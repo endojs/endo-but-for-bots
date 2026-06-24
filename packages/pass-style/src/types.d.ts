@@ -59,7 +59,8 @@ export type PassStyle =
   | ContainerStyle
   | 'remotable'
   | 'error'
-  | 'promise';
+  | 'promise'
+  | 'sturdyref';
 
 export type PassStyleMarker = 'tagged' | 'remotable';
 
@@ -140,6 +141,7 @@ export type PassStyleOf = {
   (p: Promise<any>): 'promise';
   (p: Error): 'error';
   (p: CopyTagged): 'tagged';
+  (p: SturdyRef): 'sturdyref';
   (p: readonly any[]): 'copyArray';
   (p: Iterable<any>): 'remotable';
   (p: Iterator<any, any, undefined>): 'remotable';
@@ -234,6 +236,19 @@ export type CopyTagged<
   Tag extends string = string,
   Payload extends Passable = any,
 > = PassStyled<'tagged', Tag> & { payload: Payload };
+
+/**
+ * A SturdyRef is an opaque, pass-by-copy token that addresses a capability
+ * by an off-band locator. Unlike a CopyTagged it carries no payload: its
+ * locator is held in a module-private WeakMap inside `@endo/pass-style`, so
+ * the locator (and the secret it contains) cannot leak through pass-style
+ * introspection. `passStyleOf` returns `'sturdyref'`. Mint one with
+ * `makeSturdyRef` and recover its locator with `getStudyRefLocator`.
+ */
+export type SturdyRef = {
+  [PASS_STYLE]: 'sturdyref';
+  [Symbol.toStringTag]: 'SturdyRef';
+};
 
 /**
  * This is an interface specification.

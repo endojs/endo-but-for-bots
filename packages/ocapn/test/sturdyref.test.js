@@ -7,7 +7,7 @@ import { test, testWithErrorUnwrapping, makeTestClient } from './_util.js';
 import { isSturdyRef, getSturdyRefDetails } from '../src/client/sturdyrefs.js';
 import { ocapnPassStyleOf } from '../src/codecs/ocapn-pass-style.js';
 
-testWithErrorUnwrapping('SturdyRef is a tagged type', async t => {
+testWithErrorUnwrapping('SturdyRef is a first-class pass-style', async t => {
   const { client: clientA, location: locationB } = await makeTestClient({
     debugLabel: 'A',
   });
@@ -15,7 +15,7 @@ testWithErrorUnwrapping('SturdyRef is a tagged type', async t => {
 
   const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
 
-  t.is(passStyleOf(sturdyRef), 'tagged', 'passStyleOf returns tagged');
+  t.is(passStyleOf(sturdyRef), 'sturdyref', 'passStyleOf returns sturdyref');
   t.is(
     ocapnPassStyleOf(sturdyRef),
     'sturdyref',
@@ -23,10 +23,14 @@ testWithErrorUnwrapping('SturdyRef is a tagged type', async t => {
   );
   t.is(
     sturdyRef[Symbol.toStringTag],
-    'ocapn-sturdyref',
-    'has correct tag name',
+    'SturdyRef',
+    'has the SturdyRef tag name',
   );
-  t.is(sturdyRef.payload, undefined, 'payload is undefined');
+  t.is(
+    /** @type {any} */ (sturdyRef).payload,
+    undefined,
+    'is opaque: no payload',
+  );
 
   clientA.shutdown();
   clientB.shutdown();
@@ -45,11 +49,7 @@ testWithErrorUnwrapping("SturdyRef doesn't expose secret/location", async t => {
   t.false('swissNum' in sturdyRef, 'no swissNum property');
 
   const stringified = String(sturdyRef);
-  t.is(
-    stringified,
-    '[object ocapn-sturdyref]',
-    'stringification shows tag name',
-  );
+  t.is(stringified, '[object SturdyRef]', 'stringification shows tag name');
 
   clientA.shutdown();
   clientB.shutdown();

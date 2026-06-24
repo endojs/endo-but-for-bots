@@ -3,20 +3,27 @@
 /**
  * @import { OcapnLocation } from '../codecs/components.js'
  * @import { InternalSession } from './types.js'
+ * @import { SturdyRef as PassStyleSturdyRef } from '@endo/pass-style'
  */
 
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
-import { makeTagged } from '@endo/pass-style';
+import {
+  makeSturdyRef as makePassStyleSturdyRef,
+  getStudyRefLocator,
+  passStyleOf,
+} from '@endo/pass-style';
 import { encodeSwissnum, swissnumFromBytes } from './util.js';
 
 /**
- * @import { CopyTagged } from '@endo/pass-style'
- * @typedef {CopyTagged<'ocapn-sturdyref', undefined>} SturdyRef
- * A `SturdyRef` addresses a capability by `(location, secret)`. It is
- * reified in JavaScript as a tagged value purely so `passStyleOf` has
- * something to return; it never crosses the wire in this form (on the
- * wire OCapN uses the `'ocapn-sturdyref'` spec tag).
+ * @typedef {PassStyleSturdyRef} SturdyRef
+ * A `SturdyRef` addresses a capability by `(location, secret)`. It is a
+ * first-class `@endo/pass-style` value: `passStyleOf` returns
+ * `'sturdyref'`. The `(location, secret)` pair is held off-band by
+ * `@endo/pass-style` (keyed on the SturdyRef in a module-private WeakMap),
+ * so the SturdyRef itself never exposes the secret. It does not cross the
+ * wire in this JavaScript form: on the wire OCapN uses the
+ * `'ocapn-sturdyref'` spec tag.
  *
  * The `secret` may be a printable ASCII string (the friendly form for
  * locators keyed by name) or raw bytes (Uint8Array) for arbitrary-byte
@@ -28,36 +35,67 @@ import { encodeSwissnum, swissnumFromBytes } from './util.js';
  * @property {string | Uint8Array} secret
  */
 
-/** @type {WeakMap<SturdyRef, SturdyRefDetails>} */
-const sturdyRefDetails = new WeakMap();
-
-/** @param {any} value */
-export const isSturdyRef = value => sturdyRefDetails.has(value);
-
-/** @param {SturdyRef} sturdyRef */
-export const getSturdyRefDetails = sturdyRef => sturdyRefDetails.get(sturdyRef);
-
 /**
- * Resolve a `SturdyRef` to an actual reference: local values come from
- * the injected `locator`; remote values are fetched from the peer's
- * bootstrap over a session.
+ * True when `value` is a SturdyRef minted through `@endo/pass-style`.
  *
+ * @param {any} value
+ * @returns {boolean}
+ */
+export const isSturdyRef = value => {
+  try {
+    return passStyleOf(value) === 'sturdyref';
+  } catch {
+    return false;
+  }
+};
+harden(isSturdyRef);
+
 /**
+ * Reveal a SturdyRef's off-band `(location, secret)` details, or
+ * `undefined` when `sturdyRef` is not a SturdyRef. The details now live in
+ * `@endo/pass-style`'s off-band locator map; this reads through to it.
+ *
  * @param {SturdyRef} sturdyRef
+ * @returns {SturdyRefDetails | undefined}
+ */
+export const getSturdyRefDetails = sturdyRef =>
+  isSturdyRef(sturdyRef)
+    ? /** @type {SturdyRefDetails} */ (getStudyRefLocator(sturdyRef))
+    : undefined;
+harden(getSturdyRefDetails);
+
+/**
+ * Per-client cache from a SturdyRef to its in-flight or settled
+ * enlivenment. A SturdyRef is an inert opaque data box, so enlivening it
+ * to a live presence is a side-effecting step worth memoizing: repeated
+ * `enlivenSturdyRef` calls on the same SturdyRef reuse the same
+ * enlivenment rather than re-dialing the peer or re-reading the locator.
+ *
+ * The cache deliberately lives here in `@endo/ocapn`, not in
+ * `@endo/eventual-send`: SturdyRefs are not `E()`-dispatch targets, so the
+ * eventual-send layer needs no knowledge of them. A rejected enlivenment
+ * is evicted so a later call can retry.
+ *
+ * @type {WeakMap<SturdyRef, Promise<any>>}
+ */
+const sturdyRefToEnlivened = new WeakMap();
+
+/**
+ * The actual resolution, factored out of `enlivenSturdyRef` so the
+ * memoization wrapper stays synchronous up to the point it caches the
+ * resulting promise.
+ *
+ * @param {SturdyRefDetails} details
  * @param {(location: OcapnLocation) => Promise<InternalSession>} provideSession
  * @param {(location: OcapnLocation) => boolean} isSelfLocation
  * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} locator
  */
-export const enlivenSturdyRef = async (
-  sturdyRef,
+const resolveSturdyRef = async (
+  details,
   provideSession,
   isSelfLocation,
   locator,
 ) => {
-  const details = sturdyRefDetails.get(sturdyRef);
-  if (!details) {
-    throw Error('SturdyRef details not found');
-  }
   const { location, secret } = details;
 
   if (isSelfLocation(location)) {
@@ -84,6 +122,47 @@ export const enlivenSturdyRef = async (
 };
 
 /**
+ * Resolve a `SturdyRef` to an actual reference: local values come from the
+ * injected `locator`; remote values are fetched from the peer's bootstrap
+ * over a session. The result is memoized per SturdyRef.
+ *
+ * @param {SturdyRef} sturdyRef
+ * @param {(location: OcapnLocation) => Promise<InternalSession>} provideSession
+ * @param {(location: OcapnLocation) => boolean} isSelfLocation
+ * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} locator
+ */
+export const enlivenSturdyRef = (
+  sturdyRef,
+  provideSession,
+  isSelfLocation,
+  locator,
+) => {
+  const cached = sturdyRefToEnlivened.get(sturdyRef);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  // getStudyRefLocator throws if `sturdyRef` was not minted as a SturdyRef,
+  // which is the correct failure for an invalid input here.
+  const details = /** @type {SturdyRefDetails} */ (
+    getStudyRefLocator(sturdyRef)
+  );
+
+  const enlivened = resolveSturdyRef(
+    details,
+    provideSession,
+    isSelfLocation,
+    locator,
+  );
+  sturdyRefToEnlivened.set(sturdyRef, enlivened);
+  // Evict a failed enlivenment so a later call can retry rather than
+  // replaying a stale rejection forever.
+  enlivened.catch(() => sturdyRefToEnlivened.delete(sturdyRef));
+  return enlivened;
+};
+harden(enlivenSturdyRef);
+
+/**
  * @typedef {object} SturdyRefTracker
  * @property {(location: OcapnLocation, secret: string | Uint8Array) => SturdyRef} makeSturdyRef
  * @property {(secretBytes: ArrayBufferLike) => Promise<any | undefined>} lookup
@@ -100,11 +179,10 @@ export const enlivenSturdyRef = async (
 export const makeSturdyRefTracker = locator => {
   const textDecoder = new TextDecoder('ascii', { fatal: true });
   return harden({
-    makeSturdyRef: (location, secret) => {
-      const sturdyRef = makeTagged('ocapn-sturdyref', undefined);
-      sturdyRefDetails.set(sturdyRef, { location, secret });
-      return harden(sturdyRef);
-    },
+    makeSturdyRef: (location, secret) =>
+      // The `(location, secret)` pair is the off-band locator; pass-style
+      // owns the WeakMap that keeps it out of the SturdyRef's surface.
+      makePassStyleSturdyRef(harden({ location, secret })),
     lookup: async secretBytes => {
       const view =
         secretBytes instanceof Uint8Array
@@ -124,3 +202,4 @@ export const makeSturdyRefTracker = locator => {
     },
   });
 };
+harden(makeSturdyRefTracker);
