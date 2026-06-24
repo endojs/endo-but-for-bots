@@ -408,7 +408,7 @@ const scopePowers = async (task, emit = null) => {
 // turn; if simple, the orchestration verbs are stripped from THIS turn's toolbox. Fail-open (keep them on
 // any error) — never block a real task on a flaky classifier.
 const ORCH_POWERS = ['delegate', 'roles', 'subagent', 'specialists'];
-const ORCH_VERBS = new Set(['delegateTask', 'employ', 'listRoles', 'proposeSpawnSpecialist', 'askSpecialist', 'listSpecialists', 'proposeSubAgent']);
+const ORCH_VERBS = new Set(['delegateTask', 'employ', 'listRoles', 'spawnSpecialist', 'askSpecialist', 'listSpecialists', 'proposeSubAgent']);
 // ONE cheap classifier, TWO axes (dan: "have that same pass do the categorization"):
 //   SCOPE  = simple|complex → a simple turn can't delegate/spawn (orchestration verbs stripped).
 //   FORMAT = rich|text      → a rich turn is nudged to answer with a live/interactive WIDGET.

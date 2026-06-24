@@ -17,7 +17,7 @@ import { POWERS, ALL_POWERS, makeFieldAgent } from './agent-caps.mjs';
 // test below — that is the whole point of this suite. (See AUTHORITY-MODEL.md.)
 const POLICY = {
   // read — observe only, free
-  searchNotes: 'read', readNote: 'read', consult: 'read', fetchUrl: 'read', transcribeYoutube: 'read',
+  searchNotes: 'read', readNote: 'read', searchDietNotes: 'read', readDietNote: 'read', consult: 'read', fetchUrl: 'read', transcribeYoutube: 'read',
   haFind: 'read', haTree: 'read', haState: 'read',
   agentsList: 'read', agentStatus: 'read', machineRepoStatus: 'read',
   fileList: 'read', fileRead: 'read', listTimers: 'read',
@@ -60,7 +60,7 @@ const POLICY = {
   proposeNoteEdit: 'propose', proposeEmail: 'propose', proposeSubAgent: 'propose',
   proposeSystemPrompt: 'propose', haAct: 'propose',
   proposeAddContact: 'propose', proposeEditContact: 'propose',
-  proposeSpawnSpecialist: 'propose', proposeGiveKazputer: 'propose',
+  proposeGiveKazputer: 'propose',
   proposeKazputerSetting: 'propose', proposeKazputerCoins: 'propose',
   dietRefreshSite: 'propose', // publishing a food guide is outward → confirm-gated
   proposeTool: 'propose', // admitting agent-authored CODE is security-sensitive → owner reviews + admits
@@ -80,7 +80,7 @@ const POLICY = {
   revertChange: 'coarse', // undo a shipped change (git revert -m 1 on the live branch) — grant-time authorization
   proposeImprovement: 'add', listImprovements: 'read', listChangelog: 'read', // backlog/changelog: propose (additive) / read
   // delegate — attenuated sub-bundle to a larger agent / a confined specialist / a role sub-agent
-  delegateTask: 'delegate', askSpecialist: 'delegate', employ: 'delegate',
+  delegateTask: 'delegate', spawnSpecialist: 'delegate', askSpecialist: 'delegate', employ: 'delegate',
   // share — re-grant ONE held power as a named, revocable invite (monotonic delegation); revoke any time
   createInvite: 'share',
   shareTool: 'share', revokeToolShare: 'share', // share an admitted component as a revocable invite; revoke it

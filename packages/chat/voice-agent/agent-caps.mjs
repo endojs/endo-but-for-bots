@@ -521,7 +521,7 @@ export const POWERS = harden({
   email: { label: 'Propose an email to send (you review + confirm)', verbs: ['proposeEmail'] },
   subagent: { label: 'Propose a sub-agent with system access (you confirm)', verbs: ['proposeSubAgent'] },
   contacts: { label: 'Read your address book; propose add/edit a contact (you confirm)', verbs: ['contactsSearch', 'contactsGet', 'proposeAddContact', 'proposeEditContact'] },
-  specialists: { label: 'Spawn + consult persistent specialist sub-agents (spawning you confirm)', verbs: ['listSpecialists', 'proposeSpawnSpecialist', 'askSpecialist'] },
+  specialists: { label: 'Spawn + consult persistent specialist sub-agents (spawn within your bounds — no confirmation)', verbs: ['listSpecialists', 'spawnSpecialist', 'askSpecialist'] },
   kazputer: { label: 'Manage Kazputers — give someone a new one (email invite), and administer your own (settings/coins; you confirm)', verbs: ['proposeGiveKazputer', 'kazputerStatus', 'proposeKazputerSetting', 'proposeKazputerCoins'] },
   dietician: { label: "Drive the dietician's restaurant pipeline — scan an area, evaluate spots for Alexa's diet, refresh + publish the food guides (publishing you confirm)", verbs: ['dietScanArea', 'dietEvaluateArea', 'dietBuildMap', 'dietStatus', 'dietRefreshSite'] },
   app: { label: 'Introspect + manage your own app state — list/read/retitle every conversation (chats, voice memos, voice notes) and see an overview of asks/feed/proposals', verbs: ['listChats', 'readChat', 'retitleChat', 'appState'] },
@@ -696,7 +696,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   //    HomeAssistant is EXCLUDED — physical-world actions (locks!) always confirm;
   //    per-entity HA autonomy is future work needing per-cap attribution. ──────────
   const AUTOCONFIRM_FILE = autoConfirmFile || '/home/dan/.config/field-agent/auto-confirm.json';
-  const NEVER_AUTO = new Set(['home-assistant', 'spawn-specialist', 'accept-invite']); // physical-world + authority-granting actions ALWAYS confirm
+  const NEVER_AUTO = new Set(['home-assistant', 'accept-invite']); // physical-world + EXTERNAL-authority actions ALWAYS confirm (spawning a confined sub-agent no longer proposes — it's structurally within bounds)
   let autoRules = [];
   try { autoRules = JSON.parse(fs.readFileSync(AUTOCONFIRM_FILE, 'utf8')).rules || []; } catch { autoRules = []; }
   const saveAutoRules = () => { try { fs.mkdirSync(path.dirname(AUTOCONFIRM_FILE), { recursive: true }); fs.writeFileSync(AUTOCONFIRM_FILE, JSON.stringify({ rules: autoRules }, null, 2), { mode: 0o600 }); } catch (e) { /* best effort */ } };
@@ -713,7 +713,17 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   //    confirmable proposal (the grant is the authorization). Persisted so a
   //    specialist + its accrued context survive restarts. ─────────────────────────
   const SPECIALISTS_FILE = specialistsFile || '/home/dan/.config/field-agent/specialists.json';
-  const META_POWERS = new Set(['delegate', 'subagent', 'specialists', 'roles', 'app', 'selfImprove']); // orchestration + self-state powers — not delegable/shareable downward (one level deep; `app` is root-only; `selfImprove` is implement-mode-scheduled-only — never a sub-bundle or share)
+  // NON-DELEGABLE powers: the few that grant authority nothing downstream can bound — `subagent` reaches the
+  // real HOST shell (escapes confinement), `app` + `selfImprove` are root-only self-modification. Everything
+  // ELSE (delegate, specialists, roles, …) is delegable: a node re-grants only powers it already holds (the
+  // `node.powers.has(p)` checks below), so every sub-agent is a SUBSET of its parent and can never escalate.
+  // That invariant — not a permission prompt — is what makes spawning within your bounds safe and lets trees
+  // sprawl arbitrarily deep, each level ⊆ the one above.
+  // ⚠️ OCAP DEBT: that subset is enforced today by a NAME-SET (powers are STRINGS), which is itself the ocap
+  // smell dan flagged — the correct form is designation by REFERENCE (hold the cap object; pass a subset of
+  // refs; you can't name what you don't hold). Tracked as urgent maintenance: ~/TODO/ocap-designate-by-reference.md.
+  // Until then: do NOT add new string-name capability designation.
+  const META_POWERS = new Set(['subagent', 'app', 'selfImprove']);
   let specialists = [];
   try { specialists = JSON.parse(fs.readFileSync(SPECIALISTS_FILE, 'utf8')).specialists || []; } catch { specialists = []; }
   const saveSpecialists = () => { try { fs.mkdirSync(path.dirname(SPECIALISTS_FILE), { recursive: true }); fs.writeFileSync(SPECIALISTS_FILE, JSON.stringify({ specialists }, null, 2), { mode: 0o600 }); } catch (e) { /* best effort */ } };
@@ -754,7 +764,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         '3. Write clear standing instructions: its role, what it does step by step, when to PROPOSE vs act, and any skepticism/safety rules for its domain. Destructive actions stay propose→confirm regardless.',
         '4. Name it for what it does, with a fitting emoji.',
         '',
-        'THE FLOW: talk through the need with dan → decide the domain + the minimal powers + the instructions → proposeSpawnSpecialist({ name, domain, powers, instructions }) (dan confirms the grant) → test it with askSpecialist → refine its instructions if needed. Use listSpecialists first; don\'t duplicate one that exists.',
+        'THE FLOW: talk through the need with dan → decide the domain + the minimal powers + the instructions → spawnSpecialist({ name, domain, powers, instructions }) (spawns immediately — no confirmation: it is confined to a SUBSET of your powers, so the cap graph guarantees it can never exceed you) → test it with askSpecialist → refine its instructions if needed. Use listSpecialists first; don\'t duplicate one that exists.',
         '',
         'EXAMPLES already in the menu (built-in domain agents): 🥗 Dietician, 🔎 Researcher, 🏠 Home, ⏰ Scheduler, 🎨 Image studio — study their shape (focused domain + a tight power ring + a clear persona).',
         '',
@@ -1574,21 +1584,25 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       );
     }
     if (powers.has('specialists')) {
-      // Spawn + consult persistent specialist sub-agents. Spawning grants authority,
-      // so it PROPOSES (you confirm the grant). A specialist runs with its OWN confined
-      // bundle + instructions + id; its actions still surface for confirmation unless
-      // you granted it autonomy ("don't ask again", scoped to that specialist).
+      // Spawn + consult persistent specialist sub-agents. A specialist runs with its OWN confined bundle +
+      // instructions + id. Spawning needs NO confirmation: the ocap graph guarantees the child is a SUBSET of
+      // you (you can only re-grant powers you hold — node.powers.has below), so it can never escalate; creating
+      // one within your own bounds is pre-approved. It may inherit `specialists` too → it can spawn its own
+      // sub-specialists, so trees sprawl arbitrarily deep, every level ⊆ the one above. (A spawned specialist's
+      // own destructive ACTIONS still surface for confirmation unless you granted it autonomy.)
       toolbox.listSpecialists = harden({ run: async () => ({ ok: true, specialists: [...builtinList(), ...specialists.map(s => ({ id: s.id, name: s.name, domain: s.domain, powers: s.powers, autonomy: listAutoRules(s.id).map(r => r.kind), spawnedFrom: s.spawnedFrom || null }))] }) });
-      toolbox.proposeSpawnSpecialist = harden({ run: async ({ name, domain, powers: want = [], instructions } = {}) => {
-        const granted = [...new Set((Array.isArray(want) ? want : []).filter(p => node.powers.has(p) && !META_POWERS.has(p)))];
-        return np({ type: 'spawn-specialist', power: 'specialists', title: `Spawn specialist: ${String(name || 'specialist')}`, summary: `${String(domain || '')}${granted.length ? ' · ' + granted.join(', ') : ' · (no powers)'}`,
-          detail: { name: String(name || ''), domain: String(domain || ''), powers: granted, instructions: String(instructions || '').slice(0, 4000) },
-          commit: () => spawnSpecialist({ name, domain, powers: granted, instructions, spawnedFromChatId: ctx.chatId }) });
+      toolbox.spawnSpecialist = harden({ run: async ({ name, domain, powers: want = [], instructions } = {}) => {
+        const reqd = [...new Set(Array.isArray(want) ? want : [])];
+        const granted = reqd.filter(p => node.powers.has(p) && !META_POWERS.has(p)); // structurally ⊆ you (the cap graph IS the bound)
+        const dropped = reqd.filter(p => !granted.includes(p));
+        const r = spawnSpecialist({ name, domain, powers: granted, instructions, spawnedFromChatId: ctx.chatId }); // r.url (its #cap) is NOT returned — cap hygiene
+        return harden({ ok: !!r.ok, id: r.id, name: r.name, domain: String(domain || ''), powers: granted,
+          note: `Spawned — confined to ${granted.length ? granted.join(', ') : 'no'} power(s), a subset of yours (no confirmation needed). ${dropped.length ? `Not granted: ${dropped.join(', ')} (outside your bounds or not delegable). ` : ''}Use it via askSpecialist("${r.name}", …).` });
       } });
       toolbox.askSpecialist = harden(makeAskSpecialist(ctx.userText));
       manifest.push(
         { name: 'listSpecialists', reversible: false, args: {}, description: 'List your specialist sub-agents (name, domain, powers, and what each may do autonomously).' },
-        { name: 'proposeSpawnSpecialist', reversible: false, args: { name: 'string', domain: 'string — the kind of requests it handles', powers: 'array — a subset of YOUR powers to grant it (meta-powers excluded)', instructions: 'string — its standing instructions / persona' }, description: 'PROPOSE spawning a persistent specialist sub-agent into your inventory. Does NOT spawn — you confirm the grant first.' },
+        { name: 'spawnSpecialist', reversible: true, args: { name: 'string', domain: 'string — the kind of requests it handles', powers: 'array — a subset of YOUR powers to grant it', instructions: 'string — its standing instructions / persona' }, description: 'Spawn a persistent specialist sub-agent into your inventory. Spawns IMMEDIATELY, no confirmation — it is confined to a SUBSET of your own powers (the cap graph guarantees it can never exceed you), so creating one within your bounds is pre-approved; you may incur cost, capped by your budget. Powers you do not hold are silently not granted. Grant it `specialists` too if you want it to build its own sub-agents.' },
         { name: 'askSpecialist', reversible: true, args: { name: 'string — a specialist from listSpecialists', request: 'string — what to ask it to do' }, description: 'Hand a request to one of your specialists; it acts within its own confined powers + context. Its destructive actions still surface for your confirmation unless you granted it autonomy.' },
       );
     }
