@@ -6,10 +6,14 @@
 import { E } from '@endo/far';
 import { q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
+import { encodeBase64 } from '@endo/base64';
+import { mapReader } from '@endo/stream';
 import {
   ReadableBlobInterface,
   ReadableTreeInterface,
 } from '@endo/platform/fs/lite';
+import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
 
 import { mountHelp, mountFileHelp, makeHelp } from './help-text.js';
 import {
@@ -17,8 +21,6 @@ import {
   MountFileInterface,
   MountInterface,
 } from './interfaces.js';
-import { makeReaderRef } from './reader-ref.js';
-import { makeRefIterator, makeRefReader } from './ref-reader.js';
 
 const mountEntryRecords = new WeakMap();
 const mountRecords = new WeakMap();
@@ -714,12 +716,7 @@ const makeMountExo = ctx => {
         const scratch = await reserveScratchPath(target, filePowers);
         const writer = filePowers.makeFileWriter(scratch);
         try {
-          const readerRef = E(value).streamBase64();
-          for await (const bytes of makeRefReader(
-            /** @type {import('@endo/far').ERef<AsyncIterator<string>>} */ (
-              readerRef
-            ),
-          )) {
+          for await (const bytes of iterateBytesReader(value)) {
             // eslint-disable-next-line no-await-in-loop
             await writer.next(bytes);
           }
@@ -927,7 +924,8 @@ const makeMountFileExo = (
       return filePowers.readFileText(filePath);
     },
 
-    streamBase64() {
+    /** @param {import('@endo/eventual-send').ERef<unknown>} synPromise */
+    streamBase64(synPromise) {
       /** @returns {AsyncGenerator<Uint8Array>} */
       const readConfined = async function* readConfinedFile() {
         await assertConfined(filePath, confinementRoot, filePowers);
@@ -947,7 +945,8 @@ const makeMountFileExo = (
           }
         }
       };
-      return makeReaderRef(readConfined());
+      const pump = makeReaderPump(mapReader(readConfined(), encodeBase64));
+      return pump(/** @type {any} */ (synPromise));
     },
 
     async json() {
@@ -976,10 +975,8 @@ const makeMountFileExo = (
       assertWritable();
       await assertConfined(filePath, confinementRoot, filePowers);
       const writer = filePowers.makeFileWriter(filePath);
-      for await (const value of makeRefIterator(
-        /** @type {import('@endo/far').ERef<AsyncIterator<Uint8Array>>} */ (
-          readableRef
-        ),
+      for await (const value of iterateBytesReader(
+        /** @type {any} */ (readableRef),
       )) {
         // eslint-disable-next-line no-await-in-loop
         await writer.next(value);
@@ -1028,10 +1025,11 @@ harden(makeMountFileExo);
  */
 const makeReadableBlobView = readOnlyFile => {
   return makeExo('EndoMountReadableBlob', ReadableBlobInterface, {
-    streamBase64() {
-      return /** @type {{ streamBase64: () => object }} */ (
+    /** @param {import('@endo/eventual-send').ERef<any>} synPromise */
+    async streamBase64(synPromise) {
+      return /** @type {{ streamBase64: (synPromise: unknown) => Promise<any> }} */ (
         readOnlyFile
-      ).streamBase64();
+      ).streamBase64(synPromise);
     },
     async text() {
       return E(readOnlyFile).text();

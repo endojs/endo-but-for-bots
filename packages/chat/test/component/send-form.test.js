@@ -4,6 +4,7 @@ import '@endo/init/debug.js';
 
 import test from 'ava';
 import { E } from '@endo/far';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makeMockPowers } from '../helpers/mock-powers.js';
 import {
   createButton,
@@ -12,7 +13,6 @@ import {
   tick,
 } from '../helpers/dom-setup.js';
 import { typeText } from '../helpers/keyboard-events.js';
-import { makeRefIterator } from '../../ref-iterator.js';
 import { sendFormComponent } from '../../send-form.js';
 
 const { document: testDocument, cleanup: cleanupDOM } = createDOM();
@@ -58,7 +58,7 @@ const setup = (names = ['alice', 'bob', 'charlie']) => {
     $sendButton,
     $chatBar,
     E,
-    makeRefIterator,
+    iterateReader,
     powers,
     showValue: () => {},
     onStateChange: state => {

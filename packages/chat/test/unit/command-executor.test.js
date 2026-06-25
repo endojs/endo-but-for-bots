@@ -10,6 +10,7 @@ import test from 'ava';
 import { Far } from '@endo/far';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
+import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
 import { createCommandExecutor } from '../../command-executor.js';
 
 const MockTreeI = M.interface('MockTree', {
@@ -18,7 +19,7 @@ const MockTreeI = M.interface('MockTree', {
 });
 
 const MockBlobI = M.interface('MockBlob', {
-  streamBase64: M.call().returns(M.any()),
+  streamBase64: M.call(M.any()).returns(M.any()),
 });
 
 /**
@@ -813,18 +814,14 @@ test('execute checkout command looks up tree and writes to directory', async t =
     list: async () => ['hello.txt'],
     lookup: async () =>
       makeExo('MockBlob', MockBlobI, {
-        streamBase64: () =>
-          Far('MockIterator', {
-            async next() {
-              return { value: undefined, done: true };
-            },
-            async return() {
-              return { value: undefined, done: true };
-            },
-            async throw() {
-              return { value: undefined, done: true };
-            },
-          }),
+        // Mirror the daemon's ReadableBlob wire shape: streamBase64 takes the
+        // initiator's synchronization chain head and returns the acknowledgement
+        // chain head produced by the exo-stream reader pump. An empty source
+        // iterator models a zero-byte file, which is all this checkout test
+        // needs to exercise the walk-and-write path.
+        streamBase64: synPromise =>
+          // eslint-disable-next-line no-empty-function
+          makeReaderPump((async function* emptyBlob() {})())(synPromise),
       }),
   });
 
