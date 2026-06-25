@@ -25,7 +25,9 @@
     <div class="apps-sub" id="appsub">A standalone app served from this origin — no separate service.</div>
     <div id="app">loading…</div>
   </div>
-  <!-- islands bundle first (sets globalThis.__fieldIslands), then the per-app host controller -->
+  <!-- SES shim first (installs assert/harden/Compartment globals the islands bundle needs; taming intact). -->
+  <script src="/ses.umd.min.js"></script>
+  <!-- islands bundle next (sets globalThis.__fieldIslands), then the per-app host controller -->
   <script src="/islands/islands.js" type="module"></script>
   <script src="/apps-host.js" type="module"></script>
 </body>

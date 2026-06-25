@@ -668,6 +668,11 @@
 </div>
 </div>
 <script src="/qrcode.js"></script>
+<!-- SES shim FIRST (classic, synchronous): the standalone compartment-mapper build installs
+     assert/harden/Compartment/lockdown globals with function-constructor taming intact (a bundled ses
+     does NOT). islands.js calls lockdown({overrideTaming:'severe'}) only when globalThis.__FIELD_LOCKDOWN__
+     is set — UNSET in production, so loading the shim here is a no-op for the live realm until we flip it. -->
+<script src="/ses.umd.min.js"></script>
 <!-- confined-Preact ISLANDS bundle (preact + @endo/preact-container); sets globalThis.__fieldIslands
      before app.js runs. Built by `yarn build:islands`. The DOM app falls back gracefully if absent. -->
 <script src="/islands/islands.js" type="module"></script>

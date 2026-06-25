@@ -6,9 +6,29 @@
 // `addContent`, and the render propagator re-paints through the SANITIZING renderer (renderConfined:
 // refs stripped, dangerous tags/attrs removed, frozen SafeEvent — no live DOM). Cap-hygiene holds by
 // construction: a cell is only ever given render-safe data (labels/tags), never a swissnum.
-import 'ses'; // installs the `assert` shim endo library code destructures at load; does NOT lockdown
+// NOTE: ses is NOT bundled here. Bundlers (vite/rollup) break `tameFunctionConstructors`, so a bundled
+// lockdown freezes intrinsics but leaves the global `Function`/`eval` LIVE — an untrusted endowment's
+// `h.constructor('return globalThis')()` then climbs to the host realm (proven in the staging probe).
+// Instead the page loads the standalone, compartment-mapper-built shim (public/ses.umd.min.js) as a
+// classic script FIRST; it installs `assert`/`harden`/`Compartment`/`lockdown` globals with taming intact.
 import { h } from 'preact';
 import { renderConfined } from '@endo/preact-container/renderer';
+import { makeConfinedFromSource, lockdownActive } from './confined-source.js';
+
+// Phase: severe-taming lockdown (designs/preact-component-trie.md). FLAG-GATED so the live app is
+// untouched until the staging probe proves app.js + the islands survive a frozen realm. When the flag is
+// set (the staging test sets it via addInitScript BEFORE any page module runs; live never sets it),
+// freeze the realm here — islands.js executes before app.js, so this is the "pre-lockdown" the plan wants.
+// 'severe' is required for Preact's override mistake AND to contain an untrusted fork's Function escape;
+// 'unsafe' error taming keeps usable stacks/console in the operator app.
+const wantLockdown = globalThis.__FIELD_LOCKDOWN__
+  || (typeof document !== 'undefined' && document.documentElement
+      && document.documentElement.getAttribute('data-field-lockdown') === '1');
+if (wantLockdown && typeof globalThis.lockdown === 'function' && !lockdownActive()) {
+  // Requires the page's CSP to allow script-src 'unsafe-eval' (the server pairs the marker with that CSP);
+  // without it SES freezes but cannot tame the Function constructor and the confinement is decorative.
+  globalThis.lockdown({ overrideTaming: 'severe', errorTaming: 'unsafe', consoleTaming: 'unsafe' });
+}
 
 import { makeCell, react } from './propagator.js';
 import { SharesPanel } from './shares-panel.js';
@@ -284,6 +304,22 @@ const islands = {
     if (!C || !el) return false;
     el.setAttribute('data-component-id', `island-${name}`);
     el.setAttribute('data-component-name', name);
+    renderConfined(h(C, props || {}), el);
+    return true;
+  },
+
+  // ── Render an UNTRUSTED component from SOURCE, confined + inline (no iframe). This is the fork→edit→
+  // re-share render path: `source` is a `(endowments, props) => vnode` function string. We REFUSE unless
+  // the realm is locked down (severe taming) — rendering untrusted source un-frozen is a containment hole
+  // (the endowed Function constructor could climb to the host realm). Returns false on refusal/bad source.
+  renderSource(source, el, props) {
+    if (!el) return false;
+    if (!lockdownActive()) { el.textContent = '⚠︎ refusing untrusted source: realm not locked down'; return false; }
+    let C;
+    try { C = makeConfinedFromSource(source, { name: 'forked-component' }); }
+    catch (e) { el.textContent = `⚠︎ bad component source: ${e && e.message}`; return false; }
+    el.setAttribute('data-component-id', 'confined-source');
+    el.setAttribute('data-component-name', 'forked-component');
     renderConfined(h(C, props || {}), el);
     return true;
   },

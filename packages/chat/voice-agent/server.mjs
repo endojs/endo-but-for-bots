@@ -87,6 +87,14 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOME = '/home/dan';
 const PORT = Number(process.env.PORT) || 8778;
 const BIND = (process.env.BIND ? process.env.BIND.split(',').map(s => s.trim()).filter(Boolean) : ['100.83.80.102', '127.0.0.1']); // tailnet IP + loopback — never 0.0.0.0 (overridable for staging)
+// FIELD_LOCKDOWN couples the two halves of the confined-fork render path so they can NEVER drift apart:
+// (1) the app shell is served with a lockdown marker (<html data-field-lockdown="1">) that islands.js reads
+//     to call lockdown({overrideTaming:'severe'}) before app.js runs, and
+// (2) its CSP grants script-src 'unsafe-eval' — REQUIRED for SES to install its safe evaluators (without it,
+//     tameFunctionConstructors silently no-ops: the realm freezes but the Function constructor stays a host
+//     escape — proven in lockdown-survive.staging.test.cjs). 'unsafe-eval' is SAFE here precisely because SES
+//     then tames eval/Function; we only relax it when lockdown is actually on. OFF (default) = today's strict CSP.
+const FIELD_LOCKDOWN = process.env.FIELD_LOCKDOWN === '1';
 // Public-facing base for cap URLs. The browser mic (getUserMedia) requires a
 // SECURE CONTEXT, so the app is fronted by `tailscale serve` HTTPS on the tailnet
 // (https://archua.taildd002.ts.net) — NOT public. Cap links must use that origin.
@@ -787,6 +795,23 @@ const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'applic
 // stuck on a stale cached copy (iOS Safari ignores no-cache for module scripts) — only the big vendored
 // libs (three.module.js) keep revalidate-caching. This ends the "still broken after you deployed" cycle.
 const serveFile = async (res, rel, type) => { try { const cc = rel === 'three.module.js' ? 'no-cache' : 'no-store, must-revalidate'; res.writeHead(200, { 'content-type': type, 'cache-control': cc, ...SEC }); res.end(await fs.promises.readFile(path.join(HERE, 'public', rel))); } catch { res.writeHead(404, SEC); res.end('not found'); } };
+// The app-shell CSP grants script-src 'unsafe-eval' ONLY when lockdown is on (see FIELD_LOCKDOWN) — SES then
+// tames eval, so the relaxation is compensated. We add it to default-src (the script-src fallback) since the
+// shell sets no explicit script-src.
+const SHELL_SEC = FIELD_LOCKDOWN
+  ? { ...SEC, 'content-security-policy': SEC['content-security-policy'].replace("default-src 'self'", "default-src 'self' 'unsafe-eval'") }
+  : SEC;
+// Serve an HTML app-shell (index.html / apps.html / component-app.html). Under FIELD_LOCKDOWN, stamp the
+// <html> element with data-field-lockdown="1" (islands.js reads it to lockdown pre-app.js, no inline script
+// needed) and widen the CSP to allow SES's evaluators. OFF = byte-identical to the old serveFile path.
+const serveShell = async (res, rel, type) => {
+  try {
+    let html = await fs.promises.readFile(path.join(HERE, 'public', rel), 'utf8');
+    if (FIELD_LOCKDOWN) html = html.replace(/<html(\s|>)/i, '<html data-field-lockdown="1"$1');
+    res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store, must-revalidate', ...SHELL_SEC });
+    res.end(html);
+  } catch { res.writeHead(404, SEC); res.end('not found'); }
+};
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.ico': 'image/x-icon', '.txt': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8', '.woff2': 'font/woff2' };
 const mimeFor = p => MIME[path.extname(p).toLowerCase()] || 'application/octet-stream';
 const rawBody = req => new Promise(resolve => { const ch = []; let n = 0; req.on('data', c => { ch.push(c); n += c.length; if (n > 25 * 1024 * 1024) req.destroy(); }); req.on('end', () => resolve(Buffer.concat(ch))); req.on('error', () => resolve(Buffer.alloc(0))); });
@@ -897,9 +922,10 @@ const processAttachments = async (list, homeSubkey = null) => {
 const handler = async (req, res) => {
   try {
     const u = new URL(req.url, 'http://x');
-    if (u.pathname === '/' || u.pathname === '/index.html') return serveFile(res, 'index.html', 'text/html; charset=utf-8');
+    if (u.pathname === '/' || u.pathname === '/index.html') return serveShell(res, 'index.html', 'text/html; charset=utf-8');
     if (u.pathname === '/app.js') return serveFile(res, 'app.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/qrcode.js') return serveFile(res, 'qrcode.js', 'text/javascript; charset=utf-8');
+    if (u.pathname === '/ses.umd.min.js') return serveFile(res, 'ses.umd.min.js', 'text/javascript; charset=utf-8'); // standalone SES shim (taming intact), loaded before the page modules
     if (u.pathname === '/trace.js') return serveFile(res, 'trace.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/pendant.js') return serveFile(res, 'pendant.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/three.module.js') return serveFile(res, 'three.module.js', 'text/javascript; charset=utf-8');

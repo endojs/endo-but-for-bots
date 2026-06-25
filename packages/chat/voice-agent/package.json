@@ -6,9 +6,11 @@
   "description": "Field agent (Agent C) — voice/text Endo-capability chat platform. Server is plain node ESM; the client is incrementally migrating to confined-Preact islands (see designs/preact-component-trie.md).",
   "scripts": {
     "build:islands": "vite build --config vite.islands.config.js",
+    "build:ses-shim": "yarn workspace @endo/ses-test build:ses-vanilla && cp ../../ses/dist/ses.umd.min.js public/ses.umd.min.js",
     "test": "node --test",
     "test:theme": "node theme-matrix.staging.test.cjs",
     "test:confinement": "node confinement.staging.test.cjs",
+    "test:lockdown": "node lockdown-survive.staging.test.cjs",
     "test:component-select": "node component-select.staging.test.cjs",
     "test:shape": "node shape-graph.staging.test.cjs",
     "test:trace": "node trace-fanout.staging.test.cjs",

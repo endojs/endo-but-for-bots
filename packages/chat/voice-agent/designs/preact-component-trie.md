@@ -136,12 +136,27 @@ Implications that change the phases below:
 
 ## Phasing
 
-- **Phase 1 — the port (the immediate ask).** Get `@endo/preact-container` into
-  our build; stand up the confined-Preact runtime in the voice-agent app
-  (pre-lockdown severe taming + `renderConfined`); establish the
-  **component-as-project tree** scaffold (one mount point that renders a
-  confined component, swappable at runtime); **port one real slice** of the
-  current DOM app to prove the path end-to-end. No agent/sharing/trust yet.
+- **Phase 1 — the port (DONE) + the untrusted-fork render keystone (DONE, flag-gated).**
+  `@endo/preact-container` is in the build; islands render OWN (trusted) components via
+  `renderConfined`; real slices ported. ✅ **`confineComponent` (untrusted SOURCE → confined,
+  inline, NO iframe) is now wired + proven**: `client/confined-source.js`
+  (`makeConfinedFromSource`) + `__fieldIslands.renderSource`, which REFUSES unless the realm is
+  locked down. Severe-taming lockdown is **flag-gated** behind the server's `FIELD_LOCKDOWN` env
+  (OFF in production → zero change to the live realm; the strict CSP stays). When ON, the server
+  serves the shell with `<html data-field-lockdown="1">` (islands.js reads it → `lockdown({
+  overrideTaming:'severe' })` before app.js) AND widens the shell CSP to `script-src 'unsafe-eval'`.
+  - **CSP gotcha (load-bearing, do not regress):** SES's `tameFunctionConstructors` REQUIRES
+    `'unsafe-eval'` in the page CSP. Under the strict `default-src 'self'` CSP, `lockdown()` freezes
+    intrinsics but the Function-constructor taming **silently no-ops**, leaving
+    `endowments.h.constructor('return globalThis')()` a live host escape — confinement is decorative.
+    `'unsafe-eval'` is safe here precisely because SES then tames eval/Function; the server couples the
+    CSP relaxation to the lockdown marker so they can never drift. Also: **ses must NOT be bundled**
+    (vite/rollup break the taming) — the page loads the standalone compartment-mapper build
+    `public/ses.umd.min.js` first; rebuild via `yarn build:ses-shim`.
+  - Proven end-to-end against the real server by `lockdown-survive.staging.test.cjs`
+    (`yarn test:lockdown`, 12/12): app.js boots in the frozen realm, built-in islands + untrusted
+    forks render inline, a malicious fork's Function escape THROWS, and the live-default path refuses
+    untrusted source. **Flipping `FIELD_LOCKDOWN=1` live is dan's call** (it's the operator app).
 - **Phase 2 — the grain layer + component = git object (DONE).** ✅ The
   cell/propagator substrate (`client/propagator.js`) and the **TMS grain**
   (`makeTmsCell`) — proven 15/15. ✅ **component = git-as-Endo object**
