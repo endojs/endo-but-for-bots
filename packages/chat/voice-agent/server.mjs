@@ -889,6 +889,12 @@ const handler = async (req, res) => {
     }
     if (u.pathname === '/component-app.js') return serveFile(res, 'component-app.js', 'text/javascript; charset=utf-8');
     if (u.pathname.startsWith('/c/') && req.method === 'GET') return serveFile(res, 'component-app.html', 'text/html; charset=utf-8'); // standalone home of a broken-out component (reads its id from the path)
+    // ── islands-as-SPWAs: /apps/<name> serves a standalone host page that mounts island
+    //    <name> from THIS origin (no per-app ngrok). The app name is in the path; the cap
+    //    rides the #fragment (apps-host.js lifts it out of the address bar). ──
+    if (u.pathname === '/kit.css') return serveFile(res, 'kit.css', 'text/css; charset=utf-8');
+    if (u.pathname === '/apps-host.js') return serveFile(res, 'apps-host.js', 'text/javascript; charset=utf-8');
+    if (u.pathname.startsWith('/apps/') && req.method === 'GET') return serveFile(res, 'apps.html', 'text/html; charset=utf-8');
     // Public descriptive catalog (power → what it does) for UI tooltips. No authority, no secrets.
     if (u.pathname === '/powers') return json(res, 200, { powers: POWER_CATALOG });
     if (u.pathname === '/successes' || u.pathname === '/usecases') { // W6 "Use cases" showcase (tailnet; public bind = operator's call). Own CSP so its inline hero/card script runs.
