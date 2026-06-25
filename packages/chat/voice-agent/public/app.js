@@ -3375,7 +3375,7 @@ const showHooks = () => {
 //    and (next) a gallery of the agents you've built as 3D Granovetter diagrams. A foothold to grow into.
 const fmtUsd = u => '$' + (Math.max(0, Number(u) || 0) / 1e6).toFixed(2);
 const fmtEvery = ms => { const n = Number(ms) || 0; const h = n / 3600000; if (h >= 24 && Number.isInteger(h / 24)) return `${h / 24}d`; if (h >= 1) return `${Math.round(h)}h`; return `${Math.round(n / 60000)}m`; };
-const SETTINGS_SECTIONS = [{ key: 'usage', label: '📊 Usage' }, { key: 'providers', label: '🧠 Providers' }, { key: 'agents', label: '🕸️ Agents' }, { key: 'specialists', label: '🧑‍🔬 Specialists' }, { key: 'files', label: '📂 Files' }, { key: 'timers', label: '⏰ Timers' }, { key: 'internal', label: '📨 Internal' }];
+const SETTINGS_SECTIONS = [{ key: 'usage', label: '📊 Usage' }, { key: 'providers', label: '🧠 Providers' }, { key: 'agents', label: '🕸️ Agents' }, { key: 'specialists', label: '🧑‍🔬 Specialists' }, { key: 'feedback', label: '🛡️ Checks' }, { key: 'files', label: '📂 Files' }, { key: 'timers', label: '⏰ Timers' }, { key: 'internal', label: '📨 Internal' }];
 let settingsSection = 'usage';
 const openSettings = async () => {
   if (!isRoot) { setStatus('settings are owner-only — open with your root link'); return; }
@@ -3388,10 +3388,35 @@ const renderSettingsSection = () => {
   if (settingsSection === 'providers') { body.innerHTML = '<div class="set-h">🧠 Model providers</div><div class="pmeta">Pick a per-chat model from the header selector. Add a provider key by asking the agent (it stores it in the key vault). A dedicated provider-management form is coming next.</div>'; return; }
   if (settingsSection === 'agents') return renderSettingsShape(body);
   if (settingsSection === 'specialists') return renderSettingsSpecialists(body);
+  if (settingsSection === 'feedback') return renderSettingsGauntlet(body);
   if (settingsSection === 'files') return renderSettingsFiles(body);
   if (settingsSection === 'timers') return renderSettingsTimers(body);
   if (settingsSection === 'internal') return renderSettingsInternal(body);
   return renderSettingsUsage(body);
+};
+// 🛡️ Feedback loops — the dev agent's checks & balances surfaced as GATE-LANES (the propagator-gate model:
+// each gate reads the action's cells → a verdict; the action proceeds only while the verdict holds). Read-only
+// "surface what exists": the real 4-discipline review panel + the FAPO verify/auto-merge/re-verify/revert.
+const renderSettingsGauntlet = async body => {
+  body.innerHTML = '<div class="set-h">🛡️ Feedback loops <span style="font-size:12px;color:var(--mut);font-weight:400">— the checks an action must clear</span></div><div class="pmeta" id="gl-meta" style="margin-bottom:12px">loading…</div><div id="gl-lanes"></div>';
+  let r; try { r = await (await fetch('/gauntlet', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json(); } catch (e) { r = { error: e.message }; }
+  if (!r || !r.ok) { $('gl-meta').textContent = '⚠︎ ' + ((r && r.error) || 'could not load'); return; }
+  $('gl-meta').innerHTML = `<b>${esc(r.agent)}</b><div style="font-size:12px;margin-top:4px;line-height:1.45">${esc(r.model)}</div>`;
+  const sevColor = s => ({ critical: 'var(--bad)', high: 'var(--bad)', medium: '#d29922', low: 'var(--mut)' }[String(s || '').toLowerCase()] || 'var(--mut)');
+  const gateCard = g => `<div style="flex:0 0 235px;border:1px solid var(--edge);border-radius:10px;padding:10px;background:var(--bg)">
+      <div style="font-weight:600;font-size:13px">▣ ${esc(g.name)}</div>
+      <div style="font-size:10px;color:var(--mut);margin:2px 0 6px">${esc(g.stage)} · policy <b style="color:${/BLOCK|REVERT/.test(g.policy) ? 'var(--bad)' : 'var(--mut)'}">${esc(g.policy)}</b></div>
+      <div style="font-size:11px;color:var(--ink);line-height:1.4">${esc(g.checks)}</div>
+      <div style="font-size:10px;color:var(--mut);margin-top:7px;font-family:ui-monospace,Menlo,monospace">reads ⟨${esc(g.reads)}⟩ → ${esc(g.verdictCell)}</div>
+      ${(g.findings && g.findings.length) ? `<div style="margin-top:7px;border-top:1px solid var(--edge);padding-top:6px">${g.findings.map(f => `<div style="font-size:11px;margin-bottom:3px"><span style="color:${sevColor(f.severity)}">●</span> <b>${esc(f.tool || '')}</b>: ${esc(f.report)}</div>`).join('')}</div>` : (g.flagged === 0 ? '<div style="font-size:10px;color:var(--ok,#3fb950);margin-top:7px">✓ nothing flagged</div>' : '')}
+    </div>`;
+  $('gl-lanes').innerHTML = r.lanes.map(lane => `<div style="margin-bottom:18px">
+      <div style="font-weight:600;margin-bottom:2px">⟶ ${esc(lane.action)}</div>
+      <div style="font-size:11px;color:var(--mut);margin-bottom:8px">cell <span style="font-family:ui-monospace,Menlo,monospace">⟨${esc(lane.cell)}⟩</span> · ${esc(lane.note || '')}</div>
+      <div style="display:flex;align-items:stretch;gap:7px;overflow-x:auto;padding-bottom:6px">${lane.gates.map(gateCard).join('<div style="align-self:center;color:var(--mut);font-size:18px">→</div>')}</div>
+      ${(lane.recent && lane.recent.length) ? `<div style="margin-top:7px;font-size:11px;color:var(--mut)">recent: ${lane.recent.map(m => `${m.rolledBack ? '↩ reverted' : '✓ merged'} ${esc(String(m.goal || '').slice(0, 48))} <span style="font-family:ui-monospace,monospace">${esc(m.mergeCommit || '')}</span>`).join(' · ')}</div>` : ''}
+    </div>`).join('');
+  $('gl-lanes').insertAdjacentHTML('beforeend', '<div class="pmeta" style="margin-top:4px;font-size:11px">Next: each gate becomes a confined <b>checker</b> you can add live (“describe a check” → an agent writes it, governed by distribution-trust).</div>');
 };
 // The agent↔Agent C "internal messages" chat: what the fleet is building + how Agent C organizes it
 // (tools proposed → reviewed → admitted to the library), so dan can watch without a proposal card per tool.

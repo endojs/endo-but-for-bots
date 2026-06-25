@@ -2029,6 +2029,47 @@ const handler = async (req, res) => {
       return json(res, 404, { ok: false, error: 'unknown shared-tool route' });
     }
 
+    // ── /gauntlet — the FEEDBACK-LOOPS view (owner-only): the dev agent's checks & balances surfaced as
+    //    GATE-LANES in the propagator-gate model (each gate reads the action's cells → a verdict; the action
+    //    proceeds only while the verdict holds). Read-only "surface what exists": the real 4-discipline review
+    //    panel findings + the FAPO verify/auto-merge/re-verify/auto-revert ledger.
+    if (req.method === 'POST' && u.pathname === '/gauntlet') {
+      const { cap } = await jsonBody(req);
+      if (!nodeFor(cap)?.isRoot) return json(res, 403, { ok: false, error: 'the feedback-loops view is owner-only' });
+      const reviewed = customTools.listAll().filter(t => t.review);
+      const byDisc = {};
+      for (const t of reviewed) for (const f of (t.review.findings || [])) { (byDisc[f.discipline] || (byDisc[f.discipline] = [])).push({ tool: t.name, severity: f.severity, report: String(f.report || '').slice(0, 220), at: t.review.ranAt || '' }); }
+      const dGate = (id, name, checks) => ({ id, name, stage: 'post-produce', reads: 'the submitted code (a cell)', verdictCell: 'admission verdict', policy: 'advisory + admission gate', checks, flagged: (byDisc[id] || []).length, findings: (byDisc[id] || []).slice(-4).reverse() });
+      const disciplineLane = {
+        action: 'Admit an agent-authored component / tool',
+        cell: 'the submitted code',
+        note: `${reviewed.length} submission(s) reviewed so far`,
+        gates: [
+          dGate('ocapReviewer', 'ocap discipline', 'designation by reference (not forgeable strings) · least authority · no swissnum to DOM/URL/log · attenuation + revocation'),
+          dGate('propagatorReviewer', 'propagator discipline', 'state in CELLS not components · stateless/memoryless propagators · reactive wiring (not imperative re-render) · no over-wiring (= over-authority)'),
+          dGate('capHygieneReviewer', 'cap-hygiene', 'never render/persist a swissnum or #cap · copy + on-demand QR hand-offs · strip the cap from the address bar'),
+          dGate('sharingReviewer', 'sharing & distribution', 'attenuated + revocable shares · allowance metering · social-collateral end-user gate'),
+        ],
+      };
+      let merges = [];
+      try { merges = ((JSON.parse(fs.readFileSync(process.env.AUTO_MERGE_LEDGER || `${HOME}/.local/state/field-agent/auto-merge-ledger.json`, 'utf8')).merges) || []).slice(-8).reverse().map(m => ({ goal: m.goal, mergeCommit: String(m.mergeCommit || '').slice(0, 8), mergedAt: m.mergedAt, rolledBack: !!m.rolledBack })); } catch { /* no ledger yet */ }
+      const fapoLane = {
+        action: 'Self-improve the system (FAPO loop)',
+        cell: 'the worktree diff + the test outcome',
+        note: merges.length ? `${merges.length} recent auto-merge(s)` : 'no auto-merges yet',
+        gates: [
+          { id: 'verify', name: 'Verify (isolated checkout)', stage: 'pre-merge', reads: 'the diff', verdictCell: 'green/red', policy: 'BLOCK', checks: 'the success command / full test suite must pass in a CLEAN isolated checkout — an unverified change never lands' },
+          { id: 'merge', name: 'Flag-gated auto-merge', stage: 'merge', reads: 'verify verdict + the auto-merge flag', verdictCell: 'merged?', policy: 'gate', checks: 'only a verified-green, conflict-free change merges — as a --no-ff (one revertible merge commit) — and only if auto-merge is enabled' },
+          { id: 'reverify', name: 'Re-verify (post-merge)', stage: 'post-merge', reads: 'the live branch', verdictCell: 'still-green?', policy: 'BLOCK', checks: 'tests re-run on the LIVE branch after the merge — catches a change that interacts badly with concurrent work' },
+          { id: 'revert', name: 'Auto-revert', stage: 'post-merge', reads: 're-verify verdict', verdictCell: 'reverted?', policy: 'REVERT', checks: 'a post-merge regression auto-reverts the merge commit + records it in the ledger (rollback = one git revert)' },
+        ],
+        recent: merges,
+      };
+      return json(res, 200, { ok: true, agent: 'developer (Blacksmith) + self-improver',
+        model: 'Propagator-gate: each check is a propagator wired to the action’s cells — it reads them and writes a verdict; the action proceeds only while the verdict holds. Adding a check = wiring one more propagator (no change to the action). pre/per/post is just WHICH cell the gate reads.',
+        lanes: [disciplineLane, fapoLane] });
+    }
+
     // ── /forks/* — user-owned forks of confined Preact components (fork→edit→re-share, in-tree/no-iframe).
     // Available to ANY cap-holder (not root-only): owner is derived from the cap (forkOwnerOf). The one
     // exception is /forks/open (the share redemption) — token-gated, NO cap, vends only the source to render.
