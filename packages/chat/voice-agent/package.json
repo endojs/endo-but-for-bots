@@ -26,7 +26,8 @@
     "test:file-editor": "node file-editor.staging.test.cjs",
     "test:obj-nav": "node obj-nav.staging.test.cjs",
     "test:gauntlet": "node gauntlet.staging.test.cjs",
-    "test:agent-profile": "node agent-profile.staging.test.cjs"
+    "test:agent-profile": "node agent-profile.staging.test.cjs",
+    "test:object-inspector": "node object-inspector.staging.test.cjs"
   },
   "dependencies": {
     "@endo/exo-git": "workspace:^",

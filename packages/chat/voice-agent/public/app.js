@@ -102,6 +102,53 @@ const agentProfile = async who => {
   const ec = $('prof-ec'); if (ec) ec.onclick = () => go('feedback');
 };
 window.agentProfile = agentProfile; // reachable from any surface that names an agent
+
+// ── 🔬 OBJECT INSPECTOR — see + poke the goods. A live inventory object self-describes (describe/help +
+// its method set); the inspector lists its methods, lets you CALL one, and renders the result as an
+// interactive value TREE (records/arrays collapse; remotables surface their interface; secrets redacted
+// server-side). Rung 1 of the "blossom a renderer per object" loop — the generic fallback every object gets.
+const valNode = (v, key) => {
+  const row = document.createElement('div'); row.style.cssText = 'font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word';
+  const kpart = key != null ? `<span style="color:var(--acc,#39d3ff)">${esc(String(key))}</span>: ` : '';
+  if (v === null || v === undefined) { row.innerHTML = `${kpart}<span style="color:var(--mut)">${v === null ? 'null' : 'undefined'}</span>`; return row; }
+  const t = typeof v;
+  if (t === 'string') { row.innerHTML = `${kpart}<span style="color:var(--ok,#3fb950)">${esc(JSON.stringify(v))}</span>`; return row; }
+  if (t === 'number' || t === 'boolean') { row.innerHTML = `${kpart}<span style="color:#d29922">${esc(String(v))}</span>`; return row; }
+  if (v && v.__ref) { row.innerHTML = `${kpart}<span class="pill" title="a live remotable — call its .describe()/.help()">⛓ ${esc(v.__ref)}</span>`; return row; }
+  if (v && v.__fn) { row.innerHTML = `${kpart}<span class="pill">ƒ ${esc(v.__fn)}</span>`; return row; }
+  // array / object → collapsible
+  const isArr = Array.isArray(v); const entries = isArr ? v.map((x, i) => [i, x]) : Object.entries(v);
+  const head = document.createElement('div'); head.style.cssText = 'cursor:pointer'; head.innerHTML = `${kpart}<span style="color:var(--mut)">${isArr ? `▸ [${entries.length}]` : `▸ {${entries.length}}`}</span>`;
+  const kids = document.createElement('div'); kids.style.cssText = 'margin-left:14px;border-left:1px solid var(--edge);padding-left:8px;display:none';
+  let built = false;
+  head.onclick = () => { const open = kids.style.display !== 'none'; if (!built && !open) { for (const [k, val] of entries) kids.appendChild(valNode(val, k)); built = true; } kids.style.display = open ? 'none' : 'block'; head.querySelector('span:last-child').textContent = (open ? '▸ ' : '▾ ') + (isArr ? `[${entries.length}]` : `{${entries.length}}`); };
+  row.append(head, kids); return row;
+};
+const objectInspector = async name => {
+  showModal('<div class="qrlabel">loading inventory…</div>');
+  let objs; try { objs = await rpc('objectsList', []); } catch (e) { showModal(`<div class="qrlabel">🔬 Objects</div><div class="pmeta">${esc(e.message)}</div>`); return; }
+  const o = (objs || []).find(x => x.name === name) || (objs || [])[0];
+  if (!o) { showModal('<div class="qrlabel">🔬 Objects</div><div class="pmeta">No objects in your inventory yet — accept an Endo invite link.</div>'); return; }
+  const methods = (o.methods || []).length ? o.methods : ['describe'];
+  showModal(`<div class="qrlabel" style="font-size:16px">🔬 ${esc(o.name)} <span class="pmeta">· ${esc(o.transport)}</span></div>
+    <div class="pmeta" style="margin:2px 0 9px">${esc(o.description || 'a live capability in your inventory')} — self-describing: call a method to see the goods.</div>
+    <div class="set-sec"><div class="set-h">Methods</div>
+      <div class="set-row" style="gap:6px;align-items:center;flex-wrap:wrap">${methods.map(m => `<button class="mini insp-m" data-m="${esc(m)}">${esc(m)}()</button>`).join('')}</div>
+      <input id="insp-args" class="mini" placeholder="args (JSON array, or plain text for one string arg) — optional" style="width:100%;box-sizing:border-box;margin-top:7px;font-family:ui-monospace,monospace">
+    </div>
+    <div class="set-sec"><div class="set-h">Result</div><div id="insp-result" class="pmeta">— call a method —</div></div>`);
+  const call = async m => {
+    const out = $('insp-result'); out.textContent = `calling ${m}()…`;
+    let args = []; const raw = ($('insp-args') && $('insp-args').value || '').trim();
+    if (raw) { try { const p = JSON.parse(raw); args = Array.isArray(p) ? p : [p]; } catch { args = [raw]; } }
+    let r; try { r = await rpc('objectCall', [o.name, m, args]); } catch (e) { out.innerHTML = `<span style="color:var(--bad)">⚠︎ ${esc(e.message)}</span>`; return; }
+    out.innerHTML = ''; out.appendChild(valNode(r && r.value, null));
+    // auto-expand the top node so you see the goods immediately
+    const h = out.querySelector('div[style*="cursor"]'); if (h) h.click();
+  };
+  document.querySelectorAll('.insp-m').forEach(b => { b.onclick = () => call(b.dataset.m); });
+};
+window.objectInspector = objectInspector;
 const copyLink = async (s, btn) => { if (await writeClipboard(localizeUrl(s.url))) flashBtn(btn, 'copied ✓'); else revealLink(s, 'auto-copy was blocked — select & copy (⌘/Ctrl-C):'); };
 const showQr = s => { let body; try { const qr = window.qrcode(0, 'M'); qr.addData(localizeUrl(s.url)); qr.make(); body = qr.createImgTag(6, 6); } catch (e) { body = `<div class="err">QR unavailable: ${esc(e.message)}</div>`; } showModal(`<div class="qrlabel">scan to open “${esc(s.label || 'link')}”</div>${body}<span class="qrwarn">contains the credential — scan it, don't screen-share it</span>`); };
 
@@ -1464,6 +1511,7 @@ const rootFolders = () => {
   if (heldPowers.has('home')) r.push({ ns: 'home', label: 'Files', sub: 'home folder' });
   if (heldPowers.has('timers')) r.push({ ns: 'timers', label: 'Timers', sub: 'wake-ups' });
   if (heldPowers.has('notes')) r.push({ ns: 'notes', label: 'Notes', sub: 'your vault' });
+  if (heldPowers.has('objects')) r.push({ ns: 'objects', label: 'Objects', sub: 'inventory' });
   return r;
 };
 const mintNode = async (ns, handle, label, readOnly) => {
@@ -1520,6 +1568,13 @@ const renderNav = async () => {
     let nc; try { nc = await rpc('noteContent', [loc.handle]); } catch (e) { $('obj-node').innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
     $('obj-node').innerHTML = `<div class="kv" style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span><b>📄 ${esc(nc.name)}</b></span><button class="mini" id="sh-note">🔗 share</button></div><pre style="white-space:pre-wrap;word-break:break-word;max-height:62vh;overflow:auto;background:var(--panel);border:1px solid var(--edge);border-radius:7px;padding:10px;font-size:13px;margin-top:8px">${esc(nc.text || '')}</pre>`;
     const sb = $('sh-note'); if (sb) sb.onclick = () => mintNode('notes', loc.handle, nc.name, true);
+    return;
+  }
+  if (loc.ns === 'objects') { // the inventory of accepted live capabilities — click one → the object inspector
+    navNode = null; $('obj-list').innerHTML = '';
+    let objs = []; try { objs = await rpc('objectsList', []); } catch (e) { $('obj-node').innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+    $('obj-node').innerHTML = `<div class="kv"><b>📦 Inventory objects</b> <span class="pill">${objs.length}</span></div><div class="pmeta" style="margin:4px 0 8px">live capabilities you've accepted — click one to inspect + call its methods (see the goods).</div>` + (objs.length ? objs.map((o, i) => `<div class="share obj-obj" data-i="${i}" style="cursor:pointer"><div>🔬 <b>${esc(o.name)}</b> <span class="pill">${esc(o.transport)}</span></div>${o.description ? `<div style="font-size:11px;color:var(--mut)">${esc(o.description)}</div>` : ''}</div>`).join('') : '<div class="pill">none yet — accept an Endo invite link</div>');
+    document.querySelectorAll('#obj-node .obj-obj').forEach(el => { el.onclick = () => objectInspector(objs[+el.dataset.i].name); });
     return;
   }
   if (loc.leaf && loc.ns === 'home') { // a home-folder FILE leaf — viewing/editing lives in the Files app

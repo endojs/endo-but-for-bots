@@ -53,6 +53,28 @@ import { postInternal } from './internal-messages.mjs'; // the agent↔Agent C "
 // Sub-agents (scheduled, specialists, employed roles) run the composable-code harness (CEO-Bench: it
 // beats per-tool calls + specialized harnesses) by default. AGENT_CODEMODE=0 reverts to the classic loop.
 const AGENT_RUNNER = process.env.AGENT_CODEMODE === '0' ? runAgent : runAgentCode;
+// safeValue — a JSON-safe STRUCTURED snapshot of any value, for the client object-inspector tree. Never
+// throws (records → records with secret keys redacted, REMOTABLES → { __ref, methods } descriptors so they
+// don't re-trip the [object Object] / JSON.stringify-throws problem over /rpc). Bounded depth + width.
+const VALUE_SECRET = /secret|password|swissnum|privatekey|api[_-]?key|^token$|bearer/i;
+const safeValue = (v, depth = 0, seen = new WeakSet()) => {
+  if (v === null || v === undefined) return null;
+  const t = typeof v;
+  if (t === 'string') return v.length > 4000 ? `${v.slice(0, 4000)}… (+${v.length - 4000})` : v;
+  if (t === 'number' || t === 'boolean') return v;
+  if (t === 'bigint') return `${v}n`;
+  if (t === 'symbol') { try { return v.toString(); } catch { return '«symbol»'; } }
+  if (t === 'function') return { __fn: v.name || 'anon' };
+  if (depth > 6) return '…';
+  if (seen.has(v)) return '«circular»';
+  seen.add(v);
+  if (Array.isArray(v)) return v.slice(0, 100).map(x => { try { return safeValue(x, depth + 1, seen); } catch { return '«?»'; } });
+  let keys = null; try { keys = Object.keys(v); } catch { keys = null; }
+  if (keys && keys.length) { const o = {}; for (const k of keys.slice(0, 60)) { o[k] = VALUE_SECRET.test(k) ? '«redacted»' : (() => { try { return safeValue(v[k], depth + 1, seen); } catch { return '«throws»'; } })(); } return o; }
+  // no enumerable own keys → a remotable/presence; surface its interface tag (+ methods if it self-describes)
+  let tag = 'remotable'; try { const s = Object.prototype.toString.call(v); if (s.includes('Alleged')) tag = s.slice(8, -1); } catch { /* */ }
+  return { __ref: tag };
+};
 // A delegator-supplied NICKNAME → a readable, url-safe sub-agent id stem (or '' if none). A short
 // unique suffix is appended at the call site, so the same nickname can name many concurrent delegates.
 const nickId = s => String(s || '').trim().toLowerCase().replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
@@ -2174,6 +2196,21 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         if (!rel.endsWith('.md')) throw new Error('not a note');
         let text; try { text = fs.readFileSync(vaultReadPath(rel), 'utf8'); } catch (e) { throw new Error(`cannot read: ${e.message}`); }
         return harden({ kind: 'note', name: rel.split('/').pop().replace(/\.md$/, ''), handle: rel, text: text.slice(0, 200000) });
+      },
+      // ── interactive object inspector (client-reachable introspection of the live inventory) ──
+      // objectsList() → the inventory (name, transport, description, methods). objectCall(name, method, args)
+      // → routeObjectCall, returning a JSON-SAFE structured snapshot (safeValue) so the client can render a
+      // tree + recurse. Objects-power-gated; the held swissnum is used host-side, never returned.
+      objectsList: async () => {
+        if (!powerSet.has('objects')) throw new Error('no objects power held');
+        return harden(acceptedObjects.map(o => ({ name: o.name, transport: isPeerCallable(o) ? 'endo-peer' : (isHttpCallable(o) ? 'http' : (o.transport || 'iroh')), origin: isPeerCallable(o) ? '(live peer)' : (o.origin && o.origin !== 'null' ? o.origin : '(this instance)'), callable: isHttpCallable(o) || isIrohCallable(o) || isPeerCallable(o), description: o.description || '', methods: (o.methods || []).map(m => (typeof m === 'string' ? m : m.name)) })));
+      },
+      objectCall: async (name, method, args) => {
+        if (!powerSet.has('objects')) throw new Error('no objects power held');
+        const o = acceptedObjects.find(x => x.name === String(name || '')); if (!o) throw new Error('unknown object');
+        const r = await routeObjectCall(o, String(method || 'describe'), Array.isArray(args) ? args : (args === undefined ? [] : [args]));
+        if (!r || r.ok === false) throw new Error((r && r.error) || 'call failed');
+        return harden({ ok: true, value: safeValue(r.value) });
       },
       shareAgent: (handle, label, opts) => harden(node.shareAgent(handle, label, opts || {})),
       shareContacts: async (handle, label) => harden(await node.shareContacts(handle, label)),
