@@ -53,8 +53,16 @@ export const mountForkInto = async (host, opts = {}) => {
   const render = async () => {
     const got = await fetchSource();
     if (got.error) { stage.textContent = '⚠︎ ' + got.error; upgradeBar.innerHTML = ''; return; }
+    // Phase 5 end-user gate: a distribution share withholds source a reviewer hasn't approved.
+    if (got.gated) { stage.textContent = '🔒 ' + (got.note || 'pending distribution review'); upgradeBar.innerHTML = ''; return; }
     paint(got.source);
     renderUpgrade(got);
+    // distribution trust badge (advisory on a normal share; the gate already enforced it on an end-user share)
+    if (shareToken && got.distribution) {
+      const d = got.distribution;
+      upgradeBar.append(el('div', { style: `font-size:10px;margin-top:3px;color:${d.approved ? 'var(--ok,#3fb950)' : 'var(--mut,#7d8590)'}` },
+        [d.approved ? `✓ approved for distribution by ${d.by}` : '◌ not yet reviewed for distribution']));
+    }
   };
 
   const doEdit = async () => {

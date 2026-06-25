@@ -75,6 +75,7 @@ import { makeTollBridge } from './toll-bridge.mjs';
 import { makeLiveCells } from './live-cells.mjs';
 import { makeComponentShares } from './component-shares.mjs';
 import { makeForks } from './forks.mjs';
+import { makeDistTrust } from './dist-trust.mjs';
 import * as projects from './projects.mjs';
 import { makeMeetingScribe } from './meeting-scribe.mjs';
 import { opusComplete } from './delegate.mjs';
@@ -496,6 +497,9 @@ const componentShares = makeComponentShares({ file: `${HOME}/.local/state/voice-
 // regardless (it only vends source strings, which the client refuses to render unless the realm is frozen).
 const forks = makeForks({ file: process.env.FORKS_STORE || `${HOME}/.local/state/voice-agent/forks.json`, makePurse, purseStore });
 const forkOwnerOf = cap => { const n = nodeFor(cap); if (!n) return null; return n.isRoot ? 'root' : `u:${crypto.createHash('sha256').update(`fork-owner:${String(cap)}`).digest('hex').slice(0, 16)}`; };
+// Distribution-trust (Phase 5): the social-collateral graph that decides which fork VERSIONS are approved
+// for end-user distribution. Root (the operator) is the base authority; trust flows outward via grants.
+const distTrust = makeDistTrust({ file: process.env.DIST_TRUST_STORE || `${HOME}/.local/state/voice-agent/dist-trust.json`, rootId: 'root' });
 // build a read-only cell source for a shared cell (re-resolved each time from the live HA trie).
 const shareCellReader = handle => () => { const ro = haResolveReadOnly(handle); return ro && ro.state ? ro.state() : { state: '(unavailable)' }; };
 
@@ -1987,7 +1991,18 @@ const handler = async (req, res) => {
     if (req.method === 'POST' && u.pathname.startsWith('/forks/')) {
       const body = await jsonBody(req);
       // share redemption: a recipient with a token gets just the source (metered). Adopt+edit = /forks/create.
-      if (u.pathname === '/forks/open') return json(res, 200, forks.openShare(String(body.token || '')));
+      if (u.pathname === '/forks/open') {
+        const o = forks.openShare(String(body.token || ''));
+        if (o.ok) {
+          const ap = distTrust.approvalFor(o.id, o.source); // Phase 5: distribution-trust status of the served version
+          o.distribution = ap;
+          // END-USER GATE: a forEndUsers share NEVER vends source a reviewer hasn't approved — the source is
+          // withheld (blanked) and the recipient is told it's pending review. (A normal share still renders;
+          // the distribution status is advisory there — the widget shows a trust badge.)
+          if (o.forEndUsers && !ap.approved) { o.source = ''; o.gated = true; o.note = 'This shared component is pending a distribution reviewer’s approval.'; }
+        }
+        return json(res, 200, o);
+      }
       // Phase 4 recipient-side, token-gated (NO cap): try-on / accept / auto-accept an owner's newer version + read the owner's inbox.
       if (u.pathname === '/forks/upgrade/preview') return json(res, 200, forks.previewUpgrade(String(body.token || '')));
       if (u.pathname === '/forks/upgrade/accept') return json(res, 200, forks.acceptUpgrade(String(body.token || '')));
@@ -2001,9 +2016,24 @@ const handler = async (req, res) => {
       if (u.pathname === '/forks/history') { const h = forks.history(String(body.id || ''), owner); return json(res, 200, h ? { ok: true, versions: h } : { ok: false, error: 'unknown fork (or not yours)' }); }
       if (u.pathname === '/forks/revert') return json(res, 200, forks.revert(String(body.id || ''), body.version, owner));
       if (u.pathname === '/forks/remove') return json(res, 200, { ok: forks.remove(String(body.id || ''), owner) });
-      if (u.pathname === '/forks/share') return json(res, 200, forks.share({ id: String(body.id || ''), owner, charge: body.charge || {} }));
+      if (u.pathname === '/forks/share') return json(res, 200, forks.share({ id: String(body.id || ''), owner, charge: body.charge || {}, forEndUsers: !!body.forEndUsers }));
       if (u.pathname === '/forks/share/revoke') return json(res, 200, { ok: forks.revokeShare(String(body.token || ''), owner) });
       if (u.pathname === '/forks/notify') return json(res, 200, forks.notifyRecipients(String(body.id || ''), owner, String(body.message || ''))); // owner → recipients' inboxes ("I changed X — update?")
+      // ── Phase 5 distribution-trust (social collateral). grant/revoke a reviewer; approve/unapprove a fork
+      //    VERSION for end-user distribution; query the graph + a fork's status. Owner = the caller's id.
+      if (u.pathname === '/forks/review/reviewers') return json(res, 200, { ok: true, reviewers: distTrust.reviewers(), me: owner, amReviewer: distTrust.isReviewer(owner) });
+      if (u.pathname === '/forks/review/grant') return json(res, 200, distTrust.grantReviewer(owner, String(body.reviewerId || '')));
+      if (u.pathname === '/forks/review/revoke-reviewer') return json(res, 200, distTrust.revokeReviewer(owner, String(body.reviewerId || '')));
+      if (u.pathname === '/forks/review/approve' || u.pathname === '/forks/review/unapprove') {
+        if (!distTrust.isReviewer(owner)) return json(res, 200, { ok: false, error: 'you are not a distribution reviewer' });
+        // body.source (an explicit version, e.g. from a share you reviewed) takes precedence; otherwise the
+        // owner's CURRENT fork source. Precedence matters: approving/revoking a SPECIFIC past version must
+        // target that version, not whatever the fork has since been edited to.
+        const id = String(body.id || ''); const r = forks.read(id, owner); const src = body.source || (r && r.source);
+        if (!src) return json(res, 200, { ok: false, error: 'no source to review (own the fork, or pass the reviewed source)' });
+        return json(res, 200, u.pathname === '/forks/review/approve' ? distTrust.approve(owner, id, r ? r.version : (body.version || null), src) : distTrust.revokeApproval(owner, id, src));
+      }
+      if (u.pathname === '/forks/review/status') { const id = String(body.id || ''); const r = forks.read(id, owner); const src = (r && r.source) || body.source; return json(res, 200, { ok: true, status: src ? distTrust.approvalFor(id, src) : { approved: false }, amReviewer: distTrust.isReviewer(owner) }); }
       if (u.pathname === '/forks/shares') return json(res, 200, { ok: true, shares: forks.sharesFor(String(body.id || ''), owner) });
       if (u.pathname === '/forks/edit') {
         const id = String(body.id || '');

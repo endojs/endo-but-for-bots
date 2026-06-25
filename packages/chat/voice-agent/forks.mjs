@@ -91,11 +91,13 @@ export const makeForks = ({ file, makePurse, purseStore }) => {
   // share({ id, owner, charge }) → { ok, token } (plaintext, shown once). charge mirrors component-shares.
   // The share PINS to the fork's current version (the invite = current mutated state). Later owner edits
   // become an UPGRADE the recipient chooses to accept (atomic), preview (try-on), or auto-accept — Phase 4.
-  const share = ({ id, owner, charge = {} }) => {
+  const share = ({ id, owner, charge = {}, forEndUsers = false }) => {
     const f = get(id, owner); if (!f) return { ok: false, error: 'unknown fork (or not yours)' };
     const token = crypto.randomBytes(18).toString('base64url'); const th = hash(token);
     const scheme = ['free', 'expires', 'allowance'].includes(charge.scheme) ? charge.scheme : 'free';
-    const rec = { forkId: id, owner: String(owner), createdAt: new Date().toISOString(), revoked: false, scheme, pinnedVersion: curVersion(f), autoAccept: false, inbox: [] };
+    // forEndUsers = a distribution share: the recipient (a code-illiterate end-user) only receives source
+    // a distribution reviewer has APPROVED (Phase 5; the gate is enforced server-side at /forks/open).
+    const rec = { forkId: id, owner: String(owner), createdAt: new Date().toISOString(), revoked: false, scheme, forEndUsers: !!forEndUsers, pinnedVersion: curVersion(f), autoAccept: false, inbox: [] };
     if (scheme === 'expires') rec.expiresAt = now() + Math.max(1, Math.min(8760, Number(charge.hours) || 24)) * 3600e3;
     if (scheme === 'allowance' && makePurse && purseStore) { rec.purseKey = purseKeyFor(th); rec.perOpen = Math.max(1, Math.round(Number(charge.perOpen) || 10000)); const total = Math.max(rec.perOpen, Math.round(Number(charge.total) || 1000000)); const p = makePurse(total, { onChange: (b, g) => purseStore.set(rec.purseKey, b, g) }); purseStore.set(rec.purseKey, p.balance(), p.granted()); }
     data.shares[th] = rec; save();
@@ -113,7 +115,7 @@ export const makeForks = ({ file, makePurse, purseStore }) => {
     const cur = curVersion(f);
     if (r.autoAccept && r.pinnedVersion !== cur) { r.pinnedVersion = cur; save(); } // auto: always ride the latest
     const ver = Math.min(r.pinnedVersion || cur, cur);
-    return { ok: true, id: f.id, name: f.name, source: sourceAtVersion(f, ver), version: ver, currentVersion: cur, upgradeAvailable: ver < cur, autoAccept: !!r.autoAccept, inbox: (r.inbox || []).slice(-20) };
+    return { ok: true, id: f.id, name: f.name, source: sourceAtVersion(f, ver), version: ver, currentVersion: cur, upgradeAvailable: ver < cur, autoAccept: !!r.autoAccept, forEndUsers: !!r.forEndUsers, inbox: (r.inbox || []).slice(-20) };
   };
   // ── Phase 4: atomic upgrades + try-on (recipient-side, token-gated — no cap) ──
   // previewUpgrade: the LATEST source WITHOUT changing the pin (non-destructive "try it on for size").
