@@ -3519,7 +3519,7 @@ const renderProjects = async () => {
   await loadSeedChats(); // refresh so each timer agent's runs folder reflects the latest scheduled runs
   // a timer agent's runs = the scheduled seed-chats filed under it (kept out of the sidebar; here is their home)
   const agentRuns = ag => seedChats.filter(s => s && s.source === 'scheduled' && s.scheduled && s.scheduled.agent === ag.name && s.scheduled.project === p.name).sort((x, y) => (y.ts || 0) - (x.ts || 0));
-  const agents = (p.scheduledAgents || []).map(a => { const runs = agentRuns(a); return `
+  const agents = (p.scheduledAgents || []).map(a => { return `
       <div style="border:1px solid var(--edge);border-radius:8px;padding:8px;margin:6px 0">
         <div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><b>⏰ ${esc(a.name)}</b>
           <span><button class="mini" data-run="${p.id}|${a.id}">Run now</button> <button class="mini" data-delagent="${p.id}|${a.id}">×</button></span></div>
@@ -3534,8 +3534,8 @@ const renderProjects = async () => {
             <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--mut)">timing:</div><select class="hdr-sel" style="max-width:none;flex:1" data-ecad="${p.id}|${a.id}"><option value="-1">keep current · ${esc(cadenceLabel(a.schedule) || 'event-triggered')}</option>${CADENCES.map((c, i) => `<option value="${i}">${esc(c.label)}</option>`).join('')}</select></div>
             <div><button class="mini" data-saveagent="${p.id}|${a.id}">Save changes</button></div>
           </div></details>
-        <details style="margin-top:6px"${runs.length ? '' : ''}><summary class="mini" style="display:inline-block">📁 runs (${runs.length})</summary>
-          <div style="margin-top:6px;display:flex;flex-direction:column;gap:4px">${runs.length ? runs.map(r => `<div class="share" style="padding:5px 7px"><div style="font-size:12px">${esc(new Date(r.ts || 0).toLocaleString())}</div><div><button class="mini" data-openrun="${esc(r.id)}">open</button> <button class="mini" data-delrun="${esc(r.id)}" title="throw away this run">🗑</button></div></div>`).join('') : '<div style="color:var(--mut);font-size:12px">no runs yet — scheduled runs land here and GC after a week</div>'}</div>
+        <details style="margin-top:6px"><summary class="mini" style="display:inline-block">📁 run log (${(a.runs || []).length})</summary>
+          <div style="margin-top:6px;display:flex;flex-direction:column;gap:4px">${(a.runs || []).length ? (a.runs).map(r => `<div class="share" style="padding:5px 7px;align-items:flex-start"><div style="font-size:12px;min-width:0;flex:1"><div>${esc(new Date(r.at).toLocaleString())} ${r.ok === false ? '⚠️ failed' : (r.nProp ? `· ${r.nProp} proposal(s)` : '· ✓')}</div>${r.summary ? `<div style="color:var(--mut);font-size:11px;white-space:pre-wrap;word-break:break-word">${esc(String(r.summary).slice(0, 200))}</div>` : ''}</div>${r.chatId ? `<button class="mini" data-openrun="${esc(r.chatId)}">open</button>` : ''}</div>`).join('') : '<div style="color:var(--mut);font-size:12px">no runs yet — every run lands here (silent no-op runs too); the chat opens for runs that had something to report</div>'}</div>
         </details>
         <div data-out="${p.id}|${a.id}" style="font-size:12px;color:var(--acc);margin-top:4px"></div>
       </div>`; }).join('');
