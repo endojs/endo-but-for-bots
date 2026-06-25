@@ -1214,13 +1214,23 @@ const handler = async (req, res) => {
       const ok = interjections.push(sid, text);
       return json(res, 200, { ok, pending: interjections.pending(sid) });
     }
-    // The "raw context" viewer: the exact system persona + tool/capability manifest + message history the
-    // agent last received for this chat. Cap-gated (a valid capability), no swissnums in the bundle.
+    // The "raw context" viewer. Prefer the LIVE capture (the exact provider `messages` of this chat's most
+    // recent LLM call). If there's none (e.g. after a server restart — lastCtx is in-memory), RECONSTRUCT a
+    // faithful provider-shaped bundle from the chat's transcript (sent by the client) + the cap's CURRENT
+    // persona + tool manifest. Cap-gated; no swissnums (the manifest describes caps by reference).
     if (req.method === 'POST' && u.pathname === '/chat/context') {
-      const { sessionId, cap } = await jsonBody(req);
-      if (!nodeFor(cap)) return json(res, 403, { ok: false, error: 'a valid capability is required' });
-      const ctx = lastCtx.get(String(sessionId || '').slice(0, 64));
-      return json(res, 200, ctx ? { ok: true, context: ctx } : { ok: false, error: 'no turn has run in this chat yet — send a message first' });
+      const { sessionId, cap, history } = await jsonBody(req);
+      const node = nodeFor(cap);
+      if (!node) return json(res, 403, { ok: false, error: 'a valid capability is required' });
+      const sid = String(sessionId || '').slice(0, 64);
+      const live = lastCtx.get(sid);
+      if (live) return json(res, 200, { ok: true, context: live });
+      const hist = (Array.isArray(history) ? history : []).filter(m => m && (m.role === 'user' || m.role === 'assistant') && m.content).map(m => ({ role: m.role, content: String(m.content).slice(0, 8000) }));
+      if (!hist.length) return json(res, 200, { ok: false, error: 'no turn has run in this chat yet — send a message first' });
+      let manifest = [];
+      try { const built = node.toolbox({ chatId: sid, userText: '', emit: () => {}, app: undefined, homeSubkey: null, charge: () => true, purse: makePurse(0), perProvider: {} }); manifest = built.manifest || []; } catch { /* manifest best-effort */ }
+      const sysText = `${getPersona() || ''}\n\n## Tools / capabilities the agent may call\n${manifest.map(m => `- ${m.name}(${m.args ? Object.keys(m.args).join(', ') : (m.methods || []).join('/')}): ${m.description || ''}`).join('\n')}`;
+      return json(res, 200, { ok: true, context: { at: Date.now(), agent: 'field-agent', model: 'default', powers: [...node.powers], reconstructed: true, messages: [{ role: 'system', content: sysText.slice(0, 24000) }, ...hist] } });
     }
     // ── voice/text turn: the cap decides the agent's reach. No cap → no powers. ──
     if (req.method === 'POST' && u.pathname === '/chat') {

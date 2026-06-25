@@ -55,6 +55,12 @@ const post = (p, body) => fetch(`${BASE}${p}`, { method: 'POST', headers: { 'con
   ok(ctx && Array.isArray(ctx.powers), 'the bundle lists the granted powers');
   ok(ctx && !JSON.stringify(ctx).includes(cap), 'the bundle contains NO swissnum (cap-hygiene)');
 
+  // RECONSTRUCTION: a chat with NO live capture (e.g. after a restart) but a transcript → rebuilt bundle
+  const recon = await post('/chat/context', { cap, sessionId: 'never-ran-sid', history: [{ role: 'user', content: 'what is the capital of france' }, { role: 'assistant', content: 'Paris.' }] });
+  ok(recon.ok && recon.context.reconstructed === true, 'a chat with no live capture reconstructs from its transcript');
+  ok(recon.ok && recon.context.messages.some(m => m.role === 'system' && m.content.length > 0), 'reconstruction includes the cap’s current persona + tool manifest as the system message');
+  ok(recon.ok && recon.context.messages.some(m => m.role === 'user' && /capital of france/.test(m.content)) && recon.context.messages.some(m => m.role === 'assistant' && /Paris/.test(m.content)), 'reconstruction includes the alternating transcript turns');
+
   let chromium = null;
   try { ({ chromium } = require('/usr/lib/node_modules/@playwright/cli/node_modules/playwright-core')); } catch {}
   if (!chromium) { console.log('  SKIP - browser button/modal check (no chromium)'); }
