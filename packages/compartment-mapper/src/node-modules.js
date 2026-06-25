@@ -459,7 +459,11 @@ const computeLanguageForExtensionByPrefix = (
   if (auxiliaryDescriptors.length === 0) {
     return undefined;
   }
-  let layered = inferParsers(packageDescriptor, packageLocation, languageOptions);
+  let layered = inferParsers(
+    packageDescriptor,
+    packageLocation,
+    languageOptions,
+  );
   const records = [{ prefix: '', languageForExtension: layered }];
   for (const auxiliary of auxiliaryDescriptors) {
     const auxiliaryLanguageForExtension = inferParsers(
@@ -1123,9 +1127,7 @@ const translateGraph = (
       scopes,
       ...(patterns.length > 0 ? { patterns } : {}),
       parsers,
-      ...(languageForExtensionByPrefix
-        ? { languageForExtensionByPrefix }
-        : {}),
+      ...(languageForExtensionByPrefix ? { languageForExtensionByPrefix } : {}),
       types,
       policy: /** @type {SomePackagePolicy} */ (packagePolicy),
     };

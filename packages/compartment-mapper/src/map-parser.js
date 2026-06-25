@@ -409,13 +409,15 @@ export const makeMapParsers = ({
     ) {
       return undefined;
     }
-    return languageForExtensionByPrefix.map(({ prefix, languageForExtension }) => ({
-      prefix,
-      languageForExtension: validateLanguageForExtension(
-        languageForExtension,
-        parserForLanguage,
-      ),
-    }));
+    return languageForExtensionByPrefix.map(
+      ({ prefix, languageForExtension }) => ({
+        prefix,
+        languageForExtension: validateLanguageForExtension(
+          languageForExtension,
+          parserForLanguage,
+        ),
+      }),
+    );
   };
 
   if (!hasAsyncTransforms && isSyncParserForLanguage(parserForLanguage)) {
