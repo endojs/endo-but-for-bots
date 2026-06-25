@@ -3247,7 +3247,10 @@ const renderSettingsUsage = async body => {
 //    the cap + state + fetching (/files/*); the island only renders + calls back. Re-renders
 //    via draw() through renderInto (the host-owned-state island pattern, cf. buildAskCard).
 const renderSettingsFiles = async body => {
-  body.innerHTML = '<div class="set-h">📂 Files</div><div class="pmeta" style="margin-bottom:9px">Browse + add files in your power folders. The browser is a <b>confined island</b> — it holds no capability; the server reads/writes on your behalf.</div><div id="fb-mount"></div>';
+  body.innerHTML = '<div class="set-h">📂 Files</div><div class="pmeta" style="margin-bottom:9px">Browse + add files in your power folders. The browser is a <b>confined island</b> — it holds no capability; the server reads/writes on your behalf.</div><div id="fb-mount"></div>'
+    + '<div id="fb-share" style="margin-top:12px;border-top:1px solid var(--edge);padding-top:10px">'
+    + '<div class="pmeta" style="margin-bottom:6px">🔗 <b>Share the current folder as an app</b> — a scoped, revocable link (a confined cap, not your root) that lets someone browse + add files in <i>just this folder</i>, against a granted allowance.</div>'
+    + '<div class="kit-rowx" style="gap:6px;align-items:center"><span class="pmeta">allowance $</span><input id="fb-share-allow" class="hdr-sel" style="max-width:80px" value="1.00"><button class="mini" id="fb-share-go">Share current folder</button> <span id="fb-share-out" class="pmeta"></span></div></div>';
   const mount = $('fb-mount'); if (!mount) return;
   const roots = ((await pf('/files/roots')).roots) || [];
   const st = { root: (roots[0] && roots[0].key) || 'vault', path: '', entries: [], file: null, busy: false, error: '' };
@@ -3261,6 +3264,17 @@ const renderSettingsFiles = async body => {
   const onDownload = () => { const f = st.file; if (f && f.b64) dlB64(f.name, f.b64); };
   const onRemove = async name => { if (!confirm(`Delete ${name}?`)) return; const r = await pf('/files/rm', { root: st.root, path: rel(name) }); if (r.error) { st.error = r.error; draw(); } else { st.file = null; list(); } };
   const onAdd = () => { const inp = document.createElement('input'); inp.type = 'file'; inp.onchange = async () => { const file = inp.files && inp.files[0]; if (!file) return; if (file.size > 25 * 1024 * 1024) { st.error = `${file.name} is over the 25MB limit`; draw(); return; } st.busy = true; draw(); const b64 = await fileToB64(file); const r = await pf('/files/put', { root: st.root, path: rel(file.name), b64 }); st.busy = false; if (r.error) { st.error = r.error; draw(); } else list(); }; inp.click(); };
+  // 🔗 Share the CURRENT folder as a scoped, allowance-funded app link. The cap stays in JS (copied to the
+  // clipboard on click) and is NEVER rendered to the DOM — the cap-hygienic copy hand-off.
+  { const sg = $('fb-share-go'); if (sg) sg.onclick = async () => {
+    const out = $('fb-share-out'); const allow = Math.max(0, Math.round((parseFloat(($('fb-share-allow') || {}).value) || 1) * 1e6));
+    sg.disabled = true; if (out) out.textContent = 'minting…';
+    const r = await pf('/apps/share', { app: 'file-browser', roots: [st.root], allowanceUusd: allow });
+    sg.disabled = false;
+    if (!r || r.error) { if (out) out.textContent = (r && r.error) || 'share failed'; return; }
+    if (out) { out.innerHTML = `✓ scoped link for <b>${esc(st.root)}</b> ($${(allow / 1e6).toFixed(2)}) <button class="mini" id="fb-share-copy">Copy link</button> <span id="fb-share-msg" style="color:var(--acc)"></span>`;
+      const cb = $('fb-share-copy'); if (cb) cb.onclick = async () => { try { await navigator.clipboard.writeText(r.url); $('fb-share-msg').textContent = 'copied'; } catch { $('fb-share-msg').textContent = 'copy failed — link in console'; console.log(r.url); } }; }
+  }; }
   list();
 };
 

@@ -273,6 +273,26 @@ const fileSafe = (root, rel) => {
   return pth;
 };
 
+// ── APP-SHARES: a scoped, metered grant of an app (island) to a non-owner. The owner mints a confined
+//    scoped cap (mintScopedCap — persisted/re-registered across restart) and this record attenuates WHAT it
+//    can reach (e.g. which file roots) alongside a funded allowance purse. Keyed by a hash of the cap, never
+//    the raw swissnum. The recipient opens /apps/<app>#cap=<scopedcap>; the backend authorizes via
+//    appShareFor + attenuates + (for inference apps) meters against the purse. First step of the
+//    break-out → minimize → fork → re-share lifecycle. ──
+const appKey = c => crypto.createHash('sha256').update(String(c || '')).digest('hex').slice(0, 16);
+const APP_SHARES_FILE = `${HOME}/.local/state/voice-agent/app-shares.json`;
+let appShares = {};
+try { appShares = JSON.parse(fs.readFileSync(APP_SHARES_FILE, 'utf8')) || {}; } catch { appShares = {}; }
+const saveAppShares = () => { try { fs.mkdirSync(path.dirname(APP_SHARES_FILE), { recursive: true }); fs.writeFileSync(APP_SHARES_FILE, JSON.stringify(appShares, null, 2)); } catch { /* */ } };
+const appShareFor = cap => (cap ? appShares[appKey(cap)] || null : null);
+// file roots a caller may reach: ALL for root; for a file-browser app-share, only its attenuated subset.
+const allowedFileRoots = (node, cap) => {
+  if (node && node.isRoot) return FILE_ROOTS;
+  const sh = appShareFor(cap);
+  if (sh && sh.app === 'file-browser' && Array.isArray(sh.roots)) return FILE_ROOTS.filter(r => sh.roots.includes(r.key));
+  return [];
+};
+
 const VAULT_DIR = path.join(HOME, 'obsidian/vault');
 const VAULT_NAME = 'Obsidian'; // the Obsidian app's vault name (not the dir basename)
 const VAULT_REAL = (() => { try { return fs.realpathSync(VAULT_DIR); } catch { return VAULT_DIR; } })();
@@ -2160,17 +2180,39 @@ const handler = async (req, res) => {
     // ── PROJECTS: a folder grouping chats + scheduled agents, sharing one home folder.
     //    The surface for "recurring self-improvement from within the chat projects interface".
     //    Root-gated: projects are dan's automation (a shared/sub cap must not manage them). ──
+    // ── /apps/share: the OWNER mints a scoped, attenuated, allowance-funded grant of an app to a
+    //    non-owner. Mints a confined cap (no powers — access is gated by the app-share record, least
+    //    authority), records what it may reach (roots), funds an allowance purse, and returns the cap so
+    //    the owner can hand off /apps/<app>#cap=<scopedcap> (copy/QR — not rendered/persisted). ──
+    if (req.method === 'POST' && u.pathname === '/apps/share') {
+      const body = await jsonBody(req);
+      const node = nodeFor(body.cap);
+      if (!node || !node.isRoot) return json(res, 403, { error: 'sharing an app needs your root capability' });
+      const app = String(body.app || '').trim();
+      if (app !== 'file-browser') return json(res, 400, { error: 'unknown app (only file-browser is shareable so far)' });
+      const roots = (Array.isArray(body.roots) ? body.roots : []).map(String).filter(k => FILE_ROOTS.some(r => r.key === k));
+      if (!roots.length) return json(res, 400, { error: 'grant at least one folder (roots)' });
+      const allowanceUusd = Math.max(0, Math.round(Number(body.allowanceUusd) || defaultAllowance));
+      const out = mintScopedCap({ powers: [], label: String(body.label || `${app} share`) });
+      const k = appKey(out.swiss);
+      appShares[k] = { app, roots, label: out.name, allowanceUusd, createdAt: new Date().toISOString() };
+      saveAppShares();
+      try { const p = makePurse(allowanceUusd, { onChange: (b, g) => purseStore.set(`app:${k}`, b, g) }); purseStore.set(`app:${k}`, p.balance(), p.granted()); } catch { /* purse best-effort */ }
+      return json(res, 200, { scopedCap: out.swiss, app, roots, allowanceUusd, url: `${BASE_URL}/apps/${app}#cap=${out.swiss}` });
+    }
     // ── File-browser island data layer: browse + read/add files WITHIN the named
-    //    power folders (FILE_ROOTS). Root-gated (owner-only); every path is traversal-
-    //    guarded by fileSafe. The confined island holds no cap + no fs — it calls these. ──
+    //    power folders. The OWNER (root cap) reaches all FILE_ROOTS; a non-owner holding a
+    //    file-browser APP-SHARE (scoped cap) reaches ONLY its attenuated root subset. Every
+    //    path is traversal-guarded by fileSafe. The confined island holds no cap + no fs. ──
     if (req.method === 'POST' && u.pathname.startsWith('/files')) {
       const body = await jsonBody(req);
       const node = nodeFor(body.cap);
-      if (!node || !node.isRoot) return json(res, 403, { error: 'file access needs your root capability' });
+      const roots = allowedFileRoots(node, body.cap); // [] = neither root nor a valid file-browser share
+      if (!roots.length) return json(res, 403, { error: 'file access needs your capability (the owner, or a file-browser app-share)' });
       try {
-        if (u.pathname === '/files/roots') return json(res, 200, { roots: FILE_ROOTS.map(r => ({ key: r.key, label: r.label })) });
-        const root = fileRoot(body.root);
-        if (!root) return json(res, 400, { error: 'unknown root' });
+        if (u.pathname === '/files/roots') return json(res, 200, { roots: roots.map(r => ({ key: r.key, label: r.label })) });
+        const root = roots.find(r => r.key === String(body.root || '')); // restricted to the caller's allowed roots
+        if (!root) return json(res, 400, { error: 'unknown or unauthorized root' });
         if (u.pathname === '/files/list') {
           const dir = fileSafe(root, body.path);
           let entries = [];
