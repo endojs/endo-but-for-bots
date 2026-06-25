@@ -14,6 +14,9 @@ if (hp.get('cap')) { try { localStorage.setItem(CAP_KEY, hp.get('cap')); } catch
 if (location.hash) { try { history.replaceState(null, '', location.pathname); } catch { /* */ } } // lift the cap out of the address bar
 
 const appName = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
+// ⊟ Minimize to chat: hand off to the chat app (same origin); the cap is already in localStorage (stored
+// above), so index.html restores it and embeds this app as a live inline widget — no cap in the URL.
+{ const mb = document.getElementById('apps-minimize'); if (mb) mb.onclick = () => { location.href = `/#minimize-app=${encodeURIComponent(appName)}`; }; }
 const root = document.getElementById('app');
 const setHead = (title, sub) => { const t = document.getElementById('apptitle'); if (t) t.textContent = title; document.title = `${title} · Agent C`; const s = document.getElementById('appsub'); if (s && sub) s.textContent = sub; };
 

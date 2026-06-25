@@ -32,6 +32,7 @@ let cap = _hashParams.get('cap');
 // chat link carries NO swissnum — cap-hygiene preserved.
 let pendingChat = _hashParams.get('chat') || null;
 const pendingShare = _hashParams.get('chatshare') || null; // Feature B: opened via a chat-share link
+const pendingMinimizeApp = _hashParams.get('minimize-app') || null; // handoff from /apps/<name> → minimize into a fresh chat (cap restored from localStorage)
 if (cap) { try { localStorage.setItem(CAP_KEY, cap); } catch {} }
 if (location.hash) { try { history.replaceState(null, '', location.pathname + location.search); } catch {} } // strip the fragment (cap and/or chat)
 if (!cap) { try { cap = localStorage.getItem(CAP_KEY) || null; } catch {} }
@@ -1807,6 +1808,37 @@ async function syncLoad({ keepActive = false } = {}) {
   } catch {}
 }
 const pushTx = (who, text, extra = {}) => { activeTx.push({ who, text, at: Date.now(), ...extra }); saveTx(); };
+
+// ── apps minimized into a chat ───────────────────────────────────────────────
+// Mount an APP (an island + its host controller) INLINE, authorized by the CHAT's cap — so a standalone
+// /apps page can be "minimized" into a chat as a live, interactive widget, and a scoped recipient gets the
+// same view, attenuated to their grant. (Reuses the FileBrowser island + /files; chatCap() = root for the
+// owner, or the scoped app-share cap for a recipient.)
+const mountAppInto = async (el, app) => {
+  if (app !== 'file-browser') { el.textContent = `unknown app: ${app}`; return; }
+  const apf = (p, b = {}) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), ...b }) }).then(r => r.json()).catch(e => ({ error: e.message }));
+  const roots = ((await apf('/files/roots')).roots) || [];
+  if (!roots.length) { el.textContent = '(this capability has no access to this app)'; return; }
+  const st = { root: (roots[0] && roots[0].key) || 'vault', path: '', entries: [], file: null, busy: false, error: '' };
+  const rel = n => (st.path ? `${st.path}/${n}` : n);
+  const draw = () => { if (window.__fieldIslands && window.__fieldIslands.renderInto) window.__fieldIslands.renderInto('FileBrowser', el, { roots, root: st.root, path: st.path, entries: st.entries, file: st.file, busy: st.busy, error: st.error, onRoot, onOpen, onCrumb, onAdd, onDownload, onRemove, onCloseFile }); };
+  const list = async () => { st.busy = true; st.error = ''; st.file = null; draw(); const r = await apf('/files/list', { root: st.root, path: st.path }); st.busy = false; if (r.error) { st.error = r.error; st.entries = []; } else st.entries = r.entries || []; draw(); };
+  const onRoot = k => { st.root = k; st.path = ''; st.file = null; list(); };
+  const onCrumb = i => { const s = st.path.split('/').filter(Boolean); st.path = i < 0 ? '' : s.slice(0, i + 1).join('/'); st.file = null; list(); };
+  const onOpen = async (n, isDir) => { if (isDir) { st.path = rel(n); list(); return; } st.busy = true; draw(); const r = await apf('/files/get', { root: st.root, path: rel(n) }); st.busy = false; if (r.error) st.error = r.error; else st.file = { name: r.name, text: r.text, size: r.size, b64: r.b64 }; draw(); };
+  const onCloseFile = () => { st.file = null; draw(); };
+  const onDownload = () => { const f = st.file; if (f && f.b64) dlB64(f.name, f.b64); };
+  const onRemove = async n => { if (!confirm(`Delete ${n}?`)) return; const r = await apf('/files/rm', { root: st.root, path: rel(n) }); if (r.error) { st.error = r.error; draw(); } else { st.file = null; list(); } };
+  const onAdd = () => { const inp = document.createElement('input'); inp.type = 'file'; inp.onchange = async () => { const f = inp.files && inp.files[0]; if (!f) return; if (f.size > 25 * 1024 * 1024) { st.error = `${f.name} over 25MB`; draw(); return; } st.busy = true; draw(); const b64 = await fileToB64(f); const r = await apf('/files/put', { root: st.root, path: rel(f.name), b64 }); st.busy = false; if (r.error) st.error = r.error; list(); }; inp.click(); };
+  list();
+};
+// minimize an app into a fresh chat as a persistent inline widget, then open it.
+const minimizeAppToChat = app => {
+  newChat(); // mint a fresh ephemeral chat (sessionId set)
+  if (!chats.some(c => c.id === sessionId)) { chats.unshift({ id: sessionId, title: `🧩 ${app}`, ts: Date.now(), lastMsgAt: Date.now() }); saveChats(); } // commit it (no first message would otherwise persist it)
+  pushTx('widget', '', { app }); // the minimized app, rendered inline by renderTx
+  document.body.classList.remove('landing'); showTab('talk'); renderTx(); renderChatList();
+};
 const titleFrom = t => { const ch = chats.find(c => c.id === sessionId); if (ch && (!ch.title || ch.title === 'New chat')) { ch.title = t.slice(0, 40); saveChats(); renderChatList(); } };
 
 // Google-style landing: an empty chat centres the composer in mid-screen (with a
@@ -1934,6 +1966,12 @@ const renderTx = () => {
     const m = activeTx[i];
     try { // one bad message must not stop the rest of the transcript from rendering
       if (m.who === 'widget' && m.site) { log.appendChild(makeInlineWidget(m.site, m.id)); continue; } // a pasted site, rendered inline as a live widget
+      if (m.who === 'widget' && m.app) { // an app minimized into this chat — mount the island + its controller inline (authorized by the chat's cap)
+        const wrap = document.createElement('div'); wrap.className = 'msg';
+        wrap.innerHTML = `<div class="who">🧩 <span>${esc(m.app)}</span> <span style="font-size:10px;color:var(--mut);opacity:.7;margin-left:6px">minimized app</span></div><div class="app-mount" style="margin-top:4px"></div>`;
+        log.appendChild(wrap); try { mountAppInto(wrap.querySelector('.app-mount'), m.app); } catch { /* mount best-effort */ }
+        continue;
+      }
       if (m.who === 'agent') { // render the ACTIVE fork (model/param variant) of this answer
         const v = activeVariant(m);
         if (_arr(v.steps).length) log.appendChild(traceGeometry(_arr(v.steps))); // the SVG trace sits ABOVE the message (tap it for the 3D)
@@ -3253,7 +3291,7 @@ const renderSettingsFiles = async body => {
   body.innerHTML = '<div class="set-h">📂 Files</div><div class="pmeta" style="margin-bottom:9px">Browse + add files in your power folders. The browser is a <b>confined island</b> — it holds no capability; the server reads/writes on your behalf.</div><div id="fb-mount"></div>'
     + '<div id="fb-share" style="margin-top:12px;border-top:1px solid var(--edge);padding-top:10px">'
     + '<div class="pmeta" style="margin-bottom:6px">🔗 <b>Share the current folder as an app</b> — a scoped, revocable link (a confined cap, not your root) that lets someone browse + add files in <i>just this folder</i>, against a granted allowance.</div>'
-    + '<div class="kit-rowx" style="gap:6px;align-items:center"><span class="pmeta">allowance $</span><input id="fb-share-allow" class="hdr-sel" style="max-width:80px" value="1.00"><button class="mini" id="fb-share-go">Share current folder</button> <span id="fb-share-out" class="pmeta"></span></div></div>';
+    + '<div class="kit-rowx" style="gap:6px;align-items:center"><span class="pmeta">allowance $</span><input id="fb-share-allow" class="hdr-sel" style="max-width:80px" value="1.00"><button class="mini" id="fb-share-go">Share current folder</button> <button class="mini" id="fb-minimize">⊟ Minimize into a chat</button> <span id="fb-share-out" class="pmeta"></span></div></div>';
   const mount = $('fb-mount'); if (!mount) return;
   const roots = ((await pf('/files/roots')).roots) || [];
   const st = { root: (roots[0] && roots[0].key) || 'vault', path: '', entries: [], file: null, busy: false, error: '' };
@@ -3278,6 +3316,7 @@ const renderSettingsFiles = async body => {
     if (out) { out.innerHTML = `✓ scoped link for <b>${esc(st.root)}</b> ($${(allow / 1e6).toFixed(2)}) <button class="mini" id="fb-share-copy">Copy link</button> <span id="fb-share-msg" style="color:var(--acc)"></span>`;
       const cb = $('fb-share-copy'); if (cb) cb.onclick = async () => { try { await navigator.clipboard.writeText(r.url); $('fb-share-msg').textContent = 'copied'; } catch { $('fb-share-msg').textContent = 'copy failed — link in console'; console.log(r.url); } }; }
   }; }
+  { const mb = $('fb-minimize'); if (mb) mb.onclick = () => { closeModal(); minimizeAppToChat('file-browser'); }; } // bring this app into a chat as a live inline widget
   list();
 };
 
@@ -3502,6 +3541,7 @@ const boot = async () => {
     ? `Hi — I'm Agent C. I can ${(d.powers || []).map(p => p.label.toLowerCase()).join('; ')}. Type a message, or tap 🎤 for voice.`
     : `You hold a shared link for: ${powers}. Type a message, or tap 🎤 for voice.`;
   initChats(); // restore chats + active transcript (shows greeting if empty)
+  if (pendingMinimizeApp) { try { minimizeAppToChat(pendingMinimizeApp); } catch (e) { console.warn('minimize-app handoff', e); } } // /apps → "minimize to chat" landed here
   setStatus('');
   refreshBadge(); setInterval(refreshBadge, 60000); // 🔔 notification badge
   loadModels(); loadAgentList(); loadProjectList(); // populate the header agent + model-provider selectors and the project menu
