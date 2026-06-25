@@ -100,7 +100,7 @@ function makeModulePlugins(options) {
       node = t.expressionStatement(t.identifier('null')),
     ) => {
       node.loc = src.loc;
-      // @ts-ignore - no comments allowed on ExpressionStatement
+      // @ts-expect-error - no comments allowed on ExpressionStatement
       node.comments = [...(src.leadingComments || [])];
       t.inheritsComments(node, src);
       return node;
@@ -320,7 +320,7 @@ function makeModulePlugins(options) {
         ) {
           importMeta.present = true;
           path.replaceWithMultiple([
-            // @ts-ignore - dubious
+            // @ts-expect-error - dubious
             replace(path.node, hiddenIdentifier(h.HIDDEN_META)),
           ]);
         }
@@ -368,12 +368,12 @@ function makeModulePlugins(options) {
                 break;
               // import { importFrom as importTo } from 'module';
               case 'ImportSpecifier':
-                // @ts-ignore - needs Identifier
+                // @ts-expect-error - needs Identifier
                 importFrom = spec.imported.name;
                 break;
               default:
                 throw path.buildCodeFrameError(
-                  // @ts-ignore - exhaustive switch
+                  // @ts-expect-error - exhaustive switch
                   `Unrecognized import specifier type ${spec.type}`,
                 );
             }
@@ -427,13 +427,13 @@ function makeModulePlugins(options) {
             );
           }
 
-          // @ts-ignore - no id on ArrayExpression
+          // @ts-expect-error - no id on ArrayExpression
           if (decl.id) {
             // Just keep the same declaration and mark it as the default.
             path.replaceWithMultiple([
-              // @ts-ignore - no expression in ArrayExpression
+              // @ts-expect-error - no expression in ArrayExpression
               replace(path.node, decl),
-              // @ts-ignore - no id on ArrayExpression
+              // @ts-expect-error - no id on ArrayExpression
               t.expressionStatement(t.callExpression(callee, [decl.id])),
             ]);
             return;
@@ -443,11 +443,11 @@ function makeModulePlugins(options) {
           path.replaceWithMultiple([
             replace(
               path.node,
-              // @ts-ignore - wants ExpressionStatement
+              // @ts-expect-error - wants ExpressionStatement
               t.variableDeclaration('const', [
                 t.variableDeclarator(
                   t.objectPattern([t.objectProperty(id, cid)]),
-                  // @ts-ignore - could be a TSDeclareFunction
+                  // @ts-expect-error - could be a TSDeclareFunction
                   t.objectExpression([t.objectProperty(id, expr)]),
                 ),
               ]),
@@ -462,7 +462,7 @@ function makeModulePlugins(options) {
           return;
         }
 
-        // @ts-ignore - could be undefined
+        // @ts-expect-error - could be undefined
         const { name } = path.node.id;
         if (doAnalyze) {
           topLevelIsOnce[name] = /** @type {Binding} */ (
@@ -471,11 +471,11 @@ function makeModulePlugins(options) {
         }
         if (doTransform) {
           if (topLevelExported[name]) {
-            // @ts-ignore - could be undefined
+            // @ts-expect-error - could be undefined
             const callee = t.memberExpression(markExport(name), path.node.id);
             path.replaceWithMultiple([
               path.node,
-              // @ts-ignore - could be undefined
+              // @ts-expect-error - could be undefined
               t.expressionStatement(t.callExpression(callee, [path.node.id])),
             ]);
           }
@@ -487,7 +487,7 @@ function makeModulePlugins(options) {
           return;
         }
 
-        // @ts-ignore - could be undefined
+        // @ts-expect-error - could be undefined
         const { name } = path.node.id;
         if (doAnalyze) {
           topLevelIsOnce[name] = /** @type {Binding} */ (
@@ -570,7 +570,7 @@ function makeModulePlugins(options) {
           }
 
           if (decl) {
-            // @ts-ignore - XXX unsure
+            // @ts-expect-error - XXX unsure
             const declarations = decl.declarations || [decl];
             const vids = declarations.flatMap(({ id }) =>
               collectPatternIdentifiers(path, id),
@@ -586,13 +586,13 @@ function makeModulePlugins(options) {
           }
 
           for (const spec of specs) {
-            // @ts-ignore - XXX unsure what "local" is
+            // @ts-expect-error - XXX unsure what "local" is
             const { local, exported } = spec;
             const importFrom =
               spec.type === 'ExportNamespaceSpecifier' ? '*' : local.name;
             let myUpdaterSources;
             // If local.name is reexported we omit it.
-            // @ts-ignore - no name on StringLiteral
+            // @ts-expect-error - no name on StringLiteral
             const importTo = exported.name;
 
             if (source) {
@@ -608,7 +608,7 @@ function makeModulePlugins(options) {
               if (!reexportMap[source.value]) {
                 reexportMap[source.value] = [];
               }
-              // @ts-ignore - no name on StringLiteral
+              // @ts-expect-error - no name on StringLiteral
               reexportMap[source.value].push([importFrom, exported.name]);
               // Don't populate importSources here, so the live binding won't get
               // generated by the transform
@@ -647,7 +647,7 @@ function makeModulePlugins(options) {
           }
         }
         if (doTransform) {
-          // @ts-ignore - no decl on ClassDeclaration
+          // @ts-expect-error - no decl on ClassDeclaration
           path.replaceWithMultiple(decl ? [replace(path.node, decl)] : []);
         }
       },
