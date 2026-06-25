@@ -2831,6 +2831,49 @@ const componentSelect = () => {
   addEventListener('scroll', () => { if (chip.style.display === 'flex') clearChip(); }, true);
 };
 componentSelect();
+// ── { } raw-context viewer: a top-right button revealing EXACTLY what the agent was shown this chat
+//    (system persona + tool/capability manifest + message history + this turn), monospace + theme colours. ──
+const fmtRawContext = c => {
+  const L = [];
+  L.push(`agent:    ${c.agent}`);
+  L.push(`model:    ${c.model}`);
+  L.push(`powers:   ${(c.powers || []).join(', ') || '(none)'}`);
+  L.push(`captured: ${new Date(c.at).toLocaleString()}`);
+  L.push('', '━━━ SYSTEM (persona) ━━━', c.persona || '(none)', '');
+  L.push(`━━━ TOOLS / CAPABILITIES (${(c.tools || []).length}) ━━━`);
+  for (const t of (c.tools || [])) L.push(`• ${t.name}(${(t.args || []).join(', ')})${t.methods ? ` [methods: ${(t.methods || []).join(', ')}]` : ''}: ${t.description || ''}`);
+  L.push('', `━━━ MESSAGES (${(c.history || []).length} prior + this turn) ━━━`);
+  for (const m of (c.history || [])) { L.push(`[${m.role}]`, m.content, ''); }
+  L.push('[user · this turn]', c.userText || '');
+  return L.join('\n');
+};
+const rawContextUI = () => {
+  const btn = document.createElement('button');
+  btn.id = 'ctx-btn'; btn.title = 'Reveal the raw context + messages shown to the agent';
+  btn.textContent = '{ }';
+  btn.style.cssText = 'position:fixed;top:max(10px,env(safe-area-inset-top));right:max(12px,env(safe-area-inset-right));z-index:60;font:600 13px ui-monospace,Menlo,Consolas,monospace;background:var(--panel);color:var(--mut);border:1px solid var(--edge);border-radius:8px;padding:4px 9px;cursor:pointer;line-height:1';
+  const back = document.createElement('div');
+  back.style.cssText = 'position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.55);display:none;align-items:stretch;justify-content:center;padding:max(16px,env(safe-area-inset-top)) 12px max(16px,env(safe-area-inset-bottom))';
+  const panel = document.createElement('div');
+  panel.style.cssText = 'background:var(--bg);color:var(--ink);border:1px solid var(--edge);border-radius:12px;width:min(920px,100%);max-height:100%;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 18px 60px rgba(0,0,0,.6)';
+  const head = document.createElement('div');
+  head.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 13px;border-bottom:1px solid var(--edge);font:600 13px ui-monospace,Menlo,Consolas,monospace;color:var(--ink)';
+  head.innerHTML = '<span style="color:var(--acc)">{ }</span><span>raw context shown to the agent</span><span style="flex:1"></span>';
+  const close = document.createElement('button'); close.textContent = '✕'; close.style.cssText = 'background:var(--panel);color:var(--ink);border:1px solid var(--edge);border-radius:7px;padding:3px 9px;cursor:pointer;font:inherit';
+  head.appendChild(close);
+  const pre = document.createElement('pre');
+  pre.style.cssText = 'margin:0;padding:13px;overflow:auto;font:12px/1.55 ui-monospace,Menlo,Consolas,monospace;color:var(--ink);white-space:pre-wrap;word-break:break-word';
+  panel.append(head, pre); back.appendChild(panel); document.body.append(btn, back);
+  const hide = () => { back.style.display = 'none'; };
+  close.onclick = hide; back.onclick = e => { if (e.target === back) hide(); };
+  addEventListener('keydown', e => { if (e.key === 'Escape' && back.style.display !== 'none') hide(); });
+  btn.onclick = async () => {
+    pre.textContent = 'loading…'; back.style.display = 'flex';
+    let r; try { r = await (await fetch('/chat/context', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId }) })).json(); } catch (e) { r = { error: e.message }; }
+    pre.textContent = (r && r.ok) ? fmtRawContext(r.context) : '⚠︎ ' + ((r && r.error) || 'could not load context');
+  };
+};
+rawContextUI();
 // ── 🖼 the component GALLERY — every UI component rendered live with DUMMY sample data, in a grid, so you
 //    (and agents) can see the framework's vocabulary at a glance. It reflects the active theme (the same
 //    propagator feeds these previews), so it doubles as a live style reference. Self-contained samples

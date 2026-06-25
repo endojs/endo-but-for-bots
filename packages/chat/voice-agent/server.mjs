@@ -714,6 +714,7 @@ const runProjectAgent = async (project, agent) => {
 };
 
 const sessions = new Map(); // sessionId → [{role,content}...]
+const lastCtx = new Map(); // sessionId → the exact context bundle last handed to the agent (for the "raw context" viewer)
 const runs = new Map();     // sessionId → AbortController (barge-in cancel)
 const interjections = makeInterjections(); // sessionId → queued mid-turn user messages (drained at each step boundary)
 // sessionId → { state:'running'|'done'|'timedOut'|'exhausted'|'cancelled', node, text, result?, startedAt, at }.
@@ -1213,6 +1214,14 @@ const handler = async (req, res) => {
       const ok = interjections.push(sid, text);
       return json(res, 200, { ok, pending: interjections.pending(sid) });
     }
+    // The "raw context" viewer: the exact system persona + tool/capability manifest + message history the
+    // agent last received for this chat. Cap-gated (a valid capability), no swissnums in the bundle.
+    if (req.method === 'POST' && u.pathname === '/chat/context') {
+      const { sessionId, cap } = await jsonBody(req);
+      if (!nodeFor(cap)) return json(res, 403, { ok: false, error: 'a valid capability is required' });
+      const ctx = lastCtx.get(String(sessionId || '').slice(0, 64));
+      return json(res, 200, ctx ? { ok: true, context: ctx } : { ok: false, error: 'no turn has run in this chat yet — send a message first' });
+    }
     // ── voice/text turn: the cap decides the agent's reach. No cap → no powers. ──
     if (req.method === 'POST' && u.pathname === '/chat') {
       const { sessionId, text, cap, attachments, model, history: clientHistory, agent, resume } = await jsonBody(req);
@@ -1285,6 +1294,15 @@ const handler = async (req, res) => {
       const meteredLLM = makeMeteredLLM({ callLLM, purse, perProvider });
       const TURN_DEADLINE_MS = Number(process.env.TURN_DEADLINE_MS) || 360000; // hard per-turn limit → a LEGIBLE timeout, never a silent stall (the crowdsupply hang)
       let deadlineHit = false; let deadlineT = null;
+      // Capture the EXACT context the agent is about to receive — system persona + the tool/capability
+      // manifest + the message history + this turn's text — so the "raw context" viewer shows the truth
+      // (no swissnums: manifests describe caps by reference, never the secret). Bounded.
+      lastCtx.set(sid, {
+        at: Date.now(), agent: agent && agent !== 'field-agent' ? agent : 'field-agent', model: String(model || 'default'),
+        powers: [...runNode.powers], persona: String(runPersona || '').slice(0, 20000),
+        tools: manifest.map(m => ({ name: m.name, description: m.description, args: m.args ? Object.keys(m.args) : undefined, methods: m.methods })),
+        history: history.map(h => ({ role: h.role, content: String(h.content).slice(0, 8000) })), userText: String(t).slice(0, 8000),
+      });
       const r = await Promise.race([
         AGENT_RUNNER({
         toolbox, manifest, userText: t, history, resumeMessages, attachments: agentAttachments, signal: ac.signal, persona: runPersona, model: String(model || 'default'),
