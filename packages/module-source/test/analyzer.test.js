@@ -49,6 +49,51 @@ test('analyzeModule() identifies imports and exports via buildRecord', t => {
   t.true(record.exports.includes('baz'));
 });
 
+const buildRecordFor = source => {
+  const ctx = makeModuleAnalysisContext();
+  const ast = parseBabel(source, {
+    sourceType: 'module',
+    tokens: true,
+    createParenthesizedExpressions: true,
+  });
+  traverseBabel(ast, ctx.analyzePass.visitor);
+  traverseBabel(ast, ctx.transformPass.visitor);
+  const { code } = generateBabel(ast, { retainLines: true }, source);
+  return ctx.buildRecord(code);
+};
+
+test('static-literal dynamic import() is surfaced in imports and __dynamicImports__', t => {
+  const record = buildRecordFor(`export const f = () => import('./foo.js');`);
+  t.true([...record.imports].includes('./foo.js'));
+  t.deepEqual([...record.__dynamicImports__], ['./foo.js']);
+});
+
+test('a specifier imported both statically and dynamically stays a static import', t => {
+  // Finding: a specifier that is also a static import (or re-export) must NOT be
+  // listed in __dynamicImports__, or compartment-mapper would wrongly treat the
+  // genuine static dependency as deferrable.
+  const record = buildRecordFor(
+    `import x from './shared.js'; export const f = () => import('./shared.js'); export const y = x;`,
+  );
+  t.true([...record.imports].includes('./shared.js'));
+  t.deepEqual([...record.__dynamicImports__], []);
+});
+
+test('a re-exported specifier imported dynamically stays a static dependency', t => {
+  const record = buildRecordFor(
+    `export { a } from './shared.js'; export const f = () => import('./shared.js');`,
+  );
+  t.true([...record.imports].includes('./shared.js'));
+  t.deepEqual([...record.__dynamicImports__], []);
+});
+
+test('a computed dynamic import() specifier is not surfaced', t => {
+  const record = buildRecordFor(
+    `export const f = name => import('./' + name + '.js');`,
+  );
+  t.deepEqual([...record.__dynamicImports__], []);
+});
+
 test('analyzeModule().buildRecord produces a record with __syncModuleProgram__', t => {
   const source = `import { foo } from 'bar'; export const x = foo();`;
 
