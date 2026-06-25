@@ -13,6 +13,7 @@ import { renderWidgets, disposeAllWidgets } from './grain-ui.js'; // live/intera
 import { theme, cycleTheme, initTheme } from './theme.js'; // the user's global style as a read-only propagator (dark/light MVP)
 import { forkRetry, forkPage, forkCount, forkIndex } from './fork-model.js'; // retry-as-fork data-model (pure, unit-tested)
 import { renderMarkdown } from './md.js'; // safe Markdown→DOM for agent replies + the notification modal
+import { mountForkInto } from './fork-widget.js'; // mount a confined FORK (in-tree, no-iframe) inline in a chat
 initTheme(); // restore the saved theme + start applying it to :root as CSS vars
 (() => { // a header toggle for light/dark (the first control of the userspace-extensible style framework)
   try {
@@ -33,6 +34,7 @@ let cap = _hashParams.get('cap');
 let pendingChat = _hashParams.get('chat') || null;
 const pendingShare = _hashParams.get('chatshare') || null; // Feature B: opened via a chat-share link
 const pendingMinimizeApp = _hashParams.get('minimize-app') || null; // handoff from /apps/<name> → minimize into a fresh chat (cap restored from localStorage)
+const pendingForkToken = _hashParams.get('fork') || null; // a shared FORK link (#fork=<token>): open it inline so the recipient can use, adopt + re-share
 if (cap) { try { localStorage.setItem(CAP_KEY, cap); } catch {} }
 if (location.hash) { try { history.replaceState(null, '', location.pathname + location.search); } catch {} } // strip the fragment (cap and/or chat)
 if (!cap) { try { cap = localStorage.getItem(CAP_KEY) || null; } catch {} }
@@ -1839,6 +1841,22 @@ const minimizeAppToChat = app => {
   pushTx('widget', '', { app }); // the minimized app, rendered inline by renderTx
   document.body.classList.remove('landing'); showTab('talk'); renderTx(); renderChatList();
 };
+// Open a confined FORK inline in a chat. `fork` = { id?, shareToken?, name? } — owner mounts by id, a
+// recipient (shared link) mounts by shareToken. Mirrors minimizeAppToChat: a fresh chat, the fork widget.
+const openForkInChat = (fork, title) => {
+  newChat();
+  if (!chats.some(c => c.id === sessionId)) { chats.unshift({ id: sessionId, title: title || `⑂ ${fork.name || 'fork'}`, ts: Date.now(), lastMsgAt: Date.now() }); saveChats(); }
+  pushTx('widget', '', { fork });
+  document.body.classList.remove('landing'); showTab('talk'); renderTx(); renderChatList();
+};
+// Fork an island/app: snapshot its source server-side into a NEW user fork, then open it inline to edit.
+// `source` is the (endowments,props)=>vnode text; for islands we seed from a minimal wrapper the agent edits.
+const forkIntoChat = async ({ source, name, baseId }) => {
+  const r = await fetch('/forks/create', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), source, name, baseId }) }).then(x => x.json()).catch(e => ({ ok: false, error: e.message }));
+  if (!r.ok) { alert(r.error || 'could not fork'); return; }
+  openForkInChat({ id: r.id, name }, `⑂ ${name || 'fork'}`);
+};
+window.forkIntoChat = forkIntoChat; // reachable from the components/apps surfaces
 const titleFrom = t => { const ch = chats.find(c => c.id === sessionId); if (ch && (!ch.title || ch.title === 'New chat')) { ch.title = t.slice(0, 40); saveChats(); renderChatList(); } };
 
 // Google-style landing: an empty chat centres the composer in mid-screen (with a
@@ -1970,6 +1988,13 @@ const renderTx = () => {
         const wrap = document.createElement('div'); wrap.className = 'msg';
         wrap.innerHTML = `<div class="who">🧩 <span>${esc(m.app)}</span> <span style="font-size:10px;color:var(--mut);opacity:.7;margin-left:6px">minimized app</span></div><div class="app-mount" style="margin-top:4px"></div>`;
         log.appendChild(wrap); try { mountAppInto(wrap.querySelector('.app-mount'), m.app); } catch { /* mount best-effort */ }
+        continue;
+      }
+      if (m.who === 'widget' && m.fork) { // a confined FORK mounted inline (owner via id, recipient via shareToken)
+        const wrap = document.createElement('div'); wrap.className = 'msg';
+        wrap.innerHTML = `<div class="who">⑂ <span>${esc(m.fork.name || 'fork')}</span> <span style="font-size:10px;color:var(--mut);opacity:.7;margin-left:6px">${m.fork.shareToken ? 'shared fork' : 'your fork'}</span></div><div class="fork-mount" style="margin-top:4px"></div>`;
+        log.appendChild(wrap);
+        try { mountForkInto(wrap.querySelector('.fork-mount'), { cap: chatCap(), id: m.fork.id, shareToken: m.fork.shareToken, name: m.fork.name, onAdopt: fid => { m.fork = { id: fid, name: (m.fork.name || 'fork') + ' (mine)' }; saveTx(); } }); } catch { /* best-effort */ }
         continue;
       }
       if (m.who === 'agent') { // render the ACTIVE fork (model/param variant) of this answer
@@ -3542,6 +3567,7 @@ const boot = async () => {
     : `You hold a shared link for: ${powers}. Type a message, or tap 🎤 for voice.`;
   initChats(); // restore chats + active transcript (shows greeting if empty)
   if (pendingMinimizeApp) { try { minimizeAppToChat(pendingMinimizeApp); } catch (e) { console.warn('minimize-app handoff', e); } } // /apps → "minimize to chat" landed here
+  if (pendingForkToken) { try { openForkInChat({ shareToken: pendingForkToken, name: 'shared fork' }, '⑂ Shared fork'); } catch (e) { console.warn('fork handoff', e); } } // #fork=<token> shared link → open inline
   setStatus('');
   refreshBadge(); setInterval(refreshBadge, 60000); // 🔔 notification badge
   loadModels(); loadAgentList(); loadProjectList(); // populate the header agent + model-provider selectors and the project menu

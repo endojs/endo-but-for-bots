@@ -12,6 +12,7 @@
     "test:confinement": "node confinement.staging.test.cjs",
     "test:lockdown": "node lockdown-survive.staging.test.cjs",
     "test:forks": "node forks-loop.staging.test.cjs",
+    "test:fork-widget": "node fork-widget.staging.test.cjs",
     "test:component-select": "node component-select.staging.test.cjs",
     "test:shape": "node shape-graph.staging.test.cjs",
     "test:trace": "node trace-fanout.staging.test.cjs",

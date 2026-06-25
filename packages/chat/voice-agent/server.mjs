@@ -490,7 +490,7 @@ const componentShares = makeComponentShares({ file: `${HOME}/.local/state/voice-
 // owner = a stable, NON-SECRET id derived from the cap ('root' for the root cap, else a one-way hash — never
 // the cap itself, cap-hygiene). Forks render via client renderSource under lockdown; the store is live-safe
 // regardless (it only vends source strings, which the client refuses to render unless the realm is frozen).
-const forks = makeForks({ file: `${HOME}/.local/state/voice-agent/forks.json`, makePurse, purseStore });
+const forks = makeForks({ file: process.env.FORKS_STORE || `${HOME}/.local/state/voice-agent/forks.json`, makePurse, purseStore });
 const forkOwnerOf = cap => { const n = nodeFor(cap); if (!n) return null; return n.isRoot ? 'root' : `u:${crypto.createHash('sha256').update(`fork-owner:${String(cap)}`).digest('hex').slice(0, 16)}`; };
 // build a read-only cell source for a shared cell (re-resolved each time from the live HA trie).
 const shareCellReader = handle => () => { const ro = haResolveReadOnly(handle); return ro && ro.state ? ro.state() : { state: '(unavailable)' }; };
@@ -945,6 +945,7 @@ const handler = async (req, res) => {
     if (u.pathname === '/grain-ui.js') return serveFile(res, 'grain-ui.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/theme.js') return serveFile(res, 'theme.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/fork-model.js') return serveFile(res, 'fork-model.js', 'text/javascript; charset=utf-8');
+    if (u.pathname === '/fork-widget.js') return serveFile(res, 'fork-widget.js', 'text/javascript; charset=utf-8'); // mounts a confined fork inline in a chat
     if (u.pathname === '/md.js') return serveFile(res, 'md.js', 'text/javascript; charset=utf-8');
     // the sandboxed component runtime. Served with its OWN no-network CSP (a src= iframe uses its response
     // CSP, NOT the parent's — so the inline runtime runs while all network stays blocked). Loaded with

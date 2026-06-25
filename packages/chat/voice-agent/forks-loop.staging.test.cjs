@@ -32,6 +32,7 @@ const SRC2 = "(endowments, props) => endowments.h(Banner, { kind: 'info' }, 'FOR
     env: { ...process.env, PORT: String(PORT), BIND: '127.0.0.1', FIELD_LOCKDOWN: '1',
       SEED_FILE: path.join(tmp, 'root.swiss'), OUT_DIR: path.join(tmp, 'out'),
       PROJECTS_STORE: path.join(tmp, 'projects.json'), MEMO_RUNS_FILE: path.join(tmp, 'memo.json'),
+      FORKS_STORE: path.join(tmp, 'forks.json'),
       PRINT_ROOT_CAP: '1' },
     stdio: ['ignore', 'ignore', 'ignore'],
   });
