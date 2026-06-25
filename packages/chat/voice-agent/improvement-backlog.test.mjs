@@ -8,7 +8,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'backlog-test-'));
 process.env.IMPROVEMENT_BACKLOG = path.join(tmp, 'backlog.json');
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-const { addBacklog, listBacklog, nextOpen, recordOutcome, clearResolved, normalizeTestCmd, goalTargets, missingTargets } = await import('./improvement-backlog.mjs');
+const { addBacklog, listBacklog, nextOpen, recordOutcome, clearResolved, normalizeTestCmd, goalTargets, missingTargets, FAILURE_THRESHOLD } = await import('./improvement-backlog.mjs');
 after(() => { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* */ } });
 
 test('pre-flight target guard: a goal whose named paths all 404 is rejected; a real path (or none) passes', () => {
@@ -86,4 +86,40 @@ test('clearResolved removes merged + staged items and leaves OPEN ones, returnin
   assert.equal(remaining.length, 1, 'only the open item remains');
   assert.equal(remaining[0].id, o.id, 'the remaining item is the open one');
   assert.equal(remaining[0].status, 'open');
+});
+
+test('FAILURE THRESHOLD: a target is auto-moved to terminal "failed" after 3 unsuccessful attempts so it cannot block the queue', () => {
+  process.env.IMPROVEMENT_BACKLOG = path.join(tmp, 'failure-threshold.json');
+  assert.equal(FAILURE_THRESHOLD, 3, 'the default failure threshold is 3 attempts');
+  const stuck = addBacklog({ goal: 'In stuck/file.mjs, attempt an impossible change that keeps failing, plus a test.', priority: 9 });
+  const other = addBacklog({ goal: 'In other/file.mjs, a healthy lower-priority change L plus a test asserting L.', priority: 1 });
+
+  // attempt 1: failed → still open (bounded retry), still the top target
+  let r = recordOutcome(stuck.id, { status: 'failed', reason: 'fail 1' });
+  assert.equal(r.status, 'open'); assert.equal(r.attempts, 1);
+  assert.equal(nextOpen().id, stuck.id, 'still picked after 1 failure');
+
+  // attempt 2: failed → still open
+  r = recordOutcome(stuck.id, { status: 'failed', reason: 'fail 2' });
+  assert.equal(r.status, 'open'); assert.equal(r.attempts, 2);
+  assert.equal(nextOpen().id, stuck.id, 'still picked after 2 failures (under the threshold)');
+
+  // attempt 3: hits the threshold → terminal 'failed', drops out of the open queue
+  r = recordOutcome(stuck.id, { status: 'failed', reason: 'fail 3' });
+  assert.equal(r.status, 'failed', 'auto-moved to terminal failed at the 3rd unsuccessful attempt');
+  assert.equal(r.attempts, 3);
+  const it = listBacklog().find(x => x.id === stuck.id);
+  assert.equal(it.status, 'failed', 'persisted as terminal failed');
+
+  // the failing target NO LONGER blocks the queue — nextOpen now drains the OTHER target
+  const nxt = nextOpen();
+  assert.ok(nxt && nxt.id === other.id, 'a single failing target no longer blocks the whole queue');
+  assert.notEqual(nxt.id, stuck.id, 'the exhausted target is never picked again');
+
+  // a custom failureThreshold is honored (e.g. fail fast after 1)
+  process.env.IMPROVEMENT_BACKLOG = path.join(tmp, 'failure-threshold-custom.json');
+  const ff = addBacklog({ goal: 'In ff/file.mjs, a change that should be parked after a single failure, plus a test.' });
+  const fr = recordOutcome(ff.id, { status: 'failed', reason: 'one and done', failureThreshold: 1 });
+  assert.equal(fr.status, 'failed', 'a failureThreshold of 1 parks the target after one failure');
+  assert.equal(nextOpen(), null, 'no open target remains once the only target is parked');
 });

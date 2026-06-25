@@ -29,8 +29,14 @@ export const addBacklog = ({ goal, successCommand, rationale, by, priority } = {
   return { ok: true, id: item.id };
 };
 
-// the highest-priority OPEN target (ties broken oldest-first). Skips items that already failed too often.
-export const nextOpen = ({ maxAttempts = 2 } = {}) => load().items
+// the FAILURE THRESHOLD: after this many unsuccessful attempts a target is parked in a terminal status
+// ('failed') by recordOutcome so it can NEVER be picked again — one failing target can't block the whole queue.
+export const FAILURE_THRESHOLD = 3;
+
+// the highest-priority OPEN target (ties broken oldest-first). Only 'open' items below the failure threshold
+// are eligible; once a target hits FAILURE_THRESHOLD it is moved to a terminal 'failed' status (see recordOutcome)
+// and is no longer 'open', so it drops out of the queue and the loop drains the next target instead of stalling.
+export const nextOpen = ({ maxAttempts = FAILURE_THRESHOLD } = {}) => load().items
   .filter(i => i.status === 'open' && (i.attempts || 0) < maxAttempts)
   .sort((a, b) => (b.priority - a.priority) || (a.addedAt < b.addedAt ? -1 : 1))[0] || null;
 
@@ -53,15 +59,24 @@ export const missingTargets = (goal, exists) => {
 };
 
 // record the outcome of an attempt (FAPO attribution): 'merged' | 'staged' (verified, awaiting review) |
-// 'failed' (empty/red — keep the reason so the next attempt or the operator can learn).
-export const recordOutcome = (id, { status, branch, reason } = {}) => {
+// 'failed' (empty/red — keep the reason so the next attempt or the operator can learn). An unsuccessful attempt
+// returns the target to 'open' for a BOUNDED retry — but once it has racked up FAILURE_THRESHOLD (default 3)
+// unsuccessful attempts it is parked in a TERMINAL 'failed' status so it leaves the open queue permanently and
+// one persistently-failing target can never block the rest of the backlog from draining.
+export const recordOutcome = (id, { status, branch, reason, failureThreshold = FAILURE_THRESHOLD } = {}) => {
   const s = load(); const it = s.items.find(x => x.id === String(id));
   if (!it) return { ok: false, error: 'no such backlog item' };
   it.attempts = (it.attempts || 0) + 1;
-  it.status = status === 'merged' || status === 'staged' ? status : 'open'; // failed → back to open (bounded by maxAttempts) so it can be retried/refined
+  if (status === 'merged' || status === 'staged') {
+    it.status = status; // a successful (or verified-staged) attempt is terminal
+  } else if (it.attempts >= failureThreshold) {
+    it.status = 'failed'; // exhausted the retry budget → terminal 'failed', no longer 'open' (queue is never blocked)
+  } else {
+    it.status = 'open'; // failed but under the threshold → back to open for a bounded retry/refine
+  }
   it.lastOutcome = { at: now(), status, branch: branch || null, reason: String(reason || '').slice(0, 400) };
   save(s);
-  return { ok: true, status: it.status, attempts: it.attempts };
+  return { ok: true, status: it.status, attempts: it.attempts, threshold: failureThreshold };
 };
 
 // summarize the backlog by status — counts items in each lifecycle bucket. REUSES load().
