@@ -1831,14 +1831,17 @@ const mountAppInto = async (el, app) => {
   const apf = (p, b = {}) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), ...b }) }).then(r => r.json()).catch(e => ({ error: e.message }));
   const roots = ((await apf('/files/roots')).roots) || [];
   if (!roots.length) { el.textContent = '(this capability has no access to this app)'; return; }
-  const st = { root: (roots[0] && roots[0].key) || 'vault', path: '', entries: [], file: null, busy: false, error: '' };
+  const st = { root: (roots[0] && roots[0].key) || 'vault', path: '', entries: [], file: null, busy: false, error: '', editing: false, draft: '', dirty: false };
   const rel = n => (st.path ? `${st.path}/${n}` : n);
-  const draw = () => { if (window.__fieldIslands && window.__fieldIslands.renderInto) window.__fieldIslands.renderInto('FileBrowser', el, { roots, root: st.root, path: st.path, entries: st.entries, file: st.file, busy: st.busy, error: st.error, onRoot, onOpen, onCrumb, onAdd, onDownload, onRemove, onCloseFile }); };
-  const list = async () => { st.busy = true; st.error = ''; st.file = null; draw(); const r = await apf('/files/list', { root: st.root, path: st.path }); st.busy = false; if (r.error) { st.error = r.error; st.entries = []; } else st.entries = r.entries || []; draw(); };
+  const draw = () => { if (window.__fieldIslands && window.__fieldIslands.renderInto) window.__fieldIslands.renderInto('FileBrowser', el, { roots, root: st.root, path: st.path, entries: st.entries, file: st.file, busy: st.busy, error: st.error, editing: st.editing, draft: st.draft, dirty: st.dirty, onRoot, onOpen, onCrumb, onAdd, onDownload, onRemove, onCloseFile, onToggleEdit, onEdit, onSave }); };
+  const list = async () => { st.busy = true; st.error = ''; st.file = null; st.editing = false; draw(); const r = await apf('/files/list', { root: st.root, path: st.path }); st.busy = false; if (r.error) { st.error = r.error; st.entries = []; } else st.entries = r.entries || []; draw(); };
   const onRoot = k => { st.root = k; st.path = ''; st.file = null; list(); };
   const onCrumb = i => { const s = st.path.split('/').filter(Boolean); st.path = i < 0 ? '' : s.slice(0, i + 1).join('/'); st.file = null; list(); };
-  const onOpen = async (n, isDir) => { if (isDir) { st.path = rel(n); list(); return; } st.busy = true; draw(); const r = await apf('/files/get', { root: st.root, path: rel(n) }); st.busy = false; if (r.error) st.error = r.error; else st.file = { name: r.name, text: r.text, size: r.size, b64: r.b64 }; draw(); };
-  const onCloseFile = () => { st.file = null; draw(); };
+  const onOpen = async (n, isDir) => { if (isDir) { st.path = rel(n); list(); return; } st.busy = true; st.editing = false; draw(); const r = await apf('/files/get', { root: st.root, path: rel(n) }); st.busy = false; if (r.error) st.error = r.error; else st.file = { name: r.name, text: r.text, size: r.size, b64: r.b64 }; draw(); };
+  const onCloseFile = () => { st.file = null; st.editing = false; draw(); };
+  const onToggleEdit = () => { if (!st.file || st.file.text == null) return; st.editing = !st.editing; if (st.editing) { st.draft = st.file.text; st.dirty = false; } draw(); };
+  const onEdit = text => { st.draft = text; st.dirty = text !== (st.file && st.file.text); draw(); };
+  const onSave = async () => { if (!st.file || !st.dirty) return; st.busy = true; draw(); const b64 = await fileToB64(new Blob([st.draft], { type: 'text/plain' })); const r = await apf('/files/put', { root: st.root, path: rel(st.file.name), b64 }); st.busy = false; if (r.error) st.error = r.error; else { st.file = { ...st.file, text: st.draft }; st.dirty = false; } draw(); };
   const onDownload = () => { const f = st.file; if (f && f.b64) dlB64(f.name, f.b64); };
   const onRemove = async n => { if (!confirm(`Delete ${n}?`)) return; const r = await apf('/files/rm', { root: st.root, path: rel(n) }); if (r.error) { st.error = r.error; draw(); } else { st.file = null; list(); } };
   const onAdd = () => { const inp = document.createElement('input'); inp.type = 'file'; inp.onchange = async () => { const f = inp.files && inp.files[0]; if (!f) return; if (f.size > 25 * 1024 * 1024) { st.error = `${f.name} over 25MB`; draw(); return; } st.busy = true; draw(); const b64 = await fileToB64(f); const r = await apf('/files/put', { root: st.root, path: rel(f.name), b64 }); st.busy = false; if (r.error) st.error = r.error; list(); }; inp.click(); };

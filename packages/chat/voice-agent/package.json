@@ -22,7 +22,8 @@
     "test:dist-trust": "node --test dist-trust.test.mjs",
     "test:fork-distribution": "node fork-distribution.staging.test.cjs",
     "test:paste-link": "node paste-link.staging.test.cjs",
-    "test:raw-context": "node raw-context.staging.test.cjs"
+    "test:raw-context": "node raw-context.staging.test.cjs",
+    "test:file-editor": "node file-editor.staging.test.cjs"
   },
   "dependencies": {
     "@endo/exo-git": "workspace:^",
