@@ -67,7 +67,7 @@ test('free share vends ONLY the source; revoke kills it', () => {
   assert.ok(s.ok && s.token, 'minted a token');
   const open = forks.openShare(s.token);
   assert.ok(open.ok && open.source === SRC && open.name === 'sharable', 'recipient gets the source to render');
-  assert.deepEqual(Object.keys(open).sort(), ['id', 'name', 'ok', 'source'], 'share grants nothing but the source (+id/name)');
+  assert.ok(!('owner' in open) && !('history' in open) && !('purseKey' in open), 'share leaks no owner/history/secret — only source + render-safe version metadata');
   assert.ok(forks.revokeShare(s.token, 'alice'), 'owner revokes');
   assert.equal(forks.openShare(s.token).ok, false, 'revoked token is dead');
 });
@@ -90,6 +90,43 @@ test('expires share dies after its window (revoked path)', () => {
   assert.ok(forks.openShare(s.token).ok, 'works within the window');
   assert.ok(forks.revokeShare(s.token, 'alice'), 'and is independently revocable');
   assert.equal(forks.openShare(s.token).ok, false, 'dead after revoke');
+});
+
+test('Phase 4: share pins to invite-version; owner edits are an upgrade the recipient chooses', () => {
+  const { forks } = setup();
+  const { id } = forks.create({ source: SRC, name: 'upgradable', owner: 'alice' }); // v1
+  const s = forks.share({ id, owner: 'alice', charge: { scheme: 'free' } });
+  let o = forks.openShare(s.token);
+  assert.ok(o.ok && o.source === SRC && o.version === 1 && o.upgradeAvailable === false, 'recipient opens at v1, no upgrade');
+
+  forks.edit(id, SRC2, 'alice'); // owner → v2
+  o = forks.openShare(s.token);
+  assert.ok(o.source === SRC && o.version === 1, 'recipient STAYS on v1 (non-destructive — not force-upgraded)');
+  assert.equal(o.upgradeAvailable, true, 'but an upgrade IS flagged (currentVersion 2 > pinned 1)');
+
+  const pv = forks.previewUpgrade(s.token);
+  assert.ok(pv.ok && pv.source === SRC2 && pv.version === 2, 'previewUpgrade = try-on the latest WITHOUT committing');
+  assert.equal(forks.openShare(s.token).version, 1, 'preview did not change the pin (still v1)');
+
+  const acc = forks.acceptUpgrade(s.token);
+  assert.ok(acc.ok && acc.version === 2 && acc.source === SRC2, 'acceptUpgrade atomically jumps to v2');
+  assert.equal(forks.openShare(s.token).upgradeAvailable, false, 'no upgrade pending after accept');
+});
+
+test('Phase 4: auto-accept rides the latest; inbox carries owner notices', () => {
+  const { forks } = setup();
+  const { id } = forks.create({ source: SRC, name: 'auto', owner: 'alice' });
+  const s = forks.share({ id, owner: 'alice', charge: { scheme: 'free' } });
+  forks.setAutoAccept(s.token, true);
+  forks.edit(id, SRC2, 'alice'); // v2
+  const o = forks.openShare(s.token);
+  assert.ok(o.source === SRC2 && o.version === 2 && o.autoAccept === true && o.upgradeAvailable === false, 'auto-accept always serves the latest');
+
+  const n = forks.notifyRecipients(id, 'alice', 'made it bold — fyi');
+  assert.ok(n.ok && n.delivered === 1, 'owner notified 1 recipient');
+  assert.equal(forks.notifyRecipients(id, 'mallory', 'x').ok, false, 'a non-owner cannot notify');
+  const inbox = forks.shareInbox(s.token);
+  assert.ok(inbox.ok && inbox.inbox.length === 1 && /made it bold/.test(inbox.inbox[0].message), 'recipient reads the owner inbox');
 });
 
 test('persists across reopen (durable store)', () => {

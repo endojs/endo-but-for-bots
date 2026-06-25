@@ -17,7 +17,8 @@
     "test:component-select": "node component-select.staging.test.cjs",
     "test:shape": "node shape-graph.staging.test.cjs",
     "test:trace": "node trace-fanout.staging.test.cjs",
-    "test:agent-menu": "node agent-menu.staging.test.cjs"
+    "test:agent-menu": "node agent-menu.staging.test.cjs",
+    "test:fork-upgrade": "node fork-upgrade.staging.test.cjs"
   },
   "dependencies": {
     "@endo/exo-git": "workspace:^",

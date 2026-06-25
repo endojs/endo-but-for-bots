@@ -84,30 +84,50 @@ export const makeForks = ({ file, makePurse, purseStore }) => {
   };
   const remove = (id, owner) => { const f = get(id, owner); if (!f) return false; delete data.forks[String(id)]; save(); return true; };
 
+  const curVersion = f => f.history.length;
+  const sourceAtVersion = (f, v) => (f.history[v - 1] || {}).source || f.source;
+
   // ── least-authority share tokens (vend ONLY the source to render, optionally metered) ──
   // share({ id, owner, charge }) → { ok, token } (plaintext, shown once). charge mirrors component-shares.
+  // The share PINS to the fork's current version (the invite = current mutated state). Later owner edits
+  // become an UPGRADE the recipient chooses to accept (atomic), preview (try-on), or auto-accept — Phase 4.
   const share = ({ id, owner, charge = {} }) => {
     const f = get(id, owner); if (!f) return { ok: false, error: 'unknown fork (or not yours)' };
     const token = crypto.randomBytes(18).toString('base64url'); const th = hash(token);
     const scheme = ['free', 'expires', 'allowance'].includes(charge.scheme) ? charge.scheme : 'free';
-    const rec = { forkId: id, owner: String(owner), createdAt: new Date().toISOString(), revoked: false, scheme };
+    const rec = { forkId: id, owner: String(owner), createdAt: new Date().toISOString(), revoked: false, scheme, pinnedVersion: curVersion(f), autoAccept: false, inbox: [] };
     if (scheme === 'expires') rec.expiresAt = now() + Math.max(1, Math.min(8760, Number(charge.hours) || 24)) * 3600e3;
     if (scheme === 'allowance' && makePurse && purseStore) { rec.purseKey = purseKeyFor(th); rec.perOpen = Math.max(1, Math.round(Number(charge.perOpen) || 10000)); const total = Math.max(rec.perOpen, Math.round(Number(charge.total) || 1000000)); const p = makePurse(total, { onChange: (b, g) => purseStore.set(rec.purseKey, b, g) }); purseStore.set(rec.purseKey, p.balance(), p.granted()); }
     data.shares[th] = rec; save();
     return { ok: true, token };
   };
   const shareRec = token => { const r = data.shares[hash(String(token || ''))]; if (!r || r.revoked) return null; if (r.scheme === 'expires' && r.expiresAt && now() > r.expiresAt) return null; return r; };
-  // openShare(token) → { ok, id, name, source } and DEBITS the allowance (call once per recipient open).
-  // This is the ONLY path that hands a fork's source to a non-owner — and it grants nothing but the source.
+  // openShare(token) → { ok, id, name, source, version, currentVersion, upgradeAvailable, autoAccept, inbox }
+  // and DEBITS the allowance (call once per recipient open). The recipient sees the source at THEIR pinned
+  // version (non-destructive: an owner's newer edits do not force-upgrade them), plus whether an upgrade is
+  // available + the owner's inbox messages. This is the ONLY path that hands a fork's source to a non-owner.
   const openShare = token => {
     const r = shareRec(token); if (!r) return { ok: false, error: 'this share link is no longer valid' };
     const f = data.forks[r.forkId]; if (!f) return { ok: false, error: 'the shared fork no longer exists' };
     if (r.scheme === 'allowance') { const p = purseOf(r); if (p) { if (!p.canAfford(r.perOpen)) return { ok: false, error: 'this fork’s usage allowance is used up' }; p.debit(r.perOpen); } }
-    return { ok: true, id: f.id, name: f.name, source: f.source };
+    const cur = curVersion(f);
+    if (r.autoAccept && r.pinnedVersion !== cur) { r.pinnedVersion = cur; save(); } // auto: always ride the latest
+    const ver = Math.min(r.pinnedVersion || cur, cur);
+    return { ok: true, id: f.id, name: f.name, source: sourceAtVersion(f, ver), version: ver, currentVersion: cur, upgradeAvailable: ver < cur, autoAccept: !!r.autoAccept, inbox: (r.inbox || []).slice(-20) };
   };
+  // ── Phase 4: atomic upgrades + try-on (recipient-side, token-gated — no cap) ──
+  // previewUpgrade: the LATEST source WITHOUT changing the pin (non-destructive "try it on for size").
+  const previewUpgrade = token => { const r = shareRec(token); if (!r) return { ok: false, error: 'invalid share' }; const f = data.forks[r.forkId]; if (!f) return { ok: false, error: 'gone' }; const cur = curVersion(f); return { ok: true, source: sourceAtVersion(f, cur), version: cur, current: cur, fromVersion: Math.min(r.pinnedVersion || cur, cur) }; };
+  // acceptUpgrade: atomically jump the pin to the current version (commit the try-on).
+  const acceptUpgrade = token => { const r = shareRec(token); if (!r) return { ok: false, error: 'invalid share' }; const f = data.forks[r.forkId]; if (!f) return { ok: false, error: 'gone' }; r.pinnedVersion = curVersion(f); save(); return { ok: true, version: r.pinnedVersion, source: sourceAtVersion(f, r.pinnedVersion) }; };
+  // setAutoAccept: opt this share into always riding the owner's latest (or back to manual).
+  const setAutoAccept = (token, on) => { const r = shareRec(token); if (!r) return { ok: false, error: 'invalid share' }; r.autoAccept = !!on; if (r.autoAccept) { const f = data.forks[r.forkId]; if (f) r.pinnedVersion = curVersion(f); } save(); return { ok: true, autoAccept: r.autoAccept }; };
+  // ── invite-carries-inbox: the OWNER messages recipients ("I changed X — update?"); recipients read it on open.
+  const notifyRecipients = (id, owner, message) => { const f = get(id, owner); if (!f) return { ok: false, error: 'unknown fork (or not yours)' }; const msg = { at: new Date().toISOString(), message: String(message || '').slice(0, 280) }; let n = 0; for (const r of Object.values(data.shares)) { if (r.forkId === id && !r.revoked) { r.inbox = (r.inbox || []).concat(msg).slice(-20); n += 1; } } save(); return { ok: true, delivered: n }; };
+  const shareInbox = token => { const r = shareRec(token); if (!r) return { ok: false, error: 'invalid share' }; return { ok: true, inbox: (r.inbox || []).slice(-20) }; };
   const revokeShare = (token, owner) => { const k = hash(String(token || '')); const r = data.shares[k]; if (!r || (owner && r.owner !== String(owner))) return false; r.revoked = true; save(); return true; };
   const sharesFor = (id, owner) => { const f = get(id, owner); if (!f) return []; return Object.entries(data.shares).filter(([, r]) => r.forkId === id && !r.revoked).map(([, r]) => { const p = purseOf(r); return { scheme: r.scheme, createdAt: r.createdAt, expiresAt: r.expiresAt || null, remaining: p ? p.balance() : null, granted: p ? p.granted() : null }; }); };
 
-  return harden({ create, get, source, list, read, edit, history, revert, remove, share, openShare, revokeShare, sharesFor });
+  return harden({ create, get, source, list, read, edit, history, revert, remove, share, openShare, previewUpgrade, acceptUpgrade, setAutoAccept, notifyRecipients, shareInbox, revokeShare, sharesFor });
 };
 harden(makeForks);

@@ -1984,6 +1984,11 @@ const handler = async (req, res) => {
       const body = await jsonBody(req);
       // share redemption: a recipient with a token gets just the source (metered). Adopt+edit = /forks/create.
       if (u.pathname === '/forks/open') return json(res, 200, forks.openShare(String(body.token || '')));
+      // Phase 4 recipient-side, token-gated (NO cap): try-on / accept / auto-accept an owner's newer version + read the owner's inbox.
+      if (u.pathname === '/forks/upgrade/preview') return json(res, 200, forks.previewUpgrade(String(body.token || '')));
+      if (u.pathname === '/forks/upgrade/accept') return json(res, 200, forks.acceptUpgrade(String(body.token || '')));
+      if (u.pathname === '/forks/upgrade/auto') return json(res, 200, forks.setAutoAccept(String(body.token || ''), !!body.on));
+      if (u.pathname === '/forks/inbox') return json(res, 200, forks.shareInbox(String(body.token || '')));
       const owner = forkOwnerOf(body.cap);
       if (!owner) return json(res, 403, { ok: false, error: 'a valid capability is required to own forks' });
       if (u.pathname === '/forks/create') return json(res, 200, forks.create({ source: body.source, name: body.name, baseId: body.baseId || null, owner }));
@@ -1994,6 +1999,7 @@ const handler = async (req, res) => {
       if (u.pathname === '/forks/remove') return json(res, 200, { ok: forks.remove(String(body.id || ''), owner) });
       if (u.pathname === '/forks/share') return json(res, 200, forks.share({ id: String(body.id || ''), owner, charge: body.charge || {} }));
       if (u.pathname === '/forks/share/revoke') return json(res, 200, { ok: forks.revokeShare(String(body.token || ''), owner) });
+      if (u.pathname === '/forks/notify') return json(res, 200, forks.notifyRecipients(String(body.id || ''), owner, String(body.message || ''))); // owner → recipients' inboxes ("I changed X — update?")
       if (u.pathname === '/forks/shares') return json(res, 200, { ok: true, shares: forks.sharesFor(String(body.id || ''), owner) });
       if (u.pathname === '/forks/edit') {
         const id = String(body.id || '');
