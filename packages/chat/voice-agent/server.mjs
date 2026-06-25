@@ -2255,6 +2255,14 @@ const handler = async (req, res) => {
       if (!node || !node.isRoot) return json(res, 403, { error: 'projects need your root capability' });
       try {
         if (u.pathname === '/projects/list') return json(res, 200, { projects: projects.listProjects(), powers: ALL_POWERS });
+        // scheduled agents created FROM a given chat (originChat) + their recent run-log — powers the
+        // in-chat run indicator (a coalesced "ran N× since your last message · last <time>" badge).
+        if (u.pathname === '/projects/agents/by-chat') {
+          const cid = String(body.chatId || '');
+          const agents = [];
+          if (cid) for (const p of projects.listProjects()) for (const a of (p.scheduledAgents || [])) if (a.originChat === cid) agents.push({ id: a.id, name: a.name, project: p.name, schedule: a.schedule, nextAt: a.nextAt, lastRun: a.lastRun, runs: (a.runs || []).slice(0, 30) });
+          return json(res, 200, { agents });
+        }
         if (u.pathname === '/projects/create') return json(res, 200, { project: projects.createProject(body.name) });
         if (u.pathname === '/projects/rename') return json(res, 200, { project: projects.renameProject(body.id, body.name) });
         if (u.pathname === '/projects/attach') return json(res, 200, { project: projects.attachChat(body.id, body.chatId) });

@@ -1055,6 +1055,7 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     if (imgAtts.length) tx.attachImgs = imgAtts.map(a => a.dataUrl);           // session-only (stripped before persist)
     if (fileAtts.length) tx.attachFiles = fileAtts.map(a => a.name);
     activeTx.push(tx); saveTx();
+    { const cc = chats.find(c => c.id === sessionId); if (cc) { cc.lastMsgAt = Date.now(); saveChats(); } } // baseline for the in-chat run indicator ("since your last message")
     try { userBubbleControls(activeTx.length - 1, tx, ub); } catch { /* control row: ↻ retry / ✎ edit / 🔊 audio — appears live INSIDE the bubble */ }
     titleFrom(t || (attachments[0] && attachments[0].name) || 'photo'); setStatus('thinking…'); if (spoken) setMic('thinking');
     await pendantBegin(t); // descend the live 3D pendant + open the step stream BEFORE the turn starts
@@ -1952,7 +1953,42 @@ const renderTx = () => {
   devTasks.filter(t => t.chatId === sessionId).forEach(devCard);
   schedulePendantPosition(); // re-anchor the live pendant after the log was rebuilt
   reapplyExpanded(); // an applet expanded in this chat stays expanded when you return to it (retained view-state)
+  renderRunIndicator(); // ⏰ coalesced badge: this chat's scheduled watcher(s) ran N× since your last message
 };
+
+// ── in-chat run indicator ───────────────────────────────────────────────────
+// A scheduled watcher created from a chat (originChat) runs silently in the
+// background. Instead of N "it ran" messages, show ONE coalesced badge at the
+// foot of the chat: how many times it ran since your last message + the most
+// recent run time. NOT part of the model's context — just a visible marker.
+let _chatWatchers = { sid: null, agents: [], at: 0 };
+const _WATCHER_TTL = 45000;
+const _relTime = ms => { const s = Math.max(0, (Date.now() - ms) / 1000); if (s < 90) return 'just now'; if (s < 5400) return `${Math.round(s / 60)}m ago`; if (s < 129600) return `${Math.round(s / 3600)}h ago`; return new Date(ms).toLocaleString(); };
+const refreshChatWatchers = async sid => {
+  if (!isRoot) return;
+  try { const r = await pf('/projects/agents/by-chat', { chatId: sid }); if (sessionId === sid) { _chatWatchers = { sid, agents: (r && r.agents) || [], at: Date.now() }; renderRunIndicator(); } } catch { /* best-effort */ }
+};
+function renderRunIndicator() {
+  const old = log.querySelector('#run-indicator'); if (old) old.remove();
+  if (!isRoot) return;
+  if (_chatWatchers.sid !== sessionId || Date.now() - _chatWatchers.at > _WATCHER_TTL) refreshChatWatchers(sessionId); // refresh stale/other-chat cache (async → re-renders)
+  if (_chatWatchers.sid !== sessionId) return; // no cache for this chat yet
+  const agents = _chatWatchers.agents || []; if (!agents.length) return;
+  const cc = curChatObj() || {}; const since = cc.lastMsgAt || cc.ts || 0;
+  const rows = agents.map(a => {
+    const runs = a.runs || []; const latest = runs[0];
+    const nNew = runs.filter(r => new Date(r.at).getTime() > since).length;
+    const last = latest ? _relTime(new Date(latest.at).getTime()) : '';
+    const head = nNew > 0 ? `ran ${nNew}× since your last message` : (latest ? `last checked ${last}` : 'scheduled — no runs yet');
+    const tip = latest && latest.summary ? esc(String(latest.summary).slice(0, 200)) : '';
+    return `<div style="padding:1px 0" title="${tip}">⏰ <b>${esc(a.name)}</b> · ${esc(head)}${nNew > 0 && latest ? ` · last ${esc(last)}` : ''}</div>`;
+  }).join('');
+  const el = document.createElement('div'); el.id = 'run-indicator';
+  el.style.cssText = 'margin:12px auto;max-width:680px;padding:6px 11px;border:1px dashed var(--edge,#262c3d);border-radius:9px;color:var(--mut,#8b949e);font-size:12px;background:rgba(124,92,255,0.05);cursor:pointer';
+  el.innerHTML = rows;
+  el.onclick = () => { settingsSection = 'timers'; openSettings(); }; // open the full run log
+  log.appendChild(el);
+}
 
 const SIDEBAR_KEY = 'field-agent-sidebar';
 const setSidebar = open => { document.body.classList.toggle('sidebar-open', open); if (open) document.body.classList.remove('sidebar-peek'); /* pinning open supersedes a transient hover-peek */ try { localStorage.setItem(SIDEBAR_KEY, open ? '1' : '0'); } catch {} if (!$('trace-overlay').classList.contains('hide')) traceInst?.resize(); };
