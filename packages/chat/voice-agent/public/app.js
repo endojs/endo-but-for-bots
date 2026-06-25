@@ -70,6 +70,38 @@ const showModal = html => { const m = $('qrmodal'); m.innerHTML = `<div class="q
 // the origin the user is actually on, so "copy link" / QR match the current page (chu, localhost, …).
 const localizeUrl = u => { try { const x = new URL(u, location.origin); return location.origin + x.pathname + x.search + x.hash; } catch { return u; } };
 const revealLink = (s, note) => { showModal(`<div class="qrlabel">${esc(note || 'copy this link')}</div><input class="reveal-in" id="reveal-in" readonly value="${esc(localizeUrl(s.url))}"><span class="qrwarn">contains the credential — copy it, don't screen-share it</span>`); const inp = $('reveal-in'); if (inp) { inp.focus(); inp.select(); try { inp.setSelectionRange(0, inp.value.length); } catch {} } };
+
+// ── 🪪 AGENT PROFILE — the petname handle for an agent opens its whole self: identity, the powers + agents
+//    in its inventory (double-click to browse / open), its feedback loops, and (with the root cap) the
+//    entry points to reshape them. The name you use to identify another IS your petname for it.
+const POWER_NS = { notes: 'notes', home: 'home', homeassistant: 'ha', agents: 'agents', contacts: 'contacts', timers: 'timers' };
+const openInventoryForPower = pn => { const ns = POWER_NS[pn]; if (!ns) return false; closeModal(); if (curTab !== 'shares') showTab('shares'); try { navGo([{ ns, label: pn }]); } catch {} return true; };
+const agentProfile = async who => {
+  const id = who || chatAgent() || 'field-agent';
+  showModal('<div class="qrlabel">loading agent profile…</div>');
+  let shape; try { shape = await (await fetch('/agent/shape', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, agent: id }) })).json(); } catch (e) { shape = { error: e.message }; }
+  if (!shape || shape.error) { showModal(`<div class="qrlabel">🪪 ${esc(id)}</div><div class="pmeta">${esc((shape && shape.error) || 'could not load profile')}${shape && /owner-only/.test(shape.error || '') ? ' — a fuller profile needs the root capability.' : ''}</div>`); return; }
+  let gaunt = null; try { gaunt = await (await fetch('/gauntlet', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json(); } catch {}
+  const chips = arr => _arr(arr).map(x => `<span class="pill" style="margin:1px 3px 1px 0">${esc(String(x))}</span>`).join('');
+  const powers = _arr(shape.powers), specs = _arr(shape.specialists);
+  const html = `<div class="qrlabel" style="font-size:16px">🪪 ${esc(shape.label || id)} <span class="pmeta">· ${esc(shape.kind || 'agent')}</span></div>
+    <div class="pmeta" style="margin:2px 0 11px">This name is your <b>petname</b> for it — the handle you use to identify, inspect, and (with permission) reshape this agent.</div>
+    <div class="set-sec"><div class="set-h">🔑 Powers <span class="pmeta">· ${powers.length} · double-click to browse</span></div>
+      ${powers.map(p => `<div class="share prof-power" data-pn="${esc(p.name)}" style="display:block;padding:6px 9px;margin:4px 0;cursor:pointer" title="double-click to browse / expand"><div style="font-size:13px">${esc(scrubCap(p.label || p.name))} <span class="pmeta">(${esc(p.name)})${POWER_NS[p.name] ? ' · 📂' : ''}</span></div><div class="prof-verbs" style="margin-top:3px;display:none">${chips(p.verbs)}</div></div>`).join('') || '<div class="pill">none</div>'}</div>
+    <div class="set-sec"><div class="set-h">🧑‍🚀 Agents it holds <span class="pmeta">· ${specs.length} · double-click to open</span></div>
+      ${specs.length ? specs.map(s => `<div class="share prof-spec" data-sid="${esc(s.id || s.name)}" style="display:block;padding:6px 9px;margin:4px 0;cursor:pointer" title="double-click to open its profile"><div style="font-size:13px">${esc(s.name || s.id)}${s.domain ? ` <span class="pmeta">· ${esc(scrubCap(s.domain))}</span>` : ''}</div><div style="margin-top:3px">${chips(s.powers)}</div></div>`).join('') : '<div class="pill">no held agents</div>'}</div>
+    ${gaunt && gaunt.ok ? `<div class="set-sec"><div class="set-h">🛡️ Feedback loops <span class="pmeta">· ${gaunt.lanes.reduce((n, l) => n + l.gates.length, 0)} gates</span></div><div class="pmeta" style="line-height:1.5">${gaunt.lanes.map(l => `${esc(l.action)}:<br>&nbsp;&nbsp;${l.gates.map(g => esc(g.name)).join(' → ')}`).join('<br>')}</div><button class="mini" id="prof-checks" style="margin-top:6px">open the gauntlet ↗</button></div>` : ''}
+    ${isRoot ? `<div class="set-sec"><div class="set-h">✎ Reshape <span class="pmeta">· you hold the root cap</span></div><button class="mini" id="prof-ep">manage powers</button> <button class="mini" id="prof-es">manage agents</button> <button class="mini" id="prof-ec">manage checks</button></div>` : '<div class="pmeta">Editing this agent needs the root capability.</div>'}`;
+  showModal(html);
+  document.querySelectorAll('.prof-power').forEach(el => { el.ondblclick = () => { if (!openInventoryForPower(el.dataset.pn)) { const v = el.querySelector('.prof-verbs'); if (v) v.style.display = v.style.display === 'none' ? 'block' : 'none'; } }; });
+  document.querySelectorAll('.prof-spec').forEach(el => { el.ondblclick = () => { agentProfile(el.dataset.sid); }; });
+  const go = (sec) => { closeModal(); settingsSection = sec; openSettings(); };
+  const pc = $('prof-checks'); if (pc) pc.onclick = () => go('feedback');
+  const ep = $('prof-ep'); if (ep) ep.onclick = () => go('agents');
+  const es = $('prof-es'); if (es) es.onclick = () => go('specialists');
+  const ec = $('prof-ec'); if (ec) ec.onclick = () => go('feedback');
+};
+window.agentProfile = agentProfile; // reachable from any surface that names an agent
 const copyLink = async (s, btn) => { if (await writeClipboard(localizeUrl(s.url))) flashBtn(btn, 'copied ✓'); else revealLink(s, 'auto-copy was blocked — select & copy (⌘/Ctrl-C):'); };
 const showQr = s => { let body; try { const qr = window.qrcode(0, 'M'); qr.addData(localizeUrl(s.url)); qr.make(); body = qr.createImgTag(6, 6); } catch (e) { body = `<div class="err">QR unavailable: ${esc(e.message)}</div>`; } showModal(`<div class="qrlabel">scan to open “${esc(s.label || 'link')}”</div>${body}<span class="qrwarn">contains the credential — scan it, don't screen-share it</span>`); };
 
@@ -131,6 +163,8 @@ const bubble = (who, text, agent, at) => {
   const label = who === 'you' ? 'you' : (named ? id : 'agent');
   d.innerHTML = `<div class="who"></div><div class="body"></div>`;
   const w = d.querySelector('.who'); w.textContent = label; if (named) w.style.color = col;
+  // the agent's NAME is your petname handle for it → click to open its profile (identity · inventory · feedback loops)
+  if (who !== 'you') { w.style.cursor = 'pointer'; w.title = `open ${id}'s profile`; w.onclick = e => { if (e.target.classList && e.target.classList.contains('msg-time')) return; agentProfile(id); }; }
   if (at) { const ts = document.createElement('span'); ts.className = 'msg-time'; ts.style.cssText = 'margin-left:7px;font-size:10px;font-weight:400;color:var(--mut);opacity:.65'; ts.textContent = fmtMsgTime(at); ts.title = new Date(at).toLocaleString(); w.appendChild(ts); }
   // agent replies are Markdown (agents format even unprompted) → render it; user text stays literal (linkify only)
   const bodyEl = d.querySelector('.body');
