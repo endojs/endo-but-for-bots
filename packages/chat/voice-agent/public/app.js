@@ -585,8 +585,8 @@ const toolCallDetailHtml = s => {
   const call = fmtTrace(s.call != null ? s.call : s.detail);
   const result = fmtTrace(s.result != null ? s.result : (s.resultText != null ? s.resultText : s.info));
   const kids = _arr(s.children);
-  const pre = (txt, col) => `<pre style="white-space:pre-wrap;word-break:break-word;max-height:38vh;overflow:auto;background:rgba(0,0,0,.25);border:1px solid var(--edge);border-left:3px solid ${col};border-radius:7px;padding:8px 10px;margin:4px 0 10px;font:12px ui-monospace,Menlo,Consolas,monospace;color:var(--ink)">${esc(txt)}</pre>`;
-  return `<div style="text-align:left;width:520px;max-width:88vw">
+  const pre = (txt, col) => `<pre style="white-space:pre-wrap;word-break:break-word;max-height:38vh;overflow:auto;background:var(--bg);border:1px solid var(--edge);border-left:3px solid ${col};border-radius:7px;padding:8px 10px;margin:4px 0 10px;font:12px ui-monospace,Menlo,Consolas,monospace;color:var(--ink)">${esc(txt)}</pre>`;
+  return `<div class="trace-detail" style="text-align:left;width:520px;max-width:88vw">
     <div style="font-weight:600;font-size:14px;margin-bottom:8px;font-family:ui-monospace,Menlo,Consolas,monospace;color:${s.ok === false ? 'var(--bad,#ff9e9e)' : 'var(--acc,#7c5cff)'}">${s.ok === false ? '⚠️' : '⚙'} ${esc(s.name || 'tool')}${s.ok === false ? ' · failed' : ''}</div>
     <div style="font-size:11px;color:#39c5cf;letter-spacing:.04em">CALL</div>${call ? pre(call, '#39c5cf') : '<div class="pmeta" style="margin-bottom:8px">no call args recorded</div>'}
     <div style="font-size:11px;color:#d29922;letter-spacing:.04em">RESULT</div>${result ? pre(result, '#d29922') : '<div class="pmeta" style="margin-bottom:8px">no result recorded</div>'}

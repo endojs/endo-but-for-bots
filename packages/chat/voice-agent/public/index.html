@@ -470,6 +470,9 @@
   .qrcard:has(.setwrap) { background:var(--panel); color:var(--ink); }
   .qrcard:has(.setwrap) .mini { color:var(--ink); border-color:var(--edge); }
   .qrcard:has(.setwrap) code { color:var(--ink); background:var(--bg); padding:1px 4px; border-radius:4px; }
+  /* the SVG-trace node detail (CALL/RESULT) is NOT a QR — flip the whole card to the theme so it reads in dark mode */
+  .qrcard:has(.trace-detail) { background:var(--panel); color:var(--ink); }
+  .qrcard:has(.trace-detail) .mini { color:var(--ink); border-color:var(--edge); background:transparent; }
   .qrcard .reveal-in { width:340px; max-width:82vw; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; margin:4px 0 2px; }
   /* OAuth-style consent card (the "Powers this chat needs" prompt). Rendered straight into the
      #qrmodal backdrop — NOT wrapped in the white .qrcard — so it's a clean dark consent sheet. */
