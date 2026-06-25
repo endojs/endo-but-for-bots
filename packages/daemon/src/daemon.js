@@ -1998,7 +1998,7 @@ const makeDaemonCore = async (
   };
 
   /** @type {DaemonCore['formulateMarshalValue']} */
-  async function formulateMarshalValue(value, deferredTasks) {
+  const formulateMarshalValue = async (value, deferredTasks) => {
     const { marshalFormulaNumber } = await formulaGraphJobs.enqueue(
       async () => {
         const ownFormulaNumber = /** @type {FormulaNumber} */ (
@@ -2030,7 +2030,7 @@ const makeDaemonCore = async (
     return /** @type {FormulateResult<void>} */ (
       formulate(marshalFormulaNumber, formula)
     );
-  }
+  };
 
   /** @type {DaemonCore['formulatePromise']} */
   const formulatePromise = async () => {
