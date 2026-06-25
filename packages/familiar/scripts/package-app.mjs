@@ -25,6 +25,14 @@ const includeFilter = filePath => {
   // Allow the root
   if (filePath === '') return true;
 
+  // Build-time metafiles for the license aggregator; never shipped.
+  if (
+    filePath === '/bundles/.metafiles' ||
+    filePath.startsWith('/bundles/.metafiles/')
+  ) {
+    return false;
+  }
+
   const allowed = [
     '/preload.js',
     '/package.json',

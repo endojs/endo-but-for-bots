@@ -1,6 +1,11 @@
 /**
  * Bundles the Endo CLI and daemon into self-contained CJS files
  * using esbuild for inclusion in the packaged Electron app.
+ *
+ * Each esbuild invocation also emits a metafile under
+ * `bundles/.metafiles/<name>.json` that enumerates every input file
+ * pulled into the bundle. The `aggregate-licenses.mjs` step consumes
+ * these metafiles to enumerate third-party packages for attribution.
  */
 
 import '@endo/init';
@@ -12,6 +17,26 @@ import { fileURLToPath } from 'url';
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const familiarRoot = path.resolve(dirname, '..');
 const repoRoot = path.resolve(familiarRoot, '../..');
+const metafileDir = path.join(familiarRoot, 'bundles/.metafiles');
+await fs.mkdir(metafileDir, { recursive: true });
+
+/**
+ * Wraps esbuild's `build()` to emit a metafile alongside each bundle.
+ * The metafile is written to `bundles/.metafiles/<name>.json` where
+ * `<name>` derives from the outfile basename minus extension.
+ *
+ * @param {import('esbuild').BuildOptions} options
+ */
+const buildWithMetafile = async options => {
+  const result = await build({ ...options, metafile: true });
+  const outfile = options.outfile;
+  if (!outfile) throw new Error('buildWithMetafile requires outfile');
+  const base = path.basename(outfile).replace(/\.[cm]?js$/, '');
+  await fs.writeFile(
+    path.join(metafileDir, `${base}.json`),
+    JSON.stringify(result.metafile, null, 2),
+  );
+};
 
 /**
  * esbuild plugin that replaces `import.meta.url` with a CJS equivalent.
@@ -53,25 +78,25 @@ const shared = {
   logLevel: 'info',
 };
 
-await build({
+await buildWithMetafile({
   ...shared,
   entryPoints: [path.join(repoRoot, 'packages/cli/bin/endo.cjs')],
   outfile: path.join(familiarRoot, 'bundles/endo-cli.cjs'),
 });
 
-await build({
+await buildWithMetafile({
   ...shared,
   entryPoints: [path.join(repoRoot, 'packages/daemon/src/daemon-node.js')],
   outfile: path.join(familiarRoot, 'bundles/endo-daemon.cjs'),
 });
 
-await build({
+await buildWithMetafile({
   ...shared,
   entryPoints: [path.join(repoRoot, 'packages/daemon/src/worker-node.js')],
   outfile: path.join(familiarRoot, 'bundles/worker-node.cjs'),
 });
 
-await build({
+await buildWithMetafile({
   ...shared,
   entryPoints: [path.join(repoRoot, 'packages/lal/setup.js')],
   outfile: path.join(familiarRoot, 'bundles/endo-lal-setup.cjs'),
@@ -83,7 +108,7 @@ await build({
 // Must be ESM: the worker import()s caplets as ES modules.
 // The banner polyfills `require` for CJS deps (e.g. node-fetch)
 // that esbuild cannot statically convert to ESM imports.
-await build({
+await buildWithMetafile({
   ...shared,
   format: 'esm',
   banner: {
@@ -100,7 +125,7 @@ const primerSrc = path.join(repoRoot, 'packages/lal/primer');
 const primerDest = path.join(familiarRoot, 'bundles/primer');
 await fs.cp(primerSrc, primerDest, { recursive: true });
 
-await build({
+await buildWithMetafile({
   ...shared,
   entryPoints: [path.join(familiarRoot, 'electron-main.js')],
   outfile: path.join(familiarRoot, 'bundles/electron-main.cjs'),
