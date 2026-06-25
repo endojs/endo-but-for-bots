@@ -47,10 +47,11 @@ const post = (p, body) => fetch(`${BASE}${p}`, { method: 'POST', headers: { 'con
   post('/chat', { cap, sessionId: sid, text: 'hello world, what can you do?' }).catch(() => {});
   let ctx = null;
   for (let i = 0; i < 40 && !ctx; i++) { await sleep(200); const r = await post('/chat/context', { cap, sessionId: sid }); if (r.ok) ctx = r.context; }
-  ok(!!ctx, 'after firing a turn, /chat/context returns the captured bundle');
-  ok(ctx && ctx.userText === 'hello world, what can you do?', 'the bundle carries THIS turn’s user text');
-  ok(ctx && Array.isArray(ctx.tools) && ctx.tools.length > 0 && ctx.tools.every(t => t.name), 'the bundle lists the tool/capability manifest the agent saw');
-  ok(ctx && typeof ctx.persona === 'string', 'the bundle carries the system persona');
+  ok(!!ctx, 'after firing a turn, /chat/context returns the captured provider call');
+  ok(ctx && Array.isArray(ctx.messages) && ctx.messages.length > 0, 'the bundle IS the provider messages array');
+  ok(ctx && ctx.messages.some(m => m.role === 'system' && (m.content || '').length > 0), 'it includes a system message');
+  ok(ctx && ctx.messages.some(m => m.role === 'user' && /hello world/.test(m.content || '')), 'it includes the user turn text in a user message');
+  ok(ctx && ctx.messages.every(m => m.role && typeof m.content === 'string'), 'every message has a role + string content (alternating turns)');
   ok(ctx && Array.isArray(ctx.powers), 'the bundle lists the granted powers');
   ok(ctx && !JSON.stringify(ctx).includes(cap), 'the bundle contains NO swissnum (cap-hygiene)');
 

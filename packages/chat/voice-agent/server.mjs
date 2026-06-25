@@ -1292,21 +1292,37 @@ const handler = async (req, res) => {
       // prepaid inference toll-bridge: meter THIS chat's purse; show the agent its budget in-context.
       // (perProvider was declared above so the delegate path and callLLM share one ledger.)
       const meteredLLM = makeMeteredLLM({ callLLM, purse, perProvider });
+      // Capture the EXACT provider `messages` payload of the MOST RECENT LLM call this turn (system message +
+      // alternating user/assistant turns + tool results) — the truth of what the model saw — for the { }
+      // viewer. The agent loops (CodeMode), so we overwrite on each call → end on the last one. No swissnums:
+      // the system/tool framing describes caps by reference. (content blocks → readable text, bounded.)
+      const ctxText = c => {
+        if (typeof c === 'string') return c;
+        if (Array.isArray(c)) return c.map(b => (typeof b === 'string' ? b : b && b.type === 'text' ? b.text : b && b.type === 'tool_use' ? `⚙ tool_use ${b.name}(${JSON.stringify(b.input || {}).slice(0, 400)})` : b && b.type === 'tool_result' ? `↳ tool_result: ${ctxText(b.content)}` : JSON.stringify(b).slice(0, 800))).join('\n');
+        return JSON.stringify(c).slice(0, 2000);
+      };
+      const agentLabel = agent && agent !== 'field-agent' ? agent : 'field-agent';
+      const capturingLLM = (messages, mdl) => {
+        try { lastCtx.set(sid, { at: Date.now(), agent: agentLabel, model: String(mdl || model || 'default'), powers: [...runNode.powers], messages: (Array.isArray(messages) ? messages : []).map(m => ({ role: m.role, content: ctxText(m.content).slice(0, 12000) })) }); } catch { /* viewer is best-effort */ }
+        return meteredLLM(messages, mdl);
+      };
+      // Seed the viewer with a SYNTHESIZED provider-shaped bundle (system = persona + tool manifest, then the
+      // prior turns, then this user turn) BEFORE the run — so even a turn that errors before its first LLM
+      // call still shows context. capturingLLM overwrites it with the REAL provider `messages` once it fires.
+      try {
+        const sysText = `${runPersona || ''}\n\n## Tools / capabilities the agent may call\n${manifest.map(m => `- ${m.name}(${m.args ? Object.keys(m.args).join(', ') : (m.methods || []).join('/')}): ${m.description || ''}`).join('\n')}`;
+        lastCtx.set(sid, { at: Date.now(), agent: agentLabel, model: String(model || 'default'), powers: [...runNode.powers], messages: [
+          { role: 'system', content: sysText.slice(0, 24000) },
+          ...history.map(h => ({ role: h.role, content: String(h.content).slice(0, 8000) })),
+          { role: 'user', content: String(t).slice(0, 8000) },
+        ] });
+      } catch { /* best-effort */ }
       const TURN_DEADLINE_MS = Number(process.env.TURN_DEADLINE_MS) || 360000; // hard per-turn limit → a LEGIBLE timeout, never a silent stall (the crowdsupply hang)
       let deadlineHit = false; let deadlineT = null;
-      // Capture the EXACT context the agent is about to receive — system persona + the tool/capability
-      // manifest + the message history + this turn's text — so the "raw context" viewer shows the truth
-      // (no swissnums: manifests describe caps by reference, never the secret). Bounded.
-      lastCtx.set(sid, {
-        at: Date.now(), agent: agent && agent !== 'field-agent' ? agent : 'field-agent', model: String(model || 'default'),
-        powers: [...runNode.powers], persona: String(runPersona || '').slice(0, 20000),
-        tools: manifest.map(m => ({ name: m.name, description: m.description, args: m.args ? Object.keys(m.args) : undefined, methods: m.methods })),
-        history: history.map(h => ({ role: h.role, content: String(h.content).slice(0, 8000) })), userText: String(t).slice(0, 8000),
-      });
       const r = await Promise.race([
         AGENT_RUNNER({
         toolbox, manifest, userText: t, history, resumeMessages, attachments: agentAttachments, signal: ac.signal, persona: runPersona, model: String(model || 'default'),
-        llm: meteredLLM, budgetLine: budgetLine(purse.balance(), String(model || 'default')),
+        llm: capturingLLM, budgetLine: budgetLine(purse.balance(), String(model || 'default')),
         takeInterjections: () => interjections.take(sid), // mid-turn re-steer: drained + folded into context at each step boundary
 
         onStep: s => {

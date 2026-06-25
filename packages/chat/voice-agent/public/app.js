@@ -2842,19 +2842,21 @@ const fmtRawContext = c => {
   L.push(`model:    ${c.model}`);
   L.push(`powers:   ${(c.powers || []).join(', ') || '(none)'}`);
   L.push(`captured: ${new Date(c.at).toLocaleString()}`);
-  L.push('', '━━━ SYSTEM (persona) ━━━', c.persona || '(none)', '');
-  L.push(`━━━ TOOLS / CAPABILITIES (${(c.tools || []).length}) ━━━`);
-  for (const t of (c.tools || [])) L.push(`• ${t.name}(${(t.args || []).join(', ')})${t.methods ? ` [methods: ${(t.methods || []).join(', ')}]` : ''}: ${t.description || ''}`);
-  L.push('', `━━━ MESSAGES (${(c.history || []).length} prior + this turn) ━━━`);
-  for (const m of (c.history || [])) { L.push(`[${m.role}]`, m.content, ''); }
-  L.push('[user · this turn]', c.userText || '');
+  const msgs = c.messages || [];
+  L.push(`messages: ${msgs.length} — the most recent provider messages API call`);
+  L.push('');
+  // the actual provider payload: a system message, then alternating user/assistant (+ tool results)
+  for (const m of msgs) { L.push(`━━━ ${String(m.role || '?').toUpperCase()} ━━━`, m.content || '', ''); }
+  if (!msgs.length) L.push('(no LLM call captured yet)');
   return L.join('\n');
 };
 const rawContextUI = () => {
   const btn = document.createElement('button');
   btn.id = 'ctx-btn'; btn.title = 'Reveal the raw context + messages shown to the agent';
   btn.textContent = '{ }';
-  btn.style.cssText = 'position:fixed;top:max(10px,env(safe-area-inset-top));right:max(12px,env(safe-area-inset-right));z-index:60;font:600 13px ui-monospace,Menlo,Consolas,monospace;background:var(--panel);color:var(--mut);border:1px solid var(--edge);border-radius:8px;padding:4px 9px;cursor:pointer;line-height:1';
+  // BELOW the sticky header (don't obscure its buttons): top is set dynamically to the header's bottom edge.
+  btn.style.cssText = 'position:fixed;right:max(12px,env(safe-area-inset-right));z-index:29;font:600 13px ui-monospace,Menlo,Consolas,monospace;background:var(--panel);color:var(--mut);border:1px solid var(--edge);border-radius:8px;padding:4px 9px;cursor:pointer;line-height:1';
+  const positionBtn = () => { const hdr = document.querySelector('header'); btn.style.top = `${(hdr ? hdr.getBoundingClientRect().bottom : 56) + 6}px`; };
   const back = document.createElement('div');
   back.style.cssText = 'position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.55);display:none;align-items:stretch;justify-content:center;padding:max(16px,env(safe-area-inset-top)) 12px max(16px,env(safe-area-inset-bottom))';
   const panel = document.createElement('div');
@@ -2867,6 +2869,7 @@ const rawContextUI = () => {
   const pre = document.createElement('pre');
   pre.style.cssText = 'margin:0;padding:13px;overflow:auto;font:12px/1.55 ui-monospace,Menlo,Consolas,monospace;color:var(--ink);white-space:pre-wrap;word-break:break-word';
   panel.append(head, pre); back.appendChild(panel); document.body.append(btn, back);
+  positionBtn(); addEventListener('resize', positionBtn); setTimeout(positionBtn, 600); // header height settles after layout
   const hide = () => { back.style.display = 'none'; };
   close.onclick = hide; back.onclick = e => { if (e.target === back) hide(); };
   addEventListener('keydown', e => { if (e.key === 'Escape' && back.style.display !== 'none') hide(); });
