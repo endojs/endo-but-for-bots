@@ -215,10 +215,9 @@ const sortedModules = (
           reexports = [],
           // eslint-disable-next-line no-underscore-dangle
           __dynamicImports__: dynamicImports = [],
-        } =
-          /** @type {PrecompiledStaticModuleInterface & { __dynamicImports__?: string[] }} */ (
-            record
-          );
+        } = /** @type {PrecompiledStaticModuleInterface & { __dynamicImports__?: string[] }} */ (
+          record
+        );
         // Specifiers reached only via a dynamic `import()` are captured in the
         // compartment map for archives, but a bundle does not wire dynamic
         // import, so they must not be statically linked into the bundle graph
