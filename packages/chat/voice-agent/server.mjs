@@ -254,6 +254,25 @@ const ATTENTION_RE = /needs|attention|flag|operator|review|confirm|decision|bloc
 // and the dashboard agree: vault paths → obsidian://open deep links (realpath
 // follows the ~/TADA → "the field/TADA" symlink); web URLs pass through; anything
 // else gets an empty href and renders as plain text.
+// ── FILE-POWER folders the owner can browse/add-to via the File-browser island.
+//    A named allowlist of real roots; the /files endpoints navigate + read/write
+//    WITHIN a root only (path-traversal-guarded). Root-gated (owner-only). This is
+//    the data layer behind the confined file-browser island + the "add files to a
+//    folder" affordance. Read-only roots (reference/library) are omitted for now. ──
+const FILE_ROOTS = [
+  { key: 'vault', label: '📓 Notes (vault)', dir: path.join(HOME, 'obsidian/vault') },
+  { key: 'home', label: '🏠 Agent home (projects)', dir: HOME_BASE },
+  { key: 'tada', label: '✅ TADA (done/outbox)', dir: path.join(HOME, 'TADA') },
+];
+const fileRoot = key => FILE_ROOTS.find(r => r.key === String(key || '')) || null;
+// resolve a root-relative path safely (no escape), returning the absolute path or throwing.
+const fileSafe = (root, rel) => {
+  const base = path.resolve(root.dir);
+  const pth = path.resolve(base, String(rel || '').replace(/^\/+/, ''));
+  if (pth !== base && !pth.startsWith(base + path.sep)) throw new Error('path escapes the folder');
+  return pth;
+};
+
 const VAULT_DIR = path.join(HOME, 'obsidian/vault');
 const VAULT_NAME = 'Obsidian'; // the Obsidian app's vault name (not the dir basename)
 const VAULT_REAL = (() => { try { return fs.realpathSync(VAULT_DIR); } catch { return VAULT_DIR; } })();
@@ -2124,6 +2143,60 @@ const handler = async (req, res) => {
     // ── PROJECTS: a folder grouping chats + scheduled agents, sharing one home folder.
     //    The surface for "recurring self-improvement from within the chat projects interface".
     //    Root-gated: projects are dan's automation (a shared/sub cap must not manage them). ──
+    // ── File-browser island data layer: browse + read/add files WITHIN the named
+    //    power folders (FILE_ROOTS). Root-gated (owner-only); every path is traversal-
+    //    guarded by fileSafe. The confined island holds no cap + no fs — it calls these. ──
+    if (req.method === 'POST' && u.pathname.startsWith('/files')) {
+      const body = await jsonBody(req);
+      const node = nodeFor(body.cap);
+      if (!node || !node.isRoot) return json(res, 403, { error: 'file access needs your root capability' });
+      try {
+        if (u.pathname === '/files/roots') return json(res, 200, { roots: FILE_ROOTS.map(r => ({ key: r.key, label: r.label })) });
+        const root = fileRoot(body.root);
+        if (!root) return json(res, 400, { error: 'unknown root' });
+        if (u.pathname === '/files/list') {
+          const dir = fileSafe(root, body.path);
+          let entries = [];
+          try {
+            entries = fs.readdirSync(dir, { withFileTypes: true }).map(e => {
+              const isDir = e.isDirectory(); let size = 0, mtime = 0;
+              try { const st = fs.statSync(path.join(dir, e.name)); size = st.size; mtime = st.mtimeMs; } catch {}
+              return { name: e.name, isDir, size, mtime };
+            }).sort((a, b) => (a.isDir === b.isDir) ? (a.isDir ? a.name.localeCompare(b.name) : b.mtime - a.mtime) : (a.isDir ? -1 : 1));
+          } catch (e) { return json(res, 404, { error: 'folder not found' }); }
+          return json(res, 200, { path: String(body.path || ''), entries });
+        }
+        if (u.pathname === '/files/get') {
+          const pth = fileSafe(root, body.path);
+          let st; try { st = fs.statSync(pth); } catch (e) { return json(res, 404, { error: 'not found' }); }
+          if (st.isDirectory()) return json(res, 400, { error: 'is a directory' });
+          if (st.size > 25 * 1024 * 1024) return json(res, 413, { error: 'file too large (25MB max)' });
+          const buf = fs.readFileSync(pth);
+          // text preview when it decodes cleanly (no NULs); always return b64 for download
+          const isText = buf.length < 512 * 1024 && !buf.subarray(0, 8192).includes(0);
+          return json(res, 200, { name: path.basename(pth), size: st.size, b64: buf.toString('base64'), text: isText ? buf.toString('utf8') : null });
+        }
+        if (u.pathname === '/files/put') {
+          const b64 = String(body.b64 || '');
+          if (b64.length > 34 * 1024 * 1024) return json(res, 413, { error: 'file too large (25MB max)' });
+          const buf = Buffer.from(b64, 'base64');
+          if (buf.length > 25 * 1024 * 1024) return json(res, 413, { error: 'file too large (25MB max)' });
+          const pth = fileSafe(root, body.path);
+          fs.mkdirSync(path.dirname(pth), { recursive: true });
+          fs.writeFileSync(pth, buf);
+          return json(res, 200, { ok: true, name: path.basename(pth), bytes: buf.length });
+        }
+        if (u.pathname === '/files/mkdir') { fs.mkdirSync(fileSafe(root, body.path), { recursive: true }); return json(res, 200, { ok: true }); }
+        if (u.pathname === '/files/rm') {
+          const pth = fileSafe(root, body.path);
+          const st = fs.statSync(pth);
+          if (st.isDirectory()) { fs.rmdirSync(pth); } else { fs.unlinkSync(pth); } // rmdir only removes EMPTY dirs — deliberate
+          return json(res, 200, { ok: true });
+        }
+        return json(res, 404, { error: 'unknown /files route' });
+      } catch (e) { return json(res, 400, { error: e.message }); }
+    }
+
     // ── Settings → Specialists: view/edit/create the ROLE catalog the entry agent
     //    can employ(). Built-ins are read-only specs; saving one writes an operator
     //    OVERLAY (custom-roles.json) merged over the built-ins, so a new role — or an

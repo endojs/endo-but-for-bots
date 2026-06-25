@@ -3157,7 +3157,7 @@ const showHooks = () => {
 //    and (next) a gallery of the agents you've built as 3D Granovetter diagrams. A foothold to grow into.
 const fmtUsd = u => '$' + (Math.max(0, Number(u) || 0) / 1e6).toFixed(2);
 const fmtEvery = ms => { const n = Number(ms) || 0; const h = n / 3600000; if (h >= 24 && Number.isInteger(h / 24)) return `${h / 24}d`; if (h >= 1) return `${Math.round(h)}h`; return `${Math.round(n / 60000)}m`; };
-const SETTINGS_SECTIONS = [{ key: 'usage', label: '📊 Usage' }, { key: 'providers', label: '🧠 Providers' }, { key: 'agents', label: '🕸️ Agents' }, { key: 'specialists', label: '🧑‍🔬 Specialists' }, { key: 'timers', label: '⏰ Timers' }, { key: 'internal', label: '📨 Internal' }];
+const SETTINGS_SECTIONS = [{ key: 'usage', label: '📊 Usage' }, { key: 'providers', label: '🧠 Providers' }, { key: 'agents', label: '🕸️ Agents' }, { key: 'specialists', label: '🧑‍🔬 Specialists' }, { key: 'files', label: '📂 Files' }, { key: 'timers', label: '⏰ Timers' }, { key: 'internal', label: '📨 Internal' }];
 let settingsSection = 'usage';
 const openSettings = async () => {
   if (!isRoot) { setStatus('settings are owner-only — open with your root link'); return; }
@@ -3170,6 +3170,7 @@ const renderSettingsSection = () => {
   if (settingsSection === 'providers') { body.innerHTML = '<div class="set-h">🧠 Model providers</div><div class="pmeta">Pick a per-chat model from the header selector. Add a provider key by asking the agent (it stores it in the key vault). A dedicated provider-management form is coming next.</div>'; return; }
   if (settingsSection === 'agents') return renderSettingsShape(body);
   if (settingsSection === 'specialists') return renderSettingsSpecialists(body);
+  if (settingsSection === 'files') return renderSettingsFiles(body);
   if (settingsSection === 'timers') return renderSettingsTimers(body);
   if (settingsSection === 'internal') return renderSettingsInternal(body);
   return renderSettingsUsage(body);
@@ -3206,6 +3207,27 @@ const renderSettingsUsage = async body => {
     el.querySelectorAll('.set-cost-row').forEach(row => { const id = row.getAttribute('data-id'); if (chats.some(c => c.id === id)) { row.style.cursor = 'pointer'; row.onclick = () => { closeModal(); switchChat(id); }; } });
   } catch { const el = $('set-costs'); if (el) el.textContent = '(could not load usage)'; }
 };
+// ── Settings → 📂 Files: the confined FileBrowser island, host-driven. The host owns
+//    the cap + state + fetching (/files/*); the island only renders + calls back. Re-renders
+//    via draw() through renderInto (the host-owned-state island pattern, cf. buildAskCard).
+const renderSettingsFiles = async body => {
+  body.innerHTML = '<div class="set-h">📂 Files</div><div class="pmeta" style="margin-bottom:9px">Browse + add files in your power folders. The browser is a <b>confined island</b> — it holds no capability; the server reads/writes on your behalf.</div><div id="fb-mount"></div>';
+  const mount = $('fb-mount'); if (!mount) return;
+  const roots = ((await pf('/files/roots')).roots) || [];
+  const st = { root: (roots[0] && roots[0].key) || 'vault', path: '', entries: [], file: null, busy: false, error: '' };
+  const rel = name => st.path ? `${st.path}/${name}` : name;
+  const draw = () => { if (window.__fieldIslands && window.__fieldIslands.renderInto) window.__fieldIslands.renderInto('FileBrowser', mount, { roots, root: st.root, path: st.path, entries: st.entries, file: st.file, busy: st.busy, error: st.error, onRoot, onOpen, onCrumb, onAdd, onDownload, onRemove, onCloseFile }); else mount.textContent = '(islands bundle not loaded)'; };
+  const list = async () => { st.busy = true; st.error = ''; st.file = null; draw(); const r = await pf('/files/list', { root: st.root, path: st.path }); st.busy = false; if (r.error) { st.error = r.error; st.entries = []; } else st.entries = r.entries || []; draw(); };
+  const onRoot = k => { st.root = k; st.path = ''; st.file = null; list(); };
+  const onCrumb = i => { const segs = st.path.split('/').filter(Boolean); st.path = i < 0 ? '' : segs.slice(0, i + 1).join('/'); st.file = null; list(); };
+  const onOpen = async (name, isDir) => { if (isDir) { st.path = rel(name); list(); return; } st.busy = true; st.error = ''; draw(); const r = await pf('/files/get', { root: st.root, path: rel(name) }); st.busy = false; if (r.error) st.error = r.error; else st.file = { name: r.name, text: r.text, size: r.size, b64: r.b64 }; draw(); };
+  const onCloseFile = () => { st.file = null; draw(); };
+  const onDownload = () => { const f = st.file; if (f && f.b64) dlB64(f.name, f.b64); };
+  const onRemove = async name => { if (!confirm(`Delete ${name}?`)) return; const r = await pf('/files/rm', { root: st.root, path: rel(name) }); if (r.error) { st.error = r.error; draw(); } else { st.file = null; list(); } };
+  const onAdd = () => { const inp = document.createElement('input'); inp.type = 'file'; inp.onchange = async () => { const file = inp.files && inp.files[0]; if (!file) return; if (file.size > 25 * 1024 * 1024) { st.error = `${file.name} is over the 25MB limit`; draw(); return; } st.busy = true; draw(); const b64 = await fileToB64(file); const r = await pf('/files/put', { root: st.root, path: rel(file.name), b64 }); st.busy = false; if (r.error) { st.error = r.error; draw(); } else list(); }; inp.click(); };
+  list();
+};
+
 // ── Settings → 🧑‍🔬 Specialists: view/edit the role catalog the agent can employ(),
 //    and create new roles. Built-ins edit into an operator override; custom roles are
 //    fully editable + deletable. A saved role is immediately employable by the entry agent.

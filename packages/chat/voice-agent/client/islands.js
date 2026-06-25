@@ -26,6 +26,7 @@ import { ExhaustedCard } from './exhausted-card.js';
 import { TraceSignature } from './trace-signature.js';
 import { ObjectBrowser } from './object-browser.js';
 import { ShareLinkManager } from './share-link-manager.js';
+import { FileBrowser } from './file-browser.js';
 
 // A render propagator: re-paints `view(...values)` into `el` whenever any wired cell changes.
 // This is the one kind of propagator whose effect is the DOM; logic propagators stay headless.
@@ -36,7 +37,7 @@ const renderPropagator = (el, cells, view) =>
 // the HOST owns + re-renders, e.g. the ask/proposal cards appended individually into the chat log).
 const COMPONENTS = {
   SharesPanel, NotificationCard, ChangelogList, PowersBanner, KitSampler, AskCard, ProposalCard,
-  ChatList, MessageControls, ChatMetaBar, DevTaskCard, ExhaustedCard, TraceSignature, ObjectBrowser, ShareLinkManager,
+  ChatList, MessageControls, ChatMetaBar, DevTaskCard, ExhaustedCard, TraceSignature, ObjectBrowser, ShareLinkManager, FileBrowser,
 };
 
 // ── Shares island ───────────────────────────────────────────────────────────────────────────────
