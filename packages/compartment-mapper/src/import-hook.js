@@ -228,7 +228,21 @@ export const exitModuleImportHookMaker = ({
   }
   return async specifier => {
     if (modules && has(modules, specifier)) {
-      const ns = modules[specifier];
+      const moduleDescriptor = modules[specifier];
+      // The `modules` map may provide an exit module either as a module exports
+      // namespace object directly (e.g. `{ builtin: namespace }`) or as a
+      // third-party module descriptor that wraps the namespace
+      // (`{ 'h2g2:meaning': { namespace } }`), mirroring SES's acceptance of both
+      // shapes for a Compartment's `modules` option. Unwrap the descriptor form
+      // so the synthesized virtual module source exposes the real export names —
+      // and therefore their export notifiers, which a re-export of an exit module
+      // (`export { x } from 'exit:module'`) requires. Without the unwrap the
+      // exit module would appear to export only `namespace`, and re-export wiring
+      // in SES throws "notify is not a function".
+      const ns =
+        moduleDescriptor && has(moduleDescriptor, 'namespace')
+          ? moduleDescriptor.namespace
+          : moduleDescriptor;
       return freeze({
         imports: [],
         exports: ns ? keys(ns) : [],

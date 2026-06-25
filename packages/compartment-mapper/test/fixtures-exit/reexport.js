@@ -1,6 +1,7 @@
 /* eslint-disable import/no-unresolved */
 // @ts-nocheck
 
-// The following form should suffice, but interacts with an apparent SES bug
-// for reexports.
+// Re-exporting from an exit module supplied through the `modules` map. This
+// exercises the export-notifier wiring that re-exports require: the exit module
+// instance must present a notifier per export name.
 export { meaning } from 'h2g2:meaning';

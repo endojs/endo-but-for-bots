@@ -23,21 +23,15 @@ test('can make, parse, and import an archive with a URL-scheme-prefixed importHo
   t.is(namespace.meaning, 42);
 });
 
-test.failing(
-  'can make, parse, and import an archive with a URL-scheme-prefixed modules map exit to a host module',
-  async t => {
-    const fixture = new URL(
-      'fixtures-exit/reexport.js',
-      import.meta.url,
-    ).toString();
-    const readPowers = makeReadPowers({ fs, url, crypto });
-    const archive = await makeArchive(readPowers, fixture);
-    const app = await parseArchive(archive);
-    const { namespace } = await app.import({
-      modules: {
-        'h2g2:meaning': { namespace: { meaning: 42 } },
-      },
-    });
-    t.is(namespace.meaning, 42);
-  },
-);
+test('can make, parse, and import an archive with a URL-scheme-prefixed modules map exit to a host module', async t => {
+  const fixture = new URL('fixtures-exit/reexport.js', import.meta.url).toString();
+  const readPowers = makeReadPowers({ fs, url, crypto });
+  const archive = await makeArchive(readPowers, fixture);
+  const app = await parseArchive(archive);
+  const { namespace } = await app.import({
+    modules: {
+      'h2g2:meaning': { namespace: { meaning: 42 } },
+    },
+  });
+  t.is(namespace.meaning, 42);
+});
