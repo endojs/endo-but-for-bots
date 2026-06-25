@@ -34,22 +34,42 @@ the same least-authority discipline forks already use.
   agent" are the two driving UX flows. This replaces the current string-named power dropdown — and aligns
   with `ocap_designate_by_reference` (designation by reference, not forgeable string names).
 
-## The virtual File/Folder abstraction
+## The virtual File/Folder abstraction — build on the Endo **"directory"** (Kris Kowal, 2026-06-25)
 
-Build **our own File/Folder abstraction that inherits from / builds on the unix→endo filesystem object
-mapping** (the `@endo/endo-fs` `Filesystem`/`FsBackend` seam; `makeGitFsBackend` already adapts a git
-tree onto it). Key requirement: **folders that map to a real unix folder BUT into which the user can ALSO
-drop endo objects.** So the backend is a *composite*: unix entries (from the host FS) ∪ endo-object
-entries (our overlay), presented as one tree.
+Authoritative guidance from Kris Kowal — this **corrects** the earlier "inherits from" framing:
 
-- **Plan 9 bridge**: there is a Plan 9 bridge in endo-but-for-bots to potentially build on (everything-is-
-  a-file lineage fits the "objects as files" model — verify what it exposes before committing).
+- **The thing to build on is the Endo "directory"**, which is a *superset/generalization* of the Endo
+  platform **filesystem** directory: it has `readFile`/`writeFile` among other things, and **holds its
+  entries directly in the CAS** (content-addressed store) — but with **less** of the unix baggage (no
+  `stat`/`mode`/`xattrs` or such). So "objects as files" is native: an Endo directory already holds
+  CAS-backed entries, which is exactly where islands/caps/grains-as-files live.
+- **The relationship is METHOD-NAME PARITY, not subset/superset/inheritance.** Endo directories and
+  filesystem directories are *neither* a subset nor superset of each other; the discipline is: **if both
+  implement a method name, it has the SAME SEMANTICS on both**, and **to the extent a method name has a
+  sensible interpretation, both implement it.** So our composite Inventory folder must follow the same
+  rule — implement the shared verbs (`readFile`/`writeFile`/list/lookup/…) with identical semantics
+  whether the entry is a real unix file or an endo object; don't model it as one extending the other.
+- **`editFile` (hashline editing, "for the bots")** — in our tree the fs/edit tooling lives in
+  **`packages/fae/`** (`setup-fs-tools.js`, `src/tool-makers.js`) and **`packages/genie/`** (`DESIGN.md`);
+  ride that for the in-place-edit verb the per-component/fork edit agents want. (Kris: the hashline
+  `editFile` is in a PR — reconcile with `fae` before building our own.)
+- **9p / Plan 9 is the target, not yet reached.** The bridge is **`packages/9p-server/`**
+  (`src/fs-bridge.js`, `src/wire.js`, `README.md`) — that's the "Plan 9 bridge in endo-but-for-bots."
+  Kris: hasn't yet figured out whether the Endo directory squares with 9p, "but that's where we should
+  arrive." So convergence is a *goal*, not a solved bridge to wrap. **Status: ~two rounds of work done
+  upstream toward endo-dir↔fs-dir parity; Kris is NOT confident it's done** — build on a moving target:
+  expect gaps, track upstream, contribute parity fixes rather than fork.
+- **Endo directory** itself lives in **`packages/daemon/src/`** (the directory/CAS powers —
+  `daemon-node-powers.js`, `daemon-persistence-powers.js`).
+
+Concretely: the Inventory backend is a **composite Endo directory** — unix entries (host FS) ∪ endo-object
+entries (our CAS overlay), presented as one directory that honors the shared-method-name parity contract.
+
 - **Name-collision rule (Hilbert-Hotel prefixing):** our overlay names risk colliding with real unix
   files that appear later. When the virtualized host "stomps" a name we used for an endo object, **our
   entry bows out of the way of the root filesystem** via a Hilbert-Hotel-style prefix shift (rename our
-  entry aside so the real file keeps the bare name). Safe to do because **all our references are by
-  handle, not name** — names are a human convenience, not the identity, so a forced rename never breaks a
-  reference. (Design the prefix scheme so it's stable + visibly "this was bumped to avoid the host".)
+  entry aside so the real file keeps the bare name). Safe because **all our references are by handle, not
+  name** (entries are CAS/handle-addressed) — a forced rename never breaks a reference.
 
 ## Why this matters / how it composes
 
