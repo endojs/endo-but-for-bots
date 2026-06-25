@@ -1402,6 +1402,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/zip@workspace:packages/zip"
   dependencies:
+    "@endo/chacha12": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     ava: "catalog:dev"
