@@ -3671,6 +3671,7 @@ const renderSettingsShape = async body => {
   load();
 };
 { const f = $('drawer-foot'); if (f) f.onclick = openSettings; }
+{ const ib = $('info-btn'); if (ib) ib.onclick = () => { try { window.open('/successes', '_blank', 'noopener'); } catch { location.href = '/successes'; } }; } // explain the system to visitors
 
 const boot = async () => {
   if (pendingShare) { try { await openSharedChat(pendingShare); } catch {} }
