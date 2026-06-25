@@ -252,7 +252,14 @@ export const makePendant = canvas => {
     if (!root || !root.lifeline || !root.lifeline.tailGroup) return;
     const lf = root.lifeline, tg = lf.tailGroup;
     const restY = ROOT_Y - 0.9;
-    const bottom = level1.length ? Math.min(restY, Math.min(...level1.map(n => n.group.position.y)) - 0.4) : restY;
+    // the frontier descends to the DEEPEST (lowest Y) of: rest length, the elapsed-DURATION mark
+    // (yOf(liveT) — advances every frame while the turn runs, frozen at finish), and the lowest tool node.
+    // → the hyper-octahedron grows continuously with how long the request has taken, not just when a tool fires.
+    const nodeFloor = level1.length ? Math.min(...level1.map(n => n.group.position.y)) - 0.4 : restY;
+    // listening (listenLvl≥0) reuses the lifeline as the mic indicator — don't grow it then; only a real
+    // request grows the frontier with elapsed time. (liveT freezes the duration once finished.)
+    const frontierTime = (live && listenLvl >= 0) ? t0 : liveT();
+    const bottom = Math.min(restY, yOf(frontierTime), nodeFloor);
     const k = Math.min(1, dt * 6);
     tg.position.x += (root.group.position.x - tg.position.x) * k;
     tg.position.z += (root.group.position.z - tg.position.z) * k;
@@ -325,6 +332,11 @@ export const makePendant = canvas => {
   const SEQ_BACK = 0xd29922; // return edge — the message BACK to the agent (amber)
   let t0 = 0;                // the turn's start time (set in makeRoot); the lifeline's origin
   const yOf = t => ROOT_Y - 0.6 - Math.max(0, (Number(t) || t0) - t0) * TIME_SCALE; // a time → its Y on the lifeline
+  // LIVE duration: while a request is in flight the lifeline frontier descends with WALL-CLOCK time, so the
+  // hyper-octahedron keeps GROWING for as long as the request takes — even through a long wait with no new
+  // tool events. finish() freezes the elapsed duration so a completed trace holds its final length.
+  let live = false, tEnd = 0;
+  const liveT = () => (live ? now() : (tEnd || t0)); // the frontier's "now": real time while live, frozen after
   const relayoutLevel1 = () => {
     const n = level1.length; if (!n) return;
     const cx = root.group.position.x;
@@ -386,7 +398,7 @@ export const makePendant = canvas => {
   // ---- public API ----
   const makeRoot = (descend, promptText, color = COL.root) => {
     root = makeNodeRecord('root', color, 'prompt'); root.labelText = 'prompt'; root.detail = String(promptText || '');
-    t0 = now(); // the lifeline's time origin
+    t0 = now(); live = true; tEnd = 0; // the lifeline's time origin; the turn is live → the frontier grows with elapsed time
     sceneGroup.add(root.group); nodes.push(root); pickables.push(root.pick);
     // the agent's BODY is an EXTRUDED polyhedron: the rotating head (root, above) + a TWIN "now" shape at the
     // live frontier of the timeline, with all MATCHING vertices joined by glowing edges (the twin shares the
@@ -508,7 +520,7 @@ export const makePendant = canvas => {
     pendingQ.slice().forEach(nd => { if (!nd.settled) settle(nd, true); });
     pendingQ.length = 0; relayoutLevel1(); fit();
   };
-  const finish = () => { pendingQ.slice().forEach(nd => { if (!nd.settled) settle(nd, true); }); pendingQ.length = 0; };
+  const finish = () => { live = false; tEnd = now(); pendingQ.slice().forEach(nd => { if (!nd.settled) settle(nd, true); }); pendingQ.length = 0; }; // freeze the elapsed duration → the comet holds its final length
   // re-render a SAVED trace instantly (no descend/animation) — persistence across navigation
   const showSteps = steps => {
     clearScene(); buildInstant = true; makeRoot(false);
@@ -670,6 +682,7 @@ export const makePendant = canvas => {
       if (nd.crown.length) positionCrown(nd); // the power crown rides above the agent
     }
     updateLifeline(dt); // the agent's time-extruded body grows to the latest step + spins
+    if (live && listenLvl < 0) fit(); // while a real request runs, the comet keeps growing with elapsed time → follow it (camera ease lags, so the growth still reads)
     camTarget.lerp(desiredCenter, 1 - Math.pow(0.0008, dt));
     camDist += (desiredDist * userZoom - camDist) * (1 - Math.pow(0.0008, dt));
     autoAz += dt * 0.14; // continuous slow turn (~one gentle revolution every ~45s)
