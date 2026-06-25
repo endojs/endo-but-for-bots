@@ -2715,6 +2715,22 @@ const forkComponentAct = async (id, name) => {
   setStatus(r.ok ? `Forked → "${fname}" — queued for review; admit it in the Components tab.` : `fork: ${r.error || 'failed'}`);
   if (curTab === 'components') refreshComponents();
 };
+// ── live FORK actions (Alt-click on a mounted [data-fork-id] fork → edit/fork). Available to ANY cap-holder
+//    (forks are owner-gated by the cap, not root). Distinct from forkComponentAct (the /components git path).
+const forkEditAct = async (id, name) => {
+  const change = window.prompt(`✎ Edit fork "${name}" — describe the change. The fork's agent rewrites its (endowments,props)=>vnode source (a new version), applied live:`);
+  if (!change) return;
+  setStatus(`✎ editing "${name}"…`);
+  const r = await (await fetch('/forks/edit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), id, prompt: change }) })).json();
+  setStatus(r.ok ? `Edited "${name}" → v${r.version}. Revert in the fork's history.` : `edit: ${r.error || 'failed'}`);
+  renderTx(); // re-render so the mounted fork widget re-fetches + repaints the new source
+};
+const forkForkAct = async (id, name) => {
+  const r = await (await fetch('/forks/read', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), id }) })).json();
+  if (!r.ok) { setStatus(`fork: ${r.error || 'failed'}`); return; }
+  const fname = window.prompt(`⑂ Fork "${name}" — name your new fork:`, `${name} copy`); if (!fname) return;
+  forkIntoChat({ source: r.source, name: fname, baseId: id }); // new independent fork, opened inline to edit
+};
 
 // ── ⌥ Alt/Option-click to SELECT a component + edit it with its agent ───────────────────────────────
 // Hold Alt/Option → hovering outlines the lowest-level element tagged with its component id; click →
@@ -2739,10 +2755,14 @@ const componentSelect = () => {
   const chip = document.createElement('div');
   chip.style.cssText = 'position:fixed;z-index:9002;display:none;gap:6px;background:#0d1117f7;border:1px solid var(--acc,#39d3ff);border-radius:10px;padding:6px 7px;box-shadow:0 10px 34px rgba(0,0,0,.6);font:12px -apple-system,sans-serif;align-items:center;';
   document.body.append(outline, hint, chip);
-  // a "component" = any element carrying its project id (the Studio) OR a live in-chat confined component.
-  const tagOf = el => (el && el.closest ? el.closest('[data-component-id], .gw-component') : null);
+  // a "component" = any element carrying its project id (the Studio) OR a live in-chat confined component
+  // OR a live mounted FORK ([data-fork-id]). Forks select for any cap-holder; components stay root-only.
+  const tagOf = el => (el && el.closest ? el.closest('[data-fork-id], [data-component-id], .gw-component') : null);
+  const isForkEl = el => !!(el && el.closest && el.closest('[data-fork-id]'));
+  const hasForks = () => !!document.querySelector('[data-fork-id]');
+  const canEngage = () => isRoot || hasForks(); // forks are alt-selectable even without the root cap
   const setAlt = on => { altHeld = on; hint.style.display = on ? 'block' : 'none'; document.documentElement.classList.toggle('comp-select', on); if (!on && (!chip.style.display || chip.style.display === 'none')) { outline.style.display = 'none'; hoverEl = null; } };
-  const place = el => { if (!el) { outline.style.display = 'none'; return; } const r = el.getBoundingClientRect(); outline.style.display = 'block'; outline.style.left = `${r.left - 1}px`; outline.style.top = `${r.top - 1}px`; outline.style.width = `${r.width}px`; outline.style.height = `${r.height}px`; label.textContent = el.getAttribute('data-component-name') || el.getAttribute('data-component-id') || 'component'; }; // formal name, impact-colour monospace, top-left
+  const place = el => { if (!el) { outline.style.display = 'none'; return; } const r = el.getBoundingClientRect(); outline.style.display = 'block'; outline.style.left = `${r.left - 1}px`; outline.style.top = `${r.top - 1}px`; outline.style.width = `${r.width}px`; outline.style.height = `${r.height}px`; label.textContent = (el.closest && el.closest('[data-fork-id]') ? `⑂ ${el.closest('[data-fork-id]').getAttribute('data-fork-name') || 'fork'}` : '') || el.getAttribute('data-component-name') || el.getAttribute('data-component-id') || 'component'; }; // formal name, impact-colour monospace, top-left
   const clearChip = () => { chip.style.display = 'none'; outline.style.display = 'none'; };
   // Break out an id-less inline component into a project object, then edit it — so click-to-edit works on
   // freshly-generated chat components too (breaking out IS minting the editable, versioned project).
@@ -2756,7 +2776,7 @@ const componentSelect = () => {
     if (!r || !r.ok || !r.id) { setStatus('break out: ' + ((r && r.error) || 'failed')); return; }
     editComponent(r.id, r.name || nm); // now it's a project object → edit it with its focused agent
   };
-  addEventListener('keydown', e => { if ((e.key === 'Alt' || e.altKey) && isRoot) setAlt(true); });
+  addEventListener('keydown', e => { if ((e.key === 'Alt' || e.altKey) && canEngage()) setAlt(true); });
   addEventListener('keyup', e => { if (e.key === 'Alt' || !e.altKey) setAlt(false); });
   addEventListener('blur', () => setAlt(false)); // alt-tab / focus loss → never leave iframes disabled
   // Drive selection off EACH event's own altKey, not just a captured Alt keydown. The keydown frequently never
@@ -2764,12 +2784,27 @@ const componentSelect = () => {
   // is why holding Alt did nothing. mousemove/click both carry altKey regardless of focus, so any Alt-move
   // engages select mode (which disables the iframes' pointer-events, letting the rest of the gesture land).
   addEventListener('mousemove', e => {
-    if (!isRoot) return;
+    if (!canEngage()) return;
     if (e.altKey) { if (!altHeld) setAlt(true); const el = tagOf(e.target); if (el !== hoverEl) { hoverEl = el; place(el); } else if (el) place(el); }
     else if (altHeld) setAlt(false);
   }, true);
   addEventListener('click', e => {
-    if (!isRoot || !e.altKey) return; const el = tagOf(e.target); if (!el) return;
+    if (!e.altKey || !canEngage()) return; const el = tagOf(e.target); if (!el) return;
+    // LIVE FORK ([data-fork-id]): editable by any cap-holder via the /forks/* path. Takes priority over the
+    // component branch (a fork mount is never also a Studio component).
+    const forkEl = el.closest ? el.closest('[data-fork-id]') : null;
+    if (forkEl) {
+      e.preventDefault(); e.stopPropagation();
+      const fid = forkEl.getAttribute('data-fork-id'); const fname = forkEl.getAttribute('data-fork-name') || 'fork';
+      const r = el.getBoundingClientRect();
+      chip.innerHTML = `<span style="color:var(--mut)">⑂ ${esc(fname)}</span> <button class="mini" data-act="fedit">✎ edit</button> <button class="mini" data-act="ffork">⑂ fork</button> <button class="mini" data-act="x">✕</button>`;
+      chip.style.display = 'flex'; chip.style.left = `${Math.min(r.left, innerWidth - 240)}px`; chip.style.top = `${Math.min(r.bottom + 6, innerHeight - 44)}px`; place(el);
+      chip.querySelector('[data-act=fedit]').onclick = () => { clearChip(); forkEditAct(fid, fname); };
+      chip.querySelector('[data-act=ffork]').onclick = () => { clearChip(); forkForkAct(fid, fname); };
+      chip.querySelector('[data-act=x]').onclick = clearChip;
+      return;
+    }
+    if (!isRoot) return; // component selection (Studio + in-chat components) stays owner-only
     e.preventDefault(); e.stopPropagation();
     const id = el.getAttribute('data-component-id'); const name = el.getAttribute('data-component-name') || 'component'; const spec = el.__componentSpec;
     const r = el.getBoundingClientRect();

@@ -67,6 +67,10 @@ export const mountForkInto = async (host, opts = {}) => {
     bar.append(el('span', { style: 'font-size:12px;color:var(--mut,#7d8590)' }, [`⑂ ${name || 'fork'}`]));
     if (shareToken) bar.append(btn('⑂ Make mine', doAdopt, 'adopt this shared fork as your own to edit + re-share'));
     else { bar.append(btn('✎ Edit', doEdit, 'agent edits this fork')); bar.append(btn('⇪ Share', doShare, 'mint a re-shareable link')); }
+    // Tag the host with the fork's identity so Alt-click selection can act on a LIVE mounted fork (owner
+    // forks only — a shared fork isn't yours to edit until you "Make mine"). data-fork-name shows in the chip.
+    if (!shareToken && id) { host.setAttribute('data-fork-id', id); host.setAttribute('data-fork-name', name || 'fork'); }
+    else { host.removeAttribute('data-fork-id'); host.removeAttribute('data-fork-name'); }
   };
 
   host.append(bar, stage, note);
