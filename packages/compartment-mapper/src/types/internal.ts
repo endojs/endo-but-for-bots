@@ -343,3 +343,16 @@ export type ParserGeneratorConfig = {
   parserForLanguage: ParserForLanguage;
   transforms: Record<string, ModuleTransform | SyncModuleTransform>;
 };
+
+/**
+ * Classification of a single `package.json` descriptor, memoized per
+ * directory by `makePackageDescriptorCache`.
+ */
+export type ClassifiedDescriptor = {
+  packageDescriptor: PackageDescriptor;
+  /**
+   * True when the descriptor has a non-empty `name` field and therefore
+   * defines a compartment. False for an auxiliary descriptor.
+   */
+  isCompartmentDefining: boolean;
+};

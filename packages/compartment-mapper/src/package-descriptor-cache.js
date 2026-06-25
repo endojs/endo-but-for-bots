@@ -28,9 +28,13 @@
 
 /**
  * @import {
+ *   AuxiliaryDescriptor,
+ *   ClassifiedDescriptor,
+ *   CompartmentRootDescriptor,
  *   FileUrlString,
  *   MaybeReadFn,
  *   PackageDescriptor,
+ *   PackageDescriptorCache,
  * } from './types.js'
  */
 
@@ -48,64 +52,6 @@ const { quote: q } = assert;
  * @param {string|URL} abs - a fully qualified URL
  */
 const resolveLocation = (rel, abs) => new URL(rel, abs).toString();
-
-/**
- * Classification of a `package.json` descriptor.
- *
- * @typedef {object} ClassifiedDescriptor
- * @property {PackageDescriptor} packageDescriptor
- * @property {boolean} isCompartmentDefining
- *   True when the descriptor has a non-empty `name` field and therefore
- *   defines a compartment. False for an auxiliary descriptor.
- */
-
-/**
- * A descriptor for the compartment-defining ancestor of a file path, plus
- * the ordered list of auxiliary descriptors between the compartment root
- * and (but not including) the file's parent.
- *
- * @typedef {object} CompartmentRootDescriptor
- * @property {FileUrlString} packageLocation
- *   Directory of the compartment-defining `package.json`.
- * @property {PackageDescriptor} packageDescriptor
- *   The compartment-defining descriptor; always has a non-empty `name`.
- * @property {ReadonlyArray<AuxiliaryDescriptor>} auxiliaryDescriptors
- *   In path order from the compartment root down. Empty when the file's
- *   nearest enclosing `package.json` is the compartment root itself.
- */
-
-/**
- * An auxiliary `package.json` descriptor (one without a `name`), located in
- * a subdirectory of a compartment-defining ancestor.
- *
- * @typedef {object} AuxiliaryDescriptor
- * @property {FileUrlString} location
- *   Directory containing the auxiliary `package.json`.
- * @property {PackageDescriptor} packageDescriptor
- *   Has no `name` (or an empty `name`).
- */
-
-/**
- * Cache of `package.json` descriptors with the two-question API described
- * in `designs/compartment-mapper-auxiliary-package-json.md`.
- *
- * @typedef {object} PackageDescriptorCache
- * @property {(path: string) => Promise<CompartmentRootDescriptor>} findEnclosingCompartmentRoot
- *   Walks upward from the directory containing `path`, skipping past
- *   auxiliary descriptors transparently. Throws when no named ancestor
- *   exists (matches the PR 70 diagnostic: at that point the package
- *   itself is anonymous and has no compartment to belong to).
- * @property {(path: string) => Promise<ReadonlyArray<PackageDescriptor>>} collectLanguageOverrides
- *   Returns the layered descriptor list for the file at `path`, shallowest
- *   first. The first element is the compartment root's descriptor;
- *   subsequent elements are auxiliary descriptors whose directory prefixes
- *   `path`.
- * @property {(packageLocation: string) => Promise<PackageDescriptor | undefined>} readDescriptor
- *   Memoized read of a single descriptor at `packageLocation`. Returns
- *   `undefined` when no `package.json` is present at that exact directory.
- *   Exposed so callers can share the same memoization for their own walks
- *   (for example, `node-modules.js`'s `readDescriptorUpwards`).
- */
 
 /**
  * @param {MaybeReadFn} maybeRead
