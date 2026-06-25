@@ -459,7 +459,7 @@ const makeAffordances = ({ outDir }) => {
     // operator's own access. AMBIENT host-root authority: only grant it deliberately, and treat a
     // chat/share that holds it as holding the whole machine.
     host: Far('HostShell', {
-      help: () => 'Full shell over THIS host (archua) as the operator. exec(cmd,{cwd}) runs immediately (the grant is the authorization). Coarse ambient host-root — clone/build/test/edit on the host. Equivalent to the operator\'s claude-code.',
+      help: () => 'Full shell over THIS host (archua) as the operator. exec(cmd,{cwd}) runs immediately (the grant is the authorization). Coarse ambient host-root — clone/build/test/edit on the host. Equivalent to the operator\'s claude-code. THIS IS ALSO YOUR FILESYSTEM-TRAVERSAL TOOL: to look at any path on the host (e.g. ~/endo-but-for-bots), exec `ls`/`find`/`cat`/`rg` — do NOT report you "can\'t read a path" when you hold this; the structured fileList/fileRead tools only cover the sandboxed power-folders, but hostExec reads anything the operator can.',
       describe: () => harden({ kind: 'host-shell', host: 'archua (local)' }),
       // `jail` (optional) confines this shell to a worktree dir. When bwrap is available (WORKTREE_BWRAP)
       // the jail is a KERNEL boundary: only the worktree is bound rw, a read-only toolchain/repo is bound,

@@ -299,7 +299,11 @@ const saveAppShares = () => { try { fs.mkdirSync(path.dirname(APP_SHARES_FILE), 
 const appShareFor = cap => (cap ? appShares[appKey(cap)] || null : null);
 // file roots a caller may reach: ALL for root; for a file-browser app-share, only its attenuated subset.
 const allowedFileRoots = (node, cap) => {
-  if (node && node.isRoot) return FILE_ROOTS;
+  // A host-shell holder can already `cat` anything via hostExec, so withholding the STRUCTURED file browser
+  // from it is pointless — and worse, it makes a host-powered agent wrongly conclude it "can't traverse the
+  // filesystem" (the scoped-dfb48b2f0 case: granted ["host"] yet fileList returned []). The stronger power
+  // subsumes the weaker; surface the roots to it. (The real cure is the Inventory/by-reference model.)
+  if (node && (node.isRoot || (node.powers && node.powers.has('host')))) return FILE_ROOTS;
   const sh = appShareFor(cap);
   if (sh && sh.app === 'file-browser' && Array.isArray(sh.roots)) return FILE_ROOTS.filter(r => sh.roots.includes(r.key));
   return [];
