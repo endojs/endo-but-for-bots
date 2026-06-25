@@ -87,29 +87,43 @@ design for future readers.
 
 ## Progress Tracking
 
-Progress is tracked at two levels:
+**The roadmap is no longer tracked in this repository.** Status, milestones,
+size/time estimates, dependency edges, target dates, and the Gantt timeline now
+live as state in the **garden journal plan** (the `journal2` branch of
+`kriskowal/garden`, under `plan/`), where each design is one record and the
+roadmap view is an *aggregation* of those records. The journal is the **single
+source of truth**; the narrative in this directory is **mirrored** from the
+journal record bodies.
 
-### Per-document
+- Per-design source of truth: garden journal `plan/designs/endo-but-for-bots/<slug>.md`
+  (frontmatter — `status`, `size`, `milestone`, `depends_on`, `pr`, `target`,
+  `created`, `updated` — plus the design narrative in the body).
+- Generated aggregate roadmap: garden journal `plan/README.md` (table + Mermaid
+  dependency graph + per-milestone rollups; rendered by
+  `scripts/jobs/plan/render.sh`, never hand-edited).
+- Architecture: `designs/plan-in-journal.md` on `kriskowal/garden` (garden#4).
 
-- The **Status** field in the metadata table is the primary indicator.
-- The optional `## Status` prose section provides implementation details:
-  file paths built, design deviations, and what remains.
+`designs/README.md` in this directory is a **generated, non-authoritative courtesy
+redirect** for human readers browsing the fork — regenerated from the journal
+records by `scripts/jobs/plan/render-endo-redirect.sh` on the weekly recalibration
+job. **Do not hand-edit it,** and do not hand-maintain a summary table, milestone
+tables, or a dependency graph here.
 
-### Cross-document
+The former **manual synchronization discipline is retired.** You no longer keep a
+README summary table in lock-step with each design's metadata, nor file new designs
+into milestone tables and the dependency graph by hand. Instead:
 
-- `designs/README.md` maintains a summary table of all designs with
-  Created, Updated, and Status columns.
-- The README also contains a Mermaid dependency graph, milestone tables
-  with exit criteria, size/time estimates calibrated against observed
-  velocity, and a Gantt timeline.
-- **Any modification to a design document — especially its metadata —
-  must be synchronized with `designs/README.md`.** Update the summary
-  table row to reflect the current Status, Updated date, and any other
-  changed fields.
-- **New designs must be incorporated into the README plan.** This means:
-  adding a row to the summary table, assigning the design to a milestone,
-  adding it to the appropriate milestone table, inserting it into the
-  dependency graph if it has dependencies or dependents, adding a
-  per-design size/duration estimate, and updating the milestone totals
-  and timeline if the new work changes the critical path.
+- To change a design's status, dates, estimate, milestone, or dependencies, edit
+  its **journal record** (`plan/designs/endo-but-for-bots/<slug>.md` on `journal2`);
+  the aggregate view and this redirect both recompute.
+- Status/PR drift is reconciled automatically by `scripts/jobs/plan/reconcile.sh`
+  (the gh merge-detection auto-flip to **Complete**) on the weekly Sunday-evening
+  recalibration job; you do not chase status by hand.
+- A **new design** is added by creating its journal record (and, for browsing,
+  its mirrored narrative file here); the milestone rollup, dependency graph, and
+  redirect table all follow from the records.
+
+The **Status** field in each design's metadata table here still documents that
+design at a glance, but it is a mirror of the journal record's `status`, not an
+independent source — edit the record, not the file's table, to change it.
 
