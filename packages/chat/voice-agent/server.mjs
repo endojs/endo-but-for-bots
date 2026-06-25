@@ -570,25 +570,40 @@ const runProjectAgent = async (project, agent) => {
   const now = new Date().toISOString();
   const answer = String(out.ok ? out.answer : `run failed: ${out.error}`);
   const usedTools = out.toolsUsed || [];
-  // Persist the run as a reviewable, CONTINUABLE chat (a seed-chat) so it lands in history with evidence —
-  // not just a dead-end notification. loadSeedChats adopts it into the sidebar; #chat=<id> deep-links to it.
-  const id = `chat-${crypto.randomBytes(6).toString('hex')}`;
-  try {
-    const seed = {
-      id, title: `⏰ ${project.name} › ${agent.name}`, ts: Date.now(), source: 'scheduled',
-      transcript: agent.prompt, scheduled: { project: project.name, agent: agent.name, at: now, tools: out.grantedPowers || agent.tools || [] },
-      tx: [{ who: 'you', text: agent.prompt }, { who: 'agent', text: answer, tools: usedTools, steps: [] }],
-      versions: [{ v: 0, label: 'scheduled run', env: { persona: `scheduled:${agent.name}` }, answer, toolsUsed: usedTools, steps: [], at: now }],
-    };
-    const seeds = await readSeedChats(); seeds.unshift(seed); await writeSeedChats(seeds);
-  } catch (e) { log('sched seed-chat', e.message); }
-  await postFeed({
-    agent: agent.name, avatar: '⏰', title: `${project.name} › ${agent.name}`,
-    body: answer.slice(0, 8000), // store the full run summary so the click-to-expand modal isn't truncated (the card still shows a 400-char preview)
-    status: nProp ? `needs your input · ${nProp} proposal(s)` : 'ran', note: `tools: ${(out.grantedPowers || agent.tools || []).join(', ')}`,
-    chatId: id, click: `${BASE_URL}/#chat=${id}`, // tapping the notification opens the run
+  // SPAM GATE: a scheduled run only earns a notification + a sidebar seed-chat
+  // when there's something for the operator — proposals raised, or the run
+  // failed. A routine no-op (e.g. the self-improvement drainer finding an empty
+  // backlog) is recorded ONLY in the agent's run-log (visible in the timer
+  // Detail view); it posts no feed notification and spawns no chat. This is what
+  // stops the "⏰ … ran" wall with nothing to report.
+  const reportworthy = nProp > 0 || !out.ok;
+  let id = null;
+  if (reportworthy) {
+    // Persist the run as a reviewable, CONTINUABLE chat (a seed-chat) so the
+    // notification deep-links to evidence. #chat=<id> opens it.
+    id = `chat-${crypto.randomBytes(6).toString('hex')}`;
+    try {
+      const seed = {
+        id, title: `⏰ ${project.name} › ${agent.name}`, ts: Date.now(), source: 'scheduled',
+        transcript: agent.prompt, scheduled: { project: project.name, agent: agent.name, at: now, tools: out.grantedPowers || agent.tools || [] },
+        tx: [{ who: 'you', text: agent.prompt }, { who: 'agent', text: answer, tools: usedTools, steps: [] }],
+        versions: [{ v: 0, label: 'scheduled run', env: { persona: `scheduled:${agent.name}` }, answer, toolsUsed: usedTools, steps: [], at: now }],
+      };
+      const seeds = await readSeedChats(); seeds.unshift(seed); await writeSeedChats(seeds);
+    } catch (e) { log('sched seed-chat', e.message); }
+    await postFeed({
+      agent: agent.name, avatar: '⏰', title: `${project.name} › ${agent.name}`,
+      body: answer.slice(0, 8000), // store the full run summary so the click-to-expand modal isn't truncated (the card still shows a 400-char preview)
+      status: nProp ? `needs your input · ${nProp} proposal(s)` : 'run failed', note: `tools: ${(out.grantedPowers || agent.tools || []).join(', ')}`,
+      chatId: id, click: `${BASE_URL}/#chat=${id}`, // tapping the notification opens the run
+    });
+  } else {
+    log('scheduled-agent: no-op (nothing to report), logged only:', project.name, '›', agent.name);
+  }
+  projects.recordAgentRun(project.id, agent.id, {
+    nextAt: agent.schedule ? projects.computeNextAt(agent.schedule, Date.now()) : null, // event-only agents have no nextAt
+    run: { at: now, chatId: id, ok: out.ok, nProp, summary: answer },
   });
-  projects.recordAgentRun(project.id, agent.id, { nextAt: agent.schedule ? projects.computeNextAt(agent.schedule, Date.now()) : null, lastRun: Date.now(), lastRunChatId: id }); // event-only agents have no nextAt
   return { ...out, chatId: id };
 };
 

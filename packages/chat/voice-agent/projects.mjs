@@ -66,7 +66,9 @@ export const listScheduledAgents = pid => (getProject(pid)?.scheduledAgents) || 
 export const updateScheduledAgent = (pid, agentId, patch) => mutate(pid, p => {
   const a = p.scheduledAgents.find(x => x.id === agentId);
   if (!a) throw new Error(`no scheduled agent ${agentId}`);
-  Object.assign(a, patch);
+  // patch is either a shallow-merge object or a mutator fn (so callers can
+  // append to in-place arrays like the run-log without read-modify-write).
+  if (typeof patch === 'function') patch(a); else Object.assign(a, patch);
   return a;
 });
 export const removeScheduledAgent = (pid, agentId) => mutate(pid, p => { p.scheduledAgents = p.scheduledAgents.filter(x => x.id !== agentId); });
@@ -94,4 +96,16 @@ export const computeNextAt = (schedule = {}, fromMs = Date.now()) => {
 };
 
 // Mark an agent's run outcome + advance its nextAt (used by the scheduler + run-now).
-export const recordAgentRun = (pid, agentId, { nextAt } = {}) => updateScheduledAgent(pid, agentId, { lastRun: nowIso(), nextAt: nextAt ?? null });
+// `run` (optional) appends to a bounded per-agent run-log so the timer Detail view
+// can show history — including routine no-op runs that (deliberately) post no
+// notification and spawn no sidebar chat. lastRunChatId only set for runs that
+// produced a chat (something to report).
+const RUN_LOG_MAX = 40;
+export const recordAgentRun = (pid, agentId, { nextAt, run } = {}) => updateScheduledAgent(pid, agentId, a => {
+  a.lastRun = nowIso();
+  a.nextAt = nextAt ?? null;
+  if (run) {
+    a.runs = [{ at: a.lastRun, chatId: run.chatId ?? null, ok: run.ok !== false, nProp: run.nProp || 0, summary: String(run.summary || '').slice(0, 300) }, ...(a.runs || [])].slice(0, RUN_LOG_MAX);
+    if (run.chatId) a.lastRunChatId = run.chatId;
+  }
+});
