@@ -20,7 +20,8 @@
     "test:agent-menu": "node agent-menu.staging.test.cjs",
     "test:fork-upgrade": "node fork-upgrade.staging.test.cjs",
     "test:dist-trust": "node --test dist-trust.test.mjs",
-    "test:fork-distribution": "node fork-distribution.staging.test.cjs"
+    "test:fork-distribution": "node fork-distribution.staging.test.cjs",
+    "test:paste-link": "node paste-link.staging.test.cjs"
   },
   "dependencies": {
     "@endo/exo-git": "workspace:^",

@@ -35,6 +35,10 @@ let pendingChat = _hashParams.get('chat') || null;
 const pendingShare = _hashParams.get('chatshare') || null; // Feature B: opened via a chat-share link
 const pendingMinimizeApp = _hashParams.get('minimize-app') || null; // handoff from /apps/<name> → minimize into a fresh chat (cap restored from localStorage)
 const pendingForkToken = _hashParams.get('fork') || null; // a shared FORK link (#fork=<token>): open it inline so the recipient can use, adopt + re-share
+// A pasted link becomes an inline widget card (embedSiteInline) AND is staged here per-session so the next
+// send also tells the AGENT about it — otherwise the card is client-only and the agent never sees the link.
+// cap-hygiene: only the cap-STRIPPED URL is staged (the swissnum never reaches the agent/server).
+const pendingSharedLinks = {}; // sessionId -> [url, …]
 if (cap) { try { localStorage.setItem(CAP_KEY, cap); } catch {} }
 if (location.hash) { try { history.replaceState(null, '', location.pathname + location.search); } catch {} } // strip the fragment (cap and/or chat)
 if (!cap) { try { cap = localStorage.getItem(CAP_KEY) || null; } catch {} }
@@ -994,7 +998,13 @@ const scopeChat = async prompt => {
 };
 
 const sendChat = async (text, { spoken = false, audio = null, attachments = [], model = null } = {}) => {
-  const t = (text || '').trim(); if ((!t && !attachments.length) || busy) return false;
+  const t = (text || '').trim();
+  // Fold any pasted-link cards for this chat into the AGENT-FACING text (the visible bubble stays `t`; the
+  // link also shows as its widget card). Consumed once. Lets a link-only message (empty `t`) still send.
+  const sharedLinks = (pendingSharedLinks[sessionId] || []).slice();
+  const agentText = (t + (sharedLinks.length ? `${t ? '\n\n' : ''}${sharedLinks.map(u => `[link the user shared in chat: ${u}]`).join('\n')}` : '')).trim();
+  if ((!agentText && !attachments.length) || busy) return false;
+  delete pendingSharedLinks[sessionId]; // consumed
   busy = true; if (sendBtn) sendBtn.disabled = true;
   const myTurn = ++turn; const stale = () => myTurn !== turn;
   let ok = false;
@@ -1007,7 +1017,7 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     if (activeChat && activeChat.shareToken) {
       if (activeChat.shareMode !== 'write') { setStatus('this is a read-only shared chat'); return false; }
       renderUserBubble(t, attachments); document.body.classList.remove('landing'); activeTx.push({ who: 'you', text: t, at: Date.now() }); saveTx(); setStatus('thinking…');
-      let r; try { r = await (await fetch('/share/post', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: activeChat.shareToken, text: t }) })).json(); } catch (e) { r = { error: e.message }; }
+      let r; try { r = await (await fetch('/share/post', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: activeChat.shareToken, text: agentText }) })).json(); } catch (e) { r = { error: e.message }; }
       if (stale()) return true;
       if (r.error) { setStatus('share: ' + r.error); return false; }
       if (r.exhausted) { renderAgentResponse({ answer: 'The shared spend allowance for this chat is used up.' }); pushTx('agent', '(allowance spent)'); setStatus(''); ok = true; return true; }
@@ -1031,7 +1041,7 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
       const asSpecialist = entryAgent && entryAgent !== 'field-agent';
       let sc = null;
       if (!asSpecialist) {
-        sc = await scopeChat(t || (attachments[0] && attachments[0].name) || 'this task');
+        sc = await scopeChat(agentText || (attachments[0] && attachments[0].name) || 'this task');
         if (stale()) return true;
         if (sc === null) { renderTx(); syncLanding(); setStatus(''); return false; } // cancelled → restore the landing box
       }
@@ -1065,7 +1075,7 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     try { userBubbleControls(activeTx.length - 1, tx, ub); } catch { /* control row: ↻ retry / ✎ edit / 🔊 audio — appears live INSIDE the bubble */ }
     titleFrom(t || (attachments[0] && attachments[0].name) || 'photo'); setStatus('thinking…'); if (spoken) setMic('thinking');
     await pendantBegin(t); // descend the live 3D pendant + open the step stream BEFORE the turn starts
-    const payload = { sessionId, text: t, cap: chatCap(), model: model || chatModel(), agent: chatAgent() }; // chatCap() = this chat's CONFINED cap (Feature A); agent = run AS this entrypoint specialist (server confines)
+    const payload = { sessionId, text: agentText, cap: chatCap(), model: model || chatModel(), agent: chatAgent() }; // agentText = typed text + any pasted-link references; chatCap() = this chat's CONFINED cap (Feature A); agent = run AS this entrypoint specialist (server confines)
     // Send the DURABLE transcript as history so the agent's memory of this chat survives a server
     // restart (the server's in-memory history is volatile + wiped on restart). Exclude the current
     // user turn (just pushed above) — the server appends it from `text`. Plain text per turn.
@@ -2365,8 +2375,10 @@ const embedSiteInline = site => {
     stored = { url: site.url.slice(0, h), hadCap: true }; // persisted form is cap-stripped
   }
   activeTx.push({ who: 'widget', id, site: stored }); saveTx(); renderTx();
+  // Stage the (cap-stripped) URL so the next send tells the agent about it (the widget alone is client-only).
+  if (stored.url) (pendingSharedLinks[sessionId] || (pendingSharedLinks[sessionId] = [])).push(stored.url);
   const inlined = site.html != null || isSameOriginSite(stored.url ?? '/') || isFramableFleetSite(stored.url || '');
-  setStatus(inlined ? '🧩 site embedded inline' : '🧩 cross-origin app linked — tap “open ↗”');
+  setStatus(inlined ? '🧩 site embedded inline — the agent will see it on send' : '🧩 cross-origin app linked — tap “open ↗” (the agent sees the link on send)');
 };
 // detect a "pasted site": a full HTML document, or a single same-origin / .html / #cap link.
 const looksLikeHtmlDoc = s => /<!doctype html|<html[\s>]|<body[\s>]/i.test(s) && /<\/(html|body|div|p|main)>/i.test(s);
