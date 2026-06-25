@@ -2163,6 +2163,18 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         const children = all.slice(0, CAP);
         return harden({ kind: rel ? 'notes-folder' : 'notes', name: rel || 'Notes', handle: rel, children, truncated: all.length > CAP ? all.length - CAP : 0 });
       },
+      // noteContent(handle) — read ONE note's text (so the object-navigator can "click into" a text document).
+      // Same notes-power gate + prefix confinement as notesTree; bounded; read-only.
+      noteContent: async handle => {
+        if (!powerSet.has('notes')) throw new Error('no notes held');
+        const b = (node.notesBinding && node.notesBinding()) || aff.notes;
+        const base = b.prefix || '';
+        const rel = String(handle || '').replace(/^\/+/, '').replace(/\/+$/, '');
+        if (base && rel !== base && !underPrefix(rel, base)) throw new Error('escapes your share');
+        if (!rel.endsWith('.md')) throw new Error('not a note');
+        let text; try { text = fs.readFileSync(vaultReadPath(rel), 'utf8'); } catch (e) { throw new Error(`cannot read: ${e.message}`); }
+        return harden({ kind: 'note', name: rel.split('/').pop().replace(/\.md$/, ''), handle: rel, text: text.slice(0, 200000) });
+      },
       shareAgent: (handle, label, opts) => harden(node.shareAgent(handle, label, opts || {})),
       shareContacts: async (handle, label) => harden(await node.shareContacts(handle, label)),
       shareHome: (subpath, label) => harden(node.shareHome(subpath, label)),

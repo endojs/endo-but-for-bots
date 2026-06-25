@@ -1466,10 +1466,13 @@ const renderNavList = () => {
   const roOnly = !!loc && (loc.ns === 'contacts' || loc.ns === 'home' || loc.ns === 'timers' || loc.ns === 'notes'); // contacts/files/timers/notes share as single granules
   const shareBtns = (k, i) => k.root ? '' : (roOnly ? ` <button class="mini" data-shro="${i}">🔗 share</button>` : ` <button class="mini" data-shro="${i}">RO</button><button class="mini" data-shfull="${i}">full</button>`);
   const shown = f ? kids.filter(k => k.label.toLowerCase().includes(f) || (k.sub || '').toLowerCase().includes(f)) : kids;
-  $('obj-list').innerHTML = shown.length ? shown.map((k, i) => `<div class="share"><div>${k.leaf ? '' : '📂 '}<b>${esc(k.label)}</b> <span class="pill">${esc(k.sub || '')}</span></div><div>${k.leaf ? '' : `<button class="mini" data-drill="${i}">open</button>`}${shareBtns(k, i)}</div></div>`).join('') : '<div class="pill">(nothing here)</div>';
-  document.querySelectorAll('#obj-list [data-drill]').forEach(b => { b.onclick = () => { const k = shown[+b.dataset.drill]; navGo([...navStack, { ns: k.root ? k.ns : loc.ns, handle: k.root ? null : k.handle, label: k.label }]); }; });
-  document.querySelectorAll('#obj-list [data-shro]').forEach(b => { b.onclick = () => { const k = shown[+b.dataset.shro]; mintNode(loc.ns, k.handle, k.label, true); }; });
-  document.querySelectorAll('#obj-list [data-shfull]').forEach(b => { b.onclick = () => { const k = shown[+b.dataset.shfull]; mintNode(loc.ns, k.handle, k.label, false); }; });
+  // file-system feel: the WHOLE row is clickable — a folder drills in, a leaf opens (renderNav shows a note's
+  // text / a contact's or entity's detail). The share buttons live on the row but stopPropagation so they
+  // don't also trigger the open. A › affordance signals "click to open".
+  $('obj-list').innerHTML = shown.length ? shown.map((k, i) => `<div class="share obj-row" data-row="${i}" style="cursor:pointer"><div>${k.leaf ? '📄 ' : '📂 '}<b>${esc(k.label)}</b> <span class="pill">${esc(k.sub || '')}</span></div><div class="kit-rowx" style="gap:5px;align-items:center">${shareBtns(k, i)}<span style="color:var(--mut);font-size:16px;line-height:1">›</span></div></div>`).join('') : '<div class="pill">(nothing here)</div>';
+  document.querySelectorAll('#obj-list .obj-row').forEach(r => { r.onclick = () => { const k = shown[+r.dataset.row]; navGo([...navStack, { ns: k.root ? k.ns : loc.ns, handle: k.root ? null : k.handle, label: k.label, leaf: !!k.leaf, kind: k.kind }]); }; });
+  document.querySelectorAll('#obj-list [data-shro]').forEach(b => { b.onclick = e => { e.stopPropagation(); const k = shown[+b.dataset.shro]; mintNode(loc.ns, k.handle, k.label, true); }; });
+  document.querySelectorAll('#obj-list [data-shfull]').forEach(b => { b.onclick = e => { e.stopPropagation(); const k = shown[+b.dataset.shfull]; mintNode(loc.ns, k.handle, k.label, false); }; });
 };
 const renderNav = async () => {
   const loc = navStack[navStack.length - 1];
@@ -1477,6 +1480,19 @@ const renderNav = async () => {
   document.querySelectorAll('#obj-crumbs [data-crumb]').forEach(a => { a.onclick = e => { e.preventDefault(); navGo(navStack.slice(0, +a.dataset.crumb + 1)); }; });
   $('obj-filter').value = '';
   if (!loc) { navNode = null; $('obj-node').innerHTML = '<div class="pmeta">Choose a tree to browse:</div>'; renderNavList(); return; }
+  // CLICK INTO A TEXT DOCUMENT: a note leaf → show its content (treeRpc would try to readdir a file and fail).
+  if (loc.leaf && loc.ns === 'notes') {
+    navNode = null; $('obj-list').innerHTML = '';
+    let nc; try { nc = await rpc('noteContent', [loc.handle]); } catch (e) { $('obj-node').innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+    $('obj-node').innerHTML = `<div class="kv" style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span><b>📄 ${esc(nc.name)}</b></span><button class="mini" id="sh-note">🔗 share</button></div><pre style="white-space:pre-wrap;word-break:break-word;max-height:62vh;overflow:auto;background:var(--panel);border:1px solid var(--edge);border-radius:7px;padding:10px;font-size:13px;margin-top:8px">${esc(nc.text || '')}</pre>`;
+    const sb = $('sh-note'); if (sb) sb.onclick = () => mintNode('notes', loc.handle, nc.name, true);
+    return;
+  }
+  if (loc.leaf && loc.ns === 'home') { // a home-folder FILE leaf — viewing/editing lives in the Files app
+    navNode = null; $('obj-list').innerHTML = '';
+    $('obj-node').innerHTML = `<div class="kv"><b>📄 ${esc(loc.label)}</b></div><div class="pmeta" style="margin-top:6px">Open the <b>Files</b> app (Settings → 📂 Files) to view or edit this file.</div>`;
+    return;
+  }
   let n; try { n = await treeRpc(loc.ns, loc.handle); } catch (e) { $('obj-node').innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
   navNode = n;
   const curName = n.name || n.entity_id || n.label || (loc.ns === 'ha' ? 'Home Assistant' : 'Agents');
