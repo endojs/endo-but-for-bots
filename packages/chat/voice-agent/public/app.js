@@ -3206,7 +3206,36 @@ const renderSettingsUsage = async body => {
   } catch { const el = $('set-costs'); if (el) el.textContent = '(could not load usage)'; }
 };
 const renderSettingsTimers = async body => {
-  body.innerHTML = '<div class="set-h">⏰ Scheduled jobs</div><div class="pmeta" style="margin-bottom:9px">Jobs your <b>agents</b> have scheduled — durable reminders + recurring checks (distinct from scheduled <i>agents</i> that do work). Cancel any that have outlived their use.</div><div id="set-timers" class="pmeta">loading…</div>';
+  body.innerHTML = '<div class="set-h">⏰ Scheduled work</div>'
+    + '<div class="pmeta" style="margin-bottom:6px">Recurring <b>agents</b> that do work on a cadence. Open one for its Detail — edit the prompt, powers, timing, browse its run history, or cancel it.</div>'
+    + '<div id="set-sched" class="pmeta">loading…</div>'
+    + '<div class="set-h" style="margin-top:14px">🔔 Reminders &amp; checks</div><div class="pmeta" style="margin-bottom:9px">Lighter one-off / interval jobs your agents scheduled (durable wake-ups). Cancel any that have outlived their use.</div><div id="set-timers" class="pmeta">loading…</div>';
+  // ── scheduled AGENTS (projects.scheduledAgents): each links into its full Detail view ──
+  try {
+    const d = await pf('/projects/list');
+    const el = $('set-sched'); if (el) {
+      const rows = [];
+      for (const p of (d.projects || [])) for (const a of (p.scheduledAgents || [])) rows.push({ p, a });
+      if (!rows.length) el.textContent = 'no scheduled agents — create one under 🕐 Projects.';
+      else {
+        el.innerHTML = '';
+        for (const { p, a } of rows) {
+          const row = document.createElement('div'); row.className = 'tmr-row';
+          const main = document.createElement('div'); main.className = 'tmr-main';
+          const title = document.createElement('div'); title.className = 'tmr-title'; title.textContent = `⏰ ${a.name}`;
+          const last = a.lastRun ? ` · last ${new Date(a.lastRun).toLocaleDateString()}` : '';
+          const sub = document.createElement('div'); sub.className = 'tmr-sub'; sub.textContent = `${p.name} · ${cadenceLabel(a.schedule) || 'event-triggered'}${last}`;
+          main.append(title, sub);
+          const right = document.createElement('div'); right.style.cssText = 'display:flex;gap:5px;flex:0 0 auto;align-items:center';
+          const run = document.createElement('button'); run.className = 'mini'; run.textContent = 'Run now';
+          run.onclick = async () => { run.disabled = true; run.textContent = 'running…'; const r = await pf('/projects/agents/run', { id: p.id, agentId: a.id }); run.textContent = r.error ? 'error' : '✓ ran'; setTimeout(() => { run.disabled = false; run.textContent = 'Run now'; }, 2500); };
+          const open = document.createElement('button'); open.className = 'mini'; open.textContent = 'Detail ›';
+          open.onclick = () => { openProjectId = p.id; closeModal(); renderProjects(); }; // → the rich per-agent Detail (prompt/powers/timing/runs)
+          right.append(run, open); row.append(main, right); el.appendChild(row);
+        }
+      }
+    }
+  } catch { const el = $('set-sched'); if (el) el.textContent = '(could not load scheduled agents)'; }
   try {
     const r = await (await fetch('/timers/list', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json();
     const el = $('set-timers'); if (!el) return;
@@ -3403,6 +3432,7 @@ const renderProjects = async () => {
             <textarea data-eprompt="${p.id}|${a.id}" style="background:var(--panel);border:1px solid var(--edge);color:var(--ink);border-radius:7px;padding:6px;min-height:90px">${esc(a.prompt || '')}</textarea>
             <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--mut)">tools (its ring):</div><button class="mini" data-epropose="${p.id}|${a.id}">✨ propose from prompt</button></div>
             <div data-etools="${p.id}|${a.id}"></div>
+            <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--mut)">timing:</div><select class="hdr-sel" style="max-width:none;flex:1" data-ecad="${p.id}|${a.id}"><option value="-1">keep current · ${esc(cadenceLabel(a.schedule) || 'event-triggered')}</option>${CADENCES.map((c, i) => `<option value="${i}">${esc(c.label)}</option>`).join('')}</select></div>
             <div><button class="mini" data-saveagent="${p.id}|${a.id}">Save changes</button></div>
           </div></details>
         <details style="margin-top:6px"${runs.length ? '' : ''}><summary class="mini" style="display:inline-block">📁 runs (${runs.length})</summary>
@@ -3475,7 +3505,10 @@ const renderProjects = async () => {
     const prompt = m.querySelector(`[data-eprompt="${pid}|${aid}"]`).value.trim();
     const tools = [...m.querySelectorAll(`[data-etools="${pid}|${aid}"] input:checked`)].map(x => x.value);
     if (!prompt) { alert('a prompt is required'); return; }
-    const r = await pf('/projects/agents/update', { id: pid, agentId: aid, patch: { name, prompt, tools } });
+    const patch = { name, prompt, tools };
+    const cv = m.querySelector(`[data-ecad="${pid}|${aid}"]`); // adjust timing (–1 = keep current/event schedule)
+    if (cv && cv.value !== '-1') patch.schedule = CADENCES[+cv.value].schedule;
+    const r = await pf('/projects/agents/update', { id: pid, agentId: aid, patch });
     if (r.error) alert(r.error);
     renderProjects();
   });

@@ -2109,7 +2109,12 @@ const handler = async (req, res) => {
           if (agent.schedule) projects.updateScheduledAgent(body.id, agent.id, { nextAt: projects.computeNextAt(agent.schedule, Date.now()) }); // event-only agents have no nextAt
           return json(res, 200, { agent: projects.listScheduledAgents(body.id).find(a => a.id === agent.id) });
         }
-        if (u.pathname === '/projects/agents/update') return json(res, 200, { agent: projects.updateScheduledAgent(body.id, body.agentId, body.patch || {}) });
+        if (u.pathname === '/projects/agents/update') {
+          const patch = body.patch || {};
+          // when the timing changes, recompute the next fire so the edit takes effect immediately
+          if (patch.schedule && patch.schedule.kind) patch.nextAt = projects.computeNextAt(patch.schedule, Date.now());
+          return json(res, 200, { agent: projects.updateScheduledAgent(body.id, body.agentId, patch) });
+        }
         if (u.pathname === '/projects/agents/remove') { projects.removeScheduledAgent(body.id, body.agentId); return json(res, 200, { ok: true }); }
         if (u.pathname === '/projects/agents/run') {
           const project = projects.getProject(body.id); const agent = projects.listScheduledAgents(body.id).find(a => a.id === body.agentId);
