@@ -24,8 +24,17 @@ has no named ancestor — the walk reaches a `node_modules` boundary or
 the filesystem root after passing an unnamed `package.json` without
 finding a `name` — still fails loudly.
 
-See `designs/compartment-mapper-auxiliary-package-json.md` for the
-design this implements; subsequent work lands the per-file
-layered-language-override pipeline (`languageForExtensionByPrefix`) so a
-`{"type": "module"}` auxiliary actually flips `.js` parsing within its
-subtree.
+Auxiliary descriptors also carry their language: a `{"type": "module"}`
+(or `{"type": "commonjs"}`) auxiliary now flips `.js` parsing within its
+subtree, including for modules reached by relative import rather than a
+package `export`. The import hook walks upward from each loaded module to
+its compartment root, layers any intermediate auxiliary descriptors'
+language-for-extension deltas shallow-to-deep onto the compartment's base
+parser map (deeper auxiliaries win), records the result on the new
+optional `languageForExtensionByPrefix` compartment-descriptor field, and
+parses the module against its deepest-matching prefix. `importArchive` and
+other fully-described compartment maps are unaffected, since their
+per-module language is already pinned.
+
+See `designs/compartment-mapper-auxiliary-package-json.md` for the design
+this implements.

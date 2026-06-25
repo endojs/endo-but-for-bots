@@ -870,6 +870,13 @@ type ParseArguments = [
     sourceMapUrl: string | undefined;
     readPowers: ReadFn | ReadPowers | undefined;
     compartmentDescriptor: CompartmentDescriptor | undefined;
+    /**
+     * Per-module language-for-extension override, supplied by the import hook
+     * when the module sits inside an auxiliary `package.json` subtree. Takes
+     * precedence over the compartment's base parser map. See
+     * `designs/compartment-mapper-auxiliary-package-json.md`.
+     */
+    languageForExtension: LanguageForExtension | undefined;
   }> &
     ArchiveOnlyOption,
 ];
