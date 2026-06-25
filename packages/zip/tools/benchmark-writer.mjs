@@ -2,6 +2,7 @@
 /* global process */
 
 import { parseArgs } from 'util';
+import { makeChaCha12 } from '@endo/chacha12';
 import { ZipWriter } from '../src/writer.js';
 
 const options = {
@@ -20,16 +21,23 @@ const toPositiveInt = (value, name) => {
 };
 
 /**
+ * Deterministic uint32 source backed by `@endo/chacha12`, so the benchmark's
+ * synthetic corpus is reproducible across runs and machines while reusing the
+ * package's vetted keystream rather than an ad hoc xorshift.
+ *
  * @param {number} seed
  */
 const makeRng = seed => {
-  let state = seed >>> 0;
-  return () => {
-    state ^= state << 13;
-    state ^= state >>> 17;
-    state ^= state << 5;
-    return state >>> 0;
-  };
+  // ChaCha12 keys are 32 bytes; spread the 32-bit seed across the first four
+  // key bytes (little-endian) so distinct seeds produce distinct streams.
+  const key = new Uint8Array(32);
+  key[0] = seed & 0xff;
+  key[1] = (seed >>> 8) & 0xff;
+  key[2] = (seed >>> 16) & 0xff;
+  key[3] = (seed >>> 24) & 0xff;
+  const generator = makeChaCha12(key);
+  // `next()` yields a signed int32; mask to uint32 to match the prior contract.
+  return () => generator.next() >>> 0;
 };
 
 /**

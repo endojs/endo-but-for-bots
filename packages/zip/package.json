@@ -37,6 +37,7 @@
     "test:c8": "c8 ${C8_OPTIONS:-} yarn run -T ses-ava"
   },
   "devDependencies": {
+    "@endo/chacha12": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
