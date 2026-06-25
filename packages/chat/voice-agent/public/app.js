@@ -151,11 +151,16 @@ const objectInspector = async name => {
       await new Promise(r => setTimeout(r, 2500));
     }
   };
+  // A MEDIATED capability handed to the confined renderer: it can invoke THIS object's methods (host-side,
+  // scoped to o.name) but holds no cap of its own — least authority. Used by interactive widgets (e.g. a
+  // send box). Returns a Promise of the (structured) result.
+  const callObj = async (method, args) => { const r = await rpc('objectCall', [o.name, method, Array.isArray(args) ? args : (args == null ? [] : [args])]); return r && r.value; };
   const paintBespoke = () => {
     const host = $('insp-bloom'); if (!host || !rendererSrc) return;
     host.innerHTML = '';
-    const ok = window.__fieldIslands && window.__fieldIslands.renderSource && window.__fieldIslands.renderSource(rendererSrc, host, { value: lastValue, name: o.name, methods });
-    if (!ok) host.innerHTML = '<div class="pmeta">A bespoke confined renderer was authored for this interface — it renders inline once the confined runtime (lockdown) is on. <button class="mini" id="insp-open-fork">open the renderer</button></div>';
+    const props = { value: lastValue, name: o.name, methods, call: callObj, refresh: () => { call(methods.includes('describe') ? 'describe' : methods[0]); } };
+    const ok = window.__fieldIslands && window.__fieldIslands.renderSource && window.__fieldIslands.renderSource(rendererSrc, host, props);
+    if (!ok) host.innerHTML = '<div class="pmeta">A bespoke confined renderer was authored for this interface — it renders inline (interactive) once the confined runtime (lockdown) is on.</div>';
   };
   const call = async m => {
     const out = $('insp-result'); out.textContent = `calling ${m}()…`;

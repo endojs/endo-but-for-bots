@@ -29,7 +29,8 @@
     "test:agent-profile": "node agent-profile.staging.test.cjs",
     "test:object-inspector": "node object-inspector.staging.test.cjs",
     "test:blossom": "node --test blossom.test.mjs",
-    "test:blossom-loop": "node blossom-loop.staging.test.cjs"
+    "test:blossom-loop": "node blossom-loop.staging.test.cjs",
+    "test:interactive-widget": "node interactive-widget.staging.test.cjs"
   },
   "dependencies": {
     "@endo/exo-git": "workspace:^",
