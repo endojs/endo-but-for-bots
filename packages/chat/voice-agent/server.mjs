@@ -18,7 +18,7 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { E } from '@endo/eventual-send';
 import { makeFieldAgent, ALL_POWERS, POWERS, HOME_BASE } from './agent-caps.mjs';
-import { roleList } from './agent-roles.mjs';
+import { roleList, getRole, setCustomRoles, customRoleNames } from './agent-roles.mjs';
 import { runAgent, buildUserContent, callLLM } from '../../ocapn-noise/tool-bridge.mjs';
 import { runAgentCode } from '../../ocapn-noise/codemode.mjs';
 // CodeMode (default ON): the agent acts by writing ONE composable JS program per turn, run in a
@@ -320,6 +320,36 @@ const SCHEDULED_SEED_TTL_MS = 7 * 24 * 60 * 60 * 1000; // ⏰ scheduled-agent ru
 // read→unshift→write, the next scheduled run also prunes them from the file. Non-scheduled seeds are kept.
 const readSeedChats = async () => { try { const all = (JSON.parse(await fs.promises.readFile(SEED_CHATS_FILE, 'utf8')).chats) || []; const cutoff = Date.now() - SCHEDULED_SEED_TTL_MS; return all.filter(c => !(c && c.source === 'scheduled' && (c.ts || 0) < cutoff)); } catch { return []; } };
 const writeSeedChats = async chats => { await fs.promises.mkdir(path.dirname(SEED_CHATS_FILE), { recursive: true }); await fs.promises.writeFile(SEED_CHATS_FILE, JSON.stringify({ chats: chats.slice(0, 80) }, null, 2)); };
+
+// ── operator-defined specialist ROLES (Settings → Specialists). Persisted here,
+//    merged over the built-in agent-roles catalog via setCustomRoles so a custom
+//    role (or an override of a built-in) is immediately employable by the entry
+//    agent. Loaded at boot; rewritten + re-pushed on every /roles/save|delete. ──
+const CUSTOM_ROLES_FILE = `${HOME}/.local/state/voice-agent/custom-roles.json`;
+const readCustomRoles = () => { try { return JSON.parse(fs.readFileSync(CUSTOM_ROLES_FILE, 'utf8')) || {}; } catch { return {}; } };
+const writeCustomRoles = map => { fs.mkdirSync(path.dirname(CUSTOM_ROLES_FILE), { recursive: true }); fs.writeFileSync(CUSTOM_ROLES_FILE, JSON.stringify(map, null, 2)); };
+try { setCustomRoles(readCustomRoles()); } catch (e) { log('load custom-roles', e.message); }
+const ROLE_NAME_RE = /^[a-z][a-zA-Z0-9-]{0,40}$/; // safe role key; camelCase allowed to match built-ins (testRunner, securityAudit)
+const ROLE_TIERS = new Set(['strong', 'mid', 'cheap']);
+const ROLE_VIAS = new Set(['subagent', 'dev']);
+// Validate + normalize a role spec from the editor. Powers are clamped to the real power set
+// (a role can only ever be GRANTED powers the employer holds, but we still keep the catalog honest).
+const sanitizeRole = raw => {
+  const r = raw || {};
+  const powers = [...new Set((Array.isArray(r.powers) ? r.powers : []).map(String).filter(p => ALL_POWERS.includes(p)))];
+  return {
+    label: String(r.label || '').slice(0, 80) || 'Custom role',
+    tier: ROLE_TIERS.has(r.tier) ? r.tier : 'mid',
+    via: ROLE_VIAS.has(r.via) ? r.via : 'subagent',
+    writes: !!r.writes,
+    isolation: r.isolation ? String(r.isolation).slice(0, 40) : null,
+    powers,
+    blurb: String(r.blurb || '').slice(0, 400),
+    prompt: String(r.prompt || '').slice(0, 8000),
+    output: String(r.output || '').slice(0, 1000),
+    custom: true,
+  };
+};
 
 // the field agent's window onto the app's OWN stateful aspects (every conversation +
 // asks/feed overview). Defined in app-state.mjs; wired here with this server's stores. The
@@ -2094,6 +2124,41 @@ const handler = async (req, res) => {
     // ── PROJECTS: a folder grouping chats + scheduled agents, sharing one home folder.
     //    The surface for "recurring self-improvement from within the chat projects interface".
     //    Root-gated: projects are dan's automation (a shared/sub cap must not manage them). ──
+    // ── Settings → Specialists: view/edit/create the ROLE catalog the entry agent
+    //    can employ(). Built-ins are read-only specs; saving one writes an operator
+    //    OVERLAY (custom-roles.json) merged over the built-ins, so a new role — or an
+    //    edited built-in — is immediately employable. Root-gated (dan's automation). ──
+    if (req.method === 'POST' && u.pathname.startsWith('/roles')) {
+      const body = await jsonBody(req);
+      const node = nodeFor(body.cap);
+      if (!node || !node.isRoot) return json(res, 403, { error: 'roles need your root capability' });
+      try {
+        if (u.pathname === '/roles/list') {
+          const custom = new Set(customRoleNames());
+          // full specs (incl prompt/output) so the editor can show + edit them
+          const roles = roleList().map(r => { const full = getRole(r.role) || {}; return { ...r, prompt: full.prompt || '', output: full.output || '', custom: custom.has(r.role) }; });
+          return json(res, 200, { roles, powers: ALL_POWERS });
+        }
+        if (u.pathname === '/roles/save') {
+          const name = String(body.name || '').trim();
+          if (!ROLE_NAME_RE.test(name)) return json(res, 400, { error: 'role name must be [a-z][a-zA-Z0-9-]{0,40} (e.g. "triager")' });
+          const store = readCustomRoles();
+          store[name] = sanitizeRole(body.spec);
+          writeCustomRoles(store); setCustomRoles(store);
+          return json(res, 200, { ok: true, role: { role: name, ...store[name] } });
+        }
+        if (u.pathname === '/roles/delete') {
+          const name = String(body.name || '').trim();
+          const store = readCustomRoles();
+          if (!(name in store)) return json(res, 404, { error: `no custom role "${name}" (built-ins can't be deleted, only overridden)` });
+          delete store[name];
+          writeCustomRoles(store); setCustomRoles(store);
+          return json(res, 200, { ok: true });
+        }
+        return json(res, 404, { error: 'unknown /roles route' });
+      } catch (e) { return json(res, 500, { error: e.message }); }
+    }
+
     if (req.method === 'POST' && u.pathname.startsWith('/projects')) {
       const body = await jsonBody(req);
       const node = nodeFor(body.cap);

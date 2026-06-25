@@ -285,24 +285,44 @@ export const localModelFor = tier => {
 };
 harden(localModelFor);
 
+// Operator-defined role overlay: roles created/edited from the Settings →
+// Specialists UI, persisted by the server (custom-roles.json) and pushed in via
+// setCustomRoles at boot + after every edit. Merged OVER the built-in catalog so
+// getRole / roleList / employ all see custom roles and per-role overrides
+// (override = a custom entry whose key equals a built-in role). Built-ins stay
+// hardened; the overlay is a replaceable hardened map. The keys here are the
+// SET of operator-managed roles (so the UI can mark which are custom).
+let customRoles = harden({});
+export const setCustomRoles = map => {
+  const clean = {};
+  for (const [k, v] of Object.entries(map || {})) if (k && v && typeof v === 'object') clean[String(k)] = { ...v };
+  customRoles = harden(clean);
+};
+harden(setCustomRoles);
+export const customRoleNames = () => harden(Object.keys(customRoles));
+harden(customRoleNames);
+// the catalog every resolver reads: built-ins with the operator overlay on top.
+const effectiveCatalog = () => ({ ...ROLE_CATALOG, ...customRoles });
+
 // resolve a (possibly-aliased, case-insensitive) role name → its spec (with .role set), or null.
 export const getRole = name => {
   const raw = String(name || '').trim();
   if (!raw) return null;
-  const key = ROLE_CATALOG[raw] ? raw
-    : ROLE_CATALOG[ALIASES[raw]] ? ALIASES[raw]
-    : (() => { const lc = raw.toLowerCase(); return Object.keys(ROLE_CATALOG).find(k => k.toLowerCase() === lc) || ALIASES[lc] || null; })();
-  return key && ROLE_CATALOG[key] ? harden({ role: key, ...ROLE_CATALOG[key] }) : null;
+  const CAT = effectiveCatalog();
+  const key = CAT[raw] ? raw
+    : CAT[ALIASES[raw]] ? ALIASES[raw]
+    : (() => { const lc = raw.toLowerCase(); return Object.keys(CAT).find(k => k.toLowerCase() === lc) || ALIASES[lc] || null; })();
+  return key && CAT[key] ? harden({ role: key, ...CAT[key] }) : null;
 };
 harden(getRole);
 
 // the slim, prompt-free catalog view for listRoles() + the manifest (keeps prompts out of context).
-export const roleList = () => harden(Object.keys(ROLE_CATALOG)
+export const roleList = () => { const CAT = effectiveCatalog(); return harden(Object.keys(CAT)
   // Skip the string ALIAS entries (e.g. ocap → 'ocapReviewer'); only real role objects are listable.
   // (Treating an alias as a role did `[...string.powers]` → a hard crash that broke every roles-power turn.)
-  .filter(role => ROLE_CATALOG[role] && typeof ROLE_CATALOG[role] === 'object')
+  .filter(role => CAT[role] && typeof CAT[role] === 'object')
   .map(role => {
-    const s = ROLE_CATALOG[role];
+    const s = CAT[role];
     return { role, label: s.label, tier: s.tier, via: s.via, writes: s.writes, isolation: s.isolation || null, powers: [...(Array.isArray(s.powers) ? s.powers : [])], blurb: s.blurb };
-  }));
+  })); };
 harden(roleList);

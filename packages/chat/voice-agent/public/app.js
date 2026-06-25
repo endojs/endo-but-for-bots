@@ -3157,7 +3157,7 @@ const showHooks = () => {
 //    and (next) a gallery of the agents you've built as 3D Granovetter diagrams. A foothold to grow into.
 const fmtUsd = u => '$' + (Math.max(0, Number(u) || 0) / 1e6).toFixed(2);
 const fmtEvery = ms => { const n = Number(ms) || 0; const h = n / 3600000; if (h >= 24 && Number.isInteger(h / 24)) return `${h / 24}d`; if (h >= 1) return `${Math.round(h)}h`; return `${Math.round(n / 60000)}m`; };
-const SETTINGS_SECTIONS = [{ key: 'usage', label: '📊 Usage' }, { key: 'providers', label: '🧠 Providers' }, { key: 'agents', label: '🕸️ Agents' }, { key: 'timers', label: '⏰ Timers' }, { key: 'internal', label: '📨 Internal' }];
+const SETTINGS_SECTIONS = [{ key: 'usage', label: '📊 Usage' }, { key: 'providers', label: '🧠 Providers' }, { key: 'agents', label: '🕸️ Agents' }, { key: 'specialists', label: '🧑‍🔬 Specialists' }, { key: 'timers', label: '⏰ Timers' }, { key: 'internal', label: '📨 Internal' }];
 let settingsSection = 'usage';
 const openSettings = async () => {
   if (!isRoot) { setStatus('settings are owner-only — open with your root link'); return; }
@@ -3169,6 +3169,7 @@ const renderSettingsSection = () => {
   const body = $('setbody'); if (!body) return;
   if (settingsSection === 'providers') { body.innerHTML = '<div class="set-h">🧠 Model providers</div><div class="pmeta">Pick a per-chat model from the header selector. Add a provider key by asking the agent (it stores it in the key vault). A dedicated provider-management form is coming next.</div>'; return; }
   if (settingsSection === 'agents') return renderSettingsShape(body);
+  if (settingsSection === 'specialists') return renderSettingsSpecialists(body);
   if (settingsSection === 'timers') return renderSettingsTimers(body);
   if (settingsSection === 'internal') return renderSettingsInternal(body);
   return renderSettingsUsage(body);
@@ -3205,6 +3206,82 @@ const renderSettingsUsage = async body => {
     el.querySelectorAll('.set-cost-row').forEach(row => { const id = row.getAttribute('data-id'); if (chats.some(c => c.id === id)) { row.style.cursor = 'pointer'; row.onclick = () => { closeModal(); switchChat(id); }; } });
   } catch { const el = $('set-costs'); if (el) el.textContent = '(could not load usage)'; }
 };
+// ── Settings → 🧑‍🔬 Specialists: view/edit the role catalog the agent can employ(),
+//    and create new roles. Built-ins edit into an operator override; custom roles are
+//    fully editable + deletable. A saved role is immediately employable by the entry agent.
+const ROLE_TIERS = ['strong', 'mid', 'cheap'];
+const ROLE_VIAS = ['subagent', 'dev'];
+const renderSettingsSpecialists = async body => {
+  body.innerHTML = '<div class="set-h">🧑‍🔬 Specialists</div>'
+    + '<div class="pmeta" style="margin-bottom:9px">The <b>roles</b> the agent can <code>employ</code> — each is a system prompt + a least-privilege tool ring + a model tier. Edit a built-in to override it, or create a new role the entry agent can call.</div>'
+    + '<div id="set-roles" class="pmeta">loading…</div>';
+  const d = await pf('/roles/list');
+  const host = $('set-roles'); if (!host) return;
+  if (d.error) { host.textContent = d.error; return; }
+  const powers = d.powers || [];
+  const roles = d.roles || [];
+  const ta = 'background:var(--panel);border:1px solid var(--edge);color:var(--ink);border-radius:7px;padding:6px';
+  const fields = (idk, r) => `
+    <input class="hdr-sel" style="max-width:none" data-rl-label="${idk}" placeholder="label (display name)" value="${esc(r.label || '')}">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+      <select class="hdr-sel" data-rl-tier="${idk}" title="model tier">${ROLE_TIERS.map(t => `<option${r.tier === t ? ' selected' : ''}>${t}</option>`).join('')}</select>
+      <select class="hdr-sel" data-rl-via="${idk}" title="how it runs: a confined sub-agent, or routed to the Blacksmith dev session">${ROLE_VIAS.map(v => `<option${r.via === v ? ' selected' : ''}>${v}</option>`).join('')}</select>
+      <label class="pill" style="cursor:pointer"><input type="checkbox" data-rl-writes="${idk}"${r.writes ? ' checked' : ''}> writes</label>
+    </div>
+    <input class="hdr-sel" style="max-width:none" data-rl-blurb="${idk}" placeholder="one-line blurb (shown in the role menu)" value="${esc(r.blurb || '')}">
+    <div style="font-size:11px;color:var(--mut)">tool ring (its MAX powers — intersected with the employer's at run time):</div>
+    <div data-rl-tools="${idk}"></div>
+    <textarea data-rl-prompt="${idk}" placeholder="the system prompt / instructions defining this role" style="${ta};min-height:120px">${esc(r.prompt || '')}</textarea>
+    <input class="hdr-sel" style="max-width:none" data-rl-output="${idk}" placeholder="output contract — what the role must return" value="${esc(r.output || '')}">`;
+  host.innerHTML = roles.map(r => `
+    <div style="border:1px solid var(--edge);border-radius:8px;padding:8px;margin:6px 0">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b>🧑‍🔬 ${esc(r.label || r.role)}</b>
+        <span>${r.custom ? '<span class="pill">custom</span>' : '<span class="pill" style="opacity:.55">built-in</span>'} <span class="pill">${esc(r.tier)}</span>${r.writes ? ' <span class="pill">writes</span>' : ''}</span></div>
+      <div style="color:var(--mut);font-size:12px;margin-top:3px"><code>${esc(r.role)}</code> · ${esc((r.powers || []).join(', ') || 'no tools')}</div>
+      <div style="font-size:12px;margin-top:3px">${esc(r.blurb || '')}</div>
+      <details style="margin-top:6px"><summary class="mini" style="display:inline-block">✏️ edit${r.custom ? '' : ' (saves an override)'}</summary>
+        <div style="margin-top:6px;display:flex;flex-direction:column;gap:6px">
+          ${fields('e|' + r.role, r)}
+          <div><button class="mini" data-rl-save="${esc(r.role)}">Save</button> ${r.custom
+    ? `<button class="mini bad" data-rl-del="${esc(r.role)}">Delete</button>`
+    : `<button class="mini" data-rl-revert="${esc(r.role)}" title="remove your override, revert to the built-in">↺ revert</button>`}
+            <span data-rl-out="${esc(r.role)}" style="font-size:11px;color:var(--acc);margin-left:6px"></span></div>
+        </div></details>
+    </div>`).join('')
+    + `<details style="margin-top:10px;border-top:1px solid var(--edge);padding-top:8px"><summary class="mini" style="display:inline-block">+ new specialist role</summary>
+        <div style="margin-top:6px;display:flex;flex-direction:column;gap:6px">
+          <input class="hdr-sel" style="max-width:none" data-rl-newname placeholder="role key — lowercase, no spaces (e.g. triager)">
+          ${fields('n|', { tier: 'mid', via: 'subagent', powers: [] })}
+          <div><button class="mini" data-rl-create>Create role</button> <span data-rl-out="__new" style="font-size:11px;color:var(--acc);margin-left:6px"></span></div>
+        </div></details>`;
+  // mount a power picker into each form (edit forms pre-granted with the role's ring; new form empty)
+  host.querySelectorAll('[data-rl-tools]').forEach(el => { const idk = el.dataset.rlTools; const role = idk.startsWith('e|') ? idk.slice(2) : null; const r = roles.find(x => x.role === role); renderPowersPicker(el, { all: powers, granted: (r && r.powers) || [], itemShare: true }); });
+  const val = sel => { const e = host.querySelector(sel); return e ? e.value : ''; };
+  const collect = idk => ({
+    label: val(`[data-rl-label="${idk}"]`), tier: val(`[data-rl-tier="${idk}"]`), via: val(`[data-rl-via="${idk}"]`),
+    writes: !!(host.querySelector(`[data-rl-writes="${idk}"]`) || {}).checked,
+    blurb: val(`[data-rl-blurb="${idk}"]`), prompt: val(`[data-rl-prompt="${idk}"]`), output: val(`[data-rl-output="${idk}"]`),
+    powers: [...host.querySelectorAll(`[data-rl-tools="${idk}"] input:checked`)].map(x => x.value),
+  });
+  host.querySelectorAll('[data-rl-save]').forEach(b => b.onclick = async () => {
+    const role = b.dataset.rlSave; const out = host.querySelector(`[data-rl-out="${role}"]`);
+    if (out) out.textContent = 'saving…';
+    const r = await pf('/roles/save', { name: role, spec: collect('e|' + role) });
+    if (r.error) { if (out) out.textContent = r.error; return; }
+    renderSettingsSpecialists(body);
+  });
+  host.querySelectorAll('[data-rl-del]').forEach(b => b.onclick = async () => { const role = b.dataset.rlDel; if (!confirm(`Delete custom role "${role}"?`)) return; await pf('/roles/delete', { name: role }); renderSettingsSpecialists(body); });
+  host.querySelectorAll('[data-rl-revert]').forEach(b => b.onclick = async () => { const role = b.dataset.rlRevert; if (!confirm(`Revert "${role}" to the built-in (discard your override)?`)) return; await pf('/roles/delete', { name: role }); renderSettingsSpecialists(body); });
+  { const cb = host.querySelector('[data-rl-create]'); if (cb) cb.onclick = async () => {
+    const name = (host.querySelector('[data-rl-newname]').value || '').trim(); const out = host.querySelector('[data-rl-out="__new"]');
+    if (!name) { if (out) out.textContent = 'a role key is required'; return; }
+    if (out) out.textContent = 'creating…';
+    const r = await pf('/roles/save', { name, spec: collect('n|') });
+    if (r.error) { if (out) out.textContent = r.error; return; }
+    renderSettingsSpecialists(body);
+  }; }
+};
+
 const renderSettingsTimers = async body => {
   body.innerHTML = '<div class="set-h">⏰ Scheduled work</div>'
     + '<div class="pmeta" style="margin-bottom:6px">Recurring <b>agents</b> that do work on a cadence. Open one for its Detail — edit the prompt, powers, timing, browse its run history, or cancel it.</div>'
