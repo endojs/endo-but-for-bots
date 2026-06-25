@@ -496,7 +496,7 @@ export const POWERS = harden({
   'notes.dietician': { label: 'Read ONLY the Dietician notes folder (the family diet specs + dietician notes — scoped, no access to other personal notes)', verbs: ['searchDietNotes', 'readDietNote'] },
   jotNote: { label: 'Jot NEW notes straight into your private vault (non-destructive — only ever ADDS; never overwrites or deletes; no confirmation)', verbs: ['addNote'] },
   reference: { label: 'Consult your library + Wikipedia', verbs: ['consult'] },
-  web: { label: 'Search the web (Brave) + fetch & summarize a page', verbs: ['fetchUrl', 'webSearch'] },
+  web: { label: 'Search the web (Brave) + fetch any page or HTTP/JSON API programmatically (fetchUrl) — the CHEAP default for getting web data; reach for this before the headless browser', verbs: ['fetchUrl', 'webSearch'] },
   research: { label: 'Employ a research team (plan → parallel search/read/distill → cited synthesis)', verbs: ['research'] },
   youtube: { label: 'Transcribe a YouTube video (fetch its captions)', verbs: ['transcribeYoutube'] },
   images: { label: 'Generate images on the GPU', verbs: ['generateImage'] },
@@ -508,7 +508,7 @@ export const POWERS = harden({
   phone: { label: 'Push a notification to your phone', verbs: ['pushPhone'] },
   timers: { label: 'Schedule wake-ups / reminders that PING dan (for things a human must do)', verbs: ['scheduleWakeup', 'repeatEvery', 'cancelTimer', 'listTimers'] },
   schedule: { label: 'Create + edit SCHEDULED TASKS — recurring autonomous runs that DO the work themselves on a cadence (use this, not a reminder, when the agent can do the task)', verbs: ['scheduleTask', 'listScheduledTasks', 'editScheduledTask', 'cancelScheduledTask'] },
-  browser: { label: 'Browse the web in a real headless browser (render JS, read pages, screenshot)', verbs: ['browseWeb', 'screenshotWeb'] },
+  browser: { label: 'Browse the web in a real headless browser (renders JS, screenshots) — EXPENSIVE (a full chromium); use ONLY for JS-rendered or interactive pages. For plain pages + JSON/HTTP APIs use `web`/fetchUrl instead (far cheaper).', verbs: ['browseWeb', 'screenshotWeb'] },
   home: { label: 'A private scratch/workspace folder of ITS OWN to read/write + publish sites + mint download links from (a sandboxed folder created for the agent — NOT your home directory or vault)', verbs: ['fileList', 'fileRead', 'fileWrite', 'publishSite', 'createDownloadLinkFor'] },
   vm: { label: 'Full terminal in the agent-code dev VM (coarse: root over that sandbox)', verbs: ['vmExec'] },
   host: { label: '⚠️ Full shell over THIS host (archua) as the operator — the dev/dogfood harness; coarse ambient host-root, like claude-code', verbs: ['hostExec'] },
@@ -1164,8 +1164,8 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     //    request like "check X daily and notify me" becomes a self-running job, not a "remind me" reminder. ──
     scheduleTask: {
       reversible: false,
-      args: { name: 'string — short label', prompt: 'string — the INSTRUCTIONS the run executes, written as a task to DO (e.g. "Visit <url>; if the sale is live, notify me once"). NOT "remind dan to…".', tools: 'array — power names the run may use, a subset of YOUR powers (e.g. ["browser","feed","phone"])', cadence: 'object — {kind:"daily",at:"HH:MM"} | {kind:"weekly",day:0-6,at:"HH:MM"} | {kind:"interval",everyMs:N}' },
-      description: 'Create a recurring SCHEDULED TASK: a future autonomous run that DOES the work itself on a cadence and can notify you of the result — NOT a reminder that pings dan to do it. Use for "check X daily", "every morning do Y". (For a one-off nudge a human must act on, use a reminder via scheduleWakeup instead.)',
+      args: { name: 'string — short label', prompt: 'string — the INSTRUCTIONS the run executes, written as a task to DO (e.g. "Visit <url>; if the sale is live, notify me once"). NOT "remind dan to…".', tools: 'array — power names the run may use, a subset of YOUR powers. Grant the CHEAPEST that suffice: prefer `web` (fetchUrl — for pages + JSON/HTTP APIs) over `browser` (a full headless chromium, expensive). Only grant `browser` when the page genuinely needs JS rendering or interaction.', cadence: 'object — {kind:"daily",at:"HH:MM"} | {kind:"weekly",day:0-6,at:"HH:MM"} | {kind:"interval",everyMs:N}' },
+      description: 'Create a recurring SCHEDULED TASK: a future autonomous run that DOES the work itself on a cadence and can notify you of the result — NOT a reminder that pings dan to do it. Use for "check X daily", "every morning do Y". (For a one-off nudge a human must act on, use a reminder via scheduleWakeup instead.) A scheduled task RECURS — be cost-conscious: pick programmatic tools (web/fetchUrl) over the browser so each run is cheap.',
       run: async ({ name, prompt, tools, cadence }, agent, ctx = {}) => {
         if (!String(prompt || '').trim()) return { ok: false, error: 'a scheduled task needs a prompt — the instructions it will run' };
         if (!cadence || !cadence.kind) return { ok: false, error: 'a scheduled task needs a cadence, e.g. {kind:"daily",at:"08:00"}' };
