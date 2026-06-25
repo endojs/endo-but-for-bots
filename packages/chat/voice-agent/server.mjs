@@ -609,12 +609,23 @@ const flagErrorForFix = async (kind, error, context = '') => {
     return true;
   } catch (e) { log('flagErrorForFix', e.message); return false; }
 };
+const SCHED_RUN_BUDGET = Number(process.env.SCHED_RUN_BUDGET_UUSD) || defaultAllowance; // per-run µUSD ceiling — bounds a scheduled run so it can't leak unbounded inference
 const runProjectAgent = async (project, agent) => {
   log('scheduled-agent:', project.name, '›', agent.name, '| tools:', (agent.tools || []).join(','));
+  // METERED: a scheduled run draws from a bounded per-run purse and its spend is ATTRIBUTED to the
+  // originating chat's visible ledger (addSpend) — these timers are never an invisible fund leak.
+  const perProvider = {};
+  const runModel = agent.model || 'default';
+  const purse = makePurse(SCHED_RUN_BUDGET);
+  const meteredLLM = makeMeteredLLM({ callLLM, purse, perProvider });
   let out;
   try {
-    out = await runScheduledAgent({ powers: agent.tools || [], homeSubkey: project.homeSubkey, prompt: agent.prompt, persona: getPersona(), model: agent.model || 'default', mode: agent.mode || 'recommend' });
+    out = await runScheduledAgent({ powers: agent.tools || [], homeSubkey: project.homeSubkey, prompt: agent.prompt, persona: getPersona(), model: runModel, mode: agent.mode || 'recommend', llm: meteredLLM, budgetLine: budgetLine(purse.balance(), runModel) });
   } catch (e) { out = { ok: false, error: e.message }; }
+  const spent = Object.values(perProvider).reduce((a, b) => a + b, 0);
+  // attribute the cost: to the chat that created it (visible in that session's usage), else a per-agent
+  // scheduled account — either way it shows up, never silently drains a hidden fund.
+  addSpend(agent.originChat || `sched:${agent.id}`, spent);
   const nProp = (out.proposalIds || []).length;
   const now = new Date().toISOString();
   const answer = String(out.ok ? out.answer : `run failed: ${out.error}`);
@@ -651,7 +662,7 @@ const runProjectAgent = async (project, agent) => {
   }
   projects.recordAgentRun(project.id, agent.id, {
     nextAt: agent.schedule ? projects.computeNextAt(agent.schedule, Date.now()) : null, // event-only agents have no nextAt
-    run: { at: now, chatId: id, ok: out.ok, nProp, summary: answer },
+    run: { at: now, chatId: id, ok: out.ok, nProp, summary: answer, spentUusd: spent },
   });
   return { ...out, chatId: id };
 };

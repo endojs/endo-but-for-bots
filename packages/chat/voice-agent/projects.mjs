@@ -49,13 +49,15 @@ export const detachChat = (pid, chatId) => mutate(pid, p => { p.chatIds = p.chat
 // EVENT (a propagator — fires the moment something happens, not on a clock; W4 "propagator-first").
 // schedule: { kind:'interval', everyMs } | { kind:'daily', at:'HH:MM' } | { kind:'weekly', day:0-6, at:'HH:MM' }
 // trigger:  { kind:'event', source:'clippings'|'inbox' }  — runs when a doc lands in that vault folder.
-export const addScheduledAgent = (pid, { name, prompt, tools = [], schedule, trigger, model = 'default', mode = 'recommend', enabled = true }) => {
+export const addScheduledAgent = (pid, { name, prompt, tools = [], schedule, trigger, model = 'default', mode = 'recommend', enabled = true, originChat = null }) => {
   if (!prompt) throw new Error('scheduled agent needs a prompt');
   if (!(schedule && schedule.kind) && !(trigger && trigger.kind)) throw new Error('a scheduled agent needs a schedule {kind,…} OR a trigger {kind:"event", source}');
   return mutate(pid, p => {
     // mode:'implement' lets the task autonomously implement→verify→(flag-gated)auto-merge (it gets the
     // selfImprove power); 'recommend' (default + every legacy task) can only propose. (dan re-vets a flip.)
-    const agent = { id: id('sched'), name: String(name || 'agent'), prompt: String(prompt), tools: [...tools], schedule: (schedule && schedule.kind) ? schedule : null, trigger: (trigger && trigger.kind) ? trigger : null, model, mode: mode === 'implement' ? 'implement' : 'recommend', enabled: !!enabled, createdAt: nowIso(), lastRun: null, nextAt: null };
+    // originChat = the chat it was created from (a chat id, NOT a cap — safe to persist); its runs charge
+    // that session's visible spend ledger and surface a run indicator there.
+    const agent = { id: id('sched'), name: String(name || 'agent'), prompt: String(prompt), tools: [...tools], schedule: (schedule && schedule.kind) ? schedule : null, trigger: (trigger && trigger.kind) ? trigger : null, model, mode: mode === 'implement' ? 'implement' : 'recommend', enabled: !!enabled, originChat: originChat ? String(originChat) : null, createdAt: nowIso(), lastRun: null, nextAt: null };
     p.scheduledAgents.push(agent);
     return agent;
   });
@@ -105,7 +107,7 @@ export const recordAgentRun = (pid, agentId, { nextAt, run } = {}) => updateSche
   a.lastRun = nowIso();
   a.nextAt = nextAt ?? null;
   if (run) {
-    a.runs = [{ at: a.lastRun, chatId: run.chatId ?? null, ok: run.ok !== false, nProp: run.nProp || 0, summary: String(run.summary || '').slice(0, 300) }, ...(a.runs || [])].slice(0, RUN_LOG_MAX);
+    a.runs = [{ at: a.lastRun, chatId: run.chatId ?? null, ok: run.ok !== false, nProp: run.nProp || 0, summary: String(run.summary || '').slice(0, 300), spentUusd: Math.round(run.spentUusd || 0) }, ...(a.runs || [])].slice(0, RUN_LOG_MAX);
     if (run.chatId) a.lastRunChatId = run.chatId;
   }
 });

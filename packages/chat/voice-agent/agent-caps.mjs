@@ -1173,7 +1173,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         const want = Array.isArray(tools) ? tools : [];
         const granted = want.filter(t => own.has(t) && !META_POWERS.has(t)); // never escalate past the creator
         const proj = (ctx.chatId && projectForChat(ctx.chatId)) || listProjects().find(p => p.name === 'Scheduled tasks') || createProject('Scheduled tasks');
-        const sa = addScheduledAgent(proj.id, { name: String(name || prompt).slice(0, 60), prompt: String(prompt), tools: granted, schedule: cadence, model: 'default', enabled: true });
+        const sa = addScheduledAgent(proj.id, { name: String(name || prompt).slice(0, 60), prompt: String(prompt), tools: granted, schedule: cadence, model: 'default', enabled: true, originChat: ctx.chatId || null });
         const nextAt = computeNextAt(cadence, Date.now());
         updateScheduledAgent(proj.id, sa.id, { nextAt });
         const dropped = want.filter(t => !granted.includes(t));
@@ -2277,7 +2277,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // ring, ⊆ ALL_POWERS minus META), bound to the PROJECT's shared home folder via homeSubkey
   // (so every chat + scheduled agent in a Project read/write the same folder). Returns the
   // answer + any PROPOSALS it raised (it proposes; destructive actions still need confirm).
-  const runScheduledAgent = async ({ powers = [], homeSubkey = null, prompt = '', persona: personaOverride = '', model = 'default', mode = 'recommend', signal, emit = null } = {}) => {
+  const runScheduledAgent = async ({ powers = [], homeSubkey = null, prompt = '', persona: personaOverride = '', model = 'default', mode = 'recommend', signal, emit = null, llm = null, budgetLine = '' } = {}) => {
     // `selfImprove` (autonomous implement→verify→auto-merge) is granted ONLY to IMPLEMENT-mode tasks; every
     // legacy/recommend-mode task has it stripped exactly like a META power, so they can only propose.
     // strip META as usual, EXCEPT grant `selfImprove` to IMPLEMENT-mode tasks (the one controlled exception).
@@ -2300,7 +2300,8 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       : '';
     const r = await AGENT_RUNNER({
       toolbox: sub.toolbox, manifest: sub.manifest, userText: String(prompt || '') + soulPreamble,
-      persona: String(personaOverride || persona || ''), model, signal,
+      persona: String(personaOverride || persona || ''), model, signal, llm, budgetLine, // llm = a metered LLM bound to a per-run purse → scheduled spend is accounted, never an invisible leak
+
       onStep: s => {
         const detailOf = a => (a && (a.query || a.question || a.path || a.name)) || '';
         const sx = v => { try { return typeof v === 'string' ? v.slice(0, 16000) : JSON.stringify(v).slice(0, 16000); } catch { return String(v).slice(0, 2000); } };
