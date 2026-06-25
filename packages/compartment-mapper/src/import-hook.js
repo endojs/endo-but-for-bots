@@ -98,9 +98,8 @@ const resolveLocation = (rel, abs) =>
   /** @type {FileUrlString} */ (new URL(rel, abs).toString());
 
 // this is annoying
-function getImportsFromRecord(record) {
-  return (has(record, 'record') ? record.record.imports : record.imports) || [];
-}
+const getImportsFromRecord = record =>
+  (has(record, 'record') ? record.record.imports : record.imports) || [];
 
 // Node.js default resolution allows for an incomplement specifier that does not include a suffix.
 // https://nodejs.org/api/modules.html#all-together
@@ -756,7 +755,7 @@ export const makeImportHookMaker = (
  * @param {MakeImportNowHookMakerOptions} options
  * @returns {ImportNowHookMaker}
  */
-export function makeImportNowHookMaker(
+export const makeImportNowHookMaker = (
   readPowers,
   baseLocation,
   {
@@ -770,7 +769,7 @@ export function makeImportNowHookMaker(
     moduleSourceHook,
     log = noop,
   },
-) {
+) => {
   // Set of specifiers for modules (scoped to compartment) whose parser is not
   // using heuristics to determine imports.
   /** @type {Map<string, Set<string>>} compartment name ->* module specifier */
@@ -849,7 +848,7 @@ export function makeImportNowHookMaker(
     };
 
     if (!isSyncParseFn(parse)) {
-      return function impossibleTransformImportNowHook() {
+      return () => {
         throw new Error(
           'Dynamic requires are only possible with synchronous parsers and no asynchronous module transforms in options',
         );
@@ -952,4 +951,4 @@ export function makeImportNowHookMaker(
     return importNowHook;
   };
   return makeImportNowHook;
-}
+};
