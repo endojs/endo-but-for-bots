@@ -10,6 +10,7 @@ import url from 'url';
 import path from 'path';
 import http from 'node:http';
 import { WebSocketServer } from 'ws';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { E } from '@endo/far';
 import { makePromiseKit } from '@endo/promise-kit';
 import { start, stop, purge, makeEndoClient } from '../index.js';
@@ -370,7 +371,7 @@ test.serial(
       const bobMember = await E(remoteChannel).join('Bob');
 
       // Follow messages from Bob's side
-      const bobIterator = await E(bobMember).followMessages();
+      const bobIterator = iterateReader(await E(bobMember).followMessages());
 
       // Alice posts first
       await E(channel).post(['Message 1 from Alice'], [], []);
@@ -385,7 +386,7 @@ test.serial(
       const messages = [];
       for (let i = 0; i < 3; i += 1) {
         // eslint-disable-next-line no-await-in-loop
-        const result = await E(bobIterator).next();
+        const result = await bobIterator.next();
         messages.push(result.value);
       }
 
