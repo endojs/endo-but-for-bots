@@ -21,7 +21,7 @@ const generatorThrow = uncurryThis(generatorPrototype.throw);
  * @param {TArgs} args Arguments to pass to `generatorFn`
  * @returns {SyncTrampolineResult<TFn>}
  */
-export function syncTrampoline(generatorFn, ...args) {
+export const syncTrampoline = (generatorFn, ...args) => {
   const iterator = generatorFn(...args);
   let result = generatorNext(iterator);
   while (!result.done) {
@@ -32,7 +32,7 @@ export function syncTrampoline(generatorFn, ...args) {
     }
   }
   return result.value;
-}
+};
 
 /**
  * Trampoline on {@link TrampolineGeneratorFn generatorFn} asynchronously.
@@ -43,7 +43,7 @@ export function syncTrampoline(generatorFn, ...args) {
  * @param {TArgs} args Arguments to pass to `generatorFn`
  * @returns {Promise<TrampolineResult<TFn>>}
  */
-export async function asyncTrampoline(generatorFn, ...args) {
+export const asyncTrampoline = async (generatorFn, ...args) => {
   const iterator = generatorFn(...args);
   let result = generatorNext(iterator);
   while (!result.done) {
@@ -56,4 +56,4 @@ export async function asyncTrampoline(generatorFn, ...args) {
     }
   }
   return result.value;
-}
+};
