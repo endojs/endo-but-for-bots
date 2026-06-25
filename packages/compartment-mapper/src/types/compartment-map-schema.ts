@@ -133,6 +133,16 @@ export interface CompartmentDescriptor<
   scopes?: Record<string, ScopeDescriptor>;
   /** language for extension */
   parsers?: LanguageForExtension;
+  /**
+   * Layered language-for-extension overrides scoped to subtree prefixes
+   * within this compartment, contributed by auxiliary `package.json` files
+   * (those without a `name`). Shortest prefix first; the deepest matching
+   * prefix for a module's path wins at parse time. Absent when the
+   * compartment has no auxiliary descriptors, in which case `parsers` is
+   * used unchanged. See
+   * `designs/compartment-mapper-auxiliary-package-json.md`.
+   */
+  languageForExtensionByPrefix?: LanguageForExtensionByPrefix;
   /** language for module specifier */
   types?: LanguageForModuleSpecifier;
   /** policy specific to compartment */
@@ -164,6 +174,7 @@ export interface DigestedCompartmentDescriptor extends CompartmentDescriptor<Mod
   retained: never;
   scopes: never;
   parsers: never;
+  languageForExtensionByPrefix: never;
   types: never;
   __createdBy: never;
   sourceDirname: never;
@@ -278,6 +289,28 @@ export type LanguageForExtension = Record<string, Language>;
  * Mapping of module specifier to {@link Language Languages}.
  */
 export type LanguageForModuleSpecifier = Record<string, Language>;
+
+/**
+ * A single layered language-for-extension override scoped to a subtree of a
+ * compartment, contributed by an auxiliary `package.json` (one without a
+ * `name`). The `prefix` is the compartment-relative directory path the
+ * override applies to (ending in `/`, or the empty string for the
+ * compartment root).
+ *
+ * See `designs/compartment-mapper-auxiliary-package-json.md`.
+ */
+export type LanguageForExtensionByPrefixEntry = {
+  prefix: string;
+  languageForExtension: LanguageForExtension;
+};
+
+/**
+ * The ordered list of layered language-for-extension overrides for a
+ * compartment, shortest prefix first. At parse time the deepest matching
+ * prefix for a module's path wins; when empty or absent, the compartment's
+ * flat {@link LanguageForExtension} (`parsers`) is used unchanged.
+ */
+export type LanguageForExtensionByPrefix = LanguageForExtensionByPrefixEntry[];
 
 export type ModuleConfigurationKind = 'file' | 'compartment' | 'exit' | 'error';
 

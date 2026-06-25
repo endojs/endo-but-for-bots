@@ -47,21 +47,69 @@ const has = (object, key) => apply(hasOwnProperty, object, [key]);
 const extensionImpliesLanguage = extension => extension !== 'js';
 
 /**
+ * Selects the language-for-extension map that applies to a module at
+ * `location`, honoring auxiliary `package.json` overrides scoped to subtree
+ * prefixes within the compartment (see
+ * `designs/compartment-mapper-auxiliary-package-json.md`).
+ *
+ * Records are stored shortest-prefix-first, so the deepest matching prefix
+ * wins by scanning from the end. Falls back to the compartment's flat map
+ * when no override list is present, the module is outside the compartment,
+ * or no prefix matches.
+ *
+ * @param {string} location - absolute module location
+ * @param {string} packageLocation - absolute compartment location
+ * @param {Record<string, string>} languageForExtension - flat fallback map
+ * @param {ReadonlyArray<{prefix: string, languageForExtension: Record<string, string>}>} [languageForExtensionByPrefix]
+ * @returns {Record<string, string>}
+ */
+const selectLanguageForExtension = (
+  location,
+  packageLocation,
+  languageForExtension,
+  languageForExtensionByPrefix,
+) => {
+  if (
+    languageForExtensionByPrefix === undefined ||
+    languageForExtensionByPrefix.length === 0 ||
+    !location.startsWith(packageLocation)
+  ) {
+    return languageForExtension;
+  }
+  const relativePath = location.slice(packageLocation.length);
+  for (
+    let index = languageForExtensionByPrefix.length - 1;
+    index >= 0;
+    index -= 1
+  ) {
+    const record = languageForExtensionByPrefix[index];
+    if (record.prefix === '' || relativePath.startsWith(record.prefix)) {
+      return record.languageForExtension;
+    }
+  }
+  return languageForExtension;
+};
+
+/**
  * Resolves the module language from its specifier and location.
  *
  * Shared logic between sync and async generators.
  *
  * @param {string} specifier
  * @param {string} location
+ * @param {string} packageLocation
  * @param {Record<string, string>} languageForExtension
  * @param {Record<string, string>} languageForModuleSpecifier
+ * @param {ReadonlyArray<{prefix: string, languageForExtension: Record<string, string>}>} [languageForExtensionByPrefix]
  * @returns {string} The resolved language.
  */
 const resolveLanguage = (
   specifier,
   location,
+  packageLocation,
   languageForExtension,
   languageForModuleSpecifier,
+  languageForExtensionByPrefix,
 ) => {
   const extension = parseExtension(location);
   if (
@@ -70,8 +118,14 @@ const resolveLanguage = (
   ) {
     return languageForModuleSpecifier[specifier];
   }
-  if (has(languageForExtension, extension)) {
-    return languageForExtension[extension];
+  const effectiveLanguageForExtension = selectLanguageForExtension(
+    location,
+    packageLocation,
+    languageForExtension,
+    languageForExtensionByPrefix,
+  );
+  if (has(effectiveLanguageForExtension, extension)) {
+    return effectiveLanguageForExtension[extension];
   }
   return extension;
 };
@@ -111,6 +165,7 @@ function* getParserGenerator(
   const {
     languageForExtension,
     languageForModuleSpecifier,
+    languageForExtensionByPrefix,
     parserForLanguage,
     transforms,
   } = config;
@@ -118,8 +173,10 @@ function* getParserGenerator(
   let language = resolveLanguage(
     specifier,
     location,
+    packageLocation,
     languageForExtension,
     languageForModuleSpecifier,
+    languageForExtensionByPrefix,
   );
 
   /** @type {string | undefined} */
@@ -183,6 +240,7 @@ const isAsyncParseResult = result =>
  * @param {Record<string, string>} languageForModuleSpecifier
  * @param {SyncParserForLanguage} parserForLanguage
  * @param {SyncModuleTransforms} transforms
+ * @param {ReadonlyArray<{prefix: string, languageForExtension: Record<string, string>}>} [languageForExtensionByPrefix]
  * @returns {ParseFn}
  */
 const makeSyncParserForExtension = (
@@ -190,11 +248,13 @@ const makeSyncParserForExtension = (
   languageForModuleSpecifier,
   parserForLanguage,
   transforms,
+  languageForExtensionByPrefix,
 ) => {
   /** @type {ParserGeneratorConfig} */
   const config = {
     languageForExtension,
     languageForModuleSpecifier,
+    languageForExtensionByPrefix,
     parserForLanguage,
     transforms,
   };
@@ -236,6 +296,7 @@ const makeSyncParserForExtension = (
  * @param {ParserForLanguage} parserForLanguage
  * @param {Record<string, ModuleTransform>} moduleTransforms
  * @param {Record<string, SyncModuleTransform>} syncModuleTransforms
+ * @param {ReadonlyArray<{prefix: string, languageForExtension: Record<string, string>}>} [languageForExtensionByPrefix]
  * @returns {AsyncParseFn}
  */
 const makeAsyncParserForExtension = (
@@ -244,11 +305,13 @@ const makeAsyncParserForExtension = (
   parserForLanguage,
   moduleTransforms,
   syncModuleTransforms,
+  languageForExtensionByPrefix,
 ) => {
   /** @type {ParserGeneratorConfig} */
   const config = {
     languageForExtension,
     languageForModuleSpecifier,
+    languageForExtensionByPrefix,
     parserForLanguage,
     transforms: {
       ...syncModuleTransforms,
@@ -330,6 +393,31 @@ export const makeMapParsers = ({
   const hasAsyncTransforms =
     moduleTransforms != null && keys(moduleTransforms).length > 0;
 
+  /**
+   * Validates each per-prefix override map against the parser-for-language
+   * map, preserving the shortest-prefix-first order. Returns `undefined`
+   * when there are no overrides so the parse path takes the unchanged flat
+   * lookup.
+   *
+   * @param {ReadonlyArray<{prefix: string, languageForExtension: LanguageForExtension}>} [languageForExtensionByPrefix]
+   * @returns {ReadonlyArray<{prefix: string, languageForExtension: Record<string, string>}> | undefined}
+   */
+  const validateLanguageForExtensionByPrefix = languageForExtensionByPrefix => {
+    if (
+      languageForExtensionByPrefix === undefined ||
+      languageForExtensionByPrefix.length === 0
+    ) {
+      return undefined;
+    }
+    return languageForExtensionByPrefix.map(({ prefix, languageForExtension }) => ({
+      prefix,
+      languageForExtension: validateLanguageForExtension(
+        languageForExtension,
+        parserForLanguage,
+      ),
+    }));
+  };
+
   if (!hasAsyncTransforms && isSyncParserForLanguage(parserForLanguage)) {
     /**
      * Synchronous `mapParsers()` function; returned when all parsers are
@@ -337,7 +425,11 @@ export const makeMapParsers = ({
      *
      * @type {MapParsersFn<ParseFn>}
      */
-    return (languageForExtension, languageForModuleSpecifier) => {
+    return (
+      languageForExtension,
+      languageForModuleSpecifier,
+      languageForExtensionByPrefix,
+    ) => {
       const validExtensions = validateLanguageForExtension(
         languageForExtension,
         parserForLanguage,
@@ -347,6 +439,7 @@ export const makeMapParsers = ({
         languageForModuleSpecifier,
         parserForLanguage,
         syncModuleTransforms || {},
+        validateLanguageForExtensionByPrefix(languageForExtensionByPrefix),
       );
     };
   }
@@ -357,7 +450,11 @@ export const makeMapParsers = ({
    *
    * @type {MapParsersFn<AsyncParseFn>}
    */
-  return (languageForExtension, languageForModuleSpecifier) => {
+  return (
+    languageForExtension,
+    languageForModuleSpecifier,
+    languageForExtensionByPrefix,
+  ) => {
     const validExtensions = validateLanguageForExtension(
       languageForExtension,
       parserForLanguage,
@@ -368,6 +465,7 @@ export const makeMapParsers = ({
       parserForLanguage,
       moduleTransforms || {},
       syncModuleTransforms || {},
+      validateLanguageForExtensionByPrefix(languageForExtensionByPrefix),
     );
   };
 };

@@ -393,7 +393,19 @@ export type MapNodeModulesHookOptions = {
 export type CompartmentMapForNodeModulesOptions = Omit<
   MapNodeModulesOptions,
   'conditions' | 'tags'
->;
+> & {
+  /**
+   * Internal: auxiliary `package.json` descriptors (those without a `name`)
+   * discovered between the compartment root and the entry module, shallowest
+   * first. Supplied by `mapNodeModules` so the entry compartment can carry
+   * layered language-for-extension overrides for its subtree. See
+   * `designs/compartment-mapper-auxiliary-package-json.md`.
+   */
+  entryAuxiliaryDescriptors?: ReadonlyArray<{
+    location: FileUrlString;
+    packageDescriptor: PackageDescriptor;
+  }>;
+};
 
 /**
  * Options for `captureFromMap()`

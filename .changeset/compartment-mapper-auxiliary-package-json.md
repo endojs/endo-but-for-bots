@@ -24,8 +24,16 @@ has no named ancestor — the walk reaches a `node_modules` boundary or
 the filesystem root after passing an unnamed `package.json` without
 finding a `name` — still fails loudly.
 
+The auxiliary descriptors on the path to the entry module are also
+honored at parse time: the entry compartment carries a
+`languageForExtensionByPrefix` list (layered shortest-prefix-first, the
+deepest matching prefix winning) so a `{"type": "module"}` auxiliary
+actually flips `.js` parsing to ECMAScript within its subtree, and a
+`{"type": "commonjs"}` auxiliary nested inside it flips back. A
+compartment with no auxiliary descriptors keeps its flat `parsers` map
+unchanged. The fully general per-file walk for auxiliaries discovered
+lazily deep inside dependency subtrees (rather than on the entry path)
+remains future work.
+
 See `designs/compartment-mapper-auxiliary-package-json.md` for the
-design this implements; subsequent work lands the per-file
-layered-language-override pipeline (`languageForExtensionByPrefix`) so a
-`{"type": "module"}` auxiliary actually flips `.js` parsing within its
-subtree.
+design this implements.

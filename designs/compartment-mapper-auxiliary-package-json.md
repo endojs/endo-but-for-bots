@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-06 |
-| **Updated** | 2026-06-24 |
+| **Updated** | 2026-06-25 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 | **Source** | Maintainer comment on PR endojs/endo-but-for-bots#70; tracks endojs/endo issue #1845. |
@@ -465,21 +465,33 @@ path handles that case at least as well as the old.
 
 7. **Honor the layered overrides at parse time
    (`languageForExtensionByPrefix`).**
-   The remaining functional phase. `collectLanguageOverrides` already
-   returns the layered descriptor list, but the parse pipeline does not
-   yet consult it: a `{"type": "module"}` auxiliary is collected and
-   ignored by `inferParsers`, so `.js` files in its subtree are not yet
-   reparsed as ECMAScript modules.
-   This requires extending the compartment descriptor schema with the
-   `languageForExtensionByPrefix` field (Design Decision §7) and
-   resolving the deepest matching prefix for a module's path at parse
-   time (`link.js` → `map-parser.js`).
+   Landed for the entry compartment. The compartment descriptor schema
+   now carries an optional `languageForExtensionByPrefix` field (Design
+   Decision §7): an ordered list of `{ prefix, languageForExtension }`
+   records, shortest prefix first, computed by layering `inferParsers`
+   over the entry's auxiliary descriptors (shallow-to-deep, deeper
+   auxiliaries winning for conflicting extensions). `mapNodeModules`
+   attaches the list to the entry compartment from the auxiliary
+   descriptors `findEnclosingCompartmentRoot` already collected on the
+   path to the entry module; `link.js` threads the list to
+   `map-parser.js`, where `resolveLanguage` selects the deepest matching
+   prefix for a module's path at parse time and falls back to the flat
+   `parsers` map when no prefix matches or the list is absent. So a
+   `{"type": "module"}` auxiliary now flips `.js` parsing to ECMAScript
+   within its subtree, and a `{"type": "commonjs"}` auxiliary nested
+   inside it flips back.
+
    Because the static graph builder does not traverse package subtrees
-   today (modules within a package are discovered lazily at import
-   time), this phase carries the layered overrides through to the lazy
-   language lookup rather than precomputing them per compartment. It is
-   the next phase of work; the on-demand cache and the entry-resolution
-   reclassification (Phases 1–6) land first.
+   (modules within a package are discovered lazily at import time), only
+   the auxiliaries on the **entry module's** path are known at map time
+   and contribute to the list. The fully general case — auxiliaries
+   discovered lazily deep inside dependency subtrees, off the entry path
+   — would require carrying the per-file `collectLanguageOverrides` walk
+   through to the lazy import-time language lookup (reaching into
+   `import-hook.js`); that remains future work. `importArchive` and any
+   relative consuming a fully described compartment map are unaffected
+   either way (Design Decision §9): language is already pinned per
+   module, so the auxiliary lookup has no work to do.
 
 ## Design Decisions
 
