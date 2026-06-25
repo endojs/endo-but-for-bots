@@ -410,7 +410,6 @@ export const link = (
       location,
       name,
       parsers: languageForExtension = {},
-      languageForExtensionByPrefix,
       types: languageForModuleSpecifier = {},
     } = compartmentDescriptor;
 
@@ -427,11 +426,7 @@ export const link = (
     // TS is kind of dumb about this, so we can use a type assertion to avoid a
     // pointless ternary.
     const parse = /** @type {ParseFn|AsyncParseFn} */ (
-      mapParsers(
-        languageForExtension,
-        languageForModuleSpecifier,
-        languageForExtensionByPrefix,
-      )
+      mapParsers(languageForExtension, languageForModuleSpecifier)
     );
 
     /** @type {ShouldDeferError} */

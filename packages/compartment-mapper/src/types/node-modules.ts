@@ -178,17 +178,6 @@ export interface Node {
    */
   dependencyLocations: Record<string, FileUrlString>;
   parsers: LanguageForExtension;
-  /**
-   * Layered language-for-extension overrides scoped to subtree prefixes
-   * within this compartment, contributed by auxiliary `package.json` files
-   * (those without a `name`). Present only on the entry compartment when the
-   * entry module sits inside an auxiliary subtree. See
-   * `designs/compartment-mapper-auxiliary-package-json.md`.
-   */
-  languageForExtensionByPrefix?: Array<{
-    prefix: string;
-    languageForExtension: LanguageForExtension;
-  }>;
   types: Record<string, Language>;
   packageDescriptor: PackageDescriptor;
 }

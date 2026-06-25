@@ -134,12 +134,11 @@ export interface CompartmentDescriptor<
   /** language for extension */
   parsers?: LanguageForExtension;
   /**
-   * Layered language-for-extension overrides scoped to subtree prefixes
-   * within this compartment, contributed by auxiliary `package.json` files
-   * (those without a `name`). Shortest prefix first; the deepest matching
-   * prefix for a module's path wins at parse time. Absent when the
-   * compartment has no auxiliary descriptors, in which case `parsers` is
-   * used unchanged. See
+   * Language-for-extension overrides scoped to subtree prefixes within this
+   * compartment, layered from auxiliary `package.json` descriptors (those
+   * without a `name`). Populated lazily as modules under an auxiliary
+   * subtree are loaded. Absent or empty for compartments with no auxiliary
+   * descriptors, in which case `parsers` applies uniformly. See
    * `designs/compartment-mapper-auxiliary-package-json.md`.
    */
   languageForExtensionByPrefix?: LanguageForExtensionByPrefix;
@@ -174,7 +173,6 @@ export interface DigestedCompartmentDescriptor extends CompartmentDescriptor<Mod
   retained: never;
   scopes: never;
   parsers: never;
-  languageForExtensionByPrefix: never;
   types: never;
   __createdBy: never;
   sourceDirname: never;
@@ -291,26 +289,27 @@ export type LanguageForExtension = Record<string, Language>;
 export type LanguageForModuleSpecifier = Record<string, Language>;
 
 /**
- * A single layered language-for-extension override scoped to a subtree of a
- * compartment, contributed by an auxiliary `package.json` (one without a
- * `name`). The `prefix` is the compartment-relative directory path the
- * override applies to (ending in `/`, or the empty string for the
- * compartment root).
+ * An ordered list of {@link LanguageForExtension} maps scoped to subtree
+ * prefixes within a single compartment, shortest prefix first.
  *
- * See `designs/compartment-mapper-auxiliary-package-json.md`.
+ * Each record's `languageForExtension` is the compartment's base parser map
+ * overlaid with every auxiliary `package.json` descriptor (one without a
+ * `name`) from the compartment root down to and including `prefix`, deeper
+ * auxiliaries winning on conflicting extensions. At parse time the deepest
+ * prefix that prefixes a module's path within the compartment selects the
+ * map used to resolve its language.
+ *
+ * See `designs/compartment-mapper-auxiliary-package-json.md` (Design
+ * Decision §7).
  */
-export type LanguageForExtensionByPrefixEntry = {
+export type LanguageForExtensionByPrefix = Array<{
+  /**
+   * Directory prefix relative to the compartment root, ending with `/`.
+   * The empty string denotes the compartment root itself.
+   */
   prefix: string;
   languageForExtension: LanguageForExtension;
-};
-
-/**
- * The ordered list of layered language-for-extension overrides for a
- * compartment, shortest prefix first. At parse time the deepest matching
- * prefix for a module's path wins; when empty or absent, the compartment's
- * flat {@link LanguageForExtension} (`parsers`) is used unchanged.
- */
-export type LanguageForExtensionByPrefix = LanguageForExtensionByPrefixEntry[];
+}>;
 
 export type ModuleConfigurationKind = 'file' | 'compartment' | 'exit' | 'error';
 

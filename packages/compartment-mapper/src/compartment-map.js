@@ -420,42 +420,6 @@ const assertParsers = (allegedParsers, keypath, url) => {
 };
 
 /**
- * @param {unknown} allegedLanguageForExtensionByPrefix
- * @param {string} keypath
- * @param {string} url
- * @returns {void}
- */
-const assertLanguageForExtensionByPrefix = (
-  allegedLanguageForExtensionByPrefix,
-  keypath,
-  url,
-) => {
-  Array.isArray(allegedLanguageForExtensionByPrefix) ||
-    Fail`${b(keypath)}.languageForExtensionByPrefix must be an array in ${q(url)}`;
-  const entryList = /** @type {unknown[]} */ (
-    allegedLanguageForExtensionByPrefix
-  );
-  entryList.forEach((entry, index) => {
-    assertPlainObject(
-      entry,
-      `${keypath}.languageForExtensionByPrefix[${index}]`,
-      url,
-    );
-    const { prefix, languageForExtension } = entry;
-    assertString(
-      prefix,
-      `${keypath}.languageForExtensionByPrefix[${index}].prefix`,
-      url,
-    );
-    assertParsers(
-      languageForExtension,
-      `${keypath}.languageForExtensionByPrefix[${index}]`,
-      url,
-    );
-  });
-};
-
-/**
  * @overload
  * @param {unknown} allegedTruthyValue
  * @param {string} keypath
@@ -580,7 +544,6 @@ const assertCompartmentDescriptor = (
     location,
     name,
     parsers,
-    languageForExtensionByPrefix,
     types,
     scopes,
     modules,
@@ -599,13 +562,6 @@ const assertCompartmentDescriptor = (
 
   if (parsers !== undefined) {
     assertParsers(parsers, keypath, url);
-  }
-  if (languageForExtensionByPrefix !== undefined) {
-    assertLanguageForExtensionByPrefix(
-      languageForExtensionByPrefix,
-      keypath,
-      url,
-    );
   }
   if (scopes !== undefined) {
     assertScopes(scopes, keypath, url);

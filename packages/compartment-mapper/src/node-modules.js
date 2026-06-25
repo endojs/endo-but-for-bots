@@ -429,59 +429,6 @@ const inferParsers = (descriptor, location, languageOptions) => {
 };
 
 /**
- * Builds the layered language-for-extension override list for a compartment
- * from its compartment-defining descriptor and the auxiliary `package.json`
- * descriptors (those without a `name`) discovered between the compartment
- * root and the entry module, shallowest first. The first record covers the
- * compartment root (prefix `''`); each subsequent record layers a deeper
- * auxiliary's {@link inferParsers} result on top of the shallower map, so a
- * deeper auxiliary wins for conflicting extensions while inheriting the
- * shallower mapping otherwise. Each prefix is the auxiliary directory's path
- * relative to the compartment root (ending in `/`), matching the
- * compartment-relative path computed at parse time.
- *
- * Returns `undefined` when there are no auxiliaries, leaving the compartment
- * on the unchanged flat `parsers` path. See
- * `designs/compartment-mapper-auxiliary-package-json.md`.
- *
- * @param {FileUrlString} packageLocation
- * @param {PackageDescriptor} packageDescriptor
- * @param {ReadonlyArray<{location: FileUrlString, packageDescriptor: PackageDescriptor}>} auxiliaryDescriptors
- * @param {LanguageOptions} languageOptions
- * @returns {Array<{prefix: string, languageForExtension: Record<string, string>}> | undefined}
- */
-const computeLanguageForExtensionByPrefix = (
-  packageLocation,
-  packageDescriptor,
-  auxiliaryDescriptors,
-  languageOptions,
-) => {
-  if (auxiliaryDescriptors.length === 0) {
-    return undefined;
-  }
-  let layered = inferParsers(
-    packageDescriptor,
-    packageLocation,
-    languageOptions,
-  );
-  const records = [{ prefix: '', languageForExtension: layered }];
-  for (const auxiliary of auxiliaryDescriptors) {
-    const auxiliaryLanguageForExtension = inferParsers(
-      auxiliary.packageDescriptor,
-      auxiliary.location,
-      languageOptions,
-    );
-    layered = { ...layered, ...auxiliaryLanguageForExtension };
-    // The auxiliary directory always descends from the compartment root, so
-    // slicing off the root prefix yields the compartment-relative directory
-    // path (ending in `/`) that the parse-time lookup compares against.
-    const prefix = auxiliary.location.slice(packageLocation.length);
-    records.push({ prefix, languageForExtension: layered });
-  }
-  return records;
-};
-
-/**
  * `graphPackage` and {@link gatherDependency} are mutually recursive functions that
  * gather the metadata for a package and its transitive dependencies.
  * The keys of the graph are the locations of the package descriptors.
@@ -1026,7 +973,6 @@ const translateGraph = (
       internalAliases,
       patterns,
       parsers,
-      languageForExtensionByPrefix,
       types,
       packageDescriptor,
     } = graph[dependeeLocation];
@@ -1127,7 +1073,6 @@ const translateGraph = (
       scopes,
       ...(patterns.length > 0 ? { patterns } : {}),
       parsers,
-      ...(languageForExtensionByPrefix ? { languageForExtensionByPrefix } : {}),
       types,
       policy: /** @type {SomePackagePolicy} */ (packagePolicy),
     };
@@ -1418,7 +1363,6 @@ export const compartmentMapForNodeModules_ = async (
     packageDataHook,
     packageDependenciesHook,
     additionalLocations = [],
-    entryAuxiliaryDescriptors = [],
   } = options;
 
   for (const { location: additionalLocation } of additionalLocations) {
@@ -1459,25 +1403,6 @@ export const compartmentMapForNodeModules_ = async (
     logicalPathGraph,
     { log, policy, packageDependenciesHook },
   );
-
-  // Attach the entry compartment's layered language-for-extension overrides,
-  // derived from the auxiliary `package.json` descriptors on the path to the
-  // entry module. The static graph builder does not traverse package
-  // subtrees, so only the entry compartment's known auxiliaries contribute
-  // here; the deeper, fully-general per-file walk remains future work (see
-  // `designs/compartment-mapper-auxiliary-package-json.md` Phase 7).
-  const entryNode = graph[entryPackageLocation];
-  if (entryNode !== undefined) {
-    const languageForExtensionByPrefix = computeLanguageForExtensionByPrefix(
-      entryPackageLocation,
-      entryNode.packageDescriptor,
-      entryAuxiliaryDescriptors,
-      languageOptions,
-    );
-    if (languageForExtensionByPrefix !== undefined) {
-      entryNode.languageForExtensionByPrefix = languageForExtensionByPrefix;
-    }
-  }
 
   // Graph additional package locations that are not reachable from the entry's
   // dependency tree (e.g., a project root package when the entry is a tool
@@ -1669,11 +1594,6 @@ export const mapNodeModules = async (
       unknownCanonicalNameHook,
       packageDependenciesHook,
       packageDataHook,
-      // The auxiliary `package.json` descriptors between the compartment root
-      // and the entry module scope language-for-extension overrides to the
-      // entry compartment's subtree (Phase 7 of the auxiliary-`package.json`
-      // design). When empty, the entry compartment keeps its flat `parsers`.
-      entryAuxiliaryDescriptors: compartmentRoot.auxiliaryDescriptors,
       ...otherOptions,
     },
   );

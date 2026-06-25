@@ -5,7 +5,7 @@
 | **Created** | 2026-05-06 |
 | **Updated** | 2026-06-25 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+| **Status** | Implemented |
 | **Source** | Maintainer comment on PR endojs/endo-but-for-bots#70; tracks endojs/endo issue #1845. |
 
 ## What is the Problem Being Solved?
@@ -464,34 +464,36 @@ path handles that case at least as well as the old.
    to do when the language is already pinned per module.
 
 7. **Honor the layered overrides at parse time
-   (`languageForExtensionByPrefix`).**
-   Landed for the entry compartment. The compartment descriptor schema
-   now carries an optional `languageForExtensionByPrefix` field (Design
-   Decision §7): an ordered list of `{ prefix, languageForExtension }`
-   records, shortest prefix first, computed by layering `inferParsers`
-   over the entry's auxiliary descriptors (shallow-to-deep, deeper
-   auxiliaries winning for conflicting extensions). `mapNodeModules`
-   attaches the list to the entry compartment from the auxiliary
-   descriptors `findEnclosingCompartmentRoot` already collected on the
-   path to the entry module; `link.js` threads the list to
-   `map-parser.js`, where `resolveLanguage` selects the deepest matching
-   prefix for a module's path at parse time and falls back to the flat
-   `parsers` map when no prefix matches or the list is absent. So a
-   `{"type": "module"}` auxiliary now flips `.js` parsing to ECMAScript
-   within its subtree, and a `{"type": "commonjs"}` auxiliary nested
-   inside it flips back.
-
+   (`languageForExtensionByPrefix`).** _Implemented._
+   The compartment descriptor schema now carries the optional
+   `languageForExtensionByPrefix` field (Design Decision §7), and the
+   parse pipeline consults it so a `{"type": "module"}` (or
+   `{"type": "commonjs"}`) auxiliary actually flips `.js` parsing within
+   its subtree.
    Because the static graph builder does not traverse package subtrees
-   (modules within a package are discovered lazily at import time), only
-   the auxiliaries on the **entry module's** path are known at map time
-   and contribute to the list. The fully general case — auxiliaries
-   discovered lazily deep inside dependency subtrees, off the entry path
-   — would require carrying the per-file `collectLanguageOverrides` walk
-   through to the lazy import-time language lookup (reaching into
-   `import-hook.js`); that remains future work. `importArchive` and any
-   relative consuming a fully described compartment map are unaffected
-   either way (Design Decision §9): language is already pinned per
-   module, so the auxiliary lookup has no work to do.
+   (modules within a package are discovered lazily at import time), the
+   override lookup is lazy rather than precomputed per compartment: the
+   import hook (`import-hook.js`) walks upward from each loaded module's
+   location to the compartment root, reads any intermediate auxiliary
+   `package.json` files (memoized per compartment, via the same
+   trampoline that serves both the sync and async hooks), layers their
+   language-for-extension deltas shallow-to-deep onto the compartment's
+   base `parsers` map, records the result on
+   `languageForExtensionByPrefix`, and passes the deepest-matching
+   prefix's map to the parser as a per-module override
+   (`map-parser.js`). The pure layering and selection helpers live in
+   `language-for-extension-by-prefix.js`. `.js` is the only extension
+   whose language depends on a descriptor's `type`, so an auxiliary only
+   ever flips `js` (plus any explicit `parsers` field it carries),
+   matching `inferParsers`. Modules reached via package `exports`
+   continue to be covered by the existing `types` /
+   `readDescriptorUpwards` path, which agrees with this override;
+   modules reached by relative import within an auxiliary subtree are
+   now covered too.
+   Per Design Decision §9, `importArchive` and any relative consuming a
+   fully described compartment map are unaffected: their per-module
+   language is already pinned, so the import hook supplies no override
+   and the base map is used unchanged.
 
 ## Design Decisions
 

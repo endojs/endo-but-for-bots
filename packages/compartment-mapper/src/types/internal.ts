@@ -132,15 +132,6 @@ export type MapParsersFn<ParseT = AsyncParseFn | ParseFn> = (
   languageForExtension: LanguageForExtension,
   /** Mapping from module specifier to Language. */
   languageForModuleSpecifier: LanguageForModuleSpecifier,
-  /**
-   * Layered language-for-extension overrides scoped to subtree prefixes
-   * within the compartment (auxiliary `package.json` handling); shortest
-   * prefix first. Omitted or empty for compartments without auxiliaries.
-   */
-  languageForExtensionByPrefix?: ReadonlyArray<{
-    prefix: string;
-    languageForExtension: LanguageForExtension;
-  }>,
 ) => ParseT;
 
 /**
@@ -349,16 +340,6 @@ export type CaptureCompartmentMapOptions = DigestCompartmentMapOptions;
 export type ParserGeneratorConfig = {
   languageForExtension: LanguageForExtension;
   languageForModuleSpecifier: LanguageForModuleSpecifier;
-  /**
-   * Layered language-for-extension overrides scoped to subtree prefixes
-   * within the compartment (auxiliary `package.json` handling). Shortest
-   * prefix first; the deepest matching prefix for a module's path wins.
-   * Absent when the compartment has no auxiliary descriptors.
-   */
-  languageForExtensionByPrefix?: ReadonlyArray<{
-    prefix: string;
-    languageForExtension: LanguageForExtension;
-  }>;
   parserForLanguage: ParserForLanguage;
   transforms: Record<string, ModuleTransform | SyncModuleTransform>;
 };
