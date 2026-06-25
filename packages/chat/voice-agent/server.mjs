@@ -770,6 +770,29 @@ const scrubCaps = s => String(s == null ? '' : s)
   .replace(/#k=[\w-]{16,}/g, '#k=«redacted»')
   .replace(/#agent=[\w-]{8,}/g, '#agent=«redacted»')
   .replace(/\b[0-9a-f]{32}\b/g, '«swissnum»');
+// A SAFE descriptive walk for values JSON.stringify chokes on — arrays of REMOTABLES/presences (live ocap
+// refs whose proxy traps throw mid-stringify) were falling through to String(v) = "[object Object],…",
+// discarding the goods. This never throws and never yields a bare [object Object]: records become
+// { key: value } literals, remotables become their alleged interface tag, and per-property access is
+// guarded. (Endo's passableAsJustin is the prettier path for true Passables; this also covers plain JS.)
+const describeValue = (v, depth = 0, seen = new WeakSet()) => {
+  if (v === null || v === undefined) return String(v);
+  const t = typeof v;
+  if (t === 'string') return JSON.stringify(v.length > 2000 ? `${v.slice(0, 2000)}…` : v);
+  if (t === 'number' || t === 'boolean') return String(v);
+  if (t === 'bigint') return `${v}n`;
+  if (t === 'symbol') { try { return v.toString(); } catch { return '«symbol»'; } }
+  if (t === 'function') return `[Function ${v.name || 'anon'}]`;
+  if (depth > 6) return '…';
+  if (seen.has(v)) return '«circular»';
+  seen.add(v);
+  if (Array.isArray(v)) return `[${v.slice(0, 50).map(x => { try { return describeValue(x, depth + 1, seen); } catch { return '«?»'; } }).join(', ')}${v.length > 50 ? `, …(+${v.length - 50})` : ''}]`;
+  let keys = null; try { keys = Object.keys(v); } catch { keys = null; }
+  if (keys && keys.length) return `{ ${keys.slice(0, 40).map(k => { if (SECRET_KEY.test(k)) return `${k}: «redacted»`; let val; try { val = describeValue(v[k], depth + 1, seen); } catch { val = '«throws»'; } return `${k}: ${val}`; }).join(', ')}${keys.length > 40 ? ', …' : ''} }`;
+  // no enumerable own keys → likely a remotable/presence; surface its interface tag if any
+  let tag = '[remotable]'; try { tag = Object.prototype.toString.call(v); if (tag.includes('Alleged')) tag = `[${tag.slice(8, -1)}]`; else tag = '[remotable object — call its .describe()/.help() for its interface]'; } catch { /* */ }
+  return tag;
+};
 const safeText = (v, cap) => {
   const seen = new WeakSet(); let s;
   try {
@@ -779,7 +802,8 @@ const safeText = (v, cap) => {
       if (val && typeof val === 'object') { if (seen.has(val)) return '«circular»'; seen.add(val); }
       return val;
     }, 2);
-  } catch { try { s = String(v); } catch { s = ''; } }
+    if (s === undefined) s = describeValue(v); // JSON.stringify returns undefined for a bare function/symbol
+  } catch { try { s = describeValue(v); } catch { try { s = String(v); } catch { s = ''; } } }
   if (s === undefined || s === null) return '';
   s = String(s).replace(/data:[^;,\s]+;base64,[A-Za-z0-9+/=]+/g, '«base64 data elided»');
   s = scrubCaps(s); // VALUE-level cap-hygiene: a tool whose result echoes a cap must not leak it into the trace/render
