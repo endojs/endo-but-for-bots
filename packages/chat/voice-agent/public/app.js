@@ -113,7 +113,9 @@ const linkify = (el, text) => {
   if (i < s.length) el.appendChild(document.createTextNode(s.slice(i)));
   return el;
 };
-const bubble = (who, text, agent) => {
+// a per-message timestamp: time-only for today, "Mon D, h:mm" otherwise; full date/time on hover.
+const fmtMsgTime = ms => { if (!ms) return ''; const d = new Date(ms); return (d.toDateString() === new Date().toDateString()) ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
+const bubble = (who, text, agent, at) => {
   const d = document.createElement('div'); d.className = `msg ${who === 'you' ? 'user' : ''}`;
   const id = who === 'you' ? 'you' : (agent || 'field-agent');
   const col = frameColor(id);
@@ -122,6 +124,7 @@ const bubble = (who, text, agent) => {
   const label = who === 'you' ? 'you' : (named ? id : 'agent');
   d.innerHTML = `<div class="who"></div><div class="body"></div>`;
   const w = d.querySelector('.who'); w.textContent = label; if (named) w.style.color = col;
+  if (at) { const ts = document.createElement('span'); ts.className = 'msg-time'; ts.style.cssText = 'margin-left:7px;font-size:10px;font-weight:400;color:var(--mut);opacity:.65'; ts.textContent = fmtMsgTime(at); ts.title = new Date(at).toLocaleString(); w.appendChild(ts); }
   // agent replies are Markdown (agents format even unprompted) → render it; user text stays literal (linkify only)
   const bodyEl = d.querySelector('.body');
   if (who === 'you') { linkify(bodyEl, text || '…'); } else { bodyEl.classList.add('md'); renderMarkdown(bodyEl, text || '…'); }
@@ -685,7 +688,7 @@ addEventListener('keydown', e => { if (e.key === 'Escape') { const w = log.query
 
 const renderAgentResponse = r => {
   if (_arr(r.steps).length) log.appendChild(traceGeometry(r.steps)); // the SVG trace sits ABOVE the message (tap it for the 3D); the 3D pendant is reserved for the live "working" animation
-  const body = bubble('agent', r.answer || '…', r.agentId);
+  const body = bubble('agent', r.answer || '…', r.agentId, Date.now());
   if (r.toolsUsed?.length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + r.toolsUsed.join(', '); body.parentNode.appendChild(e); }
   ((r.images && r.images.length ? r.images : (r.imageUrls || [])) || []).forEach(src => { const im = document.createElement('img'); im.src = src; body.appendChild(im); }); // data-URLs in the moment; durable /uploads urls as fallback (e.g. the share-post path)
   if (Array.isArray(r.ui) && r.ui.length) renderWidgets(body, r.ui, { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet }); // live/interactive widgets (countdowns, live status, choices, custom components)
@@ -905,7 +908,7 @@ const appendAtt = (body, imgUrls = [], fileNames = []) => {
 };
 // render the user's outgoing message bubble, with any attached image thumbnails
 const renderUserBubble = (text, attachments = []) => {
-  const body = bubble('you', text); if (!text) body.textContent = '';
+  const body = bubble('you', text, null, Date.now()); if (!text) body.textContent = '';
   appendAtt(body, attachments.filter(a => a.kind === 'image').map(a => a.dataUrl), attachments.filter(a => a.kind === 'text' || a.kind === 'file').map(a => a.name));
   window.scrollTo(0, document.body.scrollHeight);
   return body;
@@ -1000,7 +1003,7 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     const activeChat = chats.find(c => c.id === sessionId);
     if (activeChat && activeChat.shareToken) {
       if (activeChat.shareMode !== 'write') { setStatus('this is a read-only shared chat'); return false; }
-      renderUserBubble(t, attachments); document.body.classList.remove('landing'); activeTx.push({ who: 'you', text: t }); saveTx(); setStatus('thinking…');
+      renderUserBubble(t, attachments); document.body.classList.remove('landing'); activeTx.push({ who: 'you', text: t, at: Date.now() }); saveTx(); setStatus('thinking…');
       let r; try { r = await (await fetch('/share/post', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: activeChat.shareToken, text: t }) })).json(); } catch (e) { r = { error: e.message }; }
       if (stale()) return true;
       if (r.error) { setStatus('share: ' + r.error); return false; }
@@ -1048,7 +1051,7 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     if (!ub) ub = renderUserBubble(t, attachments);
     if (isFirst) { document.body.classList.remove('landing'); ub.parentNode.classList.add('pop'); } // composer drops to the bottom; the message pops in as a bubble
     // build the persisted tx entry (kept by reference so we can swap data-URLs → durable /uploads URLs)
-    const tx = { who: 'you', text: t };
+    const tx = { who: 'you', text: t, at: Date.now() };
     if (audio) tx.audio = audio;
     const imgAtts = attachments.filter(a => a.kind === 'image');
     const fileAtts = attachments.filter(a => a.kind === 'text' || a.kind === 'file');
@@ -1803,7 +1806,7 @@ async function syncLoad({ keepActive = false } = {}) {
     } else { scheduleSync(); } // server empty/older → push our local state up
   } catch {}
 }
-const pushTx = (who, text, extra = {}) => { activeTx.push({ who, text, ...extra }); saveTx(); };
+const pushTx = (who, text, extra = {}) => { activeTx.push({ who, text, at: Date.now(), ...extra }); saveTx(); };
 const titleFrom = t => { const ch = chats.find(c => c.id === sessionId); if (ch && (!ch.title || ch.title === 'New chat')) { ch.title = t.slice(0, 40); saveChats(); renderChatList(); } };
 
 // Google-style landing: an empty chat centres the composer in mid-screen (with a
@@ -1934,14 +1937,14 @@ const renderTx = () => {
       if (m.who === 'agent') { // render the ACTIVE fork (model/param variant) of this answer
         const v = activeVariant(m);
         if (_arr(v.steps).length) log.appendChild(traceGeometry(_arr(v.steps))); // the SVG trace sits ABOVE the message (tap it for the 3D)
-        const b = bubble('agent', v.answer, v.agentId || m.agent);
+        const b = bubble('agent', v.answer, v.agentId || m.agent, m.at);
         const imgs = asArr(m.imageUrls).length ? asArr(m.imageUrls) : asArr(m.images).filter(s => typeof s === 'string' && s.startsWith('data:')); imgs.forEach(src => { const im = document.createElement('img'); im.src = src; b.appendChild(im); });
         if (_arr(v.ui).length) renderWidgets(b, _arr(v.ui), { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet }); // re-hydrate live widgets
         if (_arr(v.tools).length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + _arr(v.tools).join(', '); b.parentNode.appendChild(e); }
         continue;
       }
       // a user message → its (active fork's) prompt, with the ↻/✎/🔊 + fork-pager controls INSIDE the bubble
-      const b = bubble('you', m.text, m.agent);
+      const b = bubble('you', m.text, m.agent, m.at);
       if (!m.text) b.textContent = '';
       appendAtt(b, asArr(m.attachUrls).length ? asArr(m.attachUrls) : asArr(m.attachImgs), asArr(m.attachFiles));
       userBubbleControls(i, m, b); // ↻ retry · ✎ edit · 🔊 audio · ◀ k/n ▶ forks — all inside the prompt bubble
