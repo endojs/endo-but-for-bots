@@ -11,9 +11,10 @@
 // `h.constructor('return globalThis')()` then climbs to the host realm (proven in the staging probe).
 // Instead the page loads the standalone, compartment-mapper-built shim (public/ses.umd.min.js) as a
 // classic script FIRST; it installs `assert`/`harden`/`Compartment`/`lockdown` globals with taming intact.
-import { h } from 'preact';
+import { h, Fragment } from 'preact';
 import { renderConfined } from '@endo/preact-container/renderer';
 import { makeConfinedFromSource, lockdownActive } from './confined-source.js';
+import * as uiKit from './ui-kit.js';
 
 // Phase: severe-taming lockdown (designs/preact-component-trie.md). FLAG-GATED so the live app is
 // untouched until the staging probe proves app.js + the islands survive a frozen realm. When the flag is
@@ -59,6 +60,12 @@ const COMPONENTS = {
   SharesPanel, NotificationCard, ChangelogList, PowersBanner, KitSampler, AskCard, ProposalCard,
   ChatList, MessageControls, ChatMetaBar, DevTaskCard, ExhaustedCard, TraceSignature, ObjectBrowser, ShareLinkManager, FileBrowser,
 };
+
+// The authoring vocabulary handed to an untrusted FORK as compartment globals (see renderSource): preact's
+// h/Fragment + every ui-kit primitive. All are pure (props)→vnode render functions — no caps, DOM, fs, or
+// network — so this is the fork's entire authority. It matches what islands themselves import, so a fork
+// reads like an island body. uiKit's non-component helpers (joinDot, …) ride along harmlessly.
+const FORK_VOCAB = Object.freeze({ h, Fragment, ...uiKit });
 
 // ── Shares island ───────────────────────────────────────────────────────────────────────────────
 // One cell (the data grain) holds the render-safe rows; the render propagator wires it to SharesPanel.
@@ -312,11 +319,14 @@ const islands = {
   // re-share render path: `source` is a `(endowments, props) => vnode` function string. We REFUSE unless
   // the realm is locked down (severe taming) — rendering untrusted source un-frozen is a containment hole
   // (the endowed Function constructor could climb to the host realm). Returns false on refusal/bad source.
+  // The fork is seeded with FORK_VOCAB as compartment globals — the render-safe island vocabulary (h,
+  // Fragment + every ui-kit primitive). That IS the fork's whole authority: pure render functions that emit
+  // vnodes, no caps/DOM/fs/network. Under lockdown their `.constructor` is tamed, so they grant no escape.
   renderSource(source, el, props) {
     if (!el) return false;
     if (!lockdownActive()) { el.textContent = '⚠︎ refusing untrusted source: realm not locked down'; return false; }
     let C;
-    try { C = makeConfinedFromSource(source, { name: 'forked-component' }); }
+    try { C = makeConfinedFromSource(source, { name: 'forked-component', endowments: FORK_VOCAB }); }
     catch (e) { el.textContent = `⚠︎ bad component source: ${e && e.message}`; return false; }
     el.setAttribute('data-component-id', 'confined-source');
     el.setAttribute('data-component-name', 'forked-component');

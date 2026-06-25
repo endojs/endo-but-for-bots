@@ -107,6 +107,18 @@ const cleanup = () => { for (const s of servers) { try { s.srv.kill('SIGKILL'); 
     ok(fork.hasIframe === false, 'the confined fork rendered WITHOUT an iframe (in-tree renderConfined)');
     ok(fork.id === 'confined-source', 'fork mount carries the confined-source component id');
 
+    // a fork authored in the ISLAND VOCABULARY (ui-kit primitives as compartment globals) renders inline
+    const vocab = await page.evaluate(async () => {
+      const el = document.createElement('div'); document.body.appendChild(el);
+      // Banner is a ui-kit primitive seeded as a compartment global — the fork uses it with no import
+      const src = "(endowments, props) => endowments.h(Banner, { kind: 'info' }, 'FORKVOCAB-OK ' + (props.tag || ''))";
+      const okk = globalThis.__fieldIslands.renderSource(src, el, { tag: 'beta' });
+      await new Promise(r => setTimeout(r, 150));
+      return { okk, text: el.textContent, hasIframe: !!el.querySelector('iframe') };
+    });
+    ok(vocab.okk === true && /FORKVOCAB-OK beta/.test(vocab.text || '') && !vocab.hasIframe,
+      `a fork using the ui-kit vocabulary (Banner) renders inline — got: ${JSON.stringify(vocab.text)}`);
+
     const escaped = await page.evaluate(async () => {
       globalThis.__HOST_SECRET__ = 'host-only';
       const el = document.createElement('div'); document.body.appendChild(el);
