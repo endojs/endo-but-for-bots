@@ -24,7 +24,10 @@ test('can make, parse, and import an archive with a URL-scheme-prefixed importHo
 });
 
 test('can make, parse, and import an archive with a URL-scheme-prefixed modules map exit to a host module', async t => {
-  const fixture = new URL('fixtures-exit/reexport.js', import.meta.url).toString();
+  const fixture = new URL(
+    'fixtures-exit/reexport.js',
+    import.meta.url,
+  ).toString();
   const readPowers = makeReadPowers({ fs, url, crypto });
   const archive = await makeArchive(readPowers, fixture);
   const app = await parseArchive(archive);
