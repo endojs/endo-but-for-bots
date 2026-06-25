@@ -74,6 +74,7 @@ import { budgetLine, costOf } from './costModel.mjs';
 import { makeTollBridge } from './toll-bridge.mjs';
 import { makeLiveCells } from './live-cells.mjs';
 import { makeComponentShares } from './component-shares.mjs';
+import { makeForks } from './forks.mjs';
 import * as projects from './projects.mjs';
 import { makeMeetingScribe } from './meeting-scribe.mjs';
 import { opusComplete } from './delegate.mjs';
@@ -221,6 +222,9 @@ if (AUTO_ADMIT) setInterval(() => { triageTick().catch(e => log('triage', e && e
 
 // Editing a confined-Preact ISLAND (its source is a client file → rewrite + rebuild, not make(powers)).
 const ISLAND_EDIT_SYS = reuseFirstPreamble() + '\n\nYou are editing a confined-Preact ISLAND — a UI component rendered through @endo/preact-container `renderConfined`. The source is a JS module built with `h(tag, props, children)` hyperscript (NO JSX), pure + stateless (state lives in cells passed via props; render-safe data only — never a swissnum/secret). When the change ADDS UI, compose the kit primitives above (import from ./ui-kit.js) rather than hand-rolling raw `h(\'button\'/\'input\'/…)`; only write new markup when no primitive fits. Apply the user\'s requested change, keep it valid h-based confined Preact, keep the SAME exports and imports (add ONLY from ./ui-kit.js if you adopt a primitive not yet imported), use theme vars not hardcoded colours, and use no DOM/network/fs/ambient access. Reply with ONLY the complete updated file as a single ```js fenced code block — no prose.';
+// Editing a user FORK (in-tree confined component): its source is a SINGLE arrow function expression
+// `(endowments, props) => vnode`, NOT a module — evaluated in a SES Compartment by client renderSource.
+const FORK_EDIT_SYS = reuseFirstPreamble() + '\n\nYou are editing a confined FORK — one UI component rendered inline (no iframe) through @endo/preact-container. The source is a SINGLE arrow function expression `(endowments, props) => vnode` (NOT a module — no import/export statements; they will not evaluate). Build the tree with `endowments.h(tag_or_Component, props, ...children)` hyperscript (NO JSX). The ui-kit primitives (Btn, Card, Chip, List, Banner, Field, TextField, Toggle, SegmentedControl, Table, Stack, Row, …) are available as BARE GLOBALS — use them via `endowments.h(Btn, {...}, ...)` rather than hand-rolling raw markup when one fits. The fork is PURE + STATELESS: read only from `props`, render render-safe data only (never a swissnum/secret), and use no DOM/network/fs/ambient access (none is reachable — that IS the confinement). Use theme CSS vars, not hardcoded colours. Apply the user\'s requested change and reply with ONLY the complete updated function expression as a single ```js fenced code block — no prose, no `const X =`, no exports.';
 const editIslandSource = async (id, prompt) => {
   if (!String(prompt || '').trim()) return { ok: false, error: 'describe the change you want' };
   const cur = await islandSource.readSourceText(id, 'HEAD'); if (cur === null) return { ok: false, error: 'unknown island' };
@@ -482,6 +486,12 @@ const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProp
 liveCells = makeLiveCells({ nodeFor }); // browser-subscribable live grains (cap-gated)
 // Least-authority cross-user share tokens for a broken-out component: subscribe-only to its frozen cells.
 const componentShares = makeComponentShares({ file: `${HOME}/.local/state/voice-agent/component-shares.json`, makePurse, purseStore });
+// User-owned FORKS of confined Preact components (the in-tree, no-iframe model). Any cap-holder owns forks;
+// owner = a stable, NON-SECRET id derived from the cap ('root' for the root cap, else a one-way hash — never
+// the cap itself, cap-hygiene). Forks render via client renderSource under lockdown; the store is live-safe
+// regardless (it only vends source strings, which the client refuses to render unless the realm is frozen).
+const forks = makeForks({ file: `${HOME}/.local/state/voice-agent/forks.json`, makePurse, purseStore });
+const forkOwnerOf = cap => { const n = nodeFor(cap); if (!n) return null; return n.isRoot ? 'root' : `u:${crypto.createHash('sha256').update(`fork-owner:${String(cap)}`).digest('hex').slice(0, 16)}`; };
 // build a read-only cell source for a shared cell (re-resolved each time from the live HA trie).
 const shareCellReader = handle => () => { const ro = haResolveReadOnly(handle); return ro && ro.state ? ro.state() : { state: '(unavailable)' }; };
 
@@ -1964,6 +1974,39 @@ const handler = async (req, res) => {
         return json(res, 200, { ok: false, error: `unknown git op "${op}" (history | files | read | write)` });
       }
       return json(res, 404, { ok: false, error: 'unknown shared-tool route' });
+    }
+
+    // ── /forks/* — user-owned forks of confined Preact components (fork→edit→re-share, in-tree/no-iframe).
+    // Available to ANY cap-holder (not root-only): owner is derived from the cap (forkOwnerOf). The one
+    // exception is /forks/open (the share redemption) — token-gated, NO cap, vends only the source to render.
+    if (req.method === 'POST' && u.pathname.startsWith('/forks/')) {
+      const body = await jsonBody(req);
+      // share redemption: a recipient with a token gets just the source (metered). Adopt+edit = /forks/create.
+      if (u.pathname === '/forks/open') return json(res, 200, forks.openShare(String(body.token || '')));
+      const owner = forkOwnerOf(body.cap);
+      if (!owner) return json(res, 403, { ok: false, error: 'a valid capability is required to own forks' });
+      if (u.pathname === '/forks/create') return json(res, 200, forks.create({ source: body.source, name: body.name, baseId: body.baseId || null, owner }));
+      if (u.pathname === '/forks/list') return json(res, 200, { ok: true, forks: forks.list(owner) });
+      if (u.pathname === '/forks/read') { const r = forks.read(String(body.id || ''), owner); return json(res, 200, r ? { ok: true, ...r } : { ok: false, error: 'unknown fork (or not yours)' }); }
+      if (u.pathname === '/forks/history') { const h = forks.history(String(body.id || ''), owner); return json(res, 200, h ? { ok: true, versions: h } : { ok: false, error: 'unknown fork (or not yours)' }); }
+      if (u.pathname === '/forks/revert') return json(res, 200, forks.revert(String(body.id || ''), body.version, owner));
+      if (u.pathname === '/forks/remove') return json(res, 200, { ok: forks.remove(String(body.id || ''), owner) });
+      if (u.pathname === '/forks/share') return json(res, 200, forks.share({ id: String(body.id || ''), owner, charge: body.charge || {} }));
+      if (u.pathname === '/forks/share/revoke') return json(res, 200, { ok: forks.revokeShare(String(body.token || ''), owner) });
+      if (u.pathname === '/forks/shares') return json(res, 200, { ok: true, shares: forks.sharesFor(String(body.id || ''), owner) });
+      if (u.pathname === '/forks/edit') {
+        const id = String(body.id || '');
+        // Direct source edit (deterministic; used by fork-from-existing + tooling), OR an agent edit: the
+        // owner's micro-agent rewrites the source from a prompt, scoped to JUST this fork's (endowments,props)=>vnode.
+        if (typeof body.source === 'string') return json(res, 200, forks.edit(id, body.source, owner, 'edit'));
+        const cur = forks.source(id, owner);
+        if (cur === null) return json(res, 200, { ok: false, error: 'unknown fork (or not yours)' });
+        let out; try { out = String((await opusComplete({ system: FORK_EDIT_SYS, prompt: `Current fork source:\n\`\`\`js\n${cur}\n\`\`\`\n\nRequested change: ${String(body.prompt || '')}`, maxTokens: 4000 })) || ''); }
+        catch (e) { return json(res, 200, { ok: false, error: `edit agent failed: ${(e && e.message) || e}` }); }
+        const code = extractJs(out); if (!code) return json(res, 200, { ok: false, error: 'the edit agent returned no code' });
+        return json(res, 200, forks.edit(id, code, owner, String(body.prompt || 'agent edit').slice(0, 60)));
+      }
+      return json(res, 404, { ok: false, error: 'unknown forks route' });
     }
 
     // ONLY way a proposed tool becomes callable — never auto-injected. (Also the root-gated component
