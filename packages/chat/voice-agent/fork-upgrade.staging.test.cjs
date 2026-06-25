@@ -61,7 +61,7 @@ const V2 = "(endowments, props) => endowments.h(Banner, { kind: 'info' }, 'UPGRA
     await page.goto(`${BASE}/#fork=${encodeURIComponent(s.token)}`, { waitUntil: 'load' });
     await page.waitForFunction(() => { const st = document.querySelector('.fork-stage'); return st && /UPGRADE v1/.test(st.textContent || ''); }, { timeout: 6000 }).catch(() => {});
     ok(await page.evaluate(() => /UPGRADE v1/.test((document.querySelector('.fork-stage') || {}).textContent || '')), 'recipient sees v1 (pinned at invite)');
-    ok(await page.evaluate(() => !document.querySelector('.fork-upgrade').textContent.trim()), 'no upgrade banner yet');
+    ok(await page.evaluate(() => !/available/.test(document.querySelector('.fork-upgrade').textContent || '')), 'no upgrade available yet (distribution badge may show)');
 
     // owner edits → v2, and notifies
     await post('/forks/edit', { cap, id: c.id, source: V2 });
