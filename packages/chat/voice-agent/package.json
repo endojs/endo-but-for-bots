@@ -27,7 +27,9 @@
     "test:obj-nav": "node obj-nav.staging.test.cjs",
     "test:gauntlet": "node gauntlet.staging.test.cjs",
     "test:agent-profile": "node agent-profile.staging.test.cjs",
-    "test:object-inspector": "node object-inspector.staging.test.cjs"
+    "test:object-inspector": "node object-inspector.staging.test.cjs",
+    "test:blossom": "node --test blossom.test.mjs",
+    "test:blossom-loop": "node blossom-loop.staging.test.cjs"
   },
   "dependencies": {
     "@endo/exo-git": "workspace:^",

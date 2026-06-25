@@ -76,6 +76,7 @@ import { makeLiveCells } from './live-cells.mjs';
 import { makeComponentShares } from './component-shares.mjs';
 import { makeForks } from './forks.mjs';
 import { makeDistTrust } from './dist-trust.mjs';
+import { makeBlossom } from './blossom.mjs';
 import * as projects from './projects.mjs';
 import { makeMeetingScribe } from './meeting-scribe.mjs';
 import { opusComplete } from './delegate.mjs';
@@ -500,6 +501,17 @@ const forkOwnerOf = cap => { const n = nodeFor(cap); if (!n) return null; return
 // Distribution-trust (Phase 5): the social-collateral graph that decides which fork VERSIONS are approved
 // for end-user distribution. Root (the operator) is the base authority; trust flows outward via grants.
 const distTrust = makeDistTrust({ file: process.env.DIST_TRUST_STORE || `${HOME}/.local/state/voice-agent/dist-trust.json`, rootId: 'root' });
+// EAGER BLOSSOM (the "render an island per object interface" loop): on first sight of a new interface, an
+// agent authors a confined renderer FORK, registered by interface signature + reused forever. Budget caps +
+// a per-signature lock keep "eager" from running away. The renderer authoring system prompt:
+const RENDERER_SYS = reuseFirstPreamble() + '\n\nYou author a CONFINED RENDERER for one kind of object. The object exposes an interface (a set of methods) and returns DATA; you write a single arrow function expression `(endowments, props) => vnode` (NOT a module — no import/export) that renders `props.value` (a SAMPLE of that data) beautifully for a human. Build with `endowments.h(tag_or_Component, props, ...children)` (NO JSX). The ui-kit primitives are BARE GLOBALS — prefer `endowments.h(Card,{...})`, `List`, `Banner`, `Badge`, `Row`, `Stack`, `Field`, `Table`, `Chip` over raw markup. The renderer is PURE + STATELESS: read only from `props.value` (+ `props.name`, `props.methods` if useful), render render-safe data only, NO DOM/network/fs/caps (none is reachable — that IS the confinement). Make it legible + structured for THIS shape (e.g. a list of messages → a message list with sender/text/time; a status record → labelled fields). Use theme CSS vars, not hardcoded colours. Reply with ONLY the complete function expression in a single ```js fenced code block — no prose, no `const X =`.';
+const authorRenderer = async ({ objectName, methods, sample }) => {
+  let out; try { out = String((await opusComplete({ system: RENDERER_SYS, prompt: `Object "${objectName}" exposes methods: ${(methods || []).join(', ')}.\nA SAMPLE of the data it returns (this is props.value):\n\`\`\`json\n${safeText(sample, 4000)}\n\`\`\`\nWrite the confined renderer for this interface.`, maxTokens: 2000 })) || ''); } catch (e) { throw new Error(`renderer agent failed: ${(e && e.message) || e}`); }
+  const code = extractJs(out); if (!code) throw new Error('the renderer agent returned no code');
+  return code;
+};
+const blossom = makeBlossom({ file: process.env.BLOSSOM_STORE || `${HOME}/.local/state/voice-agent/blossom.json`, forks, authorRenderer,
+  maxConcurrent: Number(process.env.BLOSSOM_MAX_CONCURRENT) || 2, maxTotal: Number(process.env.BLOSSOM_MAX_TOTAL) || 300 });
 // build a read-only cell source for a shared cell (re-resolved each time from the live HA trie).
 const shareCellReader = handle => () => { const ro = haResolveReadOnly(handle); return ro && ro.state ? ro.state() : { state: '(unavailable)' }; };
 
@@ -2092,6 +2104,19 @@ const handler = async (req, res) => {
       return json(res, 200, { ok: true, agent: 'developer (Blacksmith) + self-improver',
         model: 'Propagator-gate: each check is a propagator wired to the action’s cells — it reads them and writes a verdict; the action proceeds only while the verdict holds. Adding a check = wiring one more propagator (no change to the action). pre/per/post is just WHICH cell the gate reads.',
         lanes: [disciplineLane, fapoLane] });
+    }
+
+    // ── /blossom/* — the eager "render an island per object interface" loop (owner's renderer library).
+    if (req.method === 'POST' && u.pathname.startsWith('/blossom/')) {
+      const body = await jsonBody(req);
+      if (!nodeFor(body.cap)?.isRoot) return json(res, 403, { ok: false, error: 'the renderer-blossom library is owner-only' });
+      // ensure: SPOT an object → eagerly blossom a renderer for its interface signature (fire-and-forget; poll).
+      if (u.pathname === '/blossom/ensure') return json(res, 200, { ok: true, entry: await blossom.ensure({ methods: body.methods || [], objectName: String(body.name || 'object'), sample: body.sample, owner: 'root' }) });
+      if (u.pathname === '/blossom/for') return json(res, 200, { ok: true, entry: blossom.rendererFor(body.methods || []) || { status: 'none', sig: blossom.sigOf(body.methods || []) } });
+      if (u.pathname === '/blossom/source') { const e = blossom.bySig(body.sig); if (!e || e.status !== 'ready' || !e.forkId) return json(res, 200, { ok: false, error: 'no ready renderer for this signature' }); const src = forks.source(e.forkId, 'root'); return json(res, 200, src ? { ok: true, sig: e.sig, forkId: e.forkId, source: src } : { ok: false, error: 'renderer fork missing' }); }
+      if (u.pathname === '/blossom/list') return json(res, 200, { ok: true, renderers: blossom.list(), stats: blossom.stats() });
+      if (u.pathname === '/blossom/forget') return json(res, 200, { ok: blossom.forget(String(body.sig || '')) });
+      return json(res, 404, { ok: false, error: 'unknown blossom route' });
     }
 
     // ── /forks/* — user-owned forks of confined Preact components (fork→edit→re-share, in-tree/no-iframe).

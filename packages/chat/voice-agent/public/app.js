@@ -136,17 +136,39 @@ const objectInspector = async name => {
       <div class="set-row" style="gap:6px;align-items:center;flex-wrap:wrap">${methods.map(m => `<button class="mini insp-m" data-m="${esc(m)}">${esc(m)}()</button>`).join('')}</div>
       <input id="insp-args" class="mini" placeholder="args (JSON array, or plain text for one string arg) — optional" style="width:100%;box-sizing:border-box;margin-top:7px;font-family:ui-monospace,monospace">
     </div>
+    <div class="set-sec" id="insp-bloom-sec" style="display:none"><div class="set-h">🌱 Custom view <span class="pmeta" id="insp-bloom-status"></span></div><div id="insp-bloom"></div></div>
     <div class="set-sec"><div class="set-h">Result</div><div id="insp-result" class="pmeta">— call a method —</div></div>`);
+  // EAGER BLOSSOM: spotting this object kicks off authoring a bespoke renderer for its INTERFACE; we poll it.
+  let rendererSrc = null; let lastValue = undefined;
+  const blossom = async () => {
+    try { await fetch('/blossom/ensure', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, name: o.name, methods, sample: { name: o.name, transport: o.transport, methods } }) }); } catch { return; }
+    const sec = $('insp-bloom-sec'), st = $('insp-bloom-status'); if (sec) sec.style.display = 'block';
+    for (let i = 0; i < 20; i++) {
+      let e; try { e = (await (await fetch('/blossom/for', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, methods }) })).json()).entry; } catch { return; }
+      if (st) st.textContent = `· ${e.status}${e.reason ? ` (${e.reason})` : ''}`;
+      if (e.status === 'ready') { try { const s = await (await fetch('/blossom/source', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, sig: e.sig }) })).json(); if (s.ok) { rendererSrc = s.source; paintBespoke(); } } catch {} return; }
+      if (e.status === 'failed' || e.status === 'budget-exhausted' || e.status === 'no-interface') return;
+      await new Promise(r => setTimeout(r, 2500));
+    }
+  };
+  const paintBespoke = () => {
+    const host = $('insp-bloom'); if (!host || !rendererSrc) return;
+    host.innerHTML = '';
+    const ok = window.__fieldIslands && window.__fieldIslands.renderSource && window.__fieldIslands.renderSource(rendererSrc, host, { value: lastValue, name: o.name, methods });
+    if (!ok) host.innerHTML = '<div class="pmeta">A bespoke confined renderer was authored for this interface — it renders inline once the confined runtime (lockdown) is on. <button class="mini" id="insp-open-fork">open the renderer</button></div>';
+  };
   const call = async m => {
     const out = $('insp-result'); out.textContent = `calling ${m}()…`;
     let args = []; const raw = ($('insp-args') && $('insp-args').value || '').trim();
     if (raw) { try { const p = JSON.parse(raw); args = Array.isArray(p) ? p : [p]; } catch { args = [raw]; } }
     let r; try { r = await rpc('objectCall', [o.name, m, args]); } catch (e) { out.innerHTML = `<span style="color:var(--bad)">⚠︎ ${esc(e.message)}</span>`; return; }
-    out.innerHTML = ''; out.appendChild(valNode(r && r.value, null));
-    // auto-expand the top node so you see the goods immediately
-    const h = out.querySelector('div[style*="cursor"]'); if (h) h.click();
+    lastValue = r && r.value;
+    out.innerHTML = ''; out.appendChild(valNode(lastValue, null));
+    const hd = out.querySelector('div[style*="cursor"]'); if (hd) hd.click(); // auto-expand to see the goods
+    if (rendererSrc) paintBespoke(); // re-render the bespoke view with this result
   };
   document.querySelectorAll('.insp-m').forEach(b => { b.onclick = () => call(b.dataset.m); });
+  blossom();
 };
 window.objectInspector = objectInspector;
 const copyLink = async (s, btn) => { if (await writeClipboard(localizeUrl(s.url))) flashBtn(btn, 'copied ✓'); else revealLink(s, 'auto-copy was blocked — select & copy (⌘/Ctrl-C):'); };
