@@ -15,8 +15,6 @@ const fixtureOptionalDepsCjs = new URL(
 
 scaffold(
   'optionalDependencies/esm',
-  // fails for archives because dynamic import cannot reach modules not
-  // discovered during archival
   test,
   fixtureOptionalDepsEsm,
   async (t, { namespace }) => {
@@ -43,7 +41,6 @@ scaffold(
     );
   },
   4,
-  { knownArchiveFailure: true },
 );
 
 scaffold(

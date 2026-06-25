@@ -130,5 +130,6 @@ export const buildModuleRecord = (sourceOptions, functorSource) => {
     __reexportMap__: freeze(sourceOptions.reexportMap),
     __needsImport__: sourceOptions.dynamicImport.present,
     __needsImportMeta__: sourceOptions.importMeta.present,
+    __dynamicImports__: freeze([...keys(sourceOptions.dynamicImportSources)]),
   });
 };

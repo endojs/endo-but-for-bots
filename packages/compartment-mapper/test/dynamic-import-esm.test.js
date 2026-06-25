@@ -18,7 +18,4 @@ scaffold(
     t.is(foo, 'foo');
   },
   1,
-  {
-    knownArchiveFailure: true,
-  },
 );

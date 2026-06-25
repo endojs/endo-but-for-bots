@@ -67,6 +67,7 @@ function makeModulePlugins(options) {
     liveExportMap,
     importMeta,
     dynamicImport,
+    dynamicImportSources,
   } = options;
 
   if (sourceType !== 'module') {
@@ -305,6 +306,25 @@ function makeModulePlugins(options) {
         // import(FOO) -> $h_import(FOO)
         if (path.node.callee.type === 'Import') {
           dynamicImport.present = true;
+          // Surface a static-string-literal dynamic import specifier so the
+          // module graph trace (used to build archives) can discover and
+          // capture the referenced module. Computed/non-literal specifiers
+          // cannot be statically resolved and are left for runtime, where a
+          // missing target degrades to the same catchable error the live
+          // path produces.
+          //
+          // The specifier is recorded both in `imports` (so the existing
+          // trace machinery walks and archives the target) and separately in
+          // `dynamicImportSources` (so the trace can treat it as deferrable —
+          // a missing dynamic-import target must not be a hard load error the
+          // way a missing static import is).
+          const arg = path.node.arguments[0];
+          if (arg && arg.type === 'StringLiteral') {
+            dynamicImportSources[arg.value] = true;
+            if (!(arg.value in imports)) {
+              imports[arg.value] = [];
+            }
+          }
           path.node.callee = hiddenIdentifier(h.HIDDEN_IMPORT);
         }
       },
