@@ -1,7 +1,13 @@
 # Extensible UI: a trie of confined Preact component-projects
 
 Source: dan's voice note 2026-06-19 (`vault/inbox/processed/Extensible UI via Preact Confinement and Git Objects.md`).
-Status: DESIGN — phased. Phase 1 (the DOM→Preact port) is the immediate ask.
+Status: **ALL 5 PHASES COMPLETE (2026-06-25), flag-gated behind `FIELD_LOCKDOWN` (off in prod).**
+P1 keystone (confineComponent inline, no iframe) + P2 grain/git-object + P3 alt-click on live forks +
+P4 sharing/upgrades (pin/try-on/accept/auto + inbox) + P5 distribution-trust (social-collateral gate).
+Proven by staging suites: `test:lockdown` 13/13, `test:forks` 14/14, `test:fork-widget` 10/10,
+`test:alt-fork` 5/5, `test:fork-upgrade` 10/10, `test:fork-distribution` 13/13 + unit forks 10/10,
+dist-trust 7/7. **Flipping `FIELD_LOCKDOWN=1` live is dan's call** (operator-app blast radius; reversible;
+needs a heavy-panel frozen-realm smoke first). Next big project: `islands-as-objects-inventory.md`.
 
 ## The one-sentence vision
 
