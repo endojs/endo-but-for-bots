@@ -107,7 +107,6 @@ api-docs
 !packages/daemon/src/types.d.ts
 !packages/daemon/types.d.ts
 !packages/daemon-cas/types.d.ts
-!packages/endo-fs/types.d.ts
 !packages/git/types.d.ts
 !packages/exo-git/types.d.ts
 !packages/jsonl-transcript/types.d.ts
