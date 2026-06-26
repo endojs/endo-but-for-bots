@@ -13,6 +13,7 @@
 // classic script FIRST; it installs `assert`/`harden`/`Compartment`/`lockdown` globals with taming intact.
 import { h, Fragment } from 'preact';
 import { renderConfined } from '@endo/preact-container/renderer';
+import { confineComponent } from '@endo/preact-container/compartment';
 import { makeConfinedFromSource, lockdownActive } from './confined-source.js';
 import * as uiKit from './ui-kit.js';
 
@@ -64,8 +65,24 @@ const COMPONENTS = {
 // The authoring vocabulary handed to an untrusted FORK as compartment globals (see renderSource): preact's
 // h/Fragment + every ui-kit primitive. All are pure (props)→vnode render functions — no caps, DOM, fs, or
 // network — so this is the fork's entire authority. It matches what islands themselves import, so a fork
-// reads like an island body. uiKit's non-component helpers (joinDot, …) ride along harmlessly.
-const FORK_VOCAB = Object.freeze({ h, Fragment, ...uiKit });
+// reads like an island body.
+//
+// CONFINE THE KIT COMPONENTS. A fork's returned tree passes through the compartment's coerceToSafeVNode,
+// whose coerceType ONLY admits a function-typed vnode if it's a registered confined component — every other
+// function type is dropped to a Fragment. So a RAW kit component used as `h(Btn,…)` rendered NOTHING (the
+// dead-Send-button bug). Wrapping each PascalCase kit component with confineComponent registers it, so a
+// fork can write `h(Btn,{label,onClick})` / `h(TextField,{value,onInput})` and have it actually render +
+// wire events: the wrapper invokes the kit fn, whose raw-tag output is itself coerced (sanitized) + mounted,
+// and host children are routed through the opaque-child machinery. Non-component helpers (camelCase, e.g.
+// joinDot) ride along UNWRAPPED — a fork calls them directly, never as a vnode type.
+const confinedKit = {};
+for (const [name, val] of Object.entries(uiKit)) {
+  confinedKit[name] =
+    typeof val === 'function' && /^[A-Z]/.test(name)
+      ? confineComponent((_endowments, props) => val(props), { name })
+      : val;
+}
+const FORK_VOCAB = Object.freeze({ h, Fragment, ...confinedKit });
 
 // ── Shares island ───────────────────────────────────────────────────────────────────────────────
 // One cell (the data grain) holds the render-safe rows; the render propagator wires it to SharesPanel.

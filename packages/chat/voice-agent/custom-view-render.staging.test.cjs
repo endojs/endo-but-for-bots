@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // custom-view-render.staging.test.cjs — STAGING proof of the confined-renderer RENDERING CONTRACT that dan's
-// broken "Send button" exposed: a confined custom-view renderer must be built with RAW HTML tags via
-// endowments.h('tag', …). The host ui-kit COMPONENT primitives (h(Btn,…)/h(TextField,…)) belong to the
-// host bundle's Preact and render NOTHING inside a confined renderer — so an agent that used them produced a
-// component with no real <input>/<button> and a dead Send button. This test:
+// broken "Send button" exposed. A confined renderer's returned tree passes through the compartment's
+// coerceToSafeVNode, which DROPS any function-typed vnode that isn't a registered confined component — so the
+// raw ui-kit components (h(Btn,…)/h(TextField,…)) used to render NOTHING (the dead Send button). FORK_VOCAB
+// now seeds confineComponent-WRAPPED kit components, so they render + wire events. This test proves BOTH paths:
 //   1. a RAW-TAG renderer mounts a real <input> + <button>, and clicking Send fires props.call('send',[text]);
-//   2. (regression guard for the bug) a KIT-COMPONENT renderer renders NO interactive DOM — which is exactly
-//      why RENDERER_SYS / the customView tool now forbid the kit primitives and require raw tags.
+//   2. a KIT-COMPONENT renderer ALSO renders real DOM (Btn/Chip/TextField + Row/Stack children) and wires
+//      onInput(value) + onClick through to props.call — the fix that makes the themed kit usable in forks.
 //
 // Run: node custom-view-render.staging.test.cjs   (exits non-zero on failure; SKIPs without chromium)
 
@@ -20,8 +20,11 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const cleanup = () => { try { srv && srv.kill('SIGKILL'); } catch {} try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {} };
 
 const RAW = fs.readFileSync(path.join(__dirname, 'designs', 'kumavis-renderer.example.js'), 'utf8');
-// the BUG shape: correct kit API, but kit components don't render in a confined renderer
-const KIT = "(endowments, props) => { const { h } = endowments; return h('div', null, [h(TextField, { value: '', placeholder: 'x', onInput: () => {} }), h(Btn, { label: 'Send', onClick: () => {} })]); }";
+// the KIT shape: build with the ui-kit COMPONENT primitives. These USED to render nothing in a confined
+// renderer (the dead-Send-button bug); confineComponent-wrapping FORK_VOCAB now makes them render + wire
+// events. Covers label-prop components (Btn/Chip), input components (TextField), and children-bearing
+// layout (Row/Stack with positional children → the opaque-child passthrough).
+const KIT = "(endowments, props) => { const { h, useState } = endowments; const [txt, setTxt] = useState(''); return h(Stack, null, h(Row, null, h(TextField, { value: txt, placeholder: 'msg', onInput: v => setTxt(v) }), h(Btn, { label: 'Send', onClick: () => props.call('send', [txt]) })), h(Chip, { label: 'tag' })); }";
 
 (async () => {
   srv = spawn('node', ['server.mjs'], { cwd: __dirname, env: { ...process.env, PORT: String(PORT), BIND: '127.0.0.1', FIELD_LOCKDOWN: '1',
@@ -59,13 +62,24 @@ const KIT = "(endowments, props) => { const { h } = endowments; return h('div', 
     ok(!!sent, 'clicking Send fired the mediated props.call');
     ok(sent && sent[1] && sent[1][0] === 'hello kumavis', `the call carried the typed message — got: ${JSON.stringify(sent)}`);
 
-    // (2) regression guard: the kit-COMPONENT shape renders NO interactive DOM (the original bug)
-    const kitRes = await page.evaluate((SRC) => {
-      const el = document.createElement('div'); document.body.appendChild(el);
-      window.__fieldIslands.renderSource(SRC, el, {});
-      return { hasInput: !!el.querySelector('input'), hasButton: !!el.querySelector('button') };
+    // (2) the kit-COMPONENT primitives now RENDER in a confined renderer (confineComponent-wrapped FORK_VOCAB)
+    const kitRes = await page.evaluate(async (SRC) => {
+      const el = document.createElement('div'); el.id = 'kitmount'; document.body.appendChild(el);
+      const calls = []; window.__kitcalls = calls;
+      window.__fieldIslands.renderSource(SRC, el, { value: {}, methods: ['send'], call: (m, a) => { calls.push([m, a]); return Promise.resolve({}); } });
+      await new Promise(r => setTimeout(r, 200));
+      return { hasInput: !!el.querySelector('input'), sendBtn: !!Array.from(el.querySelectorAll('button')).find(b => /Send/.test(b.textContent)), chip: !!el.querySelector('.pill'), row: !!el.querySelector('.kit-rowx'), stack: !!el.querySelector('.kit-stack') };
     }, KIT);
-    ok(!kitRes.hasInput && !kitRes.hasButton, 'kit-COMPONENT primitives (h(Btn,…)/h(TextField,…)) render NO DOM in a confined renderer — why the guidance requires raw tags');
+    ok(kitRes.hasInput, 'kit TextField renders a REAL <input> (was empty before the fix)');
+    ok(kitRes.sendBtn, 'kit Btn renders a REAL <button> with its label="Send" (label prop now reaches the DOM)');
+    ok(kitRes.chip, 'kit Chip (a label-prop component) renders');
+    ok(kitRes.row && kitRes.stack, 'children-bearing layout (Row/Stack) render their nested children (opaque-child passthrough works)');
+    // kit components wire events end-to-end: type → onInput(value) → state; click → onClick → props.call
+    await page.fill('#kitmount input', 'via kit'); await sleep(150);
+    await page.evaluate(() => { const b = Array.from(document.querySelectorAll('#kitmount button')).find(x => /Send/.test(x.textContent)); b && b.click(); });
+    await page.waitForFunction(() => (window.__kitcalls || []).some(c => c[0] === 'send'), { timeout: 3000 }).catch(() => {});
+    const kitSent = await page.evaluate(() => (window.__kitcalls || []).find(c => c[0] === 'send'));
+    ok(kitSent && kitSent[1] && kitSent[1][0] === 'via kit', `kit TextField onInput + Btn onClick wire through to props.call — got: ${JSON.stringify(kitSent)}`);
     await page.close();
   } finally { await browser.close(); }
 
