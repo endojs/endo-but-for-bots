@@ -6,6 +6,9 @@ const { getPrototypeOf } = Object;
 const { bind } = Function.prototype;
 const uncurryThis = bind.bind(bind.call); // eslint-disable-line @endo/no-polymorphic-call
 export const { prototype: generatorPrototype } = getPrototypeOf(
+  // Standalone generator expression retained by deliberate exception: an
+  // anonymous sentinel used only to reach the intrinsic generator prototype, not
+  // naturally an object member. See docs/house-style/function-keyword.md.
   // eslint-disable-next-line no-empty-function, func-names
   function* () {},
 );
