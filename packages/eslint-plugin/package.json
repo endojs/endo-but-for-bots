@@ -70,6 +70,22 @@
     "rules": {
       "import/extensions": "off"
     },
+    "overrides": [
+      {
+        "files": [
+          "lib/rules/*.js"
+        ],
+        "rules": {
+          "object-shorthand": [
+            "error",
+            "always",
+            {
+              "avoidQuotes": false
+            }
+          ]
+        }
+      }
+    ],
     "env": {
       "node": true
     }
