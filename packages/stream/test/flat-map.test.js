@@ -219,10 +219,7 @@ test('consumer return propagates termination upstream', async (/** @type {import
 });
 
 test('the upstream is pulled lazily, one group at a time', async (/** @type {import('ava').Assertions} */ t) => {
-  const { reader, pulls } = makeRecordingReader([
-    [10, 20],
-    [30],
-  ]);
+  const { reader, pulls } = makeRecordingReader([[10, 20], [30]]);
   const flat = flatMapReader(
     reader,
     (/** @type {Array<number>} */ group) => group,
