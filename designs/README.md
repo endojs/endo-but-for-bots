@@ -5,105 +5,16 @@
 *Last updated: 2026-07-13 (added [ocapn-iroh-netlayer](ocapn-iroh-netlayer.md) to M4 (Networking) as **Complete**: an iroh 1.0 QUIC netlayer for `@endo/ocapn` shipped as `@endo/ocapn-iroh`; summary table, M4 rows, dependency graph, and totals synced. Layered on 2026-07-16 (added [ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) to M4 (Networking): a prototype distributed ocap machine, `@endo/thixotrope`, whose host daemon serves orthogonally persistent, sleepy CapTP workers as OCapN sturdy refs; the host persists its half of each worker session (slot counters, import descriptors, inbound-message journal) and resumes — not re-establishes — sessions across restarts via a new `@endo/captp` `provideImport` seam, with a deterministic journal-replay reference engine standing in for the `rust/endo/xsnap` snapshot engine; prototype, tests, and design landed together; summary table, M4 bucket, dependency graph, per-design estimate, and totals synced. Layered on the 2026-07-12 addition of [cbor-codec](cbor-codec.md) to M4 (Networking): a shared canonical-CBOR primitive codec package, `@endo/cbor`, extracted from the parallel head codecs in `packages/ocapn/src/cbor` and PR #124's `packages/slots/src/cbor.js` per kriskowal's follow-up request on the PR #124 review, with the daemon `envelope.js` codec as an optional later adopter and byte identity with `rust/endo/slots` enforced by shared golden vectors; summary table, M4 bucket and count, and per-design estimate synced. Layered on the 2026-07-10 acceptance and sequencing of the four-layer daemon-worker `importLocation` stack in M3: [registry-capability](registry-capability.md), [mvs-resolver](mvs-resolver.md), [snapshot-mapper](snapshot-mapper.md), and [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) flip Proposed to Not Started together, and the canonical dependency-ordered build plan now lives in [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) § *Phased Implementation* (Phases 1–4 are the serial critical path to `endo run <mount>`; Phase 5 Rust drop-in and Phase 6 XS hosting are parallel-lane follow-ups over the landed `EndoMount.snapshot()` and `makeFromTree` substrate, which gates nothing). Reconciliation deltas: workspace-root discovery assigned to the mapper layer, the workspace-member `RegistryResolution` entry shape pinned in registry-capability (bare-name key, `workspace: true`, no `integrity`), and Phase 2's readable-tree fixture stance vs Phase 4's live-mount snapshot made explicit; summary table, M3 rows, and totals synced. Layered on the 2026-07-09 revision of [agentry-git-eval-scenarios](agentry-git-eval-scenarios.md) in M3 (Remote Access and Coding Capabilities): trimmed the `@endo/agentry` git code-mode eval set to `stage-and-commit`, `conflict-rebase`, and `stack-surgery`, with `stack-surgery` fixture/scorer work landing behind a pending row while live activation depends on [agentry-git-verb-gaps](agentry-git-verb-gaps.md); summary table, M3 row, and per-design estimate synced. Layered on the 2026-07-08 addition of [agentry-git-eval-scenarios](agentry-git-eval-scenarios.md) to M3: a small canonical git code-mode eval set for `@endo/agentry`. Layered on the 2026-07-06 addition of [exo-google-sheets](exo-google-sheets.md) to M7 (Weblets and Integrations): a Google Sheets connector, `@endo/exo-google-sheets`, presenting a spreadsheet as passable read-only / read-write facets over CapTP, backed by a plain `@endo/google-sheets` client that takes a fetch power from the endoclaw-oauth credential capability so the agent never sees the token; summary table, M7 bucket and count, dependency graph, per-design estimate, and milestone totals synced. Layered on the 2026-06-15 targeted post-event M2 closure: M2 (Project Hygiene) flipped to Complete on `llm` since turborepo is in place (PR #121 merged), `break-dev-dependency-cycles` is dissolved on `llm` (all five `@endo/<pkg>-test` sibling packages exist; combined dep+devDep SCC count is 0; self-loop count is 0); the residual upstream-ferry work on PR #235 against master is M2-orthogonal — the cycle is broken on the project branch and the substrate noise it produced is gone. Layered on the 2026-06-03 milestone renumbering pass per maintainer directive on PR #400 review: resequence to integer numbers starting at 1, with no later milestone depending on an earlier one, prioritizing work entrained by the hosted-Gateway-service north star and deferring work that is not. Old → new mapping: M0 → M1 (Complete), M½ → M2 (Complete), M1 → M3 (Remote Access & Coding Capabilities, the gateway substrate), M2 → M4 (Networking), M7 → M5 (Public Hosting & Billing), Milestone B → M6 (MCP Bridge Hosting), M3 → M7 (Weblets & Integrations), Milestone A → M8 (Peer App Sharing), M4 → M9 (UX & Tooling), M5 → M10 (Confinement & Ecosystem), M6 → M11 (Rust Daemon `endor`). Layered on the 2026-06-02 compound pass: (a) MCP-bridge rebucket that added the **Milestone B: MCP Bridge Hosting** cross-cutting cut (since renumbered to M6) and the hosted-Gateway public-hosting bucket (M7, now M5), raised `endo-gateway-mcp` as a Strategic Early Item (now M6 in its own right), and named the gateway-package implementation stack PRs #343, #388–#397 (phases 1–9 landed) under what is now M3; and (b) daemon-worker-import-from-mount decomposed into a four-layer stack per kriskowal CHANGES_REQUESTED on `endojs/endo-but-for-bots#358` (the original 1164-line monolith repurposed as the integration layer; three new sibling designs land alongside as `registry-capability`, `mvs-resolver`, `snapshot-mapper`; existing slug preserved). On the 2026-06-01 pass that added the Peer App Sharing cut (`app-sharing-milestone` + `familiar-deep-link-invitations` + `endo-app-sharing` + `familiar-app-ui-hosting`; now M8). On the 2026-05-22 monolithic `daemon-worker-import-from-mount` landing (sibling of `daemon-make-archive` § Phase 7 that ties `compartment-mapper.importLocation` to a `package.json`-rooted `EndoMount` source and the Rust `endor-npm-registry-proxy` + Go-like MVS resolver exposed as an `EndoRegistry` / `@registry` daemon capability). On the 2026-05-20 mount and git capability plans (three new design docs revised per design-panel review: structured-result-shape migration deferred to Phase 7, `tree(ref)` and `readOnly()` both live on the `Git` cap, `NativeGitBackend` hardening envelope split off the essential `GitBackend` contract, `EndoMountBacking` pinned to a hidden Exo facet, credential-injection mechanism named, native git pinned to >=2.30, restart-mid-operation tests added, open-question debt reduced from 20 to 2; landed on top of the same-day forge-gap-analysis Reference design and the same-day full grooming pass that reconciled milestone-totals, added the 2026-05-20 calibration round, re-projected the Summary by Milestone and Gantt, and refreshed Progress-as-of). On the 2026-05-19 status-only sweep that reconciled Status fields with shipped state on `llm`, the project-hygiene milestone (now M2) extracted from the gateway substrate, endopi raft added, PR #302 consolidation absorbed, and patterns-diagnostic-feedback added)*
 
 *Recently added or revised:
-[conservative-regexp-subset](conservative-regexp-subset.md) (added 2026-07-10,
-revised 2026-07-29; settles review choices: block-determinism safety,
-builder-selected corpus-backed limits, whole-string plus contains/composition
-modes, XS `xsre` / #600 native direction, and the shared
-Node/compartment-mapper `endor` package-export condition; revised 2026-07-15;
-pivots the proposed `@endo/regexp` contract to a complete RFC 9485 I-Regexp
-parse plus Unicode-independent, resource-safe profile validation; JavaScript
-delegates only validated patterns as a ponyfill, while a single fixed corpus
-specifies the future Rust backend and an Endor condition must omit the
-JavaScript implementation from the import graph),
-[ocapn-iroh-netlayer](ocapn-iroh-netlayer.md) (added 2026-07-13,
-**Complete** with its implementation; `@endo/ocapn-iroh`, an iroh 1.0
-QUIC netlayer for `@endo/ocapn` — the OCapN designator is the peer's
-iroh `EndpointId`, dialed through iroh discovery/relays into a mutually
-authenticated encrypted QUIC connection carrying netstring-framed OCapN
-messages under the `ocapn/netstring/0` ALPN; `@number0/iroh` is optional
-and injectable so CI tests run against an in-memory mock, with a
-real-endpoint integration test gated behind `ENDO_IROH_INTEGRATION=1`),
-[ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) (added
-2026-07-16; a prototype distributed ocap machine, `@endo/thixotrope`: a
-host daemon spins up orthogonally persistent workers — one guest
-Compartment behind an endo-captp endpoint, preserved by engine heap
-snapshots or, in the reference engine, by deterministic
-journal-replay-at-quiescence — and serves published worker exports as
-OCapN sturdy refs from its locator; the host persists its half of
-each worker CapTP session (slot counters and import descriptors via
-`makeCapTPImportExportTables`, an inbound-message journal, bootstrap
-slot and snapshot ref) and resumes sessions across restarts through
-the new `@endo/captp` `provideImport` seam, which re-mints presences
-through `convertSlotToVal` so identity survives; workers are sleepy —
-snapshotted and terminated when idle and quiescent, transparently
-woken by the next message, with guests never observing suspension;
-no upgrade, by design; future work covers the XS engine adapter over
-the daemon-xs-worker-snapshot suspend/resume substrate, durable host
-exports for system resources, and durable OCapN sessions layered on
-ocapn-noise-session-reconnect; prototype and tests landed with the
-design),
-[endor-git-bindings](endor-git-bindings.md) (added 2026-07-15,
-revised 2026-07-25 per review for the cross-compilation requirement;
-a daemon-private, local-only `GitCas` boundary in M11 (Rust Daemon
-`endor`) for in-process Git object and compare-and-swap ref
-operations over the pure-Rust `gix` implementation — chosen so every
-release target cross-compiles without a per-target C toolchain —
-deliberately distinct from Endor's SHA-256 `ContentStore`; the
-local-only artifact excludes transport features, and vendored
-libgit2 (per-target toolchain or hash-pinned prebuilt artifacts) is
-the documented contingency; summary table, M11 row, dependency
-graph, estimate, totals, and timeline synced),
-[cbor-codec](cbor-codec.md) (added 2026-07-12; shared canonical-CBOR
-primitive codec `@endo/cbor` at `packages/cbor/`: hardened functional
-write/read primitives for the RFC 8949 subset that slot-machine
-(PR #124's `packages/slots/src/cbor.js`) and ocapn
-(`packages/ocapn/src/cbor/{encode,decode}.js`) both re-implement
-today (canonical minimal-length heads, definite-length byte strings
-and arrays, null/simple values, uint heads, strict EOF discipline),
-plus the ocapn-only grammar (text strings, maps, tags 2/3 bignums,
-float64 with canonical NaN); canonical-always writers with
-optionally-strict readers, number-domain heads guarded by
-safe-integer checks, byte identity with `rust/endo/slots` enforced by
-a shared golden-vector fixture; ocapn keeps its `CborWriter` /
-`CborReader` classes and OCapN policy as a consuming adapter, slots
-drops its private copy post-#124, daemon `envelope.js` is an optional
-third adopter; follow-up to kriskowal's review of
-endojs/endo-but-for-bots#124),
-[agentry-git-eval-scenarios](agentry-git-eval-scenarios.md)
-(added 2026-07-08, revised 2026-07-09 and 2026-07-17; distilled git-rebase-session
-evidence into a trimmed three-scenario `@endo/agentry` git code-mode
-eval set: `stage-and-commit`, buildable `conflict-rebase`, and
-`stack-surgery` as the involved centerpiece whose fixture/scorer land
-behind a pending row while live activation depends on
-agentry-git-verb-gaps for cherry-pick, amend, reword, autosquash, and
-conflict-side selection; its bounded-read section now names the
-ReadableBlob `fetch`/`rangeRead`/`rangeReadText` contract as the
-filesystem/blob realization of sed-like reads and leaves rendered Git
-outputs plus remote exo propagation as follow-ups),
-[exo-google-sheets](exo-google-sheets.md) (added 2026-07-06; Google
-Sheets connector: `@endo/exo-google-sheets` presents one spreadsheet
-(optionally one tab) as passable `Spreadsheet` / `SpreadsheetWriter` /
-`SpreadsheetControl` facets over CapTP, with hidden-facet write
-attenuation per daemon-mount-capabilities, A1 ranges as confined
-selectors, copyable cell scalars under `UNFORMATTED_VALUE`,
-header-keyed `readRecords` sugar, batched reads/writes, an in-exo
-quota throttle with structured quota errors, and a polling `follow`
-change feed that swaps to Drive push channels once endoclaw-webhooks
-lands; backed by a plain `@endo/google-sheets` REST client that takes
-an injected fetch power (in production the endoclaw-oauth `OAuth`
-exo's fetch, over the endoclaw-network-fetch allowlist substrate) so
-neither package ever touches a token; first concrete instance of the
-M7 OAuth-integration pattern and a template for Gmail / Calendar
-siblings),
-[sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) (added
-2026-06-23; design 2 of 2 in a competing pair addressing the
-maintainer's directive on PR #500 to land SturdyRefs in
-`@endo/pass-style` and thread them through the daemon's
-pet-name-path surface; this design rejects worker-local SturdyRef
-retention and proposes daemon-side ephemeral retention plus a new
-`endor` worker syscall (`retain` / `release`) for cross-turn
-retention, contrasting with the parallel `FinalizationRegistry`-
-based plan in the sibling design),
+[sturdy-refs-ocapn-enlivenment](sturdy-refs-ocapn-enlivenment.md)
+(added 2026-06-23, repurposed 2026-06-26 per the maintainer's
+decision; lands SturdyRefs in `@endo/pass-style` as inert,
+pass-by-copy data and threads them through the daemon's
+pet-name-path surface; a SturdyRef is enlivened on demand by the
+closely-held OCapN network capability (`enlivenSturdyRef`); the
+prior paired `FinalizationRegistry` release plan and the
+`retain` / `release` `endor`-syscall retention plan are both
+withdrawn — no retention table, no syscall, and no
+`FinalizationRegistry` in any role),
 [chat-inventory-create-menu](chat-inventory-create-menu.md) (added
 2026-06-02, revised 2026-06-08; `+` button at the bottom of the
 inventory in Chat opens a pop-over menu listing whole-cloth item
@@ -297,7 +208,7 @@ LLM-agent stack).*
 | [daemon-cross-peer-gc](daemon-cross-peer-gc.md) | 2026-03-07 | 2026-04-29 | **Complete** |
 | [daemon-retention-paths](daemon-retention-paths.md) | 2026-04-30 | 2026-05-19 | In Progress (PR #284) |
 | [retention-path-notation](retention-path-notation.md) | 2026-05-10 | 2026-05-19 | Reference |
-| [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) | 2026-06-23 | 2026-06-26 | Not Started |
+| [sturdy-refs-ocapn-enlivenment](sturdy-refs-ocapn-enlivenment.md) | 2026-06-23 | 2026-06-26 | Not Started |
 | [daemon-rename-to-manager](daemon-rename-to-manager.md) | 2026-05-04 | 2026-05-05 | Not Started |
 | [daemon-guest-eval-simplification](daemon-guest-eval-simplification.md) | 2026-03-21 | 2026-05-04 | **Implemented** |
 | [daemon-docker-selfhost](daemon-docker-selfhost.md) | 2026-03-02 | 2026-03-02 | Not Started |
