@@ -124,13 +124,18 @@ const valNode = (v, key) => {
   head.onclick = () => { const open = kids.style.display !== 'none'; if (!built && !open) { for (const [k, val] of entries) kids.appendChild(valNode(val, k)); built = true; } kids.style.display = open ? 'none' : 'block'; head.querySelector('span:last-child').textContent = (open ? '▸ ' : '▾ ') + (isArr ? `[${entries.length}]` : `{${entries.length}}`); };
   row.append(head, kids); return row;
 };
-const objectInspector = async name => {
-  showModal('<div class="qrlabel">loading inventory…</div>');
-  let objs; try { objs = await rpc('objectsList', []); } catch (e) { showModal(`<div class="qrlabel">🔬 Objects</div><div class="pmeta">${esc(e.message)}</div>`); return; }
+const objectInspector = async (name, opts = {}) => {
+  // opts.mount → render INLINE into that element (e.g. the navigator's detail pane) instead of a modal,
+  // so the inspector + blossoming UI live right in the Powers/navigator. The #insp-* ids are wired via $()
+  // so the handlers work in either host.
+  const mount = opts.mount || null;
+  const render = html => { if (mount) mount.innerHTML = `<div class="insp-wrap">${html}</div>`; else showModal(html); };
+  render('<div class="pmeta">loading inventory…</div>');
+  let objs; try { objs = await rpc('objectsList', []); } catch (e) { render(`<div class="qrlabel">🔬 Objects</div><div class="pmeta">${esc(e.message)}</div>`); return; }
   const o = (objs || []).find(x => x.name === name) || (objs || [])[0];
-  if (!o) { showModal('<div class="qrlabel">🔬 Objects</div><div class="pmeta">No objects in your inventory yet — accept an Endo invite link.</div>'); return; }
+  if (!o) { render('<div class="qrlabel">🔬 Objects</div><div class="pmeta">No objects in your inventory yet — accept an Endo invite link.</div>'); return; }
   const methods = (o.methods || []).length ? o.methods : ['describe'];
-  showModal(`<div class="qrlabel" style="font-size:16px">🔬 ${esc(o.name)} <span class="pmeta">· ${esc(o.transport)}</span></div>
+  render(`<div class="qrlabel" style="font-size:16px">🔬 ${esc(o.name)} <span class="pmeta">· ${esc(o.transport)}</span></div>
     <div class="pmeta" style="margin:2px 0 9px">${esc(o.description || 'a live capability in your inventory')} — self-describing: call a method to see the goods.</div>
     <div class="set-sec"><div class="set-h">Methods</div>
       <div class="set-row" style="gap:6px;align-items:center;flex-wrap:wrap">${methods.map(m => `<button class="mini insp-m" data-m="${esc(m)}">${esc(m)}()</button>`).join('')}</div>
@@ -1611,11 +1616,13 @@ const renderNav = async () => {
     const sb = $('sh-note'); if (sb) sb.onclick = () => mintNode('notes', loc.handle, nc.name, true);
     return;
   }
-  if (loc.ns === 'objects') { // the inventory of accepted live capabilities — click one → the object inspector
-    navNode = null; $('obj-list').innerHTML = '';
-    let objs = []; try { objs = await rpc('objectsList', []); } catch (e) { $('obj-node').innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
-    $('obj-node').innerHTML = `<div class="kv"><b>📦 Inventory objects</b> <span class="pill">${objs.length}</span></div><div class="pmeta" style="margin:4px 0 8px">live capabilities you've accepted — click one to inspect + call its methods (see the goods).</div>` + (objs.length ? objs.map((o, i) => `<div class="share obj-obj" data-i="${i}" style="cursor:pointer"><div>🔬 <b>${esc(o.name)}</b> <span class="pill">${esc(o.transport)}</span></div>${o.description ? `<div style="font-size:11px;color:var(--mut)">${esc(o.description)}</div>` : ''}</div>`).join('') : '<div class="pill">none yet — accept an Endo invite link</div>');
-    document.querySelectorAll('#obj-node .obj-obj').forEach(el => { el.onclick = () => objectInspector(objs[+el.dataset.i].name); });
+  if (loc.ns === 'objects') { // the inventory of accepted live capabilities — click one → the inspector (+ blossom) INLINE
+    navNode = null;
+    let objs = []; try { objs = await rpc('objectsList', []); } catch (e) { $('obj-node').innerHTML = `<div class="err">${esc(e.message)}</div>`; $('obj-list').innerHTML = ''; return; }
+    $('obj-node').innerHTML = `<div class="kv"><b>📦 Inventory objects</b> <span class="pill">${objs.length}</span></div><div class="pmeta" style="margin:4px 0 2px">live capabilities you've accepted — click one to inspect, call its methods, and generate a custom view.</div>`;
+    $('obj-list').innerHTML = objs.length ? objs.map((o, i) => `<div class="share obj-obj" data-i="${i}" style="cursor:pointer"><div>🔬 <b>${esc(o.name)}</b> <span class="pill">${esc(o.transport)}</span></div>${o.description ? `<div style="font-size:11px;color:var(--mut)">${esc(o.description)}</div>` : ''}</div>`).join('') : '<div class="pill">none yet — accept an Endo invite link</div>';
+    // the LIST stays in obj-list (so you can switch objects); the inspector + blossom UI renders in obj-node (the detail pane)
+    document.querySelectorAll('#obj-list .obj-obj').forEach(el => { el.onclick = () => { document.querySelectorAll('#obj-list .obj-obj').forEach(x => x.classList.remove('on')); el.classList.add('on'); objectInspector(objs[+el.dataset.i].name, { mount: $('obj-node') }); }; });
     return;
   }
   if (loc.leaf && loc.ns === 'home') { // a home-folder FILE leaf — viewing/editing lives in the Files app
