@@ -284,7 +284,7 @@ Layered responsibility, restated:
 | `@endo/eventual-send` | No change. A SturdyRef is inert; it is enlivened to a presence before `E()` is used, and `E(presence)` is the existing path. |
 | `@endo/marshal` | Reads `passStyleOf(v) === 'sturdyref'` and emits a slot; on receive, reconstructs a SturdyRef from `(slot, iface, locator)` via `makeSturdyRef`. |
 | `@endo/captp` | Slot allocation per its existing protocol; SturdyRefs cross as a new slot kind `sturdyref`. |
-| `@endo/ocapn` | Emits/reads `<ocapn-sturdyref node secret>` syrup records. Registers the global SturdyRef handler with `HandledPromise`. Continues to host the `enlivenSturdyRef` flow. |
+| `@endo/ocapn` | Emits/reads `<ocapn-sturdyref node secret>` syrup records. Continues to host the `enlivenSturdyRef` flow (and any enlivenment cache). Registers **no** handler with `HandledPromise`: a SturdyRef is inert (see *Enlivening a SturdyRef*); `@endo/eventual-send` is unchanged. |
 | `@endo/daemon` | Accepts SturdyRefs at the boundary anywhere a pet-name-path is accepted. Reads the locator via `getStudyRefLocator` and routes to `formulaForId`. |
 
 The wire format does not change. What changes is the **JavaScript-side
