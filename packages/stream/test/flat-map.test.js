@@ -1,6 +1,8 @@
 // @ts-check
 import test from '@endo/ses-ava/test.js';
 
+import harden from '@endo/harden';
+
 import { flatMapReader, makePipe } from '../index.js';
 
 /**
