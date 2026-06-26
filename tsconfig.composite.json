@@ -9,6 +9,9 @@
       "path": "packages/benchmark/tsconfig.composite.json"
     },
     {
+      "path": "packages/block-device/tsconfig.composite.json"
+    },
+    {
       "path": "packages/bundle-source/tsconfig.composite.json"
     },
     {
@@ -75,6 +78,9 @@
       "path": "packages/exo-stream/tsconfig.composite.json"
     },
     {
+      "path": "packages/ext4/tsconfig.composite.json"
+    },
+    {
       "path": "packages/familiar/tsconfig.composite.json"
     },
     {
@@ -103,6 +109,9 @@
     },
     {
       "path": "packages/lp32/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/luks/tsconfig.composite.json"
     },
     {
       "path": "packages/markmdown/tsconfig.composite.json"
