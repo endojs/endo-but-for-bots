@@ -126,6 +126,7 @@ export const makeDirectoryMaker = ({
 
     /** @type {EndoDirectory['followLocatorNameChanges']} */
     const followLocatorNameChanges = {
+      /** @returns {ReturnType<EndoDirectory['followLocatorNameChanges']>} */
       async *followLocatorNameChanges(locator) {
         const id = idFromLocator(locator);
         for await (const idNameChange of petStore.followIdNameChanges(id)) {
@@ -170,6 +171,7 @@ export const makeDirectoryMaker = ({
 
     /** @type {EndoDirectory['followNameChanges']} */
     const followNameChanges = {
+      /** @returns {ReturnType<EndoDirectory['followNameChanges']>} */
       async *followNameChanges(...petNamePath) {
         assertNames(petNamePath);
         if (petNamePath.length === 0) {
