@@ -505,11 +505,20 @@ const distTrust = makeDistTrust({ file: process.env.DIST_TRUST_STORE || `${HOME}
 // agent authors a confined renderer FORK, registered by interface signature + reused forever. Budget caps +
 // a per-signature lock keep "eager" from running away. The renderer authoring system prompt:
 const RENDERER_SYS = reuseFirstPreamble() + '\n\nYou author a CONFINED, INTERACTIVE RENDERER for one kind of object. The object exposes an interface (a set of methods) and returns DATA; you write a single arrow function expression `(endowments, props) => vnode` (NOT a module — no import/export) that renders `props.value` (a SAMPLE of that data) beautifully AND lets the human ACT on the object. Build with `endowments.h(tag_or_Component, props, ...children)` (NO JSX). The ui-kit primitives are BARE GLOBALS — prefer `endowments.h(Card,{...})`, `List`, `Banner`, `Badge`, `Row`, `Stack`, `Field`, `TextField`, `Btn`, `Table`, `Chip` over raw markup.\n\nWHAT YOU HAVE:\n- `props.value` — a sample of the object\'s data; render it legibly + structured for THIS shape (messages → a message list w/ sender/text/time; a status record → labelled fields).\n- `props.methods` — the method names you may invoke. NEVER fabricate a method not in this list.\n- `props.call(method, args)` — INVOKE one of the object\'s methods (host-mediated; args is an ARRAY; returns a Promise of the result). Use it for ACTIONS — e.g. a peer with a `send` method → a TextField + a Send Btn whose onClick does `props.call(\'send\', [text]).then(...)`. This is the ONLY authority you hold; it reaches only THIS object.\n- `props.refresh()` — re-fetch the object\'s data after an action.\n- `endowments.useState`/`useEffect` — local UI state (the input text, a "sent ✓" flash). State is ephemeral UI only.\n\nCONFINEMENT: no DOM/network/fs/caps beyond `props.call` (none else is reachable — that IS the confinement). Use theme CSS vars, never hardcoded colours, so it matches dark/light. Reply with ONLY the complete function expression in a single ```js fenced code block — no prose, no `const X =`.';
-const authorRenderer = async ({ objectName, methods, sample }) => {
-  let out; try { out = String((await opusComplete({ system: RENDERER_SYS, prompt: `Object "${objectName}" exposes methods: ${(methods || []).join(', ')}.\nA SAMPLE of the data it returns (this is props.value):\n\`\`\`json\n${safeText(sample, 4000)}\n\`\`\`\nWrite the confined renderer for this interface.`, maxTokens: 2000 })) || ''); } catch (e) { throw new Error(`renderer agent failed: ${(e && e.message) || e}`); }
-  const code = extractJs(out); if (!code) throw new Error('the renderer agent returned no code');
+const rendererMessages = ({ objectName, methods, sample }) => [
+  { role: 'system', content: RENDERER_SYS },
+  { role: 'user', content: `Object "${objectName}" exposes methods: ${(methods || []).join(', ')}.\nA SAMPLE of the data it returns (this is props.value):\n\`\`\`json\n${safeText(sample, 4000)}\n\`\`\`\nWrite the confined renderer for this interface.` },
+];
+// authorRendererWith(llm) → an author that runs through the GIVEN llm (so blossoming can be metered against a
+// chat's purse). The default (untolled) author is used only when ensure() is called outside a chat.
+const authorRendererWith = llm => async args => {
+  let r; try { r = await llm(rendererMessages(args), 'default'); } catch (e) { throw new Error(`renderer agent failed: ${(e && e.message) || e}`); }
+  if (r && r.exhausted) throw new Error('this chat’s inference budget is used up — top it up to generate a custom view');
+  if (r && r.error) throw new Error(r.error);
+  const code = extractJs(String((r && r.text) || '')); if (!code) throw new Error('the renderer agent returned no code');
   return code;
 };
+const authorRenderer = authorRendererWith(async messages => ({ text: String(await opusComplete({ system: messages[0].content, prompt: messages[1].content, maxTokens: 2000 }) || '') }));
 const blossom = makeBlossom({ file: process.env.BLOSSOM_STORE || `${HOME}/.local/state/voice-agent/blossom.json`, forks, authorRenderer,
   maxConcurrent: Number(process.env.BLOSSOM_MAX_CONCURRENT) || 2, maxTotal: Number(process.env.BLOSSOM_MAX_TOTAL) || 300 });
 // build a read-only cell source for a shared cell (re-resolved each time from the live HA trie).
@@ -2110,8 +2119,14 @@ const handler = async (req, res) => {
     if (req.method === 'POST' && u.pathname.startsWith('/blossom/')) {
       const body = await jsonBody(req);
       if (!nodeFor(body.cap)?.isRoot) return json(res, 403, { ok: false, error: 'the renderer-blossom library is owner-only' });
-      // ensure: SPOT an object → eagerly blossom a renderer for its interface signature (fire-and-forget; poll).
-      if (u.pathname === '/blossom/ensure') return json(res, 200, { ok: true, entry: await blossom.ensure({ methods: body.methods || [], objectName: String(body.name || 'object'), sample: body.sample, owner: 'root' }) });
+      // ensure: SPOT an object → blossom a renderer for its interface signature (fire-and-forget; poll). The
+      // LLM authoring is METERED against the TRIGGERING CHAT's purse (the toll-bridge) — blossoming draws from
+      // that chat's inference budget, so the spend is visible + bounded by the same per-chat allowance.
+      if (u.pathname === '/blossom/ensure') {
+        const sid = String(body.sessionId || 'anon').slice(0, 64);
+        const chatLlm = makeMeteredLLM({ callLLM, purse: purseFor(body.cap, sid), perProvider: {} });
+        return json(res, 200, { ok: true, entry: await blossom.ensure({ methods: body.methods || [], objectName: String(body.name || 'object'), sample: body.sample, owner: 'root', author: authorRendererWith(chatLlm) }) });
+      }
       if (u.pathname === '/blossom/for') return json(res, 200, { ok: true, entry: blossom.rendererFor(body.methods || []) || { status: 'none', sig: blossom.sigOf(body.methods || []) } });
       if (u.pathname === '/blossom/source') { const e = blossom.bySig(body.sig); if (!e || e.status !== 'ready' || !e.forkId) return json(res, 200, { ok: false, error: 'no ready renderer for this signature' }); const src = forks.source(e.forkId, 'root'); return json(res, 200, src ? { ok: true, sig: e.sig, forkId: e.forkId, source: src } : { ok: false, error: 'renderer fork missing' }); }
       if (u.pathname === '/blossom/list') return json(res, 200, { ok: true, renderers: blossom.list(), stats: blossom.stats() });

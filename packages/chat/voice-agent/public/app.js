@@ -136,20 +136,34 @@ const objectInspector = async name => {
       <div class="set-row" style="gap:6px;align-items:center;flex-wrap:wrap">${methods.map(m => `<button class="mini insp-m" data-m="${esc(m)}">${esc(m)}()</button>`).join('')}</div>
       <input id="insp-args" class="mini" placeholder="args (JSON array, or plain text for one string arg) — optional" style="width:100%;box-sizing:border-box;margin-top:7px;font-family:ui-monospace,monospace">
     </div>
-    <div class="set-sec" id="insp-bloom-sec" style="display:none"><div class="set-h">🌱 Custom view <span class="pmeta" id="insp-bloom-status"></span></div><div id="insp-bloom"></div></div>
+    <div class="set-sec" id="insp-bloom-sec"><div class="set-h">🌱 Custom view <span class="pmeta" id="insp-bloom-status"></span></div><div id="insp-bloom" class="pmeta">checking…</div></div>
     <div class="set-sec"><div class="set-h">Result</div><div id="insp-result" class="pmeta">— call a method —</div></div>`);
-  // EAGER BLOSSOM: spotting this object kicks off authoring a bespoke renderer for its INTERFACE; we poll it.
+  // BLOSSOM a bespoke renderer for this object's INTERFACE. Generating one costs an LLM call, METERED against
+  // THIS CHAT's budget — so it's MANUAL by default (a "Generate" button), with an opt-in "always generate"
+  // checkbox (persisted) for the eager behaviour. A renderer already authored for this interface is reused.
   let rendererSrc = null; let lastValue = undefined;
-  const blossom = async () => {
-    try { await fetch('/blossom/ensure', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, name: o.name, methods, sample: { name: o.name, transport: o.transport, methods } }) }); } catch { return; }
-    const sec = $('insp-bloom-sec'), st = $('insp-bloom-status'); if (sec) sec.style.display = 'block';
-    for (let i = 0; i < 20; i++) {
-      let e; try { e = (await (await fetch('/blossom/for', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, methods }) })).json()).entry; } catch { return; }
-      if (st) st.textContent = `· ${e.status}${e.reason ? ` (${e.reason})` : ''}`;
-      if (e.status === 'ready') { try { const s = await (await fetch('/blossom/source', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, sig: e.sig }) })).json(); if (s.ok) { rendererSrc = s.source; paintBespoke(); } } catch {} return; }
-      if (e.status === 'failed' || e.status === 'budget-exhausted' || e.status === 'no-interface') return;
+  const bfetch = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then(r => r.json()).catch(() => null);
+  const genControls = (prefix) => { const host = $('insp-bloom'); if (!host) return; host.innerHTML = `${prefix || ''}<div style="margin-top:6px"><button class="mini" id="insp-gen">✨ Generate a custom view</button> <label style="font-size:11px;color:var(--mut);margin-left:8px;cursor:pointer"><input type="checkbox" id="insp-auto"${localStorage.getItem('blossom-auto') === '1' ? ' checked' : ''}> always generate interfaces for unknown objects</label></div>`; const g = $('insp-gen'); if (g) g.onclick = triggerBlossom; const a = $('insp-auto'); if (a) a.onchange = () => { try { localStorage.setItem('blossom-auto', a.checked ? '1' : '0'); } catch {} }; };
+  const loadReady = async sig => { const s = await bfetch('/blossom/source', { cap, sig }); if (s && s.ok) { rendererSrc = s.source; paintBespoke(); return true; } return false; };
+  const triggerBlossom = async () => {
+    const host = $('insp-bloom'), st = $('insp-bloom-status');
+    if (host) host.innerHTML = '<div class="pmeta">🌱 generating a custom view… <span style="color:var(--mut)">(drawing from this chat’s budget)</span></div>';
+    await bfetch('/blossom/ensure', { cap, sessionId, name: o.name, methods, sample: { name: o.name, transport: o.transport, methods } });
+    for (let i = 0; i < 24; i++) {
+      const r = await bfetch('/blossom/for', { cap, methods }); const e = r && r.entry; if (!e) { if (st) st.textContent = ''; return; }
+      if (st) st.textContent = `· ${e.status}`;
+      if (e.status === 'ready') { if (st) st.textContent = ''; await loadReady(e.sig); return; }
+      if (e.status === 'failed' || e.status === 'budget-exhausted' || e.status === 'no-interface' || e.status === 'queued') { if (st) st.textContent = ''; genControls(`<div class="pmeta">⚠︎ ${esc(e.reason || e.status)}</div>`); return; }
       await new Promise(r => setTimeout(r, 2500));
     }
+  };
+  const setupBloom = async () => {
+    const host = $('insp-bloom'); if (!host) return;
+    const r = await bfetch('/blossom/for', { cap, methods }); const e = r && r.entry;
+    if (e && e.status === 'ready') { if (await loadReady(e.sig)) return; }
+    if (e && e.status === 'blossoming') { host.innerHTML = '<div class="pmeta">🌱 generating a custom view…</div>'; triggerBlossom(); return; } // already in flight → just poll
+    if (localStorage.getItem('blossom-auto') === '1') { triggerBlossom(); return; } // opted into eager
+    genControls('<div class="pmeta">No custom view yet for this kind of object.</div>'); // MANUAL by default
   };
   // A MEDIATED capability handed to the confined renderer: it can invoke THIS object's methods (host-side,
   // scoped to o.name) but holds no cap of its own — least authority. Used by interactive widgets (e.g. a
@@ -173,7 +187,7 @@ const objectInspector = async name => {
     if (rendererSrc) paintBespoke(); // re-render the bespoke view with this result
   };
   document.querySelectorAll('.insp-m').forEach(b => { b.onclick = () => call(b.dataset.m); });
-  blossom();
+  setupBloom();
 };
 window.objectInspector = objectInspector;
 const copyLink = async (s, btn) => { if (await writeClipboard(localizeUrl(s.url))) flashBtn(btn, 'copied ✓'); else revealLink(s, 'auto-copy was blocked — select & copy (⌘/Ctrl-C):'); };

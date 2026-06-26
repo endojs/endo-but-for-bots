@@ -31,9 +31,12 @@ export const makeBlossom = ({ file, forks, authorRenderer, maxConcurrent = 2, ma
   const bySig = sig => data.renderers[String(sig || '')] || null;
   const list = () => Object.values(data.renderers);
 
-  // ensure({ methods, objectName, sample, owner }) — eager: kick off authoring for a NEW signature; return
+  // ensure({ methods, objectName, sample, owner, author }) — kick off authoring for a NEW signature; return
   // the registry entry (may be 'blossoming' — poll). Never re-fires an existing/in-flight/failed signature.
-  const ensure = async ({ methods, objectName = 'object', sample, owner = 'root' }) => {
+  // `author` (optional) overrides the default authorRenderer for THIS blossom — used to meter the LLM call
+  // against the triggering CHAT's purse (the toll-bridge), so blossoming draws from that chat's budget.
+  const ensure = async ({ methods, objectName = 'object', sample, owner = 'root', author }) => {
+    const authorFn = author || authorRenderer;
     const sig = sigOf(methods);
     if (sig === 'sig-empty') return { sig, status: 'no-interface', reason: 'object exposes no methods to key a renderer on' };
     if (data.renderers[sig]) return data.renderers[sig]; // ready | blossoming | failed — do not re-fire
@@ -45,7 +48,7 @@ export const makeBlossom = ({ file, forks, authorRenderer, maxConcurrent = 2, ma
     save();
     (async () => {
       try {
-        const source = await authorRenderer({ sig, objectName, methods: methodNames(methods), sample });
+        const source = await authorFn({ sig, objectName, methods: methodNames(methods), sample });
         if (!source || typeof source !== 'string' || !source.trim()) throw new Error('the renderer agent produced no source');
         const fk = forks.create({ source, name: `${objectName} renderer`, baseId: `blossom:${sig}`, owner });
         if (!fk.ok) throw new Error(fk.error || 'could not create the renderer fork');
