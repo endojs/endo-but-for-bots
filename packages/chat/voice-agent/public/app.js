@@ -148,8 +148,9 @@ const objectInspector = async (name, opts = {}) => {
   // checkbox (persisted) for the eager behaviour. A renderer already authored for this interface is reused.
   let rendererSrc = null; let lastValue = undefined;
   const bfetch = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then(r => r.json()).catch(() => null);
-  const genControls = (prefix) => { const host = $('insp-bloom'); if (!host) return; host.innerHTML = `${prefix || ''}<div style="margin-top:6px"><button class="mini" id="insp-gen">✨ Generate a custom view</button> <label style="font-size:11px;color:var(--mut);margin-left:8px;cursor:pointer"><input type="checkbox" id="insp-auto"${localStorage.getItem('blossom-auto') === '1' ? ' checked' : ''}> always generate interfaces for unknown objects</label></div>`; const g = $('insp-gen'); if (g) g.onclick = triggerBlossom; const a = $('insp-auto'); if (a) a.onchange = () => { try { localStorage.setItem('blossom-auto', a.checked ? '1' : '0'); } catch {} }; };
-  const loadReady = async sig => { const s = await bfetch('/blossom/source', { cap, sig }); if (s && s.ok) { rendererSrc = s.source; paintBespoke(); return true; } return false; };
+  const genControls = (prefix) => { const host = $('insp-bloom'); if (!host) return; host.innerHTML = `${prefix || ''}<div style="margin-top:6px"><button class="mini" id="insp-gen">✨ Generate a custom view</button> <label style="font-size:11px;color:var(--mut);margin-left:8px;cursor:pointer"><input type="checkbox" id="insp-auto"${localStorage.getItem('blossom-auto') === '1' ? ' checked' : ''}> always generate interfaces for unknown objects</label></div>`; const g = $('insp-gen'); if (g) g.onclick = () => openRendererStudio(o.name, methods); const a = $('insp-auto'); if (a) a.onchange = () => { try { localStorage.setItem('blossom-auto', a.checked ? '1' : '0'); } catch {} }; };
+  // populate props.value with REAL data (describe) so a ready view isn't empty before any method is clicked
+  const loadReady = async sig => { const s = await bfetch('/blossom/source', { cap, sig }); if (s && s.ok) { rendererSrc = s.source; if (lastValue === undefined) { try { lastValue = await callObj(methods.includes('describe') ? 'describe' : methods[0], []); } catch {} } paintBespoke(); return true; } return false; };
   const triggerBlossom = async () => {
     const host = $('insp-bloom'), st = $('insp-bloom-status');
     if (host) host.innerHTML = '<div class="pmeta">🌱 generating a custom view… <span style="color:var(--mut)">(drawing from this chat’s budget)</span></div>';
@@ -2015,6 +2016,40 @@ const openForkInChat = (fork, title) => {
   pushTx('widget', '', { fork });
   document.body.classList.remove('landing'); showTab('talk'); renderTx(); renderChatList();
 };
+// 🎨 RENDERER STUDIO — "Generate a custom view" breaks OUT into a chat where the renderer is generated and
+// ITERATED conversationally: a live preview fed the object's REAL data (+ the mediated call), a "describe a
+// change" prompt that revises the renderer fork, and the source. Fixes the one-shot/empty-view/no-revise gaps.
+const openRendererStudio = (objectName, methods) => {
+  newChat();
+  if (!chats.some(c => c.id === sessionId)) { chats.unshift({ id: sessionId, title: `🎨 ${objectName} view`, ts: Date.now(), lastMsgAt: Date.now() }); saveChats(); }
+  pushTx('widget', '', { blossom: { name: objectName, methods } });
+  document.body.classList.remove('landing'); showTab('talk'); renderTx(); renderChatList();
+};
+window.openRendererStudio = openRendererStudio;
+const mountBlossomStudio = async (el, spec) => {
+  const objectName = spec.name; const methods = spec.methods || [];
+  const bf = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then(r => r.json()).catch(() => null);
+  el.innerHTML = '';
+  const status = document.createElement('div'); status.style.cssText = 'font-size:11px;color:var(--mut);margin-bottom:6px';
+  const preview = document.createElement('div'); preview.style.cssText = 'border:1px solid var(--edge);border-radius:8px;padding:10px;min-height:48px;background:var(--bg)';
+  const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:6px;margin-top:8px;align-items:center';
+  const input = document.createElement('input'); input.placeholder = 'describe a change to this view…'; input.style.cssText = 'flex:1;font:inherit;font-size:12px;background:var(--panel);border:1px solid var(--edge);color:var(--ink);border-radius:7px;padding:5px 8px';
+  const reviseBtn = document.createElement('button'); reviseBtn.className = 'mini'; reviseBtn.textContent = '✎ Revise'; reviseBtn.disabled = true;
+  const srcBtn = document.createElement('button'); srcBtn.className = 'mini'; srcBtn.textContent = '</>'; srcBtn.title = 'show the renderer source';
+  row.append(input, reviseBtn, srcBtn);
+  const srcPre = document.createElement('pre'); srcPre.style.cssText = 'display:none;white-space:pre-wrap;max-height:30vh;overflow:auto;background:var(--panel);border:1px solid var(--edge);border-radius:7px;padding:8px;font:11px ui-monospace,Menlo,monospace;margin-top:6px;color:var(--ink)';
+  el.append(status, preview, row, srcPre);
+  let forkId = null, src = null, sample;
+  const callObj = async (m, args) => { const r = await rpc('objectCall', [objectName, m, Array.isArray(args) ? args : (args == null ? [] : [args])]); return r && r.value; };
+  const getSample = async () => { try { sample = await callObj(methods.includes('describe') ? 'describe' : methods[0], []); } catch { sample = undefined; } }; // feed props.value REAL data so the view isn't empty
+  const paint = () => { if (!src) return; preview.innerHTML = ''; const ok = window.__fieldIslands && window.__fieldIslands.renderSource && window.__fieldIslands.renderSource(src, preview, { value: sample, name: objectName, methods, call: callObj, refresh: async () => { await getSample(); paint(); } }); if (!ok) preview.innerHTML = '<div class="pmeta">This view renders once the confined runtime (lockdown) is on.</div>'; srcPre.textContent = src; };
+  srcBtn.onclick = () => { srcPre.style.display = srcPre.style.display === 'none' ? 'block' : 'none'; };
+  const loadFork = async () => { const r = await bf('/blossom/for', { cap: chatCap(), methods }); const e = r && r.entry; if (e && e.status === 'ready' && e.forkId) { forkId = e.forkId; const rd = await bf('/forks/read', { cap: chatCap(), id: forkId }); if (rd && rd.ok) { src = rd.source; await getSample(); paint(); reviseBtn.disabled = false; status.textContent = '✓ a custom view for this interface — type a change below to revise it'; return true; } } return false; };
+  const generate = async () => { status.textContent = '🌱 generating a custom view… (drawing from this chat’s budget)'; await bf('/blossom/ensure', { cap: chatCap(), sessionId, name: objectName, methods, sample: { name: objectName, methods } }); for (let i = 0; i < 24; i++) { const r = await bf('/blossom/for', { cap: chatCap(), methods }); const e = r && r.entry; if (e && e.status === 'ready') { await loadFork(); return; } if (e && /failed|budget-exhausted|no-interface|queued/.test(e.status)) { status.textContent = '⚠︎ ' + (e.reason || e.status); return; } await new Promise(r => setTimeout(r, 2500)); } status.textContent = 'timed out — try again'; };
+  const revise = async () => { const p = input.value.trim(); if (!p || !forkId) return; reviseBtn.disabled = true; status.textContent = '✎ revising…'; const r = await bf('/forks/edit', { cap: chatCap(), id: forkId, prompt: p }); if (r && r.ok) { const rd = await bf('/forks/read', { cap: chatCap(), id: forkId }); if (rd && rd.ok) src = rd.source; await getSample(); paint(); status.textContent = `✓ revised → v${r.version}`; input.value = ''; } else status.textContent = '⚠︎ ' + ((r && r.error) || 'revise failed'); reviseBtn.disabled = false; };
+  reviseBtn.onclick = revise; input.onkeydown = e => { if (e.key === 'Enter') revise(); };
+  if (!(await loadFork())) generate();
+};
 // Fork an island/app: snapshot its source server-side into a NEW user fork, then open it inline to edit.
 // `source` is the (endowments,props)=>vnode text; for islands we seed from a minimal wrapper the agent edits.
 const forkIntoChat = async ({ source, name, baseId }) => {
@@ -2154,6 +2189,12 @@ const renderTx = () => {
         const wrap = document.createElement('div'); wrap.className = 'msg';
         wrap.innerHTML = `<div class="who">🧩 <span>${esc(m.app)}</span> <span style="font-size:10px;color:var(--mut);opacity:.7;margin-left:6px">minimized app</span></div><div class="app-mount" style="margin-top:4px"></div>`;
         log.appendChild(wrap); try { mountAppInto(wrap.querySelector('.app-mount'), m.app); } catch { /* mount best-effort */ }
+        continue;
+      }
+      if (m.who === 'widget' && m.blossom) { // the renderer studio — generate + iterate a custom view for an object
+        const wrap = document.createElement('div'); wrap.className = 'msg';
+        wrap.innerHTML = `<div class="who">🎨 <span>${esc(m.blossom.name)}</span> <span style="font-size:10px;color:var(--mut);opacity:.7;margin-left:6px">custom view studio</span></div><div class="bloom-mount" style="margin-top:4px"></div>`;
+        log.appendChild(wrap); try { mountBlossomStudio(wrap.querySelector('.bloom-mount'), m.blossom); } catch { /* best-effort */ }
         continue;
       }
       if (m.who === 'widget' && m.fork) { // a confined FORK mounted inline (owner via id, recipient via shareToken)
