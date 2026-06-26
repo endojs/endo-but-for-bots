@@ -100,8 +100,17 @@ const patches = {
   },
 };
 
-// @ts-expect-error _propagate is internal
-AsyncLocalStorage.prototype._propagate = patches._propagate;
-AsyncLocalStorage.prototype.enterWith = patches.enterWith;
-AsyncLocalStorage.prototype.run = patches.run;
-AsyncLocalStorage.prototype.getStore = patches.getStore;
+// Install the patched methods with the descriptor form
+// (`defineProperties` over `getOwnPropertyDescriptors`) rather than per-property
+// assignment. The descriptor form copies each method onto the prototype via
+// `[[DefineOwnProperty]]`, which transfers the own-property descriptor faithfully
+// and unconditionally; plain `proto.x = patches.x` routes through `[[Set]]`,
+// which would honor an inherited setter and would silently skip a non-writable
+// inherited slot. One observable nuance: object-literal methods carry
+// `enumerable: true`, so this makes `enterWith`, `run`, and `getStore`
+// enumerable own properties of the prototype, whereas per-property assignment
+// preserved the non-enumerability of the built-in methods it overwrote.
+Object.defineProperties(
+  AsyncLocalStorage.prototype,
+  Object.getOwnPropertyDescriptors(patches),
+);
