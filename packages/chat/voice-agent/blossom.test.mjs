@@ -100,3 +100,35 @@ test('an object with NO methods cannot be keyed (no-interface)', async () => {
   const e = await blossom.ensure({ methods: [], objectName: 'opaque' });
   assert.equal(e.status, 'no-interface');
 });
+
+test('register installs an AGENT-AUTHORED renderer directly (no LLM) → ready, with a fork', () => {
+  const { blossom, calls, forks } = setup();
+  const src = '(endowments, props) => endowments.h("div", null, "hi " + (props.value && props.value.name))';
+  const r = blossom.register({ methods: SEND_INBOX, kind: 'object', source: src, objectName: 'Kumavis', owner: 'root' });
+  assert.ok(r.ok, 'register succeeds'); assert.equal(r.version, 1, 'first version'); assert.ok(r.forkId, 'has a fork');
+  assert.equal(calls.length, 0, 'NO hidden author ran — the agent supplied the source itself');
+  const got = blossom.rendererFor(SEND_INBOX, 'object');
+  assert.equal(got.status, 'ready'); assert.equal(got.forkId, r.forkId);
+  assert.equal(forks.read(r.forkId, 'root').source, src, 'the fork holds exactly the agent-authored source');
+});
+
+test('register a SECOND time for the same signature REVISES the existing fork (new version, same fork)', () => {
+  const { blossom } = setup();
+  const v1 = blossom.register({ methods: [], kind: 'contact', source: '(e,p)=>e.h("div",null,"v1")', objectName: 'Alice', owner: 'root' });
+  const v2 = blossom.register({ methods: [], kind: 'contact', source: '(e,p)=>e.h("div",null,"v2")', objectName: 'Alice', owner: 'root' });
+  assert.ok(v1.ok && v2.ok); assert.equal(v1.forkId, v2.forkId, 'same renderer fork (revise, not a new one)');
+  assert.equal(v2.version, 2, 'a new version of the SAME lineage');
+});
+
+test('register rejects an empty source and an unkeyable (no kind/methods) target', () => {
+  const { blossom } = setup();
+  assert.equal(blossom.register({ methods: [], kind: '', source: '(e,p)=>e.h("div")', owner: 'root' }).ok, false, 'no kind + no methods → unkeyable');
+  assert.equal(blossom.register({ methods: [], kind: 'contact', source: '   ', owner: 'root' }).ok, false, 'empty source rejected');
+});
+
+test('a kind-keyed registered renderer is SHARED across all leaves of that kind', () => {
+  const { blossom } = setup();
+  blossom.register({ methods: [], kind: 'contact', source: '(e,p)=>e.h("div",null,p.value&&p.value.name)', objectName: 'Alice', owner: 'root' });
+  const forBob = blossom.rendererFor([], 'contact'); // a DIFFERENT contact, same kind
+  assert.equal(forBob.status, 'ready', 'every contact resolves to the one contact renderer');
+});

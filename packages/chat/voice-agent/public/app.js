@@ -39,6 +39,7 @@ const pendingForkToken = _hashParams.get('fork') || null; // a shared FORK link 
 // send also tells the AGENT about it — otherwise the card is client-only and the agent never sees the link.
 // cap-hygiene: only the cap-STRIPPED URL is staged (the swissnum never reaches the agent/server).
 const pendingSharedLinks = {}; // sessionId -> [url, …]
+const pendingCustomView = {}; // sessionId -> { name, kind, methods, sample, current } — a custom-view task folded into the next send
 if (cap) { try { localStorage.setItem(CAP_KEY, cap); } catch {} }
 if (location.hash) { try { history.replaceState(null, '', location.pathname + location.search); } catch {} } // strip the fragment (cap and/or chat)
 if (!cap) { try { cap = localStorage.getItem(CAP_KEY) || null; } catch {} }
@@ -148,7 +149,7 @@ const objectInspector = async (name, opts = {}) => {
   // checkbox (persisted) for the eager behaviour. A renderer already authored for this interface is reused.
   let rendererSrc = null; let lastValue = undefined;
   const bfetch = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then(r => r.json()).catch(() => null);
-  const genControls = (prefix) => { const host = $('insp-bloom'); if (!host) return; host.innerHTML = `${prefix || ''}<div style="margin-top:6px"><button class="mini" id="insp-gen">✨ Generate a custom view</button> <label style="font-size:11px;color:var(--mut);margin-left:8px;cursor:pointer"><input type="checkbox" id="insp-auto"${localStorage.getItem('blossom-auto') === '1' ? ' checked' : ''}> always generate interfaces for unknown objects</label></div>`; const g = $('insp-gen'); if (g) g.onclick = () => openRendererStudio({ name: o.name, kind: 'object', methods, callable: true }); const a = $('insp-auto'); if (a) a.onchange = () => { try { localStorage.setItem('blossom-auto', a.checked ? '1' : '0'); } catch {} }; };
+  const genControls = (prefix) => { const host = $('insp-bloom'); if (!host) return; host.innerHTML = `${prefix || ''}<div style="margin-top:6px"><button class="mini" id="insp-gen">✨ Generate a custom view</button> <label style="font-size:11px;color:var(--mut);margin-left:8px;cursor:pointer"><input type="checkbox" id="insp-auto"${localStorage.getItem('blossom-auto') === '1' ? ' checked' : ''}> always generate interfaces for unknown objects</label></div>`; const g = $('insp-gen'); if (g) g.onclick = () => requestCustomView({ name: o.name, kind: 'object', methods, callable: true }); const a = $('insp-auto'); if (a) a.onchange = () => { try { localStorage.setItem('blossom-auto', a.checked ? '1' : '0'); } catch {} }; };
   // populate props.value with REAL data (describe) so a ready view isn't empty before any method is clicked
   const loadReady = async sig => { const s = await bfetch('/blossom/source', { cap, sig }); if (s && s.ok) { rendererSrc = s.source; if (lastValue === undefined) { try { lastValue = await callObj(methods.includes('describe') ? 'describe' : methods[0], []); } catch {} } paintBespoke(); return true; } return false; };
   const triggerBlossom = async () => {
@@ -1130,9 +1131,13 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
   // Fold any pasted-link cards for this chat into the AGENT-FACING text (the visible bubble stays `t`; the
   // link also shows as its widget card). Consumed once. Lets a link-only message (empty `t`) still send.
   const sharedLinks = (pendingSharedLinks[sessionId] || []).slice();
-  const agentText = (t + (sharedLinks.length ? `${t ? '\n\n' : ''}${sharedLinks.map(u => `[link the user shared in chat: ${u}]`).join('\n')}` : '')).trim();
+  const cvNote = customViewTaskNote(pendingCustomView[sessionId]); // a pending custom-view task (kind/methods/sample/source)
+  const agentText = (t
+    + (sharedLinks.length ? `${t ? '\n\n' : ''}${sharedLinks.map(u => `[link the user shared in chat: ${u}]`).join('\n')}` : '')
+    + (cvNote ? `${t || sharedLinks.length ? '\n\n' : ''}${cvNote}` : '')).trim();
   if ((!agentText && !attachments.length) || busy) return false;
   delete pendingSharedLinks[sessionId]; // consumed
+  delete pendingCustomView[sessionId]; // consumed
   busy = true; if (sendBtn) sendBtn.disabled = true;
   const myTurn = ++turn; const stale = () => myTurn !== turn;
   let ok = false;
@@ -1607,7 +1612,7 @@ const renderNavList = () => {
 // keyed by domain (lights vs locks differ). This is what makes the inspector/blossom work on ANY leaf.
 const blossomKindFor = (ns, n) => { if (ns === 'contacts') return 'contact'; if (ns === 'agents') return 'agent'; if (ns === 'ha') { const eid = n && n.entity_id; return eid ? `ha:${String(eid).split('.')[0]}` : 'ha-entity'; } return `${ns}${n && n.kind ? `:${n.kind}` : ''}`; };
 // append a custom-view affordance to a leaf's detail: render a ready renderer inline (props.value = the
-// leaf's data), and a 🎨 Generate/Revise button that opens the renderer studio for this KIND.
+// leaf's data), and a 🎨 Generate/Revise button that grants this KIND's custom view to a chat (the agent authors/revises it).
 const appendLeafBlossom = async (kind, name, data) => {
   const node = $('obj-node'); if (!node) return;
   const bf = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then(r => r.json()).catch(() => null);
@@ -1615,7 +1620,7 @@ const appendLeafBlossom = async (kind, name, data) => {
   const r = await bf('/blossom/for', { cap, methods: [], kind }); const e = r && r.entry;
   if (e && e.status === 'ready' && e.forkId) { const s = await bf('/blossom/source', { cap, sig: e.sig }); if (s && s.ok && window.__fieldIslands && window.__fieldIslands.renderSource) { const view = document.createElement('div'); view.style.cssText = 'margin-bottom:8px'; wrap.appendChild(view); window.__fieldIslands.renderSource(s.source, view, { value: data, name, kind }); } }
   const btn = document.createElement('button'); btn.className = 'mini'; btn.textContent = (e && e.status === 'ready') ? '🎨 Revise the custom view' : '🎨 Generate a custom view';
-  btn.onclick = () => openRendererStudio({ name, kind, methods: [], data, callable: false });
+  btn.onclick = () => requestCustomView({ name, kind, methods: [], data, callable: false });
   wrap.appendChild(btn); node.appendChild(wrap);
 };
 window.appendLeafBlossom = appendLeafBlossom; window.blossomKindFor = blossomKindFor; // staging hooks
@@ -2034,44 +2039,64 @@ const openForkInChat = (fork, title) => {
   pushTx('widget', '', { fork });
   document.body.classList.remove('landing'); showTab('talk'); renderTx(); renderChatList();
 };
-// 🎨 RENDERER STUDIO — "Generate a custom view" breaks OUT into a chat where the renderer is generated and
-// ITERATED conversationally: a live preview fed the object's REAL data (+ the mediated call), a "describe a
-// change" prompt that revises the renderer fork, and the source. Fixes the one-shot/empty-view/no-revise gaps.
-const openRendererStudio = (spec) => {
+// 🎨 CUSTOM VIEW — the chat IS the studio. Instead of a bespoke generate/revise widget, we GRANT the custom
+// view (the renderer component) to a chat and let the NORMAL chat agent author/revise it — visible in the
+// normal trace, because it's a normal agent. requestCustomView seeds that turn: it mounts the live component
+// into the chat (so you can see it) and hands the agent a structured task (kind / methods / sample / current
+// source) via pendingCustomView, which sendChat folds into the agent-facing text. The agent writes the
+// (endowments,props)=>vnode and registers it with the `customView` tool.
+const requestCustomView = async (spec) => {
   const s = typeof spec === 'string' ? { name: spec, kind: 'object', methods: [], callable: true } : spec;
-  newChat();
-  if (!chats.some(c => c.id === sessionId)) { chats.unshift({ id: sessionId, title: `🎨 ${s.name} view`, ts: Date.now(), lastMsgAt: Date.now() }); saveChats(); }
-  pushTx('widget', '', { blossom: s });
-  document.body.classList.remove('landing'); showTab('talk'); renderTx(); renderChatList();
-};
-window.openRendererStudio = openRendererStudio;
-// mountBlossomStudio(el, spec) — spec = { name, kind, methods, data?, callable? }. A renderer is keyed by KIND
-// (so ANY navigator leaf — a contact, an HA entity, an agent — gets a shared renderer, not just inventory
-// objects). `data` (pre-fetched, e.g. a contact record) feeds props.value; `callable` (inventory objects)
-// adds the mediated props.call.
-const mountBlossomStudio = async (el, spec) => {
-  const objectName = spec.name; const kind = spec.kind || 'object'; const methods = spec.methods || []; const callable = spec.callable !== false;
+  const name = s.name; const kind = s.kind || 'object'; const methods = s.methods || []; const callable = s.callable !== false;
   const bf = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then(r => r.json()).catch(() => null);
+  // resolve a sample of the object's data (props.value) so the agent renders the REAL shape
+  let sample = s.data;
+  if (sample === undefined && callable) { try { const r = await rpc('objectCall', [name, methods.includes('describe') ? 'describe' : methods[0], []]); sample = r && r.value; } catch { /* */ } }
+  if (sample === undefined) sample = { name, kind };
+  // is there already a renderer for this kind? → this is a REVISE; fetch its source so the agent iterates it
+  const forR = await bf('/blossom/for', { cap: chatCap(), methods, kind }); const e = forR && forR.entry;
+  let current = null; if (e && e.status === 'ready' && e.sig) { const sr = await bf('/blossom/source', { cap: chatCap(), sig: e.sig }); if (sr && sr.ok) current = sr.source; }
+  const revising = !!current;
+  // open a focused chat, grant it the live component, stash the task
+  newChat();
+  if (!chats.some(c => c.id === sessionId)) { chats.unshift({ id: sessionId, title: `🎨 ${name} view`, ts: Date.now(), lastMsgAt: Date.now() }); saveChats(); }
+  pushTx('widget', '', { customview: { name, kind, methods, sample, callable } });
+  pendingCustomView[sessionId] = { name, kind, methods, sample, current };
+  document.body.classList.remove('landing'); showTab('talk'); renderTx(); renderChatList();
+  if (revising) { const input = $('text'); if (input) { input.value = `Revise the custom view for the ${kind} "${name}": `; input.focus(); try { input.setSelectionRange(input.value.length, input.value.length); } catch {} } }
+  else { await sendChat(`Create a custom view for "${name}" (a ${kind}).`); }
+};
+window.requestCustomView = requestCustomView;
+// Fold a pending custom-view task into the agent-facing text (visible bubble unchanged): the structured spec
+// the agent needs to author/revise the renderer + call the customView tool. Consumed once.
+const customViewTaskNote = ctx => {
+  if (!ctx) return '';
+  let sample = ''; try { sample = JSON.stringify(ctx.sample); } catch { sample = String(ctx.sample); }
+  if (sample && sample.length > 1500) sample = sample.slice(0, 1500) + '…';
+  return [
+    `[custom-view task — author${ctx.current ? ' (revise)' : ''} a CONFINED renderer for this object, then register it with the customView tool.`,
+    `  kind: ${JSON.stringify(ctx.kind || 'object')}`,
+    `  objectName: ${JSON.stringify(ctx.name || 'object')}`,
+    `  methods: ${JSON.stringify(ctx.methods || [])}   (props.methods you may props.call; [] = a data-only leaf keyed by kind)`,
+    `  sample (props.value): ${sample}`,
+    ctx.current ? `  current renderer source to REVISE (iterate this, don't rewrite from scratch):\n\`\`\`js\n${ctx.current}\n\`\`\`` : '',
+    `  → write the (endowments,props)=>vnode, then call customView({ kind, methods, objectName, source }).]`,
+  ].filter(Boolean).join('\n');
+};
+// mountCustomView(el, cv) — render the live custom view (the component granted to this chat) fed its sample
+// data. Read-only display; the AGENT revises it (the chat is the studio). Re-renders on each renderTx, so it
+// picks up the agent's newly-registered/revised renderer automatically.
+const mountCustomView = async (el, cv) => {
+  const bf = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then(r => r.json()).catch(() => null);
+  el.innerHTML = '<div class="pmeta">🌱 the agent is authoring this view…</div>';
+  const r = await bf('/blossom/for', { cap: chatCap(), methods: cv.methods || [], kind: cv.kind || 'object' }); const e = r && r.entry;
+  if (!e || e.status !== 'ready' || !e.sig) return; // not authored yet — stays as the placeholder until the next render
+  const sr = await bf('/blossom/source', { cap: chatCap(), sig: e.sig }); if (!sr || !sr.ok) return;
   el.innerHTML = '';
-  const status = document.createElement('div'); status.style.cssText = 'font-size:11px;color:var(--mut);margin-bottom:6px';
-  const preview = document.createElement('div'); preview.style.cssText = 'border:1px solid var(--edge);border-radius:8px;padding:10px;min-height:48px;background:var(--bg)';
-  const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:6px;margin-top:8px;align-items:center';
-  const input = document.createElement('input'); input.placeholder = 'describe a change to this view…'; input.style.cssText = 'flex:1;font:inherit;font-size:12px;background:var(--panel);border:1px solid var(--edge);color:var(--ink);border-radius:7px;padding:5px 8px';
-  const reviseBtn = document.createElement('button'); reviseBtn.className = 'mini'; reviseBtn.textContent = '✎ Revise'; reviseBtn.disabled = true;
-  const srcBtn = document.createElement('button'); srcBtn.className = 'mini'; srcBtn.textContent = '</>'; srcBtn.title = 'show the renderer source';
-  row.append(input, reviseBtn, srcBtn);
-  const srcPre = document.createElement('pre'); srcPre.style.cssText = 'display:none;white-space:pre-wrap;max-height:30vh;overflow:auto;background:var(--panel);border:1px solid var(--edge);border-radius:7px;padding:8px;font:11px ui-monospace,Menlo,monospace;margin-top:6px;color:var(--ink)';
-  el.append(status, preview, row, srcPre);
-  let forkId = null, src = null, sample = spec.data; // pre-fetched data (a leaf record) feeds props.value
-  const callObj = async (m, args) => { const r = await rpc('objectCall', [objectName, m, Array.isArray(args) ? args : (args == null ? [] : [args])]); return r && r.value; };
-  const getSample = async () => { if (sample !== undefined) return; if (!callable) { sample = { name: objectName }; return; } try { sample = await callObj(methods.includes('describe') ? 'describe' : methods[0], []); } catch { sample = undefined; } };
-  const paint = () => { if (!src) return; preview.innerHTML = ''; const props = { value: sample, name: objectName, kind, methods, refresh: async () => { sample = spec.data; await getSample(); paint(); } }; if (callable) props.call = callObj; const ok = window.__fieldIslands && window.__fieldIslands.renderSource && window.__fieldIslands.renderSource(src, preview, props); if (!ok) preview.innerHTML = '<div class="pmeta">This view renders once the confined runtime (lockdown) is on.</div>'; srcPre.textContent = src; };
-  srcBtn.onclick = () => { srcPre.style.display = srcPre.style.display === 'none' ? 'block' : 'none'; };
-  const loadFork = async () => { const r = await bf('/blossom/for', { cap: chatCap(), methods, kind }); const e = r && r.entry; if (e && e.status === 'ready' && e.forkId) { forkId = e.forkId; const rd = await bf('/forks/read', { cap: chatCap(), id: forkId }); if (rd && rd.ok) { src = rd.source; await getSample(); paint(); reviseBtn.disabled = false; status.textContent = `✓ a custom view for this ${kind} — type a change below to revise it`; return true; } } return false; };
-  const generate = async () => { status.textContent = '🌱 generating a custom view… (drawing from this chat’s budget)'; await getSample(); await bf('/blossom/ensure', { cap: chatCap(), sessionId, name: objectName, methods, kind, sample: sample || { name: objectName, kind } }); for (let i = 0; i < 24; i++) { const r = await bf('/blossom/for', { cap: chatCap(), methods, kind }); const e = r && r.entry; if (e && e.status === 'ready') { await loadFork(); return; } if (e && /failed|budget-exhausted|no-interface|queued/.test(e.status)) { status.textContent = '⚠︎ ' + (e.reason || e.status); return; } await new Promise(r => setTimeout(r, 2500)); } status.textContent = 'timed out — try again'; };
-  const revise = async () => { const p = input.value.trim(); if (!p || !forkId) return; reviseBtn.disabled = true; status.textContent = '✎ revising…'; const r = await bf('/forks/edit', { cap: chatCap(), id: forkId, prompt: p }); if (r && r.ok) { const rd = await bf('/forks/read', { cap: chatCap(), id: forkId }); if (rd && rd.ok) src = rd.source; await getSample(); paint(); status.textContent = `✓ revised → v${r.version}`; input.value = ''; } else status.textContent = '⚠︎ ' + ((r && r.error) || 'revise failed'); reviseBtn.disabled = false; };
-  reviseBtn.onclick = revise; input.onkeydown = e => { if (e.key === 'Enter') revise(); };
-  if (!(await loadFork())) generate();
+  const props = { value: cv.sample, name: cv.name, kind: cv.kind, methods: cv.methods || [] };
+  if (cv.callable) props.call = async (m, args) => { const cr = await rpc('objectCall', [cv.name, m, Array.isArray(args) ? args : (args == null ? [] : [args])]); return cr && cr.value; };
+  const ok = window.__fieldIslands && window.__fieldIslands.renderSource && window.__fieldIslands.renderSource(sr.source, el, props);
+  if (!ok) el.innerHTML = '<div class="pmeta">This view renders once the confined runtime (lockdown) is on.</div>';
 };
 // Fork an island/app: snapshot its source server-side into a NEW user fork, then open it inline to edit.
 // `source` is the (endowments,props)=>vnode text; for islands we seed from a minimal wrapper the agent edits.
@@ -2214,10 +2239,10 @@ const renderTx = () => {
         log.appendChild(wrap); try { mountAppInto(wrap.querySelector('.app-mount'), m.app); } catch { /* mount best-effort */ }
         continue;
       }
-      if (m.who === 'widget' && m.blossom) { // the renderer studio — generate + iterate a custom view for an object
-        const wrap = document.createElement('div'); wrap.className = 'msg';
-        wrap.innerHTML = `<div class="who">🎨 <span>${esc(m.blossom.name)}</span> <span style="font-size:10px;color:var(--mut);opacity:.7;margin-left:6px">custom view studio</span></div><div class="bloom-mount" style="margin-top:4px"></div>`;
-        log.appendChild(wrap); try { mountBlossomStudio(wrap.querySelector('.bloom-mount'), m.blossom); } catch { /* best-effort */ }
+      if (m.who === 'widget' && m.customview) { // the COMPONENT granted to this chat: the live custom view the agent will author/revise (the chat IS the studio)
+        const cv = m.customview; const wrap = document.createElement('div'); wrap.className = 'msg';
+        wrap.innerHTML = `<div class="who">🎨 <span>${esc(cv.name)}</span> <span style="font-size:10px;color:var(--mut);opacity:.7;margin-left:6px">custom view · ${esc(cv.kind || 'object')}</span></div><div class="cv-mount" style="margin-top:4px;border:1px solid var(--edge);border-radius:8px;padding:10px;min-height:40px;background:var(--bg)"></div>`;
+        log.appendChild(wrap); mountCustomView(wrap.querySelector('.cv-mount'), cv);
         continue;
       }
       if (m.who === 'widget' && m.fork) { // a confined FORK mounted inline (owner via id, recipient via shareToken)

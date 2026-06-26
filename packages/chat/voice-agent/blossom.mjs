@@ -63,9 +63,34 @@ export const makeBlossom = ({ file, forks, authorRenderer, maxConcurrent = 2, ma
     return data.renderers[sig];
   };
 
+  // register({ methods, kind, source, objectName, owner }) — install a renderer whose SOURCE is provided
+  // directly (NOT authored by a hidden LLM). This is how a NORMAL chat agent — visible in the trace — creates
+  // or revises a custom view via the `customView` tool: it writes the (endowments,props)=>vnode itself and
+  // hands it here. If a renderer already exists for the signature, EDIT the existing fork (new version,
+  // lineage kept); otherwise create a fresh renderer fork. The chat IS the studio.
+  const register = ({ methods, kind = '', source, objectName = 'object', owner = 'root' }) => {
+    const src = String(source || '');
+    if (!src.trim()) return { ok: false, error: 'no renderer source provided' };
+    const sig = sigOf(methods, kind);
+    if (sig === 'sig-empty') return { ok: false, error: 'no kind or methods to key a renderer on' };
+    const existing = data.renderers[sig];
+    if (existing && existing.forkId) { // REVISE the existing renderer fork
+      const r = forks.edit(existing.forkId, src, owner, 'customView edit');
+      if (!r.ok) return r;
+      data.renderers[sig] = { ...existing, status: 'ready', name: objectName || existing.name, completedAt: new Date().toISOString() };
+      save();
+      return { ok: true, sig, forkId: existing.forkId, version: r.version };
+    }
+    const fk = forks.create({ source: src, name: `${objectName} renderer`, baseId: `blossom:${sig}`, owner }); // GENERATE a new renderer fork
+    if (!fk.ok) return { ok: false, error: fk.error || 'could not create the renderer fork' };
+    data.renderers[sig] = { sig, status: 'ready', name: objectName, kind, methods: methodNames(methods), forkId: fk.id, at: new Date().toISOString(), completedAt: new Date().toISOString() };
+    data.count += 1; save();
+    return { ok: true, sig, forkId: fk.id, version: 1 };
+  };
+
   // forget(sig) — drop a renderer (e.g. a failed one) so it can re-blossom; the fork itself is the owner's to keep/remove.
   const forget = sig => { if (data.renderers[String(sig)]) { delete data.renderers[String(sig)]; save(); return true; } return false; };
 
-  return harden({ sigOf, ensure, rendererFor, bySig, list, forget, stats: () => ({ total: data.count, registered: Object.keys(data.renderers).length, blossoming: inflight.size }) });
+  return harden({ sigOf, ensure, register, rendererFor, bySig, list, forget, stats: () => ({ total: data.count, registered: Object.keys(data.renderers).length, blossoming: inflight.size }) });
 };
 harden(makeBlossom);

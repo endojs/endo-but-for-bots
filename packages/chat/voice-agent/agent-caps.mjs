@@ -569,7 +569,7 @@ export { makeCapabilityBundle } from './agent-caps-bundle.mjs';
 // ── build the agent. Returns the locator + a root node holding ALL powers. ────
 // makeFieldAgent({ outDir, baseUrl }) →
 //   { locator, register, rootNode, rootSwiss(set later), toolboxFor, manifestFor }
-export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFile, fillSpecialist, wandPolicy, peerBridge = endoPeer, peerRedemption = process.env.FIELD_AGENT_PEER_REDEMPTION === '1' } = {}) => {
+export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFile, fillSpecialist, wandPolicy, customView = {}, peerBridge = endoPeer, peerRedemption = process.env.FIELD_AGENT_PEER_REDEMPTION === '1' } = {}) => {
   const aff = makeAffordances({ outDir });
   // worktree manager for write-capable role sub-agents (runs on the UNCONFINED host shell).
   const worktrees = makeWorktrees({ host: aff.host });
@@ -1871,6 +1871,28 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       { name: 'listComponents', reversible: false, args: {}, description: 'List the saved/broken-out UI components in the library (id, name, declared cells) so you can REUSE one instead of rewriting it.' },
       { name: 'readComponent', reversible: false, args: { id: 'string — a uicomp- id from listComponents' }, description: 'Read a saved component\'s SOURCE (a (ui)=>element function) so you can reuse/adapt its pattern inside your own showComponent. Render-safe code only.' },
     );
+    // customView — author or revise the CONFINED CUSTOM VIEW (renderer) for a kind of object: a contact, an
+    // HA entity, an inventory capability. You WRITE the renderer yourself (no hidden agent) and register it
+    // here; this whole turn is visible in the normal trace — the chat IS the studio. The renderer is keyed by
+    // KIND (all contacts share one 'contact' view) or, for an inventory object, by its METHOD-SET. Registering
+    // makes it render wherever that kind appears (the navigator leaf, the trace, a shared link). Root-only:
+    // the renderer registry is the operator's. A custom-view TASK arrives in the message as `[custom-view
+    // task — … kind: … methods: … sample (props.value): … (current source to revise:) …]`.
+    if (node.isRoot && customView && typeof customView.register === 'function') {
+      toolbox.customView = harden({ run: async ({ kind, methods, objectName, source } = {}) => {
+        const src = String(source || '');
+        if (!/^\s*[(a-zA-Z_$]/.test(src) || !src.includes('=>')) return { ok: false, error: 'source must be a SINGLE arrow function expression: (endowments, props) => vnode (no const/import/export, no JSX)' };
+        if (src.length > 8000) return { ok: false, error: 'renderer source too long (keep it under 8000 chars)' };
+        const r = customView.register({ kind: String(kind || ''), methods: Array.isArray(methods) ? methods : [], objectName: String(objectName || 'object'), source: src, owner: 'root' });
+        return r && r.ok ? { ok: true, sig: r.sig, version: r.version, note: `Registered the custom view for ${kind ? `the ${kind}` : 'this object'} (v${r.version}). It now renders wherever this kind appears.` } : (r || { ok: false, error: 'custom views are unavailable here' });
+      } });
+      manifest.push({ name: 'customView', reversible: false, args: {
+        kind: 'string — the KIND this view is for (e.g. "contact", "agent", "ha:light", "object"). Use the kind from the custom-view task. All objects of one kind SHARE this view.',
+        methods: 'array — for an inventory OBJECT, its method names (props.methods you may props.call); OMIT/[] for a data-only leaf like a contact (keyed by kind alone).',
+        objectName: 'string — a short label for the thing being viewed (used as the renderer name).',
+        source: 'string — the renderer: a SINGLE arrow function `(endowments, props) => vnode` (NO module, NO JSX). Build with `endowments.h(tag_or_Component, props, ...children)`. props.value = a SAMPLE of the object\'s data — render it legibly for THIS shape. props.methods = method names; props.call(method, argsArray) = INVOKE one (host-mediated; returns a Promise) — wire actions to it; NEVER call a method not in props.methods. props.refresh() re-fetches. endowments.useState/useEffect = local UI state. UI-KIT primitives are BARE GLOBALS — prefer h(Card,…), List, Banner, Badge, Row, Stack, Field, TextField, Btn, Table, Chip. CONFINEMENT: no DOM/network/fs/caps beyond props.call. Use theme CSS vars, never hardcoded colours.',
+      }, description: 'Author or REVISE the custom view (a confined renderer) for a KIND of object — a contact, an HA entity, an inventory capability. You write the (endowments,props)=>vnode yourself; this registers it so it renders wherever that kind appears. Use it to fulfil a "custom view" / "make a view for this …" task; if the task includes a current source, iterate THAT rather than rewriting. The chat IS the studio — this turn is visible in the trace.' });
+    }
     // proposeTool — ALWAYS available. Build a new tool (a pure JS function of `args`) and propose it to
     // the library. It is NOT injected into anyone's scope or made callable; it queues PENDING for dan to
     // REVIEW the code, then admit. (A delegate's proposals are also RETURNED by delegateTask as data.)

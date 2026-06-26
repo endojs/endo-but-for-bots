@@ -488,7 +488,11 @@ const fillSpecialist = process.env.SELF_HEAL === '0' ? undefined : async ({ name
   try { const j = JSON.parse(m[0]); return { domain: String(j.domain || ''), powers: Array.isArray(j.powers) ? j.powers : [], instructions: String(j.instructions || '') }; }
   catch { return null; }
 };
-const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, haResolveReadOnly, changelog } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL, fillSpecialist });
+// customView — late-bound holder the chat agent's `customView` tool calls to register a renderer it AUTHORED.
+// makeFieldAgent runs before `blossom` exists, so the server populates `customView.register` below; the tool
+// reads it at call-time. This is the seam that lets a NORMAL chat agent (visible in the trace) be the studio.
+const customView = {};
+const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, haResolveReadOnly, changelog } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL, fillSpecialist, customView });
 liveCells = makeLiveCells({ nodeFor }); // browser-subscribable live grains (cap-gated)
 // Least-authority cross-user share tokens for a broken-out component: subscribe-only to its frozen cells.
 const componentShares = makeComponentShares({ file: `${HOME}/.local/state/voice-agent/component-shares.json`, makePurse, purseStore });
@@ -521,6 +525,11 @@ const authorRendererWith = llm => async args => {
 const authorRenderer = authorRendererWith(async messages => ({ text: String(await opusComplete({ system: messages[0].content, prompt: messages[1].content, maxTokens: 2000 }) || '') }));
 const blossom = makeBlossom({ file: process.env.BLOSSOM_STORE || `${HOME}/.local/state/voice-agent/blossom.json`, forks, authorRenderer,
   maxConcurrent: Number(process.env.BLOSSOM_MAX_CONCURRENT) || 2, maxTotal: Number(process.env.BLOSSOM_MAX_TOTAL) || 300 });
+// Wire the late-bound seam: the chat agent's `customView` tool registers/revises a renderer it AUTHORED
+// itself (no hidden LLM — the agent IS the studio, visible in the trace). `current` hands the agent the
+// existing source so a revise iterates rather than rewrites.
+customView.register = ({ kind, methods, source, objectName, owner }) => blossom.register({ kind: String(kind || ''), methods: Array.isArray(methods) ? methods : [], source, objectName: String(objectName || 'object'), owner: owner || 'root' });
+customView.current = ({ kind, methods }) => { const e = blossom.rendererFor(Array.isArray(methods) ? methods : [], String(kind || '')); if (!e || !e.forkId) return null; const r = forks.read(e.forkId, 'root'); return r ? { sig: e.sig, forkId: e.forkId, source: r.source } : null; };
 // build a read-only cell source for a shared cell (re-resolved each time from the live HA trie).
 const shareCellReader = handle => () => { const ro = haResolveReadOnly(handle); return ro && ro.state ? ro.state() : { state: '(unavailable)' }; };
 
@@ -2129,6 +2138,9 @@ const handler = async (req, res) => {
       }
       if (u.pathname === '/blossom/for') return json(res, 200, { ok: true, entry: blossom.rendererFor(body.methods || [], String(body.kind || '')) || { status: 'none', sig: blossom.sigOf(body.methods || [], String(body.kind || '')) } });
       if (u.pathname === '/blossom/source') { const e = blossom.bySig(body.sig); if (!e || e.status !== 'ready' || !e.forkId) return json(res, 200, { ok: false, error: 'no ready renderer for this signature' }); const src = forks.source(e.forkId, 'root'); return json(res, 200, src ? { ok: true, sig: e.sig, forkId: e.forkId, source: src } : { ok: false, error: 'renderer fork missing' }); }
+      // register: install a renderer whose SOURCE is provided directly (no LLM) — the HTTP primitive behind the
+      // chat agent's `customView` tool. Create-or-revise by signature.
+      if (u.pathname === '/blossom/register') return json(res, 200, blossom.register({ kind: String(body.kind || ''), methods: body.methods || [], source: String(body.source || ''), objectName: String(body.name || 'object'), owner: 'root' }));
       if (u.pathname === '/blossom/list') return json(res, 200, { ok: true, renderers: blossom.list(), stats: blossom.stats() });
       if (u.pathname === '/blossom/forget') return json(res, 200, { ok: blossom.forget(String(body.sig || '')) });
       return json(res, 404, { ok: false, error: 'unknown blossom route' });
