@@ -97,7 +97,10 @@ const noop = () => {};
 const resolveLocation = (rel, abs) =>
   /** @type {FileUrlString} */ (new URL(rel, abs).toString());
 
-// this is annoying
+// A record arrives in one of two shapes — either wrapped, with the payload
+// under a nested `record` property, or unwrapped — so we must probe for
+// `record.record` before reading `imports`. That dual shape is the annoying
+// part, and it is unchanged by the arrow/`function`-keyword spelling.
 const getImportsFromRecord = record =>
   (has(record, 'record') ? record.record.imports : record.imports) || [];
 
