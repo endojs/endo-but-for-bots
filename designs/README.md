@@ -407,7 +407,7 @@ LLM-agent stack).*
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [pass-style-promise](pass-style-promise.md) | 2026-05-10 | 2026-05-10 | Proposed |
-| [sturdy-refs-finalization-registry](sturdy-refs-finalization-registry.md) | 2026-06-22 | 2026-06-22 | Proposed |
+| [sturdy-refs-finalization-registry](sturdy-refs-finalization-registry.md) | 2026-06-26 | 2026-06-26 | Proposed |
 | [namehub-interface-unification](namehub-interface-unification.md) | 2026-05-07 | 2026-05-07 | Proposed |
 | [forge-gap-analysis](forge-gap-analysis.md) | 2026-05-20 | 2026-05-20 | Reference (exploratory) |
 | [app-sharing-milestone](app-sharing-milestone.md) | 2026-06-01 | 2026-06-01 | Proposed |

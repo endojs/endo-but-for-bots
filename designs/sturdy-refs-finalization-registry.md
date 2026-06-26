@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-06-22 |
+| **Updated** | 2026-06-26 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 
@@ -785,6 +786,8 @@ hinge on a specific latency target.
 | [chat-slot-slash-commands](chat-slot-slash-commands.md) | Reference for the in-memory transient-pin pattern (`captp-bounded-transient-pin` in `journal/library/concepts/`). Worker-via-SturdyRef edges are conceptually analogous: in-memory only, dropped on captp partition. |
 | [daemon-endor-architecture](daemon-endor-architecture.md) | Companion design space. This design does **not** depend on endor surface changes; the alternative design does. |
 | `endojs/endo-but-for-bots#500` | The precipitating PR. `makeUnconfined({ powers })` is the by-reference cap pattern this design generalises through SturdyRefs. |
+| `endojs/endo-but-for-bots#521` | The in-flight implementation of the shared base problem (`feat(pass-style): first-class 'sturdyref' pass-style; ocapn defers to it`). Its review established the inert-data-box correction this design (and the sibling #510) adopts: a SturdyRef is not a presence, is not registered with `HandledPromise`, and `@endo/eventual-send` is unchanged. |
+| `endojs/endo-but-for-bots#510` | The sibling design (`design/sturdy-refs-via-endor-syscall`); shares the base problem, differs on the retention axis (endor `retain`/`release` syscall vs this design's `FinalizationRegistry`). |
 
 ## Spec citations
 
