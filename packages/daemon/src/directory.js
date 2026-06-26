@@ -125,22 +125,22 @@ export const makeDirectoryMaker = ({
     };
 
     /** @type {EndoDirectory['followLocatorNameChanges']} */
-    const followLocatorNameChanges = async function* followLocatorNameChanges(
-      locator,
-    ) {
-      const id = idFromLocator(locator);
-      for await (const idNameChange of petStore.followIdNameChanges(id)) {
-        /** @type {any} */
-        const locatorNameChange = {
-          ...idNameChange,
-          ...(Object.hasOwn(idNameChange, 'add')
-            ? { add: locator }
-            : { remove: locator }),
-        };
+    const followLocatorNameChanges = {
+      async *followLocatorNameChanges(locator) {
+        const id = idFromLocator(locator);
+        for await (const idNameChange of petStore.followIdNameChanges(id)) {
+          /** @type {any} */
+          const locatorNameChange = {
+            ...idNameChange,
+            ...(Object.hasOwn(idNameChange, 'add')
+              ? { add: locator }
+              : { remove: locator }),
+          };
 
-        yield /** @type {LocatorNameChange} */ (locatorNameChange);
-      }
-    };
+          yield /** @type {LocatorNameChange} */ (locatorNameChange);
+        }
+      },
+    }.followLocatorNameChanges;
 
     /** @type {EndoDirectory['list']} */
     const list = async (...petNamePath) => {
@@ -169,17 +169,17 @@ export const makeDirectoryMaker = ({
     };
 
     /** @type {EndoDirectory['followNameChanges']} */
-    const followNameChanges = async function* followNameChanges(
-      ...petNamePath
-    ) {
-      assertNames(petNamePath);
-      if (petNamePath.length === 0) {
-        yield* petStore.followNameChanges();
-        return;
-      }
-      const hub = /** @type {NameHub} */ (await lookup(petNamePath));
-      yield* await E(hub).followNameChanges();
-    };
+    const followNameChanges = {
+      async *followNameChanges(...petNamePath) {
+        assertNames(petNamePath);
+        if (petNamePath.length === 0) {
+          yield* petStore.followNameChanges();
+          return;
+        }
+        const hub = /** @type {NameHub} */ (await lookup(petNamePath));
+        yield* await E(hub).followNameChanges();
+      },
+    }.followNameChanges;
 
     /** @type {EndoDirectory['remove']} */
     const remove = async (...petNamePath) => {

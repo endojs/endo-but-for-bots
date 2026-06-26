@@ -114,21 +114,48 @@ Concise method syntax does not remove that `prototype`; it only drops the
 `function` keyword, which is why the preference is about house-style consistency
 rather than a change in hazard.
 
-The `function*`/`async function*` keyword stays in place when the generator is
-not naturally a member of an object — most commonly an anonymous generator used
-only to reach an intrinsic generator prototype:
+The `function*`/`async function*` keyword stays in place in two situations: an
+anonymous generator used only to reach an intrinsic generator prototype, and a
+standalone top-level generator *declaration* that is not naturally a member of an
+object. In both situations the generator is not an object member, so the only
+keyword-free spelling would be to wrap it in an object literal and immediately
+extract the method (`{ *name() {} }.name`); for these cases that wrapper is pure
+indirection with no readability gain, so the keyword stays.
+
+Intrinsic-prototype sentinels:
 
 - `packages/trampoline/src/trampoline.js`: `function* () {}` sentinel, used only
   to extract the intrinsic generator prototype via `getPrototypeOf`.
 - `packages/ses/src/commons.js` and `get-anonymous-intrinsics.js`: the same
-  intrinsic-extraction pattern.
+  intrinsic-extraction pattern (including the Hermes async-generator
+  feature-detection sentinel in `commons.js`).
 
-Many `function*`/`async function*` sites in this repository predate this rule
-(for example across `packages/daemon/src/`, `packages/compartment-mapper/src/`,
-and `packages/captp/src/`). Those that are naturally object members — for
-instance `packages/captp/src/atomics.js`'s `trapHost` — should become concise
-generator methods, but converting them is follow-up work tracked separately from
-this PR rather than bundled into it.
+Standalone top-level generator declarations:
+
+- `packages/compartment-mapper/src/`: `function* enumerate`
+  (`compartment-map.js`), `function* chooseModuleDescriptor` (`import-hook.js`),
+  `function* getParserGenerator` (`map-parser.js`), and the `function*`
+  declarations in `infer-exports.js` (`interpretBrowserField`,
+  `interpretExports`, `interpretImports`, and the exported
+  `inferExportsEntries`). These are module-level helper declarations, not members
+  of any object.
+- `packages/ses/src/module-load.js`: `function* loadWithoutErrorAnnotation`, a
+  module-level declaration.
+
+Generators that *are* naturally object members have been converted to concise
+generator methods in this repository, so the keyword form is reserved for the
+standalone cases above. The conversions include `packages/captp/src/atomics.js`'s
+`trapHost` (now a concise `async *trapHost()` method on a hardened object) and the
+`async function*` subscription generators in `packages/daemon/src/` — the
+`followNameChanges`, `followIdNameChanges`, `followLocatorNameChanges`, and
+`followMessages` generators in `pet-sitter.js`, `pet-store.js`, `mail.js`,
+`directory.js`, and `daemon.js`, plus the `generateNumbers` connection-number
+counters in `daemon-node-powers.js`, `networks/tcp-netstring.js`, and
+`web-server-node.js`. Each was a `const` bound to a named generator expression and
+later assembled into a returned or `Far()`/`makeExo`-wrapped object; each is now
+written as a concise generator method on an object literal, preserving the `const`
+binding, the generator's name, and its JSDoc `@type` annotation while dropping the
+`function*` keyword.
 
 ### Vendored or third-party-derived code
 
