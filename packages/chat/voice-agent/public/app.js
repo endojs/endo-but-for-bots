@@ -2094,7 +2094,14 @@ const mountCustomView = async (el, cv) => {
   const sr = await bf('/blossom/source', { cap: chatCap(), sig: e.sig }); if (!sr || !sr.ok) return;
   el.innerHTML = '';
   const props = { value: cv.sample, name: cv.name, kind: cv.kind, methods: cv.methods || [] };
-  if (cv.callable) props.call = async (m, args) => { const cr = await rpc('objectCall', [cv.name, m, Array.isArray(args) ? args : (args == null ? [] : [args])]); return cr && cr.value; };
+  // The mediated handle is ATTENUATED to exactly the methods this view was granted: the confined component
+  // can only invoke those (read-only by construction — a view handed only read methods cannot act). The
+  // confined renderer holds nothing but this props.call, so scoping it here IS the component's authority boundary.
+  if (cv.callable) props.call = async (m, args) => {
+    const allowed = Array.isArray(cv.methods) ? cv.methods : [];
+    if (allowed.length && !allowed.includes(m)) throw new Error(`this view holds a ${cv.kind || 'object'} handle scoped to: ${allowed.join(', ')} — not "${m}"`);
+    const cr = await rpc('objectCall', [cv.name, m, Array.isArray(args) ? args : (args == null ? [] : [args])]); return cr && cr.value;
+  };
   const ok = window.__fieldIslands && window.__fieldIslands.renderSource && window.__fieldIslands.renderSource(sr.source, el, props);
   if (!ok) el.innerHTML = '<div class="pmeta">This view renders once the confined runtime (lockdown) is on.</div>';
 };
