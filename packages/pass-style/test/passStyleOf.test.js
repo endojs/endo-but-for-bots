@@ -541,9 +541,10 @@ test('Allow toStringTag overrides', t => {
 // Regression test for https://github.com/endojs/endo/issues/3156
 //
 // `document.all` is the only known JS value with the [[IsHTMLDDA]] internal
-// slot. Such a value reports `typeof` as `'undefined'` and is loose-equal
-// (`==`) to both `null` and `undefined`, but is strict-equal (`===`) to
-// neither. It is also non-extensible: HTMLAllCollection's
+// slot, and is the only JS value the current TC39 specification permits to
+// have it (Annex B). Such a value reports `typeof` as `'undefined'` and is
+// loose-equal (`==`) to both `null` and `undefined`, but is strict-equal
+// (`===`) to neither. It is also non-extensible: HTMLAllCollection's
 // [[PreventExtensions]] unconditionally returns false, so the value cannot
 // be frozen. The slot is browser-only and cannot be reproduced in Node.js
 // (Proxies cannot influence `typeof`, and there is no host API to install
