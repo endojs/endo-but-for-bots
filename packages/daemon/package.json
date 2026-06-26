@@ -61,6 +61,7 @@
     "@endo/captp": "workspace:^",
     "@endo/compartment-mapper": "workspace:^",
     "@endo/daemon-cas": "workspace:^",
+    "@endo/endo-fs": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
