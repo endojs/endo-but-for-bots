@@ -53,6 +53,7 @@ export const makePetSitter = (petStore, specialNames) => {
 
   /** @type {PetStore['followNameChanges']} */
   const followNameChanges = {
+    /** @returns {ReturnType<PetStore['followNameChanges']>} */
     async *currentAndSubsequentNames() {
       for (const name of Object.keys(specialNames).sort()) {
         const idRecord = idRecordForName(name);
@@ -67,6 +68,7 @@ export const makePetSitter = (petStore, specialNames) => {
 
   /** @type {PetStore['followIdNameChanges']} */
   const followIdNameChanges = {
+    /** @returns {ReturnType<PetStore['followIdNameChanges']>} */
     async *currentAndSubsequentIds(id) {
       const subscription = petStore.followIdNameChanges(id);
 

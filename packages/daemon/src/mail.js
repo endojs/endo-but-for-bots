@@ -143,6 +143,7 @@ export const makeMailboxMaker = ({
 
     /** @type {Mail['followMessages']} */
     const followMessages = {
+      /** @returns {ReturnType<Mail['followMessages']>} */
       async *currentAndSubsequentMessages() {
         const subsequentRequests = messagesTopic.subscribe();
         yield* messages.values();

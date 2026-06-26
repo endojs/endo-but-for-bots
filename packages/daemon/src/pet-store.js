@@ -137,6 +137,7 @@ export const makePetStoreMaker = (filePowers, config) => {
 
     /** @type {PetStore['followNameChanges']} */
     const followNameChanges = {
+      /** @returns {ReturnType<PetStore['followNameChanges']>} */
       async *currentAndSubsequentNames() {
         const subscription = nameChangesTopic.subscribe();
         for (const name of idsToPetNames.getAll().sort()) {
@@ -155,6 +156,7 @@ export const makePetStoreMaker = (filePowers, config) => {
 
     /** @type {PetStore['followIdNameChanges']} */
     const followIdNameChanges = {
+      /** @returns {ReturnType<PetStore['followIdNameChanges']>} */
       async *currentAndSubsequentIds(id) {
         if (!idsToTopics.has(id)) {
           idsToTopics.set(id, makeIdChangeTopic());
