@@ -23,7 +23,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const cleanup = () => { try { srv && srv.kill('SIGKILL'); } catch {} try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {} };
 
 const METHODS = ['ping', 'status', 'describe'];
-const sig = `sig-${crypto.createHash('sha256').update(`iface:${[...METHODS].sort().join(',')}`).digest('hex').slice(0, 16)}`;
+const sig = `sig-${crypto.createHash('sha256').update(`iface:object|${[...METHODS].sort().join(',')}`).digest('hex').slice(0, 16)}`;
 const RENDERER = "(endowments, props) => endowments.h('div', { class: 'bespoke' }, 'BESPOKE-VIEW ' + (props.name || ''))";
 
 (async () => {
@@ -51,9 +51,9 @@ const RENDERER = "(endowments, props) => endowments.h('div', { class: 'bespoke' 
   const cap = fs.readFileSync(path.join(tmp, 'root.swiss'), 'utf8').trim();
 
   // /blossom/for finds the pre-seeded renderer for the object's interface signature
-  const forR = await (await fetch(`${BASE}/blossom/for`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, methods: METHODS }) })).json();
+  const forR = await (await fetch(`${BASE}/blossom/for`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, methods: METHODS, kind: 'object' }) })).json();
   ok(forR.ok && forR.entry.status === 'ready' && forR.entry.sig === sig, 'the registry maps the object’s interface signature → a ready renderer');
-  const ens = await (await fetch(`${BASE}/blossom/ensure`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, name: 'Widget', methods: METHODS, sample: {} }) })).json();
+  const ens = await (await fetch(`${BASE}/blossom/ensure`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, name: 'Widget', methods: METHODS, sample: {}, kind: 'object' }) })).json();
   ok(ens.ok && ens.entry.status === 'ready', 'ensure on an already-known interface returns the existing renderer (does NOT re-blossom)');
 
   let chromium = null;

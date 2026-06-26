@@ -15,8 +15,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 
 const methodNames = methods => [...new Set((methods || []).map(m => (typeof m === 'string' ? m : m && m.name)).filter(Boolean))].sort();
-// sigOf — the interface signature: a stable hash of the sorted method-set. THIS is the object's "type".
-export const sigOf = methods => { const ms = methodNames(methods); return ms.length ? `sig-${crypto.createHash('sha256').update(`iface:${ms.join(',')}`).digest('hex').slice(0, 16)}` : 'sig-empty'; };
+// sigOf — the interface signature: a stable hash of the leaf's KIND + its sorted method-set. THIS is the
+// "type" a renderer is keyed on. `kind` lets methodLESS navigator leaves (a contact, an HA entity, an agent)
+// still get distinct, shared renderers (all contacts → one renderer); inventory objects key on their methods.
+export const sigOf = (methods, kind = '') => { const ms = methodNames(methods); const k = String(kind || ''); return (ms.length || k) ? `sig-${crypto.createHash('sha256').update(`iface:${k}|${ms.join(',')}`).digest('hex').slice(0, 16)}` : 'sig-empty'; };
 
 // makeBlossom({ file, forks, authorRenderer, maxConcurrent, maxTotal })
 //   forks          — the forks store (makeForks): a renderer is created as forks.create(...).
@@ -27,7 +29,7 @@ export const makeBlossom = ({ file, forks, authorRenderer, maxConcurrent = 2, ma
   const save = () => { try { fs.writeFileSync(file, JSON.stringify(data, null, 2)); } catch { /* best-effort */ } };
   const inflight = new Set(); // per-signature lock (the de-dup that makes "eager" safe)
 
-  const rendererFor = methods => data.renderers[sigOf(methods)] || null;
+  const rendererFor = (methods, kind = '') => data.renderers[sigOf(methods, kind)] || null;
   const bySig = sig => data.renderers[String(sig || '')] || null;
   const list = () => Object.values(data.renderers);
 
@@ -35,20 +37,20 @@ export const makeBlossom = ({ file, forks, authorRenderer, maxConcurrent = 2, ma
   // the registry entry (may be 'blossoming' — poll). Never re-fires an existing/in-flight/failed signature.
   // `author` (optional) overrides the default authorRenderer for THIS blossom — used to meter the LLM call
   // against the triggering CHAT's purse (the toll-bridge), so blossoming draws from that chat's budget.
-  const ensure = async ({ methods, objectName = 'object', sample, owner = 'root', author }) => {
+  const ensure = async ({ methods, objectName = 'object', sample, owner = 'root', author, kind = '' }) => {
     const authorFn = author || authorRenderer;
-    const sig = sigOf(methods);
+    const sig = sigOf(methods, kind);
     if (sig === 'sig-empty') return { sig, status: 'no-interface', reason: 'object exposes no methods to key a renderer on' };
     if (data.renderers[sig]) return data.renderers[sig]; // ready | blossoming | failed — do not re-fire
     if (inflight.has(sig)) return { sig, status: 'blossoming' };
     if (inflight.size >= maxConcurrent) return { sig, status: 'queued', reason: 'too many renderers blossoming at once — try again shortly' };
     if (data.count >= maxTotal) return { sig, status: 'budget-exhausted', reason: `the renderer budget (${maxTotal}) is used up` };
     inflight.add(sig);
-    data.renderers[sig] = { sig, status: 'blossoming', name: objectName, methods: methodNames(methods), at: new Date().toISOString() };
+    data.renderers[sig] = { sig, status: 'blossoming', name: objectName, kind, methods: methodNames(methods), at: new Date().toISOString() };
     save();
     (async () => {
       try {
-        const source = await authorFn({ sig, objectName, methods: methodNames(methods), sample });
+        const source = await authorFn({ sig, objectName, methods: methodNames(methods), sample, kind });
         if (!source || typeof source !== 'string' || !source.trim()) throw new Error('the renderer agent produced no source');
         const fk = forks.create({ source, name: `${objectName} renderer`, baseId: `blossom:${sig}`, owner });
         if (!fk.ok) throw new Error(fk.error || 'could not create the renderer fork');

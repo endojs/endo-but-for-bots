@@ -22,7 +22,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const cleanup = () => { try { srv && srv.kill('SIGKILL'); } catch {} try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {} };
 
 const METHODS = ['send', 'inbox', 'describe'];
-const sig = `sig-${crypto.createHash('sha256').update(`iface:${[...METHODS].sort().join(',')}`).digest('hex').slice(0, 16)}`;
+const sig = `sig-${crypto.createHash('sha256').update(`iface:object|${[...METHODS].sort().join(',')}`).digest('hex').slice(0, 16)}`;
 // an INTERACTIVE renderer: a text field + a Send button that invokes props.call('send', [text]) via the mediated cap
 const RENDERER = "(endowments, props) => { const { h, useState } = endowments; const [text, setText] = useState(''); const [flash, setFlash] = useState(''); return h('div', { class: 'kbox' }, [ h('div', null, '✉ to ' + (props.name || '')), h('input', { id: 'w-input', value: text, oninput: e => setText(e.target.value) }), h('button', { id: 'w-send', onclick: () => { props.call('send', [text]).then(() => setFlash('sent')); } }, 'Send'), flash ? h('span', { id: 'w-flash' }, flash) : null ]); }";
 

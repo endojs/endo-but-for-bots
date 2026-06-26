@@ -22,7 +22,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const cleanup = () => { try { srv && srv.kill('SIGKILL'); } catch {} try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {} };
 
 const METHODS = ['send', 'inbox', 'describe'];
-const sig = `sig-${crypto.createHash('sha256').update(`iface:${[...METHODS].sort().join(',')}`).digest('hex').slice(0, 16)}`;
+const sig = `sig-${crypto.createHash('sha256').update(`iface:object|${[...METHODS].sort().join(',')}`).digest('hex').slice(0, 16)}`;
 // a renderer that reads props.value (the object's data) → proves the preview is fed REAL data, not empty
 const RENDERER = "(endowments, props) => endowments.h('div', { class: 'pv' }, 'PEER: ' + ((props.value && props.value.name) || 'EMPTY') + ' / ' + ((props.value && props.value.kind) || '?'))";
 
@@ -61,7 +61,7 @@ const RENDERER = "(endowments, props) => endowments.h('div', { class: 'pv' }, 'P
     await page.goto(`${BASE}/`, { waitUntil: 'load' }); await sleep(2000);
 
     // "Generate" breaks into a chat: a studio widget mounts
-    await page.evaluate(() => window.openRendererStudio('Kumavis', ['send', 'inbox', 'describe']));
+    await page.evaluate(() => window.openRendererStudio({ name: 'Kumavis', kind: 'object', methods: ['send', 'inbox', 'describe'], callable: true }));
     await page.waitForFunction(() => !!document.querySelector('.bloom-mount'), { timeout: 6000 }).catch(() => {});
     ok(await page.$('.bloom-mount') !== null, 'Generate broke out into a chat with the renderer studio widget');
 

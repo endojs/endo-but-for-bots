@@ -148,15 +148,15 @@ const objectInspector = async (name, opts = {}) => {
   // checkbox (persisted) for the eager behaviour. A renderer already authored for this interface is reused.
   let rendererSrc = null; let lastValue = undefined;
   const bfetch = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then(r => r.json()).catch(() => null);
-  const genControls = (prefix) => { const host = $('insp-bloom'); if (!host) return; host.innerHTML = `${prefix || ''}<div style="margin-top:6px"><button class="mini" id="insp-gen">✨ Generate a custom view</button> <label style="font-size:11px;color:var(--mut);margin-left:8px;cursor:pointer"><input type="checkbox" id="insp-auto"${localStorage.getItem('blossom-auto') === '1' ? ' checked' : ''}> always generate interfaces for unknown objects</label></div>`; const g = $('insp-gen'); if (g) g.onclick = () => openRendererStudio(o.name, methods); const a = $('insp-auto'); if (a) a.onchange = () => { try { localStorage.setItem('blossom-auto', a.checked ? '1' : '0'); } catch {} }; };
+  const genControls = (prefix) => { const host = $('insp-bloom'); if (!host) return; host.innerHTML = `${prefix || ''}<div style="margin-top:6px"><button class="mini" id="insp-gen">✨ Generate a custom view</button> <label style="font-size:11px;color:var(--mut);margin-left:8px;cursor:pointer"><input type="checkbox" id="insp-auto"${localStorage.getItem('blossom-auto') === '1' ? ' checked' : ''}> always generate interfaces for unknown objects</label></div>`; const g = $('insp-gen'); if (g) g.onclick = () => openRendererStudio({ name: o.name, kind: 'object', methods, callable: true }); const a = $('insp-auto'); if (a) a.onchange = () => { try { localStorage.setItem('blossom-auto', a.checked ? '1' : '0'); } catch {} }; };
   // populate props.value with REAL data (describe) so a ready view isn't empty before any method is clicked
   const loadReady = async sig => { const s = await bfetch('/blossom/source', { cap, sig }); if (s && s.ok) { rendererSrc = s.source; if (lastValue === undefined) { try { lastValue = await callObj(methods.includes('describe') ? 'describe' : methods[0], []); } catch {} } paintBespoke(); return true; } return false; };
   const triggerBlossom = async () => {
     const host = $('insp-bloom'), st = $('insp-bloom-status');
     if (host) host.innerHTML = '<div class="pmeta">🌱 generating a custom view… <span style="color:var(--mut)">(drawing from this chat’s budget)</span></div>';
-    await bfetch('/blossom/ensure', { cap, sessionId, name: o.name, methods, sample: { name: o.name, transport: o.transport, methods } });
+    await bfetch('/blossom/ensure', { cap, sessionId, name: o.name, methods, kind: 'object', sample: { name: o.name, transport: o.transport, methods } });
     for (let i = 0; i < 24; i++) {
-      const r = await bfetch('/blossom/for', { cap, methods }); const e = r && r.entry; if (!e) { if (st) st.textContent = ''; return; }
+      const r = await bfetch('/blossom/for', { cap, methods, kind: 'object' }); const e = r && r.entry; if (!e) { if (st) st.textContent = ''; return; }
       if (st) st.textContent = `· ${e.status}`;
       if (e.status === 'ready') { if (st) st.textContent = ''; await loadReady(e.sig); return; }
       if (e.status === 'failed' || e.status === 'budget-exhausted' || e.status === 'no-interface' || e.status === 'queued') { if (st) st.textContent = ''; genControls(`<div class="pmeta">⚠︎ ${esc(e.reason || e.status)}</div>`); return; }
@@ -165,7 +165,7 @@ const objectInspector = async (name, opts = {}) => {
   };
   const setupBloom = async () => {
     const host = $('insp-bloom'); if (!host) return;
-    const r = await bfetch('/blossom/for', { cap, methods }); const e = r && r.entry;
+    const r = await bfetch('/blossom/for', { cap, methods, kind: 'object' }); const e = r && r.entry;
     if (e && e.status === 'ready') { if (await loadReady(e.sig)) return; }
     if (e && e.status === 'blossoming') { host.innerHTML = '<div class="pmeta">🌱 generating a custom view…</div>'; triggerBlossom(); return; } // already in flight → just poll
     if (localStorage.getItem('blossom-auto') === '1') { triggerBlossom(); return; } // opted into eager
@@ -1603,6 +1603,22 @@ const renderNavList = () => {
   document.querySelectorAll('#obj-list [data-shro]').forEach(b => { b.onclick = e => { e.stopPropagation(); const k = shown[+b.dataset.shro]; mintNode(loc.ns, k.handle, k.label, true); }; });
   document.querySelectorAll('#obj-list [data-shfull]').forEach(b => { b.onclick = e => { e.stopPropagation(); const k = shown[+b.dataset.shfull]; mintNode(loc.ns, k.handle, k.label, false); }; });
 };
+// the blossom KIND for a navigator leaf — all contacts share one renderer, all agents another, HA entities
+// keyed by domain (lights vs locks differ). This is what makes the inspector/blossom work on ANY leaf.
+const blossomKindFor = (ns, n) => { if (ns === 'contacts') return 'contact'; if (ns === 'agents') return 'agent'; if (ns === 'ha') { const eid = n && n.entity_id; return eid ? `ha:${String(eid).split('.')[0]}` : 'ha-entity'; } return `${ns}${n && n.kind ? `:${n.kind}` : ''}`; };
+// append a custom-view affordance to a leaf's detail: render a ready renderer inline (props.value = the
+// leaf's data), and a 🎨 Generate/Revise button that opens the renderer studio for this KIND.
+const appendLeafBlossom = async (kind, name, data) => {
+  const node = $('obj-node'); if (!node) return;
+  const bf = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then(r => r.json()).catch(() => null);
+  const wrap = document.createElement('div'); wrap.style.cssText = 'margin-top:10px;border-top:1px solid var(--edge);padding-top:8px';
+  const r = await bf('/blossom/for', { cap, methods: [], kind }); const e = r && r.entry;
+  if (e && e.status === 'ready' && e.forkId) { const s = await bf('/blossom/source', { cap, sig: e.sig }); if (s && s.ok && window.__fieldIslands && window.__fieldIslands.renderSource) { const view = document.createElement('div'); view.style.cssText = 'margin-bottom:8px'; wrap.appendChild(view); window.__fieldIslands.renderSource(s.source, view, { value: data, name, kind }); } }
+  const btn = document.createElement('button'); btn.className = 'mini'; btn.textContent = (e && e.status === 'ready') ? '🎨 Revise the custom view' : '🎨 Generate a custom view';
+  btn.onclick = () => openRendererStudio({ name, kind, methods: [], data, callable: false });
+  wrap.appendChild(btn); node.appendChild(wrap);
+};
+window.appendLeafBlossom = appendLeafBlossom; window.blossomKindFor = blossomKindFor; // staging hooks
 const renderNav = async () => {
   const loc = navStack[navStack.length - 1];
   $('obj-crumbs').innerHTML = ['<a href="#" data-crumb="-1">Home</a>'].concat(navStack.map((l, i) => `<a href="#" data-crumb="${i}">${esc(l.label)}</a>`)).join(' › ');
@@ -1640,6 +1656,7 @@ const renderNav = async () => {
       const det = [n.org && `🏢 ${n.org}`, ...(n.emails || []).map(e => `✉️ ${e}`), ...(n.tels || []).map(t => `📞 ${t}`), n.note && `📝 ${n.note}`].filter(Boolean);
       $('obj-node').innerHTML = `<div class="kv" style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span><b>👤 ${esc(curName)}</b></span><button class="mini" id="sh-contact">🔗 share this contact</button></div>${det.length ? `<div style="font-size:13px;margin-top:6px;white-space:pre-wrap">${det.map(esc).join('<br>')}</div>` : '<div class="pmeta">contact</div>'}`;
       const sb = $('sh-contact'); if (sb) sb.onclick = () => mintNode('contacts', n.handle, curName, true);
+      appendLeafBlossom('contact', curName, n); // a contact is blossomable too
     }
     renderNavList(); return;
   }
@@ -1653,6 +1670,7 @@ const renderNav = async () => {
   $('obj-node').innerHTML = `<div class="kv" style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span><b>${esc(kind)}</b> ${esc(curName)}${n.readOnly ? ' · read-only' : ''}</span><span><button class="mini" id="sh-ro">share${roNs ? '' : ' read-only'}</button>${noFull ? '' : '<button class="mini" id="sh-full">share full</button>'}</span></div>${n.truncated ? `<div class="pmeta" style="margin-top:4px">+${n.truncated} more not shown — drill into a subfolder or use the filter</div>` : ''}`;
   $('sh-ro').onclick = () => mintNode(loc.ns, n.handle, curName, true);
   if ($('sh-full')) $('sh-full').onclick = () => mintNode(loc.ns, n.handle, curName, false);
+  if (loc.leaf) appendLeafBlossom(blossomKindFor(loc.ns, n), curName, n); // any LEAF (an HA entity, an agent, …) is inspectable + blossomable
   renderNavList();
 };
 const mint = async () => {
@@ -2019,15 +2037,20 @@ const openForkInChat = (fork, title) => {
 // 🎨 RENDERER STUDIO — "Generate a custom view" breaks OUT into a chat where the renderer is generated and
 // ITERATED conversationally: a live preview fed the object's REAL data (+ the mediated call), a "describe a
 // change" prompt that revises the renderer fork, and the source. Fixes the one-shot/empty-view/no-revise gaps.
-const openRendererStudio = (objectName, methods) => {
+const openRendererStudio = (spec) => {
+  const s = typeof spec === 'string' ? { name: spec, kind: 'object', methods: [], callable: true } : spec;
   newChat();
-  if (!chats.some(c => c.id === sessionId)) { chats.unshift({ id: sessionId, title: `🎨 ${objectName} view`, ts: Date.now(), lastMsgAt: Date.now() }); saveChats(); }
-  pushTx('widget', '', { blossom: { name: objectName, methods } });
+  if (!chats.some(c => c.id === sessionId)) { chats.unshift({ id: sessionId, title: `🎨 ${s.name} view`, ts: Date.now(), lastMsgAt: Date.now() }); saveChats(); }
+  pushTx('widget', '', { blossom: s });
   document.body.classList.remove('landing'); showTab('talk'); renderTx(); renderChatList();
 };
 window.openRendererStudio = openRendererStudio;
+// mountBlossomStudio(el, spec) — spec = { name, kind, methods, data?, callable? }. A renderer is keyed by KIND
+// (so ANY navigator leaf — a contact, an HA entity, an agent — gets a shared renderer, not just inventory
+// objects). `data` (pre-fetched, e.g. a contact record) feeds props.value; `callable` (inventory objects)
+// adds the mediated props.call.
 const mountBlossomStudio = async (el, spec) => {
-  const objectName = spec.name; const methods = spec.methods || [];
+  const objectName = spec.name; const kind = spec.kind || 'object'; const methods = spec.methods || []; const callable = spec.callable !== false;
   const bf = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then(r => r.json()).catch(() => null);
   el.innerHTML = '';
   const status = document.createElement('div'); status.style.cssText = 'font-size:11px;color:var(--mut);margin-bottom:6px';
@@ -2039,13 +2062,13 @@ const mountBlossomStudio = async (el, spec) => {
   row.append(input, reviseBtn, srcBtn);
   const srcPre = document.createElement('pre'); srcPre.style.cssText = 'display:none;white-space:pre-wrap;max-height:30vh;overflow:auto;background:var(--panel);border:1px solid var(--edge);border-radius:7px;padding:8px;font:11px ui-monospace,Menlo,monospace;margin-top:6px;color:var(--ink)';
   el.append(status, preview, row, srcPre);
-  let forkId = null, src = null, sample;
+  let forkId = null, src = null, sample = spec.data; // pre-fetched data (a leaf record) feeds props.value
   const callObj = async (m, args) => { const r = await rpc('objectCall', [objectName, m, Array.isArray(args) ? args : (args == null ? [] : [args])]); return r && r.value; };
-  const getSample = async () => { try { sample = await callObj(methods.includes('describe') ? 'describe' : methods[0], []); } catch { sample = undefined; } }; // feed props.value REAL data so the view isn't empty
-  const paint = () => { if (!src) return; preview.innerHTML = ''; const ok = window.__fieldIslands && window.__fieldIslands.renderSource && window.__fieldIslands.renderSource(src, preview, { value: sample, name: objectName, methods, call: callObj, refresh: async () => { await getSample(); paint(); } }); if (!ok) preview.innerHTML = '<div class="pmeta">This view renders once the confined runtime (lockdown) is on.</div>'; srcPre.textContent = src; };
+  const getSample = async () => { if (sample !== undefined) return; if (!callable) { sample = { name: objectName }; return; } try { sample = await callObj(methods.includes('describe') ? 'describe' : methods[0], []); } catch { sample = undefined; } };
+  const paint = () => { if (!src) return; preview.innerHTML = ''; const props = { value: sample, name: objectName, kind, methods, refresh: async () => { sample = spec.data; await getSample(); paint(); } }; if (callable) props.call = callObj; const ok = window.__fieldIslands && window.__fieldIslands.renderSource && window.__fieldIslands.renderSource(src, preview, props); if (!ok) preview.innerHTML = '<div class="pmeta">This view renders once the confined runtime (lockdown) is on.</div>'; srcPre.textContent = src; };
   srcBtn.onclick = () => { srcPre.style.display = srcPre.style.display === 'none' ? 'block' : 'none'; };
-  const loadFork = async () => { const r = await bf('/blossom/for', { cap: chatCap(), methods }); const e = r && r.entry; if (e && e.status === 'ready' && e.forkId) { forkId = e.forkId; const rd = await bf('/forks/read', { cap: chatCap(), id: forkId }); if (rd && rd.ok) { src = rd.source; await getSample(); paint(); reviseBtn.disabled = false; status.textContent = '✓ a custom view for this interface — type a change below to revise it'; return true; } } return false; };
-  const generate = async () => { status.textContent = '🌱 generating a custom view… (drawing from this chat’s budget)'; await bf('/blossom/ensure', { cap: chatCap(), sessionId, name: objectName, methods, sample: { name: objectName, methods } }); for (let i = 0; i < 24; i++) { const r = await bf('/blossom/for', { cap: chatCap(), methods }); const e = r && r.entry; if (e && e.status === 'ready') { await loadFork(); return; } if (e && /failed|budget-exhausted|no-interface|queued/.test(e.status)) { status.textContent = '⚠︎ ' + (e.reason || e.status); return; } await new Promise(r => setTimeout(r, 2500)); } status.textContent = 'timed out — try again'; };
+  const loadFork = async () => { const r = await bf('/blossom/for', { cap: chatCap(), methods, kind }); const e = r && r.entry; if (e && e.status === 'ready' && e.forkId) { forkId = e.forkId; const rd = await bf('/forks/read', { cap: chatCap(), id: forkId }); if (rd && rd.ok) { src = rd.source; await getSample(); paint(); reviseBtn.disabled = false; status.textContent = `✓ a custom view for this ${kind} — type a change below to revise it`; return true; } } return false; };
+  const generate = async () => { status.textContent = '🌱 generating a custom view… (drawing from this chat’s budget)'; await getSample(); await bf('/blossom/ensure', { cap: chatCap(), sessionId, name: objectName, methods, kind, sample: sample || { name: objectName, kind } }); for (let i = 0; i < 24; i++) { const r = await bf('/blossom/for', { cap: chatCap(), methods, kind }); const e = r && r.entry; if (e && e.status === 'ready') { await loadFork(); return; } if (e && /failed|budget-exhausted|no-interface|queued/.test(e.status)) { status.textContent = '⚠︎ ' + (e.reason || e.status); return; } await new Promise(r => setTimeout(r, 2500)); } status.textContent = 'timed out — try again'; };
   const revise = async () => { const p = input.value.trim(); if (!p || !forkId) return; reviseBtn.disabled = true; status.textContent = '✎ revising…'; const r = await bf('/forks/edit', { cap: chatCap(), id: forkId, prompt: p }); if (r && r.ok) { const rd = await bf('/forks/read', { cap: chatCap(), id: forkId }); if (rd && rd.ok) src = rd.source; await getSample(); paint(); status.textContent = `✓ revised → v${r.version}`; input.value = ''; } else status.textContent = '⚠︎ ' + ((r && r.error) || 'revise failed'); reviseBtn.disabled = false; };
   reviseBtn.onclick = revise; input.onkeydown = e => { if (e.key === 'Enter') revise(); };
   if (!(await loadFork())) generate();

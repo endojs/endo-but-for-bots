@@ -28,6 +28,14 @@ test('sigOf is order-independent + stable; different method-sets differ', () => 
   assert.equal(sigOf([]), 'sig-empty');
 });
 
+test('sigOf incorporates the KIND so methodless leaves get distinct, shared renderers', () => {
+  assert.equal(sigOf([], 'contact'), sigOf([], 'contact'), 'same kind → same sig (all contacts share a renderer)');
+  assert.notEqual(sigOf([], 'contact'), sigOf([], 'agent'), 'different kinds differ');
+  assert.notEqual(sigOf([], 'contact'), 'sig-empty', 'a kind ALONE (no methods) keys a renderer');
+  assert.equal(sigOf([], ''), 'sig-empty', 'no kind + no methods = empty');
+  assert.notEqual(sigOf(['send'], 'object'), sigOf(['send'], 'peer'), 'kind also distinguishes method-bearing objects');
+});
+
 test('ensure blossoms a NEW interface once → ready, with a renderer fork', async () => {
   const { blossom, calls, forks } = setup();
   const e = await blossom.ensure({ methods: SEND_INBOX, objectName: 'Kumavis', sample: { kind: 'peer' }, owner: 'root' });
