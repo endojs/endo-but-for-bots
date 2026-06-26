@@ -3,9 +3,25 @@
   const [msg, setMsg] = useState('');
   const [messages, setMessages] = useState([]);
   const [busy, setBusy] = useState(false);
-  const loadInbox = async () => { try { const d = await props.call('inbox', []); setMessages(Array.isArray(d) ? d : d ? [d] : []); } catch (e) {} };
+  const [note, setNote] = useState(null); // { ok, text } — visible send/load feedback (NEVER swallow errors)
+  const loadInbox = async () => {
+    try { const d = await props.call('inbox', []); setMessages(Array.isArray(d) ? d : d ? [d] : []); }
+    catch (e) { setNote({ ok: false, text: 'couldn’t load messages: ' + ((e && e.message) || 'error') }); }
+  };
   useEffect(() => { loadInbox(); }, []);
-  const send = async () => { const text = msg.trim(); if (!text || busy) return; setBusy(true); setMsg(''); try { await props.call('send', [text]); await loadInbox(); } catch (e) {} finally { setBusy(false); } };
+  const send = async () => {
+    const text = msg.trim();
+    if (!text || busy) return;
+    setBusy(true); setNote(null);
+    try {
+      await props.call('send', [text]);     // throws on transport failure (e.g. "iroh stream closed")
+      setMsg(''); setNote({ ok: true, text: 'sent ✓' });
+      await loadInbox();
+    } catch (e) {
+      // surface the failure so the widget never looks silently broken; keep the typed text for a retry
+      setNote({ ok: false, text: 'couldn’t send: ' + ((e && e.message) || 'unknown error') });
+    } finally { setBusy(false); }
+  };
   const v = props.value || {};
   const row = (m, i) => {
     const o = (m && typeof m === 'object') ? m : { text: String(m) };
@@ -25,8 +41,9 @@
     h('hr', { class: 'kit-divider' }),
     h('div', { class: 'kit-stack', style: 'gap:8px;max-height:300px;overflow:auto' },
       messages.length ? messages.map(row) : [h('div', { class: 'pill' }, 'No messages yet — say hello')]),
+    note ? h('div', { style: 'font-size:12px;padding:6px 9px;border-radius:7px;white-space:pre-wrap;word-break:break-word;background:var(--panel);border:1px solid ' + (note.ok ? 'var(--acc)' : 'var(--bad,#cf5a3a)') + ';color:' + (note.ok ? 'var(--ink)' : 'var(--bad,#cf5a3a)') }, (note.ok ? '✓ ' : '⚠︎ ') + note.text) : null,
     h('div', { class: 'kit-rowx', style: 'gap:6px;align-items:center' }, [
-      h('input', { class: 'kit-in', style: 'flex:1', value: msg, placeholder: 'Type a message…', onInput: e => setMsg(e.target.value), onKeyDown: e => { if (e.key === 'Enter') send(); } }),
+      h('input', { class: 'kit-in', style: 'flex:1', value: msg, placeholder: 'Type a message…', disabled: busy, onInput: e => setMsg(e.target.value), onKeyDown: e => { if (e.key === 'Enter') send(); } }),
       h('button', { class: 'mini primary', disabled: busy || !msg.trim(), onClick: send }, busy ? 'Sending…' : 'Send'),
       h('button', { class: 'mini', onClick: loadInbox, title: 'refresh' }, '⟳'),
     ]),
