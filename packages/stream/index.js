@@ -212,6 +212,38 @@ export const mapReader = (reader, transform) => {
 harden(mapReader);
 
 /**
+ * Maps each value read from `reader` to an iterable (a synchronous array or
+ * iterable, or an async iterable / sub-`Reader`) via `transform` and flattens
+ * the results into a single reader, analogous to `Array.prototype.flatMap`.
+ * The identity transform `value => value` flattens a `Reader<TOut[]>` into a
+ * `Reader<TOut>`.
+ *
+ * Back-pressure is preserved: the inner iterable's values are emitted one at a
+ * time as the consumer pulls them, and the next value is read from `reader`
+ * only once the current group is exhausted, so the upstream reader is never
+ * drained ahead of demand. Empty groups simply advance to the next source
+ * value. Early `return`/`throw` and upstream termination propagate through the
+ * delegating `yield*` to both the inner iterable and `reader`.
+ *
+ * @template TIn
+ * @template TOut
+ * @param {import('./types.js').Reader<TIn>} reader
+ * @param {(value: TIn) => Iterable<TOut> | AsyncIterable<TOut>} transform
+ * @returns {import('./types.js').Reader<TOut>}
+ */
+export const flatMapReader = (reader, transform) => {
+  async function* transformGenerator() {
+    for await (const value of reader) {
+      yield* transform(value);
+    }
+    return undefined;
+  }
+  harden(transformGenerator);
+  return harden(transformGenerator());
+};
+harden(flatMapReader);
+
+/**
  * @template TIn
  * @template TOut
  * @param {import('./types.js').Writer<TOut>} writer

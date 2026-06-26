@@ -53,6 +53,40 @@ const singleWriter = mapWriter(doubleWriter, n => n * 2);
 In this example, any value written to singleWriter will be writ double to
 doubleWriter.
 
+## Flat map
+
+To map each value read from a reader to *many* values, use `flatMapReader`.
+It is the stream analog of `Array.prototype.flatMap`: the transform returns an
+iterable (a synchronous array or iterable, or an async iterable / sub-reader)
+and its elements are flattened into the resulting reader.
+
+```js
+const wordReader = flatMapReader(lineReader, line => line.split(/\s+/));
+```
+
+In this example, every line read from `lineReader` is split into words, and
+`wordReader` yields each word in turn.
+
+The identity transform flattens a reader of arrays into a reader of their
+elements — turning a `Reader<T[]>` into a `Reader<T>`:
+
+```js
+const recordReader = flatMapReader(recordBatchReader, batch => batch);
+```
+
+Back-pressure is preserved. The inner iterable's values are emitted one at a
+time as the consumer pulls them, and the next value is read from the upstream
+reader only once the current group is exhausted, so the upstream is never
+drained ahead of demand. Empty groups advance to the next source value, and
+early `return`/`throw` and upstream termination propagate through to both the
+inner iterable and the upstream reader.
+
+This makes `flatMapReader` the building block for 1-to-many stream transforms
+such as parsing a stream of byte chunks into a stream of newline-delimited
+records: a chunk-to-records transform returns the records parsed from each
+chunk, and `flatMapReader` flattens them into a single record reader while
+holding only the current chunk's records in memory.
+
 ## Pipe
 
 The `makePipe` function returns an entangled pair of streams.
