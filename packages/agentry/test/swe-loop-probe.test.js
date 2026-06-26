@@ -12,6 +12,8 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
+/** @import { SweLoopPowers } from '../src/execute/swe-loop-probe.js' */
+
 import {
   probeClone,
   probeWorktreeAuthority,
@@ -28,20 +30,22 @@ import {
 // ---------------------------------------------------------------------------
 
 test('probeClone throws — clone is not available on any code-mode capability surface', async t => {
-  await t.throwsAsync(probeClone({}), {
+  // The gap stub throws before touching its powers, so empty powers exercise
+  // the gap path; cast documents that the input is intentionally incomplete.
+  await t.throwsAsync(probeClone(/** @type {SweLoopPowers} */ ({})), {
     message: /clone is not available on any code-mode capability surface/,
   });
 });
 
 test('probeExec throws — no exec/spawn power is exposed as a code-mode lexical capability', async t => {
-  await t.throwsAsync(probeExec({}), {
+  await t.throwsAsync(probeExec(/** @type {SweLoopPowers} */ ({})), {
     message:
       /no exec\/spawn power is exposed as a code-mode lexical capability/,
   });
 });
 
 test('probePush throws — push requires a GitRemote cap that is not accessible from code-mode', async t => {
-  await t.throwsAsync(probePush({}), {
+  await t.throwsAsync(probePush(/** @type {SweLoopPowers} */ ({})), {
     message:
       /push requires a GitRemote cap that is not accessible from code-mode/,
   });
