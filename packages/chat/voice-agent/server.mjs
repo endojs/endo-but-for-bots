@@ -371,7 +371,7 @@ const enqueueReply = ({ doc = '', label = '', title = '', prompt = '' }) => {
   const tmp = `${INPUT_QUEUE}.tmp-${crypto.randomBytes(4).toString('hex')}`;
   fs.writeFileSync(tmp, JSON.stringify(q, null, 2)); fs.renameSync(tmp, INPUT_QUEUE);
 };
-const SEED_CHATS_FILE = `${HOME}/.local/state/voice-agent/seed-chats.json`;
+const SEED_CHATS_FILE = process.env.SEED_CHATS_FILE || `${HOME}/.local/state/voice-agent/seed-chats.json`;
 const SCHEDULED_SEED_TTL_MS = 7 * 24 * 60 * 60 * 1000; // ⏰ scheduled-agent runs are ephemeral — GC after a week
 // readSeedChats GC's expired scheduled runs from the RETURNED view; since writeSeedChats's caller does a
 // read→unshift→write, the next scheduled run also prunes them from the file. Non-scheduled seeds are kept.

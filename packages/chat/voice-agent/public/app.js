@@ -2209,31 +2209,56 @@ const userBubbleControls = (uIx, m, bodyEl) => {
   }
   bodyEl.appendChild(row); // INSIDE the bubble — the controls visibly belong to the prompt they fork
 };
-// A propose-only sub-agent (voice-note ingest) → let dan READ the prompt the agent would run BEFORE
-// approving (approval = authorization). Shows the granted powers + a collapsible prompt; for older
-// proposals that predate prompt-at-ingest, a one-tap generate (cached server-side after).
+// A propose-only sub-agent (voice-note ingest) → let dan READ the prompt the agent would run AND APPROVE it
+// (approval = authorization). Shows the granted powers + a collapsible prompt; for older proposals that
+// predate prompt-at-ingest, a one-tap generate (cached server-side after). "✅ Approve & run" grants exactly
+// the proposed powers to THIS chat (mints a confined scoped cap) and runs the attenuated agent on the prompt.
 const appendProposalPrompt = (parent, m) => {
   if (!m || (!m.proposedPrompt && !(Array.isArray(m.proposedPowers) && m.proposedPowers.length))) return;
   const powers = Array.isArray(m.proposedPowers) ? m.proposedPowers : [];
+  const cc = chats.find(c => c.id === sessionId);
+  const approved = !!(cc && Array.isArray(cc.scopedPowers) && cc.scopedPowers.length); // already granted → consumed
   const wrap = document.createElement('div'); wrap.style.cssText = 'margin-top:6px';
+  // resolve (generating + caching if needed) the proposed prompt; returns '' on failure
+  const resolvePrompt = async () => {
+    if (m.proposedPrompt) return m.proposedPrompt;
+    const r = await pf('/seed-chats/gen-prompt', { id: sessionId });
+    if (r && r.ok && r.prompt) { m.proposedPrompt = r.prompt; saveTx(); return r.prompt; }
+    return '';
+  };
+  // ── prompt viewer (collapsible) ──
   const det = document.createElement('details'); det.style.cssText = 'border:1px solid var(--edge);border-radius:8px;padding:6px 10px;background:var(--panel)';
   const sum = document.createElement('summary'); sum.style.cssText = 'cursor:pointer;color:var(--acc);font-size:13px;list-style:none;user-select:none';
   sum.innerHTML = `🔍 View proposed agent prompt${powers.length ? ' &nbsp;' + powers.map(p => `<span class="pill" title="${esc(powerTip(p))}">${powerIcon(p)} ${esc(p)}</span>`).join('') : ''}`;
   const body = document.createElement('div'); body.style.cssText = 'margin-top:8px';
-  det.append(sum, body); wrap.appendChild(det); parent.appendChild(wrap);
+  det.append(sum, body);
   const fill = txt => { body.innerHTML = ''; const pre = document.createElement('pre'); pre.style.cssText = 'white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--edge);border-radius:7px;padding:10px;font-size:12.5px;line-height:1.5;max-height:48vh;overflow:auto;margin:0;color:var(--ink)'; pre.textContent = txt; body.appendChild(pre); };
-  if (m.proposedPrompt) { fill(m.proposedPrompt); return; }
-  const btn = document.createElement('button'); btn.className = 'mini'; btn.textContent = '✨ Generate the proposed prompt';
-  btn.onclick = async () => {
-    btn.disabled = true; btn.textContent = '✨ generating…';
-    try {
-      const r = await (await fetch('/seed-chats/gen-prompt', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: sessionId }) })).json();
-      if (r && r.ok && r.prompt) { m.proposedPrompt = r.prompt; saveTx(); fill(r.prompt); }
-      else { btn.disabled = false; btn.textContent = '⚠︎ ' + ((r && r.error) || 'failed — retry'); }
-    } catch (e) { btn.disabled = false; btn.textContent = '⚠︎ retry'; }
-  };
-  const hint = document.createElement('div'); hint.className = 'pmeta'; hint.style.cssText = 'margin-bottom:6px'; hint.textContent = 'This proposal predates prompt-at-ingest — generate the exact instructions the sub-agent would run:';
-  body.append(hint, btn);
+  if (m.proposedPrompt) { fill(m.proposedPrompt); }
+  else {
+    const gen = document.createElement('button'); gen.className = 'mini'; gen.textContent = '✨ Generate the proposed prompt';
+    gen.onclick = async () => { gen.disabled = true; gen.textContent = '✨ generating…'; const p = await resolvePrompt(); if (p) fill(p); else { gen.disabled = false; gen.textContent = '⚠︎ retry'; } };
+    const hint = document.createElement('div'); hint.className = 'pmeta'; hint.style.cssText = 'margin-bottom:6px'; hint.textContent = 'This proposal predates prompt-at-ingest — generate the exact instructions the sub-agent would run:';
+    body.append(hint, gen);
+  }
+  // ── action row: approve (only while pending + root) + the viewer ──
+  if (isRoot && !approved) {
+    const actions = document.createElement('div'); actions.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px';
+    const approve = document.createElement('button'); approve.className = 'mini';
+    approve.style.cssText = 'background:var(--acc);color:#fff;border:none;font-weight:600';
+    approve.textContent = powers.length ? `✅ Approve & run · grants ${powers.join(', ')}` : '✅ Approve & run';
+    approve.title = 'Grant exactly these powers to this chat (a confined scoped cap) and run the agent on the proposed prompt';
+    approve.onclick = async () => {
+      approve.disabled = true; approve.textContent = '✅ approving…';
+      const task = await resolvePrompt() || (runFor(sessionId) || {}).transcript || (activeTx[0] && activeTx[0].text) || '';
+      if (powers.length) await rescopeChat(cc, powers); // grant exactly the proposed powers (mints a confined cap, re-renders)
+      if (task) await sendChat(task); // run the now-attenuated agent on the reviewed instructions
+    };
+    actions.appendChild(approve);
+    wrap.appendChild(actions);
+  } else if (approved) {
+    const note = document.createElement('div'); note.className = 'pmeta'; note.style.cssText = 'margin-bottom:6px'; note.textContent = '✅ approved — running with the granted powers above'; wrap.appendChild(note);
+  }
+  wrap.appendChild(det); parent.appendChild(wrap);
 };
 const renderTx = () => {
   syncLanding();
