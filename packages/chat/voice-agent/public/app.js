@@ -1920,7 +1920,7 @@ function adoptBundle(b, { keepActive = false } = {}) {
     if (ex.title && ex.title !== 'New chat' && (!sc.title || sc.title === 'New chat')) merged.title = ex.title; // keep a real title over a placeholder
     byId.set(sc.id, merged);
   }
-  chats = [...byId.values()].filter(c => !deletedIds.has(c.id)).sort((a, c) => (c.ts || 0) - (a.ts || 0));
+  chats = [...byId.values()].filter(c => !deletedIds.has(c.id)).sort((a, c) => ((c.lastMsgAt || c.ts) || 0) - ((a.lastMsgAt || a.ts) || 0)); // most recent activity first
   saveDeleted();
   try { localStorage.setItem(CHATS_KEY, JSON.stringify(chats)); } catch {}
   // tx: only adopt a server transcript if it's non-empty AND we don't already hold a longer local one —
@@ -1951,7 +1951,7 @@ async function syncLoad({ keepActive = false } = {}) {
     } else { scheduleSync(); } // server empty/older → push our local state up
   } catch {}
 }
-const pushTx = (who, text, extra = {}) => { activeTx.push({ who, text, at: Date.now(), ...extra }); saveTx(); };
+const pushTx = (who, text, extra = {}) => { activeTx.push({ who, text, at: Date.now(), ...extra }); saveTx(); const cc = chats.find(c => c.id === sessionId); if (cc) { cc.lastMsgAt = Date.now(); saveChats(); renderChatList(); } }; // any message (you/agent/widget) bumps the chat's recency → sidebar re-sorts
 
 // ── apps minimized into a chat ───────────────────────────────────────────────
 // Mount an APP (an island + its host controller) INLINE, authorized by the CHAT's cap — so a standalone
@@ -2227,7 +2227,8 @@ const renderChatItems = () => {
   // and any already-adopted ones (older clients folded them into `chats`).
   const sched = scheduledSeedIds();
   const all = [
-    ...chats.filter(c => !sched.has(c.id)).map(c => ({ id: c.id, title: c.title || 'New chat', ts: c.ts || 0, voice: false, shared: !!(c.shared && c.shareToken), shareMode: c.shareMode })),
+    // sort by most recent ACTIVITY (last message), falling back to origin date for a chat with no message yet
+    ...chats.filter(c => !sched.has(c.id)).map(c => ({ id: c.id, title: c.title || 'New chat', ts: c.lastMsgAt || c.ts || 0, voice: false, shared: !!(c.shared && c.shareToken), shareMode: c.shareMode })),
     ...memoRuns.map(r => ({ id: r.id, title: r.title || 'voice note', ts: Date.parse(r.date) || 0, voice: true })),
   ].sort((a, b) => b.ts - a.ts);
   const f = chatFilter.trim().toLowerCase();
