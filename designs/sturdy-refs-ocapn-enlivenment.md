@@ -96,15 +96,16 @@ that have to be solved together:
    holding an opaque SturdyRef.
    No host pet name need be allocated.
 
-The retention question the directive also raised — how the user retains agency
-to revoke a formula a worker holds without a name to point at — is **out of
-scope for this design** per the maintainer's 2026-06-26 decision.
+The retention question the directive also raised (how the user retains agency to
+revoke a formula a worker holds without a name to point at) is answered without a
+retention table.
 We do not introduce a retention table, a worker syscall, or GC observation.
-The persistence and revocation affordance that already exists — write the
-locator under a pet name via `writeLocator` — remains the user's anchor; how
-revocation and lifetime are expressed for an *un-named* SturdyRef that has only
-been enlivened on demand is recorded under *Open questions* rather than
-resolved with invented mechanism.
+The daemon revokes a sturdyref by **forgetting** the swiss number it carried, so
+it can never again be enlivened, and revokes a live value by partitioning or
+terminating the process holding the reference (see *Revocation*).
+The pet-name affordance (write the locator under a pet name via `writeLocator`)
+remains available for the case where the user chose to name the locator, but it
+is not the only revocation root.
 
 ## Background
 
@@ -196,8 +197,10 @@ store and for a remote locator dials the peer via `provideSession(location)` and
 `bootstrap.fetch(secret)`.
 The enlivened presence is an ordinary presence; from there `E(presence)` is the
 existing, unchanged eventual-send path.
-The pass-style layer never calls into eventual-send, and the enlivenment cache
-(if any) lives in `@endo/ocapn`, not in `HandledPromise`.
+The pass-style layer never calls into eventual-send.
+Enlivenment does **not** cache: each enlivenment goes through the closely-held
+capability afresh, and no enlivenment cache is kept in `@endo/ocapn` or in
+`HandledPromise`.
 
 This is the whole lifecycle this design commits to: a SturdyRef is inert data,
 and the only way to act on it is on-demand enlivenment through the closely-held
@@ -232,9 +235,17 @@ This design promotes that shim by:
 
 - Moving the `PASS_STYLE` answer for sturdyrefs from `ocapnPassStyleOf` (an
   OCapN-specific upgrade of the answer) into `passStyleOf` itself.
+  This also obviates the `makeTagged('ocapn-sturdyref', ...)` tag entirely: a
+  SturdyRef is no longer a tagged value at all.
+  It is literally a pass-style object whose `passStyleOf` answer is `'sturdyref'`
+  (an instance carrying `[Symbol.for('passStyle')]: 'sturdyref'`), and that
+  object has a meaningful identity to the CapTP session manager.
 - Replacing the side-`WeakMap` carrier with a real pass-style category that
-  names its content (`location`, optionally a `swissNum` projection that the
-  closely-held capability is the only path to).
+  names its content: a **locator**.
+  `@endo/pass-style` defines the **shape** of that category (its
+  recognition and validation), but it does **not** construct sturdyrefs.
+  Construction is the role of the CapTP session manager (see *Pass-style defines
+  the shape; the CapTP session manager constructs* below).
 - Keeping the close-held nature of the secret: even when pass-style knows about
   the category, **the secret is not a property the worker can read**; reveal goes
   through the OCapN-provided capability.
@@ -280,20 +291,30 @@ A guest or worker never sees the swiss number.
 
 #### A new pass-style category, `'sturdyref'`
 
-A new marker style, joining `'remotable'` and `'tagged'`.
-Construction is gated through a maker (`makeSturdyRef`) supplied by
-`@endo/pass-style`:
+A new pass-style category, joining `'remotable'` and `'tagged'`.
+A SturdyRef is its own pass-style category with an identity meaningful to the
+CapTP session manager: it is **not** a tagged value and carries no
+`makeTagged('ocapn-sturdyref', ...)` tag.
+`@endo/pass-style` defines the **shape** of the category (the recognition and
+validation a value must satisfy for `passStyleOf` to answer `'sturdyref'`) and
+exposes a validator, but it does **not** construct sturdyrefs.
+Construction is the role of the CapTP session manager (see *Pass-style defines
+the shape; the CapTP session manager constructs* below).
+A constructed SturdyRef satisfies the shape so that `passStyleOf` answers
+`'sturdyref'`:
 
 ```js
-import { makeSturdyRef, passStyleOf } from '@endo/pass-style';
-const sturdyRef = makeSturdyRef(location);
+import { passStyleOf } from '@endo/pass-style';
+// sessionManager constructs the instance; pass-style only recognises it.
+const sturdyRef = sessionManager.makeSturdyRef(location);
 passStyleOf(sturdyRef); // 'sturdyref'
 ```
 
 A SturdyRef value has:
 
-- `[PASS_STYLE]: 'sturdyref'` on a tag-record prototype, mirroring the way
-  remotables work.
+- `[Symbol.for('passStyle')]: 'sturdyref'`, marking it as an instance of its own
+  pass-style category whose identity is meaningful to the CapTP session manager.
+  It is not a tag-record and not a tagged value.
 - `[Symbol.toStringTag]: 'SturdyRef'`.
 - A non-enumerable `location` accessor returning the deep-frozen parsed
   `OcapnLocation`.
@@ -307,11 +328,12 @@ A SturdyRef value has:
   It is advisory only: it never authorises anything (the secret is still
   off-band) and a consumer must tolerate its absence (a SturdyRef minted without
   a hint, or one whose minter chose not to disclose a type, has no `type`).
-  `makeSturdyRef(location, type?)` takes it as an optional second argument;
-  `assertValid` checks only that, when present, it is a string.
+  The CapTP session manager takes it as an optional second argument when it
+  constructs a SturdyRef; the pass-style validator (`assertValid`) checks only
+  that, when present, it is a string.
   Because it is purely a hint and not part of the locator's identity, it is
   **excluded from the structural-equality** comparison that decides whether two
-  SturdyRefs designate the same object — equality is on `location` (and the
+  SturdyRefs designate the same object: equality is on `location` (and the
   off-band swiss number), never on `type`.
 
 The secret (swiss number) is **not** a property.
@@ -321,6 +343,30 @@ closely-held capability (next subsection) is.
 This shape composes with `makeExo` and pattern-matchers (`M.kind` gains an entry
 for `'sturdyref'`) without surprise.
 
+#### Pass-style defines the shape; the CapTP session manager constructs
+
+`@endo/pass-style` owns the **definition** of the `'sturdyref'` category but not
+its **construction**.
+Concretely, `@endo/pass-style` supplies:
+
+- recognition: `passStyleOf(value) === 'sturdyref'` for any value that satisfies
+  the shape,
+- validation: an `assertValid` (and the `SturdyRefHelper` below) that asserts a
+  candidate is structurally a SturdyRef (a `location` that is a passable
+  `OcapnLocation`, an optional string `type` hint, and no secret as a property),
+- the `M.kind('sturdyref')` and `M.sturdyRef()` patterns that admit the category.
+
+Construction (minting an instance that satisfies the shape) is the role of the
+**CapTP session manager**, not `@endo/pass-style`.
+The session manager is what associates a freshly minted SturdyRef instance with
+its closely-held `(location, swissNum)` tuple, so it is the natural owner of
+construction.
+This is a deliberate reversal of an earlier draft that gated construction
+through a `makeSturdyRef` maker exported by `@endo/pass-style`: pass-style stays
+the definer of the shape, and the session manager constructs.
+Where this document writes `sessionManager.makeSturdyRef(location, type?)`, the
+maker is the session manager's, not pass-style's.
+
 #### Helper: `SturdyRefHelper`
 
 A new file `packages/pass-style/src/sturdyRef.js` adding:
@@ -328,9 +374,10 @@ A new file `packages/pass-style/src/sturdyRef.js` adding:
 ```js
 export const SturdyRefHelper = harden({
   styleName: 'sturdyref',
-  canBeValid: (candidate, reject) => { /* tag-record check */ },
+  canBeValid: (candidate, reject) => { /* sturdyref-instance check */ },
   assertValid: (candidate, passStyleOfRecur) => {
-    // 1. tag-record is structurally a SturdyRef tag-record.
+    // 1. The candidate is structurally a SturdyRef: an instance carrying
+    //    [Symbol.for('passStyle')]: 'sturdyref', not a tagged value.
     // 2. The location passes a passable-location check
     //    (copyRecord with the right keys, designator/transport/
     //    optional network/hints).
@@ -339,7 +386,10 @@ export const SturdyRefHelper = harden({
 });
 ```
 
-This helper joins `CopyArrayHelper`, `CopyRecordHelper`, `TaggedHelper`,
+This helper only **recognises and validates**; it does not construct sturdyrefs
+(construction is the CapTP session manager's role per *Pass-style defines the
+shape; the CapTP session manager constructs*).
+It joins `CopyArrayHelper`, `CopyRecordHelper`, `TaggedHelper`,
 `RemotableHelper`, and the others in `passStyleOf.js`'s helper table.
 
 #### Interface guards
@@ -376,7 +426,8 @@ The mechanism is:
 - **On receive (unboxing).**
   The wire form (`ocapn-sturdyref(peer, swiss-num)` for OCapN, the equivalent
   for other layers) is handed to the layer's sturdyref *unboxer*, which:
-  1. constructs a SturdyRef via `makeSturdyRef(parsedLocation)`,
+  1. asks the CapTP session manager to construct a SturdyRef from
+     `parsedLocation`,
   2. records `{ swissNum }` in the layer's side-table keyed by SturdyRef identity
      (the off-band `(location, secret)` map),
   3. returns the inert SturdyRef to the application.
@@ -463,6 +514,12 @@ There is no implicit retention, no ephemeral edge, and no syscall:
   If the worker wants the capability again later, it enlivens again; the
   closely-held capability is the only path, and re-enlivenment is the sanctioned
   way to re-acquire.
+  Re-enlivenment is **not idempotent**: two `enlivenSturdyRef` calls on the same
+  SturdyRef within one instance return two **distinct** promises.
+  Those promises do, however, **converge on the same value**, because the
+  provider of the target remotable vends only one instance per session.
+  Convergence on a single value, not promise identity, is the guarantee a bearer
+  may rely on.
 - A worker that wants to stash a reference for later stashes the **inert
   SturdyRef box** (pass-by-copy data), not a live presence.
   The box on its own retains nothing: re-enlivening still needs the closely-held
@@ -475,10 +532,25 @@ There is no implicit retention, no ephemeral edge, and no syscall:
   presence the daemon proxies to the remote target.
   The swiss number never crosses into the worker.
 
-How the underlying formula's lifetime and the user's revocation agency are
-expressed for a SturdyRef that has only ever been enlivened on demand — with no
-pet name and no retention table — is left open (see *Open questions*); this
-design deliberately does **not** introduce a retention mechanism to answer it.
+#### Revocation
+
+The daemon revokes both sturdyrefs and live values, by distinct mechanisms and
+without a retention table.
+
+- **Revoking a sturdyref** is the daemon **forgetting** the nonce, identifier, or
+  swiss number the sturdyref carried.
+  Once the daemon has forgotten it, the sturdyref can never again be enlivened: a
+  later `enlivenSturdyRef` call has nothing to resolve against and rejects.
+- **Revoking a live value** is either **partition** or **termination** of the
+  process holding the reference.
+
+This is the revocation agency for a SturdyRef that has only ever been enlivened
+on demand, with no pet name and no retention table.
+The pet-name affordance (`writeLocator`) remains available for the case where the
+user chose to name the locator, but it is not required: forgetting the
+sturdyref's swiss number is itself the revocation root.
+What governs the lifetime of an already-enlivened presence (as opposed to the
+ability to enliven again) is still open (see *Open questions*).
 
 ### Local-only at the boundary
 
@@ -500,8 +572,8 @@ not all in one PR.
 
 | Cut | Change | Risk |
 |---|---|---|
-| 1 | Add `'sturdyref'` to `@endo/pass-style` with `SturdyRefHelper`, `makeSturdyRef`, and a passing test suite. No daemon change. `@endo/ocapn` continues to use its `tagged`-with-WeakMap shim; nothing else has to migrate yet. | Low. Internal-only addition. |
-| 2 | `@endo/ocapn` migrates from `tagged`-with-WeakMap to the new pass-style category. `ocapnPassStyleOf` collapses to `passStyleOf`. Existing tests stay green. | Low. One package, well-covered. |
+| 1 | Add the `'sturdyref'` shape to `@endo/pass-style` with `SturdyRefHelper`, an `assertValid` recogniser, the `M.sturdyRef()`/`M.kind('sturdyref')` patterns, and a passing test suite. Pass-style defines the shape only; it exposes no maker. No daemon change. `@endo/ocapn` continues to use its `tagged`-with-WeakMap shim; nothing else has to migrate yet. | Low. Internal-only addition. |
+| 2 | `@endo/ocapn` migrates from `tagged`-with-WeakMap to the new pass-style category, dropping the `makeTagged('ocapn-sturdyref', ...)` tag: the CapTP session manager constructs sturdyref instances that satisfy the pass-style shape. `ocapnPassStyleOf` collapses to `passStyleOf`. Existing tests stay green. | Low. One package, well-covered. |
 | 3 | Daemon's existing pet-name-path-accepting methods grow the `M.or(M.petNamePath(), M.sturdyRef())` guard. Initially they reject `M.sturdyRef()` at the facet (returning a "not yet implemented" error), so the guard ships before the resolution does. | Low. Type-surface only. |
 | 4 | Daemon `revealSturdyRef` closely-held capability lands; the facets actually resolve SturdyRefs to formula identifiers and dispatch. Per-method tests prove `lookup`/`identify`/`locate`/`evaluate`/`makeUnconfined` all accept SturdyRefs. Existing pet-name-path-only callers are unaffected. | Medium. Touches every facet; per-method coverage matters. |
 
@@ -548,23 +620,25 @@ name via `writeLocator`); the user already has that affordance.
 
 Pass-style:
 
-- `passStyleOf(makeSturdyRef(location)) === 'sturdyref'`.
+- `passStyleOf(sessionManager.makeSturdyRef(location)) === 'sturdyref'`, where
+  the session manager (not pass-style) constructs the instance.
 - A SturdyRef survives `harden` and `passStyleOf` is idempotent.
 - A SturdyRef whose location is not a valid `OcapnLocation` fails `assertValid`.
 - A SturdyRef can be embedded in a `copyRecord`, a `copyArray`, and a
   `CopyTagged` payload (a SturdyRef-bearing record passes `passStyleOf`).
 - The pattern matcher `M.sturdyRef()` admits SturdyRefs and rejects presences,
   copyRecords, and tagged values that look like SturdyRefs.
-- `makeSturdyRef(location, 'some-type')` yields a SturdyRef whose `type` is
-  `'some-type'`; `makeSturdyRef(location)` yields one with no `type`;
-  `assertValid` rejects a non-string `type`.
+- `sessionManager.makeSturdyRef(location, 'some-type')` yields a SturdyRef whose
+  `type` is `'some-type'`; `sessionManager.makeSturdyRef(location)` yields one
+  with no `type`; `assertValid` rejects a non-string `type`.
   Two SturdyRefs with equal `location` but different `type` are treated as
   designating the same object (the `type` hint is excluded from identity).
 
 OCapN integration:
 
-- `@endo/ocapn` round-trips a SturdyRef minted by `makeSturdyRef` across a
-  session and back to a SturdyRef whose `location` deeply equals the original.
+- `@endo/ocapn` round-trips a SturdyRef minted by the CapTP session manager
+  across a session and back to a SturdyRef whose `location` deeply equals the
+  original.
 - The receiving side's SturdyRef is inert; `E(sturdyRef)` is **not** valid, and
   `enlivenSturdyRef(sturdyRef)` yields a presence whose `E(presence).foo()`
   reaches the remote target.
@@ -588,8 +662,10 @@ Daemon facets:
 
 ## Acceptance criteria
 
-- `@endo/pass-style` exports a SturdyRef pass-style category with a maker, a
-  helper, a pattern, and full tests.
+- `@endo/pass-style` exports a SturdyRef pass-style category: a recogniser
+  (`passStyleOf` answers `'sturdyref'`), a validating helper, and a pattern,
+  with full tests. It defines the shape and does **not** export a maker;
+  construction is the CapTP session manager's role.
 - The SturdyRef value carries `location` and an optional flexible `type` hint (a
   string, advisory only, excluded from structural equality); the secret swiss
   number is never a property.
@@ -612,20 +688,11 @@ Daemon facets:
 
 ## Open questions
 
-These are flagged rather than answered: the abandoned paired-design mechanism
-(retention table, `retain` / `release` syscall, proactive per-turn export drop,
-`FinalizationRegistry`) is withdrawn, and this design does **not** substitute new
-mechanism in its place.
+One item remains genuinely open.
+The abandoned paired-design mechanism (retention table, `retain` / `release`
+syscall, proactive per-turn export drop, `FinalizationRegistry`) is withdrawn,
+and this design does **not** substitute new mechanism in its place.
 
-- **Revocation agency for an un-named SturdyRef.**
-  The maintainer's hard invariant is that the user can mention a retention root
-  and force disincarnation, reincarnation, or revocation-by-deletion for any
-  formula with a living reference.
-  For a SturdyRef that has only been enlivened on demand — with no pet name and
-  no retention table — what is the retention root the user points at?
-  The pet-name affordance (`writeLocator`) covers the case where the user chose
-  to name the locator; the un-named, enliven-on-demand case needs an answer that
-  does not reintroduce a retention table.
 - **Lifetime of an enlivened presence.**
   When a worker enlivens a SturdyRef to a presence and then yields, what governs
   the lifetime of that presence (and the underlying formula's liveness) absent a
@@ -634,16 +701,9 @@ mechanism in its place.
   existing `formulaGraph` and CapTP slot machinery, but it does **not** specify a
   deterministic teardown boundary; whether one is needed, and what enforces it
   without GC observation, is open.
-- **Bounding the enlivenment cache.**
-  *A SturdyRef is inert* notes the enlivenment cache (if any) lives in
-  `@endo/ocapn`.
-  Whether such a cache exists, how it is keyed (per-instance SturdyRef identity),
-  and how it is bounded (so repeated on-demand enlivenment does not accumulate
-  daemon-local presences without limit) is unspecified.
-- **Whether re-enlivenment is idempotent within an instance.**
-  Two `enlivenSturdyRef` calls on the same SturdyRef within one instance may
-  return the same presence or two distinct presences; the design does not commit
-  either way.
+  This is distinct from revocation, which is decided (see *Revocation*): the
+  daemon forgets the swiss number to revoke a sturdyref, and partitions or
+  terminates the holding process to revoke a live value.
 
 ## Dependencies
 
@@ -688,7 +748,10 @@ boxing, and pet-name-path-substitute portions retained here):
 > locator, to refer to a formula without naming it.
 
 The retention-dilemma portion of the original directive (the
-`FinalizationRegistry` vs. `retain`/`release`-syscall pair) is **not** pursued,
-per the 2026-06-26 decision above; how revocation and lifetime are expressed
-without a retention table is recorded under *Open questions* rather than
-answered with new mechanism.
+`FinalizationRegistry` versus `retain`/`release`-syscall pair) is **not**
+pursued, per the 2026-06-26 decision above.
+Revocation is expressed without a retention table (the daemon forgets the swiss
+number to revoke a sturdyref, and partitions or terminates the holding process
+to revoke a live value; see *Revocation*).
+Only the lifetime of an already-enlivened presence remains open (see *Open
+questions*).
