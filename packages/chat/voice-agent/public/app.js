@@ -2209,6 +2209,32 @@ const userBubbleControls = (uIx, m, bodyEl) => {
   }
   bodyEl.appendChild(row); // INSIDE the bubble — the controls visibly belong to the prompt they fork
 };
+// A propose-only sub-agent (voice-note ingest) → let dan READ the prompt the agent would run BEFORE
+// approving (approval = authorization). Shows the granted powers + a collapsible prompt; for older
+// proposals that predate prompt-at-ingest, a one-tap generate (cached server-side after).
+const appendProposalPrompt = (parent, m) => {
+  if (!m || (!m.proposedPrompt && !(Array.isArray(m.proposedPowers) && m.proposedPowers.length))) return;
+  const powers = Array.isArray(m.proposedPowers) ? m.proposedPowers : [];
+  const wrap = document.createElement('div'); wrap.style.cssText = 'margin-top:6px';
+  const det = document.createElement('details'); det.style.cssText = 'border:1px solid var(--edge);border-radius:8px;padding:6px 10px;background:var(--panel)';
+  const sum = document.createElement('summary'); sum.style.cssText = 'cursor:pointer;color:var(--acc);font-size:13px;list-style:none;user-select:none';
+  sum.innerHTML = `🔍 View proposed agent prompt${powers.length ? ' &nbsp;' + powers.map(p => `<span class="pill" title="${esc(powerTip(p))}">${powerIcon(p)} ${esc(p)}</span>`).join('') : ''}`;
+  const body = document.createElement('div'); body.style.cssText = 'margin-top:8px';
+  det.append(sum, body); wrap.appendChild(det); parent.appendChild(wrap);
+  const fill = txt => { body.innerHTML = ''; const pre = document.createElement('pre'); pre.style.cssText = 'white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--edge);border-radius:7px;padding:10px;font-size:12.5px;line-height:1.5;max-height:48vh;overflow:auto;margin:0;color:var(--ink)'; pre.textContent = txt; body.appendChild(pre); };
+  if (m.proposedPrompt) { fill(m.proposedPrompt); return; }
+  const btn = document.createElement('button'); btn.className = 'mini'; btn.textContent = '✨ Generate the proposed prompt';
+  btn.onclick = async () => {
+    btn.disabled = true; btn.textContent = '✨ generating…';
+    try {
+      const r = await (await fetch('/seed-chats/gen-prompt', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: sessionId }) })).json();
+      if (r && r.ok && r.prompt) { m.proposedPrompt = r.prompt; saveTx(); fill(r.prompt); }
+      else { btn.disabled = false; btn.textContent = '⚠︎ ' + ((r && r.error) || 'failed — retry'); }
+    } catch (e) { btn.disabled = false; btn.textContent = '⚠︎ retry'; }
+  };
+  const hint = document.createElement('div'); hint.className = 'pmeta'; hint.style.cssText = 'margin-bottom:6px'; hint.textContent = 'This proposal predates prompt-at-ingest — generate the exact instructions the sub-agent would run:';
+  body.append(hint, btn);
+};
 const renderTx = () => {
   syncLanding();
   disposeAllWidgets(); // tear down any live widget streams/intervals from the previous render before rebuilding
@@ -2259,6 +2285,7 @@ const renderTx = () => {
         const imgs = asArr(m.imageUrls).length ? asArr(m.imageUrls) : asArr(m.images).filter(s => typeof s === 'string' && s.startsWith('data:')); imgs.forEach(src => { const im = document.createElement('img'); im.src = src; b.appendChild(im); });
         if (_arr(v.ui).length) renderWidgets(b, _arr(v.ui), { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet }); // re-hydrate live widgets
         if (_arr(v.tools).length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + _arr(v.tools).join(', '); b.parentNode.appendChild(e); }
+        appendProposalPrompt(b.parentNode, m); // a propose-only sub-agent → "🔍 View proposed agent prompt"
         continue;
       }
       // a user message → its (active fork's) prompt, with the ↻/✎/🔊 + fork-pager controls INSIDE the bubble
@@ -2391,7 +2418,7 @@ const switchChat = id => {
   // turns) it shows its live transcript — every intake is capable of moving forward.
   if (run && run.versions && run.versions.length && liveTx.length <= 2) {
     memoVersion = run.versions.length - 1; const ver = run.versions[memoVersion] || {};
-    activeTx = [{ who: 'you', text: run.transcript }, { who: 'agent', text: ver.answer || '', tools: ver.toolsUsed || [], steps: ver.steps || [] }];
+    activeTx = [{ who: 'you', text: run.transcript }, { who: 'agent', text: ver.answer || '', tools: ver.toolsUsed || [], steps: ver.steps || [], proposedPowers: ver.proposedPowers || run.proposedPowers, proposedPrompt: ver.proposedPrompt || run.proposedPrompt }];
   } else { activeTx = liveTx; memoVersion = run && run.versions ? run.versions.length - 1 : 0; }
   showTab('talk'); renderTx(); renderChatList(); renderChatBar();
   ensureChatPowers(id); // a scoped chat created before this feature has no stored powers — fetch + show them

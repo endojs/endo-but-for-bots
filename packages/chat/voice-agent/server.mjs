@@ -601,6 +601,16 @@ const ingestPropose = async transcript => {
   const { proposed } = await scopePowers(transcript);
   return { proposals: proposals || '(could not analyze the note)', powers: proposed };
 };
+// The OPERATING PROMPT a proposed attenuated sub-agent would run with. Approval = authorization, so dan
+// should be able to READ exactly what the agent is instructed to do (+ what it must NOT touch) BEFORE
+// approving it. gemma → Claude fallback; '' if it can't (caller treats absence gracefully).
+const SUBAGENT_PROMPT_SYS = 'You write the OPERATING PROMPT for a small, LEAST-AUTHORITY sub-agent that will act on a captured voice note. Given the note, the proposed action items, and the capabilities it will be granted, write the agent\'s first-person instructions: what it should accomplish, how to use ONLY its granted capabilities, what concrete artifact to produce, and an explicit reminder NOT to reach beyond those capabilities (no personal/vault data unless that access was granted). Be concrete and tight — one short paragraph or a few bullet lines. Output ONLY the prompt text the agent would receive — no preamble, no quotes, no meta-commentary.';
+const genSubAgentPrompt = async (transcript, proposals, powers) => {
+  const u = `Voice note:\n${String(transcript || '').slice(0, 4000)}\n\nProposed action items:\n${String(proposals || '').slice(0, 2000)}\n\nCapabilities it will be granted: ${(powers || []).length ? powers.join(', ') : '(reading only)'}`;
+  try { const r = await callLLM([{ role: 'system', content: SUBAGENT_PROMPT_SYS }, { role: 'user', content: u }], 'default'); const t = String(r.text || '').trim(); if (t) return t; } catch (e) { log('subprompt gemma', e.message); }
+  try { const t = String((await opusComplete({ system: SUBAGENT_PROMPT_SYS, prompt: u, maxTokens: 700 })) || '').trim(); if (t) return t; } catch (e) { log('subprompt claude', e.message); }
+  return '';
+};
 // Derive a SHORT, descriptive title from a transcript so voice notes/memos are BROWSABLE in the sidebar
 // (instead of a "capture-20260621T…" filename or a raw transcript slice). The entry agent labels the note.
 // gemma → Claude fallback; returns '' if it can't (callers keep their own fallback).
@@ -1690,13 +1700,19 @@ const handler = async (req, res) => {
       // attenuated agent would need (the scoper). Then push the proposals to dan's phone.
       // analyze the note AND derive a descriptive title concurrently (the entry agent labels the note so
       // it's browsable — not "capture-20260621T…"); keep the caller's title only if it's a real one.
-      const [{ proposals, powers }, derivedTitle] = await Promise.all([ ingestPropose(t), isFilenameTitle(title) ? deriveTitle(t) : Promise.resolve(String(title).trim()) ]);
+      const { proposals, powers } = await ingestPropose(t);
+      // derive a browsable title + the proposed sub-agent's operating prompt concurrently (both depend on the
+      // note; the prompt also folds in the proposed actions + powers so you can review what you'd approve).
+      const [derivedTitle, proposedPrompt] = await Promise.all([
+        isFilenameTitle(title) ? deriveTitle(t) : Promise.resolve(String(title).trim()),
+        genSubAgentPrompt(t, proposals, powers),
+      ]);
       const agentMsg = proposals + (powers.length ? `\n\n— To act on this, I can spin up an attenuated agent with: ${powers.join(', ')}. Approve it from this chat.` : '');
-      const tr = { answer: agentMsg, toolsUsed: [], steps: [], proposedPowers: powers };
+      const tr = { answer: agentMsg, toolsUsed: [], steps: [], proposedPowers: powers, proposedPrompt };
       notify({ title: '🎙 Voice note → proposed actions', message: proposals.slice(0, 180), click: `${BASE_URL}/#chat=${id}`, tags: ['memo'] }).catch(e => log('ingest push', e.message));
       const now = new Date().toISOString();
-      const seed = { id, title: derivedTitle || String(title || '').trim() || t.slice(0, 48) || 'voice note', ts: Date.now(), source: String(source || 'voice'), transcript: t, proposeOnly: true, proposedPowers: powers,
-        tx: [{ who: 'you', text: t }, { who: 'agent', text: agentMsg, tools: [], steps: [] }],
+      const seed = { id, title: derivedTitle || String(title || '').trim() || t.slice(0, 48) || 'voice note', ts: Date.now(), source: String(source || 'voice'), transcript: t, proposeOnly: true, proposedPowers: powers, proposedPrompt,
+        tx: [{ who: 'you', text: t }, { who: 'agent', text: agentMsg, tools: [], steps: [], proposedPowers: powers, proposedPrompt }],
         versions: [{ v: 0, label: 'original', env: { persona: 'ingest:propose-only' }, ...tr, at: now }] };
       const seeds = await readSeedChats(); seeds.unshift(seed); await writeSeedChats(seeds);
       return json(res, 200, { ok: true, chatId: id, proposedPowers: powers });
@@ -1706,6 +1722,26 @@ const handler = async (req, res) => {
       const node = nodeFor(cap);
       if (!node || !node.isRoot) return json(res, 403, { error: 'no capability' });
       return json(res, 200, { chats: await readSeedChats() });
+    }
+    // On-demand: generate (+ cache) the proposed sub-agent's operating prompt for an EXISTING propose-only
+    // seed chat that predates prompt-at-ingest. Lets you review the prompt for older voice-note proposals.
+    if (req.method === 'POST' && u.pathname === '/seed-chats/gen-prompt') {
+      const { cap, id } = await jsonBody(req);
+      const node = nodeFor(cap);
+      if (!node || !node.isRoot) return json(res, 403, { error: 'no capability' });
+      const seeds = await readSeedChats();
+      const s = seeds.find(x => x && x.id === String(id || ''));
+      if (!s) return json(res, 404, { ok: false, error: 'no such seed chat' });
+      if (s.proposedPrompt) return json(res, 200, { ok: true, prompt: s.proposedPrompt, cached: true });
+      const proposals = (s.versions && s.versions[0] && s.versions[0].answer) || (s.tx && s.tx[1] && s.tx[1].text) || '';
+      const prompt = await genSubAgentPrompt(s.transcript || (s.tx && s.tx[0] && s.tx[0].text) || '', proposals, s.proposedPowers || []);
+      if (!prompt) return json(res, 200, { ok: false, error: 'could not generate a prompt' });
+      // cache it back onto the seed (+ its version + agent tx message) so it persists + syncs
+      s.proposedPrompt = prompt;
+      if (s.versions && s.versions[0]) s.versions[0].proposedPrompt = prompt;
+      if (s.tx && s.tx[1]) s.tx[1].proposedPrompt = prompt;
+      await writeSeedChats(seeds);
+      return json(res, 200, { ok: true, prompt });
     }
     // Throw away a single seed-chat (a scheduled-agent run, viewed from its timer agent's runs folder).
     if (req.method === 'POST' && u.pathname === '/seed-chats/delete') {
