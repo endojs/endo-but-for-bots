@@ -16,18 +16,27 @@ hardened-JavaScript code:
 3. Because of that extra object, `freeze` is not equivalent to `harden`;
    the prototype object remains mutable and leaves hazardous reachable state.
 4. Function-keyword declarations additionally have hoisting hazards.
-   A function declaration is hoisted and fully initialized before the module
-   body runs — it has no temporal dead zone — so in an import cycle one side
-   can observe the function as a value before the rest of the module has run,
-   masking initialization-order bugs.
+   A function declaration `f` is hoisted and fully initialized before the
+   module body runs — it has no temporal dead zone — masking
+   initialization-order bugs. For example, a `harden(f)` or `freeze(f)`
+   immediately after the function-keyword declaration of `f` does not
+   prevent other code from mutating `f` before it is frozen.
+   - This hazard exists even among code within one module, though these
+     are less urgent because the eslint `no-use-before-define` rule
+     reliably flags these hazards.
+   - For an `export function f` exported function-keyword function
+     declaration `f` in an import cycle, the importer can observe the
+     function as a value before the rest of the exporting module has run.
+     This case cannot be reliably avoided by other means.
 
 The arrow function `() => {}` form has none of these hazards: no
 `[[Construct]]`, no `prototype`, no early initialization (a `const` binding
 stays in its temporal dead zone until evaluated), and `freeze` is equivalent to
-`harden`.
+`harden`. An arrow function lexically binds `this`, meaning that it is
+insensitive to the `this`-binding provided by its callers.
 Concise-method syntax (`{ name() {} }`, `{ get name() {} }`,
 `{ set name(v) {} }`) likewise has no `[[Construct]]` and no `prototype`,
-while still binding `this`.
+while being sensitive to the `this`-binding provided by its callers.
 
 This rule was codified following erights's review on
 [endojs/endo-but-for-bots#468](https://github.com/endojs/endo-but-for-bots/pull/468#issuecomment-3439684004).
@@ -47,6 +56,10 @@ The conversion itself landed on
   `packages/init/src/node-async-local-storage-patch.js`): concise methods retain
   `name` while having no `[[Construct]]` and no `prototype`, so a named
   function expression is not needed for this case.
+- Use a concise generator method (`{ *name() {} }`) or concise async-generator
+  method (`{ async *name() {} }`) for generators and async generators: concise
+  method syntax can spell both, so the `function*`/`async function*` keyword is
+  not required to write one.
 - Leave the `function` keyword in place for the legitimate-exception categories
   listed below.
 
@@ -84,23 +97,38 @@ legitimately needs `[[Construct]]` and a `prototype` property:
   Each one is replacing a built-in constructor; the replacement must itself be
   a constructor.
 
-### Generator and async-generator function expressions
+### Standalone generator and async-generator expressions
 
-ECMAScript provides no arrow-function spelling for generators or
-async-generators.
-A `function*` or `async function*` expression is the only way to write one.
-These cannot be invoked with `new` (the spec marks them non-constructable), so
-the `[[Construct]]` hazard does not apply, but the function still has a
-`prototype` property pointing at the generator's prototype, so `freeze` is not
-equivalent to `harden`.
-The author must remember to harden the wrapping closure, not just freeze it.
-We accept this trade-off because the alternative is no generator at all.
+Concise method syntax can spell a generator (`{ *name() {} }`) or an async
+generator (`{ async *name() {} }`), so the `function*`/`async function*` keyword
+is **not** the only way to write one.
+Prefer a concise generator method, consistent with the rest of this house style;
+reserve the keyword form for the standalone cases below.
 
-Examples kept under this exception:
+The hazard profile is the same for both spellings: a generator (in either form)
+cannot be invoked with `new` (the spec marks them non-constructable), so the
+`[[Construct]]` hazard does not apply, but it still carries a `prototype`
+property pointing at the generator's prototype, so `freeze` is not equivalent to
+`harden` and the author must harden the wrapping closure, not just freeze it.
+Concise method syntax does not remove that `prototype`; it only drops the
+`function` keyword, which is why the preference is about house-style consistency
+rather than a change in hazard.
 
-- `packages/trampoline/src/trampoline.js`: `function* () {}` sentinel.
-- `packages/captp/src/atomics.js`:
-  `harden(async function* trapHost([isReject, serialized]) { ... })`.
+The `function*`/`async function*` keyword stays in place when the generator is
+not naturally a member of an object — most commonly an anonymous generator used
+only to reach an intrinsic generator prototype:
+
+- `packages/trampoline/src/trampoline.js`: `function* () {}` sentinel, used only
+  to extract the intrinsic generator prototype via `getPrototypeOf`.
+- `packages/ses/src/commons.js` and `get-anonymous-intrinsics.js`: the same
+  intrinsic-extraction pattern.
+
+Many `function*`/`async function*` sites in this repository predate this rule
+(for example across `packages/daemon/src/`, `packages/compartment-mapper/src/`,
+and `packages/captp/src/`). Those that are naturally object members — for
+instance `packages/captp/src/atomics.js`'s `trapHost` — should become concise
+generator methods, but converting them is follow-up work tracked separately from
+this PR rather than bundled into it.
 
 ### Vendored or third-party-derived code
 
@@ -121,23 +149,46 @@ upstream style so future merges remain tractable:
 
 `packages/ses/src/assert-sloppy-mode.js`:
 `function getThis() { return this; }`.
-The whole point of this function is that it returns the calling-context `this`
-(which is `globalThis` in sloppy mode and `undefined` in strict mode), so SES
-can detect the ambient strictness.
-Arrow functions and concise methods bind `this` lexically, which would make
-`getThis()` return the module-scope `this` (always `undefined` under modules),
-defeating the check.
+The whole point of this function is that, called as a bare `getThis()`, it
+returns the calling-context `this` (which is `globalThis` in sloppy mode and
+`undefined` in strict mode), so SES can detect the ambient strictness.
+An **arrow** function is disqualified: it binds `this` lexically — insensitive
+to the caller — so it would return the module-scope `this` (always `undefined`
+under modules) and defeat the check.
+A **concise method**, by contrast, is sensitive to the caller-provided `this`
+in the same way a function-keyword function is, so it would in fact work here.
+We keep the `function`-keyword declaration only because this is a
+security-critical SES-initialization tripwire where the bare
+`function getThis() { return this; }` is the canonical, well-understood spelling
+of an ambient-`this` probe; wrapping it in an object literal solely to extract a
+concise method (`{ getThis() {} }.getThis`) would add indirection to a security
+boundary for a purely stylistic gain.
 
-### TypeScript assertion functions
+### Static-checker limitations: suppress, do not keep the runtime hazard
 
-`function assertX(...): asserts x is Y` requires a function declaration under
-the current TypeScript checker; converting to an arrow drops the `asserts`
-narrowing and the compiler emits TS2775 ("Assertions require every name in the
-call target to be declared with an explicit type annotation").
-Where the function is an assertion, the declaration stays.
-Concrete site:
-`packages/compartment-mapper/src/compartment-map.js`:
-`function assertModuleConfiguration`.
+When a TypeScript or lint limitation appears to push toward retaining the
+`function` keyword, prefer the less-hazardous runtime form (arrow or concise
+method) and suppress the checker with `@ts-expect-error` or `@ts-ignore`, rather
+than keeping the hazardous runtime form in order to satisfy the checker.
+The runtime behavior is what counts; a static-checker weakness is the cheaper
+thing to work around.
+
+A motivating case was TypeScript assertion functions
+(`@returns {asserts x is Y}`).
+It is sometimes assumed that an assertion function must be a `function`
+declaration and that converting it to an arrow drops the `asserts` narrowing
+(the compiler's TS2775, "Assertions require every name in the call target to be
+declared with an explicit type annotation").
+That turns out not to be so: an arrow function with a JSDoc
+`@returns {asserts ...}` annotation — plus, where an implementation-only
+parameter must be hidden from the public signature, a JSDoc `@overload` block,
+which attaches to a `const` arrow just as it does to a declaration — carries the
+assertion narrowing with no suppression at all.
+`packages/compartment-mapper/src/compartment-map.js`'s
+`assertModuleConfiguration` is written this way (arrow plus `@overload`), so it
+needs neither the `function` keyword nor an `@ts-expect-error`.
+If a genuine checker limitation ever does block such a conversion, reach for
+`@ts-expect-error`/`@ts-ignore` before reaching for the `function` keyword.
 
 ### Module-init-time forward references
 
@@ -177,7 +228,7 @@ When writing a new function:
 
 1. Does it need `[[Construct]]` (called with `new`) or a `prototype` property?
    Use a `class` or a `function`-keyword function, and document why.
-2. Does it need a `this` binding?
+2. Does it need to be sensitive to the `this`-binding provided by its callers?
    Use concise method syntax inside an object literal or class body.
 3. Otherwise, use an arrow function.
 
