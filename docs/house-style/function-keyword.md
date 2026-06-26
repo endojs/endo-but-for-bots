@@ -82,7 +82,7 @@ legitimately needs `[[Construct]]` and a `prototype` property:
   emulates a built-in TypedArray constructor (uses `new.target`,
   `construct(...)`, and exposes `prototype`).
 - `packages/eventual-send/src/handled-promise.js`:
-  `function baseHandledPromise`, which the author already documented as
+  `function BaseHandledPromise`, which the author already documented as
   "*needs* to be a `function X` so that we can use it as a constructor"
   (uses `new.target`).
 - `packages/ses/src/tame-function-constructors.js`:
