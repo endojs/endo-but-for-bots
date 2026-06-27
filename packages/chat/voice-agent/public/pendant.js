@@ -157,10 +157,11 @@ export const makePendant = canvas => {
     const g = new THREE.Group(); g.add(glow); g.add(core);
     return { g, wireMat, glowMat };
   };
-  // the point on a PARENT agent's lifeline at time t (root's lifeline = the vertical time axis; a delegate's
-  // = its own column). Tools edge to this point, so the connection lands at the right moment on the timeline.
+  // the point on a PARENT agent's lifeline at time t (root's lifeline = the vertical time axis; a delegate/
+  // specialist's = its OWN column). Tools edge to this point, so the connection lands at the right moment on
+  // THAT agent's timeline — root + each sub-agent are parallel lifelines = a 3D sequence diagram.
   const _v = new THREE.Vector3();
-  const axisAt = (parent, t) => parent === root ? _v.set(parent.group.position.x, yOf(t), parent.group.position.z) : parent.group.position;
+  const axisAt = (parent, t) => parent && parent.lifeline ? _v.set(parent.group.position.x, yOfNode(parent, t), parent.group.position.z) : (parent ? parent.group.position : _v.set(0, 0, 0));
   const updateLine = nd => {
     const par = nd.parent; if (!par) return;
     if (nd.line) { nd.lineGeo.setFromPoints([axisAt(par, nd.tCall).clone(), nd.group.position]); nd.lineGeo.attributes.position.needsUpdate = true; } // OUT: message went out at call-time
@@ -248,43 +249,84 @@ export const makePendant = canvas => {
   // ordering dance. The cage brightens with the head (so it pulses with the voice level too).
   const _wt = new THREE.Vector3(), _wb = new THREE.Vector3(), _dir = new THREE.Vector3();
   const octWorld = (group, localV, out) => out.copy(localV).multiplyScalar(group.scale.x || 1).applyQuaternion(group.quaternion).add(group.position);
-  const updateLifeline = dt => {
-    if (!root || !root.lifeline || !root.lifeline.tailGroup) return;
-    const lf = root.lifeline, tg = lf.tailGroup;
-    const restY = ROOT_Y - 0.9;
-    // the frontier descends to the DEEPEST (lowest Y) of: rest length, the elapsed-DURATION mark
-    // (yOf(liveT) — advances every frame while the turn runs, frozen at finish), and the lowest tool node.
-    // → the hyper-octahedron grows continuously with how long the request has taken, not just when a tool fires.
-    const nodeFloor = level1.length ? Math.min(...level1.map(n => n.group.position.y)) - 0.4 : restY;
-    // listening (listenLvl≥0) reuses the lifeline as the mic indicator — don't grow it then; only a real
-    // request grows the frontier with elapsed time. (liveT freezes the duration once finished.)
-    const frontierTime = (live && listenLvl >= 0) ? t0 : liveT();
-    const bottom = Math.min(restY, yOf(frontierTime), nodeFloor);
+  // Drive ONE agent's time-extruded body (root OR a sub-agent). The frontier (the "now" twin shape) descends
+  // to the DEEPEST of: rest length, the elapsed-duration mark (yOfNode), and the lowest child node — so the
+  // hyper-octahedron grows with how long that agent has worked. Root grows with wall-clock; a sub-agent grows
+  // to its own end time. This is what makes EACH sub-agent its own hyper-octahedron in the 3D sequence diagram.
+  const updateBody = (nd, dt) => {
+    const lf = nd.lifeline; if (!lf || !lf.tailGroup) return;
+    const tg = lf.tailGroup, head = nd.group.position, isRoot = nd === root;
+    const restY = head.y - 0.9;
+    const kids = isRoot ? level1 : nd.children;
+    const nodeFloor = kids.length ? Math.min(...kids.map(n => n.group.position.y)) - 0.4 : restY;
+    // listening (listenLvl≥0) reuses the root lifeline as the mic indicator — don't grow it then.
+    const frontierTime = isRoot ? ((live && listenLvl >= 0) ? t0 : liveT()) : (nd.tDone || liveT());
+    const bottom = Math.min(restY, yOfNode(nd, frontierTime), nodeFloor);
     const k = Math.min(1, dt * 6);
-    tg.position.x += (root.group.position.x - tg.position.x) * k;
-    tg.position.z += (root.group.position.z - tg.position.z) * k;
+    tg.position.x += (head.x - tg.position.x) * k;
+    tg.position.z += (head.z - tg.position.z) * k;
     tg.position.y += (bottom - tg.position.y) * k;
-    tg.quaternion.copy(root.group.quaternion); // share the head's spin → the extrusion is one rigid body
-    const inten = root.wireMat ? root.wireMat.uniforms.uIntensity.value : 1;
+    tg.quaternion.copy(nd.group.quaternion); // share the head's spin → the extrusion is one rigid body
+    const inten = nd.wireMat ? nd.wireMat.uniforms.uIntensity.value : 1;
     lf.tWireMat.uniforms.uIntensity.value = lf.tGlowMat.uniforms.uIntensity.value = 0.6 + inten * 0.4;
-    if (lf.thread) { // the glowing central thread spans the head centre → the "now" centre (the spine tools draw from)
-      const top = root.group.position.y, hh = Math.max(0.05, top - tg.position.y);
-      lf.thread.scale.y = hh; lf.thread.position.set(root.group.position.x, top - hh / 2, root.group.position.z);
-      lf.thrMat.uniforms.uIntensity.value = 0.9 + inten * 0.5;
-    }
-    const sp = lf.skin ? lf.skinGeo.attributes.position : null; // fill skin tracks the same world vertices as the struts
+    if (lf.thread) { const top = head.y, hh = Math.max(0.05, top - tg.position.y); lf.thread.scale.y = hh; lf.thread.position.set(head.x, top - hh / 2, head.z); lf.thrMat.uniforms.uIntensity.value = 0.9 + inten * 0.5; }
+    const sp = lf.skin ? lf.skinGeo.attributes.position : null;
     for (let i = 0; i < lf.struts.length; i += 1) {
-      octWorld(root.group, lf.topV[i], _wt);
+      octWorld(nd.group, lf.topV[i], _wt);
       octWorld(tg, lf.botV[i], _wb);
-      if (sp) { sp.setXYZ(i, _wt.x, _wt.y, _wt.z); sp.setXYZ(6 + i, _wb.x, _wb.y, _wb.z); } // head verts 0..5, tail 6..11
+      if (sp) { sp.setXYZ(i, _wt.x, _wt.y, _wt.z); sp.setXYZ(6 + i, _wb.x, _wb.y, _wb.z); }
       const st = lf.struts[i];
       _dir.copy(_wb).sub(_wt); const len = Math.max(0.001, _dir.length());
-      st.g.position.copy(_wt).add(_wb).multiplyScalar(0.5);          // midpoint of the matching-vertex pair
-      st.g.quaternion.setFromUnitVectors(STRUT_UP, _dir.multiplyScalar(1 / len)); // orient the cylinder along the edge
-      st.g.scale.set(1, len, 1);                                     // stretch to the gap; radius stays thin
-      st.wireMat.uniforms.uIntensity.value = st.glowMat.uniforms.uIntensity.value = inten; // glow with the head, like the shapes
+      st.g.position.copy(_wt).add(_wb).multiplyScalar(0.5);
+      st.g.quaternion.setFromUnitVectors(STRUT_UP, _dir.multiplyScalar(1 / len));
+      st.g.scale.set(1, len, 1);
+      st.wireMat.uniforms.uIntensity.value = st.glowMat.uniforms.uIntensity.value = inten;
     }
-    if (sp) { sp.needsUpdate = true; lf.skinGeo.computeVertexNormals(); lf.skinMat.uniforms.uIntensity.value = inten; } // fill glows with the body
+    if (sp) { sp.needsUpdate = true; lf.skinGeo.computeVertexNormals(); lf.skinMat.uniforms.uIntensity.value = inten; }
+  };
+  const updateLifeline = dt => { for (const nd of nodes) if (nd.lifeline && nd.lifeline.tailGroup) updateBody(nd, dt); };
+
+  // ── sub-agent = its OWN hyper-octahedron lifeline ──────────────────────────────────────────────────────
+  // A delegate / specialist / research / employ is a real agentic loop, so it gets its OWN time-extruded body
+  // (a smaller hyper-octahedron) in its OWN column beside the root. Its tools descend on its own spine; the
+  // OUT/BACK edges to the root (the delegation call + return) read as the message arrows between the two
+  // lifelines — root + each sub-agent in parallel columns = a 3D sequence diagram over time.
+  const SUB_HEAD_R = 0.4, SUB_TAIL_R = 0.28;
+  const subAgents = []; // promoted sub-agent nodes, in creation order (each gets its own column)
+  const attachSubLifeline = (nd, color) => {
+    if (nd.lifeline) return nd.lifeline;
+    const tcol = new THREE.Color(color);
+    const tGeo = new THREE.OctahedronGeometry(SUB_TAIL_R);
+    const tWireMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: tcol.clone() }, uIntensity: { value: 0.9 } }, vertexShader: WIRE_V, fragmentShader: WIRE_F, transparent: true });
+    const tGlowMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: tcol.clone() }, uIntensity: { value: 0.9 } }, vertexShader: GLOW_V, fragmentShader: GLOW_F, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide });
+    const tWire = new THREE.LineSegments(new THREE.EdgesGeometry(tGeo), tWireMat);
+    const tGlow = new THREE.Mesh(tGeo, tGlowMat); tGlow.scale.setScalar(1.25);
+    const tailGroup = new THREE.Group(); tailGroup.add(tGlow); tailGroup.add(tWire);
+    tailGroup.position.copy(nd.group.position).setY(nd.group.position.y - 0.5);
+    sceneGroup.add(tailGroup);
+    const topV = OCTA_LOCAL(SUB_HEAD_R), botV = OCTA_LOCAL(SUB_TAIL_R);
+    const struts = []; for (let i = 0; i < topV.length; i += 1) { const st = makeStrut(color); sceneGroup.add(st.g); struts.push(st); }
+    const skinGeo = new THREE.BufferGeometry();
+    skinGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(12 * 3), 3));
+    skinGeo.setIndex(HYPER_OCTA_FACES);
+    const skinMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: tcol.clone() }, uIntensity: { value: 0.9 } }, vertexShader: GLOW_V, fragmentShader: GLOW_F, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+    const skin = new THREE.Mesh(skinGeo, skinMat); skin.frustumCulled = false; sceneGroup.add(skin);
+    const thrMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: new THREE.Color(COL.thread) }, uIntensity: { value: 1.0 } }, vertexShader: WIRE_V, fragmentShader: WIRE_F, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    const thread = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1, 8, 1, true), thrMat); sceneGroup.add(thread);
+    nd.lifeline = { tailGroup, tWireMat, tGlowMat, tGeo, struts, thread, thrMat, topV, botV, skin, skinGeo, skinMat };
+    nd.lifeTopY = nd.group.position.y; nd.lifeT0 = nd.tCall || t0;
+    return nd.lifeline;
+  };
+  const promoteToAgent = nd => {
+    if (!nd || nd.lifeline || nd === root || !DELEGATE.has(nd.name) || nd.name === 'research') return; // research keeps its own live subtree viz
+    const i = subAgents.length; subAgents.push(nd);
+    const colX = (root ? root.group.position.x : 0) + 2.2 + 1.7 * i; // its own column, to the right of the root spine
+    const colY = yOfNode(root, nd.tCall || t0); // start at the Y of when the delegation went out (its call time)
+    nd.lifeTopY = colY; nd.lifeT0 = nd.tCall || t0;
+    tweenPos(nd, new THREE.Vector3(colX, colY, 0), 0.5); // glide the sub-agent head into its column
+    attachSubLifeline(nd, COL.delegate);
+    if (nd.children.length) relayoutChildren(nd); // its tools descend on its own spine
+    fit();
   };
 
   const grow = nd => { if (buildInstant) { nd.group.scale.setScalar(1); return; } nd.group.scale.setScalar(0.001); tween(0.44, easeOutBack, e => nd.group.scale.setScalar(Math.max(0.001, e))); };
@@ -331,7 +373,14 @@ export const makePendant = canvas => {
   const SEQ_OUT = 0x39c5cf;  // call edge — the message OUT to the tool (teal)
   const SEQ_BACK = 0xd29922; // return edge — the message BACK to the agent (amber)
   let t0 = 0;                // the turn's start time (set in makeRoot); the lifeline's origin
-  const yOf = t => ROOT_Y - 0.6 - Math.max(0, (Number(t) || t0) - t0) * TIME_SCALE; // a time → its Y on the lifeline
+  const yOf = t => ROOT_Y - 0.6 - Math.max(0, (Number(t) || t0) - t0) * TIME_SCALE; // a time → its Y on the ROOT lifeline
+  // a time → its Y on ANY agent's lifeline (root = the main vertical axis; a sub-agent = its own column,
+  // whose spine starts at its head `lifeTopY` and descends from its own start time `lifeT0`).
+  const yOfNode = (nd, t) => {
+    if (!nd || nd === root || !nd.lifeline) return yOf(t);
+    const top = (nd.lifeTopY != null ? nd.lifeTopY : nd.group.position.y) - 0.5;
+    return top - Math.max(0, (Number(t) || nd.lifeT0 || t0) - (nd.lifeT0 || t0)) * TIME_SCALE;
+  };
   // LIVE duration: while a request is in flight the lifeline frontier descends with WALL-CLOCK time, so the
   // hyper-octahedron keeps GROWING for as long as the request takes — even through a long wait with no new
   // tool events. finish() freezes the elapsed duration so a completed trace holds its final length.
@@ -343,6 +392,7 @@ export const makePendant = canvas => {
     // Each step spirals around the agent's lifeline, positioned at the Y of ITS time (mid of call→return),
     // so the spiral now reads on the time-scale axis. Its two edges connect to the lifeline at call/return Y.
     level1.forEach((nd, j) => {
+      if (nd.lifeline) return; // a PROMOTED sub-agent lives in its own column, not the root's spiral
       const a = j * SPIRAL_TURN;
       const midT = nd.tDone ? (nd.tCall + nd.tDone) / 2 : nd.tCall;
       tweenPos(nd, new THREE.Vector3(cx + SPIRAL_R * Math.sin(a), yOf(midT), SPIRAL_R * Math.cos(a)));
@@ -350,6 +400,11 @@ export const makePendant = canvas => {
   };
   const relayoutChildren = parent => {
     const kids = parent.children, m = kids.length; if (!m) return; const R = parent === root ? 1.4 : 0.95;
+    if (parent.lifeline && parent !== root) { // a SUB-AGENT: its tools descend on its OWN spine (its column = a lifeline)
+      const cx = parent.group.position.x, cz = parent.group.position.z, topY = parent.lifeTopY != null ? parent.lifeTopY : parent.group.position.y;
+      kids.forEach((nd, j) => { const a = j * 0.66; tweenPos(nd, new THREE.Vector3(cx + 0.62 * Math.sin(a), topY - 0.55 - (j + 1) * 0.42, cz + 0.62 * Math.cos(a)), 0.46); });
+      return;
+    }
     // A timeline step's sub-tree (delegate/research children) branches OUT TO THE RIGHT of the spine so
     // it doesn't collide with the steps continuing downward. Deeper nodes keep fanning along their own
     // growth direction.
@@ -392,7 +447,11 @@ export const makePendant = canvas => {
       settle(nd, c.ok);
       if (c.children && c.children.length) buildChildren(c.children, nd);
     });
-    relayoutChildren(parent);
+    // a delegate/specialist/research/employ is a real agentic loop → promote it to its OWN hyper-octahedron
+    // lifeline (own column + spine) so the trace reads as a 3D sequence diagram. promoteToAgent calls
+    // relayoutChildren itself (descending the kids on the new spine); otherwise lay them under the parent.
+    if (parent !== root && DELEGATE.has(parent.name) && parent.name !== 'research' && !parent.lifeline) promoteToAgent(parent);
+    else relayoutChildren(parent);
   };
 
   // ---- public API ----
