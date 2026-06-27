@@ -35,25 +35,6 @@ const runProgram = async (code, endow) => {
 const safeJson = v => { try { return JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? String(x) : x)); } catch { return String(v); } };
 const clip = (s, n) => { const t = String(s == null ? '' : s); return t.length > n ? `${t.slice(0, n)}…[${t.length - n} more chars]` : t; };
 
-// RECOVERABLE NETWORK ERROR classifier. Returns true for the kind of transient connectivity failures
-// that are worth ONE retry (a dropped/reset connection, a timeout, a DNS/connect hiccup, a temporary
-// "network unreachable"). Matched by the standard Node error `code`s AND by message text, so it works
-// whether the cap throws a structured error or a plain Error with a descriptive message. Deliberately
-// NARROW: a logic error, a bad-args error, or a real "not found" is NOT recoverable and is not retried.
-const RECOVERABLE_NET_CODES = new Set([
-  'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'EPIPE', 'ETIMEDOUT', 'ESOCKETTIMEDOUT',
-  'ENETUNREACH', 'ENETRESET', 'EHOSTUNREACH', 'EAI_AGAIN', 'ENOTFOUND', 'EADDRNOTAVAIL',
-  'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET',
-]);
-const RECOVERABLE_NET_RE = /\b(?:ECONNRESET|ECONNREFUSED|ECONNABORTED|EPIPE|ETIMEDOUT|ESOCKETTIMEDOUT|ENETUNREACH|ENETRESET|EHOSTUNREACH|EAI_AGAIN|ENOTFOUND|EADDRNOTAVAIL|UND_ERR_\w+)\b|socket hang up|network (?:error|timeout|unreachable)|connection (?:reset|refused|closed|timed out|timeout|aborted)|request timed? out|fetch failed|temporarily unavailable/i;
-const isRecoverableNetworkError = e => {
-  if (!e) return false;
-  const code = (e && (e.code || (e.cause && e.cause.code))) || '';
-  if (code && RECOVERABLE_NET_CODES.has(String(code))) return true;
-  const msg = (e && (e.message || (e.cause && e.cause.message))) || String(e);
-  return RECOVERABLE_NET_RE.test(String(msg));
-};
-
 // Extract a JS program from the model reply: a ```js fenced block (preferred), else a bare ``` block.
 const extractCode = reply => {
   const s = String(reply || '');
@@ -76,23 +57,7 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
   const wrapCall = (label, fn) => harden(async (args = {}) => {
     if (signal?.aborted) throw new Error('aborted');
     onStep({ kind: 'tool-start', name: label, args });
-    // SINGLE-RETRY for RECOVERABLE NETWORK ERRORS. A tool call that touches the network (fetch a peer,
-    // hit a service) can fail transiently — a dropped connection, a reset socket, a timeout. Those are
-    // worth ONE immediate retry before we surface the failure: a single re-attempt fixes the common
-    // blip without turning the loop into an unbounded retry storm. Non-network errors (a real bad
-    // result, an aborted signal, a bug) are NOT retried — they go straight back as the answer.
-    try {
-      let r;
-      try {
-        r = await fn(args || {});
-      } catch (e1) {
-        if (signal?.aborted || !isRecoverableNetworkError(e1)) throw e1;
-        // recoverable + still alive → ONE retry; emit a trace so the re-attempt is visible.
-        onStep({ kind: 'tool-retry', name: label, error: (e1 && e1.message) || String(e1) });
-        r = await fn(args || {});
-      }
-      used.push({ name: label, args, result: r }); onStep({ kind: 'tool', name: label, args, result: r }); return r;
-    }
+    try { const r = await fn(args || {}); used.push({ name: label, args, result: r }); onStep({ kind: 'tool', name: label, args, result: r }); return r; }
     catch (e) { onStep({ kind: 'tool-error', name: label, error: (e && e.message) || String(e) }); return harden({ ok: false, error: (e && e.message) || String(e) }); }
   });
   const argSig = a => Object.keys(a || {}).length ? 'args' : '';
