@@ -535,7 +535,7 @@ const makeAffordances = ({ outDir }) => {
 // ── power metadata: name → label + the toolbox verbs it contributes ───────────
 export const POWERS = harden({
   notes: { label: 'Read your personal notes', verbs: ['searchNotes', 'readNote'] },
-  'notes.dietician': { label: 'Read ONLY the Dietician notes folder (the family diet specs + dietician notes — scoped, no access to other personal notes)', verbs: ['searchDietNotes', 'readDietNote'] },
+  'notes.dietician': { label: 'Read + RECORD into the Dietician notes folder ONLY (the family diet specs + dietician notes — scoped, no access to other personal notes; append fires, overwrite confirms)', verbs: ['searchDietNotes', 'readDietNote', 'appendDietNote', 'proposeDietNoteEdit'] },
   jotNote: { label: 'Jot NEW notes straight into your private vault (non-destructive — only ever ADDS; never overwrites or deletes; no confirmation)', verbs: ['addNote'] },
   reference: { label: 'Consult your library + Wikipedia', verbs: ['consult'] },
   web: { label: 'Search the web (Brave) + fetch any page or HTTP/JSON API programmatically (fetchUrl) — the CHEAP default for getting web data; reach for this before the headless browser', verbs: ['fetchUrl', 'webSearch'] },
@@ -807,7 +807,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         "2. dietEvaluateArea(city, limit?) — judges the scanned candidates against the person's diet (it READS the diet spec ITSELF — do NOT search/read notes to find it). It is SLOW (a few seconds per restaurant). Each verdict is SAVED as it lands, so a batch cut short by the turn limit keeps its progress. Call it ONCE per turn with a sensible batch (e.g. limit 12-20), then STOP and REPORT { evaluated, remaining, verdicts } and tell the user to say \"continue\" for the next batch. NEVER loop it many times in one turn — that's what blows the 6-minute time limit. To cover a whole big city just keep saying continue; progress accumulates.",
         "3. When all candidates are judged (remaining = 0): dietBuildMap() rebuilds the safe-eats map; dietRefreshSite(site) refreshes a published guide (propose→confirm; NEVER publish without confirmation).",
         "KEEP EVERY TURN SHORT + FOCUSED — one scan, OR one evaluate batch, OR one publish — then report. Do NOT chain many slow tools or loop a tool in a single turn; that's what blows the time limit.",
-        "You can read ONLY the vault's Dietician folder (searchDietNotes / readDietNote) — the family diet specs ([[Alexa — Diet]], [[Dan — Diet]], index [[Diet Preferences]]) + dietician notes; you cannot see any other personal notes. The diet specs are read by dietEvaluateArea automatically — only open them if the user asks about the diet itself. Be skeptical about menus; when unsure prefer SKIP / UNKNOWN. Carry the city + person across the conversation.",
+        "You can read AND record into ONLY the vault's Dietician folder — the family diet specs ([[Alexa — Diet]], [[Dan — Diet]], index [[Diet Preferences]]) + dietician notes; you cannot see any other personal notes. READ: searchDietNotes / readDietNote (the specs are read by dietEvaluateArea automatically — only open them if the user asks about the diet itself; once you've read a spec this chat, REUSE it — don't re-read the same note every turn). RECORD: when you learn a new diet fact in conversation (a reaction, a trigger, a preference — e.g. 'Alexa reacts to corn, she suspects the sorbitol'), appendDietNote it into the relevant spec so it PERSISTS and you never re-derive it; use proposeDietNoteEdit (confirm-gated) to overwrite/correct a spec. Be skeptical about menus; when unsure prefer SKIP / UNKNOWN. Carry the city + person across the conversation.",
       ].join('\n') },
     { id: 'researcher', name: '🔎 Researcher', domain: 'deep multi-source research', powers: ['research', 'web', 'reference', 'browser', 'notes', 'jotNote', 'feed'],
       instructions: 'You are the Researcher. For any question, plan, search the web + your library in parallel, read the best sources, and synthesize a concise, CITED answer. Prefer primary sources and flag uncertainty. Use the research tool for big questions; web/browser/reference for the rest; jot durable findings to notes.' },
@@ -1081,10 +1081,31 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     //    specs + the dietician's own notes). A least-authority view — cannot see any other personal note. ──
     searchDietNotes: { reversible: false, args: { query: 'string' }, description: 'Search the Dietician notes folder (the family diet specs + dietician notes). Scoped — cannot see any other personal notes.',
       run: async ({ query }) => harden(((await aff.notes.search(String(query || ''), { limit: 8 })) || []).filter(r => underPrefix(r.path, 'Dietician'))) },
-    readDietNote: { reversible: false, args: { path: 'string — a path under Dietician/' }, description: 'Read one note from the Dietician folder (diet specs / dietician notes).',
+    readDietNote: { reversible: false, args: { path: 'string — a path under Dietician/' }, description: 'Read one note from the Dietician folder (diet specs / dietician notes). You\'ve usually read the specs already this chat — REUSE what you retrieved; don\'t re-read the same diet note every turn.',
       run: async ({ path: rel }) => (underPrefix(String(rel || ''), 'Dietician')
         ? ({ ok: true, content: String(await aff.notes.read(String(rel || ''))).slice(0, 6000) })
         : ({ ok: false, content: '', error: 'outside the Dietician folder — not readable by the Dietician' })) },
+    // SCOPED diet-note WRITE — the Dietician can RECORD findings back INTO the Dietician/ folder (jailed there).
+    appendDietNote: { reversible: false, args: { path: 'string — a note under Dietician/ (e.g. "Dietician/Alexa — Diet.md")', content: 'string — the finding/observation to append' },
+      description: 'APPEND a finding to a Dietician note — NON-DESTRUCTIVE (only ever ADDS), so it fires IMMEDIATELY. RECORD new diet facts you learn in conversation (e.g. "Alexa reacts to corn — she suspects the sorbitol") so they PERSIST in the spec + you never re-derive them. Scoped to the Dietician folder.',
+      run: async ({ path: rel, content }) => {
+        const relS = String(rel || '');
+        if (!underPrefix(relS, 'Dietician')) return { ok: false, error: 'outside the Dietician folder — the Dietician can only write under Dietician/' };
+        const stamp = new Date().toISOString().slice(0, 10);
+        const r = await aff.editNote.appendTo(relS, `\n---\n*added ${stamp}*\n\n${String(content ?? '')}\n`);
+        return (r && r.ok === false) ? r : harden({ ok: true, appended: true, path: relS, note: `Recorded into ${relS} — it persists in the diet spec.` });
+      } },
+    proposeDietNoteEdit: { reversible: false, args: { path: 'string — a note under Dietician/', content: 'string — new content (or text to append)', mode: 'string — "overwrite" (default) or "append"' },
+      description: 'PROPOSE a CHANGE to a Dietician note (overwrite/edit a spec). Does NOT write — the user confirms the diff first. For just RECORDING a new finding, prefer appendDietNote (immediate). Scoped to the Dietician folder.',
+      run: async ({ path: rel, content, mode = 'overwrite' }, agent) => {
+        const relS = String(rel || '');
+        if (!underPrefix(relS, 'Dietician')) return { ok: false, error: 'outside the Dietician folder' };
+        const old = await aff.editNote.read(relS);
+        const next = String(mode) === 'append' ? `${old}${old && !old.endsWith('\n') ? '\n' : ''}${String(content || '')}` : String(content || '');
+        return propose({ type: 'note-edit', power: 'notes.dietician', agent, title: `Edit ${relS}`, summary: `${mode} · ${relS}`,
+          detail: { path: relS, mode: String(mode), oldContent: old.slice(0, 12000), newContent: next.slice(0, 12000) },
+          commit: () => aff.editNote.write(relS, next) });
+      } },
     // NON-DESTRUCTIVE note CREATION — fires directly, no proposal. Creating a new note (or appending to
     // one) only ever ADDS; it cannot overwrite or delete, so it needs no confirmation. This is the
     // self-hosted private notepad: the entry agent can record SENSITIVE things that never leave the

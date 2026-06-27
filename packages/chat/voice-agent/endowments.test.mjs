@@ -41,7 +41,7 @@ const POLICY = {
   componentWriteFile: 'scoped-write', forkComponent: 'scoped-write', revertComponent: 'scoped-write',
   // add — non-destructive additive write: only ever creates/appends a note, never overwrites or deletes
   // (the self-hosted private notepad; sensitive notes that never leave the network)
-  addNote: 'add',
+  addNote: 'add', appendDietNote: 'add', // non-destructive append (scoped to the Dietician folder)
   // render — emit an EPHEMERAL UI widget/spec into the agent's own response. No persistence, no authority,
   // no external effect; the live data a widget shows flows separately + cap-gated. Safe even from a confined cap.
   showEntityStatus: 'render', showCountdowns: 'render', showChoices: 'render', showComponent: 'render',
@@ -58,7 +58,7 @@ const POLICY = {
   dietScanArea: 'notify', dietEvaluateArea: 'notify', dietBuildMap: 'notify', dietStatus: 'read',
   retitleChat: 'notify', // rename a conversation — the user's own metadata, contained + reversible
   // propose — DESTRUCTIVE → confirmable proposal (agent proposes, human confirms)
-  proposeNoteEdit: 'propose', proposeEmail: 'propose', proposeSubAgent: 'propose',
+  proposeNoteEdit: 'propose', proposeDietNoteEdit: 'propose', proposeEmail: 'propose', proposeSubAgent: 'propose',
   proposeSystemPrompt: 'propose', haAct: 'propose',
   proposeAddContact: 'propose', proposeEditContact: 'propose',
   proposeGiveKazputer: 'propose',
