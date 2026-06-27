@@ -82,6 +82,7 @@ const POLICY = {
   proposeImprovement: 'add', listImprovements: 'read', listChangelog: 'read', // backlog/changelog: propose (additive) / read
   // delegate — attenuated sub-bundle to a larger agent / a confined specialist / a role sub-agent
   delegateTask: 'delegate', spawnSpecialist: 'delegate', askSpecialist: 'delegate', employ: 'delegate',
+  forgeTool: 'delegate', // spawns a confined toolsmith sub-agent (VM-holding) that proposes a reusable tool
   // share — re-grant ONE held power as a named, revocable invite (monotonic delegation); revoke any time
   createInvite: 'share',
   shareTool: 'share', revokeToolShare: 'share', // share an admitted component as a revocable invite; revoke it

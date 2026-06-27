@@ -558,6 +558,7 @@ export const POWERS = harden({
   selfPrompt: { label: 'Propose changes to your own system prompt (you confirm)', verbs: ['proposeSystemPrompt'] },
   delegate: { label: 'Delegate a task to a larger (Opus) agent', verbs: ['delegateTask'] },
   roles: { label: 'Employ a specialized role sub-agent (planner, retriever, synthesizer, critic, reviewer, …) with a least-privilege tool ring + model tier', verbs: ['listRoles', 'employ'] },
+  toolsmith: { label: 'Forge a reusable tool: hand a confined sub-agent a VM to build + test a new least-authority library tool, then bank it for future use', verbs: ['forgeTool'] },
   // ── DESTRUCTIVE powers: the agent gets only `propose*` verbs. Each proposal
   //    is confirmed by the operator (root cap) before its real action fires. ──
   editNote: { label: 'Propose edits to your notes (you confirm)', verbs: ['proposeNoteEdit'] },
@@ -784,7 +785,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // smell dan flagged — the correct form is designation by REFERENCE (hold the cap object; pass a subset of
   // refs; you can't name what you don't hold). Tracked as urgent maintenance: ~/TODO/ocap-designate-by-reference.md.
   // Until then: do NOT add new string-name capability designation.
-  const META_POWERS = new Set(['subagent', 'app', 'selfImprove']);
+  const META_POWERS = new Set(['subagent', 'app', 'selfImprove', 'toolsmith']); // toolsmith hands a sub-agent a VM → stays at the entry level, never sub-delegated
   // WAND POLICY (Phase 5): the held authority to auto-mint a specialist on a name-miss — option → ~/.config
   // file → conservative default. A node only auto-mints if it HOLDS this (node.wandBinding) AND the name matches
   // an enumerated entry; minted powers are entry.powers ∩ caller. Nodes that don't hold it → graceful miss.
@@ -1427,6 +1428,52 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       manifest.push({ name: 'delegateTask', reversible: true,
         args: { prompt: 'string — the task', powers: `array — subset of [${[...node.powers].filter(p => !META_POWERS.has(p)).join(', ')}] to grant the sub-agent`, nickname: 'string — OPTIONAL but encouraged: a short readable name for this delegate (e.g. "flights-builder"), shown in the trace + as the proposer of anything it builds. You may delegate MANY in one turn.' },
         description: 'Break a task off to a larger (Opus) agent, granting it ONLY the listed powers. Use this ONLY when (a) the scope is too big for one agent (genuinely multi-stage / parallelizable / needs a bigger brain), OR (b) it involves potentially destructive actions best done by a confined least-authority sub-agent. Do NOT delegate a read, lookup, or single-tool action you can just do yourself. Give it a nickname; you may call this MULTIPLE times in one response for several delegates.' });
+    }
+    // ── TOOLSMITH — forge a reusable tool when no existing tool fits ────────────────────────────────────────
+    // The "surprise and delight" path WITH guardrails: instead of handing the entry agent a free unix box for
+    // a one-off (the OpenClaw failure mode), forgeTool hands a CONFINED sub-agent a VM (kernel-isolated) whose
+    // sole job is to PROTOTYPE the approach in the VM, then write + PROPOSE a reusable, LEAST-AUTHORITY tool as
+    // a sandboxed Endo object — and RETURN it. The VM is the toolsmith's scratchpad (used once, to build); the
+    // forged tool runs confined (proposeTool → review → admit → callable via callCustomTool for ANY future
+    // task). So a capability we needed once becomes a bounded, reusable, auditable tool — not ambient unix.
+    if (powers.has('toolsmith')) {
+      let activeForge = null;
+      toolbox.forgeTool = harden({
+        run: async ({ name, task, hint } = {}) => {
+          if (!String(task || '').trim()) return { ok: false, error: 'describe the task the tool must accomplish' };
+          // the toolsmith's ring: a VM to prototype in (kernel-isolated; host as fallback), a scratch folder,
+          // research + library access to design/propose/test — ⊆ what the entry agent holds, never META.
+          const ring = [...new Set(['vm', 'host', 'home', 'web', 'research', 'reference', 'youtube', 'customtools', 'feed'].filter(p => node.powers.has(p) && !META_POWERS.has(p)))];
+          if (!ring.includes('vm') && !ring.includes('host')) return { ok: false, error: 'forging a tool needs a VM — you do not hold the vm/host power to pass to the toolsmith.' };
+          const fid = `forge-${newSwiss().slice(0, 8)}`;
+          const smith = makeAgentNode({ powers: ring, labelOf: `toolsmith-${fid}`, haBinding: node.haBinding, agBinding: node.agBinding, id: `toolsmith-${fid}` });
+          const sub = smith.toolbox(ctx);
+          const ac = new AbortController(); activeForge = ac;
+          const lead = ctx.userText ? `The user's request that needs a NEW tool (context):\n"${String(ctx.userText).slice(0, 1200)}"\n\n` : '';
+          const prompt = `${lead}You are a TOOLSMITH. The entry agent hit a task NO existing tool can do, but a reusable tool COULD. FORGE that tool for the shared library and RETURN it. This is the guardrailed alternative to "give the agent a free unix box": you get a VM to BUILD with, but the OUTPUT is a confined, least-authority, reusable tool.\n\nTOOL NAME: ${String(name || '(you choose a short, clear name)')}\nWHAT IT MUST DO: ${String(task)}${hint ? `\nHINT: ${String(hint)}` : ''}\n\nHOW:\n1. PROTOTYPE in your VM (vmExec / hostExec): work out + TEST the approach end-to-end — write a script, run it on a REAL sample input, confirm correct output. The VM is your kernel-isolated scratchpad; experiment freely.\n2. Once it works, WRITE the tool as a CONFINED Endo object and PROPOSE it with proposeTool({ name, description, code, args }). The tool's make(powers) body runs SANDBOXED — only powers.state (durable kv), powers.grains (cells), and console; NO fs / network / shell / import. So the tool must be PURE JS over its args (a parser/validator/transformer/extractor/calculator).\n3. If the task FUNDAMENTALLY needs a runtime capability a sandboxed tool cannot hold (spawn a binary, hit the network, read a file), do NOT fake it — say so plainly in your answer and propose the closest pure-JS helper you can, or none.\n4. Keep it LEAST AUTHORITY + reusable: a clear name, a tight arg schema, deterministic, no ambient access.\n5. FINISH by stating the proposed tool's id + a one-line summary. Your returned answer IS the report to the entry agent.`;
+          let r;
+          try {
+            const run = makeMeteredOpusDelegate({ purse: ctx.purse, perProvider: ctx.perProvider });
+            r = await run({ prompt, toolbox: sub.toolbox, manifest: sub.manifest, grantedPowers: ring, signal: ac.signal, maxSteps: 22 });
+          } catch (e) { return { ok: false, error: `toolsmith failed: ${(e && e.message) || e}` }; }
+          finally { if (activeForge === ac) activeForge = null; }
+          const forged = customToolsObj.pendingBy(smith.id); // the tool(s) it proposed — banked for future use
+          return harden({
+            ok: forged.length > 0,
+            forged: forged.map(t => ({ id: t.id, name: t.name, description: t.description })),
+            agentName: `toolsmith-${fid}`,
+            answer: String((r && r.answer) || '').slice(0, 4000),
+            toolsUsed: (r && r.toolsUsed) || [],
+            note: forged.length
+              ? `Forged ${forged.length} reusable tool(s) → the library (PENDING review; once admitted they're callable by ANY future task via callCustomTool — no VM needed again). The VM was used only to build them.`
+              : 'The toolsmith proposed no tool — read its answer (the task may need a runtime capability a sandboxed tool cannot hold).',
+          });
+        },
+        abort: () => { try { activeForge?.abort(); } catch {} },
+      });
+      manifest.push({ name: 'forgeTool', reversible: true,
+        args: { name: 'string — OPTIONAL short name for the tool (e.g. "csv-to-json", "ical-parser")', task: 'string — what the tool must do + WHY no current tool fits (the build brief — be concrete about inputs/outputs)', hint: 'string — OPTIONAL approach hint (a library/algorithm to try)' },
+        description: 'FORGE a new reusable tool when NO existing tool can do a task but a tool COULD (a parser/validator/transformer/extractor/calculator — e.g. "parse an iCal feed", "validate an IBAN"). Hands a CONFINED toolsmith sub-agent a VM to prototype + TEST the approach, then it writes + PROPOSES a sandboxed least-authority tool to the library and returns it. Use this INSTEAD of asking for raw shell to do a one-off — the forged tool is bounded, auditable, and reusable forever (admitted tools show in listCustomTools / callCustomTool). NOT for actions (use the matching power); NOT for things needing live shell/network at call time (a sandboxed tool can\'t hold those).' });
     }
     if (powers.has('roles')) {
       // EMPLOY A ROLE — the doc's "roles are configurations, not classes." Each role
