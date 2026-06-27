@@ -19,7 +19,7 @@
 // languages (`cts`). The languages a `.ts`/`.mts`/`.cts` file resolves to —
 // not how the bytes are parsed — is what this exercises, and that resolution
 // is what must match Node.js. See
-// `packages/compartment-mapper/designs/compartment-mapper-auxiliary-package-json.md`.
+// `../designs/compartment-mapper-auxiliary-package-json.md`.
 import 'ses';
 import fs from 'fs';
 import url from 'url';
@@ -30,6 +30,7 @@ import { mapNodeModules } from '../src/node-modules.js';
 import { makeReadPowers } from '../src/node-powers.js';
 import parserMjs from '../src/parse-mjs.js';
 import parserCjs from '../src/parse-cjs.js';
+import { assertTypeScriptClassification } from './_auxiliary-typescript-assertions.js';
 
 const readPowers = makeReadPowers({ fs, url });
 
@@ -67,23 +68,12 @@ test('auxiliary package.json flips .ts parsing per subtree, with .mts/.cts type-
   const { namespace } = await application.import({});
   // Every subtree must have parsed under the language Node.js would choose; a
   // mismatch (e.g. `.ts` parsed as ESM where CommonJS was meant) throws during
-  // evaluation, so a structured result is the load-bearing assertion.
-  t.deepEqual(namespace.default, {
-    // `.ts` under ts-pkg's own `type: "module"` is an ECMAScript module.
-    rootTs: 'root-ts-esm',
-    // `.mts` is always an ECMAScript module.
-    alwaysMts: 'mts-esm',
-    // `.ts` under the `{"type":"commonjs"}` auxiliary is CommonJS.
-    ctsLeaf: 'cts-leaf',
-    // `.cts` is always CommonJS.
-    alwaysCts: 'cts-always',
-    // `.mts` stays an ECMAScript module even inside the commonjs subtree.
-    forcedMts: 'mts-under-cjs',
-    // a deeper directory with no package.json inherits the commonjs auxiliary.
-    ctsDeep: 'cts-deep',
-    // a still-deeper `{"type":"module"}` auxiliary flips `.ts` back to ESM.
-    tsEsmAgain: 'ts-esm-again',
-  });
+  // evaluation, so a structured result is the load-bearing assertion. The
+  // companion `auxiliary-typescript-node-parity.test.js` asserts the same
+  // aggregate under plain Node.js via the shared assertions module, so the
+  // Compartment Mapper's classification is verified to match Node.js by
+  // construction.
+  assertTypeScriptClassification(t, namespace.default);
 });
 
 test('the entry compartment records ts/mts/cts languageForExtensionByPrefix matching Node.js', async t => {

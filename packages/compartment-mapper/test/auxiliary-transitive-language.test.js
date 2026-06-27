@@ -13,7 +13,7 @@
 // auxiliary override is honored; a deeper `transdep/aux/flip-back/package.json`
 // is `{"type": "module"}` and flips `.js` back to ECMAScript.
 //
-// See `designs/compartment-mapper-auxiliary-package-json.md`.
+// See `../designs/compartment-mapper-auxiliary-package-json.md`.
 import 'ses';
 import fs from 'fs';
 import url from 'url';

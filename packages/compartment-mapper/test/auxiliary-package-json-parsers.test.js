@@ -12,7 +12,7 @@
 // loads in the language the auxiliary names) and, where they inspect the field,
 // build the map and import through it so the import-hook walk has run.
 //
-// See `designs/compartment-mapper-auxiliary-package-json.md`.
+// See `../designs/compartment-mapper-auxiliary-package-json.md`.
 import 'ses';
 import fs from 'fs';
 import url from 'url';

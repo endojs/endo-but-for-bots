@@ -133,7 +133,7 @@ const auxiliaryDescriptorMemos = new WeakMap();
  * the static graph builder cannot enumerate package subtrees, so the override
  * lookup happens here, where each loaded module's location is known and the
  * trampoline lets the same generator serve the sync and async import hooks.
- * See `designs/compartment-mapper-auxiliary-package-json.md` (Phase 7).
+ * See `../designs/compartment-mapper-auxiliary-package-json.md`.
  *
  * @param {object} args
  * @param {FileUrlString} args.moduleLocation - absolute URL of the module being loaded
@@ -566,7 +566,7 @@ function* chooseModuleDescriptor(
       // `{"type": "module"}` (or `"commonjs"`) auxiliary flips `.js` parsing
       // within its directory. `undefined` leaves the compartment's base parser
       // map in force. See
-      // `designs/compartment-mapper-auxiliary-package-json.md`.
+      // `../designs/compartment-mapper-auxiliary-package-json.md`.
       const languageForExtension = yield* resolveAuxiliaryLanguageForExtension(
         { moduleLocation, packageLocation, compartmentDescriptor },
         { maybeRead },

@@ -139,7 +139,7 @@ export interface CompartmentDescriptor<
    * without a `name`). Populated lazily as modules under an auxiliary
    * subtree are loaded. Absent or empty for compartments with no auxiliary
    * descriptors, in which case `parsers` applies uniformly. See
-   * `designs/compartment-mapper-auxiliary-package-json.md`.
+   * `../../designs/compartment-mapper-auxiliary-package-json.md`.
    */
   languageForExtensionByPrefix?: LanguageForExtensionByPrefix;
   /** language for module specifier */
@@ -299,8 +299,8 @@ export type LanguageForModuleSpecifier = Record<string, Language>;
  * prefix that prefixes a module's path within the compartment selects the
  * map used to resolve its language.
  *
- * See `designs/compartment-mapper-auxiliary-package-json.md` (Design
- * Decision §7).
+ * See `../../designs/compartment-mapper-auxiliary-package-json.md` (the
+ * `languageForExtensionByPrefix` field).
  */
 export type LanguageForExtensionByPrefix = Array<{
   /**

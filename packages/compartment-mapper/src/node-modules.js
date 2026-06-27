@@ -1562,7 +1562,7 @@ export const mapNodeModules = async (
   // Advanced callers thread their own cache through `packageDescriptorCache`
   // to share a single descriptor cache (and its read memoization) across
   // multiple `mapNodeModules` calls. See
-  // `designs/compartment-mapper-auxiliary-package-json.md`.
+  // `../designs/compartment-mapper-auxiliary-package-json.md`.
   const descriptorCache =
     packageDescriptorCache ??
     makePackageDescriptorCache(unpackReadPowers(readPowers).maybeRead);

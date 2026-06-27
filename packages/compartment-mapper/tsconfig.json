@@ -10,5 +10,8 @@
     "src/types.d.ts",
     "test",
     "!**/*.d.ts"
+  ],
+  "exclude": [
+    "test/fixtures-auxiliary-typescript-node-parity"
   ]
 }

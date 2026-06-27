@@ -11,8 +11,8 @@
  * it implies, and select the effective map for a module by its deepest
  * matching subtree prefix.
  *
- * See `designs/compartment-mapper-auxiliary-package-json.md` (Phase 7,
- * Design Decision §7: the `languageForExtensionByPrefix` field).
+ * See `../designs/compartment-mapper-auxiliary-package-json.md` (the
+ * `languageForExtensionByPrefix` field).
  *
  * @module
  */

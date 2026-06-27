@@ -282,7 +282,7 @@ type MapNodeModulesOptionsOmitPolicy = Partial<{
    * without finding a `name`) still triggers the diagnostic introduced in
    * `endojs/endo-but-for-bots#70`.
    *
-   * See `designs/compartment-mapper-auxiliary-package-json.md` for the
+   * See `../../designs/compartment-mapper-auxiliary-package-json.md` for the
    * design this option implements.
    */
   packageDescriptorCache: PackageDescriptorCache;
@@ -874,7 +874,7 @@ type ParseArguments = [
      * Per-module language-for-extension override, supplied by the import hook
      * when the module sits inside an auxiliary `package.json` subtree. Takes
      * precedence over the compartment's base parser map. See
-     * `designs/compartment-mapper-auxiliary-package-json.md`.
+     * `../../designs/compartment-mapper-auxiliary-package-json.md`.
      */
     languageForExtension: LanguageForExtension | undefined;
   }> &

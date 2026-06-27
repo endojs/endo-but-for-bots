@@ -3,7 +3,7 @@
 // (Phase 7): a `{"type": "module"}` or `{"type": "commonjs"}` descriptor
 // without a `name` flips `.js` parsing within its subtree, for modules reached
 // by relative import (not just package exports). See
-// `designs/compartment-mapper-auxiliary-package-json.md`.
+// `../designs/compartment-mapper-auxiliary-package-json.md`.
 import 'ses';
 import fs from 'fs';
 import url from 'url';

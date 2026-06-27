@@ -20,7 +20,7 @@
  * (compartment-defining vs. auxiliary) at insert time so neither lookup
  * needs to re-classify.
  *
- * See `designs/compartment-mapper-auxiliary-package-json.md` for the design
+ * See `../designs/compartment-mapper-auxiliary-package-json.md` for the design
  * this module implements.
  *
  * @module

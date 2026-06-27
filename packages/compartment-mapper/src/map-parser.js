@@ -118,7 +118,7 @@ function* getParserGenerator(
   // A per-module `languageForExtension` override (supplied by the import hook
   // when the module sits inside an auxiliary `package.json` subtree) takes
   // precedence over the compartment's base map. See
-  // `designs/compartment-mapper-auxiliary-package-json.md`.
+  // `../designs/compartment-mapper-auxiliary-package-json.md`.
   const languageForExtension =
     (options && options.languageForExtension) || configLanguageForExtension;
 
