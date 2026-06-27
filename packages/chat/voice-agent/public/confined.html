@@ -94,17 +94,22 @@ const apiGrain = (cellId) => {
 //    over create() (no island bundle, no import, no new authority — the CSP/sandbox boundary is untouched) so
 //    a reply widget can wear the app's look + behaviour. Unknown name → a labelled fallback (never throws).
 //    Props are render-safe DATA only; these builders grant nothing create() doesn't already.
+// content-bearing primitives read a NAMED prop (label/text/parts) for their content — BUT also fall back to
+// any CHILDREN passed (a very common authoring mistake: `island('Badge', {}, [span(time)])` instead of
+// `island('Badge', {label: time})`). `txt` resolves the named value; if absent, the kids render — so neither
+// shape silently drops the content (the "times never show up" bug).
+const labelOrKids = (el, val, kids) => (val != null ? el.text(String(val)) : (kids ? el.push(kids) : el));
 const KIT = {
-  Card: (p, kids) => create('div').class('cu-card').push(p.title ? create('div').class('cu-title').text(p.title) : null).push(kids),
-  Btn: (p) => { const b = create('button').class('cu-btn' + (p.variant === 'primary' ? ' primary' : p.variant === 'danger' ? ' danger' : '')).text(p.label == null ? '' : p.label); if (typeof p.onClick === 'function') b.on('click', () => p.onClick()); return b; },
-  Chip: (p) => create('span').class('cu-chip').text(p.label == null ? '' : p.label),
-  Badge: (p) => create('span').class('cu-badge').text(p.label == null ? '' : p.label),
-  Banner: (p) => create('div').class('cu-banner ' + (['warn', 'error', 'ok'].includes(p.kind) ? p.kind : 'info')).text((p.icon ? p.icon + ' ' : '') + (p.text == null ? '' : p.text)),
-  Meta: (p) => create('div').class('cu-meta').text((Array.isArray(p.parts) ? p.parts : []).join(' · ')),
+  Card: (p, kids) => create('div').class('cu-card').push(p.title ? create('div').class('cu-title').text(p.title) : null).push(p.body != null ? create('div').text(String(p.body)) : null).push(kids),
+  Btn: (p, kids) => { const b = create('button').class('cu-btn' + (p.variant === 'primary' ? ' primary' : p.variant === 'danger' ? ' danger' : '')); labelOrKids(b, p.label, kids); if (typeof p.onClick === 'function') b.on('click', () => p.onClick()); return b; },
+  Chip: (p, kids) => labelOrKids(create('span').class('cu-chip'), p.label, kids),
+  Badge: (p, kids) => labelOrKids(create('span').class('cu-badge'), p.label, kids),
+  Banner: (p, kids) => { const d = create('div').class('cu-banner ' + (['warn', 'error', 'ok'].includes(p.kind) ? p.kind : 'info')); if (p.icon) d.push(create('span').text(p.icon + ' ')); return labelOrKids(d, p.text, kids); },
+  Meta: (p, kids) => { const d = create('div').class('cu-meta'); if (Array.isArray(p.parts)) return d.text(p.parts.join(' · ')); return labelOrKids(d, p.text, kids); },
   Divider: () => create('hr').class('cu-divider'),
   Stack: (p, kids) => create('div').class('cu-stack').push(kids),
   Row: (p, kids) => create('div').class('cu-row').push(kids),
-  EmptyState: (p) => create('div').class('cu-empty').text(p.text == null ? 'nothing here' : p.text),
+  EmptyState: (p, kids) => labelOrKids(create('div').class('cu-empty'), p.text != null ? p.text : (kids ? null : 'nothing here'), kids),
   ProgressBar: (p) => { const pct = Math.max(0, Math.min(100, Number(p.value) || 0)); return create('div').class('cu-prog').push(create('span').style({ width: pct + '%' })); },
   Field: (p, kids) => create('label').class('cu-field').push(p.label ? create('span').class('cu-label').text(p.label) : null).push(kids),
   TextField: (p) => { const i = create('input').class('cu-in').attr('type', p.type || 'text').attr('placeholder', p.placeholder || ''); if (p.value != null) i.attr('value', String(p.value)); if (typeof p.onInput === 'function') i.on('input', e => p.onInput(e.value)); return i; },
