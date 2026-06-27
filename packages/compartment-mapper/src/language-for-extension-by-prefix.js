@@ -30,12 +30,16 @@ const { assign, create, freeze } = Object;
 /**
  * The language-for-extension contribution of a single descriptor.
  *
- * `.js` is the only extension whose language depends on a package's `type`:
- * it resolves to `mjs` under `type: "module"` (or when a `module` field is
- * present) and to `cjs` under `type: "commonjs"`. Every other extension
- * (`.mjs`, `.cjs`, `.json`, ...) is type-independent, so an auxiliary
- * descriptor only ever flips `js`. A descriptor may additionally carry an
- * explicit `parsers` map, which layers on top of the `type`-implied flip.
+ * `.js` and `.ts` are the only extensions whose language depends on a
+ * package's `type`, mirroring Node.js: `.js` resolves to `mjs` under
+ * `type: "module"` (or when a `module` field is present) and to `cjs` under
+ * `type: "commonjs"`, and `.ts` resolves analogously to `mts` and `cts`.
+ * Every other extension — including the unambiguous `.mjs`/`.cjs` and their
+ * TypeScript counterparts `.mts`/`.cts` — is type-independent (Node.js always
+ * treats `.mts` as a module and `.cts` as CommonJS regardless of the enclosing
+ * `type`), so an auxiliary descriptor only ever flips `js` and `ts`. A
+ * descriptor may additionally carry an explicit `parsers` map, which layers on
+ * top of the `type`-implied flip.
  *
  * @param {PackageDescriptor} descriptor
  * @returns {LanguageForExtension}
@@ -46,8 +50,10 @@ export const languageForExtensionOverride = descriptor => {
   const override = create(null);
   if (type === 'module' || module !== undefined) {
     override.js = 'mjs';
+    override.ts = 'mts';
   } else if (type === 'commonjs') {
     override.js = 'cjs';
+    override.ts = 'cts';
   }
   if (parsers !== undefined && typeof parsers === 'object') {
     assign(override, parsers);

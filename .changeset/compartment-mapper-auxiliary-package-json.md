@@ -36,5 +36,10 @@ parses the module against its deepest-matching prefix. `importArchive` and
 other fully-described compartment maps are unaffected, since their
 per-module language is already pinned.
 
-See `designs/compartment-mapper-auxiliary-package-json.md` for the design
-this implements.
+The flip mirrors Node.js across the TypeScript extensions too: an
+auxiliary `type` flips both `.js` and `.ts` (to `mjs`/`cjs` and
+`mts`/`cts` respectively), while the unambiguous `.mjs`/`.cjs` and
+`.mts`/`.cts` are never reclassified by an enclosing `type`.
+
+See `packages/compartment-mapper/designs/compartment-mapper-auxiliary-package-json.md`
+for the design this implements.

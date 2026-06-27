@@ -16,6 +16,23 @@ test('languageForExtensionOverride flips js by type', t => {
   t.deepEqual({ ...languageForExtensionOverride({}) }, {});
 });
 
+test('languageForExtensionOverride flips ts by type, mirroring Node.js', t => {
+  // `.ts` is type-dependent exactly like `.js`: Node.js classifies it as an
+  // ECMAScript module under `type: "module"` and as CommonJS under
+  // `type: "commonjs"`. The unambiguous `.mts`/`.cts` are never flipped — they
+  // are always module / CommonJS respectively — so the override leaves them
+  // out, just as it leaves out `.mjs`/`.cjs`.
+  t.is(languageForExtensionOverride({ type: 'module' }).ts, 'mts');
+  t.is(languageForExtensionOverride({ type: 'commonjs' }).ts, 'cts');
+  // A `module` field (no `type`) implies ECMAScript modules for `.ts` too.
+  t.is(languageForExtensionOverride({ module: './index.ts' }).ts, 'mts');
+  // No type and no module: nothing to flip, including `.ts`.
+  t.is(languageForExtensionOverride({}).ts, undefined);
+  // `.mts`/`.cts` are type-independent and never appear in the override.
+  t.is(languageForExtensionOverride({ type: 'commonjs' }).mts, undefined);
+  t.is(languageForExtensionOverride({ type: 'module' }).cts, undefined);
+});
+
 test('languageForExtensionOverride layers an explicit parsers map over the type flip', t => {
   const override = languageForExtensionOverride({
     type: 'commonjs',
