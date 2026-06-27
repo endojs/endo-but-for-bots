@@ -112,7 +112,7 @@ const KAZPUTER_STATE = '/home/dan/.config/kazputer-phone/instances.json'; // hol
 
 const FEED_MJS = path.resolve('/home/dan/endo-bfb/packages/chat/dashboard/feed.mjs');
 const FEED_FILE = '/home/dan/.local/state/field-dashboard/feed.json'; // the dashboard's durable feed — reused as the notification data endowment (the 🔔 bell reads it)
-const VAULT = '/home/dan/obsidian/vault';
+const VAULT = process.env.OBSIDIAN_VAULT || '/home/dan/obsidian/vault'; // env-overridable (matches obsidian-graph.mjs; lets tests point at a temp vault)
 const HA_URL = (process.env.HOMEASSISTANT_URL || 'http://192.168.50.11:8123').replace(/\/$/, '');
 const VM_HOST = process.env.VM_HOST || 'agent@10.89.0.3'; // the agent-code dev persona
 const newSwiss = () => crypto.randomBytes(16).toString('hex');
@@ -837,7 +837,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // Per-chat scoped caps must SURVIVE RESTARTS (else a deployed/restarted server orphans every
   // confined chat — its cap 403s, the chat silently can't send). Persist {swiss, powers, label}
   // and re-register at boot, the same durability the root swiss already has.
-  const SCOPED_FILE = '/home/dan/.config/field-agent/scoped-caps.json';
+  const SCOPED_FILE = process.env.SCOPED_CAPS_FILE || '/home/dan/.config/field-agent/scoped-caps.json'; // env-overridable for tests
   let scopedCaps = [];
   try { scopedCaps = JSON.parse(fs.readFileSync(SCOPED_FILE, 'utf8')).caps || []; } catch { scopedCaps = []; }
   const saveScoped = () => { try { fs.mkdirSync(path.dirname(SCOPED_FILE), { recursive: true }); fs.writeFileSync(SCOPED_FILE, JSON.stringify({ caps: scopedCaps }, null, 2), { mode: 0o600 }); } catch (e) { /* best effort */ } };
@@ -1775,7 +1775,43 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     } });
     manifest.push({ name: 'requestAccess', reversible: false,
       args: { power: 'string — the capability you need (e.g. notes, web, images, research)', why: 'string — why you need it (helps the owner decide)' },
-      description: 'REQUEST a power you do NOT currently hold from the owner. You cannot grant yourself powers — this asks the owner, who approves or declines. Use this instead of giving up when a task needs a capability you lack.' });
+      description: 'REQUEST a power you do NOT currently hold from the owner. You cannot grant yourself powers — this asks the owner, who approves or declines. Use this instead of giving up when a task needs a capability you lack. For NOTES specifically, prefer requestNotesFolder (ask for just the folder you need) over the whole-vault `notes` power.' });
+    // ── NOTES as an endo file/folder tree, granted at LEAST AUTHORITY ──────────────────────────────────
+    // The vault is a folder structure; you should hold only the SUBTREE a task needs, never the whole vault.
+    // noteFolders maps the folders you can reach (names + note counts, NO contents) so you can pick the
+    // minimal one; requestNotesFolder asks the owner to grant notes scoped to JUST that folder.
+    toolbox.noteFolders = harden({ run: async ({ under } = {}) => {
+      if (!powers.has('notes')) return { ok: false, error: 'you don\'t hold the notes power yet — call requestNotesFolder to ask the owner for a specific folder.' };
+      const base = (ctx.notes && ctx.notes.prefix) || ''; // your current reach (whole vault if '')
+      const start = cleanNotesFolder(under || base || '');
+      if (base && start !== base && !underPrefix(start, base)) return { ok: false, error: `"${start}" is outside your reach (${base || 'whole vault'})` };
+      const out = [];
+      const walk = (rel, depth) => {
+        if (depth > 6 || out.length > 400) return;
+        let ents = []; try { ents = fs.readdirSync(vaultReadPath(rel), { withFileTypes: true }); } catch { return; }
+        const notes = ents.filter(e => e.isFile() && e.name.endsWith('.md') && !e.name.startsWith('.')).length;
+        const dirs = ents.filter(e => e.isDirectory() && !e.name.startsWith('.'));
+        out.push({ folder: rel || '(vault root)', notes, subfolders: dirs.length });
+        for (const d of dirs) walk(rel ? `${rel}/${d.name}` : d.name, depth + 1);
+      };
+      walk(start, 0);
+      return { ok: true, base: base || '(whole vault)', folders: out, note: 'Pick the SMALLEST folder that covers the task, then requestNotesFolder(it) — or if you already hold the reach, readNote/searchNotes within it.' };
+    } });
+    toolbox.requestNotesFolder = harden({ run: async ({ folder, why } = {}) => {
+      const f = cleanNotesFolder(folder);
+      if (!f) return { ok: false, error: 'name the folder you need (e.g. "the field/plans")' };
+      const reason = String(why || '').slice(0, 1000);
+      const label = `notes: ${f}`;
+      await aff.feed.notify({ title: `🔓 ${node.id} requests notes scoped to "${f}"`, body: reason || '(no reason given)', agent: node.id, link: chatLink(ctx) });
+      try { await aff.phone.push({ title: `🔓 notes folder: ${f}`, message: `${node.id}: ${reason}`.slice(0, 150), click: chatLink(ctx) || '' }); } catch { /* best-effort */ }
+      // accessRequest carries notesFolder → the Grant card grants `notes` scoped to JUST this subtree (least
+      // authority), not the whole vault. The owner approves in-chat; the chat's notes reach becomes `f`.
+      return { ok: true, requested: 'notes', notesFolder: f, accessRequest: { power: 'notes', notesFolder: f, label, why: reason }, note: `Asked the owner to grant notes scoped to JUST "${f}" (least authority — nothing else in the vault). Once approved, searchNotes/readNote see only that folder.` };
+    } });
+    manifest.push(
+      { name: 'noteFolders', reversible: false, args: { under: 'string — OPTIONAL subfolder to list under (default: your whole reach)' }, description: 'Map the NOTES folder tree you can reach — folder names + note counts (NO contents). Use it to find the SMALLEST folder that covers your task before reading, so you take least authority. (You see only folders within your granted reach.)' },
+      { name: 'requestNotesFolder', reversible: false, args: { folder: 'string — the vault-relative folder you need, e.g. "the field/plans" or "Dietician"', why: 'string — why this folder (helps the owner decide)' }, description: 'REQUEST notes access scoped to JUST one folder (least authority) — preferred over the whole-vault `notes` power. The owner approves in-chat; your notes reach then becomes exactly that subtree. ALWAYS check your own notes (this) before reaching for web/research — the answer is often already in the vault.' },
+    );
     // ── WIDGETS — ALWAYS available. Emit a LIVE / INTERACTIVE widget into the chat bubble (vs plain text).
     //    These return a display SPEC only — they grant NO authority (the spec is pure data: labels, an
     //    entity handle, timer dueAts, choice strings). The live DATA flows separately + cap-gated: a door
@@ -2113,14 +2149,9 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       if (!powerSet.has('notes')) throw new Error("you don't hold notes");
       const cur = (node.notesBinding && node.notesBinding()) || aff.notes;
       const base = cur.prefix || '';
-      const pfx = String(subpath || base || '').replace(/^\/+/, '').replace(/\/+$/, '');
+      const pfx = cleanNotesFolder(subpath || base || '');
       if (base && pfx !== base && !underPrefix(pfx, base)) throw new Error('path not in your reach');
-      const view = harden({
-        prefix: pfx,
-        search: async (q, opts) => harden((((await aff.notes.search(q, opts)) || []).filter(r => underPrefix(r.path, pfx)))),
-        read: async rel => (underPrefix(String(rel || ''), pfx) ? aff.notes.read(rel) : ''),
-        stats: async () => aff.notes.stats(),
-      });
+      const view = makeNotesView(pfx);
       const clean = String(label || pfx || 'notes').trim().slice(0, 80);
       const swiss = newSwiss();
       const child = makeAgentNode({ powers: ['notes'], labelOf: clean, notesBinding: () => view, id: swiss });
@@ -2413,32 +2444,48 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // specialist but anonymous + no persona. (Feature A: scoping agent proposes powers → user approves → mint.)
   // (re)build + register the node for a persisted scoped cap. Bindings are lazy thunks, so this is
   // safe to call at boot before/after the HA/contacts tries are built.
-  const registerScoped = ({ swiss, powers, label }) => {
-    const node = makeAgentNode({ powers, labelOf: `chat-${String(label || 'chat').replace(/[^\w-]/g, '_').slice(0, 32)}`, name: String(label || '').trim(), haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, contactsBinding: () => contactsObj, wandBinding: () => wand, id: `scoped-${String(swiss).slice(0, 8)}` });
+  // makeNotesView(folder) — a vault view ATTENUATED to one subtree: search/read only see notes under
+  // `folder` (least authority — a grant for "the field/plans" can't read anything outside it). The same
+  // filter backs an owner's shareNotes link AND a chat scoped to a notes folder.
+  const cleanNotesFolder = f => String(f || '').replace(/^\/+/, '').replace(/\/+$/, '');
+  const makeNotesView = folder => { const pfx = cleanNotesFolder(folder); return harden({
+    prefix: pfx,
+    search: async (q, opts) => harden((((await aff.notes.search(q, opts)) || []).filter(r => underPrefix(r.path, pfx)))),
+    read: async rel => (underPrefix(String(rel || ''), pfx) ? aff.notes.read(rel) : ''),
+    stats: async () => aff.notes.stats(),
+  }); };
+  const registerScoped = ({ swiss, powers, label, notesFolder = '' }) => {
+    // notesFolder scopes the `notes` power to a single vault subtree (least authority); empty → whole vault.
+    const notesBinding = (notesFolder && (Array.isArray(powers) ? powers : []).includes('notes')) ? () => makeNotesView(notesFolder) : null;
+    const node = makeAgentNode({ powers, labelOf: `chat-${String(label || 'chat').replace(/[^\w-]/g, '_').slice(0, 32)}`, name: String(label || '').trim(), haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, contactsBinding: () => contactsObj, wandBinding: () => wand, notesBinding, id: `scoped-${String(swiss).slice(0, 8)}` });
     locator.set(swiss, { node });
     return node;
   };
-  const mintScopedCap = ({ powers = [], label = '' } = {}) => {
+  const mintScopedCap = ({ powers = [], label = '', notesFolder = '' } = {}) => {
     const granted = [...new Set((Array.isArray(powers) ? powers : []).filter(p => ALL_POWERS.includes(p)))];
+    const nf = cleanNotesFolder(notesFolder);
     const swiss = newSwiss();
     // a DESCRIPTIVE name (no LLM round trip) so the agent reads "notes + web agent" / its given label, not the
     // bare id "scoped-a0a6c7a3": a meaningful label if provided, else a powers-derived description, else a
     // friendly pet name as the last resort.
     const labelOk = String(label || '').trim() && !/^(chat|subchat|new chat)$/i.test(String(label).trim());
     const name = labelOk ? String(label).trim().slice(0, 80) : (granted.length ? `${granted.slice(0, 3).join(' + ')} agent` : genPetName());
-    registerScoped({ swiss, powers: granted, label: name });
-    scopedCaps = scopedCaps.concat({ swiss, powers: granted, label: name }); saveScoped(); // survive restarts
-    return harden({ ok: true, swiss, powers: granted, name, url: `${baseUrl}/#cap=${swiss}` });
+    registerScoped({ swiss, powers: granted, label: name, notesFolder: nf });
+    scopedCaps = scopedCaps.concat({ swiss, powers: granted, label: name, ...(nf ? { notesFolder: nf } : {}) }); saveScoped(); // survive restarts
+    return harden({ ok: true, swiss, powers: granted, name, notesFolder: nf || undefined, url: `${baseUrl}/#cap=${swiss}` });
   };
   // Re-scope an EXISTING chat cap to a new power set (add/revoke powers): re-register the SAME swiss
   // with the new ring + persist. The cap stays the same (the chat link doesn't change), its authority
   // changes. Returns the new ring. (Root authority — the server gates this on the root cap.)
-  const rescopeCap = (swiss, powers) => {
+  const rescopeCap = (swiss, powers, notesFolder) => {
     const granted = [...new Set((Array.isArray(powers) ? powers : []).filter(p => ALL_POWERS.includes(p)))];
     const rec = scopedCaps.find(c => c.swiss === String(swiss));
     if (!rec) return harden({ ok: false, error: 'unknown scoped cap' });
-    rec.powers = granted; registerScoped({ swiss: rec.swiss, powers: granted, label: rec.label }); saveScoped();
-    return harden({ ok: true, swiss: rec.swiss, powers: granted });
+    // notesFolder: undefined → keep the existing scope; '' → clear (whole vault); a path → scope to it.
+    const nf = notesFolder === undefined ? (rec.notesFolder || '') : cleanNotesFolder(notesFolder);
+    rec.powers = granted; if (nf) rec.notesFolder = nf; else delete rec.notesFolder;
+    registerScoped({ swiss: rec.swiss, powers: granted, label: rec.label, notesFolder: nf }); saveScoped();
+    return harden({ ok: true, swiss: rec.swiss, powers: granted, notesFolder: nf || undefined });
   };
   for (const c of scopedCaps) { try { registerScoped(c); } catch (e) { /* skip bad record */ } } // re-arm persisted scoped caps at boot
 

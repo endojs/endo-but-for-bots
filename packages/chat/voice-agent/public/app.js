@@ -404,16 +404,19 @@ const renderProposal = p => {
 const renderAccessRequest = a => {
   const cc = curChatObj() || {};
   const card = document.createElement('div'); card.className = 'prop msg';
-  card.innerHTML = `<div class="ptitle">🔓 <span>Grant the “${esc(a.power)}” capability to this chat?</span></div><div class="pmeta">${esc(a.label || a.power)}${a.why ? ' — ' + esc(a.why) : ''}</div><div class="pbtns"></div>`;
+  // notesFolder → a LEAST-AUTHORITY notes grant: scope the chat's notes to JUST that vault subtree (not all notes)
+  const scopeNote = a.notesFolder ? ` <span class="pill" title="least authority — only this folder">📁 ${esc(a.notesFolder)}</span>` : '';
+  const title = a.notesFolder ? `Grant notes — scoped to just “${esc(a.notesFolder)}”?` : `Grant the “${esc(a.power)}” capability to this chat?`;
+  card.innerHTML = `<div class="ptitle">🔓 <span>${title}</span></div><div class="pmeta">${esc(a.label || a.power)}${scopeNote}${a.why ? ' — ' + esc(a.why) : ''}</div><div class="pbtns"></div>`;
   const btns = card.querySelector('.pbtns');
   if (!isRoot || !cc.scopedCap) { btns.innerHTML = '<span class="pmeta">only the owner can grant powers (open this chat with your root link)</span>'; }
   else {
-    const g = document.createElement('button'); g.className = 'confirm'; g.textContent = 'Grant';
+    const g = document.createElement('button'); g.className = 'confirm'; g.textContent = a.notesFolder ? `Grant this folder` : 'Grant';
     const d = document.createElement('button'); d.className = 'reject'; d.textContent = 'Not now';
     g.onclick = async () => {
       g.disabled = d.disabled = true;
       const cur = cc.scopedPowers || [];
-      await rescopeChat(cc, [...new Set([...cur, a.power])]);
+      await rescopeChat(cc, [...new Set([...cur, a.power])], a.notesFolder || undefined);
       const granted = (cc.scopedPowers || []).includes(a.power);
       btns.innerHTML = granted
         ? `<span style="color:var(--acc2);font-size:13px">✓ granted “${esc(a.power)}” — ask me again and I’ll continue</span>`
@@ -2121,11 +2124,13 @@ const titleFrom = t => { const ch = chats.find(c => c.id === sessionId); if (ch 
 const syncLanding = () => document.body.classList.toggle('landing', curTab === 'talk' && !!cap && !activeTx.length);
 
 // Re-grant/revoke this chat's powers in place (banner + Add / ×). Root-only; recovers an orphaned cap.
-const rescopeChat = async (cc, newPowers) => {
-  const r = await pf('/chat/rescope', { swiss: cc.scopedCap || '', powers: newPowers, label: cc.title });
+const rescopeChat = async (cc, newPowers, notesFolder) => {
+  const body = { swiss: cc.scopedCap || '', powers: newPowers, label: cc.title };
+  if (notesFolder !== undefined) body.notesFolder = notesFolder; // least-authority notes scope (a vault subtree)
+  const r = await pf('/chat/rescope', body);
   if (!r || r.error) { alert((r && r.error) || 'could not change powers'); return; }
-  cc.scopedCap = r.scopedCap; cc.scopedPowers = r.powers; saveChats();
-  setStatus(r.recovered ? 'powers re-granted — chat recovered' : 'powers updated');
+  cc.scopedCap = r.scopedCap; cc.scopedPowers = r.powers; cc.notesFolder = r.notesFolder || undefined; saveChats();
+  setStatus(r.recovered ? 'powers re-granted — chat recovered' : (r.notesFolder ? `notes scoped to ${r.notesFolder}` : 'powers updated'));
   renderTx();
 };
 function wirePowerBanner(b, cc, ps) {

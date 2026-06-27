@@ -2371,13 +2371,13 @@ const handler = async (req, res) => {
     // cap is orphaned (minted before persistence), mint a FRESH one so the chat recovers — returns the
     // cap to use (same swiss when re-scoped, a new swiss when recovered).
     if (req.method === 'POST' && u.pathname === '/chat/rescope') {
-      const { cap, swiss, powers, label } = await jsonBody(req);
+      const { cap, swiss, powers, label, notesFolder } = await jsonBody(req);
       if (!nodeFor(cap)?.isRoot) return json(res, 403, { error: 'changing a chat\'s powers needs your root capability' });
       const want = Array.isArray(powers) ? powers : [];
-      const rc = rescopeCap(String(swiss || ''), want);
-      if (rc.ok) return json(res, 200, { scopedCap: rc.swiss, powers: rc.powers, recovered: false });
-      const out = mintScopedCap({ powers: want, label: label || 'chat' }); // orphaned/unknown → recover with a fresh live cap
-      return json(res, 200, { scopedCap: out.swiss, powers: out.powers, recovered: true });
+      const rc = rescopeCap(String(swiss || ''), want, notesFolder); // notesFolder: undefined keeps scope, '' clears, a path scopes notes to that subtree
+      if (rc.ok) return json(res, 200, { scopedCap: rc.swiss, powers: rc.powers, notesFolder: rc.notesFolder, recovered: false });
+      const out = mintScopedCap({ powers: want, label: label || 'chat', notesFolder: notesFolder || '' }); // orphaned/unknown → recover with a fresh live cap
+      return json(res, 200, { scopedCap: out.swiss, powers: out.powers, notesFolder: out.notesFolder, recovered: true });
     }
 
     // ── SHARE A CHAT (Feature B): the owner mints a link to a chat; anyone with the link (even a
