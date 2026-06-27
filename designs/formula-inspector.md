@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-02-14 |
-| **Updated** | 2026-06-13 |
+| **Updated** | 2026-06-27 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 
@@ -19,6 +19,11 @@ Daemon and CLI cuts landed in `endojs/endo-but-for-bots#440` (master-base). Spec
 The Chat-side cut (modal back face, gear icon on inventory rows, layout registry) is deferred. The design assumes a `packages/chat` package that, on the implementation base branch (`master`), does not exist; the chat package on master is `packages/goblin-chat` with a different file layout. The chat cut waits for either the `packages/chat` migration onto `master` or a re-targeting of the chat-side design at `goblin-chat`.
 
 The `InspectorHubInterface`, `InspectorInterface`, and `pet-inspector` formula type are retained as vestigial infrastructure (no user-facing path reaches them post-`@info` removal) to keep existing on-disk host formulas loadable. Full removal is a follow-up.
+
+`getFormula` superseded only *part* of what `@info` offered: the single-node read.
+The `@info` hub's `lookup(["@info", petName, ...propertyPath])` form also let a host **address a deeply nested value through a path of formula properties in one call**; `getFormula` alone does not.
+The 2026-06-27 maintainer directive ("a general way for hosts to address deeply nested values through the hidden formula properties") asks to close that remaining gap.
+The § *Addressing deeply nested values through formula properties* section below adds the forward-traversal host method `getFormulaPath(root, path)` that does so; it is the true `@info` replacement and is **designed but not yet implemented**.
 
 ## What is the Problem Being Solved?
 
@@ -98,22 +103,183 @@ The standalone `InspectorHubInterface` (`lookup`, `list`) at `packages/daemon/sr
 `makePetStoreInspector` remains as the internal implementation of `getFormula` for the per-type metadata catalog; the exo interface it constructed is no longer exposed.
 `list` was always a thin wrapper on `petStore.list()`; the host's existing pet-store enumeration methods (`identifyLocal`, the `list()` on the directory facet) cover that use case.
 
+### Addressing deeply nested values through formula properties
+
+`getFormula(identifier)` reads **one** node.
+The retired `@info` hub did more: `E(AGENT).lookup(["@info", petName, ...propertyPath])` resolved a (possibly nested) pet name to a formula and then **walked that formula's properties by a path**, in a single call.
+That second capability — addressing a deeply nested value by following a path of formula properties from a root — is the part `getFormula` did not carry forward.
+Without it, a host that wants the `worker` retained by the `eval` named `ten`, or the endowment `x` of that `eval`, must issue one `getFormula` per hop and assemble the walk on the client.
+
+This section adds the forward-traversal host method that closes the gap.
+Given a **root identifier** and a **sequence of property steps**, the host resolves the path through the formula reference graph and returns the addressed leaf (a deeply nested formula record, or a literal value) in one host-only call.
+
+#### Method
+
+```typescript
+interface EndoHost {
+  /**
+   * Resolve a path of formula-property steps starting from a root
+   * formula identifier, returning the addressed leaf. Each step
+   * descends through exactly one property of the current formula's
+   * `FormulaRecord`. host-only; absent on guests; the cross-peer
+   * rejection that `getFormula` applies to the root is re-applied at
+   * *every* hop, so a path can never tunnel from a local root into a
+   * remote peer's formula structure.
+   *
+   * `path` is the canonical structured form. An empty path is
+   * equivalent to `getFormula(root)` wrapped as a `formula` leaf.
+   *
+   * With `{ trail: true }` the result also carries the ordered list of
+   * intermediate `FormulaRecord`s visited (the root first, the leaf
+   * last), so a single call can seed the inspector's navigation stack
+   * (§ Back-to-value navigation) without re-fetching each hop.
+   */
+  getFormulaPath(
+    root: FormulaIdentifier,
+    path: FormulaPathStep[],
+    options?: { trail?: boolean },
+  ): Promise<FormulaAddress>;
+}
+
+type FormulaPathStep =
+  // A `literal` or single `reference` property, named directly.
+  | string
+  // One entry of a `reference-list` property (e.g. an `eval`'s
+  // `endowments` keyed by codeName, or a `marshal`'s `slots` keyed by
+  // index). Both parts are required for a list step.
+  | { property: string; key: string };
+
+type FormulaAddress =
+  | {
+      kind: 'formula';
+      identifier: FormulaIdentifier;
+      record: FormulaRecord;
+      trail?: FormulaRecord[]; // present when options.trail is set
+    }
+  | {
+      kind: 'literal';
+      property: string;        // the final property name
+      value: PassableValue;
+      trail?: FormulaRecord[];
+    };
+```
+
+`getFormulaPath` is added to `HostInterface` immediately after `getFormula` in `packages/daemon/src/interfaces.js`, and exposed on the `EndoHost` Far facet in `host.js`.
+Like `getFormula`, it is **not** added to `GuestInterface` and never crosses the CapTP `provide` boundary.
+
+#### It is `getFormula` applied iteratively
+
+`getFormulaPath` introduces no new classification logic.
+At each hop it resolves the current identifier through the same internal route `getFormula` uses (`getFormulaForId` → `makeFormulaRecord`), reads the named property from the resulting `FormulaRecord`, and continues from that property's identifier.
+The legal step alphabet is therefore exactly the three property kinds `makeFormulaRecord` already emits:
+
+- A **string step** names a `literal` or `reference` property.
+  On a `reference` it descends to the referenced formula.
+  On a `literal` it terminates (a literal has no identifier to continue from); a non-final string step that lands on a literal is an error (see § Errors).
+- A **`{ property, key }` step** names one entry of a `reference-list` property.
+  List entries are always `FormulaIdentifier`s, so a list step always descends to a formula.
+
+Because the addressable property set is whatever `formula-record.js` classifies, the addressing surface tracks the per-type catalog automatically: a property becomes addressable the moment the classifier emits it, with no change to `getFormulaPath`.
+This is the same single-source-of-truth discipline the *Formula-view layout taxonomy* relies on.
+
+#### Relationship to the retention-path edge model
+
+The forward formula-property graph and the retention graph are the **same edge set viewed in opposite directions**.
+`listRetentionPaths` ([`daemon-retention-paths.md`](daemon-retention-paths.md)) walks *upstream* (target → GC root) over `groupInEdges`, labeling each edge with a field name (`worker`, `hub`, `powers`, `slot0`, …) or, for pet-store writes, `pet:<name>`.
+`getFormulaPath` walks *downstream* (root → leaf) over the same field edges.
+
+The downstream subset differs in two ways that matter:
+
+- It **excludes pet-name edges**.
+  `pet:<name>` segments belong to the pet-store / `lookup` / `identify` layer, not to formula properties.
+  Pet-name resolution stays the host's existing job (see § Migration below); `getFormulaPath` traverses only formula-internal references and reference-list entries.
+- A **`{ property, key }` reference-list step corresponds to one of the per-entry labeled edges** `graph.js` already records via `extractLabeledDeps` (the endowment codeName, the `slot0`/`slot1` marshal-slot label, and so on).
+  The `FormulaRecord` nesting (entries grouped under a property) and the graph's flat per-entry labeling are two views of the same edge.
+
+Notation reconciliation with [`retention-path-notation.md`](retention-path-notation.md): that document renders a field edge as `:field`.
+A forward formula-property address reuses the same alphabet — a string step is a `:field` edge and a `{ property, key }` step is a `:property[key]` edge — so the two designs never grow divergent edge vocabularies.
+A `getFormulaPath` address is literally the downstream continuation of a retention path: a retention path renders `@agent/ten` (root, then a pet-name edge) and a forward address extends it with `:source` or `:endowments[x]`.
+If and when a CLI textual form is built (see CLI below), it should reuse `retention-path-notation.md`'s field-edge renderer for the `:field` / `:property[key]` portion rather than minting a second one.
+
+#### Why host-only
+
+The host-only argument from § *Daemon surface: host-only `getFormula`* and from `daemon-retention-paths.md` § *Why host-only* carries verbatim, and is *stronger* here: `getFormulaPath` reaches strictly more than `getFormula` (any node reachable by chaining `getFormula` from the root), so the same structure-disclosure leak it must prevent (the host's internal naming, peer relationships, and which guests share common roots) is reachable in fewer round-trips.
+A guest must not gain a path-walker into structure it does not own.
+
+The walk grants **no authority beyond `getFormula`**: every node `getFormulaPath` returns is one a sequence of public `getFormula` calls could already reach from the same root.
+It is an ergonomic and round-trip optimization that also moves the per-hop cross-peer check inside the host, where it cannot be skipped — see § Security.
+
+#### Errors and edge semantics
+
+| Condition | Result |
+|---|---|
+| **Empty path** | `{ kind: 'formula', identifier: root, record }` — the base case, equal to `getFormula(root)`. |
+| **Unknown / collected identifier** at any hop (root or a descended reference) | The same surface error `getFormula` raises (`getFormula could not resolve unknown identifier`), naming the unresolved identifier, not the on-disk path. |
+| **Missing property** | `makeError` naming the absent property and the current formula's type and identifier (e.g. *no property `worker` on `lookup` formula `…`*). |
+| **Kind mismatch** | A `{ property, key }` step on a `literal` or single-`reference` property, or a bare string step on a `reference-list` property (ambiguous — a list step must name a key): a clear error citing the property's actual kind. |
+| **Absent list key** | A `{ property, key }` step whose `key` is not in the `reference-list`'s `entries`: error naming the key and the available keys. |
+| **Descend through a literal** | A non-final string step that lands on a `literal` property (no identifier to continue from): error *cannot descend through literal property `source`*. |
+| **Cross-peer hop** | A `reference` or list entry whose identifier resolves to a non-local node: rejected exactly as `getFormula` rejects cross-peer locators. The walk halts at the peer boundary; cross-peer formula structure is the remote host's concern (no CapTP round-trip is made). |
+| **Depth limit** | A supplied `path` longer than a generous fixed cap (proposed 256 steps) is rejected before traversal, as defense-in-depth against a pathological input. |
+
+**Cycles are not a hazard for the core method.**
+The reference graph does contain cycles (the `host`+`handle` and `promise`+`resolver` union-find merges, `eval` → `worker` chains that re-reference shared roots).
+But `getFormulaPath` performs exactly `path.length` hops over a caller-supplied, finite list of steps; it never auto-expands, so revisiting a node mid-path is simply another hop, not an infinite walk.
+This is distinct from the interactive navigation stack in § *Cycle handling: principle of least surprise*, where a *user* may click back into a cycle; that is UI navigation across many calls, governed there, not a property of a single `getFormulaPath` call.
+
+#### Returned shape: metadata, not the live value
+
+`getFormulaPath` returns **formula records and literal values**, the same metadata `getFormula` returns — not a live value capability.
+Reaching the actual capability at the leaf (the running `eval`, the worker presence) remains a separate, separately-authorized operation through the host's normal `provide` / lookup channels.
+Keeping `getFormulaPath` a pure inspection surface mirrors `getFormula` and `listRetentionPaths`, which also surface structure rather than handing out the capabilities they describe.
+A value-returning variant (`E(host)`-style resolution of the leaf to its presence) is a possible follow-up with its own authority analysis; it is out of scope here.
+
 ### CLI: `endo inspect`
 
-The CLI gains an `endo inspect <name-or-identifier>` verb.
+The CLI gains an `endo inspect <name-or-identifier>` verb, optionally extended with a forward property path.
 
 ```
-endo inspect <name-or-identifier> [--identifier] [--json]
+endo inspect <name-or-identifier> [property-step...] [--identifier] [--json]
 ```
 
 - Without flags, accepts a pet name (or `petname/path`) and resolves it via the host's `identify` to a formula identifier before calling `getFormula`.
 - `--identifier` interprets the argument as an already-encoded formula identifier.
 - Default output is human-readable: formula type as a header, then one row per property, with reference-properties rendered as the property name plus the target identifier in a dim style.
 - `--json` emits the raw `FormulaRecord` for scripting.
+- **Trailing `property-step` arguments** form a forward property path and switch the verb to `getFormulaPath(identifier, path)`.
+  A `reference-list` entry is written `property[key]` (e.g. `endowments[x]`, `slots[0]`); a plain property is written bare (`worker`, `source`).
+  A `formula` leaf renders exactly as the no-path output (type header plus property rows); a `literal` leaf renders the value (for an `eval`'s `source`, the code block).
+  `--json` emits the raw `FormulaAddress`.
+
+The trailing-path form restores the single-command ergonomics the `@info` hub used to offer: the old `E(AGENT).lookup(["@info", "ten", "source"])` becomes `endo inspect ten source`, and `endo inspect ten endowments[x]` reaches the endowment `x` of the `eval` named `ten`.
+The property-step tokens reuse the `:field` / `:property[key]` edge alphabet of [`retention-path-notation.md`](retention-path-notation.md) (rendered without the leading `:` at the CLI, since the steps are already positional); the CLI should share that document's field-edge renderer rather than minting a second notation.
 
 `inspect` was chosen over the alternatives the maintainer offered (`examine`, `formula`) for parallelism with `formula-inspector.md`'s original `endo inspect` proposal (this document's prior name) and with the *Pop the bonnet* metaphor in the existing concept page.
 The current CLI (`packages/cli/src/endo.js`) carries 41 verbs (`run`, `make`, `inbox`, `request`, `resolve`, ..., `log`, `ping`); none of `inspect`, `examine`, or `formula` is taken, so the choice is unconstrained by collision.
 The parallel to `endo paths` (from `daemon-retention-paths.md`) and `endo locate` keeps the single-word noun-style-verb shape consistent.
+
+### Migration from the `@info` hub
+
+The `@info` hub bundled two capabilities into one `lookup(["@info", petName, ...propertyPath])` call: (a) pet-name → formula resolution, and (b) formula-property path traversal.
+The replacement decomposes them onto the host's existing surfaces plus `getFormulaPath`:
+
+| `@info` capability | Replacement |
+|---|---|
+| (a) Resolve a (possibly nested) pet name to a formula | The existing host `identify(petNamePath)`, which already resolves nested directory pet-name paths to an identifier. This is exactly the case the maintainer flagged as the reason `@info` "becomes more complicated for formulas in directories of a guest's pet store" (PR #439): `identify` is the correct, already-built pet-name layer. |
+| (b) Walk that formula's properties by a path | `getFormulaPath(identifier, propertyPath)`. |
+
+So `lookup(["@info", "ten", "source"])` becomes `getFormulaPath(await identify(["ten"]), ["source"])`, yielding `{ kind: 'literal', property: 'source', value: <source code> }`.
+The CLI's `endo inspect ten source` is the one-command surface for the same workflow (§ CLI).
+
+**Nothing still depends on the removed `INFO` special name.**
+Verified on `llm`: the host's `specialNames` map in `packages/daemon/src/host.js` no longer contains `@info` / `INFO`; the host formula's retained `inspectorId` is kept only for forward-load compatibility and participates in no special-name lookup; the three `@info` regression tests in `endo.test.js` were rewritten to call `getFormula` directly.
+`getFormulaPath` adds **no new special name** — it is a host method, not a hub — so it reintroduces none of the addressability concerns that made `@info` misguided.
+
+### Forward-compatibility for not-yet-classified formula types
+
+`getFormulaPath` inherits the default-empty-properties contract `makeFormulaRecord` established in #440: a formula type with no classifier entry yields a record with `properties: {}`.
+Such a node is **reachable** as a leaf (you can address *to* it) but **not traversable past** — any further step fails with the *missing property* error, which names the type and is the visible signal that its properties are not yet classified, mirroring the inspector back face's "Properties not yet exposed" empty state.
+When `formula-record.js` later classifies that type, the same path begins resolving with no change to `getFormulaPath`.
 
 ### Chat: Value modal back face
 
@@ -335,15 +501,20 @@ The per-type layouts are a small registry in the Chat client.
 
 ### Affected Packages
 
-- `packages/daemon`: add `getFormula` to `EndoHost`; remove `@info` from host special names; rewrite the three `@info` regression tests in `endo.test.js` to call `getFormula` directly; retire `InspectorHubInterface`.
+- `packages/daemon`: add `getFormula` to `EndoHost` *(landed in #440)*; add `getFormulaPath(root, path, options?)` to `HostInterface` and the `EndoHost` Far facet, iterating `getFormulaForId` → `makeFormulaRecord` per hop with a per-hop cross-peer check *(this extension)*; remove `@info` from host special names *(landed in #440)*; rewrite the three `@info` regression tests in `endo.test.js` to call `getFormula` directly *(landed in #440)*; retire `InspectorHubInterface` *(landed in #440)*.
 - `packages/chat`: new formula-view component, layout registry, flip control on the Value modal, gear icon on inventory rows that opens the modal flipped to the back face.
-- `packages/cli`: new `endo inspect <name-or-identifier>` command.
+- `packages/cli`: new `endo inspect <name-or-identifier>` command *(landed in #440)*; extend it with trailing `property-step` arguments that call `getFormulaPath` *(this extension)*.
 
 ## Options Considered
 
 | Option | Decision | Rationale |
 |---|---|---|
 | **Daemon surface**: keep `@info` (extend) versus replace with host method `getFormula` | **Host method `getFormula`** | `@info` forces composed paths through a name hub and exposes the inspector to any agent that resolves `@info`; the redesign aligns the inspector with the host-only authority shape used by `daemon-retention-paths` and the `traces` facet from `docs/error-tracing-design.md`. Considered and rejected: *deprecation alias (`@info` redirects onto `getFormula` for one release)*. Reason: a redirect re-encodes the same composition burden in a different surface; the test rewrite is cheap. |
+| **Deep addressing**: single-call `getFormulaPath(root, path)` versus client-side chained `getFormula` | **Single host call** | `@info`'s `lookup([...])` form addressed a deeply nested value in one call; `getFormula` alone forces one round-trip per hop plus a client-side walk. A single host call restores that ergonomic, keeps the per-hop cross-peer check *inside* the host (a client walk would have to re-check at each hop and could leak structure across the boundary), and bounds the work to one method call. Client-side chaining stays available — `getFormula` is public — for callers that interleave their own logic between hops. |
+| **Addressing method name**: `getFormulaPath` versus `addressFormula` / `lookupFormula` / `followFormulaPath` | **`getFormulaPath`** | Parallel to `getFormula`, and signals the same metadata (not live-capability) semantics. `lookup` is reserved for the pet-name traversal that returns a value presence; `follow*` is reserved for subscriptions (`followNameChanges`); `address*` reads less like the existing `get*` family. |
+| **Path-step encoding**: structured `FormulaPathStep[]` versus a flat delimited string | **Structured steps** | Reference-list keys are arbitrary (endowment codeNames, message names) and would need escaping in a flat string at the API boundary. The structured form is unambiguous and escape-free; the CLI owns the textual `property[key]` rendering and reuses `retention-path-notation.md`'s field-edge alphabet. |
+| **Leaf result**: formula record / literal metadata versus the live value capability | **Metadata** | Mirrors `getFormula` and `listRetentionPaths`, which surface structure rather than handing out the capabilities they describe. `getFormulaPath` grants no authority beyond `getFormula` (every node it reaches is reachable by chaining `getFormula`). A value-returning variant is a deferred follow-up with its own authority analysis. |
+| **Root key**: formula identifier versus pet name | **Identifier** | Consistent with `getFormula`, the host-only rule, and the no-cross-peer rule. The CLI resolves a pet name to an identifier via the existing `identify` first, exactly as `endo inspect` and `endo paths` already do. |
 | **CLI verb**: `inspect` versus `examine` versus `formula` | **`inspect`** | Parallel to the existing `endo inspect` proposal in this document's prior draft; parallel to the *Pop the bonnet* metaphor in the concept page; parallel to the single-word noun-style-verb shape of `endo paths`, `endo locate`, `endo show`. |
 | **Chat surface count**: dedicated inspector panel plus modal back face versus single modal back face | **Single modal back face** | The modal back face is the everyday-inspection moment (one flip, no context switch); an inventory-row gear icon reaches it directly so the power-user entry point is preserved without a separate panel. Considered and rejected: *dedicated inspector panel with read/edit toggle and retention-paths embed*. Reason: kriskowal review 2026-06-13: "We only need one surface. ... While one formula captures state, we do not need these to be user editable at this stage of development." |
 | **Navigation model**: stack versus replace | **Stack** | Preserves entry-point context across the reference walk; matches user expectation from browser-back; bounded only by user clicks. Considered and rejected: *replace*. Reason: loses context after one click. Maintainer ack 2026-06-12: "Stack model sounds good to me." |
@@ -362,6 +533,11 @@ The per-type layouts are a small registry in the Chat client.
   Cross-peer formula content is the remote host's concern; surfacing it would require a CapTP round-trip that this design does not propose.
 - **Trace access for rejected promises**: the "View trace" button calls `E(host).traces().lookup(errorId)`, which is host-only (per `docs/error-tracing-design.md` § Confidentiality and security).
   A guest seeing the modal back face for a rejected promise sees the rejection reason but no "View trace" affordance, because the guest's facet does not include `traces`.
+- **`getFormulaPath` per-hop cross-peer enforcement**: each hop re-applies `getFormula`'s local-only check before descending.
+  A path therefore cannot tunnel from a local root through a `reference` into a remote peer's formula structure; the walk halts at the peer boundary with the cross-peer rejection.
+  This is the central safety reason the path-walk lives inside the host rather than being assembled on the client: the boundary check cannot be skipped or moved off-host.
+- **`getFormulaPath` grants no authority beyond `getFormula`**: every node it returns is one a sequence of public `getFormula` calls could already reach from the same root.
+  It is host-only (absent on `GuestInterface`, never crossing the CapTP `provide` boundary) for the same structure-disclosure reason as `getFormula`, and the keypair caveat above carries — a path landing on a `keypair` formula returns the same private-key-omitting record `getFormula` returns.
 
 ## Scaling Considerations
 
@@ -374,14 +550,25 @@ The per-type layouts are a small registry in the Chat client.
 - **Large endowments records**: an `eval` with hundreds of endowments produces a long property list.
   The property list is independently scrollable; we do not paginate in V1.
   If real usage shows a need we revisit (consider virtual-scrolling or a search box).
+- **`getFormulaPath` cost is bounded by path length**: one `getFormulaForId` per hop, no subscription held, no auto-expansion.
+  The depth cap (proposed 256 steps) bounds a pathological supplied path.
+  With `{ trail: true }` the host returns each intermediate record it already resolved, so seeding the inspector's navigation stack costs the same single round-trip rather than one per hop.
 
 ## Test Plan
 
 Exercise what is implemented.
 
 - **Daemon unit tests** for `getFormula`: each formula type returns the expected per-type metadata; cross-peer locators are rejected with a clear error; the three pre-existing `@info` regression tests in `endo.test.js` lines 2377-2510 are rewritten to call `getFormula` and continue to assert the same per-type properties.
-- **Daemon authority test**: a guest's facet does not expose `getFormula`; attempting to call it through a guest-only edge fails with the standard "no such method" guard-rejection.
-- **CLI integration test**: `endo inspect <name>` prints the expected per-type output for `eval`, `lookup`, `guest`, and `host` formulas; `--json` emits the raw record.
+- **Daemon authority test**: a guest's facet does not expose `getFormula` *or* `getFormulaPath`; attempting to call either through a guest-only edge fails with the standard "no such method" guard-rejection.
+- **`getFormulaPath` unit tests**:
+  - Multi-step resolution: `eval` → `worker` (a `reference` step) returns the worker's record; `eval` → `source` (a final `literal` step) returns `{ kind: 'literal', property: 'source', value }`; `eval` → `endowments[x]` (a `reference-list` entry step) returns the endowment's record.
+  - Empty path returns the root's record as a `formula` leaf, equal to `getFormula(root)`.
+  - `{ trail: true }` returns each intermediate record in root-to-leaf order.
+  - Error cases: missing property; a `{ property, key }` step on a non-list property; a bare string step on a `reference-list` property; an absent list key; a non-final string step landing on a literal (descend-through-literal); an unknown / collected identifier at a hop; a path exceeding the depth cap.
+  - Cross-peer enforcement: a `reference` or list entry resolving to a remote node is rejected with the cross-peer error at the hop, not silently skipped.
+  - Forward-compatibility: addressing reaches an unclassified-type node as a leaf; a further step fails with the missing-property error.
+  - Migration parity: reproduce the old `lookup(["@info", "ten", "source"])` result via `getFormulaPath(await identify(["ten"]), ["source"])` and assert the `eval`'s source.
+- **CLI integration test**: `endo inspect <name>` prints the expected per-type output for `eval`, `lookup`, `guest`, and `host` formulas; `--json` emits the raw record. `endo inspect ten source` prints the `eval`'s source literal; `endo inspect ten worker` prints the worker formula record; `endo inspect ten endowments[x]` prints the endowment record; `--json` emits the raw `FormulaAddress`.
 - **Unit tests for the formula-view-registry**: each row in the layout-taxonomy table renders the expected header, help text, and property list shape for a synthetic input.
 - **Component tests** (Playwright per [`chat-playwright-smoke.md`](chat-playwright-smoke.md)) for the modal back face:
   - Open the modal on an `eval` value; press `F`; assert the back face renders the `eval` layout.
@@ -407,6 +594,9 @@ Exercise what is implemented.
 | `chat-components` (Complete) | The inventory row's gear icon (opening the modal flipped to the back face) is a new chat-components-style affordance. |
 | `chat-invariants` (Complete) | The `Escape` flip-to-front behavior is governed by the Escape Consistency rule. |
 | `daemon-256-bit-identifiers` (Complete) | Supplies the formula-identifier string shape and the per-agent keypair structure. |
+| `daemon-retention-paths` (In Progress, PR #284) | Defines the upstream retention-path edge model and the host-only-traversal precedent. `getFormulaPath` is the forward (downstream) reader of the same field-edge set; the two share one edge alphabet and host-only rule. |
+| `retention-path-notation` (Reference) | Owns the `:field` / `:property[key]` edge alphabet a `getFormulaPath` CLI textual form should reuse so the forward and reverse renderings never diverge. |
+| `packages/daemon/src/formula-record.js` (#440, merged) | The per-type classifier whose `{ literal, reference, reference-list }` output defines `getFormulaPath`'s legal step alphabet; the addressable property set tracks it automatically. |
 
 ## Open Questions
 
@@ -416,6 +606,13 @@ Exercise what is implemented.
 2. **Enter-Profile keyboard parity (`Shift+P`)**: the existing modal has `N/A` keyboard for Enter Profile per [`chat-command-bar.md`](chat-command-bar.md) (acknowledged parity gap).
    This design proposes `Shift+P` to retire the gap simultaneously.
    Maintainer acks: "Let's implement this" (2026-06-12) and "Shift+P is worth a try" (kriskowal 2026-06-13 inline comment on PR #439).
+3. **`getFormulaPath` value-returning variant**: this design returns metadata at the leaf, not the live capability.
+   Whether a separate authorized method should resolve the leaf identifier to its presence (so a host can address-and-fetch in one call) is deferred; it needs its own authority analysis and is not required to close the `@info` gap.
+4. **Reference-list step CLI syntax**: the design proposes `property[key]` for a `reference-list` entry at the CLI.
+   An alternative is two positional tokens (`property key`).
+   The bracket form is the recommendation (it keeps one token per edge and round-trips through the retention-path notation's `:property[key]`); flagged for review.
+5. **Depth cap value**: 256 steps is a placeholder defense-in-depth bound.
+   Real formula graphs are shallow; confirm whether a lower cap (or none, relying on the caller-supplied finite path) is preferable.
 
 ## Prompt
 
@@ -435,3 +632,8 @@ Plus the 2026-06-12 maintainer consolidation directive on PR #439:
 > Create a CLI/GUI verb like `inspect` or `examine` or `formula` to replace the former idiom.
 > The view for a promise formula will need to subscribe to the promise and provide a button to view the next value when it resolves, or the rejection reason. This should be integrated with error tracing.
 > Principle of least surprise: do not unwind cycles. The user has a mental model of how many layers they have gone down that we should not meddle with.
+
+Plus the 2026-06-27 maintainer directive that prompted the § *Addressing deeply nested values through formula properties* extension:
+
+> The `@info` inspector name hubs have been only partially superseded.
+> We need a general way for hosts (not guests) to address deeply nested values through the hidden formula properties — given a root value/formula, follow a path through its formula's reference / reference-list properties (and theirs, and so on) to resolve a deeply nested value, host-only.
