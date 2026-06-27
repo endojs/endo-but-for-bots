@@ -65,6 +65,21 @@ declarations](#typescript-declarations) for more details.
   Use a top-level `/** @import {Foo} from 'bar' */` comment instead of inline
   `{import('bar').Foo}` in `@param`, `@type`, or `@returns` tags.
 
+- Import a name from the package that originally exports it, not from another
+  package that merely re-exports it unchanged.
+  A *plain re-export* is a non-renaming `export { name } from '@other/package'`
+  (or `export *`) that adds nothing an importer could not get by importing
+  `name` straight from the package that defines it (`@endo/far` is the canonical
+  example).
+  A single canonical import source per name spares IDEs and AI tools a pointless
+  choice of which exporting package to import from, keeps bundles minimal, and
+  lets the import list document the system's layering.
+  A re-export that adds value (a rename, a narrowed type, a wrapper, or a
+  package consolidating its own modules into a public barrel) is not a plain
+  re-export and is exempt.
+  See
+  [`designs/cross-package-plain-re-exports.md`](./designs/cross-package-plain-re-exports.md).
+
 ## Markdown Style Guide
 
 When writing Markdown documentation:
