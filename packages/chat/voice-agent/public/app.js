@@ -1144,6 +1144,10 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
   busy = true; if (sendBtn) sendBtn.disabled = true;
   const myTurn = ++turn; const stale = () => myTurn !== turn;
   let ok = false;
+  // Once the user bubble is rendered + pushed, the message IS SENT — a later turn error / gateway timeout /
+  // resume must NOT cause the composer to re-insert the (already-sent) text. `committed` gates that: the
+  // caller (doSend) only restores text when sendChat returns false, and we return false ONLY pre-commit.
+  let committed = false;
   // EVERYTHING runs inside try/finally so `busy` + the send button can NEVER get wedged:
   // a throw, a stale turn, or a mic toggle mid-send always releases the composer.
   try {
@@ -1152,10 +1156,10 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     const activeChat = chats.find(c => c.id === sessionId);
     if (activeChat && activeChat.shareToken) {
       if (activeChat.shareMode !== 'write') { setStatus('this is a read-only shared chat'); return false; }
-      renderUserBubble(t, attachments); document.body.classList.remove('landing'); activeTx.push({ who: 'you', text: t, at: Date.now() }); saveTx(); setStatus('thinking…');
+      renderUserBubble(t, attachments); document.body.classList.remove('landing'); activeTx.push({ who: 'you', text: t, at: Date.now() }); saveTx(); committed = true; setStatus('thinking…');
       let r; try { r = await (await fetch('/share/post', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: activeChat.shareToken, text: agentText }) })).json(); } catch (e) { r = { error: e.message }; }
       if (stale()) return true;
-      if (r.error) { setStatus('share: ' + r.error); return false; }
+      if (r.error) { setStatus('share: ' + r.error); return true; } // committed → don't re-insert the sent text
       if (r.exhausted) { renderAgentResponse({ answer: 'The shared spend allowance for this chat is used up.' }); pushTx('agent', '(allowance spent)'); setStatus(''); ok = true; return true; }
       renderAgentResponse(r); pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], ui: r.ui || [] }); setStatus(''); ok = true;
       if (typeof r.len === 'number') shareCursor[sessionId] = r.len; // we already rendered our 2 turns → advance the live-poll cursor past them
@@ -1206,7 +1210,7 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     const fileAtts = attachments.filter(a => a.kind === 'text' || a.kind === 'file');
     if (imgAtts.length) tx.attachImgs = imgAtts.map(a => a.dataUrl);           // session-only (stripped before persist)
     if (fileAtts.length) tx.attachFiles = fileAtts.map(a => a.name);
-    activeTx.push(tx); saveTx();
+    activeTx.push(tx); saveTx(); committed = true; // message is now SENT — never re-insert its text into the composer
     { const cc = chats.find(c => c.id === sessionId); if (cc) { cc.lastMsgAt = Date.now(); saveChats(); } } // baseline for the in-chat run indicator ("since your last message")
     try { userBubbleControls(activeTx.length - 1, tx, ub); } catch { /* control row: ↻ retry / ✎ edit / 🔊 audio — appears live INSIDE the bubble */ }
     titleFrom(t || (attachments[0] && attachments[0].name) || 'photo'); setStatus('thinking…'); if (spoken) setMic('thinking');
@@ -1229,7 +1233,7 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     if (stale() || r.cancelled) return true;
     // PROVIDER ERROR (429/overload/unreachable): a TRANSIENT retry card, NOT a persisted answer — so it
     // clears on the next turn/reload (fixes the Opus-429 string that used to stick as a permanent bubble).
-    if (r.error) { if (r.retryable || r.llmError) { renderRetryableError(r.error, payload, spoken); ok = true; return true; } setStatus('chat: ' + r.error); return false; }
+    if (r.error) { if (r.retryable || r.llmError) { renderRetryableError(r.error, payload, spoken); ok = true; return true; } setStatus('chat: ' + r.error); return true; } // committed → don't re-insert the sent text (retry via the bubble's ↻)
     // prepaid allowance spent — server refused WITHOUT a model call. Static Top-up/Abandon card.
     if (r.exhausted) { updateBudgetChip(r.remaining, r.allowance); renderExhausted(payload, spoken); ok = true; return true; }
     // durable server URLs for the attached images → persist these (survive reload + cross-device sync)
@@ -1269,7 +1273,9 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     try { pendantES && pendantES.close(); } catch {} pendantLive = false; if (pendant) pendant.finish(); // never leave the step stream open
     if (queuedSend) setTimeout(flushQueued, 0); // a message typed mid-turn was queued → send it now the turn is done
   }
-  return ok;
+  // committed → the message was sent (a post-commit error/timeout is shown in-band; the user turn stays + is
+  // retryable via the bubble's ↻). Returning truthy here stops doSend from re-inserting the sent text.
+  return committed || ok;
 };
 
 // voice path: transcribe an utterance, then hand it to sendChat (spoken reply)
