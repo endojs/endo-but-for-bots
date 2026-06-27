@@ -1405,6 +1405,31 @@ if (fileInput) fileInput.onchange = () => { addFiles(fileInput.files); fileInput
 
 // text composer: send on click / Enter (carries any pending attachments)
 const input = $('text'), sendBtn = $('send');
+// ⏹ STOP — interrupt a running agentic turn and drop straight into refining the prompt. Aborts the turn
+// server-side (/cancel → the reasoning loop sees signal.aborted at its next step), supersedes it locally so
+// the half-finished answer is discarded, then opens the inline editor on the last prompt (Save & retry
+// forks a fresh branch with the edited prompt). This is the "the agent went the wrong way — stop + redirect"
+// control. (Typing while busy still INTERJECTS to re-steer without aborting — a softer nudge.)
+const stopTurn = () => {
+  if (!busy) return;
+  fetch('/cancel', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId }) }).catch(() => {});
+  turn += 1; // supersede the in-flight turn → stale() discards its (aborted) response
+  busy = false; if (sendBtn) sendBtn.disabled = false;
+  try { pendant && pendant.finish(); } catch {}
+  setStatus('⏹ stopped — refine your prompt and resend');
+  let uIx = -1; for (let i = activeTx.length - 1; i >= 0; i--) { if (activeTx[i] && activeTx[i].who === 'you') { uIx = i; break; } }
+  // defer to the next tick so any synchronous re-render from the abort settles before we open the editor
+  if (uIx >= 0) setTimeout(() => { const bubs = log.querySelectorAll('.msg.user'); const bub = bubs[bubs.length - 1]; if (bub && !bub.querySelector('.msg-edit')) editPrompt(uIx, bub); }, 0);
+};
+if (sendBtn && !$('stop')) {
+  const stopBtn = document.createElement('button'); stopBtn.id = 'stop'; stopBtn.type = 'button'; stopBtn.textContent = '⏹';
+  stopBtn.title = 'Stop the agent + edit your prompt'; stopBtn.setAttribute('aria-label', 'Stop the agent and edit your prompt');
+  stopBtn.style.cssText = 'display:none;background:var(--bad,#cf5a3a);color:#fff;border:none;border-radius:9px;cursor:pointer;font-size:14px;line-height:1;padding:0 11px;align-self:stretch';
+  stopBtn.onclick = stopTurn;
+  sendBtn.parentNode.insertBefore(stopBtn, sendBtn); // sits just left of Send
+  let stopShown = false; // cheap sync to `busy` (the flag is toggled from many turn paths; avoid threading a setter through all)
+  setInterval(() => { const want = !!busy; if (want !== stopShown) { stopShown = want; stopBtn.style.display = want ? '' : 'none'; } }, 200);
+}
 // A message the user composed WHILE a turn was still in flight. Rather than silently dropping the
 // Enter/click (the old behaviour — sendChat returns false when busy, so the text just got restored and
 // nothing happened), we stash it here and auto-send it the instant the current turn finishes. So Enter

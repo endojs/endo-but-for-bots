@@ -2373,7 +2373,10 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
               if (s.kind !== 'tool' || !s.result) return;
               if (s.result.proposed && s.result.id) proposalIds.push(s.result.id);
               if (s.result.autoConfirmed) autoFired.push({ title: s.result.title, type: s.result.type, ok: s.result.fired !== false });
-              if (s.name) toolsUsed.push(s.name);
+              // push the RICH step (name + args + result) so the specialist's actual work shows as nested
+              // octahedrons in the trace — not just a name. (Matches delegateTask; the parent's onStep at
+              // server.mjs maps rv.toolsUsed → step.children with detail/call/result.)
+              if (s.name) toolsUsed.push({ name: s.name, args: s.args, result: s.result });
             } });
           return harden({ ok: true, specialist: spec.name, answer: r.answer, proposalIds, autoFired, toolsUsed, ...(autoCreated ? { autoCreated } : {}) });
         } finally { if (active === ac) active = null; }
