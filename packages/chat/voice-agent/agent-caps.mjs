@@ -102,6 +102,7 @@ import { makeHomeFolder } from './agent-home.mjs';
 import { sendMail } from './email-smtp.mjs';
 import { makeContacts } from './contacts.mjs';
 import { getTranscript } from './youtube.mjs';
+import { extractPdf } from './pdf-extract.mjs';
 
 export const HOME_BASE = '/home/dan/.local/state/field-agent/home';
 const PERSONA_FILE = '/home/dan/.config/field-agent/persona.txt'; // the agent's self-authored, operator-confirmed instructions
@@ -289,6 +290,23 @@ const fetchPage = async (u, { maxBytes = 1_500_000, timeoutMs = 12000 } = {}) =>
   const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '').replace(/\s+/g, ' ').trim().slice(0, 200);
   return { ok: true, title, text: stripHtml(html).slice(0, 8000), finalUrl: res.url || u };
 };
+// SSRF-guarded fetch of RAW bytes (no HTML-stripping, no content-type filter) for a binary resource
+// such as a PDF. Same egress authority as fetchPage — gate it on the `web` power. Returns a Uint8Array.
+const fetchBytes = async (u, { maxBytes = 32 * 1024 * 1024, timeoutMs = 30000 } = {}) => {
+  if (!(await ssrfOk(u))) return { ok: false, error: 'blocked/invalid url' };
+  let res;
+  try { res = await fetch(u, { redirect: 'follow', signal: AbortSignal.timeout(timeoutMs), headers: { 'user-agent': 'field-agent/1.0 (+tailnet, read-only)' } }); }
+  catch (e) { return { ok: false, error: e.message }; }
+  if (!res.ok) return { ok: false, error: `http ${res.status}` };
+  if (res.url && res.url !== u && !(await ssrfOk(res.url))) return { ok: false, error: 'redirected to blocked host' };
+  const reader = res.body.getReader(); const chunks = []; let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read(); if (done) break;
+    total += value.length; if (total > maxBytes) { try { await reader.cancel(); } catch {} return { ok: false, error: 'too large' }; }
+    chunks.push(Buffer.from(value));
+  }
+  return { ok: true, bytes: new Uint8Array(Buffer.concat(chunks)), finalUrl: res.url || u };
+};
 
 // ── post to the daily dashboard feed (shell out to the proven feed.mjs CLI) ───
 const postFeed = ({ title, body = '', status = '🗣️ from the voice agent', note = '', links = [], agent = '' }) =>
@@ -315,9 +333,10 @@ const makeAffordances = ({ outDir }) => {
   const graph = makeObsidianGraph(); // exposes ONLY search/read/stats — no write/send
   return harden({
     notes: Far('PersonalNotes', {
-      help: () => 'Read-only access to dan\'s personal Obsidian vault. search(query)/read(relpath)/stats(). No write, no send.',
+      help: () => 'Read-only access to dan\'s personal Obsidian vault. search(query)/read(relpath)/readBytes(relpath)/stats(). No write, no send.',
       search: async (query, opts) => graph.search(query, opts),
       read: async rel => graph.read(rel),
+      readBytes: async (rel, opts) => graph.readBytes(rel, opts),
       stats: async () => graph.stats(),
     }),
     reference: Far('Reference', {
@@ -325,8 +344,9 @@ const makeAffordances = ({ outDir }) => {
       ask: async question => consultReferences(String(question || '')),
     }),
     web: Far('Web', {
-      help: () => 'Read-only: fetch + summarize ONE public web page (SSRF-guarded). get(url). search(query) = Brave web search → top results.',
+      help: () => 'Read-only: fetch + summarize ONE public web page (SSRF-guarded). get(url). getBytes(url) = raw bytes of a binary resource (e.g. a PDF). search(query) = Brave web search → top results.',
       get: async url => fetchPage(String(url || '')),
+      getBytes: async (url, opts) => fetchBytes(String(url || ''), opts),
       search: async query => braveSearch(String(query || '')),
     }),
     browser: Far('Browser', {
@@ -1615,6 +1635,42 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         { name: 'createDownloadLinkFor', reversible: false, args: { path: 'string — a file in your home folder', name: 'string — optional download filename' }, description: 'Mint a working DOWNLOAD link for a file in your home folder, so you can give the user a clickable download in your reply. Returns { url } — put it in your reply as a markdown link.' },
       );
     }
+    // readPdf — extract a PDF's text (per page) from a vault note path, a home-folder file, or a URL.
+    // It is offered whenever the agent holds ANY of the three SOURCE powers, but each SOURCE is gated on
+    // its OWN power + resolved through that power's existing jail: `path` (a vault path) goes through the
+    // node's notes binding (least-authority subtree if scoped) exactly like readNote; `homePath` goes
+    // through the home folder's path-guard; `url` goes through the web power's SSRF-guarded egress. No new
+    // authority — it only reads bytes the agent could already read, then runs poppler's pdftotext on them.
+    if (powers.has('notes') || powers.has('home') || powers.has('web')) {
+      const homeFor = () => (ctx.homeSubkey ? makeHome(ctx.homeSubkey) : node.homeBinding?.());
+      toolbox.readPdf = harden({ run: async ({ path: rel, homePath, url, maxPages, maxChars } = {}) => {
+        try {
+          let bytes; let from;
+          if (url) {
+            if (!powers.has('web')) return harden({ ok: false, error: 'reading a PDF from a URL needs the `web` power' });
+            const r = await aff.web.getBytes(String(url));
+            if (!r.ok) return harden({ ok: false, error: r.error });
+            bytes = r.bytes; from = `url ${r.finalUrl || url}`;
+          } else if (homePath) {
+            if (!powers.has('home')) return harden({ ok: false, error: 'reading a PDF from your home folder needs the `home` power' });
+            const h = homeFor(); if (!h?.readBytes) return harden({ ok: false, error: 'no home folder' });
+            bytes = await h.readBytes(String(homePath)); from = `home ./${homePath}`;
+          } else if (rel) {
+            if (!powers.has('notes')) return harden({ ok: false, error: 'reading a PDF from a vault path needs the `notes` power' });
+            bytes = await ctx.notes.readBytes(String(rel)); from = `note ${rel}`;
+          } else {
+            return harden({ ok: false, error: 'give one of: path (a vault file), homePath (a file in your home), or url' });
+          }
+          const x = await extractPdf(bytes, { maxPages, maxChars });
+          if (!x.ok) return harden({ ...x, source: from });
+          return harden({ ok: true, source: from, totalPages: x.totalPages, renderedPages: x.renderedPages, truncatedPages: x.truncatedPages, truncatedChars: x.truncatedChars, pages: x.pages, text: x.text, note: x.note });
+        } catch (e) { return harden({ ok: false, error: e.message }); }
+      } });
+      const src = [powers.has('notes') && 'a vault path (`path`)', powers.has('home') && 'a file in your home folder (`homePath`)', powers.has('web') && 'a URL (`url`)'].filter(Boolean).join(', ');
+      manifest.push({ name: 'readPdf', reversible: false,
+        args: { path: 'string — OPTIONAL vault-relative path to a .pdf (needs the notes power)', homePath: 'string — OPTIONAL path to a .pdf in your home folder (needs the home power)', url: 'string — OPTIONAL public URL of a .pdf (needs the web power)', maxPages: 'number — OPTIONAL cap on pages read (default 50)', maxChars: 'number — OPTIONAL cap on total characters returned (default 60000)' },
+        description: `Read a PDF document and extract its TEXT, per page. Source it from ${src} — give exactly one. Returns { pages:[{page,text}], text (joined with page markers), totalPages, truncatedPages, truncatedChars }. Honors least authority: a vault PDF is read through your notes folder, a home PDF through your home jail, a URL through the SSRF-guarded web power. Scanned/image-only PDFs return empty text (no OCR).` });
+    }
     if (powers.has('contacts')) {
       // Address book: READ is free (search/get); add/edit only PROPOSE — the user
       // confirms before any CardDAV write. (contactsObj is built at boot.)
@@ -2455,6 +2511,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     prefix: pfx,
     search: async (q, opts) => harden((((await aff.notes.search(q, opts)) || []).filter(r => underPrefix(r.path, pfx)))),
     read: async rel => (underPrefix(String(rel || ''), pfx) ? aff.notes.read(rel) : ''),
+    readBytes: async (rel, opts) => { if (!underPrefix(String(rel || ''), pfx)) throw new Error('outside your notes folder'); return aff.notes.readBytes(rel, opts); },
     stats: async () => aff.notes.stats(),
   }); };
   const registerScoped = ({ swiss, powers, label, notesFolder = '' }) => {

@@ -80,6 +80,15 @@ export const searchNotes = async (query, { limit = 8 } = {}) => {
   return scored.slice(0, limit);
 };
 export const readNote = async rel => fsp.readFile(withinVault(rel), 'utf8');
+// Raw bytes of a vault file (same vault-jail as readNote), for BINARY content (e.g. an attached PDF
+// filed into the vault) where a utf8 decode would corrupt it. Returns a Uint8Array. Size-capped.
+export const readNoteBytes = async (rel, { maxBytes = 32 * 1024 * 1024 } = {}) => {
+  const full = withinVault(rel);
+  const st = await fsp.stat(full); // throws if missing
+  if (!st.isFile()) throw new Error('not a file');
+  if (st.size > maxBytes) throw new Error(`file too large (${st.size} > ${maxBytes})`);
+  return new Uint8Array(await fsp.readFile(full));
+};
 export const noteStats = async () => {
   const { so } = await run('bash', ['-c',
     `find ${JSON.stringify(VAULT)} -name '*.md' -not -path '*/${EXCLUDE_DIR}/*' | wc -l`]);
@@ -91,8 +100,9 @@ export const makeObsidianGraph = () => Far('ObsidianGraph', {
   help: () => harden(
     "Read-only view of dan's Obsidian personal-notes graph (~17k notes). FULLY PERMITTED TO " +
     'READ; this object has no send/write methods — findings may only be communicated back to ' +
-    'dan (push), never to the outside world. Methods: search(query,{limit}), read(relpath), stats().'),
+    'dan (push), never to the outside world. Methods: search(query,{limit}), read(relpath), readBytes(relpath), stats().'),
   search: async (query, opts) => harden(await searchNotes(query, opts)),
   read: async rel => readNote(rel),
+  readBytes: async (rel, opts) => harden(await readNoteBytes(rel, opts)),
   stats: async () => harden(await noteStats()),
 });

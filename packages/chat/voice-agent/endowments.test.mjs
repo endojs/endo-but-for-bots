@@ -18,6 +18,7 @@ import { POWERS, ALL_POWERS, makeFieldAgent } from './agent-caps.mjs';
 const POLICY = {
   // read — observe only, free
   searchNotes: 'read', readNote: 'read', searchDietNotes: 'read', readDietNote: 'read', consult: 'read', fetchUrl: 'read', transcribeYoutube: 'read',
+  readPdf: 'read', // extract a PDF's text (per page) from a vault path / home file / URL — read-only, each source gated on its own power
   haFind: 'read', haTree: 'read', haState: 'read',
   agentsList: 'read', agentStatus: 'read', machineRepoStatus: 'read',
   fileList: 'read', fileRead: 'read', listTimers: 'read',

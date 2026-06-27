@@ -44,6 +44,18 @@ export const makeHomeFolder = ({ root, label = 'home', publish, download, ro = f
       return harden({ ok: true, path: rel || '', entries: ents.map(e => ({ name: e.name, dir: e.isDirectory() })) });
     },
     read: async rel => { try { return harden({ ok: true, content: fs.readFileSync(within(root, rel), 'utf8').slice(0, 200000) }); } catch (e) { return harden({ ok: false, error: e.message }); } },
+    // readBytes(rel) → the raw bytes of a file in this home, for BINARY content (e.g. a PDF) that
+    // read()'s utf8-decode would corrupt. Same path-jail as read; symlink-checked like downloadLink so
+    // a planted symlink can't reach a host file. Returns a (hardened) Uint8Array, never a path.
+    readBytes: async (rel, { maxBytes = 32 * 1024 * 1024 } = {}) => {
+      const abs = within(root, rel);
+      const st = fs.statSync(abs); // throws if missing
+      if (!st.isFile()) throw new Error('not a file');
+      if (st.size > maxBytes) throw new Error(`file too large (${st.size} > ${maxBytes})`);
+      const real = fs.realpathSync(abs); const realRoot = fs.realpathSync(root);
+      if (real !== realRoot && !real.startsWith(realRoot + path.sep)) throw new Error('file resolves outside your home folder');
+      return harden(new Uint8Array(fs.readFileSync(abs)));
+    },
     downloadLink,
     readOnly: () => makeHomeFolder({ root, label, publish, download, ro: true }),
     // share(rel) → a READ-ONLY attenuated view of a sub-path: a directory becomes a read-only
@@ -59,6 +71,12 @@ export const makeHomeFolder = ({ root, label = 'home', publish, download, ro = f
         describe: () => harden({ kind: 'home', label: fname, readOnly: true }),
         list: async () => harden({ ok: true, path: '', entries: [{ name: fname, dir: false }] }),
         read: async r => { if (r && path.basename(String(r)) !== fname) return harden({ ok: false, error: 'not in this share' }); try { return harden({ ok: true, content: fs.readFileSync(abs, 'utf8').slice(0, 200000) }); } catch (e) { return harden({ ok: false, error: e.message }); } },
+        readBytes: async (r, { maxBytes = 32 * 1024 * 1024 } = {}) => {
+          if (r && path.basename(String(r)) !== fname) throw new Error('not in this share');
+          const st = fs.statSync(abs);
+          if (st.size > maxBytes) throw new Error(`file too large (${st.size} > ${maxBytes})`);
+          return harden(new Uint8Array(fs.readFileSync(abs)));
+        },
         downloadLink: async () => { if (typeof download !== 'function') throw new Error('downloads are not available here'); return harden(await download(fs.realpathSync(abs), fname)); },
         readOnly() { return this; },
       });

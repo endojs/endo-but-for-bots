@@ -18,6 +18,7 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { E } from '@endo/eventual-send';
 import { makeFieldAgent, ALL_POWERS, POWERS, HOME_BASE } from './agent-caps.mjs';
+import { extractPdf } from './pdf-extract.mjs';
 import { roleList, getRole, setCustomRoles, customRoleNames } from './agent-roles.mjs';
 import { runAgent, buildUserContent, callLLM } from '../../ocapn-noise/tool-bridge.mjs';
 import { runAgentCode } from '../../ocapn-noise/codemode.mjs';
@@ -979,6 +980,25 @@ const processAttachments = async (list, homeSubkey = null) => {
         if (!bytes.length || bytes.length > MAX_DECODED) continue;
         const name = String((a && a.name) || 'file').slice(0, 120);
         const saved = saveToHome(homeSubkey, name, bytes);
+        // A PDF: extract its text right here so the model SEES the content this turn (a PDF in the home
+        // folder is otherwise opaque to it — readPdf would be a second round-trip). Inline the extracted
+        // text; the file still lives in home for re-reading with readPdf({homePath:…}) if needed.
+        const isPdf = mime === 'application/pdf' || /\.pdf$/i.test(name);
+        if (isPdf) {
+          try {
+            const x = await extractPdf(new Uint8Array(bytes), { maxPages: 50, maxChars: 40000 });
+            if (x.ok && x.text) {
+              const trunc = x.truncatedPages || x.truncatedChars ? ` (showing the first ${x.renderedPages} of ${x.totalPages} pages; truncated)` : '';
+              agentAttachments.push({ kind: 'text', name, text: `[PDF "${name}" (${x.totalPages} page(s))${saved ? `, saved to your home folder as ./${saved}` : ''}${trunc}. Extracted text below — re-read with readPdf({homePath:"${saved || name}"}) for more.]\n\n${x.text}` });
+              savedRefs.push({ kind: 'file', name, home: saved || undefined });
+              continue;
+            }
+            // fall through to the generic message (e.g. scanned image-only PDF → no text)
+            agentAttachments.push({ kind: 'text', name, text: `[A PDF "${name}" (${bytes.length} bytes) was attached${saved ? ` and saved to your home folder as ./${saved}` : ''}, but no text could be extracted (likely a scanned/image-only PDF — there is no OCR). ${x.note || x.error || ''}]` });
+            savedRefs.push({ kind: 'file', name, home: saved || undefined });
+            continue;
+          } catch { /* fall through to generic file handling */ }
+        }
         if (saved) {
           agentAttachments.push({ kind: 'text', name, text: `[A file "${name}" (${bytes.length} bytes, ${mime}) was attached and saved to your home folder as ./${saved}. It is yours — read, move, rename, or process it with your home-folder tools (fileList/fileRead/fileWrite).]` });
           savedRefs.push({ kind: 'file', name, home: saved });
