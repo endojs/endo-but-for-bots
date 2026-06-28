@@ -34,6 +34,7 @@ module.exports = {
     'no-loop-func': 'off',
     'no-inner-declarations': 'off',
 
+    'jsdoc/check-tag-names': 'error',
     'jsdoc/no-multi-asterisks': ['warn', { allowWhitespace: true }],
     'jsdoc/no-undefined-types': 'off',
     'jsdoc/require-jsdoc': 'off',
