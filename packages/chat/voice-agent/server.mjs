@@ -33,6 +33,7 @@ import { makeReviewedFixer } from './self-heal.mjs';
 import { makeInterjections } from './interjections.mjs';
 import { makeToolShares } from './tool-shares.mjs';
 import { makeComponentGit } from './component-git.mjs';
+import { makeComponentSync } from './component-sync.mjs';
 import { makeIslandSource } from './island-source.mjs';
 import { reuseFirstPreamble } from './component-catalog.mjs';
 import { addBacklog } from './improvement-backlog.mjs';
@@ -107,7 +108,11 @@ const WHISPER = process.env.STT_URL || 'http://192.168.50.226:8000/v1/audio/tran
 const STT_MODEL = process.env.STT_MODEL || 'deepdml/faster-whisper-large-v3-turbo-ct2';
 const OUT = process.env.OUT_DIR || `${HOME}/.local/state/voice-agent/out`;
 const toolShares = makeToolShares({ dir: `${HOME}/.local/state/voice-agent/tool-shares` }); // share-as-factory/instance + meter + charge
-const componentGit = makeComponentGit({ baseDir: process.env.COMPONENT_GIT_DIR || `${HOME}/.local/state/voice-agent/component-git` }); // each component's SOURCE as a git-as-Endo object (version / fork / revert). Env-overridable so a staging/test instance does NOT write broken-out components into the live gallery (the reason it filled with probes).
+const COMPONENT_GIT_DIR = process.env.COMPONENT_GIT_DIR || `${HOME}/.local/state/voice-agent/component-git`;
+const componentGit = makeComponentGit({ baseDir: COMPONENT_GIT_DIR }); // each component's SOURCE as a git-as-Endo object (version / fork / revert). Env-overridable so a staging/test instance does NOT write broken-out components into the live gallery (the reason it filled with probes).
+// DURABILITY (live-editable plan): mirror every component/fork repo to a remote (gitea) so a local DB/disk
+// failure loses no history. OPT-IN — a no-op unless COMPONENT_GIT_REMOTE is set, so no surprise outward push.
+const componentSync = makeComponentSync({ baseDir: COMPONENT_GIT_DIR, log: (...a) => log(...a) }); // lazy: `log` is defined later in the file (avoid the TDZ at module top)
 const islandSource = makeIslandSource({ here: HERE, componentGit }); // confined-Preact ISLANDS as versioned components (edit = rewrite client file + rebuild)
 // A tool's source as a {relpath: content} file map for the component-git store (single-file → tool.js).
 const sourceFilesOf = t => (t.files && typeof t.files === 'object' && Object.keys(t.files).length ? t.files : { 'tool.js': String(t.code || '') });
@@ -138,6 +143,7 @@ const editComponentSource = async (ct, id, prompt) => {
   let review = null; try { review = await runReviewPanel({ name: t.name, description: t.description, code, kind: t.kind }, { callLLM, ranAt: new Date().toISOString() }); } catch { /* advisory */ }
   const rec = await componentGit.commit(id, newFiles, `edit: ${String(prompt).slice(0, 60)}`);
   ct.setSource(id, newFiles); // apply live (the owner triggered it; revert from the Studio if unwanted)
+  componentSync.schedule(id); // mirror to the durable remote (debounced; no-op unless a remote is configured)
   return { ok: true, version: rec.version, review, note: 'Edited — committed as a new version + applied to the live component. Revert from the Components tab if you don\'t like it.' };
 };
 
@@ -2842,6 +2848,13 @@ const main = async () => {
   watchFolder('clippings', path.join(VAULT_DIR, 'Clippings'));
   watchFolder('inbox', path.join(VAULT_DIR, 'inbox'));
   log('scheduled-agent tick armed (30s)');
+  // DURABILITY backstop: if a component-git remote is configured, sweep-push everything at boot + every 15 min
+  // (the per-edit debounced push handles the hot path; this catches forks/reverts/break-outs + any missed push).
+  if (componentSync.enabled) {
+    log(`component-git sync ON → ${componentSync.remote}`);
+    componentSync.syncAll().then(r => log(`component-git sync: pushed ${r.pushed}${r.failed ? `, ${r.failed} failed` : ''}`)).catch(e => log('component-sync boot', e.message));
+    setInterval(() => { componentSync.syncAll().catch(e => log('component-sync sweep', e.message)); }, 15 * 60 * 1000);
+  }
 
   for (const ip of BIND) { const s = http.createServer(handler); s.on('error', e => log('bind', ip, e.message)); s.listen(PORT, ip, () => log(`field agent on http://${ip}:${PORT}`)); }
   // cap-hygiene: don't print the all-powers root #cap link to the log on a normal boot. Show only a
