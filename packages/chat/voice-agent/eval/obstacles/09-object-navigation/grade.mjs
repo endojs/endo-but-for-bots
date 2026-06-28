@@ -36,7 +36,7 @@ export const grade = async () => {
 
     // 3. The ASSEMBLED SYSTEM PROMPT the agent actually sees teaches it (captured via a fake llm — deterministic).
     let sys = '';
-    const llm = async messages => { sys = (messages[0] && messages[0].content) || ''; return { text: 'ANSWER: ok' }; };
+    const llm = async messages => { sys = (messages[0] && messages[0].content) || ''; return { text: 'ok' }; };
     await runAgentCode({ toolbox, manifest, userText: 'hello', llm, buildUserContent: t => String(t || '') });
     const s = sys.toLowerCase();
     ok('system prompt teaches self-documenting objects + introspect-first', /self-documenting/.test(s) && /describe/.test(s) && (/introspect/.test(s) || /never .*unusable|do not give up|ask it what/.test(s)), `${sys.length} chars`);

@@ -22,7 +22,7 @@ test('interjections store: push, take DRAINS once-only, drop clears', () => {
 test('CodeMode folds a mid-turn interjection at the next step boundary, exactly once', async () => {
   const q = makeInterjections(); const sid = 's1';
   const snaps = []; let n = 0;
-  const llm = async messages => { snaps.push(messages.map(m => `${m.role}:${m.content}`).join('\n')); n += 1; return { text: n === 1 ? '```js\nawait postNow({});\n```' : 'ANSWER: done', usage: null }; };
+  const llm = async messages => { snaps.push(messages.map(m => `${m.role}:${m.content}`).join('\n')); n += 1; return { text: n === 1 ? '```js\nawait postNow({});\n```' : 'done', usage: null }; };
   // round 1's program simulates the user POSTing /chat/interject DURING round 1
   const toolbox = { postNow: { run: async () => { q.push(sid, 'steer toward X'); return { ok: true }; } } };
   const manifest = [{ name: 'postNow', description: 'queues an interjection (stands in for a POST /chat/interject)', args: {} }];
@@ -36,7 +36,7 @@ test('CodeMode folds a mid-turn interjection at the next step boundary, exactly 
 
 test('no interjections → CodeMode behaviour is unchanged (default no-op taker)', async () => {
   let n = 0;
-  const llm = async () => { n += 1; return { text: 'ANSWER: hi', usage: null }; };
+  const llm = async () => { n += 1; return { text: 'hi', usage: null }; };
   const r = await runAgentCode({ toolbox: {}, manifest: [], userText: 'hi', llm }); // no takeInterjections → default () => []
   assert.equal(r.answer, 'hi');
 });

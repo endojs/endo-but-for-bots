@@ -192,24 +192,27 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     if (signal?.aborted) return cancelled();
     const reply = (out && out.text) || '';
     const code = extractCode(reply);
-    if (!code) { // no program → BACK-COMPAT fallback: treat bare prose as the final answer (the primary path is
-      // now a program that calls answer()). Strip a legacy `ANSWER:` marker if present. If it's empty, the MODEL
-      // produced nothing.
-      let answer = reply.replace(/^ANSWER:\s*/i, '').trim();
-      // SAFETY NET: a weaker model may emit a bare `answer("…")` / `ask("…")` / `blocked("…")` call WITHOUT a
-      // ```js fence (so extractCode missed it) — unwrap the string argument so the user sees the message, not the
-      // literal call text. (The kind/flag is lost in this degraded path, but the text still reaches the user.)
-      const bare = /^(?:answer|ask|blocked)\(\s*(['"`])([\s\S]*)\1\s*\)\s*;?$/i.exec(answer);
-      if (bare) answer = bare[2];
+    if (!code) {
+      // No ```js program in the reply. A turn ENDS via a turn-ender FUNCTION (answer/ask/blocked); the `ANSWER:`
+      // text MARKER is RETIRED — it is no longer emitted, parsed, or stripped (the last in-band control marker).
+      // (1) a bare turn-ender call emitted WITHOUT a ```js fence (a weaker model slip) → accept it AS that
+      //     function, preserving its KIND so ask()/blocked() keep their structured flag — it's a function call,
+      //     not a marker.
+      const bare = /^\s*(answer|ask|blocked)\(\s*(['"`])([\s\S]*)\2\s*\)\s*;?\s*$/i.exec(reply);
+      if (bare) {
+        const kind = bare[1].toLowerCase(); const text = bare[3];
+        onStep({ kind: 'answer', text });
+        return harden({ answer: text, toolsUsed: used, ...(kind === 'ask' ? { asking: true } : kind === 'blocked' ? { blocked: true } : {}) });
+      }
+      // (2) a non-empty natural-language reply → deliver it as the answer. A model replying in prose IS its reply;
+      //     there is no marker to parse. (3) empty → a MODEL stall: nudge it to ACT + end with a turn-ender
+      //     (bounded), then report honestly. Never go silent.
+      let answer = reply.trim();
       if (!answer) {
-        // The model returned NOTHING — no program, no answer. This is a MODEL stall (common with the local
-        // default on a multi-step action / follow-up), NOT the user being unclear. NUDGE it to use the
-        // conversation context + act (or ask a SPECIFIC question), retrying a couple of times; only then
-        // report — honestly (a model issue + the stronger-model lever), never the misleading "tell me more".
         if (emptyRetries < 2 && !signal?.aborted) {
           emptyRetries += 1;
-          onStep({ kind: 'tool-error', name: 'model', error: 'empty response — nudging to use context + act' });
-          messages.push({ role: 'user', content: 'You returned an empty response. Use the conversation ABOVE for context (e.g. a device/object/peer already identified earlier in this chat — refer to it directly). Then either WRITE a ```js program that uses your tools to DO the task, or ask ONE specific clarifying question, or reply by calling `answer("<text>")` in a program. Do not return nothing.' });
+          onStep({ kind: 'tool-error', name: 'model', error: 'empty response — nudging to act + end with a turn-ender' });
+          messages.push({ role: 'user', content: 'You returned an empty response. Use the conversation ABOVE for context (e.g. a device/object/peer already identified earlier in this chat — refer to it directly), then reply with a ```js program that DOES the task and ENDS by calling exactly one turn-ender: answer("…") when done, ask("…") if you need one thing from the user, or blocked("…") if you could not finish. Do not return nothing.' });
           continue;
         }
         answer = lastError ? stallMessage(lastError)

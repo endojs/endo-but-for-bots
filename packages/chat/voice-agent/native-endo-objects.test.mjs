@@ -21,7 +21,7 @@ const mk = objs => {
 const promptFor = async fa => {
   const { toolbox, manifest } = fa.rootNode.toolbox();
   let sys = '';
-  await runAgentCode({ toolbox, manifest, userText: 'hi', llm: async m => { sys = m[0].content; return { text: 'ANSWER: ok' }; }, buildUserContent: t => String(t || '') });
+  await runAgentCode({ toolbox, manifest, userText: 'hi', llm: async m => { sys = m[0].content; return { text: 'ok' }; }, buildUserContent: t => String(t || '') });
   return { toolbox, manifest, sys };
 };
 

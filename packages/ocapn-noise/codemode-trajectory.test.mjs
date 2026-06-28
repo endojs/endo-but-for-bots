@@ -17,7 +17,7 @@ test('emits a kind:"trajectory" onStep carrying lastError after a program throws
   const llm = async (_messages, _model) => {
     turns += 1;
     if (turns === 1) return { text: '```js\nthrow new Error("boom-trajectory");\n```' };
-    return { text: 'ANSWER: done' };
+    return { text: 'done' };
   };
 
   const steps = [];

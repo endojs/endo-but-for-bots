@@ -1,8 +1,8 @@
 // codemode-answer.test.mjs — the FINAL ANSWER is delivered by calling answer(text) in the program scope (a
 // first-class function), not by an `ANSWER:` text marker parsed out of prose. Proves: (1) answer() in a program
 // becomes the turn's reply; (2) it works after a tool call; (3) answer() ENDS the turn — the model isn't called
-// again and code after answer() does NOT run; (4) non-string args coerce; (5) the legacy bare-text / `ANSWER:`
-// path still works (back-compat).
+// again and code after answer() does NOT run; (4) non-string args coerce; (5) the `ANSWER:` marker is RETIRED
+// (a no-program reply is delivered verbatim, not stripped) — the last in-band control marker is gone.
 import '@endo/init';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -77,19 +77,26 @@ test('ask()/blocked() end the turn immediately — code after them does not run,
   assert.equal(after, 0, 'code after blocked() never ran');
 });
 
-test('back-compat: a bare-text / ANSWER: reply still delivers the answer', async () => {
-  const llm1 = scriptedLLM(['ANSWER: legacy marker reply']);
-  const r1 = await runAgentCode({ toolbox: {}, manifest: [], userText: 'q', llm: llm1 });
-  assert.equal(r1.answer, 'legacy marker reply', 'a legacy ANSWER: marker is still accepted');
-
-  const llm2 = scriptedLLM(['just some plain prose with no code and no marker']);
-  const r2 = await runAgentCode({ toolbox: {}, manifest: [], userText: 'q', llm: llm2 });
-  assert.equal(r2.answer, 'just some plain prose with no code and no marker', 'bare prose is still accepted');
+test('the ANSWER: marker is RETIRED — a no-program reply is delivered VERBATIM (not stripped)', async () => {
+  // The last in-band marker is gone: the loop no longer recognizes or strips a leading "ANSWER:".
+  const r1 = await runAgentCode({ toolbox: {}, manifest: [], userText: 'q', llm: scriptedLLM(['ANSWER: legacy text']) });
+  assert.equal(r1.answer, 'ANSWER: legacy text', 'the ANSWER: prefix is NOT stripped — the marker is retired');
+  // a plain natural-language reply (no program) is still delivered as the answer — that is content, not a marker.
+  const r2 = await runAgentCode({ toolbox: {}, manifest: [], userText: 'q', llm: scriptedLLM(['just some plain prose']) });
+  assert.equal(r2.answer, 'just some plain prose', 'a prose reply is delivered as the answer');
 });
 
-test('safety net: a bare answer/ask/blocked("…") call WITHOUT a code fence is unwrapped', async () => {
-  for (const q of ['answer("unfenced reply")', "ask('unfenced reply');", 'blocked(`unfenced reply`)']) {
+test('safety net: a bare answer/ask/blocked("…") call WITHOUT a code fence is unwrapped AND keeps its flag', async () => {
+  const cases = [
+    { q: 'answer("unfenced reply")', asking: undefined, blocked: undefined },
+    { q: "ask('unfenced reply');", asking: true, blocked: undefined },
+    { q: 'blocked(`unfenced reply`)', asking: undefined, blocked: true },
+  ];
+  for (const { q, asking, blocked } of cases) {
+    // eslint-disable-next-line no-await-in-loop
     const r = await runAgentCode({ toolbox: {}, manifest: [], userText: 'q', llm: scriptedLLM([q]) });
     assert.equal(r.answer, 'unfenced reply', `unwrapped ${q}`);
+    assert.equal(r.asking, asking, `asking flag for ${q}`);
+    assert.equal(r.blocked, blocked, `blocked flag for ${q}`);
   }
 });

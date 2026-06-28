@@ -28,7 +28,7 @@ test('exhaustion returns the in-flight transcript; resume continues WITHOUT re-r
   assert.ok(!r1.resumeFrom.some(m => m.role === 'system'), 'resumeFrom excludes the system prompt (server re-adds a fresh one)');
 
   // RESUME: hand the saved transcript back; the model now just answers. The tool must NOT run again.
-  const llm2 = mkLLM([{ text: 'ANSWER: The data is 42.' }]);
+  const llm2 = mkLLM([{ text: 'The data is 42.' }]);
   const r2 = await runAgentCode({ toolbox, manifest, userText: 'do the thing', resumeMessages: r1.resumeFrom, llm: llm2, buildUserContent: bUC });
   assert.equal(r2.answer, 'The data is 42.', 'resume produced the final answer');
   assert.equal(gathered, 1, 'the tool did NOT re-run on resume — no wasted re-work');
@@ -38,7 +38,7 @@ test('exhaustion returns the in-flight transcript; resume continues WITHOUT re-r
 test('resume prepends a FRESH system prompt then continues the saved transcript verbatim', async () => {
   const toolbox = { gatherData: { run: async () => ({ ok: true, data: 'X' }) } };
   const seen = [];
-  const llm = async (messages, model) => { seen.push(messages); return { text: 'ANSWER: ok' }; };
+  const llm = async (messages, model) => { seen.push(messages); return { text: 'ok' }; };
   const saved = [
     { role: 'user', content: 'original ask' },
     { role: 'assistant', content: '```js\nreturn await gatherData();\n```' },
@@ -53,7 +53,7 @@ test('resume prepends a FRESH system prompt then continues the saved transcript 
 test('a normal (non-resume) turn is unaffected — builds from userText + history', async () => {
   const toolbox = { gatherData: { run: async () => ({ ok: true }) } };
   const seen = [];
-  const llm = async (messages) => { seen.push(messages); return { text: 'ANSWER: hi' }; };
+  const llm = async (messages) => { seen.push(messages); return { text: 'hi' }; };
   const r = await runAgentCode({ toolbox, manifest, userText: 'hello', history: [{ role: 'user', content: 'prior' }, { role: 'assistant', content: 'earlier' }], llm, buildUserContent: bUC });
   assert.equal(r.answer, 'hi');
   const msgs = seen[0];
