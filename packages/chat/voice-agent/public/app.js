@@ -29,6 +29,16 @@ initTheme(); // restore the saved theme + start applying it to :root as CSS vars
     if (!NEED.every(id => hdr.querySelector('#' + id))) throw new Error('header island missing an id — restoring');
   } catch (e) { try { hdr.innerHTML = snapshot; } catch { /* keep static */ } }
 })();
+(() => { // P4: composer input row as an island (mount BEFORE app.js grabs #text/#send below)
+  const row = document.querySelector('.inputrow');
+  if (!row || !window.__fieldIslands || !window.__fieldIslands.renderInputRow) return;
+  const NEED = ['attach', 'file', 'text', 'send', 'mic', 'meeting-btn'];
+  const snapshot = row.innerHTML;
+  try {
+    window.__fieldIslands.renderInputRow(row);
+    if (!NEED.every(id => row.querySelector('#' + id))) throw new Error('input-row island missing an id — restoring');
+  } catch (e) { try { row.innerHTML = snapshot; } catch { /* keep static */ } }
+})();
 (() => { // a header toggle for light/dark (the first control of the userspace-extensible style framework)
   try {
     const hdr = document.querySelector('header'); if (!hdr) return;

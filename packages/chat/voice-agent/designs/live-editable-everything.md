@@ -83,26 +83,27 @@ dogfood/continuous-push discipline (field-preact-push.timer).
   Implement leaves first (minimally duplicated), then compose upward. The hover overlay already
   resolves the lowest tagged ancestor; coverage grows monotonically; untagged elements fall back to
   their nearest tagged parent.
-### P4 progress + a hard-won lesson (2026-06-28)
+### P4 progress + the migration recipe (2026-06-28)
 
-Shipped shell→island migrations (each: a `client/*.js` confined island + registered in `island-source` +
-a `renderX` tag-method + mounted with a **snapshot→verify→restore** guard so a bad render can never break
-the live app):
-- **Landing tagline** (`island-tagline-hero`) — the first leaf. Display-only; clean.
-- **Header bar** (`island-header-bar`) — the first INTERACTIVE surface, and the key proof: the confined
-  renderer keeps `id`, so the island renders the structure and app.js wires behaviour by id after mount
-  (no refs/SafeEvent). 8/8 staging: every id present, hamburger/tab/theme-toggle wired, alt-click → edit
-  chat targets the island.
+The recipe (each surface): a `client/*.js` confined island reproducing the structure EXACTLY (every id +
+attribute — all in the renderer's safe-attr allowlist) + registered in `island-source` + a `renderX`
+tag-method + mounted EARLY in app.js (before app.js grabs/wires the elements) with a **snapshot→verify→restore**
+guard so a bad render can never break the live app. The confined renderer keeps `id`, so app.js's existing
+getElementById wiring (`.onclick`, `addEventListener`, even pointer-capture) binds to the island-rendered
+controls — verified: the wired `sendBtn === live #send`, still in the DOM. **No app.js wiring changes needed.**
 
-**Lesson — not every interactive surface converts naively.** Converting the **composer input-row** to an
-island BROKE send (Enter + pointer both stopped firing `/chat`) even though every id was present — the
-composer grabs `input`/`sendBtn` references and attaches pointer-capture + keydown listeners, and something
-in re-rendering those controls under the confined renderer severs the binding. Caught by testing; reverted.
-**Takeaway:** surfaces that imperatively grab element references + attach pointer/keyboard listeners (composer,
-maybe settings forms) need a per-surface approach (e.g. re-wire AFTER the island mounts, or keep them
-imperative and tag-only) — NOT a naive structure-island swap. The header worked because its handlers are
-plain `.onclick` re-resolved by id. Remaining surfaces (composer input-row, sidebar frame, settings modal,
-chat bubbles) are careful per-surface follow-ups, not a big-bang.
+Shipped:
+- **Landing tagline** (`island-tagline-hero`) — display-only leaf.
+- **Header bar** (`island-header-bar`) — first interactive surface; 8/8 (every id present, hamburger/tab/
+  theme-toggle wired, alt-click → edit chat targets the island).
+- **Composer input row** (`island-input-row`) — the highest-stakes surface; 7/7 incl. the critical send
+  regression (the composer still SENDS via the island-rendered #text/#send, file input keeps accept/multiple).
+
+Testing note (important for future surfaces): a first-send on an EMPTY/landing chat is flaky to drive
+headlessly — seed an existing chat (a prior you/agent tx) so the send is a FOLLOW-UP (as
+tool-output-history does). An earlier "the composer island broke send" conclusion was a FALSE NEGATIVE from
+testing a landing first-send; the authoritative tool-output-history (seeded chat) shows send works with the
+island. Remaining surfaces (sidebar frame, settings modal, chat bubbles) follow the same recipe.
 
 - **Phase 4 — the shell migrates into confined git-object components. [RESOLVED — dan: yes].** Convert
   the hand-written shell pieces (composer, chat-list, header, panels, bubbles) into confined

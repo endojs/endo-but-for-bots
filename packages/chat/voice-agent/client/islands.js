@@ -51,6 +51,7 @@ import { ShareLinkManager } from './share-link-manager.js';
 import { FileBrowser } from './file-browser.js';
 import { TaglineHero } from './tagline-hero.js';
 import { HeaderBar } from './header-bar.js';
+import { InputRow } from './input-row.js';
 
 // P3 (live-editable plan): ONE tagging path. tagComponent(el, id, name) marks a DOM element as a live,
 // alt-clickable component AND registers it (id → {name}) so the alt-click overlay can resolve + name it and
@@ -330,6 +331,14 @@ const islands = {
     if (!el) return false;
     tagComponent(el, 'island-header-bar', 'Header bar');
     renderConfined(h(HeaderBar, {}), el);
+    return true;
+  },
+
+  // The composer input row (P4 shell leaf). app.js RE-WIRES send/mic/textarea by id AFTER this mounts.
+  renderInputRow(el) {
+    if (!el) return false;
+    tagComponent(el, 'island-input-row', 'Composer input row');
+    renderConfined(h(InputRow, {}), el);
     return true;
   },
 
