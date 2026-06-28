@@ -14,6 +14,7 @@ import {
   isGitReadOnly,
 } from '@endo/exo-git';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+import { subscriptionFromReader } from '@endo/exo-pubsub/subscription-from-reader.js';
 import {
   assertPetName,
   assertPetNamePath,
@@ -1825,11 +1826,11 @@ export const makeHostMaker = ({
         },
         followMessages: async () => {
           const iterator = host.followMessages();
-          return readerFromIterator(/** @type {any} */ (iterator));
+          return subscriptionFromReader(/** @type {any} */ (iterator));
         },
         followNameChanges: async () => {
           const iterator = host.followNameChanges();
-          return readerFromIterator(iterator);
+          return subscriptionFromReader(iterator);
         },
         followPeerChanges: async () => {
           const iterator = await host.followPeerChanges();

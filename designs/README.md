@@ -148,6 +148,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
+| [notifier-pubsub-migration](notifier-pubsub-migration.md) | 2026-06-23 | 2026-06-28 | In Progress |
 | [endo-fs-backend-seam](endo-fs-backend-seam.md) | 2026-05-28 | 2026-05-28 | **Complete** |
 | [chat-color-schemes](chat-color-schemes.md) | 2026-02-26 | 2026-02-26 | **Complete** |
 | [cli-store-verb-text-modes](cli-store-verb-text-modes.md) | 2026-05-08 | 2026-05-08 | Proposed |

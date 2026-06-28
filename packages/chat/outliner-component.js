@@ -15,6 +15,7 @@
 import harden from '@endo/harden';
 import { E } from '@endo/far';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { iterateSubscription } from '@endo/exo-pubsub/iterate-subscription.js';
 
 import { tokenAutocompleteComponent } from '@endo/spaces-util/token-autocomplete.js';
 import {
@@ -363,8 +364,8 @@ export const outlinerComponent = async (
     const powers = options.powers;
     (async () => {
       const changesRef = await E(powers).followNameChanges();
-      const it = iterateReader(
-        /** @type {Parameters<typeof iterateReader>[0]} */ (
+      const it = iterateSubscription(
+        /** @type {Parameters<typeof iterateSubscription>[0]} */ (
           /** @type {unknown} */ (changesRef)
         ),
       );

@@ -7,6 +7,7 @@ import { makeExo } from '@endo/exo';
 import { q } from '@endo/errors';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+import { subscriptionFromReader } from '@endo/exo-pubsub/subscription-from-reader.js';
 import { externalizeId, internalizeLocator } from './locator.js';
 import {
   assertNamePath,
@@ -478,7 +479,7 @@ export const makeDirectoryMaker = ({
         listIdentifiers,
         listLocators,
         followNameChanges: () =>
-          readerFromIterator(directory.followNameChanges()),
+          subscriptionFromReader(directory.followNameChanges()),
         lookup,
         maybeLookup: directory.maybeLookup,
         reverseLookup,

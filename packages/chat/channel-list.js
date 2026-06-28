@@ -5,7 +5,7 @@
 
 import harden from '@endo/harden';
 import { E } from '@endo/far';
-import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { iterateSubscription } from '@endo/exo-pubsub/iterate-subscription.js';
 
 import {
   Fragment,
@@ -410,8 +410,8 @@ const ChannelList = ({ powers, options, controller }) => {
     const run = async () => {
       // The daemon's name-change reader is loosely typed (Passable); narrow it
       // to the add/remove shape at the boundary, as the rest of the app does.
-      const nameChanges = iterateReader(
-        /** @type {Parameters<typeof iterateReader>[0]} */ (
+      const nameChanges = iterateSubscription(
+        /** @type {Parameters<typeof iterateSubscription>[0]} */ (
           /** @type {unknown} */ (E(powers).followNameChanges())
         ),
         // Prefetch a window of values so the channel-name backlog streams

@@ -72,6 +72,9 @@
       "path": "packages/exo-playwright/tsconfig.composite.json"
     },
     {
+      "path": "packages/exo-pubsub/tsconfig.composite.json"
+    },
+    {
       "path": "packages/exo-stream/tsconfig.composite.json"
     },
     {
