@@ -5547,6 +5547,9 @@ test('mount subDir rejects "." segment', async t => {
   await t.throwsAsync(() => E(mount).subDir('.'), {
     message: /Invalid subDir segment/,
   });
+  await t.throwsAsync(() => E(mount).subDir(''), {
+    message: /Invalid subDir segment/,
+  });
   await t.throwsAsync(() => E(mount).subDir('pkg/./inner'), {
     message: /Invalid subDir segment/,
   });
@@ -5646,6 +5649,67 @@ test('host provideSubMount stores a usable mount formula', async t => {
   t.false(await E(inner).has('top.txt'));
 });
 
+test('host provideSubMount preserves parent readOnly attenuation', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(
+    config.statePath,
+    '..',
+    'mount-test-provideSubMount-readonly',
+  );
+  await fs.promises.mkdir(path.join(mountPath, 'inner'), { recursive: true });
+  await fs.promises.writeFile(
+    path.join(mountPath, 'inner', 'leaf.txt'),
+    'leaf content',
+    'utf-8',
+  );
+
+  await E(host).provideMount(mountPath, 'readonly-parent-mount', {
+    readOnly: true,
+  });
+  await E(host).provideSubMount(
+    'readonly-parent-mount',
+    'inner',
+    'readonly-child-mount',
+  );
+
+  const child = await E(host).lookup(['readonly-child-mount']);
+  const leaf = await E(child).lookup('leaf.txt');
+  t.is(await E(leaf).text(), 'leaf content');
+
+  await t.throwsAsync(() => E(child).writeText('new.txt', 'nope'), {
+    message: /read-only/i,
+  });
+});
+
+test('host provideSubMount resolves nested parent names', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(
+    config.statePath,
+    '..',
+    'mount-test-provideSubMount-nested',
+  );
+  await fs.promises.mkdir(path.join(mountPath, 'inner'), { recursive: true });
+  await fs.promises.writeFile(
+    path.join(mountPath, 'inner', 'leaf.txt'),
+    'leaf content',
+    'utf-8',
+  );
+
+  await E(host).makeDirectory(['mounts']);
+  await E(host).provideMount(mountPath, ['mounts', 'nested-parent']);
+  await E(host).provideSubMount(
+    ['mounts', 'nested-parent'],
+    'inner',
+    'nested-child',
+  );
+
+  const child = await E(host).lookup(['nested-child']);
+  const leaf = await E(child).lookup('leaf.txt');
+  t.is(await E(leaf).text(), 'leaf content');
+});
+
 test('host provideSubMount rejects "." segment', async t => {
   const { host, config } = await prepareHost(t);
 
@@ -5660,6 +5724,12 @@ test('host provideSubMount rejects "." segment', async t => {
 
   await t.throwsAsync(
     () => E(host).provideSubMount('parent-dot', '.', 'inner-dot'),
+    {
+      message: /Invalid subDir segment/,
+    },
+  );
+  await t.throwsAsync(
+    () => E(host).provideSubMount('parent-dot', '', 'inner-dot'),
     {
       message: /Invalid subDir segment/,
     },
@@ -5755,6 +5825,47 @@ test('mount file streamBase64 yields base64-encoded chunks', async t => {
   }
   const decoded = new TextDecoder().decode(allBytes);
   t.is(decoded, 'Hello, mount!');
+});
+
+test('mount file streamBase64 rechecks confinement before reading', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const basePath = path.join(config.statePath, '..', 'mount-test-stream-swap');
+  const mountPath = path.join(basePath, 'mount-root');
+  const outsidePath = path.join(basePath, 'outside');
+
+  await fs.promises.rm(basePath, { recursive: true, force: true });
+  await fs.promises.mkdir(mountPath, { recursive: true });
+  await fs.promises.mkdir(outsidePath, { recursive: true });
+  await fs.promises.writeFile(
+    path.join(mountPath, 'target.txt'),
+    'inside',
+    'utf-8',
+  );
+  await fs.promises.writeFile(
+    path.join(outsidePath, 'secret.txt'),
+    'outside',
+    'utf-8',
+  );
+
+  await E(host).provideMount(mountPath, 'stream-swap-mount');
+  const mount = await E(host).lookup(['stream-swap-mount']);
+  const file = await E(mount).lookup('target.txt');
+
+  await fs.promises.rm(path.join(mountPath, 'target.txt'));
+  await fs.promises.symlink(
+    path.join(outsidePath, 'secret.txt'),
+    path.join(mountPath, 'target.txt'),
+  );
+
+  const { promise: synHead, resolve: synResolve } = makePromiseKit();
+  const { promise: nextSyn } = makePromiseKit();
+  const ack = E(file).streamBase64(synHead);
+  synResolve(harden({ value: undefined, promise: nextSyn }));
+
+  await t.throwsAsync(ack, {
+    message: /escapes mount root/,
+  });
 });
 // symlink confinement tests
 

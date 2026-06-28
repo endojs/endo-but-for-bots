@@ -593,6 +593,8 @@ export const MountInterface = M.interface('EndoMount', {
   makeFile: M.call(PathArgShape).optional(M.any()).returns(M.promise()),
   // Mutation
   remove: M.call(PathArgShape).returns(M.promise()),
+  removeDirectory: M.call(PathArgShape).returns(M.promise()),
+  removeTree: M.call(PathArgShape).returns(M.promise()),
   move: M.call(PathArgShape, PathArgShape).returns(M.promise()),
   // Attenuation — returns a structural ReadableTree view, not an
   // EndoMount.  Callers that need mount-specific extensions on a

@@ -2336,7 +2336,9 @@ const makeMethodGuardMaker = (
 export const InterfaceGuardPayloadShape = M.splitRecord(
   {
     interfaceName: M.string(),
-    methodGuards: M.recordOf(M.string(), MethodGuardShape),
+    methodGuards: M.recordOf(M.string(), MethodGuardShape, {
+      numPropertiesLimit: 200,
+    }),
   },
   {
     defaultGuards: M.or(M.undefined(), 'passable', 'raw'),

@@ -768,6 +768,38 @@ const makeMountExo = ctx => {
       await filePowers.removePath(target);
     },
 
+    async removeDirectory(pathArg) {
+      await null;
+      assertWritable();
+      const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
+      const target = resolve(segments);
+      await assertConfined(target, confinementRoot, filePowers);
+      await filePowers.removeDirectory(target);
+    },
+
+    async removeTree(pathArg) {
+      await null;
+      assertWritable();
+      const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
+      /**
+       * @param {string} target
+       */
+      const removeTreePath = async target => {
+        await assertConfined(target, confinementRoot, filePowers);
+        if (await filePowers.isDirectory(target)) {
+          const entries = await filePowers.readDirectory(target);
+          for (const entry of entries) {
+            // eslint-disable-next-line no-await-in-loop
+            await removeTreePath(filePowers.joinPath(target, entry));
+          }
+          await filePowers.removeDirectory(target);
+        } else {
+          await filePowers.removePath(target);
+        }
+      };
+      await removeTreePath(resolve(segments));
+    },
+
     async move(fromArg, toArg) {
       await null;
       assertWritable();
@@ -797,9 +829,16 @@ const makeMountExo = ctx => {
     async subDir(subpath) {
       await null;
       if (typeof subpath !== 'string') {
-        throw new Error(`subDir path must be a string, got ${q(typeof subpath)}`);
+        throw new Error(
+          `subDir path must be a string, got ${q(typeof subpath)}`,
+        );
       }
       const segments = subpath.split('/').filter(s => s.length > 0);
+      if (segments.length === 0 || subpath.startsWith('/')) {
+        throw new Error(
+          `Invalid subDir segment: ${q(subpath.startsWith('/') ? '/' : '')}`,
+        );
+      }
       for (const seg of segments) {
         if (seg === '..' || seg === '.') {
           throw new Error(`Invalid subDir segment: ${q(seg)}`);
