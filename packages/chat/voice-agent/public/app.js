@@ -2206,7 +2206,10 @@ const stepResults = m => {
 // small default model trims aggressively. Budget is spent NEWEST-first (recent retrievals stay full).
 const buildHistory = (msgs, model = '') => {
   const big = !!model && !/^default$/i.test(model) && !/gemma|haiku|mini|tiny|small/i.test(model); // large-context → keep outputs long
-  const totalBudget = big ? 160000 : 8000, perCap = big ? 16000 : 2000;
+  // Opus-class windows are ~1M tokens now; budgets are in CHARS (~4/token). Keep retrieved outputs
+  // until the window is genuinely exhausted: ~750k chars (~190k tokens) leaves ample room for the
+  // system prompt, toolbox, current turn, and the response. Small models stay tight.
+  const totalBudget = big ? 750000 : 8000, perCap = big ? 120000 : 2000;
   const list = msgs.filter(m => m && (m.who === 'you' || m.who === 'agent')).slice(-24);
   const blocks = new Array(list.length).fill('');
   let budget = totalBudget;
