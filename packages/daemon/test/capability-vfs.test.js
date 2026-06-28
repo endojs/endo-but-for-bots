@@ -65,7 +65,7 @@ const setup = async t => {
     readFileRange: async (p, offset, length) => {
       const handle = await fs.promises.open(p, 'r');
       try {
-        const buffer = Buffer.alloc(length);
+        const buffer = new Uint8Array(length);
         const { bytesRead } = await handle.read(buffer, 0, length, offset);
         return new Uint8Array(buffer.subarray(0, bytesRead));
       } finally {
