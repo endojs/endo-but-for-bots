@@ -1,8 +1,9 @@
 # Control signals as scope functions, not text markers (`answer()`, not `ANSWER:`)
 
-Status: `answer()` SHIPPED (2026-06-27, codemode.mjs + codemode-answer.test.mjs). The agent now delivers
-its final reply by calling `answer(text)` in its program; `ANSWER:` survives only as a back-compat
-fallback. `ask()` / `blocked()` and the `TOOL_CALL`/empty-nudge markers remain future work (below).
+Status: `answer()`, `ask()`, `blocked()` ALL SHIPPED (2026-06-27, codemode.mjs + codemode-answer.test.mjs).
+The agent ends its turn by calling one of them in its program; the kind flows through the server as an
+`endKind` + `asking`/`blocked` flag (turn-done log, "needs you" push). `ANSWER:` survives only as a
+back-compat fallback. Remaining future work: the `TOOL_CALL`/empty-nudge markers (below).
 
 ## The principle
 
