@@ -15,9 +15,8 @@ const probe = env => {
 // strip any inherited overrides so we test the genuine defaults
 const CLEAN = { FIELD_PERSONAL_ROOT: '', FIELD_MODE: '', FIELD_CONFIG_DIR: '', OBSIDIAN_VAULT: '', FIELD_STATE_DIR: '', USERS_FILE: '', SEED_FILE: '', PERSONA_FILE: '', FEED_FILE: '', FIELD_HOME_BASE: '' };
 
-test('legacy home layout → personal mode, identical paths', () => {
+test('legacy home layout → identical default paths', () => {
   const c = probe({ ...CLEAN });
-  assert.equal(c.mode, 'personal'); assert.equal(c.personal, true);
   assert.equal(c.CONFIG_DIR, '/home/dan/.config/field-agent');
   assert.equal(c.VAULT_DIR, '/home/dan/obsidian/vault');
   assert.equal(c.PERSONA_FILE, '/home/dan/.config/field-agent/persona.txt');
@@ -25,6 +24,18 @@ test('legacy home layout → personal mode, identical paths', () => {
   assert.equal(c.ROOT_SWISS_FILE, '/home/dan/.config/field-agent/root.swiss');
   assert.equal(c.HOME_BASE, '/home/dan/.local/state/field-agent/home');
   assert.equal(c.FEED_FILE, '/home/dan/.local/state/field-dashboard/feed.json');
+});
+
+test('mode keys on root.swiss PRESENCE — present → personal, absent → platform (the bind/scrub signal)', () => {
+  const withSwiss = fs.mkdtempSync(path.join(os.tmpdir(), 'cfg-'));
+  fs.writeFileSync(path.join(withSwiss, 'root.swiss'), 'deadbeef');
+  const p = probe({ ...CLEAN, FIELD_CONFIG_DIR: withSwiss });
+  assert.equal(p.mode, 'personal'); assert.equal(p.personal, true);
+
+  const noSwiss = fs.mkdtempSync(path.join(os.tmpdir(), 'cfg-')); // dir EXISTS but no root.swiss (an empty mountpoint after scrub+lock)
+  const q = probe({ ...CLEAN, FIELD_CONFIG_DIR: noSwiss });
+  assert.equal(q.mode, 'platform'); assert.equal(q.personal, false);
+  fs.rmSync(withSwiss, { recursive: true, force: true }); fs.rmSync(noSwiss, { recursive: true, force: true });
 });
 
 test('FIELD_PERSONAL_ROOT with marker → personal, whole family rebased onto the volume', () => {

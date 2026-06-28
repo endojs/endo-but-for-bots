@@ -37,14 +37,18 @@ export const personalAt = (sub, legacy) => (PERSONAL_ROOT ? path.join(PERSONAL_R
 
 const exists = p => { try { return !!p && fs.existsSync(p); } catch { return false; } };
 
-// MODE — personal if either (a) a personal.json marker sits in the mounted PERSONAL_ROOT, or (b) the
-// legacy layout is present (no PERSONAL_ROOT but ~/.config/field-agent exists → today's home NUC). Else
-// platform. Override explicitly with FIELD_MODE=personal|platform.
+// MODE — personal iff the personal DATA is actually present, never merely a directory. With the bind-mount
+// model the home dirs persist as EMPTY mountpoints when the volume is locked, so a bare-directory check would
+// false-positive into a broken "personal but no data" state. The honest signal is the root cap file: it is
+// there when the encrypted volume is mounted/bound, gone when it is locked (+ the originals scrubbed).
+//   (a) a personal.json marker in a mounted PERSONAL_ROOT (the provisioner/non-bind case), OR
+//   (b) root.swiss present at the resolved config dir (the home/bind case). Else platform.
+// Override explicitly with FIELD_MODE=personal|platform.
 const markerPersonal = () => exists(PERSONAL_ROOT && path.join(PERSONAL_ROOT, 'personal.json'));
-const legacyPersonal = () => !PERSONAL_ROOT && exists(`${HOME}/.config/field-agent`);
+const dataPresent = () => exists(path.join(process.env.FIELD_CONFIG_DIR || personalAt('config', `${HOME}/.config/field-agent`), 'root.swiss'));
 export const FIELD_MODE = (process.env.FIELD_MODE === 'personal' || process.env.FIELD_MODE === 'platform')
   ? process.env.FIELD_MODE
-  : (markerPersonal() || legacyPersonal() ? 'personal' : 'platform');
+  : (markerPersonal() || dataPresent() ? 'personal' : 'platform');
 export const PERSONAL = FIELD_MODE === 'personal';
 
 // ── the personal directory roots (rebased onto the volume when PERSONAL_ROOT is set) ─────────────────

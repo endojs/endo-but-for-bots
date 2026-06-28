@@ -74,8 +74,9 @@ cmd_status() {
   echo "  known drive (LUKS UUID): ${uuid:-«not initialized — run init»}"
   if is_open; then c_grn "  LUKS mapping:   OPEN  (/dev/mapper/$MAPPER)"; else echo "  LUKS mapping:   closed"; fi
   if is_mounted; then c_grn "  mounted at:     $MOUNT"; else echo "  mounted at:     (not mounted)"; fi
-  local mode="platform"; if is_mounted && [ -f "$MOUNT/personal.json" ]; then mode="personal"; fi
-  echo "  → service mode would be: $mode  (FIELD_PERSONAL_ROOT $([ "$mode" = personal ] && echo "= $MOUNT" || echo unset))"
+  if _binds_active; then c_grn "  bind-mounts:    ACTIVE (the whole box reads the volume)"; else echo "  bind-mounts:    none"; fi
+  local mode="platform"; if [ -f "$HOME_DIR/.config/field-agent/root.swiss" ]; then mode="personal"; fi
+  echo "  → service mode: $mode  (keyed on root.swiss presence at the home config path)"
   echo
   echo "── Plaintext personal data STILL on the internal (unencrypted) disk ──"
   local any=0
@@ -122,42 +123,55 @@ _resolve_dev() {
   echo "$dev"
 }
 
-cmd_unlock() {
-  need_root unlock
+# raw mount of the LUKS volume (used by init/migrate/verify/scrub AND as the bind SOURCE)
+_mount_raw() {
   is_open || { local dev; dev="$(_resolve_dev)"; c_ylw "  Enter your volume passphrase:"; cryptsetup open "$dev" "$MAPPER"; }
   is_mounted || { mkdir -p "$MOUNT"; mount "/dev/mapper/$MAPPER" "$MOUNT"; }
-  [ -f "$MOUNT/personal.json" ] || c_ylw "  (mounted, but no personal.json yet — run migrate to populate)"
-  _set_service_mode personal
-  c_grn "✓ unlocked + mounted at $MOUNT → restarting $SVC in PERSONAL mode"
+}
+# BIND the volume's subdirs OVER their home locations, so EVERY consumer on the box (Agent C, the dashboard,
+# the vault, the muddle …) transparently reads the volume — not just things that honor FIELD_PERSONAL_ROOT.
+_bind_on() {
+  for src in "${!MAP[@]}"; do
+    local vol="$MOUNT/${MAP[$src]}"
+    [ -d "$vol" ] || continue
+    runuser -u "$OWNER" -- mkdir -p "$src"
+    mountpoint -q "$src" || mount --bind "$vol" "$src"
+  done
+}
+_bind_off() { for src in "${!MAP[@]}"; do mountpoint -q "$src" && umount "$src" 2>/dev/null || true; done; }
+_binds_active() { for src in "${!MAP[@]}"; do mountpoint -q "$src" && return 0; done; return 1; }
+
+cmd_unlock() {
+  need_root unlock
+  _mount_raw
+  [ -f "$MOUNT/personal.json" ] || c_ylw "  (mounted, but no personal.json yet — run migrate first)"
+  _bind_on
+  _restart_service
+  c_grn "✓ unlocked: volume bound over your home paths → $SVC in PERSONAL mode (the WHOLE box reads the volume)"
 }
 
 cmd_lock() {
   need_root lock
-  _set_service_mode platform
-  is_mounted && umount "$MOUNT" || true
-  is_open && cryptsetup close "$MAPPER" || true
-  c_grn "✓ locked — drive closed; $SVC restarted in PLATFORM mode (no secrets on the box)"
+  _bind_off
+  is_mounted && umount "$MOUNT" 2>/dev/null || true
+  is_open && cryptsetup close "$MAPPER" 2>/dev/null || true
+  _restart_service
+  c_grn "✓ locked — binds removed, drive closed; $SVC restarted (platform mode once originals are scrubbed)"
 }
 
-# Flip the systemd --user service between modes by writing a drop-in that (un)sets FIELD_PERSONAL_ROOT,
-# then restart. Run as the service's user (we were invoked with sudo, so reach back via the login user).
-_set_service_mode() {
-  local mode="$1"; local owner="$OWNER"
-  local dropin_dir="$HOME_DIR/.config/systemd/user/$SVC.service.d"
-  local dropin="$dropin_dir/personal-mode.conf"
-  runuser -u "$owner" -- mkdir -p "$dropin_dir"
-  if [ "$mode" = personal ]; then
-    printf '[Service]\nEnvironment=FIELD_PERSONAL_ROOT=%s\n' "$MOUNT" | runuser -u "$owner" -- tee "$dropin" >/dev/null
-  else
-    printf '[Service]\nEnvironment=FIELD_PERSONAL_ROOT=\n' | runuser -u "$owner" -- tee "$dropin" >/dev/null
-  fi
-  local uid; uid="$(id -u "$owner")"
+# With the bind model the service just reads the HOME paths (which the binds make = the volume) — no
+# FIELD_PERSONAL_ROOT needed. Clear any legacy drop-in + restart so field-config re-resolves; mode follows
+# whether root.swiss is present (bound → present → personal; locked+scrubbed → absent → platform).
+_restart_service() {
+  local owner="$OWNER" uid; uid="$(id -u "$owner")"
+  runuser -u "$owner" -- rm -f "$HOME_DIR/.config/systemd/user/$SVC.service.d/personal-mode.conf" 2>/dev/null || true
   runuser -u "$owner" -- env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user daemon-reload || true
   runuser -u "$owner" -- env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user restart "$SVC" || true
 }
 
 cmd_migrate() {
-  is_mounted || die "the volume is not mounted — run: sudo field-personal unlock"
+  _binds_active && die "the volume is BOUND over your home paths — run 'sudo field-personal lock' first (migrate must read the real originals, not the volume through a bind)"
+  is_mounted || die "the volume is not mounted — open it: sudo cryptsetup open <part> field-personal && sudo mount /dev/mapper/field-personal /mnt/field-personal"
   command -v rsync >/dev/null || die "rsync not installed"
   # Some targets NEST under another (e.g. config/kazputer-phone + config/gator-pay live under config/, which
   # is itself the target of ~/.config/field-agent). A naive `--delete` on the parent would wipe the nested
@@ -204,8 +218,11 @@ cmd_verify() {
 cmd_scrub() {
   need_root scrub "$@"
   [ "${1:-}" = "--yes" ] || die "scrub is DESTRUCTIVE — re-run: sudo field-personal scrub --yes (after a passing verify)"
-  is_mounted || die "mount the volume first so scrub can re-verify the copy exists before deleting"
-  # gate on a passing verify (run it as the owner so paths resolve)
+  # CRITICAL SAFETY: the home paths must NOT be bound over the volume, or shred would erase the VOLUME's data
+  # through the bind. Remove any binds, then refuse to proceed if any remain.
+  _bind_off
+  _binds_active && die "the volume is still BOUND over your home paths — refusing to scrub (would erase the volume). lock first."
+  is_mounted || die "mount the volume first so scrub can re-verify the copy exists before deleting (sudo field-personal unlock, then lock)"
   cmd_verify >/dev/null || die "verify failed — refusing to scrub"
   echo; c_red "  ⚠  This permanently removes the plaintext personal data from the internal disk."
   read -r -p "  Type ERASE-ORIGINALS to confirm: " ans; [ "$ans" = "ERASE-ORIGINALS" ] || die "aborted (nothing erased)"
@@ -214,6 +231,7 @@ cmd_scrub() {
   runuser -u "$owner" -- env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user stop "$SVC" || true
   for src in "${!MAP[@]}"; do
     [ -e "$src" ] || continue
+    mountpoint -q "$src" && { c_red "  ✗ $src is a mountpoint — SKIPPING (never shred through a bind)"; continue; }
     c_ylw "  shredding $src"
     find "$src" -type f -exec shred -u -n1 {} + 2>/dev/null || true
     rm -rf "$src"
