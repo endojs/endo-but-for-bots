@@ -801,13 +801,17 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   //    is a subset of ALL_POWERS minus the meta powers. Edit this list to curate the menu.
   const BUILTIN_AGENTS = [
     { id: 'dietician', name: '🥗 Dietician', domain: 'restaurant + diet safety', powers: ['dietician', 'web', 'reference', 'notes.dietician', 'contact', 'feed'],
+      // foldDocs: standing reference docs FOLDED into the persona at prompt-build time (read once, scope-jailed
+      // to foldScope) so the Dietician already HOLDS the family diet specs and never re-reads them turn after turn.
+      foldScope: 'Dietician',
+      foldDocs: ['Dietician/Diet Preferences.md', 'Dietician/Alexa — Diet.md', 'Dietician/Dan — Diet.md'],
       instructions: [
         "You are the Dietician — the household's restaurant + diet-safety agent, powered by a built-in scanning PIPELINE. To find + judge restaurants for ANY place, use the pipeline tools — never manually web-search to compile a restaurant list:",
         "1. dietScanArea(city, radiusMiles?) — sweeps an area's restaurants. Works for ANY place; a NEW one (e.g. Copenhagen, or a hotel name) is auto-geocoded. By default it sweeps ~5 mi (most of a city) up to ~80 candidates — to scan the WHOLE city leave radiusMiles off; for just a few miles around a hotel pass e.g. radiusMiles: 3 and use the hotel's name as the place. Call it ONCE, then move on. (If it returns NO candidates, say so + check the name — never fall back to a hand-made list.)",
         "2. dietEvaluateArea(city, limit?) — judges the scanned candidates against the person's diet (it READS the diet spec ITSELF — do NOT search/read notes to find it). It is SLOW (a few seconds per restaurant). Each verdict is SAVED as it lands, so a batch cut short by the turn limit keeps its progress. Call it ONCE per turn with a sensible batch (e.g. limit 12-20), then STOP and REPORT { evaluated, remaining, verdicts } and tell the user to say \"continue\" for the next batch. NEVER loop it many times in one turn — that's what blows the 6-minute time limit. To cover a whole big city just keep saying continue; progress accumulates.",
         "3. When all candidates are judged (remaining = 0): dietBuildMap() rebuilds the safe-eats map; dietRefreshSite(site) refreshes a published guide (propose→confirm; NEVER publish without confirmation).",
         "KEEP EVERY TURN SHORT + FOCUSED — one scan, OR one evaluate batch, OR one publish — then report. Do NOT chain many slow tools or loop a tool in a single turn; that's what blows the time limit.",
-        "You can read AND record into ONLY the vault's Dietician folder — the family diet specs ([[Alexa — Diet]], [[Dan — Diet]], index [[Diet Preferences]]) + dietician notes; you cannot see any other personal notes. READ: searchDietNotes / readDietNote (the specs are read by dietEvaluateArea automatically — only open them if the user asks about the diet itself; once you've read a spec this chat, REUSE it — don't re-read the same note every turn). RECORD: when you learn a new diet fact in conversation (a reaction, a trigger, a preference — e.g. 'Alexa reacts to corn, she suspects the sorbitol'), appendDietNote it into the relevant spec so it PERSISTS and you never re-derive it; use proposeDietNoteEdit (confirm-gated) to overwrite/correct a spec. Be skeptical about menus; when unsure prefer SKIP / UNKNOWN. Carry the city + person across the conversation.",
+        "The family diet specs (Diet Preferences + Alexa's + Dan's) are ALREADY FOLDED INTO YOUR CONTEXT above (under 'YOUR STANDING REFERENCE DOCUMENTS') — you HOLD them; answer diet questions straight from there and do NOT call searchDietNotes/readDietNote to fetch the diet (that's wasted work — they're already here). You can read AND record into ONLY the vault's Dietician folder; you cannot see any other personal notes. RECORD: when you learn a NEW diet fact in conversation (a reaction, a trigger, a preference — e.g. 'Alexa reacts to corn, she suspects the sorbitol'), appendDietNote it into the relevant spec so it PERSISTS (and folds in next time); use proposeDietNoteEdit (confirm-gated) to overwrite/correct a spec. Be skeptical about menus; when unsure prefer SKIP / UNKNOWN. Carry the city + person across the conversation.",
       ].join('\n') },
     { id: 'researcher', name: '🔎 Researcher', domain: 'deep multi-source research', powers: ['research', 'web', 'reference', 'browser', 'notes', 'jotNote', 'feed'],
       instructions: 'You are the Researcher. For any question, plan, search the web + your library in parallel, read the best sources, and synthesize a concise, CITED answer. Prefer primary sources and flag uncertainty. Use the research tool for big questions; web/browser/reference for the rest; jot durable findings to notes.' },
@@ -844,6 +848,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     id: a.id, name: a.name, domain: a.domain,
     powers: [...new Set(a.powers.filter(p => ALL_POWERS.includes(p)))],
     instructions: a.instructions, builtin: true, spawnedFrom: null,
+    foldDocs: Array.isArray(a.foldDocs) ? a.foldDocs.map(String) : [], foldScope: String(a.foldScope || ''),
   }));
   const builtinList = () => builtinSpecs.map(s => ({ id: s.id, name: s.name, domain: s.domain, powers: s.powers, autonomy: [], spawnedFrom: null, builtin: true }));
 
@@ -855,6 +860,25 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   const isBuiltinId = id => builtinSpecs.some(s => s.id === id);
   const builtinPersona = id => builtinPersonas[id] || (builtinSpecs.find(s => s.id === id) || {}).instructions || '';
   const setBuiltinPersona = (id, text) => { try { builtinPersonas[id] = String(text ?? ''); fs.mkdirSync(path.dirname(BUILTIN_PERSONAS_FILE), { recursive: true }); fs.writeFileSync(BUILTIN_PERSONAS_FILE, JSON.stringify(builtinPersonas, null, 2), { mode: 0o600 }); return harden({ ok: true, bytes: builtinPersonas[id].length }); } catch (e) { return harden({ ok: false, error: e.message }); } };
+
+  // FOLD-DOCS registry — the reusable "documents an agent always has on hand" pattern. Any agent id (a built-in
+  // specialist, or 'field-agent' for the entry agent) can have a list of vault-relative docs that get read once
+  // and folded into its system prompt, scope-jailed to foldScope. Overrides are persisted so the Agent editor can
+  // edit them; code defaults come from BUILTIN_AGENTS. Keyed by agent id → { foldDocs:[paths], foldScope }.
+  const FOLDDOCS_FILE = path.join(path.dirname(SPECIALISTS_FILE), 'fold-docs.json');
+  let foldDocsOverrides = {};
+  try { foldDocsOverrides = JSON.parse(fs.readFileSync(FOLDDOCS_FILE, 'utf8')) || {}; } catch { foldDocsOverrides = {}; }
+  const getFoldDocs = id => {
+    if (Object.prototype.hasOwnProperty.call(foldDocsOverrides, id)) { const o = foldDocsOverrides[id] || {}; return { foldDocs: (Array.isArray(o.foldDocs) ? o.foldDocs : []).map(String), foldScope: String(o.foldScope || '') }; }
+    const s = builtinSpecs.find(b => b.id === id);
+    return { foldDocs: (s && Array.isArray(s.foldDocs) ? s.foldDocs : []).map(String), foldScope: String((s && s.foldScope) || '') };
+  };
+  const setFoldDocs = (id, { foldDocs = [], foldScope = '' } = {}) => { try {
+    const clean = [...new Set((Array.isArray(foldDocs) ? foldDocs : []).map(p => String(p || '').replace(/^\/+/, '').trim()).filter(Boolean))];
+    foldDocsOverrides[String(id)] = { foldDocs: clean, foldScope: String(foldScope || '').replace(/^\/+/, '').replace(/\/+$/, '') };
+    fs.mkdirSync(path.dirname(FOLDDOCS_FILE), { recursive: true }); fs.writeFileSync(FOLDDOCS_FILE, JSON.stringify(foldDocsOverrides, null, 2), { mode: 0o600 });
+    return harden({ ok: true, count: clean.length });
+  } catch (e) { return harden({ ok: false, error: e.message }); } };
   // Per-chat scoped caps must SURVIVE RESTARTS (else a deployed/restarted server orphans every
   // confined chat — its cap 403s, the chat silently can't send). Persist {swiss, powers, label}
   // and re-register at boot, the same durability the root swiss already has.
@@ -2492,7 +2516,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         // Carry the originating request so the specialist's record shows what led to it.
         const lead = origin ? `The user's original request that led to this (context):\n"${String(origin).slice(0, 1200)}"\n\nWhat I'm asking you to do:\n` : '';
         try {
-          const r = await AGENT_RUNNER({ toolbox: sub.toolbox, manifest: sub.manifest, userText: lead + String(request || ''), persona: spec.instructions, signal: ac.signal,
+          const r = await AGENT_RUNNER({ toolbox: sub.toolbox, manifest: sub.manifest, userText: lead + String(request || ''), persona: await foldedPersonaFor(spec.id, spec.instructions), signal: ac.signal,
             onStep: s => {
               if (s.kind !== 'tool' || !s.result) return;
               if (s.result.proposed && s.result.id) proposalIds.push(s.result.id);
@@ -2582,6 +2606,37 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     readBytes: async (rel, opts) => { if (!underPrefix(String(rel || ''), pfx)) throw new Error('outside your notes folder'); return aff.notes.readBytes(rel, opts); },
     stats: async () => aff.notes.stats(),
   }); };
+
+  // foldDocsInto(persona, foldDocs, foldScope) — read an agent's standing reference docs ONCE and append them to
+  // its persona, so they are part of the system prompt from turn 1 (no per-turn re-read). Scope-jailed: a doc is
+  // only folded if it sits under foldScope (you can fold only what the agent is allowed to read), via the same
+  // makeNotesView attenuation that backs the notes power. Silently skips missing/empty/out-of-scope docs.
+  const FOLD_BUDGET = 200000; // chars (~50k tokens); ample on a 1M-token window, bounded for small models server-side
+  const foldDocsInto = async (persona, foldDocs, foldScope = '') => {
+    const paths = (Array.isArray(foldDocs) ? foldDocs : []).map(p => String(p || '').replace(/^\/+/, '').trim()).filter(Boolean);
+    if (!paths.length) return String(persona || '');
+    const scope = cleanNotesFolder(foldScope);
+    const view = makeNotesView(scope);
+    const parts = []; let budget = FOLD_BUDGET;
+    for (const rel of paths) {
+      if (budget <= 0) break;
+      if (scope && !underPrefix(rel, scope)) continue; // can fold only what the agent may read
+      let txt = ''; try { txt = String((await view.read(rel)) || ''); } catch { txt = ''; }
+      txt = txt.trim(); if (!txt) continue;
+      if (txt.length > budget) txt = `${txt.slice(0, budget)}\n…(truncated)`;
+      budget -= txt.length;
+      parts.push(`### ${rel}\n${txt}`);
+    }
+    if (!parts.length) return String(persona || '');
+    const block = `\n\nYOUR STANDING REFERENCE DOCUMENTS — part of your knowledge, loaded in full below. You ALREADY hold these; do NOT search for or re-read them — answer from this content directly:\n\n${parts.join('\n\n')}`;
+    return String(persona || '') + block;
+  };
+  // foldedPersonaFor(agentId, basePersona) — resolve the persona for an agent id (built-in override-aware) WITH its
+  // standing docs folded in. Used by the server for a top-level specialist turn and the entry agent.
+  const foldedPersonaFor = async (agentId, basePersona) => {
+    const { foldDocs, foldScope } = getFoldDocs(String(agentId || ''));
+    return foldDocsInto(basePersona, foldDocs, foldScope);
+  };
   const registerScoped = ({ swiss, powers, label, notesFolder = '' }) => {
     // notesFolder scopes the `notes` power to a single vault subtree (least authority); empty → whole vault.
     const notesBinding = (notesFolder && (Array.isArray(powers) ? powers : []).includes('notes')) ? () => makeNotesView(notesFolder) : null;
@@ -2637,7 +2692,12 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     nodeFor: swiss => locator.get(String(swiss || ''))?.node || null,
     // resolve a specialist by id/name → its CONFINED node + persona, so a chat can run AS it
     // (the entrypoint-agent picker). Returns null if there's no such specialist.
-    specialistFor: ref => { const spec = findSpecialist(ref); return spec ? harden({ id: spec.id, name: spec.name, node: getSpecNode(spec), persona: spec.builtin ? builtinPersona(spec.id) : (spec.instructions || ''), powers: [...spec.powers] }) : null; },
+    specialistFor: ref => { const spec = findSpecialist(ref); if (!spec) return null; const fd = getFoldDocs(spec.id); return harden({ id: spec.id, name: spec.name, node: getSpecNode(spec), persona: spec.builtin ? builtinPersona(spec.id) : (spec.instructions || ''), powers: [...spec.powers], foldDocs: fd.foldDocs, foldScope: fd.foldScope }); },
+    // fold an agent's standing reference docs into a persona (the reusable "documents on hand" pattern), and
+    // read/write the per-agent fold-docs config (used by the server's chat turn + the Agent editor).
+    foldedPersonaFor,
+    getFoldDocs: id => harden(getFoldDocs(String(id || ''))),
+    setFoldDocs: (id, cfg) => setFoldDocs(String(id || ''), cfg || {}),
     // resolve a published-site token → its directory (for the /sites/ host)
     siteDir: token => sites.get(String(token || '')) || null,
     downloadFor,

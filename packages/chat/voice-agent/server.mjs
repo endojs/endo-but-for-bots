@@ -493,7 +493,7 @@ const fillSpecialist = process.env.SELF_HEAL === '0' ? undefined : async ({ name
 // makeFieldAgent runs before `blossom` exists, so the server populates `customView.register` below; the tool
 // reads it at call-time. This is the seam that lets a NORMAL chat agent (visible in the trace) be the studio.
 const customView = {};
-const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, haResolveReadOnly, changelog } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL, fillSpecialist, customView });
+const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, foldedPersonaFor, getFoldDocs, setFoldDocs, haResolveReadOnly, changelog } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL, fillSpecialist, customView });
 liveCells = makeLiveCells({ nodeFor }); // browser-subscribable live grains (cap-gated)
 // Least-authority cross-user share tokens for a broken-out component: subscribe-only to its frozen cells.
 const componentShares = makeComponentShares({ file: `${HOME}/.local/state/voice-agent/component-shares.json`, makePurse, purseStore });
@@ -1326,10 +1326,15 @@ const handler = async (req, res) => {
       // SPECIALIST to run AS — the turn executes with the specialist's CONFINED ring + persona (not
       // root). Only a cap that OWNS specialists (root, or one holding `specialists`) may act as one.
       let runNode = node, runPersona = getPersona();
+      let runAgentId = 'field-agent';
       if (agent && agent !== 'field-agent' && (node.isRoot || node.powers.has('specialists'))) {
         const spec = specialistFor(agent);
-        if (spec) { runNode = spec.node; runPersona = spec.persona || getPersona(); }
+        if (spec) { runNode = spec.node; runPersona = spec.persona || getPersona(); runAgentId = spec.id; }
       }
+      // Fold this agent's STANDING reference docs into its persona (read once, scope-jailed) — the reusable
+      // "documents always on hand" pattern, so e.g. the Dietician already holds the family diet specs and never
+      // re-reads them every turn. No-op for an agent with no foldDocs configured.
+      try { runPersona = await foldedPersonaFor(runAgentId, runPersona); } catch (e) { log('foldDocs', e.message); }
       const sid0 = String(sessionId || 'anon').slice(0, 64);
       // the chat's home folder: its project's shared folder if filed under one, else the root agent's home.
       const chatProject = runNode.isRoot ? projects.projectForChat(sid0) : null;
