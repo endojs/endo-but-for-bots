@@ -35,6 +35,30 @@ const runProgram = async (code, endow) => {
 const safeJson = v => { try { return JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? String(x) : x)); } catch { return String(v); } };
 const clip = (s, n) => { const t = String(s == null ? '' : s); return t.length > n ? `${t.slice(0, n)}…[${t.length - n} more chars]` : t; };
 
+// Classify an error from a tool call as a RECOVERABLE (transient) NETWORK error — the kind that a
+// single immediate retry can paper over: connection resets/timeouts, DNS/socket hiccups, generic
+// `fetch failed`, and transient HTTP status codes (429 Too Many Requests, 502/503/504 gateway/
+// unavailable/timeout). Deterministic faults (bad args, 4xx other than 429, application `ok:false`)
+// return false so they are NOT retried. Inspects the error's `code`, `name`, `status`/`statusCode`,
+// the wrapped `cause`, and the message text.
+const RECOVERABLE_NET_CODES = new Set([
+  'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ECONNABORTED', 'EPIPE',
+  'EAI_AGAIN', 'ENOTFOUND', 'EHOSTUNREACH', 'ENETUNREACH', 'ENETDOWN', 'ESOCKETTIMEDOUT',
+  'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET',
+]);
+const RECOVERABLE_HTTP_STATUS = new Set([429, 502, 503, 504]);
+export const isRecoverableNetworkError = err => {
+  if (!err) return false;
+  const code = err.code || (err.cause && err.cause.code);
+  if (code && RECOVERABLE_NET_CODES.has(code)) return true;
+  const status = err.status ?? err.statusCode ?? (err.cause && (err.cause.status ?? err.cause.statusCode));
+  if (typeof status === 'number' && RECOVERABLE_HTTP_STATUS.has(status)) return true;
+  if (err.name === 'AbortError' && /timeout/i.test(String(err.message || ''))) return true;
+  const msg = `${err.message || ''} ${(err.cause && err.cause.message) || ''}`.toLowerCase();
+  if (/\bfetch failed\b|network (error|timeout)|socket hang up|connection (reset|refused|closed|timed? ?out)|request timed? ?out|temporarily unavailable/.test(msg)) return true;
+  return false;
+};
+
 // Extract a JS program from the model reply: a ```js fenced block (preferred), else a bare ``` block.
 const extractCode = reply => {
   const s = String(reply || '');
@@ -54,10 +78,24 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
   // Wrap every toolbox verb as an async fn the program can call: `await name(args)`. Each emits the
   // same onStep events as the classic loop, so the trace/pendant + toolsUsed keep working.
   // wrap one invocation so it emits the trace + records usage + never throws past the sandbox.
+  // Run the tool's underlying call ONCE, retrying EXACTLY ONCE on a RECOVERABLE network error.
+  // Transient transport faults (ECONNRESET, ETIMEDOUT, fetch failures, 429/502/503/504, …) are
+  // worth a single immediate retry — they often succeed on the second attempt — whereas a
+  // deterministic error (bad args, a real `ok:false` result) must NOT be retried (it would just
+  // fail again and waste a round-trip). So we retry only when isRecoverableNetworkError(e) is true.
+  const callWithRetry = async (label, fn, args) => {
+    try {
+      return await fn(args);
+    } catch (e) {
+      if (!isRecoverableNetworkError(e)) throw e;
+      onStep({ kind: 'tool-retry', name: label, error: (e && e.message) || String(e) });
+      return await fn(args); // single retry
+    }
+  };
   const wrapCall = (label, fn) => harden(async (args = {}) => {
     if (signal?.aborted) throw new Error('aborted');
     onStep({ kind: 'tool-start', name: label, args });
-    try { const r = await fn(args || {}); used.push({ name: label, args, result: r }); onStep({ kind: 'tool', name: label, args, result: r }); return r; }
+    try { const r = await callWithRetry(label, fn, args || {}); used.push({ name: label, args, result: r }); onStep({ kind: 'tool', name: label, args, result: r }); return r; }
     catch (e) { onStep({ kind: 'tool-error', name: label, error: (e && e.message) || String(e) }); return harden({ ok: false, error: (e && e.message) || String(e) }); }
   });
   const argSig = a => Object.keys(a || {}).length ? 'args' : '';
