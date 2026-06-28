@@ -826,15 +826,20 @@ const reapplyExpanded = () => { const key = expandedApplet[sessionId]; if (!key)
 addEventListener('keydown', e => { if (e.key === 'Escape') { const w = log.querySelector('.gw-component.applet-expanded'); if (w) minimizeApplet(w); } }); // Esc minimizes
 
 const renderAgentResponse = r => {
-  if (_arr(r.steps).length) log.appendChild(traceGeometry(r.steps)); // the SVG trace sits ABOVE the message (tap it for the 3D); the 3D pendant is reserved for the live "working" animation
+  // The ANSWER bubble must render even if an auxiliary part (trace SVG, a widget, a Grant/proposal/ask card)
+  // throws on malformed data — otherwise one bad card swallows the whole turn (the "answer + the permission
+  // request both vanished" bug). Each piece is isolated; the answer comes first and unconditionally.
+  try { if (_arr(r.steps).length) log.appendChild(traceGeometry(r.steps)); } catch (e) { console.error('traceGeometry failed', e); } // the SVG trace sits ABOVE the message (tap it for the 3D)
   const body = bubble('agent', r.answer || '…', r.agentId, Date.now());
   if (r.toolsUsed?.length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + r.toolsUsed.join(', '); body.parentNode.appendChild(e); }
   ((r.images && r.images.length ? r.images : (r.imageUrls || [])) || []).forEach(src => { const im = document.createElement('img'); im.src = src; body.appendChild(im); }); // data-URLs in the moment; durable /uploads urls as fallback (e.g. the share-post path)
-  if (Array.isArray(r.ui) && r.ui.length) renderWidgets(body, r.ui, { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet }); // live/interactive widgets (countdowns, live status, choices, custom components)
+  try { if (Array.isArray(r.ui) && r.ui.length) renderWidgets(body, r.ui, { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet }); } catch (e) { console.error('renderWidgets failed', e); } // live/interactive widgets
   (r.autoFired || []).forEach(a => { const e = document.createElement('div'); e.className = 'autofired'; e.textContent = `✓ auto-confirmed: ${a.title}${a.ok === false ? ' (failed)' : ''}`; body.parentNode.appendChild(e); }); // fired via a "don't ask again" rule
-  (r.proposals || []).forEach(renderProposal); // destructive actions show as confirmable cards
-  (r.accessRequests || []).forEach(renderAccessRequest); // requestAccess → an actionable Grant card
-  (r.asks || []).forEach(a => { openAsks.unshift(a); renderAskCard(a); }); // typed questions → answerable cards
+  // Each card renders INDEPENDENTLY — one malformed proposal/access-request/ask must never abort the rest
+  // (the answer is already shown above; a throwing Grant card used to swallow the whole turn's render).
+  (r.proposals || []).forEach(p => { try { renderProposal(p); } catch (e) { console.error('renderProposal failed', e); } }); // destructive actions show as confirmable cards
+  (r.accessRequests || []).forEach(a => { try { renderAccessRequest(a); } catch (e) { console.error('renderAccessRequest failed', e); } }); // requestAccess → an actionable Grant card
+  (r.asks || []).forEach(a => { try { openAsks.unshift(a); renderAskCard(a); } catch (e) { console.error('renderAskCard failed', e); } }); // typed questions → answerable cards
   if (r.asks?.length) refreshBadge();
   refreshTraceApp(); // push the new turn to the iframe trace app if it's open
   window.scrollTo(0, document.body.scrollHeight);
@@ -1254,12 +1259,18 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     if (!stale()) {
       const dropped = /Failed to fetch|NetworkError|load failed|aborted|gateway-timeout/i.test(e.message || '');
       if (dropped) {
-        // The connection dropped mid-run (usually a server restart). Do NOT persist a dead agent turn —
-        // that would bury the user turn and block auto-resume. Leave the user turn unanswered, show a
-        // transient status, and auto-retry shortly; reattachRun also re-runs it the next time the chat opens.
-        setStatus('⚠️ interrupted (the server may have restarted) — resuming…'); try { pendantEnd([]); } catch {}
+        // Two cases land here, and BOTH want a RE-ATTACH, not a blind re-run:
+        //  (a) gateway-timeout — a long turn (e.g. Opus) outlived the PUBLIC PROXY's request window, but it is
+        //      STILL RUNNING (or already finished) server-side. Re-running it would just hit the same proxy
+        //      timeout again AND abort the in-flight run — so the completed answer never renders (the "long
+        //      Opus voice-note never comes back" stall).
+        //  (b) the connection genuinely dropped (server restart) — the server may have no record.
+        // reattachRun handles both: it renders a finished result, POLLS a still-running one to completion, and
+        // falls back to a reconstruct+re-run ONLY when the server truly has no record (rr.state === 'none').
+        // Don't persist a dead agent turn — leave the user turn unanswered so re-attach/auto-resume can heal it.
+        setStatus('⏳ still working on the server — reattaching (safe to leave; the answer will land here)…'); try { pendantEnd([]); } catch {}
         const sidAtDrop = sessionId;
-        setTimeout(() => { if (!busy && sessionId === sidAtDrop) resumeIfPending(sidAtDrop, { reconstruct: true }).catch(() => {}); }, 2200);
+        setTimeout(() => { if (!busy && sessionId === sidAtDrop) reattachRun(sidAtDrop).catch(() => {}); }, 1800);
       } else {
         const msg = '⚠️ Something went wrong: ' + e.message;
         setStatus(''); try { renderAgentResponse({ answer: msg }); } catch {} pushTx('agent', msg, {}); try { pendantEnd([]); } catch {}
