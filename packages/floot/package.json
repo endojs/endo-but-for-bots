@@ -29,7 +29,7 @@
     "lint:eslint": "eslint '**/*.js'"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.95.1",
+    "@anthropic-ai/sdk": "^0.105.0",
     "@endo/conversation-tree": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",

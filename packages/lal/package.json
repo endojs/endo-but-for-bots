@@ -35,7 +35,7 @@
     "test:xs": "exit 0"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.95.1",
+    "@anthropic-ai/sdk": "^0.105.0",
     "@earendil-works/pi-agent-core": "^0.79.0",
     "@earendil-works/pi-ai": "^0.79.0",
     "@endo/agentry": "workspace:^",
