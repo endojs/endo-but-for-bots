@@ -159,11 +159,20 @@ _set_service_mode() {
 cmd_migrate() {
   is_mounted || die "the volume is not mounted — run: sudo field-personal unlock"
   command -v rsync >/dev/null || die "rsync not installed"
+  # Some targets NEST under another (e.g. config/kazputer-phone + config/gator-pay live under config/, which
+  # is itself the target of ~/.config/field-agent). A naive `--delete` on the parent would wipe the nested
+  # child copied from a DIFFERENT source. So for each sync we EXCLUDE any other target nested beneath it →
+  # order-independent + correct.
+  local -a dsts=(); for s in "${!MAP[@]}"; do dsts+=("${MAP[$s]}"); done
   for src in "${!MAP[@]}"; do
     [ -e "$src" ] || continue
-    local dst="$MOUNT/${MAP[$src]}"; mkdir -p "$dst"
-    c_ylw "  copying $src → $dst"
-    rsync -a --delete "$src"/ "$dst"/
+    local rel="${MAP[$src]}"; local dst="$MOUNT/$rel"; mkdir -p "$dst"
+    local -a ex=()
+    for other in "${dsts[@]}"; do
+      case "$other" in "$rel"/*) ex+=( "--exclude=/${other#"$rel"/}" );; esac
+    done
+    c_ylw "  copying $src → $dst${ex[*]:+  (keeping nested: ${ex[*]//--exclude=\//})}"
+    rsync -a --delete "${ex[@]}" "$src"/ "$dst"/
   done
   # The keys the VOICE-AGENT itself needs (the agent's own inference + HA), copied to a volume-local env so
   # personal mode reads them FROM the drive. This is a SUBSET of the host-wide ~/.env (which other services
