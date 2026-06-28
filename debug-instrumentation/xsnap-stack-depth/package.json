@@ -1,0 +1,1 @@
+{"name":"endo-beta2","private":true,"type":"module","dependencies":{"@endo/eventual-send":"^1.5.0","@endo/init":"^1.1.13","@endo/marshal":"^1.8.0","@endo/pass-style":"^1.6.3","@endo/patterns":"^1.7.0","ses":"^1.15.0"}}
