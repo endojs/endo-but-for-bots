@@ -1,6 +1,8 @@
 # Control signals as scope functions, not text markers (`answer()`, not `ANSWER:`)
 
-Status: captured idea (dan, 2026-06-27) — not yet implemented.
+Status: `answer()` SHIPPED (2026-06-27, codemode.mjs + codemode-answer.test.mjs). The agent now delivers
+its final reply by calling `answer(text)` in its program; `ANSWER:` survives only as a back-compat
+fallback. `ask()` / `blocked()` and the `TOOL_CALL`/empty-nudge markers remain future work (below).
 
 ## The principle
 
