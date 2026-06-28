@@ -205,6 +205,12 @@ harden(buildUserContent);
 // `signal` (AbortSignal) makes the whole run retractable: between steps and during an abortable
 // tool, a cancel stops the turn and revokes any in-flight op. commit-only tools simply aren't
 // reached once cancelled. (commit-only vs reversible declared in the manifest.)
+// LEGACY loop — uses TEXT MARKERS (`TOOL_CALL: {json}` to act, `ANSWER:` to finish). SUPERSEDED by CodeMode
+// (runAgentCode), where tool invocation and the turn-enders are SCOPE FUNCTIONS, not in-band markers. Kept only
+// as the `AGENT_CODEMODE=0` fallback. Why the marker protocol is worse: a marker is an in-band, forgeable string
+// — content that merely mentions `TOOL_CALL:`/`ANSWER:` collides with the control channel — and is markdown-/
+// format-fragile. The function protocol (and the measured difference) is specced in
+// eval/obstacles/10-control-protocol. Do NOT extend this loop; evolve CodeMode.
 export const runAgent = async ({ toolbox, manifest, userText, history = [], onStep = () => {}, signal, persona = '', attachments = [], model = 'default', llm, budgetLine = '' } = {}) => {
   // `invoke` is the inference seam: a metered llm (meter.mjs) when the caller supplies one
   // (the /chat path), else the bare callLLM. A metered llm can return { exhausted:true } —

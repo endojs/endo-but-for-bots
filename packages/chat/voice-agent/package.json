@@ -16,6 +16,7 @@
     "test:alt-fork": "node alt-click-fork.staging.test.cjs",
     "test:component-select": "node component-select.staging.test.cjs",
     "test:shape": "node shape-graph.staging.test.cjs",
+    "test:control-protocol": "node --test eval/obstacles/10-control-protocol/spec.test.mjs",
     "test:trace": "node trace-fanout.staging.test.cjs",
     "test:agent-menu": "node agent-menu.staging.test.cjs",
     "test:fork-upgrade": "node fork-upgrade.staging.test.cjs",
