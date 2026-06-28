@@ -30,7 +30,15 @@
 
 set -euo pipefail
 
-HOME_DIR="${HOME:-/home/dan}"
+# Resolve the REAL operator's home even under sudo (sudo sets HOME=/root). Everything personal — the
+# data sources, the metadata file, the service owner — keys off the invoking user, never root.
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+  HOME_DIR="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+  OWNER="$SUDO_USER"
+else
+  HOME_DIR="${HOME:-/home/dan}"
+  OWNER="$(id -un)"
+fi
 MAPPER="field-personal"                 # /dev/mapper/field-personal when unlocked
 MOUNT="${FIELD_PERSONAL_MOUNT:-/mnt/field-personal}"
 META="$HOME_DIR/.config/field-agent-volume.json"   # NON-secret: just the LUKS UUID of YOUR drive (no key)
@@ -134,7 +142,7 @@ cmd_lock() {
 # Flip the systemd --user service between modes by writing a drop-in that (un)sets FIELD_PERSONAL_ROOT,
 # then restart. Run as the service's user (we were invoked with sudo, so reach back via the login user).
 _set_service_mode() {
-  local mode="$1"; local owner; owner="$(stat -c %U "$HOME_DIR")"
+  local mode="$1"; local owner="$OWNER"
   local dropin_dir="$HOME_DIR/.config/systemd/user/$SVC.service.d"
   local dropin="$dropin_dir/personal-mode.conf"
   runuser -u "$owner" -- mkdir -p "$dropin_dir"
@@ -193,7 +201,7 @@ cmd_scrub() {
   echo; c_red "  ⚠  This permanently removes the plaintext personal data from the internal disk."
   read -r -p "  Type ERASE-ORIGINALS to confirm: " ans; [ "$ans" = "ERASE-ORIGINALS" ] || die "aborted (nothing erased)"
   # stop the service first so it isn't reading the dirs as they go
-  local owner uid; owner="$(stat -c %U "$HOME_DIR")"; uid="$(id -u "$owner")"
+  local owner uid; owner="$OWNER"; uid="$(id -u "$owner")"
   runuser -u "$owner" -- env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user stop "$SVC" || true
   for src in "${!MAP[@]}"; do
     [ -e "$src" ] || continue
