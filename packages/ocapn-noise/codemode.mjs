@@ -84,11 +84,20 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
   }
   // introspect ANY object reference you hold — returns its callable method names (Endo or plain).
   endow.methodsOf = harden(o => { try { return o && typeof o.__getMethodNames__ === 'function' ? [...o.__getMethodNames__()] : (o && typeof o === 'object' ? Object.keys(o) : []); } catch { return []; } });
+  // FINAL ANSWER as a SCOPE FUNCTION, not an `ANSWER:` text marker (dan's principle: control signals are
+  // first-class functions in the JS scope, never conventions parsed out of prose — text markers are
+  // markdown-/format-/whitespace-fragile). The program calls `answer(text)` to deliver its reply to the user
+  // and END the turn: it records the reply and throws a private sentinel to unwind immediately; the loop
+  // intercepts the captured `finalAnswer` BEFORE treating that unwind as a program error.
+  let finalAnswer = null;
+  const ANSWER_SENTINEL = '__codemode_answer__';
+  endow.answer = harden(text => { finalAnswer = String(text == null ? '' : text); throw new Error(ANSWER_SENTINEL); });
   // Expose your OWN prompt as read-only variables so you can reference it — or pass a SLICE of it as
   // context to a delegate (e.g. delegateTask({ prompt: `${myPersona}\n\n<the sub-task>` })). myPersona is
   // your operator-confirmed instructions; mySystemPrompt is your full assembled system prompt.
   endow.myPersona = harden(String(persona || ''));
   apiLines.push('  const myPersona = <string: your operator-confirmed instructions>; const mySystemPrompt = <string: your FULL system prompt>. Read-only. Reference them, or pass a slice as context to a delegate — e.g. delegateTask({ prompt: `${myPersona.slice(0, 600)}\\n\\n<sub-task>`, ... }).');
+  apiLines.push('  answer(text): deliver your FINAL reply to the user and END the turn. This is HOW you reply — call it when the task is done (or to explain plainly what blocked you). Do NOT use an "ANSWER:" text marker; `answer("…")` is the reply mechanism. `return` is only for INSPECTING an intermediate value as OUTPUT.');
   const api = apiLines.join('\n');
   // Accepted INVENTORY objects are now FIRST-CLASS live in-scope objects in `api` above: the toolbox builds a
   // manifest entry with methods[] for each callable accepted object, so the methods[] branch renders it as
@@ -107,7 +116,7 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     'These ARE tools. If you hold a reference to an object (a peer, a device, a contact, a service), it is live — call its methods directly. Unsure what an object offers? `methodsOf(obj)` returns its callable method names. Never say you "cannot" use something that is in scope — call it and read the result.',
     'OBJECTS YOU HOLD ARE LIVE — CALL THEM DIRECTLY. Every Endo object you have accepted appears ABOVE as a live in-scope object; invoke its methods by PROPERTY ACCESS, never by a method-name string: `await Kumavis.send("hi")`, `await Kumavis.inbox()`. Do NOT write `callObject("Kumavis", "send", ...)` for an object that is already in scope, and do NOT guess a bare global like `kumavis(...)` (that is not how you call it). The only time you reach for callObject(name, "describe") is to introspect a NEWLY accepted object whose methods are not yet listed — once described it becomes a live in-scope object too. methodsOf(obj) lists any held reference\'s methods. If a call FAILS (unreachable peer, an error result) that IS the answer: report what you tried + what it said and move on — never retry the same failing call or re-accept the same invite in a loop.',
     '',
-    'ANSWER DIRECTLY WHEN YOU CAN — if the user asks a QUESTION you can answer from your own knowledge, and it needs no live/private data, no action, and nothing destructive, just reply on one line with `ANSWER: <your reply>` immediately. Do NOT write a program, call a tool, or delegate/spawn a sub-agent merely to answer something you already know — that adds a wasted cycle and spends credits. Reach for tools or delegation only when you genuinely need to ACT, to fetch data you do not have, or to do work that truly belongs elsewhere. Prefer answering over delegating.',
+    'ANSWER DIRECTLY WHEN YOU CAN — if the user asks a QUESTION you can answer from your own knowledge, and it needs no live/private data, no action, and nothing destructive, just reply immediately with a one-line program that calls `answer(...)`:\n```js\nanswer("<your reply>");\n```\nDo NOT call a tool or delegate/spawn a sub-agent merely to answer something you already know — that adds a wasted cycle and spends credits. Reach for tools or delegation only when you genuinely need to ACT, to fetch data you do not have, or to do work that truly belongs elsewhere. Prefer answering over delegating.',
     'DO YOUR OWN TOOL WORK — do NOT delegate it. If a task is within YOUR tools, just call them and answer (e.g. "is the front door open?" = haFind/haState, then reply). Delegate or employ a sub-agent ONLY when (a) the scope is genuinely too big for one agent (multi-stage work better split across sub-agents or needing a bigger model), OR (b) it involves potentially destructive actions you want carried out by a confined, least-authority sub-agent. A simple read, lookup, or single-tool action is NEVER a reason to delegate.',
     'HOW TO ACT (when the task does need tools) — reply with a single fenced JavaScript program:',
     '```js',
@@ -115,14 +124,14 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     "const hits = await searchNotes({ query: 'budget' });",
     'return hits;   // `return` your result (or console.log intermediate values)',
     '```',
-    'The program runs in a SECURE SANDBOX: only the capabilities above + console + methodsOf exist. There is no filesystem, network, process, or import — only your granted capabilities. `await` any capability call. `return` a value to inspect it (you will see it as OUTPUT), or `console.log(...)` to trace.',
-    'BIAS TO ACTION: prefer few, well-composed programs over many round-trips — BUT keep each program SHORT enough to finish in one reply (always close the ``` fence). If a task is large, do it across several smaller programs (gather → inspect OUTPUT → act), not one giant block. After OUTPUT, write another program or give your final reply on one line prefixed with `ANSWER:`.',
+    'The program runs in a SECURE SANDBOX: only the capabilities above + console + methodsOf + answer exist. There is no filesystem, network, process, or import — only your granted capabilities. `await` any capability call. `return` a value to INSPECT it (you will see it as OUTPUT, an intermediate step), `console.log(...)` to trace, and call `answer(text)` to deliver your FINAL reply and end the turn.',
+    'BIAS TO ACTION: prefer few, well-composed programs over many round-trips — BUT keep each program SHORT enough to finish in one reply (always close the ``` fence). If a task is large, do it across several smaller programs (gather → inspect OUTPUT → act), not one giant block. After OUTPUT, write another program, or call `answer(text)` to give your final reply.',
     'EXTRACT ONCE, THEN OPERATE ON THE STRUCTURE: when a task draws on a DOCUMENT or DATASET across MULTIPLE turns (a PDF schedule, a long page, a table, a transcript), do NOT re-read + re-parse the raw source every prompt — that is slow, spends tokens, and re-derives the same facts. On the FIRST pass, parse the facts you need into a DURABLE DATA STRUCTURE and reuse THAT: save structured JSON to your home folder (fileWrite → fileRead it on later turns), or — best — proposeTool / forgeTool a small grain-backed tool that ingests the data ONCE and exposes query methods (getEventsAt, filterBy, …), or back a component with a grain cell that holds the parsed data. Then on later turns you MANAGE THE DATA PROGRAMMATICALLY (query/filter/transform the structure) instead of re-parsing the original.',
     'WHEN A TASK NEEDS TOOLS, USE THE BREADTH OF YOUR TOOLKIT — the strongest results come from distributing work ACROSS the capabilities you hold and composing them, not fixating on one or two. (This is about HOW to do real work — it is NOT a reason to invoke tools for a question you could just answer.) And act with PRECISION: prefer specific, targeted moves (the exact note, the exact device, the precise parameter/recipient) over broad, coarse ones.',
     'PLAN FIRST, THEN ACT: before you start, think through every step the task needs end to end — INCLUDING how you will PRODUCE and PUBLISH its output (a page, graph, file, image). If a step needs a capability that is NOT in your scope above, do NOT silently give up or fake it — call `requestAccess({ power, why })` (always available) so the owner can grant it, then tell the user you have requested it and what you will do once granted. A capability you reference but were not granted will throw "is not defined"; that means you must requestAccess for it, not work around it.',
     'PROPOSE FREELY, IN PARALLEL, AND CONTINUOUSLY: a single response MAY launch MANY sub-agents and proposals — call delegateTask/employ/proposeSpawnSpecialist/proposeTool several times in one program; do not artificially stop at one. Give each delegate/specialist you create a MEMORABLE, HUMAN pet name (the `nickname` arg) — a short evocative two-word name like "Cobalt Otter" or "Scandinavian Airline Agent", NEVER a code or id — so it reads nicely in the chat/trace and as the proposer of anything it builds. (If you omit one, a friendly pet name is auto-assigned — but you naming it is better.) When you are processing an ONGOING or STREAMING feed of information (a live multi-speaker transcript, a wearable\'s audio stream, a long document arriving in pieces), stay in a continuously-helpful posture: surface AS MANY genuinely useful, well-scoped suggestions/delegations/proposals as the available information supports — each nicknamed — rather than a single summary, and keep doing so as new information arrives.',
-    'When the task is complete, reply with `ANSWER: <your concise reply to the user>` (no code block).',
-    'ALWAYS finish with an `ANSWER:` line — even if you were BLOCKED or something FAILED. Never end silently or with an empty reply. If you could not finish, say plainly what you accomplished, what you could not, and why (e.g. a capability you had to requestAccess for). A clear "here is what stopped me" is required; going quiet is a bug.',
+    'When the task is complete, deliver your reply by calling `answer("<your concise reply to the user>")` — it ENDS the turn. (`answer` is always in scope, alongside methodsOf/requestAccess.) Call it as the LAST thing your program does.',
+    'ALWAYS finish by calling `answer(...)` — even if you were BLOCKED or something FAILED. Never end silently or with an empty reply. If you could not finish, `answer(...)` with a plain account of what you accomplished, what you could not, and why (e.g. a capability you had to requestAccess for). A clear "here is what stopped me" is required; going quiet is a bug.',
   ].filter(Boolean).join('\n');
   // the full system prompt is now assembled — expose it read-only so the program can pass slices to delegates.
   endow.mySystemPrompt = harden(sys);
@@ -175,8 +184,14 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     if (signal?.aborted) return cancelled();
     const reply = (out && out.text) || '';
     const code = extractCode(reply);
-    if (!code) { // no program → treat as the final answer; if it's empty, the MODEL produced nothing
+    if (!code) { // no program → BACK-COMPAT fallback: treat bare prose as the final answer (the primary path is
+      // now a program that calls answer()). Strip a legacy `ANSWER:` marker if present. If it's empty, the MODEL
+      // produced nothing.
       let answer = reply.replace(/^ANSWER:\s*/i, '').trim();
+      // SAFETY NET: a weaker model may emit a bare `answer("…")` call WITHOUT a ```js fence (so extractCode
+      // missed it) — unwrap the string argument so the user sees the message, not the literal call text.
+      const bare = /^answer\(\s*(['"`])([\s\S]*)\1\s*\)\s*;?$/i.exec(answer);
+      if (bare) answer = bare[2];
       if (!answer) {
         // The model returned NOTHING — no program, no answer. This is a MODEL stall (common with the local
         // default on a multi-step action / follow-up), NOT the user being unclear. NUDGE it to use the
@@ -185,7 +200,7 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
         if (emptyRetries < 2 && !signal?.aborted) {
           emptyRetries += 1;
           onStep({ kind: 'tool-error', name: 'model', error: 'empty response — nudging to use context + act' });
-          messages.push({ role: 'user', content: 'You returned an empty response. Use the conversation ABOVE for context (e.g. a device/object/peer already identified earlier in this chat — refer to it directly). Then either WRITE a ```js program that uses your tools to DO the task, or ask ONE specific clarifying question, or reply `ANSWER: <text>`. Do not return nothing.' });
+          messages.push({ role: 'user', content: 'You returned an empty response. Use the conversation ABOVE for context (e.g. a device/object/peer already identified earlier in this chat — refer to it directly). Then either WRITE a ```js program that uses your tools to DO the task, or ask ONE specific clarifying question, or reply by calling `answer("<text>")` in a program. Do not return nothing.' });
           continue;
         }
         answer = lastError ? stallMessage(lastError)
@@ -198,6 +213,11 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     onStep({ kind: 'code', code });
     const r = await runProgram(code, endow);
     if (signal?.aborted) return cancelled();
+    // The program called answer(text) → that IS the final reply, delivered as a scope function (not parsed from
+    // prose). Return it BEFORE touching r.ok/r.error: the answer() sentinel unwind shows up as a program "throw",
+    // but the captured finalAnswer supersedes it. (A program that set the answer then hit a real error still
+    // delivers the answer — better than going silent.)
+    if (finalAnswer != null) { const a = finalAnswer; onStep({ kind: 'answer', text: a }); return harden({ answer: a, toolsUsed: used }); }
     const parts = [];
     if (r.logs.length) parts.push(`logs:\n${clip(r.logs.join('\n'), 8000)}`);
     if (r.ok) { parts.push(`returned: ${clip(safeJson(r.value), 12000)}`); repeatErr = 0; failStreak = 0; lastError = ''; }
@@ -209,7 +229,7 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
       const undef = /^(?:Uncaught )?ReferenceError: (\w[\w$]*) is not defined|^(\w[\w$]*) is not defined/.exec(err);
       const bad = undef && (undef[1] || undef[2]);
       if (bad) {
-        const helpers = new Set(['methodsOf', 'myPersona', 'mySystemPrompt', 'requestAccess', 'console']);
+        const helpers = new Set(['methodsOf', 'myPersona', 'mySystemPrompt', 'requestAccess', 'answer', 'console']);
         const real = Object.keys(endow).filter(k => !helpers.has(k)).sort();
         err = `no tool named "${bad}" — you invented it; it is not in scope. Your ACTUAL tools are: ${real.join(', ') || '(none)'}. `
           + `If "${bad}" is a real capability you need but don't have, call requestAccess({ power: "${bad}", why: "…" }) ONCE — do not keep calling "${bad}". `
