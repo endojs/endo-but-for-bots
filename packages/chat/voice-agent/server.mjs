@@ -1352,6 +1352,14 @@ const handler = async (req, res) => {
       runs.get(sid)?.abort();
       const ac = new AbortController(); runs.set(sid, ac);
       const startedAt = Date.now();
+      // EVERY turn logs its OUTCOME + DURATION on the way out — so a stall is diagnosable from logs alone:
+      // a `turn-done … done … 95000ms … opus` line says the turn FINISHED server-side and was slow enough that
+      // the inline response likely outran the public proxy's window (→ the client must re-attach to deliver it).
+      // A turn that logs `chat:` (start) with no matching `turn-done` is genuinely stuck (no return path hit).
+      const PROXY_WINDOW_MS = Number(process.env.PROXY_WINDOW_MS) || 55000; // ~ngrok edge request window
+      const turnDone = (outcome, extra = '') => { const ms = Date.now() - startedAt;
+        log('turn-done:', sid, '|', outcome, '|', `${ms}ms`, '| model', String(model || 'default'), '| agent', runNode.id,
+          ms > PROXY_WINDOW_MS ? '| ⚠️ exceeded proxy window — inline response may not reach the client (client re-attaches via /chat/result)' : '', extra); };
       // mark this session as RUNNING server-side so a reopened tab can re-attach (vs. losing the run).
       setRunResult(sid, { state: 'running', node: runNode, text: t, startedAt });
       if (!resumeMessages) resetStepBuffer(sid); // fresh turn → fresh live-trace buffer (a resume keeps building the same trace)
@@ -1390,7 +1398,7 @@ const handler = async (req, res) => {
       const askIds = []; // structured typed questions the agent raised this turn (rendered inline)
       const accessRequests = []; // requestAccess(power) calls → an ACTIONABLE Grant card client-side
       const steps = []; // ordered tool calls this turn; delegateTask nests its sub-agent's tools (sub-branch trees)
-      log('chat:', JSON.stringify(t).slice(0, 80), '| powers:', [...runNode.powers].join(','), agent && agent !== 'field-agent' ? `| as:${agent}` : '', agentAttachments.length ? `| +${agentAttachments.length} attachment(s)` : '');
+      log('chat:', sid, JSON.stringify(t).slice(0, 80), '| model', String(model || 'default'), '| powers:', [...runNode.powers].join(','), agent && agent !== 'field-agent' ? `| as:${agent}` : '', agentAttachments.length ? `| +${agentAttachments.length} attachment(s)` : '');
       // prepaid inference toll-bridge: meter THIS chat's purse; show the agent its budget in-context.
       // (perProvider was declared above so the delegate path and callLLM share one ledger.)
       const meteredLLM = makeMeteredLLM({ callLLM, purse, perProvider });
@@ -1478,6 +1486,7 @@ const handler = async (req, res) => {
         const names = steps.map(s => s.name).filter(Boolean);
         const last = names[names.length - 1];
         const mins = Math.round(TURN_DEADLINE_MS / 60000);
+        turnDone('TIMED_OUT', `${mins}m limit | ${names.length ? `${names.length} step(s) [${names.join(' → ')}], last=${last} (likely stall)` : 'NO steps — stalled before first action'}`); // never a silent stall: name the likely culprit
         const answer = `⚠️ I stopped this run after ${mins} min (the turn time limit). ` + (names.length
           ? `It ran ${names.length} step(s): ${names.join(' → ')}. The last one (${last}) didn't return in time — that's the likely stall.`
           : `It produced no steps — it stalled before the first action (a tool likely hung).`) + ` Tell me to retry, or narrow it to the part that matters.`;
@@ -1485,13 +1494,13 @@ const handler = async (req, res) => {
         setRunResult(sid, { state: 'timedOut', node: runNode, text: t, result: toPayload, startedAt, doneAt: Date.now() });
         return json(res, 200, toPayload);
       }
-      if (r.cancelled) { setRunResult(sid, { state: 'cancelled', node: runNode, text: t, startedAt }); return json(res, 200, { cancelled: true }); }
+      if (r.cancelled) { turnDone('cancelled', `${steps.length} step(s)`); setRunResult(sid, { state: 'cancelled', node: runNode, text: t, startedAt }); return json(res, 200, { cancelled: true }); }
       // PROVIDER ERROR (429/overload/unreachable) → a RETRYABLE failure, surfaced as `error` (NOT persisted
       // as the answer). The user's message stays; changing the model + retrying produces a clean answer.
-      if (r.llmError) { setRunResult(sid, { state: 'error', node: runNode, text: t, startedAt, doneAt: Date.now() }); return json(res, 200, { error: r.llmError, llmError: true, retryable: true }); }
+      if (r.llmError) { turnDone('llmError', String(r.llmError).slice(0, 120)); setRunResult(sid, { state: 'error', node: runNode, text: t, startedAt, doneAt: Date.now() }); return json(res, 200, { error: r.llmError, llmError: true, retryable: true }); }
       // prepaid allowance spent mid-turn → return a DETERMINISTIC exhausted signal (no model
       // call was made to produce it). The client renders a static Top-up / Abandon card.
-      if (r.exhausted) { saveResume(sid, r.resumeFrom); const exPayload = { exhausted: true, answer: r.answer || '', remaining: purse.balance(), allowance: purse.granted() }; setRunResult(sid, { state: 'exhausted', node: runNode, text: t, result: exPayload, startedAt, doneAt: Date.now() }); return json(res, 200, exPayload); }
+      if (r.exhausted) { turnDone('exhausted', `${steps.length} step(s)`); saveResume(sid, r.resumeFrom); const exPayload = { exhausted: true, answer: r.answer || '', remaining: purse.balance(), allowance: purse.granted() }; setRunResult(sid, { state: 'exhausted', node: runNode, text: t, result: exPayload, startedAt, doneAt: Date.now() }); return json(res, 200, exPayload); }
       // history keeps the multimodal user content so a follow-up can still refer to the attached image.
       const next = [...history, { role: 'user', content: buildUserContent(t, agentAttachments) }, { role: 'assistant', content: r.answer }].slice(-12);
       sessions.set(sid, next);
@@ -1499,6 +1508,7 @@ const handler = async (req, res) => {
       const proposals = proposalIds.map(getProposal).filter(Boolean);
       const asks = askIds.map(getAsk).filter(Boolean); // typed questions raised this turn → rendered inline
       const donePayload = { answer: r.answer, images, imageUrls, ui: uiWidgets, toolsUsed: r.toolsUsed.map(x => x.name), steps, proposals, autoFired, asks, accessRequests, agentId: runNode.id, attachments: savedRefs, remaining: purse.balance(), allowance: purse.granted(), spent: Object.values(perProvider).reduce((a, b) => a + b, 0), perProvider };
+      turnDone('done', `${steps.length} step(s) [${steps.map(s => s.name).filter(Boolean).join(' → ') || 'direct answer'}] | ${Object.values(perProvider).reduce((a, b) => a + b, 0)}µUSD | ${String(r.answer || '').length}ch${proposals.length ? ` | ${proposals.length} proposal(s)` : ''}${accessRequests.length ? ` | ${accessRequests.length} access-request(s)` : ''}${asks.length ? ` | ${asks.length} ask(s)` : ''}`);
       // PERSIST the finished turn so it survives a closed tab — the client re-attaches on reopen.
       setRunResult(sid, { state: 'done', node: runNode, text: t, result: donePayload, startedAt, doneAt: Date.now() });
       // Tab-friendly: ping the user when a SUBSTANTIAL run finishes (long, or it raised questions/actions),
@@ -1530,6 +1540,10 @@ const handler = async (req, res) => {
       if (!rr) return json(res, 200, { state: 'none' });
       if (!(node.isRoot || node === rr.node)) return json(res, 403, { error: 'not your run' });
       const running = rr.state === 'running' && runs.has(sid); // still actually in flight?
+      // Log a re-attach that SERVES A FINISHED turn — the smoking gun that the inline response was lost (proxy
+      // timeout / dropped tab) and the client had to recover the answer out-of-band. (A `running` poll is silent
+      // — it fires every few seconds while watching a live turn; we only want the recovery moment.)
+      if (!running && rr.state !== 'running') log('reattach:', sid, '| served', rr.state, rr.doneAt ? `| turn took ${rr.doneAt - rr.startedAt}ms` : '');
       return json(res, 200, { state: running ? 'running' : rr.state, text: rr.text, startedAt: rr.startedAt, ...(rr.result ? { result: rr.result } : {}) });
     }
 
