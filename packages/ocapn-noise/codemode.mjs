@@ -100,6 +100,12 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
   endow.answer = harden(text => endTurn('answer', text));
   endow.ask = harden(question => endTurn('ask', question));
   endow.blocked = harden(reason => endTurn('blocked', reason));
+  // MID-TURN PROGRESS (dan): a long multi-step program looks STALLED to the user — the page sits silent
+  // while the model thinks + tools run. updateProgress(text) pushes a one-line "here's what I'm doing now"
+  // to the live UI WITHOUT ending the turn (unlike answer/ask/blocked). It is a status ping, not a reply:
+  // it returns immediately and the program keeps running. Call it before each slow phase of a long task.
+  endow.updateProgress = harden(text => { try { onStep({ kind: 'progress', text: String(text == null ? '' : text).slice(0, 280) }); } catch { /* progress is best-effort — never break the program */ } return harden({ ok: true }); });
+  apiLines.push('  updateProgress(text): show the user a one-line status of what you are doing RIGHT NOW (e.g. "Reading the bulletin…", "Comparing against our codebase…"). Does NOT end your turn — it keeps running. Call it at the start of each slow phase of a long, multi-step task so the page never looks stalled.');
   // Expose your OWN prompt as read-only variables so you can reference it — or pass a SLICE of it as
   // context to a delegate (e.g. delegateTask({ prompt: `${myPersona}\n\n<the sub-task>` })). myPersona is
   // your operator-confirmed instructions; mySystemPrompt is your full assembled system prompt.
@@ -140,6 +146,7 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     'PROPOSE FREELY, IN PARALLEL, AND CONTINUOUSLY: a single response MAY launch MANY sub-agents and proposals — call delegateTask/employ/proposeSpawnSpecialist/proposeTool several times in one program; do not artificially stop at one. Give each delegate/specialist you create a MEMORABLE, HUMAN pet name (the `nickname` arg) — a short evocative two-word name like "Cobalt Otter" or "Scandinavian Airline Agent", NEVER a code or id — so it reads nicely in the chat/trace and as the proposer of anything it builds. (If you omit one, a friendly pet name is auto-assigned — but you naming it is better.) When you are processing an ONGOING or STREAMING feed of information (a live multi-speaker transcript, a wearable\'s audio stream, a long document arriving in pieces), stay in a continuously-helpful posture: surface AS MANY genuinely useful, well-scoped suggestions/delegations/proposals as the available information supports — each nicknamed — rather than a single summary, and keep doing so as new information arrives.',
     'END YOUR TURN by calling exactly ONE of (always in scope, alongside methodsOf/requestAccess): `answer("<reply>")` when the task is complete; `ask("<question>")` when you need ONE thing from the user to proceed; `blocked("<what you did, what you could not, and why>")` when you could not finish (e.g. a capability you had to requestAccess for). Call it as the LAST thing your program does.',
     'ALWAYS finish by calling one of answer()/ask()/blocked() — NEVER end silently or with an empty reply. If something failed or a capability was missing, use `blocked(...)` with a clear "here is what I did and what stopped me"; going quiet is a bug.',
+    'KEEP THE USER POSTED ON LONG TASKS: if your work will take more than a few seconds — several tool calls, a research pass, building something, a multi-phase plan — call `updateProgress("<one line of what you are doing now>")` at the START of each phase (e.g. before research, before comparing, before publishing). It shows live in the UI and does NOT end your turn, so the page never looks frozen while you work. It is for status only; still finish with answer()/ask()/blocked().',
   ].filter(Boolean).join('\n');
   // the full system prompt is now assembled — expose it read-only so the program can pass slices to delegates.
   endow.mySystemPrompt = harden(sys);
@@ -171,8 +178,13 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
   let repeatErr = 0; // consecutive identical throws → the agent is wedged; break out and REPORT it
   let failStreak = 0; // consecutive throws of ANY kind → catches alternating/non-identical errors repeatErr misses
   let emptyRetries = 0; // the model returned NOTHING (no program, no answer) → nudge it to act, then report honestly
+  let round = 0;
   for (;;) {
     if (signal?.aborted) return cancelled();
+    // HEARTBEAT before the (potentially slow) LLM call: the FIRST program a model writes for a big task can take
+    // a minute+ to generate, during which no tool has run → zero trace events → the page looks DEAD. Emit a
+    // lightweight thinking ping at each round so the UI can show "Thinking…" immediately, before any tool fires.
+    round += 1; try { onStep({ kind: 'thinking', round }); } catch { /* heartbeat is best-effort */ }
     // MID-TURN INTERJECTION: re-steer a long fan-out WITHOUT aborting it. Anything the user posted since the
     // last round is folded into context HERE, at the step boundary, so the next program sees it. takeInterjections
     // DRAINS (once-only); a turn with none injected is byte-identical to before (default is () => []).
@@ -241,7 +253,7 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
       const undef = /^(?:Uncaught )?ReferenceError: (\w[\w$]*) is not defined|^(\w[\w$]*) is not defined/.exec(err);
       const bad = undef && (undef[1] || undef[2]);
       if (bad) {
-        const helpers = new Set(['methodsOf', 'myPersona', 'mySystemPrompt', 'requestAccess', 'answer', 'ask', 'blocked', 'console']);
+        const helpers = new Set(['methodsOf', 'myPersona', 'mySystemPrompt', 'requestAccess', 'answer', 'ask', 'blocked', 'updateProgress', 'console']);
         const real = Object.keys(endow).filter(k => !helpers.has(k)).sort();
         err = `no tool named "${bad}" — you invented it; it is not in scope. Your ACTUAL tools are: ${real.join(', ') || '(none)'}. `
           + `If "${bad}" is a real capability you need but don't have, call requestAccess({ power: "${bad}", why: "…" }) ONCE — do not keep calling "${bad}". `

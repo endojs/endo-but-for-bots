@@ -253,6 +253,30 @@ const rpc = async (method, args = []) => {
 const log = $('log'), mic = $('mic'), status = $('status');
 const setStatus = t => { status.textContent = t; };
 const setMic = c => { mic.className = c || ''; };
+// LIVE PROGRESS (dan): a long turn used to sit SILENT — the model thinks + tools run for a minute+ with no
+// visible sign, so the page looked stalled. This is an ephemeral agent-side bubble in the log that shows the
+// CURRENT activity (a "Thinking…" heartbeat, the agent's own updateProgress() pings, and tool starts). It is
+// replaced by the real answer bubble when the turn lands (clearLiveProgress, called from pendantEnd + render).
+let liveProgressEl = null;
+const showLiveProgress = text => {
+  try {
+    if (!liveProgressEl || !liveProgressEl.isConnected) {
+      liveProgressEl = document.createElement('div');
+      liveProgressEl.className = 'msg live-progress';
+      liveProgressEl.style.opacity = '.85';
+      liveProgressEl.innerHTML = '<div class="who"></div><div class="body"><span class="lp-dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--acc,#7c5cff);margin-right:7px;animation:lp-pulse 1.1s ease-in-out infinite;vertical-align:middle"></span><span class="lp-text" style="color:var(--mut,#8b949e)"></span></div>';
+      const w = liveProgressEl.querySelector('.who'); if (w) w.textContent = 'agent';
+      log.appendChild(liveProgressEl);
+      if (!document.getElementById('lp-kf')) { const st = document.createElement('style'); st.id = 'lp-kf'; st.textContent = '@keyframes lp-pulse{0%,100%{opacity:.35;transform:scale(.8)}50%{opacity:1;transform:scale(1.15)}}'; document.head.appendChild(st); }
+    }
+    const tx = liveProgressEl.querySelector('.lp-text'); if (tx) tx.textContent = text || 'Thinking…';
+    try { liveProgressEl.scrollIntoView({ block: 'end', behavior: 'smooth' }); } catch { /* */ }
+  } catch { /* progress UI is enhancement-only — never block a turn */ }
+};
+const clearLiveProgress = () => { try { if (liveProgressEl) { liveProgressEl.remove(); liveProgressEl = null; } } catch { /* */ } };
+// a friendly label for a tool start, so the heartbeat reads in plain language ("Researching…") not "research"
+const PROGRESS_VERB = { research: 'Researching', search: 'Searching', browser: 'Browsing the web', web: 'Searching the web', fileWrite: 'Writing a file', fileRead: 'Reading a file', publishSite: 'Publishing a page', delegateTask: 'Delegating to a sub-agent', employ: 'Bringing in a specialist', proposeTool: 'Building a tool', forgeTool: 'Building a tool', requestAccess: 'Requesting access', scheduleWakeup: 'Setting up a schedule' };
+const progressLabelFor = (name, detail) => { const v = PROGRESS_VERB[name] || (name ? name.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, c => c.toUpperCase()) : 'Working'); return detail ? `${v}: ${String(detail).slice(0, 80)}` : `${v}…`; };
 // per-agent SECURITY FRAME: each agent's bubbles get a 1px border in its own colour so
 // you can always see WHICH agent is talking (entry agent vs the Blacksmith dev vs a
 // specialist). Known kinds get fixed colours; unknown agents get a stable hashed hue.
@@ -874,6 +898,7 @@ const reapplyExpanded = () => { const key = expandedApplet[sessionId]; if (!key)
 addEventListener('keydown', e => { if (e.key === 'Escape') { const w = log.querySelector('.gw-component.applet-expanded'); if (w) minimizeApplet(w); } }); // Esc minimizes
 
 const renderAgentResponse = r => {
+  clearLiveProgress(); // the real answer supersedes the ephemeral "working…" bubble
   // The ANSWER bubble must render even if an auxiliary part (trace SVG, a widget, a Grant/proposal/ask card)
   // throws on malformed data — otherwise one bad card swallows the whole turn (the "answer + the permission
   // request both vanished" bug). Each piece is isolated; the answer comes first and unconditionally.
@@ -2897,13 +2922,14 @@ const pendantBegin = async (promptText, sid = sessionId) => {
     const p = await ensurePendant();
     pendantWrap.classList.remove('hide'); p.setVisible(true);
     positionPendant(); p.reset(promptText);
+    showLiveProgress('Thinking…'); // immediate sign of life, before the model has even written its first program
     try { pendantES && pendantES.close(); } catch {}
     pendantES = new EventSource('/chat/steps?sid=' + encodeURIComponent(sid)); // tool NAMES + queries/urls only — never the cap (cap-hygiene). The server replays the trace so far → joining mid-run shows it live.
-    pendantES.onmessage = e => { try { const m = JSON.parse(e.data); if (m.t === 'start') p.toolStart(m.name, m.detail, m.call); else if (m.t === 'done') p.toolDone(m.name, m.ok, m.detail, m.children, m.call, m.result, m.granted); else if (m.t === 'rnode') p.rnode(m); else if (m.t === 'child-done') p.childDone(m.parent, m.name, m.ok); else if (m.t === 'end') { try { pendantES.close(); } catch {} } } catch {} };
+    pendantES.onmessage = e => { try { const m = JSON.parse(e.data); if (m.t === 'start') { p.toolStart(m.name, m.detail, m.call); showLiveProgress(progressLabelFor(m.name, m.detail)); } else if (m.t === 'thinking') { if (!liveProgressEl) showLiveProgress('Thinking…'); } else if (m.t === 'progress') { showLiveProgress(m.text || 'Working…'); } else if (m.t === 'done') p.toolDone(m.name, m.ok, m.detail, m.children, m.call, m.result, m.granted); else if (m.t === 'rnode') p.rnode(m); else if (m.t === 'child-done') p.childDone(m.parent, m.name, m.ok); else if (m.t === 'end') { clearLiveProgress(); try { pendantES.close(); } catch {} } } catch {} };
     pendantES.onerror = () => {}; // degrade silently — applyFinal reconciles from the final steps[]
   } catch { /* pendant is enhancement-only; never block the turn */ }
 };
-const pendantEnd = steps => { try { pendantES && pendantES.close(); } catch {} pendantLive = false; if (pendant) { pendant.finish(); pendant.applyFinal(steps || []); } hidePendant(); }; // done WORKING → hide the live 3D animation; the per-message SVG trace (above the message) becomes the record. Tap an SVG to reopen the 3D on demand.
+const pendantEnd = steps => { clearLiveProgress(); try { pendantES && pendantES.close(); } catch {} pendantLive = false; if (pendant) { pendant.finish(); pendant.applyFinal(steps || []); } hidePendant(); }; // done WORKING → hide the live 3D animation; the per-message SVG trace (above the message) becomes the record. Tap an SVG to reopen the 3D on demand.
 // re-render the latest turn's SAVED trace when opening/returning to a chat (persistence across navigation)
 const pendantShowFor = async id => {
   if (pendantShapeMode) return; // a Settings agent-shape graph is up — don't reclaim the pendant with a chat trace

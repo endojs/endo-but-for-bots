@@ -1447,6 +1447,8 @@ const handler = async (req, res) => {
         takeInterjections: () => interjections.take(sid), // mid-turn re-steer: drained + folded into context at each step boundary
 
         onStep: s => {
+          if (s.kind === 'thinking') { emitStep(sid, { t: 'thinking', round: s.round }); return; } // heartbeat before each LLM round → "Thinking…" before any tool fires
+          if (s.kind === 'progress') { emitStep(sid, { t: 'progress', text: scrubCaps(String(s.text || '')).slice(0, 280) }); return; } // agent's own updateProgress() ping (cap-scrubbed)
           if (s.kind === 'tool-start') { emitStep(sid, { t: 'start', name: s.name, detail: detailFromArgs(s.args), call: safeText(s.args, 16000) }); return; } // the pendant grows a node (with its exact call) the instant a tool is invoked
           if (s.kind !== 'tool') return;
           // NB: do NOT bail on a falsy result. Many tools/live-object methods legitimately return
