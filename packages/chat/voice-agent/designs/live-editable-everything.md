@@ -114,13 +114,18 @@ mount once it's rendered, so app.js's imperative fill into a slot like `#chat-li
   is only used in the Components-tab gallery — so there is no nested island to clobber. An earlier revert of
   the drawer was a MISDIAGNOSIS: the test wrongly expected an `island-chat-list` tag the live app never sets.)
 
-The real boundary is a surface whose children are themselves rendered via **`renderConfined`** (a true nested
-island): chat bubbles (→`MessageControls` via `renderInto`), proposal/ask cards, the inbox (→`renderNotifications`).
-Confined-rendering such a container would put the inner island's mount under the container's preact root, and a
-second `renderConfined` into it doesn't compose. Plus the **settings modal** is built dynamically by
-`openSettings()` (innerHTML), not static structure. These need a SLOT mechanism (the container island declares
-an opaque slot the inner island still owns — the preact-container "opaque-child" machinery is the basis) or
-tag-only. That's the scoped next P4 step.
+**The "container boundary" DISSOLVED — no slot mechanism needed.** I feared a container hosting a TRUE nested
+island (rendered via `renderConfined`) couldn't be an island, because the inner island's mount would be under
+the container's preact root. TESTED on the **inbox** (`#rec-list` is filled by `renderNotifications` =
+`renderConfined`): it WORKS. Because a container island renders ONCE (no cells → no re-diff), preact never
+reconciles the slot, so the nested `renderConfined` into it composes fine (verified: rec-list gets
+`island-notifications` + its content, zero errors). So container surfaces convert with the SAME recipe:
+- **tagline, header, composer, sidebar/drawer, inbox** ✓ done + verified.
+
+The only genuinely-different cases left are about WHEN/HOW the surface is created, not nesting:
+- **Settings modal** — built ON-DEMAND by `openSettings()` (innerHTML into an ephemeral `#qrmodal`), so it
+  can't be boot-mounted; convert by having `openSettings` render via an island.
+- **Chat bubbles** — created PER-MESSAGE by `bubble()`, so it's a per-instance render, not a one-time mount.
 
 - **Phase 4 — the shell migrates into confined git-object components. [RESOLVED — dan: yes].** Convert
   the hand-written shell pieces (composer, chat-list, header, panels, bubbles) into confined

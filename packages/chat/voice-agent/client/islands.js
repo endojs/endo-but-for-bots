@@ -53,6 +53,7 @@ import { TaglineHero } from './tagline-hero.js';
 import { HeaderBar } from './header-bar.js';
 import { InputRow } from './input-row.js';
 import { DrawerFrame } from './drawer-frame.js';
+import { InboxView } from './inbox-view.js';
 
 // P3 (live-editable plan): ONE tagging path. tagComponent(el, id, name) marks a DOM element as a live,
 // alt-clickable component AND registers it (id → {name}) so the alt-click overlay can resolve + name it and
@@ -348,6 +349,15 @@ const islands = {
     if (!el) return false;
     tagComponent(el, 'island-drawer-frame', 'Sidebar / drawer');
     renderConfined(h(DrawerFrame, {}), el);
+    return true;
+  },
+
+  // The notifications view (P4 shell leaf) — a CONTAINER of nested islands. It renders ONCE, so the nested
+  // renderNotifications/renderChangelog (renderConfined into rec-list/chg-list) coexist (no re-diff).
+  renderInboxView(el) {
+    if (!el) return false;
+    tagComponent(el, 'island-inbox-view', 'Notifications view');
+    renderConfined(h(InboxView, {}), el);
     return true;
   },
 

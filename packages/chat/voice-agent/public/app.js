@@ -49,6 +49,16 @@ initTheme(); // restore the saved theme + start applying it to :root as CSS vars
     if (!NEED.every(id => dr.querySelector('#' + id))) throw new Error('drawer island missing an id — restoring');
   } catch (e) { try { dr.innerHTML = snapshot; } catch { /* keep static */ } }
 })();
+(() => { // P4: notifications view as an island — a CONTAINER of nested islands (rec-list/chg-list); renders once.
+  const iv = document.getElementById('inbox-view');
+  if (!iv || !window.__fieldIslands || !window.__fieldIslands.renderInboxView) return;
+  const NEED = ['att-head', 'att-count', 'att-list', 'rec-head', 'rec-list', 'chg-section', 'chg-head', 'chg-count', 'chg-list'];
+  const snapshot = iv.innerHTML;
+  try {
+    window.__fieldIslands.renderInboxView(iv);
+    if (!NEED.every(id => iv.querySelector('#' + id))) throw new Error('inbox island missing an id — restoring');
+  } catch (e) { try { iv.innerHTML = snapshot; } catch { /* keep static */ } }
+})();
 (() => { // a header toggle for light/dark (the first control of the userspace-extensible style framework)
   try {
     const hdr = document.querySelector('header'); if (!hdr) return;
