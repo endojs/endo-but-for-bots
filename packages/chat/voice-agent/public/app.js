@@ -3105,6 +3105,49 @@ const editComponent = async (id, name) => {
   setStatus(r.ok ? `Edited "${name}" → new version${r.review && r.review.worst !== 'none' ? ` (panel: ${r.review.worst})` : ''}. Revert in the Components tab if needed.` : `edit: ${r.error || 'failed'}`);
   if (curTab === 'components') refreshComponents();
 };
+// ── Increment 1 of designs/live-editable-everything.md: Alt-click ✎ edit opens a CONVERSATIONAL edit chat
+//    with the component's agent (not a one-shot window.prompt). Each message edits the component live via its
+//    edit endpoint; the exchange renders as a chat; the live component re-renders. Session-only thread per id.
+const compEditThreads = {}; // `${kind}:${id}` → [{who, text}]
+const openComponentEditChat = (id, name, { kind = 'component' } = {}) => {
+  const endpoint = kind === 'fork' ? '/forks/edit' : '/components/edit';
+  const capFor = kind === 'fork' ? chatCap() : cap;
+  const key = `${kind}:${id}`; const hist = compEditThreads[key] || (compEditThreads[key] = []);
+  const ov = document.createElement('div'); ov.className = 'qrmodal';
+  ov.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:60;background:rgba(0,0,0,.45)';
+  ov.innerHTML = `<div class="qrcard" style="width:min(560px,93vw);max-height:84vh;display:flex;flex-direction:column;text-align:left;padding:0;overflow:hidden">
+    <div style="padding:11px 14px;border-bottom:1px solid var(--edge);display:flex;align-items:center;gap:8px">
+      <b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">🧩 ${esc(name)} <span class="pill">live edit</span></b>
+      <button class="mini" data-ce-close>✕</button></div>
+    <div id="ce-log" style="flex:1;overflow:auto;padding:12px 14px;display:flex;flex-direction:column;gap:8px;min-height:120px">
+      <div class="pmeta">Talk to <b>${esc(name)}</b>'s agent — describe a change and it edits this component live (a new, revertable version, applied on the spot). e.g. "make the header teal", "add a copy button", "show the newest first". Revert any version in the Components tab.</div></div>
+    <div style="padding:10px 12px;border-top:1px solid var(--edge);display:flex;gap:6px">
+      <input id="ce-input" class="hdr-sel" style="flex:1;min-width:0" placeholder="Describe a change to ${esc(name)}…" autocomplete="off">
+      <button class="mini primary" id="ce-send">Send</button></div></div>`;
+  document.body.appendChild(ov);
+  const logEl = ov.querySelector('#ce-log'), input = ov.querySelector('#ce-input');
+  const close = () => ov.remove(); ov.querySelector('[data-ce-close]').onclick = close; ov.onclick = e => { if (e.target === ov) close(); };
+  const bubble = (who, text) => { const d = document.createElement('div'); d.style.cssText = `align-self:${who === 'you' ? 'flex-end' : 'flex-start'};max-width:86%;padding:7px 10px;border-radius:9px;font-size:13px;white-space:pre-wrap;background:${who === 'you' ? 'var(--acc-fill)' : 'rgba(127,127,127,.14)'};color:${who === 'you' ? '#fff' : 'var(--ink)'}`; d.textContent = text; logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight; return d; };
+  hist.forEach(m => bubble(m.who, m.text));
+  let busyCe = false;
+  const send = async () => {
+    const change = (input.value || '').trim(); if (!change || busyCe) return;
+    busyCe = true; input.value = ''; bubble('you', change); hist.push({ who: 'you', text: change });
+    const pend = bubble('agent', '✎ editing…');
+    try {
+      const r = await (await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: capFor, id, prompt: change }) })).json();
+      const msg = r.ok
+        ? `✓ updated — ${r.version != null ? `v${r.version}` : 'new version'}${r.review && r.review.worst && r.review.worst !== 'none' ? ` · review: ${r.review.worst}` : ''}. Applied live.`
+        : `⚠️ ${r.error || 'edit failed'}`;
+      pend.textContent = msg; hist.push({ who: 'agent', text: msg });
+      try { renderTx(); } catch { /* re-render mounted forks/components */ } if (curTab === 'components') { try { refreshComponents(); } catch { /* */ } }
+    } catch (e) { pend.textContent = `⚠️ ${e.message}`; }
+    busyCe = false; logEl.scrollTop = logEl.scrollHeight; input.focus();
+  };
+  ov.querySelector('#ce-send').onclick = send;
+  input.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } };
+  setTimeout(() => input.focus(), 30);
+};
 const forkComponentAct = async (id, name) => {
   const fname = window.prompt(`Fork "${name}" — name your fork:`, `${name}-fork`); if (!fname) return;
   const r = await (await fetch('/components/fork', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id, name: fname }) })).json();
@@ -3195,7 +3238,7 @@ const componentSelect = () => {
       const r = el.getBoundingClientRect();
       chip.innerHTML = `<span style="color:var(--mut)">⑂ ${esc(fname)}</span> <button class="mini" data-act="fedit">✎ edit</button> <button class="mini" data-act="ffork">⑂ fork</button> <button class="mini" data-act="x">✕</button>`;
       chip.style.display = 'flex'; chip.style.left = `${Math.min(r.left, innerWidth - 240)}px`; chip.style.top = `${Math.min(r.bottom + 6, innerHeight - 44)}px`; place(el);
-      chip.querySelector('[data-act=fedit]').onclick = () => { clearChip(); forkEditAct(fid, fname); };
+      chip.querySelector('[data-act=fedit]').onclick = () => { clearChip(); openComponentEditChat(fid, fname, { kind: 'fork' }); };
       chip.querySelector('[data-act=ffork]').onclick = () => { clearChip(); forkForkAct(fid, fname); };
       chip.querySelector('[data-act=x]').onclick = clearChip;
       return;
@@ -3207,7 +3250,7 @@ const componentSelect = () => {
     const editLabel = id ? '✎ edit' : '⤴ edit (break out)';
     chip.innerHTML = `<span style="color:var(--mut)">🧩 ${esc(name)}</span> <button class="mini" data-act="edit">${editLabel}</button> ${id ? '<button class="mini" data-act="fork">🍴 fork</button>' : ''} <button class="mini" data-act="x">✕</button>`;
     chip.style.display = 'flex'; chip.style.left = `${Math.min(r.left, innerWidth - 240)}px`; chip.style.top = `${Math.min(r.bottom + 6, innerHeight - 44)}px`; place(el);
-    chip.querySelector('[data-act=edit]').onclick = () => { clearChip(); if (id) editComponent(id, name); else breakOutThenEdit(spec, name); };
+    chip.querySelector('[data-act=edit]').onclick = () => { clearChip(); if (id) openComponentEditChat(id, name, { kind: 'component' }); else breakOutThenEdit(spec, name); };
     const fk = chip.querySelector('[data-act=fork]'); if (fk) fk.onclick = () => { clearChip(); forkComponentAct(id, name); };
     chip.querySelector('[data-act=x]').onclick = clearChip;
   }, true);
