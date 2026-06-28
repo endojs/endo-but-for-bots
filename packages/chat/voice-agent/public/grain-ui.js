@@ -243,8 +243,13 @@ const renderThemePreview = (spec) => {
 //    address, an Open action, AND a LIVE thumbnail of the actual page (a sandboxed, non-interactive iframe
 //    — the same opaque-origin boundary as a confined component, so the preview can't reach the chat's cap).
 const hostLabel = url => { try { const u = new URL(url, location.origin); return (u.host || location.host) + (u.pathname && u.pathname !== '/' ? u.pathname.replace(/\/$/, '') : ''); } catch { return String(url || '').replace(/^https?:\/\//, '').slice(0, 60); } };
+// publishSite() stamps URLs with the server's BASE_URL (the TAILNET host). A viewer on the PUBLIC
+// origin (agentc.chu via ngrok, off-tailnet) can't reach that host → the iframe goes blank. The same
+// /sites/<token>/ path is served on whatever origin the viewer is on, so resolve our own published
+// sites SAME-ORIGIN (path only) — correct on both tailnet and public; also repairs already-published sites.
+const localizeSiteUrl = url => { try { const u = new URL(url, location.origin); if (/^\/sites\//.test(u.pathname)) return u.pathname + u.search + u.hash; return url; } catch { return url; } };
 const renderSitePreview = spec => {
-  const url = String(spec.url || ''); const name = String(spec.name || spec.title || 'Published site');
+  const url = localizeSiteUrl(String(spec.url || '')); const name = String(spec.name || spec.title || 'Published site');
   const wrap = document.createElement('div'); wrap.className = 'gw gw-site'; wrap.style.cssText = `${STYLE};margin:8px 0;border:1px solid var(--edge,#30363d);border-radius:12px;overflow:hidden;background:var(--panel,#161b22);cursor:pointer`;
   const head = document.createElement('div'); head.style.cssText = 'display:flex;align-items:center;gap:9px;padding:9px 12px';
   const ic = document.createElement('span'); ic.textContent = '🌐'; ic.style.fontSize = '16px';
