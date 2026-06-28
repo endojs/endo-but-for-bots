@@ -1507,16 +1507,20 @@ const handler = async (req, res) => {
       pendingResumes.delete(sid); // a completed turn supersedes any stale saved resume for this session
       const proposals = proposalIds.map(getProposal).filter(Boolean);
       const asks = askIds.map(getAsk).filter(Boolean); // typed questions raised this turn → rendered inline
-      const donePayload = { answer: r.answer, images, imageUrls, ui: uiWidgets, toolsUsed: r.toolsUsed.map(x => x.name), steps, proposals, autoFired, asks, accessRequests, agentId: runNode.id, attachments: savedRefs, remaining: purse.balance(), allowance: purse.granted(), spent: Object.values(perProvider).reduce((a, b) => a + b, 0), perProvider };
-      turnDone('done', `${steps.length} step(s) [${steps.map(s => s.name).filter(Boolean).join(' → ') || 'direct answer'}] | ${Object.values(perProvider).reduce((a, b) => a + b, 0)}µUSD | ${String(r.answer || '').length}ch${proposals.length ? ` | ${proposals.length} proposal(s)` : ''}${accessRequests.length ? ` | ${accessRequests.length} access-request(s)` : ''}${asks.length ? ` | ${asks.length} ask(s)` : ''}`);
+      // how the turn ENDED: the CodeMode reply kind (answer/ask/blocked) — a structured signal from the scope
+      // function the agent called, not parsed from prose. Carried in the payload for the client + logged below.
+      const endKind = r.asking ? 'ask' : r.blocked ? 'blocked' : 'answer';
+      const donePayload = { answer: r.answer, endKind, ...(r.asking ? { asking: true } : {}), ...(r.blocked ? { blocked: true } : {}), images, imageUrls, ui: uiWidgets, toolsUsed: r.toolsUsed.map(x => x.name), steps, proposals, autoFired, asks, accessRequests, agentId: runNode.id, attachments: savedRefs, remaining: purse.balance(), allowance: purse.granted(), spent: Object.values(perProvider).reduce((a, b) => a + b, 0), perProvider };
+      turnDone(endKind === 'answer' ? 'done' : `done(${endKind})`, `${steps.length} step(s) [${steps.map(s => s.name).filter(Boolean).join(' → ') || 'direct answer'}] | ${Object.values(perProvider).reduce((a, b) => a + b, 0)}µUSD | ${String(r.answer || '').length}ch${proposals.length ? ` | ${proposals.length} proposal(s)` : ''}${accessRequests.length ? ` | ${accessRequests.length} access-request(s)` : ''}${asks.length ? ` | ${asks.length} ask(s)` : ''}`);
       // PERSIST the finished turn so it survives a closed tab — the client re-attaches on reopen.
       setRunResult(sid, { state: 'done', node: runNode, text: t, result: donePayload, startedAt, doneAt: Date.now() });
       // Tab-friendly: ping the user when a SUBSTANTIAL run finishes (long, or it raised questions/actions),
       // so they can ask-and-close and get pulled back. Quick replies don't push (no spam).
       try {
-        if (Date.now() - startedAt > 45000 || asks.length || proposals.length) {
-          const summary = asks.length ? `${asks.length} question(s) need you` : proposals.length ? `${proposals.length} action(s) to confirm` : 'finished';
-          notify({ title: `✅ ${JSON.stringify(t).slice(1, 41)}… — ${summary}`, message: String(r.answer || '').slice(0, 160), click: `${BASE_URL}/#chat=${sid}`, tags: ['chat'] }).catch(() => {});
+        if (Date.now() - startedAt > 45000 || asks.length || proposals.length || r.asking || r.blocked) {
+          const summary = r.asking ? 'needs your answer' : asks.length ? `${asks.length} question(s) need you` : r.blocked ? 'blocked — needs you' : proposals.length ? `${proposals.length} action(s) to confirm` : 'finished';
+          const icon = r.asking ? '❓' : r.blocked ? '🚧' : '✅';
+          notify({ title: `${icon} ${JSON.stringify(t).slice(1, 41)}… — ${summary}`, message: String(r.answer || '').slice(0, 160), click: `${BASE_URL}/#chat=${sid}`, tags: ['chat'] }).catch(() => {});
         }
       } catch { /* push is best-effort */ }
       return json(res, 200, donePayload);

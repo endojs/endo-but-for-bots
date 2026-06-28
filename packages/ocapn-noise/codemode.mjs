@@ -84,20 +84,28 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
   }
   // introspect ANY object reference you hold — returns its callable method names (Endo or plain).
   endow.methodsOf = harden(o => { try { return o && typeof o.__getMethodNames__ === 'function' ? [...o.__getMethodNames__()] : (o && typeof o === 'object' ? Object.keys(o) : []); } catch { return []; } });
-  // FINAL ANSWER as a SCOPE FUNCTION, not an `ANSWER:` text marker (dan's principle: control signals are
+  // TURN-ENDING REPLY as a SCOPE FUNCTION, not an `ANSWER:` text marker (dan's principle: control signals are
   // first-class functions in the JS scope, never conventions parsed out of prose — text markers are
-  // markdown-/format-/whitespace-fragile). The program calls `answer(text)` to deliver its reply to the user
-  // and END the turn: it records the reply and throws a private sentinel to unwind immediately; the loop
-  // intercepts the captured `finalAnswer` BEFORE treating that unwind as a program error.
-  let finalAnswer = null;
-  const ANSWER_SENTINEL = '__codemode_answer__';
-  endow.answer = harden(text => { finalAnswer = String(text == null ? '' : text); throw new Error(ANSWER_SENTINEL); });
+  // markdown-/format-/whitespace-fragile). The program ends its turn by calling ONE of:
+  //   answer(text)   — the task is complete; deliver the reply.
+  //   ask(question)  — you need ONE thing from the user to proceed; ask it and yield the turn.
+  //   blocked(reason)— you could NOT complete it; say plainly what you did, what you couldn't, and why.
+  // Each records the reply + its KIND and throws a private sentinel to unwind the program immediately; the loop
+  // intercepts the captured `finalReply` BEFORE treating that unwind as a program error. All three deliver text
+  // the user sees; the kind is a STRUCTURED signal (asking/blocked) for the server/client (logging, "needs you",
+  // distinct rendering) — no prose-parsing required.
+  let finalReply = null; // { kind: 'answer'|'ask'|'blocked', text }
+  const REPLY_SENTINEL = '__codemode_reply__';
+  const endTurn = (kind, text) => { finalReply = { kind, text: String(text == null ? '' : text) }; throw new Error(REPLY_SENTINEL); };
+  endow.answer = harden(text => endTurn('answer', text));
+  endow.ask = harden(question => endTurn('ask', question));
+  endow.blocked = harden(reason => endTurn('blocked', reason));
   // Expose your OWN prompt as read-only variables so you can reference it — or pass a SLICE of it as
   // context to a delegate (e.g. delegateTask({ prompt: `${myPersona}\n\n<the sub-task>` })). myPersona is
   // your operator-confirmed instructions; mySystemPrompt is your full assembled system prompt.
   endow.myPersona = harden(String(persona || ''));
   apiLines.push('  const myPersona = <string: your operator-confirmed instructions>; const mySystemPrompt = <string: your FULL system prompt>. Read-only. Reference them, or pass a slice as context to a delegate — e.g. delegateTask({ prompt: `${myPersona.slice(0, 600)}\\n\\n<sub-task>`, ... }).');
-  apiLines.push('  answer(text): deliver your FINAL reply to the user and END the turn. This is HOW you reply — call it when the task is done (or to explain plainly what blocked you). Do NOT use an "ANSWER:" text marker; `answer("…")` is the reply mechanism. `return` is only for INSPECTING an intermediate value as OUTPUT.');
+  apiLines.push('  answer(text) / ask(question) / blocked(reason): the THREE ways to END your turn (always in scope). answer(text) = task complete, here is the reply. ask(question) = you need ONE thing from the user to proceed — ask it and yield. blocked(reason) = you could not complete it — say plainly what you did, what you could not, and why. This is HOW you reply; do NOT use an "ANSWER:" text marker. `return` is only for INSPECTING an intermediate value as OUTPUT.');
   const api = apiLines.join('\n');
   // Accepted INVENTORY objects are now FIRST-CLASS live in-scope objects in `api` above: the toolbox builds a
   // manifest entry with methods[] for each callable accepted object, so the methods[] branch renders it as
@@ -130,8 +138,8 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     'WHEN A TASK NEEDS TOOLS, USE THE BREADTH OF YOUR TOOLKIT — the strongest results come from distributing work ACROSS the capabilities you hold and composing them, not fixating on one or two. (This is about HOW to do real work — it is NOT a reason to invoke tools for a question you could just answer.) And act with PRECISION: prefer specific, targeted moves (the exact note, the exact device, the precise parameter/recipient) over broad, coarse ones.',
     'PLAN FIRST, THEN ACT: before you start, think through every step the task needs end to end — INCLUDING how you will PRODUCE and PUBLISH its output (a page, graph, file, image). If a step needs a capability that is NOT in your scope above, do NOT silently give up or fake it — call `requestAccess({ power, why })` (always available) so the owner can grant it, then tell the user you have requested it and what you will do once granted. A capability you reference but were not granted will throw "is not defined"; that means you must requestAccess for it, not work around it.',
     'PROPOSE FREELY, IN PARALLEL, AND CONTINUOUSLY: a single response MAY launch MANY sub-agents and proposals — call delegateTask/employ/proposeSpawnSpecialist/proposeTool several times in one program; do not artificially stop at one. Give each delegate/specialist you create a MEMORABLE, HUMAN pet name (the `nickname` arg) — a short evocative two-word name like "Cobalt Otter" or "Scandinavian Airline Agent", NEVER a code or id — so it reads nicely in the chat/trace and as the proposer of anything it builds. (If you omit one, a friendly pet name is auto-assigned — but you naming it is better.) When you are processing an ONGOING or STREAMING feed of information (a live multi-speaker transcript, a wearable\'s audio stream, a long document arriving in pieces), stay in a continuously-helpful posture: surface AS MANY genuinely useful, well-scoped suggestions/delegations/proposals as the available information supports — each nicknamed — rather than a single summary, and keep doing so as new information arrives.',
-    'When the task is complete, deliver your reply by calling `answer("<your concise reply to the user>")` — it ENDS the turn. (`answer` is always in scope, alongside methodsOf/requestAccess.) Call it as the LAST thing your program does.',
-    'ALWAYS finish by calling `answer(...)` — even if you were BLOCKED or something FAILED. Never end silently or with an empty reply. If you could not finish, `answer(...)` with a plain account of what you accomplished, what you could not, and why (e.g. a capability you had to requestAccess for). A clear "here is what stopped me" is required; going quiet is a bug.',
+    'END YOUR TURN by calling exactly ONE of (always in scope, alongside methodsOf/requestAccess): `answer("<reply>")` when the task is complete; `ask("<question>")` when you need ONE thing from the user to proceed; `blocked("<what you did, what you could not, and why>")` when you could not finish (e.g. a capability you had to requestAccess for). Call it as the LAST thing your program does.',
+    'ALWAYS finish by calling one of answer()/ask()/blocked() — NEVER end silently or with an empty reply. If something failed or a capability was missing, use `blocked(...)` with a clear "here is what I did and what stopped me"; going quiet is a bug.',
   ].filter(Boolean).join('\n');
   // the full system prompt is now assembled — expose it read-only so the program can pass slices to delegates.
   endow.mySystemPrompt = harden(sys);
@@ -188,9 +196,10 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
       // now a program that calls answer()). Strip a legacy `ANSWER:` marker if present. If it's empty, the MODEL
       // produced nothing.
       let answer = reply.replace(/^ANSWER:\s*/i, '').trim();
-      // SAFETY NET: a weaker model may emit a bare `answer("…")` call WITHOUT a ```js fence (so extractCode
-      // missed it) — unwrap the string argument so the user sees the message, not the literal call text.
-      const bare = /^answer\(\s*(['"`])([\s\S]*)\1\s*\)\s*;?$/i.exec(answer);
+      // SAFETY NET: a weaker model may emit a bare `answer("…")` / `ask("…")` / `blocked("…")` call WITHOUT a
+      // ```js fence (so extractCode missed it) — unwrap the string argument so the user sees the message, not the
+      // literal call text. (The kind/flag is lost in this degraded path, but the text still reaches the user.)
+      const bare = /^(?:answer|ask|blocked)\(\s*(['"`])([\s\S]*)\1\s*\)\s*;?$/i.exec(answer);
       if (bare) answer = bare[2];
       if (!answer) {
         // The model returned NOTHING — no program, no answer. This is a MODEL stall (common with the local
@@ -213,11 +222,11 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     onStep({ kind: 'code', code });
     const r = await runProgram(code, endow);
     if (signal?.aborted) return cancelled();
-    // The program called answer(text) → that IS the final reply, delivered as a scope function (not parsed from
-    // prose). Return it BEFORE touching r.ok/r.error: the answer() sentinel unwind shows up as a program "throw",
-    // but the captured finalAnswer supersedes it. (A program that set the answer then hit a real error still
-    // delivers the answer — better than going silent.)
-    if (finalAnswer != null) { const a = finalAnswer; onStep({ kind: 'answer', text: a }); return harden({ answer: a, toolsUsed: used }); }
+    // The program called answer()/ask()/blocked() → that IS the turn's reply, delivered as a scope function (not
+    // parsed from prose). Return it BEFORE touching r.ok/r.error: the sentinel unwind shows up as a program
+    // "throw", but the captured finalReply supersedes it. (A program that set the reply then hit a real error
+    // still delivers it — better than going silent.) The kind rides along as a structured asking/blocked flag.
+    if (finalReply != null) { const { kind, text } = finalReply; onStep({ kind: 'answer', text }); return harden({ answer: text, toolsUsed: used, ...(kind === 'ask' ? { asking: true } : kind === 'blocked' ? { blocked: true } : {}) }); }
     const parts = [];
     if (r.logs.length) parts.push(`logs:\n${clip(r.logs.join('\n'), 8000)}`);
     if (r.ok) { parts.push(`returned: ${clip(safeJson(r.value), 12000)}`); repeatErr = 0; failStreak = 0; lastError = ''; }
@@ -229,7 +238,7 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
       const undef = /^(?:Uncaught )?ReferenceError: (\w[\w$]*) is not defined|^(\w[\w$]*) is not defined/.exec(err);
       const bad = undef && (undef[1] || undef[2]);
       if (bad) {
-        const helpers = new Set(['methodsOf', 'myPersona', 'mySystemPrompt', 'requestAccess', 'answer', 'console']);
+        const helpers = new Set(['methodsOf', 'myPersona', 'mySystemPrompt', 'requestAccess', 'answer', 'ask', 'blocked', 'console']);
         const real = Object.keys(endow).filter(k => !helpers.has(k)).sort();
         err = `no tool named "${bad}" — you invented it; it is not in scope. Your ACTUAL tools are: ${real.join(', ') || '(none)'}. `
           + `If "${bad}" is a real capability you need but don't have, call requestAccess({ power: "${bad}", why: "…" }) ONCE — do not keep calling "${bad}". `

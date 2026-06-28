@@ -48,6 +48,35 @@ test('answer() coerces a non-string argument to a string', async () => {
   assert.equal(r.answer, '42');
 });
 
+test('ask(question) ends the turn with the asking flag (no answer/blocked flags)', async () => {
+  const llm = scriptedLLM(['```js\nask("which city did you mean?");\n```']);
+  const r = await runAgentCode({ toolbox: {}, manifest: [], userText: 'weather?', llm });
+  assert.equal(r.answer, 'which city did you mean?', 'the question is delivered as the reply text');
+  assert.equal(r.asking, true, 'asking flag is set');
+  assert.equal(r.blocked, undefined, 'blocked flag is NOT set');
+  assert.equal(llm.calls(), 1, 'ask() ended the turn');
+});
+
+test('blocked(reason) ends the turn with the blocked flag', async () => {
+  const llm = scriptedLLM(['```js\nblocked("I need the home power, which I have requested.");\n```']);
+  const r = await runAgentCode({ toolbox: {}, manifest: [], userText: 'turn on the lights', llm });
+  assert.equal(r.answer, 'I need the home power, which I have requested.');
+  assert.equal(r.blocked, true, 'blocked flag is set');
+  assert.equal(r.asking, undefined, 'asking flag is NOT set');
+  assert.equal(llm.calls(), 1, 'blocked() ended the turn');
+});
+
+test('ask()/blocked() end the turn immediately — code after them does not run, and they work after a tool', async () => {
+  let after = 0;
+  const toolbox = { peek: { run: async () => ({ value: 7 }) }, sideEffect: { run: async () => { after += 1; } } };
+  const manifest = [{ name: 'peek', description: 'peek', args: {} }, { name: 'sideEffect', description: 'fx', args: {} }];
+  const r = await runAgentCode({ toolbox, manifest, userText: 'go',
+    llm: scriptedLLM(['```js\nconst x = await peek();\nblocked("stuck at " + x.value);\nawait sideEffect();\n```']) });
+  assert.equal(r.answer, 'stuck at 7', 'blocked() composed the tool result');
+  assert.equal(r.blocked, true);
+  assert.equal(after, 0, 'code after blocked() never ran');
+});
+
 test('back-compat: a bare-text / ANSWER: reply still delivers the answer', async () => {
   const llm1 = scriptedLLM(['ANSWER: legacy marker reply']);
   const r1 = await runAgentCode({ toolbox: {}, manifest: [], userText: 'q', llm: llm1 });
@@ -58,8 +87,8 @@ test('back-compat: a bare-text / ANSWER: reply still delivers the answer', async
   assert.equal(r2.answer, 'just some plain prose with no code and no marker', 'bare prose is still accepted');
 });
 
-test('safety net: a bare answer("…") call WITHOUT a code fence is unwrapped', async () => {
-  for (const q of ['answer("unfenced reply")', "answer('unfenced reply');", 'answer(`unfenced reply`)']) {
+test('safety net: a bare answer/ask/blocked("…") call WITHOUT a code fence is unwrapped', async () => {
+  for (const q of ['answer("unfenced reply")', "ask('unfenced reply');", 'blocked(`unfenced reply`)']) {
     const r = await runAgentCode({ toolbox: {}, manifest: [], userText: 'q', llm: scriptedLLM([q]) });
     assert.equal(r.answer, 'unfenced reply', `unwrapped ${q}`);
   }
