@@ -24,7 +24,15 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
         localStorage.setItem('field-agent-active', id);
         localStorage.setItem('field-agent-tx-' + id, JSON.stringify([
           { who: 'you', text: 'tell me about Alexa diet' },
-          { who: 'agent', text: 'Alexa avoids several FODMAPs.', steps: [{ name: 'readDietNote', call: '{"path":"Dietician/Alexa — Diet.md"}', result: '# Alexa Diet\nAvoids corn (high fructans), garlic, onion. Low FODMAP only.' }] },
+          { who: 'agent', text: 'Alexa avoids several FODMAPs.', steps: [
+            // a normal tool output → KEPT; a delegate's TOP-LEVEL result → KEPT; its CHILDREN (the sub-agent's
+            // internal tool calls) → EXCLUDED (context isolation is the whole point of a sub-agent).
+            { name: 'readDietNote', call: '{"path":"Dietician/Alexa — Diet.md"}', result: '# Alexa Diet\nAvoids corn (high fructans), garlic, onion. Low FODMAP only.' },
+            { name: 'delegateTask', call: '{"prompt":"plan it"}', result: 'SUBAGENT_OUTPUT: produced the meal plan', children: [
+              { name: 'searchWeb', call: '{}', result: 'SUBAGENT_INTERNAL: a web search the sub-agent ran' },
+              { name: 'writeFile', call: '{}', result: 'SUBAGENT_INTERNAL: a file the sub-agent wrote' },
+            ] },
+          ] },
         ]));
       } catch {}
       window.__hist = null; const orig = window.fetch;
@@ -39,10 +47,15 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
     await page.waitForTimeout(600);
     await page.fill('#text', 'what about corn again?'); await page.evaluate(() => { const b = document.getElementById('send'); b && b.click(); });
     await page.waitForTimeout(1500);
-    const r = await page.evaluate(() => { const blob = JSON.stringify(window.__hist || []); return { hasOutput: /high fructans/.test(blob), hasName: /readDietNote/.test(blob), hasHint: /REUSE these/.test(blob) }; });
+    const r = await page.evaluate(() => { const blob = JSON.stringify(window.__hist || []); return {
+      hasOutput: /high fructans/.test(blob), hasName: /readDietNote/.test(blob), hasHint: /REUSE these/.test(blob),
+      hasDelegateOut: /SUBAGENT_OUTPUT/.test(blob), hasChildren: /SUBAGENT_INTERNAL/.test(blob),
+    }; });
     ok(r.hasOutput, "the prior turn's tool OUTPUT (the note content) is in the next turn's history");
     ok(r.hasName, 'the tool name is included so the agent knows what it ran');
     ok(r.hasHint, 'a reuse hint tells the agent not to re-fetch the same source');
+    ok(r.hasDelegateOut, "a sub-agent's RETURNED output (the top-level delegate result) IS kept in context");
+    ok(!r.hasChildren, "a sub-agent's INTERNAL tool calls are EXCLUDED — context isolation is the point of a sub-agent");
     await page.close();
   } finally { await br.close(); }
   console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

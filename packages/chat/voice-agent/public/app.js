@@ -1219,7 +1219,7 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     // Send the DURABLE transcript as history so the agent's memory of this chat survives a server
     // restart (the server's in-memory history is volatile + wiped on restart). Exclude the current
     // user turn (just pushed above) — the server appends it from `text`. Plain text per turn.
-    payload.history = buildHistory(activeTx.slice(0, -1)); // folds prior tool OUTPUTS in → the agent reuses what it fetched instead of re-fetching
+    payload.history = buildHistory(activeTx.slice(0, -1), payload.model); // folds prior tool OUTPUTS in (kept long for large models) → the agent reuses what it fetched
     if (attachments.length) payload.attachments = attachments.map(a => ({ kind: a.kind, name: a.name, mediaType: a.mediaType, url: a.dataUrl, text: a.text }));
     const cr = await fetch('/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
     if (stale()) return true;        // superseded by a newer turn — composer already moved on
@@ -2191,31 +2191,35 @@ const _arr = v => (Array.isArray(v) ? v : (v ? [v] : []));
 // base variant; an entry that still carries .variants (pre-fork-redesign chats) renders the active one.
 const baseVariant = am => ({ answer: am.text || '', steps: _arr(am.steps), ui: _arr(am.ui), tools: _arr(am.tools), agentId: am.agent, model: am.vmodel || 'default', agent: am.vagent || 'field-agent', prompt: null, ts: am.ts || 0 });
 const activeVariant = am => (am && am.variants && am.variants.length) ? am.variants[Math.max(0, Math.min(am.varIx || 0, am.variants.length - 1))] : baseVariant(am);
-// flatten an agent message's tool STEPS (+ nested children) into {name, call, result} with non-empty results
+// An agent turn's TOP-LEVEL tool results only. CRITICAL: do NOT descend into `children` — those are a
+// sub-agent's (delegate/specialist/research) INTERNAL tool calls, which are deliberately context-ISOLATED
+// (the whole point of a sub-agent). The top-level step's `result` already IS the sub-agent's OUTPUT; that
+// stays, its internals do not.
 const stepResults = m => {
   const v = activeVariant(m); const steps = (Array.isArray(v.steps) && v.steps.length) ? v.steps : _arr(m.steps);
-  const out = []; const walk = arr => (arr || []).forEach(s => { if (!s) return; const res = String(s.result !== undefined ? s.result : (s.info || '')).trim(); if (res) out.push({ name: s.name || 'tool', call: String(s.call || s.detail || ''), result: res }); if (Array.isArray(s.children)) walk(s.children); });
-  walk(steps); return out;
+  return steps.map(s => { if (!s) return null; const res = String(s.result !== undefined ? s.result : (s.info || '')).trim(); return res ? { name: s.name || 'tool', call: String(s.call || s.detail || ''), result: res } : null; }).filter(Boolean);
 };
-const TOOL_HIST_BUDGET = 22000, TOOL_HIST_PERCAP = 4000; // total + per-result caps for tool-output history (keep recent turns full, bound bloat)
-// Build cross-turn history. Crucially, FOLD each agent turn's TOOL OUTPUTS into its message — so the agent
-// remembers what it ALREADY retrieved (a note, a fetch, a search) and reuses it instead of re-running the same
-// search/read every turn. The output budget is spent NEWEST-first, so the most recent retrievals stay full
-// and only the oldest turns lose their outputs when the budget is exhausted.
-const buildHistory = msgs => {
+// Build cross-turn history. FOLD each agent turn's TOP-LEVEL tool OUTPUTS into its message — so the agent
+// remembers what it ALREADY retrieved (a note, a fetch, a search, a sub-agent's RETURNED result) and reuses
+// it instead of re-running the same search/read every turn. Outputs stay until context is genuinely tight:
+// for large-context models (Opus/Sonnet/…) the budget is huge, so they persist for a long time; only the
+// small default model trims aggressively. Budget is spent NEWEST-first (recent retrievals stay full).
+const buildHistory = (msgs, model = '') => {
+  const big = !!model && !/^default$/i.test(model) && !/gemma|haiku|mini|tiny|small/i.test(model); // large-context → keep outputs long
+  const totalBudget = big ? 160000 : 8000, perCap = big ? 16000 : 2000;
   const list = msgs.filter(m => m && (m.who === 'you' || m.who === 'agent')).slice(-24);
   const blocks = new Array(list.length).fill('');
-  let budget = TOOL_HIST_BUDGET;
+  let budget = totalBudget;
   for (let i = list.length - 1; i >= 0; i -= 1) {
     const m = list[i]; if (m.who !== 'agent' || budget <= 0) continue;
     const rs = stepResults(m); if (!rs.length) continue;
     const lines = [];
-    for (const s of rs) { if (budget <= 0) break; let res = s.result; const cap = Math.min(TOOL_HIST_PERCAP, budget); if (res.length > cap) res = res.slice(0, cap) + '…'; const call = s.call.replace(/\s+/g, ' ').trim().slice(0, 160); const head = call ? (call.startsWith(s.name) ? call : `${s.name}(${call})`) : s.name; const line = `• ${head} → ${res}`; budget -= line.length; lines.push(line); }
+    for (const s of rs) { if (budget <= 0) break; let res = s.result; const cap = Math.min(perCap, budget); if (res.length > cap) res = res.slice(0, cap) + '…'; const call = s.call.replace(/\s+/g, ' ').trim().slice(0, 160); const head = call ? (call.startsWith(s.name) ? call : `${s.name}(${call})`) : s.name; const line = `• ${head} → ${res}`; budget -= line.length; lines.push(line); }
     if (lines.length) blocks[i] = `\n\n[results I already retrieved this turn — REUSE these; do NOT re-search/re-read the same source:\n${lines.join('\n')}\n]`;
   }
   return list.map((m, i) => ({ role: m.who === 'you' ? 'user' : 'assistant', content: String(m.who === 'you' ? (m.text || '') : (activeVariant(m).answer || m.text || '')) + blocks[i] })).filter(x => x.content.trim());
 };
-const histUpTo = uIx => buildHistory(activeTx.slice(0, uIx));
+const histUpTo = uIx => buildHistory(activeTx.slice(0, uIx), chatModel());
 // Retry FORKS the conversation at this user turn: stash the current branch (its prompt + everything below
 // it), then start a fresh empty branch carrying the (maybe edited) prompt and re-run from here. Retrying
 // CLEARS everything below the bubble. Each fork keeps its own continuation (tail), pageable from the bubble.
