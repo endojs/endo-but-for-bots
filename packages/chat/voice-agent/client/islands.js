@@ -50,6 +50,13 @@ import { ObjectBrowser } from './object-browser.js';
 import { ShareLinkManager } from './share-link-manager.js';
 import { FileBrowser } from './file-browser.js';
 
+// P3 (live-editable plan): ONE tagging path. tagComponent(el, id, name) marks a DOM element as a live,
+// alt-clickable component AND registers it (id → {name}) so the alt-click overlay can resolve + name it and
+// the edit chat can address it. The global registry is the authoritative list of every live component on the
+// page (the substrate for "talk to the agent that owns it" + the P4 shell→island migration).
+const componentRegistry = (globalThis.__componentRegistry = globalThis.__componentRegistry || new Map());
+const tagComponent = (el, id, name) => { if (!el || !el.setAttribute) return el; try { el.setAttribute('data-component-id', String(id)); el.setAttribute('data-component-name', String(name)); componentRegistry.set(String(id), { name: String(name), at: Date.now() }); } catch { /* best effort */ } return el; };
+
 // A render propagator: re-paints `view(...values)` into `el` whenever any wired cell changes.
 // This is the one kind of propagator whose effect is the DOM; logic propagators stay headless.
 const renderPropagator = (el, cells, view) =>
@@ -126,8 +133,7 @@ const islands = {
     if (!sharesWired) {
       // Tag the mount with this island's COMPONENT id so the Alt/Option-click overlay can select it +
       // edit its source (the island is a versioned component, like any other).
-      el.setAttribute('data-component-id', 'island-shares-panel');
-      el.setAttribute('data-component-name', 'Shares panel');
+      tagComponent(el, 'island-shares-panel', 'Shares panel');
       renderPropagator(el, [sharesCell], d => h(SharesPanel, { ...d, ...handlers }));
       sharesWired = true;
     }
@@ -141,8 +147,7 @@ const islands = {
   // real href/cap lives.
   renderNotifications(el, data, handlers) {
     if (!notifWired) {
-      el.setAttribute('data-component-id', 'island-notifications');
-      el.setAttribute('data-component-name', 'Notifications');
+      tagComponent(el, 'island-notifications', 'Notifications');
       renderPropagator(el, [notifCell], d => h('div', null, (d.items || []).map((it, idx) =>
         h(NotificationCard, {
           ...it, withDone: d.withDone, key: it.id || idx,
@@ -160,8 +165,7 @@ const islands = {
   // { onRevert(id) } runs the host-side revert.
   renderChangelogList(el, data, handlers) {
     if (!changelogWired) {
-      el.setAttribute('data-component-id', 'island-changelog');
-      el.setAttribute('data-component-name', 'Changelog');
+      tagComponent(el, 'island-changelog', 'Changelog');
       renderPropagator(el, [changelogCell], d => h(ChangelogList, { merges: d.merges || [], onRevert: handlers.onRevert }));
       changelogWired = true;
     }
@@ -174,8 +178,7 @@ const islands = {
   renderPowersBanner(el, data, handlers) {
     if (!powersWired) {
       el.classList.add('powers-banner'); // the .chip styles are scoped under .powers-banner
-      el.setAttribute('data-component-id', 'island-powers-banner');
-      el.setAttribute('data-component-name', 'Powers banner');
+      tagComponent(el, 'island-powers-banner', 'Powers banner');
       renderPropagator(el, [powersCell], d => h(PowersBanner, { ...d, ...handlers }));
       powersWired = true;
     }
@@ -186,8 +189,7 @@ const islands = {
   // A living style guide: one of every kit primitive, rendered through the real bundle. No data/handlers.
   renderKitSampler(el) {
     if (!kitWired) {
-      el.setAttribute('data-component-id', 'island-ui-kit');
-      el.setAttribute('data-component-name', 'UI kit (primitives)');
+      tagComponent(el, 'island-ui-kit', 'UI kit (primitives)');
       renderPropagator(el, [kitCell], () => h(KitSampler));
       kitWired = true;
     }
@@ -199,8 +201,7 @@ const islands = {
   // { onChange(qid,value), onSubmit(askId), onOpenOrigin() }. The host owns the answers + submits.
   renderAskCard(el, data, handlers) {
     if (!askWired) {
-      el.setAttribute('data-component-id', 'island-ask-card');
-      el.setAttribute('data-component-name', 'Ask card');
+      tagComponent(el, 'island-ask-card', 'Ask card');
       renderPropagator(el, [askCell], d => h(AskCard, { ...d, ...handlers }));
       askWired = true;
     }
@@ -212,8 +213,7 @@ const islands = {
   // { onConfirm(id, dontAskAgain), onReject(id), onToggleDontAsk(checked) }.
   renderProposalCard(el, data, handlers) {
     if (!propWired) {
-      el.setAttribute('data-component-id', 'island-proposal-card');
-      el.setAttribute('data-component-name', 'Proposal card');
+      tagComponent(el, 'island-proposal-card', 'Proposal card');
       renderPropagator(el, [propCell], d => h(ProposalCard, { ...d, ...handlers }));
       propWired = true;
     }
@@ -225,8 +225,7 @@ const islands = {
   // { onSelect(id), onDelete(id), onMore(), onRenameStart(id), onRenameChange(v), onRenameCommit(save) }.
   renderChatList(el, data, handlers) {
     if (!chatListWired) {
-      el.setAttribute('data-component-id', 'island-chat-list');
-      el.setAttribute('data-component-name', 'Chat list');
+      tagComponent(el, 'island-chat-list', 'Chat list');
       renderPropagator(el, [chatListCell], d => h(ChatList, { ...d, ...handlers }));
       chatListWired = true;
     }
@@ -237,8 +236,7 @@ const islands = {
   // `data` = { hasAudio, varIx, varCount }. `handlers` = { onRetry, onEdit, onPlayAudio, onFork(delta) }.
   renderMessageControls(el, data, handlers) {
     if (!msgCtrlWired) {
-      el.setAttribute('data-component-id', 'island-message-controls');
-      el.setAttribute('data-component-name', 'Message controls');
+      tagComponent(el, 'island-message-controls', 'Message controls');
       renderPropagator(el, [msgCtrlCell], d => h(MessageControls, { ...d, ...handlers }));
       msgCtrlWired = true;
     }
@@ -250,8 +248,7 @@ const islands = {
   // onRerun, onOpenParent(id), onOpenProject(id) }.
   renderChatMetaBar(el, data, handlers) {
     if (!metaBarWired) {
-      el.setAttribute('data-component-id', 'island-chat-meta-bar');
-      el.setAttribute('data-component-name', 'Chat meta bar');
+      tagComponent(el, 'island-chat-meta-bar', 'Chat meta bar');
       renderPropagator(el, [metaBarCell], d => h(ChatMetaBar, { ...d, ...handlers }));
       metaBarWired = true;
     }
@@ -262,8 +259,7 @@ const islands = {
   // `data` = { task, accent, who, expanded, draft }. `handlers` = { onToggle, onReplyChange, onReplySend }.
   renderDevTaskCard(el, data, handlers) {
     if (!devTaskWired) {
-      el.setAttribute('data-component-id', 'island-dev-task-card');
-      el.setAttribute('data-component-name', 'Dev task card');
+      tagComponent(el, 'island-dev-task-card', 'Dev task card');
       renderPropagator(el, [devTaskCell], d => h(DevTaskCard, { ...d, ...handlers }));
       devTaskWired = true;
     }
@@ -274,8 +270,7 @@ const islands = {
   // `data` = { isRoot, note }. `handlers` = { onTopUp(), onAbandon() }.
   renderExhaustedCard(el, data, handlers) {
     if (!exhaustedWired) {
-      el.setAttribute('data-component-id', 'island-exhausted-card');
-      el.setAttribute('data-component-name', 'Out-of-allowance card');
+      tagComponent(el, 'island-exhausted-card', 'Out-of-allowance card');
       renderPropagator(el, [exhaustedCell], d => h(ExhaustedCard, { ...d, ...handlers }));
       exhaustedWired = true;
     }
@@ -286,8 +281,7 @@ const islands = {
   // `data` = { steps, expanded, legend }. `handlers` = { onToggle(), onOpen3D() }.
   renderTraceSignature(el, data, handlers) {
     if (!traceSigWired) {
-      el.setAttribute('data-component-id', 'island-trace-signature');
-      el.setAttribute('data-component-name', 'Trace signature');
+      tagComponent(el, 'island-trace-signature', 'Trace signature');
       renderPropagator(el, [traceSigCell], d => h(TraceSignature, { ...d, ...handlers }));
       traceSigWired = true;
     }
@@ -298,8 +292,7 @@ const islands = {
   // `data` = { crumbs, items, roOnly, emptyText }. `handlers` = { onCrumb, onDrill, onShareRO, onShareFull }.
   renderObjectBrowser(el, data, handlers) {
     if (!objBrowserWired) {
-      el.setAttribute('data-component-id', 'island-object-browser');
-      el.setAttribute('data-component-name', 'Object browser');
+      tagComponent(el, 'island-object-browser', 'Object browser');
       renderPropagator(el, [objBrowserCell], d => h(ObjectBrowser, { ...d, ...handlers }));
       objBrowserWired = true;
     }
@@ -311,8 +304,7 @@ const islands = {
   // onAdjustField, onSave, onRevoke, onNewField, onCreate }.
   renderShareLinkManager(el, data, handlers) {
     if (!shareMgrWired) {
-      el.setAttribute('data-component-id', 'island-share-link-manager');
-      el.setAttribute('data-component-name', 'Share link manager');
+      tagComponent(el, 'island-share-link-manager', 'Share link manager');
       renderPropagator(el, [shareMgrCell], d => h(ShareLinkManager, { ...d, ...handlers }));
       shareMgrWired = true;
     }
@@ -326,8 +318,7 @@ const islands = {
   renderInto(name, el, props) {
     const C = COMPONENTS[name];
     if (!C || !el) return false;
-    el.setAttribute('data-component-id', `island-${name}`);
-    el.setAttribute('data-component-name', name);
+    tagComponent(el, `island-${name}`, name);
     renderConfined(h(C, props || {}), el);
     return true;
   },
@@ -345,8 +336,7 @@ const islands = {
     let C;
     try { C = makeConfinedFromSource(source, { name: 'forked-component', endowments: FORK_VOCAB }); }
     catch (e) { el.textContent = `⚠︎ bad component source: ${e && e.message}`; return false; }
-    el.setAttribute('data-component-id', 'confined-source');
-    el.setAttribute('data-component-name', 'forked-component');
+    tagComponent(el, 'confined-source', 'forked-component');
     renderConfined(h(C, props || {}), el);
     return true;
   },
