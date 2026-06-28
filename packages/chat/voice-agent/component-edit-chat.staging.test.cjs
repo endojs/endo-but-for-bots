@@ -16,7 +16,18 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
     const errs = []; page.on('pageerror', e => errs.push(e.message));
     let editBody = null;
     // intercept the real edit so the test never spends an Opus rewrite — capture the payload + return a version.
-    await page.route('**/components/edit', r => { try { editBody = JSON.parse(r.request().postData() || '{}'); } catch {} r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, version: 3, review: { worst: 'none' } }) }); });
+    // P2: a component edit runs the REAL agent loop via /components/edit-chat (conversational). Capture the
+    // payload + return an agent answer + an edited version, so we assert the message/history wiring + render.
+    let turns = 0;
+    await page.route('**/components/edit-chat', r => {
+      try { editBody = JSON.parse(r.request().postData() || '{}'); } catch {}
+      turns += 1;
+      // first turn: a clarifying question (ask); second turn: the edit is applied (answer + edited version)
+      const body = turns === 1
+        ? { ok: true, answer: 'Which header — the chat header or the panel header?', asking: true, edited: null, steps: ['readComponentSource'] }
+        : { ok: true, answer: 'Recolored the panel header to teal.', asking: false, edited: { version: 3, review: { worst: 'none' } }, steps: ['readComponentSource', 'editComponent'] };
+      r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    });
     await page.route('**/chat/steps**', r => r.fulfill({ status: 200, contentType: 'text/event-stream', body: '' }));
     await page.addInitScript(c => { try { localStorage.setItem('field-agent-cap', c); } catch {} }, cap);
     await page.goto('http://127.0.0.1:8778/', { waitUntil: 'load' }); await page.waitForTimeout(3500);
@@ -30,10 +41,17 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
     ok(chipEdit, 'the alt-click chip offers an ✎ edit action');
     await page.waitForTimeout(250);
     ok(await page.evaluate(() => !!document.getElementById('ce-input') && !!document.getElementById('ce-log')), 'edit opens a CONVERSATIONAL edit chat (not a window.prompt)');
+    // turn 1 — the agent asks a clarifying question (the REAL conversational loop, not a one-shot)
     await page.evaluate(() => { document.getElementById('ce-input').value = 'make the header teal'; document.getElementById('ce-send').click(); });
-    await page.waitForTimeout(600);
-    ok(editBody && editBody.prompt === 'make the header teal' && editBody.id === 'test-comp', 'a chat message edits the component live (prompt + id sent to /components/edit)');
-    ok(/✓ updated — v3/.test(await page.evaluate(() => document.getElementById('ce-log').innerText)), 'the agent reply shows the new live version');
+    await page.waitForTimeout(500);
+    ok(editBody && editBody.message === 'make the header teal' && editBody.id === 'test-comp', 'a message runs the agent loop (message + id sent to /components/edit-chat)');
+    ok(/Which header/.test(await page.evaluate(() => document.getElementById('ce-log').innerText)), 'the agent can ask a clarifying question (conversational, not one-shot)');
+    // turn 2 — the answer carries prior history, the edit applies, version shown
+    await page.evaluate(() => { document.getElementById('ce-input').value = 'the panel header'; document.getElementById('ce-send').click(); });
+    await page.waitForTimeout(500);
+    ok(editBody && Array.isArray(editBody.history) && editBody.history.length >= 2, 'the prior exchange is sent as history (a real conversation)');
+    ok(/Recolored the panel header to teal\./.test(await page.evaluate(() => document.getElementById('ce-log').innerText)), "the agent's reply renders");
+    ok(/v3/.test(await page.evaluate(() => document.getElementById('ce-log').innerText)), 'an applied edit shows the new live version');
     ok(errs.length === 0, `no page errors (${errs.slice(0, 2).join('; ')})`);
     await page.close();
   } finally { await br.close(); }

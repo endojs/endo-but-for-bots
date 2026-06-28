@@ -3130,17 +3130,29 @@ const openComponentEditChat = (id, name, { kind = 'component' } = {}) => {
   const bubble = (who, text) => { const d = document.createElement('div'); d.style.cssText = `align-self:${who === 'you' ? 'flex-end' : 'flex-start'};max-width:86%;padding:7px 10px;border-radius:9px;font-size:13px;white-space:pre-wrap;background:${who === 'you' ? 'var(--acc-fill)' : 'rgba(127,127,127,.14)'};color:${who === 'you' ? '#fff' : 'var(--ink)'}`; d.textContent = text; logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight; return d; };
   hist.forEach(m => bubble(m.who, m.text));
   let busyCe = false;
+  // Components run the REAL agent loop (P2): a conversational editor that reads the source, asks clarifying
+  // questions, and edits — /components/edit-chat. Forks still use the one-shot /forks/edit (P2-for-forks TBD).
+  const realLoop = kind === 'component';
   const send = async () => {
     const change = (input.value || '').trim(); if (!change || busyCe) return;
     busyCe = true; input.value = ''; bubble('you', change); hist.push({ who: 'you', text: change });
-    const pend = bubble('agent', '✎ editing…');
+    const pend = bubble('agent', realLoop ? '…' : '✎ editing…');
     try {
-      const r = await (await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: capFor, id, prompt: change }) })).json();
-      const msg = r.ok
-        ? `✓ updated — ${r.version != null ? `v${r.version}` : 'new version'}${r.review && r.review.worst && r.review.worst !== 'none' ? ` · review: ${r.review.worst}` : ''}. Applied live.`
-        : `⚠️ ${r.error || 'edit failed'}`;
+      let msg;
+      if (realLoop) {
+        const priorHistory = hist.slice(0, -1).map(m => ({ role: m.who === 'you' ? 'user' : 'assistant', content: m.text }));
+        const r = await (await fetch('/components/edit-chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: capFor, id, message: change, history: priorHistory }) })).json();
+        if (!r.ok) msg = `⚠️ ${r.error || 'failed'}`;
+        else { msg = r.answer || (r.edited ? '✓ updated.' : '(no reply)'); if (r.edited) msg += `  ·  v${r.edited.version}${r.edited.review && r.edited.review.worst && r.edited.review.worst !== 'none' ? ` · review: ${r.edited.review.worst}` : ''} — applied live`; }
+        if (r.edited) { try { renderTx(); } catch { /* re-render mounted components */ } if (curTab === 'components') { try { refreshComponents(); } catch { /* */ } } }
+      } else {
+        const r = await (await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: capFor, id, prompt: change }) })).json();
+        msg = r.ok
+          ? `✓ updated — ${r.version != null ? `v${r.version}` : 'new version'}${r.review && r.review.worst && r.review.worst !== 'none' ? ` · review: ${r.review.worst}` : ''}. Applied live.`
+          : `⚠️ ${r.error || 'edit failed'}`;
+        try { renderTx(); } catch { /* re-render mounted forks */ } if (curTab === 'components') { try { refreshComponents(); } catch { /* */ } }
+      }
       pend.textContent = msg; hist.push({ who: 'agent', text: msg });
-      try { renderTx(); } catch { /* re-render mounted forks/components */ } if (curTab === 'components') { try { refreshComponents(); } catch { /* */ } }
     } catch (e) { pend.textContent = `⚠️ ${e.message}`; }
     busyCe = false; logEl.scrollTop = logEl.scrollHeight; input.focus();
   };

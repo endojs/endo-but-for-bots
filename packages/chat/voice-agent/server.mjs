@@ -2390,6 +2390,31 @@ const handler = async (req, res) => {
       if (u.pathname === '/components/read') { const id = String(body.id || ''); const s = await (islandSource.isIsland(id) ? islandSource.readAt(id, String(body.version || 'HEAD')) : componentGit.readAt(id, String(body.version || 'HEAD'))); return json(res, 200, s ? { ok: true, ...s } : { ok: false, error: 'unknown component/version' }); }
       if (u.pathname === '/components/fork') { const id = String(body.id || ''); if (islandSource.isIsland(id)) return json(res, 200, { ok: false, error: 'forking an island component isn\'t supported yet — edit or revert it' }); return json(res, 200, await forkComponentTo(customTools, id, String(body.name || ''), String(body.version || 'HEAD'), 'owner')); }
       if (u.pathname === '/components/edit') { const id = String(body.id || ''); return json(res, 200, islandSource.isIsland(id) ? await editIslandSource(id, String(body.prompt || '')) : await editComponentSource(customTools, id, String(body.prompt || ''))); }
+      // P2 of the live-editable plan: a REAL CodeMode agent loop scoped (by toolbox construction) to ONE
+      // component — readComponentSource() + editComponent({prompt}) are its ENTIRE authority (lexical
+      // confinement, the one agent loop). It converses: reads the source, asks ONE clarifying question if
+      // needed (ask()), else edits + reports (answer()). The client maintains the thread + re-renders live.
+      if (u.pathname === '/components/edit-chat') {
+        const id = String(body.id || ''); const message = String(body.message || '').trim();
+        if (!message) return json(res, 200, { ok: false, error: 'empty message' });
+        const isIsland = islandSource.isIsland(id); const t = isIsland ? null : customTools.get(id);
+        if (!isIsland && !t) return json(res, 200, { ok: false, error: 'no such component' });
+        const name = (t && t.name) || id;
+        const history = (Array.isArray(body.history) ? body.history : []).filter(m => m && (m.role === 'user' || m.role === 'assistant') && m.content).map(m => ({ role: m.role, content: String(m.content).slice(0, 8000) })).slice(-16);
+        let edited = null;
+        const toolbox = {
+          readComponentSource: { run: async () => { try { const snap = await (isIsland ? islandSource.readAt(id, 'HEAD') : componentGit.readAt(id, 'HEAD')); const files = (snap && snap.files) || (t ? sourceFilesOf(t) : {}); return { ok: true, name, files }; } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; } } },
+          editComponent: { run: async ({ prompt } = {}) => { const r = isIsland ? await editIslandSource(id, String(prompt || '')) : await editComponentSource(customTools, id, String(prompt || '')); if (r && r.ok) edited = { version: r.version, review: r.review || null }; return r; } },
+        };
+        const manifest = [
+          { name: 'readComponentSource', description: `Read the CURRENT source of the "${name}" component (a {relpath:content} file map). Read it before editing so you change the real code.`, args: {} },
+          { name: 'editComponent', description: `Apply a change to the "${name}" component: an edit agent rewrites its source from your prompt, commits a new revertable version, and applies it LIVE. Make the prompt precise + self-contained.`, args: { prompt: 'string — a precise description of the change to make' } },
+        ];
+        const persona = `You are the focused editor agent for the live UI component "${name}". You can readComponentSource() to see its current source and editComponent({prompt}) to change it (a new revertable version, applied live). Converse with the owner: if the request is clear, make the change with editComponent then answer() what you did; if it is genuinely ambiguous, ask() ONE specific clarifying question first. Keep the component working. Be concise.`;
+        let r; try { r = await AGENT_RUNNER({ toolbox, manifest, userText: message, history, persona, model: 'anthropic:claude-opus-4-8' }); }
+        catch (e) { return json(res, 200, { ok: false, error: (e && e.message) || String(e) }); }
+        return json(res, 200, { ok: true, answer: r.answer || '', asking: !!r.asking, blocked: !!r.blocked, edited, steps: (r.toolsUsed || []).map(x => x.name) });
+      }
       if (u.pathname === '/components/revert') {
         const id = String(body.id || ''); const version = String(body.version || '');
         if (islandSource.isIsland(id)) return json(res, 200, await islandSource.revert(id, version));
