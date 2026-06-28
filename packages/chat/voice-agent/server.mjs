@@ -493,7 +493,7 @@ const fillSpecialist = process.env.SELF_HEAL === '0' ? undefined : async ({ name
 // makeFieldAgent runs before `blossom` exists, so the server populates `customView.register` below; the tool
 // reads it at call-time. This is the seam that lets a NORMAL chat agent (visible in the trace) be the studio.
 const customView = {};
-const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, foldedPersonaFor, getFoldDocs, setFoldDocs, haResolveReadOnly, changelog } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL, fillSpecialist, customView });
+const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, foldedPersonaFor, getFoldDocs, setFoldDocs, agentConfig, saveAgentConfig, haResolveReadOnly, changelog } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL, fillSpecialist, customView });
 liveCells = makeLiveCells({ nodeFor }); // browser-subscribable live grains (cap-gated)
 // Least-authority cross-user share tokens for a broken-out component: subscribe-only to its frozen cells.
 const componentShares = makeComponentShares({ file: `${HOME}/.local/state/voice-agent/component-shares.json`, makePurse, purseStore });
@@ -2592,6 +2592,29 @@ const handler = async (req, res) => {
     //    can employ(). Built-ins are read-only specs; saving one writes an operator
     //    OVERLAY (custom-roles.json) merged over the built-ins, so a new role — or an
     //    edited built-in — is immediately employable. Root-gated (dan's automation). ──
+    // ── AGENT EDITOR: read/write one agent's full config (built-in or user specialist) — its system prompt
+    //    (instructions) + its STANDING REFERENCE DOCUMENTS (the fold-docs pattern, surfaced friendly). The
+    //    docs fold into the agent's persona at run time (see foldedPersonaFor). Root-gated. ──
+    if (req.method === 'POST' && u.pathname.startsWith('/agents/')) {
+      const body = await jsonBody(req);
+      const node = nodeFor(body.cap);
+      if (!node || !node.isRoot) return json(res, 403, { error: 'editing agents needs your root capability' });
+      try {
+        if (u.pathname === '/agents/config') {
+          const cfg = agentConfig(String(body.agent || ''));
+          return cfg ? json(res, 200, { ok: true, config: cfg, powers: ALL_POWERS }) : json(res, 404, { error: 'no such agent' });
+        }
+        if (u.pathname === '/agents/save') {
+          const patch = {};
+          if (typeof body.instructions === 'string') patch.instructions = body.instructions;
+          if (Array.isArray(body.foldDocs)) patch.foldDocs = body.foldDocs;
+          if (typeof body.foldScope === 'string') patch.foldScope = body.foldScope;
+          const r = saveAgentConfig(String(body.agent || ''), patch);
+          return json(res, r.ok ? 200 : 400, r);
+        }
+        return json(res, 404, { error: 'unknown /agents route' });
+      } catch (e) { return json(res, 500, { error: e.message }); }
+    }
     if (req.method === 'POST' && u.pathname.startsWith('/roles')) {
       const body = await jsonBody(req);
       const node = nodeFor(body.cap);

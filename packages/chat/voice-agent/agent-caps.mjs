@@ -2698,6 +2698,32 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     foldedPersonaFor,
     getFoldDocs: id => harden(getFoldDocs(String(id || ''))),
     setFoldDocs: (id, cfg) => setFoldDocs(String(id || ''), cfg || {}),
+    // The friendly Agent editor: read/write one agent's full editable config (built-in OR user specialist) —
+    // its display name/domain, its system prompt (instructions), its power ring, and its standing reference
+    // documents (the fold-docs pattern, surfaced as a first-class field). Root-gated by the server.
+    agentConfig: id => { const aid = String(id || '') || 'field-agent';
+      if (aid === 'field-agent' || aid === 'root') { const fd = getFoldDocs('field-agent');
+        return harden({ id: 'field-agent', name: 'Agent C', domain: 'the entry field agent', builtin: true, entry: true, powers: [...rootNode.powers],
+          instructions: persona || '', foldDocs: fd.foldDocs, foldScope: fd.foldScope }); }
+      const spec = findSpecialist(aid); if (!spec) return null;
+      const fd = getFoldDocs(spec.id);
+      return harden({ id: spec.id, name: spec.name, domain: spec.domain || '', builtin: !!spec.builtin, powers: [...spec.powers],
+        instructions: spec.builtin ? builtinPersona(spec.id) : (spec.instructions || ''), foldDocs: fd.foldDocs, foldScope: fd.foldScope }); },
+    saveAgentConfig: (id, { instructions, foldDocs, foldScope } = {}) => {
+      const aid = String(id || '') || 'field-agent';
+      const foldId = (aid === 'field-agent' || aid === 'root') ? 'field-agent' : null;
+      if (foldId) { if (typeof instructions === 'string') writePersona(instructions); }
+      else {
+        const spec = findSpecialist(aid); if (!spec) return harden({ ok: false, error: 'no such agent' });
+        if (typeof instructions === 'string') {
+          if (spec.builtin) setBuiltinPersona(spec.id, instructions);
+          else { const rec = specialists.find(s => s.id === spec.id); if (rec) { const updated = { ...rec, instructions: String(instructions) }; specialists = specialists.filter(s => s.id !== spec.id).concat(updated); saveSpecialists(); registerSpecialist(updated); } }
+        }
+      }
+      const key = foldId || findSpecialist(aid)?.id;
+      if (key && (foldDocs !== undefined || foldScope !== undefined)) { const cur = getFoldDocs(key); setFoldDocs(key, { foldDocs: foldDocs !== undefined ? foldDocs : cur.foldDocs, foldScope: foldScope !== undefined ? foldScope : cur.foldScope }); }
+      return harden({ ok: true, id: foldId || findSpecialist(aid)?.id });
+    },
     // resolve a published-site token → its directory (for the /sites/ host)
     siteDir: token => sites.get(String(token || '')) || null,
     downloadFor,

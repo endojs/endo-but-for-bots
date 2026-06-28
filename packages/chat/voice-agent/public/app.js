@@ -1576,7 +1576,8 @@ const refreshSpecialists = async () => {
   try { specs = await rpc('listSpecialists'); } catch { return; }
   if (!specs.length) { wrap.classList.add('hide'); $('specialists-list').innerHTML = ''; return; }
   wrap.classList.remove('hide');
-  $('specialists-list').innerHTML = specs.map((s, i) => `<div class="share"><div><b>${esc(s.name)}</b> <span class="pill">${esc(s.domain || '')}${s.powers && s.powers.length ? ' · ' + esc(s.powers.join(', ')) : ''}${s.autonomy && s.autonomy.length ? ' · auto: ' + esc(s.autonomy.join(', ')) : ''}</span></div><div><button class="mini bad" data-retire="${i}">retire</button></div></div>`).join('');
+  $('specialists-list').innerHTML = specs.map((s, i) => `<div class="share"><div><b>${esc(s.name)}</b> <span class="pill">${esc(s.domain || '')}${s.powers && s.powers.length ? ' · ' + esc(s.powers.join(', ')) : ''}${s.autonomy && s.autonomy.length ? ' · auto: ' + esc(s.autonomy.join(', ')) : ''}</span></div><div><button class="mini" data-edit="${i}">✏️ edit</button> <button class="mini bad" data-retire="${i}">retire</button></div></div>`).join('');
+  document.querySelectorAll('#specialists-list [data-edit]').forEach(b => { b.onclick = () => openAgentEditor(specs[+b.dataset.edit].id); });
   document.querySelectorAll('#specialists-list [data-retire]').forEach(b => { b.onclick = async () => { const s = specs[+b.dataset.retire]; if (window.confirm(`Retire specialist "${s.name}"? It will be removed from your inventory.`)) { await rpc('removeSpecialist', [s.id]); refreshSpecialists(); } }; });
 };
 
@@ -3997,10 +3998,44 @@ const openShapePendant = async steps => {
 };
 let lastShape = {};
 const AGENT_LABEL = id => (id === 'field-agent' ? 'Agent C' : ((agentMeta[id] && agentMeta[id].name) || id));
+// The friendly Agent EDITOR — view + edit one agent's configuration: its system prompt (persona) and its
+// STANDING REFERENCE DOCUMENTS (notes always folded into its context, so it never re-reads them). Works for the
+// entry agent (Agent C), the built-in domain agents (Dietician, …), and your own specialists. Root-gated server-side.
+const openAgentEditor = async agentId => {
+  const d = await pf('/agents/config', { agent: agentId });
+  if (!d || d.error || !d.config) { showModal(`<div class="qrlabel">Agent editor</div><div class="pmeta">${esc((d && d.error) || 'could not load this agent')}</div>`); return; }
+  const c = d.config;
+  const ta = 'width:100%;box-sizing:border-box;background:var(--panel);color:var(--ink);border:1px solid var(--edge);border-radius:8px;padding:8px;font:inherit';
+  const docRow = (val = '') => `<div class="ae-doc set-row" style="gap:6px;margin:4px 0"><input class="hdr-sel ae-docpath" style="flex:1;min-width:0" placeholder="Folder/Note.md — a vault path" value="${esc(val)}"><button class="mini bad ae-docdel" title="remove this document">×</button></div>`;
+  showModal(`<div style="text-align:left;width:min(640px,90vw)">
+    <div class="set-h">✏️ Edit ${esc(c.name)}${c.builtin ? (c.entry ? ' <span class="pill">entry agent</span>' : ' <span class="pill">built-in</span>') : ' <span class="pill">your specialist</span>'}</div>
+    <div class="pmeta" style="margin-bottom:10px">${esc(c.domain || '')}${c.powers && c.powers.length ? ` · <span class="pmeta">holds: ${esc(c.powers.join(', '))}</span>` : ''}</div>
+    <div class="set-h" style="margin-top:6px">🧠 System prompt</div>
+    <div class="pmeta">This agent's standing instructions — who it is and how it works.</div>
+    <textarea id="ae-instr" style="${ta};min-height:170px;margin-top:5px">${esc(c.instructions || '')}</textarea>
+    <div class="set-h" style="margin-top:14px">📎 Always-on reference documents</div>
+    <div class="pmeta">Vault notes this agent <b>always has on hand</b> — folded into its context every turn, so it never has to search for or re-read them (e.g. the family diet specs for the Dietician). Least authority: docs must live under the scope folder.</div>
+    <div class="set-row" style="gap:6px;margin:7px 0"><span class="pill">scope</span><input id="ae-scope" class="hdr-sel" style="flex:1;min-width:0" placeholder="folder these docs live under (blank = whole vault)" value="${esc(c.foldScope || '')}"></div>
+    <div id="ae-docs">${(c.foldDocs || []).map(docRow).join('')}</div>
+    <button class="mini" id="ae-add" style="margin-top:4px">+ add document</button>
+    <div style="margin-top:14px"><button class="mini primary" id="ae-save">Save</button> <span id="ae-out" class="pill" style="margin-left:6px"></span></div>
+  </div>`);
+  const docsHost = $('ae-docs');
+  const wireDel = () => docsHost.querySelectorAll('.ae-docdel').forEach(b => { b.onclick = () => b.closest('.ae-doc').remove(); });
+  wireDel();
+  $('ae-add').onclick = () => { docsHost.insertAdjacentHTML('beforeend', docRow('')); wireDel(); const last = docsHost.querySelector('.ae-doc:last-child .ae-docpath'); if (last) last.focus(); };
+  $('ae-save').onclick = async () => {
+    const foldDocs = [...docsHost.querySelectorAll('.ae-docpath')].map(i => i.value.trim()).filter(Boolean);
+    const out = $('ae-out'); out.textContent = 'saving…';
+    const r = await pf('/agents/save', { agent: c.id, instructions: $('ae-instr').value, foldDocs, foldScope: $('ae-scope').value.trim() });
+    out.textContent = r && r.ok ? 'saved ✓ — applies on the next turn' : `error: ${(r && r.error) || '?'}`;
+  };
+};
+
 const renderSettingsShape = async body => {
   body.innerHTML = `<div class="set-h">🕸️ Agent shape</div>
     <div class="pmeta" style="margin-bottom:9px">The structural graph of what an agent <b>holds</b> — its powers (each fanning to the tools it can call), its specialist sub-agents, and the roles it could employ. What the agent <i>is</i> (distinct from the per-message trace, which is what it <i>did</i>). Includes the built-in domain agents (Dietician, …) + your specialists.</div>
-    <div class="set-row" style="margin-bottom:9px;gap:8px"><select id="shape-agent" class="mini">${agentGroupsHtml()}</select><button class="mini" id="shape-3d">🧊 Open 3D diagram</button></div>
+    <div class="set-row" style="margin-bottom:9px;gap:8px"><select id="shape-agent" class="mini">${agentGroupsHtml()}</select><button class="mini primary" id="shape-edit">✏️ Edit agent</button><button class="mini" id="shape-3d">🧊 Open 3D diagram</button></div>
     <div id="shape-body" class="pmeta">loading…</div>`;
   const chips = arr => _arr(arr).map(x => `<span class="pill" style="margin:1px 3px 1px 0">${esc(String(x))}</span>`).join('');
   const load = async () => {
@@ -4020,6 +4055,7 @@ const renderSettingsShape = async body => {
         ${roles.length ? roles.map(r => `<div class="share" style="display:block;padding:6px 9px;margin:4px 0;opacity:.85"><div style="font-size:13px">${esc(r.label || r.role)} <span class="pmeta">(${esc(r.role)} · ${r.writes ? 'writes' : 'read-only'})</span></div>${r.blurb ? `<div class="pmeta" style="margin-top:1px">${esc(scrubCap(r.blurb))}</div>` : ''}<div style="margin-top:3px">${chips(r.powers)}</div></div>`).join('') : `<div class="pill">no roles employable with this agent's powers</div>`}</div>`;
   };
   const sel = $('shape-agent'); if (sel) sel.onchange = load;
+  const ed = $('shape-edit'); if (ed) ed.onclick = () => openAgentEditor(($('shape-agent') && $('shape-agent').value) || 'field-agent');
   const btn = $('shape-3d'); if (btn) btn.onclick = () => openShapePendant(shapeToSteps(lastShape));
   load();
 };
