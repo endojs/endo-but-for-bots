@@ -88,9 +88,12 @@ import { postInternal, listInternal } from './internal-messages.mjs';
 import { reviseToConverge } from './revise-loop.mjs';
 import { notify, topicForKey } from '../capture/notify.mjs';
 import { writeRating, ratingsDir } from './eval-ratings.mjs';
+// THE PERSONAL/PLATFORM SEAM (Packing up for Dweb): personal config + state dirs resolve through
+// field-config so FIELD_PERSONAL_ROOT (the encrypted volume) moves them together. Defaults identical on the NUC.
+import { CONFIG_DIR, STATE_DIR, VOICE_STATE_DIR, DASH_STATE_DIR, FIELD_MODE, configSummary } from './field-config.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const HOME = '/home/dan';
+const HOME = process.env.HOME || '/home/dan';
 const PORT = Number(process.env.PORT) || 8778;
 const BIND = (process.env.BIND ? process.env.BIND.split(',').map(s => s.trim()).filter(Boolean) : ['100.83.80.102', '127.0.0.1']); // tailnet IP + loopback — never 0.0.0.0 (overridable for staging)
 // FIELD_LOCKDOWN couples the two halves of the confined-fork render path so they can NEVER drift apart:
@@ -107,9 +110,9 @@ const FIELD_LOCKDOWN = process.env.FIELD_LOCKDOWN === '1';
 const BASE_URL = process.env.PUBLIC_BASE_URL || `http://100.83.80.102:${PORT}`;
 const WHISPER = process.env.STT_URL || 'http://192.168.50.226:8000/v1/audio/transcriptions';
 const STT_MODEL = process.env.STT_MODEL || 'deepdml/faster-whisper-large-v3-turbo-ct2';
-const OUT = process.env.OUT_DIR || `${HOME}/.local/state/voice-agent/out`;
-const toolShares = makeToolShares({ dir: `${HOME}/.local/state/voice-agent/tool-shares` }); // share-as-factory/instance + meter + charge
-const COMPONENT_GIT_DIR = process.env.COMPONENT_GIT_DIR || `${HOME}/.local/state/voice-agent/component-git`;
+const OUT = process.env.OUT_DIR || `${VOICE_STATE_DIR}/out`;
+const toolShares = makeToolShares({ dir: `${VOICE_STATE_DIR}/tool-shares` }); // share-as-factory/instance + meter + charge
+const COMPONENT_GIT_DIR = process.env.COMPONENT_GIT_DIR || `${VOICE_STATE_DIR}/component-git`;
 const componentGit = makeComponentGit({ baseDir: COMPONENT_GIT_DIR }); // each component's SOURCE as a git-as-Endo object (version / fork / revert). Env-overridable so a staging/test instance does NOT write broken-out components into the live gallery (the reason it filled with probes).
 // DURABILITY (live-editable plan): mirror every component/fork repo to a remote (gitea) so a local DB/disk
 // failure loses no history. OPT-IN — a no-op unless COMPONENT_GIT_REMOTE is set, so no surprise outward push.
@@ -117,7 +120,7 @@ const componentSync = makeComponentSync({ baseDir: COMPONENT_GIT_DIR, log: (...a
 // MULTI-USER (live-editable plan): per-user capabilities — minted on first open (INVITE-ONLY), storing prefs +
 // a Root pointer so each user runs their own app variant over the shared component fork-tree. cap-hygiene: the
 // user-cap is stored only as a hash. No public minting (dan's call: invite-only / Tailnet-private).
-const userStore = makeUserStore({ file: process.env.USERS_FILE || `${HOME}/.config/field-agent/users.json` });
+const userStore = makeUserStore({ file: process.env.USERS_FILE || `${CONFIG_DIR}/users.json` });
 const islandSource = makeIslandSource({ here: HERE, componentGit }); // confined-Preact ISLANDS as versioned components (edit = rewrite client file + rebuild)
 // A tool's source as a {relpath: content} file map for the component-git store (single-file → tool.js).
 const sourceFilesOf = t => (t.files && typeof t.files === 'object' && Object.keys(t.files).length ? t.files : { 'tool.js': String(t.code || '') });
@@ -261,13 +264,13 @@ const forkComponentTo = async (ct, srcId, newName, ref = 'HEAD', proposedBy = 'o
   return { ok: true, forkId: p.id, name: newName, note: 'Forked — its own source lineage + a copy of the data. It enters review; admit it to host your fork. The original is untouched.' };
 };
 const UPLOADS = `${OUT}/uploads`; // user-attached photos/files (served under web-key'd /uploads/<hex>.<ext>)
-const SEED_FILE = process.env.SEED_FILE || `${HOME}/.config/field-agent/root.swiss`;
-const CHATS_DIR = `${HOME}/.local/state/voice-agent/chats`; // per-cap chat list + transcripts (cross-device sync)
+const SEED_FILE = process.env.SEED_FILE || `${CONFIG_DIR}/root.swiss`;
+const CHATS_DIR = `${VOICE_STATE_DIR}/chats`; // per-cap chat list + transcripts (cross-device sync)
 const chatStorePath = cap => path.join(CHATS_DIR, crypto.createHash('sha256').update(String(cap || '')).digest('hex').slice(0, 40) + '.json');
 // notification inbox (the 🔔 bell): the dashboard's durable feed is the shared data
 // endowment; per-cap dismissed-state lives here. An entry "needs attention" by its status.
-const FEED_FILE = `${HOME}/.local/state/field-dashboard/feed.json`;
-const NOTIF_DIR = `${HOME}/.local/state/voice-agent/notif-triage`;
+const FEED_FILE = `${DASH_STATE_DIR}/feed.json`;
+const NOTIF_DIR = `${VOICE_STATE_DIR}/notif-triage`;
 const notifStorePath = cap => path.join(NOTIF_DIR, crypto.createHash('sha256').update(String(cap || '')).digest('hex').slice(0, 40) + '.json');
 // review/confirm/decision are the operator-action notification kinds ("needs review",
 // "needs confirming", "needs your decision"); enumerate them by kind so a status that
@@ -306,7 +309,7 @@ const fileSafe = (root, rel) => {
 //    appShareFor + attenuates + (for inference apps) meters against the purse. First step of the
 //    break-out → minimize → fork → re-share lifecycle. ──
 const appKey = c => crypto.createHash('sha256').update(String(c || '')).digest('hex').slice(0, 16);
-const APP_SHARES_FILE = `${HOME}/.local/state/voice-agent/app-shares.json`;
+const APP_SHARES_FILE = `${VOICE_STATE_DIR}/app-shares.json`;
 let appShares = {};
 try { appShares = JSON.parse(fs.readFileSync(APP_SHARES_FILE, 'utf8')) || {}; } catch { appShares = {}; }
 const saveAppShares = () => { try { fs.mkdirSync(path.dirname(APP_SHARES_FILE), { recursive: true }); fs.writeFileSync(APP_SHARES_FILE, JSON.stringify(appShares, null, 2)); } catch { /* */ } };
@@ -356,8 +359,8 @@ const feedLinkHref = l => {
 };
 // memo runs: each incoming voice memo is processed by the entry agent → a traceable
 // "run" (transcript + the agent's steps[]). Server-owned (not the editable per-cap chats).
-const MEMO_RUNS_FILE = process.env.MEMO_RUNS_FILE || `${HOME}/.local/state/voice-agent/memo-runs.json`;
-const DEV_QUEUE_FILE = `${HOME}/.local/state/field-agent/dev-queue.jsonl`; // dev-task visibility + thread replies
+const MEMO_RUNS_FILE = process.env.MEMO_RUNS_FILE || `${VOICE_STATE_DIR}/memo-runs.json`;
+const DEV_QUEUE_FILE = `${STATE_DIR}/dev-queue.jsonl`; // dev-task visibility + thread replies
 // a run holds VERSIONS — each {env → trace} — so re-running the same memo under a changed
 // environment appends a version you can scrub through. Old flat runs normalize to v0.
 const readMemoRuns = async () => {
@@ -371,7 +374,7 @@ const writeMemoRuns = async runs => { await fs.promises.mkdir(path.dirname(MEMO_
 // continuable chat. The client adopts these into its own chat list once (additively,
 // so it never clobbers unsynced local edits), after which they are normal chats —
 // continuable, cross-device-synced, 3D-traceable, and deep-linkable (#chat=<id>).
-const INPUT_QUEUE = `${HOME}/.local/state/field-dashboard/input-queue.json`; // the off-app drain (input-runner polls this)
+const INPUT_QUEUE = `${DASH_STATE_DIR}/input-queue.json`; // the off-app drain (input-runner polls this)
 // enqueue an operator's answer for the off-app agent drain (input-runner → claude -p).
 // Uses the kind:'reply' shape so the answer is passed to the worker INLINE. Atomic write.
 const enqueueReply = ({ doc = '', label = '', title = '', prompt = '' }) => {
@@ -383,7 +386,7 @@ const enqueueReply = ({ doc = '', label = '', title = '', prompt = '' }) => {
   const tmp = `${INPUT_QUEUE}.tmp-${crypto.randomBytes(4).toString('hex')}`;
   fs.writeFileSync(tmp, JSON.stringify(q, null, 2)); fs.renameSync(tmp, INPUT_QUEUE);
 };
-const SEED_CHATS_FILE = process.env.SEED_CHATS_FILE || `${HOME}/.local/state/voice-agent/seed-chats.json`;
+const SEED_CHATS_FILE = process.env.SEED_CHATS_FILE || `${VOICE_STATE_DIR}/seed-chats.json`;
 const SCHEDULED_SEED_TTL_MS = 7 * 24 * 60 * 60 * 1000; // ⏰ scheduled-agent runs are ephemeral — GC after a week
 // readSeedChats GC's expired scheduled runs from the RETURNED view; since writeSeedChats's caller does a
 // read→unshift→write, the next scheduled run also prunes them from the file. Non-scheduled seeds are kept.
@@ -394,7 +397,7 @@ const writeSeedChats = async chats => { await fs.promises.mkdir(path.dirname(SEE
 //    merged over the built-in agent-roles catalog via setCustomRoles so a custom
 //    role (or an override of a built-in) is immediately employable by the entry
 //    agent. Loaded at boot; rewritten + re-pushed on every /roles/save|delete. ──
-const CUSTOM_ROLES_FILE = `${HOME}/.local/state/voice-agent/custom-roles.json`;
+const CUSTOM_ROLES_FILE = `${VOICE_STATE_DIR}/custom-roles.json`;
 const readCustomRoles = () => { try { return JSON.parse(fs.readFileSync(CUSTOM_ROLES_FILE, 'utf8')) || {}; } catch { return {}; } };
 const writeCustomRoles = map => { fs.mkdirSync(path.dirname(CUSTOM_ROLES_FILE), { recursive: true }); fs.writeFileSync(CUSTOM_ROLES_FILE, JSON.stringify(map, null, 2)); };
 try { setCustomRoles(readCustomRoles()); } catch (e) { log('load custom-roles', e.message); }
@@ -454,7 +457,7 @@ const chatPurses = new Map(); // `${cap}:${sid}` → purse
 // Durable balances: a purse's mutations persist (hashed key → {balance,granted}); on boot a chat's purse
 // rehydrates from disk instead of resetting to the default allowance. (Increment 6 swaps this for agora's
 // journaled bank behind the same shape.)
-const purseStore = makePurseStore({ file: `${HOME}/.local/state/voice-agent/purses.json` });
+const purseStore = makePurseStore({ file: `${VOICE_STATE_DIR}/purses.json` });
 const purseFor = (cap, sid) => {
   const k = `${cap}:${sid}`;
   let p = chatPurses.get(k);
@@ -468,7 +471,7 @@ const purseFor = (cap, sid) => {
 };
 // Central toll-bridge for EDIT (AI-credit spend) + SAVE/HOST (storage×time) rights, used by the SPWA
 // self-editors. Same µUSD purse ledger as inference, in a separate `toll:<account>` namespace.
-const tollBridge = makeTollBridge({ purseStore, makePurse, costOf, ledgerFile: `${HOME}/.local/state/voice-agent/hosting-ledger.json` });
+const tollBridge = makeTollBridge({ purseStore, makePurse, costOf, ledgerFile: `${VOICE_STATE_DIR}/hosting-ledger.json` });
 // Live grain transport for chat widgets: a browser subscribes to named server cells (e.g. ha:<handle>)
 // over a streamed response and gets PUSHED updates — no polling. Cap-gated per cell. (Defined after
 // nodeFor below via a late binding; see the /cells/subscribe route.)
@@ -510,16 +513,16 @@ const customView = {};
 const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, foldedPersonaFor, getFoldDocs, setFoldDocs, agentConfig, saveAgentConfig, haResolveReadOnly, changelog, actOnStagedReview } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL, fillSpecialist, customView });
 liveCells = makeLiveCells({ nodeFor }); // browser-subscribable live grains (cap-gated)
 // Least-authority cross-user share tokens for a broken-out component: subscribe-only to its frozen cells.
-const componentShares = makeComponentShares({ file: `${HOME}/.local/state/voice-agent/component-shares.json`, makePurse, purseStore });
+const componentShares = makeComponentShares({ file: `${VOICE_STATE_DIR}/component-shares.json`, makePurse, purseStore });
 // User-owned FORKS of confined Preact components (the in-tree, no-iframe model). Any cap-holder owns forks;
 // owner = a stable, NON-SECRET id derived from the cap ('root' for the root cap, else a one-way hash — never
 // the cap itself, cap-hygiene). Forks render via client renderSource under lockdown; the store is live-safe
 // regardless (it only vends source strings, which the client refuses to render unless the realm is frozen).
-const forks = makeForks({ file: process.env.FORKS_STORE || `${HOME}/.local/state/voice-agent/forks.json`, makePurse, purseStore });
+const forks = makeForks({ file: process.env.FORKS_STORE || `${VOICE_STATE_DIR}/forks.json`, makePurse, purseStore });
 const forkOwnerOf = cap => { const n = nodeFor(cap); if (!n) return null; return n.isRoot ? 'root' : `u:${crypto.createHash('sha256').update(`fork-owner:${String(cap)}`).digest('hex').slice(0, 16)}`; };
 // Distribution-trust (Phase 5): the social-collateral graph that decides which fork VERSIONS are approved
 // for end-user distribution. Root (the operator) is the base authority; trust flows outward via grants.
-const distTrust = makeDistTrust({ file: process.env.DIST_TRUST_STORE || `${HOME}/.local/state/voice-agent/dist-trust.json`, rootId: 'root' });
+const distTrust = makeDistTrust({ file: process.env.DIST_TRUST_STORE || `${VOICE_STATE_DIR}/dist-trust.json`, rootId: 'root' });
 // EAGER BLOSSOM (the "render an island per object interface" loop): on first sight of a new interface, an
 // agent authors a confined renderer FORK, registered by interface signature + reused forever. Budget caps +
 // a per-signature lock keep "eager" from running away. The renderer authoring system prompt:
@@ -538,7 +541,7 @@ const authorRendererWith = llm => async args => {
   return code;
 };
 const authorRenderer = authorRendererWith(async messages => ({ text: String(await opusComplete({ system: messages[0].content, prompt: messages[1].content, maxTokens: 2000 }) || '') }));
-const blossom = makeBlossom({ file: process.env.BLOSSOM_STORE || `${HOME}/.local/state/voice-agent/blossom.json`, forks, authorRenderer,
+const blossom = makeBlossom({ file: process.env.BLOSSOM_STORE || `${VOICE_STATE_DIR}/blossom.json`, forks, authorRenderer,
   maxConcurrent: Number(process.env.BLOSSOM_MAX_CONCURRENT) || 2, maxTotal: Number(process.env.BLOSSOM_MAX_TOTAL) || 300 });
 // Wire the late-bound seam: the chat agent's `customView` tool registers/revises a renderer it AUTHORED
 // itself (no hidden LLM — the agent IS the studio, visible in the trace). `current` hands the agent the
@@ -672,8 +675,8 @@ const withOutputPowers = (proposed, task) => {
 // speaker labels — sidesteps the cross-chunk stitching limitation), persist the TRANSCRIPT
 // per-cap (raw audio is NOT stored server-side), and return speaker-labelled segments.
 const meetingScribe = makeMeetingScribe();
-const MEETINGS_DIR = `${HOME}/.local/state/voice-agent/meetings`;
-const SHARED_DIR = `${HOME}/.local/state/voice-agent/shared-chats`; // Feature B: token → shared chat
+const MEETINGS_DIR = `${VOICE_STATE_DIR}/meetings`;
+const SHARED_DIR = `${VOICE_STATE_DIR}/shared-chats`; // Feature B: token → shared chat
 const sharePurses = new Map(); // share token → allowance purse (bounds a write-recipient's spend)
 // Durable share-allowance purses: persisted via purseStore under a `share:` namespace (token is hashed,
 // never on disk), so a funded share survives a restart instead of resetting.
@@ -2228,7 +2231,7 @@ const handler = async (req, res) => {
         ],
       };
       let merges = [];
-      try { merges = ((JSON.parse(fs.readFileSync(process.env.AUTO_MERGE_LEDGER || `${HOME}/.local/state/field-agent/auto-merge-ledger.json`, 'utf8')).merges) || []).slice(-8).reverse().map(m => ({ goal: m.goal, mergeCommit: String(m.mergeCommit || '').slice(0, 8), mergedAt: m.mergedAt, rolledBack: !!m.rolledBack })); } catch { /* no ledger yet */ }
+      try { merges = ((JSON.parse(fs.readFileSync(process.env.AUTO_MERGE_LEDGER || `${STATE_DIR}/auto-merge-ledger.json`, 'utf8')).merges) || []).slice(-8).reverse().map(m => ({ goal: m.goal, mergeCommit: String(m.mergeCommit || '').slice(0, 8), mergedAt: m.mergedAt, rolledBack: !!m.rolledBack })); } catch { /* no ledger yet */ }
       const fapoLane = {
         action: 'Self-improve the system (FAPO loop)',
         cell: 'the worktree diff + the test outcome',
@@ -2890,6 +2893,7 @@ const main = async () => {
     setInterval(() => { componentSync.syncAll().catch(e => log('component-sync sweep', e.message)); }, 15 * 60 * 1000);
   }
 
+  { const c = configSummary(); log(`field mode: ${c.mode} | personal-root: ${c.personalRoot} | config: ${c.configDir} | vault: ${c.vault}`); }
   for (const ip of BIND) { const s = http.createServer(handler); s.on('error', e => log('bind', ip, e.message)); s.listen(PORT, ip, () => log(`field agent on http://${ip}:${PORT}`)); }
   // cap-hygiene: don't print the all-powers root #cap link to the log on a normal boot. Show only a
   // fingerprint; the operator gets the full link by setting PRINT_ROOT_CAP=1 (first-run bootstrap only).

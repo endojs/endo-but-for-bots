@@ -102,17 +102,21 @@ import { sendMail } from './email-smtp.mjs';
 import { makeContacts } from './contacts.mjs';
 import { getTranscript } from './youtube.mjs';
 import { extractPdf } from './pdf-extract.mjs';
+// THE PERSONAL/PLATFORM SEAM (Packing up for Dweb): every personal coupling that used to be a hardcoded
+// /home/dan literal now resolves through field-config, so pointing FIELD_PERSONAL_ROOT at the encrypted
+// volume moves dan's whole personal family together. Defaults are byte-identical to before on the NUC.
+import { HOME_BASE as CFG_HOME_BASE, PERSONA_FILE as CFG_PERSONA_FILE, EMAIL_CFG as CFG_EMAIL_CFG, EMAIL_FROM as CFG_EMAIL_FROM, KAZPUTER_STATE as CFG_KAZPUTER_STATE, FEED_FILE as CFG_FEED_FILE, VAULT_DIR, STATE_DIR, VOICE_STATE_DIR, CONFIG_DIR } from './field-config.mjs';
 
-export const HOME_BASE = '/home/dan/.local/state/field-agent/home';
-const PERSONA_FILE = '/home/dan/.config/field-agent/persona.txt'; // the agent's self-authored, operator-confirmed instructions
-const EMAIL_CFG = '/home/dan/.config/field-agent/email.json'; // SMTP relay creds for the email power (never in code/chat)
-const EMAIL_FROM = 'bot@danfinlay.com'; // default From for the bot's outbound mail
+export const HOME_BASE = CFG_HOME_BASE;
+const PERSONA_FILE = CFG_PERSONA_FILE; // the agent's self-authored, operator-confirmed instructions
+const EMAIL_CFG = CFG_EMAIL_CFG; // SMTP relay creds for the email power (never in code/chat)
+const EMAIL_FROM = CFG_EMAIL_FROM; // default From for the bot's outbound mail
 const KAZPUTER_URL = process.env.KAZPUTER_URL || 'http://127.0.0.1:8779'; // kazputer-phone RPC (loopback, same host)
-const KAZPUTER_STATE = '/home/dan/.config/kazputer-phone/instances.json'; // holds the provisioner cap (read live)
+const KAZPUTER_STATE = CFG_KAZPUTER_STATE; // holds the provisioner cap (read live)
 
-const FEED_MJS = path.resolve('/home/dan/endo-bfb/packages/chat/dashboard/feed.mjs');
-const FEED_FILE = '/home/dan/.local/state/field-dashboard/feed.json'; // the dashboard's durable feed — reused as the notification data endowment (the 🔔 bell reads it)
-const VAULT = process.env.OBSIDIAN_VAULT || '/home/dan/obsidian/vault'; // env-overridable (matches obsidian-graph.mjs; lets tests point at a temp vault)
+const FEED_MJS = path.resolve(process.env.FEED_MJS || '/home/dan/endo-bfb/packages/chat/dashboard/feed.mjs');
+const FEED_FILE = CFG_FEED_FILE; // the dashboard's durable feed — reused as the notification data endowment (the 🔔 bell reads it)
+const VAULT = VAULT_DIR; // env-overridable via OBSIDIAN_VAULT (field-config); rebases onto the personal volume
 const HA_URL = (process.env.HOMEASSISTANT_URL || 'http://192.168.50.11:8123').replace(/\/$/, '');
 const VM_HOST = process.env.VM_HOST || 'agent@10.89.0.3'; // the agent-code dev persona
 const newSwiss = () => crypto.randomBytes(16).toString('hex');
@@ -127,7 +131,7 @@ const newSwiss = () => crypto.randomBytes(16).toString('hex');
 //   `cd` elsewhere or use absolute paths); the worktree only sets the DEFAULT working
 //   dir + guards the cwd PARAMETER. True escape-confinement is the @endo/sandbox
 //   (bwrap/podman) layer — tracked separately (see endo_sandbox_genie memory).
-const WORKTREE_DIR = process.env.FIELD_AGENT_WORKTREE_DIR || '/home/dan/.local/state/field-agent/worktrees';
+const WORKTREE_DIR = process.env.FIELD_AGENT_WORKTREE_DIR || path.join(STATE_DIR, 'worktrees');
 const WORKTREE_REPO = process.env.FIELD_AGENT_WORKTREE_REPO || '/home/dan/endo-bfb-llm'; // self-improvement default; override per-deployment
 const WORKTREE_BASE_REF = process.env.FIELD_AGENT_WORKTREE_BASE || 'HEAD';
 // ── KERNEL confinement for worktree sub-agents (bubblewrap). A worktree-jailed hostExec (the self-improve
@@ -619,7 +623,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // PRE-FLIGHT: a goal must name at least one REAL path (resolved against the live repo) — stops phantom/
   // wrong-path goals at the door instead of burning an Opus implementation cycle discovering the file is gone.
   const checkTargets = goal => missingTargets(goal, rel => fs.existsSync(path.join(WORKTREE_REPO, rel)));
-  const selfImprover = makeSelfImprover({ host: aff.host, repo: WORKTREE_REPO, baseBranch: process.env.FIELD_AGENT_BASE_BRANCH || 'field-preact', verifyDir: `${WORKTREE_DIR}/_verify`, ledgerFile: '/home/dan/.local/state/field-agent/auto-merge-ledger.json', defaultTest: DEFAULT_VERIFY, timeoutMs: 600000 });
+  const selfImprover = makeSelfImprover({ host: aff.host, repo: WORKTREE_REPO, baseBranch: process.env.FIELD_AGENT_BASE_BRANCH || 'field-preact', verifyDir: `${WORKTREE_DIR}/_verify`, ledgerFile: path.join(STATE_DIR, 'auto-merge-ledger.json'), defaultTest: DEFAULT_VERIFY, timeoutMs: 600000 });
   let selfImproveInFlight = false; // single-flight: at most one self-improvement at a time
 
   // ── STAGED-BRANCH REVIEW (dan): a verified-but-unmerged self-improve branch must SURFACE as an actionable
@@ -722,8 +726,8 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   let contactsObj = null; // dan's NextCloud address book (CardDAV), built at boot
   const connectorsObj = makeConnectors({ getSecret, ssrfOk }); // owner-configured API-service tools (key injected server-side)
   const customToolsObj = makeCustomTools(); // agent-PROPOSED, human-reviewed code tools (admitted → callable, SES-sandboxed)
-  const toolSharesObj = makeToolShares({ dir: '/home/dan/.local/state/voice-agent/tool-shares' }); // same store the server consumer-routes read
-  const componentGitObj = makeComponentGit({ baseDir: '/home/dan/.local/state/voice-agent/component-git' }); // a component's source as a git-as-Endo object (version/fork/revert)
+  const toolSharesObj = makeToolShares({ dir: path.join(VOICE_STATE_DIR, 'tool-shares') }); // same store the server consumer-routes read
+  const componentGitObj = makeComponentGit({ baseDir: path.join(VOICE_STATE_DIR, 'component-git') }); // a component's source as a git-as-Endo object (version/fork/revert)
   let kazAdmin = null; // admin object for dan's own Kazputer (kid-phone), built at boot — searchable + actionable
 
   // ── virtual home folders + static site publishing ──────────────────────────
@@ -813,7 +817,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   //    agent's inventory. Persisted so the accrued trust survives restarts.
   //    HomeAssistant is EXCLUDED — physical-world actions (locks!) always confirm;
   //    per-entity HA autonomy is future work needing per-cap attribution. ──────────
-  const AUTOCONFIRM_FILE = autoConfirmFile || '/home/dan/.config/field-agent/auto-confirm.json';
+  const AUTOCONFIRM_FILE = autoConfirmFile || path.join(CONFIG_DIR, 'auto-confirm.json');
   const NEVER_AUTO = new Set(['home-assistant', 'accept-invite']); // physical-world + EXTERNAL-authority actions ALWAYS confirm (spawning a confined sub-agent no longer proposes — it's structurally within bounds)
   let autoRules = [];
   try { autoRules = JSON.parse(fs.readFileSync(AUTOCONFIRM_FILE, 'utf8')).rules || []; } catch { autoRules = []; }
@@ -830,7 +834,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   //    autonomy per-kind via the "don't ask again" rules above. Spawning is itself a
   //    confirmable proposal (the grant is the authorization). Persisted so a
   //    specialist + its accrued context survive restarts. ─────────────────────────
-  const SPECIALISTS_FILE = specialistsFile || '/home/dan/.config/field-agent/specialists.json';
+  const SPECIALISTS_FILE = specialistsFile || path.join(CONFIG_DIR, 'specialists.json');
   // NON-DELEGABLE powers: the few that grant authority nothing downstream can bound — `subagent` reaches the
   // real HOST shell (escapes confinement), `app` + `selfImprove` are root-only self-modification. Everything
   // ELSE (delegate, specialists, roles, …) is delegable: a node re-grants only powers it already holds (the
@@ -845,7 +849,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // WAND POLICY (Phase 5): the held authority to auto-mint a specialist on a name-miss — option → ~/.config
   // file → conservative default. A node only auto-mints if it HOLDS this (node.wandBinding) AND the name matches
   // an enumerated entry; minted powers are entry.powers ∩ caller. Nodes that don't hold it → graceful miss.
-  const loadWandPolicyFile = () => { try { const j = JSON.parse(fs.readFileSync('/home/dan/.config/field-agent/wand-policy.json', 'utf8')); return Array.isArray(j) ? j : (j.entries || []); } catch { return null; } };
+  const loadWandPolicyFile = () => { try { const j = JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, 'wand-policy.json'), 'utf8')); return Array.isArray(j) ? j : (j.entries || []); } catch { return null; } };
   const wand = makeWandPolicy(wandPolicy || loadWandPolicyFile() || DEFAULT_WAND_POLICY);
   let specialists = [];
   try { specialists = JSON.parse(fs.readFileSync(SPECIALISTS_FILE, 'utf8')).specialists || []; } catch { specialists = []; }
@@ -938,14 +942,14 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // Per-chat scoped caps must SURVIVE RESTARTS (else a deployed/restarted server orphans every
   // confined chat — its cap 403s, the chat silently can't send). Persist {swiss, powers, label}
   // and re-register at boot, the same durability the root swiss already has.
-  const SCOPED_FILE = process.env.SCOPED_CAPS_FILE || '/home/dan/.config/field-agent/scoped-caps.json'; // env-overridable for tests
+  const SCOPED_FILE = process.env.SCOPED_CAPS_FILE || path.join(CONFIG_DIR, 'scoped-caps.json'); // env-overridable for tests
   let scopedCaps = [];
   try { scopedCaps = JSON.parse(fs.readFileSync(SCOPED_FILE, 'utf8')).caps || []; } catch { scopedCaps = []; }
   const saveScoped = () => { try { fs.mkdirSync(path.dirname(SCOPED_FILE), { recursive: true }); fs.writeFileSync(SCOPED_FILE, JSON.stringify({ caps: scopedCaps }, null, 2), { mode: 0o600 }); } catch (e) { /* best effort */ } };
   // ── INVENTORY: external Endo capabilities the agent ACCEPTED (each via an owner-confirmed proposal) — the
   //    inbound counterpart to createInvite. The swissnum is held host-side (mode 0600), NEVER spoken/rendered;
   //    the object is called over the standard /rpc {swissnum, method, args} seam (the same one createInvite shares).
-  const OBJECTS_FILE = process.env.OBJECTS_FILE || '/home/dan/.config/field-agent/accepted-objects.json'; // env-overridable for tests
+  const OBJECTS_FILE = process.env.OBJECTS_FILE || path.join(CONFIG_DIR, 'accepted-objects.json'); // env-overridable for tests
   let acceptedObjects = [];
   try { acceptedObjects = JSON.parse(fs.readFileSync(OBJECTS_FILE, 'utf8')).objects || []; } catch { acceptedObjects = []; }
   const saveAcceptedObjects = () => { try { fs.mkdirSync(path.dirname(OBJECTS_FILE), { recursive: true }); fs.writeFileSync(OBJECTS_FILE, JSON.stringify({ objects: acceptedObjects }, null, 2), { mode: 0o600 }); } catch (e) { /* best effort */ } };
