@@ -43,16 +43,15 @@ import { runOpusDelegate, makeMeteredOpusDelegate } from './delegate.mjs';
 import { makeSelfImprover } from './self-improver.mjs';
 import { listBacklog, addBacklog, nextOpen, recordOutcome, normalizeTestCmd, missingTargets } from './improvement-backlog.mjs';
 import { makeWandPolicy, DEFAULT_WAND_POLICY } from './wand-policy.mjs';
-import { runAgent } from '../../ocapn-noise/tool-bridge.mjs';
 import { runAgentCode } from '../../ocapn-noise/codemode.mjs';
 import { dialIrohObject } from './iroh-objects.mjs';
 // Boot-safe: this module only static-imports node builtins; it lazy-loads @endo/daemon on first USE (when an
 // agent actually redeems an Endo invitation), so importing it can never crash voice-agent boot.
 import * as endoPeer from './endo-peer-bridge.mjs';
 import { postInternal } from './internal-messages.mjs'; // the agent↔Agent C "internal messages" chat (tool pipeline)
-// Sub-agents (scheduled, specialists, employed roles) run the composable-code harness (CEO-Bench: it
-// beats per-tool calls + specialized harnesses) by default. AGENT_CODEMODE=0 reverts to the classic loop.
-const AGENT_RUNNER = process.env.AGENT_CODEMODE === '0' ? runAgent : runAgentCode;
+// Sub-agents (scheduled, specialists, employed roles) run the composable-code harness (CodeMode — it
+// beats per-tool calls + specialized harnesses). The legacy text-marker loop (runAgent) was retired.
+const AGENT_RUNNER = runAgentCode;
 // safeValue — a JSON-safe STRUCTURED snapshot of any value, for the client object-inspector tree. Never
 // throws (records → records with secret keys redacted, REMOTABLES → { __ref, methods } descriptors so they
 // don't re-trip the [object Object] / JSON.stringify-throws problem over /rpc). Bounded depth + width.
@@ -702,7 +701,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   const homeCache = new Map(); // subkey → home object (stable per agent)
   const makeHome = subkey => { if (!homeCache.has(subkey)) homeCache.set(subkey, makeHomeFolder({ root: `${HOME_BASE}/${subkey}`, label: subkey, publish, download })); return homeCache.get(subkey); };
 
-  // The agent's editable system-prompt block (persisted; injected into runAgent).
+  // The agent's editable system-prompt block (persisted; injected as the persona into CodeMode).
   // Changes are operator-confirmed proposals — the agent can PROPOSE but not apply.
   let persona = '';
   try { persona = fs.readFileSync(PERSONA_FILE, 'utf8'); } catch {}

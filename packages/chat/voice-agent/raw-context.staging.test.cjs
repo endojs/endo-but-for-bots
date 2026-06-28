@@ -23,7 +23,7 @@ const post = (p, body) => fetch(`${BASE}${p}`, { method: 'POST', headers: { 'con
 (async () => {
   srv = spawn('node', ['server.mjs'], {
     cwd: __dirname,
-    env: { ...process.env, PORT: String(PORT), BIND: '127.0.0.1', AGENT_CODEMODE: '0',
+    env: { ...process.env, PORT: String(PORT), BIND: '127.0.0.1',
       SEED_FILE: path.join(tmp, 'root.swiss'), OUT_DIR: path.join(tmp, 'out'),
       PROJECTS_STORE: path.join(tmp, 'projects.json'), MEMO_RUNS_FILE: path.join(tmp, 'memo.json'),
       FORKS_STORE: path.join(tmp, 'forks.json'), PRINT_ROOT_CAP: '1' },

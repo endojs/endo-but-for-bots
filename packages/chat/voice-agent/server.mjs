@@ -5,7 +5,7 @@
 // grants exactly one power. Voice chat runs the cap-confined tool agent over
 // whatever bundle the presented cap resolves to.
 //
-//   browser mic ─VAD→ /stt (whisper) ─→ /chat {cap} ─→ runAgent(toolboxFor(cap))
+//   browser mic ─VAD→ /stt (whisper) ─→ /chat {cap} ─→ runAgentCode(toolboxFor(cap))
 //   Shares panel ─→ /rpc {swissnum, method} ─→ node.cap[method]  (describe/share/…)
 //
 // SES process: caps run under @endo/init. Tailnet + loopback bind only.
@@ -20,12 +20,12 @@ import { E } from '@endo/eventual-send';
 import { makeFieldAgent, ALL_POWERS, POWERS, HOME_BASE } from './agent-caps.mjs';
 import { extractPdf } from './pdf-extract.mjs';
 import { roleList, getRole, setCustomRoles, customRoleNames } from './agent-roles.mjs';
-import { runAgent, buildUserContent, callLLM } from '../../ocapn-noise/tool-bridge.mjs';
+import { buildUserContent, callLLM } from '../../ocapn-noise/tool-bridge.mjs';
 import { runAgentCode } from '../../ocapn-noise/codemode.mjs';
-// CodeMode (default ON): the agent acts by writing ONE composable JS program per turn, run in a
-// SES Compartment endowed with exactly its caps (lexical confinement), instead of one TOOL_CALL
-// per turn. Set AGENT_CODEMODE=0 to fall back to the classic loop. See codemode.mjs.
-const AGENT_RUNNER = process.env.AGENT_CODEMODE === '0' ? runAgent : runAgentCode;
+// CodeMode is the ONE agent loop: the agent acts by writing a composable JS program per turn, run in a
+// SES Compartment endowed with exactly its caps (lexical confinement), and ends the turn via the
+// answer()/ask()/blocked() scope functions. The legacy text-marker loop (runAgent) was retired. See codemode.mjs.
+const AGENT_RUNNER = runAgentCode;
 import { readAsks, getAsk, answerAsk, setAskStatus, formatAnswers, getSecret, storeNamedSecret } from './asks-store.mjs';
 import { makeConnectors } from './connectors.mjs';
 import { makeCustomTools, TOOL_AUTHORING_GUIDE } from './custom-tools.mjs';

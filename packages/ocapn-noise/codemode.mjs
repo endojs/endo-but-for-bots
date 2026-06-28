@@ -8,7 +8,7 @@
 // no `process`/`require`/`fs`/host realm to escape into. The cap bundle IS the sandbox API; the
 // lexical scope IS the confinement. (Verified: `typeof process === 'undefined'` inside.)
 //
-// Drop-in alongside runAgent: same signature, so /chat can pick either loop.
+// This is THE agent loop (the legacy text-marker runAgent in tool-bridge.mjs was retired).
 import '@endo/init';
 import { callLLM as defaultCallLLM, buildUserContent as defaultBuildUserContent } from './tool-bridge.mjs';
 

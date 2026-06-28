@@ -1,59 +1,12 @@
-// tool-bridge.mjs — a voice/text agent whose TOOLS are Endo capabilities. The reasoning model
-// (gemma @ tinix:8003) is probabilistic; its AUTHORITY is not. The agent can only invoke the
-// caps in the bundle it was handed — "correct by lexical construction": there is no name for it
-// to reach a power outside the bundle, no matter what it emits. This is the confinement layer
-// for a real-time voice agent (Moshi feeds `userText` in; the agent's reach is this cap bundle).
-//
-// Two tools to start (both already real media caps): generateImage (tinix GPU) + saveNote (vault).
+// tool-bridge.mjs — the model-provider seam for Agent C: callLLM (gemma/Anthropic/OpenRouter dispatch +
+// metering-friendly usage) + buildUserContent (multimodal turn assembly). The reasoning model is
+// probabilistic; its AUTHORITY is not — confinement lives in CodeMode's lexical scope (codemode.mjs), which
+// is the ONLY agent loop. The legacy text-marker loop (runAgent + TOOL_CALL:/ANSWER: parsing) was RETIRED
+// (2026-06-28): control signals are scope functions, not forgeable in-band strings.
 import '@endo/init';
 import fs from 'node:fs';
-import { Far } from '@endo/marshal';
-// Lazy GPU image generator: imported on FIRST use (inside generateImage.run) rather than at module load,
-// so importing this module on a host WITHOUT the GPU box (CI / tests) does not hard-fail. Path overridable.
-const GPU_GEN_MODULE = process.env.GPU_GEN_MODULE || '/home/dan/gpu-img/gen.mjs';
-let _generate = null;
-const generate = async (...a) => {
-  if (!_generate) { ({ generate: _generate } = await import(GPU_GEN_MODULE)); }
-  return _generate(...a);
-};
 
 const LLM = process.env.AGENT_LLM || 'http://192.168.50.226:8003/v1/chat/completions';
-
-// ── the cap bundle: the agent's ENTIRE authority. Each cap is attenuated to one verb. ──────────
-// Returns { toolbox: {name → Far cap}, manifest: [{name, description, args}] (data for the prompt) }.
-export const makeToolbox = ({ outDir }) => {
-  fs.mkdirSync(outDir, { recursive: true });
-  const toolbox = harden({
-    generateImage: Far('generateImage', {
-      run: async ({ prompt }) => {
-        const p = String(prompt || '').trim().slice(0, 400);
-        if (!p) throw new Error('prompt required');
-        const r = await generate(p, { steps: 4, width: 512, height: 512, seed: Math.floor(Date.now() % 1e9) });
-        const file = `${outDir}/image-${Date.now()}.png`;
-        fs.writeFileSync(file, r._buf);
-        return harden({ ok: true, savedTo: file, prompt: p, bytes: r.info.bytes, ms: r.info.ms });
-      },
-      // REVERSIBLE: barge-in / cancel kills the in-flight GPU job (ComfyUI interrupt). The
-      // escape-token retraction = invoking this abort (structural, like revoke()).
-      abort: async () => { try { await fetch('http://192.168.50.226:8188/interrupt', { method: 'POST' }); } catch (e) { /* best effort */ } },
-    }),
-    saveNote: Far('saveNote', {
-      run: async ({ title, body }) => {
-        const safe = (String(title || 'note').replace(/[^\w -]/g, '').trim().slice(0, 60)) || 'note';
-        const file = `${outDir}/${safe}.md`;
-        fs.writeFileSync(file, String(body || ''));
-        return harden({ ok: true, savedTo: file });
-      },
-    }),
-  });
-  // reversible (abortable: speculate + revoke) vs commit-only (only fire when committed/reached).
-  const manifest = harden([
-    { name: 'generateImage', description: 'Generate an image on the GPU and save it. Returns the file path.', args: { prompt: 'string — what to draw' }, reversible: true },
-    { name: 'saveNote', description: 'Save a markdown note to the vault.', args: { title: 'string', body: 'string' }, reversible: false },
-  ]);
-  return harden({ toolbox, manifest });
-};
-harden(makeToolbox);
 
 // OpenRouter routing: a model id of `openrouter:<slug>` (chosen in the provider menu) is dispatched
 // to OpenRouter instead of the local gemma. The key is read lazily from the env, then the field-agent
@@ -146,40 +99,6 @@ export const callLLM = async (messages, model = 'default', { maxTokens = 4096 } 
 };
 harden(callLLM);
 
-// parse a single tool call: the first BRACE-BALANCED {...} (handles nested args, respects strings).
-const parseToolCall = text => {
-  const marker = text.search(/TOOL_CALL/i);
-  const start = text.indexOf('{', marker >= 0 ? marker : 0);
-  if (start < 0) return null;
-  let depth = 0, inStr = false, esc = false, end = -1;
-  for (let i = start; i < text.length; i += 1) {
-    const ch = text[i];
-    if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; }
-    else if (ch === '"') inStr = true;
-    else if (ch === '{') depth += 1;
-    else if (ch === '}') { depth -= 1; if (depth === 0) { end = i; break; } }
-  }
-  if (end < 0) return null; // unbalanced / truncated
-  try { const o = JSON.parse(text.slice(start, end + 1)); return o.name ? o : null; } catch { return null; }
-};
-
-// run a tool, ABORTABLE: if `signal` fires mid-run, invoke the cap's abort() (revoke the in-flight
-// op — e.g. kill the GPU job) and reject. This is the escape/cancel mechanism, structural via the
-// cap's own revocation — not a probabilistic undo. (Barge-in: the user talks over it → cancel.)
-const runTool = (cap, args, signal) => {
-  if (!signal) return cap.run(args);
-  if (signal.aborted) { try { cap.abort?.(); } catch (e) { /* best effort */ } return Promise.reject(new Error('aborted')); }
-  return new Promise((resolve, reject) => {
-    let done = false;
-    const onAbort = () => { if (done) return; done = true; try { cap.abort?.(); } catch (e) { /* best effort */ } reject(new Error('aborted')); };
-    signal.addEventListener('abort', onAbort, { once: true });
-    Promise.resolve().then(() => cap.run(args)).then(
-      r => { if (done) return; done = true; signal.removeEventListener('abort', onAbort); resolve(r); },
-      e => { if (done) return; done = true; signal.removeEventListener('abort', onAbort); reject(e); },
-    );
-  });
-};
-
 // Build the user turn's content. Plain string when there are no attachments;
 // an OpenAI-style multimodal content array when images/files are attached. Images
 // become image_url blocks (gemma on tinix is multimodal — it SEES them, locally);
@@ -200,70 +119,3 @@ export const buildUserContent = (userText, attachments = []) => {
   ];
 };
 harden(buildUserContent);
-
-// ── the agent loop: reason → emit a tool call → DISPATCH ONLY INTO THE BUNDLE → feed back. ──────
-// `signal` (AbortSignal) makes the whole run retractable: between steps and during an abortable
-// tool, a cancel stops the turn and revokes any in-flight op. commit-only tools simply aren't
-// reached once cancelled. (commit-only vs reversible declared in the manifest.)
-// LEGACY loop — uses TEXT MARKERS (`TOOL_CALL: {json}` to act, `ANSWER:` to finish). SUPERSEDED by CodeMode
-// (runAgentCode), where tool invocation and the turn-enders are SCOPE FUNCTIONS, not in-band markers. Kept only
-// as the `AGENT_CODEMODE=0` fallback. Why the marker protocol is worse: a marker is an in-band, forgeable string
-// — content that merely mentions `TOOL_CALL:`/`ANSWER:` collides with the control channel — and is markdown-/
-// format-fragile. The function protocol (and the measured difference) is specced in
-// eval/obstacles/10-control-protocol. Do NOT extend this loop; evolve CodeMode.
-export const runAgent = async ({ toolbox, manifest, userText, history = [], onStep = () => {}, signal, persona = '', attachments = [], model = 'default', llm, budgetLine = '' } = {}) => {
-  // `invoke` is the inference seam: a metered llm (meter.mjs) when the caller supplies one
-  // (the /chat path), else the bare callLLM. A metered llm can return { exhausted:true } —
-  // the prepaid bound; the loop then halts deterministically (no further model spend).
-  const invoke = llm || callLLM;
-  const sys = [
-    'You are a friendly real-time voice assistant. Keep spoken replies short and conversational. You may use tools to act.',
-    // Spare a tool cycle: hand the agent "now" directly (fresh per turn) so it never needs a date/time tool.
-    `The current date and time is ${new Date().toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })}. Use this directly — do not call a tool to learn the date or time.`,
-    // Bias to ACTION + iterate-until-done. The agent kept enthusing ("I\'m ready to
-    // help") instead of starting; this makes it take the reversible first step and
-    // keep going until the work is complete or genuinely blocked on dan.
-    'BIAS TO ACTION — do not just describe what you could do. When asked to do something, take the concrete first step NOW with your tools, then KEEP GOING (call another tool, then another) until the task is genuinely complete or you are blocked on a decision/authorization only dan can give. Never end on "I\'m ready to help", "let me know", or "would you like me to…": either DO the safe, reversible parts immediately (e.g. draft/save a note, search, summarize, route a build to the dev session), or, if you truly need a decision, ask ONE crisp question. Irreversible/destructive actions still go through a proposal (you propose; dan confirms) — proposing IS taking the step, so do it rather than asking permission in prose.',
-    'USE THE BREADTH OF YOUR TOOLKIT — the strongest results come from distributing work across the tools you hold and composing them, not fixating on one or two. Act with PRECISION: prefer specific, targeted moves (the exact note, device, parameter, or recipient) over broad, coarse ones.',
-    // operator-confirmed self-authored instructions (the agent can propose edits to this block)
-    persona && persona.trim() ? `\nYour instructions (operator-confirmed; you may propose edits via proposeSystemPrompt):\n${persona.trim()}\n` : '',
-    // the user attached image(s)/file(s) to THIS turn — they're carried inline in the user message
-    attachments && attachments.length
-      ? `\nThe user attached ${attachments.length} file(s) to THIS message. Any image is shown inline in the user's message — LOOK at it directly to answer (you do NOT need a tool to "see" an image). Text from attached files is inlined too. Use the attachment to act.`
-      : '',
-    // the prepaid budget the agent is spending against (toll-bridge): keeps it cost-aware
-    budgetLine ? `\n${budgetLine}` : '',
-    'Available tools:',
-    ...manifest.map(t => `- ${t.name}(${Object.keys(t.args).join(', ')}): ${t.description}`),
-    '',
-    'To call a tool, reply with EXACTLY: TOOL_CALL: {"name":"<tool>","args":{...}} and nothing else. Keep args concise (short prompts).',
-    'After you receive a tool RESULT, either call another tool or give your final spoken reply on one line prefixed with ANSWER:',
-  ].filter(Boolean).join('\n');
-  const messages = [{ role: 'system', content: sys }, ...history, { role: 'user', content: buildUserContent(userText, attachments) }];
-  const used = [];
-  const cancelled = () => { onStep({ kind: 'cancelled' }); return harden({ answer: '', toolsUsed: used, cancelled: true }); };
-  // No step limit: iterate until ANSWER, ABORT, or the prepaid ALLOWANCE METER is exhausted. Each
-  // turn makes a metered LLM call, so the purse bounds the loop — no arbitrary cutoff of real work.
-  for (;;) {
-    if (signal?.aborted) return cancelled();
-    const out = await invoke(messages, model);
-    if (out && out.exhausted) return harden({ answer: '', toolsUsed: used, exhausted: true, remaining: out.remaining }); // prepaid allowance spent → halt (the bsky fix)
-    if (signal?.aborted) return cancelled();
-    const reply = (out && out.text) || '';
-    const call = parseToolCall(reply);
-    if (!call) { onStep({ kind: 'answer', text: reply }); return harden({ answer: reply.replace(/^ANSWER:\s*/i, '').trim(), toolsUsed: used }); }
-    messages.push({ role: 'assistant', content: reply });
-    const cap = toolbox[call.name]; // ← THE CONFINEMENT: only bundle names resolve to a cap
-    if (!cap) {
-      onStep({ kind: 'denied', name: call.name });
-      messages.push({ role: 'user', content: `RESULT: error — no such tool "${call.name}". You may only use: ${manifest.map(t => t.name).join(', ')}.` });
-      continue;
-    }
-    onStep({ kind: 'tool-start', name: call.name, args: call.args }); // a tool was INVOKED (before it returns) — lets the UI show work in-flight in real time
-    let result;
-    try { result = await runTool(cap, call.args || {}, signal); used.push({ name: call.name, args: call.args }); onStep({ kind: 'tool', name: call.name, args: call.args, result }); }
-    catch (e) { if (signal?.aborted) return cancelled(); result = { ok: false, error: e.message }; onStep({ kind: 'tool-error', name: call.name, error: e.message }); }
-    messages.push({ role: 'user', content: `RESULT: ${JSON.stringify(result)}` });
-  }
-};
-harden(runAgent);
