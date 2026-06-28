@@ -15,6 +15,20 @@ import { forkRetry, forkPage, forkCount, forkIndex } from './fork-model.js'; // 
 import { renderMarkdown } from './md.js'; // safe Markdown→DOM for agent replies + the notification modal
 import { mountForkInto } from './fork-widget.js'; // mount a confined FORK (in-tree, no-iframe) inline in a chat
 initTheme(); // restore the saved theme + start applying it to :root as CSS vars
+// P4 (shell→island): render the header bar from its EDITABLE island — BEFORE anything else touches the header
+// (the theme toggle below + app.js's by-id wiring). The confined renderer keeps `id`, so app.js's getElementById
+// wiring still finds every button. SNAPSHOT→VERIFY→RESTORE: if islands aren't up, or any expected id is missing
+// after the render, restore the original static header so the live app can never break.
+(() => {
+  const hdr = document.querySelector('header');
+  if (!hdr || !window.__fieldIslands || !window.__fieldIslands.renderHeaderBar) return;
+  const NEED = ['hamburger', 'new-chat-top', 'trash-chat-top', 'scope', 'budget', 'agent-sel', 'model-sel', 'tab-talk', 'tab-shares', 'tab-components', 'bell-btn', 'bell-badge', 'info-btn', 'projects-btn', 'chatshare-btn', 'hooks-btn'];
+  const snapshot = hdr.innerHTML;
+  try {
+    window.__fieldIslands.renderHeaderBar(hdr);
+    if (!NEED.every(id => hdr.querySelector('#' + id))) throw new Error('header island missing an id — restoring');
+  } catch (e) { try { hdr.innerHTML = snapshot; } catch { /* keep static */ } }
+})();
 (() => { // a header toggle for light/dark (the first control of the userspace-extensible style framework)
   try {
     const hdr = document.querySelector('header'); if (!hdr) return;

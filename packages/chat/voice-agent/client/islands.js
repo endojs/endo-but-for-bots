@@ -50,6 +50,7 @@ import { ObjectBrowser } from './object-browser.js';
 import { ShareLinkManager } from './share-link-manager.js';
 import { FileBrowser } from './file-browser.js';
 import { TaglineHero } from './tagline-hero.js';
+import { HeaderBar } from './header-bar.js';
 
 // P3 (live-editable plan): ONE tagging path. tagComponent(el, id, name) marks a DOM element as a live,
 // alt-clickable component AND registers it (id → {name}) so the alt-click overlay can resolve + name it and
@@ -321,6 +322,14 @@ const islands = {
     if (!el) return false;
     tagComponent(el, 'island-tagline-hero', 'Landing tagline');
     renderConfined(h(TaglineHero, { text }), el);
+    return true;
+  },
+
+  // The header bar (P4 shell leaf): renders the structure into the existing <header>; app.js wires by id.
+  renderHeaderBar(el) {
+    if (!el) return false;
+    tagComponent(el, 'island-header-bar', 'Header bar');
+    renderConfined(h(HeaderBar, {}), el);
     return true;
   },
 
