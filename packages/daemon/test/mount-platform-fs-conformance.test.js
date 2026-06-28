@@ -182,7 +182,9 @@ test('EndoMount exposes every method on PlatformDirectoryInterface', async t => 
  * whether the vocabulary should grow to include it. `maybeLookup` is the
  * `ReadableNameHub` lookup-or-undefined primitive (C1), not part of the lite
  * `Directory` vocabulary. (`help` is now part of the platform contract, so it
- * is not an extension.)
+ * is not an extension.) `removeDirectory` / `removeTree` split the older
+ * Mount-specific removal semantics, and `subDir` is the daemon mount scoped
+ * string-path convenience over `subView`.
  */
 const ENDOMOUNT_EXTENSIONS = [
   'entry',
@@ -191,7 +193,10 @@ const ENDOMOUNT_EXTENSIONS = [
   'maybeReadText',
   'writeText',
   'makeFile',
+  'removeDirectory',
+  'removeTree',
   'subView',
+  'subDir',
   'maybeLookup',
   // Declared as part of the name-hub contract but throws ENOSYS until a
   // filesystem watcher is wired (filesystem-watchers.md) — see § C1.
