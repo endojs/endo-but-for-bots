@@ -3,7 +3,11 @@
 Status: `answer()`, `ask()`, `blocked()` ALL SHIPPED (2026-06-27, codemode.mjs + codemode-answer.test.mjs).
 The agent ends its turn by calling one of them in its program; the kind flows through the server as an
 `endKind` + `asking`/`blocked` flag (turn-done log, "needs you" push). `ANSWER:` survives only as a
-back-compat fallback. Remaining future work: the `TOOL_CALL`/empty-nudge markers (below).
+back-compat fallback. **TOOL_CALL:** in CodeMode tool invocation is already a scope function
+(`await tool(args)`); the marker survives only in the legacy `runAgent` (`AGENT_CODEMODE=0`) loop, now
+marked superseded. The function-vs-marker difference is codified + measured by a conformance spec suite:
+`eval/obstacles/10-control-protocol/` (`yarn test:control-protocol`). Remaining: the empty-response nudge
+still mentions a reply convention (minor).
 
 ## The principle
 
