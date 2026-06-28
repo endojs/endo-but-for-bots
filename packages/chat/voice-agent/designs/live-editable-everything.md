@@ -103,7 +103,24 @@ Testing note (important for future surfaces): a first-send on an EMPTY/landing c
 headlessly — seed an existing chat (a prior you/agent tx) so the send is a FOLLOW-UP (as
 tool-output-history does). An earlier "the composer island broke send" conclusion was a FALSE NEGATIVE from
 testing a landing first-send; the authoritative tool-output-history (seeded chat) shows send works with the
-island. Remaining surfaces (sidebar frame, settings modal, chat bubbles) follow the same recipe.
+island.
+
+**The boundary the recipe DOESN'T cross — container surfaces that host OTHER islands.** Converting the
+sidebar/drawer frame to an island was tried + reverted: the drawer hosts `#chat-list` (the chat-list
+island). Confined-rendering the drawer takes `#chat-list` under the drawer's preact render, so the chat-list
+island's own `renderConfined` into it no longer composes — the chat list fell back to a plain-DOM render
+(it still WORKED + populated, but lost its OWN island/alt-click-edit). Net-negative: you'd trade a valuable
+inner island for a less-valuable container one. So:
+
+- **Standalone surfaces** (no nested islands) convert cleanly with the recipe: **tagline, header, composer**
+  ✓ done.
+- **Container surfaces** that host other islands — sidebar/drawer (→chat-list), chat bubbles
+  (→message-controls), inbox sections (→notification/changelog cards) — and **dynamically-generated**
+  surfaces (the settings modal, built by `openSettings()` innerHTML) need a different approach: a SLOT
+  mechanism (the container island declares an opaque slot the inner island still owns) or tag-only (mark the
+  container alt-clickable, keep its render imperative). That's a real architectural extension (the
+  preact-container "opaque-child" machinery is the likely basis) — scoped as the next P4 step, not a naive
+  swap.
 
 - **Phase 4 — the shell migrates into confined git-object components. [RESOLVED — dan: yes].** Convert
   the hand-written shell pieces (composer, chat-list, header, panels, bubbles) into confined
