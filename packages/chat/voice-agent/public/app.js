@@ -3852,7 +3852,13 @@ const SETTINGS_SECTIONS = [{ key: 'usage', label: '📊 Usage' }, { key: 'provid
 let settingsSection = 'usage';
 const openSettings = async () => {
   if (!isRoot) { setStatus('settings are owner-only — open with your root link'); return; }
-  showModal(`<div class="setwrap"><div class="setnav">${SETTINGS_SECTIONS.map(s => `<button class="setnav-item${s.key === settingsSection ? ' on' : ''}" data-sec="${s.key}">${s.label}</button>`).join('')}</div><div class="setbody" id="setbody"></div></div>`);
+  // P4: the settings modal SHELL is an editable island (.setnav + .setbody); app.js fills #setnav (sections) +
+  // #setbody. Fall back to static markup if islands aren't up or the shell didn't render its two panes.
+  showModal('<div id="settings-shell"></div>');
+  const mount = $('settings-shell'); let shellOk = false;
+  try { if (mount && window.__fieldIslands && window.__fieldIslands.renderSettingsShell) shellOk = window.__fieldIslands.renderSettingsShell(mount); } catch { shellOk = false; }
+  if (!shellOk || !$('setnav') || !$('setbody')) { if (mount) mount.innerHTML = '<div class="setwrap"><div class="setnav" id="setnav"></div><div class="setbody" id="setbody"></div></div>'; }
+  $('setnav').innerHTML = SETTINGS_SECTIONS.map(s => `<button class="setnav-item${s.key === settingsSection ? ' on' : ''}" data-sec="${s.key}">${s.label}</button>`).join('');
   document.querySelectorAll('.setnav-item').forEach(btn => { btn.onclick = () => { settingsSection = btn.getAttribute('data-sec'); document.querySelectorAll('.setnav-item').forEach(b => b.classList.toggle('on', b === btn)); renderSettingsSection(); }; });
   renderSettingsSection();
 };

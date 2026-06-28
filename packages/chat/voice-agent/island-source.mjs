@@ -35,6 +35,7 @@ const ISLANDS = [
   { id: 'island-drawer-frame', name: 'Sidebar / drawer', file: 'client/drawer-frame.js' },
   { id: 'island-inbox-view', name: 'Notifications view', file: 'client/inbox-view.js' },
   { id: 'island-message-bubble', name: 'Message bubble', file: 'client/message-bubble.js' },
+  { id: 'island-settings-modal', name: 'Settings modal', file: 'client/settings-shell.js' },
   // The shared confined-Preact UI kit every island builds on (Card/Chip/Btn/EmptyState/Meta).
   { id: 'island-ui-kit', name: 'UI kit (primitives)', file: 'client/ui-kit.js' },
   // The 3D conversation-trace view. It's a standalone served script (public/pendant.js), NOT part of

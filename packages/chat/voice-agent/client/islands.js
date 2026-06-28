@@ -55,6 +55,7 @@ import { InputRow } from './input-row.js';
 import { DrawerFrame } from './drawer-frame.js';
 import { InboxView } from './inbox-view.js';
 import { MessageBubble } from './message-bubble.js';
+import { SettingsShell } from './settings-shell.js';
 
 // P3 (live-editable plan): ONE tagging path. tagComponent(el, id, name) marks a DOM element as a live,
 // alt-clickable component AND registers it (id → {name}) so the alt-click overlay can resolve + name it and
@@ -367,6 +368,14 @@ const islands = {
     if (!el) return false;
     tagComponent(el, 'island-message-bubble', 'Message bubble');
     renderConfined(h(MessageBubble, {}), el);
+    return true;
+  },
+
+  // The settings modal SHELL (P4) — .setnav + .setbody. app.js fills #setnav (sections) + #setbody after.
+  renderSettingsShell(el) {
+    if (!el) return false;
+    tagComponent(el, 'island-settings-modal', 'Settings modal');
+    renderConfined(h(SettingsShell, {}), el);
     return true;
   },
 

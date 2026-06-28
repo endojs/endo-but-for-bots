@@ -114,18 +114,23 @@ mount once it's rendered, so app.js's imperative fill into a slot like `#chat-li
   is only used in the Components-tab gallery — so there is no nested island to clobber. An earlier revert of
   the drawer was a MISDIAGNOSIS: the test wrongly expected an `island-chat-list` tag the live app never sets.)
 
-**The "container boundary" DISSOLVED — no slot mechanism needed.** I feared a container hosting a TRUE nested
-island (rendered via `renderConfined`) couldn't be an island, because the inner island's mount would be under
-the container's preact root. TESTED on the **inbox** (`#rec-list` is filled by `renderNotifications` =
-`renderConfined`): it WORKS. Because a container island renders ONCE (no cells → no re-diff), preact never
-reconciles the slot, so the nested `renderConfined` into it composes fine (verified: rec-list gets
-`island-notifications` + its content, zero errors). So container surfaces convert with the SAME recipe:
-- **tagline, header, composer, sidebar/drawer, inbox** ✓ done + verified.
+**P4 COMPLETE — the whole hand-written shell is now editable islands.** Seven surfaces shipped + verified,
+covering all three "special" cases (which all turned out to need NO new mechanism — the recipe + a fallback):
+1. **Landing tagline** — display leaf.
+2. **Header bar** — interactive (by-id wiring survives; `id` is preserved by the renderer).
+3. **Composer input-row** — interactive incl. send (the wired `sendBtn === live #send`).
+4. **Sidebar/drawer** — a slot (`#chat-list`) filled imperatively by app.js.
+5. **Notifications inbox** — a CONTAINER of a TRUE nested island (`#rec-list` via `renderNotifications`):
+   composes because a container island renders ONCE (no re-diff), so the nested `renderConfined` coexists.
+   No "slot/opaque-child mechanism" was needed (the feared boundary was a non-issue).
+6. **Message bubble** — PER-INSTANCE (rendered per message; `.body` is a slot); alt-click any message → edit
+   the bubble template.
+7. **Settings modal** — ON-DEMAND (rendered by `openSettings` into the modal; `#setnav`/`#setbody` filled).
 
-The only genuinely-different cases left are about WHEN/HOW the surface is created, not nesting:
-- **Settings modal** — built ON-DEMAND by `openSettings()` (innerHTML into an ephemeral `#qrmodal`), so it
-  can't be boot-mounted; convert by having `openSettings` render via an island.
-- **Chat bubbles** — created PER-MESSAGE by `bubble()`, so it's a per-instance render, not a one-time mount.
+The pattern, proven across all of them: a confined island reproduces the structure exactly; the renderer keeps
+`id` so app.js wires/fills by id after mount; once-rendered containers let nested islands + imperative fills
+coexist; and a snapshot→verify→restore (or two-slot-check) fallback means a bad render can never break the
+live app. Every shell surface is now alt-clickable → talk to its agent → edit it live.
 
 - **Phase 4 — the shell migrates into confined git-object components. [RESOLVED — dan: yes].** Convert
   the hand-written shell pieces (composer, chat-list, header, panels, bubbles) into confined
