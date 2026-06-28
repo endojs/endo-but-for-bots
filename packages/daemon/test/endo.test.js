@@ -5320,7 +5320,7 @@ const awaitMountChange = async (iter, predicate, timeoutMs = 5000) => {
 };
 
 test('mount followNameChanges yields snapshot in alphabetical order', async t => {
-  t.timeout(30000);
+  t.timeout(30_000);
   const { host, config } = await prepareHost(t);
 
   const mountPath = path.join(config.statePath, '..', 'mount-follow-snapshot');
@@ -5333,7 +5333,7 @@ test('mount followNameChanges yields snapshot in alphabetical order', async t =>
   await E(host).provideMount(mountPath, 'follow-snapshot-mount');
   const mount = await E(host).lookup(['follow-snapshot-mount']);
 
-  const iter = makeRefIterator(await E(mount).followNameChanges());
+  const iter = iterateReader(await E(mount).followNameChanges());
 
   const snapshot = await takeCount(iter, 3);
   t.deepEqual(
@@ -5349,7 +5349,7 @@ test('mount followNameChanges yields snapshot in alphabetical order', async t =>
 });
 
 test('mount followNameChanges yields directory type for subdirectories', async t => {
-  t.timeout(30000);
+  t.timeout(30_000);
   const { host, config } = await prepareHost(t);
 
   const mountPath = path.join(config.statePath, '..', 'mount-follow-types');
@@ -5361,7 +5361,7 @@ test('mount followNameChanges yields directory type for subdirectories', async t
   await E(host).provideMount(mountPath, 'follow-types-mount');
   const mount = await E(host).lookup(['follow-types-mount']);
 
-  const iter = makeRefIterator(await E(mount).followNameChanges());
+  const iter = iterateReader(await E(mount).followNameChanges());
   const snapshot = await takeCount(iter, 2);
 
   const byName = new Map(snapshot.map(record => [record.add, record.type]));
@@ -5372,7 +5372,7 @@ test('mount followNameChanges yields directory type for subdirectories', async t
 });
 
 test('mount followNameChanges reports a live file addition', async t => {
-  t.timeout(30000);
+  t.timeout(30_000);
   const { host, config } = await prepareHost(t);
 
   const mountPath = path.join(config.statePath, '..', 'mount-follow-add');
@@ -5381,7 +5381,7 @@ test('mount followNameChanges reports a live file addition', async t => {
   await E(host).provideMount(mountPath, 'follow-add-mount');
   const mount = await E(host).lookup(['follow-add-mount']);
 
-  const iter = makeRefIterator(await E(mount).followNameChanges());
+  const iter = iterateReader(await E(mount).followNameChanges());
 
   // Backing path is empty, so no snapshot entries; we go straight
   // to the live stream.  Race the watcher startup by waiting a
@@ -5401,7 +5401,7 @@ test('mount followNameChanges reports a live file addition', async t => {
 });
 
 test('mount followNameChanges reports a live file removal', async t => {
-  t.timeout(30000);
+  t.timeout(30_000);
   const { host, config } = await prepareHost(t);
 
   const mountPath = path.join(config.statePath, '..', 'mount-follow-rm');
@@ -5410,7 +5410,7 @@ test('mount followNameChanges reports a live file removal', async t => {
   await E(host).provideMount(mountPath, 'follow-rm-mount');
   const mount = await E(host).lookup(['follow-rm-mount']);
 
-  const iter = makeRefIterator(await E(mount).followNameChanges());
+  const iter = iterateReader(await E(mount).followNameChanges());
 
   // Drain the snapshot (one entry).
   await takeCount(iter, 1);
@@ -5429,7 +5429,7 @@ test('mount followNameChanges reports a live file removal', async t => {
 });
 
 test('mount followNameChanges on a subdirectory does not see siblings', async t => {
-  t.timeout(30000);
+  t.timeout(30_000);
   const { host, config } = await prepareHost(t);
 
   const mountPath = path.join(config.statePath, '..', 'mount-follow-subdir');
@@ -5441,7 +5441,7 @@ test('mount followNameChanges on a subdirectory does not see siblings', async t 
   await E(host).provideMount(mountPath, 'follow-subdir-mount');
   const mount = await E(host).lookup(['follow-subdir-mount']);
 
-  const subIter = makeRefIterator(await E(mount).followNameChanges('sub'));
+  const subIter = iterateReader(await E(mount).followNameChanges('sub'));
   const subSnapshot = await takeCount(subIter, 1);
   t.deepEqual(
     subSnapshot.map(record => record.add),
@@ -5482,7 +5482,7 @@ test('mount followNameChanges on a subdirectory does not see siblings', async t 
 });
 
 test('mount followNameChanges filters confinement-escaping symlinks from snapshot', async t => {
-  t.timeout(30000);
+  t.timeout(30_000);
   const { host, config } = await prepareHost(t);
 
   const basePath = path.join(config.statePath, '..', 'mount-follow-confined');
@@ -5496,7 +5496,7 @@ test('mount followNameChanges filters confinement-escaping symlinks from snapsho
   await E(host).provideMount(mountRoot, 'follow-confined-mount');
   const mount = await E(host).lookup(['follow-confined-mount']);
 
-  const iter = makeRefIterator(await E(mount).followNameChanges());
+  const iter = iterateReader(await E(mount).followNameChanges());
   const snapshot = await takeCount(iter, 1);
   t.deepEqual(
     snapshot.map(record => record.add),
@@ -5508,14 +5508,14 @@ test('mount followNameChanges filters confinement-escaping symlinks from snapsho
 });
 
 test('mount followNameChanges scratch-mount parity: snapshot + live add', async t => {
-  t.timeout(30000);
+  t.timeout(30_000);
   const { host } = await prepareHost(t);
 
   await E(host).provideScratchMount('follow-scratch');
   const scratch = await E(host).lookup(['follow-scratch']);
   await E(scratch).writeText(['seed.txt'], 'seeded');
 
-  const iter = makeRefIterator(await E(scratch).followNameChanges());
+  const iter = iterateReader(await E(scratch).followNameChanges());
   const snapshot = await takeCount(iter, 1);
   t.is(snapshot[0].add, 'seed.txt');
   t.is(snapshot[0].type, 'file');
@@ -5534,7 +5534,7 @@ test('mount followNameChanges scratch-mount parity: snapshot + live add', async 
 });
 
 test('mount followNameChanges releases watcher when iterator is returned', async t => {
-  t.timeout(30000);
+  t.timeout(30_000);
   const { host, config } = await prepareHost(t);
 
   const mountPath = path.join(config.statePath, '..', 'mount-follow-cleanup');
@@ -5543,7 +5543,7 @@ test('mount followNameChanges releases watcher when iterator is returned', async
   await E(host).provideMount(mountPath, 'follow-cleanup-mount');
   const mount = await E(host).lookup(['follow-cleanup-mount']);
 
-  const iter = makeRefIterator(await E(mount).followNameChanges());
+  const iter = iterateReader(await E(mount).followNameChanges());
 
   // Drop the iterator immediately.  After return() the iterator is
   // permanently terminated; subsequent next() calls report done and
