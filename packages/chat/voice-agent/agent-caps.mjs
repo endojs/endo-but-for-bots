@@ -1569,15 +1569,18 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
           try {
             const wantOpus = model === 'opus' || model === 'strong';
             const wantLocal = model === 'gemma' || model === 'default' || model === 'local';
+            // fold the role's STANDING REFERENCE DOCS into its prompt (read once, scope-jailed) — same pattern as
+            // built-in agents, so a role always holds its reference notes instead of re-reading them.
+            const rolePersona = await foldDocsInto(spec.prompt, spec.foldDocs, spec.foldScope);
             // STRONG tier (or explicit "opus") → the bigger brain; falls back to gemma if no API key.
             if (wantOpus || (spec.tier === 'strong' && !wantLocal)) {
-              const prompt = `${spec.prompt}\n\nTASK:\n${taskS}\n\nReturn: ${spec.output}`;
+              const prompt = `${rolePersona}\n\nTASK:\n${taskS}\n\nReturn: ${spec.output}`;
               const r = await runOpusDelegate({ prompt, toolbox: sub.toolbox, manifest: sub.manifest, grantedPowers: [...ring], signal: ac.signal });
               if (!r.error) out = harden({ ok: true, role: spec.role, via: 'opus', tier: spec.tier, answer: r.answer, toolsUsed: r.toolsUsed || [], granted: [...ring] });
               // else fall through to local gemma (e.g. no ANTHROPIC_API_KEY)
             }
             if (!out) {
-              const r = await AGENT_RUNNER({ toolbox: sub.toolbox, manifest: sub.manifest, userText: `TASK:\n${taskS}\n\nReturn: ${spec.output}`, persona: spec.prompt, signal: ac.signal,
+              const r = await AGENT_RUNNER({ toolbox: sub.toolbox, manifest: sub.manifest, userText: `TASK:\n${taskS}\n\nReturn: ${spec.output}`, persona: rolePersona, signal: ac.signal,
                 // a REAL caller model id wins; the "gemma"/"local"/"default" sentinels (wantLocal) and
                 // the tier fall through to localModelFor (the role's local model, 'default' today).
                 model: (model && !wantOpus && !wantLocal) ? String(model) : localModelFor(spec.tier),

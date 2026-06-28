@@ -405,6 +405,9 @@ const sanitizeRole = raw => {
     blurb: String(r.blurb || '').slice(0, 400),
     prompt: String(r.prompt || '').slice(0, 8000),
     output: String(r.output || '').slice(0, 1000),
+    // standing reference docs folded into the role's prompt at run time (the fold-docs pattern)
+    foldScope: String(r.foldScope || '').replace(/^\/+/, '').replace(/\/+$/, '').slice(0, 200),
+    foldDocs: [...new Set((Array.isArray(r.foldDocs) ? r.foldDocs : []).map(p => String(p || '').replace(/^\/+/, '').trim()).filter(Boolean))].slice(0, 30),
     custom: true,
   };
 };
@@ -2623,7 +2626,7 @@ const handler = async (req, res) => {
         if (u.pathname === '/roles/list') {
           const custom = new Set(customRoleNames());
           // full specs (incl prompt/output) so the editor can show + edit them
-          const roles = roleList().map(r => { const full = getRole(r.role) || {}; return { ...r, prompt: full.prompt || '', output: full.output || '', custom: custom.has(r.role) }; });
+          const roles = roleList().map(r => { const full = getRole(r.role) || {}; return { ...r, prompt: full.prompt || '', output: full.output || '', foldDocs: Array.isArray(full.foldDocs) ? full.foldDocs : [], foldScope: full.foldScope || '', custom: custom.has(r.role) }; });
           return json(res, 200, { roles, powers: ALL_POWERS });
         }
         if (u.pathname === '/roles/save') {

@@ -3866,7 +3866,10 @@ const renderSettingsSpecialists = async body => {
     <div style="font-size:11px;color:var(--mut)">tool ring (its MAX powers — intersected with the employer's at run time):</div>
     <div data-rl-tools="${idk}"></div>
     <textarea data-rl-prompt="${idk}" placeholder="the system prompt / instructions defining this role" style="${ta};min-height:120px">${esc(r.prompt || '')}</textarea>
-    <input class="hdr-sel" style="max-width:none" data-rl-output="${idk}" placeholder="output contract — what the role must return" value="${esc(r.output || '')}">`;
+    <input class="hdr-sel" style="max-width:none" data-rl-output="${idk}" placeholder="output contract — what the role must return" value="${esc(r.output || '')}">
+    <div style="font-size:11px;color:var(--mut)">📎 always-on reference documents — vault notes folded into this role's context every time (one path per line):</div>
+    <input class="hdr-sel" style="max-width:none" data-rl-foldscope="${idk}" placeholder="scope folder these docs live under (blank = whole vault)" value="${esc(r.foldScope || '')}">
+    <textarea data-rl-folddocs="${idk}" placeholder="Folder/Note.md&#10;Folder/Another.md" style="${ta};min-height:54px">${esc((r.foldDocs || []).join('\n'))}</textarea>`;
   host.innerHTML = roles.map(r => `
     <div style="border:1px solid var(--edge);border-radius:8px;padding:8px;margin:6px 0">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b>🧑‍🔬 ${esc(r.label || r.role)}</b>
@@ -3895,6 +3898,8 @@ const renderSettingsSpecialists = async body => {
     label: val(`[data-rl-label="${idk}"]`), tier: val(`[data-rl-tier="${idk}"]`), via: val(`[data-rl-via="${idk}"]`),
     writes: !!(host.querySelector(`[data-rl-writes="${idk}"]`) || {}).checked,
     blurb: val(`[data-rl-blurb="${idk}"]`), prompt: val(`[data-rl-prompt="${idk}"]`), output: val(`[data-rl-output="${idk}"]`),
+    foldScope: val(`[data-rl-foldscope="${idk}"]`).trim(),
+    foldDocs: val(`[data-rl-folddocs="${idk}"]`).split('\n').map(s => s.trim()).filter(Boolean),
     powers: [...host.querySelectorAll(`[data-rl-tools="${idk}"] input:checked`)].map(x => x.value),
   });
   host.querySelectorAll('[data-rl-save]').forEach(b => b.onclick = async () => {
