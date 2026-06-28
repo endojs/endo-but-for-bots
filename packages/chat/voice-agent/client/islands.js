@@ -54,6 +54,7 @@ import { HeaderBar } from './header-bar.js';
 import { InputRow } from './input-row.js';
 import { DrawerFrame } from './drawer-frame.js';
 import { InboxView } from './inbox-view.js';
+import { MessageBubble } from './message-bubble.js';
 
 // P3 (live-editable plan): ONE tagging path. tagComponent(el, id, name) marks a DOM element as a live,
 // alt-clickable component AND registers it (id → {name}) so the alt-click overlay can resolve + name it and
@@ -358,6 +359,14 @@ const islands = {
     if (!el) return false;
     tagComponent(el, 'island-inbox-view', 'Notifications view');
     renderConfined(h(InboxView, {}), el);
+    return true;
+  },
+
+  // The per-message bubble SHELL (P4) — .who + .body. app.js fills both imperatively after; .body is a slot.
+  renderMessageBubble(el) {
+    if (!el) return false;
+    tagComponent(el, 'island-message-bubble', 'Message bubble');
+    renderConfined(h(MessageBubble, {}), el);
     return true;
   },
 

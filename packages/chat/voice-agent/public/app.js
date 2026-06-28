@@ -300,7 +300,11 @@ const bubble = (who, text, agent, at) => {
   d.style.borderColor = col; // the 1px security-frame
   const named = who !== 'you' && !ENTRY_AGENTS.has(id);
   const label = who === 'you' ? 'you' : (named ? id : 'agent');
-  d.innerHTML = `<div class="who"></div><div class="body"></div>`;
+  // P4: render the bubble SHELL (.who + .body) via its editable island (alt-click a message → edit the bubble
+  // template). Fall back to static markup if islands aren't up or the shell didn't render its two slots.
+  let shellOk = false;
+  try { if (window.__fieldIslands && window.__fieldIslands.renderMessageBubble) shellOk = window.__fieldIslands.renderMessageBubble(d); } catch { shellOk = false; }
+  if (!shellOk || !d.querySelector('.who') || !d.querySelector('.body')) d.innerHTML = `<div class="who"></div><div class="body"></div>`;
   const w = d.querySelector('.who'); w.textContent = label; if (named) w.style.color = col;
   // the agent's NAME is your petname handle for it → click to open its profile (identity · inventory · feedback loops)
   if (who !== 'you') { w.style.cursor = 'pointer'; w.title = `open ${id}'s profile`; w.onclick = e => { if (e.target.classList && e.target.classList.contains('msg-time')) return; agentProfile(id); }; }
