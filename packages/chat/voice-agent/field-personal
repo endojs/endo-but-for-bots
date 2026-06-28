@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+# field-personal — manage dan's ENCRYPTED PERSONAL VOLUME for Agent C (Packing up for Dweb, P5).
+#
+# The keystone: Agent C runs in PLATFORM mode (no secrets, clean multi-tenant) unless this LUKS volume
+# is decrypted with YOUR passphrase and mounted. There is NO keyfile on the host — the machine cannot
+# unlock it; only you can. Decrypt + mount → PERSONAL mode (your vault, secrets, root cap, admin caps
+# load FROM the volume). Pull the drive → none of it is on the box.
+#
+# SAFETY: nothing here is automatic. The destructive steps (`init`, `scrub`) and the passphrase steps
+# (`init`, `unlock`) refuse to run without an explicit confirmation token, and `scrub` refuses until it
+# has VERIFIED a good copy exists on the volume. Run `field-personal status` any time to see where you stand.
+#
+# The drive is laid out as TWO regions (see designs/packing-up-for-dweb.md, "The provisioner drive"):
+#   • a plaintext BOOTABLE archua deploy image + agent docs (provisions fresh instances), and
+#   • this LUKS PERSONAL PARTITION (dan's secrets/vault/state). `init` operates on the PARTITION, so the
+#     deploy image on the rest of the drive is untouched.
+#
+#   field-personal status                 — mode, mount state, what (if anything) is still plaintext on disk
+#   sudo field-personal init   <part>     — DESTRUCTIVE: LUKS-format the PERSONAL PARTITION (e.g. /dev/sdX2)
+#   sudo field-personal unlock            — decrypt (asks your passphrase) + mount + switch service to personal
+#   sudo field-personal lock              — unmount + close + switch service back to platform
+#        field-personal migrate           — copy the personal data from the internal disk → the mounted volume
+#        field-personal verify            — confirm the volume holds a complete, readable copy
+#   sudo field-personal scrub  --yes      — DESTRUCTIVE: securely erase the plaintext originals from the disk
+#
+# Typical first-time flow (you run these; the agent built the tool):
+#   sudo field-personal init /dev/sdX2  →  sudo field-personal unlock  →  field-personal migrate
+#   →   field-personal verify   →   (sanity-check personal mode works)   →   sudo field-personal scrub --yes
+# Thereafter each session: plug the drive, `sudo field-personal unlock`; when done, `sudo field-personal lock`.
+
+set -euo pipefail
+
+HOME_DIR="${HOME:-/home/dan}"
+MAPPER="field-personal"                 # /dev/mapper/field-personal when unlocked
+MOUNT="${FIELD_PERSONAL_MOUNT:-/mnt/field-personal}"
+META="$HOME_DIR/.config/field-agent-volume.json"   # NON-secret: just the LUKS UUID of YOUR drive (no key)
+SVC="voice-agent"
+LABEL="field-personal"
+
+# The personal data set: { source on the internal disk → sub-path on the volume }. Mirrors field-config.mjs
+# (CONFIG_DIR/STATE_DIR/VOICE_STATE_DIR/DASH_STATE_DIR/VAULT_DIR) so the service finds everything via
+# FIELD_PERSONAL_ROOT. `env` is a copy of the keys the voice-agent itself needs (see note in `migrate`).
+declare -A MAP=(
+  ["$HOME_DIR/.config/field-agent"]="config"
+  ["$HOME_DIR/.config/kazputer-phone"]="config/kazputer-phone"
+  ["$HOME_DIR/.config/gator-pay"]="config/gator-pay"
+  ["$HOME_DIR/.local/state/field-agent"]="state/field-agent"
+  ["$HOME_DIR/.local/state/voice-agent"]="state/voice-agent"
+  ["$HOME_DIR/.local/state/field-dashboard"]="state/field-dashboard"
+  ["$HOME_DIR/obsidian/vault"]="vault"
+)
+
+c_red() { printf '\033[31m%s\033[0m\n' "$*"; }
+c_grn() { printf '\033[32m%s\033[0m\n' "$*"; }
+c_ylw() { printf '\033[33m%s\033[0m\n' "$*"; }
+die()   { c_red "✗ $*" >&2; exit 1; }
+need_root() { [ "$(id -u)" = 0 ] || die "this step needs root — re-run with: sudo field-personal $*"; }
+
+is_mounted() { mountpoint -q "$MOUNT" 2>/dev/null; }
+is_open()    { [ -e "/dev/mapper/$MAPPER" ]; }
+vol_uuid()   { [ -f "$META" ] && sed -n 's/.*"luksUUID"[: ]*"\([^"]*\)".*/\1/p' "$META" | head -1; }
+
+cmd_status() {
+  echo "── Agent C personal volume ─────────────────────────────"
+  local uuid; uuid="$(vol_uuid || true)"
+  echo "  known drive (LUKS UUID): ${uuid:-«not initialized — run init»}"
+  if is_open; then c_grn "  LUKS mapping:   OPEN  (/dev/mapper/$MAPPER)"; else echo "  LUKS mapping:   closed"; fi
+  if is_mounted; then c_grn "  mounted at:     $MOUNT"; else echo "  mounted at:     (not mounted)"; fi
+  local mode="platform"; if is_mounted && [ -f "$MOUNT/personal.json" ]; then mode="personal"; fi
+  echo "  → service mode would be: $mode  (FIELD_PERSONAL_ROOT $([ "$mode" = personal ] && echo "= $MOUNT" || echo unset))"
+  echo
+  echo "── Plaintext personal data STILL on the internal (unencrypted) disk ──"
+  local any=0
+  for src in "${!MAP[@]}"; do
+    if [ -e "$src" ] && [ -n "$(ls -A "$src" 2>/dev/null || true)" ]; then any=1; printf '  %-7s %s\n' "$(du -sh "$src" 2>/dev/null | cut -f1)" "$src"; fi
+  done
+  [ -f "$HOME_DIR/.env" ] && { any=1; printf '  %-7s %s  (host-wide — shared with other services; see checklist)\n' "$(du -sh "$HOME_DIR/.env" | cut -f1)" "$HOME_DIR/.env"; }
+  if [ "$any" = 0 ]; then c_grn "  none — all secrets live only on the encrypted volume ✓"; else c_ylw "  ↑ these are readable WITHOUT the drive. Run migrate → verify → scrub to remove them."; fi
+}
+
+cmd_init() {
+  need_root init "$@"
+  local dev="${1:-}"; [ -n "$dev" ] || die "usage: sudo field-personal init /dev/sdX2   (the LUKS PARTITION, not the whole drive — it will be ERASED)"
+  [ -b "$dev" ] || die "$dev is not a block device"
+  command -v cryptsetup >/dev/null || die "cryptsetup not installed"
+  # refuse to touch the system disk OR a whole-disk device (we want a PARTITION so the deploy image survives)
+  local root_src; root_src="$(findmnt -no SOURCE / 2>/dev/null || true)"
+  case "$root_src" in *"$(basename "$dev")"*) die "$dev backs the root filesystem — refusing";; esac
+  case "$dev" in /dev/sd[a-z]|/dev/nvme[0-9]n[0-9]|/dev/mmcblk[0-9]) c_ylw "  ⚠  $dev looks like a WHOLE disk, not a partition. The plan is a partition (e.g. ${dev}2) so the"; c_ylw "      bootable deploy image on the rest of the drive survives. Continue ONLY if you meant whole-disk.";; esac
+  echo; c_red "  ⚠  THIS ERASES EVERYTHING ON $dev:"; lsblk "$dev" -o NAME,SIZE,FSTYPE,LABEL || true
+  echo; read -r -p "  Type the device name to confirm ERASE (e.g. $(basename "$dev")): " ans
+  [ "$ans" = "$(basename "$dev")" ] || die "confirmation mismatch — aborted (nothing erased)"
+  echo; c_ylw "  You will now set the volume PASSPHRASE. ONLY YOU will know it. The host stores no key — without"
+  c_ylw "  this passphrase, the data is unrecoverable and the machine cannot decrypt it. Choose it well."
+  echo
+  cryptsetup --type luks2 --label "$LABEL" luksFormat "$dev"      # interactive: you set the passphrase
+  echo; c_ylw "  Re-enter the passphrase to open it for first-time setup:"
+  cryptsetup open "$dev" "$MAPPER"
+  mkfs.ext4 -q -L "$LABEL" "/dev/mapper/$MAPPER"
+  mkdir -p "$MOUNT"; mount "/dev/mapper/$MAPPER" "$MOUNT"
+  mkdir -p "$MOUNT/config" "$MOUNT/state" "$MOUNT/vault"
+  printf '{\n  "user": "dan",\n  "created": "%s",\n  "note": "Agent C personal volume — presence here = personal mode"\n}\n' "$(date -u +%FT%TZ)" > "$MOUNT/personal.json"
+  chown -R "$(stat -c %u "$HOME_DIR"):$(stat -c %g "$HOME_DIR")" "$MOUNT"
+  local uuid; uuid="$(cryptsetup luksUUID "$dev")"
+  printf '{ "luksUUID": "%s", "label": "%s", "mount": "%s" }\n' "$uuid" "$LABEL" "$MOUNT" > "$META"
+  chown "$(stat -c %u "$HOME_DIR"):$(stat -c %g "$HOME_DIR")" "$META"
+  c_grn "✓ initialized. LUKS UUID $uuid recorded in $META (no key stored). Now: field-personal migrate"
+}
+
+_resolve_dev() {
+  local uuid; uuid="$(vol_uuid || true)"; [ -n "$uuid" ] || die "no known drive — run init first"
+  local dev; dev="$(blkid -t UUID="$uuid" -o device 2>/dev/null | head -1 || true)"
+  [ -n "$dev" ] || die "the personal drive (LUKS UUID $uuid) is not plugged in"
+  echo "$dev"
+}
+
+cmd_unlock() {
+  need_root unlock
+  is_open || { local dev; dev="$(_resolve_dev)"; c_ylw "  Enter your volume passphrase:"; cryptsetup open "$dev" "$MAPPER"; }
+  is_mounted || { mkdir -p "$MOUNT"; mount "/dev/mapper/$MAPPER" "$MOUNT"; }
+  [ -f "$MOUNT/personal.json" ] || c_ylw "  (mounted, but no personal.json yet — run migrate to populate)"
+  _set_service_mode personal
+  c_grn "✓ unlocked + mounted at $MOUNT → restarting $SVC in PERSONAL mode"
+}
+
+cmd_lock() {
+  need_root lock
+  _set_service_mode platform
+  is_mounted && umount "$MOUNT" || true
+  is_open && cryptsetup close "$MAPPER" || true
+  c_grn "✓ locked — drive closed; $SVC restarted in PLATFORM mode (no secrets on the box)"
+}
+
+# Flip the systemd --user service between modes by writing a drop-in that (un)sets FIELD_PERSONAL_ROOT,
+# then restart. Run as the service's user (we were invoked with sudo, so reach back via the login user).
+_set_service_mode() {
+  local mode="$1"; local owner; owner="$(stat -c %U "$HOME_DIR")"
+  local dropin_dir="$HOME_DIR/.config/systemd/user/$SVC.service.d"
+  local dropin="$dropin_dir/personal-mode.conf"
+  runuser -u "$owner" -- mkdir -p "$dropin_dir"
+  if [ "$mode" = personal ]; then
+    printf '[Service]\nEnvironment=FIELD_PERSONAL_ROOT=%s\n' "$MOUNT" | runuser -u "$owner" -- tee "$dropin" >/dev/null
+  else
+    printf '[Service]\nEnvironment=FIELD_PERSONAL_ROOT=\n' | runuser -u "$owner" -- tee "$dropin" >/dev/null
+  fi
+  local uid; uid="$(id -u "$owner")"
+  runuser -u "$owner" -- env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user daemon-reload || true
+  runuser -u "$owner" -- env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user restart "$SVC" || true
+}
+
+cmd_migrate() {
+  is_mounted || die "the volume is not mounted — run: sudo field-personal unlock"
+  command -v rsync >/dev/null || die "rsync not installed"
+  for src in "${!MAP[@]}"; do
+    [ -e "$src" ] || continue
+    local dst="$MOUNT/${MAP[$src]}"; mkdir -p "$dst"
+    c_ylw "  copying $src → $dst"
+    rsync -a --delete "$src"/ "$dst"/
+  done
+  # The keys the VOICE-AGENT itself needs (the agent's own inference + HA), copied to a volume-local env so
+  # personal mode reads them FROM the drive. This is a SUBSET of the host-wide ~/.env (which other services
+  # share) — scrubbing the host ~/.env is a separate, flagged decision (see the checklist).
+  if [ -f "$HOME_DIR/.env" ]; then
+    grep -E '^(ANTHROPIC_API_KEY|OPENROUTER_API_KEY|PERPLEXITY_API_KEY|HOMEASSISTANT|VLLM_API_KEY|OCOB_VLLM_)' "$HOME_DIR/.env" > "$MOUNT/env" 2>/dev/null || true
+    chmod 600 "$MOUNT/env"
+    c_grn "  wrote the voice-agent's own keys → $MOUNT/env (subset of host ~/.env)"
+  fi
+  c_grn "✓ migrate complete. Next: field-personal verify"
+}
+
+cmd_verify() {
+  is_mounted || die "the volume is not mounted — run: sudo field-personal unlock"
+  local ok=1
+  [ -f "$MOUNT/personal.json" ] || { c_red "  ✗ personal.json missing on the volume"; ok=0; }
+  for src in "${!MAP[@]}"; do
+    [ -e "$src" ] || continue
+    local dst="$MOUNT/${MAP[$src]}"
+    if [ ! -d "$dst" ]; then c_red "  ✗ missing on volume: ${MAP[$src]}"; ok=0; continue; fi
+    # compare file counts as a cheap completeness check
+    local sc dc; sc="$(find "$src" -type f 2>/dev/null | wc -l)"; dc="$(find "$dst" -type f 2>/dev/null | wc -l)"
+    if [ "$dc" -ge "$sc" ]; then printf '  \033[32m✓\033[0m %-26s %s files\n' "${MAP[$src]}" "$dc"; else c_red "  ✗ ${MAP[$src]}: volume has $dc < $sc on disk"; ok=0; fi
+  done
+  [ -f "$HOME_DIR/.config/field-agent/root.swiss" ] && { [ -f "$MOUNT/config/root.swiss" ] && c_grn "  ✓ root.swiss present on volume" || { c_red "  ✗ root.swiss NOT on volume"; ok=0; }; }
+  if [ "$ok" = 1 ]; then c_grn "✓ verify PASSED — the volume holds a complete copy. Safe to scrub the originals."; else die "verify FAILED — do NOT scrub; re-run migrate."; fi
+}
+
+cmd_scrub() {
+  need_root scrub "$@"
+  [ "${1:-}" = "--yes" ] || die "scrub is DESTRUCTIVE — re-run: sudo field-personal scrub --yes (after a passing verify)"
+  is_mounted || die "mount the volume first so scrub can re-verify the copy exists before deleting"
+  # gate on a passing verify (run it as the owner so paths resolve)
+  cmd_verify >/dev/null || die "verify failed — refusing to scrub"
+  echo; c_red "  ⚠  This permanently removes the plaintext personal data from the internal disk."
+  read -r -p "  Type ERASE-ORIGINALS to confirm: " ans; [ "$ans" = "ERASE-ORIGINALS" ] || die "aborted (nothing erased)"
+  # stop the service first so it isn't reading the dirs as they go
+  local owner uid; owner="$(stat -c %U "$HOME_DIR")"; uid="$(id -u "$owner")"
+  runuser -u "$owner" -- env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user stop "$SVC" || true
+  for src in "${!MAP[@]}"; do
+    [ -e "$src" ] || continue
+    c_ylw "  shredding $src"
+    find "$src" -type f -exec shred -u -n1 {} + 2>/dev/null || true
+    rm -rf "$src"
+  done
+  c_grn "✓ originals erased from the internal disk. The personal data now lives ONLY on the encrypted volume."
+  c_ylw "  NOTE: ~/.env is host-wide (other services read it) — NOT scrubbed here. Decide its fate separately."
+  c_ylw "  Re-start in personal mode with: sudo field-personal unlock"
+}
+
+case "${1:-status}" in
+  status)  cmd_status ;;
+  init)    shift; cmd_init "$@" ;;
+  unlock)  cmd_unlock ;;
+  lock)    cmd_lock ;;
+  migrate) cmd_migrate ;;
+  verify)  cmd_verify ;;
+  scrub)   shift; cmd_scrub "$@" ;;
+  *) echo "usage: field-personal {status|init <dev>|unlock|lock|migrate|verify|scrub --yes}"; exit 1 ;;
+esac

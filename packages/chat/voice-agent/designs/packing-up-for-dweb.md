@@ -73,11 +73,32 @@ access is unnameable.
 user-store record + their uploaded/referenced objects. Always available to the holder. Verify: a
 user deletes → namespace gone, caps dead, downstream shares dead.
 
-### P5 — the encrypted personal volume (tooling + handshake)
-A `field-personal` helper: create the LUKS USB (layout: `config/ vault/ state/ personal.json`),
-unlock + mount at `FIELD_PERSONAL_ROOT`, and a systemd path-unit / pre-start check that sets
-`FIELD_MODE` from the mount. Pull-the-drive → platform mode on next boot; plug + unlock → personal.
-Verify (real-run): mount → personal mode + dan's caps; unmount → platform mode + none of it on disk.
+### P5 — the encrypted personal volume + the PROVISIONER DRIVE (tooling + handshake)
+The `field-personal` tool (voice-agent/field-personal) runs the LUKS lifecycle:
+`status / init <part> / unlock / lock / migrate / verify / scrub`. Every destructive (init, scrub) or
+passphrase (init, unlock) step is the OPERATOR's to run and is double-confirmed; `scrub` refuses until
+`verify` passes. `unlock` writes a systemd drop-in setting `FIELD_PERSONAL_ROOT` + restarts → personal;
+`lock` clears it → platform. **No keyfile on the host** — only dan's passphrase decrypts it.
+
+**The provisioner drive (dan, 2026-06-28):** the USB is partitioned so it is BOTH the key AND a
+provisioner:
+- **p1 — deploy + docs (plaintext)** — a bootable archua image + the Agent C source snapshot + the
+  systemd unit template + `PROVISIONER-DRIVE.md` (the AGENT RUNBOOK: stand up a fresh platform-mode
+  instance, LAN-event config, and unlock into personal mode — self-contained so an agent can run it).
+- **p2 — LUKS personal volume** — dan's `config/ vault/ state/ personal.json`; mounts at
+  `FIELD_PERSONAL_ROOT`. `field-personal init` operates on THIS PARTITION so p1 survives.
+
+Layout: GPT, p1 ~8–16 GB (deploy+docs), p2 the rest (LUKS). The personal footprint today is ~1.1 GB
+(config 528 K, state ~295 M, vault 818 M) so p2 has vast headroom.
+Verify (real-run): provision a fresh box from p1 → platform mode (no secrets); `unlock` p2 → personal
+mode + dan's caps; `lock`/unplug → platform mode + nothing personal on disk.
+
+**Straggler secrets (to finish "no secrets without the drive"):** `~/.env` (ANTHROPIC/OPENROUTER/
+PERPLEXITY/VLLM + HA token) is HOST-WIDE — shared with other services (ocap-obstacle-course, …).
+`migrate` copies the voice-agent's OWN keys to a volume-local `env`; relocating/scrubbing the shared
+`~/.env` is a separate, operator-gated host decision (flagged in the checklist), not done automatically.
+`delegation-pay.mjs` paths (gator-pay.json, delegations.json) still use `${HOME}` literals → thread onto
+the seam so they follow the volume too.
 
 ### P6 — LAN-only event networking
 `EVENT_MODE`: BIND to the LAN iface + PUBLIC_BASE_URL = LAN origin so share/invite/cap links are
