@@ -6,8 +6,10 @@ The agent ends its turn by calling one of them in its program; the kind flows th
 back-compat fallback. **TOOL_CALL:** in CodeMode tool invocation is already a scope function
 (`await tool(args)`); the marker survives only in the legacy `runAgent` (`AGENT_CODEMODE=0`) loop, now
 marked superseded. The function-vs-marker difference is codified + measured by a conformance spec suite:
-`eval/obstacles/10-control-protocol/` (`yarn test:control-protocol`). Remaining: the empty-response nudge
-still mentions a reply convention (minor).
+`eval/obstacles/10-control-protocol/` (`yarn test:control-protocol`). The `ANSWER:` marker is now FULLY
+RETIRED in CodeMode (2026-06-27): a no-program reply is delivered verbatim, never stripped/parsed, and the
+empty-response nudge references only the turn-ender functions. **Migration complete** — the only marker
+protocol left is the legacy `AGENT_CODEMODE=0` `runAgent` loop.
 
 ## The principle
 

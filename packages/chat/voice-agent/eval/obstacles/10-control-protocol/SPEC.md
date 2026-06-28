@@ -53,7 +53,7 @@ node eval/eval.mjs --obstacle control-protocol                 # via the eval ha
 ## Status of the protocol in the product
 
 `answer()` / `ask()` / `blocked()` and tool-as-function are **live** in `runAgentCode`
-(`packages/ocapn-noise/codemode.mjs`). The `TOOL_CALL:` / `ANSWER:` markers survive only in the
-**legacy** `runAgent` loop (`tool-bridge.mjs`, used only under `AGENT_CODEMODE=0`) and as a
-back-compat parse in CodeMode. This obstacle is the conformance gate that keeps the function
-protocol honest.
+(`packages/ocapn-noise/codemode.mjs`), and the `ANSWER:` marker is **retired** there — a no-program
+reply is delivered verbatim (never stripped/parsed). The `TOOL_CALL:` / `ANSWER:` markers survive
+only in the **legacy** `runAgent` loop (`tool-bridge.mjs`, used only under `AGENT_CODEMODE=0`). This
+obstacle is the conformance gate that keeps the function protocol honest.
