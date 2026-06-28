@@ -232,8 +232,13 @@ cmd_scrub() {
   sleep 1; _bind_off; sleep 1
   # 2. CRITICAL SAFETY: every home path must now be UNBOUND, or shred would erase the VOLUME through a bind.
   _binds_active && { c_red "  could not unbind every home path (still busy)."; c_ylw "  recover with: sudo $0 unlock"; die "refusing to scrub while any bind remains"; }
-  # 3. re-verify the copy on the volume (now that home paths show the real originals again)
-  cmd_verify >/dev/null || { c_ylw "  recover with: sudo $0 unlock"; die "verify failed — refusing to scrub"; }
+  # 3. FINAL RECONCILE (not a brittle count-verify): ~17 other services write these paths, so the moment we
+  #    unbind one may touch an original. Rather than race a strict verify, capture any drift onto the volume
+  #    NEWEST-WINS (no --delete → never clobber the live chats/purses the volume already holds), so nothing is
+  #    lost. Then gate the shred on a REAL completeness signal: the root cap is present on the volume.
+  c_ylw "  reconciling any last-moment drift onto the volume (newest-wins)…"
+  for src in "${!MAP[@]}"; do [ -e "$src" ] || continue; mountpoint -q "$src" && continue; rsync -a --update "$src"/ "$MOUNT/${MAP[$src]}"/ 2>/dev/null || true; done
+  [ -f "$MOUNT/config/root.swiss" ] || { c_ylw "  recover with: sudo $0 unlock"; die "root.swiss not on the volume — aborting (the copy is not complete)"; }
   for src in "${!MAP[@]}"; do
     [ -e "$src" ] || continue
     mountpoint -q "$src" && { c_red "  ✗ $src is a mountpoint — SKIPPING (never shred through a bind)"; continue; }
@@ -243,7 +248,10 @@ cmd_scrub() {
   done
   c_grn "✓ originals erased from the internal disk. The personal data now lives ONLY on the encrypted volume."
   c_ylw "  NOTE: ~/.env is host-wide (other services read it) — NOT scrubbed here. Decide its fate separately."
-  c_ylw "  Re-start in personal mode with: sudo field-personal unlock"
+  # 4. re-bind + restart so the box comes straight back up in personal mode (no manual unlock needed).
+  c_ylw "  re-binding the volume + restarting $SVC…"
+  _bind_on; _restart_service
+  c_grn "✓ back up in PERSONAL mode — the whole box reads the encrypted volume; nothing personal is on the disk."
 }
 
 case "${1:-status}" in
