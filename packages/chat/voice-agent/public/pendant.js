@@ -389,32 +389,39 @@ export const makePendant = canvas => {
   const relayoutLevel1 = () => {
     const n = level1.length; if (!n) return;
     const cx = root.group.position.x;
-    // Each step spirals around the agent's lifeline, positioned at the Y of ITS time (mid of call→return),
-    // so the spiral now reads on the time-scale axis. Its two edges connect to the lifeline at call/return Y.
+    // Each step sits on an EXPANDING HORIZONTAL spiral around the lifeline: the ring WIDENS with each step,
+    // so a burst of fan-out calls — or a long run of sequential calls — spreads SIDEWAYS in the X-Z plane
+    // instead of piling onto one fixed ring or stacking vertically (the overlap dan saw). Y still tracks each
+    // node's time (its call/return edges meet the vertical lifeline there), but horizontal spread is what
+    // keeps many nodes legible + non-overlapping in 3D.
     level1.forEach((nd, j) => {
       if (nd.lifeline) return; // a PROMOTED sub-agent lives in its own column, not the root's spiral
       const a = j * SPIRAL_TURN;
+      const r = SPIRAL_R + j * 0.24; // widen the ring as steps accrue → no crowding even at the same time-Y
       const midT = nd.tDone ? (nd.tCall + nd.tDone) / 2 : nd.tCall;
-      tweenPos(nd, new THREE.Vector3(cx + SPIRAL_R * Math.sin(a), yOf(midT), SPIRAL_R * Math.cos(a)));
+      tweenPos(nd, new THREE.Vector3(cx + r * Math.sin(a), yOf(midT), r * Math.cos(a)));
     });
   };
   const relayoutChildren = parent => {
     const kids = parent.children, m = kids.length; if (!m) return; const R = parent === root ? 1.4 : 0.95;
-    if (parent.lifeline && parent !== root) { // a SUB-AGENT: its tools descend on its OWN spine (its column = a lifeline)
+    if (parent.lifeline && parent !== root) { // a SUB-AGENT: its tools wind down its OWN column (its lifeline)
       const cx = parent.group.position.x, cz = parent.group.position.z, topY = parent.lifeTopY != null ? parent.lifeTopY : parent.group.position.y;
-      kids.forEach((nd, j) => { const a = j * 0.66; tweenPos(nd, new THREE.Vector3(cx + 0.62 * Math.sin(a), topY - 0.55 - (j + 1) * 0.42, cz + 0.62 * Math.cos(a)), 0.46); });
+      // EXPANDING horizontal spiral + GENTLE descent: the ring widens per tool so a sub-agent's fan-out spreads
+      // SIDEWAYS (X-Z) instead of stacking vertically, while still drifting down to read as its timeline.
+      kids.forEach((nd, j) => { const a = j * 0.7; const r = 0.6 + j * 0.12; tweenPos(nd, new THREE.Vector3(cx + r * Math.sin(a), topY - 0.55 - (j + 1) * 0.26, cz + r * Math.cos(a)), 0.46); });
       return;
     }
-    // A timeline step's sub-tree (delegate/research children) branches OUT TO THE RIGHT of the spine so
-    // it doesn't collide with the steps continuing downward. Deeper nodes keep fanning along their own
-    // growth direction.
+    // A timeline step's sub-tree (delegate/research children) fans out in the HORIZONTAL (X-Z) plane around
+    // the parent — NOT vertically — so a burst of fan-out calls spreads sideways in 3D and reads without
+    // overlap. It sits slightly BELOW the parent so the tree still flows top-down overall. Deeper nodes keep
+    // fanning along their own horizontal growth direction.
     let base;
-    if (parent.parent === root) base = 0; // +x, branch rightward off the vertical spine
-    else { const dir = parent.target.clone().sub(parent.parent ? parent.parent.group.position : root.group.position); if (dir.lengthSq() < 1e-4) dir.set(1, 0, 0); base = Math.atan2(dir.y, dir.x); }
-    const spread = Math.min(Math.PI * 0.72, 0.4 + m * 0.3); const step = m > 1 ? spread / (m - 1) : 0;
+    if (parent.parent === root) base = 0; // sweep around +x in the horizontal plane, off the vertical spine
+    else { const dir = parent.target.clone().sub(parent.parent ? parent.parent.group.position : root.group.position); if (dir.x * dir.x + dir.z * dir.z < 1e-4) dir.set(1, 0, 0); base = Math.atan2(dir.z, dir.x); }
+    const spread = Math.min(Math.PI * 0.9, 0.5 + m * 0.32); const step = m > 1 ? spread / (m - 1) : 0;
     kids.forEach((nd, j) => {
       const ang = base + (j - (m - 1) / 2) * step;
-      tweenPos(nd, parent.target.clone().add(new THREE.Vector3(R * Math.cos(ang), R * Math.sin(ang), (j - (m - 1) / 2) * 0.1)), 0.46);
+      tweenPos(nd, parent.target.clone().add(new THREE.Vector3(R * Math.cos(ang), -0.18, R * Math.sin(ang))), 0.46);
     });
   };
 
