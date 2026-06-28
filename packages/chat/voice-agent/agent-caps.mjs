@@ -621,6 +621,63 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   const checkTargets = goal => missingTargets(goal, rel => fs.existsSync(path.join(WORKTREE_REPO, rel)));
   const selfImprover = makeSelfImprover({ host: aff.host, repo: WORKTREE_REPO, baseBranch: process.env.FIELD_AGENT_BASE_BRANCH || 'field-preact', verifyDir: `${WORKTREE_DIR}/_verify`, ledgerFile: '/home/dan/.local/state/field-agent/auto-merge-ledger.json', defaultTest: DEFAULT_VERIFY, timeoutMs: 600000 });
   let selfImproveInFlight = false; // single-flight: at most one self-improvement at a time
+
+  // ── STAGED-BRANCH REVIEW (dan): a verified-but-unmerged self-improve branch must SURFACE as an actionable
+  //    notification — not sit silently in the backlog. raiseStagedReview() posts a 🔔 approve/reject ASK (inline
+  //    decision UI in the inbox — lights the bell + renders ✅/❌ buttons) AND a feed notify (durable + phone push).
+  //    actOnStagedReview() is what the inbox button calls back into (via the server's /asks/answer interceptor):
+  //      APPROVE → safe-merge the EXISTING verified branch into the live branch, with a post-merge re-verify +
+  //                auto-revert if anything breaks (the same structural safety as the auto-merge path).
+  //      REJECT  → discard the branch.  Either way the OUTCOME is posted to the feed so the loop is legible.
+  const raiseStagedReview = ({ goal, branch, backlogId = '', reason = '', chatId = '' } = {}) => {
+    if (!branch) return { ok: false, error: 'no branch to review' };
+    const g = String(goal || 'a system improvement').trim();
+    const ask = addAsk({
+      title: `🌱 Self-improve ready to review: ${g.slice(0, 88)}`,
+      body: `A confined executor implemented this on an isolated branch and it passed INDEPENDENT verification (green).${reason ? `\n\n${String(reason).slice(0, 300)}` : ''}\n\nBranch: ${branch}\n\nApprove → I safe-merge it into the live app (post-merge re-verify + auto-revert if anything breaks). Reject → I discard the branch.`,
+      questions: [{ id: 'decision', q: 'Merge this verified change into the live app?', type: 'approve-reject' }],
+      origin: { kind: 'self-improve', branch, goal: g, backlogId, chatId },
+      requestedBy: 'self-improve',
+    });
+    try { postFeed({ title: `🌱 A self-improvement is ready for your review`, body: `${g.slice(0, 180)}\n\nVerified green on branch ${branch}. Open the 🔔 inbox to approve (merge) or reject (discard) — right from there.`, status: '🔔 needs your attention', agent: 'self-improve', links: chatId ? [`${baseUrl}/#chat=${encodeURIComponent(chatId)}`] : [] }); } catch { /* feed best-effort */ }
+    return { ok: true, askId: ask.id, branch };
+  };
+  const actOnStagedReview = async ({ branch, goal, backlogId = '', decision } = {}) => {
+    const now = new Date().toISOString();
+    const g = String(goal || 'self-improvement');
+    if (!branch) return { ok: false, error: 'no branch recorded for this review' };
+    if (decision === 'reject') {
+      await aff.host.exec(`git -C ${shq(WORKTREE_REPO)} worktree prune`, { timeoutMs: 30000 });
+      const d = await aff.host.exec(`git -C ${shq(WORKTREE_REPO)} branch -D ${shq(branch)}`, { timeoutMs: 30000 });
+      const ok = !!d.ok;
+      try { recordOutcome(backlogId, { status: 'rejected', branch, reason: 'discarded by operator' }); } catch { /* backlog id may be absent */ }
+      try { postFeed({ title: ok ? `🗑️ Discarded a self-improvement` : `⚠️ Could not discard branch`, body: `${g.slice(0, 160)}\n\nBranch ${branch} ${ok ? 'deleted — nothing was merged.' : `could NOT be deleted: ${String(d.stderr || d.stdout || '').slice(0, 200)}`}`, status: ok ? '🗣️ from the voice agent' : '🔔 needs your attention', agent: 'self-improve' }); } catch { /* */ }
+      return { ok, decision: 'rejected', branch };
+    }
+    // APPROVE → safe-merge the existing verified branch (refuses on a dirty tree / conflict — fail closed)
+    const r = await selfImprover.mergeBranch(branch, g, now);
+    if (!r.merged) {
+      try { recordOutcome(backlogId, { status: 'staged', branch, reason: r.reason }); } catch { /* */ }
+      try { postFeed({ title: `⚠️ Couldn't merge — left staged`, body: `${g.slice(0, 160)}\n\n${r.reason || 'merge refused'}\n\nThe branch ${branch} is untouched; resolve the blocker and approve again.`, status: '🔔 needs your attention', agent: 'self-improve' }); } catch { /* */ }
+      return { ok: false, decision: 'approve', ...r };
+    }
+    // post-merge RE-VERIFY the merged live tree with the full suite; auto-revert a real regression
+    const pv = await selfImprover.verifyBranch(selfImprover.baseBranch, DEFAULT_VERIFY, now);
+    if (pv.ok) {
+      try { recordOutcome(backlogId, { status: 'merged', branch, reason: 'approved + merged' }); } catch { /* */ }
+      try { postFeed({ title: `✅ Merged a self-improvement`, body: `${g.slice(0, 160)}\n\nMerged to ${selfImprover.baseBranch} (${String(r.mergeCommit).slice(0, 8)}) — post-merge re-verify GREEN. Revertable any time from the 🔧 changelog.`, status: '🗣️ from the voice agent', agent: 'self-improve' }); } catch { /* */ }
+      return { ok: true, decision: 'approved', merged: true, postVerified: true, ...r };
+    }
+    if (!pv.ran) {
+      try { recordOutcome(backlogId, { status: 'merged', branch, reason: 'approved + merged; post-verify inconclusive' }); } catch { /* */ }
+      try { postFeed({ title: `⚠️ Merged, but couldn't re-verify`, body: `${g.slice(0, 160)}\n\nMerge ${String(r.mergeCommit).slice(0, 8)} is LIVE; the post-merge re-verify could not RUN (${pv.reason}). Re-verify, or revert from the 🔧 changelog.`, status: '🔔 needs your attention', agent: 'self-improve' }); } catch { /* */ }
+      return { ok: true, decision: 'approved', merged: true, postVerifyInconclusive: true, ...r };
+    }
+    const rb = await selfImprover.rollback({ id: r.id, now });
+    try { recordOutcome(backlogId, { status: 'failed', branch, reason: 'post-merge re-verify failed; auto-reverted' }); } catch { /* */ }
+    try { postFeed({ title: rb.ok ? `↩️ Auto-reverted a bad merge` : `🛑 Bad merge still live`, body: `${g.slice(0, 160)}\n\nPost-merge re-verify FAILED. ${rb.ok ? 'Auto-reverted — the live app is back to normal.' : `Auto-revert ALSO failed — revert manually: git revert -m 1 ${String(r.mergeCommit).slice(0, 8)}`}`, status: '🔔 needs your attention', agent: 'self-improve' }); } catch { /* */ }
+    return { ok: rb.ok, decision: 'approved', merged: false, revertedAfterMerge: rb.ok, ...r };
+  };
   // SELF-CONTAINED executor runner (does NOT require the `roles` power): fork a worktree, run the confined
   // executor (Opus) jailed to it, commit its working tree to a branch on teardown, return { branch }.
   const runWorktreeExecutor = async ({ goal, successCommand, signal } = {}) => {
@@ -1052,14 +1109,18 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // ⚠️ self-improvement: implement on an isolated worktree → independently verify → (flag-gated) auto-merge.
     improveSystem: { reversible: false, args: { goal: 'string — the concrete system improvement to implement', successCommand: 'string — OPTIONAL: the command that must pass to prove it (defaults to the full voice-agent test suite)' },
       description: 'Autonomously IMPLEMENT a system improvement: a confined executor builds it on a FRESH git worktree + ships a test; the harness INDEPENDENTLY re-verifies, and (only if SELF_IMPROVE_AUTOMERGE is enabled) merges to the live branch with a post-merge re-verify + auto-revert on failure. One at a time. With auto-merge off it stops at a verified, ready-to-review branch (the safe default).',
-      run: async ({ goal, successCommand }, agent) => {
+      run: async ({ goal, successCommand }, agent, ctx) => {
         const g = String(goal || '').trim();
         if (!g) return harden({ ok: false, error: 'a goal is required' });
         if (selfImproveInFlight) return harden({ ok: false, busy: true, error: 'a self-improvement is already in flight — one at a time' });
         selfImproveInFlight = true;
         try {
           const vcmd = buildVerify(successCommand); // canonical runner + deps preamble — both the gate AND the executor's self-check use it
-          return harden(await selfImprover.improve({ goal: g, successCommand: vcmd, employExecutor: ({ goal: gg }) => runWorktreeExecutor({ goal: gg, successCommand: vcmd }), autoMerge: SELF_IMPROVE_AUTOMERGE, now: new Date().toISOString() }));
+          const r = await selfImprover.improve({ goal: g, successCommand: vcmd, employExecutor: ({ goal: gg }) => runWorktreeExecutor({ goal: gg, successCommand: vcmd }), autoMerge: SELF_IMPROVE_AUTOMERGE, now: new Date().toISOString() });
+          // verified-but-unmerged (auto-merge off) → surface an actionable 🔔 review with inline ✅ Merge / ❌ Discard.
+          let review = null;
+          if (r && r.readyToReview && !r.merged && r.branch) { try { review = raiseStagedReview({ goal: g, branch: r.branch, reason: r.reason, chatId: (ctx && ctx.chatId) || '' }); } catch (e) { review = { ok: false, error: e.message }; } }
+          return harden({ ...r, ...(review ? { reviewRaised: review.ok, reviewAskId: review.askId } : {}) });
         } finally { selfImproveInFlight = false; }
       } },
     // ── FAPO-style backlog: research PROPOSES precise targets; the loop DRAINS the top one + records the outcome. ──
@@ -1075,7 +1136,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       run: async ({ status }) => harden({ ok: true, items: listBacklog({ status: status || undefined }) }) },
     runNextImprovement: { reversible: false, args: {},
       description: 'DRAIN the backlog: take the top OPEN target, implement it on an isolated worktree, INDEPENDENTLY verify, (flag-gated) auto-merge, and RECORD the outcome (attribution: merged / staged-for-review / failed+why). One at a time. This is how the loop makes real progress — precise targets, deterministically implemented + verified.',
-      run: async (a, agent) => {
+      run: async (a, agent, ctx) => {
         if (selfImproveInFlight) return harden({ ok: false, busy: true, error: 'a self-improvement is already in flight — one at a time' });
         const item = nextOpen();
         if (!item) return harden({ ok: true, empty: true, note: 'the improvement backlog has no open target — proposeImprovement some first (precise file-scoped or larger architectural; the suite gates them)' });
@@ -1089,7 +1150,11 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
           const r = await selfImprover.improve({ goal: item.goal, successCommand: vcmd, employExecutor: ({ goal: gg }) => runWorktreeExecutor({ goal: gg, successCommand: vcmd }), autoMerge: SELF_IMPROVE_AUTOMERGE, now: new Date().toISOString() });
           const status = r.merged ? 'merged' : r.readyToReview ? 'staged' : 'failed';
           recordOutcome(item.id, { status, branch: r.branch, reason: r.reason });
-          return harden({ ok: true, target: item.goal, targetId: item.id, outcome: status, ...r });
+          // STAGED (verified but not merged) → raise an actionable 🔔 review so it doesn't sit silent in the
+          // backlog: dan gets a notification with inline ✅ Merge / ❌ Discard he can act on right from the inbox.
+          let review = null;
+          if (status === 'staged' && r.branch) { try { review = raiseStagedReview({ goal: item.goal, branch: r.branch, backlogId: item.id, reason: r.reason, chatId: (ctx && ctx.chatId) || '' }); } catch (e) { review = { ok: false, error: e.message }; } }
+          return harden({ ok: true, target: item.goal, targetId: item.id, outcome: status, ...r, ...(review ? { reviewRaised: review.ok, reviewAskId: review.askId } : {}) });
         } finally { selfImproveInFlight = false; }
       } },
     listChangelog: { reversible: false, args: { limit: 'number — OPTIONAL: how many recent entries (default 50)' },
@@ -2683,6 +2748,10 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       list: ({ limit = 50 } = {}) => selfImprover.listMerges({ limit }),
       revert: ({ id } = {}) => selfImprover.rollback({ id: String(id || ''), now: new Date().toISOString() }),
     }),
+    // act on a staged-branch review the inbox raised (APPROVE → safe-merge + post-merge re-verify + auto-revert;
+    // REJECT → discard the branch). The server's /asks/answer interceptor calls this when an answered ask carries
+    // origin.kind==='self-improve'. Root-gated by the server (same gate as the asks endpoints).
+    actOnStagedReview: ({ branch, goal, backlogId, decision } = {}) => actOnStagedReview({ branch, goal, backlogId, decision }),
     rescopeCap, // re-grant/revoke a chat cap's powers in place (same swiss) — root-gated by the server
     locator,
     rootNode,

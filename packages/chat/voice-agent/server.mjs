@@ -507,7 +507,7 @@ const fillSpecialist = process.env.SELF_HEAL === '0' ? undefined : async ({ name
 // makeFieldAgent runs before `blossom` exists, so the server populates `customView.register` below; the tool
 // reads it at call-time. This is the seam that lets a NORMAL chat agent (visible in the trace) be the studio.
 const customView = {};
-const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, foldedPersonaFor, getFoldDocs, setFoldDocs, agentConfig, saveAgentConfig, haResolveReadOnly, changelog } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL, fillSpecialist, customView });
+const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, foldedPersonaFor, getFoldDocs, setFoldDocs, agentConfig, saveAgentConfig, haResolveReadOnly, changelog, actOnStagedReview } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL, fillSpecialist, customView });
 liveCells = makeLiveCells({ nodeFor }); // browser-subscribable live grains (cap-gated)
 // Least-authority cross-user share tokens for a broken-out component: subscribe-only to its frozen cells.
 const componentShares = makeComponentShares({ file: `${HOME}/.local/state/voice-agent/component-shares.json`, makePurse, purseStore });
@@ -1924,6 +1924,19 @@ const handler = async (req, res) => {
       const ask = answerAsk(id, answers || {});
       if (!ask) return json(res, 404, { error: 'no such ask' });
       log('ask answered:', ask.id, ask.origin && ask.origin.kind);
+      // STAGED-BRANCH REVIEW: a self-improve approve/reject is ACTED ON right here — no off-app flush needed.
+      // APPROVE → safe-merge the verified branch (post-merge re-verify + auto-revert); REJECT → discard it. The
+      // merge can take minutes, so kick it off async, mark the ask done, and post the OUTCOME to the feed; the
+      // client gets an immediate ack so the inbox button never hangs.
+      if (ask.origin && ask.origin.kind === 'self-improve') {
+        const decision = String((ask.answers && ask.answers.decision) || '').toLowerCase() === 'reject' ? 'reject' : 'approve';
+        setAskStatus(ask.id, 'done'); // resolve it out of the inbox immediately (the feed carries the outcome)
+        log('self-improve review:', ask.id, decision, ask.origin.branch);
+        Promise.resolve().then(() => actOnStagedReview({ branch: ask.origin.branch, goal: ask.origin.goal, backlogId: ask.origin.backlogId, decision }))
+          .then(r => log('self-improve review done:', ask.id, decision, r && (r.ok ? 'ok' : 'fail'), r && r.reason ? String(r.reason).slice(0, 120) : ''))
+          .catch(e => log('self-improve review error:', ask.id, e.message));
+        return json(res, 200, { ok: true, ask, selfImprove: decision === 'reject' ? 'discarding' : 'merging' });
+      }
       return json(res, 200, { ok: true, ask });
     }
     // "Done — process my answers": flush every ANSWERED off-app ask into the input-runner
