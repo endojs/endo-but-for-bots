@@ -2165,6 +2165,11 @@ const titleFrom = t => { const ch = chats.find(c => c.id === sessionId); if (ch 
 // tagline); the first message drops it to the bottom. Driven off the active tab + cap +
 // whether the transcript is still empty, so it stays correct across chat switches/reloads.
 const syncLanding = () => document.body.classList.toggle('landing', curTab === 'talk' && !!cap && !activeTx.length);
+// P4 (live-editable plan): the landing tagline is now an EDITABLE confined island where a static <div> used to
+// be — alt-click it and ask its agent to reword it. Mount once; if islands aren't up, the static text remains.
+(() => { const el = $('composer-tagline'); if (!el) return; const prev = el.textContent;
+  try { if (window.__fieldIslands && window.__fieldIslands.renderTaglineHero) { el.textContent = ''; window.__fieldIslands.renderTaglineHero(el); } } // clear the static text node so the island's render isn't doubled
+  catch (e) { try { el.textContent = prev || 'What can Agent C do for you?'; } catch { /* keep static */ } } })();
 
 // Re-grant/revoke this chat's powers in place (banner + Add / ×). Root-only; recovers an orphaned cap.
 const rescopeChat = async (cc, newPowers, notesFolder) => {
