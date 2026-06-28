@@ -105,22 +105,22 @@ tool-output-history does). An earlier "the composer island broke send" conclusio
 testing a landing first-send; the authoritative tool-output-history (seeded chat) shows send works with the
 island.
 
-**The boundary the recipe DOESN'T cross — container surfaces that host OTHER islands.** Converting the
-sidebar/drawer frame to an island was tried + reverted: the drawer hosts `#chat-list` (the chat-list
-island). Confined-rendering the drawer takes `#chat-list` under the drawer's preact render, so the chat-list
-island's own `renderConfined` into it no longer composes — the chat list fell back to a plain-DOM render
-(it still WORKED + populated, but lost its OWN island/alt-click-edit). Net-negative: you'd trade a valuable
-inner island for a less-valuable container one. So:
+**What converts cleanly vs the real boundary.** A surface converts cleanly with the recipe IF its slot
+children are filled IMPERATIVELY by app.js (innerHTML / appendChild) — preact doesn't re-diff the island's
+mount once it's rendered, so app.js's imperative fill into a slot like `#chat-list` persists fine:
 
-- **Standalone surfaces** (no nested islands) convert cleanly with the recipe: **tagline, header, composer**
-  ✓ done.
-- **Container surfaces** that host other islands — sidebar/drawer (→chat-list), chat bubbles
-  (→message-controls), inbox sections (→notification/changelog cards) — and **dynamically-generated**
-  surfaces (the settings modal, built by `openSettings()` innerHTML) need a different approach: a SLOT
-  mechanism (the container island declares an opaque slot the inner island still owns) or tag-only (mark the
-  container alt-clickable, keep its render imperative). That's a real architectural extension (the
-  preact-container "opaque-child" machinery is the likely basis) — scoped as the next P4 step, not a naive
-  swap.
+- **tagline, header, composer, sidebar/drawer** ✓ done + verified. (The drawer hosts `#chat-list`, but the
+  live sidebar list is rendered IMPERATIVELY by app.js's `renderChatList` — NOT the chat-list island, which
+  is only used in the Components-tab gallery — so there is no nested island to clobber. An earlier revert of
+  the drawer was a MISDIAGNOSIS: the test wrongly expected an `island-chat-list` tag the live app never sets.)
+
+The real boundary is a surface whose children are themselves rendered via **`renderConfined`** (a true nested
+island): chat bubbles (→`MessageControls` via `renderInto`), proposal/ask cards, the inbox (→`renderNotifications`).
+Confined-rendering such a container would put the inner island's mount under the container's preact root, and a
+second `renderConfined` into it doesn't compose. Plus the **settings modal** is built dynamically by
+`openSettings()` (innerHTML), not static structure. These need a SLOT mechanism (the container island declares
+an opaque slot the inner island still owns — the preact-container "opaque-child" machinery is the basis) or
+tag-only. That's the scoped next P4 step.
 
 - **Phase 4 — the shell migrates into confined git-object components. [RESOLVED — dan: yes].** Convert
   the hand-written shell pieces (composer, chat-list, header, panels, bubbles) into confined

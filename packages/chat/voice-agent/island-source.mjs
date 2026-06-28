@@ -32,6 +32,7 @@ const ISLANDS = [
   { id: 'island-tagline-hero', name: 'Landing tagline', file: 'client/tagline-hero.js' },
   { id: 'island-header-bar', name: 'Header bar', file: 'client/header-bar.js' },
   { id: 'island-input-row', name: 'Composer input row', file: 'client/input-row.js' },
+  { id: 'island-drawer-frame', name: 'Sidebar / drawer', file: 'client/drawer-frame.js' },
   // The shared confined-Preact UI kit every island builds on (Card/Chip/Btn/EmptyState/Meta).
   { id: 'island-ui-kit', name: 'UI kit (primitives)', file: 'client/ui-kit.js' },
   // The 3D conversation-trace view. It's a standalone served script (public/pendant.js), NOT part of

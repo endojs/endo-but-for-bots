@@ -39,6 +39,16 @@ initTheme(); // restore the saved theme + start applying it to :root as CSS vars
     if (!NEED.every(id => row.querySelector('#' + id))) throw new Error('input-row island missing an id — restoring');
   } catch (e) { try { row.innerHTML = snapshot; } catch { /* keep static */ } }
 })();
+(() => { // P4: sidebar/drawer frame as an island. Provides #chat-list (app.js fills it imperatively after).
+  const dr = document.getElementById('drawer');
+  if (!dr || !window.__fieldIslands || !window.__fieldIslands.renderDrawerFrame) return;
+  const NEED = ['new-chat', 'drawer-close', 'chat-list', 'drawer-foot', 'df-sub'];
+  const snapshot = dr.innerHTML;
+  try {
+    window.__fieldIslands.renderDrawerFrame(dr);
+    if (!NEED.every(id => dr.querySelector('#' + id))) throw new Error('drawer island missing an id — restoring');
+  } catch (e) { try { dr.innerHTML = snapshot; } catch { /* keep static */ } }
+})();
 (() => { // a header toggle for light/dark (the first control of the userspace-extensible style framework)
   try {
     const hdr = document.querySelector('header'); if (!hdr) return;
