@@ -4157,6 +4157,7 @@ const boot = async () => {
   }
   isRoot = d.kind === 'root';
   heldPowers = new Set((d.powers || []).map(p => p.name)); // gates self-confirm of proposals
+  ensureUserCap(); // MULTI-USER: mint/restore this browser's persistent per-user cap (invite-only); no UI change yet
   const powers = (d.powers || []).map(p => p.name).join(', ');
   // Headline removed (dan): "reads all · proposes changes" only fit a pure Agent C selection.
   // Powers are now shown where they're accurate per-chat: the powers banner at the top of a chat
@@ -4185,6 +4186,19 @@ boot();
 // A Project groups chats + recurring "scheduled agents" (a prompt + a tool ring + a cadence)
 // sharing ONE home folder. Agents run on schedule (server tick) and on demand ("Run now").
 const pf = async (path, body = {}) => { try { return await (await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, ...body }) })).json(); } catch (e) { return { error: e.message }; } };
+// MULTI-USER (invite-only): ensure this browser holds a persistent per-user cap, minted on first open from the
+// invite cap it already holds, storing the user's prefs + Root pointer (their app variant). Idempotent; the
+// user-cap is stored locally + never rendered (cap-hygiene). No UI change yet — the per-user-variant rendering
+// lands with the shell→island migration (P4); this establishes the identity + prefs substrate.
+const USERCAP_KEY = 'field-agent-usercap';
+let userCap = '', userPrefs = {}, userRoot = 'canonical';
+const ensureUserCap = async () => {
+  if (!cap) return;
+  try { userCap = localStorage.getItem(USERCAP_KEY) || ''; } catch { userCap = ''; }
+  if (userCap) { const v = await pf('/user/get', { userCap }); if (v && v.ok) { userPrefs = v.prefs || {}; userRoot = v.root || 'canonical'; return; } userCap = ''; } // stale → re-init
+  const r = await pf('/user/init', {});
+  if (r && r.ok && r.userCap) { userCap = r.userCap; userPrefs = r.prefs || {}; userRoot = r.root || 'canonical'; try { localStorage.setItem(USERCAP_KEY, userCap); } catch { /* */ } }
+};
 const CADENCES = [
   { label: 'Weekly · Sun 03:00', schedule: { kind: 'weekly', day: 0, at: '03:00' } },
   { label: 'Daily · 03:00', schedule: { kind: 'daily', at: '03:00' } },

@@ -34,6 +34,7 @@ import { makeInterjections } from './interjections.mjs';
 import { makeToolShares } from './tool-shares.mjs';
 import { makeComponentGit } from './component-git.mjs';
 import { makeComponentSync } from './component-sync.mjs';
+import { makeUserStore } from './user-store.mjs';
 import { makeIslandSource } from './island-source.mjs';
 import { reuseFirstPreamble } from './component-catalog.mjs';
 import { addBacklog } from './improvement-backlog.mjs';
@@ -113,6 +114,10 @@ const componentGit = makeComponentGit({ baseDir: COMPONENT_GIT_DIR }); // each c
 // DURABILITY (live-editable plan): mirror every component/fork repo to a remote (gitea) so a local DB/disk
 // failure loses no history. OPT-IN — a no-op unless COMPONENT_GIT_REMOTE is set, so no surprise outward push.
 const componentSync = makeComponentSync({ baseDir: COMPONENT_GIT_DIR, log: (...a) => log(...a) }); // lazy: `log` is defined later in the file (avoid the TDZ at module top)
+// MULTI-USER (live-editable plan): per-user capabilities — minted on first open (INVITE-ONLY), storing prefs +
+// a Root pointer so each user runs their own app variant over the shared component fork-tree. cap-hygiene: the
+// user-cap is stored only as a hash. No public minting (dan's call: invite-only / Tailnet-private).
+const userStore = makeUserStore({ file: process.env.USERS_FILE || `${HOME}/.config/field-agent/users.json` });
 const islandSource = makeIslandSource({ here: HERE, componentGit }); // confined-Preact ISLANDS as versioned components (edit = rewrite client file + rebuild)
 // A tool's source as a {relpath: content} file map for the component-git store (single-file → tool.js).
 const sourceFilesOf = t => (t.files && typeof t.files === 'object' && Object.keys(t.files).length ? t.files : { 'tool.js': String(t.code || '') });
@@ -1532,6 +1537,20 @@ const handler = async (req, res) => {
       return json(res, 200, donePayload);
     }
 
+    // ── MULTI-USER: per-user capabilities (invite-only). /user/init mints a persistent user-cap ONLY for
+    //    someone who already holds a valid cap (an invite) — no public/anonymous minting. The user holds their
+    //    user-cap (their identity token); /user/{get,prefs,root} are gated by holding it. ──
+    if (req.method === 'POST' && u.pathname.startsWith('/user/')) {
+      const body = await jsonBody(req);
+      if (u.pathname === '/user/init') {
+        if (!nodeFor(body.cap)) return json(res, 403, { error: 'open this app with your invite link first' }); // INVITE-ONLY gate
+        return json(res, 200, userStore.mint({ prefs: body.prefs || {} }));
+      }
+      if (u.pathname === '/user/get') { const v = userStore.get(String(body.userCap || '')); return json(res, 200, v ? { ok: true, ...v } : { ok: false, error: 'unknown user-cap' }); }
+      if (u.pathname === '/user/prefs') return json(res, 200, userStore.setPrefs(String(body.userCap || ''), body.prefs || {}));
+      if (u.pathname === '/user/root') return json(res, 200, userStore.setRoot(String(body.userCap || ''), String(body.root || 'canonical')));
+      return json(res, 404, { error: 'unknown /user route' });
+    }
     if (req.method === 'POST' && u.pathname === '/cancel') {
       const { sessionId } = await jsonBody(req);
       const sid = String(sessionId || 'anon').slice(0, 64);
