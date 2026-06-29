@@ -92,6 +92,7 @@ import { makeComponentGit } from './component-git.mjs';
 import { validateComponentSource } from './component-source.mjs';
 import { buildSystemMap } from './system-map.mjs';
 import { braveSearch } from './brave-search.mjs';
+import { makeBuffer } from './buffer-caps.mjs';
 import { runResearch } from './research.mjs';
 import { getRole, roleList, localModelFor } from './agent-roles.mjs';
 import { scanArea as dietScan, evaluateArea as dietEval, buildMap as dietBuild, regenSite as dietRegen, publishSite as dietPublish, status as dietStat, DIET_SITES } from './dietician-js.mjs';
@@ -455,6 +456,10 @@ const makeAffordances = ({ outDir }) => {
     // in ~/.config/field-agent/email.json it actually sends as bot@danfinlay.com;
     // with no creds (or on send failure) it falls back to a reviewed draft, so a
     // confirmed email is never silently lost.
+    // Buffer (social scheduling) as an attenuatable cap. The token is closed over (never returned/logged); the
+    // affordance mirrors Buffer's affordances (channels × read/draft/publish/delete). Reads + drafts are safe;
+    // publish/delete are gated behind propose→confirm at the verb layer.
+    buffer: makeBuffer({ getToken: () => getSecret('buffer-key') }),
     email: Far('EmailExec', {
       help: () => `Sends a confirmed email via your SMTP relay (creds in ${EMAIL_CFG}), or drafts to the vault outbox if no creds. Outbound is gated: the agent only PROPOSES; you confirm.`,
       send: async ({ to, subject, body }) => {
@@ -567,6 +572,7 @@ export const POWERS = harden({
   editNote: { label: 'Propose edits to your notes (you confirm)', verbs: ['proposeNoteEdit'] },
   homeassistant: { label: 'Read Home Assistant; propose device actions (you confirm)', verbs: ['haFind', 'haTree', 'haState', 'haAct'] },
   email: { label: 'Propose an email to send (you review + confirm)', verbs: ['proposeEmail'] },
+  buffer: { label: 'Manage your social media via Buffer — list channels + scheduled posts, save drafts (safe); publishing & deleting you confirm', verbs: ['bufferChannels', 'bufferListPosts', 'bufferDraft', 'proposeBufferPost', 'proposeBufferDelete'] },
   subagent: { label: 'Propose a sub-agent with system access (you confirm)', verbs: ['proposeSubAgent'] },
   contacts: { label: 'Read your address book; propose add/edit a contact (you confirm)', verbs: ['contactsSearch', 'contactsGet', 'proposeAddContact', 'proposeEditContact'] },
   specialists: { label: 'Spawn + consult persistent specialist sub-agents (spawn within your bounds — no confirmation)', verbs: ['listSpecialists', 'spawnSpecialist', 'askSpecialist'] },
@@ -1387,6 +1393,20 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       run: async ({ to, subject, body }, agent) => propose({ type: 'email', power: 'email', agent, title: `Email: ${String(subject || '(no subject)')}`, summary: `To ${String(to || '')}`,
         detail: { to: String(to || ''), subject: String(subject || ''), body: String(body || '').slice(0, 6000) },
         commit: () => aff.email.send({ to, subject, body }) }) },
+    // ── Buffer (social media) ─ reads + drafts are direct (a draft sits in Buffer for your approval, nothing
+    //    is published); publishing + deleting go through propose→confirm. The agent picks a channel by id.
+    bufferChannels: { reversible: false, args: {}, description: 'List your connected social accounts in Buffer (id, network, handle). Use the id to target a post. Read-only.',
+      run: async () => ({ ok: true, channels: await aff.buffer.channels() }) },
+    bufferListPosts: { reversible: false, args: { status: 'string — scheduled | draft | sent (default scheduled)', channelId: 'string — optional, a channel id from bufferChannels' }, description: 'List your Buffer posts by status (scheduled/draft/sent), optionally for one channel. Read-only.',
+      run: async ({ status, channelId }) => ({ ok: true, posts: await aff.buffer.posts({ status: status || 'scheduled', channelId }) }) },
+    bufferDraft: { reversible: true, args: { channelId: 'string — a channel id from bufferChannels', text: 'string — the post text' }, description: "Save a DRAFT post to Buffer (NOT published — it waits in Buffer for your approval there). Safe; reversible by deleting the draft. To actually publish/schedule, use proposeBufferPost.",
+      run: async ({ channelId, text }) => { const p = await aff.buffer.createPost({ channelId: String(channelId || ''), text: String(text || ''), mode: 'addToQueue', draft: true }); return { ok: true, draftId: p && p.id, status: p && p.status }; } },
+    proposeBufferPost: { reversible: false, args: { channelId: 'string — a channel id from bufferChannels', text: 'string — the post text', mode: 'string — addToQueue (next slot) | shareNow (post immediately) | shareNext (top of queue) | customScheduled (needs dueAt)', dueAt: 'string — ISO-8601 UTC time, required for customScheduled' },
+      description: 'PROPOSE PUBLISHING a post to a social account via Buffer. Does NOT publish — you review the exact text/channel/timing and confirm; only on confirm does it go live.',
+      run: async ({ channelId, text, mode, dueAt }, agent) => { const chs = await aff.buffer.channels(); const ch = chs.find(c => c.id === String(channelId || '')); return propose({ type: 'buffer-post', power: 'buffer', agent, title: `Post to ${ch ? `${ch.service} (${ch.displayName || ch.name})` : channelId}`, summary: String(text || '').slice(0, 140), detail: { channel: ch ? `${ch.service} · ${ch.displayName || ch.name}` : String(channelId), text: String(text || ''), when: String(mode || 'addToQueue') + (dueAt ? ` @ ${dueAt}` : '') }, commit: () => aff.buffer.createPost({ channelId: String(channelId || ''), text: String(text || ''), mode: String(mode || 'addToQueue'), dueAt }) }); } },
+    proposeBufferDelete: { reversible: false, args: { id: 'string — a post id from bufferListPosts' },
+      description: 'PROPOSE DELETING a scheduled/draft Buffer post. Does NOT delete — you confirm first.',
+      run: async ({ id }, agent) => propose({ type: 'buffer-delete', power: 'buffer', agent, title: `Delete Buffer post ${String(id || '')}`, summary: 'Remove a scheduled/draft post', detail: { id: String(id || '') }, commit: () => aff.buffer.deletePost(String(id || '')) }) },
     proposeSubAgent: { reversible: false, args: { name: 'string', task: 'string', powers: 'array — capabilities it would need' },
       description: 'PROPOSE spawning a sub-agent with system access. Does NOT spawn — on confirm it is queued to the dashboard for a second approval.',
       run: async ({ name, task, powers }, agent) => propose({ type: 'subagent', power: 'subagent', agent, title: `Spawn sub-agent: ${String(name || 'sub')}`, summary: String(task || ''),
