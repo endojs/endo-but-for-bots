@@ -4,64 +4,224 @@ import { E } from '@endo/far';
 import harden from '@endo/harden';
 
 /**
- * @import { VFS, VFSStat, VFSDirEntry } from '../../genie/src/tools/vfs.js'
+ * @import { VFS, VFSReadStreamOptions, VFSStat, VFSDirEntry } from '../../genie/src/tools/vfs.js'
  */
+
+const textEncoder = new TextEncoder();
+
+/**
+ * @param {string} text
+ * @returns {Uint8Array}
+ */
+const encodeText = text => textEncoder.encode(text);
+harden(encodeText);
+
+/**
+ * Normalize a POSIX path: collapse `.`, resolve `..`, drop empty segments.
+ *
+ * Throws if `..` would escape the root (i.e. when popping above the start).
+ *
+ * @param {string} p
+ * @returns {string}
+ */
+const normalizePosix = p => {
+  const parts = p.split('/').filter(s => s.length > 0 && s !== '.');
+  /** @type {string[]} */
+  const out = [];
+  for (const part of parts) {
+    if (part === '..') {
+      if (out.length === 0) {
+        throw new Error(`Invalid path: escapes root: ${p}`);
+      }
+      out.pop();
+    } else {
+      out.push(part);
+    }
+  }
+  return out.join('/');
+};
+
+/**
+ * Maximum directory recursion depth for `readdir({ recursive: true })`.
+ *
+ * Matches the daemon-side `MAX_CHECKIN_DEPTH` cap (see checkinTree in
+ * packages/platform/src/fs/checkin.js).  Bounds the walk so an
+ * adversarial Mount layout (symlink loop reachable only via a
+ * capability that exposes follows) cannot drive the iterator
+ * unboundedly.  Mount's own assertConfined catches realpath escapes,
+ * but the recursive walk would still revisit the cycle until exhausted
+ * without an explicit cap.
+ */
+export const MAX_READDIR_DEPTH = 64;
 
 /**
  * Create a VFS adapter backed by a Mount exo capability.
  *
  * This bridges the Genie tool system's VFS interface to an Endo Mount
  * capability.  All filesystem access goes through the Mount's
- * confinement, deny patterns, and revocation — no ambient authority.
+ * confinement, deny patterns, and revocation: no ambient authority.
  *
  * @param {object} mount - An EndoMount exo (or remote reference).
  * @returns {VFS}
  */
 export const makeCapabilityVFS = mount => {
+  /**
+   * @param {string} filePath
+   * @returns {string[]}
+   */
+  const pathSegments = filePath =>
+    filePath.split('/').filter(s => s.length > 0);
+
+  /**
+   * @param {string[]} segments
+   * @returns {Promise<boolean>}
+   */
+  const isDirectory = async segments => {
+    try {
+      await E(mount).list(...segments);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  /**
+   * @param {string[]} segments
+   * @returns {Promise<number>}
+   */
+  const fileSize = async segments => {
+    const text = await E(mount).readText(segments);
+    return encodeText(text).byteLength;
+  };
+
+  /**
+   * @param {Uint8Array} bytes
+   * @param {VFSReadStreamOptions} opts
+   * @returns {Uint8Array}
+   */
+  const byteRange = (bytes, opts) => {
+    const start = opts.start ?? 0;
+    const end = opts.end ?? bytes.byteLength - 1;
+    if (start < 0 || end < -1) {
+      throw new RangeError('Byte range must not be negative');
+    }
+    if (end < start || start >= bytes.byteLength) {
+      return new Uint8Array();
+    }
+    return bytes.slice(start, Math.min(end + 1, bytes.byteLength));
+  };
+
+  /**
+   * Inner implementation of readdir that tracks recursion depth.
+   * Refuses to descend past MAX_READDIR_DEPTH.
+   *
+   * @param {string} dirPath
+   * @param {{ recursive?: boolean }} opts
+   * @param {number} depth
+   * @returns {AsyncIterable<VFSDirEntry>}
+   */
+  const readdirImpl = (dirPath, opts, depth) => {
+    const segments = pathSegments(dirPath);
+    return harden({
+      async *[Symbol.asyncIterator]() {
+        const entries = await E(mount).list(...segments);
+        for (const name of entries) {
+          /** @type {VFSDirEntry} */
+          let entry;
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            const subSegments = [...segments, name];
+            // eslint-disable-next-line no-await-in-loop
+            const subEntries = await E(mount).list(...subSegments);
+            // If list succeeds, it's a directory.
+            void subEntries;
+            entry = harden({
+              name,
+              type: /** @type {const} */ ('directory'),
+              size: 0,
+            });
+          } catch {
+            entry = harden({
+              name,
+              type: /** @type {const} */ ('file'),
+              // eslint-disable-next-line no-await-in-loop
+              size: await fileSize([...segments, name]),
+            });
+          }
+          yield entry;
+
+          // Recurse if requested and entry is a directory.
+          if (opts.recursive && entry.type === 'directory') {
+            if (depth + 1 >= MAX_READDIR_DEPTH) {
+              throw new Error(
+                `readdir recursion depth exceeded MAX_READDIR_DEPTH=${MAX_READDIR_DEPTH} at ${dirPath}/${name}`,
+              );
+            }
+            const subPath = segments.length > 0 ? `${dirPath}/${name}` : name;
+            const subIter = readdirImpl(subPath, opts, depth + 1);
+            // eslint-disable-next-line no-await-in-loop
+            for await (const subEntry of subIter) {
+              yield harden({
+                ...subEntry,
+                name: `${name}/${subEntry.name}`,
+              });
+            }
+          }
+        }
+      },
+    });
+  };
+
   /** @type {VFS} */
   const vfs = {
     async stat(filePath) {
-      const segments = filePath.split('/').filter(s => s.length > 0);
+      const segments = pathSegments(filePath);
       const exists = await E(mount).has(...segments);
       if (!exists) {
         throw new Error(`ENOENT: no such file or directory: ${filePath}`);
       }
-      const mountStat = await E(mount).stat(segments);
+      // Try to list. If it succeeds, it's a directory.
+      if (await isDirectory(segments)) {
+        return harden({
+          size: 0,
+          mtime: new Date().toISOString(),
+          type: /** @type {const} */ ('directory'),
+        });
+      }
+      // Not a directory, assume file.
       return harden({
-        size: mountStat.size,
+        size: await fileSize(segments),
         mtime: new Date().toISOString(),
-        type: /** @type {'file' | 'directory'} */ (mountStat.type),
+        type: /** @type {const} */ ('file'),
       });
     },
 
     async readFile(filePath) {
       const segments =
-        typeof filePath === 'string'
-          ? filePath.split('/').filter(s => s.length > 0)
-          : filePath;
+        typeof filePath === 'string' ? pathSegments(filePath) : filePath;
       return E(mount).readText(segments);
     },
 
-    createReadStream(filePath, _opts) {
-      // Return an async iterable that yields the file content as a
-      // single UTF-8 chunk.  Mount doesn't support byte-range reads
-      // natively, so this is a simple adapter.
-      const segments = filePath.split('/').filter(s => s.length > 0);
+    createReadStream(filePath, opts = {}) {
+      const segments = pathSegments(filePath);
       return harden({
         async *[Symbol.asyncIterator]() {
           const text = await E(mount).readText(segments);
-          yield new TextEncoder().encode(text);
+          const bytes = byteRange(encodeText(text), opts);
+          if (bytes.byteLength > 0) {
+            yield bytes;
+          }
         },
       });
     },
 
     async writeFile(filePath, content) {
-      const segments = filePath.split('/').filter(s => s.length > 0);
+      const segments = pathSegments(filePath);
       await E(mount).writeText(segments, content);
     },
 
     async mkdir(filePath, opts = {}) {
-      const segments = filePath.split('/').filter(s => s.length > 0);
+      const segments = pathSegments(filePath);
       const exists = await E(mount).has(...segments);
       if (exists) {
         if (opts.recursive) {
@@ -69,117 +229,96 @@ export const makeCapabilityVFS = mount => {
         }
         throw new Error(`EEXIST: directory already exists: ${filePath}`);
       }
+      if (!opts.recursive && segments.length > 1) {
+        const parentSegments = segments.slice(0, -1);
+        const parentExists = await E(mount).has(...parentSegments);
+        if (!parentExists) {
+          throw new Error(`ENOENT: no such file or directory: ${filePath}`);
+        }
+        if (!(await isDirectory(parentSegments))) {
+          throw new Error(`ENOTDIR: not a directory: ${filePath}`);
+        }
+      }
       await E(mount).makeDirectory(segments);
       return true;
     },
 
     async unlink(filePath) {
-      const segments = filePath.split('/').filter(s => s.length > 0);
+      const segments = pathSegments(filePath);
+      if (await isDirectory(segments)) {
+        throw new Error(
+          `EISDIR: illegal operation on a directory: ${filePath}`,
+        );
+      }
       await E(mount).remove(segments);
     },
 
     async rmdir(filePath) {
-      const segments = filePath.split('/').filter(s => s.length > 0);
-      await E(mount).remove(segments);
+      const segments = pathSegments(filePath);
+      const entries = /** @type {string[]} */ (
+        await E(mount).list(...segments)
+      );
+      if (entries.length > 0) {
+        throw new Error(`ENOTEMPTY: directory not empty: ${filePath}`);
+      }
+      await E(mount).removeDirectory(segments);
     },
 
-    async rm(filePath, _opts) {
-      const segments = filePath.split('/').filter(s => s.length > 0);
+    async rm(filePath, opts = {}) {
+      const segments = pathSegments(filePath);
+      if (await isDirectory(segments)) {
+        if (!opts.recursive) {
+          throw new Error(
+            `EISDIR: illegal operation on a directory: ${filePath}`,
+          );
+        }
+        await E(mount).removeTree(segments);
+        return;
+      }
       await E(mount).remove(segments);
-    },
-
-    readdir(dirPath, opts = {}) {
-      const segments = dirPath.split('/').filter(s => s.length > 0);
-      return harden({
-        async *[Symbol.asyncIterator]() {
-          const entries = await E(mount).list(...segments);
-          for (const name of entries) {
-            const subSegments = [...segments, name];
-            // eslint-disable-next-line no-await-in-loop
-            const entryStat = await E(mount).stat(subSegments);
-            /** @type {VFSDirEntry} */
-            const entry = harden({
-              name,
-              type: /** @type {'file' | 'directory'} */ (entryStat.type),
-              size: entryStat.size,
-            });
-            yield entry;
-
-            // Recurse if requested and entry is a directory.
-            if (opts.recursive && entry.type === 'directory') {
-              const subPath = segments.length > 0 ? `${dirPath}/${name}` : name;
-              const subIter = vfs.readdir(subPath, opts);
-              // eslint-disable-next-line no-await-in-loop
-              for await (const subEntry of subIter) {
-                yield harden({
-                  ...subEntry,
-                  name: `${name}/${subEntry.name}`,
-                });
-              }
-            }
-          }
-        },
-      });
     },
 
     sep: '/',
 
     join(...parts) {
-      const filtered = parts.filter(p => p.length > 0);
-      if (filtered.length === 0) {
-        return '.';
-      }
-      const joined = filtered.join('/').replace(/\/+/g, '/');
-      // Preserve a leading slash, drop a trailing one (unless joined === '/').
-      const trimmed = joined.length > 1 ? joined.replace(/\/$/, '') : joined;
-      return trimmed;
+      return parts.join('/').replace(/\/+/g, '/');
     },
 
     relative(from, to) {
-      const fromSegs = from.split('/').filter(s => s.length > 0);
-      const toSegs = to.split('/').filter(s => s.length > 0);
-      let common = 0;
+      const fromParts = normalizePosix(from).split('/').filter(Boolean);
+      const toParts = normalizePosix(to).split('/').filter(Boolean);
+      let i = 0;
       while (
-        common < fromSegs.length &&
-        common < toSegs.length &&
-        fromSegs[common] === toSegs[common]
+        i < fromParts.length &&
+        i < toParts.length &&
+        fromParts[i] === toParts[i]
       ) {
-        common += 1;
+        i += 1;
       }
-      const up = fromSegs.slice(common).map(() => '..');
-      const down = toSegs.slice(common);
-      const parts = [...up, ...down];
-      return parts.length === 0 ? '' : parts.join('/');
+      const up = fromParts.slice(i).map(() => '..');
+      const down = toParts.slice(i);
+      const joined = [...up, ...down].join('/');
+      return joined.length > 0 ? joined : '.';
     },
 
     resolve(...paths) {
-      // Mount confines all paths under its root, so `resolve` returns a
-      // path relative to that root.  Absolute inputs reset the
-      // accumulator; otherwise we append.  The mount layer enforces
-      // confinement when the resolved path is used.
-      let acc = [];
+      // The Mount is the root; resolved paths stay under it.
+      // Absolute segments reset to root, matching POSIX `path.resolve`.
+      let current = '';
       for (const p of paths) {
-        if (p.length === 0) {
-          // eslint-disable-next-line no-continue
-          continue;
-        }
         if (p.startsWith('/')) {
-          acc = p.split('/').filter(s => s.length > 0);
+          current = p.slice(1);
+        } else if (current.length > 0) {
+          current = `${current}/${p}`;
         } else {
-          for (const seg of p.split('/')) {
-            if (seg.length === 0 || seg === '.') {
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-            if (seg === '..') {
-              acc.pop();
-            } else {
-              acc.push(seg);
-            }
-          }
+          current = p;
         }
       }
-      return acc.length === 0 ? '/' : `/${acc.join('/')}`;
+      return `/${normalizePosix(current)}`;
+    },
+
+    readdir(dirPath, opts = {}) {
+      return readdirImpl(dirPath, opts, 0);
     },
   };
 

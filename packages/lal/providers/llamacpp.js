@@ -5,8 +5,7 @@
  * Supports context-size and request options that differ from Anthropic.
  */
 
-// eslint-disable-next-line import/no-unresolved
-import OpenAI from 'openai';
+import { toOpenAICompatibleMessages } from './openai-compatible-messages.js';
 
 /**
  * @typedef {object} CommonTool
@@ -18,7 +17,7 @@ import OpenAI from 'openai';
  * @typedef {object} CommonChatMessage
  * @property {'system'|'user'|'assistant'|'tool'} role
  * @property {string} content
- * @property {Array<{ id?: string, function: { name: string, arguments: string|object }}>} [tool_calls]
+ * @property {Array<{ id?: string, type?: 'function', function: { name: string, arguments: string|object }}>} [tool_calls]
  * @property {string} [tool_call_id]
  */
 
@@ -39,13 +38,24 @@ export const makeLlamaCppProvider = ({
   maxTokens = 4096,
   maxMessages = undefined,
 }) => {
-  const client = new OpenAI({
-    apiKey,
-    baseURL,
-  });
+  let clientP;
+
+  const getClient = async () => {
+    if (clientP === undefined) {
+      clientP = import('openai').then(
+        ({ default: OpenAI }) =>
+          new OpenAI({
+            apiKey,
+            baseURL,
+          }),
+      );
+    }
+    return clientP;
+  };
 
   return {
     async chat(messages, tools) {
+      const client = await getClient();
       let sendMessages = messages;
       if (
         typeof maxMessages === 'number' &&
@@ -64,8 +74,7 @@ export const makeLlamaCppProvider = ({
           model,
           max_tokens: maxTokens,
           tools,
-          // @ts-expect-error - our message format matches OpenAI's for this path
-          messages: sendMessages,
+          messages: toOpenAICompatibleMessages(sendMessages),
         });
       } catch (error) {
         console.error('[LAL] llama.cpp API error:', error);
@@ -86,6 +95,7 @@ export const makeLlamaCppProvider = ({
       ) {
         message.tool_calls = choice.message.tool_calls.map(tc => ({
           id: tc.id,
+          type: 'function',
           function: {
             name: tc.function?.name ?? '',
             arguments: tc.function?.arguments ?? '{}',

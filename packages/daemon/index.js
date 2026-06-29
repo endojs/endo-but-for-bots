@@ -9,7 +9,7 @@ import path from 'path';
 import os from 'os';
 
 import { E } from '@endo/eventual-send';
-import { makePromiseKit } from '@endo/promise-kit';
+import { makeCancelKit } from '@endo/cancel';
 
 import { waitForExit, waitForMessage, waitForSpawn } from '@endo/platform/proc';
 
@@ -23,8 +23,6 @@ import { makeEndoClient } from './src/client.js';
 
 // Reexports:
 export { makeEndoClient } from './src/client.js';
-export { makeRefReader, makeRefIterator } from './src/ref-reader.js';
-export { makeReaderRef, makeIteratorRef } from './src/reader-ref.js';
 
 const removePath = async removalPath => {
   return fs.promises
@@ -52,17 +50,35 @@ const info = {
   temp,
 };
 
+const keepStdEnv = new Set([
+  'ARCH',
+  'EGID',
+  'EUID',
+  'HOME',
+  'HOSTNAME',
+  'LANG',
+  'LOCALE',
+  'OSTYPE',
+  'PATH',
+  'PWD',
+  'TEMP',
+  'TMP',
+  'TMPDIR',
+  'TZ',
+  'USER',
+]);
+
 /**
  * Used to filter ambient env when building background daemon env.
  *
  * @param {string} key
  */
 const allowEnvPass = key => {
-  // TODO probably better to use a more restrictive whitelist
   return (
-    key.startsWith('LOCKDOWN_') || key.startsWith('ENDO_')
-    // || key.startsWith('XDG_') // NOTE should not be necessary, as these are already systemd-injected
-    // || key === 'ONLY_WELL_FORMED_STRINGS_PASSABLE' // TODO need?
+    keepStdEnv.has(key) ||
+    key.startsWith('ENDO_') ||
+    key.startsWith('LOCKDOWN_') ||
+    key.startsWith('XDG_')
   );
 };
 
@@ -129,7 +145,7 @@ const configFromEnv = env => {
 };
 
 export const terminate = async (config = defaultConfig) => {
-  const { resolve: cancel, promise: cancelled } = makePromiseKit();
+  const { cancelled, cancel } = makeCancelKit();
   const { getBootstrap, closed } = await makeEndoClient(
     'harbinger',
     config.sockPath,
@@ -141,7 +157,6 @@ export const terminate = async (config = defaultConfig) => {
   await E(bootstrap)
     .terminate()
     .catch(() => {});
-  // @ts-expect-error zero-argument promise resolve
   cancel();
   await closed.catch(() => {});
 };
@@ -607,7 +622,7 @@ const readPidFile = async pidPath => {
 /** @type {EndProcPolicy} */
 const defaultEndProcPolicy = harden([
   { kill: 'SIGTERM' },
-  { wait: 2_000 }, // try SIGTERM for 2s
+  { wait: 2000 }, // try SIGTERM for 2s
   { kill: 'SIGKILL' },
   { wait: 400 }, // try SIGKILL for 0.4s
   { notify: 'warn' }, // or warn of zombie remnant
@@ -717,7 +732,7 @@ const killDaemonProcess = async config => {
   await politeEndProcess(pid, {
     // Wait up to 5s for the process to exit on its own
     // (graceful shutdown from a prior terminate() call).
-    waitBefore: 5_000,
+    waitBefore: 5000,
   });
 };
 

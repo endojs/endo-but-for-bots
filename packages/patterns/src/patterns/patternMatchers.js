@@ -829,10 +829,10 @@ const makePatternKit = () => {
 
     getRankCover: (patts, encodePassable) =>
       intersectRankCovers(
-        compareRank,
         /** @type {CopyArray<Passable>} */ (patts).map(p =>
           getRankCover(p, encodePassable),
         ),
+        compareRank,
       ),
   });
 
@@ -868,10 +868,10 @@ const makePatternKit = () => {
 
     getRankCover: (patts, encodePassable) =>
       unionRankCovers(
-        compareRank,
         /** @type {CopyArray<Passable>} */ (patts).map(p =>
           getRankCover(p, encodePassable),
         ),
+        compareRank,
       ),
   });
 
@@ -2336,7 +2336,9 @@ const makeMethodGuardMaker = (
 export const InterfaceGuardPayloadShape = M.splitRecord(
   {
     interfaceName: M.string(),
-    methodGuards: M.recordOf(M.string(), MethodGuardShape),
+    methodGuards: M.recordOf(M.string(), MethodGuardShape, {
+      numPropertiesLimit: 200,
+    }),
   },
   {
     defaultGuards: M.or(M.undefined(), 'passable', 'raw'),

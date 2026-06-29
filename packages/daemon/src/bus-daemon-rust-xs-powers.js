@@ -1,13 +1,9 @@
-// @ts-nocheck
-// The XS-backed powers still implement the pre-SQLite SqliteValue
-// contract and expose readLink outside the current FilePowers type.
-// Aligning this module with the llm-side typings is tracked as
-// follow-up; re-enable @ts-check once FilePowers gains readLink
-// and SqliteParams unifies with the SQLite migration's types.
+// @ts-check
 /// <reference path="./bus-xs-host-globals.d.ts" />
 /* global btoa, atob,
    hostReadFile, hostReadFileBytes, hostMaybeReadFileBytes,
-   hostWriteFile, hostReadDir, hostMkdir, hostRemove,
+   hostWriteFile, hostAppendFile, hostStat,
+   hostReadDir, hostMkdir, hostRemove,
    hostRename, hostExists, hostIsDir, hostReadLink, hostSha256Init,
    hostSha256Update, hostSha256UpdateBytes, hostSha256Finish, hostRandomHex256,
    hostEd25519Keygen, hostEd25519Sign, hostJoinPath,
@@ -89,6 +85,14 @@ export const makeXsFilePowers = () => {
     }
   };
 
+  /** @type {FilePowers['appendFileText']} */
+  const appendFileText = async (path, text) => {
+    const result = hostAppendFile(DIR_TOKEN, toRelative(path), text);
+    if (typeof result === 'string' && result.startsWith('Error: ')) {
+      throw new Error(result);
+    }
+  };
+
   /** @type {FilePowers['readFileText']} */
   const readFileText = async path => {
     const result = hostReadFile(DIR_TOKEN, toRelative(path));
@@ -136,6 +140,50 @@ export const makeXsFilePowers = () => {
   };
 
   /**
+   * Binary-safe whole-file read.  Identical to {@link readFile} on the
+   * XS host — both go through the `hostReadFileBytes` ArrayBuffer path —
+   * but kept as a distinct member so the XS powers satisfy the same
+   * `FilePowers` contract as the Node powers, where `readFileBytes` is
+   * the explicitly byte-typed accessor.
+   *
+   * @type {FilePowers['readFileBytes']}
+   */
+  const readFileBytes = async path => readFile(path);
+
+  /**
+   * Binary-safe range read returning `[offset, offset + length)`. The XS
+   * host has no native pread primitive, so this reads the whole file and
+   * slices — correct, if not as I/O-efficient as the Node powers' windowed
+   * read. Mirrors the `BlobRef.fetch` clamp: a short read past EOF returns
+   * the available bytes, and `offset` at/beyond EOF returns empty.
+   *
+   * @type {FilePowers['readFileRange']}
+   */
+  const readFileRange = async (path, offset, length) => {
+    if (length <= 0) {
+      return new Uint8Array(0);
+    }
+    const bytes = await readFile(path);
+    if (offset >= bytes.length) {
+      return new Uint8Array(0);
+    }
+    return bytes.subarray(offset, Math.min(offset + length, bytes.length));
+  };
+
+  /**
+   * Content hash of a file: the hex sha256 of its current bytes, via the XS
+   * host's streaming sha256 (the same host functions `makeXsCryptoPowers` uses).
+   *
+   * @type {FilePowers['sha256']}
+   */
+  const sha256 = async path => {
+    const bytes = await readFile(path);
+    const handle = hostSha256Init();
+    hostSha256UpdateBytes(handle, bytes);
+    return hostSha256Finish(handle);
+  };
+
+  /**
    * Like {@link readFile} but resolves to `undefined` when the file
    * does not exist (or the path is a directory).  The host returns
    * `undefined` for those cases natively; other I/O errors come back
@@ -179,6 +227,33 @@ export const makeXsFilePowers = () => {
     }
   };
 
+  /**
+   * Recursively remove a directory and its contents.  The XS host's
+   * `remove` is non-recursive, so emulate `rm -rf` by walking the
+   * tree.  Idempotent: a missing directory is not an error.
+   *
+   * @type {FilePowers['removeDirectory']}
+   */
+  const removeDirectory = async path => {
+    const isDir = await isDirectory(path);
+    if (!isDir) {
+      // Either missing or a file; defer to removePath which is
+      // already idempotent for missing entries.
+      const present = await exists(path);
+      if (present) {
+        await removePath(path);
+      }
+      return;
+    }
+    const entries = await readDirectory(path);
+    for (const entry of entries) {
+      const childPath = joinPath(path, entry);
+      // eslint-disable-next-line no-use-before-define, no-await-in-loop
+      await removeDirectory(childPath);
+    }
+    await removePath(path);
+  };
+
   /** @type {FilePowers['renamePath']} */
   const renamePath = async (source, target) => {
     const result = hostRename(
@@ -208,6 +283,67 @@ export const makeXsFilePowers = () => {
     const result = hostReadLink(DIR_TOKEN, toRelative(path));
     // Returns undefined if not a symlink, otherwise the target string.
     return result;
+  };
+
+  /**
+   * Parse the host `stat` JSON, which carries the Node `statPath`
+   * fields (`kind`, `sizeBytes`, `modifiedMs`) plus the POSIX
+   * `dev`/`ino` pair that backs {@link pathIdentity}.
+   *
+   * @param {string} path
+   * @returns {Promise<{
+   *   kind: 'file' | 'directory' | 'symlink';
+   *   sizeBytes: number;
+   *   modifiedMs: number;
+   *   dev: number;
+   *   ino: number;
+   * }>}
+   */
+  const statRaw = async path => {
+    const result = hostStat(DIR_TOKEN, toRelative(path));
+    if (typeof result === 'string' && result.startsWith('Error: ')) {
+      throw new Error(result);
+    }
+    return JSON.parse(/** @type {string} */ (result));
+  };
+
+  /** @type {FilePowers['statPath']} */
+  const statPath = async path => {
+    const { kind, sizeBytes, modifiedMs } = await statRaw(path);
+    // Align to the extended `Stat` shape (size: bigint, mtime/atime: bigint
+    // nanoseconds). The XS host stat JSON carries ms; convert to ns. It does
+    // not provide atime, so atime mirrors mtime (a documented XS limitation,
+    // like pathIdentity below).
+    //
+    // `modifiedMs` is a Number and may be fractional (`fs.Stats.mtimeMs` is),
+    // so `BigInt(modifiedMs)` would throw `RangeError: not an integer`. Round
+    // to whole milliseconds *first* (well within `Number.MAX_SAFE_INTEGER`),
+    // then scale to nanoseconds in BigInt space so the multiply stays exact —
+    // rounding after `* 1_000_000` would instead lose precision past 2**53.
+    const mtimeNs = BigInt(Math.round(modifiedMs)) * 1_000_000n;
+    return harden({
+      kind,
+      size: BigInt(sizeBytes),
+      mtime: mtimeNs,
+      atime: mtimeNs,
+    });
+  };
+
+  /**
+   * Stable filesystem identity (`<dev>:<ino>`) used as a content-store
+   * key, mirroring the Node `pathIdentity`.  The XS host derives the
+   * pair from `symlink_metadata`, so unlike the Node version (which
+   * follows symlinks) this reports the symlink's own identity rather
+   * than its target's.  The daemon's content store calls `pathIdentity`
+   * only on regular files, where the two agree; the divergence is a
+   * documented Unix-only XS limitation rather than a behavioral
+   * dependency of any caller today.
+   *
+   * @type {FilePowers['pathIdentity']}
+   */
+  const pathIdentity = async path => {
+    const { dev, ino } = await statRaw(path);
+    return `${dev}:${ino}`;
   };
 
   /** @type {FilePowers['isDirectory']} */
@@ -244,6 +380,7 @@ export const makeXsFilePowers = () => {
         // "extensible object").  Freeze only the top-level record,
         // leaving the typed array as-is — the caller's mapReader
         // immediately consumes and transforms the value.
+        /** @type {IteratorResult<Uint8Array, undefined>} */
         const result = { done: false, value: bytes };
         Object.freeze(result);
         return result;
@@ -294,17 +431,24 @@ export const makeXsFilePowers = () => {
     makeFileReader,
     makeFileWriter,
     writeFileText,
+    appendFileText,
     readFileText,
+    readFileBytes,
     readFile,
+    readFileRange,
+    sha256,
     maybeReadFile,
     maybeReadFileText,
     readDirectory,
     makePath,
     joinPath,
     removePath,
+    removeDirectory,
     renamePath,
     realPath,
     readLink,
+    pathIdentity,
+    statPath,
     isDirectory,
     exists,
   });
@@ -507,7 +651,7 @@ export const makeXsSqlitePowers = () => {
       assertSqliteOk(stmtHandle);
 
       /**
-       * @param {import('./types.js').SqliteValue[]} args
+       * @param {import('./types.js').SqliteParams} args
        * @returns {string}
        */
       const encodeParams = args => {
@@ -532,7 +676,12 @@ export const makeXsSqlitePowers = () => {
           }
           return JSON.stringify(encoded);
         }
-        return JSON.stringify(args.map(encodeValue));
+        // The named-parameter form returned above; the remaining shape
+        // is the positional `SqliteValue[]` arm of `SqliteParams`.
+        const positional = /** @type {import('./types.js').SqliteValue[]} */ (
+          args
+        );
+        return JSON.stringify(positional.map(encodeValue));
       };
 
       /** @type {import('./types.js').StatementSync['run']} */

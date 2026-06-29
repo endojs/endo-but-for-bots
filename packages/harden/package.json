@@ -22,6 +22,12 @@
       "noop-harden": "./noop.js",
       "default": "./index.js"
     },
+    "./hardened.js": {
+      "test-endo-harden": "./hardened.js"
+    },
+    "./noop.js": {
+      "test-endo-harden": "./noop.js"
+    },
     "./is-noop.js": "./is-noop.js",
     "./package.json": "./package.json"
   },
@@ -29,7 +35,7 @@
     "build": "exit 0",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
-    "lint:eslint": "eslint '**/*.js'",
+    "lint:eslint": "eslint .",
     "lint:types": "tsc",
     "postpack": "git clean -fX -e node_modules/",
     "prepack": "git clean -fX -e node_modules/ && tsc --build tsconfig.build.json",
@@ -41,7 +47,6 @@
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
-    "ses": "workspace:^",
     "tsd": "catalog:dev",
     "typescript": "catalog:dev"
   },

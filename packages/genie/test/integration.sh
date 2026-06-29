@@ -44,8 +44,8 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       echo "[integration] Loading env from $1"
-      # shellcheck disable=SC1090
       set -a
+      # shellcheck source=/dev/null  # dynamic source path is intentional
       source "$1"
       set +a
       shift
@@ -57,6 +57,7 @@ while [[ $# -gt 0 ]]; do
         echo "[integration] ERROR: -E requires KEY=VAL argument." >&2
         exit 1
       fi
+      # shellcheck disable=SC2163  # exporting the assignment string is intentional; the caller passes KEY=VAL.
       export "$1"
       echo "[integration] Set ${1%%=*}"
       shift
@@ -160,64 +161,101 @@ trace_reply() {
   echo "[integration] Waiting up to ${max_wait}s for reply after message #${after_msg}..." >&2
 
   while (( $(date +%s) < deadline )); do
-    echo "are you still there" >&2
-    endo inbox \
-    | grep -E '^[0-9]+\.' \
-    | while IFS= read -r line; do
+    # Read the inbox via PROCESS SUBSTITUTION (`done < <(endo inbox ...)`)
+    # so the loop body runs in the CURRENT shell.  Two properties depend
+    # on that: `return 0` returns from trace_reply itself the moment a
+    # reply is seen (an early exit, not just a loop break), and the
+    # `after_msg` watermark we advance below persists across `while`
+    # iterations.
+    while IFS= read -r line; do
       msg_num="${line%%.*}"
-      if (( msg_num <= after_msg )); then
+      # Only consider strictly-newer messages than the watermark.
+      if [[ ! "$msg_num" =~ ^[0-9]+$ ]] || (( msg_num <= after_msg )); then
         continue
       fi
-
-      echo "  ??? $after_msg $msg_num $line" >&2
       after_msg=$msg_num
 
-      # Classify each line using shell builtins; echo skipped
-      # (insubstantive) lines to stderr so the TTY-repl shows
-      # live progress while callers can still discard noise via
-      # 2>/dev/null.
+      # Inbox line shapes (see packages/cli/src/commands/inbox.js):
+      #   ours → agent : `N. sent "agent" "..."`  (verb FIRST — provenance
+      #                   for from==self is `${verb} "${toName}" `)
+      #   agent → us   : `N. "agent" sent "..."`  or `N. "agent" replied to "..."`
+      #                   (sender NAME first — provenance for to==self is
+      #                   `"${fromName}" ${verb} `)
+      #   tool call    : `N. "agent" requested "..."`
+      #   proposal     : `N. "agent" proposed definition "..."`
+      # The discriminator that distinguishes the agent's substantive
+      # reply from OUR echoed prompt is therefore structural: a real
+      # reply is a `sent`/`replied to` package whose verb is PRECEDED by
+      # the quoted sender name, i.e. it matches `N. "<name>" sent ` (or
+      # `replied to`).  Our own prompts put the verb first (`N. sent
+      # "<name>" `) and tool-calls/proposals use `requested`/`proposed`.
+      #
+      # NB: the patterns are UNQUOTED on the right of `==` so bash treats
+      # them as globs and matches them against the inbox line shapes
+      # above.  Quoting a pattern would make bash compare the line
+      # against the literal pattern text instead, so the skip branches
+      # must keep their right-hand sides unquoted to glob-match.
 
-      # Skip messages we sent (". sent " from us)
-      if [[ "$line" == "[0-9]*. sent *" ]]; then
-        echo "  (skip sent) $line" >&2
+      # Skip our own outbound messages (verb first: `N. sent ...` /
+      # `N. replied to ...` / `N. sent form ...`).
+      if [[ "$line" == [0-9]*.\ sent\ * || "$line" == [0-9]*.\ replied\ to\ * ]]; then
+        echo "  (skip ours) $line" >&2
         continue
 
-      # Skip "Thinking..." status messages (case-insensitive via extglob)
-      elif [[ "$line" == "*[Tt][Hh][Ii][Nn][Kk][Ii][Nn][Gg]...*" ]]; then
+      # Skip "Thinking..." status messages.
+      elif [[ "$line" == *[Tt]hinking...* ]]; then
         echo "  (skip thinking) $line" >&2
         continue
 
-      # Skip request/tool-call messages ("requested")
-      elif [[ "$line" == "[0-9]* requested*" ]]; then
+      # Skip request/tool-call messages (`N. "agent" requested ...`).
+      elif [[ "$line" == *\"\ requested\ * ]]; then
         echo "  (skip requested) $line" >&2
         continue
 
-      # Skip definition proposals
-      elif [[ "$line" == "[0-9]* proposed*" ]]; then
+      # Skip definition proposals (`N. "agent" proposed definition ...`).
+      elif [[ "$line" == *\"\ proposed\ * ]]; then
         echo "  (skip proposed) $line" >&2
         continue
 
-      # This is a substantive reply from the agent
-      else
-        echo "$line"
-
+      # A substantive reply FROM the agent: sender name first, then a
+      # `sent` / `replied to` verb (`N. "agent" sent "..."`).
+      elif [[ "$line" == [0-9]*.\ \"*\"\ sent\ * \
+           || "$line" == [0-9]*.\ \"*\"\ replied\ to\ * ]]; then
         echo "[integration] Got reply: $line" >&2
-        # Strip inbox metadata: remove leading "N. <verb> <agent> " prefix
-        # to get the raw message content.
-        echo "$line" | sed 's/^[0-9]*\. [^ ]* [^ ]* //'
+        # Strip the inbox metadata prefix `N. "agent" <verb> ` to leave
+        # the raw message text.  `sent` is one word; `replied to` is two,
+        # so strip the optional ` to` that may follow the verb word.
+        echo "$line" | sed -E 's/^[0-9]+\. "[^"]*" [^ ]+( to)? //'
         return 0
 
+      # Anything else (forms, values, unrecognized) is not a reply.
+      else
+        echo "  (skip other) $line" >&2
+        continue
       fi
 
-      echo "  ??? next" >&2
-
-    done
+    done < <(endo inbox 2>/dev/null | grep -E '^[0-9]+\.')
 
     sleep "$interval"
   done
 
-  echo "[integration] Timed out waiting for reply." >&2
-  endo inbox 2>/dev/null || true
+  echo "[integration] Timed out waiting for reply after message #${after_msg}." >&2
+  # Dump the daemon + worker logs so a model-side failure (bad/expired
+  # key, a free model that won't emit tool calls, blocked egress to
+  # openrouter.ai) is visible to the operator instead of a silent spin.
+  # Mirrors the Phase-3 readiness-timeout dump below.
+  echo "[integration] --- daemon log (tail) ---" >&2
+  endo log 2>&1 | tail -80 >&2 || true
+  echo "[integration] --- worker logs ---" >&2
+  if [[ -n "${ENDO_STATE_PATH:-}" && -d "$ENDO_STATE_PATH/worker" ]]; then
+    for w in "$ENDO_STATE_PATH"/worker/*/worker.log; do
+      [[ -f "$w" ]] || continue
+      echo "[integration] ---- $w ----" >&2
+      tail -60 "$w" >&2 || true
+    done
+  fi
+  echo "[integration] --- inbox ---" >&2
+  endo inbox 2>&1 | tail -40 >&2 || true
   return 1
 }
 
@@ -287,6 +325,7 @@ endo start
 # wait until it is responsive before proceeding.
 echo "[integration] Waiting for daemon to become ready..."
 daemon_ready=0
+# shellcheck disable=SC2034  # `i` is a counter; the loop body uses it indirectly through retry pacing.
 for i in $(seq 1 30); do
   if endo ping 2>/dev/null; then
     daemon_ready=1
@@ -335,7 +374,29 @@ echo "[integration] Setup completed."
 echo ""
 echo "=== Phase 3: Wait for agent ready ==="
 # The agent sends `N. "name" sent "Genie agent ready ..." once configured.
-agent_ready=$(wait_for 120 'Genie agent ready')
+# When this hangs, the most likely culprit is slice minting failing inside
+# spawnAgent (missing bwrap, missing workspace mount, kernel without
+# unprivileged user namespaces).  Capture stderr / log dumps so the operator
+# sees a structured diagnosis rather than a bare timeout.
+if ! agent_ready=$(wait_for 120 'Genie agent ready'); then
+  echo "[integration] ERROR: agent did not announce readiness within 120s." >&2
+  echo "[integration] --- daemon log (tail) ---" >&2
+  endo log 2>&1 | tail -80 >&2 || true
+  echo "[integration] --- worker logs ---" >&2
+  if [[ -d "$ENDO_STATE_PATH/worker" ]]; then
+    for w in "$ENDO_STATE_PATH"/worker/*/worker.log; do
+      [[ -f "$w" ]] || continue
+      echo "[integration] ---- $w ----" >&2
+      tail -60 "$w" >&2 || true
+    done
+  fi
+  echo "[integration] --- inbox ---" >&2
+  endo inbox 2>&1 | tail -40 >&2 || true
+  echo "[integration] Hint: confirm bwrap is installed and unprivileged" >&2
+  echo "[integration] user namespaces are permitted on this host" >&2
+  echo "[integration] (sysctl kernel.unprivileged_userns_clone=1)." >&2
+  exit 1
+fi
 agent_ready=${agent_ready#* }
 agent_ready=${agent_ready%% *}
 agent_ready=${agent_ready//\"/}
@@ -355,53 +416,25 @@ export -f endo wait_for trace_reply wait_for_reply send_and_wait \
           assert_reply_contains current_max_msg
 export ENDO_BIN TEST_DIR GENIE_WORKSPACE
 
-# echo "[integration] Commands: /quit to exit, /inbox to dump full inbox, /shell to drop to debug bash"
-#
-# while true; do
-#   printf 'genie> '
-#   IFS= read -r user_input || break
-#
-#   # Skip blank lines
-#   if [[ -z "$user_input" ]]; then
-#     continue
-#   fi
-#
-#   # Special commands
-#   case "$user_input" in
-#     /quit)
-#       echo "[integration] Exiting REPL."
-#       break
-#       ;;
-#
-#     /inbox)
-#       endo inbox 2>/dev/null || true
-#       continue
-#       ;;
-#
-#     /shell)
-
-echo "[integration] Spawning debug sub-shell, exit to return to genie test loop"
-bash
-
-#       continue
-#       ;;
-#
-#   esac
-#
-#   # Send and wait for reply
-#   CURRENT_MAX="$(current_max_msg)"
-#   endo send "$GENIE_NAME" "$user_input"
-#
-#   # TODO filter from $GENIE_NAME
-#   agent_reply="$(trace_reply "$CURRENT_MAX" 180)" || true
-#
-#   if [[ -n "$agent_reply" ]]; then
-#     echo "$agent_reply"
-#   else
-#     echo "[integration] (no reply within 180s)"
-#   fi
-#
-# done
+# When `GENIE_TEST` points at a scenario script, source it so it inherits
+# the helpers and exported state (GENIE_NAME, GENIE_WORKSPACE, …).  Each
+# scenario is responsible for its own assertions and can `exit 0` to
+# pass-with-skip when an environment precondition (e.g. bwrap absent)
+# rules the scenario out.  Without `GENIE_TEST` we drop into an
+# interactive sub-shell so an operator can poke at the running daemon.
+if [[ -n "${GENIE_TEST:-}" ]]; then
+  if [[ ! -f "$GENIE_TEST" ]]; then
+    echo "[integration] ERROR: GENIE_TEST=$GENIE_TEST does not exist." >&2
+    exit 1
+  fi
+  echo "[integration] Sourcing scenario: $GENIE_TEST"
+  # shellcheck disable=SC1090
+  source "$GENIE_TEST"
+else
+  echo "[integration] GENIE_TEST unset — spawning debug sub-shell."
+  echo "[integration] (exit to return to the cleanup phase)"
+  bash
+fi
 
 # ---------------------------------------------------------------------------
 # Phase 5: Final inbox dump and result

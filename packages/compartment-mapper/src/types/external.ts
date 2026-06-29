@@ -8,11 +8,18 @@
 
 import type {
   FinalStaticModuleType,
+  ModuleDescriptor,
   StaticModuleType,
   ThirdPartyStaticModuleInterface,
   Transform,
 } from 'ses';
 import type {
+  ATTENUATORS_COMPARTMENT,
+  ENTRY_COMPARTMENT,
+} from '../policy-format.js';
+import type { CanonicalName } from './canonical-name.js';
+import type {
+  SomeCompartmentDescriptor,
   CompartmentDescriptor,
   CompartmentMapDescriptor,
   DigestedCompartmentMapDescriptor,
@@ -21,18 +28,12 @@ import type {
   PackageCompartmentDescriptorName,
   PackageCompartmentDescriptors,
 } from './compartment-map-schema.js';
+import type { PackageDescriptor } from './node-modules.js';
 import type { SomePolicy } from './policy-schema.js';
 import type { HashFn, ReadFn, ReadPowers } from './powers.js';
-import type { CanonicalName } from './canonical-name.js';
-import type { PackageDescriptor } from './node-modules.js';
-import type {
-  ATTENUATORS_COMPARTMENT,
-  ENTRY_COMPARTMENT,
-} from '../policy-format.js';
 import type { LiteralUnion } from './typescript.js';
 
-export type { CanonicalName };
-export type { PackageDescriptor };
+export type { CanonicalName, PackageDescriptor };
 
 /**
  * Hook executed for each canonical name mentioned in policy but not found in the
@@ -256,7 +257,41 @@ type MapNodeModulesOptionsOmitPolicy = Partial<{
    * from the `parserForLanguage` option.
    */
   languages: Array<Language> | undefined;
+  /**
+   * Additional package locations to graph alongside the entry package. Each
+   * entry is graphed into the same compartment map, with an edge from the entry
+   * package. If `modules` is specified, those paths are injected into the
+   * package's external aliases.
+   *
+   * These can be thought of as "additional entry points" insofar as building
+   * the compartment map.
+   */
+  additionalLocations: Array<AdditionalLocation>;
 }>;
+
+/**
+ * An additional package location to include in the compartment map graph.
+ *
+ * This allows packages that are not reachable through the entry package's
+ * dependency graph to appear in the compartment map. A common use case is
+ * including a project root package when the entry point is a tool binary
+ * (e.g., webpack) inside `node_modules`.
+ */
+export interface AdditionalLocation {
+  /**
+   * File URL of the package root directory (must contain a `package.json`).
+   */
+  location: FileUrlString;
+
+  /**
+   * Specific relative module paths to expose as external aliases. These paths
+   * are relative to {@link location}.
+   *
+   * If omitted, only modules discovered by standard inference (see
+   * `infer-exports.js`) are externally visible.
+   */
+  modules?: Array<string>;
+}
 
 /**
  * Hook options for `mapNodeModules()`
@@ -651,6 +686,15 @@ export type SourceMapHookDetails = {
   sha512: string;
 };
 
+/**
+ * Source map hook as received by {@link ParseFn}.
+ *
+ * The import hook wraps the public {@link SourceMapHook} into this shape; it
+ * receives the raw source map object from the code generator, not a JSON
+ * string.
+ */
+export type ParseSourceMapHook = (sourceMapObject: object) => void;
+
 export type ModuleTransforms = Record<string, ModuleTransform>;
 
 export type SyncModuleTransforms = Record<string, SyncModuleTransform>;
@@ -681,12 +725,12 @@ type ModuleTransformResult = {
 export type ExitModuleImportHook = (
   specifier: string,
   packageLocation: string,
-) => Promise<ThirdPartyStaticModuleInterface | undefined>;
+) => Promise<ModuleDescriptor | undefined>;
 
 export type ExitModuleImportNowHook = (
   specifier: string,
   packageLocation: string,
-) => ThirdPartyStaticModuleInterface | undefined;
+) => ModuleDescriptor | undefined;
 
 export type ComputeSourceLocationHook = (
   compartmentName: string,
@@ -718,29 +762,59 @@ export type ComputeSourceMapLocationHook = (
   details: ComputeSourceMapLocationDetails,
 ) => string;
 
-export type ParserImplementation = {
+interface BaseParserImplementation {
   /**
    * Whether a heuristic is used by parser to detect imports.
    * CommonJS uses a lexer to heuristically discover static require calls.
    */
   heuristicImports: boolean;
-  parse: ParseFn;
-  synchronous: boolean;
-};
+}
 
-type ParseArguments = [
+export interface ParserImplementation<
+  TCompartmentDescriptor extends SomeCompartmentDescriptor =
+    SomeCompartmentDescriptor,
+> extends BaseParserImplementation {
+  parse: ParseFn<TCompartmentDescriptor>;
+  synchronous: true;
+}
+
+export interface AsyncParserImplementation<
+  TCompartmentDescriptor extends SomeCompartmentDescriptor =
+    SomeCompartmentDescriptor,
+> extends BaseParserImplementation {
+  parse: AsyncParseFn<TCompartmentDescriptor>;
+  synchronous: false;
+}
+
+/**
+ * Options bag for a {@link ParseFn} or {@link AsyncParseFn}.
+ *
+ * @template TCompartmentDescriptor The compartment descriptor to use for the parse
+ */
+export type ParseOptions<
+  TCompartmentDescriptor extends SomeCompartmentDescriptor =
+    SomeCompartmentDescriptor,
+> = Partial<{
+  sourceMap: string | undefined;
+  sourceMapHook: ParseSourceMapHook | undefined;
+  sourceMapUrl: string | undefined;
+  readPowers: ReadFn | ReadPowers | undefined;
+  compartmentDescriptor: TCompartmentDescriptor | undefined;
+}> &
+  ArchiveOnlyOption;
+
+/**
+ * Arguments for a {@link ParseFn} or {@link AsyncParseFn}.
+ */
+export type ParseArguments<
+  TCompartmentDescriptor extends SomeCompartmentDescriptor =
+    SomeCompartmentDescriptor,
+> = [
   bytes: Uint8Array,
   specifier: string,
   moduleLocation: string,
   packageLocation: string,
-  options?: Partial<{
-    sourceMap: string | undefined;
-    sourceMapHook: SourceMapHook | undefined;
-    sourceMapUrl: string | undefined;
-    readPowers: ReadFn | ReadPowers | undefined;
-    compartmentDescriptor: CompartmentDescriptor | undefined;
-  }> &
-    ArchiveOnlyOption,
+  options?: ParseOptions<TCompartmentDescriptor>,
 ];
 
 /**
@@ -753,17 +827,56 @@ export type ParseResult = {
   sourceMap?: string | undefined;
 };
 
-export type AsyncParseFn = (...args: ParseArguments) => Promise<ParseResult>;
+/**
+ * A synchronous module parsing function.
+ *
+ * @todo This and all parser-related types (including {@link ParseResult} should
+ * be moved into a separate package. `@endo/parser-pipeline` needs these types,
+ * and a package needing the types in `@endo/parser-pipeline` would then pull in
+ * `@endo/compartment-mapper` as a transitive dep and all _its_ transitive deps.
+ * Because {@link ParseResult} contains {@link FinalStaticModuleType} from
+ * `ses`, those types would want to be moved out of `ses` with it.
+ */
+export interface ParseFn<
+  TCompartmentDescriptor extends SomeCompartmentDescriptor =
+    SomeCompartmentDescriptor,
+> {
+  isSyncParser?: true;
+  (...args: ParseArguments<TCompartmentDescriptor>): ParseResult;
+}
 
-export type ParseFn = { isSyncParser?: true } & ((
-  ...args: ParseArguments
-) => ParseResult);
+/**
+ * Mapping of `Language` to synchronous {@link ParserImplementation}s only.
+ *
+ * Used when all parsers are known to be synchronous.
+ */
+export type SyncParserForLanguage = Record<
+  Language | string,
+  ParserImplementation
+>;
+
+/**
+ * An asynchronous module parsing function.
+ */
+export interface AsyncParseFn<
+  TCompartmentDescriptor extends SomeCompartmentDescriptor =
+    SomeCompartmentDescriptor,
+> {
+  isSyncParser?: false;
+  (...args: ParseArguments<TCompartmentDescriptor>): Promise<ParseResult>;
+}
 
 /**
  * Mapping of `Language` to {@link ParserImplementation
- * ParserImplementations}
+ * ParserImplementations} or {@link AsyncParserImplementation}s.
+ *
+ * When any entry has `synchronous: false`, the pipeline uses the async
+ * trampoline.
  */
-export type ParserForLanguage = Record<Language | string, ParserImplementation>;
+export type ParserForLanguage = Record<
+  Language | string,
+  ParserImplementation | AsyncParserImplementation
+>;
 
 /**
  * Generic logging function accepted by various functions.

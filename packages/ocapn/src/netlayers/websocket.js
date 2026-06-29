@@ -3,15 +3,14 @@
 import { randomBytes } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 import harden from '@endo/harden';
+import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
+import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 
-import { makeOcapnKeyPair, makeOcapnPublicKey } from '../cryptography.js';
-import {
-  immutableArrayBufferToUint8Array,
-  uint8ArrayToImmutableArrayBuffer,
-} from '../buffer-utils.js';
+import { makeCryptography } from '../cryptography.js';
 import { locationToLocationId } from '../client/util.js';
 import { makeSyrupReader } from '../syrup/decode.js';
 import { makeSyrupWriter } from '../syrup/encode.js';
+import { syrupCodec } from '../syrup/index.js';
 import { OcapnSignatureCodec } from '../codecs/components.js';
 import { makeOcapnRecordCodecFromDefinition } from '../codecs/util.js';
 
@@ -174,7 +173,7 @@ const encodeInitPeerAuth = payload => {
   InitPeerAuthCodec.write(
     {
       type: 'init:peer-auth',
-      payload: uint8ArrayToImmutableArrayBuffer(payload),
+      payload: bytesToImmutable(payload),
     },
     syrupWriter,
   );
@@ -283,8 +282,13 @@ export const makeWebSocketNetLayer = async ({
   specifiedHostname = '127.0.0.1',
   specifiedUrl,
 }) => {
-  const designatorKeyPair = makeOcapnKeyPair();
-  const designatorPublicKey = immutableArrayBufferToUint8Array(
+  // The Spritely Goblins websocket auth protocol is syrup-encoded; bind
+  // the netlayer's local cryptography to the syrup codec so the
+  // designator key it generates serializes consistently with the
+  // init:peer-auth records on the wire.
+  const cryptography = makeCryptography(syrupCodec);
+  const designatorKeyPair = cryptography.makeOcapnKeyPair();
+  const designatorPublicKey = bytesFromImmutable(
     designatorKeyPair.publicKey.bytes,
   );
   const designator = base32Encode(designatorPublicKey);
@@ -358,8 +362,8 @@ export const makeWebSocketNetLayer = async ({
         `Expected websocket designator to decode to ${DESIGNATOR_PUBLIC_KEY_BYTES} bytes, got ${remotePublicKeyBytes.byteLength}`,
       );
     }
-    const remotePublicKey = makeOcapnPublicKey(
-      uint8ArrayToImmutableArrayBuffer(remotePublicKeyBytes),
+    const remotePublicKey = cryptography.makeOcapnPublicKey(
+      bytesToImmutable(remotePublicKeyBytes),
     );
 
     logger.info('Connecting to websocket', { wsUrl });
@@ -391,7 +395,7 @@ export const makeWebSocketNetLayer = async ({
         try {
           const envelope = decodeInitPeerAuthSigEnvelope(messageBytes);
           remotePublicKey.assertSignatureValid(
-            uint8ArrayToImmutableArrayBuffer(challengeMessage),
+            bytesToImmutable(challengeMessage),
             envelope.signature,
           );
           socketState.authenticated = true;
@@ -461,7 +465,7 @@ export const makeWebSocketNetLayer = async ({
           // Sign the received bytes verbatim. The wrapping `init:peer-auth`
           // record prevents this from being used as a generic signing oracle.
           const signature = designatorKeyPair.sign(
-            uint8ArrayToImmutableArrayBuffer(messageBytes),
+            bytesToImmutable(messageBytes),
           );
           const responseBytes = encodeInitPeerAuthSigEnvelope(
             initPeerAuth,

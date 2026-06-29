@@ -6,8 +6,9 @@ import { E, Far } from '@endo/far';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { ZipWriter } from '@endo/zip/writer.js';
+import { bytesFromText } from '@endo/bytes/from-string.js';
+import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { makeNetstringCapTP } from './connection.js';
-import { makeRefReader } from './ref-reader.js';
 
 import { WorkerFacetForDaemonInterface } from './interfaces.js';
 
@@ -120,14 +121,13 @@ export const makeWorkerFacet = ({ cancel }) => {
         // compartment-mapper.makeArchive produces, then hand it to the
         // existing parseArchive pipeline.  Keeps tree loading on the
         // worker side without duplicating the archive loader.
-        const textEncoder = new TextEncoder();
         const [{ parseArchive }, { defaultParserForLanguage }] =
           await Promise.all([
             import('@endo/compartment-mapper'),
             import('@endo/compartment-mapper/import-archive-all-parsers.js'),
           ]);
         const zip = new ZipWriter();
-        zip.write('compartment-map.json', textEncoder.encode(mapText));
+        zip.write('compartment-map.json', bytesFromText(mapText));
 
         for (const [compartmentName, descriptor] of Object.entries(
           compartmentMap.compartments,
@@ -148,7 +148,7 @@ export const makeWorkerFacet = ({ cancel }) => {
               );
               // eslint-disable-next-line no-await-in-loop
               const src = await E(/** @type {any} */ (blob)).text();
-              zip.write(archivePath, textEncoder.encode(src));
+              zip.write(archivePath, bytesFromText(src));
             }
           }
         }
@@ -183,8 +183,8 @@ export const makeWorkerFacet = ({ cancel }) => {
         /** @type {Uint8Array[]} */
         const chunks = [];
         let total = 0;
-        for await (const chunk of makeRefReader(
-          /** @type {any} */ (await E(readableP).streamBase64()),
+        for await (const chunk of iterateBytesReader(
+          /** @type {any} */ (readableP),
         )) {
           chunks.push(chunk);
           total += chunk.byteLength;

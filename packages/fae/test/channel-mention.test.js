@@ -7,7 +7,8 @@
  * replies in the channel (not to inbox).
  *
  * Requires a running LLM — reads config from packages/lal/.env or
- * the environment.  NOT part of the automated suite; run manually:
+ * the environment. Excluded from the default `yarn test` glob in
+ * packages/fae/package.json; run manually:
  *
  *   cd packages/fae && npx ava test/channel-mention.test.js --timeout=120s
  */
@@ -21,7 +22,7 @@ import fs from 'fs';
 
 import { E } from '@endo/far';
 import { makePromiseKit } from '@endo/promise-kit';
-import { makeRefIterator } from '@endo/daemon/ref-reader.js';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { start, stop, purge, makeEndoClient } from '@endo/daemon';
 
@@ -152,7 +153,7 @@ test.afterEach.always(
  */
 const waitForChannelMessage = async (channelRef, predicate, ms = 90_000) => {
   const messagesRef = await E(channelRef).followMessages();
-  const iter = makeRefIterator(messagesRef);
+  const iter = iterateReader(messagesRef);
   const deadline = Date.now() + ms;
 
   while (Date.now() < deadline) {

@@ -7,9 +7,14 @@
   "include": [
     "*.js",
     "*.ts",
-    "scripts",
-    "src",
-    "src-xs",
+    "scripts/*.js",
+    "src/*.js",
+    "src/*.ts",
+    "src-xs/*.js",
+    "src/types/*.ts",
+    "!src/types/*.d.ts",
+    "src/external.types.d.ts",
+    "src/shim.types.d.ts",
     "test/*.*"
   ]
 }

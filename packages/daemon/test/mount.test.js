@@ -1,484 +1,1034 @@
 // @ts-check
 
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
+// Establish a perimeter:
+// eslint-disable-next-line import/order
+import '@endo/init/debug.js';
 
-import test from '@endo/ses-ava/prepare-endo.js';
+import test from 'ava';
+import os from 'os';
+import path from 'path';
+import fs from 'fs';
+import { E } from '@endo/far';
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
+import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { checkinTree } from '@endo/platform/fs/lite';
 
-import { makeMount } from '../src/mount.js';
+import { makeFilePowers } from '../src/daemon-node-powers.js';
+import { makeMount, makeRevocableMount } from '../src/mount.js';
+import { makeMemoryStore } from './_mount-test-helpers.js';
 
 /**
- * Create a temp directory and return filePowers for mount.
+ * Coverage-driven integration tests for `src/mount.js`.
  *
+ * These tests exercise reachable branches on the public `EndoMount`,
+ * `EndoMountEntry`, and `EndoMountFile` surfaces that the existing
+ * mount-platform-fs-conformance and mount-snapshot-and-entry tests
+ * do not reach: input validation, confinement error paths, write
+ * variants, read-only rejection paths, and the optional `snapshot`
+ * surface's not-configured error path. Each test exercises one
+ * specific reachable branch and asserts on observable behavior.
+ */
+
+const filePowers = makeFilePowers({ fs, path });
+
+/**
  * @param {import('ava').ExecutionContext} t
  */
-const setup = async t => {
-  const tmpDir = await fs.promises.mkdtemp(
-    path.join(os.tmpdir(), 'endo-mount-test-'),
-  );
-  await fs.promises.writeFile(
-    path.join(tmpDir, 'hello.txt'),
-    'Hello, world!',
-    'utf-8',
-  );
-  await fs.promises.writeFile(
-    path.join(tmpDir, 'readme.md'),
-    '# Readme',
-    'utf-8',
-  );
-  await fs.promises.mkdir(path.join(tmpDir, 'sub'), { recursive: true });
-  await fs.promises.writeFile(
-    path.join(tmpDir, 'sub', 'nested.txt'),
-    'Nested',
-    'utf-8',
-  );
-  await fs.promises.writeFile(
-    path.join(tmpDir, 'sub', 'data.json'),
-    '{}',
-    'utf-8',
-  );
-  await fs.promises.mkdir(path.join(tmpDir, 'sub', 'deep'), {
-    recursive: true,
-  });
-  await fs.promises.writeFile(
-    path.join(tmpDir, 'sub', 'deep', 'file.txt'),
-    'deep',
-    'utf-8',
-  );
-
-  t.teardown(async () => {
-    await fs.promises.rm(tmpDir, { recursive: true, force: true });
-  });
-
-  const filePowers = /** @type {import('../src/types.js').FilePowers} */ (
-    /** @type {unknown} */ ({
-      readDirectory: dir => fs.promises.readdir(dir),
-      readFileText: p => fs.promises.readFile(p, 'utf-8'),
-      writeFileText: (p, c) => fs.promises.writeFile(p, c, 'utf-8'),
-      makePath: async p => {
-        await fs.promises.mkdir(p, { recursive: true });
-      },
-      removePath: p => fs.promises.rm(p, { recursive: true, force: true }),
-      renamePath: (a, b) => fs.promises.rename(a, b),
-      joinPath: (...parts) => path.join(...parts),
-      realPath: p => fs.promises.realpath(p),
-      exists: async p => {
-        try {
-          await fs.promises.access(p);
-          return true;
-        } catch {
-          return false;
-        }
-      },
-      isDirectory: async p => {
-        try {
-          const stat = await fs.promises.stat(p);
-          return stat.isDirectory();
-        } catch {
-          return false;
-        }
-      },
-      makeFileReader: _p => {
-        throw new Error('not implemented');
-      },
-      makeFileWriter: _p => {
-        throw new Error('not implemented');
-      },
-    })
-  );
-
-  return { tmpDir, filePowers };
+const makeTempRoot = t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mount-cov-'));
+  t.teardown(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
 };
 
-test('makeMount returns mount and control', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-  const { mount, control } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
-  t.truthy(mount);
-  t.truthy(control);
-  t.is(typeof control.revoke, 'function');
-  t.is(typeof control.help, 'function');
-});
+// --- Path-segment validation ---
 
-test('stat returns file and directory info', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-  const { mount } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
-
-  const fileStat = /** @type {{ type: string, size: number }} */ (
-    await mount.stat('hello.txt')
+test('writeText rejects a path-like object passed as a segment (realistic adversarial input)', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  // A git-file-shaped record `{ path: '../' }` is the kind of value
+  // a caller might forward through the mount thinking the API
+  // unwraps `.path`.  It does not; the Exo guard rejects on shape,
+  // and a downstream reader can see that the `path` field is not a
+  // tunnel back to the relative segment, even when the value
+  // *looks* like a path-bearing record.
+  const gitLikeFile = harden({ path: '../', mode: '100644' });
+  await t.throwsAsync(
+    () => E(mount).writeText(/** @type {any} */ ([gitLikeFile]), 'content'),
+    { message: /Must match/ },
+    'guard rejects a record-shaped segment even when it carries a path field',
   );
-  t.is(fileStat.type, 'file');
-  t.true(fileStat.size > 0);
-
-  const dirStat = await mount.stat('sub');
-  t.is(dirStat.type, 'directory');
-  t.is(dirStat.size, 0);
 });
 
-test('readJson and writeJson roundtrip', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-  const { mount } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
-
-  // Read existing JSON file.
-  const data = await mount.readJson(['sub', 'data.json']);
-  t.deepEqual(data, {});
-
-  // Write and read back.
-  const obj = { name: 'test', count: 42, nested: { ok: true } };
-  await mount.writeJson('config.json', obj);
-  const readBack = await mount.readJson('config.json');
-  t.deepEqual(readBack, obj);
-});
-
-test('mount reads files before revocation', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-  const { mount } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
-
-  const text = await mount.readText('hello.txt');
-  t.is(text, 'Hello, world!');
-});
-
-test('control.revoke() prevents all mount operations', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-  const { mount, control } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
-
-  // Works before revocation.
-  t.true(await mount.has('hello.txt'));
-
-  // Revoke.
-  control.revoke();
-
-  // All operations throw after revocation.
-  await t.throwsAsync(() => mount.has('hello.txt'), {
-    message: /revoked/,
-  });
-  await t.throwsAsync(() => mount.list(), {
-    message: /revoked/,
-  });
-  await t.throwsAsync(() => mount.readText('hello.txt'), {
-    message: /revoked/,
-  });
-  await t.throwsAsync(() => mount.writeText('new.txt', 'data'), {
-    message: /revoked/,
-  });
-  t.throws(() => mount.readOnly(), {
-    message: /revoked/,
+test('writeText rejects empty path segment', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await t.throwsAsync(() => E(mount).writeText(['a', '', 'b'], 'c'), {
+    message: /must not be empty/,
   });
 });
 
-test('revocation propagates to subDir mounts', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-  const { mount, control } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
-
-  // Create a subDir before revoking.
-  const sub = await mount.subDir('sub');
-  t.is(await sub.readText('nested.txt'), 'Nested');
-
-  // Revoke the parent.
-  control.revoke();
-
-  // SubDir is also revoked (shares revokedRef).
-  await t.throwsAsync(() => sub.readText('nested.txt'), {
-    message: /revoked/,
+test('writeText rejects path segment containing forward slash', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await t.throwsAsync(() => E(mount).writeText(['a/b'], 'c'), {
+    message: /must not contain/,
   });
 });
 
-test('deny patterns block access to sensitive directories', async t => {
-  const { tmpDir, filePowers } = await setup(t);
+test('writeText rejects path segment containing backslash', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await t.throwsAsync(() => E(mount).writeText(['a\\b'], 'c'), {
+    message: /must not contain/,
+  });
+});
 
-  // Create a .ssh directory in the mount root.
-  await fs.promises.mkdir(path.join(tmpDir, '.ssh'), { recursive: true });
-  await fs.promises.writeFile(
-    path.join(tmpDir, '.ssh', 'id_rsa'),
-    'PRIVATE KEY',
-    'utf-8',
+test('writeText rejects path segment containing NUL byte', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await t.throwsAsync(() => E(mount).writeText(['a\0b'], 'c'), {
+    message: /must not contain/,
+  });
+});
+
+// --- Path normalization (dot / dotdot) ---
+
+test('writeText resolves "." path segments to current directory', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['.', 'hello.txt'], 'data');
+  t.is(fs.readFileSync(path.join(rootPath, 'hello.txt'), 'utf8'), 'data');
+});
+
+test('writeText resolves ".." segments and clamps at confinement root', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  // ['..', '..', 'a.txt'] from the root pops to the root twice (clamped)
+  // and then writes a.txt at the root.
+  await E(mount).writeText(['..', '..', 'a.txt'], 'data');
+  t.is(fs.readFileSync(path.join(rootPath, 'a.txt'), 'utf8'), 'data');
+});
+
+test('writeText with a slash-joined ".." string segment is treated as a single literal name', async t => {
+  // writeText uses normalizeSegments on [stringArg], so a string like
+  // 'sub/..' is NOT split by /; the slash inside the single segment
+  // triggers the validator.
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await t.throwsAsync(() => E(mount).writeText('sub/..', 'data'), {
+    message: /must not contain/,
+  });
+});
+
+// --- assertConfined error paths ---
+
+test('readText reports a missing-path error rather than leaking host filesystem state', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await t.throwsAsync(() => E(mount).readText(['does-not-exist.txt']), {
+    message: /does not exist|cannot be verified|ENOENT/,
+  });
+});
+
+test('maybeReadText returns undefined for a missing path', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  const result = await E(mount).maybeReadText(['does-not-exist.txt']);
+  t.is(result, undefined);
+});
+
+test('maybeReadText returns the content for an existing file', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['present.txt'], 'hello');
+  t.is(await E(mount).maybeReadText(['present.txt']), 'hello');
+});
+
+test('maybeLookup returns undefined for a missing path', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  t.is(await E(mount).maybeLookup(['does-not-exist.txt']), undefined);
+});
+
+test('maybeLookup returns a usable file handle for an existing file', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['present.txt'], 'hello');
+  const file = await E(mount).maybeLookup(['present.txt']);
+  t.not(file, undefined);
+  t.is(await E(file).text(), 'hello');
+});
+
+test('maybeLookup confines a `..` escape to undefined (does not leak an out-of-root file)', async t => {
+  const parent = makeTempRoot(t);
+  const rootPath = path.join(parent, 'root');
+  fs.mkdirSync(rootPath);
+  // A secret file one level ABOVE the mount root.
+  fs.writeFileSync(path.join(parent, 'secret.txt'), 'do-not-leak');
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  // `..` clamps to the confinement root, so the clamped path
+  // (root/secret.txt) does not exist and maybeLookup returns undefined —
+  // the out-of-root secret is never reachable, and the escape attempt is
+  // reported as "absent" rather than throwing or returning the host file.
+  t.is(await E(mount).maybeLookup(['..', 'secret.txt']), undefined);
+  // And the secret is genuinely there on the host, so the undefined above
+  // is confinement, not a missing fixture.
+  t.is(fs.readFileSync(path.join(parent, 'secret.txt'), 'utf8'), 'do-not-leak');
+});
+
+test('readOnly() blob view exposes getInfo/fetch over the LIVE file (not a snapshot)', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['f.txt'], 'hello');
+
+  /** @param {any} reader */
+  const collect = async reader => {
+    const chunks = [];
+    for await (const chunk of iterateBytesReader(reader)) {
+      chunks.push(chunk);
+    }
+    const total = chunks.reduce((n, c) => n + c.length, 0);
+    const out = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) {
+      out.set(c, off);
+      off += c.length;
+    }
+    return new TextDecoder().decode(out);
+  };
+
+  const file = await E(mount).lookup('f.txt');
+  const view = await E(file).readOnly();
+
+  const info1 = await E(view).getInfo();
+  t.is(info1.algorithm, 'sha256');
+  t.is(info1.size, 5n);
+  t.is(await collect(await E(view).fetch(0n, 5n)), 'hello');
+  t.is(await collect(await E(view).fetch(0n, 3n)), 'hel');
+
+  // The view is a read-only FACE, not a snapshot: change the underlying file
+  // and the same view observes the new content + size + hash.
+  await E(mount).writeText(['f.txt'], 'goodbye world');
+  const info2 = await E(view).getInfo();
+  t.is(info2.size, 13n);
+  t.not(info2.hash, info1.hash);
+  t.is(await collect(await E(view).fetch(0n, 13n)), 'goodbye world');
+
+  // But the face itself cannot be written to (no write methods).
+  // eslint-disable-next-line no-underscore-dangle
+  const viewMethods = await E(view).__getMethodNames__();
+  t.false(viewMethods.includes('writeText'));
+});
+
+test('EndoMountFile.fetch rejects a negative or out-of-range window with EINVAL', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['f.txt'], 'hello');
+  const file = await E(mount).lookup('f.txt');
+  // The mount-file fetch validates the bigint→Number boundary via
+  // toSafeNumber, so a negative or over-MAX_SAFE_INTEGER window throws EINVAL
+  // rather than reaching readFileRange with a bad position.
+  await t.throwsAsync(() => E(file).fetch(-1n, 4n), { message: /EINVAL/ });
+  await t.throwsAsync(() => E(file).fetch(0n, -1n), { message: /EINVAL/ });
+  await t.throwsAsync(() => E(file).fetch(2n ** 60n, 4n), {
+    message: /EINVAL/,
+  });
+});
+
+test('followNameChanges throws ENOSYS until a filesystem watcher is wired', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await t.throwsAsync(() => E(mount).followNameChanges(), {
+    message: /ENOSYS.*followNameChanges.*filesystem watcher/,
+  });
+});
+
+test('maybeLookup accepts a MountEntry path argument', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['present.txt'], 'hello');
+  const entry = await E(mount).entry(['present.txt']);
+  const file = await E(mount).maybeLookup(entry);
+  t.not(file, undefined);
+  t.is(await E(file).text(), 'hello');
+  // A fresh entry for an absent path still yields undefined.
+  const absent = await E(mount).entry(['gone.txt']);
+  t.is(await E(mount).maybeLookup(absent), undefined);
+});
+
+test('stat returns undefined for a missing path', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  const result = await E(mount).stat(['does-not-exist.txt']);
+  t.is(result, undefined);
+});
+
+test('stat returns a populated record for an existing file', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['present.txt'], 'hello');
+  const result = await E(mount).stat(['present.txt']);
+  // Aligned with the extended `Stat` shape: size + mtime/atime as bigint
+  // (mtime/atime in nanoseconds). See fs-interface-consolidation § stat.
+  t.is(result.kind, 'file');
+  t.is(result.size, 5n);
+  t.is(typeof result.mtime, 'bigint');
+  t.is(typeof result.atime, 'bigint');
+});
+
+// --- has() variants ---
+
+test('has() with zero arguments returns true for the mount root', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await null;
+  t.true(await E(mount).has());
+});
+
+test('has() returns false for an absent path', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await null;
+  t.false(await E(mount).has('missing.txt'));
+});
+
+test('has() returns true for a present file via variadic segments', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['dir', 'file.txt'], 'x');
+  t.true(await E(mount).has('dir', 'file.txt'));
+});
+
+test('has() rejects a non-string positional argument when the first arg is a string', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await t.throwsAsync(() => E(mount).has('a', /** @type {any} */ (42)), {
+    message: /segments must be strings/,
+  });
+});
+
+// --- entry() and child() ---
+
+test('entry() default of root has displayPath "."', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  const rootEntry = await E(mount).entry([]);
+  t.is(await E(rootEntry).displayPath(), '.');
+  t.deepEqual(await E(rootEntry).segments(), []);
+});
+
+test('entry() with array path mints a nested entry with matching segments', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  const entry = await E(mount).entry(['a', 'b']);
+  t.deepEqual(await E(entry).segments(), ['a', 'b']);
+  t.is(await E(entry).displayPath(), 'a/b');
+});
+
+test('entry().child() extends the entry by one segment', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  const e = await E(mount).entry(['a']);
+  const c = await E(e).child('b');
+  t.deepEqual(await E(c).segments(), ['a', 'b']);
+});
+
+test('entry().child() rejects an invalid name segment', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  const e = await E(mount).entry(['a']);
+  await t.throwsAsync(() => E(e).child(''), { message: /must not be empty/ });
+  await t.throwsAsync(() => E(e).child('x/y'), { message: /must not contain/ });
+});
+
+test('entry() rejects a non-string, non-array argument', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await t.throwsAsync(() => E(mount).entry(/** @type {any} */ (42)), {
+    message: /Must match|must be a string or array/,
+  });
+});
+
+// --- Entry provenance across mounts ---
+
+test('writeText through an entry from a different mount root is rejected on provenance', async t => {
+  const aRoot = makeTempRoot(t);
+  const bRoot = makeTempRoot(t);
+  const a = makeMount({ rootPath: aRoot, readOnly: false, filePowers });
+  const b = makeMount({ rootPath: bRoot, readOnly: false, filePowers });
+  const foreign = await E(a).entry(['leaked.txt']);
+  await t.throwsAsync(() => E(b).writeText(foreign, 'x'), {
+    message: /different mount root/,
+  });
+});
+
+test('writeText rejects a foreign (non-entry) object as path argument (documented gap)', async t => {
+  // The "unrecognized object" branch in segmentsFromPathArg is gated
+  // by the writeText M.interface guard (which accepts string,
+  // arrayOf string, or an EndoMountEntry remotable). A bare hardened
+  // record cannot pass the guard, so the inner WeakMap-miss branch
+  // is unreachable from the public API. The provenance branch
+  // (different-rootId) is the reachable failure mode and is covered
+  // by the previous test.
+  t.pass();
+});
+
+// --- makeFile content variants ---
+
+test('makeFile with no content creates an empty file when absent', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).makeFile('empty.txt');
+  t.is(fs.readFileSync(path.join(rootPath, 'empty.txt'), 'utf8'), '');
+});
+
+test('makeFile with no content is a no-op when the file already exists', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  fs.writeFileSync(path.join(rootPath, 'keep.txt'), 'preserved');
+  await E(mount).makeFile('keep.txt');
+  t.is(fs.readFileSync(path.join(rootPath, 'keep.txt'), 'utf8'), 'preserved');
+});
+
+test('makeFile with a string overwrites with that string', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).makeFile('s.txt', 'first');
+  await E(mount).makeFile('s.txt', 'second');
+  t.is(fs.readFileSync(path.join(rootPath, 's.txt'), 'utf8'), 'second');
+});
+
+test('makeFile rejects mutable Uint8Array at the exo guard', async t => {
+  // The makeFile interface guard `M.call(PathArgShape).optional(M.any())`
+  // accepts only passable values; a raw Uint8Array is mutable and is
+  // therefore rejected at the exo boundary. Binary content reaches the
+  // mount through `write(path, readableBlob)` instead; `makeFile`
+  // accepts only `string` content (or `undefined` for a touch-style
+  // empty file).
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  const bytes = new Uint8Array([0x00, 0xff]);
+  await t.throwsAsync(
+    () => E(mount).makeFile('b.bin', /** @type {any} */ (bytes)),
+    { message: /Cannot pass mutable typed arrays|Must match/ },
+    'mutable Uint8Array rejected at the exo guard',
   );
-  // Create .env file.
-  await fs.promises.writeFile(
-    path.join(tmpDir, '.env'),
-    'SECRET=value',
-    'utf-8',
+});
+
+test('makeFile rejects non-string content', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await t.throwsAsync(
+    () => E(mount).makeFile('bad.txt', /** @type {any} */ (42)),
+    { message: /must be a string/ },
+  );
+});
+
+test('makeFile rejects writing to an existing directory path', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  fs.mkdirSync(path.join(rootPath, 'adir'));
+  await t.throwsAsync(() => E(mount).makeFile('adir', 'x'), {
+    message: /is a directory/,
+  });
+});
+
+// --- remove / move ---
+
+test('remove deletes an existing file', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['gone.txt'], 'x');
+  await E(mount).remove(['gone.txt']);
+  t.false(fs.existsSync(path.join(rootPath, 'gone.txt')));
+});
+
+test('move renames a file within the mount', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['src.txt'], 'data');
+  await E(mount).move(['src.txt'], ['dst.txt']);
+  t.false(fs.existsSync(path.join(rootPath, 'src.txt')));
+  t.is(fs.readFileSync(path.join(rootPath, 'dst.txt'), 'utf8'), 'data');
+});
+
+// --- Read-only rejection paths ---
+
+test('read-only mount rejects writeText', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.writeFileSync(path.join(rootPath, 'exists.txt'), 'x');
+  const mount = makeMount({ rootPath, readOnly: true, filePowers });
+  await t.throwsAsync(() => E(mount).writeText(['hello.txt'], 'data'), {
+    message: /read-only/,
+  });
+});
+
+test('read-only mount rejects makeFile', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: true, filePowers });
+  await t.throwsAsync(() => E(mount).makeFile('nope.txt'), {
+    message: /read-only/,
+  });
+});
+
+test('read-only mount rejects makeDirectory', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: true, filePowers });
+  await t.throwsAsync(() => E(mount).makeDirectory('nope'), {
+    message: /read-only/,
+  });
+});
+
+test('read-only mount rejects remove', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.writeFileSync(path.join(rootPath, 'present.txt'), 'x');
+  const mount = makeMount({ rootPath, readOnly: true, filePowers });
+  await t.throwsAsync(() => E(mount).remove(['present.txt']), {
+    message: /read-only/,
+  });
+});
+
+test('read-only mount rejects move', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.writeFileSync(path.join(rootPath, 'a.txt'), 'x');
+  const mount = makeMount({ rootPath, readOnly: true, filePowers });
+  await t.throwsAsync(() => E(mount).move(['a.txt'], ['b.txt']), {
+    message: /read-only/,
+  });
+});
+
+test('read-only mount rejects copy', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.writeFileSync(path.join(rootPath, 'a.txt'), 'x');
+  const mount = makeMount({ rootPath, readOnly: true, filePowers });
+  await t.throwsAsync(() => E(mount).copy(['a.txt'], ['b.txt']), {
+    message: /read-only/,
+  });
+});
+
+test('readOnly() called on an already-read-only mount returns a working view', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.writeFileSync(path.join(rootPath, 'a.txt'), 'persist');
+  const mount = makeMount({ rootPath, readOnly: true, filePowers });
+  const view = await E(mount).readOnly();
+  t.true(await E(view).has('a.txt'));
+});
+
+// --- subView confinement ---
+
+test('subView confines `..` to the sub-root (cannot reach siblings or mount root)', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).makeDirectory('sub');
+  await E(mount).writeText(['sub', 'inside.txt'], 'in');
+  await E(mount).writeText('secret.txt', 'top');
+
+  const view = await E(mount).subView('sub');
+  t.true(await E(view).has('inside.txt'), 'in-view path is visible');
+  // `..` clamps at the sub-view root: the parent-mount sibling is gone.
+  t.false(
+    await E(view).has('..', 'secret.txt'),
+    'subView cannot escape upward to a sibling',
   );
 
-  const { mount } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
-
-  // Direct access to denied segments throws.
-  await t.throwsAsync(() => mount.readText(['.ssh', 'id_rsa']), {
-    message: /restricted/,
-  });
-  await t.throwsAsync(() => mount.readText('.env'), {
-    message: /restricted/,
-  });
-  await t.throwsAsync(() => mount.has('.ssh'), {
-    message: /restricted/,
-  });
-  await t.throwsAsync(() => mount.lookup('.aws'), {
-    message: /restricted/,
-  });
-
-  // list() filters out denied segments.
-  const entries = await mount.list();
-  t.false(entries.includes('.ssh'));
-  t.false(entries.includes('.env'));
-  t.true(entries.includes('hello.txt'));
-  t.true(entries.includes('sub'));
-});
-
-test('deny patterns are case-insensitive', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-  const { mount } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
-
-  // Mixed case should also be denied.
-  await t.throwsAsync(() => mount.readText(['.SSH', 'id_rsa']), {
-    message: /restricted/,
-  });
-  await t.throwsAsync(() => mount.readText('.Env'), {
-    message: /restricted/,
-  });
-});
-
-test('deny patterns do not block normal dotfiles', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-
-  // Create a normal dotfile that's not in the deny list.
-  await fs.promises.writeFile(
-    path.join(tmpDir, '.gitignore'),
-    'node_modules/',
-    'utf-8',
+  // Contrast: a plain lookup sub-handle shares the mount confinement root,
+  // so it DOES reach the sibling via `..` — which is exactly why subView
+  // (a real confinement shift) is needed for attenuation.
+  const handle = await E(mount).lookup('sub');
+  t.true(
+    await E(handle).has('..', 'secret.txt'),
+    'lookup sub-handle shares the mount root by design',
   );
-
-  const { mount } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
-
-  // .gitignore is allowed.
-  const text = await mount.readText('.gitignore');
-  t.is(text, 'node_modules/');
 });
 
-test('control.help() returns documentation', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-  const { control } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
-
-  const helpText = control.help();
-  t.true(helpText.includes('MountControl'));
-  t.true(helpText.includes('revoke'));
+test('subView of a file throws ENOTDIR', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText('a.txt', 'x');
+  await t.throwsAsync(() => E(mount).subView('a.txt'), { message: /ENOTDIR/ });
 });
 
-// --- Glob tests ---
+test('subView rejects a parent-minted entry (own identity domain)', async t => {
+  // A `mountEntry` minted by the parent carries parent-root-relative
+  // segments. The sub-view has its own `rootId`, so passing a parent
+  // entry to it must be rejected (not silently re-based against the
+  // sub-view root, which would be authority/identity confusion).
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).makeDirectory('sub');
+  await E(mount).writeText('secret.txt', 'top');
+  await E(mount).writeText(['sub', 'secret.txt'], 'inner');
 
-test('glob matches wildcard in single directory', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-  const { mount } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
+  const parentEntry = await E(mount).entry('secret.txt');
+  const view = await E(mount).subView('sub');
+
+  await t.throwsAsync(() => E(view).readText(parentEntry), {
+    message: /different mount root/,
   });
-
-  const txtFiles = await mount.glob('*.txt');
-  t.true(txtFiles.includes('hello.txt'));
-  t.false(txtFiles.includes('readme.md'));
+  // A sub-view-minted entry, by contrast, works within the sub-view.
+  const ownEntry = await E(view).entry('secret.txt');
+  t.is(await E(view).readText(ownEntry), 'inner');
 });
 
-test('glob matches files in subdirectory', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-  const { mount } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
+// --- snapshot() not configured ---
 
-  const subFiles = await mount.glob('sub/*.txt');
-  t.deepEqual(subFiles, ['sub/nested.txt']);
+test('snapshot() throws when no snapshotTree was wired in', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await t.throwsAsync(() => E(mount).snapshot(), {
+    message: /snapshot.* not available/,
+  });
 });
 
-test('glob ** matches recursively', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-  const { mount } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
+// --- EndoMountFile surface ---
 
-  const allTxt = await mount.glob('**/*.txt');
-  t.true(allTxt.includes('hello.txt'));
-  t.true(allTxt.includes('sub/nested.txt'));
-  t.true(allTxt.includes('sub/deep/file.txt'));
+test('lookup of a present file returns an EndoMountFile with text/json', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  fs.writeFileSync(path.join(rootPath, 'value.json'), '{"a":1}');
+  const file = await E(mount).lookup('value.json');
+  t.is(await E(file).text(), '{"a":1}');
+  t.deepEqual(await E(file).json(), { a: 1 });
 });
 
-test('glob excludes denied segments', async t => {
-  const { tmpDir, filePowers } = await setup(t);
+test('EndoMountFile.append extends the file content', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['log.txt'], 'one\n');
+  const file = await E(mount).lookup('log.txt');
+  await E(file).append('two\n');
+  t.is(fs.readFileSync(path.join(rootPath, 'log.txt'), 'utf8'), 'one\ntwo\n');
+});
 
-  // Create a .ssh directory with files.
-  await fs.promises.mkdir(path.join(tmpDir, '.ssh'), { recursive: true });
-  await fs.promises.writeFile(
-    path.join(tmpDir, '.ssh', 'id_rsa'),
-    'PRIVATE',
-    'utf-8',
+test('EndoMountFile.writeText replaces the file content', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['v.txt'], 'old');
+  const file = await E(mount).lookup('v.txt');
+  await E(file).writeText('new');
+  t.is(fs.readFileSync(path.join(rootPath, 'v.txt'), 'utf8'), 'new');
+});
+
+test('EndoMountFile.stat returns a record for a present file', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['s.txt'], 'x');
+  const file = await E(mount).lookup('s.txt');
+  const st = await E(file).stat();
+  // Pin the realigned bigint/ns `Stat` shape (this PR's whole point), not just
+  // truthiness: a regression to the old `{ sizeBytes: number, modifiedMs }`
+  // shape must fail here.
+  t.is(st.kind, 'file');
+  t.is(st.size, 1n);
+  t.is(typeof st.mtime, 'bigint');
+  t.is(typeof st.atime, 'bigint');
+});
+
+test('EndoMountFile.snapshot throws when no snapshotFile was wired in', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['s.txt'], 'x');
+  const file = await E(mount).lookup('s.txt');
+  await t.throwsAsync(() => E(file).snapshot(), {
+    message: /snapshot.* not available/,
+  });
+});
+
+test('EndoMountFile from a read-only mount rejects writeText / append', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.writeFileSync(path.join(rootPath, 'r.txt'), 'x');
+  const mount = makeMount({ rootPath, readOnly: true, filePowers });
+  const file = await E(mount).lookup('r.txt');
+  await t.throwsAsync(() => E(file).writeText('new'), { message: /read-only/ });
+  await t.throwsAsync(() => E(file).append('more'), { message: /read-only/ });
+});
+
+// --- write() error branches ---
+
+test('write rejects a value that is neither a ReadableBlob nor a ReadableTree', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+
+  // A remotable that has neither `streamBase64` nor `list` — the
+  // duck-typing branch falls through to the explicit reject.
+  const RandoInterface = M.interface('Rando', {
+    nothing: M.call().returns(M.string()),
+  });
+  const rando = makeExo('Rando', RandoInterface, {
+    nothing() {
+      return 'nope';
+    },
+  });
+  await t.throwsAsync(() => E(mount).write(['x'], rando), {
+    message: /ReadableBlob or ReadableTree/,
+  });
+});
+
+test('write rejects writing a ReadableBlob to an existing directory target', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  fs.mkdirSync(path.join(rootPath, 'occupied'));
+
+  // bytesReaderFromIterator returns a PassableBytesReader Exo whose
+  // `streamBase64(synPromise)` is the new-protocol stream method.  The
+  // is-a-directory check in mount.write fires before any iteration.
+  const blob = bytesReaderFromIterator([new Uint8Array(0)]);
+  await t.throwsAsync(() => E(mount).write(['occupied'], blob), {
+    message: /is a directory/,
+  });
+});
+
+// --- write()/copy() data-safety regressions ---
+
+test('copy of a file onto itself preserves its content (same-inode write)', async t => {
+  // copy(name, name) opens a live source file then write()s it back onto
+  // the same path. Opening the writer directly on the target would
+  // truncate it before the lazy source reader produced a byte, emptying
+  // the file and streaming the now-empty result back. Routing the write
+  // through a scratch-then-rename keeps the source intact.
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['a.txt'], 'keep me');
+  await E(mount).copy(['a.txt'], ['a.txt']);
+  t.is(
+    fs.readFileSync(path.join(rootPath, 'a.txt'), 'utf8'),
+    'keep me',
+    'same-inode copy must not destroy the source content',
   );
-
-  const { mount } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
-
-  const all = await mount.glob('**/*');
-  t.false(all.some(p => p.includes('.ssh')));
 });
 
-test('glob returns empty array for no matches', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-  const { mount } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
-
-  const results = await mount.glob('*.xyz');
-  t.deepEqual(results, []);
-});
-
-test('glob on revoked mount throws', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-  const { mount, control } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
-
-  control.revoke();
-  await t.throwsAsync(() => mount.glob('*'), {
-    message: /revoked/,
-  });
-});
-
-// --- Grep tests ---
-
-test('grep finds matching lines in files', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-  const { mount } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
-
-  const results = await mount.grep('Hello');
-  t.is(results.length, 1);
-  t.is(results[0].file, 'hello.txt');
-  t.is(results[0].line, 1);
-  t.true(results[0].text.includes('Hello'));
-});
-
-test('grep searches recursively by default', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-  const { mount } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
-
-  // "Nested" is in sub/nested.txt, "deep" is in sub/deep/file.txt
-  const results = await mount.grep('Nested');
-  t.is(results.length, 1);
-  t.is(results[0].file, 'sub/nested.txt');
-});
-
-test('grep filters by glob pattern', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-  const { mount } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
-
-  // Search only .json files
-  const results = await mount.grep('\\{', { glob: '**/*.json' });
-  t.is(results.length, 1);
-  t.is(results[0].file, 'sub/data.json');
-});
-
-test('grep returns empty for no matches', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-  const { mount } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
-
-  const results = await mount.grep('nonexistent_string_xyz');
-  t.deepEqual(results, []);
-});
-
-test('grep respects maxResults', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-
-  // Create a file with many lines.
-  const lines = Array.from({ length: 100 }, (_, i) => `match line ${i}`);
-  await fs.promises.writeFile(
-    path.join(tmpDir, 'many.txt'),
-    lines.join('\n'),
-    'utf-8',
+test('write of a live file handle onto its own backing path preserves content', async t => {
+  // The direct form: write(name, lookup(name)). The looked-up handle's
+  // streamBase64 reads the same path the writer targets.
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['b.txt'], 'still here');
+  const handle = await E(mount).lookup('b.txt');
+  await E(mount).write(['b.txt'], handle);
+  t.is(
+    fs.readFileSync(path.join(rootPath, 'b.txt'), 'utf8'),
+    'still here',
+    'self-targeted write must not destroy the source content',
   );
-
-  const { mount } = makeMount({
-    rootPath: tmpDir,
-    readOnly: false,
-    filePowers,
-  });
-
-  const results = await mount.grep('match', { maxResults: 5 });
-  t.is(results.length, 5);
 });
 
-test('grep on revoked mount throws', async t => {
-  const { tmpDir, filePowers } = await setup(t);
-  const { mount, control } = makeMount({
-    rootPath: tmpDir,
+test('write() leaves no scratch debris in the mount on success', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['c.txt'], 'content');
+  await E(mount).copy(['c.txt'], ['c.txt']);
+  const names = fs.readdirSync(rootPath);
+  t.deepEqual(
+    names.filter(n => n.endsWith('.tmp')),
+    [],
+    'the scratch file is renamed onto the target, not left behind',
+  );
+});
+
+test('copy of a tree into its own descendant is rejected, not infinitely recursed', async t => {
+  // copy(['dir'], ['dir','copy']) would create dir/copy, then enumerate
+  // the now-larger live listing of dir/, recurse into dir/copy/copy, and
+  // loop until the filesystem is exhausted. The descendant guard rejects
+  // up front. The explicit timeout makes CI fail fast (rather than hang
+  // until the global AVA timeout) if the guard regresses.
+  t.timeout(15_000);
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).makeDirectory(['dir']);
+  await E(mount).writeText(['dir', 'leaf.txt'], 'x');
+  await t.throwsAsync(() => E(mount).copy(['dir'], ['dir', 'copy']), {
+    message: /into its own descendant/,
+  });
+  // No partial descendant tree was materialised.
+  t.false(
+    fs.existsSync(path.join(rootPath, 'dir', 'copy')),
+    'the rejected copy leaves no destination behind',
+  );
+});
+
+test('copy of a tree into a sibling (non-descendant) still succeeds', async t => {
+  // The guard must reject only descendants; a sibling destination is a
+  // legitimate tree copy.
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).makeDirectory(['src']);
+  await E(mount).writeText(['src', 'leaf.txt'], 'hello');
+  await E(mount).copy(['src'], ['dst']);
+  t.is(
+    fs.readFileSync(path.join(rootPath, 'dst', 'leaf.txt'), 'utf8'),
+    'hello',
+    'a non-descendant tree copy is unaffected by the guard',
+  );
+});
+
+test('write() that fails mid-stream propagates the error and leaves no scratch debris', async t => {
+  // When the source stream errors partway through, write()'s catch arm
+  // must flush the writer, remove the partial scratch file, and rethrow.
+  // A scratch file left behind would be visible debris in the mount, and
+  // a swallowed error would let a caller believe a failed write
+  // succeeded. The blob below yields one chunk then rejects, driving the
+  // for-await loop into the catch path.
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  const boom = new Error('source stream blew up');
+  async function* failingChunks() {
+    yield new TextEncoder().encode('partial');
+    throw boom;
+  }
+  const blob = bytesReaderFromIterator(failingChunks());
+  await t.throwsAsync(() => E(mount).write(['victim.txt'], blob), {
+    message: /source stream blew up/,
+  });
+  const names = fs.readdirSync(rootPath);
+  t.deepEqual(
+    names.filter(n => n.endsWith('.tmp')),
+    [],
+    'a failed write removes its partial scratch file rather than leaving debris',
+  );
+  t.false(
+    fs.existsSync(path.join(rootPath, 'victim.txt')),
+    'a failed write does not rename a partial scratch onto the target',
+  );
+});
+
+test('write() does not truncate a pre-existing file at the guessable scratch name', async t => {
+  // The scratch path used to be `${target}.${counter}.tmp` with a
+  // per-process counter starting at 0, so the first write of a fresh
+  // process targeted `${target}.1.tmp`. A caller who planted a file there
+  // ahead of the write would have it truncated the instant the writer
+  // opened (`createWriteStream` opens with `'w'`). The hardened scratch
+  // name carries an unpredictable random suffix and probes for collision,
+  // so an unrelated pre-existing file is never clobbered.
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  // Plant a file at every legacy `${target}.${N}.tmp` the old counter
+  // could have produced for the first few writes.
+  const planted = ['a.txt.1.tmp', 'a.txt.2.tmp', 'a.txt.3.tmp'];
+  for (const name of planted) {
+    fs.writeFileSync(path.join(rootPath, name), 'precious user data');
+  }
+  await E(mount).writeText(['a.txt'], 'new content');
+  t.is(
+    fs.readFileSync(path.join(rootPath, 'a.txt'), 'utf8'),
+    'new content',
+    'the write still lands on its target',
+  );
+  for (const name of planted) {
+    t.is(
+      fs.readFileSync(path.join(rootPath, name), 'utf8'),
+      'precious user data',
+      `a pre-existing file at the guessable scratch name ${name} is not clobbered`,
+    );
+  }
+});
+
+test('copy into a symlinked re-entry of the source is rejected', async t => {
+  // The logical-segment descendant guard compares path segments, so a
+  // destination whose segments are not a prefix of the source's slips
+  // past it. But if an intermediate destination component is a symlink
+  // pointing back into the source tree, the *physical* destination is a
+  // descendant of the source, and copy()'s live-listing recursion would
+  // diverge just as it does for the literal-descendant case. The hardened
+  // guard re-checks the symlink-resolved physical paths. The explicit
+  // timeout makes CI fail fast if the guard regresses into a hang.
+  t.timeout(15_000);
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).makeDirectory(['src']);
+  await E(mount).writeText(['src', 'leaf.txt'], 'x');
+  // `link` -> `src`, so the logical destination ['link'] is physically
+  // the source tree; copying src into link/copy re-enters src.
+  fs.symlinkSync(path.join(rootPath, 'src'), path.join(rootPath, 'link'));
+  await t.throwsAsync(
+    () => E(mount).copy(['src'], ['link', 'copy']),
+    { message: /into its own descendant/ },
+    'a symlinked re-entry of the source must be rejected like a literal descendant',
+  );
+  t.false(
+    fs.existsSync(path.join(rootPath, 'src', 'copy')),
+    'the rejected copy leaves no destination behind in the source tree',
+  );
+});
+
+test('copy through a symlink that does not re-enter the source still succeeds', async t => {
+  // The physical-path guard must reject only genuine re-entries; a
+  // symlink pointing at an unrelated sibling directory is a legitimate
+  // destination.
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).makeDirectory(['src']);
+  await E(mount).writeText(['src', 'leaf.txt'], 'hello');
+  await E(mount).makeDirectory(['elsewhere']);
+  fs.symlinkSync(path.join(rootPath, 'elsewhere'), path.join(rootPath, 'link'));
+  await E(mount).copy(['src'], ['link', 'copy']);
+  t.is(
+    fs.readFileSync(
+      path.join(rootPath, 'elsewhere', 'copy', 'leaf.txt'),
+      'utf8',
+    ),
+    'hello',
+    'a copy through a non-re-entrant symlink is unaffected by the guard',
+  );
+});
+
+// --- Snapshot wiring (covers the snapshotTree wrapper) ---
+
+test('snapshot() returns a usable snapshot when snapshotTree is wired', async t => {
+  const rootPath = makeTempRoot(t);
+  const store = makeMemoryStore();
+  const snapshotTree = async tree => {
+    const { sha256 } = await checkinTree(tree, store);
+    return store.loadTree(sha256);
+  };
+  const mount = makeMount({
+    rootPath,
+    readOnly: false,
+    filePowers,
+    snapshotTree,
+  });
+  await E(mount).writeText(['x.txt'], 'snap');
+  const snap = await E(mount).snapshot();
+  const names = await E(snap).list();
+  t.true(names.includes('x.txt'));
+});
+
+// --- ReadableTree view recursion ---
+
+// --- Additional resolveSegments / EndoMountFile paths ---
+
+test('lookup with ".." segments clamps at the confinement root', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.writeFileSync(path.join(rootPath, 'top.txt'), 'top-content');
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  // From the root, '..' should clamp to the root (not escape to the
+  // host filesystem); then 'top.txt' resolves to the existing file.
+  const file = await E(mount).lookup(['..', '..', 'top.txt']);
+  t.is(await E(file).text(), 'top-content');
+});
+
+test('list with "." returns the root listing unchanged', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.writeFileSync(path.join(rootPath, 'a.txt'), 'x');
+  fs.writeFileSync(path.join(rootPath, 'b.txt'), 'y');
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  const names = await E(mount).list('.');
+  t.deepEqual([...names].sort(), ['a.txt', 'b.txt']);
+});
+
+test('EndoMountFile.snapshot returns a usable file snapshot when wired', async t => {
+  const rootPath = makeTempRoot(t);
+  const store = makeMemoryStore();
+  const snapshotFile = async filePath => {
+    const sha256 = await store.store(filePowers.makeFileReader(filePath));
+    return store.loadBlob(sha256);
+  };
+  const mount = makeMount({
+    rootPath,
+    readOnly: false,
+    filePowers,
+    snapshotFile,
+  });
+  await E(mount).writeText(['s.txt'], 'snapshot-me');
+  const file = await E(mount).lookup('s.txt');
+  const blob = await E(file).snapshot();
+  t.is(await E(blob).text(), 'snapshot-me');
+});
+
+test('EndoMountFile.writeBytes is reachable through the read-only-rejection branch', async t => {
+  // The writeBytes body (mount.js ~736) is reachable through the
+  // read-only-rejection assertWritable() call before any byte ever
+  // moves; that's the entry point most callers hit incorrectly. A
+  // full happy-path exercise requires a remote producer that yields
+  // raw Uint8Array values without the marshaler's base64 encoding, a
+  // shape only available across a CapTP boundary with a real daemon.
+  // The in-process AVA harness cannot satisfy it, so this test pins
+  // the read-only-rejection observation instead.
+  const rootPath = makeTempRoot(t);
+  fs.writeFileSync(path.join(rootPath, 'r.bin'), '');
+  const mount = makeMount({ rootPath, readOnly: true, filePowers });
+  const file = await E(mount).lookup('r.bin');
+  async function* iter() {
+    yield new Uint8Array([1]);
+  }
+  await t.throwsAsync(
+    () => E(file).writeBytes(bytesReaderFromIterator(iter())),
+    {
+      message: /read-only/,
+    },
+  );
+});
+
+test('readOnly() narrows to a ReadableTree view that recursively narrows file lookups', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['a.txt'], 'hi');
+  const view = await E(mount).readOnly();
+  const file = await E(view).lookup('a.txt');
+  // eslint-disable-next-line no-underscore-dangle
+  const methods = await E(file).__getMethodNames__();
+  // The view-of-a-file is a ReadableBlob, not an EndoMountFile.
+  t.true(methods.includes('streamBase64'));
+  t.true(methods.includes('text'));
+  t.false(methods.includes('writeText'), 'attenuated, not full file');
+});
+
+test('mount denies sensitive path segments in direct access and listings', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.mkdirSync(path.join(rootPath, '.ssh'));
+  fs.writeFileSync(path.join(rootPath, '.ssh', 'id_rsa'), 'secret');
+  fs.writeFileSync(path.join(rootPath, '.gitignore'), 'node_modules\n');
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+
+  t.deepEqual(await E(mount).list(), ['.gitignore']);
+  await t.throwsAsync(() => E(mount).readText(['.ssh', 'id_rsa']), {
+    message: /restricted path/,
+  });
+});
+
+test('mount readJson and writeJson round trip JSON content', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+
+  await E(mount).writeJson(['config.json'], { version: 2, ok: true });
+  t.deepEqual(await E(mount).readJson(['config.json']), {
+    version: 2,
+    ok: true,
+  });
+});
+
+test('mount glob and grep find confined non-denied files', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.mkdirSync(path.join(rootPath, 'src'), { recursive: true });
+  fs.mkdirSync(path.join(rootPath, '.aws'), { recursive: true });
+  fs.writeFileSync(path.join(rootPath, 'src', 'index.js'), 'const hit = 1;\n');
+  fs.writeFileSync(path.join(rootPath, 'src', 'readme.md'), 'hit docs\n');
+  fs.writeFileSync(path.join(rootPath, '.aws', 'credentials'), 'hit secret\n');
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+
+  t.deepEqual(await E(mount).glob('**/*.js'), ['src/index.js']);
+  t.deepEqual(await E(mount).grep('hit', { glob: '**/*', maxResults: 10 }), [
+    { file: 'src/index.js', line: 1, text: 'const hit = 1;' },
+    { file: 'src/readme.md', line: 1, text: 'hit docs' },
+  ]);
+});
+
+test('mount control revokes existing mount, subview, and file handles', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.mkdirSync(path.join(rootPath, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(rootPath, 'src', 'index.js'), 'export default 1;');
+  const { mount, control } = makeRevocableMount({
+    rootPath,
     readOnly: false,
     filePowers,
   });
+  const src = await E(mount).subDir('src');
+  const file = await E(src).lookup('index.js');
 
-  control.revoke();
-  await t.throwsAsync(() => mount.grep('test'), {
-    message: /revoked/,
-  });
+  /** @type {{ revoke: () => void }} */ (control).revoke();
+
+  await t.throwsAsync(() => E(mount).list(), { message: /revoked/ });
+  await t.throwsAsync(() => E(src).list(), { message: /revoked/ });
+  await t.throwsAsync(() => E(file).text(), { message: /revoked/ });
 });

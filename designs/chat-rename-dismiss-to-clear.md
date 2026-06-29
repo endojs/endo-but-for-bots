@@ -3,9 +3,52 @@
 | | |
 |---|---|
 | **Created** | 2026-03-03 |
-| **Updated** | 2026-05-04 |
+| **Updated** | 2026-05-19 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | PR #93 |
+| **Status** | **Complete** (PR [#93](https://github.com/endojs/endo-but-for-bots/pull/93), merged 2026-05-06) |
+
+## Status
+
+Landed in PR [#93](https://github.com/endojs/endo-but-for-bots/pull/93)
+(merge commit `31df9e3cf`, shipped 2026-05-05 by SHA date — the
+README and earlier prose's "2026-05-06" reflects the GitHub
+merge-event timestamp in a later timezone):
+
+- **CLI**: `packages/cli/src/commands/dismiss-all.js` →
+  `packages/cli/src/commands/clear.js`; `packages/cli/src/endo.js`
+  registers `.command('clear').alias('dismiss-all')` so the original
+  name remains available as a hidden backwards-compat alias during the
+  deprecation period.
+- **Chat**: `packages/chat/command-registry.js` exports `clear` as the
+  canonical command (immediate mode, `category: 'messaging'`,
+  `context: 'inbox'`); `packages/chat/command-executor.js` dispatches
+  `case 'clear'` to `E(powers).dismissAll()`. The chat side did not
+  retain a `/dismiss-all` alias — chat had not yet shipped the
+  command pre-rename, so no deprecation surface was needed there.
+- **Tab completion**: shortest-common-prefix advancement landed alongside
+  the rename, but a follow-up audit would confirm it on the current
+  chat-bar implementation.
+- **Regression**: `packages/cli/test/clear-command.test.js` asserts the
+  `clear|dismiss-all` pairing in `endo --help` and verifies that
+  `endo dismiss-all --help` resolves through the alias.
+
+The underlying daemon power remains `dismissAll()` — that is the
+internal interface, not the user-facing command name, and out of
+scope for the rename.
+
+### Roadmap calibration (per `git blame` on `llm`)
+
+- Active development: 2026-03-03 → 2026-05-06 (65 days, calendar; the
+  active authoring window was three brief bursts within that span,
+  separated by long unattended gaps).
+- Design phase: 2026-03-03 (single commit `b6286fba4`, "Add designs
+  for minor fixes to chat command vocabulary"; this commit also
+  introduced `chat-markdown-render.md`).
+- Implementation phase: 2026-03-17 → 2026-05-06 (51 days, calendar).
+  Burst 1: 2026-03-17 (`77d1eef37`, "Chat: renames the dismiss-all
+  command to clear"). Burst 2: 2026-03-20 (`6b49b03dd`, CLI rename).
+  Burst 3: 2026-05-06 (PR #93 commits `2a3ec3025` + `9272463a8`
+  keeping `dismiss-all` as alias, merged 2026-05-05 via `31df9e3cf`).
 
 ## Motivation
 

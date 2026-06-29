@@ -3,14 +3,55 @@
 | | |
 |---|---|
 | **Created** | 2026-03-20 |
-| **Updated** | 2026-03-20 |
+| **Updated** | 2026-05-27 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 
 ## Status
 
-Phases 1, 2, 3, and 5 are implemented.  Phase 4 (sub-mounts and snapshot)
-is not yet started.
+**In Progress** (Phases 1-3 + 5 shipped 2026-03-21 via commit
+`e22f71327` on `llm`; Phases 4 and beyond open as PRs #135 / #127 /
+#277; partial Phase 6 absorbed by PR #153, commit `8a8e872d4`
+2026-05-18).
+Snapshot landed independently 2026-05-27 via
+[PR #339](https://github.com/endojs/endo-but-for-bots/pull/339)
+(the `daemon-mount-capabilities` follow-up, which also reshaped
+`EndoMount` as a `Directory` specialization, added `EndoMountEntry`
+value-typed descriptors, and `makeFile`); PR #135's remaining open
+scope is sub-mounts + capability VFS only.
+
+Phases 1, 2, 3, and 5 landed on `llm` in commit e22f71327
+("Filesystem mount formulas", 2026-03-21) and follow-up commits
+(`feat(daemon) rework help-text => helpdown`, `Homogenize read and
+write`, etc.).
+Phase 4 (sub-mounts, snapshot, capability VFS) is forwarded under
+the bot as
+[PR #135](https://github.com/endojs/endo-but-for-bots/pull/135)
+(open).
+Additional mount extensions (revocation, deny patterns, glob/grep
+/stat/json) are forwarded as PR #127 (open), and an
+`EndoMount.followNameChanges` live entry-name stream is on PR #277
+(open).
+Phase 6 (CLI commands `endo ls`, `endo cat`, `endo write`) was
+partially absorbed by the CLI verb reshape in
+[#153](https://github.com/endojs/endo-but-for-bots/pull/153)
+(commit `8a8e872d4`, 2026-05-18).
+
+### Roadmap calibration (per `git blame` on `llm`)
+
+- Active development: 2026-03-21 → present (ongoing; Phase 4+ open as
+  PRs #127, #135, #277).
+- Design phase: 2026-03-21 (single commit `e22f71327`, "Filesystem
+  mount formulas"; the same commit carried the design doc add and
+  the Phase 1-3 + 5 implementation).
+- Implementation phase: 2026-03-21 → 2026-05-27, ongoing. Burst 1:
+  2026-03-21 (Phases 1-3 + 5 in `e22f71327`). Burst 2: 2026-03-23 →
+  2026-03-25 (`acabec931` helpdown rework, `0e52003c4` Homogenize
+  read and write). Burst 3: 2026-05-18 (PR #153 partial Phase 6 in
+  `8a8e872d4`). Burst 4: 2026-05-27 (PR #339, snapshot +
+  `EndoMount` specialization in `0fae0036e`). Phase 4 sub-mount
+  work and remaining Phase 6 work currently open in PRs #127,
+  #135, #277.
 
 ### Implemented
 
@@ -63,7 +104,6 @@ is not yet started.
 ### Not yet implemented
 
 - `provideSubMount` host method (Phase 4)
-- `snapshot()` — currently throws "not yet implemented" (Phase 4)
 - GC cleanup for scratch mount backing directories — extracted to
   [daemon-content-store-gc](daemon-content-store-gc.md)
 - CLI commands: `endo ls`, `endo cat`, `endo write` (Phase 6)
@@ -587,11 +627,14 @@ disk usage, mitigated by GC when the formula becomes unreachable.
 GC cleanup of scratch-mount backing directories is covered by
 [daemon-content-store-gc](daemon-content-store-gc.md).
 
-### Phase 4: Sub-mounts and snapshot — Not Started
+### Phase 4: Sub-mounts and snapshot — Partial
 
 1. Implement `provideSubMount` host method
-2. Implement `snapshot()` using the content store from platform-fs
-3. Tests: sub-mount isolation, snapshot round-trip
+2. ~~Implement `snapshot()` using the content store from platform-fs~~
+   (shipped 2026-05-27 via PR #339; see
+   designs/daemon-mount-capabilities.md)
+3. Tests: sub-mount isolation, ~~snapshot round-trip~~
+   (snapshot-round-trip tests shipped 2026-05-27 via PR #339)
 
 ### Phase 5: Transient lookup exos — **Complete**
 

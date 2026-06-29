@@ -1,6 +1,6 @@
 {
   "name": "@endo/cli",
-  "version": "2.3.12",
+  "version": "2.3.13",
   "private": true,
   "description": "Endo command line interface",
   "keywords": [],
@@ -16,14 +16,12 @@
     "url": "https://github.com/endojs/endo/issues"
   },
   "bin": {
-    "endo": "./bin/endo"
+    "endo": "./bin/endo.cjs"
   },
   "type": "module",
   "exports": {},
   "scripts": {
     "build": "exit 0",
-    "prepack": "git clean -fX -e node_modules/ && tsc --build tsconfig.build.json",
-    "postpack": "git clean -fX -e node_modules/",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
@@ -31,11 +29,14 @@
     "test": "ava"
   },
   "dependencies": {
+    "@endo/bytes": "workspace:^",
+    "@endo/cancel": "workspace:^",
     "@endo/compartment-mapper": "workspace:^",
     "@endo/daemon": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
+    "@endo/exo-stream": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/hex": "workspace:^",
@@ -56,7 +57,7 @@
     "eslint-config-airbnb-base": "^15.0.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-eslint-comments": "^3.2.0",
-    "eslint-plugin-import": "^2.31.0",
+    "eslint-plugin-import": "catalog:dev",
     "execa": "^9.3.0",
     "typescript": "catalog:dev"
   },

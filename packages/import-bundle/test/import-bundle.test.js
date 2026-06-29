@@ -126,7 +126,6 @@ test('test fs import with importHook', async t => {
     },
   };
 
-  // @ts-expect-error no overload matches
   const bundle = await bundleSource(testFilePath, options);
   const ns = await importBundle(bundle, options);
 
@@ -278,4 +277,27 @@ test('bundleTestExports should accept a genuine module exports namespace', t => 
   // Taking into account that it will have a Symbol.toStringTag.
   bundleTestExports(namespace);
   t.pass();
+});
+
+test('importBundle supports exiting to importHook', async t => {
+  const bundle = await bundleSource(
+    url.fileURLToPath(
+      new URL(
+        '../../compartment-mapper/test/fixtures-conditional-host-exports/node_modules/app/index.js',
+        import.meta.url,
+      ),
+    ),
+    {
+      format: 'endoZipBase64',
+      conditions: ['endo:lib'],
+    },
+  );
+
+  const ns = await importBundle(bundle, {
+    async importHook(specifier) {
+      t.is(specifier, 'endo:lib');
+      return { namespace: { feature: 'host' } };
+    },
+  });
+  t.is(ns.feature, 'host');
 });

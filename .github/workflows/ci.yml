@@ -7,11 +7,31 @@ on:
   push:
     branches: [master]
   pull_request:
+    # `paths-ignore` causes this workflow not to run at all when every
+    # changed path matches one of these patterns. The sister workflow
+    # `ci-docs.yml` mirrors this list under `paths` (the inverse) so
+    # that doc-only PRs still produce checks named `test` and `lint`,
+    # satisfying any future branch-protection rule that names those
+    # checks as required. Keep the two lists in sync.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
 
-# Minimal permissions for workflows and jobs (cache uses actions API).
+# Minimal permissions for workflows and jobs. `actions/cache` and
+# `setup-node`'s `cache: yarn` use the runner's built-in cache service,
+# which is authenticated independently of the `actions:` permission;
+# `contents: read` is sufficient for every job below.
 permissions:
   contents: read
-  actions: write
+
+# Defense in depth against npm lifecycle scripts running implicitly at install.
+# .yarnrc.yml sets `enableScripts: false` at rest; these env vars ensure the
+# posture survives a branch that drops the repo-level config, an invocation of
+# npm where yarn was intended, or a workflow that unsets the yarn config.
+# See designs/ci-no-npm-lifecycle.md.
+env:
+  YARN_ENABLE_SCRIPTS: 'false'
+  npm_config_ignore_scripts: 'true'
 
 # Cancel in-progress runs for the same branch when a new run is started
 concurrency:
@@ -33,15 +53,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       # without this, setup-node errors on mismatched yarn versions
       - run: corepack enable
 
       - name: Use Node.js
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
 
       - name: Install dependencies
@@ -52,12 +74,70 @@ jobs:
       - name: Run yarn build
         run: yarn build
 
+      # shellcheck ships preinstalled on ubuntu-latest runners. Print
+      # the version so a regression in the image surfaces here rather
+      # than as an unexplained gate flap. `yarn lint` runs `lint:sh`
+      # against the same binary; this step is the install-presence
+      # check.
+      - name: Show shellcheck version
+        run: shellcheck --version
+
       - name: Run yarn lint
         run: yarn lint
+
+      - name: Check SECURITY.md uniformity
+        run: bash scripts/check-security-md.sh
+
+      - name: Check composite tsconfig files are up to date
+        run: yarn build:types:check
+
+      - name: Check package uniformity
+        run: node scripts/check-package-uniformity.mjs
 
       # build the API docs to verify it works
       - name: build API docs
         run: yarn docs
+
+  familiar-bundle:
+    name: familiar-bundle
+
+    # The Familiar Electron shell bundles a handful of CLI / daemon /
+    # worker / agent entry points with esbuild before it can be packaged.
+    # The `step:bundle` script is build-only — it produces .cjs / .js
+    # files under packages/familiar/bundles/ and does NOT launch
+    # Electron or otherwise need a display, so we can run it in CI
+    # without xvfb. A separate concern (familiar-release.yml) handles
+    # the runtime packaging on tag push.
+    #
+    # Without this job a regression in any module reachable from one of
+    # the bundle entry points (notably packages/daemon/src/daemon-node.js
+    # and packages/daemon/src/worker-node.js) is invisible until release
+    # time. See the d0ce26b327 SQLite migration for an example: it added
+    # top-level await to daemon-node.js, which esbuild's `cjs` output
+    # format rejects, and the bundle build silently broke for months.
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      # without this, setup-node errors on mismatched yarn versions
+      - run: corepack enable
+
+      - name: Use Node.js
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        with:
+          node-version: 22.x
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Bundle Familiar entry points
+        run: yarn workspace @endo/familiar step:bundle
 
   test:
     name: test
@@ -68,7 +148,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [18.x, 20.x, 22.x, 24.x]
+        node-version: [22.x, 24.x]
         platform: [ubuntu-latest, macos-15]
         # windows-latest exhibited flakey tests that are not yet worth the
         # trouble to investigate, and blocked us from upgrading yarn from 1 to
@@ -76,13 +156,18 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Fetch full history so turbo can compute the affected set against
+          # `origin/llm` for the `--filter='...[origin/llm]'` invocation below.
+          fetch-depth: 0
+          persist-credentials: false
 
       # without this, setup-node errors on mismatched yarn versions
       - run: corepack enable
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: ${{ matrix.node-version }}
           cache: yarn
@@ -105,13 +190,16 @@ jobs:
 
       # end macro
 
-      - name: Run yarn build
+      # Use turbo's `--filter='...[origin/llm]'` to test only the packages
+      # affected by this PR and their dependents (the leading `...` selects the
+      # changed set plus everything that depends on it), rather than the full
+      # matrix. The base `origin/llm` is the repo's default branch on this fork.
+      # The `test` task `dependsOn` `build` and `^build`, so turbo builds only
+      # the affected closure on demand; a separate full `yarn build` step would
+      # rebuild all ~83 packages and is therefore omitted.
+      - name: Run yarn test (affected set)
         working-directory: ${{ env.WORKDIR }}
-        run: yarn build
-
-      - name: Run yarn test
-        working-directory: ${{ env.WORKDIR }}
-        run: yarn test
+        run: yarn turbo run test --filter='...[origin/llm]'
 
       - name: Restore working directory
         if: ${{ steps.move-wd.outcome == 'success' }}
@@ -127,13 +215,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       # without this, setup-node errors on mismatched yarn versions
       - run: corepack enable
 
       - name: Use Node.js 22.x
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
         with:
           node-version: 22.x
           cache: yarn
@@ -170,15 +260,19 @@ jobs:
       fail-fast: false
       matrix:
         node-version:
+          # Historical record of Node patch-version compatibility for the
+          # SES-viable promise-hook surface (entries removed as their Node
+          # major lines reached EOL or left CI):
           # '16.1' last version before some significant promise hooks changes
           # '16.5' last version before unconditional promise fast-path
           # '16.6' first version after unconditional promise fast-path
-          - '18'
-          # '20.6' not viable due to https://github.com/nodejs/node/issues/49497
           # '20.3' to '20.6' not viable due to https://github.com/nodejs/node/pull/49211
-          # '20.7' first SES-viable version
-          # '20.9' first LTS of 20
-          - '20'
+          # '20.6' not viable due to https://github.com/nodejs/node/issues/49497
+          # '20.7' first SES-viable version of Node 20
+          # '20.9' first LTS of Node 20
+          # '22' is the post-promise-fast-path lane on a current LTS
+          # (the SES-viable promise-hook lane the Node-20 entry was guarding).
+          - '22'
         platform:
           - ubuntu-latest
 
@@ -186,13 +280,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       # without this, setup-node errors on mismatched yarn versions
       - run: corepack enable
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: ${{ matrix.node-version }}
           cache: yarn
@@ -218,18 +314,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [18.x, 20.x, 24.x]
+        node-version: [22.x, 24.x]
         platform: [ubuntu-latest]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Fetch full history so turbo can compute the affected set against
+          # `origin/llm` for the `--filter='...[origin/llm]'` invocation below.
+          fetch-depth: 0
+          persist-credentials: false
 
       # without this, setup-node errors on mismatched yarn versions
       - run: corepack enable
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: ${{ matrix.node-version }}
           cache: yarn
@@ -239,11 +340,12 @@ jobs:
 
       # end macro
 
-      - name: Run yarn build
-        run: yarn build
-
-      - name: Run yarn test:c8
-        run: yarn test:c8
+      # As with the `test` job, scope coverage to the affected packages and
+      # their dependents. The `test:c8` turbo task `dependsOn` `build` and
+      # `^build`, so turbo builds only the affected closure on demand; a
+      # separate full `yarn build` step is therefore omitted.
+      - name: Run yarn test:c8 (affected set)
+        run: yarn turbo run test:c8 --filter='...[origin/llm]'
 
   test262:
     name: test262
@@ -254,18 +356,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [18.x, 20.x, 24.x]
+        node-version: [22.x, 24.x]
         platform: [ubuntu-latest]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       # without this, setup-node errors on mismatched yarn versions
       - run: corepack enable
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: ${{ matrix.node-version }}
           cache: yarn
@@ -286,23 +390,21 @@ jobs:
 
     # begin macro
 
-    runs-on: ${{ matrix.platform }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [ubuntu-latest]
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       # without this, setup-node errors on mismatched yarn versions
       - run: corepack enable
 
-      - name: Use Node.js 22.x
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6
+      - name: Use Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
 
       - name: Install dependencies
@@ -323,15 +425,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       # without this, setup-node errors on mismatched yarn versions
       - run: corepack enable
 
-      - name: Use Node.js 22.x
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6
+      - name: Use Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
 
       - name: Install dependencies
@@ -339,7 +443,7 @@ jobs:
 
       - name: Detect workflow changes
         id: paths
-        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
         with:
           filters: |
             workflows:
@@ -358,18 +462,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [18.x, 20.x, 24.x]
+        node-version: [22.x, 24.x]
         platform: [ubuntu-latest]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       # without this, setup-node errors on mismatched yarn versions
       - run: corepack enable
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: ${{ matrix.node-version }}
           cache: yarn
@@ -382,45 +488,48 @@ jobs:
       - name: build
         run: yarn run build
 
-      - name: pack
-        run: yarn workspaces foreach --all --topological exec yarn pack
-
-      # Prepack (without cleanup per package) to ensure that type resolution in
-      # dependent packages continues to work when the typedefs are generated by
-      # their upstream packages. This helps avoid a situation in which the types
-      # only resolve because of the state of the local filesystem, and fails
-      # when imported in an NPM node_modules tree.
-      - name: Prepack packages
-        run: yarn lerna run --reject-cycles --concurrency 1 prepack
+      # Smoke-test the publish flow end to end. Boots a disposable
+      # Verdaccio registry, runs `yarn release:npm` against it, then
+      # installs a representative subset of the published tarballs into
+      # a fresh consumer and exercises them under SES lockdown. This
+      # replaces the previous `yarn workspaces foreach exec npm pack`
+      # step (which could not have worked after the ts-node-pack
+      # refactor because the .ts-using packages no longer have prepack
+      # hooks to turn their sources into publishable JS) and also
+      # subsumes the "Prepack packages" type-resolution check: the
+      # consumer imports under SES prove that declarations resolve
+      # cross-package from their published tarball state, not from
+      # whatever source tree happens to be on disk.
+      - name: Smoke-test publish
+        run: yarn smoketest:publish
 
   test-xs:
     name: test-xs
 
     # begin macro
 
-    runs-on: ${{ matrix.platform }}
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: [20.x]
-        # may include release tags and hashes:
-        moddable-version: [5.0.0]
-        platform: [ubuntu-latest]
+    runs-on: ubuntu-latest
+
+    # may include release tags and hashes
+    env:
+      MODDABLE_VERSION: 5.0.0
 
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: endo
+          persist-credentials: false
 
       # without this, setup-node errors on mismatched yarn versions
       - run: corepack enable
         working-directory: endo
 
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6
+      # The tests run on the XS engine; Node is just driving the harness.
+      - name: Use Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version-file: endo/.node-version
           cache: yarn
           cache-dependency-path: endo/yarn.lock
 
@@ -440,16 +549,16 @@ jobs:
 
       - name: Restore XS binary cache
         id: restore-xs
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: bin/xst
-          key: xst-lin64-${{ matrix.moddable-version }}
+          key: xst-lin64-${{ env.MODDABLE_VERSION }}
 
       - name: Choose XS download or build
         if: steps.restore-xs.outputs.cache-hit != 'true'
         id: check-release
         run: |
-          if curl -f -s -o /dev/null -I -L https://api.github.com/repos/Moddable-OpenSource/moddable/releases/tags/${{ matrix.moddable-version }}
+          if curl -f -s -o /dev/null -I -L "https://api.github.com/repos/Moddable-OpenSource/moddable/releases/tags/${MODDABLE_VERSION}"
           then
             echo release=download
           else
@@ -459,18 +568,19 @@ jobs:
       - name: Download XS
         if: steps.check-release.outputs.release == 'download'
         run: |
-          wget "https://github.com/Moddable-OpenSource/moddable/releases/download/${{ matrix.moddable-version }}/xst-lin64.zip"
+          wget "https://github.com/Moddable-OpenSource/moddable/releases/download/${MODDABLE_VERSION}/xst-lin64.zip"
           unzip xst-lin64.zip -d bin
           mkdir -p bin
           chmod 755 bin/xst
 
       - name: Checkout XS
         if: steps.check-release.outputs.release == 'build'
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: moddable-OpenSource/moddable
-          ref: ${{ matrix.moddable-version }}
+          ref: ${{ env.MODDABLE_VERSION }}
           path: moddable
+          persist-credentials: false
 
       - name: Build XS
         if: steps.check-release.outputs.release == 'build'
@@ -493,30 +603,32 @@ jobs:
 
     steps:
       - name: Checkout Endo
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: endo
+          persist-credentials: false
 
       - name: Checkout OCapN Test Suite
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           # https://github.com/ocapn/ocapn-test-suite/ (main branch)
           repository: ocapn/ocapn-test-suite
           ref: 74db78f08a40efba1e2b975d809374ff0e7acf60
           path: ocapn-test-suite
+          persist-credentials: false
 
       - run: corepack enable
         working-directory: endo
 
-      - name: Use Node.js 20.x
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6
+      - name: Use Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: 20.x
+          node-version-file: endo/.node-version
           cache: yarn
           cache-dependency-path: endo/yarn.lock
 
       - name: Set up Python 3.10
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.10'
 
@@ -563,3 +675,45 @@ jobs:
           if [ -f /tmp/ocapn-server.pid ]; then
             kill $(cat /tmp/ocapn-server.pid) || true
           fi
+
+  build-wasm:
+    name: build-wasm
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Cache Cargo + target
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          # Bust the cache when sources or the pinned toolchain change.
+          key: ${{ runner.os }}-wasm-${{ hashFiles('rust/ocapn_noise/**', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-wasm-
+
+      - name: Install rust target
+        run: |
+          # ubuntu-latest images ship with rustup + stable; this just
+          # adds the wasm32 target.  The pinned channel from
+          # rust/ocapn_noise/rust-toolchain.toml takes effect on the
+          # first cargo invocation under that subdirectory.
+          rustup target add wasm32-unknown-unknown
+
+      - name: Build wasm
+        run: bash rust/ocapn_noise/build.sh
+
+      - name: Verify committed wasm matches source
+        run: |
+          # The artifact is committed for JS-only contributors.  CI
+          # regenerates it from source and asserts the committed copy
+          # is identical.  Drift indicates somebody changed Rust source
+          # without re-running build.sh.
+          git diff --exit-code packages/ocapn-noise/gen/ocapn-noise.wasm

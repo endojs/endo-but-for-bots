@@ -5,7 +5,7 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 import { passableAsJustin, makeMarshal } from '@endo/marshal';
-import { makeRefIterator } from '@endo/daemon/ref-reader.js';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { createProvider } from '@endo/lal/providers/index.js';
 import {
   makeConversationTree,
@@ -22,6 +22,8 @@ import {
   makeAdoptTool,
   makeSendTool,
   makeReplyTool,
+  makeEditMessageTool,
+  makeMessageHistoryTool,
   makeListMessagesTool,
   makeDismissTool,
   makeExecTool,
@@ -111,12 +113,24 @@ Example: if a message says "Here is @counter for you", adopt it:
 `;
 
 /**
+ * @typedef {object} ProviderConstructorConfig
+ * @property {string} host - LAL host URL.
+ * @property {string} model - LAL model identifier.
+ * @property {string} authToken - LAL auth token.
+ */
+
+/**
+ * @typedef {object} InjectedProviderConfig
+ * @property {{ chat: (messages: object[], tools: object[]) => Promise<{ message: object }> }} provider - Pre-built provider (e.g. for tests).
+ */
+
+/**
  * Spawn a worker loop that follows a guest's inbox and processes messages
  * using the given LLM provider configuration.
  *
  * @param {any} powers - Guest powers (manager's own or a sub-guest's)
  * @param {Promise<object> | object | undefined} context - Context for cancellation
- * @param {{ host: string, model: string, authToken: string }} providerConfig - LLM provider config
+ * @param {ProviderConstructorConfig | InjectedProviderConfig} providerConfig - LLM provider config. Pass `provider` to inject a pre-built provider (e.g. for tests); otherwise host/model/authToken are used to construct one.
  * @param {string} [systemPrompt] - Override system prompt (defaults to guestSystemPrompt)
  * @returns {Promise<void>}
  */
@@ -139,11 +153,13 @@ export const spawnWorkerLoop = async (
     return null;
   };
 
-  const provider = createProvider({
-    LAL_HOST: providerConfig.host,
-    LAL_MODEL: providerConfig.model,
-    LAL_AUTH_TOKEN: providerConfig.authToken,
-  });
+  const provider =
+    providerConfig.provider ||
+    createProvider({
+      LAL_HOST: providerConfig.host,
+      LAL_MODEL: providerConfig.model,
+      LAL_AUTH_TOKEN: providerConfig.authToken,
+    });
 
   /**
    * @param {object[]} messages
@@ -214,6 +230,8 @@ export const spawnWorkerLoop = async (
   );
   localTools.set('listMessages', makeListMessagesTool(powers));
   localTools.set('dismiss', makeDismissTool(powers));
+  localTools.set('editMessage', makeEditMessageTool(powers));
+  localTools.set('messageHistory', makeMessageHistoryTool(powers));
   localTools.set('exec', makeExecTool(powers));
   localTools.set('readChannel', makeReadChannelTool(powers));
 
@@ -415,7 +433,18 @@ export const spawnWorkerLoop = async (
     // than branching from the root (which would lose all context).
     let lastLeafId = await rootNodeIdP;
 
-    const messageIterator = makeRefIterator(E(powers).followMessages());
+    /**
+     * Track inbound message numbers we have already processed.  Re-emission
+     * of the same number indicates the sender called daemon `editMessage`:
+     * a partial submission settling, or an amendment of an already-settled
+     * message.  We do not rerun the agentic loop for such re-emissions;
+     * the agent can call `messageHistory(n)` to retrieve the prior text
+     * if it needs to reason about the change.
+     * @type {Set<bigint>}
+     */
+    const seenInboundNumbers = new Set();
+
+    const messageIterator = iterateReader(E(powers).followMessages());
     while (true) {
       const nextMessage = messageIterator.next();
       const raced = cancelledSignal
@@ -442,10 +471,34 @@ export const spawnWorkerLoop = async (
         type,
         strings,
         names,
+        done: messageDone = true,
       } = /** @type {any} */ (message);
 
       if (fromId !== selfLocator) {
         const { messageId, replyTo } = /** @type {any} */ (message);
+
+        // Skip partial (in-flight) submissions: wait until the sender
+        // marks the message done before spinning up an LLM turn.
+        if (messageDone === false) {
+          console.log(
+            `[fae] Message #${number} is not yet done; deferring until settled`,
+          );
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+
+        // Re-emission of a previously-processed number means the sender
+        // edited a settled message.  Do not start a new turn; the
+        // history is available via the messageHistory tool.
+        if (seenInboundNumbers.has(number)) {
+          console.log(
+            `[fae] Message #${number} was edited after settlement; ` +
+              `not rerunning. Use messageHistory(${number}) for the prior text.`,
+          );
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        seenInboundNumbers.add(number);
 
         await rootNodeIdP;
 

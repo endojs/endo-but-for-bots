@@ -44,6 +44,8 @@ import { makeCapTP } from '@endo/captp';
 import { E } from '@endo/far';
 import { makePromiseKit } from '@endo/promise-kit';
 import { mapWriter, mapReader, makePipe } from '@endo/stream';
+import { bytesFromText } from '@endo/bytes/from-string.js';
+import { bytesToText } from '@endo/bytes/to-string.js';
 
 import { makeDaemon } from './daemon.js';
 import { makeDaemonicPersistencePowers } from './daemon-persistence-powers.js';
@@ -66,9 +68,6 @@ import { makeDebugger } from './debugger.js';
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { CapTpConnectionRegistrar, Config, DaemonWorkerFacet, WorkerDaemonFacet } from './types.js' */
-
-const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder();
 
 // ---------------------------------------------------------------------------
 // Console polyfill for XS (daemon.js uses console.log/error extensively)
@@ -345,6 +344,18 @@ const workerExitResolvers = new Map();
 /** @type {Map<number, { dispatch: (msg: Record<string, unknown>) => void, abort: () => void }>} */
 const clientSessions = new Map();
 
+// Remote-peer CapTP sessions (iroh connections bridged by the supervisor's
+// iroh network device). Distinct from clientSessions because a peer is
+// bootstrapped with the greeter (it speaks the `hello` handshake), whereas a
+// CLI client is bootstrapped with the full endo object.
+/** @type {Map<number, { dispatch: (msg: Record<string, unknown>) => void, abort: () => void }>} */
+const peerSessions = new Map();
+
+// The local greeter, resolved once the daemon is up; bootstrap for inbound
+// iroh peer sessions.
+/** @type {unknown} */
+let endoGreeter = null;
+
 // Debug sessions per worker handle.
 /** @type {Map<number, import('./types.js').DebugSession>} */
 const debugSessions = new Map();
@@ -394,18 +405,18 @@ const encodeSpawnPayload = (command, args) => {
   /** @type {number[]} */
   const buf = [];
   cborHead(buf, CBOR_MAP, 2);
-  const commandKey = textEncoder.encode('command');
+  const commandKey = bytesFromText('command');
   cborHead(buf, CBOR_TEXT, commandKey.length);
   for (let i = 0; i < commandKey.length; i += 1) buf.push(commandKey[i]);
-  const commandVal = textEncoder.encode(command);
+  const commandVal = bytesFromText(command);
   cborHead(buf, CBOR_TEXT, commandVal.length);
   for (let i = 0; i < commandVal.length; i += 1) buf.push(commandVal[i]);
-  const argsKey = textEncoder.encode('args');
+  const argsKey = bytesFromText('args');
   cborHead(buf, CBOR_TEXT, argsKey.length);
   for (let i = 0; i < argsKey.length; i += 1) buf.push(argsKey[i]);
   cborHead(buf, CBOR_ARRAY, args.length);
   for (const arg of args) {
-    const argVal = textEncoder.encode(arg);
+    const argVal = bytesFromText(arg);
     cborHead(buf, CBOR_TEXT, argVal.length);
     for (let i = 0; i < argVal.length; i += 1) buf.push(argVal[i]);
   }
@@ -492,7 +503,7 @@ const makeWorker = async (
   const response = await spawnResponse;
 
   if (response.verb === 'error') {
-    const errorText = textDecoder.decode(response.payload);
+    const errorText = bytesToText(response.payload);
     throw new Error(`Worker spawn failed: ${errorText}`);
   }
 
@@ -689,13 +700,35 @@ const main = async () => {
   /** @type {number[]} */
   const listenBuf = [];
   cborHead(listenBuf, CBOR_MAP, 1);
-  const pathKey = textEncoder.encode('path');
+  const pathKey = bytesFromText('path');
   cborHead(listenBuf, CBOR_TEXT, pathKey.length);
   for (let i = 0; i < pathKey.length; i += 1) listenBuf.push(pathKey[i]);
-  const pathVal = textEncoder.encode(sockPath);
+  const pathVal = bytesFromText(sockPath);
   cborHead(listenBuf, CBOR_TEXT, pathVal.length);
   for (let i = 0; i < pathVal.length; i += 1) listenBuf.push(pathVal[i]);
   sendEnvelope(0, 'listen-path', new Uint8Array(listenBuf), 0);
+
+  // Optionally ask the supervisor to host an iroh network device. The
+  // supervisor (which, unlike the XS manager, can open sockets and speak
+  // QUIC) binds the endpoint and bridges inbound peers back as
+  // `iroh-connect` / `deliver` / `disconnect`. The payload is a CBOR map
+  // {node: <NodeNumber hex>}; the supervisor derives the stable iroh
+  // identity from it, wire-compatible with the Node.js iroh transport.
+  if (hostGetEnv('ENDO_IROH') === '1') {
+    endoGreeter = await E(endoBootstrap).greeter();
+    const nodeNumber = /** @type {string} */ (await E(endoBootstrap).nodeId());
+    /** @type {number[]} */
+    const irohBuf = [];
+    cborHead(irohBuf, CBOR_MAP, 1);
+    const nodeKey = bytesFromText('node');
+    cborHead(irohBuf, CBOR_TEXT, nodeKey.length);
+    for (let i = 0; i < nodeKey.length; i += 1) irohBuf.push(nodeKey[i]);
+    const nodeVal = bytesFromText(nodeNumber);
+    cborHead(irohBuf, CBOR_TEXT, nodeVal.length);
+    for (let i = 0; i < nodeVal.length; i += 1) irohBuf.push(nodeVal[i]);
+    sendEnvelope(0, 'listen-iroh', new Uint8Array(irohBuf), 0);
+    hostTrace('Endo daemon (xs) requested iroh network device');
+  }
 
   // Update endo.pid with our PID.
   const pidPath = filePowers.joinPath(ephemeralStatePath, 'endo.pid');
@@ -739,7 +772,7 @@ const setupClientSession = connectionHandle => {
    */
   const send = message => {
     const json = JSON.stringify(message);
-    const bytes = textEncoder.encode(json);
+    const bytes = bytesFromText(json);
     hostTrace(
       `daemon-xs: client SEND handle=${connectionHandle} type=${message.type || '?'}`,
     );
@@ -755,6 +788,48 @@ const setupClientSession = connectionHandle => {
 
   clientSessions.set(connectionHandle, { dispatch, abort });
   hostTrace(`daemon-xs: client session created handle=${connectionHandle}`);
+};
+
+/**
+ * Set up a CapTP session for a new inbound iroh peer connection.
+ *
+ * Unlike a CLI client, a peer daemon is bootstrapped with the greeter and
+ * drives the `hello` handshake; the daemon's remote-control state machine
+ * resolves crossed-hellos by NodeNumber bias. The supervisor frames CapTP
+ * with netstrings over iroh exactly as it does over the Unix socket, so the
+ * JSON-message wiring here is identical to a client session.
+ *
+ * @param {number} connectionHandle
+ */
+const setupPeerSession = connectionHandle => {
+  if (!endoGreeter) {
+    hostTrace(
+      `daemon-xs: iroh peer connect before greeter ready (handle=${connectionHandle})`,
+    );
+    return;
+  }
+
+  /**
+   * @param {Record<string, unknown>} message
+   */
+  const send = message => {
+    const json = JSON.stringify(message);
+    const bytes = bytesFromText(json);
+    hostTrace(
+      `daemon-xs: peer SEND handle=${connectionHandle} type=${message.type || '?'}`,
+    );
+    sendEnvelope(connectionHandle, 'deliver', bytes);
+  };
+
+  const { dispatch, abort } = makeCapTP(
+    `Peer ${connectionHandle}`,
+    send,
+    endoGreeter,
+    { onReject: silentReject },
+  );
+
+  peerSessions.set(connectionHandle, { dispatch, abort });
+  hostTrace(`daemon-xs: iroh peer session created handle=${connectionHandle}`);
 };
 
 /**
@@ -807,6 +882,25 @@ globalThis.handleCommand = harden(bytes => {
       return;
     }
 
+    // Check if this is from an inbound iroh peer connection.
+    const peerEntry = peerSessions.get(handle);
+    if (peerEntry) {
+      const json =
+        env.payload.length > 8192
+          ? hostDecodeUtf8(env.payload)
+          : bytesToText(env.payload);
+      const message = JSON.parse(json);
+      hostTrace(
+        `daemon-xs: peer deliver handle=${handle} type=${message.type || '?'}`,
+      );
+      try {
+        peerEntry.dispatch(message);
+      } catch (_e) {
+        // Swallow — handled by onReject.
+      }
+      return;
+    }
+
     // Check if this is from a client connection.
     const clientEntry = clientSessions.get(handle);
     if (clientEntry) {
@@ -817,7 +911,7 @@ globalThis.handleCommand = harden(bytes => {
       const json =
         env.payload.length > 8192
           ? hostDecodeUtf8(env.payload)
-          : textDecoder.decode(env.payload);
+          : bytesToText(env.payload);
       const message = JSON.parse(json);
       hostTrace(
         `daemon-xs: client deliver handle=${handle} type=${message.type || '?'} method=${message.method || '?'}`,
@@ -893,12 +987,32 @@ globalThis.handleCommand = harden(bytes => {
     return;
   }
 
-  // Client disconnection.
+  // Inbound iroh peer connection (bridged by the supervisor iroh device).
+  if (env.verb === 'iroh-connect') {
+    setupPeerSession(env.handle);
+    return;
+  }
+
+  // Iroh listener acknowledgement: payload is the published address.
+  if (env.verb === 'listening-iroh') {
+    const address = bytesToText(env.payload);
+    globalThis.__irohAddress = address;
+    hostTrace(`daemon-xs: iroh listening at ${address}`);
+    return;
+  }
+
+  // Client or peer disconnection.
   if (env.verb === 'disconnect') {
-    const session = clientSessions.get(env.handle);
-    if (session) {
-      session.abort();
+    const clientEntry = clientSessions.get(env.handle);
+    if (clientEntry) {
+      clientEntry.abort();
       clientSessions.delete(env.handle);
+      return;
+    }
+    const peerEntry = peerSessions.get(env.handle);
+    if (peerEntry) {
+      peerEntry.abort();
+      peerSessions.delete(env.handle);
     }
     return;
   }

@@ -5,6 +5,7 @@
 import { E } from '@endo/eventual-send';
 import { makeError, q, X } from '@endo/errors';
 import { makeExo } from '@endo/exo';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { M } from '@endo/patterns';
 
 import {
@@ -14,12 +15,6 @@ import {
   SandboxHandleInterface,
 } from './interfaces.js';
 import { resolveLimits } from './limits.js';
-
-const AsyncReaderInterface = M.interface('SandboxReader', {
-  next: M.call().returns(M.promise()),
-  return: M.call().optional(M.any()).returns(M.promise()),
-  throw: M.call().optional(M.any()).returns(M.promise()),
-});
 
 const AsyncWriterInterface = M.interface('SandboxWriter', {
   next: M.call().optional(M.any()).returns(M.promise()),
@@ -80,11 +75,12 @@ Methods:
  *   - `runtimeDetails.prlimit:    { applied: string[] }` (bwrap)
  *   - `runtimeDetails.rootless:   { available, reason? }` (podman)
  *   - `runtimeDetails.rootlessNet:{ backend, reason? }` (podman)
+ *   - `runtimeDetails.path:       { value, source }`     (podman)
  *
  * Missing fields render as "not detected" so the report stays
  * informative across drivers that do not implement every layer.
  *
- * @param {{ runtimeDetails?: { landlock?: { available: boolean, reason?: string }, cgroup2?: { available: boolean, controllers: string[], reason?: string }, prlimit?: { applied: string[] }, rootless?: { available: boolean, reason?: string }, rootlessNet?: { backend: string | null, reason?: string } } }} driverSlice
+ * @param {{ runtimeDetails?: { landlock?: { available: boolean, reason?: string }, cgroup2?: { available: boolean, controllers: string[], reason?: string }, prlimit?: { applied: string[] }, rootless?: { available: boolean, reason?: string }, rootlessNet?: { backend: string | null, reason?: string }, path?: { value: string, source: 'env' | 'image' | 'fallback' } } }} driverSlice
  * @param {SliceSpec} spec
  * @returns {string}
  */
@@ -152,6 +148,14 @@ const renderSliceRuntimeReport = (driverSlice, spec) => {
       lines.push(`  rootless-net: none${why}`);
     }
   }
+  if (details.path !== undefined) {
+    // `source` distinguishes "caller set this" / "the OCI image set
+    // this" / "we fell back to the cross-driver default" — useful
+    // when debugging "why can't my slice find `apk`" cases.
+    lines.push(
+      `  path: ${details.path.value} (source: ${details.path.source})`,
+    );
+  }
   return lines.join('\n');
 };
 harden(renderSliceRuntimeReport);
@@ -178,54 +182,31 @@ Methods:
   unmount()    Detach the mount from the slice.
 `;
 
-const KILL_GRACE_MS = 5_000;
+const KILL_GRACE_MS = 5000;
 
 /**
- * Wrap a driver-side `AsyncIterable<Uint8Array>` as a `ReaderRef`-
- * shaped exo. The factory minimally implements the AsyncIterator
- * protocol the daemon's `reader-ref.js` uses (`next` / `return` /
- * `throw`).
+ * Wrap a driver-side `AsyncIterable<Uint8Array>` as a
+ * `PassableBytesReader` exo (the new exo-stream wire shape).
  *
  * @param {AsyncIterable<Uint8Array> | null | undefined} iterable
  * @returns {object}
  */
 const makeReaderExoFromAsyncIterable = iterable => {
-  /** @type {AsyncIterator<Uint8Array> | null} */
-  let iterator = null;
-  if (iterable !== undefined && iterable !== null) {
-    iterator = iterable[Symbol.asyncIterator]();
+  if (iterable === undefined || iterable === null) {
+    // Empty stream: an iterable producing no chunks.
+    return bytesReaderFromIterator([]);
   }
-  return makeExo('SandboxReader', AsyncReaderInterface, {
-    async next() {
-      await null;
-      if (iterator === null) return harden({ done: true, value: undefined });
-      const r = await iterator.next();
-      if (r.done) return harden({ done: true, value: undefined });
-      const value = r.value;
-      // Some Node streams yield Buffers; normalise to Uint8Array so
-      // downstream readers see a stable type.
-      const u8 =
-        value instanceof Uint8Array
-          ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
-          : new Uint8Array(value);
-      return harden({ done: false, value: u8 });
-    },
-    async return(value) {
-      await null;
-      if (iterator !== null && iterator.return !== undefined) {
-        const r = await iterator.return(value);
-        return harden({ done: true, value: r.value });
-      }
-      return harden({ done: true, value: undefined });
-    },
-    async throw(error) {
-      await null;
-      if (iterator !== null && iterator.throw !== undefined) {
-        return iterator.throw(error);
-      }
-      throw error;
-    },
-  });
+  // Normalise Buffer chunks to plain Uint8Array views so downstream
+  // readers see a stable type irrespective of the driver's allocator.
+  /** @returns {AsyncGenerator<Uint8Array>} */
+  const normalisedIterator = (async function* normalise() {
+    for await (const value of iterable) {
+      yield value instanceof Uint8Array
+        ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+        : new Uint8Array(value);
+    }
+  })();
+  return bytesReaderFromIterator(normalisedIterator);
 };
 harden(makeReaderExoFromAsyncIterable);
 
@@ -312,11 +293,11 @@ export const makeSandboxFactory = ({ drivers, scratchProvider }) => {
         r => harden({ ok: /** @type {const} */ (true), value: r }),
         e => harden({ ok: /** @type {const} */ (false), error: e }),
       );
-      if (result.ok) {
+      if (result.ok === true) {
         probes.push(harden({ name: driver.name, ...result.value }));
       } else {
-        const reason =
-          /** @type {Error} */ (result.error).message || String(result.error);
+        const err = /** @type {{ error: any }} */ (result).error;
+        const reason = /** @type {Error} */ (err).message || String(err);
         probes.push(harden({ name: driver.name, available: false, reason }));
       }
     }

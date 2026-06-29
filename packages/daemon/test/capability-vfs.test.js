@@ -1,6 +1,7 @@
 // @ts-check
 
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -21,6 +22,7 @@ const setup = async t => {
     'Hello, world!',
     'utf-8',
   );
+  await fs.promises.writeFile(path.join(tmpDir, 'utf8.txt'), 'Aé𐐷Z', 'utf-8');
   await fs.promises.mkdir(path.join(tmpDir, 'src'), { recursive: true });
   await fs.promises.writeFile(
     path.join(tmpDir, 'src', 'main.js'),
@@ -32,44 +34,101 @@ const setup = async t => {
     await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
 
-  const filePowers = /** @type {import('../src/types.js').FilePowers} */ (
-    /** @type {unknown} */ ({
-      readDirectory: dir => fs.promises.readdir(dir),
-      readFileText: p => fs.promises.readFile(p, 'utf-8'),
-      writeFileText: (p, c) => fs.promises.writeFile(p, c, 'utf-8'),
-      makePath: async p => {
-        await fs.promises.mkdir(p, { recursive: true });
-      },
-      removePath: p => fs.promises.rm(p, { recursive: true, force: true }),
-      renamePath: (a, b) => fs.promises.rename(a, b),
-      joinPath: (...parts) => path.join(...parts),
-      realPath: p => fs.promises.realpath(p),
-      exists: async p => {
-        try {
-          await fs.promises.access(p);
-          return true;
-        } catch {
-          return false;
+  /** @type {import('../src/types.js').FilePowers} */
+  const filePowers = {
+    readDirectory: dir => fs.promises.readdir(dir),
+    readFileText: p => fs.promises.readFile(p, 'utf-8'),
+    readFileBytes: async p => new Uint8Array(await fs.promises.readFile(p)),
+    readFile: async p => new Uint8Array(await fs.promises.readFile(p)),
+    maybeReadFile: async p => {
+      try {
+        return new Uint8Array(await fs.promises.readFile(p));
+      } catch (err) {
+        if (/** @type {NodeJS.ErrnoException} */ (err).code === 'ENOENT') {
+          return undefined;
         }
-      },
-      isDirectory: async p => {
-        try {
-          const stat = await fs.promises.stat(p);
-          return stat.isDirectory();
-        } catch {
-          return false;
+        throw err;
+      }
+    },
+    maybeReadFileText: async p => {
+      try {
+        return await fs.promises.readFile(p, 'utf-8');
+      } catch (err) {
+        if (/** @type {NodeJS.ErrnoException} */ (err).code === 'ENOENT') {
+          return undefined;
         }
-      },
-      makeFileReader: _p => {
-        throw new Error('not implemented');
-      },
-      makeFileWriter: _p => {
-        throw new Error('not implemented');
-      },
-    })
-  );
+        throw err;
+      }
+    },
+    writeFileText: (p, c) => fs.promises.writeFile(p, c, 'utf-8'),
+    appendFileText: (p, c) => fs.promises.appendFile(p, c, 'utf-8'),
+    readFileRange: async (p, offset, length) => {
+      const handle = await fs.promises.open(p, 'r');
+      try {
+        const buffer = new Uint8Array(length);
+        const { bytesRead } = await handle.read(buffer, 0, length, offset);
+        return new Uint8Array(buffer.subarray(0, bytesRead));
+      } finally {
+        await handle.close();
+      }
+    },
+    sha256: async p =>
+      crypto
+        .createHash('sha256')
+        .update(await fs.promises.readFile(p))
+        .digest('hex'),
+    makePath: async p => {
+      await fs.promises.mkdir(p, { recursive: true });
+    },
+    removePath: p => fs.promises.rm(p, { force: true }),
+    removeDirectory: p => fs.promises.rmdir(p),
+    renamePath: (a, b) => fs.promises.rename(a, b),
+    joinPath: (...parts) => path.join(...parts),
+    realPath: p => fs.promises.realpath(p),
+    pathIdentity: async p => {
+      const stat = await fs.promises.stat(p);
+      return `${stat.dev}:${stat.ino}`;
+    },
+    statPath: async p => {
+      const stat = await fs.promises.lstat(p, { bigint: true });
+      return harden({
+        kind: /** @type {'directory' | 'file' | 'symlink'} */ (
+          stat.isDirectory()
+            ? 'directory'
+            : stat.isSymbolicLink()
+              ? 'symlink'
+              : 'file'
+        ),
+        size: stat.size,
+        mtime: stat.mtimeNs,
+        atime: stat.atimeNs,
+      });
+    },
+    exists: async p => {
+      try {
+        await fs.promises.access(p);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    isDirectory: async p => {
+      try {
+        const stat = await fs.promises.stat(p);
+        return stat.isDirectory();
+      } catch {
+        return false;
+      }
+    },
+    makeFileReader: _p => {
+      throw new Error('not implemented');
+    },
+    makeFileWriter: _p => {
+      throw new Error('not implemented');
+    },
+  };
 
-  const { mount } = makeMount({
+  const mount = makeMount({
     rootPath: tmpDir,
     readOnly: false,
     filePowers,
@@ -106,7 +165,10 @@ test('stat returns file info', async t => {
   const { vfs } = await setup(t);
   const fileStat = await vfs.stat('hello.txt');
   t.is(fileStat.type, 'file');
-  t.true(fileStat.size > 0);
+  t.is(fileStat.size, new TextEncoder().encode('Hello, world!').byteLength);
+
+  const utf8Stat = await vfs.stat('utf8.txt');
+  t.is(utf8Stat.size, new TextEncoder().encode('Aé𐐷Z').byteLength);
 
   const dirStat = await vfs.stat('src');
   t.is(dirStat.type, 'directory');
@@ -134,11 +196,43 @@ test('mkdir recursive returns false for existing', async t => {
   t.false(created);
 });
 
+test('mkdir non-recursive rejects missing parent', async t => {
+  const { vfs } = await setup(t);
+  await t.throwsAsync(() => vfs.mkdir('missing/child'), {
+    message: /ENOENT/,
+  });
+});
+
 test('rm removes files', async t => {
   const { vfs } = await setup(t);
   await vfs.writeFile('temp.txt', 'temp');
   await vfs.rm('temp.txt');
   await t.throwsAsync(() => vfs.stat('temp.txt'), {
+    message: /ENOENT/,
+  });
+});
+
+test('rmdir removes only empty directories', async t => {
+  const { vfs } = await setup(t);
+  await vfs.mkdir('empty');
+  await vfs.rmdir('empty');
+  await t.throwsAsync(() => vfs.stat('empty'), {
+    message: /ENOENT/,
+  });
+
+  await t.throwsAsync(() => vfs.rmdir('src'), {
+    message: /ENOTEMPTY/,
+  });
+});
+
+test('rm recursive removes directory trees', async t => {
+  const { vfs } = await setup(t);
+  await t.throwsAsync(() => vfs.rm('src'), {
+    message: /EISDIR/,
+  });
+
+  await vfs.rm('src', { recursive: true });
+  await t.throwsAsync(() => vfs.stat('src'), {
     message: /ENOENT/,
   });
 });
@@ -155,6 +249,8 @@ test('readdir lists directory entries', async t => {
 
   const srcEntry = entries.find(e => e.name === 'src');
   t.is(srcEntry?.type, 'directory');
+  const helloEntry = entries.find(e => e.name === 'hello.txt');
+  t.is(helloEntry?.size, new TextEncoder().encode('Hello, world!').byteLength);
 });
 
 test('readdir recursive yields nested entries', async t => {
@@ -175,4 +271,17 @@ test('createReadStream yields file bytes', async t => {
   }
   const text = new TextDecoder().decode(chunks[0]);
   t.is(text, 'Hello, world!');
+});
+
+test('createReadStream honors byte ranges', async t => {
+  const { vfs } = await setup(t);
+  const chunks = [];
+  for await (const chunk of vfs.createReadStream('utf8.txt', {
+    start: 1,
+    end: 2,
+  })) {
+    chunks.push(chunk);
+  }
+  t.is(chunks.length, 1);
+  t.is(new TextDecoder().decode(chunks[0]), 'é');
 });

@@ -4,22 +4,46 @@
 /** @import { ERef } from '@endo/far' */
 /** @import { EndoHost } from '@endo/daemon' */
 
+/**
+ * Structural interface for the methods invoked on a channel or channel-member
+ * reference within this module.
+ *
+ * @typedef {object} ChannelMethods
+ * @property {() => Promise<string>} getProposedName
+ * @property {(proposedName: string) => Promise<unknown>} join
+ * @property {(strings: string[], names: string[], petNamesOrPaths: string[], replyTo: string | undefined, resolvedIds: string[]) => Promise<unknown>} post
+ * @property {(displayName: string) => Promise<unknown>} createInvitation
+ * @property {() => Promise<unknown>} listMessages
+ * @property {() => Promise<unknown>} getMembers
+ */
+
 import { E } from '@endo/far';
 import harden from '@endo/harden';
-import { channelComponent } from './channel-component.js';
-import { forumComponent } from './forum-component.js';
+import { fileExplorerComponent } from '@endo/space-file-explorer';
+import { idFromLocator } from '@endo/spaces-util/locator.js';
+import { channelComponent } from '@endo/space-channel/channel-component.js';
+import { forumComponent } from '@endo/space-channel/forum-component.js';
+import { microblogComponent } from '@endo/space-channel/microblog-component.js';
+import { valueComponent } from '@endo/spaces-util/value-component.js';
+import { chatBarComponent } from '@endo/spaces-util/chat-bar-component.js';
+import { createChannelHeader } from '@endo/space-channel/channel-header.js';
+// Confined outliner host wrapper (the strangler-fig swap retired the imperative
+// `@endo/space-channel/outliner-component.js`; this is now the live outliner).
+import { createShareModal } from '@endo/space-channel/share-modal.js';
 import { outlinerComponent } from './outliner-component.js';
-import { createChannelHeader } from './channel-header.js';
 import { inboxComponent } from './inbox-component.js';
 import { inventoryComponent } from './inventory-component.js';
-import { chatBarComponent } from './chat-bar-component.js';
-import { valueComponent } from './value-component.js';
+import { channelListComponent } from './channel-list.js';
 import { createSpacesGutter } from './spaces-gutter.js';
 import { inventoryGraphComponent } from './inventory-graph-component.js';
 import { whylipComponent } from './whylip-component.js';
 import { peersComponent } from './peers-component.js';
-import { createShareModal } from './share-modal.js';
-import { microblogComponent } from './microblog-component.js';
+import { flootComponent } from './floot-component.js';
+import {
+  renderProfileBar,
+  mountMentionNotifyArea,
+  mountInboxSection,
+} from './chat-chrome.js';
 
 const template = `
 <div id="spaces-gutter"></div>
@@ -91,41 +115,6 @@ const template = `
 <div id="blob-viewer-backdrop"></div>
 <div id="blob-viewer-container"></div>
 
-<div id="value-frame" class="frame">
-  <div id="value-window" class="window">
-    <div class="value-header">
-      <span id="value-title" class="value-title">Value</span>
-      <select id="value-type" class="value-type-select">
-        <option value="unknown">Unknown</option>
-        <option value="profile">Profile</option>
-        <option value="directory">Directory</option>
-        <option value="worker">Worker</option>
-        <option value="handle">Handle</option>
-        <option value="invitation">Invitation</option>
-        <option value="readable">Readable</option>
-        <option value="string">String</option>
-        <option value="number">Number</option>
-        <option value="bigint">BigInt</option>
-        <option value="boolean">Boolean</option>
-        <option value="symbol">Symbol</option>
-        <option value="null">Null</option>
-        <option value="undefined">Undefined</option>
-        <option value="copyArray">Array</option>
-        <option value="copyRecord">Record</option>
-        <option value="error">Error</option>
-        <option value="promise">Promise</option>
-        <option value="remotable">Remotable</option>
-      </select>
-    </div>
-    <div id="value-value"></div>
-    <div class="value-actions">
-      <div id="value-actions-container"></div>
-      <button id="value-enter-profile" style="display: none;">Enter Profile</button>
-      <button id="value-close">Close</button>
-    </div>
-  </div>
-</div>
-
 <div id="help-modal-container"></div>
 <div id="add-space-modal-container"></div>
 <div id="share-modal-container"></div>
@@ -133,34 +122,6 @@ const template = `
 <div id="debugger-panel-backdrop"></div>
 <div id="debugger-panel-container"></div>
 `;
-
-/**
- * @param {HTMLElement} $parent
- * @param {{ focusValue: (value: unknown, id?: string, petNamePath?: string[], messageContext?: { number: bigint, edgeName: string }) => void | Promise<void>, blurValue: () => void }} callbacks
- */
-const controlsComponent = ($parent, { focusValue, blurValue }) => {
-  const $valueFrame = /** @type {HTMLElement} */ (
-    $parent.querySelector('#value-frame')
-  );
-
-  /**
-   * @param {unknown} value
-   * @param {string} [id]
-   * @param {string[]} [petNamePath]
-   * @param {{ number: bigint, edgeName: string }} [messageContext]
-   */
-  const showValue = (value, id, petNamePath, messageContext) => {
-    $valueFrame.dataset.show = 'true';
-    focusValue(value, id, petNamePath, messageContext);
-  };
-
-  const dismissValue = () => {
-    $valueFrame.dataset.show = 'false';
-    blurValue();
-  };
-
-  return { showValue, dismissValue };
-};
 
 /**
  * Set up the resizable sidebar handle.
@@ -203,45 +164,6 @@ const resizeHandleComponent = $parent => {
   $handle.addEventListener('mousedown', onMouseDown);
   document.addEventListener('mousemove', onMouseMove);
   document.addEventListener('mouseup', onMouseUp);
-};
-
-/**
- * Render the profile breadcrumb bar.
- *
- * @param {HTMLElement} $profileBar
- * @param {string[]} profilePath
- * @param {(depth: number) => void} onNavigate - Called with depth to navigate to
- */
-const renderProfileBar = ($profileBar, profilePath, onNavigate) => {
-  $profileBar.innerHTML = '';
-
-  // Always show "Home" as the root
-  const $home = document.createElement('span');
-  $home.className = 'profile-breadcrumb';
-  if (profilePath.length === 0) {
-    $home.classList.add('current');
-  }
-  $home.textContent = 'Home';
-  $home.onclick = () => onNavigate(0);
-  $profileBar.appendChild($home);
-
-  // Add each segment of the path
-  for (let i = 0; i < profilePath.length; i += 1) {
-    const $sep = document.createElement('span');
-    $sep.className = 'profile-separator';
-    $sep.textContent = '›';
-    $profileBar.appendChild($sep);
-
-    const $crumb = document.createElement('span');
-    $crumb.className = 'profile-breadcrumb';
-    if (i === profilePath.length - 1) {
-      $crumb.classList.add('current');
-    }
-    $crumb.textContent = profilePath[i];
-    const depth = i + 1;
-    $crumb.onclick = () => onNavigate(depth);
-    $profileBar.appendChild($crumb);
-  }
 };
 
 /**
@@ -294,8 +216,34 @@ const bodyComponent = (
     return peersComponent($parent, rootPowers, profilePath, onProfileChange);
   }
 
+  if (activeSpaceInfo && activeSpaceInfo.mode === 'files') {
+    return fileExplorerComponent(
+      $parent,
+      rootPowers,
+      profilePath,
+      onProfileChange,
+    );
+  }
+
+  if (activeSpaceInfo && activeSpaceInfo.mode === 'floot') {
+    return flootComponent(
+      $parent,
+      rootPowers,
+      profilePath,
+      onProfileChange,
+      activeSpaceInfo.audioPath,
+      activeSpaceInfo.ttsPath,
+    );
+  }
+
   /** @type {{ dispose: () => void } | null} */
   let chatBarRef = null;
+
+  /** @type {{ dispose: () => void } | null} */
+  let inboxRef = null;
+
+  /** @type {{ dispose: () => void } | null} */
+  let valueRef = null;
 
   $parent.innerHTML = template;
 
@@ -438,16 +386,21 @@ const bodyComponent = (
   // Initialize components with resolved powers
   resolvePowers()
     .then(resolvedPowers => {
-      // To they who can avoid forward-references for entangled component
-      // dependency-injection, I salute you and welcome your pull requests.
-      const { showValue, dismissValue } = controlsComponent($parent, {
-        focusValue: (value, id, petNamePath, messageContext) =>
-          focusValue(value, id, petNamePath, messageContext),
-        blurValue: () => blurValue(),
-      });
+      // The value modal owns its own frame DOM, visibility, and teardown. It
+      // exposes `showValue` (used by the bodies and the chat bar) and a
+      // `dispose` we run at teardown.
+      const { showValue, dispose: disposeValue } = valueComponent(
+        $parent,
+        /** @type {ERef<EndoHost>} */ (resolvedPowers),
+        { enterProfile: enterHost },
+      );
+      valueRef = { dispose: disposeValue };
 
-      const getConversationPetName = () =>
-        activeConversation ? activeConversation.petName : null;
+      const getConversationPetName = () => {
+        if (!activeConversation) return null;
+        const { petName } = activeConversation;
+        return Array.isArray(petName) ? petName.join('/') : petName;
+      };
 
       /** @param {string} petName */
       const navigateToConversation = petName => {
@@ -463,18 +416,29 @@ const bodyComponent = (
       /** @type {unknown} */
       let currentChannelRef = null;
 
-      // Wrap showValue so channel token clicks resolve the value
-      // via lookupById before displaying, matching inbox behavior.
+      // Wrap showValue so channel token clicks resolve the value via
+      // lookupByLocator before displaying, matching inbox behavior. Channel
+      // attachments are delivered as endo:// locators, not bare ids.
       const channelShowValue = async (
         /** @type {unknown} */ value,
-        /** @type {string | undefined} */ id,
+        /** @type {string | undefined} */ locator,
         /** @type {string[] | undefined} */ petNamePath,
       ) => {
-        if (value === undefined && id) {
+        // showValue's id arg feeds reverseIdentify, which expects a bare
+        // formula id; derive it from the locator for name display.
+        let id = locator;
+        if (locator) {
+          try {
+            id = idFromLocator(locator);
+          } catch {
+            // Leave id as the locator if it can't be parsed.
+          }
+        }
+        if (value === undefined && locator) {
           try {
             const resolved = await E(
               /** @type {ERef<EndoHost>} */ (resolvedPowers),
-            ).lookupById(id);
+            ).lookupByLocator(locator);
             showValue(resolved, id, petNamePath);
           } catch {
             // Fall back to showing with undefined value
@@ -528,12 +492,16 @@ const bodyComponent = (
             // If the channel's proposed name matches our space's proposed name,
             // we're the admin and can use the channel directly.
             // Otherwise, we join as a member so our posts carry our own identity.
-            const channelCreatorName = await E(channelRef).getProposedName();
+            const channelCreatorName = await E(
+              /** @type {ChannelMethods} */ (channelRef),
+            ).getProposedName();
             const ourProposedName = activeSpaceInfo.proposedName;
 
             if (ourProposedName && ourProposedName !== channelCreatorName) {
               // We're not the admin — join to get our own member ref for posting
-              const memberRef = await E(channelRef).join(ourProposedName);
+              const memberRef = await E(
+                /** @type {ChannelMethods} */ (channelRef),
+              ).join(ourProposedName);
               currentChannelRef = memberRef;
             } else {
               // We're the admin — use the channel directly
@@ -605,7 +573,7 @@ const bodyComponent = (
             /**
              * Fork a message's heritage chain into a new channel
              * within the current persona, then navigate to it.
-             * @param {import('./channel-utils.js').ChannelMessage[]} heritageChain
+             * @param {import('@endo/space-channel/channel-utils.js').ChannelMessage[]} heritageChain
              * @param {string} previewText
              */
             const handleFork = async (heritageChain, previewText) => {
@@ -634,7 +602,7 @@ const bodyComponent = (
                 const msg = heritageChain[i];
                 const replyTo = i > 0 ? String(i - 1) : undefined;
                 // eslint-disable-next-line no-await-in-loop
-                await E(newChannelRef).post(
+                await E(/** @type {ChannelMethods} */ (newChannelRef)).post(
                   msg.strings,
                   msg.names,
                   [],
@@ -649,7 +617,7 @@ const bodyComponent = (
 
             /**
              * Open the share modal for a message's heritage chain.
-             * @param {import('./channel-utils.js').ChannelMessage[]} heritageChain
+             * @param {import('@endo/space-channel/channel-utils.js').ChannelMessage[]} heritageChain
              * @param {string} previewText
              */
             const handleShare = (heritageChain, previewText) => {
@@ -712,7 +680,7 @@ const bodyComponent = (
               showValue: channelShowValue,
               personaId: profilePath.join('/'),
               ownMemberId,
-              powers: resolvedPowers,
+              powers: /** @type {ERef<EndoHost>} */ (resolvedPowers),
               onReply: info => {
                 if (chatBarAPI) {
                   chatBarAPI.setReplyTo(
@@ -759,11 +727,11 @@ const bodyComponent = (
           {
             showValue,
             conversationId: activeConversation ? activeConversation.id : null,
-            conversationPetName: activeConversation
-              ? activeConversation.petName
-              : null,
+            conversationPetName: getConversationPetName(),
           },
-        ).catch(window.reportError);
+        ).then(api => {
+          inboxRef = api;
+        }, window.reportError);
       }
       /**
        * Switch the active channel within the current space (channel mode only).
@@ -771,6 +739,11 @@ const bodyComponent = (
        * rebuilding the entire page.
        * @param {string} channelPetName
        */
+      // Handle to the standalone channel list (set when it mounts, below), used
+      // to update the active highlight when the user switches channels.
+      /** @type {{ setActiveChannel: (name: string | null) => void } | null} */
+      let channelListAPI = null;
+
       const switchChannel = channelPetName => {
         if (!activeSpaceInfo || activeSpaceInfo.mode !== 'channel') {
           return;
@@ -821,11 +794,15 @@ const bodyComponent = (
         E(/** @type {ERef<EndoHost>} */ (resolvedPowers))
           .lookup(channelPetName)
           .then(async channelRef => {
-            const channelCreatorName = await E(channelRef).getProposedName();
+            const channelCreatorName = await E(
+              /** @type {ChannelMethods} */ (channelRef),
+            ).getProposedName();
             const ourProposedName = activeSpaceInfo.proposedName;
 
             if (ourProposedName && ourProposedName !== channelCreatorName) {
-              currentChannelRef = await E(channelRef).join(ourProposedName);
+              currentChannelRef = await E(
+                /** @type {ChannelMethods} */ (channelRef),
+              ).join(ourProposedName);
             } else {
               currentChannelRef = channelRef;
             }
@@ -889,7 +866,7 @@ const bodyComponent = (
                     : channelComponent;
             /**
              * Fork handler for switched channels.
-             * @param {import('./channel-utils.js').ChannelMessage[]} heritageChain
+             * @param {import('@endo/space-channel/channel-utils.js').ChannelMessage[]} heritageChain
              * @param {string} previewText
              */
             const handleSwitchFork = async (heritageChain, previewText) => {
@@ -915,7 +892,7 @@ const bodyComponent = (
                 const msg = heritageChain[i];
                 const replyTo = i > 0 ? String(i - 1) : undefined;
                 // eslint-disable-next-line no-await-in-loop
-                await E(newChannelRef).post(
+                await E(/** @type {ChannelMethods} */ (newChannelRef)).post(
                   msg.strings,
                   msg.names,
                   [],
@@ -929,7 +906,7 @@ const bodyComponent = (
 
             /**
              * Share handler for switched channels.
-             * @param {import('./channel-utils.js').ChannelMessage[]} heritageChain
+             * @param {import('@endo/space-channel/channel-utils.js').ChannelMessage[]} heritageChain
              * @param {string} previewText
              */
             const handleSwitchShare = (heritageChain, previewText) => {
@@ -993,7 +970,7 @@ const bodyComponent = (
               showValue: channelShowValue,
               personaId: profilePath.join('/'),
               ownMemberId: switchOwnMemberId,
-              powers: resolvedPowers,
+              powers: /** @type {ERef<EndoHost>} */ (resolvedPowers),
               onReply: info => {
                 if (chatBarAPI) {
                   chatBarAPI.setReplyTo(
@@ -1032,10 +1009,9 @@ const bodyComponent = (
             window.reportError(err);
           });
 
-        // Update active highlight in inventory
-        const $activeItems = $pets.querySelectorAll('.active-channel');
-        for (const $item of $activeItems) {
-          $item.classList.remove('active-channel');
+        // Update the channel list's active highlight live.
+        if (channelListAPI) {
+          channelListAPI.setActiveChannel(channelPetName);
         }
       };
 
@@ -1061,125 +1037,102 @@ const bodyComponent = (
         });
       }
 
-      inventoryComponent(
-        $pets,
-        $profileBar,
-        /** @type {ERef<EndoHost>} */ (resolvedPowers),
-        {
-          showValue,
-          onSelectConversation: isChannelMode
-            ? undefined
-            : (petName, formulaId) => {
-                onConversationChange({ petName, id: formulaId });
-              },
-          activeConversationPetName: activeConversation
-            ? activeConversation.petName
-            : null,
-          channelMode: isChannelMode || false,
-          onSelectChannel: isChannelMode ? switchChannel : undefined,
-          activeChannelPetName: isChannelMode
-            ? activeSpaceInfo.channelPetName || null
-            : null,
-          channelOrder: isChannelMode
-            ? activeSpaceInfo.channelOrder
-            : undefined,
-          onChannelReorder: isChannelMode
-            ? order => {
-                const spaceId = spacesGutterAPI.getActiveSpaceId();
-                if (spaceId && spaceId !== 'home') {
-                  spacesGutterAPI
-                    .updateSpace(spaceId, { channelOrder: order })
-                    .catch(
-                      /** @param {Error} err */ err => {
-                        console.warn('Failed to persist channel order:', err);
-                      },
-                    );
-                }
-              }
-            : undefined,
-          bookmarks: isChannelMode ? activeSpaceInfo.bookmarks : undefined,
-          onSelectBookmark: isChannelMode
-            ? (channelPetName, threadKey) => {
-                switchChannel(channelPetName);
-                // Focus on the thread after channel loads
-                // The channelAPI.focusOnNode is set after the view renders
-                requestAnimationFrame(() => {
-                  setTimeout(() => {
-                    const api = /** @type {any} */ ($messages).channelAPI;
-                    if (api && api.focusOnNode) {
-                      api.focusOnNode(threadKey);
-                    }
-                  }, 500);
-                });
-              }
-            : undefined,
-          onRemoveBookmark: isChannelMode
-            ? bm => {
-                const spaceId = spacesGutterAPI.getActiveSpaceId();
-                if (!spaceId || spaceId === 'home') return;
-                const existing = activeSpaceInfo.bookmarks || [];
-                const updated = existing.filter(
-                  b =>
-                    !(
-                      b.key === bm.key && b.channelPetName === bm.channelPetName
-                    ),
-                );
-                activeSpaceInfo.bookmarks = updated;
+      if (isChannelMode) {
+        // Channels render as their own standalone component (channel-list.js),
+        // entirely separate from the inventory. Channel creation lives in the
+        // New Space modal. Retitle the panel to "Channels".
+        const $title = $pets.querySelector('.inventory-title');
+        if ($title) $title.textContent = 'Channels';
+        channelListAPI = channelListComponent(
+          $petList,
+          /** @type {ERef<EndoHost>} */ (resolvedPowers),
+          {
+            onSelectChannel: switchChannel,
+            activeChannelPetName: activeSpaceInfo.channelPetName || null,
+            channelOrder: activeSpaceInfo.channelOrder,
+            onChannelReorder: order => {
+              const spaceId = spacesGutterAPI.getActiveSpaceId();
+              if (spaceId && spaceId !== 'home') {
                 spacesGutterAPI
-                  .updateSpace(spaceId, { bookmarks: updated })
+                  .updateSpace(spaceId, { channelOrder: order })
                   .catch(
                     /** @param {Error} err */ err => {
-                      console.warn('Failed to remove bookmark:', err);
+                      console.warn('Failed to persist channel order:', err);
                     },
                   );
               }
-            : undefined,
-          viewMode: isChannelMode
-            ? activeSpaceInfo.viewMode || 'chat'
-            : undefined,
-          onViewModeChange: isChannelMode
-            ? mode => {
-                activeSpaceInfo.viewMode = mode;
-                const spaceId = spacesGutterAPI.getActiveSpaceId();
-                if (spaceId && spaceId !== 'home') {
-                  spacesGutterAPI
-                    .updateSpace(spaceId, { viewMode: mode })
-                    .catch(
-                      /** @param {Error} err */ err => {
-                        console.warn('Failed to persist view mode:', err);
-                      },
-                    );
-                }
-                // Re-render with new view mode
-                switchChannel(activeSpaceInfo.channelPetName || '');
+            },
+            bookmarks: activeSpaceInfo.bookmarks,
+            onSelectBookmark: (channelPetName, threadKey) => {
+              switchChannel(channelPetName);
+              // Focus on the thread after channel loads. The
+              // channelAPI.focusOnNode is set after the view renders.
+              requestAnimationFrame(() => {
+                setTimeout(() => {
+                  const api = /** @type {any} */ ($messages).channelAPI;
+                  if (api && api.focusOnNode) {
+                    api.focusOnNode(threadKey);
+                  }
+                }, 500);
+              });
+            },
+            onRemoveBookmark: bm => {
+              const spaceId = spacesGutterAPI.getActiveSpaceId();
+              if (!spaceId || spaceId === 'home') return;
+              const existing = activeSpaceInfo.bookmarks || [];
+              const updated = existing.filter(
+                b =>
+                  !(b.key === bm.key && b.channelPetName === bm.channelPetName),
+              );
+              activeSpaceInfo.bookmarks = updated;
+              spacesGutterAPI
+                .updateSpace(spaceId, { bookmarks: updated })
+                .catch(
+                  /** @param {Error} err */ err => {
+                    console.warn('Failed to remove bookmark:', err);
+                  },
+                );
+            },
+            viewMode: activeSpaceInfo.viewMode || 'chat',
+            onViewModeChange: mode => {
+              activeSpaceInfo.viewMode = mode;
+              const spaceId = spacesGutterAPI.getActiveSpaceId();
+              if (spaceId && spaceId !== 'home') {
+                spacesGutterAPI.updateSpace(spaceId, { viewMode: mode }).catch(
+                  /** @param {Error} err */ err => {
+                    console.warn('Failed to persist view mode:', err);
+                  },
+                );
               }
-            : undefined,
-        },
-      ).catch(window.reportError);
+              // Re-render with new view mode
+              switchChannel(activeSpaceInfo.channelPetName || '');
+            },
+          },
+        );
+      } else {
+        inventoryComponent(
+          $pets,
+          $profileBar,
+          /** @type {ERef<EndoHost>} */ (resolvedPowers),
+          {
+            showValue,
+            onSelectConversation: (petName, formulaId) => {
+              onConversationChange({ petName, id: formulaId });
+            },
+            activeConversationPetName: getConversationPetName(),
+          },
+        ).catch(window.reportError);
+      }
 
-      // Add collapsible inbox section to sidebar when in channel mode
+      // Add collapsible inbox section to sidebar when in channel mode.
+      // The view is a confined Preact component (chat-chrome.js); this host
+      // retains the powers, prompts, and gutter access and bridges them in
+      // through `loadEntries` / `onAdopt` / `onJoin`.
       if (isChannelMode) {
-        const $inboxSection = document.createElement('div');
-        $inboxSection.className = 'sidebar-inbox-section';
-
-        const $inboxHeader = document.createElement('div');
-        $inboxHeader.className = 'sidebar-inbox-header';
-        $inboxHeader.innerHTML =
-          '<span class="sidebar-inbox-toggle">\u25B6</span> <span>Inbox</span>';
-
-        const $inboxBody = document.createElement('div');
-        $inboxBody.className = 'sidebar-inbox-body';
-
-        $inboxSection.appendChild($inboxHeader);
-        $inboxSection.appendChild($inboxBody);
-        $pets.insertBefore($inboxSection, $profileBar);
-
-        let inboxExpanded = false;
-        let inboxLoaded = false;
-
-        const loadInbox = async () => {
-          $inboxBody.textContent = 'Loading\u2026';
-          try {
+        const $inboxMount = document.createElement('div');
+        $pets.insertBefore($inboxMount, $profileBar);
+        mountInboxSection($inboxMount, {
+          loadEntries: async () => {
             const rawMessages = await E(
               /** @type {{ listMessages: () => Promise<unknown[]> }} */ (
                 resolvedPowers
@@ -1192,151 +1145,96 @@ const bodyComponent = (
             const withValues = messages.filter(
               m => m.type === 'package' && m.names && m.names.length > 0,
             );
-            $inboxBody.innerHTML = '';
-            if (withValues.length === 0 && messages.length === 0) {
-              $inboxBody.innerHTML =
-                '<div class="sidebar-inbox-empty">No messages yet.</div>';
-              return;
+            return {
+              totalCount: messages.length,
+              entries: withValues.map(msg => ({
+                number: msg.number,
+                text: msg.strings ? msg.strings.join('') : '',
+                names: msg.names || [],
+              })),
+            };
+          },
+          onAdopt: async (number, name) => {
+            const petName = window.prompt(
+              `Adopt \u201C${name}\u201D as:`,
+              name,
+            );
+            if (!petName) return false;
+            try {
+              await E(
+                /** @type {{ adopt: (n: bigint, edge: string, pet: string) => Promise<void> }} */ (
+                  resolvedPowers
+                ),
+              ).adopt(number, name, petName);
+              window.alert(
+                `Adopted \u201C${name}\u201D as \u201C${petName}\u201D`,
+              );
+              return true;
+            } catch (err) {
+              window.alert(
+                `Failed to adopt: ${/** @type {Error} */ (err).message}`,
+              );
+              return false;
             }
-            if (withValues.length === 0) {
-              $inboxBody.innerHTML =
-                '<div class="sidebar-inbox-empty">No adoptable values.</div>';
-              return;
+          },
+          onJoin: async (number, name) => {
+            const localName = window.prompt(
+              `Local name for this channel:`,
+              name,
+            );
+            if (!localName) return false;
+            try {
+              // Adopt the channel reference
+              await E(
+                /** @type {{ adopt: (n: bigint, edge: string, pet: string) => Promise<void> }} */ (
+                  resolvedPowers
+                ),
+              ).adopt(number, name, localName);
+
+              // Look up and join the channel
+              const channelRef = await E(
+                /** @type {ERef<EndoHost>} */ (resolvedPowers),
+              ).lookup(localName);
+              const displayName =
+                window.prompt('Your display name in this channel:', 'Guest') ||
+                'Guest';
+              await E(/** @type {ChannelMethods} */ (channelRef)).join(
+                displayName,
+              );
+
+              // Create a space config for this channel
+              const spaceIcon = '\uD83D\uDCE8'; // 📨
+              await spacesGutterAPI.addSpace({
+                name: localName,
+                icon: spaceIcon,
+                profilePath,
+                mode: 'channel',
+                channelPetName: localName,
+                proposedName: displayName,
+                viewMode: 'chat',
+              });
+              window.alert(
+                `Joined channel as \u201C${displayName}\u201D. Check the spaces gutter.`,
+              );
+              return true;
+            } catch (err) {
+              window.alert(
+                `Failed to join channel: ${/** @type {Error} */ (err).message}`,
+              );
+              return false;
             }
-            for (const msg of withValues) {
-              const $entry = document.createElement('div');
-              $entry.className = 'sidebar-inbox-entry';
-
-              const text = msg.strings ? msg.strings.join('') : '';
-              if (text) {
-                const $text = document.createElement('div');
-                $text.className = 'sidebar-inbox-text';
-                $text.textContent = text;
-                $entry.appendChild($text);
-              }
-
-              for (const name of msg.names || []) {
-                const $btnRow = document.createElement('div');
-                $btnRow.className = 'inbox-btn-row';
-
-                const $btn = document.createElement('button');
-                $btn.className = 'inbox-adopt-btn';
-                $btn.textContent = `Adopt \u201C${name}\u201D`;
-                $btn.addEventListener('click', async () => {
-                  const petName = window.prompt(
-                    `Adopt \u201C${name}\u201D as:`,
-                    name,
-                  );
-                  if (!petName) return;
-                  try {
-                    await E(
-                      /** @type {{ adopt: (n: bigint, edge: string, pet: string) => Promise<void> }} */ (
-                        resolvedPowers
-                      ),
-                    ).adopt(msg.number, name, petName);
-                    window.alert(
-                      `Adopted \u201C${name}\u201D as \u201C${petName}\u201D`,
-                    );
-                    inboxLoaded = false;
-                    await loadInbox();
-                  } catch (err) {
-                    window.alert(
-                      `Failed to adopt: ${/** @type {Error} */ (err).message}`,
-                    );
-                  }
-                });
-                $btnRow.appendChild($btn);
-
-                // "Join as Channel" button
-                const $joinBtn = document.createElement('button');
-                $joinBtn.className = 'inbox-join-channel-btn';
-                $joinBtn.textContent = 'Join as Channel';
-                $joinBtn.addEventListener('click', async () => {
-                  const localName = window.prompt(
-                    `Local name for this channel:`,
-                    name,
-                  );
-                  if (!localName) return;
-                  $joinBtn.disabled = true;
-                  $joinBtn.textContent = 'Joining\u2026';
-                  try {
-                    // Adopt the channel reference
-                    await E(
-                      /** @type {{ adopt: (n: bigint, edge: string, pet: string) => Promise<void> }} */ (
-                        resolvedPowers
-                      ),
-                    ).adopt(msg.number, name, localName);
-
-                    // Look up and join the channel
-                    const channelRef = await E(
-                      /** @type {ERef<EndoHost>} */ (resolvedPowers),
-                    ).lookup(localName);
-                    const displayName =
-                      window.prompt(
-                        'Your display name in this channel:',
-                        'Guest',
-                      ) || 'Guest';
-                    await E(channelRef).join(displayName);
-
-                    // Create a space config for this channel
-                    // eslint-disable-next-line no-unused-vars
-                    const spaceId = String(Date.now());
-                    const spaceIcon = '\uD83D\uDCE8'; // 📨
-                    const spaceName = localName;
-                    await spacesGutterAPI.addSpace({
-                      name: spaceName,
-                      icon: spaceIcon,
-                      profilePath,
-                      mode: 'channel',
-                      channelPetName: localName,
-                      proposedName: displayName,
-                      viewMode: 'chat',
-                    });
-                    window.alert(
-                      `Joined channel as \u201C${displayName}\u201D. Check the spaces gutter.`,
-                    );
-                    inboxLoaded = false;
-                    await loadInbox();
-                  } catch (err) {
-                    $joinBtn.disabled = false;
-                    $joinBtn.textContent = 'Join as Channel';
-                    window.alert(
-                      `Failed to join channel: ${/** @type {Error} */ (err).message}`,
-                    );
-                  }
-                });
-                $btnRow.appendChild($joinBtn);
-
-                $entry.appendChild($btnRow);
-              }
-              $inboxBody.appendChild($entry);
-            }
-          } catch {
-            $inboxBody.textContent = 'Unable to load inbox.';
-          }
-          inboxLoaded = true;
-        };
-
-        $inboxHeader.addEventListener('click', () => {
-          inboxExpanded = !inboxExpanded;
-          $inboxBody.style.display = inboxExpanded ? '' : 'none';
-          const $toggle = $inboxHeader.querySelector('.sidebar-inbox-toggle');
-          if ($toggle) {
-            $toggle.textContent = inboxExpanded ? '\u25BC' : '\u25B6';
-          }
-          if (inboxExpanded && !inboxLoaded) {
-            loadInbox().catch(window.reportError);
-          }
+          },
         });
-
-        // Start collapsed
-        $inboxBody.style.display = 'none';
       }
 
       // --- Mention notification area ---
+      // Confined Preact view (chat-chrome.js); the host pushes prompts and
+      // toasts through the returned controller. Pet names render as escaped
+      // text children rather than interpolated innerHTML.
       const $mentionNotifyArea = document.createElement('div');
       $mentionNotifyArea.className = 'mention-notify-area';
       $chatBar.insertBefore($mentionNotifyArea, $chatBar.firstChild);
+      const mentionNotify = mountMentionNotifyArea($mentionNotifyArea);
 
       /**
        * Build a thread recap by walking the replyTo chain from a message
@@ -1362,6 +1260,7 @@ const bodyComponent = (
         // Walk up from fromKey to root
         /** @type {Array<{ text: string, memberId: string | undefined }>} */
         const chain = [];
+        /** @type {string | undefined} */
         let current = fromKey;
         while (current) {
           const msg = byNumber.get(current);
@@ -1448,11 +1347,15 @@ const bodyComponent = (
               `Display name for ${petName} in this channel:`,
               petName,
             ) || petName;
-          await E(channelRef).createInvitation(displayName);
+          await E(/** @type {ChannelMethods} */ (channelRef)).createInvitation(
+            displayName,
+          );
         }
 
         // Build thread recap from the channel's messages
-        const rawMessages = await E(channelRef).listMessages();
+        const rawMessages = await E(
+          /** @type {ChannelMethods} */ (channelRef),
+        ).listMessages();
         const channelMessages =
           /** @type {Array<{ number: bigint, strings?: string[], names?: string[], replyTo?: string, memberId?: string }>} */ (
             rawMessages
@@ -1495,7 +1398,7 @@ const bodyComponent = (
         try {
           const memberList =
             /** @type {Array<{ memberId: string, invitedAs: string }>} */ (
-              await E(channelRef).getMembers()
+              await E(/** @type {ChannelMethods} */ (channelRef)).getMembers()
             );
           for (const m of memberList) {
             try {
@@ -1602,50 +1505,15 @@ const bodyComponent = (
        * @param {string | undefined} threadKey
        */
       const showInvitePrompt = (petName, channelPetName, threadKey) => {
-        const $prompt = document.createElement('div');
-        $prompt.className = 'mention-notify-prompt';
-        $prompt.innerHTML = `
-          <span class="mention-notify-text">\uD83D\uDCE8 Invite & notify <strong>@${petName}</strong>?</span>
-          <button type="button" class="mention-notify-yes">Yes, invite</button>
-          <button type="button" class="mention-notify-no">No</button>
-        `;
-        $mentionNotifyArea.appendChild($prompt);
-
-        const $yes = /** @type {HTMLButtonElement} */ (
-          $prompt.querySelector('.mention-notify-yes')
-        );
-        const $no = /** @type {HTMLButtonElement} */ (
-          $prompt.querySelector('.mention-notify-no')
-        );
-
-        $no.addEventListener('click', () => {
-          $prompt.remove();
-        });
-
-        $yes.addEventListener('click', async () => {
-          $yes.disabled = true;
-          $yes.textContent = 'Sending\u2026';
-          try {
-            await sendMentionNotification(
-              petName,
-              channelPetName,
-              false,
-              threadKey,
-            );
-            $prompt.innerHTML = `<span class="mention-notify-text mention-notify-sent">\u2713 Notification sent to <strong>@${petName}</strong></span>`;
-            setTimeout(() => $prompt.remove(), 3000);
-          } catch (err) {
-            $yes.disabled = false;
-            $yes.textContent = 'Yes, invite';
-            window.alert(
-              `Failed to send notification: ${/** @type {Error} */ (err).message}`,
-            );
-          }
+        mentionNotify.showInvitePrompt?.({
+          petName,
+          onYes: () =>
+            sendMentionNotification(petName, channelPetName, false, threadKey),
         });
       };
 
       /**
-       * Handle @-mention notifications after a channel post.
+       * Handle at-mention notifications after a channel post.
        * Auto-sends for already-invited members; prompts for new ones.
        * Only defined in channel mode.
        * @type {((info: { petNames: string[], edgeNames: string[], messageStrings: string[], replyTo: string | undefined }) => Promise<void>) | undefined}
@@ -1653,7 +1521,11 @@ const bodyComponent = (
       const onMentionNotify =
         isChannelMode && activeSpaceInfo.channelPetName
           ? async info => {
-              const { channelPetName } = activeSpaceInfo;
+              // This closure is only assigned when `activeSpaceInfo.channelPetName`
+              // is set (see the guard above), so it is a defined string here.
+              const channelPetName = /** @type {string} */ (
+                activeSpaceInfo.channelPetName
+              );
 
               // For each mentioned pet name, validate and notify
               for (const petName of info.petNames) {
@@ -1679,7 +1551,9 @@ const bodyComponent = (
                   if (channelRef) {
                     const members =
                       /** @type {Array<{ invitedAs: string }>} */ (
-                        await E(channelRef).getMembers()
+                        await E(
+                          /** @type {ChannelMethods} */ (channelRef),
+                        ).getMembers()
                       );
                     alreadyInvited = members.some(m => m.invitedAs === petName);
                   }
@@ -1689,11 +1563,7 @@ const bodyComponent = (
 
                 if (alreadyInvited) {
                   // Already a member — auto-send notification silently
-                  const $toast = document.createElement('div');
-                  $toast.className = 'mention-notify-prompt';
-                  $toast.innerHTML = `<span class="mention-notify-text mention-notify-sent">\u2713 Notified <strong>@${petName}</strong></span>`;
-                  $mentionNotifyArea.appendChild($toast);
-                  setTimeout(() => $toast.remove(), 3000);
+                  const dismissToast = mentionNotify.showToast?.(petName);
 
                   sendMentionNotification(
                     petName,
@@ -1705,7 +1575,7 @@ const bodyComponent = (
                       'Auto-notify failed, falling back to invite prompt:',
                       err,
                     );
-                    $toast.remove();
+                    dismissToast?.();
                     // Fall back to the invite flow so the user can retry
                     showInvitePrompt(petName, channelPetName, info.replyTo);
                   });
@@ -1732,14 +1602,6 @@ const bodyComponent = (
         },
       );
       chatBarRef = chatBarAPI;
-      const { focusValue, blurValue } = valueComponent(
-        $parent,
-        /** @type {ERef<EndoHost>} */ (resolvedPowers),
-        {
-          dismissValue,
-          enterProfile: enterHost,
-        },
-      );
     })
     .catch(window.reportError);
 
@@ -1748,18 +1610,28 @@ const bodyComponent = (
       chatBarRef.dispose();
       chatBarRef = null;
     }
+    if (inboxRef) {
+      inboxRef.dispose();
+      inboxRef = null;
+    }
+    if (valueRef) {
+      valueRef.dispose();
+      valueRef = null;
+    }
   };
 };
 
 /**
  * @typedef {object} ActiveSpaceInfo
- * @property {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers'} mode
+ * @property {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot'} mode
  * @property {string} [channelPetName]
  * @property {string} [proposedName]
  * @property {string} [whylipSystemPrompt]
- * @property {'chat' | 'forum' | 'outliner'} [viewMode] - channel view mode (default: 'chat')
+ * @property {'chat' | 'forum' | 'outliner' | 'microblog'} [viewMode] - channel view mode (default: 'chat')
  * @property {string[]} [channelOrder] - persisted channel display order
  * @property {Array<{key: string, channelPetName: string, label: string}>} [bookmarks] - bookmarked threads
+ * @property {string[]} [audioPath] - pet-name path to an audio object (floot mic input)
+ * @property {string[]} [ttsPath] - pet-name path to a text-to-speech object (floot spoken replies)
  */
 
 /**

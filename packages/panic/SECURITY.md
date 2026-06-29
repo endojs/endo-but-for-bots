@@ -8,9 +8,9 @@ be made for the most recent branch only.
 
 ## Coordinated Vulnerability Disclosure of Security Bugs
 
-SES stands for fearless cooperation, and strong security requires strong collaboration with security researchers. If you believe that you have found a security sensitive bug that should not be disclosed until a fix has been made available, we encourage you to report it. To report a bug in HardenedJS, you have several options that include: 
+SES stands for fearless cooperation, and strong security requires strong collaboration with security researchers. If you believe that you have found a security sensitive bug that should not be disclosed until a fix has been made available, we encourage you to report it. To report a bug in HardenedJS, you have several options that include:
 
-* Reporting the issue to the [Agoric HackerOne vulnerability rewards program](https://hackerone.com/agoric). 
+* Reporting the issue to the [Agoric HackerOne vulnerability rewards program](https://hackerone.com/agoric).
 
 * Sending an email to security at (@) agoric.com., encrypted or unencrypted. To encrypt, please use  @Warner’s personal GPG key  [A476E2E6 11880C98 5B3C3A39 0386E81B 11CAA07A](http://www.lothar.com/warner-gpg.html)  .
 
@@ -21,7 +21,7 @@ SES stands for fearless cooperation, and strong security requires strong collabo
 * A bug reporter can expect acknowledgment of a potential vulnerability reported through  [security@agoric.com](mailto:security@agoric.com)  within one business day of submitting a report. If an acknowledgement of an issue is not received within this time frame, especially during a weekend or holiday period, please reach out again. Any issues reported to the HackerOne program will be acknowledged within the time frames posted on the program page.
 	* The bug triage team and Agoric code maintainers are primarily located in the San Francisco Bay Area with business hours in  [Pacific Time](https://www.timeanddate.com/worldclock/usa/san-francisco) .
 
-* For the safety and security of those who depend on the code, bug reporters should avoid publicly sharing the details of a security bug on Twitter, Discord, Telegram, or in public Github issues during the coordination process.
+* For the safety and security of those who depend on the code, bug reporters should avoid publicly sharing the details of a security bug on Twitter, Discord, Telegram, or in public GitHub issues during the coordination process.
 
 * Once a vulnerability report has been received and triaged:
 	* Agoric code maintainers will confirm whether it is valid, and will provide updates to the reporter on validity of the report.

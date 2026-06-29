@@ -174,14 +174,26 @@ graph and the kernel's bind-mount surface.
 Drivers never call it — only the factory does, when assembling a
 `SliceSpec`.
 
-The current daemon does not yet ship a wiring for `provideHostPath`
-out of the box; callers grant it explicitly when constructing the
-plugin.
-The test stub in
-[`test/bwrap.test.js`](./test/bwrap.test.js) is the canonical
-example.
-A future patch will add a `provideMountHostPath`-shaped power to
-`@endo/daemon` that the entry point can pick up automatically.
+The daemon's `EndoHost` exposes both `provideScratchMount` and
+`provideHostPath`, so a caller invoking
+`endo run --UNCONFINED packages/sandbox/src/agent.js` with
+`--powers @host` (the default for `make-unconfined`) gets the full
+`SandboxPowers` surface for free — no per-caller stub is required.
+This relies on `EndoHost` being a fully privileged host-authority
+capability: any holder of one can recover host paths for
+daemon-minted top-level mounts. Do not pass `EndoHost` to code that
+should only receive an attenuated guest or narrower sandbox powers.
+The resolver lives at `packages/daemon/src/host.js` `provideHostPath`;
+it rejects any cap the daemon did not mint as a top-level `mount`
+or `scratch-mount` formula, so an arbitrary remote object that quacks
+like a mount cannot trick the factory into bind-mounting a host path.
+
+Backend-agnostic factory tests
+([`test/bwrap.test.js`](./test/bwrap.test.js),
+[`test/podman.test.js`](./test/podman.test.js)) still construct a stub
+`provideHostPath` that maps stub Mount exos to real tmpdirs; those
+stubs are unit-test fixtures that exercise the factory without
+standing up a full daemon.
 
 ## Network profiles
 
@@ -245,6 +257,93 @@ feed into `firewalld` / `ufw` / `nftables` rules on the host.
   The driver does not yet plumb the fd through to bwrap
   (placeholder in `prepareSlice`); a future patch will memfd-write
   the blob and pass `--seccomp <fd>`.
+
+## $PATH semantics
+
+A slice's `$PATH` is synthesised at slice construction so that
+unqualified commands (`echo`, `sh`, `apk`, …) resolve under the
+configured rootfs without the caller having to spell out the path
+explicitly.
+A caller-supplied `env.PATH` always wins; the synthesis only fires
+when the slice spec's `env` does not already include `PATH`.
+
+The default is constructed per-rootfs:
+
+| Rootfs       | Default `$PATH`                                                                                     |
+| ------------ | --------------------------------------------------------------------------------------------------- |
+| `host-bind`  | `/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin` plus operator-installed survivors    |
+| `mount`      | the subset of the canonical bin dirs that exist under the host rootfs, falling back to the default  |
+| `minimal`    | the canonical default                                                                               |
+| `oci`        | the image's `Config.Env` PATH (Phase 2 podman driver), falling back to the canonical default        |
+
+The canonical default is sourced from
+[`src/drivers/path.js`](./src/drivers/path.js) and is shared between
+the bwrap and podman drivers so the two backends do not drift.
+The order is the Debian / Ubuntu interactive-shell order
+(user bin dirs first, administrative dirs last) — flipped from the
+Phase 1 order, which put `/sbin` first.
+
+### Ambient `$PATH` mining (host-bind)
+
+The bwrap driver also mines the daemon's own `process.env.PATH`
+(or the constructor's `env.PATH` if one was passed) for distro-shaped
+extras such as `/opt/...`, `/snap/bin`, or
+`/var/lib/flatpak/exports/bin`.
+A survivor must:
+
+- be an absolute path,
+- not contain a `..` segment,
+- not begin with one of `/home`, `/Users`, `/root`, `/tmp`,
+  `/var/tmp`, or `/run/user` — these would either point at
+  user-private state or world-writable scratch where another local
+  user could plant a binary,
+- not be one of the canonical bin dirs already covered by the
+  default,
+- exist on disk (best-effort `fs.existsSync` probe — the
+  `--ro-bind-try` mount itself tolerates a missing path).
+
+Survivors are bind-mounted read-only into the slice and appended
+to `$PATH` in their daemon-PATH order.
+**`/home`-prefixed entries are deliberately dropped** so a daemon
+running out of an operator's home directory does not leak the home
+layout into the slice.
+
+### Caller-mount bin-dir promotion
+
+When the caller grants a mount whose `innerPath` ends in `/bin` or
+`/sbin`, or whose host directory contains a `bin/` (or `sbin/`)
+subdirectory, the inner-side bin path is appended to `$PATH`.
+These promoted entries land **after** the rootfs-derived defaults so
+a hostile caller cannot shadow `/usr/bin` with a bin dir of their
+own.
+
+### Cross-driver consistency
+
+The podman driver (Phase 2) follows the same precedence rule the
+bwrap driver uses for `host-bind`:
+
+1. caller-supplied `spec.env.PATH` always wins,
+2. otherwise the OCI image's declared `PATH` from `Config.Env`
+   (probed once via `podman image inspect --format '{{json .Config.Env}}'`
+   and cached per ref for the driver's lifetime),
+3. otherwise the shared canonical default.
+
+The injection happens at `podman create` time as `-e PATH=…`, so the
+slice's effective `PATH` is observable from the host even when the
+image declared one of its own.  The chosen value and its source
+(`env` / `image` / `fallback`) are surfaced via the `slice.help()`
+"Hardening layers in effect" report:
+
+```text
+  path: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin (source: image)
+```
+
+This makes "why can't my slice find `apk`" debuggable without having
+to spawn `printenv PATH` inside the container.
+
+The shared canonical default lives in `src/drivers/path.js` so the
+podman driver's fall-back and the bwrap driver's `minimal`-rootfs
+fall-back stay aligned.
 
 ## Hardening layers
 
@@ -326,8 +425,13 @@ npx corepack yarn lint
 ```
 
 The bwrap test suite uses a stub `provideHostPath` that maps a stub
-`Mount` exo to a real tmpdir, so tests can exercise mount caps
-without the daemon's full mount-resolution wiring.
+`Mount` exo to a real tmpdir, so the backend-agnostic tests can
+exercise mount caps without standing up a full daemon.  The daemon
+ships its own `provideHostPath` on `EndoHost`; the round-trip
+(`provideMount(path)` → `E(host).provideHostPath(cap)` returns the
+original path) is covered by
+`packages/daemon/test/endo.test.js` § "provideHostPath resolves Mount
+caps to host paths".
 
 ## Phase 1.5 status notes
 

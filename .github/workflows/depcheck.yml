@@ -11,6 +11,13 @@ on:
 permissions:
   contents: read
 
+# Defense in depth against npm lifecycle scripts. This workflow does not run
+# a package install, but this block documents the posture and future-proofs
+# against additions. See designs/ci-no-npm-lifecycle.md.
+env:
+  YARN_ENABLE_SCRIPTS: 'false'
+  npm_config_ignore_scripts: 'true'
+
 # Cancel in-progress runs for the same branch when a new run is started
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -20,16 +27,17 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: 'true'
+          persist-credentials: false
 
       # without this, setup-node errors on mismatched yarn versions
       - run: corepack enable
 
-      - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: 18.x
+          node-version: 22.x
       - name: Install graphviz
         run: sudo apt install -y graphviz
 

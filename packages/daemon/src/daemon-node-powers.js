@@ -1,8 +1,10 @@
 // @ts-check
 /* global Buffer, process */
 
+import { createHash } from 'node:crypto';
 import harden from '@endo/harden';
 import { encodeHex } from '@endo/hex';
+import { bytesFromText } from '@endo/bytes/from-string.js';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makePipe } from '@endo/stream';
 import { makeNodeReader, makeNodeWriter } from '@endo/stream-node';
@@ -22,8 +24,6 @@ export { makeDaemonicPersistencePowers };
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /** @import { CapTpConnectionRegistrar, Config, CryptoPowers, DaemonWorkerFacet, DaemonicPersistencePowers, DaemonicPowers, EndoReadable, FilePowers, Formula, FormulaNumber, NetworkPowers, SocketPowers, WorkerDaemonFacet } from './types.js' */
 /** @import { DaemonDatabase } from './daemon-database.js' */
-
-const textEncoder = new TextEncoder();
 
 /**
  * @param {object} modules
@@ -220,6 +220,16 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
 
   /**
    * @param {string} path
+   * @param {string} text
+   */
+  const appendFileText = async (path, text) => {
+    await writeJobs.enqueue(async () => {
+      await fs.promises.appendFile(path, text);
+    });
+  };
+
+  /**
+   * @param {string} path
    */
   const readFileText = async path => {
     return fs.promises.readFile(path, 'utf-8');
@@ -245,6 +255,55 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
    * @returns {Promise<Uint8Array>}
    */
   const readFile = async path => fs.promises.readFile(path);
+
+  /**
+   * Binary-safe range read: returns the bytes in `[offset, offset +
+   * length)`, reading only that window from disk rather than the whole
+   * file. Returns fewer bytes when the window extends past EOF (and an
+   * empty array when `offset` is already at or beyond EOF), mirroring
+   * the in-memory `BlobRef.fetch` clamp semantics.
+   *
+   * @param {string} path
+   * @param {number} offset
+   * @param {number} length
+   * @returns {Promise<Uint8Array>}
+   */
+  const readFileRange = async (path, offset, length) => {
+    if (length <= 0) {
+      return new Uint8Array(0);
+    }
+    const handle = await fs.promises.open(path, 'r');
+    try {
+      // Clamp the request to the bytes actually available before allocating,
+      // so a huge `length` against a small file can't drive a multi-GB host
+      // allocation (the buffer stays bounded by the file size).
+      const { size } = await handle.stat();
+      const clamped = Math.min(length, Math.max(0, size - offset));
+      if (clamped <= 0) {
+        return new Uint8Array(0);
+      }
+      const buffer = new Uint8Array(clamped);
+      const { bytesRead } = await handle.read(buffer, 0, clamped, offset);
+      return buffer.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
+    }
+  };
+
+  /**
+   * Content hash of a file: the hex sha256 of its current bytes. The `hash`
+   * half of a content-addressed `getInfo()` triple for a *live* file (recomputed
+   * on each call, since the file may change).
+   *
+   * @param {string} path
+   * @returns {Promise<string>}
+   */
+  const sha256 = async path =>
+    encodeHex(
+      createHash('sha256')
+        .update(await readFile(path))
+        .digest(),
+    );
 
   /**
    * Binary-safe whole-file read that returns `undefined` when the
@@ -301,6 +360,18 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
     });
   };
 
+  /**
+   * Recursively remove a directory and its contents.  Idempotent:
+   * removing a missing directory is not an error.
+   *
+   * @param {string} path
+   */
+  const removeDirectory = async path => {
+    await writeJobs.enqueue(async () => {
+      return fs.promises.rm(path, { force: true, recursive: true });
+    });
+  };
+
   const renamePath = async (source, target) => {
     await writeJobs.enqueue(async () => {
       return fs.promises.rename(source, target);
@@ -323,6 +394,50 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
   };
 
   /** @param {string} path */
+  const statPath = async path => {
+    // `bigint: true` yields `size` / `mtimeNs` / `atimeNs` as bigint
+    // nanoseconds, matching the extended `Stat` shape (size: bigint,
+    // mtime/atime: bigint ns) — see designs/fs-interface-consolidation.md.
+    const stat = await fs.promises.lstat(path, { bigint: true });
+    const kind = /** @type {'directory' | 'file' | 'symlink'} */ (
+      stat.isDirectory()
+        ? 'directory'
+        : stat.isSymbolicLink()
+          ? 'symlink'
+          : 'file'
+    );
+    return harden({
+      kind,
+      size: stat.size,
+      mtime: stat.mtimeNs,
+      atime: stat.atimeNs,
+    });
+  };
+
+  /**
+   * Stable filesystem identity for a path, used as a content-store
+   * key.  Returns `<dev>:<ino>` from `stat()` (which follows symlinks
+   * intentionally — two symlinks to the same regular file should
+   * share an identity).
+   *
+   * Unix-targeted: `dev`/`ino` are the POSIX device and inode pair
+   * and are stable for the lifetime of the underlying inode on
+   * Linux/macOS.  On Windows, Node's `fs.Stats.ino` is derived from
+   * the NTFS file index (a 64-bit identifier that may collide across
+   * volumes and is not always stable across renames); Windows
+   * portability would need a different identity scheme (e.g.
+   * `GetFileInformationByHandleEx`'s `FILE_ID_INFO`).  The daemon is
+   * Unix-only today; this comment is the bookmark for a future
+   * Windows port.
+   *
+   * @param {string} path
+   */
+  const pathIdentity = async path => {
+    const stat = await fs.promises.stat(path);
+    return `${stat.dev}:${stat.ino}`;
+  };
+
+  /** @param {string} path */
   const exists = async path => {
     try {
       await fs.promises.access(path);
@@ -336,17 +451,23 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
     makeFileReader,
     makeFileWriter,
     writeFileText,
+    appendFileText,
     readFileText,
     readFileBytes,
     readFile,
+    readFileRange,
+    sha256,
     maybeReadFile,
     maybeReadFileText,
     readDirectory,
     makePath,
     joinPath,
     removePath,
+    removeDirectory,
     renamePath,
     realPath,
+    pathIdentity,
+    statPath,
     isDirectory,
     exists,
   });
@@ -361,7 +482,7 @@ export const makeCryptoPowers = crypto => {
     const digester = crypto.createHash('sha256');
     return harden({
       update: chunk => digester.update(chunk),
-      updateText: chunk => digester.update(textEncoder.encode(chunk)),
+      updateText: chunk => digester.update(bytesFromText(chunk)),
       digestHex: () => encodeHex(digester.digest()),
     });
   };
@@ -405,7 +526,7 @@ export const makeCryptoPowers = crypto => {
     new Promise((resolve, reject) =>
       crypto.generateKeyPair(
         'ed25519',
-        /** @type {import('crypto').ED25519KeyPairKeyObjectOptions} */ ({}),
+        {},
         (err, publicKeyObject, privateKeyObject) => {
           if (err) {
             reject(err);

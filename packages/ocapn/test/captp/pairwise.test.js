@@ -50,7 +50,7 @@ test('makeSlot - creates object slot with remote flag', t => {
 });
 
 test('makeSlot - handles large position values', t => {
-  const slot = makeSlot('o', true, 9007199254740991n);
+  const slot = makeSlot('o', true, 9_007_199_254_740_991n);
   t.is(slot, /** @type {any} */ ('o+9007199254740991'));
 });
 
@@ -96,7 +96,7 @@ test('parseSlot - parses large position values', t => {
   t.deepEqual(result, {
     type: 'o',
     isLocal: true,
-    position: 9007199254740991n,
+    position: 9_007_199_254_740_991n,
   });
 });
 
@@ -916,10 +916,10 @@ test('makePairwiseTable - getSlotForValue returns undefined for primitives', t =
   const table = makeTestTable();
 
   // Primitives can't be used as WeakMap keys, so should return undefined
-  t.is(table.getSlotForValue(/** @type {any} */ (42)), undefined);
-  t.is(table.getSlotForValue(/** @type {any} */ ('string')), undefined);
-  t.is(table.getSlotForValue(/** @type {any} */ (null)), undefined);
-  t.is(table.getSlotForValue(/** @type {any} */ (undefined)), undefined);
+  t.is(table.getSlotForValue(42), undefined);
+  t.is(table.getSlotForValue('string'), undefined);
+  t.is(table.getSlotForValue(null), undefined);
+  t.is(table.getSlotForValue(undefined), undefined);
 });
 
 test('makePairwiseTable - refcount accumulates across multiple commit cycles', t => {

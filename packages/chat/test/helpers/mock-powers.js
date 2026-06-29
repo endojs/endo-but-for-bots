@@ -2,8 +2,10 @@
 
 /** @import { ERef } from '@endo/far' */
 /** @import { EndoHost } from '@endo/daemon' */
+/** @import { PassableReader } from '@endo/exo-stream' */
 
 import { Far } from '@endo/far';
+import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { makePromiseKit } from '@endo/promise-kit';
 
 /**
@@ -11,6 +13,10 @@ import { makePromiseKit } from '@endo/promise-kit';
  * @property {string[]} [names] - Initial pet names
  * @property {Map<string, unknown>} [values] - Pet name to value mapping
  * @property {Map<string, string>} [ids] - Pet name to id mapping
+ * @property {Map<string, string>} [locators] - Pet name to locator URL mapping
+ *   (e.g. "endo://?type=directory&number=...").
+ *   inventoryComponent calls locate() to probe formula type for type badges
+ *   and hub-gating; absent entries return undefined (immutable / non-locatable).
  */
 
 /**
@@ -20,6 +26,10 @@ import { makePromiseKit } from '@endo/promise-kit';
  * @property {(name: string) => void} removeName - Remove a pet name
  * @property {(name: string, value: unknown, id?: string) => void} setValue
  * @property {Array<{ to: string, strings: string[], edgeNames: string[], petNames: string[] }>} sentMessages
+ * @property {Array<{ method: string, args: unknown[] }>} calls - Record of
+ *   every method invocation on the mock; the inventory-component tests assert
+ *   on the shape of cancel / copy / move calls to pin the path-argument
+ *   contract.
  */
 
 /**
@@ -33,6 +43,7 @@ export const makeMockPowers = ({
   names: initialNames = [],
   values = new Map(),
   ids = new Map(),
+  locators = new Map(),
 } = {}) => {
   // Make a mutable copy of names
   const names = [...initialNames];
@@ -42,6 +53,9 @@ export const makeMockPowers = ({
 
   /** @type {Array<{ to: string, strings: string[], edgeNames: string[], petNames: string[] }>} */
   const sentMessages = [];
+
+  /** @type {Array<{ method: string, args: unknown[] }>} */
+  const calls = [];
 
   /**
    * Create an async iterator that yields initial names then waits for changes.
@@ -121,6 +135,7 @@ export const makeMockPowers = ({
       } else {
         throw new Error(`Invalid path: ${pathOrFirst}`);
       }
+      calls.push({ method: 'lookup', args: [path] });
       const key = path.join('/');
       if (!values.has(key)) {
         throw new Error(`Not found: ${key}`);
@@ -134,16 +149,105 @@ export const makeMockPowers = ({
      * @returns {string | undefined}
      */
     identify(...path) {
+      calls.push({ method: 'identify', args: path });
       const key = path.join('/');
       return ids.get(key);
     },
 
     /**
-     * Follow name changes as an async iterator.
-     * @returns {AsyncIterator<{ add: string } | { remove: string }>}
+     * Get the locator URL for a pet name path. inventoryComponent uses the
+     * locator's `type` query parameter to decide whether to show a type
+     * badge and whether the item is a drop-accepting hub.
+     * @param  {...string} path
+     * @returns {string | undefined}
+     */
+    locate(...path) {
+      calls.push({ method: 'locate', args: path });
+      const key = path.join('/');
+      return locators.get(key);
+    },
+
+    /**
+     * Cancel an incarnation by pet name or path. The real EndoHost.cancel
+     * takes a single name-or-path argument plus an optional Error reason.
+     * @param {string | string[]} petNameOrPath
+     * @param {Error} [reason]
+     */
+    cancel(petNameOrPath, reason) {
+      calls.push({ method: 'cancel', args: [petNameOrPath, reason] });
+    },
+
+    /**
+     * Copy (alias) an item from one path to another. Real shape is
+     * copy(fromPath, toPath).
+     * @param {string[]} from
+     * @param {string[]} to
+     */
+    copy(from, to) {
+      calls.push({ method: 'copy', args: [from, to] });
+    },
+
+    /**
+     * Atomically move an item from one path to another. Real shape is
+     * move(fromPath, toPath).
+     * @param {string[]} from
+     * @param {string[]} to
+     */
+    move(from, to) {
+      calls.push({ method: 'move', args: [from, to] });
+    },
+
+    /**
+     * Remove a pet name from this host. inventoryComponent calls this via
+     * its $remove button.
+     * @param  {...string} path
+     */
+    remove(...path) {
+      calls.push({ method: 'remove', args: path });
+      const key = path.join('/');
+      values.delete(key);
+      const idx = names.indexOf(key);
+      if (idx !== -1) {
+        names.splice(idx, 1);
+        for (const resolve of nameChangeResolvers) {
+          resolve({ remove: key });
+        }
+      }
+    },
+
+    /**
+     * Report the method names this mock supports. inventoryComponent uses
+     * __getMethodNames__ during expansion to decide whether a target is a
+     * NameHub (followNameChanges present) or a static tree (list present).
+     * @returns {string[]}
+     */
+    // eslint-disable-next-line no-underscore-dangle
+    __getMethodNames__() {
+      return [
+        'list',
+        'lookup',
+        'identify',
+        'locate',
+        'cancel',
+        'copy',
+        'move',
+        'remove',
+        'followNameChanges',
+        'send',
+        'storeValue',
+        'reverseIdentify',
+        '__getMethodNames__',
+      ];
+    },
+
+    /**
+     * Follow name changes as a passable reader stream. `readerFromIterator`
+     * returns a `PassableReader` (the async-iterable/reader wire shape), not a
+     * bare `AsyncIterator`, so annotate the return as the reader type.
+     * @returns {PassableReader<{ add: string } | { remove: string }>}
      */
     followNameChanges() {
-      return makeNameChangesIterator();
+      return readerFromIterator(makeNameChangesIterator());
     },
 
     /**
@@ -198,6 +302,7 @@ export const makeMockPowers = ({
     // Cast via unknown since mock doesn't implement full EndoHost interface
     powers: typedPowers,
     sentMessages,
+    calls,
 
     addName(name) {
       if (!names.includes(name)) {
