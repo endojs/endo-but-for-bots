@@ -173,10 +173,10 @@ test('register rejects a replay of the same nonce', async t => {
 });
 
 test('register rejects an expired challenge', async t => {
-  const { clock, handle } = stand({ ttlMs: 1_000 });
+  const { clock, handle } = stand({ ttlMs: 1000 });
   const kp = await generateNodeEd25519Keypair();
   const issued = await E(handle.bootstrap).challenge();
-  clock.advance(2_000);
+  clock.advance(2000);
   const signature = kp.sign(issued.hashedNonce);
   await t.throwsAsync(
     () =>

@@ -40,7 +40,7 @@ import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 
 import { makeNonceRegistry, NONCE_BYTE_LENGTH } from './proof-of-possession.js';
 
-/** @import { AppsNameHub } from './vhost.js' */
+/** @import { AppsNameHub } from './types.js' */
 /** @import { CryptoPowers, ClockPowers, ChallengeIssued } from './proof-of-possession.js' */
 
 /**
@@ -66,7 +66,6 @@ const RegistrationInterface = M.interface('GatewayRegistration', {
   listWeblets: M.call().returns(M.promise()),
   listPublicKeys: M.call().returns(M.promise()),
 });
-harden(RegistrationInterface);
 
 const GatewayBootstrapInterface = M.interface('GatewayBootstrap', {
   challenge: M.call().returns(M.promise()),
@@ -75,7 +74,6 @@ const GatewayBootstrapInterface = M.interface('GatewayBootstrap', {
   getBindAddress: M.call().returns(M.promise()),
   getApps: M.call().returns(M.promise()),
 });
-harden(GatewayBootstrapInterface);
 
 /**
  * @typedef {object} ChallengePayload The shape returned to a caller

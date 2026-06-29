@@ -146,7 +146,7 @@ export const makeNodeCryptoPowers = () => {
           keyObject,
           asNodeBytes(signature),
         );
-      } catch (err) {
+      } catch (_err) {
         // The bare catch covers every emissible class, including
         // RangeError (which `crypto.verify` can raise at any time
         // on OOM): the contract says we return false rather than
