@@ -79,6 +79,7 @@ let pendingChat = _hashParams.get('chat') || null;
 const pendingShare = _hashParams.get('chatshare') || null; // Feature B: opened via a chat-share link
 const pendingMinimizeApp = _hashParams.get('minimize-app') || null; // handoff from /apps/<name> → minimize into a fresh chat (cap restored from localStorage)
 const pendingForkToken = _hashParams.get('fork') || null; // a shared FORK link (#fork=<token>): open it inline so the recipient can use, adopt + re-share
+let pendingInbox = location.hash === '#inbox' || _hashParams.has('inbox'); // #inbox deep-link (a notification with no chat thread → open the 🔔 inbox)
 // A pasted link becomes an inline widget card (embedSiteInline) AND is staged here per-session so the next
 // send also tells the AGENT about it — otherwise the card is client-only and the agent never sees the link.
 // cap-hygiene: only the cap-STRIPPED URL is staged (the swissnum never reaches the agent/server).
@@ -4383,6 +4384,7 @@ const boot = async () => {
   if (pendingForkToken) { try { openForkInChat({ shareToken: pendingForkToken, name: 'shared fork' }, '⑂ Shared fork'); } catch (e) { console.warn('fork handoff', e); } } // #fork=<token> shared link → open inline
   setStatus('');
   refreshBadge(); setInterval(refreshBadge, 60000); // 🔔 notification badge
+  if (pendingInbox) { pendingInbox = false; try { showTab('inbox'); } catch { /* */ } } // a notification's #inbox deep-link → open the 🔔 inbox (proposals/feed live here, not a chat thread)
   loadModels(); loadAgentList(); loadProjectList(); // populate the header agent + model-provider selectors and the project menu
 };
 boot();

@@ -19,7 +19,10 @@ import os from 'node:os';
 import path from 'node:path';
 
 const CFG = path.join(os.homedir(), '.config/field-notify/config.json');
-export const DASHBOARD = 'http://100.83.80.102:8771/';
+// Where a tapped notification lands when it has no specific chat thread. The operator lives in Agent C
+// (agentc.chu — public, opens on the phone), NOT the old standalone dashboard (:8771); /#inbox opens the 🔔
+// inbox where proposals/feed items surface. Chat-specific pushes pass their own click=…/#chat=<id> instead.
+export const DASHBOARD = 'https://agentc.chu.vmkqx.com/#inbox';
 const FEED_FILE = path.join(os.homedir(), '.local/state/field-dashboard/feed.json');
 
 // Mirror a push into the dashboard feed so a pushed answer/alert is reviewable
