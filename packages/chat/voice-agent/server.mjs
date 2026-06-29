@@ -113,6 +113,10 @@ const FIELD_LOCKDOWN = process.env.FIELD_LOCKDOWN === '1';
 // SECURE CONTEXT, so the app is fronted by `tailscale serve` HTTPS on the tailnet
 // (https://archua.taildd002.ts.net) — NOT public. Cap links must use that origin.
 const BASE_URL = process.env.PUBLIC_BASE_URL || `http://100.83.80.102:${PORT}`;
+// PUSH notifications are tapped on a PHONE via the public ntfy, so their deep-links must open OFF-tailnet. Use the
+// public web origin (agentc.chu.vmkqx.com) for notification `click` links, not the tailnet BASE_URL. Falls back to
+// BASE_URL if PUBLIC_WEB_URL is unset (e.g. in tests).
+const WEB_URL = process.env.PUBLIC_WEB_URL || BASE_URL;
 const WHISPER = process.env.STT_URL || 'http://192.168.50.226:8000/v1/audio/transcriptions';
 const STT_MODEL = process.env.STT_MODEL || 'deepdml/faster-whisper-large-v3-turbo-ct2';
 const OUT = process.env.OUT_DIR || `${VOICE_STATE_DIR}/out`;
@@ -811,7 +815,7 @@ const runProjectAgent = async (project, agent) => {
       agent: agent.name, avatar: '⏰', title: `${project.name} › ${agent.name}`,
       body: answer.slice(0, 8000), // store the full run summary so the click-to-expand modal isn't truncated (the card still shows a 400-char preview)
       status: nProp ? `needs your input · ${nProp} proposal(s)` : 'run failed', note: `tools: ${(out.grantedPowers || agent.tools || []).join(', ')}`,
-      chatId: id, click: `${BASE_URL}/#chat=${id}`, // tapping the notification opens the run
+      chatId: id, click: `${WEB_URL}/#chat=${id}`, // tapping the notification opens the run
     });
   } else {
     log('scheduled-agent: no-op (nothing to report), logged only:', project.name, '›', agent.name);
@@ -1650,7 +1654,7 @@ const handler = async (req, res) => {
         if (Date.now() - startedAt > 45000 || asks.length || proposals.length || r.asking || r.blocked) {
           const summary = r.asking ? 'needs your answer' : asks.length ? `${asks.length} question(s) need you` : r.blocked ? 'blocked — needs you' : proposals.length ? `${proposals.length} action(s) to confirm` : 'finished';
           const icon = r.asking ? '❓' : r.blocked ? '🚧' : '✅';
-          notify({ title: `${icon} ${JSON.stringify(t).slice(1, 41)}… — ${summary}`, message: String(r.answer || '').slice(0, 160), click: `${BASE_URL}/#chat=${sid}`, tags: ['chat'] }).catch(() => {});
+          notify({ title: `${icon} ${JSON.stringify(t).slice(1, 41)}… — ${summary}`, message: String(r.answer || '').slice(0, 160), click: `${WEB_URL}/#chat=${sid}`, tags: ['chat'] }).catch(() => {});
         }
       } catch { /* push is best-effort */ }
       return json(res, 200, donePayload);
@@ -1904,7 +1908,7 @@ const handler = async (req, res) => {
       ]);
       const agentMsg = proposals + (powers.length ? `\n\n— To act on this, I can spin up an attenuated agent with: ${powers.join(', ')}. Approve it from this chat.` : '');
       const tr = { answer: agentMsg, toolsUsed: [], steps: [], proposedPowers: powers, proposedPrompt };
-      notify({ title: '🎙 Voice note → proposed actions', message: proposals.slice(0, 180), click: `${BASE_URL}/#chat=${id}`, tags: ['memo'] }).catch(e => log('ingest push', e.message));
+      notify({ title: '🎙 Voice note → proposed actions', message: proposals.slice(0, 180), click: `${WEB_URL}/#chat=${id}`, tags: ['memo'] }).catch(e => log('ingest push', e.message));
       const now = new Date().toISOString();
       const seed = { id, title: derivedTitle || String(title || '').trim() || t.slice(0, 48) || 'voice note', ts: Date.now(), source: String(source || 'voice'), transcript: t, proposeOnly: true, proposedPowers: powers, proposedPrompt,
         tx: [{ who: 'you', text: t }, { who: 'agent', text: agentMsg, tools: [], steps: [], proposedPowers: powers, proposedPrompt }],
