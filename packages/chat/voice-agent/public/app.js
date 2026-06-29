@@ -264,7 +264,7 @@ const showLiveProgress = text => {
       liveProgressEl = document.createElement('div');
       liveProgressEl.className = 'msg live-progress';
       liveProgressEl.style.opacity = '.85';
-      liveProgressEl.innerHTML = '<div class="who"></div><div class="body"><span class="lp-dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--acc,#7c5cff);margin-right:7px;animation:lp-pulse 1.1s ease-in-out infinite;vertical-align:middle"></span><span class="lp-text" style="color:var(--mut,#8b949e)"></span></div>';
+      liveProgressEl.innerHTML = '<div class="who"></div><div class="body" style="display:flex;align-items:flex-start;gap:7px"><span class="lp-dot" style="flex:0 0 auto;width:7px;height:7px;border-radius:50%;background:var(--acc,#7c5cff);margin-top:5px;animation:lp-pulse 1.1s ease-in-out infinite"></span><span class="lp-text" style="flex:1;min-width:0;color:var(--mut,#8b949e);overflow-wrap:anywhere;word-break:break-word;white-space:normal"></span></div>';
       const w = liveProgressEl.querySelector('.who'); if (w) w.textContent = 'agent';
       log.appendChild(liveProgressEl);
       if (!document.getElementById('lp-kf')) { const st = document.createElement('style'); st.id = 'lp-kf'; st.textContent = '@keyframes lp-pulse{0%,100%{opacity:.35;transform:scale(.8)}50%{opacity:1;transform:scale(1.15)}}'; document.head.appendChild(st); }
