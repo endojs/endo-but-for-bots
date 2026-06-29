@@ -260,10 +260,31 @@ cmd_scrub() {
   c_grn "✓ back up in PERSONAL mode — the whole box reads the encrypted volume; nothing personal is on the disk."
 }
 
-# ENCRYPTED off-site backup → friky. The volume's contents are tar'd + compressed + ENCRYPTED on THIS host
-# (gpg AES256, your passphrase) and streamed to friky, so the secrets never touch the internal disk or friky
-# in plaintext. Your passphrase (can be the LUKS one) is the ONLY way to restore — it survives losing the USB.
+# OFF-SITE backup → friky. Default `backup` images the raw LUKS PARTITION (already ciphertext under YOUR
+# passphrase) → compress → friky. No passphrase needed to MAKE it (so it's automatable); restore = write it
+# back + `cryptsetup open` with your LUKS passphrase. friky only ever holds an opaque encrypted blob.
+# `backup-file` is the alternative: a smaller gpg-encrypted tar of the decrypted contents (interactive passphrase).
 cmd_backup() {
+  command -v zstd >/dev/null || die "zstd not installed"
+  local dev; dev="$(_resolve_dev)"   # the LUKS partition for our known drive (by UUID)
+  ssh -o ConnectTimeout=8 "$FRIKY_HOST" "mkdir -p '$FRIKY_BACKUP_DIR'" >/dev/null 2>&1 || die "can't reach friky ($FRIKY_HOST)"
+  local stamp name; stamp="$(date +%Y%m%d-%H%M%S 2>/dev/null || echo manual)"; name="field-personal-$stamp.luks.zst"
+  echo; c_ylw "  imaging the ENCRYPTED partition $dev → $FRIKY_HOST:$FRIKY_BACKUP_DIR/$name"
+  c_ylw "  (ciphertext — friky cannot read it; restore needs your LUKS passphrase. ~10-15 min to read the partition.)"
+  if sudo dd if="$dev" bs=4M 2>/dev/null | zstd -T0 -3 -q \
+       | ssh "$FRIKY_HOST" "cat > '$FRIKY_BACKUP_DIR/$name.part' && mv '$FRIKY_BACKUP_DIR/$name.part' '$FRIKY_BACKUP_DIR/$name'"; then
+    local sz; sz="$(ssh "$FRIKY_HOST" "du -h '$FRIKY_BACKUP_DIR/$name' | cut -f1" 2>/dev/null || echo '?')"
+    c_grn "✓ backup complete: $FRIKY_HOST:$FRIKY_BACKUP_DIR/$name ($sz, ciphertext)"
+    ssh "$FRIKY_HOST" "ls -1t '$FRIKY_BACKUP_DIR'/field-personal-*.luks.zst 2>/dev/null | tail -n +$((BACKUP_KEEP+1)) | xargs -r rm -f" 2>/dev/null || true
+    c_ylw "  RESTORE: ssh $FRIKY_HOST cat '$FRIKY_BACKUP_DIR/$name' | zstd -d | sudo dd of=<a 100G+ partition> bs=4M ; sudo cryptsetup open <that partition> field-personal  (your LUKS passphrase)"
+  else
+    ssh "$FRIKY_HOST" "rm -f '$FRIKY_BACKUP_DIR/$name.part'" 2>/dev/null || true
+    die "backup failed (no partial kept) — re-run"
+  fi
+}
+
+# Smaller, file-level alternative: gpg-encrypted tar of the DECRYPTED volume (needs your passphrase, interactive).
+cmd_backup_file() {
   is_mounted || die "unlock the volume first: sudo field-personal unlock"
   command -v gpg >/dev/null || die "gpg not installed"; command -v zstd >/dev/null || die "zstd not installed"
   ssh -o ConnectTimeout=8 "$FRIKY_HOST" "mkdir -p '$FRIKY_BACKUP_DIR'" >/dev/null 2>&1 || die "can't reach friky ($FRIKY_HOST)"
@@ -296,5 +317,6 @@ case "${1:-status}" in
   verify)  cmd_verify ;;
   scrub)   shift; cmd_scrub "$@" ;;
   backup)  cmd_backup ;;
-  *) echo "usage: field-personal {status|init <part>|unlock|lock|migrate|verify|scrub --yes|backup}"; exit 1 ;;
+  backup-file) cmd_backup_file ;;
+  *) echo "usage: field-personal {status|init <part>|unlock|lock|migrate|verify|scrub --yes|backup|backup-file}"; exit 1 ;;
 esac
