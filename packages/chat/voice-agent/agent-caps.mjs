@@ -2799,8 +2799,20 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       if (key && (foldDocs !== undefined || foldScope !== undefined)) { const cur = getFoldDocs(key); setFoldDocs(key, { foldDocs: foldDocs !== undefined ? foldDocs : cur.foldDocs, foldScope: foldScope !== undefined ? foldScope : cur.foldScope }); }
       return harden({ ok: true, id: foldId || findSpecialist(aid)?.id });
     },
-    // resolve a published-site token → its directory (for the /sites/ host)
-    siteDir: token => sites.get(String(token || '')) || null,
+    // resolve a published-site token → its directory (for the /sites/ host). The stored path may be a LEGACY
+    // absolute home path (/home/dan/.local/state/field-agent/home/…) from before the personal data moved onto
+    // the encrypted volume; if that path no longer exists, REBASE the part after `…/field-agent/home/` onto the
+    // CURRENT HOME_BASE (which follows FIELD_PERSONAL_ROOT) so published sites keep serving across the move /
+    // bind state — instead of 404ing (which makes a phone download the error instead of opening the page).
+    siteDir: token => {
+      const stored = sites.get(String(token || '')); if (!stored) return null;
+      // PREFER the path rebased onto the CURRENT HOME_BASE (which follows FIELD_PERSONAL_ROOT/the volume) when
+      // it differs and actually exists — the stored absolute path may be a now-empty/stale home dir (the
+      // index.html lives on the volume). Only fall back to the stored path when there's nothing better.
+      const marker = '/field-agent/home/'; const i = stored.indexOf(marker);
+      if (i >= 0) { try { const rebased = path.join(HOME_BASE, stored.slice(i + marker.length)); if (rebased !== stored && fs.existsSync(rebased)) return rebased; } catch { /* */ } }
+      return stored; // legacy/bound case (stored == volume via bind), or a legible 404 if truly absent
+    },
     downloadFor,
     // Resolve an HA entity handle → a READ-ONLY entity node (or null), WITHOUT a cap. ONLY for the server's
     // component-share path: the authorization is the persisted, owner-minted, reach-verified share record

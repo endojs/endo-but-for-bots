@@ -257,17 +257,36 @@ const renderSitePreview = spec => {
   const t = document.createElement('div'); t.textContent = name; t.style.cssText = 'font-weight:600;color:var(--ink,#e6edf3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; // textContent — agent string never becomes HTML
   const u = document.createElement('div'); u.textContent = hostLabel(url); u.style.cssText = 'font-size:11px;color:var(--mut,#8b949e);overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
   meta.append(t, u);
-  const open = document.createElement('button'); open.textContent = 'Open ↗'; open.style.cssText = 'all:unset;cursor:pointer;color:var(--acc,#7c5cff);font-size:12px;font-weight:600;border:1px solid var(--edge,#30363d);border-radius:7px;padding:3px 10px';
-  head.append(ic, meta, open); wrap.appendChild(head);
+  // the FULL absolute URL (public origin) for sharing OFF this device — the path-only `url` only resolves here.
+  const shareUrl = (() => { try { return new URL(url, location.origin).href; } catch { return url; } })();
+  const btn = (label, title) => { const b = document.createElement('button'); b.textContent = label; b.title = title; b.style.cssText = 'all:unset;cursor:pointer;color:var(--acc,#7c5cff);font-size:12px;font-weight:600;border:1px solid var(--edge,#30363d);border-radius:7px;padding:3px 9px'; return b; };
+  // EXPAND: open the page full-screen + INTERACTIVE in an overlay (not just a thumbnail / a new tab) — the
+  // natural "open it as a webpage" on mobile, where a new tab + a 404 fallback used to trigger a download.
+  const expand = () => {
+    const ov = document.createElement('div'); ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.88);display:flex;flex-direction:column';
+    const bar = document.createElement('div'); bar.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 14px;color:#fff;font:600 14px system-ui';
+    const tt = document.createElement('div'); tt.textContent = name; tt.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    const ob = btn('Open ↗', 'open in a new tab'); ob.style.color = '#fff'; ob.addEventListener('click', () => { try { window.open(url, '_blank', 'noopener'); } catch { /* */ } });
+    const cl = btn('✕', 'close'); cl.style.color = '#fff'; cl.addEventListener('click', () => ov.remove());
+    bar.append(tt, ob, cl);
+    const fr = document.createElement('iframe'); fr.setAttribute('sandbox', 'allow-scripts allow-popups allow-forms'); fr.setAttribute('referrerpolicy', 'no-referrer'); fr.src = url; fr.style.cssText = 'flex:1;width:100%;border:0;background:#fff';
+    ov.append(bar, fr); ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); }); document.body.appendChild(ov);
+  };
+  // SHARE: copy the off-device link (the site token IS the access credential — the standard copy hand-off).
+  const share = async () => { try { await navigator.clipboard.writeText(shareUrl); u.textContent = '🔗 link copied'; setTimeout(() => { u.textContent = hostLabel(url); }, 1600); } catch { try { window.prompt('Copy this link', shareUrl); } catch { /* */ } } };
+  const expandBtn = btn('⤢', 'expand'); const shareBtn = btn('Share', 'copy a link to this page'); const open = btn('Open ↗', 'open in a new tab');
+  head.append(ic, meta, expandBtn, shareBtn, open); wrap.appendChild(head);
   if (url) {
     const prev = document.createElement('div'); prev.style.cssText = 'height:148px;border-top:1px solid var(--edge,#21262d);overflow:hidden;position:relative;background:#fff';
     const ifr = document.createElement('iframe'); ifr.setAttribute('sandbox', 'allow-scripts'); ifr.setAttribute('referrerpolicy', 'no-referrer'); ifr.setAttribute('loading', 'lazy');
-    // render at 2× then scale to 0.5 → a crisp thumbnail of the real page; non-interactive (clicks open it).
+    // render at 2× then scale to 0.5 → a crisp thumbnail of the real page; non-interactive (clicks expand it).
     ifr.style.cssText = 'width:200%;height:296px;border:0;transform:scale(.5);transform-origin:top left;pointer-events:none';
     ifr.src = url; prev.appendChild(ifr); wrap.appendChild(prev);
   }
-  const go = () => { try { window.open(url, '_blank', 'noopener'); } catch { /* */ } };
-  open.addEventListener('click', e => { e.stopPropagation(); go(); }); wrap.addEventListener('click', go);
+  expandBtn.addEventListener('click', e => { e.stopPropagation(); expand(); });
+  shareBtn.addEventListener('click', e => { e.stopPropagation(); share(); });
+  open.addEventListener('click', e => { e.stopPropagation(); try { window.open(url, '_blank', 'noopener'); } catch { /* */ } });
+  wrap.addEventListener('click', expand); // tapping the card opens it inline (mobile-friendly; no download fallback)
   return wrap;
 };
 
