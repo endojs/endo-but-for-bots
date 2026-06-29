@@ -25,11 +25,50 @@ const save = o => { try { fs.mkdirSync(path.dirname(DELEG_STORE), { recursive: t
 const keyFor = (cap, sid) => crypto.createHash('sha256').update(`${cap}:${sid}`).digest('hex'); // cap-hygiene: the swissnum is never stored raw
 
 // Store the user's granted delegation, keyed by a HASH of {cap,sid} (the swissnum never lands on disk).
-export const recordDelegation = ({ cap, sid, delegation, now }) => {
-  const o = load(); o[keyFor(cap, sid)] = { delegation, grantedAt: now, redeemed: 0 }; save(o);
-  return { ok: true };
+// `subscription` (optional) makes it RECURRING: { periodUusd, periodMs } = "up to periodUusd per periodMs",
+// which the server auto-draws from to keep the purse funded (so inference + hosting just keep working). The
+// on-chain ERC-7715 grant the user signed is itself periodic; this mirrors its terms for our own accounting.
+export const recordDelegation = ({ cap, sid, delegation, now, subscription = null }) => {
+  const o = load(); const k = keyFor(cap, sid); const prev = o[k] || {};
+  o[k] = {
+    delegation, grantedAt: now, redeemed: prev.redeemed || 0,
+    sub: subscription ? { periodUusd: Math.max(0, Math.round(subscription.periodUusd || 0)), periodMs: Math.max(60000, Math.round(subscription.periodMs || 0)) } : (prev.sub || null),
+    periodStart: now, periodRedeemed: 0,
+  };
+  save(o); return { ok: true };
 };
 export const hasDelegation = (cap, sid) => !!load()[keyFor(cap, sid)];
+export const getSubscription = (cap, sid) => { const r = load()[keyFor(cap, sid)]; return r && r.sub ? r.sub : null; };
+
+// Subscription state for the UI — never returns the delegation/key, only terms + how much of THIS period is left.
+export const subscriptionStatus = (cap, sid, now = Date.now()) => {
+  const rec = load()[keyFor(cap, sid)];
+  const configured = gatorConfigured();
+  if (!rec || !rec.sub) return { subscribed: false, configured };
+  let start = Date.parse(rec.periodStart || rec.grantedAt || ''); if (Number.isNaN(start)) start = now;
+  const elapsed = now - start;
+  const redeemedThisPeriod = elapsed >= rec.sub.periodMs ? 0 : (rec.periodRedeemed || 0);
+  return { subscribed: true, configured, periodUusd: rec.sub.periodUusd, periodMs: rec.sub.periodMs, periodRedeemed: redeemedThisPeriod, periodRemaining: Math.max(0, rec.sub.periodUusd - redeemedThisPeriod), resetsInMs: Math.max(0, rec.sub.periodMs - elapsed), totalRedeemed: rec.redeemed || 0 };
+};
+
+// AUTO-TOP-UP: redeem up to `uusd` from the subscription to refill the purse, RESPECTING the period cap (resets
+// each period). The caller credits the purse on ok (so the purse stays the single real-time ledger). This is
+// what makes it "simply pay": granted once, the user's turns + hosting keep flowing without a manual payment.
+export const autoTopup = async ({ cap, sid, uusd, fetchImpl = fetch, now = Date.now() }) => {
+  const o = load(); const k = keyFor(cap, sid); const rec = o[k];
+  if (!rec || !rec.delegation || !rec.sub) return { ok: false, error: 'no active subscription' };
+  let start = Date.parse(rec.periodStart || rec.grantedAt || ''); if (Number.isNaN(start)) start = now;
+  let redeemed = rec.periodRedeemed || 0;
+  if (now - start >= rec.sub.periodMs) { start = now; redeemed = 0; } // new period → reset the cap
+  const avail = Math.max(0, rec.sub.periodUusd - redeemed);
+  if (avail <= 0) return { ok: false, error: 'subscription period cap reached', resetsInMs: rec.sub.periodMs - (now - start) };
+  const want = Math.min(Math.max(0, Math.round(Number(uusd) || 0)), avail);
+  if (want <= 0) return { ok: false, error: 'nothing to redeem' };
+  const r = await redeemDelegation({ cap, sid, uusd: want, fetchImpl }); // settles on-chain (bumps rec.redeemed)
+  if (!r.ok) return r;
+  const o2 = load(); const rec2 = o2[k]; if (rec2) { rec2.periodStart = new Date(start).toISOString(); rec2.periodRedeemed = redeemed + want; save(o2); }
+  return { ok: true, uusd: want, ref: r.ref };
+};
 
 // µUSD → on-chain wei via the configured rate. Kept here so the conversion is one place.
 export const uusdToWei = (cfg, uusd) => (BigInt(Math.max(0, Math.round(Number(uusd) || 0))) * BigInt(cfg.weiPerUusd || '0'));

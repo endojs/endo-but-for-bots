@@ -73,7 +73,7 @@ import { makePurseStore } from './purse-store.mjs';
 import { makeMeteredLLM } from './meter.mjs';
 import { listTimers, cancelTimer } from '../capture/timers.mjs';
 import { loadStripeCfg, stripeConfigured, recordPending, checkoutForm, verifyWebhook, settleEvent } from './pay.mjs';
-import { gatorConfigured, recordDelegation, redeemDelegation } from './delegation-pay.mjs';
+import { gatorConfigured, recordDelegation, redeemDelegation, getSubscription, subscriptionStatus, autoTopup } from './delegation-pay.mjs';
 import { budgetLine, costOf } from './costModel.mjs';
 import { makeTollBridge } from './toll-bridge.mjs';
 import { makeLiveCells } from './live-cells.mjs';
@@ -1389,6 +1389,13 @@ const handler = async (req, res) => {
       const boundApp = runNode.isRoot ? harden({ listChats: () => appStore.listChats(cap), readChat: id => appStore.readChat(cap, id), retitle: (id, title) => appStore.retitle(cap, id, title), summary: () => appStore.summary(cap) }) : undefined;
       // the turn's purse + a `charge` that paid connectors (Phase 4) debit market-rate+commission from.
       const purse = purseFor(cap, sid);
+      // SUBSCRIPTION AUTO-TOP-UP: if this user granted a recurring MetaMask allowance and their purse is low,
+      // refill it from their subscription (within the period cap) BEFORE the turn — so inference + hosting (one
+      // unified purse) just keep flowing without a manual payment each time. Best-effort; failure → the normal
+      // exhaustion flow still applies. Threshold = the default per-chat allowance (≈ one chat's worth of headroom).
+      if (purse.balance() < defaultAllowance && getSubscription(cap, sid)) {
+        try { const tu = await autoTopup({ cap, sid, uusd: defaultAllowance }); if (tu.ok) { purse.credit(tu.uusd); log('pay', `subscription auto-top-up +${tu.uusd}µUSD for ${sid} (tx ${tu.ref})`); } } catch (e) { log('pay', 'auto-topup', e.message); }
+      }
       const charge = uusd => { const amt = Math.max(0, Math.round(Number(uusd) || 0)); if (!amt) return true; if (!purse.canAfford(amt)) return false; purse.debit(amt); return true; };
       // prepaid inference toll-bridge for THIS turn: ONE perProvider ledger, threaded into the
       // toolbox ctx so the DELEGATED (Opus) path can be metered against the SAME chat purse as callLLM.
@@ -1667,16 +1674,21 @@ const handler = async (req, res) => {
     //    (ERC-7715). The user pre-authorizes a capped, revocable spending allowance (a capability);
     //    our gator-pay settlement service redeems against it to credit the purse. ──
     if (req.method === 'POST' && u.pathname === '/pay/delegation/status') {
-      const { cap } = await jsonBody(req);
+      const { cap, sessionId } = await jsonBody(req);
       if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
-      return json(res, 200, { available: gatorConfigured() });
+      return json(res, 200, { available: gatorConfigured(), ...subscriptionStatus(cap, String(sessionId || 'anon').slice(0, 64)) });
     }
     if (req.method === 'POST' && u.pathname === '/pay/delegation/grant') {
-      const { cap, sessionId, delegation } = await jsonBody(req);
+      const { cap, sessionId, delegation, subscription } = await jsonBody(req);
       if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
       if (!delegation) return json(res, 400, { error: 'no delegation' });
-      recordDelegation({ cap, sid: String(sessionId || 'anon').slice(0, 64), delegation, now: new Date().toISOString() });
-      return json(res, 200, { ok: true });
+      // subscription {periodUsd, periodDays} → a RECURRING allowance the server auto-draws from. The on-chain
+      // grant the user signed is periodic; we mirror its terms for our own per-period accounting.
+      const sub = subscription && Number(subscription.periodUsd) > 0
+        ? { periodUusd: Math.round(Number(subscription.periodUsd) * 1e6), periodMs: Math.max(1, Number(subscription.periodDays) || 30) * 86400000 }
+        : null;
+      recordDelegation({ cap, sid: String(sessionId || 'anon').slice(0, 64), delegation, now: new Date().toISOString(), subscription: sub });
+      return json(res, 200, { ok: true, subscribed: !!sub });
     }
     if (req.method === 'POST' && u.pathname === '/pay/delegation/redeem') {
       const { cap, sessionId, amountUsd } = await jsonBody(req);

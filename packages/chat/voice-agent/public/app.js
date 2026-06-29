@@ -1092,16 +1092,13 @@ const renderExhausted = (payload, spoken) => {
   // BILLING RAIL #3 (invitees): pay on-chain with a MetaMask ERC-7715 delegation. Shown only when the
   // gator-pay settlement service is configured + the wallet supports advanced permissions.
   if (!isRoot) (async () => {
-    try { const s = await (await fetch('/pay/delegation/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap() }) })).json(); if (!s.available) return; } catch { return; }
-    const mm = document.createElement('button'); mm.className = 'confirm'; mm.textContent = '⛓️ Pay with MetaMask';
+    let s; try { s = await (await fetch('/pay/delegation/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId }) })).json(); if (!s.available) return; } catch { return; }
+    const mm = document.createElement('button'); mm.className = 'confirm'; mm.textContent = s.subscribed ? '⛓️ Top up from your subscription' : '⛓️ Subscribe with MetaMask';
     mm.onclick = async () => {
       mm.disabled = true;
       try {
-        const eth = window.ethereum;
-        if (!eth || !eth.request) throw new Error('No Ethereum wallet found — install MetaMask (advanced permissions).');
-        // ERC-7715: ask the wallet to GRANT a capped, time-boxed spending allowance (a delegation).
-        const grant = await eth.request({ method: 'wallet_grantPermissions', params: [{ expiry: Math.floor(Date.now() / 1000) + 86400, permissions: [{ type: 'native-token-stream', data: { amount: '0x2386f26fc10000' } }] }] }).catch(e => { throw new Error('Your wallet declined or lacks ERC-7715 advanced permissions (MetaMask Flask). ' + (e.message || '')); });
-        await fetch('/pay/delegation/grant', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId, delegation: grant }) });
+        // Grant the recurring allowance once (skip if already subscribed), then draw a top-up + resume.
+        if (!s.subscribed) { const g = await grantMetaMaskSubscription({ periodUsd: 10, periodDays: 30 }); if (!g.ok) throw new Error(g.error); }
         const r = await (await fetch('/pay/delegation/redeem', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId, amountUsd: 5 }) })).json();
         if (r.ok) { updateBudgetChip(r.remaining, r.allowance); await resumeIfPending(payload.sessionId); }
         else throw new Error(r.error || 'on-chain settlement failed');
@@ -1139,6 +1136,24 @@ const renderUserBubble = (text, attachments = []) => {
 // (lexically confined — it can't reach an ungranted tool). chatCap() resolves the active chat's
 // scoped cap, falling back to root for legacy/unscoped chats. ──
 const chatCap = () => (chats.find(c => c.id === sessionId) || {}).scopedCap || cap;
+// ERC-7715 SUBSCRIPTION: ask the wallet for a RECURRING (periodic) spending allowance — granted ONCE, then the
+// server auto-draws from it to keep this user's purse funded (inference + hosting) without a manual payment each
+// time. Returns {ok} | {ok:false,error}. The signed delegation is opaque + forwarded; no key touches the page.
+const grantMetaMaskSubscription = async ({ periodUsd = 10, periodDays = 30 } = {}) => {
+  const eth = window.ethereum;
+  if (!eth || !eth.request) return { ok: false, error: 'No Ethereum wallet found — install MetaMask (advanced permissions).' };
+  let grant;
+  try {
+    grant = await eth.request({ method: 'wallet_grantPermissions', params: [{
+      expiry: Math.floor(Date.now() / 1000) + Math.max(1, periodDays) * 86400 + 86400, // outlive one period
+      permissions: [{ type: 'native-token-periodic', data: { periodAmount: '0x2386f26fc10000', periodDuration: Math.max(1, periodDays) * 86400, startTime: Math.floor(Date.now() / 1000) } }], // recurring cap
+    }] });
+  } catch (e) { return { ok: false, error: 'Your wallet declined or lacks ERC-7715 recurring permissions (MetaMask Flask). ' + (e.message || '') }; }
+  try {
+    const r = await (await fetch('/pay/delegation/grant', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId, delegation: grant, subscription: { periodUsd, periodDays } }) })).json();
+    return r && r.ok ? { ok: true } : { ok: false, error: (r && r.error) || 'grant failed' };
+  } catch (e) { return { ok: false, error: e.message }; }
+};
 // Scoping gate: ask the scoper for the minimal powers, let the user approve/adjust, mint a per-chat
 // cap. Returns the scoped cap, or null if the user cancels (→ caller aborts the send).
 const scopeChat = async prompt => {
@@ -3908,15 +3923,35 @@ const renderSettingsSection = () => {
 const renderSettingsProviders = async (body) => {
   body.innerHTML = '<div class="set-h">🧠 Your inference provider</div><div class="pmeta">loading…</div>';
   let st = {}; try { st = await (await fetch('/byo/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json(); } catch {}
+  let ds = {}; try { ds = await (await fetch('/pay/delegation/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId }) })).json(); } catch {}
+  const $usd = u => '$' + (Math.round((u || 0) / 10000) / 100).toFixed(2);
+  // BILLING card: pay for ongoing inference + hosting via a recurring MetaMask (ERC-7715) allowance. Only shown
+  // when the owner has set up on-chain settlement (ds.available). Granted once → the server auto-tops-up.
+  const billingCard = !ds.available ? '' : `
+    <div class="set-sec" style="margin-top:14px"><div class="set-h">💳 Pay for usage — MetaMask subscription</div>
+      <div class="pmeta" style="line-height:1.5;margin-bottom:8px">Grant a <b>recurring</b> spending allowance once; it auto-tops-up your inference + hosting so they keep working — no manual payment each time. Revocable from your wallet anytime.</div>
+      ${ds.subscribed ? `<div class="pill" style="margin-bottom:8px">✓ Subscribed — up to ${$usd(ds.periodUusd)} / ${Math.round((ds.periodMs || 0) / 86400000)}d · ${$usd(ds.periodRemaining)} left this period</div>` : ''}
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <label class="pmeta">Up to $<input id="sub-usd" class="kit-in" style="width:64px" type="number" min="1" value="10"> per <input id="sub-days" class="kit-in" style="width:54px" type="number" min="1" value="30"> days</label>
+        <button class="go" id="sub-go">${ds.subscribed ? 'Update subscription' : 'Set up subscription'}</button><span class="pmeta" id="sub-msg"></span>
+      </div>
+    </div>`;
   body.innerHTML = `<div class="set-h">🧠 Your inference provider</div>
-    <div class="pmeta" style="line-height:1.5;margin-bottom:9px">By default your turns run on ${isRoot ? 'your' : "the owner's"} providers + prepaid allowance. Connect your OWN provider key to run <b>unlimited on your own account</b>. Your key is stored securely server-side and never shown again.</div>
+    <div class="pmeta" style="line-height:1.5;margin-bottom:9px">By default your turns run on ${isRoot ? 'your' : "the owner's"} providers + prepaid allowance. Connect your OWN provider key to run <b>unlimited on your own account</b>, or set up a subscription below to pay for usage. Your key is stored securely server-side and never shown again.</div>
     ${st.connected ? `<div class="pill" style="margin-bottom:9px">✓ Connected — <b>${esc(st.provider || '')}</b> · ${esc(st.model || '')}</div>` : ''}
     <div style="display:flex;flex-direction:column;gap:7px;max-width:400px">
       <select id="byo-prov" class="kit-in"><option value="anthropic">Anthropic (Claude)</option><option value="openrouter">OpenRouter</option></select>
       <input id="byo-model" class="kit-in" placeholder="model id — e.g. claude-sonnet-4-6 or openai/gpt-4o">
       <input id="byo-key" class="kit-in" type="password" autocomplete="off" placeholder="🔒 your API key — stored securely, never shown">
       <div style="display:flex;gap:6px;align-items:center"><button class="go" id="byo-save">${st.connected ? 'Update' : 'Connect'}</button>${st.connected ? '<button class="mini" id="byo-clear">Disconnect</button>' : ''}<span class="pmeta" id="byo-msg"></span></div>
-    </div>`;
+    </div>${billingCard}`;
+  if ($('sub-go')) $('sub-go').onclick = async () => {
+    const periodUsd = Math.max(1, Number($('sub-usd').value) || 10), periodDays = Math.max(1, Number($('sub-days').value) || 30);
+    $('sub-go').disabled = true; $('sub-msg').textContent = 'opening your wallet…';
+    const g = await grantMetaMaskSubscription({ periodUsd, periodDays });
+    $('sub-go').disabled = false; $('sub-msg').textContent = g.ok ? '✓ subscribed — usage now auto-tops-up' : ('⚠ ' + g.error);
+    if (g.ok) setTimeout(() => renderSettingsProviders(body), 800);
+  };
   if (st.provider && $('byo-prov')) $('byo-prov').value = st.provider;
   if (st.model && $('byo-model')) $('byo-model').value = st.model;
   $('byo-save').onclick = async () => {
