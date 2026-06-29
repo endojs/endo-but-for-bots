@@ -60,10 +60,13 @@ const fetchChat = async (url, headers, makeBody, id, timeoutMs) => {
   return r;
 };
 
-export const callLLM = async (messages, model = 'default', { maxTokens = 4096 } = {}) => {
+// `apiKey` (optional) OVERRIDES the operator's key for this call — the seam for "bring your own inference
+// provider": an invited user supplies their own anthropic/openrouter key and their turns run on THEIR account
+// (unmetered against the owner's purse). When absent, the operator's configured key is used as before.
+export const callLLM = async (messages, model = 'default', { maxTokens = 4096, apiKey } = {}) => {
   if (String(model).startsWith('anthropic:')) {
     const id = String(model).slice('anthropic:'.length);
-    const key = anthropicKey();
+    const key = (apiKey && String(apiKey).trim()) || anthropicKey();
     if (!key) return harden({ text: '', usage: null, error: `${id}: no ANTHROPIC_API_KEY configured — add ANTHROPIC_API_KEY to ~/.env (or the field-agent secret), then pick this model again.` });
     const system = messages.filter(m => m.role === 'system').map(m => toAnthropicText(m.content)).join('\n\n');
     const msgs = messages.filter(m => m.role !== 'system').map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: toAnthropicText(m.content) }));
@@ -79,7 +82,7 @@ export const callLLM = async (messages, model = 'default', { maxTokens = 4096 } 
   }
   if (String(model).startsWith('openrouter:')) {
     const slug = String(model).slice('openrouter:'.length);
-    const key = openrouterKey();
+    const key = (apiKey && String(apiKey).trim()) || openrouterKey();
     if (!key) return harden({ text: '', usage: null, error: `${slug}: no OpenRouter API key configured — add OPENROUTER_API_KEY to ~/.env (or the field-agent secret), then pick this model again.` });
     try {
       const r = await fetchChat(OPENROUTER, { 'content-type': 'application/json', authorization: `Bearer ${key}`, 'HTTP-Referer': 'https://archua.taildd002.ts.net', 'X-Title': 'field-agent' },

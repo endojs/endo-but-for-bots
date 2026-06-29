@@ -35,6 +35,7 @@ import { makeToolShares } from './tool-shares.mjs';
 import { makeComponentGit } from './component-git.mjs';
 import { makeComponentSync } from './component-sync.mjs';
 import { makeUserStore } from './user-store.mjs';
+import { makeByoStore } from './byo-store.mjs';
 import { makeIslandSource } from './island-source.mjs';
 import { reuseFirstPreamble } from './component-catalog.mjs';
 import { addBacklog } from './improvement-backlog.mjs';
@@ -121,6 +122,8 @@ const componentSync = makeComponentSync({ baseDir: COMPONENT_GIT_DIR, log: (...a
 // a Root pointer so each user runs their own app variant over the shared component fork-tree. cap-hygiene: the
 // user-cap is stored only as a hash. No public minting (dan's call: invite-only / Tailnet-private).
 const userStore = makeUserStore({ file: process.env.USERS_FILE || `${CONFIG_DIR}/users.json` });
+// BYO inference: a user can connect their OWN anthropic/openrouter account → their turns run unmetered on it.
+const byoStore = makeByoStore({ file: process.env.BYO_STORE || `${CONFIG_DIR}/byo-providers.json`, getSecret, storeNamedSecret });
 const islandSource = makeIslandSource({ here: HERE, componentGit }); // confined-Preact ISLANDS as versioned components (edit = rewrite client file + rebuild)
 // A tool's source as a {relpath: content} file map for the component-git store (single-file → tool.js).
 const sourceFilesOf = t => (t.files && typeof t.files === 'object' && Object.keys(t.files).length ? t.files : { 'tool.js': String(t.code || '') });
@@ -1419,6 +1422,9 @@ const handler = async (req, res) => {
       // prepaid inference toll-bridge: meter THIS chat's purse; show the agent its budget in-context.
       // (perProvider was declared above so the delegate path and callLLM share one ledger.)
       const meteredLLM = makeMeteredLLM({ callLLM, purse, perProvider });
+      // BYO INFERENCE: if this user connected their OWN provider, their turns run on THEIR key + account,
+      // UNMETERED (the owner's purse is untouched). Key is read from the vault per turn, never logged/rendered.
+      const byo = byoStore.forTurn(cap);
       // Capture the EXACT provider `messages` payload of the MOST RECENT LLM call this turn (system message +
       // alternating user/assistant turns + tool results) — the truth of what the model saw — for the { }
       // viewer. The agent loops (CodeMode), so we overwrite on each call → end on the last one. No swissnums:
@@ -1430,7 +1436,10 @@ const handler = async (req, res) => {
       };
       const agentLabel = agent && agent !== 'field-agent' ? agent : 'field-agent';
       const capturingLLM = (messages, mdl) => {
-        try { lastCtx.set(sid, { at: Date.now(), agent: agentLabel, model: String(mdl || model || 'default'), powers: [...runNode.powers], messages: (Array.isArray(messages) ? messages : []).map(m => ({ role: m.role, content: ctxText(m.content).slice(0, 12000) })) }); } catch { /* viewer is best-effort */ }
+        const effModel = byo ? byo.modelId : String(mdl || model || 'default');
+        try { lastCtx.set(sid, { at: Date.now(), agent: agentLabel, model: effModel, powers: [...runNode.powers], messages: (Array.isArray(messages) ? messages : []).map(m => ({ role: m.role, content: ctxText(m.content).slice(0, 12000) })) }); } catch { /* viewer is best-effort */ }
+        // BYO → straight to callLLM with the user's key + their provider model; the owner's purse stays untouched.
+        if (byo) return callLLM(messages, byo.modelId, { apiKey: byo.key });
         return meteredLLM(messages, mdl);
       };
       // Seed the viewer with a SYNTHESIZED provider-shaped bundle (system = persona + tool manifest, then the
@@ -1448,8 +1457,8 @@ const handler = async (req, res) => {
       let deadlineHit = false; let deadlineT = null;
       const r = await Promise.race([
         AGENT_RUNNER({
-        toolbox, manifest, userText: t, history, resumeMessages, attachments: agentAttachments, signal: ac.signal, persona: runPersona, model: String(model || 'default'),
-        llm: capturingLLM, budgetLine: budgetLine(purse.balance(), String(model || 'default')),
+        toolbox, manifest, userText: t, history, resumeMessages, attachments: agentAttachments, signal: ac.signal, persona: runPersona, model: byo ? byo.modelId : String(model || 'default'),
+        llm: capturingLLM, budgetLine: byo ? `Inference: running on YOUR OWN ${byo.provider} account (${byo.model}) — unlimited; the owner's prepaid allowance does not apply.` : budgetLine(purse.balance(), String(model || 'default')),
         takeInterjections: () => interjections.take(sid), // mid-turn re-steer: drained + folded into context at each step boundary
 
         onStep: s => {
@@ -2136,6 +2145,16 @@ const handler = async (req, res) => {
       const ring = (Array.isArray(powers) && powers.length) ? powers.filter(p => ALL_POWERS.includes(p)) : STARTER;
       const out = mintScopedCap({ powers: ring, label: label || 'guest' });
       return json(res, 200, { scopedCap: out.swiss, powers: out.powers, starter: STARTER });
+    }
+    // BYO INFERENCE: any holder of a cap connects THEIR OWN anthropic/openrouter account (key → vault, never
+    // echoed). Their turns then run on it, unmetered. /status never returns the key (only whether one is set).
+    if (req.method === 'POST' && u.pathname.startsWith('/byo')) {
+      const body = await jsonBody(req);
+      if (!nodeFor(body.cap)) return json(res, 403, { error: 'no capability' });
+      if (u.pathname === '/byo/status') return json(res, 200, byoStore.status(body.cap));
+      if (u.pathname === '/byo/set') return json(res, 200, byoStore.set(body.cap, { provider: body.provider, model: body.model, key: body.key }));
+      if (u.pathname === '/byo/clear') return json(res, 200, byoStore.clear(body.cap));
+      return json(res, 404, { error: 'unknown byo route' });
     }
     // CONNECTORS (Phase 3 Lane A): the owner wires up an API-service tool. The secret value is stored
     // in the named vault (never echoed back / never in the connector record) and injected at call time.
