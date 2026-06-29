@@ -86,6 +86,7 @@ cmd_status() {
   echo "── Plaintext personal data STILL on the internal (unencrypted) disk ──"
   local any=0
   for src in "${!MAP[@]}"; do
+    mountpoint -q "$src" 2>/dev/null && continue   # BOUND = the encrypted volume showing through, NOT a plaintext original
     if [ -e "$src" ] && [ -n "$(ls -A "$src" 2>/dev/null || true)" ]; then any=1; printf '  %-7s %s\n' "$(du -sh "$src" 2>/dev/null | cut -f1)" "$src"; fi
   done
   [ -f "$HOME_DIR/.env" ] && { any=1; printf '  %-7s %s  (host-wide — shared with other services; see checklist)\n' "$(du -sh "$HOME_DIR/.env" | cut -f1)" "$HOME_DIR/.env"; }
