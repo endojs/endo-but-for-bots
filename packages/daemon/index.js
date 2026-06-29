@@ -23,6 +23,8 @@ import { makeEndoClient } from './src/client.js';
 
 // Reexports:
 export { makeEndoClient } from './src/client.js';
+export { mapSnapshot } from './src/map-snapshot.js';
+export { makeMountReadPowers } from './src/worker-import.js';
 
 const removePath = async removalPath => {
   return fs.promises

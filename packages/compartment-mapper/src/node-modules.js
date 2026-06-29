@@ -460,6 +460,7 @@ const graphPackage = async (
   logicalPathGraph,
   {
     commonDependencyDescriptors = {},
+    dependencyLocationHook,
     log = noop,
     packageDependenciesHook,
     policy,
@@ -559,6 +560,7 @@ const graphPackage = async (
         {
           optional,
           commonDependencyDescriptors,
+          dependencyLocationHook,
           log,
           packageDependenciesHook,
           policy,
@@ -695,17 +697,21 @@ const gatherDependency = async (
   {
     optional = false,
     commonDependencyDescriptors = {},
+    dependencyLocationHook,
     log = noop,
     packageDependenciesHook,
     policy,
   } = {},
 ) => {
-  const dependency = await findPackage(
-    readDescriptor,
-    canonical,
-    packageLocation,
-    name,
-  );
+  const dependency =
+    (await dependencyLocationHook?.({
+      packageLocation,
+      dependencyName: name,
+      readDescriptor,
+      canonical,
+      log,
+    })) ??
+    (await findPackage(readDescriptor, canonical, packageLocation, name));
 
   if (dependency === undefined) {
     // allow the dependency to be missing if optional
@@ -732,6 +738,7 @@ const gatherDependency = async (
     logicalPathGraph,
     {
       commonDependencyDescriptors,
+      dependencyLocationHook,
       log,
       packageDependenciesHook,
       policy,
@@ -771,7 +778,7 @@ const graphPackages = async (
   languageOptions,
   strict,
   logicalPathGraph,
-  { log = noop, packageDependenciesHook, policy } = {},
+  { dependencyLocationHook, log = noop, packageDependenciesHook, policy } = {},
 ) => {
   const memo = create(null);
   /**
@@ -840,6 +847,7 @@ const graphPackages = async (
     logicalPathGraph,
     {
       commonDependencyDescriptors,
+      dependencyLocationHook,
       log,
       packageDependenciesHook,
       policy,
@@ -1360,6 +1368,7 @@ export const compartmentMapForNodeModules_ = async (
     unknownCanonicalNameHook,
     packageDataHook,
     packageDependenciesHook,
+    dependencyLocationHook,
     additionalLocations = [],
   } = options;
 
@@ -1399,7 +1408,7 @@ export const compartmentMapForNodeModules_ = async (
     languageOptions,
     strict,
     logicalPathGraph,
-    { log, policy, packageDependenciesHook },
+    { dependencyLocationHook, log, policy, packageDependenciesHook },
   );
 
   // Graph additional package locations that are not reachable from the entry's
@@ -1442,7 +1451,13 @@ export const compartmentMapForNodeModules_ = async (
       languageOptions,
       strict,
       logicalPathGraph,
-      { commonDependencyDescriptors: {}, log, packageDependenciesHook, policy },
+      {
+        commonDependencyDescriptors: {},
+        dependencyLocationHook,
+        log,
+        packageDependenciesHook,
+        policy,
+      },
     );
 
     if (additionalModules && graph[additionalLocation]) {
@@ -1586,3 +1601,9 @@ export const mapNodeModules = async (
  * @deprecated Use {@link mapNodeModules} instead.
  */
 export const compartmentMapForNodeModules = compartmentMapForNodeModules_;
+
+/**
+ * Lower-level package descriptor mapper for callers that provide their own
+ * dependency-location resolver instead of a physical node_modules tree.
+ */
+export const mapPackageDescriptors = compartmentMapForNodeModules_;

@@ -31,7 +31,9 @@
     "./pet-name.js": "./src/pet-name.js",
     "./type-guards.js": "./src/type-guards.js",
     "./src/interfaces.js": "./src/interfaces.js",
+    "./src/map-snapshot.js": "./src/map-snapshot.js",
     "./src/mount.js": "./src/mount.js",
+    "./src/worker-import.js": "./src/worker-import.js",
     "./src/daemon-node-powers.js": "./src/daemon-node-powers.js",
     "./package.json": "./package.json"
   },
