@@ -126,6 +126,23 @@ export const makeBuffer = ({ getToken, fetchImpl, bound } = {}) => {
     return harden({ ok: true, id: r.id });
   };
 
+  // ── BLAST: the same post to EVERY channel this cap is authorized for (Buffer is one-channel-per-createPost, so
+  //    we fan out). Per-channel try/catch → one network rejecting (e.g. text too long for Twitter) never aborts the
+  //    rest; returns a per-channel report. Honors attenuation: a bound cap blasts only its channels; a draft-only
+  //    cap blasts drafts. `channels` (optional) narrows the blast to a subset of the authorized set.
+  const blast = async ({ text, mode = 'addToQueue', dueAt, draft = false, assets = [], channels: only } = {}) => {
+    requireWrite();
+    const all = (await channels()).filter(c => !c.isDisconnected);
+    const targets = only ? all.filter(c => only.map(String).includes(String(c.id))) : all;
+    if (!targets.length) throw new Error('no connected channels to blast to');
+    const results = [];
+    for (const c of targets) {
+      try { const p = await createPost({ channelId: c.id, text, mode, dueAt, draft, assets }); results.push({ channelId: c.id, service: c.service, name: c.displayName || c.name, ok: true, id: p && p.id, status: p && p.status }); }
+      catch (e) { results.push({ channelId: c.id, service: c.service, name: c.displayName || c.name, ok: false, error: String(e && e.message || e).slice(0, 200) }); }
+    }
+    return harden({ ok: results.some(r => r.ok), mode, draft: !!draft, posted: results.filter(r => r.ok).length, failed: results.filter(r => !r.ok).length, results });
+  };
+
   // ── ATTENUATION: mint a weaker cap. You can only ever REMOVE authority (channels ∩, flags ↓). ────────────────
   const restrict = ({ channels: ch, publish, del, write } = {}) => {
     const nextChannels = ch ? (allow ? ch.filter(c => allow.has(String(c))) : ch.map(String)) : cap.channels;
@@ -137,6 +154,6 @@ export const makeBuffer = ({ getToken, fetchImpl, bound } = {}) => {
     } });
   };
 
-  return harden({ channels, posts, getPost, createPost, editPost, deletePost, restrict, orgId,
+  return harden({ channels, posts, getPost, createPost, editPost, deletePost, blast, restrict, orgId,
     rights: () => harden({ channels: cap.channels, publish: cap.publish, del: cap.del, write: cap.write }) });
 };

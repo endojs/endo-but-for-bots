@@ -70,6 +70,45 @@ test('no-delete cap: delete refuses, write still works', async () => {
   await assert.doesNotReject(() => b.createPost({ channelId: 'ch_tw', text: 'ok' }));
 });
 
+test('blast: fans out to EVERY authorized channel', async () => {
+  const calls = []; const b = mk(undefined, calls);
+  const r = await b.blast({ text: 'hello world', mode: 'shareNow' });
+  assert.equal(r.posted, 2); assert.equal(r.failed, 0);
+  assert.deepEqual(r.results.map(x => x.service).sort(), ['bluesky', 'twitter']);
+  // one createPost per channel
+  assert.equal(calls.filter(c => c.q.includes('createPost')).length, 2);
+});
+
+test('blast: a channel-bound cap only blasts its own channels', async () => {
+  const b = mk({ channels: ['ch_tw'] });
+  const r = await b.blast({ text: 'just twitter' });
+  assert.equal(r.posted, 1);
+  assert.deepEqual(r.results.map(x => x.service), ['twitter']);
+});
+
+test('blast: draft-only cap blasts DRAFTS, never publishes', async () => {
+  const b = mk({ publish: false });
+  const r = await b.blast({ text: 'x', draft: true });
+  assert.equal(r.posted, 2); assert.ok(r.results.every(x => x.status === 'draft'));
+  // without draft:true a draft-only cap's blast fails every channel (publish withheld), aborts nothing
+  const r2 = await b.blast({ text: 'x' });
+  assert.equal(r2.posted, 0); assert.equal(r2.failed, 2); assert.ok(r2.results.every(x => /draft-only/.test(x.error)));
+});
+
+test('blast: one channel failing does not abort the others (partial report)', async () => {
+  // fetch that rejects createPost for bluesky only
+  const failOne = async (url, init) => {
+    const body = JSON.parse(init.body); const q = body.query;
+    if (q.includes('createPost') && body.variables.input.channelId === 'ch_bsky') return { ok: true, status: 200, json: async () => ({ data: { createPost: { message: 'text too long' } } }) };
+    return fakeFetch()(url, init);
+  };
+  const b = makeBuffer({ getToken: () => 'T', fetchImpl: failOne });
+  const r = await b.blast({ text: 'x' });
+  assert.equal(r.posted, 1); assert.equal(r.failed, 1);
+  assert.ok(r.results.find(x => x.service === 'bluesky' && !x.ok));
+  assert.ok(r.results.find(x => x.service === 'twitter' && x.ok));
+});
+
 test('attenuation is monotonic: restrict only removes authority', async () => {
   const b = mk();
   const sub = b.restrict({ channels: ['ch_tw'], publish: false });
