@@ -90,7 +90,9 @@ import { makeCustomTools } from './custom-tools.mjs';
 import { makeToolShares } from './tool-shares.mjs';
 import { makeComponentGit } from './component-git.mjs';
 import { validateComponentSource } from './component-source.mjs';
-import { buildSystemMap } from './system-map.mjs';
+import { buildSystemMap, STARTER_RING } from './system-map.mjs';
+import { makeInvitePolicies } from './invite-policy.mjs';
+import { makeBlueskyRaindropInviter } from './bluesky-raindrop.mjs';
 import { braveSearch } from './brave-search.mjs';
 import { runResearch } from './research.mjs';
 import { getRole, roleList, localModelFor } from './agent-roles.mjs';
@@ -574,6 +576,7 @@ export const POWERS = harden({
   dietician: { label: "Drive the dietician's restaurant pipeline — scan an area, evaluate spots for Alexa's diet, refresh + publish the food guides (publishing you confirm)", verbs: ['dietScanArea', 'dietEvaluateArea', 'dietBuildMap', 'dietStatus', 'dietRefreshSite'] },
   app: { label: 'Introspect + manage your own app state — list/read/retitle every conversation (chats, voice memos, voice notes) and see an overview of asks/feed/proposals', verbs: ['listChats', 'readChat', 'retitleChat', 'appState'] },
   selfImprove: { label: '⚠️ Autonomously IMPLEMENT system improvements (FAPO-style: propose precise targets to a backlog → drain one → implement on an isolated worktree → independently verify → flag-gated auto-merge with post-merge re-verify + auto-revert)', verbs: ['improveSystem', 'proposeImprovement', 'listImprovements', 'runNextImprovement', 'listChangelog', 'revertChange'] },
+  bluesky: { label: 'Invite Bluesky users by Raindrop — read a Raindrop collection of bsky profiles, mint each a private namespace, and DM them their invite link', verbs: ['blueskyInviteStatus', 'blueskyListCollections', 'blueskyInvitePreview', 'blueskyInviteSend'] },
 });
 export const ALL_POWERS = harden(Object.keys(POWERS));
 harden(POWERS);
@@ -1470,6 +1473,19 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         const pendingProposals = [...proposals.values()].filter(p => p.status === 'pending').length;
         return { ok: true, ...s, pendingProposals, specialists: specialists.length, personaSet: !!(persona && persona.trim()) };
       } },
+
+    // ── "Invite Bluesky users by Raindrop" ───────────────────────────────────────────────────────────────────
+    // Read a Raindrop collection of bsky.app profiles → mint each person a STABLE per-user namespace → DM them
+    // their invite link. CAP HYGIENE: the invite link (which carries the swissnum) is delivered ONLY into each
+    // recipient's private DM by the module; these verbs NEVER return or render a link to the agent/LLM.
+    blueskyInviteStatus: { reversible: false, args: {}, description: 'Check the Bluesky-invite setup: whether the Raindrop token + Bluesky app-password are configured, the default delivery mode + collection, and how many people you have already invited. Use this first; it tells you exactly what (if anything) still needs to be configured.',
+      run: async () => blueskyInviter.status() },
+    blueskyListCollections: { reversible: false, args: {}, description: 'List the Raindrop collections (title + id + bookmark count) so you can pick which one holds the Bluesky profiles to invite.',
+      run: async () => { try { return { ok: true, collections: await blueskyInviter.listCollections() }; } catch (e) { return { ok: false, error: String(e?.message || e) }; } } },
+    blueskyInvitePreview: { reversible: false, args: { collection: 'string — a Raindrop collection title or numeric id (optional; uses the configured default collection if omitted)' }, description: 'DRY RUN — read the collection and report which Bluesky users WOULD be invited (deduped, marking who was already invited). Mints nothing and sends nothing. Always preview before sending.',
+      run: async ({ collection } = {}) => { try { return await blueskyInviter.preview({ collection }); } catch (e) { return { ok: false, error: String(e?.message || e) }; } } },
+    blueskyInviteSend: { reversible: false, args: { collection: 'string — Raindrop collection title/id (optional; default from config)', deliver: 'string — "dm" (private link), "mention" (public @-post, no link), or "none" (mint only); optional, default from config', limit: 'number — max people to invite this run (optional, default 50)' }, description: "LIVE — mint each Bluesky user in the collection a private namespace and deliver their invite. Idempotent: re-running skips anyone already invited and reuses their existing space. Returns counts only — invite links are delivered privately over Bluesky and are intentionally NOT shown here (cap hygiene). Preview first.",
+      run: async ({ collection, deliver, limit } = {}) => { try { return await blueskyInviter.invite({ collection, deliver, limit: limit ? Number(limit) : undefined }); } catch (e) { return { ok: false, error: String(e?.message || e) }; } } },
   });
 
   // Build the toolbox ({name → {run, abort?}}) for a given power set, scoped to
@@ -2767,6 +2783,21 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     return harden({ ok: true, swiss: rec.swiss, powers: granted, notesFolder: nf || undefined });
   };
   for (const c of scopedCaps) { try { registerScoped(c); } catch (e) { /* skip bad record */ } } // re-arm persisted scoped caps at boot
+
+  // "Invite Bluesky users by Raindrop": membership invites sourced from a Raindrop collection of bsky profiles.
+  // Each invited person gets a STABLE per-user namespace cap (via the membership seam) — the same starter ring an
+  // invitee gets. mintNamespaceCap is the real mintScopedCap, so invited caps land in the Shares panel (revocable).
+  const blueskyInvitePolicies = makeInvitePolicies({
+    file: path.join(CONFIG_DIR, 'bluesky-policies.json'),
+    mintNamespaceCap: ({ powers, label }) => { const r = mintScopedCap({ powers, label }); return { swiss: r.swiss, powers: r.powers }; },
+  });
+  const blueskyInviter = makeBlueskyRaindropInviter({
+    configFile: path.join(CONFIG_DIR, 'bluesky-raindrop.json'),
+    stateFile: path.join(CONFIG_DIR, 'bluesky-invited.json'),
+    invitePolicies: blueskyInvitePolicies,
+    ring: STARTER_RING,
+    baseUrl,
+  });
 
   return harden({
     runScheduledAgent,
