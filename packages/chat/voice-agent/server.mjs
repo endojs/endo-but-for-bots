@@ -513,7 +513,7 @@ const fillSpecialist = process.env.SELF_HEAL === '0' ? undefined : async ({ name
 // makeFieldAgent runs before `blossom` exists, so the server populates `customView.register` below; the tool
 // reads it at call-time. This is the seam that lets a NORMAL chat agent (visible in the trace) be the studio.
 const customView = {};
-const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, foldedPersonaFor, getFoldDocs, setFoldDocs, agentConfig, saveAgentConfig, haResolveReadOnly, changelog, actOnStagedReview } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL, fillSpecialist, customView });
+const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, foldedPersonaFor, getFoldDocs, setFoldDocs, agentConfig, saveAgentConfig, haResolveReadOnly, changelog, actOnStagedReview, publishClip, revokeClip, listClips } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL, fillSpecialist, customView });
 liveCells = makeLiveCells({ nodeFor }); // browser-subscribable live grains (cap-gated)
 // Least-authority cross-user share tokens for a broken-out component: subscribe-only to its frozen cells.
 const componentShares = makeComponentShares({ file: `${VOICE_STATE_DIR}/component-shares.json`, makePurse, purseStore });
@@ -2167,6 +2167,27 @@ const handler = async (req, res) => {
       if (u.pathname === '/byo/set') return json(res, 200, byoStore.set(body.cap, { provider: body.provider, model: body.model, key: body.key }));
       if (u.pathname === '/byo/clear') return json(res, 200, byoStore.clear(body.cap));
       return json(res, 404, { error: 'unknown byo route' });
+    }
+    // CLIPS ("promote on attention"): a message (or highlighted segment) → a shareable PAGE on demand. Any
+    // cap-holder clips their OWN content; the clip is owner-keyed + revocable. The client sends the segment's
+    // sanitized markdown HTML; we DEFENSIVELY strip any scripts/handlers (the /sites CSP is permissive) before
+    // hosting it. The /sites token IS the share link (copy/QR, never rendered).
+    if (req.method === 'POST' && u.pathname.startsWith('/clip')) {
+      const body = await jsonBody(req);
+      const node = nodeFor(body.cap);
+      if (!node) return json(res, 403, { error: 'no capability' });
+      const ownerKey = node.isRoot ? 'root' : 'u:' + crypto.createHash('sha256').update(String(body.cap || '')).digest('hex').slice(0, 24);
+      if (u.pathname === '/clip/create') {
+        const scrub = h => String(h || '').slice(0, 250000)
+          .replace(/<script[\s\S]*?<\/script\s*>/gi, '').replace(/<\/?(?:script|iframe|object|embed|link|meta|base|form)\b[^>]*>/gi, '')
+          .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '').replace(/(href|src)\s*=\s*("\s*javascript:[^"]*"|'\s*javascript:[^']*')/gi, '$1="#"');
+        if (!body.html || !String(body.html).trim()) return json(res, 400, { error: 'nothing to clip' });
+        const r = await publishClip({ ownerKey, title: body.title, html: scrub(body.html) });
+        return json(res, r.ok ? 200 : 400, r);
+      }
+      if (u.pathname === '/clip/list') return json(res, 200, { clips: listClips(ownerKey) });
+      if (u.pathname === '/clip/revoke') return json(res, 200, revokeClip({ ownerKey, token: body.token }));
+      return json(res, 404, { error: 'unknown clip route' });
     }
     // CONNECTORS (Phase 3 Lane A): the owner wires up an API-service tool. The secret value is stored
     // in the named vault (never echoed back / never in the connector record) and injected at call time.

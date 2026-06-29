@@ -336,8 +336,51 @@ const bubble = (who, text, agent, at) => {
   // agent replies are Markdown (agents format even unprompted) → render it; user text stays literal (linkify only)
   const bodyEl = d.querySelector('.body');
   if (who === 'you') { linkify(bodyEl, text || '…'); } else { bodyEl.classList.add('md'); renderMarkdown(bodyEl, text || '…'); }
+  attachClipButton(d, bodyEl, text); // promote-on-attention: a quiet 🔗 in the corner → clip this message as a shareable page
   log.appendChild(d); window.scrollTo(0, document.body.scrollHeight);
   return d.querySelector('.body');
+};
+// ── CLIP ("promote on attention", dan): any message can become a shareable PAGE on demand — it doesn't start
+//    as one (perf). A quiet 🔗 in the bottom-right of every message clips the WHOLE message; selecting a segment
+//    first clips just that part. The rendered markdown is ALREADY safe HTML in bodyEl — we send it as-is (the
+//    server re-strips scripts) → it becomes a /sites page (web-key link = the share credential; copy/QR). ──
+const clipShareSheet = (clip) => {
+  const link = { url: clip.url, label: clip.name || 'Clip' };
+  showModal(`<div class="qrlabel">🔗 Clip created — “${esc(clip.name || 'Clip')}”</div>
+    <div class="sub" style="margin:6px 0 10px;max-width:320px">A shareable page of this. The link IS the access — copy or QR it, don't screenshot.</div>
+    <div style="display:flex;gap:7px;flex-wrap:wrap"><button class="mini" id="clip-copy">copy link</button><button class="mini" id="clip-qr">show QR</button><button class="mini" id="clip-open">open ↗</button></div>`);
+  if ($('clip-copy')) $('clip-copy').onclick = e => copyLink(link, e.currentTarget);
+  if ($('clip-qr')) $('clip-qr').onclick = () => showQr(link);
+  if ($('clip-open')) $('clip-open').onclick = () => { try { window.open(localizeUrl(clip.url), '_blank', 'noopener'); } catch { /* */ } };
+};
+const clipAndShare = async ({ html, text, title }) => {
+  if (!html || !html.trim()) { setStatus('nothing to clip'); return; }
+  const ttl = (title || (String(text || '').match(/^#{1,6}\s*(.+)$/m) || [])[1] || String(text || '').split('\n').find(l => l.trim()) || 'Clip').slice(0, 80);
+  setStatus('clipping…');
+  let r; try { r = await (await fetch('/clip/create', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), title: ttl, html }) })).json(); } catch (e) { r = { error: e.message }; }
+  setStatus('');
+  if (!r || !r.ok) { setStatus('clip: ' + ((r && r.error) || 'failed')); return; }
+  clipShareSheet(r);
+};
+const attachClipButton = (msgEl, bodyEl, text) => {
+  try {
+    msgEl.style.position = 'relative';
+    const b = document.createElement('button'); b.className = 'msg-clip'; b.title = 'Clip & share this as a page'; b.textContent = '🔗';
+    b.style.cssText = 'position:absolute;right:5px;bottom:4px;all:unset;cursor:pointer;font-size:12px;opacity:.3;transition:opacity .15s;padding:2px 5px;border-radius:6px;line-height:1';
+    b.addEventListener('mouseenter', () => { b.style.opacity = '1'; });
+    b.addEventListener('mouseleave', () => { b.style.opacity = '.3'; });
+    b.addEventListener('click', e => {
+      e.stopPropagation();
+      // if the user highlighted a SEGMENT inside this message, clip just that; else the whole message.
+      const sel = window.getSelection && window.getSelection();
+      let html = bodyEl.innerHTML, segText = text;
+      if (sel && !sel.isCollapsed && bodyEl.contains(sel.anchorNode) && bodyEl.contains(sel.focusNode)) {
+        const frag = sel.getRangeAt(0).cloneContents(); const tmp = document.createElement('div'); tmp.appendChild(frag); html = tmp.innerHTML; segText = sel.toString();
+      }
+      clipAndShare({ html, text: segText });
+    });
+    msgEl.appendChild(b);
+  } catch { /* the clip affordance is enhancement-only */ }
 };
 
 // ── action-proposal cards: a destructive action the agent PROPOSED. Rendered by

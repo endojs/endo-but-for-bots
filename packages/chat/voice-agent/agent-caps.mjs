@@ -742,6 +742,25 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   try { const d = JSON.parse(fs.readFileSync(SITES_FILE, 'utf8')); if (d && typeof d === 'object') for (const [k, v] of Object.entries(d)) sites.set(k, v); } catch { /* none yet */ }
   const saveSites = () => { try { fs.mkdirSync(outDir, { recursive: true }); fs.writeFileSync(SITES_FILE, JSON.stringify(Object.fromEntries(sites)), { mode: 0o600 }); } catch { /* best-effort */ } };
   const publish = async (dir, name) => { const token = crypto.randomBytes(8).toString('hex'); sites.set(token, dir); saveSites(); return { name: String(name || 'site'), url: `${baseUrl}/sites/${token}/`, token }; };
+  // CLIPS ("promote on attention"): a message (or a highlighted segment) → a shareable PAGE on demand. The
+  // client sends the segment's already-sanitized markdown HTML; we wrap it in a themed read-only shell + serve
+  // it via the SAME /sites host (web-key token = the share credential; copy/QR, never rendered). Owner-keyed so
+  // a clip belongs to whoever made it (per-user namespace) + is revocable. The token IS the link, like /sites.
+  const CLIPS_DIR = path.join(VOICE_STATE_DIR, 'clips');
+  const CLIPS_FILE = `${outDir}/clips.json`;
+  let clipIndex = {}; try { clipIndex = JSON.parse(fs.readFileSync(CLIPS_FILE, 'utf8')) || {}; } catch { /* none */ }
+  const saveClips = () => { try { fs.mkdirSync(outDir, { recursive: true }); fs.writeFileSync(CLIPS_FILE, JSON.stringify(clipIndex), { mode: 0o600 }); } catch { /* best-effort */ } };
+  const clipShell = (title, bodyHtml) => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${String(title || 'Clip').replace(/[<>&]/g, '')}</title><style>:root{color-scheme:light dark}body{margin:0;background:#0d1117;color:#e6edf3;font:16px/1.6 -apple-system,system-ui,Segoe UI,Roboto,sans-serif}@media(prefers-color-scheme:light){body{background:#fff;color:#1f2328}}.clip{max-width:720px;margin:0 auto;padding:28px 20px 64px}.clip h1,.clip h2,.clip h3{line-height:1.25}.clip pre,.clip code{background:rgba(127,127,127,.16);border-radius:6px}.clip pre{padding:12px;overflow:auto}.clip code{padding:1px 5px}.clip a{color:#7c5cff}.clip img{max-width:100%}.clip blockquote{border-left:3px solid #7c5cff;margin:0;padding-left:14px;opacity:.85}hr{border:none;border-top:1px solid rgba(127,127,127,.25)}.foot{opacity:.5;font-size:12px;margin-top:40px}</style></head><body><div class="clip">${bodyHtml}<div class="foot">— a clip from Agent C</div></div></body></html>`;
+  const publishClip = async ({ ownerKey = 'root', title, html }) => {
+    const token = crypto.randomBytes(8).toString('hex');
+    const dir = path.join(CLIPS_DIR, token);
+    try { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'index.html'), clipShell(title, String(html || ''))); } catch (e) { return { ok: false, error: e.message }; }
+    sites.set(token, dir); saveSites(); // serve via the existing /sites host (+ the site-preview card)
+    clipIndex[token] = { owner: String(ownerKey), title: String(title || 'Clip').slice(0, 120), at: new Date().toISOString() }; saveClips();
+    return { ok: true, token, url: `${baseUrl}/sites/${token}/`, name: clipIndex[token].title };
+  };
+  const revokeClip = ({ ownerKey = 'root', token } = {}) => { const rec = clipIndex[String(token)]; if (!rec || rec.owner !== String(ownerKey)) return { ok: false, error: 'not your clip' }; sites.delete(String(token)); saveSites(); try { fs.rmSync(path.join(CLIPS_DIR, String(token)), { recursive: true, force: true }); } catch { /* */ } delete clipIndex[String(token)]; saveClips(); return { ok: true }; };
+  const listClips = ownerKey => Object.entries(clipIndex).filter(([, r]) => r.owner === String(ownerKey)).map(([token, r]) => ({ token, title: r.title, at: r.at, url: `${baseUrl}/sites/${token}/` }));
   // download web-keys: token → { path (canonical, inside an agent home), name }. The token IS the credential
   // (like /sites, /uploads). 36-hex so it dodges the bare-32-hex trace scrub — a download link is a legit
   // render (it serves ONE file as an attachment), not a cap to the agent's authority. In-memory, like sites.
@@ -2804,6 +2823,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // the encrypted volume; if that path no longer exists, REBASE the part after `…/field-agent/home/` onto the
     // CURRENT HOME_BASE (which follows FIELD_PERSONAL_ROOT) so published sites keep serving across the move /
     // bind state — instead of 404ing (which makes a phone download the error instead of opening the page).
+    publishClip, revokeClip, listClips, // promote-on-attention: a message/segment → a shareable /sites page
     siteDir: token => {
       const stored = sites.get(String(token || '')); if (!stored) return null;
       // PREFER the path rebased onto the CURRENT HOME_BASE (which follows FIELD_PERSONAL_ROOT/the volume) when
