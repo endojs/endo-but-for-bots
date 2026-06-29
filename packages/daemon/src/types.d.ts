@@ -152,6 +152,11 @@ type WorkerFormula = {
   kind?: 'locked' | 'node';
 };
 
+export type RegistryFormula = {
+  type: 'registry';
+  registryUrl: string;
+};
+
 export type WorkerDeferredTaskParams = {
   workerId: FormulaIdentifier;
 };
@@ -170,6 +175,7 @@ export type HostFormula = {
   hostHandle: FormulaIdentifier;
   mainWorker: FormulaIdentifier;
   nodeWorker: FormulaIdentifier;
+  registry: FormulaIdentifier;
   inspector: FormulaIdentifier;
   petStore: FormulaIdentifier;
   mailboxStore: FormulaIdentifier;
@@ -497,6 +503,33 @@ export type GitRemoteDeferredTaskParams = {
   gitRemoteId: FormulaIdentifier;
 };
 
+export type RegistryPackageRecord = {
+  name: string;
+  version: string;
+  treeRef: EndoReadableTree;
+  integrity: string;
+};
+
+export type RegistryResolution = {
+  packagesByKey: Record<string, RegistryPackageRecord>;
+  keys: string[];
+  resolutionHash: string;
+};
+
+export interface EndoRegistry {
+  resolve(
+    packageJson: Uint8Array,
+    options?: {
+      offline?: boolean;
+      workspaceRoot?: string | EndoMount;
+    },
+  ): Promise<RegistryResolution>;
+  fetch(name: string, version: string): Promise<EndoReadableTree>;
+  lookup(name: string, version: string): Promise<EndoReadableTree | undefined>;
+  list(prefix?: string): Promise<Array<{ name: string; version: string }>>;
+  help(methodName?: string): string;
+}
+
 type LookupFormula = {
   type: 'lookup';
 
@@ -668,6 +701,7 @@ export type Formula =
   | EndoFormula
   | LoopbackNetworkFormula
   | WorkerFormula
+  | RegistryFormula
   | HostFormula
   | GuestFormula
   | LeastAuthorityFormula
@@ -2117,6 +2151,7 @@ type FormulateNumberedHostParams = {
   agentNodeNumber: NodeNumber;
   mainWorkerId: FormulaIdentifier;
   nodeWorkerId: FormulaIdentifier;
+  registryId: FormulaIdentifier;
   storeId: FormulaIdentifier;
   mailboxStoreId: FormulaIdentifier;
   mailHubId: FormulaIdentifier;
@@ -2138,6 +2173,7 @@ export type FormulaValueTypes = {
   message: NameHub;
   promise: string;
   'readable-blob': EndoReadable;
+  registry: EndoRegistry;
   resolver: Responder;
   endo: EndoBootstrap;
   guest: EndoGuest;

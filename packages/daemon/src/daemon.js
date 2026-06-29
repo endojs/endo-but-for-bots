@@ -71,6 +71,7 @@ import { makeLocalStoreController } from './store-controller.js';
 import { makeWeakMultimap } from './multimap.js';
 import { makeLoopbackNetwork } from './networks/loopback.js';
 import { assertValidFormulaType } from './formula-type.js';
+import { makeRegistry } from './registry.js';
 import {
   blobHelp,
   directoryHelp,
@@ -448,6 +449,15 @@ const makeDaemonCore = async (
     type: 'least-authority',
   });
   const { id: mainWorkerId } = await preformulate('main', { type: 'worker' });
+  const defaultRegistryUrl =
+    // eslint-disable-next-line no-undef
+    typeof process === 'undefined'
+      ? 'https://registry.npmjs.org'
+      : process.env.ENDO_REGISTRY_URL || 'https://registry.npmjs.org';
+  const { id: registryId } = await preformulate('registry', {
+    type: 'registry',
+    registryUrl: defaultRegistryUrl,
+  });
 
   /** @type {Builtins} */
   const builtins = {
@@ -550,6 +560,7 @@ const makeDaemonCore = async (
           ['hostHandle', formula.hostHandle],
           ['mainWorker', formula.mainWorker],
           ['nodeWorker', formula.nodeWorker],
+          ['registry', formula.registry],
           ['inspector', formula.inspector],
           ['petStore', formula.petStore],
           ['mailbox', formula.mailboxStore],
@@ -970,6 +981,7 @@ const makeDaemonCore = async (
   formulaGraph.addRoot(knownPeersId);
   formulaGraph.addRoot(leastAuthorityId);
   formulaGraph.addRoot(mainWorkerId);
+  formulaGraph.addRoot(registryId);
   formulaGraph.addRoot(endoFormulaId);
   for (const id of Object.values(platformNames)) {
     formulaGraph.addRoot(/** @type {FormulaIdentifier} */ (id));
@@ -1160,6 +1172,23 @@ const makeDaemonCore = async (
 
   const seedFormulaGraphFromPersistence = async () => {
     const formulaRecords = await persistencePowers.listFormulas();
+    await Promise.all(
+      formulaRecords.map(async ({ number: formulaNumber, node }) => {
+        const fNum = /** @type {FormulaNumber} */ (formulaNumber);
+        const { formula } = await persistencePowers.readFormula(fNum);
+        if (formula.type === 'host' && !('registry' in formula)) {
+          const hostFormula = /** @type {HostFormula} */ (formula);
+          await persistencePowers.writeFormula(
+            fNum,
+            /** @type {NodeNumber} */ (node || localNodeNumber),
+            harden({
+              ...hostFormula,
+              registry: registryId,
+            }),
+          );
+        }
+      }),
+    );
     const entries = await Promise.all(
       formulaRecords.map(async ({ number: formulaNumber, node }) => {
         const fNum = /** @type {FormulaNumber} */ (formulaNumber);
@@ -2777,6 +2806,7 @@ const makeDaemonCore = async (
       makeEval(worker, source, names, values, context),
     'readable-blob': ({ content }) => makeReadableBlob(content),
     'readable-tree': ({ content }) => makeReadableTree(content),
+    registry: ({ registryUrl }) => makeRegistry({ registryUrl }),
     mount: async ({ path: mountPath, readOnly }) => {
       // Verify the mount path exists.
       const pathExists = await filePowers.exists(mountPath);
@@ -3008,6 +3038,7 @@ const makeDaemonCore = async (
         inspector: inspectorId,
         mainWorker: hostMainWorkerId,
         nodeWorker: nodeWorkerId,
+        registry: hostRegistryId,
         endo: endoId,
         networks: networksId,
         pins: pinsId,
@@ -3018,6 +3049,9 @@ const makeDaemonCore = async (
       }
       if (nodeWorkerId === undefined) {
         throw new Error('Host formula missing nodeWorker (Phase 6 required)');
+      }
+      if (hostRegistryId === undefined) {
+        throw new Error('Host formula missing registry');
       }
       // Look up the agent key by scanning the agent_key table for
       // an entry whose agentId has the same formula number.
@@ -3048,6 +3082,7 @@ const makeDaemonCore = async (
         inspectorId,
         hostMainWorkerId,
         nodeWorkerId,
+        hostRegistryId,
         endoId,
         networksId,
         pinsId,
@@ -4663,6 +4698,7 @@ const makeDaemonCore = async (
       inspectorId,
       mainWorkerId: hostMainWorkerId,
       nodeWorkerId,
+      registryId,
       pinned,
     });
   };
@@ -4680,6 +4716,7 @@ const makeDaemonCore = async (
       inspector: identifiers.inspectorId,
       mainWorker: identifiers.mainWorkerId,
       nodeWorker: identifiers.nodeWorkerId,
+      registry: identifiers.registryId,
       endo: identifiers.endoId,
       networks: identifiers.networksDirectoryId,
       pins: identifiers.pinsDirectoryId,

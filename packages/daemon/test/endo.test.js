@@ -5940,6 +5940,94 @@ test('Phase 6: HostFormula carries mainWorker and nodeWorker fields', async t =>
   t.is(nodeWorkerFormula.kind, 'node');
 });
 
+test('Phase 1 registry: host.lookup("@registry") resolves', async t => {
+  const { host } = await prepareHost(t);
+
+  const registry = await E(host).lookup('@registry');
+  t.truthy(registry);
+
+  const methods =
+    // eslint-disable-next-line no-underscore-dangle
+    await E(registry).__getMethodNames__();
+  t.deepEqual(methods.filter(name => !name.startsWith('__')).sort(), [
+    'fetch',
+    'help',
+    'list',
+    'lookup',
+    'resolve',
+  ]);
+  t.is(await E(registry).lookup('ses', '0.0.0'), undefined);
+  t.deepEqual(await E(registry).list(), []);
+});
+
+test('Phase 1 registry: HostFormula carries registry field', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const hostId = await E(host).identify('@agent');
+  const registryId = await E(host).identify('@registry');
+  t.truthy(hostId);
+  t.truthy(registryId);
+
+  const formula = readFormulaFromDb(
+    config.statePath,
+    /** @type {string} */ (hostId),
+  );
+  t.is(formula.type, 'host');
+  // @ts-expect-error narrowed by t.is above
+  t.is(formula.registry, registryId);
+
+  const registryFormula = readFormulaFromDb(
+    config.statePath,
+    /** @type {string} */ (registryId),
+  );
+  t.is(registryFormula.type, 'registry');
+  // @ts-expect-error narrowed by t.is above
+  t.is(registryFormula.registryUrl, 'https://registry.npmjs.org');
+});
+
+test('Phase 1 registry: startup migrates host formulas missing registry', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+  let { host } = await makeHost(config, cancelled);
+
+  const hostId = await E(host).identify('@agent');
+  const formula = readFormulaFromDb(
+    config.statePath,
+    /** @type {string} */ (hostId),
+  );
+  t.is(formula.type, 'host');
+  // @ts-expect-error narrowed by t.is above
+  t.truthy(formula.registry);
+
+  await stop(config);
+
+  const { number, node } = parseId(/** @type {string} */ (hostId));
+  const { registry: _registry, ...legacyFormula } = formula;
+  openTestDb(config.statePath).writeFormula(number, node, legacyFormula);
+
+  await restart(config);
+  ({ host } = await makeHost(config, cancelled));
+
+  const migratedFormula = readFormulaFromDb(
+    config.statePath,
+    /** @type {string} */ (hostId),
+  );
+  t.is(migratedFormula.type, 'host');
+  // @ts-expect-error narrowed by t.is above
+  t.truthy(migratedFormula.registry);
+  // @ts-expect-error narrowed by t.is above
+  t.is(await E(host).identify('@registry'), migratedFormula.registry);
+});
+
+test('Phase 1 registry: guest.lookup("@registry") rejects', async t => {
+  const { host } = await prepareHost(t);
+
+  const guest = await E(host).provideGuest('alice');
+
+  await t.throwsAsync(async () => E(guest).lookup('@registry'), {
+    message: /Invalid pet name "@registry"/,
+  });
+});
+
 testNeedsNodeWorker(
   'Phase 6: makeUnconfined defaults to @node when no worker is named',
   async t => {

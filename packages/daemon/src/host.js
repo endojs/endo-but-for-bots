@@ -174,6 +174,7 @@ export const makeHostMaker = ({
    * @param {FormulaIdentifier} inspectorId
    * @param {FormulaIdentifier} mainWorkerId
    * @param {FormulaIdentifier} nodeWorkerId
+   * @param {FormulaIdentifier} registryId
    * @param {FormulaIdentifier} endoId
    * @param {FormulaIdentifier} networksDirectoryId
    * @param {FormulaIdentifier} pinsDirectoryId
@@ -193,6 +194,7 @@ export const makeHostMaker = ({
     inspectorId,
     mainWorkerId,
     nodeWorkerId,
+    registryId,
     endoId,
     networksDirectoryId,
     pinsDirectoryId,
@@ -203,6 +205,7 @@ export const makeHostMaker = ({
     context.thisDiesIfThatDies(storeId);
     context.thisDiesIfThatDies(mainWorkerId);
     context.thisDiesIfThatDies(nodeWorkerId);
+    context.thisDiesIfThatDies(registryId);
     context.thisDiesIfThatDies(mailboxStoreId);
     if (mailHubId !== undefined) {
       context.thisDiesIfThatDies(mailHubId);
@@ -225,6 +228,7 @@ export const makeHostMaker = ({
       '@host': hostHandleId ?? handleId,
       '@main': mainWorkerId,
       '@node': nodeWorkerId,
+      '@registry': registryId,
       '@endo': endoId,
       '@nets': networksDirectoryId,
       '@pins': pinsDirectoryId,

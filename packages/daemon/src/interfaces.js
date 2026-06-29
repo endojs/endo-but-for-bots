@@ -39,6 +39,14 @@ const MessageNumberShape = M.bigint();
 // Environment variables as string-to-string record
 const EnvShape = M.recordOf(M.string(), M.string());
 
+const RegistryOptionsShape = M.splitRecord(
+  {},
+  {
+    offline: M.boolean(),
+    workspaceRoot: M.or(M.string(), M.remotable()),
+  },
+);
+
 // Options for makeUnconfined and makeArchive
 const MakeCapletOptionsShape = M.splitRecord(
   {},
@@ -115,6 +123,14 @@ export const EnvelopeInterface = M.interface('EndoEnvelope', {});
 
 export const DismisserInterface = M.interface('EndoDismisser', {
   dismiss: M.call().returns(M.promise()),
+});
+
+export const RegistryInterface = M.interface('EndoRegistry', {
+  resolve: M.call(M.any()).optional(RegistryOptionsShape).returns(M.promise()),
+  fetch: M.call(M.string(), M.string()).returns(M.promise()),
+  lookup: M.call(M.string(), M.string()).returns(M.promise()),
+  list: M.call().optional(M.string()).returns(M.promise()),
+  help: M.call().optional(M.string()).returns(M.string()),
 });
 
 // CRITICAL: HandleInterface must use defaultGuards: 'passable' to preserve
