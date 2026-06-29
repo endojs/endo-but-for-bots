@@ -465,12 +465,19 @@ const chatPurses = new Map(); // `${cap}:${sid}` → purse
 // rehydrates from disk instead of resetting to the default allowance. (Increment 6 swaps this for agora's
 // journaled bank behind the same shape.)
 const purseStore = makePurseStore({ file: `${VOICE_STATE_DIR}/purses.json` });
+// Bluesky-claim namespaces are ZERO-UNTIL-CLAIM (dan): every chat under such a namespace shares ONE wallet seeded
+// at ZERO (not the per-chat default allowance); only an eligible claim funds it. Set once bluesky-claim exists.
+let blueskyIsNamespace = () => false;
+const BSKY_NAMESPACE_SID = '_namespace'; // the single shared wallet a Bluesky namespace's chats all draw from
 const purseFor = (cap, sid) => {
-  const k = `${cap}:${sid}`;
+  const ns = blueskyIsNamespace(cap); // a signed-in Bluesky user's namespace?
+  const realSid = ns ? BSKY_NAMESPACE_SID : sid; // share one wallet across all their chats
+  const seed = ns ? 0 : defaultAllowance; // zero until they claim; the claim credits this same wallet
+  const k = `${cap}:${realSid}`;
   let p = chatPurses.get(k);
   if (!p) {
     const saved = purseStore.get(k); // {balance, granted} if this purse was ever persisted
-    p = makePurse(saved ? saved.balance : defaultAllowance, { granted: saved ? saved.granted : undefined, onChange: (b, g) => purseStore.set(k, b, g) });
+    p = makePurse(saved ? saved.balance : seed, { granted: saved ? saved.granted : undefined, onChange: (b, g) => purseStore.set(k, b, g) });
     if (!saved) purseStore.set(k, p.balance(), p.granted()); // record the initial grant so a restart before any spend still restores it
     chatPurses.set(k, p);
   }
@@ -521,29 +528,29 @@ const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProp
 liveCells = makeLiveCells({ nodeFor }); // browser-subscribable live grains (cap-gated)
 
 // ── "Sign in with Bluesky → claim credits" ───────────────────────────────────────────────────────────────────
-// A user signs in with their Bluesky handle (AT-Protocol OAuth, scope `atproto` = identity only). If their DID is
-// on the Raindrop ELIGIBILITY allow-list, they claim a STABLE per-user namespace (membership seam, keyed on DID —
-// re-sign-in returns the same space) plus a one-time CREDIT allowance into that namespace's purse (the same purse
-// paid top-ups feed). Ineligible-but-signed-in identities get a result with no credits. The OAuth library is
-// loaded lazily and degrades gracefully if not yet installed (routes say so) — see BLUESKY-RAINDROP-RUNBOOK.md.
+// A user signs in with their Bluesky handle (AT-Protocol OAuth, scope `atproto` = identity only) and ALWAYS gets a
+// STABLE per-user namespace (membership seam, keyed on DID — re-sign-in returns the same space). ZERO-UNTIL-CLAIM:
+// the namespace's credit wallet starts empty and stays empty until an ELIGIBLE claim (DID on the Raindrop allow-
+// list) funds it once; the wallet is shared across the namespace's chats (purseFor routes it). Credit-gated
+// features stay locked at zero balance. The OAuth library loads lazily + degrades gracefully if not yet installed.
 const blueskyInvitePolicies = makeInvitePolicies({
   file: `${CONFIG_DIR}/bluesky-policies.json`,
   mintNamespaceCap: ({ powers, label }) => { const r = mintScopedCap({ powers, label }); return { swiss: r.swiss, powers: r.powers }; },
 });
 const blueskyEligibility = makeBlueskyEligibility({ configFile: `${CONFIG_DIR}/bluesky-raindrop.json` });
-const BSKY_CLAIM_SID = '_namespace'; // the namespace's credit wallet (the claim allowance lands here)
 const blueskyClaimStore = {
-  read: () => { try { return JSON.parse(fs.readFileSync(`${CONFIG_DIR}/bluesky-claims.json`, 'utf8')); } catch { return { granted: {} }; } },
+  read: () => { try { return JSON.parse(fs.readFileSync(`${CONFIG_DIR}/bluesky-claims.json`, 'utf8')); } catch { return { byDid: {}, namespaces: {} }; } },
   write: d => { try { fs.mkdirSync(CONFIG_DIR, { recursive: true }); fs.writeFileSync(`${CONFIG_DIR}/bluesky-claims.json`, JSON.stringify(d, null, 2), { mode: 0o600 }); } catch { /* best-effort */ } },
 };
 const blueskyClaim = makeBlueskyClaim({
   eligibility: blueskyEligibility,
   invitePolicies: blueskyInvitePolicies,
   ring: STARTER_RING,
-  grantUusd: defaultAllowance,
-  grantCredits: (scopedCap, uusd) => { purseFor(scopedCap, BSKY_CLAIM_SID).credit(uusd); },
+  grantUusd: defaultAllowance, // one-time fund an eligible claim grants into the shared namespace wallet
+  grantCredits: (scopedCap, uusd) => { purseFor(scopedCap, BSKY_NAMESPACE_SID).credit(uusd); }, // purseFor routes namespaces to the shared zero-seeded wallet
   store: blueskyClaimStore,
 });
+blueskyIsNamespace = cap => { try { return blueskyClaim.isNamespace(cap); } catch { return false; } }; // arm the zero-until-claim purse routing
 // AT-Proto's authorization server fetches our client-metadata over the PUBLIC internet, so the OAuth base MUST be
 // the public domain (agentc.chu.vmkqx.com via ngrok) — NOT the tailnet BASE_URL. Read it from the config's
 // `publicUrl` (preferred, no systemd edit) → env → BASE_URL. Public exposure stays an explicit operator choice.
@@ -1121,15 +1128,15 @@ const handler = async (req, res) => {
     if (u.pathname === '/bsky/callback' && req.method === 'GET') {
       try {
         const { did } = await blueskyOAuth.callback(u.searchParams);
-        const r = await blueskyClaim.claim({ did }); // checks eligibility, mints stable namespace, grants credits
-        if (r.ok && r.eligible && r.scopedCap) {
-          // sign them in to their own namespace. The cap rides the URL FRAGMENT (client-only, as every invite
-          // link in this app does) — the app stores it in localStorage and strips it from the address bar.
-          if (r.granted) log('bsky', `claim: eligible DID signed in, +${r.granted}µUSD granted`);
+        const r = await blueskyClaim.signIn({ did }); // always mints a stable namespace; funds it once iff eligible
+        if (r.ok && r.scopedCap) {
+          // sign them in to their own namespace (eligible → funded; otherwise zero until they claim). The cap rides
+          // the URL FRAGMENT (client-only, as every invite link in this app does) — the app stores it and strips it.
+          log('bsky', `sign-in: ${r.eligible ? `eligible${r.granted ? ` (+${r.granted}µUSD)` : ' (already funded)'}` : 'unclaimed — zero balance'}`);
           res.writeHead(302, { location: `${blueskyPublicUrl}/#cap=${r.scopedCap}`, 'cache-control': 'no-store', ...SEC });
           return res.end();
         }
-        res.writeHead(302, { location: '/bsky?status=ineligible', 'cache-control': 'no-store', ...SEC });
+        res.writeHead(302, { location: '/bsky?status=error', 'cache-control': 'no-store', ...SEC });
         return res.end();
       } catch (e) { log('bsky', 'callback', e.message); res.writeHead(302, { location: '/bsky?status=error', ...SEC }); return res.end(); }
     }

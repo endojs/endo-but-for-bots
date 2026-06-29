@@ -1,30 +1,33 @@
 // bluesky-claim.mjs — the heart of "Sign in with Bluesky → claim credits".
 //
-// Given a Bluesky identity that has ALREADY been PROVEN (by AT-Protocol OAuth — see bluesky-oauth.mjs), this:
-//   1. checks ELIGIBILITY against the Raindrop allow-list (bluesky-raindrop.mjs),
-//   2. for an eligible identity, redeems a STABLE per-user NAMESPACE cap via the membership seam
-//      (invite-policy.mjs `redeem`, keyed on the DID — re-signing-in returns the SAME space, never a fresh one),
-//   3. grants that namespace a one-time CREDIT allowance (into its purse — the same balance paid top-ups feed),
-//   4. returns the scoped cap so the caller can sign the user in to their own namespace.
-//
-// An INELIGIBLE (but proven) identity still gets a signed-in result with `eligible:false` and no credits — the
-// caller decides whether to drop them into a free tier or a "not on the list" page.
+// Given a Bluesky identity that has ALREADY been PROVEN (by AT-Protocol OAuth — see bluesky-oauth.mjs):
+//   1. ALWAYS mint/return a STABLE per-user NAMESPACE cap for that DID (membership seam invite-policy.mjs `redeem`,
+//      keyed on the DID — re-signing-in returns the SAME space). So ANY signed-in Bluesky user gets into the app.
+//   2. Check ELIGIBILITY against the Raindrop allow-list (bluesky-raindrop.mjs).
+//   3. ZERO-UNTIL-CLAIM (dan's model): a namespace's credit wallet starts EMPTY; only an ELIGIBLE identity's claim
+//      funds it (a one-time grant). Unclaimed signed-in users have a zero balance → credit-gated features stay
+//      locked until they claim. The wallet is SHARED across all that namespace's chats (the server routes every
+//      Bluesky-namespace purse to one wallet seeded at zero — see `isNamespace`).
 //
 // Pure orchestration: every capability (eligibility check, namespace mint, credit grant) is INJECTED, so this is
-// unit-testable with no network and no SES. Designation by reference — it holds no powers of its own.
+// unit-testable with no network and no SES. Designation by reference — it holds no powers of its own. The store
+// records cap HASHES (never raw swissnums), like the rest of the stack.
 //
 // Plain-node harden fallback (no-op under the SES server).
+import crypto from 'node:crypto';
 if (typeof globalThis.harden !== 'function') globalThis.harden = x => Object.freeze(x);
+
+const hashCap = c => crypto.createHash('sha256').update(String(c)).digest('hex');
 
 /**
  * @param {object} opts
  * @param {object} opts.eligibility      makeBlueskyEligibility(...) — .isEligible({did,handle})
  * @param {object} opts.invitePolicies   makeInvitePolicies(...) — the membership seam (.createPolicy/.listPolicies/.redeem)
- * @param {(scopedCap:string, uusd:number)=>void} opts.grantCredits  credit µUSD to a namespace's purse (idempotency is OUR job)
- * @param {string} [opts.policyName]     the membership policy these claims mint under
- * @param {string[]} opts.ring           least-privilege starter ring each claimant's namespace gets
- * @param {number} [opts.grantUusd]      one-time credit allowance per newly-claimed namespace (µUSD)
- * @param {object} opts.store            { read():{granted:{}}, write(d) } — records which DIDs already got their grant
+ * @param {(scopedCap:string, uusd:number)=>void} opts.grantCredits  credit µUSD to a namespace's shared wallet
+ * @param {string} [opts.policyName]     the membership policy these namespaces mint under
+ * @param {string[]} opts.ring           least-privilege starter ring each namespace gets
+ * @param {number} [opts.grantUusd]      one-time credit allowance an ELIGIBLE claim grants (µUSD)
+ * @param {object} opts.store            { read():{byDid,namespaces}, write(d) } — records cap HASHES + claim state
  */
 export const makeBlueskyClaim = ({
   eligibility,
@@ -35,7 +38,7 @@ export const makeBlueskyClaim = ({
   grantUusd = 1_000_000, // $1.00 default, in µUSD
   store,
 } = {}) => {
-  const read = () => { try { return store.read() || { granted: {} }; } catch { return { granted: {} }; } };
+  const read = () => { try { const d = store.read() || {}; d.byDid = d.byDid || {}; d.namespaces = d.namespaces || {}; return d; } catch { return { byDid: {}, namespaces: {} }; } };
 
   const ensurePolicy = () => {
     const existing = invitePolicies.listPolicies().find(p => p.name === policyName);
@@ -44,35 +47,41 @@ export const makeBlueskyClaim = ({
   };
 
   /**
-   * Claim for a PROVEN identity. Idempotent: the namespace is stable (redeem) and credits are granted at most once
-   * per DID. Returns { ok, eligible, scopedCap?, ring?, granted? (µUSD this call), returning? }.
+   * Sign in a PROVEN identity. ALWAYS returns a stable namespace; funds it once iff eligible.
+   * Returns { ok, scopedCap, eligible, claimed, granted (µUSD this call), returning }.
    */
-  const claim = async ({ did, handle, collection } = {}) => {
+  const signIn = async ({ did, handle, collection } = {}) => {
     const who = String(did || '').trim();
     if (!who.startsWith('did:')) return harden({ ok: false, error: 'a proven Bluesky DID is required' });
 
-    let eligible = false;
-    try { eligible = await eligibility.isEligible({ did: who, handle, collection }); } catch (e) { return harden({ ok: false, error: `eligibility check failed: ${String(e?.message || e)}` }); }
-    if (!eligible) return harden({ ok: true, eligible: false, did: who });
-
-    // eligible → mint (or re-fetch) the stable namespace for this DID
+    // 1. ALWAYS mint/return the stable namespace (verify→true: signing in IS the authorization to have a space)
     const policyId = ensurePolicy();
     const r = await invitePolicies.redeem(policyId, { identity: who, verify: () => true });
     if (!r.ok) return harden({ ok: false, error: r.error || 'redeem failed' });
 
-    // one-time credit grant, keyed by DID (never re-grant on re-sign-in)
     const d = read();
-    d.granted = d.granted || {};
+    d.namespaces[hashCap(r.scopedCap)] = true; // mark this cap a Bluesky namespace (→ shared zero-seeded wallet)
+
+    // 2. eligibility (Raindrop allow-list)
+    let eligible = false;
+    try { eligible = await eligibility.isEligible({ did: who, handle, collection }); } catch (e) { return harden({ ok: false, error: `eligibility check failed: ${String(e?.message || e)}` }); }
+
+    // 3. zero-until-claim: fund ONCE, only if eligible
     let granted = 0;
-    if (!d.granted[who]) {
-      try { grantCredits(r.scopedCap, grantUusd); granted = grantUusd; d.granted[who] = { at: new Date().toISOString(), uusd: grantUusd }; store.write(d); }
-      catch (e) { return harden({ ok: false, error: `credit grant failed: ${String(e?.message || e)}` }); }
+    const prior = d.byDid[who];
+    if (eligible && !(prior && prior.claimed)) {
+      try { grantCredits(r.scopedCap, grantUusd); granted = grantUusd; } catch (e) { return harden({ ok: false, error: `credit grant failed: ${String(e?.message || e)}` }); }
     }
-    return harden({ ok: true, eligible: true, scopedCap: r.scopedCap, ring: r.ring, granted, returning: !!r.returning });
+    d.byDid[who] = { capHash: hashCap(r.scopedCap), claimed: eligible || !!(prior && prior.claimed), at: new Date().toISOString(), uusd: (prior?.uusd || 0) + granted };
+    store.write(d);
+
+    return harden({ ok: true, scopedCap: r.scopedCap, eligible, claimed: d.byDid[who].claimed, granted, returning: !!r.returning });
   };
 
-  // Has this DID already claimed (been granted credits)?
-  const hasClaimed = did => !!read().granted?.[String(did || '')];
+  // Is this cap a Bluesky-minted namespace? (→ the server gives it a shared, zero-seeded wallet)
+  const isNamespace = cap => { try { return !!read().namespaces[hashCap(cap)]; } catch { return false; } };
+  // Has this DID claimed (been funded)?
+  const hasClaimed = did => !!read().byDid?.[String(did || '')]?.claimed;
 
-  return harden({ claim, hasClaimed, ensurePolicy });
+  return harden({ signIn, isNamespace, hasClaimed, ensurePolicy });
 };

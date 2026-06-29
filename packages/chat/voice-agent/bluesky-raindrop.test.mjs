@@ -68,13 +68,13 @@ test('eligibility: matches on DID and on case-folded handle; rejects strangers',
   assert.equal(await e.isEligible({ did: 'did:plc:stranger', handle: 'mallory.bsky.social' }), false);
 });
 
-// ── claim orchestration ──────────────────────────────────────────────────────────────────────────────────────
+// ── sign-in / claim orchestration (zero-until-claim) ─────────────────────────────────────────────────────────
 const mkClaim = () => {
   const dir = tmp();
   const minted = [];
   const invitePolicies = makeInvitePolicies({ file: path.join(dir, 'policies.json'), mintNamespaceCap: ({ powers, label }) => { const swiss = `swiss-${minted.length}`; minted.push({ swiss, powers, label }); return { swiss, powers }; } });
   const credited = [];
-  const claimStore = (() => { let d = { granted: {} }; return { read: () => d, write: x => { d = x; } }; })();
+  const claimStore = (() => { let d = { byDid: {}, namespaces: {} }; return { read: () => d, write: x => { d = x; } }; })();
   const claim = makeBlueskyClaim({
     eligibility: mkEligibility(),
     invitePolicies,
@@ -86,38 +86,51 @@ const mkClaim = () => {
   return { claim, minted, credited };
 };
 
-test('claim: eligible DID → stable namespace + one-time credit grant', async () => {
+test('signIn: eligible DID → stable namespace + one-time fund', async () => {
   const { claim, minted, credited } = mkClaim();
-  const r = await claim.claim({ did: 'did:plc:bob' });
-  assert.equal(r.ok, true); assert.equal(r.eligible, true);
+  const r = await claim.signIn({ did: 'did:plc:bob' });
+  assert.equal(r.ok, true); assert.equal(r.eligible, true); assert.equal(r.claimed, true);
   assert.ok(r.scopedCap, 'minted a namespace cap');
-  assert.equal(r.granted, 1_000_000, 'granted the claim allowance');
+  assert.equal(r.granted, 1_000_000, 'funded the claim allowance');
   assert.equal(minted.length, 1);
   assert.equal(credited.length, 1); assert.equal(credited[0].uusd, 1_000_000);
+  assert.equal(claim.isNamespace(r.scopedCap), true, 'cap is marked a Bluesky namespace (→ shared zero wallet)');
 });
 
-test('claim: ineligible (signed-in stranger) → no namespace, no credits', async () => {
+test('signIn: INELIGIBLE → still gets a namespace (signed in), but ZERO credits', async () => {
   const { claim, minted, credited } = mkClaim();
-  const r = await claim.claim({ did: 'did:plc:stranger' });
-  assert.equal(r.ok, true); assert.equal(r.eligible, false);
-  assert.equal(r.scopedCap, undefined);
-  assert.equal(minted.length, 0); assert.equal(credited.length, 0);
+  const r = await claim.signIn({ did: 'did:plc:stranger' });
+  assert.equal(r.ok, true); assert.equal(r.eligible, false); assert.equal(r.claimed, false);
+  assert.ok(r.scopedCap, 'signed in: got a namespace');
+  assert.equal(r.granted, 0, 'no credits until they claim');
+  assert.equal(minted.length, 1, 'namespace minted for the unclaimed user too');
+  assert.equal(credited.length, 0, 'nothing funded');
+  assert.equal(claim.isNamespace(r.scopedCap), true);
 });
 
-test('claim: idempotent re-sign-in → same namespace, credits granted only ONCE', async () => {
+test('signIn: idempotent re-sign-in → same namespace, funded only ONCE', async () => {
   const { claim, minted, credited } = mkClaim();
-  const a = await claim.claim({ did: 'did:plc:alice' });
-  const b = await claim.claim({ did: 'did:plc:alice' });
+  const a = await claim.signIn({ did: 'did:plc:alice' });
+  const b = await claim.signIn({ did: 'did:plc:alice' });
   assert.equal(a.scopedCap, b.scopedCap, 'stable namespace across sign-ins');
   assert.equal(minted.length, 1, 'minted once');
-  assert.equal(credited.length, 1, 'credited once');
-  assert.equal(b.granted, 0, 're-sign-in grants no new credits');
-  assert.equal(b.returning, true);
+  assert.equal(credited.length, 1, 'funded once');
+  assert.equal(b.granted, 0, 're-sign-in funds nothing new');
   assert.equal(claim.hasClaimed('did:plc:alice'), true);
 });
 
-test('claim: rejects a non-DID identity (must be OAuth-proven)', async () => {
+test('signIn: an unclaimed user who BECOMES eligible later gets funded on next sign-in', async () => {
+  // first sign-in ineligible (stranger), then a sign-in for an eligible DID — each tracked independently
+  const { claim, credited } = mkClaim();
+  const s = await claim.signIn({ did: 'did:plc:stranger' });
+  assert.equal(s.granted, 0);
+  const c = await claim.signIn({ did: 'did:plc:carol' }); // carol is on the allow-list
+  assert.equal(c.eligible, true); assert.equal(c.granted, 1_000_000, 'eligible sign-in funds');
+  assert.equal(credited.length, 1);
+});
+
+test('signIn: rejects a non-DID identity (must be OAuth-proven)', async () => {
   const { claim } = mkClaim();
-  const r = await claim.claim({ did: 'alice.bsky.social' });
+  const r = await claim.signIn({ did: 'alice.bsky.social' });
   assert.equal(r.ok, false);
 });

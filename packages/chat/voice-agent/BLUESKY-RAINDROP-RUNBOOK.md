@@ -79,15 +79,17 @@ still sign in but lands on a "not on the list yet" page (add them to Raindrop to
   `/#cap=<namespace>` (the cap rides the URL fragment, client-only, exactly as every invite link in this app
   does; the app stores it and strips the address bar).
 
-## Credit model (and a knob)
+## Credit model — ZERO until claim (your choice)
 
-- The claim grants `defaultAllowance` (µUSD; $1.00 default) into the namespace's purse on first sign-in. Change the
-  global default via the existing default-allowance setting, or the per-claim amount via `grantUusd` in the
-  server wiring.
-- **Open question for you:** today an eligible claimant's grant lands on their namespace's main wallet, and the
-  existing per-chat purse seeding still applies. If you want stricter gating (e.g. *unclaimed* signed-in users get
-  ZERO until they claim, or credits are one shared pool across all their chats rather than per-chat), that's a
-  small follow-up — tell me which model you want.
+- **Anyone** who signs in with Bluesky gets a stable namespace (they're "in the app"), but its credit wallet starts
+  **empty**. Credit-gated features (inference, etc.) stay locked at a zero balance.
+- An **eligible** sign-in (DID on the Raindrop allow-list) **funds** that wallet once with `grantUusd`
+  (= `defaultAllowance`, $1.00; change via `grantUusd` in the server wiring). Re-sign-in never re-funds.
+- The wallet is **shared across all that namespace's chats** — `purseFor` routes every Bluesky-namespace purse to
+  one `_namespace` wallet seeded at zero, instead of the per-chat default-allowance seeding regular users get. So a
+  claim funds the whole namespace, and an unclaimed user can't get free per-chat allowances by opening new chats.
+- The existing MetaMask/ERC-7715 top-up credits this **same** wallet, so an unclaimed user could also just pay.
+- (dan/root + ordinary invite caps are untouched — they keep per-chat default allowances.)
 
 ## Tests & rollback
 
