@@ -54,17 +54,22 @@ export const notify = async ({ title, message = '', priority = 'default', tags =
   try { cfg = JSON.parse(await fsp.readFile(CFG, 'utf8')); } catch { return { ok: false, error: 'no field-notify config' }; }
   const dest = String(topic || cfg.topic || ''); // route to an explicit per-user topic when given, else the default
   if (!cfg.server || !dest) return { ok: false, error: 'config missing server/topic' };
-  const headers = { 'content-type': 'text/plain' };
-  if (title) headers.Title = title;
-  if (priority) headers.Priority = priority;
-  if (tags && tags.length) headers.Tags = Array.isArray(tags) ? tags.join(',') : String(tags);
-  if (click) headers.Click = click;
+  // Publish via ntfy's JSON format (POST to the server root, topic in the body) rather than HTTP HEADERS.
+  // Headers are ByteString (Latin-1) so an emoji in Title/Tags (e.g. "🎙 Voice note…") throws
+  // "Cannot convert argument to a ByteString" and the push silently fails. JSON body is UTF-8 → emoji-safe.
+  const PRI = { min: 1, low: 2, default: 3, high: 4, max: 5, urgent: 5 };
+  const body = { topic: dest, message: String(message || '') };
+  if (title) body.title = String(title);
+  const pr = PRI[String(priority)] ?? Number(priority);
+  if (Number.isFinite(pr) && pr >= 1 && pr <= 5) body.priority = pr;
+  if (tags && tags.length) body.tags = (Array.isArray(tags) ? tags : [tags]).map(String);
+  if (click) body.click = String(click);
   // Mirror to the feed first (durable), so the message is reviewable even if the
   // ntfy push itself fails. Operational pings (feed:false) skip this.
   if (feed) await recordToFeed({ title, message, click, note, audio });
   try {
-    const res = await fetch(`${cfg.server}/${dest}`, {
-      method: 'POST', headers, body: message, signal: AbortSignal.timeout(8000),
+    const res = await fetch(`${cfg.server}/`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(8000),
     });
     return { ok: res.ok, status: res.status };
   } catch (e) { return { ok: false, error: e.message }; }
