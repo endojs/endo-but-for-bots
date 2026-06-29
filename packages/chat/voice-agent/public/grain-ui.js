@@ -176,6 +176,11 @@ const renderComponent = (spec, ctx) => {
   iframe.style.cssText = `width:100%;height:${Math.min(2000, Math.max(40, Number(spec.height) || 120))}px;border:0;display:block`;
   wrap.appendChild(iframe);
   const allowedCells = new Set((Array.isArray(spec.cells) ? spec.cells : []).map(String)); // only cells the agent DECLARED
+  // EFFECTS this component was GRANTED (only `theme` is offered today — safe CSS vars). originalTheme is the
+  // restore target for a `theme:restore` effect. A component not granted an effect has its requests ignored.
+  const allowedEffects = new Set((Array.isArray(spec.effects) ? spec.effects : []).map(String));
+  const originalTheme = theme.get();
+  const cleanThemeVars = v => { if (!v || typeof v !== 'object' || Array.isArray(v)) return null; const c = {}; for (const k of Object.keys(v)) { if (/^--[\w-]+$/.test(k) && typeof v[k] === 'string' && v[k].length <= 60) c[k] = v[k]; } return Object.keys(c).length ? c : null; };
   const cap = ctx && ctx.cap; const shareToken = ctx && ctx.shareToken; const auth = shareToken ? { shareToken } : cap;
   const releases = []; const subscribed = new Set(); // dedup: one stream per declared cell, no matter how often it asks
   let port = null;
@@ -191,6 +196,15 @@ const renderComponent = (spec, ctx) => {
       if (!auth || !allowedCells.has(id)) return; // undeclared / no credential → ignore
       const { grain, release } = acquireCell(auth, id); releases.push(release);
       follow(grain, value => { try { port && port.postMessage({ __cu: 1, type: 'cell', id, value }); } catch { /* */ } }); // pipe live values IN (cap stays here)
+    }
+    else if (m.type === 'effect') {
+      // a confined component requested a curated effect. Only honour what it was GRANTED (spec.effects) + validate.
+      const base = String(m.name || '').split(':')[0];
+      if (base === 'theme' && allowedEffects.has('theme')) {
+        const a = (m.args && typeof m.args === 'object') ? m.args : {};
+        if (/restore$/.test(String(m.name))) applyTheme(originalTheme); // back to where the user started
+        else { const v = cleanThemeVars(a.vars); if (v) applyTheme({ name: String(a.name || 'custom').slice(0, 40), mode: (a.mode === 'light' || a.mode === 'dark') ? a.mode : undefined, vars: v }); } // preview/apply: pure CSS vars
+      }
     }
     else if (m.type === 'error') { try { (window.__fieldReportError || (() => {}))(String(m.error || 'render failed'), String(m.source || '')); } catch { /* */ } } // a confined component failed → route to the auto-fix loop
   };

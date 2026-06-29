@@ -131,7 +131,13 @@ const use = (alias) => {
   if (typeof fn !== 'function') return create('span').class('cu-chip').text('[unavailable: ' + alias + ']');
   try { const r = fn(UI); return (r && r.el) ? r : create('div').text('[empty: ' + alias + ']'); } catch (e) { return create('div').class('cu-err').text('⚠️ ' + alias + ': ' + (e && e.message)); }
 };
-const UI = { create, grain: apiGrain, local: grain, h: create, island, use, kit: Object.keys(KIT) };
+// ── ui.effect(name, args): request a CURATED, least-authority EFFECT from the trusted parent (the seam that
+//    lets a confined widget DO something it can't reach directly). The parent only honours effects the host
+//    GRANTED this component (spec.effects) + validates the args. Today the one safe effect is `theme` (preview/
+//    apply/restore — pure CSS vars, reversible, no cap/data) → a confined theme component can restyle the app
+//    directly instead of round-tripping through the agent. Fire-and-forget (no return value crosses the boundary).
+const effect = (name, args) => { send({ type: 'effect', name: String(name || ''), args: (args && typeof args === 'object' && !Array.isArray(args)) ? args : {} }); };
+const UI = { create, grain: apiGrain, local: grain, h: create, island, use, effect, kit: Object.keys(KIT) };
 
 const fail = (msg) => { try { send({ type: 'error', error: String(msg) }); } catch (e) {} const d = document.createElement('div'); d.className = 'cu-err'; d.textContent = '⚠️ ' + msg; document.body.innerHTML = ''; document.body.appendChild(d); report(); }; // also REPORT the render failure to the host → auto-fix loop
 
