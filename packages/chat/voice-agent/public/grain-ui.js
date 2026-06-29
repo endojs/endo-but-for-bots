@@ -214,8 +214,17 @@ const renderComponent = (spec, ctx) => {
 // user's live global theme everywhere (it persists). The mini-mockups render with each theme's own vars
 // scoped to the box, so you see the new style without changing the page until you accept.
 const renderThemePreview = (spec) => {
-  const wrap = document.createElement('div'); wrap.className = 'gw'; wrap.style.cssText = 'margin:8px 0;border:1px solid var(--edge);border-radius:12px;padding:11px 13px;background:var(--panel)';
-  const title = document.createElement('div'); title.style.cssText = 'font-size:13px;font-weight:600;margin-bottom:8px'; title.textContent = `🎨 New theme: ${spec.name || 'custom'}`; wrap.appendChild(title);
+  // Accept a GALLERY (spec.themes:[{name,vars,mode}]) OR a single legacy theme (spec.{name,vars,mode}) →
+  // normalize to a list. With >1 you can "try them on": clicking a swatch applies it LIVE everywhere; Revert
+  // restores the theme you started with. (dan's ask: an easy way to switch between themes to try them on.)
+  const themes = (Array.isArray(spec.themes) && spec.themes.length ? spec.themes : [{ name: spec.name, vars: spec.vars, mode: spec.mode }])
+    .filter(t => t && t.vars && typeof t.vars === 'object')
+    .map(t => ({ name: String(t.name || 'custom').slice(0, 40), vars: t.vars, mode: (t.mode === 'light' || t.mode === 'dark') ? t.mode : undefined }))
+    .slice(0, 12);
+  const wrap = document.createElement('div'); wrap.className = 'gw gw-theme'; wrap.style.cssText = 'margin:8px 0;border:1px solid var(--edge);border-radius:12px;padding:11px 13px;background:var(--panel)';
+  if (!themes.length) { wrap.textContent = '🎨 (no theme to preview)'; return wrap; }
+  const original = theme.get(); // where Revert returns you
+  const title = document.createElement('div'); title.style.cssText = 'font-size:13px;font-weight:600;margin-bottom:8px'; title.textContent = themes.length > 1 ? '🎨 Try on a theme' : `🎨 New theme: ${themes[0].name}`; wrap.appendChild(title);
   const mock = (vars, label) => {
     const box = document.createElement('div');
     box.style.cssText = Object.entries(vars || {}).map(([k, v]) => `${k}:${v}`).join(';') + ';flex:1;min-width:0;border:1px solid var(--edge);border-radius:9px;padding:9px;background:var(--bg);color:var(--ink)';
@@ -226,16 +235,34 @@ const renderThemePreview = (spec) => {
     mk('span', 'display:inline-block;background:var(--panel);border:1px solid var(--edge);color:var(--mut);border-radius:6px;padding:2px 8px;font-size:10px', 'chip');
     return box;
   };
-  const cur = theme.get();
+  let active = themes[0];
   const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:8px;margin-bottom:9px';
-  row.append(mock(cur.vars, 'current · ' + (cur.name || 'theme')), mock(spec.vars, 'new · ' + (spec.name || 'theme')));
-  wrap.appendChild(row);
+  const curMock = mock(original.vars, 'current · ' + (original.name || 'theme'));
+  let newMock = mock(active.vars, 'try-on · ' + active.name);
+  row.append(curMock, newMock); wrap.appendChild(row);
+  // SWATCH STRIP — one per theme; clicking tries it on LIVE (applies globally) + updates the try-on mock.
+  if (themes.length > 1) {
+    const strip = document.createElement('div'); strip.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px';
+    const setActive = (t, chip) => {
+      active = t; applyTheme({ name: t.name, mode: t.mode, vars: t.vars }); // try it on LIVE, everywhere
+      const fresh = mock(t.vars, 'try-on · ' + t.name); newMock.replaceWith(fresh); newMock = fresh;
+      [...strip.children].forEach(x => { x.style.borderColor = 'var(--edge)'; x.style.fontWeight = '400'; }); if (chip) { chip.style.borderColor = 'var(--acc)'; chip.style.fontWeight = '600'; }
+    };
+    themes.forEach((t, i) => {
+      const chip = document.createElement('button'); chip.title = 'try on ' + t.name;
+      chip.style.cssText = `all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:6px;border:1px solid ${i === 0 ? 'var(--acc)' : 'var(--edge)'};border-radius:8px;padding:3px 9px;font-size:11px;font-weight:${i === 0 ? 600 : 400}`;
+      const sw = document.createElement('span'); sw.style.cssText = `width:13px;height:13px;border-radius:3px;background:${t.vars['--bg'] || '#000'};box-shadow:inset 0 0 0 4px ${t.vars['--acc'] || '#888'};flex:0 0 auto`;
+      const nm = document.createElement('span'); nm.textContent = t.name;
+      chip.append(sw, nm); chip.onclick = () => setActive(t, chip); strip.appendChild(chip);
+    });
+    wrap.appendChild(strip);
+  }
   const btns = document.createElement('div'); btns.style.cssText = 'display:flex;gap:6px';
-  const accept = document.createElement('button'); accept.textContent = '✓ Use this theme'; accept.style.cssText = 'all:unset;cursor:pointer;background:var(--acc);color:#fff;border-radius:7px;padding:4px 11px;font-size:12px;font-weight:600';
-  const reject = document.createElement('button'); reject.textContent = 'Keep current'; reject.style.cssText = 'all:unset;cursor:pointer;color:var(--mut);border:1px solid var(--edge);border-radius:7px;padding:4px 11px;font-size:12px';
-  accept.onclick = () => { applyTheme({ name: spec.name || 'custom', mode: spec.mode, vars: spec.vars }); title.textContent = `🎨 Applied: ${spec.name || 'custom'}`; btns.remove(); };
-  reject.onclick = () => wrap.remove();
-  btns.append(accept, reject); wrap.appendChild(btns);
+  const keep = document.createElement('button'); keep.textContent = themes.length > 1 ? '✓ Keep this one' : '✓ Use this theme'; keep.style.cssText = 'all:unset;cursor:pointer;background:var(--acc);color:#fff;border-radius:7px;padding:4px 11px;font-size:12px;font-weight:600';
+  const revert = document.createElement('button'); revert.textContent = '↶ Revert'; revert.style.cssText = 'all:unset;cursor:pointer;color:var(--mut);border:1px solid var(--edge);border-radius:7px;padding:4px 11px;font-size:12px';
+  keep.onclick = () => { applyTheme({ name: active.name, mode: active.mode, vars: active.vars }); title.textContent = `🎨 Applied: ${active.name}`; btns.remove(); };
+  revert.onclick = () => { applyTheme(original); wrap.remove(); };
+  btns.append(keep, revert); wrap.appendChild(btns);
   return wrap;
 };
 
@@ -292,33 +319,12 @@ const renderSitePreview = spec => {
 
 const RENDERERS = { countdowns: renderCountdowns, 'entity-status': renderEntityStatus, choices: renderChoices, component: renderComponent, 'theme-preview': renderThemePreview, 'site-preview': renderSitePreview };
 
-// A "tail" hanging off the bottom-right of a widget box: a chat-bubble nub you tap to OPEN A CHAT WITH THE
-// ENTRYPOINT AGENT about THIS box — so even a widget the agent can't edit directly (a trusted system renderer
-// like the theme preview) becomes CONVERSABLE: "I want to change this" reaches the agent with the box as context.
-// Wrap a widget box so its chat-tail can hang OUTSIDE the bottom-right corner even when the box itself clips
-// (gw-site / gw-component use overflow:hidden). The wrapper is position:relative + overflow:visible; the tail is
-// a child of the WRAPPER (not the box), so it escapes the box. (all:unset goes FIRST — putting it after the
-// position/right declarations would reset them and drop the tail back into normal flow at the bottom-left.)
-const withWidgetTail = (box, spec, ctx) => {
-  if (!box || !ctx || typeof ctx.onTalk !== 'function') return box;
-  try {
-    const wrap = document.createElement('div'); wrap.className = 'gw-tailwrap'; wrap.style.cssText = 'position:relative;display:block';
-    wrap.appendChild(box);
-    const tail = document.createElement('button'); tail.className = 'gw-tail'; tail.title = 'Talk to the agent about this'; tail.textContent = '💬';
-    tail.style.cssText = 'all:unset;position:absolute;right:-9px;bottom:-7px;z-index:3;cursor:pointer;font-size:11px;line-height:1;padding:3px 6px;border-radius:12px 12px 3px 12px;background:var(--acc,#7c5cff);color:#fff;box-shadow:0 1px 5px rgba(0,0,0,.4);opacity:.6;transition:opacity .15s,transform .1s';
-    tail.addEventListener('mouseenter', () => { tail.style.opacity = '1'; tail.style.transform = 'scale(1.1)'; });
-    tail.addEventListener('mouseleave', () => { tail.style.opacity = '.6'; tail.style.transform = 'none'; });
-    tail.addEventListener('click', e => { e.stopPropagation(); try { ctx.onTalk(spec, box); } catch { /* */ } });
-    wrap.appendChild(tail);
-    return wrap;
-  } catch { return box; /* the tail is enhancement-only */ }
-};
-// renderWidgets(container, specs, ctx): append each widget; ctx = { cap, onChoice, onTalk, … }. Pure data in, DOM out.
+// renderWidgets(container, specs, ctx): append each widget; ctx = { cap, onChoice }. Pure data in, DOM out.
 export const renderWidgets = (container, specs, ctx) => {
   if (!container || !Array.isArray(specs)) return;
   for (const spec of specs.slice(0, MAX_WIDGETS)) { // hard cap mirrors the server bound
     const fn = spec && RENDERERS[spec.type]; if (!fn) continue;
-    try { container.appendChild(withWidgetTail(fn(spec, ctx || {}), spec, ctx || {})); } catch { /* a bad spec never breaks the bubble */ }
+    try { container.appendChild(fn(spec, ctx || {})); } catch { /* a bad spec never breaks the bubble */ }
   }
 };
 
