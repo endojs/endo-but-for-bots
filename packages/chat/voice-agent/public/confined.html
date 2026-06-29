@@ -86,7 +86,18 @@ const cellGrains = new Map();
 const requestedCells = new Set();
 const apiGrain = (cellId) => {
   const id = String(cellId || '');
-  if (!cellGrains.has(id)) { cellGrains.set(id, grain(undefined)); if (!requestedCells.has(id)) { requestedCells.add(id); send({ type: 'subscribe', cell: id }); } } // once per cell — the parent also dedups
+  if (!cellGrains.has(id)) {
+    const g = grain(undefined);
+    // PROPAGATOR (not a redux action): a cell is shared STATE. .set(v) writes the value, which propagates UP to
+    // the parent's cell of the same id; the parent re-propagates it (e.g. the `theme` cell → the whole app).
+    // The parent only honours a write on a cell it GRANTED writable (designation by the held cell, validated there).
+    const baseSet = g.set;
+    let last;
+    g.assign = (v) => { baseSet(v); }; // INBOUND propagation (a value DELIVERED from the parent) — settle locally, never re-emit
+    g.set = (v) => { const s = JSON.stringify(v); if (s === last) return; last = s; baseSet(v); send({ type: 'cell-set', cell: id, value: v }); }; // OUTBOUND write — idempotent: re-setting the same value is a no-op (no message storm)
+    cellGrains.set(id, g);
+    if (!requestedCells.has(id)) { requestedCells.add(id); send({ type: 'subscribe', cell: id }); } // once per cell — the parent also dedups
+  }
   return cellGrains.get(id);
 };
 
@@ -131,13 +142,9 @@ const use = (alias) => {
   if (typeof fn !== 'function') return create('span').class('cu-chip').text('[unavailable: ' + alias + ']');
   try { const r = fn(UI); return (r && r.el) ? r : create('div').text('[empty: ' + alias + ']'); } catch (e) { return create('div').class('cu-err').text('⚠️ ' + alias + ': ' + (e && e.message)); }
 };
-// ── ui.effect(name, args): request a CURATED, least-authority EFFECT from the trusted parent (the seam that
-//    lets a confined widget DO something it can't reach directly). The parent only honours effects the host
-//    GRANTED this component (spec.effects) + validates the args. Today the one safe effect is `theme` (preview/
-//    apply/restore — pure CSS vars, reversible, no cap/data) → a confined theme component can restyle the app
-//    directly instead of round-tripping through the agent. Fire-and-forget (no return value crosses the boundary).
-const effect = (name, args) => { send({ type: 'effect', name: String(name || ''), args: (args && typeof args === 'object' && !Array.isArray(args)) ? args : {} }); };
-const UI = { create, grain: apiGrain, local: grain, h: create, island, use, effect, kit: Object.keys(KIT) };
+// ui.grain(id) is the cell seam (above): a granted WRITABLE cell (e.g. 'theme') is read by .subscribe and
+// driven by .set(value) — state that propagates, never a command. (No imperative effect/RPC channel.)
+const UI = { create, grain: apiGrain, local: grain, h: create, island, use, kit: Object.keys(KIT) };
 
 const fail = (msg) => { try { send({ type: 'error', error: String(msg) }); } catch (e) {} const d = document.createElement('div'); d.className = 'cu-err'; d.textContent = '⚠️ ' + msg; document.body.innerHTML = ''; document.body.appendChild(d); report(); }; // also REPORT the render failure to the host → auto-fix loop
 
@@ -173,7 +180,7 @@ window.addEventListener('message', (e) => {
   if (e.source !== parent) return; // only the parent's mount handshake comes over the window
   const m = e.data; if (!m || m.__cu !== 1 || m.type !== 'mount') return;
   const port = e.ports && e.ports[0];
-  if (port) { CU_PORT = port; port.onmessage = (pe) => { const pm = pe.data; if (!pm || pm.__cu !== 1) return; if (pm.type === 'cell') { const g = cellGrains.get(String(pm.id)); if (g) g.set(pm.value); } else if (pm.type === 'theme') applyTheme(pm.vars); }; try { port.start(); } catch (e2) {} }
+  if (port) { CU_PORT = port; port.onmessage = (pe) => { const pm = pe.data; if (!pm || pm.__cu !== 1) return; if (pm.type === 'cell') { const g = cellGrains.get(String(pm.id)); if (g) (g.assign || g.set)(pm.value); } else if (pm.type === 'theme') applyTheme(pm.vars); }; try { port.start(); } catch (e2) {} }
   if (m.theme) applyTheme(m.theme);
   mount(m.source, m.refs);
 });

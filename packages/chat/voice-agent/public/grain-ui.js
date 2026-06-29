@@ -176,11 +176,15 @@ const renderComponent = (spec, ctx) => {
   iframe.style.cssText = `width:100%;height:${Math.min(2000, Math.max(40, Number(spec.height) || 120))}px;border:0;display:block`;
   wrap.appendChild(iframe);
   const allowedCells = new Set((Array.isArray(spec.cells) ? spec.cells : []).map(String)); // only cells the agent DECLARED
-  // EFFECTS this component was GRANTED (only `theme` is offered today — safe CSS vars). originalTheme is the
-  // restore target for a `theme:restore` effect. A component not granted an effect has its requests ignored.
-  const allowedEffects = new Set((Array.isArray(spec.effects) ? spec.effects : []).map(String));
-  const originalTheme = theme.get();
-  const cleanThemeVars = v => { if (!v || typeof v !== 'object' || Array.isArray(v)) return null; const c = {}; for (const k of Object.keys(v)) { if (/^--[\w-]+$/.test(k) && typeof v[k] === 'string' && v[k].length <= 60) c[k] = v[k]; } return Object.keys(c).length ? c : null; };
+  // WRITABLE CELLS this component was GRANTED to drive (a propagator write, not a command). Today the one
+  // local propagator cell offered is `theme` — the user's global style. A component WITHOUT the grant can read
+  // theme (free) but its writes are ignored. (`spec.effects` kept as a legacy alias for the grant key.)
+  const writableCells = new Set((Array.isArray(spec.writableCells) ? spec.writableCells : (Array.isArray(spec.effects) ? spec.effects : [])).map(String));
+  // value allowlist: a confined component may only set STYLE-SHAPED values (hex / rgb()/rgba() / hsl()/hsla() /
+  // named color / simple length). This blocks `url(...)` (off-origin fetch = exfil/beacon + image-overlay phishing),
+  // `expression(...)`, and any `; } < @import` break-out — the cell carries pure presentation, never a fetch.
+  const SAFE_VAL = /^(#[0-9a-f]{3,8}|rgba?\([\d.,\s%]+\)|hsla?\([\d.,\s%]+\)|[a-z-]+|-?[\d.]+(px|em|rem|%|vh|vw|fr)?)$/i;
+  const cleanThemeVars = v => { if (!v || typeof v !== 'object' || Array.isArray(v)) return null; const c = {}; for (const k of Object.keys(v).slice(0, 64)) { const val = v[k]; if (/^--[\w-]+$/.test(k) && typeof val === 'string' && val.length <= 60 && SAFE_VAL.test(val.trim())) c[k] = val.trim(); } return Object.keys(c).length ? c : null; };
   const cap = ctx && ctx.cap; const shareToken = ctx && ctx.shareToken; const auth = shareToken ? { shareToken } : cap;
   const releases = []; const subscribed = new Set(); // dedup: one stream per declared cell, no matter how often it asks
   let port = null;
@@ -192,18 +196,23 @@ const renderComponent = (spec, ctx) => {
       const id = String(m.cell || '');
       if (subscribed.has(id)) return;
       subscribed.add(id);
+      if (id === 'theme') { // the LOCAL style PROPAGATOR cell: push the current theme + every change (read is free)
+        const push = t => { try { port && port.postMessage({ __cu: 1, type: 'cell', id: 'theme', value: { name: t.name, mode: t.mode, vars: t.vars } }); } catch { /* */ } };
+        push(theme.get()); releases.push(theme.subscribe(push)); return;
+      }
       if (ctx && ctx.sample) { try { port && port.postMessage({ __cu: 1, type: 'cell', id, value: dummyForCell(id) }); } catch { /* */ } return; } // GALLERY preview: feed generated dummy data — no server cell, no cap
       if (!auth || !allowedCells.has(id)) return; // undeclared / no credential → ignore
       const { grain, release } = acquireCell(auth, id); releases.push(release);
       follow(grain, value => { try { port && port.postMessage({ __cu: 1, type: 'cell', id, value }); } catch { /* */ } }); // pipe live values IN (cap stays here)
     }
-    else if (m.type === 'effect') {
-      // a confined component requested a curated effect. Only honour what it was GRANTED (spec.effects) + validate.
-      const base = String(m.name || '').split(':')[0];
-      if (base === 'theme' && allowedEffects.has('theme')) {
-        const a = (m.args && typeof m.args === 'object') ? m.args : {};
-        if (/restore$/.test(String(m.name))) applyTheme(originalTheme); // back to where the user started
-        else { const v = cleanThemeVars(a.vars); if (v) applyTheme({ name: String(a.name || 'custom').slice(0, 40), mode: (a.mode === 'light' || a.mode === 'dark') ? a.mode : undefined, vars: v }); } // preview/apply: pure CSS vars
+    else if (m.type === 'cell-set') {
+      // a confined component WROTE a cell. We propagate the write ONLY for a cell it was granted writable +
+      // validate the value. `theme` drives the global style propagator (theme.set → :root + every component).
+      // Revert is just the component writing the prior value back — no special command (pure propagation).
+      const id = String(m.cell || '');
+      if (id === 'theme' && writableCells.has('theme')) {
+        const val = (m.value && typeof m.value === 'object') ? m.value : {}; const v = cleanThemeVars(val.vars);
+        if (v) applyTheme({ name: String(val.name || 'custom').slice(0, 40), mode: (val.mode === 'light' || val.mode === 'dark') ? val.mode : undefined, vars: v });
       }
     }
     else if (m.type === 'error') { try { (window.__fieldReportError || (() => {}))(String(m.error || 'render failed'), String(m.source || '')); } catch { /* */ } } // a confined component failed → route to the auto-fix loop
