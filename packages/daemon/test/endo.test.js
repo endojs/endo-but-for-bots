@@ -34,6 +34,7 @@ import {
   addressesFromLocator,
   idFromLocator,
 } from '../src/locator.js';
+import { makeRegistry } from '../src/registry.js';
 
 /**
  * @import {EReturn} from '@endo/eventual-send';
@@ -5965,6 +5966,35 @@ test('Phase 1 registry: host.lookup("@registry") resolves', async t => {
   ]);
   t.is(await E(registry).lookup('ses', '0.0.0'), undefined);
   t.deepEqual(await E(registry).list(), []);
+  t.regex(await E(registry).help('help'), /help\(methodName\?\)/);
+  await t.throwsAsync(
+    async () => E(registry).resolve(new Uint8Array([123, 125])),
+    {
+      message: /Cannot pass mutable typed arrays/,
+    },
+  );
+});
+
+test('Phase 1 registry: resolve accepts immutable package bytes', async t => {
+  const registry = makeRegistry({
+    registryUrl: 'https://registry.example.invalid',
+  });
+
+  await t.throwsAsync(
+    async () => registry.resolve(new Uint8Array([123, 125])),
+    {
+      message: /Cannot pass mutable typed arrays/,
+    },
+  );
+  await t.throwsAsync(
+    async () =>
+      registry.resolve(
+        new TextEncoder().encode('{}').buffer.transferToImmutable(),
+      ),
+    {
+      message: /waiting for the MVS resolver backend/,
+    },
+  );
 });
 
 test('Phase 1 registry: HostFormula carries registry field', async t => {
@@ -5989,7 +6019,10 @@ test('Phase 1 registry: HostFormula carries registry field', async t => {
   );
   t.is(registryFormula.type, 'registry');
   // @ts-expect-error narrowed by t.is above
-  t.is(registryFormula.registryUrl, 'https://registry.npmjs.org');
+  t.is(
+    registryFormula.registryUrl,
+    process.env.ENDO_REGISTRY_URL || 'https://registry.npmjs.org',
+  );
 });
 
 test('Phase 1 registry: startup migrates host formulas missing registry', async t => {

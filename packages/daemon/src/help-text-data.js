@@ -191,13 +191,27 @@ export const helpTextEntries = harden([
       nodeId:
         "nodeId() -> string\nGet this node's unique identifier.\nUsed for peer-to-peer communication.",
       readLog:
-        'readLog(options?) -> AsyncIterator\nStream the daemon logs as { source, chunk } records, where source is a log\ndisplay name (such as endo.log or worker/<id8>) and chunk is a run of UTF-8\ntext. Returns a reader; consume it with iterateReader. The optional\noptions.name restricts the stream to a single log by display name; omitting\nit streams every log. options.pattern emits only lines matching a regular\nexpression given as a RegExp source string (a plain substring is just an\nunanchored pattern). By default the stream ends once the current logs have\nbeen read; pass options.follow true to keep it open and keep emitting new\nlines as the logs grow (and as new logs appear) until you close the reader.\nLogs are read in bounded windows so a large log is never buffered whole.',
+        'readLog(options?) -> AsyncIterator\nStream the daemon logs as { source, chunk } records, where source is a log\ndisplay name (such as endo.log or worker/<id8>) and chunk is a run of UTF-8\ntext.\nReturns a reader; consume it with iterateReader.\nThe optional options.name restricts the stream to a single log by display\nname; omitting it streams every log.\noptions.pattern emits only lines matching a regular expression given as a\nRegExp source string (a plain substring is just an unanchored pattern).\nBy default the stream ends once the current logs have been read; pass\noptions.follow true to keep it open and keep emitting new lines as the logs\ngrow (and as new logs appear) until you close the reader.\nLogs are read in bounded windows so a large log is never buffered whole.',
       reviveNetworks:
         'reviveNetworks() -> Promise<void>\nRestore network connections from persisted state.',
       revivePins:
         'revivePins() -> Promise<void>\nRestore pinned values from persisted state.',
       addPeerInfo:
         'addPeerInfo(peerInfo) -> Promise<void>\nAdd information about a remote peer.\npeerInfo: { node: string, addresses: string[] }',
+    },
+  ],
+  [
+    'EndoRegistry',
+    {
+      '': "EndoRegistry - Resolve and fetch npm-style packages.\n\nThe registry capability resolves package graphs from package.json bytes and\nfetches package trees through the daemon's configured npm-style registry.",
+      help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the registry capability\n- help("resolve") returns documentation for package graph resolution',
+      resolve:
+        'resolve(packageJson, options?) -> Promise<RegistryResolution>\nResolve a package graph rooted at package.json bytes.\n- packageJson: immutable ArrayBuffer bytes for the root package.json\n- options.offline: require cached package metadata and artifacts\n- options.workspaceRoot: optional workspace root mount or path',
+      fetch:
+        'fetch(name, version) -> Promise<EndoReadableTree>\nFetch one package tree by package name and version.',
+      lookup:
+        'lookup(name, version) -> Promise<EndoReadableTree | undefined>\nReturn a cached package tree by package name and version.\nReturns undefined when the package tree is not cached.',
+      list: 'list(prefix?) -> Promise<Array<{ name, version }>>\nList cached packages.\nWhen provided, prefix filters cached package names.',
     },
   ],
   [

@@ -518,7 +518,7 @@ export type RegistryResolution = {
 
 export interface EndoRegistry {
   resolve(
-    packageJson: Uint8Array,
+    packageJson: ArrayBuffer,
     options?: {
       offline?: boolean;
       workspaceRoot?: string | EndoMount;

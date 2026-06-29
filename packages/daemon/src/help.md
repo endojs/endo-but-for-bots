@@ -641,6 +641,38 @@ Restore pinned values from persisted state.
 Add information about a remote peer.
 peerInfo: { node: string, addresses: string[] }
 
+# EndoRegistry - Resolve and fetch npm-style packages.
+
+The registry capability resolves package graphs from package.json bytes and
+fetches package trees through the daemon's configured npm-style registry.
+
+## help(methodName?) -> string
+
+Get documentation for this interface or a specific method.
+- help() returns an overview of the registry capability
+- help("resolve") returns documentation for package graph resolution
+
+## resolve(packageJson, options?) -> Promise<RegistryResolution>
+
+Resolve a package graph rooted at package.json bytes.
+- packageJson: immutable ArrayBuffer bytes for the root package.json
+- options.offline: require cached package metadata and artifacts
+- options.workspaceRoot: optional workspace root mount or path
+
+## fetch(name, version) -> Promise<EndoReadableTree>
+
+Fetch one package tree by package name and version.
+
+## lookup(name, version) -> Promise<EndoReadableTree | undefined>
+
+Return a cached package tree by package name and version.
+Returns undefined when the package tree is not cached.
+
+## list(prefix?) -> Promise<Array<{ name, version }>>
+
+List cached packages.
+When provided, prefix filters cached package names.
+
 # ReadableTree - A read-only tree of files and subdirectories.
 
 An immutable, content-addressed directory: entries cannot be added, removed,

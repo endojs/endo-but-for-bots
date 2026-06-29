@@ -126,7 +126,9 @@ export const DismisserInterface = M.interface('EndoDismisser', {
 });
 
 export const RegistryInterface = M.interface('EndoRegistry', {
-  resolve: M.call(M.any()).optional(RegistryOptionsShape).returns(M.promise()),
+  resolve: M.call(M.byteArray())
+    .optional(RegistryOptionsShape)
+    .returns(M.promise()),
   fetch: M.call(M.string(), M.string()).returns(M.promise()),
   lookup: M.call(M.string(), M.string()).returns(M.promise()),
   list: M.call().optional(M.string()).returns(M.promise()),

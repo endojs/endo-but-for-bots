@@ -38,13 +38,16 @@ export const makeRegistry = ({ registryUrl }) => {
     RegistryInterface,
     harden({
       /**
-       * @param {unknown} packageJson
+       * @param {ArrayBuffer} packageJson
        * @param {{ offline?: boolean, workspaceRoot?: string | object }} [_options]
        * @returns {Promise<RegistryResolution>}
        */
       async resolve(packageJson, _options = {}) {
         await null;
-        if (!(packageJson instanceof Uint8Array)) {
+        if (
+          !(packageJson instanceof ArrayBuffer) ||
+          packageJson.immutable !== true
+        ) {
           throw makeError(X`Registry package.json must be bytes`);
         }
         throw makeError(

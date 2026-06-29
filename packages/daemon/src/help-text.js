@@ -45,16 +45,7 @@ export const mountHelp = helpMap.get('EndoMount') || {};
 export const mountFileHelp = helpMap.get('EndoMountFile') || {};
 
 /** @type {HelpText} */
-export const registryHelp = helpMap.get('EndoRegistry') || {
-  '': 'Resolve and fetch npm-style packages through the daemon registry.',
-  resolve:
-    'resolve(packageJson, options?) -> Promise<RegistryResolution>. Resolve a package graph rooted at package.json bytes.',
-  fetch:
-    'fetch(name, version) -> Promise<EndoReadableTree>. Fetch one package tree.',
-  lookup:
-    'lookup(name, version) -> Promise<EndoReadableTree | undefined>. Return a cached package tree.',
-  list: 'list(prefix?) -> Promise<Array<{ name, version }>>. List cached packages.',
-};
+export const registryHelp = helpMap.get('EndoRegistry') || {};
 
 /**
  * Create a help function that looks up documentation.
