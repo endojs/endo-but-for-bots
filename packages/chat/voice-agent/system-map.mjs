@@ -5,7 +5,10 @@
 
 // The least-privilege STARTER ring a new invitee gets (kept here as the single source of truth; the
 // server's /invite imports it).
-export const STARTER_RING = ['reference', 'research', 'images', 'contact'];
+// The least-privilege STARTER ring a new invitee gets. Includes `home` so the invitee's ENTRY AGENT has its
+// OWN sandboxed home folder (HOME_BASE/cap-<label>, isolated from the owner's) to read/write + publish from —
+// the basic per-user namespace. NO `notes` (that stays the owner's vault; invitees build their own connector).
+export const STARTER_RING = ['reference', 'research', 'images', 'contact', 'home'];
 
 // The canonical flows (nodes are agent types / states; edges are the steps). Structural, human+graph
 // readable. Each flow: { name, summary, steps:[{from,to,via,gate?}] }.
