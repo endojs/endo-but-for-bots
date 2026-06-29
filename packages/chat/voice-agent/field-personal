@@ -49,6 +49,12 @@ LABEL="field-personal"
 FRIKY_HOST="${FRIKY_HOST:-root@192.168.50.74}"
 FRIKY_BACKUP_DIR="${FRIKY_BACKUP_DIR:-/mnt/user/dan/backups/field-personal}"
 BACKUP_KEEP="${BACKUP_KEEP:-7}"   # how many timestamped backups to retain on friky
+# A PLAINTEXT, mountable mirror of the volume on friky — protected by the encrypted SSH transport + key-gated
+# access (NOT at-rest encryption), so it can be quickly sshfs-mounted when the USB isn't around. Default host
+# is the LAN IP (works at home); set FRIKY_HOST=root@100.79.219.15 once friky's sshd listens on the tailnet
+# (it currently binds the LAN IP only) to mount it from anywhere.
+FRIKY_LIVE_DIR="${FRIKY_LIVE_DIR:-/mnt/user/dan/field-personal-live}"
+REMOTE_MOUNT="${REMOTE_MOUNT:-/mnt/field-personal-remote}"
 
 # The personal data set: { source on the internal disk → sub-path on the volume }. Mirrors field-config.mjs
 # (CONFIG_DIR/STATE_DIR/VOICE_STATE_DIR/DASH_STATE_DIR/VAULT_DIR) so the service finds everything via
@@ -308,6 +314,31 @@ cmd_backup_file() {
   fi
 }
 
+# PLAINTEXT mirror → friky, for a quickly-mountable remote copy (when the USB isn't around / fails / for
+# remote use). Incremental rsync over SSH (encrypted transport); the copy on friky is owned root + mode 700.
+cmd_sync() {
+  is_mounted || die "the volume must be mounted to sync from it: sudo field-personal unlock"
+  command -v rsync >/dev/null || die "rsync not installed"
+  ssh -o ConnectTimeout=8 "$FRIKY_HOST" "mkdir -p '$FRIKY_LIVE_DIR' && chmod 700 '$FRIKY_LIVE_DIR'" >/dev/null 2>&1 || die "can't reach friky ($FRIKY_HOST)"
+  c_ylw "  syncing the volume → $FRIKY_HOST:$FRIKY_LIVE_DIR (plaintext mirror; encrypted SSH transport)…"
+  if rsync -a --delete --exclude=lost+found -e "ssh -o ConnectTimeout=8" "$MOUNT"/ "$FRIKY_HOST:$FRIKY_LIVE_DIR"/; then
+    local sz; sz="$(ssh "$FRIKY_HOST" "du -sh '$FRIKY_LIVE_DIR' | cut -f1" 2>/dev/null || echo '?')"
+    c_grn "✓ synced ($sz on friky). Mount it with: field-personal mount-remote"
+  else die "sync failed"; fi
+}
+# sshfs-mount friky's copy locally (READ-ONLY by default — it's a backup). Key-gated + encrypted by SSH.
+cmd_mount_remote() {
+  command -v sshfs >/dev/null || die "sshfs not installed (sudo pacman -S sshfs)"
+  local mode=ro; [ "${1:-}" = "--rw" ] && mode=rw
+  [ -d "$REMOTE_MOUNT" ] || { sudo mkdir -p "$REMOTE_MOUNT" && sudo chown "$OWNER" "$REMOTE_MOUNT"; } || die "could not create $REMOTE_MOUNT"
+  mountpoint -q "$REMOTE_MOUNT" && { c_ylw "  already mounted at $REMOTE_MOUNT"; return 0; }
+  sshfs -o "$mode,reconnect,ConnectTimeout=8,idmap=user" "$FRIKY_HOST:$FRIKY_LIVE_DIR" "$REMOTE_MOUNT" || die "sshfs mount failed"
+  c_grn "✓ friky's copy mounted ($mode) at $REMOTE_MOUNT"
+  ls "$REMOTE_MOUNT" 2>/dev/null | sed 's/^/    /'
+  c_ylw "  browse it, or unmount with: field-personal unmount-remote"
+}
+cmd_unmount_remote() { fusermount3 -u "$REMOTE_MOUNT" 2>/dev/null || fusermount -u "$REMOTE_MOUNT" 2>/dev/null || sudo umount "$REMOTE_MOUNT" 2>/dev/null; mountpoint -q "$REMOTE_MOUNT" && c_red "  still mounted" || c_grn "  ✓ unmounted $REMOTE_MOUNT"; }
+
 case "${1:-status}" in
   status)  cmd_status ;;
   init)    shift; cmd_init "$@" ;;
@@ -318,5 +349,8 @@ case "${1:-status}" in
   scrub)   shift; cmd_scrub "$@" ;;
   backup)  cmd_backup ;;
   backup-file) cmd_backup_file ;;
-  *) echo "usage: field-personal {status|init <part>|unlock|lock|migrate|verify|scrub --yes|backup|backup-file}"; exit 1 ;;
+  sync)    cmd_sync ;;
+  mount-remote)   shift; cmd_mount_remote "$@" ;;
+  unmount-remote) cmd_unmount_remote ;;
+  *) echo "usage: field-personal {status|init <part>|unlock|lock|migrate|verify|scrub --yes|backup|backup-file|sync|mount-remote [--rw]|unmount-remote}"; exit 1 ;;
 esac
