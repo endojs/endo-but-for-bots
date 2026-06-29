@@ -544,8 +544,15 @@ const blueskyClaim = makeBlueskyClaim({
   grantCredits: (scopedCap, uusd) => { purseFor(scopedCap, BSKY_CLAIM_SID).credit(uusd); },
   store: blueskyClaimStore,
 });
+// AT-Proto's authorization server fetches our client-metadata over the PUBLIC internet, so the OAuth base MUST be
+// the public domain (agentc.chu.vmkqx.com via ngrok) — NOT the tailnet BASE_URL. Read it from the config's
+// `publicUrl` (preferred, no systemd edit) → env → BASE_URL. Public exposure stays an explicit operator choice.
+const blueskyPublicUrl = (() => {
+  try { const c = JSON.parse(fs.readFileSync(`${CONFIG_DIR}/bluesky-raindrop.json`, 'utf8')); if (c.publicUrl) return String(c.publicUrl).replace(/\/$/, ''); } catch { /* fall through */ }
+  return process.env.BSKY_OAUTH_BASE_URL || BASE_URL;
+})();
 const blueskyOAuth = makeBlueskyOAuth({
-  baseUrl: BASE_URL,
+  baseUrl: blueskyPublicUrl,
   keyFile: `${CONFIG_DIR}/bluesky-oauth-key.json`,
   stateFile: `${VOICE_STATE_DIR}/bluesky-oauth-state.json`,
   sessionFile: `${VOICE_STATE_DIR}/bluesky-oauth-session.json`,
@@ -1119,7 +1126,7 @@ const handler = async (req, res) => {
           // sign them in to their own namespace. The cap rides the URL FRAGMENT (client-only, as every invite
           // link in this app does) — the app stores it in localStorage and strips it from the address bar.
           if (r.granted) log('bsky', `claim: eligible DID signed in, +${r.granted}µUSD granted`);
-          res.writeHead(302, { location: `${BASE_URL}/#cap=${r.scopedCap}`, 'cache-control': 'no-store', ...SEC });
+          res.writeHead(302, { location: `${blueskyPublicUrl}/#cap=${r.scopedCap}`, 'cache-control': 'no-store', ...SEC });
           return res.end();
         }
         res.writeHead(302, { location: '/bsky?status=ineligible', 'cache-control': 'no-store', ...SEC });

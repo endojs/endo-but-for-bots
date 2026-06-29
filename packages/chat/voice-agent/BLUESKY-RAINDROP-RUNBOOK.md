@@ -39,10 +39,20 @@ Make a Raindrop collection (e.g. **"Bluesky invites"**) and bookmark the profile
 
 `~/.config/field-agent/bluesky-raindrop.json` (mode 600):
 ```json
-{ "raindrop": { "token": "<raindrop test token>" }, "collection": "Bluesky invites" }
+{
+  "raindrop": { "token": "<raindrop test token>" },
+  "collection": "Bluesky invites",
+  "publicUrl": "https://agentc.chu.vmkqx.com"
+}
 ```
 No app password is needed (we only resolve public handles → DIDs to match the sign-in). Edit the collection
 anytime — eligibility is read fresh (cached ~5 min).
+
+**`publicUrl` is required for OAuth** and MUST be the public-internet origin (the ngrok domain
+`https://agentc.chu.vmkqx.com`), NOT the tailnet URL — AT-Proto's authorization server fetches
+`<publicUrl>/bsky/client-metadata.json` over the public internet and redirects back to `<publicUrl>/bsky/callback`.
+The server defaults to the tailnet `BASE_URL` if `publicUrl` is unset, which will NOT work for OAuth. (This is the
+one place the feature is deliberately public — consistent with agentc.chu already being your public surface.)
 
 ### C. Restart + try it
 
