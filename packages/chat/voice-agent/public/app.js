@@ -3877,20 +3877,23 @@ const fmtEvery = ms => { const n = Number(ms) || 0; const h = n / 3600000; if (h
 const SETTINGS_SECTIONS = [{ key: 'usage', label: '📊 Usage' }, { key: 'providers', label: '🧠 Providers' }, { key: 'agents', label: '🕸️ Agents' }, { key: 'specialists', label: '🧑‍🔬 Specialists' }, { key: 'feedback', label: '🛡️ Checks' }, { key: 'files', label: '📂 Files' }, { key: 'timers', label: '⏰ Timers' }, { key: 'internal', label: '📨 Internal' }];
 let settingsSection = 'usage';
 const openSettings = async () => {
-  if (!isRoot) { setStatus('settings are owner-only — open with your root link'); return; }
+  // Owners see every section; an INVITED user sees only their OWN (provider + usage), so anyone can reach the
+  // BYO-provider panel — but not the owner-management sections.
+  const SECTIONS = isRoot ? SETTINGS_SECTIONS : [{ key: 'providers', label: '🧠 Provider' }, { key: 'usage', label: '📊 Usage' }];
+  if (!SECTIONS.some(s => s.key === settingsSection)) settingsSection = SECTIONS[0].key;
   // P4: the settings modal SHELL is an editable island (.setnav + .setbody); app.js fills #setnav (sections) +
   // #setbody. Fall back to static markup if islands aren't up or the shell didn't render its two panes.
   showModal('<div id="settings-shell"></div>');
   const mount = $('settings-shell'); let shellOk = false;
   try { if (mount && window.__fieldIslands && window.__fieldIslands.renderSettingsShell) shellOk = window.__fieldIslands.renderSettingsShell(mount); } catch { shellOk = false; }
   if (!shellOk || !$('setnav') || !$('setbody')) { if (mount) mount.innerHTML = '<div class="setwrap"><div class="setnav" id="setnav"></div><div class="setbody" id="setbody"></div></div>'; }
-  $('setnav').innerHTML = SETTINGS_SECTIONS.map(s => `<button class="setnav-item${s.key === settingsSection ? ' on' : ''}" data-sec="${s.key}">${s.label}</button>`).join('');
+  $('setnav').innerHTML = SECTIONS.map(s => `<button class="setnav-item${s.key === settingsSection ? ' on' : ''}" data-sec="${s.key}">${s.label}</button>`).join('');
   document.querySelectorAll('.setnav-item').forEach(btn => { btn.onclick = () => { settingsSection = btn.getAttribute('data-sec'); document.querySelectorAll('.setnav-item').forEach(b => b.classList.toggle('on', b === btn)); renderSettingsSection(); }; });
   renderSettingsSection();
 };
 const renderSettingsSection = () => {
   const body = $('setbody'); if (!body) return;
-  if (settingsSection === 'providers') { body.innerHTML = '<div class="set-h">🧠 Model providers</div><div class="pmeta">Pick a per-chat model from the header selector. Add a provider key by asking the agent (it stores it in the key vault). A dedicated provider-management form is coming next.</div>'; return; }
+  if (settingsSection === 'providers') return renderSettingsProviders(body);
   if (settingsSection === 'agents') return renderSettingsShape(body);
   if (settingsSection === 'specialists') return renderSettingsSpecialists(body);
   if (settingsSection === 'feedback') return renderSettingsGauntlet(body);
@@ -3898,6 +3901,33 @@ const renderSettingsSection = () => {
   if (settingsSection === 'timers') return renderSettingsTimers(body);
   if (settingsSection === 'internal') return renderSettingsInternal(body);
   return renderSettingsUsage(body);
+};
+// 🧠 Your inference provider (BYO): connect your OWN anthropic/openrouter account so your turns run unlimited
+// on your key (bypassing the owner's allowance). Cap-hygiene: the key is a write-only password field, sent once,
+// stored server-side in the vault, and never rendered back (status only ever reports whether one is set).
+const renderSettingsProviders = async (body) => {
+  body.innerHTML = '<div class="set-h">🧠 Your inference provider</div><div class="pmeta">loading…</div>';
+  let st = {}; try { st = await (await fetch('/byo/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json(); } catch {}
+  body.innerHTML = `<div class="set-h">🧠 Your inference provider</div>
+    <div class="pmeta" style="line-height:1.5;margin-bottom:9px">By default your turns run on ${isRoot ? 'your' : "the owner's"} providers + prepaid allowance. Connect your OWN provider key to run <b>unlimited on your own account</b>. Your key is stored securely server-side and never shown again.</div>
+    ${st.connected ? `<div class="pill" style="margin-bottom:9px">✓ Connected — <b>${esc(st.provider || '')}</b> · ${esc(st.model || '')}</div>` : ''}
+    <div style="display:flex;flex-direction:column;gap:7px;max-width:400px">
+      <select id="byo-prov" class="kit-in"><option value="anthropic">Anthropic (Claude)</option><option value="openrouter">OpenRouter</option></select>
+      <input id="byo-model" class="kit-in" placeholder="model id — e.g. claude-sonnet-4-6 or openai/gpt-4o">
+      <input id="byo-key" class="kit-in" type="password" autocomplete="off" placeholder="🔒 your API key — stored securely, never shown">
+      <div style="display:flex;gap:6px;align-items:center"><button class="go" id="byo-save">${st.connected ? 'Update' : 'Connect'}</button>${st.connected ? '<button class="mini" id="byo-clear">Disconnect</button>' : ''}<span class="pmeta" id="byo-msg"></span></div>
+    </div>`;
+  if (st.provider && $('byo-prov')) $('byo-prov').value = st.provider;
+  if (st.model && $('byo-model')) $('byo-model').value = st.model;
+  $('byo-save').onclick = async () => {
+    const provider = $('byo-prov').value, model = ($('byo-model').value || '').trim(), key = $('byo-key').value;
+    $('byo-save').disabled = true; $('byo-msg').textContent = 'connecting…';
+    let r; try { r = await (await fetch('/byo/set', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, provider, model, key }) })).json(); } catch (e) { r = { error: e.message }; }
+    $('byo-key').value = ''; $('byo-save').disabled = false; // never keep the key in the DOM
+    $('byo-msg').textContent = r && r.ok ? '✓ connected — your turns now run on your own account' : ('⚠ ' + ((r && r.error) || 'failed'));
+    if (r && r.ok) setTimeout(() => renderSettingsProviders(body), 700);
+  };
+  if ($('byo-clear')) $('byo-clear').onclick = async () => { try { await fetch('/byo/clear', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) }); } catch {} renderSettingsProviders(body); };
 };
 // 🛡️ Feedback loops — the dev agent's checks & balances surfaced as GATE-LANES (the propagator-gate model:
 // each gate reads the action's cells → a verdict; the action proceeds only while the verdict holds). Read-only
