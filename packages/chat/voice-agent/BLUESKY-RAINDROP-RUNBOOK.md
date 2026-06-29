@@ -1,81 +1,88 @@
-# Invite Bluesky users by Raindrop — runbook
+# Sign in with Bluesky → claim credits — runbook
 
-A new field-agent power (`bluesky`) that reads a **Raindrop.io** collection of Bluesky profile bookmarks,
-mints each of those people their own **private namespace** on Agent C (the same per-user namespace any invitee
-gets — their own home folder, chats, projects, an allowance through your providers, BYO inference), and delivers
-each person their personal invite link **over Bluesky** (a private DM).
+A user comes to the app and **signs in with their Bluesky handle** (real AT-Protocol OAuth, scope `atproto` =
+identity only — no posting, no repo access). If their account is on your **Raindrop eligibility allow-list**, they
+**claim a private namespace** (their own home/chats/projects — the same per-user space any invitee gets) plus a
+**one-time credit allowance** into that namespace's purse. Credit-gated features then spend from that balance; the
+existing MetaMask/ERC-7715 top-up feeds the *same* balance, so claimed credits and paid credits are one wallet.
+Anyone can sign in; only allow-listed handles get credits.
 
-It's wired but **dormant until you drop two credentials** — no creds, no risk. Do steps 1–3, then try it from
-chat ("preview", then "send").
+This is **pull, not push** — nobody is DMed. It's wired but **switched off until you do the steps below** (the
+sign-in page says so; `/bsky/client-metadata.json` and `/bsky/jwks.json` already serve so setup can be staged).
 
 ---
 
-## 1. Make a Raindrop collection of the people to invite
+## What you do (morning, ~5 min)
 
-In Raindrop, make a collection (e.g. **"Bluesky invites"**) and add bookmarks pointing at the profiles —
-`https://bsky.app/profile/<handle>` (or `.../profile/<did>`). Only `bsky.app/profile/...` links are picked up;
-everything else in the collection is ignored. Duplicates are de-duped.
+### A. Decide to turn it on (host-layer call — I left this to you)
 
-## 2. Get the two credentials
+Two things have real blast radius, so I did NOT do them autonomously:
 
-- **Raindrop test token** — https://app.raindrop.io/settings/integrations → create an app → open it → copy the
-  **Test token** (authorizes against your own account; no OAuth dance).
-- **Bluesky app password** — bsky.app → Settings → Privacy and Security → **App Passwords** → add one, and
-  **enable "Allow access to your direct messages"** (a normal app password silently fails the DM API). Note your
-  handle (e.g. `you.bsky.social`).
+1. **Install the OAuth library** into the shared monorepo:
+   ```bash
+   cd /home/dan/endo-bfb-llm && npx corepack yarn workspace @endo/field-voice-agent add @atproto/oauth-client-node
+   ```
+   (Commit the `yarn.lock` change on its own, per the repo's pre-PR checklist.) The first time the server
+   constructs the client it auto-generates an ES256 signing keypair at
+   `~/.config/field-agent/bluesky-oauth-key.json` (mode 600) — the private half never leaves that file; only the
+   public half is served at `/bsky/jwks.json`. No app-registration step exists in AT-Proto OAuth: the client_id
+   *is* `https://agentc.chu.vmkqx.com/bsky/client-metadata.json`, which the network fetches at sign-in.
 
-## 3. Drop them in the config (never in chat / never in code)
+2. **A public OAuth callback** (`/bsky/callback`) is now reachable at agentc.chu — that's inherent to "Sign in with
+   Bluesky." It only ever learns a signed-in account's DID (scope `atproto`); it holds no power over their account.
 
-Create `~/.config/field-agent/bluesky-raindrop.json` (mode 600):
+### B. Configure eligibility (the Raindrop allow-list)
 
+Make a Raindrop collection (e.g. **"Bluesky invites"**) and bookmark the profiles to allow —
+`https://bsky.app/profile/<handle>` or `.../profile/<did>`. Get a Raindrop **test token**
+(https://app.raindrop.io/settings/integrations → create app → Test token). Then:
+
+`~/.config/field-agent/bluesky-raindrop.json` (mode 600):
 ```json
-{
-  "raindrop":   { "token": "<raindrop test token>" },
-  "bluesky":    { "identifier": "you.bsky.social", "appPassword": "xxxx-xxxx-xxxx-xxxx" },
-  "deliver":    "dm",
-  "collection": "Bluesky invites"
-}
+{ "raindrop": { "token": "<raindrop test token>" }, "collection": "Bluesky invites" }
 ```
+No app password is needed (we only resolve public handles → DIDs to match the sign-in). Edit the collection
+anytime — eligibility is read fresh (cached ~5 min).
 
-`deliver` default: `"dm"` (private link) · `"mention"` (public @-post with **no** link — just nudges them to DM
-you) · `"none"` (mint only; links wait in the Shares panel for you to hand out). `messageTemplate` is optional
-(`{url}` and `{handle}` are substituted).
+### C. Restart + try it
 
 ```bash
-chmod 600 ~/.config/field-agent/bluesky-raindrop.json
+systemctl --user restart voice-agent
 ```
-
-No restart needed for the config itself — it's read on each call. (A restart *was* needed once, to load the new
-power; that's already done.)
-
-## 4. Try it from chat
-
-- **"Check the Bluesky invite status"** → `blueskyInviteStatus` tells you what's configured / still missing.
-- **"List my Raindrop collections"** → `blueskyListCollections` (pick one if not using the default).
-- **"Preview the Bluesky invites"** → `blueskyInvitePreview` — a **dry run**: who *would* be invited, deduped,
-  marking anyone already invited. Mints nothing, sends nothing. **Always preview first.**
-- **"Send the Bluesky invites"** → `blueskyInviteSend` — mints each person a namespace and DMs them their link.
-  **Idempotent**: re-running skips anyone already invited and reuses their existing space. Throttled (~4 s
-  between DMs) and capped (default 50/run) so the account isn't flagged.
+Open **https://agentc.chu.vmkqx.com/bsky** → enter a handle that's in the collection → "Sign in with Bluesky" →
+authorize on Bluesky → you're redirected into your own namespace with credits. A handle NOT in the collection can
+still sign in but lands on a "not on the list yet" page (add them to Raindrop to let them in).
 
 ---
 
-## Notes & safety
+## How it fits together (files)
 
-- **Cap hygiene.** Each invite link carries a swissnum. It is built server-side and put **only** into that one
-  recipient's private DM — never returned to the agent, never logged, never shown in chat. The verbs return
-  counts only. (Same trust model as emailing an invite link; the `kazputer`/`email` powers already do this.
-  Bluesky DMs are *not* end-to-end encrypted, so the chat-service operator can see the link — use `mention` mode
-  if you'd rather no link transit a third party.)
-- **Revocation.** Invited people are normal scoped caps — revoke any of them from the **Shares panel** (top-right).
-- **Stable identity.** Each person is keyed by their Bluesky DID, so re-running never double-mints; the same
-  person always lands in the same space.
-- **DM etiquette.** Cold bulk DMs are the fastest way to get an account limited. Prefer inviting people you have
-  some relationship with; the throttle + per-run cap are deliberate. Delivery stops on the first rate-limit error.
+- `bluesky-oauth.mjs` — wraps `@atproto/oauth-client-node` (confidential web client, scope `atproto`). Serves
+  `/bsky/client-metadata.json` + `/bsky/jwks.json`; `/bsky/login` → authorize redirect; `/bsky/callback` →
+  proven DID. Lazy/dynamic import → degrades gracefully if the dep isn't installed. **Verified to run in-process
+  under the SES server** (jose's Web-Crypto paths don't touch frozen intrinsics).
+- `bluesky-raindrop.mjs` — `makeBlueskyEligibility`: Raindrop collection → allow-list of DIDs + handles (pages the
+  collection, resolves handles→DIDs via the public API, matches on either).
+- `bluesky-claim.mjs` — `makeBlueskyClaim`: proven DID → eligibility check → stable namespace (membership seam,
+  keyed on DID) → one-time credit grant. Idempotent (same space + credits-once on re-sign-in).
+- `server.mjs` — instantiates the three + the `/bsky/*` routes; on an eligible callback, redirects to
+  `/#cap=<namespace>` (the cap rides the URL fragment, client-only, exactly as every invite link in this app
+  does; the app stores it and strips the address bar).
 
-## Rollback
+## Credit model (and a knob)
 
-This shipped as a single merge on `field-preact` (branch `bluesky-raindrop-invite`). To remove it cleanly:
-`git revert -m 1 <merge-sha>` (or `git reset --hard <pre-merge-sha>`) then `systemctl --user restart voice-agent`.
-The feature is additive (one module + one power + one wiring block); reverting touches nothing else. Any config
-file you created (`bluesky-raindrop.json`, `bluesky-invited.json`, `bluesky-policies.json`) just goes unused.
+- The claim grants `defaultAllowance` (µUSD; $1.00 default) into the namespace's purse on first sign-in. Change the
+  global default via the existing default-allowance setting, or the per-claim amount via `grantUusd` in the
+  server wiring.
+- **Open question for you:** today an eligible claimant's grant lands on their namespace's main wallet, and the
+  existing per-chat purse seeding still applies. If you want stricter gating (e.g. *unclaimed* signed-in users get
+  ZERO until they claim, or credits are one shared pool across all their chats rather than per-chat), that's a
+  small follow-up — tell me which model you want.
+
+## Tests & rollback
+
+- `node --test bluesky-raindrop.test.mjs` — 7/7: eligibility (paging/dedup/handle→DID, DID + case-folded handle
+  match, strangers rejected) and claim (eligible→namespace+grant, ineligible→nothing, idempotent re-sign-in,
+  non-DID rejected). The live OAuth handshake itself needs a real Bluesky sign-in to exercise (step C).
+- Additive: new modules + `/bsky/*` routes + one wiring block; no agent power. To remove: revert the feature
+  commit + restart. Config files created during setup just go unused. (Branch `bluesky-raindrop-invite`.)

@@ -40,6 +40,10 @@ import { makeIslandSource } from './island-source.mjs';
 import { reuseFirstPreamble } from './component-catalog.mjs';
 import { addBacklog } from './improvement-backlog.mjs';
 import { STARTER_RING } from './system-map.mjs';
+import { makeInvitePolicies } from './invite-policy.mjs';
+import { makeBlueskyEligibility } from './bluesky-raindrop.mjs';
+import { makeBlueskyClaim } from './bluesky-claim.mjs';
+import { makeBlueskyOAuth } from './bluesky-oauth.mjs';
 const connectors = makeConnectors({ getSecret }); // owner-side registry (same connectors.json the agent calls)
 // SELF-HEAL (designs/self-healing-errors.md): when an admitted custom tool THROWS at runtime, rewrite its source
 // so the original call RESOLVES with the repaired value instead of bubbling an error. Single-file tools (the body
@@ -515,6 +519,37 @@ const fillSpecialist = process.env.SELF_HEAL === '0' ? undefined : async ({ name
 const customView = {};
 const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, foldedPersonaFor, getFoldDocs, setFoldDocs, agentConfig, saveAgentConfig, haResolveReadOnly, changelog, actOnStagedReview, publishClip, revokeClip, listClips } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL, fillSpecialist, customView });
 liveCells = makeLiveCells({ nodeFor }); // browser-subscribable live grains (cap-gated)
+
+// ── "Sign in with Bluesky → claim credits" ───────────────────────────────────────────────────────────────────
+// A user signs in with their Bluesky handle (AT-Protocol OAuth, scope `atproto` = identity only). If their DID is
+// on the Raindrop ELIGIBILITY allow-list, they claim a STABLE per-user namespace (membership seam, keyed on DID —
+// re-sign-in returns the same space) plus a one-time CREDIT allowance into that namespace's purse (the same purse
+// paid top-ups feed). Ineligible-but-signed-in identities get a result with no credits. The OAuth library is
+// loaded lazily and degrades gracefully if not yet installed (routes say so) — see BLUESKY-RAINDROP-RUNBOOK.md.
+const blueskyInvitePolicies = makeInvitePolicies({
+  file: `${CONFIG_DIR}/bluesky-policies.json`,
+  mintNamespaceCap: ({ powers, label }) => { const r = mintScopedCap({ powers, label }); return { swiss: r.swiss, powers: r.powers }; },
+});
+const blueskyEligibility = makeBlueskyEligibility({ configFile: `${CONFIG_DIR}/bluesky-raindrop.json` });
+const BSKY_CLAIM_SID = '_namespace'; // the namespace's credit wallet (the claim allowance lands here)
+const blueskyClaimStore = {
+  read: () => { try { return JSON.parse(fs.readFileSync(`${CONFIG_DIR}/bluesky-claims.json`, 'utf8')); } catch { return { granted: {} }; } },
+  write: d => { try { fs.mkdirSync(CONFIG_DIR, { recursive: true }); fs.writeFileSync(`${CONFIG_DIR}/bluesky-claims.json`, JSON.stringify(d, null, 2), { mode: 0o600 }); } catch { /* best-effort */ } },
+};
+const blueskyClaim = makeBlueskyClaim({
+  eligibility: blueskyEligibility,
+  invitePolicies: blueskyInvitePolicies,
+  ring: STARTER_RING,
+  grantUusd: defaultAllowance,
+  grantCredits: (scopedCap, uusd) => { purseFor(scopedCap, BSKY_CLAIM_SID).credit(uusd); },
+  store: blueskyClaimStore,
+});
+const blueskyOAuth = makeBlueskyOAuth({
+  baseUrl: BASE_URL,
+  keyFile: `${CONFIG_DIR}/bluesky-oauth-key.json`,
+  stateFile: `${VOICE_STATE_DIR}/bluesky-oauth-state.json`,
+  sessionFile: `${VOICE_STATE_DIR}/bluesky-oauth-session.json`,
+});
 // Least-authority cross-user share tokens for a broken-out component: subscribe-only to its frozen cells.
 const componentShares = makeComponentShares({ file: `${VOICE_STATE_DIR}/component-shares.json`, makePurse, purseStore });
 // User-owned FORKS of confined Preact components (the in-tree, no-iframe model). Any cap-holder owns forks;
@@ -1046,6 +1081,52 @@ const handler = async (req, res) => {
   try {
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/' || u.pathname === '/index.html') return serveShell(res, 'index.html', 'text/html; charset=utf-8');
+
+    // ── Sign in with Bluesky → claim credits ─────────────────────────────────────────────────────────────────
+    // client-metadata + jwks serve even before the OAuth dep is installed (they only need the keypair/config), so
+    // setup can be staged; login/callback need the dep and report clearly if it's absent.
+    if (u.pathname === '/bsky/client-metadata.json' && req.method === 'GET') return json(res, 200, blueskyOAuth.clientMetadata());
+    if (u.pathname === '/bsky/jwks.json' && req.method === 'GET') return json(res, 200, blueskyOAuth.jwks());
+    if (u.pathname === '/bsky' && req.method === 'GET') {
+      const installed = await blueskyOAuth.available().catch(() => false);
+      const elig = blueskyEligibility.status();
+      const note = u.searchParams.get('status') === 'ineligible'
+        ? '<p class="warn">That account isn\'t on the invite list yet. Ask the host to add your Bluesky profile.</p>' : '';
+      const body = !installed
+        ? '<p class="warn">Sign-in isn\'t switched on yet. (The host still needs to enable Bluesky OAuth.)</p>'
+        : !elig.configured
+          ? '<p class="warn">Sign-in is up, but the eligibility list isn\'t configured yet.</p>'
+          : `${note}<form method="GET" action="/bsky/login"><label>Your Bluesky handle<br><input name="handle" placeholder="you.bsky.social" autocapitalize="none" autocorrect="off" spellcheck="false" required></label><button type="submit">Sign in with Bluesky</button></form>`;
+      const page = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in — Agent C</title><style>body{font-family:system-ui,sans-serif;max-width:30rem;margin:12vh auto;padding:0 1.2rem;color:#e6e6e6;background:#0b0d12}h1{font-size:1.4rem}label{display:block;margin:1.2rem 0 .3rem;font-size:.95rem;color:#9aa}input{width:100%;padding:.7rem;border-radius:.6rem;border:1px solid #333;background:#11141b;color:#e6e6e6;font-size:1rem;box-sizing:border-box}button{margin-top:1rem;padding:.7rem 1.1rem;border:0;border-radius:.6rem;background:#3a7afe;color:#fff;font-size:1rem;cursor:pointer}.warn{color:#ffcf6b}</style><h1>Sign in with Bluesky</h1><p>Claim your space and credits with your Bluesky handle.</p>${body}`;
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...SEC });
+      return res.end(page);
+    }
+    if (u.pathname === '/bsky/login' && req.method === 'GET') {
+      const handle = (u.searchParams.get('handle') || '').trim();
+      if (!handle) return json(res, 400, { error: 'handle required' });
+      try {
+        const state = crypto.randomBytes(16).toString('hex');
+        const dest = await blueskyOAuth.loginUrl(handle, state);
+        res.writeHead(302, { location: dest, 'cache-control': 'no-store', ...SEC });
+        return res.end();
+      } catch (e) { log('bsky', 'login', e.message); res.writeHead(302, { location: '/bsky?status=error', ...SEC }); return res.end(); }
+    }
+    if (u.pathname === '/bsky/callback' && req.method === 'GET') {
+      try {
+        const { did } = await blueskyOAuth.callback(u.searchParams);
+        const r = await blueskyClaim.claim({ did }); // checks eligibility, mints stable namespace, grants credits
+        if (r.ok && r.eligible && r.scopedCap) {
+          // sign them in to their own namespace. The cap rides the URL FRAGMENT (client-only, as every invite
+          // link in this app does) — the app stores it in localStorage and strips it from the address bar.
+          if (r.granted) log('bsky', `claim: eligible DID signed in, +${r.granted}µUSD granted`);
+          res.writeHead(302, { location: `${BASE_URL}/#cap=${r.scopedCap}`, 'cache-control': 'no-store', ...SEC });
+          return res.end();
+        }
+        res.writeHead(302, { location: '/bsky?status=ineligible', 'cache-control': 'no-store', ...SEC });
+        return res.end();
+      } catch (e) { log('bsky', 'callback', e.message); res.writeHead(302, { location: '/bsky?status=error', ...SEC }); return res.end(); }
+    }
+
     if (u.pathname === '/app.js') return serveFile(res, 'app.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/qrcode.js') return serveFile(res, 'qrcode.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/ses.umd.min.js') return serveFile(res, 'ses.umd.min.js', 'text/javascript; charset=utf-8'); // standalone SES shim (taming intact), loaded before the page modules
