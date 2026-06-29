@@ -28,6 +28,18 @@ auth/registration system (e.g. DWeb Camp's user registry) for bulk/federated onb
 4. **No BYO inference provider** — every turn runs on the owner's keys + purse. → let a user attach their own
    provider+key (runtime-injected, never in DOM); their turns route to it and BYPASS the owner's purse.
 
+## STATUS (2026-06-29): Inc 1–5 SHIPPED + TESTED
+- ✅ **Inc 1** invitee home (STARTER_RING += `home`; isolated cap-<label>) — per-user-namespace.test 4/4.
+- ✅ **Inc 2** per-user projects (owner-partitioned; non-owner 404; scheduled-agent tools capped to the owner's
+  ring → no escalation) — unit 5/5 + live endpoint smoke (isolation both ways, host/notes stripped, 404).
+- ✅ **Inc 4** BYO inference (callLLM apiKey override + byo-store w/ vaulted key + /byo/* + unmetered routing +
+  Settings UI for invitees) — byo-store 3/3, byo-ui 5/5, endpoint smoke (key never leaked).
+- ✅ **Inc 5** membership-invite SEAM scaffolded (invite-policy.mjs: verified identity → stable namespace cap;
+  pluggable fail-closed verifier) — invite-policy.test 4/4. To go live: /membership/* + the camp's verifier.
+- ⏳ **Inc 3** cap-scoped client localStorage — OPTIONAL/deferred. Chats are already per-cap isolated SERVER-side
+  (the real boundary); the localStorage cache only matters if an invite is opened in the OWNER's own browser,
+  and the per-cap /chats/load overwrites it. Minor UX, not a security gap. Noted, not built.
+
 ## Plan (incremental, each commit shippable + tested)
 - **Inc 1 — invitee home + isolation proof.** Add `home` to STARTER_RING (default-on, owner can uncheck). Test:
   an invitee cap's home is `cap-<label>`, disjoint from `root`; an invitee turn can read/write its own home and
