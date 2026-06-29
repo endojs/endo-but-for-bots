@@ -44,6 +44,11 @@ MOUNT="${FIELD_PERSONAL_MOUNT:-/mnt/field-personal}"
 META="$HOME_DIR/.config/field-agent-volume.json"   # NON-secret: just the LUKS UUID of YOUR drive (no key)
 SVC="voice-agent"
 LABEL="field-personal"
+# Off-site backup target (the sibling Unraid box, same place archua + muddle back up). The backup is
+# ENCRYPTED on this host before it leaves, so friky holds only ciphertext — never the plaintext secrets.
+FRIKY_HOST="${FRIKY_HOST:-root@192.168.50.74}"
+FRIKY_BACKUP_DIR="${FRIKY_BACKUP_DIR:-/mnt/user/dan/backups/field-personal}"
+BACKUP_KEEP="${BACKUP_KEEP:-7}"   # how many timestamped backups to retain on friky
 
 # The personal data set: { source on the internal disk → sub-path on the volume }. Mirrors field-config.mjs
 # (CONFIG_DIR/STATE_DIR/VOICE_STATE_DIR/DASH_STATE_DIR/VAULT_DIR) so the service finds everything via
@@ -254,6 +259,33 @@ cmd_scrub() {
   c_grn "✓ back up in PERSONAL mode — the whole box reads the encrypted volume; nothing personal is on the disk."
 }
 
+# ENCRYPTED off-site backup → friky. The volume's contents are tar'd + compressed + ENCRYPTED on THIS host
+# (gpg AES256, your passphrase) and streamed to friky, so the secrets never touch the internal disk or friky
+# in plaintext. Your passphrase (can be the LUKS one) is the ONLY way to restore — it survives losing the USB.
+cmd_backup() {
+  is_mounted || die "unlock the volume first: sudo field-personal unlock"
+  command -v gpg >/dev/null || die "gpg not installed"; command -v zstd >/dev/null || die "zstd not installed"
+  ssh -o ConnectTimeout=8 "$FRIKY_HOST" "mkdir -p '$FRIKY_BACKUP_DIR'" >/dev/null 2>&1 || die "can't reach friky ($FRIKY_HOST)"
+  local stamp name; stamp="$(date +%Y%m%d-%H%M%S 2>/dev/null || echo manual)"; name="field-personal-$stamp.tar.zst.gpg"
+  echo; c_ylw "  ENCRYPTED backup → $FRIKY_HOST:$FRIKY_BACKUP_DIR/$name"
+  c_ylw "  You'll set a BACKUP PASSPHRASE — REMEMBER IT (it can be your LUKS passphrase). It is the only way to"
+  c_ylw "  restore, and it survives losing the drive. friky receives ciphertext only; it cannot read your secrets."
+  echo
+  # tar the decrypted volume → compress → encrypt (symmetric, prompts on YOUR terminal) → stream to friky.
+  if tar -C "$MOUNT" --exclude=./lost+found -cf - . | zstd -T0 -q \
+       | gpg --symmetric --cipher-algo AES256 --pinentry-mode loopback -o - \
+       | ssh "$FRIKY_HOST" "cat > '$FRIKY_BACKUP_DIR/$name.part' && mv '$FRIKY_BACKUP_DIR/$name.part' '$FRIKY_BACKUP_DIR/$name'"; then
+    local sz; sz="$(ssh "$FRIKY_HOST" "du -h '$FRIKY_BACKUP_DIR/$name' | cut -f1" 2>/dev/null || echo '?')"
+    c_grn "✓ backup complete: $FRIKY_HOST:$FRIKY_BACKUP_DIR/$name ($sz, ciphertext)"
+    # retain the newest $BACKUP_KEEP, prune older
+    ssh "$FRIKY_HOST" "ls -1t '$FRIKY_BACKUP_DIR'/field-personal-*.tar.zst.gpg 2>/dev/null | tail -n +$((BACKUP_KEEP+1)) | xargs -r rm -f" 2>/dev/null || true
+    c_ylw "  RESTORE: ssh $FRIKY_HOST cat '$FRIKY_BACKUP_DIR/$name' | gpg -d | zstd -d | tar -C <target-dir> -xf -"
+  else
+    ssh "$FRIKY_HOST" "rm -f '$FRIKY_BACKUP_DIR/$name.part'" 2>/dev/null || true
+    die "backup failed (no partial kept) — re-run"
+  fi
+}
+
 case "${1:-status}" in
   status)  cmd_status ;;
   init)    shift; cmd_init "$@" ;;
@@ -262,5 +294,6 @@ case "${1:-status}" in
   migrate) cmd_migrate ;;
   verify)  cmd_verify ;;
   scrub)   shift; cmd_scrub "$@" ;;
-  *) echo "usage: field-personal {status|init <dev>|unlock|lock|migrate|verify|scrub --yes}"; exit 1 ;;
+  backup)  cmd_backup ;;
+  *) echo "usage: field-personal {status|init <part>|unlock|lock|migrate|verify|scrub --yes|backup}"; exit 1 ;;
 esac
