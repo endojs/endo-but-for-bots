@@ -18,9 +18,11 @@ process.env.FIELD_HOME_BASE = path.join(TMP, 'home');
 process.env.FIELD_CONFIG_DIR = path.join(TMP, 'config');
 process.env.OBJECTS_FILE = path.join(TMP, 'objects.json');
 process.env.SCOPED_CAPS_FILE = path.join(TMP, 'scoped.json');
+process.env.PROJECTS_STORE = path.join(TMP, 'projects.json');
 
 const { makeFieldAgent } = await import('./agent-caps.mjs');
 const { STARTER_RING } = await import('./system-map.mjs');
+const projects = await import('./projects.mjs');
 
 const mk = () => makeFieldAgent({ outDir: fs.mkdtempSync(path.join(os.tmpdir(), 'fa-ns-out-')), baseUrl: 'http://test.invalid', autoConfirmFile: path.join(TMP, 'ac.json'), specialistsFile: path.join(TMP, 'spec.json') });
 const verbNames = tb => Object.keys(tb || {});
@@ -74,6 +76,18 @@ test('an invitee CANNOT read the owner\'s home (path traversal is jailed)', asyn
     const leaked = r && typeof r === 'object' && JSON.stringify(r).includes('top secret');
     assert.ok(!leaked, `invitee read of "${p}" must NOT leak the owner's content (got: ${JSON.stringify(r).slice(0, 120)})`);
   }
+});
+
+test('projects are partitioned by OWNER — each owner sees only their own (legacy → root)', () => {
+  const a = projects.createProject('Owner project', 'root');
+  const b = projects.createProject('Guest project', 'u:alice');
+  const c = projects.createProject('Bob project', 'u:bob');
+  const rootIds = projects.listProjects('root').map(p => p.id);
+  const aliceIds = projects.listProjects('u:alice').map(p => p.id);
+  assert.ok(rootIds.includes(a.id) && !rootIds.includes(b.id) && !rootIds.includes(c.id), 'root sees only its own project');
+  assert.ok(aliceIds.includes(b.id) && !aliceIds.includes(a.id) && !aliceIds.includes(c.id), 'alice sees only her own project');
+  assert.equal(projects.projectOwner(b.id), 'u:alice', 'project records its owner');
+  assert.equal(projects.listProjects().length >= 3, true, 'the unscoped list (scheduler) still sees ALL projects');
 });
 
 test.after(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* */ } });

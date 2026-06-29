@@ -21,15 +21,26 @@ const save = s => { s.updated = nowIso(); fs.mkdirSync(path.dirname(STORE), { re
 // HOME_BASE/<subkey>; binding every node in the project to THIS subkey = one shared folder.
 export const projectHomeSubkey = projectId => `project-${projectId}`;
 
-export const createProject = (name) => {
+// MULTI-USER: every project belongs to an OWNER (the root cap → 'root'; an invited user → a stable key derived
+// from their cap by the server). A user only ever sees/manages projects whose owner === their key. Legacy
+// projects (no owner field) default to 'root'. The scheduler still iterates ALL projects (server-side) — owner
+// only gates ACCESS, not execution; an invitee project's scheduled-agent tools are capped to the invitee's ring
+// at add time by the server, so a project can never grant powers its owner doesn't hold.
+export const createProject = (name, owner = 'root') => {
   const s = load();
   const pid = id('proj');
-  s.projects[pid] = { id: pid, name: String(name || 'Untitled project'), chatIds: [], scheduledAgents: [], homeSubkey: projectHomeSubkey(pid), createdAt: nowIso() };
+  s.projects[pid] = { id: pid, name: String(name || 'Untitled project'), owner: String(owner || 'root'), chatIds: [], scheduledAgents: [], homeSubkey: projectHomeSubkey(pid), createdAt: nowIso() };
   save(s);
   return s.projects[pid];
 };
 
-export const listProjects = () => Object.values(load().projects).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+// listProjects(owner?) — with an owner key, returns only that owner's projects (legacy = 'root'); without,
+// returns ALL (the scheduler + event fan-out need every project regardless of owner).
+export const listProjects = owner => {
+  const all = Object.values(load().projects).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  return owner ? all.filter(p => (p.owner || 'root') === owner) : all;
+};
+export const projectOwner = pid => { const p = load().projects[pid]; return p ? (p.owner || 'root') : null; };
 export const getProject = pid => load().projects[pid] || null;
 
 const mutate = (pid, fn) => {

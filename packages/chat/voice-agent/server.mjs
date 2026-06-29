@@ -1353,8 +1353,11 @@ const handler = async (req, res) => {
       // re-reads them every turn. No-op for an agent with no foldDocs configured.
       try { runPersona = await foldedPersonaFor(runAgentId, runPersona); } catch (e) { log('foldDocs', e.message); }
       const sid0 = String(sessionId || 'anon').slice(0, 64);
-      // the chat's home folder: its project's shared folder if filed under one, else the root agent's home.
-      const chatProject = runNode.isRoot ? projects.projectForChat(sid0) : null;
+      // the chat's home folder: its project's shared folder if filed under one (and owned by THIS cap), else
+      // the agent's own home (root → 'root'; an invited user → their cap-<label> via node.homeBinding).
+      const turnOwnerKey = runNode.isRoot ? 'root' : 'u:' + crypto.createHash('sha256').update(String(cap || '')).digest('hex').slice(0, 24);
+      const maybeProject = projects.projectForChat(sid0);
+      const chatProject = (maybeProject && (maybeProject.owner || 'root') === turnOwnerKey) ? maybeProject : null;
       const chatHomeSubkey = chatProject ? chatProject.homeSubkey : (runNode.isRoot ? 'root' : null);
       const { agentAttachments, savedRefs } = await processAttachments(attachments, chatHomeSubkey);
       if (!t && !agentAttachments.length) return json(res, 400, { error: 'empty' });
@@ -2738,35 +2741,45 @@ const handler = async (req, res) => {
     if (req.method === 'POST' && u.pathname.startsWith('/projects')) {
       const body = await jsonBody(req);
       const node = nodeFor(body.cap);
-      if (!node || !node.isRoot) return json(res, 403, { error: 'projects need your root capability' });
+      if (!node) return json(res, 403, { error: 'projects need a valid capability' });
+      // MULTI-USER: every project belongs to an OWNER keyed off the cap (root → 'root'; an invited user → a
+      // stable hash of their cap). A caller only ever sees/touches projects they own. `ownsTarget()` gates every
+      // project-specific route; a non-owner gets 404 (indistinguishable from "no such project" — no enumeration).
+      const ownerKey = node.isRoot ? 'root' : 'u:' + crypto.createHash('sha256').update(String(body.cap || '')).digest('hex').slice(0, 24);
+      const ownsTarget = () => { const p = projects.getProject(body.id); return (p && (p.owner || 'root') === ownerKey) ? p : null; };
+      // the powers an invited owner may put in a scheduled agent's ring (⊆ their own — never an escalation).
+      const capTools = ts => node.isRoot ? (Array.isArray(ts) ? ts : []) : (Array.isArray(ts) ? ts : []).filter(t => node.powers.has(t));
       try {
-        if (u.pathname === '/projects/list') return json(res, 200, { projects: projects.listProjects(), powers: ALL_POWERS });
+        if (u.pathname === '/projects/list') return json(res, 200, { projects: projects.listProjects(ownerKey), powers: [...node.powers] });
         // scheduled agents created FROM a given chat (originChat) + their recent run-log — powers the
         // in-chat run indicator (a coalesced "ran N× since your last message · last <time>" badge).
         if (u.pathname === '/projects/agents/by-chat') {
           const cid = String(body.chatId || '');
           const agents = [];
-          if (cid) for (const p of projects.listProjects()) for (const a of (p.scheduledAgents || [])) if (a.originChat === cid) agents.push({ id: a.id, name: a.name, project: p.name, schedule: a.schedule, nextAt: a.nextAt, lastRun: a.lastRun, runs: (a.runs || []).slice(0, 30) });
+          if (cid) for (const p of projects.listProjects(ownerKey)) for (const a of (p.scheduledAgents || [])) if (a.originChat === cid) agents.push({ id: a.id, name: a.name, project: p.name, schedule: a.schedule, nextAt: a.nextAt, lastRun: a.lastRun, runs: (a.runs || []).slice(0, 30) });
           return json(res, 200, { agents });
         }
-        if (u.pathname === '/projects/create') return json(res, 200, { project: projects.createProject(body.name) });
-        if (u.pathname === '/projects/rename') return json(res, 200, { project: projects.renameProject(body.id, body.name) });
-        if (u.pathname === '/projects/attach') return json(res, 200, { project: projects.attachChat(body.id, body.chatId) });
-        if (u.pathname === '/projects/detach') return json(res, 200, { project: projects.detachChat(body.id, body.chatId) });
+        if (u.pathname === '/projects/create') return json(res, 200, { project: projects.createProject(body.name, ownerKey) });
+        if (u.pathname === '/projects/rename') { if (!ownsTarget()) return json(res, 404, { error: 'no such project' }); return json(res, 200, { project: projects.renameProject(body.id, body.name) }); }
+        if (u.pathname === '/projects/attach') { if (!ownsTarget()) return json(res, 404, { error: 'no such project' }); return json(res, 200, { project: projects.attachChat(body.id, body.chatId) }); }
+        if (u.pathname === '/projects/detach') { if (!ownsTarget()) return json(res, 404, { error: 'no such project' }); return json(res, 200, { project: projects.detachChat(body.id, body.chatId) }); }
         if (u.pathname === '/projects/agents/add') {
-          const agent = projects.addScheduledAgent(body.id, { name: body.name, prompt: body.prompt, tools: body.tools, schedule: body.schedule, trigger: body.trigger, model: body.model });
+          if (!ownsTarget()) return json(res, 404, { error: 'no such project' });
+          const agent = projects.addScheduledAgent(body.id, { name: body.name, prompt: body.prompt, tools: capTools(body.tools), schedule: body.schedule, trigger: body.trigger, model: body.model }); // tools ⊆ the owner's ring — never an escalation
           if (agent.schedule) projects.updateScheduledAgent(body.id, agent.id, { nextAt: projects.computeNextAt(agent.schedule, Date.now()) }); // event-only agents have no nextAt
           return json(res, 200, { agent: projects.listScheduledAgents(body.id).find(a => a.id === agent.id) });
         }
         if (u.pathname === '/projects/agents/update') {
+          if (!ownsTarget()) return json(res, 404, { error: 'no such project' });
           const patch = body.patch || {};
+          if (patch.tools) patch.tools = capTools(patch.tools); // re-cap on edit too
           // when the timing changes, recompute the next fire so the edit takes effect immediately
           if (patch.schedule && patch.schedule.kind) patch.nextAt = projects.computeNextAt(patch.schedule, Date.now());
           return json(res, 200, { agent: projects.updateScheduledAgent(body.id, body.agentId, patch) });
         }
-        if (u.pathname === '/projects/agents/remove') { projects.removeScheduledAgent(body.id, body.agentId); return json(res, 200, { ok: true }); }
+        if (u.pathname === '/projects/agents/remove') { if (!ownsTarget()) return json(res, 404, { error: 'no such project' }); projects.removeScheduledAgent(body.id, body.agentId); return json(res, 200, { ok: true }); }
         if (u.pathname === '/projects/agents/run') {
-          const project = projects.getProject(body.id); const agent = projects.listScheduledAgents(body.id).find(a => a.id === body.agentId);
+          const project = ownsTarget(); const agent = project && projects.listScheduledAgents(body.id).find(a => a.id === body.agentId);
           if (!project || !agent) return json(res, 404, { error: 'no such project/agent' });
           const out = await runProjectAgent(project, agent);
           return json(res, 200, { ok: out.ok !== false, answer: out.answer || out.error || '', toolsUsed: out.toolsUsed || [], proposals: (out.proposalIds || []).length });
@@ -2775,7 +2788,7 @@ const handler = async (req, res) => {
         //    Binary-safe (base64) so any file type round-trips; path-guarded inside the root;
         //    uploads size-bounded. Same root-cap gate as the rest of /projects. ──
         if (u.pathname.startsWith('/projects/files')) {
-          const project = projects.getProject(body.id);
+          const project = ownsTarget();
           if (!project) return json(res, 404, { error: 'no such project' });
           const root = path.join(HOME_BASE, project.homeSubkey);
           const safe = name => { // resolve a requested name inside root or throw
