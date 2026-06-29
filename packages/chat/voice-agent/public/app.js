@@ -84,6 +84,20 @@ const pendingForkToken = _hashParams.get('fork') || null; // a shared FORK link 
 // cap-hygiene: only the cap-STRIPPED URL is staged (the swissnum never reaches the agent/server).
 const pendingSharedLinks = {}; // sessionId -> [url, …]
 const pendingCustomView = {}; // sessionId -> { name, kind, methods, sample, current } — a custom-view task folded into the next send
+const pendingWidgetRef = {}; // sessionId -> a context note for a widget whose chat-tail (💬) the user tapped, folded into the next send
+// tapping a widget's chat-tail opens the conversation with the ENTRYPOINT AGENT about THAT widget: focus the
+// composer + carry the widget as context (its type/name, so the agent knows what "this" is) into the next send.
+const WIDGET_LABEL = { 'theme-preview': '🎨 theme', 'site-preview': '🌐 page', component: '🧩 component', choices: 'choices', 'entity-status': 'status', countdowns: 'countdowns' };
+const talkAboutWidget = (spec) => {
+  const type = (spec && spec.type) || 'widget';
+  const name = (spec && (spec.name || spec.title || spec.label)) || '';
+  const lbl = WIDGET_LABEL[type] || type;
+  const detail = type === 'theme-preview' && spec && spec.vars ? ` Its current vars: ${JSON.stringify(spec.vars).slice(0, 400)}.` : '';
+  pendingWidgetRef[sessionId] = `[The user tapped the chat-tail on the "${type}" widget${name ? ` ("${name}")` : ''} shown above — they want to discuss or change it. It is a system-rendered widget (you propose its data, e.g. via showThemePreview / showComponent), not an editable confined component.${detail} Help them: adjust it via the right tool, or build a confined component that does what they want.]`;
+  const t = $('text');
+  if (t) { if (!t.value.trim()) t.value = `About the ${lbl} above — `; t.focus(); try { t.setSelectionRange(t.value.length, t.value.length); } catch { /* */ } try { t.scrollIntoView({ block: 'center' }); } catch { /* */ } }
+  setStatus(`talking to the agent about the ${lbl}`);
+};
 if (cap) { try { localStorage.setItem(CAP_KEY, cap); } catch {} }
 if (location.hash) { try { history.replaceState(null, '', location.pathname + location.search); } catch {} } // strip the fragment (cap and/or chat)
 if (!cap) { try { cap = localStorage.getItem(CAP_KEY) || null; } catch {} }
@@ -949,7 +963,7 @@ const renderAgentResponse = r => {
   const body = bubble('agent', r.answer || '…', r.agentId, Date.now());
   if (r.toolsUsed?.length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + r.toolsUsed.join(', '); body.parentNode.appendChild(e); }
   ((r.images && r.images.length ? r.images : (r.imageUrls || [])) || []).forEach(src => { const im = document.createElement('img'); im.src = src; body.appendChild(im); }); // data-URLs in the moment; durable /uploads urls as fallback (e.g. the share-post path)
-  try { if (Array.isArray(r.ui) && r.ui.length) renderWidgets(body, r.ui, { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet }); } catch (e) { console.error('renderWidgets failed', e); } // live/interactive widgets
+  try { if (Array.isArray(r.ui) && r.ui.length) renderWidgets(body, r.ui, { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet, onTalk: talkAboutWidget }); } catch (e) { console.error('renderWidgets failed', e); } // live/interactive widgets
   (r.autoFired || []).forEach(a => { const e = document.createElement('div'); e.className = 'autofired'; e.textContent = `✓ auto-confirmed: ${a.title}${a.ok === false ? ' (failed)' : ''}`; body.parentNode.appendChild(e); }); // fired via a "don't ask again" rule
   // Each card renders INDEPENDENTLY — one malformed proposal/access-request/ask must never abort the rest
   // (the answer is already shown above; a throwing Grant card used to swallow the whole turn's render).
@@ -1271,12 +1285,15 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
   // link also shows as its widget card). Consumed once. Lets a link-only message (empty `t`) still send.
   const sharedLinks = (pendingSharedLinks[sessionId] || []).slice();
   const cvNote = customViewTaskNote(pendingCustomView[sessionId]); // a pending custom-view task (kind/methods/sample/source)
+  const widgetNote = pendingWidgetRef[sessionId] || ''; // a widget the user tapped the chat-tail on (folded as context)
   const agentText = (t
     + (sharedLinks.length ? `${t ? '\n\n' : ''}${sharedLinks.map(u => `[link the user shared in chat: ${u}]`).join('\n')}` : '')
-    + (cvNote ? `${t || sharedLinks.length ? '\n\n' : ''}${cvNote}` : '')).trim();
+    + (cvNote ? `${t || sharedLinks.length ? '\n\n' : ''}${cvNote}` : '')
+    + (widgetNote ? `${t || sharedLinks.length || cvNote ? '\n\n' : ''}${widgetNote}` : '')).trim();
   if ((!agentText && !attachments.length) || busy) return false;
   delete pendingSharedLinks[sessionId]; // consumed
   delete pendingCustomView[sessionId]; // consumed
+  delete pendingWidgetRef[sessionId]; // consumed
   busy = true; if (sendBtn) sendBtn.disabled = true;
   const myTurn = ++turn; const stale = () => myTurn !== turn;
   let ok = false;
@@ -2530,7 +2547,7 @@ const renderTx = () => {
         if (_arr(v.steps).length) log.appendChild(traceGeometry(_arr(v.steps))); // the SVG trace sits ABOVE the message (tap it for the 3D)
         const b = bubble('agent', v.answer, v.agentId || m.agent, m.at);
         const imgs = asArr(m.imageUrls).length ? asArr(m.imageUrls) : asArr(m.images).filter(s => typeof s === 'string' && s.startsWith('data:')); imgs.forEach(src => { const im = document.createElement('img'); im.src = src; b.appendChild(im); });
-        if (_arr(v.ui).length) renderWidgets(b, _arr(v.ui), { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet }); // re-hydrate live widgets
+        if (_arr(v.ui).length) renderWidgets(b, _arr(v.ui), { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet, onTalk: talkAboutWidget }); // re-hydrate live widgets
         if (_arr(v.tools).length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + _arr(v.tools).join(', '); b.parentNode.appendChild(e); }
         appendProposalPrompt(b.parentNode, m); // a propose-only sub-agent → "🔍 View proposed agent prompt"
         continue;

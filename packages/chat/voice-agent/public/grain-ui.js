@@ -292,12 +292,28 @@ const renderSitePreview = spec => {
 
 const RENDERERS = { countdowns: renderCountdowns, 'entity-status': renderEntityStatus, choices: renderChoices, component: renderComponent, 'theme-preview': renderThemePreview, 'site-preview': renderSitePreview };
 
-// renderWidgets(container, specs, ctx): append each widget; ctx = { cap, onChoice }. Pure data in, DOM out.
+// A "tail" hanging off the bottom-right of a widget box: a chat-bubble nub you tap to OPEN A CHAT WITH THE
+// ENTRYPOINT AGENT about THIS box — so even a widget the agent can't edit directly (a trusted system renderer
+// like the theme preview) becomes CONVERSABLE: "I want to change this" reaches the agent with the box as context.
+const addWidgetTail = (box, spec, ctx) => {
+  if (!box || !ctx || typeof ctx.onTalk !== 'function') return;
+  try {
+    if (getComputedStyle(box).position === 'static') box.style.position = 'relative';
+    const tail = document.createElement('button'); tail.className = 'gw-tail'; tail.title = 'Talk to the agent about this';
+    tail.textContent = '💬';
+    tail.style.cssText = 'position:absolute;right:-7px;bottom:-9px;all:unset;cursor:pointer;font-size:11px;line-height:1;padding:3px 5px;border-radius:10px 10px 10px 2px;background:var(--acc,#7c5cff);color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.35);opacity:.55;transition:opacity .15s,transform .1s';
+    tail.addEventListener('mouseenter', () => { tail.style.opacity = '1'; tail.style.transform = 'scale(1.08)'; });
+    tail.addEventListener('mouseleave', () => { tail.style.opacity = '.55'; tail.style.transform = 'none'; });
+    tail.addEventListener('click', e => { e.stopPropagation(); try { ctx.onTalk(spec, box); } catch { /* */ } });
+    box.appendChild(tail);
+  } catch { /* the tail is enhancement-only */ }
+};
+// renderWidgets(container, specs, ctx): append each widget; ctx = { cap, onChoice, onTalk, … }. Pure data in, DOM out.
 export const renderWidgets = (container, specs, ctx) => {
   if (!container || !Array.isArray(specs)) return;
   for (const spec of specs.slice(0, MAX_WIDGETS)) { // hard cap mirrors the server bound
     const fn = spec && RENDERERS[spec.type]; if (!fn) continue;
-    try { container.appendChild(fn(spec, ctx || {})); } catch { /* a bad spec never breaks the bubble */ }
+    try { const box = fn(spec, ctx || {}); container.appendChild(box); addWidgetTail(box, spec, ctx || {}); } catch { /* a bad spec never breaks the bubble */ }
   }
 };
 
