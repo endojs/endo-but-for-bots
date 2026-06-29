@@ -380,7 +380,7 @@ const attachClipButton = (msgEl, bodyEl, text) => {
   try {
     msgEl.style.position = 'relative';
     const b = document.createElement('button'); b.className = 'msg-clip'; b.title = 'Clip & share this as a page'; b.textContent = '🔗';
-    b.style.cssText = 'position:absolute;right:5px;bottom:4px;all:unset;cursor:pointer;font-size:12px;opacity:.3;transition:opacity .15s;padding:2px 5px;border-radius:6px;line-height:1';
+    b.style.cssText = 'all:unset;position:absolute;right:6px;bottom:4px;cursor:pointer;font-size:12px;opacity:.3;transition:opacity .15s;padding:2px 5px;border-radius:6px;line-height:1';
     b.addEventListener('mouseenter', () => { b.style.opacity = '1'; });
     b.addEventListener('mouseleave', () => { b.style.opacity = '.3'; });
     b.addEventListener('click', e => {

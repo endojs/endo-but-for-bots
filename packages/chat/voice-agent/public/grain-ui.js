@@ -295,25 +295,30 @@ const RENDERERS = { countdowns: renderCountdowns, 'entity-status': renderEntityS
 // A "tail" hanging off the bottom-right of a widget box: a chat-bubble nub you tap to OPEN A CHAT WITH THE
 // ENTRYPOINT AGENT about THIS box — so even a widget the agent can't edit directly (a trusted system renderer
 // like the theme preview) becomes CONVERSABLE: "I want to change this" reaches the agent with the box as context.
-const addWidgetTail = (box, spec, ctx) => {
-  if (!box || !ctx || typeof ctx.onTalk !== 'function') return;
+// Wrap a widget box so its chat-tail can hang OUTSIDE the bottom-right corner even when the box itself clips
+// (gw-site / gw-component use overflow:hidden). The wrapper is position:relative + overflow:visible; the tail is
+// a child of the WRAPPER (not the box), so it escapes the box. (all:unset goes FIRST — putting it after the
+// position/right declarations would reset them and drop the tail back into normal flow at the bottom-left.)
+const withWidgetTail = (box, spec, ctx) => {
+  if (!box || !ctx || typeof ctx.onTalk !== 'function') return box;
   try {
-    if (getComputedStyle(box).position === 'static') box.style.position = 'relative';
-    const tail = document.createElement('button'); tail.className = 'gw-tail'; tail.title = 'Talk to the agent about this';
-    tail.textContent = '💬';
-    tail.style.cssText = 'position:absolute;right:-7px;bottom:-9px;all:unset;cursor:pointer;font-size:11px;line-height:1;padding:3px 5px;border-radius:10px 10px 10px 2px;background:var(--acc,#7c5cff);color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.35);opacity:.55;transition:opacity .15s,transform .1s';
-    tail.addEventListener('mouseenter', () => { tail.style.opacity = '1'; tail.style.transform = 'scale(1.08)'; });
-    tail.addEventListener('mouseleave', () => { tail.style.opacity = '.55'; tail.style.transform = 'none'; });
+    const wrap = document.createElement('div'); wrap.className = 'gw-tailwrap'; wrap.style.cssText = 'position:relative;display:block';
+    wrap.appendChild(box);
+    const tail = document.createElement('button'); tail.className = 'gw-tail'; tail.title = 'Talk to the agent about this'; tail.textContent = '💬';
+    tail.style.cssText = 'all:unset;position:absolute;right:-9px;bottom:-7px;z-index:3;cursor:pointer;font-size:11px;line-height:1;padding:3px 6px;border-radius:12px 12px 3px 12px;background:var(--acc,#7c5cff);color:#fff;box-shadow:0 1px 5px rgba(0,0,0,.4);opacity:.6;transition:opacity .15s,transform .1s';
+    tail.addEventListener('mouseenter', () => { tail.style.opacity = '1'; tail.style.transform = 'scale(1.1)'; });
+    tail.addEventListener('mouseleave', () => { tail.style.opacity = '.6'; tail.style.transform = 'none'; });
     tail.addEventListener('click', e => { e.stopPropagation(); try { ctx.onTalk(spec, box); } catch { /* */ } });
-    box.appendChild(tail);
-  } catch { /* the tail is enhancement-only */ }
+    wrap.appendChild(tail);
+    return wrap;
+  } catch { return box; /* the tail is enhancement-only */ }
 };
 // renderWidgets(container, specs, ctx): append each widget; ctx = { cap, onChoice, onTalk, … }. Pure data in, DOM out.
 export const renderWidgets = (container, specs, ctx) => {
   if (!container || !Array.isArray(specs)) return;
   for (const spec of specs.slice(0, MAX_WIDGETS)) { // hard cap mirrors the server bound
     const fn = spec && RENDERERS[spec.type]; if (!fn) continue;
-    try { const box = fn(spec, ctx || {}); container.appendChild(box); addWidgetTail(box, spec, ctx || {}); } catch { /* a bad spec never breaks the bubble */ }
+    try { container.appendChild(withWidgetTail(fn(spec, ctx || {}), spec, ctx || {})); } catch { /* a bad spec never breaks the bubble */ }
   }
 };
 

@@ -18,8 +18,8 @@ let pass=0,fail=0; const ok=(c,m)=>{if(c){pass++;console.log('  ok -',m)}else{fa
     }catch{} },cap);
     await page.goto('http://127.0.0.1:8778/',{waitUntil:'load'}); await page.waitForTimeout(3500);
     await page.evaluate(()=>{const it=[...document.querySelectorAll('.chat-item .ci-title')].find(s=>/tail/.test(s.textContent)); if(it)it.click();}); await page.waitForTimeout(700);
-    ok(await page.evaluate(()=>!!document.querySelector('.gw .gw-tail')),'the theme widget box has a 💬 chat-tail');
-    await page.evaluate(()=>{const t=document.querySelector('.gw .gw-tail'); if(t)t.click();}); await page.waitForTimeout(300);
+    ok(await page.evaluate(()=>!!document.querySelector('.gw-tail')),'the theme widget box has a 💬 chat-tail');
+    await page.evaluate(()=>{const t=document.querySelector('.gw-tail'); if(t)t.click();}); await page.waitForTimeout(300);
     ok(await page.evaluate(()=>/About the 🎨 theme above/.test(document.getElementById('text').value)),'tapping the tail seeds + focuses the composer about the theme widget');
     // type a request + send → the widget context rides along to the agent
     await page.evaluate(()=>{const t=document.getElementById('text'); t.value='let me try on different themes'; });
