@@ -6,6 +6,9 @@
   },
   "references": [
     {
+      "path": "../bytes/tsconfig.composite.json"
+    },
+    {
       "path": "../errors/tsconfig.composite.json"
     },
     {
@@ -16,6 +19,9 @@
     },
     {
       "path": "../far/tsconfig.composite.json"
+    },
+    {
+      "path": "../hex/tsconfig.composite.json"
     },
     {
       "path": "../patterns/tsconfig.composite.json"

@@ -244,10 +244,10 @@ test('verifyAndConsume rejects an expired nonce', async t => {
   // nonce gets accepted at the boundary.
   const crypto = makeNodeCryptoPowers();
   const clock = makeFakeClock(0);
-  const reg = makeNonceRegistry({ crypto, clock, ttlMs: 1_000 });
+  const reg = makeNonceRegistry({ crypto, clock, ttlMs: 1000 });
   const kp = await generateNodeEd25519Keypair();
   const issued = reg.issue();
-  clock.advance(2_000);
+  clock.advance(2000);
   const signature = kp.sign(issued.hashedNonce);
   t.throws(
     () =>
@@ -326,11 +326,11 @@ test('size reports outstanding nonces', t => {
 test('sweep prunes expired entries opportunistically on issue', t => {
   const crypto = makeNodeCryptoPowers();
   const clock = makeFakeClock(0);
-  const reg = makeNonceRegistry({ crypto, clock, ttlMs: 1_000 });
+  const reg = makeNonceRegistry({ crypto, clock, ttlMs: 1000 });
   reg.issue();
   reg.issue();
   t.is(reg.size(), 2);
-  clock.advance(2_000);
+  clock.advance(2000);
   // The next issue triggers a sweep before adding the new entry.
   reg.issue();
   t.is(reg.size(), 1);
