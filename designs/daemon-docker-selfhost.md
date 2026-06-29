@@ -3,9 +3,21 @@
 | | |
 |---|---|
 | **Created** | 2026-03-02 |
-| **Updated** | 2026-03-02 |
+| **Updated** | 2026-06-29 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | **Complete** |
+
+## Status
+
+Implemented on the `llm` branch.
+The Docker image definition, entrypoint, compose example, and build staging
+script live under `docker/`.
+The gateway can serve the built Chat UI via `ENDO_CHAT_DIST`, and Chat now
+defaults `#agent=<id>` URLs to the page's own host when no explicit
+`gateway=` fragment is present.
+The Docker entrypoint persists state under `/data/endo`, binds the gateway to
+`0.0.0.0:8920`, enables `ENDO_GATEWAY=remote`, and points worker subprocesses
+at the bundled worker artifact.
 
 ## What is the Problem Being Solved?
 

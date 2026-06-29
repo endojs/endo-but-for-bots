@@ -56,8 +56,11 @@ const isElectronMode =
 // and agent ID in the fragment so the bearer-token-like agent ID is
 // never sent over HTTP.
 const urlParams = new URLSearchParams(window.location.hash.slice(1));
-const gateway = urlParams.get('gateway');
+const configuredGateway = urlParams.get('gateway');
 const agent = urlParams.get('agent');
+const gateway =
+  configuredGateway ||
+  (agent && window.location.host !== '' ? window.location.host : '');
 
 // If the fragment doesn't contain config, try the Vite /dev endpoint
 // which will redirect back with the config in the fragment.

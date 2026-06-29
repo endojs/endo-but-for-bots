@@ -1,0 +1,15 @@
+services:
+  endo:
+    image: endojs/daemon:latest
+    ports:
+      - '8920:8920'
+    volumes:
+      - endo-state:/data/endo
+    environment:
+      ENDO_ADDR: 0.0.0.0:8920
+      ENDO_GATEWAY: remote
+      ENDO_CHAT_DIST: /opt/endo/chat
+    restart: unless-stopped
+
+volumes:
+  endo-state:

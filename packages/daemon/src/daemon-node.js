@@ -23,6 +23,7 @@ import {
   makeCryptoPowers,
 } from './daemon-node-powers.js';
 import { startWsGateway } from './ws-gateway.js';
+import { makeAddressChecker } from './cidr.js';
 
 const fsp = { access: fs.promises.access };
 
@@ -166,11 +167,24 @@ const main = async () => {
   );
   const gatewayHost = addrUrl.hostname;
   const gatewayPort = addrUrl.port !== '' ? Number(addrUrl.port) : 8920;
+  const allowRemote =
+    process.env.ENDO_GATEWAY === 'remote' ||
+    process.env.ENDO_GATEWAY_REMOTE === 'true';
+  if (allowRemote) {
+    console.warn(
+      '[Gateway] Remote mode active. Ensure TLS termination is configured.',
+    );
+  }
   const wsGateway = startWsGateway({
     endoBootstrap,
     host: gatewayHost,
     port: gatewayPort,
     cancelled,
+    chatDist: process.env.ENDO_CHAT_DIST || '',
+    allowAddress: makeAddressChecker({
+      allowRemote,
+      allowedCIDRs: process.env.ENDO_GATEWAY_ALLOWED_CIDRS || '',
+    }),
   });
 
   const services = [privatePathService, wsGateway];

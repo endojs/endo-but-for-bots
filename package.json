@@ -77,7 +77,8 @@
     "build:types:check": "node scripts/generate-composite-tsconfigs.mjs --check",
     "build:types": "tsc --build tsconfig.composite.json",
     "build:types:clean": "yarn build:types --clean",
-    "build:types:watch": "yarn build:types --watch"
+    "build:types:watch": "yarn build:types --watch",
+    "docker:daemon": "bash docker/build-daemon-image.sh"
   },
   "prettier": {
     "arrowParens": "avoid",
