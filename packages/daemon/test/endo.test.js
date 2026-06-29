@@ -425,7 +425,13 @@ const getConfigDirectoryName = (testTitle, testConfigIndex) => {
   if (!letter.match(/^[a-z]$/)) {
     throw Error('meta: time for two-letter suffixes?');
   }
-  const configSubDirectory = `${munged.slice(0, 24)}~${nnnn}${letter}`;
+  const suffix = `~${nnnn}${letter}`;
+  const maxSocketPathLength = 100;
+  const fixedSocketPathLength =
+    path.join(dirname, 'tmp', 'endo.sock').length + 1;
+  const maxSubDirectoryLength = maxSocketPathLength - fixedSocketPathLength;
+  const maxPrefixLength = Math.max(0, maxSubDirectoryLength - suffix.length);
+  const configSubDirectory = `${munged.slice(0, maxPrefixLength)}${suffix}`;
 
   return configSubDirectory;
 };
@@ -492,8 +498,9 @@ test('lifecycle', async t => {
   const host = E(bootstrap).host();
   await E(host).provideWorker(['worker']);
   await E(host).cancel('worker');
+  const closedHandled = closed.catch(() => {});
   cancel(new Error('Cancelled'));
-  await closed.catch(() => {});
+  await closedHandled;
 
   t.pass();
 });
