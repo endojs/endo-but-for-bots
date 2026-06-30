@@ -560,7 +560,7 @@ export const POWERS = harden({
   timers: { label: 'Schedule wake-ups / reminders that PING dan (for things a human must do)', verbs: ['scheduleWakeup', 'repeatEvery', 'cancelTimer', 'listTimers'] },
   schedule: { label: 'Create + edit SCHEDULED TASKS — recurring autonomous runs that DO the work themselves on a cadence (use this, not a reminder, when the agent can do the task)', verbs: ['scheduleTask', 'listScheduledTasks', 'editScheduledTask', 'cancelScheduledTask'] },
   browser: { label: 'Browse the web in a real headless browser (renders JS, screenshots) — EXPENSIVE (a full chromium); use ONLY for JS-rendered or interactive pages. For plain pages + JSON/HTTP APIs use `web`/fetchUrl instead (far cheaper).', verbs: ['browseWeb', 'screenshotWeb'] },
-  home: { label: 'A private scratch/workspace folder of ITS OWN to read/write + publish sites + mint download links from (a sandboxed folder created for the agent — NOT your home directory or vault)', verbs: ['fileList', 'fileRead', 'fileWrite', 'publishSite', 'createDownloadLinkFor'] },
+  home: { label: 'Publish a static SITE + mint download links from your private scratch folder (outward sharing — the private scratch read/write/list itself is free to every agent, no power needed)', verbs: ['publishSite', 'createDownloadLinkFor'] },
   vm: { label: 'Full terminal in the agent-code dev VM (coarse: root over that sandbox)', verbs: ['vmExec'] },
   host: { label: '⚠️ Full shell over THIS host (archua) as the operator — the dev/dogfood harness; coarse ambient host-root, like claude-code', verbs: ['hostExec'] },
   agents: { label: 'The roster of agent personas, machines + code sessions (read status; exec is coarse; full-VM machines also have a config checkout; route tasks to a dev session)', verbs: ['agentsList', 'agentStatus', 'agentExec', 'machineRepoStatus', 'machineRepoExec', 'routeToDev'] },
@@ -1823,15 +1823,23 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         { name: 'routeToDev', reversible: false, args: { handle: 'string — OPTIONAL: a code-session handle from agentsList, a name/id, or "blacksmith"; omit to use the default dev session', task: 'string — the tool-build / code task to hand off' }, description: 'Route a task to a registered code session (the Blacksmith) IF one is connected, when you need a tool/connector built or code run you cannot do yourself. It may be unavailable (none registered) — if routeToDev says so, do not keep retrying; instead consider proposeTool (build the tool yourself) or tell dan what is needed.' },
       );
     }
-    if (powers.has('home')) {
-      // The agent's virtual home folder (its own sandbox dir). Read/write/list +
-      // publishSite → a static-served URL. Confined to its folder; no ambient fs.
-      // a chat filed under a project binds its home to the PROJECT's shared folder (ctx.homeSubkey);
-      // otherwise the node's own home. So a project's chats + scheduled agents share one folder.
+    { // SCRATCHPAD is UNIVERSAL (dan): EVERY agent may read/write/list its OWN confined home folder with NO
+      // permission — it's a sandboxed dir (NOT the vault, NOT the host fs), so the cap graph IS the bound and the
+      // only cost is the metered turn doing the work. So a simple task that needs scratch space (incl. the
+      // researchOnly() public-research agent) just writes — no approval. (A chat filed under a project binds its
+      // home to the PROJECT's shared folder via ctx.homeSubkey; otherwise the node's own home.)
       const home = () => (ctx.homeSubkey ? makeHome(ctx.homeSubkey) : node.homeBinding?.());
       toolbox.fileList = harden({ run: async ({ path: rel } = {}) => { const h = home(); return h ? h.list(rel || '') : { ok: false, error: 'no home folder' }; } });
       toolbox.fileRead = harden({ run: async ({ path: rel }) => { const h = home(); return h ? h.read(rel) : { ok: false, error: 'no home folder' }; } });
       toolbox.fileWrite = harden({ run: async ({ path: rel, content }) => { const h = home(); if (!h?.write) return { ok: false, error: 'read-only home' }; return h.write(rel, content); } });
+      manifest.push(
+        { name: 'fileList', reversible: false, args: { path: 'string — sub-path inside your home (optional)' }, description: 'List files in your OWN private scratch/home folder (a sandboxed dir, not the vault).' },
+        { name: 'fileRead', reversible: false, args: { path: 'string — file path inside your home' }, description: 'Read a file from your own home/scratch folder.' },
+        { name: 'fileWrite', reversible: false, args: { path: 'string — file path inside your home', content: 'string' }, description: 'Write a file in your OWN private scratch/home folder (creates dirs). Self-scoped, sandboxed — NO confirmation needed; use it freely as a scratchpad.' },
+      );
+    }
+    if (powers.has('home')) { // OUTWARD-facing extras stay gated on the `home` power: publishSite serves a PUBLIC page; download links hand a file out.
+      const home = () => (ctx.homeSubkey ? makeHome(ctx.homeSubkey) : node.homeBinding?.());
       // publishSite → also emit a `site-preview` WIDGET so the published site renders as a nice inline
       // link-preview card (live thumbnail + Open) in the chat, not just a bare URL. (rv.widget is forwarded
       // to r.ui by the server; the /sites token is a web-key that's meant to be opened, so rendering it is fine.)
@@ -1841,9 +1849,6 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       // origin (so it works whether the user is on the tailnet or the public address).
       toolbox.createDownloadLinkFor = harden({ run: async ({ path: rel, name }) => { const h = home(); if (!h?.downloadLink) return { ok: false, error: 'no home folder' }; try { return await h.downloadLink(String(rel || ''), name); } catch (e) { return { ok: false, error: e.message }; } } });
       manifest.push(
-        { name: 'fileList', reversible: false, args: { path: 'string — sub-path inside your home (optional)' }, description: 'List files in your home folder.' },
-        { name: 'fileRead', reversible: false, args: { path: 'string — file path inside your home' }, description: 'Read a file from your home folder.' },
-        { name: 'fileWrite', reversible: false, args: { path: 'string — file path inside your home', content: 'string' }, description: 'Write a file in your home folder (creates dirs). Self-scoped — no confirmation needed.' },
         { name: 'publishSite', reversible: false, args: { path: 'string — a folder in your home holding index.html', name: 'string — a label' }, description: 'Publish a folder from your home as a static site; returns its URL.' },
         { name: 'createDownloadLinkFor', reversible: false, args: { path: 'string — a file in your home folder', name: 'string — optional download filename' }, description: 'Mint a working DOWNLOAD link for a file in your home folder, so you can give the user a clickable download in your reply. Returns { url } — put it in your reply as a markdown link.' },
       );
