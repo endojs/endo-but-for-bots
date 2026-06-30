@@ -1948,7 +1948,12 @@ const handler = async (req, res) => {
       const seed = { id, title: derivedTitle || String(title || '').trim() || t.slice(0, 48) || 'voice note', ts: Date.now(), source: String(source || 'voice'), transcript: t, proposeOnly: true, proposedPowers: powers, proposedPrompt,
         tx: [{ who: 'you', text: t }, { who: 'agent', text: agentMsg, tools: [], steps: [], proposedPowers: powers, proposedPrompt }],
         versions: [{ v: 0, label: 'original', env: { persona: 'ingest:propose-only' }, ...tr, at: now }] };
-      const seeds = await readSeedChats(); seeds.unshift(seed); await writeSeedChats(seeds);
+      const seeds = await readSeedChats();
+      // re-check AFTER the (seconds-long) analysis: a CONCURRENT re-POST of the same note may have created its
+      // chat while we were working (the start-of-handler check passed for both). Close that race here.
+      const raced = seeds.find(s => s && s.transcript && (Date.now() - (s.ts || 0)) < DEDUP_MS && normTx(s.transcript) === nt);
+      if (raced) { log('ingest dedup (raced)', raced.id); return json(res, 200, { ok: true, chatId: raced.id, deduped: true }); }
+      seeds.unshift(seed); await writeSeedChats(seeds);
       return json(res, 200, { ok: true, chatId: id, proposedPowers: powers });
     }
     if (req.method === 'POST' && u.pathname === '/seed-chats/load') {
