@@ -90,7 +90,8 @@ const isSupportedPair = (codec, network) =>
  * Reduce a raw request path to its bare pathname: drop any query
  * string or fragment a WebSocket upgrade URL may carry, and strip a
  * single trailing slash (so `/ocapn-cbor-np/` matches
- * `/ocapn-cbor-np`). The empty path and `/` both normalize to `/`.
+ * `/ocapn-cbor-np`). A lone `/` is preserved; the empty string is
+ * returned unchanged. Both fall through to a routing miss.
  *
  * @param {string} rawPath
  * @returns {string}
@@ -221,6 +222,16 @@ export const ocapnWebSocketConnectionHint = ({ host, secure = false }) => {
   if (typeof host !== 'string' || host.length === 0) {
     throw makeError(
       X`Connection hint host must be a non-empty string, got ${q(host)}`,
+    );
+  }
+  // The host is interpolated into a `;`-delimited locator string, so
+  // a host carrying `;`, whitespace, or a control character could
+  // inject spurious locator fields. Reject those rather than emit a
+  // malformed hint. Hostnames, IPv4, and bracketed IPv6 literals
+  // (`[::1]`) use only the characters this allows.
+  if (!/^[A-Za-z0-9.:[\]-]+$/.test(host)) {
+    throw makeError(
+      X`Connection hint host contains characters that would corrupt the locator: ${q(host)}`,
     );
   }
   const scheme = secure ? 'wss' : 'ws';

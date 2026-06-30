@@ -142,8 +142,25 @@ test('ocapnWebSocketConnectionHint builds the ws and wss forms', t => {
   );
 });
 
+test('ocapnWebSocketConnectionHint allows a bracketed IPv6 host', t => {
+  t.is(
+    ocapnWebSocketConnectionHint({ host: '[::1]', secure: true }),
+    'wss:host=[::1];path=/ocapn-cbor-np;np',
+  );
+});
+
 test('ocapnWebSocketConnectionHint rejects an empty host', t => {
   t.throws(() => ocapnWebSocketConnectionHint({ host: '' }), {
     message: /non-empty string/,
   });
+});
+
+test('ocapnWebSocketConnectionHint rejects a locator-injecting host', t => {
+  // A `;` in the host would inject a spurious locator field; reject
+  // rather than emit a malformed hint.
+  for (const bad of ['a;path=/evil', 'has space', 'a\tb']) {
+    t.throws(() => ocapnWebSocketConnectionHint({ host: bad }), {
+      message: /corrupt the locator/,
+    });
+  }
 });
