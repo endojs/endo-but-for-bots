@@ -39,12 +39,16 @@
     "@endo/exo": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
-    "@endo/patterns": "workspace:^"
+    "@endo/patterns": "workspace:^",
+    "@huggingface/transformers": "^3.0.0",
+    "kokoro-js": "^1.2.0",
+    "onnxruntime-web": "^1.20.0",
+    "phonemizer": "^1.2.1"
   },
   "devDependencies": {
+    "ava": "catalog:dev",
     "eslint": "catalog:dev"
   },
-  "//": "TODO(backend agents): add the model runtime deps your backend needs. The transformers-webgpu backend will need '@huggingface/transformers' (Whisper/Moonshine STT) and 'kokoro-js' (Kokoro-82M TTS). The onnx-piper-moonshine backend will need 'onnxruntime-web' (Moonshine ONNX STT + Piper .onnx TTS). The lockfile is a separate follow-up commit.",
   "eslintConfig": {
     "extends": [
       "plugin:@endo/internal"
