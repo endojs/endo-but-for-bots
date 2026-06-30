@@ -10,10 +10,41 @@ import { Checkbox, Banner } from './ui-kit.js';
 // Props: { proposal:{id,type,title,detail,summary}, icon, accent, mayConfirm, dontAsk }
 // Handlers: { onConfirm(id, dontAskAgain), onReject(id), onToggleDontAsk(checked) }
 const kv = pairs => h('div', { class: 'kv' }, pairs.filter(p => p[1] != null && p[1] !== '').map(([k, v], i) => h('div', { key: i }, [h('b', null, k), String(v)])));
-const diffBlock = (oldC, newC) => h('div', null, [
-  oldC ? h('div', { class: 'diff', style: 'opacity:.55;text-decoration:line-through' }, oldC) : null,
-  (newC != null && newC !== '') ? h('div', { class: 'diff' }, newC) : null,
-]);
+// GIT-STYLE line diff: align old/new by LCS and show ONLY the changed lines (-/+) with a little surrounding
+// context, collapsing long unchanged runs. (Was: strike through the WHOLE old + show the WHOLE new, so an edit
+// that replaced one line inside an otherwise-identical note looked like every line was deleted.)
+const lineDiff = (oldC, newC) => {
+  const A = String(oldC == null ? '' : oldC).split('\n'), B = String(newC == null ? '' : newC).split('\n');
+  const n = A.length, m = B.length;
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i -= 1) for (let j = m - 1; j >= 0; j -= 1) dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const rows = []; let i = 0, j = 0;
+  while (i < n && j < m) { if (A[i] === B[j]) { rows.push(['ctx', A[i]]); i += 1; j += 1; } else if (dp[i + 1][j] >= dp[i][j + 1]) { rows.push(['del', A[i]]); i += 1; } else { rows.push(['add', B[j]]); j += 1; } }
+  while (i < n) rows.push(['del', A[i++]]); while (j < m) rows.push(['add', B[j++]]);
+  return rows;
+};
+const CTX = 2; // unchanged lines of context kept around each change
+const collapseDiff = rows => {
+  const keep = new Array(rows.length).fill(false);
+  rows.forEach((r, k) => { if (r[0] !== 'ctx') for (let d = -CTX; d <= CTX; d += 1) { const x = k + d; if (x >= 0 && x < rows.length) keep[x] = true; } });
+  const out = []; let elided = 0;
+  rows.forEach((r, k) => {
+    if (r[0] === 'ctx' && !keep[k]) { elided += 1; return; }
+    if (elided) { out.push(['gap', `⋯ ${elided} unchanged line${elided === 1 ? '' : 's'} ⋯`]); elided = 0; }
+    out.push(r);
+  });
+  if (elided) out.push(['gap', `⋯ ${elided} unchanged line${elided === 1 ? '' : 's'} ⋯`]);
+  return out;
+};
+const DSYM = { add: '+', del: '-', ctx: ' ', gap: '' };
+const DCOL = { add: 'color:#3fb950', del: 'color:#f85149;text-decoration:line-through;opacity:.8', ctx: 'opacity:.55', gap: 'opacity:.4;font-style:italic' };
+const diffBlock = (oldC, newC) => {
+  const rows = collapseDiff(lineDiff(oldC, newC));
+  const changed = rows.some(r => r[0] === 'add' || r[0] === 'del');
+  if (!changed) return h('div', { class: 'diff', style: 'opacity:.6' }, '(no textual change)');
+  return h('div', { class: 'diff', style: 'white-space:pre-wrap;word-break:break-word;font:12px ui-monospace,Menlo,Consolas,monospace' },
+    rows.map((r, k) => h('div', { key: k, style: DCOL[r[0]] || '' }, `${DSYM[r[0]]}${DSYM[r[0]] ? ' ' : ''}${r[1]}`)));
+};
 const warn = txt => Banner({ kind: 'warn', icon: '⚠️', children: txt });
 
 const proposalBody = p => {
