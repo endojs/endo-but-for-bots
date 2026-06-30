@@ -93,6 +93,7 @@ import { validateComponentSource } from './component-source.mjs';
 import { buildSystemMap } from './system-map.mjs';
 import { braveSearch } from './brave-search.mjs';
 import { makeBuffer } from './buffer-caps.mjs';
+import { makeSpecialistNudges } from './specialist-nudges.mjs';
 import { runResearch } from './research.mjs';
 import { getRole, roleList, localModelFor } from './agent-roles.mjs';
 import { scanArea as dietScan, evaluateArea as dietEval, buildMap as dietBuild, regenSite as dietRegen, publishSite as dietPublish, status as dietStat, DIET_SITES } from './dietician-js.mjs';
@@ -575,7 +576,7 @@ export const POWERS = harden({
   buffer: { label: 'Manage your social media via Buffer — list channels + scheduled posts, save drafts (safe); publishing, blasting to all channels & deleting you confirm', verbs: ['bufferChannels', 'bufferListPosts', 'bufferDraft', 'bufferDraftAll', 'proposeBufferPost', 'proposeBufferBlast', 'proposeBufferDelete'] },
   subagent: { label: 'Propose a sub-agent with system access (you confirm)', verbs: ['proposeSubAgent'] },
   contacts: { label: 'Read your address book; propose add/edit a contact (you confirm)', verbs: ['contactsSearch', 'contactsGet', 'proposeAddContact', 'proposeEditContact'] },
-  specialists: { label: 'Spawn + consult persistent specialist sub-agents (spawn within your bounds — no confirmation)', verbs: ['listSpecialists', 'spawnSpecialist', 'askSpecialist'] },
+  specialists: { label: 'Spawn + consult persistent specialist sub-agents, and put them on standing schedules (spawn within your bounds — no confirmation)', verbs: ['listSpecialists', 'spawnSpecialist', 'askSpecialist', 'scheduleSpecialist', 'listSpecialistNudges', 'cancelSpecialistNudge'] },
   kazputer: { label: 'Manage Kazputers — give someone a new one (email invite), and administer your own (settings/coins; you confirm)', verbs: ['proposeGiveKazputer', 'kazputerStatus', 'proposeKazputerSetting', 'proposeKazputerCoins'] },
   dietician: { label: "Drive the dietician's restaurant pipeline — scan an area, evaluate spots for Alexa's diet, refresh + publish the food guides (publishing you confirm)", verbs: ['dietScanArea', 'dietEvaluateArea', 'dietBuildMap', 'dietStatus', 'dietRefreshSite'] },
   app: { label: 'Introspect + manage your own app state — list/read/retitle every conversation (chats, voice memos, voice notes) and see an overview of asks/feed/proposals', verbs: ['listChats', 'readChat', 'retitleChat', 'appState'] },
@@ -860,6 +861,9 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   //    confirmable proposal (the grant is the authorization). Persisted so a
   //    specialist + its accrued context survive restarts. ─────────────────────────
   const SPECIALISTS_FILE = specialistsFile || path.join(CONFIG_DIR, 'specialists.json');
+  // STANDING NUDGES: a specialist put on a timer/interval — the server tick fires due ones (runSpecialistNudge),
+  // so a "team" evolves strategy between turns. No cap stored (fires the specialist by id, server-side).
+  const specialistNudges = makeSpecialistNudges({ file: path.join(CONFIG_DIR, 'specialist-nudges.json') });
   // NON-DELEGABLE powers: the few that grant authority nothing downstream can bound — `subagent` reaches the
   // real HOST shell (escapes confinement), `app` + `selfImprove` are root-only self-modification. Everything
   // ELSE (delegate, specialists, roles, …) is delegable: a node re-grants only powers it already holds (the
@@ -1923,10 +1927,24 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
           note: `Spawned — confined to ${granted.length ? granted.join(', ') : 'no'} power(s), a subset of yours (no confirmation needed). ${dropped.length ? `Not granted: ${dropped.join(', ')} (outside your bounds or not delegable). ` : ''}Use it via askSpecialist("${r.name}", …).` });
       } });
       toolbox.askSpecialist = harden(makeAskSpecialist(ctx.userText, node)); // node = caller → the wand bounds an auto-created specialist to ⊆ this agent
+      // STANDING NUDGES — put a specialist on a recurring/one-shot schedule. The server tick wakes it, runs it
+      // confined, files the result as a viewable run in THIS chat, and pushes a deep-linked notification. This is
+      // what turns a specialist from a within-turn consult into a persistent event-responder that evolves with you.
+      toolbox.scheduleSpecialist = harden({ run: async ({ name, request, everyMs, afterMs, atIso, label } = {}) => {
+        const spec = findSpecialist(String(name || '')); if (!spec) return { ok: false, error: `no specialist "${name}" — list them with listSpecialists` };
+        const schedule = everyMs ? { kind: 'interval', everyMs: Number(everyMs) } : atIso ? { kind: 'once', atIso: String(atIso) } : { kind: 'once', afterMs: Number(afterMs || 0) };
+        const n = specialistNudges.add({ specialistId: spec.id, specialistName: spec.name, chatId: ctx.chatId || '', request: String(request || ''), schedule, label });
+        return { ok: true, nudgeId: n.id, specialist: spec.name, nextAt: new Date(n.nextAt).toISOString(), recurring: schedule.kind === 'interval', note: `${spec.name} will ${schedule.kind === 'interval' ? `run this every ${Math.round((Number(everyMs)) / 60000)}m` : `run this once at ${new Date(n.nextAt).toLocaleString()}`}, reporting back into this chat.` };
+      } });
+      toolbox.listSpecialistNudges = harden({ run: async () => ({ ok: true, nudges: specialistNudges.list().map(n => ({ id: n.id, specialist: n.specialistName, request: n.request, recurring: n.schedule.kind === 'interval', nextAt: n.nextAt ? new Date(n.nextAt).toISOString() : null, runs: n.runs, status: n.status })) }) });
+      toolbox.cancelSpecialistNudge = harden({ run: async ({ id } = {}) => ({ ok: true, ...specialistNudges.cancel(String(id || '')) }) });
       manifest.push(
         { name: 'listSpecialists', reversible: false, args: {}, description: 'List your specialist sub-agents (name, domain, powers, and what each may do autonomously).' },
         { name: 'spawnSpecialist', reversible: true, args: { name: 'string', domain: 'string — the kind of requests it handles', powers: 'array — a subset of YOUR powers to grant it', instructions: 'string — its standing instructions / persona' }, description: 'Spawn a persistent specialist sub-agent into your inventory. Spawns IMMEDIATELY, no confirmation — it is confined to a SUBSET of your own powers (the cap graph guarantees it can never exceed you), so creating one within your bounds is pre-approved; you may incur cost, capped by your budget. Powers you do not hold are silently not granted. Grant it `specialists` too if you want it to build its own sub-agents.' },
         { name: 'askSpecialist', reversible: true, args: { name: 'string — a specialist from listSpecialists', request: 'string — what to ask it to do' }, description: 'Hand a request to one of your specialists; it acts within its own confined powers + context. Its destructive actions still surface for your confirmation unless you granted it autonomy.' },
+        { name: 'scheduleSpecialist', reversible: true, args: { name: 'string — a specialist from listSpecialists', request: 'string — what it should do each time it wakes', everyMs: 'number — OPTIONAL: run it on this interval (recurring; min 60000)', afterMs: 'number — OPTIONAL: run it once after this delay', atIso: 'string — OPTIONAL: run it once at this ISO time' }, description: 'Put a specialist on a STANDING schedule — it wakes on the interval/time, acts within its own confined powers, files its result as a run in this chat, and pushes you a notification. This is how a specialist becomes a persistent event-responder that evolves strategy between your turns. Give exactly one of everyMs / afterMs / atIso.' },
+        { name: 'listSpecialistNudges', reversible: false, args: {}, description: "List your specialists' standing scheduled nudges (who, what, when next, how many times it has run)." },
+        { name: 'cancelSpecialistNudge', reversible: true, args: { id: 'string — a nudge id from listSpecialistNudges, OR a specialist name to cancel all of theirs' }, description: 'Cancel a standing specialist nudge (or all of a specialist’s nudges by name).' },
       );
     }
     // createInvite is always available (a node may re-share powers it holds).
@@ -2793,8 +2811,20 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   };
   for (const c of scopedCaps) { try { registerScoped(c); } catch (e) { /* skip bad record */ } } // re-arm persisted scoped caps at boot
 
+  // Fire one standing nudge: run the specialist (by id) within its OWN confined ring/persona/autonomy (as the
+  // owner — no live human, so any destructive step just queues as a proposal). The server tick calls this for due
+  // nudges, then files the answer as a seed-chat in the nudge's chat + pushes a deep-linked notification.
+  const runSpecialistNudge = async nudge => {
+    const spec = findSpecialist(nudge.specialistId) || findSpecialist(nudge.specialistName);
+    if (!spec) return harden({ ok: false, error: 'specialist no longer exists' });
+    try { return harden(await makeAskSpecialist('', rootNode).run({ name: spec.id, request: nudge.request })); }
+    catch (e) { return harden({ ok: false, error: String((e && e.message) || e) }); }
+  };
+
   return harden({
     runScheduledAgent,
+    specialistNudges,
+    runSpecialistNudge,
     mintScopedCap,
     // human-visible CHANGELOG of self-applied (auto-merged) improvements + one-click revert. The server
     // gates both on the ROOT cap. revert = git revert -m 1 of the recorded merge commit (history-preserving).

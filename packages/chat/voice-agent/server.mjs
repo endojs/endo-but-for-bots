@@ -528,8 +528,33 @@ const fillSpecialist = process.env.SELF_HEAL === '0' ? undefined : async ({ name
 // makeFieldAgent runs before `blossom` exists, so the server populates `customView.register` below; the tool
 // reads it at call-time. This is the seam that lets a NORMAL chat agent (visible in the trace) be the studio.
 const customView = {};
-const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, foldedPersonaFor, getFoldDocs, setFoldDocs, agentConfig, saveAgentConfig, haResolveReadOnly, changelog, actOnStagedReview, publishClip, revokeClip, listClips } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL, fillSpecialist, customView });
+const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, specialistNudges, runSpecialistNudge, mintScopedCap, rescopeCap, specialistFor, foldedPersonaFor, getFoldDocs, setFoldDocs, agentConfig, saveAgentConfig, haResolveReadOnly, changelog, actOnStagedReview, publishClip, revokeClip, listClips } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL, fillSpecialist, customView });
 liveCells = makeLiveCells({ nodeFor }); // browser-subscribable live grains (cap-gated)
+
+// ── STANDING SPECIALIST NUDGES tick ──────────────────────────────────────────────────────────────────────────
+// Fire due standing nudges: wake the specialist (confined, by id), file its result as a viewable run in its chat,
+// and push a deep-linked notification — so a "team" of specialists evolves strategy between turns. Bounded to a
+// few per tick so it can't stampede inference; specialists run on the local model so the cost is low.
+const fireDueNudges = async () => {
+  let due; try { due = specialistNudges.due(); } catch { return; }
+  for (const n of due.slice(0, 3)) {
+    try {
+      const r = await runSpecialistNudge(n);
+      const now = new Date().toISOString();
+      const answer = r && r.ok !== false ? String(r.answer || '(no output)') : `⚠️ ${(r && r.error) || 'nudge failed'}`;
+      const id = `snudge-${crypto.randomBytes(5).toString('hex')}`;
+      const seed = { id, title: `🔁 ${n.specialistName}`, ts: Date.now(), source: 'specialist-nudge',
+        transcript: n.request, scheduled: { specialist: n.specialistName, at: now, parentChat: n.chatId || '' },
+        tx: [{ who: 'you', text: n.request }, { who: 'agent', text: answer, tools: (r && r.toolsUsed) || [], steps: [] }],
+        versions: [{ v: 0, label: 'nudge run', env: { persona: `specialist:${n.specialistName}` }, answer, toolsUsed: (r && r.toolsUsed) || [], steps: [], at: now }] };
+      try { const seeds = await readSeedChats(); seeds.unshift(seed); await writeSeedChats(seeds); } catch (e) { log('nudge seed', e.message); }
+      try { await notify({ title: `🔁 ${n.specialistName}`, message: answer.slice(0, 180), click: `${WEB_URL}/#chat=${id}`, tags: ['robot'] }); } catch { /* best-effort */ }
+      specialistNudges.fired(n.id);
+      log('nudge', `fired ${n.specialistName} (${n.id})`);
+    } catch (e) { log('nudge', `fire ${n && n.id} failed: ${e.message}`); try { specialistNudges.fired(n.id); } catch { /* avoid hot-loop on a poison nudge */ } }
+  }
+};
+setInterval(() => { fireDueNudges().catch(e => log('nudge tick', e && e.message)); }, 60_000).unref?.();
 
 // ── "Sign in with Bluesky → claim credits" ───────────────────────────────────────────────────────────────────
 // A user signs in with their Bluesky handle (AT-Protocol OAuth, scope `atproto` = identity only) and ALWAYS gets a
