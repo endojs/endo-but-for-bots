@@ -81,6 +81,9 @@ import { createReactSystem } from './react-utils.js';
  * @param {unknown} channel - Channel or ChannelMember reference
  * @param {object} options
  * @param {(value: unknown, id?: string, petNamePath?: string[]) => void | Promise<void>} options.showValue
+ * @param {(target: { locator?: string, id?: string, petNamePath?: string[], label?: string }) => void} [options.showPaths]
+ *   Opens the read-only retention-paths panel for a value chip. Optional; the
+ *   chain-link reveal button hides when absent.
  * @param {string} [options.personaId] - Unique identifier for the current persona/space, used to scope the address book in localStorage
  * @param {string} [options.ownMemberId] - The current user's memberId, used to highlight own messages
  * @param {(info: { number: bigint, memberId: string, authorName: string, preview: string }) => void} [options.onReply] - Called when user clicks reply on a message
@@ -95,6 +98,7 @@ export const channelComponent = async (
   channel,
   {
     showValue,
+    showPaths,
     personaId,
     ownMemberId,
     onReply,
@@ -445,7 +449,27 @@ export const channelComponent = async (
             }
           },
         },
-        `@${edgeName}`,
+        h('b', null, `@${edgeName}`),
+        showPaths && message.ids && message.ids[index]
+          ? h(
+              'button',
+              {
+                class: 'retention-paths-reveal',
+                type: 'button',
+                title: 'Show retention paths',
+                /** @param {{ stopPropagation: () => void }} event */
+                onClick: event => {
+                  event.stopPropagation();
+                  showPaths({
+                    locator: message.ids[index],
+                    label: `@${edgeName}`,
+                  });
+                },
+              },
+              // U+1F517 LINK SYMBOL — the chain-link "paths" glyph.
+              '🔗',
+            )
+          : null,
       );
     };
 

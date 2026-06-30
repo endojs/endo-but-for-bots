@@ -20,7 +20,7 @@ import { h, renderConfined, unmount } from './setup-preact-container.js';
  * @param {HTMLElement} $parent
  * @param {HTMLElement | null} $end
  * @param {ERef<EndoHost>} powers
- * @param {{ showValue: (value: unknown, id?: string, petNamePath?: string[], messageContext?: { number: bigint, edgeName: string }) => void | Promise<void>, conversationId?: string | null, conversationPetName?: string | null }} options
+ * @param {{ showValue: (value: unknown, id?: string, petNamePath?: string[], messageContext?: { number: bigint, edgeName: string }) => void | Promise<void>, showPaths?: (target: { locator?: string, id?: string, petNamePath?: string[], label?: string }) => void, conversationId?: string | null, conversationPetName?: string | null }} options
  * @returns {Promise<{ dispose: () => void }>} A disposer that unmounts the
  *   confined tree and removes its mount node. (The view also self-disables via
  *   `isLive()` if the host rebuilds the container without calling it.)
@@ -29,7 +29,7 @@ export const inboxComponent = async (
   $parent,
   $end,
   powers,
-  { showValue, conversationId, conversationPetName },
+  { showValue, showPaths, conversationId, conversationPetName },
 ) => {
   // The caller passes a SHARED host element (`#messages`, which also holds the
   // scroll `$end` anchor and any connecting indicators). `renderConfined`
@@ -71,6 +71,7 @@ export const inboxComponent = async (
     h(InboxRoot, {
       powers,
       showValue,
+      showPaths,
       formDescriptions,
       measureNearBottom,
       scrollToBottom,

@@ -25,6 +25,7 @@ import { channelComponent } from '@endo/space-channel/channel-component.js';
 import { forumComponent } from '@endo/space-channel/forum-component.js';
 import { microblogComponent } from '@endo/space-channel/microblog-component.js';
 import { valueComponent } from '@endo/spaces-util/value-component.js';
+import { retentionPathsComponent } from '@endo/spaces-util/retention-paths-panel.js';
 import { chatBarComponent } from '@endo/spaces-util/chat-bar-component.js';
 import { createChannelHeader } from '@endo/space-channel/channel-header.js';
 // Confined outliner host wrapper (the strangler-fig swap retired the imperative
@@ -247,6 +248,9 @@ const bodyComponent = (
   /** @type {{ dispose: () => void } | null} */
   let valueRef = null;
 
+  /** @type {{ dispose: () => void } | null} */
+  let pathsRef = null;
+
   $parent.innerHTML = template;
 
   const $messages = /** @type {HTMLElement} */ (
@@ -415,13 +419,23 @@ const bodyComponent = (
   // Initialize components with resolved powers
   resolvePowers()
     .then(resolvedPowers => {
+      // The read-only retention-paths panel. Like the value modal it owns its
+      // own floating frame, visibility, and teardown; it holds the host
+      // authority for the `followRetentionPaths` subscription so the confined
+      // value chips only carry a `showPaths` callback (parallel to `showValue`).
+      const { showPaths, dispose: disposePaths } = retentionPathsComponent(
+        $parent,
+        /** @type {ERef<EndoHost>} */ (resolvedPowers),
+      );
+      pathsRef = { dispose: disposePaths };
+
       // The value modal owns its own frame DOM, visibility, and teardown. It
       // exposes `showValue` (used by the bodies and the chat bar) and a
       // `dispose` we run at teardown.
       const { showValue, dispose: disposeValue } = valueComponent(
         $parent,
         /** @type {ERef<EndoHost>} */ (resolvedPowers),
-        { enterProfile: enterHost },
+        { enterProfile: enterHost, showPaths },
       );
       valueRef = { dispose: disposeValue };
 
@@ -707,6 +721,7 @@ const bodyComponent = (
 
             channelViewFn($messages, $anchor, currentChannelRef, {
               showValue: channelShowValue,
+              showPaths,
               personaId: profilePath.join('/'),
               ownMemberId,
               powers: /** @type {ERef<EndoHost>} */ (resolvedPowers),
@@ -755,6 +770,7 @@ const bodyComponent = (
           /** @type {ERef<EndoHost>} */ (resolvedPowers),
           {
             showValue,
+            showPaths,
             conversationId: activeConversation ? activeConversation.id : null,
             conversationPetName: getConversationPetName(),
           },
@@ -997,6 +1013,7 @@ const bodyComponent = (
 
             switchViewFn($messages, $anchor, currentChannelRef, {
               showValue: channelShowValue,
+              showPaths,
               personaId: profilePath.join('/'),
               ownMemberId: switchOwnMemberId,
               powers: /** @type {ERef<EndoHost>} */ (resolvedPowers),
@@ -1145,6 +1162,7 @@ const bodyComponent = (
           /** @type {ERef<EndoHost>} */ (resolvedPowers),
           {
             showValue,
+            showPaths,
             onSelectConversation: (petName, formulaId) => {
               onConversationChange({ petName, id: formulaId });
             },
@@ -1646,6 +1664,10 @@ const bodyComponent = (
     if (valueRef) {
       valueRef.dispose();
       valueRef = null;
+    }
+    if (pathsRef) {
+      pathsRef.dispose();
+      pathsRef = null;
     }
   };
 };

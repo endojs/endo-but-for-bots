@@ -36,7 +36,7 @@ let detachToggleListeners;
  * @param {HTMLElement} $parent
  * @param {HTMLElement | null} _end - Reserved (was an imperative end marker).
  * @param {ERef<EndoHost>} powers
- * @param {{ showValue: (value: unknown, id?: string, petNamePath?: string[], messageContext?: { number: bigint, edgeName: string }) => void | Promise<void>, onSelectConversation?: (petName: string | string[], formulaId: string) => void, activeConversationPetName?: string | null }} options
+ * @param {{ showValue: (value: unknown, id?: string, petNamePath?: string[], messageContext?: { number: bigint, edgeName: string }) => void | Promise<void>, showPaths?: (target: { id?: string, petNamePath?: string[], locator?: string, label?: string }) => void, onSelectConversation?: (petName: string | string[], formulaId: string) => void, activeConversationPetName?: string | null }} options
  * @param {string[]} [path] - Current path for nested inventories.
  * @param {ERef<EndoHost>} [rootPowers] - Top-level powers for the whole tree,
  *   against which drag-and-drop link/move operate. Defaults to `powers`.
