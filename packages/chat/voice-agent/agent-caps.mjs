@@ -1550,7 +1550,9 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
           { name: 'act', args: { action: 'string — e.g. start, turn_on, lock, set_temperature', data: 'object — optional service data' }, description: 'PROPOSE an action on it (the operator confirms)' }] });
       }
     }
-    if (powers.has('delegate')) {
+    { // delegateTask is UNIVERSAL — every agent may delegate (dan's endowment-moment principle): a delegate is
+      // structurally ⊆ you (the cap graph bounds it) and the Opus run is PURSE-METERED, so the only real limit is
+      // your budget. No `delegate` power needed.
       // delegateTask: hand the prompt to Opus with an ATTENUATED sub-bundle
       // (intersection of this node's powers and the requested powers). The
       // sub-agent's tools ARE that bundle — confinement at the delegation edge.
@@ -1910,7 +1912,9 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         { name: 'proposeEditContact', reversible: false, args: { handle: 'string — from contactsSearch', name: 'string', email: 'string', phone: 'string', org: 'string', note: 'string' }, description: 'PROPOSE editing a contact (by handle). Only the fields you set change. Does NOT write — the user confirms first.' },
       );
     }
-    if (powers.has('specialists')) {
+    { // specialists are UNIVERSAL — every agent may spawn/employ/schedule delegates (dan's endowment-moment
+      // principle): each is structurally ⊆ you (the cap graph bounds it) and its runs are purse-metered, so the
+      // only real limit is budget. No `specialists` power needed to deploy a team.
       // Spawn + consult persistent specialist sub-agents. A specialist runs with its OWN confined bundle +
       // instructions + id. Spawning needs NO confirmation: the ocap graph guarantees the child is a SUBSET of
       // you (you can only re-grant powers you hold — node.powers.has below), so it can never escalate; creating
@@ -1931,6 +1935,9 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       // confined, files the result as a viewable run in THIS chat, and pushes a deep-linked notification. This is
       // what turns a specialist from a within-turn consult into a persistent event-responder that evolves with you.
       toolbox.scheduleSpecialist = harden({ run: async ({ name, request, everyMs, afterMs, atIso, label } = {}) => {
+        // STANDING work runs on the background tick (outside a metered turn), so — unlike in-turn spawn/ask, which
+        // self-meter — it's gated up front on budget: you need a non-empty purse (root excepted). "Within budget."
+        if (!node.isRoot && !(ctx.purse && typeof ctx.purse.balance === 'function' && ctx.purse.balance() > 0)) return { ok: false, error: 'scheduling a standing specialist needs available budget (it runs in the background on your allowance) — top up or claim credits first.' };
         const spec = findSpecialist(String(name || '')); if (!spec) return { ok: false, error: `no specialist "${name}" — list them with listSpecialists` };
         const schedule = everyMs ? { kind: 'interval', everyMs: Number(everyMs) } : atIso ? { kind: 'once', atIso: String(atIso) } : { kind: 'once', afterMs: Number(afterMs || 0) };
         const n = specialistNudges.add({ specialistId: spec.id, specialistName: spec.name, chatId: ctx.chatId || '', request: String(request || ''), schedule, label });
@@ -1942,9 +1949,9 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         { name: 'listSpecialists', reversible: false, args: {}, description: 'List your specialist sub-agents (name, domain, powers, and what each may do autonomously).' },
         { name: 'spawnSpecialist', reversible: true, args: { name: 'string', domain: 'string — the kind of requests it handles', powers: 'array — a subset of YOUR powers to grant it', instructions: 'string — its standing instructions / persona' }, description: 'Spawn a persistent specialist sub-agent into your inventory. Spawns IMMEDIATELY, no confirmation — it is confined to a SUBSET of your own powers (the cap graph guarantees it can never exceed you), so creating one within your bounds is pre-approved; you may incur cost, capped by your budget. Powers you do not hold are silently not granted. Grant it `specialists` too if you want it to build its own sub-agents.' },
         { name: 'askSpecialist', reversible: true, args: { name: 'string — a specialist from listSpecialists', request: 'string — what to ask it to do' }, description: 'Hand a request to one of your specialists; it acts within its own confined powers + context. Its destructive actions still surface for your confirmation unless you granted it autonomy.' },
-        { name: 'scheduleSpecialist', reversible: true, args: { name: 'string — a specialist from listSpecialists', request: 'string — what it should do each time it wakes', everyMs: 'number — OPTIONAL: run it on this interval (recurring; min 60000)', afterMs: 'number — OPTIONAL: run it once after this delay', atIso: 'string — OPTIONAL: run it once at this ISO time' }, description: 'Put a specialist on a STANDING schedule — it wakes on the interval/time, acts within its own confined powers, files its result as a run in this chat, and pushes you a notification. This is how a specialist becomes a persistent event-responder that evolves strategy between your turns. Give exactly one of everyMs / afterMs / atIso.' },
+        { name: 'scheduleSpecialist', reversible: false, args: { name: 'string — a specialist from listSpecialists', request: 'string — what it should do each time it wakes', everyMs: 'number — OPTIONAL: run it on this interval (recurring; min 60000)', afterMs: 'number — OPTIONAL: run it once after this delay', atIso: 'string — OPTIONAL: run it once at this ISO time' }, description: 'Put a specialist on a STANDING schedule — it wakes on the interval/time, acts within its own confined powers, files its result as a run in this chat, and pushes you a notification. This is how a specialist becomes a persistent event-responder that evolves strategy between your turns. Give exactly one of everyMs / afterMs / atIso.' },
         { name: 'listSpecialistNudges', reversible: false, args: {}, description: "List your specialists' standing scheduled nudges (who, what, when next, how many times it has run)." },
-        { name: 'cancelSpecialistNudge', reversible: true, args: { id: 'string — a nudge id from listSpecialistNudges, OR a specialist name to cancel all of theirs' }, description: 'Cancel a standing specialist nudge (or all of a specialist’s nudges by name).' },
+        { name: 'cancelSpecialistNudge', reversible: false, args: { id: 'string — a nudge id from listSpecialistNudges, OR a specialist name to cancel all of theirs' }, description: 'Cancel a standing specialist nudge (or all of a specialist’s nudges by name).' },
       );
     }
     // createInvite is always available (a node may re-share powers it holds).

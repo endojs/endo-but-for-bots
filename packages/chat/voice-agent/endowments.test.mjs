@@ -18,6 +18,8 @@ import { POWERS, ALL_POWERS, makeFieldAgent } from './agent-caps.mjs';
 const POLICY = {
   // read — observe only, free
   searchNotes: 'read', readNote: 'read', searchDietNotes: 'read', readDietNote: 'read', consult: 'read', fetchUrl: 'read', transcribeYoutube: 'read',
+  noteFolders: 'read', // map the notes folder tree (names + counts) — read-only
+  requestNotesFolder: 'notify', // escalation: ASK for notes access scoped to one folder (grants nothing itself)
   readPdf: 'read', // extract a PDF's text (per page) from a vault path / home file / URL — read-only, each source gated on its own power
   haFind: 'read', haTree: 'read', haState: 'read',
   agentsList: 'read', agentStatus: 'read', machineRepoStatus: 'read',
@@ -82,6 +84,13 @@ const POLICY = {
   proposeImprovement: 'add', listImprovements: 'read', listChangelog: 'read', // backlog/changelog: propose (additive) / read
   // delegate — attenuated sub-bundle to a larger agent / a confined specialist / a role sub-agent
   delegateTask: 'delegate', spawnSpecialist: 'delegate', askSpecialist: 'delegate', employ: 'delegate',
+  // standing specialist nudges: SCHEDULING is low-blast (like scheduleTask) — the RUNS are gated by the
+  // specialist's own confined ring; list is read; cancel is management.
+  scheduleSpecialist: 'notify', listSpecialistNudges: 'read', cancelSpecialistNudge: 'notify',
+  // Buffer (social via Buffer GraphQL): reads are free; a draft just waits in Buffer for approval (low blast);
+  // publishing / blasting / deleting are DESTRUCTIVE → confirmable proposals.
+  bufferChannels: 'read', bufferListPosts: 'read', bufferDraft: 'notify', bufferDraftAll: 'notify',
+  proposeBufferPost: 'propose', proposeBufferBlast: 'propose', proposeBufferDelete: 'propose',
   forgeTool: 'delegate', // spawns a confined toolsmith sub-agent (VM-holding) that proposes a reusable tool
   // share — re-grant ONE held power as a named, revocable invite (monotonic delegation); revoke any time
   createInvite: 'share',
