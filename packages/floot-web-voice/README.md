@@ -14,9 +14,9 @@ It ships:
   CapTP,
 - **feature detection** (`src/feature-detect.js`),
 - a **backend selector** (`src/index.js`), and
-- two **backend stubs** (`src/backends/`) the next two agents fill in.
-
-It does **not** implement model inference.
+- two **backends** (`src/backends/`): `transformers-webgpu` (A, Moonshine +
+  Kokoro on WebGPU) and `onnx-piper-moonshine` (B, Moonshine + Piper via ONNX
+  Runtime, engine-parity with the server caplets).
 
 ## This is HOST-side code
 
@@ -200,9 +200,11 @@ ORT STT + TTS that keeps **engine parity** with the server caplets:
 - npm deps: `onnxruntime-web`, plus a browser phonemizer for Piper (e.g.
   `phonemizer` / a wasm eSpeak-NG build).
 
-The model runtime deps are intentionally **not** in `package.json` yet — each
-backend agent adds what it needs, and commits the lockfile as a separate
-follow-up commit.
+The model runtime deps are declared in `package.json`
+(`@huggingface/transformers`, `kokoro-js`, `onnxruntime-web`, `phonemizer`).
+The lockfile update is a **separate follow-up** that must run where the npm
+registry is reachable (`yarn install`); these weights-bearing packages are not
+resolvable in an offline sandbox.
 
 ## Selector
 
@@ -219,6 +221,40 @@ if (local) {
   // wire audioServer.transcribe(...) / ttsServer.synthesize(...) into the host
 }
 ```
+
+## Activation in @endo/chat
+
+`packages/chat/floot-component.js` already accepts an optional `localVoice`
+argument — `{ audioServer, ttsServer }` — and prefers it over the remote
+`audioPath`/`ttsPath` caplet lookups, falling back to the remote path when it is
+absent.
+So nothing changes until a caller supplies it.
+To turn the local path on:
+
+1. Add `@endo/floot-web-voice` (`workspace:^`) to `@endo/chat`'s dependencies.
+2. At the `flootComponent(...)` call site (`packages/chat/chat.js`), resolve a
+   local backend and pass it through as the seventh argument:
+
+   ```js
+   import { makeLocalVoiceServers } from '@endo/floot-web-voice';
+
+   const localVoice = (await makeLocalVoiceServers({})) || undefined;
+   return flootComponent(
+     $parent,
+     rootPowers,
+     profilePath,
+     onProfileChange,
+     activeSpaceInfo.audioPath,
+     activeSpaceInfo.ttsPath,
+     localVoice,
+   );
+   ```
+
+   `makeLocalVoiceServers` returns `null` when no backend is supported, so the
+   component transparently falls back to the remote caplets.
+3. Regenerate the lockfile (`yarn install`) in a registry-connected environment.
+4. Serve the chat document **cross-origin isolated** (see above) and verify on a
+   WebGPU device (e.g. a Pixel 10 Fold in Chrome).
 
 ## Testing
 
