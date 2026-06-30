@@ -340,7 +340,46 @@ const renderSitePreview = spec => {
   return wrap;
 };
 
-const RENDERERS = { countdowns: renderCountdowns, 'entity-status': renderEntityStatus, choices: renderChoices, component: renderComponent, 'theme-preview': renderThemePreview, 'site-preview': renderSitePreview };
+// renderSpecialist — a persistent SPECIALIST ISLAND dropped where spawnSpecialist fired: its name + power-ring,
+// EXPANDABLE in place to inspect it (instructions, standing nudges, recent runs — lazy-fetched), and a button to
+// open its own thread. So a spawned specialist is visible + inspectable right in the chat, by its in-context name.
+const renderSpecialist = (spec, ctx) => {
+  const name = String(spec.name || 'specialist'); const domain = String(spec.domain || ''); const powers = Array.isArray(spec.powers) ? spec.powers : [];
+  const escTxt = s => { const d = document.createElement('div'); d.textContent = String(s == null ? '' : s); return d.innerHTML; };
+  const wrap = document.createElement('div'); wrap.className = 'gw gw-spec'; wrap.style.cssText = `${STYLE};margin:8px 0;border:1px solid var(--edge,#30363d);border-radius:12px;overflow:hidden;background:var(--panel,#161b22)`;
+  const head = document.createElement('div'); head.style.cssText = 'display:flex;align-items:center;gap:9px;padding:9px 12px';
+  const ic = document.createElement('span'); ic.textContent = '🧑‍🔬'; ic.style.fontSize = '16px';
+  const meta = document.createElement('div'); meta.style.cssText = 'flex:1;min-width:0';
+  const t = document.createElement('div'); t.textContent = name; t.style.cssText = 'font-weight:600;color:var(--ink,#e6edf3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; // textContent — never HTML
+  const d = document.createElement('div'); d.textContent = domain ? `specialist · ${domain}` : 'specialist sub-agent'; d.style.cssText = 'font-size:11px;color:var(--mut,#8b949e);overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  meta.append(t, d);
+  const btn = (label, title) => { const b = document.createElement('button'); b.textContent = label; b.title = title || ''; b.style.cssText = 'all:unset;cursor:pointer;color:var(--acc,#7c5cff);font-size:12px;font-weight:600;border:1px solid var(--edge,#30363d);border-radius:7px;padding:3px 9px;white-space:nowrap'; return b; };
+  const inspectBtn = btn('▸ Inspect', 'its ring, instructions, standing nudges + runs');
+  const chatBtn = btn('💬 Chat', 'open a new chat as this specialist');
+  head.append(ic, meta, inspectBtn, chatBtn); wrap.appendChild(head);
+  if (powers.length) { const chips = document.createElement('div'); chips.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;padding:0 12px 9px'; powers.forEach(p => { const c = document.createElement('span'); c.textContent = p; c.style.cssText = 'font-size:10px;color:var(--mut,#8b949e);border:1px solid var(--edge,#30363d);border-radius:5px;padding:1px 6px'; chips.appendChild(c); }); wrap.appendChild(chips); }
+  const panel = document.createElement('div'); panel.style.cssText = 'display:none;border-top:1px solid var(--edge,#21262d);padding:10px 12px;font-size:12px;color:var(--ink,#e6edf3);max-height:340px;overflow-y:auto'; wrap.appendChild(panel);
+  let loaded = false;
+  const loadInspect = async () => {
+    panel.textContent = 'Loading…';
+    try {
+      const r = await (await fetch('/specialist/inspect', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: ctx && ctx.cap, id: spec.id }) })).json();
+      if (!r || !r.ok) { panel.textContent = (r && r.error) || 'could not load'; return; }
+      panel.innerHTML = '';
+      const sec = (label, html) => { const s = document.createElement('div'); s.style.cssText = 'margin-bottom:9px'; s.innerHTML = `<div style="color:var(--mut,#8b949e);font-size:10px;letter-spacing:.04em;margin-bottom:3px">${label}</div>${html}`; panel.appendChild(s); return s; };
+      if (r.instructions) sec('INSTRUCTIONS', `<div style="white-space:pre-wrap">${escTxt(String(r.instructions).slice(0, 1400))}</div>`);
+      if ((r.nudges || []).length) sec('STANDING NUDGES', r.nudges.map(n => `<div>⏰ ${escTxt(String(n.request).slice(0, 90))} — ${n.recurring ? 'recurring' : 'once'}${n.nextAt ? `, next ${escTxt(new Date(n.nextAt).toLocaleString())}` : ''} <span style="color:var(--mut,#8b949e)">(${n.runs} run${n.runs === 1 ? '' : 's'})</span></div>`).join(''));
+      if ((r.runs || []).length) { const s = sec('RECENT RUNS', r.runs.map(run => `<div data-openrun="${escTxt(run.id)}" style="cursor:pointer;color:var(--acc,#7c5cff)">🔁 ${escTxt(run.title)} <span style="color:var(--mut,#8b949e)">— ${escTxt(new Date(run.at).toLocaleString())}</span></div>`).join('')); s.querySelectorAll('[data-openrun]').forEach(el => el.onclick = () => { if (ctx && ctx.onOpenRun) ctx.onOpenRun(el.getAttribute('data-openrun')); }); }
+      if (!r.instructions && !(r.nudges || []).length && !(r.runs || []).length) panel.textContent = 'No instructions, standing nudges, or runs yet — chat with it or schedule one.';
+      loaded = true;
+    } catch (e) { panel.textContent = 'could not load: ' + e.message; }
+  };
+  inspectBtn.addEventListener('click', async e => { e.stopPropagation(); const open = panel.style.display === 'none'; panel.style.display = open ? 'block' : 'none'; inspectBtn.textContent = open ? '▾ Inspect' : '▸ Inspect'; if (open && !loaded) await loadInspect(); });
+  chatBtn.addEventListener('click', e => { e.stopPropagation(); if (ctx && ctx.onOpenSpecialist) ctx.onOpenSpecialist(spec.id, name); });
+  return wrap;
+};
+
+const RENDERERS = { countdowns: renderCountdowns, 'entity-status': renderEntityStatus, choices: renderChoices, component: renderComponent, 'theme-preview': renderThemePreview, 'site-preview': renderSitePreview, specialist: renderSpecialist };
 
 // renderWidgets(container, specs, ctx): append each widget; ctx = { cap, onChoice }. Pure data in, DOM out.
 export const renderWidgets = (container, specs, ctx) => {

@@ -1928,6 +1928,9 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         const dropped = reqd.filter(p => !granted.includes(p));
         const r = spawnSpecialist({ name, domain, powers: granted, instructions, spawnedFromChatId: ctx.chatId }); // r.url (its #cap) is NOT returned — cap hygiene
         return harden({ ok: !!r.ok, id: r.id, name: r.name, domain: String(domain || ''), powers: granted,
+          // drop a persistent, expandable SPECIALIST ISLAND right here in the chat — inspect it (its ring/instructions/
+          // standing nudges/runs) or open its own thread, by the name you gave it. (cap hygiene: no swissnum.)
+          widget: { type: 'specialist', id: r.id, name: r.name, domain: String(domain || ''), powers: granted },
           note: `Spawned — confined to ${granted.length ? granted.join(', ') : 'no'} power(s), a subset of yours (no confirmation needed). ${dropped.length ? `Not granted: ${dropped.join(', ')} (outside your bounds or not delegable). ` : ''}Use it via askSpecialist("${r.name}", …).` });
       } });
       toolbox.askSpecialist = harden(makeAskSpecialist(ctx.userText, node)); // node = caller → the wand bounds an auto-created specialist to ⊆ this agent

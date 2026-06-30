@@ -871,6 +871,18 @@ const breakOutComponent = async spec => {
 // its declared cells, read-only — not a cap), and COPY the recipient link. cap-hygiene: the token rides in
 // the link's fragment; we copy it (never render it to the page).
 const schemeLabel = (s, c) => s === 'expires' ? `${c.hours}h time-boxed` : s === 'allowance' ? `$${(c.total / 1e6).toFixed(2)} allowance` : 'free';
+// open a fresh chat AS a spawned specialist (the inline specialist island's 💬 Chat) — by the name it was given.
+const onOpenSpecialist = (id, name) => {
+  newChat(); // mints a new ephemeral sessionId
+  pendingAgent[sessionId] = String(id || ''); // run this chat AS the specialist (committed on first message)
+  const sel = $('agent-sel'); if (sel) { const has = [...sel.options].some(o => o.value === id); if (has) sel.value = id; } // reflect it in the header selector if listed
+  try { renderChatBar(); } catch { /* */ }
+  setStatus(`chatting as ${name || 'specialist'}`);
+  const t = $('text'); if (t) t.focus();
+};
+// open one of a specialist's standing-nudge runs (a seed-chat) from the inline island's RECENT RUNS.
+const onOpenRun = async runId => { pendingChat = runId; try { await loadSeedChats(); } catch { /* */ } tryOpenPendingChat(); };
+
 const shareOutComponent = async spec => {
   if (!spec || spec.type !== 'component') return;
   const inp = 'background:#0a0c16;color:#e6edf3;border:1px solid #2b3350;border-radius:6px;padding:4px 6px;font:inherit';
@@ -964,7 +976,7 @@ const renderAgentResponse = r => {
   const body = bubble('agent', r.answer || '…', r.agentId, Date.now());
   if (r.toolsUsed?.length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + r.toolsUsed.join(', '); body.parentNode.appendChild(e); }
   ((r.images && r.images.length ? r.images : (r.imageUrls || [])) || []).forEach(src => { const im = document.createElement('img'); im.src = src; body.appendChild(im); }); // data-URLs in the moment; durable /uploads urls as fallback (e.g. the share-post path)
-  try { if (Array.isArray(r.ui) && r.ui.length) renderWidgets(body, r.ui, { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet, onTalk: talkAboutWidget }); } catch (e) { console.error('renderWidgets failed', e); } // live/interactive widgets
+  try { if (Array.isArray(r.ui) && r.ui.length) renderWidgets(body, r.ui, { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet, onTalk: talkAboutWidget, onOpenSpecialist, onOpenRun }); } catch (e) { console.error('renderWidgets failed', e); } // live/interactive widgets
   (r.autoFired || []).forEach(a => { const e = document.createElement('div'); e.className = 'autofired'; e.textContent = `✓ auto-confirmed: ${a.title}${a.ok === false ? ' (failed)' : ''}`; body.parentNode.appendChild(e); }); // fired via a "don't ask again" rule
   // Each card renders INDEPENDENTLY — one malformed proposal/access-request/ask must never abort the rest
   // (the answer is already shown above; a throwing Grant card used to swallow the whole turn's render).
@@ -2548,7 +2560,7 @@ const renderTx = () => {
         if (_arr(v.steps).length) log.appendChild(traceGeometry(_arr(v.steps))); // the SVG trace sits ABOVE the message (tap it for the 3D)
         const b = bubble('agent', v.answer, v.agentId || m.agent, m.at);
         const imgs = asArr(m.imageUrls).length ? asArr(m.imageUrls) : asArr(m.images).filter(s => typeof s === 'string' && s.startsWith('data:')); imgs.forEach(src => { const im = document.createElement('img'); im.src = src; b.appendChild(im); });
-        if (_arr(v.ui).length) renderWidgets(b, _arr(v.ui), { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet, onTalk: talkAboutWidget }); // re-hydrate live widgets
+        if (_arr(v.ui).length) renderWidgets(b, _arr(v.ui), { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet, onTalk: talkAboutWidget, onOpenSpecialist, onOpenRun }); // re-hydrate live widgets
         if (_arr(v.tools).length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + _arr(v.tools).join(', '); b.parentNode.appendChild(e); }
         appendProposalPrompt(b.parentNode, m); // a propose-only sub-agent → "🔍 View proposed agent prompt"
         continue;
