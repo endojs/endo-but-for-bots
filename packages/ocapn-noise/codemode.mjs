@@ -48,7 +48,7 @@ const extractCode = reply => {
   return open ? open[1].trim() : null;
 };
 
-export const runAgentCode = async ({ toolbox, manifest, userText, history = [], onStep = () => {}, signal, persona = '', attachments = [], model = 'default', llm, budgetLine = '', resumeMessages = null, callLLM = defaultCallLLM, buildUserContent = defaultBuildUserContent, takeInterjections = () => [] } = {}) => {
+export const runAgentCode = async ({ toolbox, manifest, userText, history = [], onStep = () => {}, signal, persona = '', attachments = [], model = 'default', llm, budgetLine = '', resumeMessages = null, callLLM = defaultCallLLM, buildUserContent = defaultBuildUserContent, takeInterjections = () => [], allowResearch = false } = {}) => {
   const invoke = llm || callLLM;
   const used = [];
   // Wrap every toolbox verb as an async fn the program can call: `await name(args)`. Each emits the
@@ -96,10 +96,19 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
   // distinct rendering) — no prose-parsing required.
   let finalReply = null; // { kind: 'answer'|'ask'|'blocked', text }
   const REPLY_SENTINEL = '__codemode_reply__';
-  const endTurn = (kind, text) => { finalReply = { kind, text: String(text == null ? '' : text) }; throw new Error(REPLY_SENTINEL); };
+  // text is usually a string; if a program passes an OBJECT (e.g. a tool's structured result handed straight to
+  // answer()), render it as readable JSON rather than the useless "[object Object]".
+  const endTurn = (kind, text) => { finalReply = { kind, text: text == null ? '' : (typeof text === 'string' ? text : safeJson(text)) }; throw new Error(REPLY_SENTINEL); };
   endow.answer = harden(text => endTurn('answer', text));
   endow.ask = harden(question => endTurn('ask', question));
   endow.blocked = harden(reason => endTurn('blocked', reason));
+  // research() — a 4th turn-ender (entry agent only; opt-in via allowResearch). Takes NO arguments: it hands the
+  // turn off to a fresh, CONFINED public-research agent (web/browser/fetch/research only — NO personal data, NO
+  // special/destructive powers), which answers the question from public sources. Because that agent is safe BY
+  // CONSTRUCTION (it literally cannot reach private data or act), the handoff needs NO user approval — it widens
+  // the set of questions answerable for free. It takes no parameters precisely so nothing (no private context)
+  // can be injected across the boundary; the confined agent only sees the public conversation.
+  if (allowResearch) endow.researchOnly = harden(() => endTurn('research', ''));
   // MID-TURN PROGRESS (dan): a long multi-step program looks STALLED to the user — the page sits silent
   // while the model thinks + tools run. updateProgress(text) pushes a one-line "here's what I'm doing now"
   // to the live UI WITHOUT ending the turn (unlike answer/ask/blocked). It is a status ping, not a reply:
@@ -112,6 +121,7 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
   endow.myPersona = harden(String(persona || ''));
   apiLines.push('  const myPersona = <string: your operator-confirmed instructions>; const mySystemPrompt = <string: your FULL system prompt>. Read-only. Reference them, or pass a slice as context to a delegate — e.g. delegateTask({ prompt: `${myPersona.slice(0, 600)}\\n\\n<sub-task>`, ... }).');
   apiLines.push('  answer(text) / ask(question) / blocked(reason): the THREE ways to END your turn (always in scope). answer(text) = task complete, here is the reply. ask(question) = you need ONE thing from the user to proceed — ask it and yield. blocked(reason) = you could not complete it — say plainly what you did, what you could not, and why. This is HOW you reply; do NOT use an "ANSWER:" text marker. `return` is only for INSPECTING an intermediate value as OUTPUT.');
+  if (allowResearch) apiLines.push('  researchOnly(): 4th turn-ender, NO arguments (do NOT confuse with the `research` tool). Call it to HAND OFF the whole question to a fresh CONFINED public-research agent (web/fetch/browser/research, and NOTHING else — no personal data, no special powers), which answers from public sources and whose reply becomes your reply. PREFER it for any question answerable from pure public/world knowledge: the handoff is provably safe (the agent literally cannot touch private data), so it needs NO approval — that is its whole point. Do NOT do the research yourself in that case; just call researchOnly(). Never use it for anything touching the user\'s own data or any action.');
   const api = apiLines.join('\n');
   // Accepted INVENTORY objects are now FIRST-CLASS live in-scope objects in `api` above: the toolbox builds a
   // manifest entry with methods[] for each callable accepted object, so the methods[] branch renders it as
@@ -214,7 +224,7 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
       if (bare) {
         const kind = bare[1].toLowerCase(); const text = bare[3];
         onStep({ kind: 'answer', text });
-        return harden({ answer: text, toolsUsed: used, ...(kind === 'ask' ? { asking: true } : kind === 'blocked' ? { blocked: true } : {}) });
+        return harden({ answer: text, toolsUsed: used, ...(kind === 'ask' ? { asking: true } : kind === 'blocked' ? { blocked: true } : kind === 'research' ? { researching: true } : {}) });
       }
       // (2) a non-empty natural-language reply → deliver it as the answer. A model replying in prose IS its reply;
       //     there is no marker to parse. (3) empty → a MODEL stall: nudge it to ACT + end with a turn-ender
@@ -241,7 +251,7 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     // parsed from prose). Return it BEFORE touching r.ok/r.error: the sentinel unwind shows up as a program
     // "throw", but the captured finalReply supersedes it. (A program that set the reply then hit a real error
     // still delivers it — better than going silent.) The kind rides along as a structured asking/blocked flag.
-    if (finalReply != null) { const { kind, text } = finalReply; onStep({ kind: 'answer', text }); return harden({ answer: text, toolsUsed: used, ...(kind === 'ask' ? { asking: true } : kind === 'blocked' ? { blocked: true } : {}) }); }
+    if (finalReply != null) { const { kind, text } = finalReply; onStep({ kind: 'answer', text }); return harden({ answer: text, toolsUsed: used, ...(kind === 'ask' ? { asking: true } : kind === 'blocked' ? { blocked: true } : kind === 'research' ? { researching: true } : {}) }); }
     const parts = [];
     if (r.logs.length) parts.push(`logs:\n${clip(r.logs.join('\n'), 8000)}`);
     if (r.ok) { parts.push(`returned: ${clip(safeJson(r.value), 12000)}`); repeatErr = 0; failStreak = 0; lastError = ''; }

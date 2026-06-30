@@ -96,6 +96,16 @@ export const callLLM = async (messages, model = 'default', { maxTokens = 4096, a
   try { r = await fetchChat(LLM, { 'content-type': 'application/json' },
     extra => ({ model: model || 'default', messages, max_tokens: maxTokens, ...extra }), model || 'default', 120000); }
   catch (e) { return harden({ text: '', usage: null, error: `model "${model || 'default'}" unreachable: ${e.message}` }); }
+  // SELF-HEAL the local model's modest context (gemma: 16384): a fixed 4096-output request overflows when the
+  // prompt is large (400 "maximum context length …"). The model's reported input count is an unreliable lower
+  // bound ("at least M", and it varies), so don't chase it — just HALVE the output ceiling on each context-400
+  // until it fits. Converges in a few attempts and degrades gracefully (shorter reply) instead of failing the turn.
+  let mt = maxTokens;
+  for (let attempt = 0; !r.ok && r.status === 400 && mt > 300 && attempt < 5; attempt += 1) {
+    if (!/maximum context length/i.test(await r.clone().text().catch(() => ''))) break;
+    mt = Math.floor(mt / 2);
+    try { r = await fetchChat(LLM, { 'content-type': 'application/json' }, extra => ({ model: model || 'default', messages, max_tokens: mt, ...extra }), model || 'default', 120000); } catch { break; }
+  }
   if (!r.ok) return harden({ text: '', usage: null, status: r.status, error: `model "${model || 'default'}" returned ${r.status}: ${(await r.text().catch(() => '')).slice(0, 160)}` });
   const j = await r.json().catch(() => ({}));
   return harden({ text: j.choices?.[0]?.message?.content || '', usage: j.usage || null });

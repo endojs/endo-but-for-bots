@@ -645,6 +645,12 @@ const scopePrompt = task => [{ role: 'system', content: SCOPE_SYS }, { role: 'us
 // (notes, the library+Wikipedia, agent capability docs) — to understand the task, THEN proposes the
 // endowments. This is a real agent run (it may search notes / consult Wikipedia / check agent docs)
 // confined to powers that can't leak or act. Falls back to a plain gemma→claude completion.
+// The entry agent's research() turn-ender hands off to a CONFINED agent with this ring: public, read-only tools
+// ONLY — web (fetchUrl + JSON/HTTP APIs), a headless browser (JS-rendered pages), and the research team (search/
+// read/synthesize). NO personal data (notes/contacts/home/calendar/files) and NO special/destructive powers, so
+// the handoff is safe by construction and needs no approval. (dan: "browser, fetch, research, no personal data.")
+const PUBLIC_RESEARCH_RING = ['web', 'browser', 'research'];
+const PUBLIC_RESEARCH_SYS = 'You are a confined PUBLIC-RESEARCH agent. Your ONLY tools are public + read-only: fetch web pages and JSON/HTTP APIs (web), a headless browser for JS-rendered pages (browser), and a research team that searches → reads → synthesizes with citations (research). You have NO access to any personal/private data and NO ability to act on anything. Research the question from public sources, then END by calling answer() with a clear, well-written PROSE summary of what you found, with citations — NEVER hand a tool\'s raw JSON object to answer(); write the actual prose reply yourself (e.g. from a research result, use its `report`). If it genuinely cannot be answered from public research, say so plainly.';
 const SCOPE_RESEARCH_RING = ['notes', 'reference', 'agents']; // fully-private, read-only, no egress
 const SCOPE_RESEARCH_SYS = 'You PLAN a task before its agent is granted powers. Use ONLY your private read-only tools (search notes, consult library/Wikipedia, inspect agent capabilities) for a few round-trips if useful. Then reply with: (a) the concrete STEPS the agent will take to finish end to end, and (b) the capabilities each step needs — being explicit about any step that PRODUCES output (publishing a page/graph/site, writing files, generating an image, posting) and the write-power it requires. PREFER PROGRAMMATIC capabilities over heavyweight ones: anything that can be done programmatically should be — choose `web` (fetchUrl, for pages + JSON/HTTP APIs) over `browser` (a full headless chromium), and only propose `browser` when a page genuinely needs JS rendering or interaction. Do NOT perform the task — just plan it so the right (and cheapest sufficient) powers get granted up front.';
 // Two-stage: (1) a confined PRIVATE-domain agent researches the task (real round-trips), then
@@ -1586,10 +1592,11 @@ const handler = async (req, res) => {
       } catch { /* best-effort */ }
       const TURN_DEADLINE_MS = Number(process.env.TURN_DEADLINE_MS) || 360000; // hard per-turn limit → a LEGIBLE timeout, never a silent stall (the crowdsupply hang)
       let deadlineHit = false; let deadlineT = null;
-      const r = await Promise.race([
+      let r = await Promise.race([
         AGENT_RUNNER({
         toolbox, manifest, userText: t, history, resumeMessages, attachments: agentAttachments, signal: ac.signal, persona: runPersona, model: byo ? byo.modelId : String(model || 'default'),
         llm: capturingLLM, budgetLine: byo ? `Inference: running on YOUR OWN ${byo.provider} account (${byo.model}) — unlimited; the owner's prepaid allowance does not apply.` : budgetLine(purse.balance(), String(model || 'default')),
+        allowResearch: runAgentId === 'field-agent', // the ENTRY agent gets the no-approval public-research handoff (research())
         takeInterjections: () => interjections.take(sid), // mid-turn re-steer: drained + folded into context at each step boundary
 
         onStep: s => {
@@ -1634,6 +1641,20 @@ const handler = async (req, res) => {
         }).then(x => { if (deadlineT) clearTimeout(deadlineT); return x; }),
         new Promise(resolve => { deadlineT = setTimeout(() => { deadlineHit = true; try { ac.abort(); } catch { /* */ } resolve({ cancelled: true, toolsUsed: [], answer: '' }); }, TURN_DEADLINE_MS); }),
       ]);
+      // RESEARCH HANDOFF: the entry agent ended its turn with research() — answer this from a CONFINED public-
+      // research agent (web/browser/research ONLY; no personal data, no special powers), so it needs NO approval.
+      // Its answer becomes the turn's reply. Runs on the same metered purse (no approval ≠ free).
+      if (r && r.researching && runAgentId === 'field-agent' && !deadlineHit) {
+        emitStep(sid, { t: 'start', name: 'researchOnly', detail: 'public-research handoff (confined: web/browser/research, no personal data)' });
+        try {
+          const rr = await runScheduledAgent({ powers: PUBLIC_RESEARCH_RING, prompt: t, persona: PUBLIC_RESEARCH_SYS, model: String(model || 'default'), llm: capturingLLM, budgetLine: budgetLine(purse.balance(), String(model || 'default')), emit: s => emitStep(sid, s) });
+          const ans = String((rr && rr.answer) || '').trim();
+          const kids = ((rr && rr.toolsUsed) || []).map(x => ({ name: x.name || String(x), detail: x.args ? detailFromArgs(x.args) : '', call: x.args ? safeText(x.args, 4000) : '', result: x.result !== undefined ? safeText(x.result, 4000) : '' }));
+          steps.push({ name: 'researchOnly', detail: 'public-research handoff', ok: true, ...(kids.length ? { children: kids } : {}) });
+          emitStep(sid, { t: 'done', name: 'researchOnly', ok: true, detail: 'public-research handoff', children: kids });
+          r = { ...r, answer: ans || 'I handed this to a confined public-research agent, but it returned nothing.', toolsUsed: [...(r.toolsUsed || []), ...((rr && rr.toolsUsed) || [])], researched: true };
+        } catch (e) { log('research-handoff', e.message); r = { ...r, answer: `I tried to answer that from public research, but the research agent errored: ${e.message}` }; }
+      }
       emitStep(sid, { t: 'end' });
       if (runs.get(sid) === ac) runs.delete(sid);
       interjections.drop(sid); // drop-on-turn-end: any un-drained interjection must not leak into the next turn
