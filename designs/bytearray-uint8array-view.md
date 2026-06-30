@@ -234,13 +234,13 @@ maintainer-coordinated action.
    design (erights, PR #572). The view-model implementation already lives largely
    on `feat/narrow-bytearray-to-uint8`, which seeds the fresh PR. Closing the
    upstream `endojs/endo#3226` is a maintainer-coordinated action.
-
-## Open Questions
-
-- Helper naming: keep the wire-facing `byteArrayToHex` / `hexToByteArray` names
-  (the passStyle is still "byteArray") alongside the JS-side `frozenBytes` /
-  `thawnBytes` boundary, or unify on one vocabulary? The prototype keeps both: hex
-  helpers for the codecs, frozen/thawn for the general view boundary.
+7. **Keep both helper vocabularies.** The wire-facing `byteArrayToHex` /
+   `hexToByteArray` names stay for the codecs (the passStyle is still
+   "byteArray"), alongside the JS-side `frozenBytes` / `thawnBytes` boundary for
+   the general view conversion — the two name sets are not unified. This is the
+   prototype's current shape on `feat/narrow-bytearray-to-uint8`: hex helpers for
+   the codecs, frozen/thawn for the general view boundary. All four names are
+   approved (kriskowal, PR #572).
 
 ## Prompt
 
