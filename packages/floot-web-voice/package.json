@@ -1,0 +1,56 @@
+{
+  "name": "@endo/floot-web-voice",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser-side (WASM/WebGPU) speech-to-text and text-to-speech servers for Floot — a host-side, local replacement for the server-side voice caplets",
+  "keywords": [
+    "endo",
+    "floot",
+    "voice",
+    "speech-to-text",
+    "text-to-speech",
+    "webgpu",
+    "wasm"
+  ],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/floot-web-voice"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "lint": "yarn lint:eslint",
+    "lint-fix": "yarn lint:eslint --fix",
+    "lint:eslint": "eslint '**/*.js'"
+  },
+  "dependencies": {
+    "@endo/errors": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
+    "@endo/exo": "workspace:^",
+    "@endo/far": "workspace:^",
+    "@endo/harden": "workspace:^",
+    "@endo/patterns": "workspace:^"
+  },
+  "devDependencies": {
+    "eslint": "catalog:dev"
+  },
+  "//": "TODO(backend agents): add the model runtime deps your backend needs. The transformers-webgpu backend will need '@huggingface/transformers' (Whisper/Moonshine STT) and 'kokoro-js' (Kokoro-82M TTS). The onnx-piper-moonshine backend will need 'onnxruntime-web' (Moonshine ONNX STT + Piper .onnx TTS). The lockfile is a separate follow-up commit.",
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/internal"
+    ],
+    "env": {
+      "browser": true
+    }
+  }
+}
