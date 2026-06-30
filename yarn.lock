@@ -1446,6 +1446,7 @@ __metadata:
     "@endo/daemon": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
+    "@endo/exo-pubsub": "workspace:^"
     "@endo/exo-stream": "workspace:^"
     "@endo/far": "workspace:^"
     "@endo/harden": "workspace:^"
@@ -1641,6 +1642,7 @@ __metadata:
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
     "@endo/exo-git": "workspace:^"
+    "@endo/exo-pubsub": "workspace:^"
     "@endo/exo-stream": "workspace:^"
     "@endo/far": "workspace:^"
     "@endo/git": "workspace:^"
@@ -1845,6 +1847,30 @@ __metadata:
     eslint: "catalog:dev"
     prettier: "npm:^3.5.3"
     ses: "workspace:^"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/exo-pubsub@workspace:^, @endo/exo-pubsub@workspace:packages/exo-pubsub":
+  version: 0.0.0-use.local
+  resolution: "@endo/exo-pubsub@workspace:packages/exo-pubsub"
+  dependencies:
+    "@endo/captp": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
+    "@endo/far": "workspace:^"
+    "@endo/lockdown": "workspace:^"
+    "@endo/pass-style": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
+    "@endo/pubsub": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    "@endo/stream": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    tsd: "catalog:dev"
     typescript: "catalog:dev"
   languageName: unknown
   linkType: soft
@@ -2583,7 +2609,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/pubsub@workspace:packages/pubsub":
+"@endo/pubsub@workspace:^, @endo/pubsub@workspace:packages/pubsub":
   version: 0.0.0-use.local
   resolution: "@endo/pubsub@workspace:packages/pubsub"
   dependencies:

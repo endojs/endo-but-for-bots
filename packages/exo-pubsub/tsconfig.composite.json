@@ -6,34 +6,16 @@
   },
   "references": [
     {
-      "path": "../captp/tsconfig.composite.json"
-    },
-    {
-      "path": "../daemon/tsconfig.composite.json"
-    },
-    {
       "path": "../eventual-send/tsconfig.composite.json"
     },
     {
       "path": "../exo/tsconfig.composite.json"
     },
     {
-      "path": "../exo-pubsub/tsconfig.composite.json"
-    },
-    {
       "path": "../exo-stream/tsconfig.composite.json"
     },
     {
       "path": "../far/tsconfig.composite.json"
-    },
-    {
-      "path": "../harden/tsconfig.composite.json"
-    },
-    {
-      "path": "../init/tsconfig.composite.json"
-    },
-    {
-      "path": "../markmdown/tsconfig.composite.json"
     },
     {
       "path": "../pass-style/tsconfig.composite.json"
@@ -45,7 +27,7 @@
       "path": "../promise-kit/tsconfig.composite.json"
     },
     {
-      "path": "../where/tsconfig.composite.json"
+      "path": "../pubsub/tsconfig.composite.json"
     }
   ]
 }

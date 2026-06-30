@@ -29,6 +29,7 @@ import {
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+import { subscriptionFromReader } from '@endo/exo-pubsub/subscription-from-reader.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
 import { checkinTarTree } from './tar-checkin.js';
@@ -2369,7 +2370,7 @@ const makeDaemonCore = async (
             listIdentifiers,
             listLocators,
             followNameChanges: (...petNamePath) =>
-              readerFromIterator(followNameChanges(...petNamePath)),
+              subscriptionFromReader(followNameChanges(...petNamePath)),
             lookup,
             maybeLookup,
             reverseLookup,
@@ -2746,7 +2747,7 @@ const makeDaemonCore = async (
             listIdentifiers,
             listLocators,
             followNameChanges: (...petNamePath) =>
-              readerFromIterator(followNameChanges(...petNamePath)),
+              subscriptionFromReader(followNameChanges(...petNamePath)),
             lookup,
             maybeLookup,
             reverseLookup,

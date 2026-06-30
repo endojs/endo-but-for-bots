@@ -7,7 +7,7 @@ import harden from '@endo/harden';
 /** @import { EndoHost } from '@endo/daemon' */
 
 import { E } from '@endo/far';
-import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { iterateSubscription } from '@endo/exo-pubsub/iterate-subscription.js';
 
 import {
   Fragment,
@@ -999,8 +999,8 @@ export const createSpacesGutter = ({
       const changesRef = E(
         /** @type {ERef<EndoHost>} */ (spacesDir),
       ).followNameChanges();
-      const changes = iterateReader(
-        /** @type {Parameters<typeof iterateReader>[0]} */ (
+      const changes = iterateSubscription(
+        /** @type {Parameters<typeof iterateSubscription>[0]} */ (
           /** @type {unknown} */ (changesRef)
         ),
       );

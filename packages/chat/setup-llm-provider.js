@@ -8,7 +8,7 @@
 //   ENDO_LLM_AUTH_TOKEN=sk-ant-...
 //   ENDO_LLM_NAME=fae
 
-import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { iterateSubscription } from '@endo/exo-pubsub/iterate-subscription.js';
 import { E } from '@endo/eventual-send';
 import harden from '@endo/harden';
 
@@ -45,7 +45,7 @@ export const main = async agent => {
   }
 
   console.log(`Setting up LLM provider "${name}" (${host}, ${model})`);
-  const messages = iterateReader(E(agent).followMessages());
+  const messages = iterateSubscription(E(agent).followMessages());
 
   console.log('Scanning inbox for form from llm-provider-factory-handle...');
 

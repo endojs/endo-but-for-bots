@@ -5,7 +5,7 @@
 /** @import { PassableReader } from '@endo/exo-stream' */
 
 import { Far } from '@endo/far';
-import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+import { subscriptionFromReader } from '@endo/exo-pubsub/subscription-from-reader.js';
 import { makePromiseKit } from '@endo/promise-kit';
 
 /**
@@ -244,13 +244,14 @@ export const makeMockPowers = ({
     },
 
     /**
-     * Follow name changes as a passable reader stream. `readerFromIterator`
-     * returns a `PassableReader` (the async-iterable/reader wire shape), not a
-     * bare `AsyncIterator`, so annotate the return as the reader type.
+     * Follow name changes as a passable subscription stream. The daemon vends
+     * this through `@endo/exo-pubsub`'s `subscriptionFromReader`, which returns
+     * a `PassableSubscription` (wire-identical to a `PassableReader`), so the
+     * mock matches the migrated transport the chat consumer now expects.
      * @returns {PassableReader<{ add: string } | { remove: string }>}
      */
     followNameChanges() {
-      return readerFromIterator(makeNameChangesIterator());
+      return subscriptionFromReader(makeNameChangesIterator());
     },
 
     /**

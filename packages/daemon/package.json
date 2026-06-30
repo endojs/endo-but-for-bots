@@ -61,6 +61,7 @@
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/exo-git": "workspace:^",
+    "@endo/exo-pubsub": "workspace:^",
     "@endo/exo-stream": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/git": "workspace:^",

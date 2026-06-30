@@ -3,9 +3,59 @@
 | | |
 |---|---|
 | **Created** | 2026-06-23 |
-| **Updated** | 2026-06-26 |
+| **Updated** | 2026-06-28 |
 | **Author** | Kris Kowal |
-| **Status** | Proposed |
+| **Status** | In Progress |
+
+## Status
+
+**In Progress.** The first concrete slice of `@endo/exo-pubsub` has landed on
+`llm`, together with an empirical validation on a real daemon-to-chat follow
+path.
+
+### What landed
+
+- **`packages/exo-pubsub` (`@endo/exo-pubsub`)**, an exo bridge layer over
+  `@endo/pubsub`, structured as a sibling of `@endo/exo-stream` (flat layout,
+  one bridge per subpath export, no barrel module). Six bridges, a responder
+  and an initiator side for each of the three `@endo/pubsub` facets:
+  - subscription: `subscription-from-reader.js` / `iterate-subscription.js`
+  - publisher: `publisher-from-writer.js` / `iterate-publisher.js`
+  - topic: `topic-from-subscribe.js` / `subscribe-topic.js`
+
+  The topic bridge is the pub/sub-specific primitive `@endo/exo-stream` lacks: a
+  fan-out capability whose remote `subscribe()` mints an independent cursor on
+  demand, preserving the lossless-deltas / lossy-latest semantics of the
+  underlying topic across CapTP. Unit and CapTP tests cover each bridge
+  (`packages/exo-pubsub/test/`).
+- **Empirical validation: the daemon-to-chat name-change and message follow
+  paths now cross CapTP through `@endo/exo-pubsub`.** The daemon vends
+  `followNameChanges` (the pet-store `nameChangesTopic`) and `followMessages`
+  (the mailbox `messagesTopic`) through `subscriptionFromReader` instead of
+  `@endo/exo-stream`'s `readerFromIterator` (`packages/daemon/src/host.js`,
+  `guest.js`, `directory.js`, `daemon.js`), and `@endo/chat` consumes them
+  through `iterateSubscription` (`channel-list.js`, `spaces-gutter.js`,
+  `outliner-component.js`, `setup-lal.js`, `setup-llm-provider.js`). The
+  migration is wire-equivalent, so the proof is that the chat subscription
+  tests keep passing: 762 `@endo/chat` tests, the five forked-daemon
+  `followNameChanges publishes ...` tests, and the `guest facet receives a
+  message for host` test all pass against the exo-pubsub path.
+
+### Deviation from the proposed adapter set
+
+The proposed § *`@endo/exo-pubsub`: the adapter set* is written against a
+`{ sink, makeSpring }` local-pubsub shape (`makeChangesPubSub` /
+`makeLatestPubSub`). The `@endo/pubsub` that actually landed on `llm` (PR #513)
+exposes a Reader/Writer shape instead: `makeChangeTopic` / `makeLatestTopic`
+each return `{ publisher: Writer, subscribe: () => Reader }`, over the
+`makePubSub` sink+spring primitive. This slice therefore bridges the **landed**
+surface and follows the `@endo/exo-stream` `xFromY` / `iterateX` naming the
+package's own brief calls for, rather than the proposed `topicFromSpring` /
+`readerFromTopic` / `publisherFromIterator` names. The mapping is direct: a
+subscription is a `Reader`, a publisher is a `Writer`, and a topic is the
+`subscribe` fan-out. The broader proposed catalog (the sampler, patcher,
+`reduceReader`, and hot/cold streamable-exo adapters) remains future work and is
+unaffected by this slice.
 
 ## What is the Problem Being Solved?
 
@@ -895,6 +945,73 @@ extension is a sibling design that builds on top.
 Naming it here ensures the substrate's value-type is not foreclosed:
 the kits and adapters are parameterized on `T`, and a future
 `T = SpliceChange<U>` instantiation is the migration onto FRB shape.
+
+## Next steps: collection change followers
+
+The daemon-to-chat migration was chosen precisely because the path it touches is
+a **collection change follower**: `followNameChanges` follows mutations to the
+pet store's name-to-id collection, emitting `{ add, value }` / `{ remove }`
+deltas, and `followMessages` follows the append-only message collection. Now
+that those two followers ride `@endo/exo-pubsub` end to end, the shape of the
+next iteration is visible. The migration surfaced four concrete observations,
+each of which names a next step.
+
+1. **The snapshot-then-subscribe composite is hand-rolled per follower.** Every
+   daemon follower is the same generator: yield the current members of the
+   collection, then `yield* topic.subscribe()` for subsequent deltas (see
+   `pet-store.js` `followNameChanges`, `mail.js` `followMessages`). The exo
+   bridge carries the composite as an opaque `Reader`, so each follower
+   re-implements the prefix-then-stream weave by hand, and a consumer cannot
+   tell where the snapshot ends and the live deltas begin.
+   *Next step:* a **collection-change-follower bridge** that pairs an initial
+   snapshot with the delta subscription as one passable capability
+   (`{ snapshot(): T[], changes(): PassableSubscription<Delta> }`), so the
+   weave is expressed once and the consumer receives the snapshot and the delta
+   cursor as distinct, typed surfaces rather than a flattened reader.
+
+2. **Every consumer re-folds the deltas into a local mirror by hand.** Chat's
+   consumers rebuild the collection from the delta stream themselves:
+   `outliner-component.js` pushes/splices `sharedPetNames`, `channel-list.js`
+   rebuilds its row set, `spaces-gutter.js` reconciles space configs. This is
+   exactly the `patcherFromTopic` adapter the design proposes but this slice
+   did not build.
+   *Next step:* land **`patcherFromTopic`** (the consumer-side delta-to-mirror
+   patcher) and retarget chat's per-consumer fold loops onto it. The migration
+   gives that adapter a real, test-covered first consumer instead of a
+   hypothetical one.
+
+3. **Opaque `{ add }` / `{ remove }` records foreclose incremental
+   transforms.** The deltas crossing the bridge are untyped records, so a
+   derived view (a filtered name list, a count, a sorted projection) must
+   re-fold from scratch rather than propagating the one change. This is the
+   FRB shape named in § *Future evolution: collection-change propagation*, but
+   the migration shows the demand is immediate, not hypothetical: chat already
+   maintains filtered and sorted projections of the name collection.
+   *Next step:* a **typed collection-change record** (`{ plus, minus, index }`
+   splice form) as the bridge's value type, and **transform adapters** that
+   consume a collection-change topic and produce a derived collection-change
+   topic incrementally (`map` / `filter` / `sorted` over the delta stream).
+
+4. **The passable topic is the missing piece for automatic re-subscription.**
+   `topicFromSubscribe` makes the *subscribe capability* itself passable, so a
+   remote consumer can re-subscribe on demand and obtain a fresh
+   snapshot-plus-deltas stream. That is the primitive FRB bindings need when a
+   property path is replaced: detach the old upstream collection and attach the
+   new one without the caller writing the wiring.
+   *Next step:* migrate the remaining daemon collection-change followers
+   (`followLocatorNameChanges`, `followIdNameChanges`, the directory
+   delegation, and `formulaChangeTopic` via the retention accumulator) onto the
+   collection-change-follower bridge, then wire `makeCancelKit` (and, once it
+   lands, `E.whenSevered`) to the passable topic so a replaced or severed
+   source re-subscribes automatically.
+
+These four steps compose into the FRB-shaped end state the design already names:
+the collection-change-follower bridge (step 1) plus the patcher (step 2) plus
+typed records and transforms (step 3) plus the passable topic's
+re-subscription (step 4) are exactly incremental collection-change propagation
+with automatic subscription management. The migration in this PR is the
+substrate slice that makes each of them a concrete, demanded next move rather
+than a forward-looking aspiration.
 
 ## Open questions
 

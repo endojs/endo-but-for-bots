@@ -113,6 +113,7 @@ api-docs
 !packages/exo/src/types.d.ts
 !packages/exo/types-index.d.ts
 !packages/exo-stream/types.d.ts
+!packages/exo-pubsub/types.d.ts
 !packages/far/src/exports.d.ts
 !packages/lp32/types.d.ts
 !packages/pass-style/src/types.d.ts
