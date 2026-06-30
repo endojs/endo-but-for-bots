@@ -39,6 +39,16 @@ Implemented in this slice:
 - In-memory `AppsNameHub` exo with `bind`, `unbind`, `list`,
   `lookup`.
 - Per-feature configuration toggles validated at `make` time.
+- Feature 8's OCapN WebSocket **path scheme**: the canonical
+  `/ocapn-cbor-np` path (CBOR codec, Noise Protocol network), the
+  legacy `/ocapn` compatibility alias, a router predicate
+  (`matchOcapnWebSocketPath`) that decomposes a path into its
+  protocol/codec/network triple and reserves sibling slots
+  (`/ocapn-syrups-tcp`, `/ocapn-cbor-tls`), and the OCapN locator
+  connection-hint builder (`ocapnWebSocketConnectionHint`). This is
+  the path-naming half of Feature 8; the live WebSocket listener and
+  Noise frame relay land with the rest of the network surface in
+  later phases (`src/ocapn-ws.js`).
 
 Deferred to follow-on PRs:
 
@@ -48,9 +58,10 @@ Deferred to follow-on PRs:
 - Feature 5 (Familiar-bundled fallback).
 - Feature 6 (public CapTP relay).
 - Feature 7 (admin daemon).
-- Feature 8 (`/ocapn-cbor-np` WebSocket; the network surface lands
-  once `@endo/ocapn-noise` exposes the netlayer the gateway
-  embeds).
+- Feature 8's live network surface (the WebSocket listener and the
+  Noise frame relay over `/ocapn-cbor-np`; the path scheme above
+  lands first, the socket and the frame pump arrive with the relay
+  in a later phase).
 - Feature 9 (HTTPS-terminating-proxy `X-Forwarded-*` parser).
 - Feature 10 (OS packaging: rpm / deb / PKGBUILD / Dockerfile).
 
@@ -139,12 +150,32 @@ inventory. The phase-1 skeleton exposes:
 - `Gateway`: `start`, `stop`, `getBindAddress`, `getApps`.
 - `AppsNameHub`: `bind`, `unbind`, `list`, `lookup`.
 
+### OCapN WebSocket path scheme (Feature 8)
+
+`src/ocapn-ws.js` holds the wire-path naming for the OCapN
+endpoint, independent of any live socket:
+
+- `OCAPN_WS_PATH` (`/ocapn-cbor-np`) and `OCAPN_WS_LEGACY_ALIAS_PATH`
+  (`/ocapn`).
+- `matchOcapnWebSocketPath(path)`: the router predicate. Returns a
+  route descriptor (`{ canonicalPath, protocol, codec, network,
+  isAlias, isSupported }`) for the canonical path and the legacy
+  alias, recognizes reserved siblings as `isSupported: false`, and
+  returns `undefined` for non-OCapN paths.
+- `parseOcapnWebSocketPath(path)`: the strict variant that throws on
+  a non-OCapN or unsupported path (for validating an advertised
+  locator).
+- `ocapnWebSocketConnectionHint({ host, secure })`: builds the OCapN
+  locator hint `wss:host=<host>;path=/ocapn-cbor-np;np` (or the `ws:`
+  form).
+
 ## Tests
 
 ```sh
 yarn test                          # full ava run
 npx ava test/config.test.js        # config-shape unit tests
 npx ava test/vhost.test.js         # virtual-host NameHub tests
+npx ava test/ocapn-ws.test.js      # OCapN WebSocket path-scheme tests
 ```
 
 ## Design

@@ -75,6 +75,43 @@ export type GatewayPowers = {
   env?: { [name: string]: string | undefined };
 };
 
+export type OcapnWebSocketRoute = {
+  /**
+   * The bare request path that matched (query, fragment, and a
+   * trailing slash removed).
+   */
+  requestedPath: string;
+  /**
+   * The canonical `/ocapn-<codec>-<network>` path. Equals
+   * `requestedPath` except when `isAlias` is `true`, where the legacy
+   * `/ocapn` resolves to `/ocapn-cbor-np`.
+   */
+  canonicalPath: string;
+  /**
+   * The OCapN protocol family (always `'ocapn'`).
+   */
+  protocol: string;
+  /**
+   * The payload codec the path names (`'cbor'` for the canonical
+   * path).
+   */
+  codec: string;
+  /**
+   * The network identifier the path names (`'np'` for the canonical
+   * path).
+   */
+  network: string;
+  /**
+   * `true` when the legacy `/ocapn` alias matched.
+   */
+  isAlias: boolean;
+  /**
+   * `true` when this gateway serves the path's codec/network pair;
+   * `false` for a recognized-but-reserved sibling.
+   */
+  isSupported: boolean;
+};
+
 export type Gateway = {
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -102,6 +139,24 @@ export function bindAddressFromEnv(
 ): string;
 export function normalizeVirtualHostName(name: string): string;
 export function makeAppsNameHub(): AppsNameHub;
+
+export const OCAPN_PROTOCOL_FAMILY: string;
+export const OCAPN_WS_CODEC: string;
+export const OCAPN_WS_NETWORK: string;
+export const OCAPN_WS_PATH: string;
+export const OCAPN_WS_LEGACY_ALIAS_PATH: string;
+export const OCAPN_WS_SUPPORTED: ReadonlyArray<{
+  codec: string;
+  network: string;
+}>;
+export function matchOcapnWebSocketPath(
+  rawPath: string,
+): OcapnWebSocketRoute | undefined;
+export function parseOcapnWebSocketPath(rawPath: string): OcapnWebSocketRoute;
+export function ocapnWebSocketConnectionHint(args: {
+  host: string;
+  secure?: boolean;
+}): string;
 export function makeGateway(args?: {
   powers?: GatewayPowers;
   config?: Partial<GatewayConfig>;
