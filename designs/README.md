@@ -3,6 +3,17 @@
 *Last updated: 2026-06-15 (targeted post-event M2 closure: M2 (Project Hygiene) flipped to Complete on `llm` since turborepo is in place (PR #121 merged), `break-dev-dependency-cycles` is dissolved on `llm` (all five `@endo/<pkg>-test` sibling packages exist; combined dep+devDep SCC count is 0; self-loop count is 0); the residual upstream-ferry work on PR #235 against master is M2-orthogonal — the cycle is broken on the project branch and the substrate noise it produced is gone. Layered on the 2026-06-03 milestone renumbering pass per maintainer directive on PR #400 review: resequence to integer numbers starting at 1, with no later milestone depending on an earlier one, prioritizing work entrained by the hosted-Gateway-service north star and deferring work that is not. Old → new mapping: M0 → M1 (Complete), M½ → M2 (Complete), M1 → M3 (Remote Access & Coding Capabilities, the gateway substrate), M2 → M4 (Networking), M7 → M5 (Public Hosting & Billing), Milestone B → M6 (MCP Bridge Hosting), M3 → M7 (Weblets & Integrations), Milestone A → M8 (Peer App Sharing), M4 → M9 (UX & Tooling), M5 → M10 (Confinement & Ecosystem), M6 → M11 (Rust Daemon `endor`). Layered on the 2026-06-02 compound pass: (a) MCP-bridge rebucket that added the **Milestone B: MCP Bridge Hosting** cross-cutting cut (since renumbered to M6) and the hosted-Gateway public-hosting bucket (M7, now M5), raised `endo-gateway-mcp` as a Strategic Early Item (now M6 in its own right), and named the gateway-package implementation stack PRs #343, #388–#397 (phases 1–9 landed) under what is now M3; and (b) daemon-worker-import-from-mount decomposed into a four-layer stack per kriskowal CHANGES_REQUESTED on `endojs/endo-but-for-bots#358` (the original 1164-line monolith repurposed as the integration layer; three new sibling designs land alongside as `registry-capability`, `mvs-resolver`, `snapshot-mapper`; existing slug preserved). On the 2026-06-01 pass that added the Peer App Sharing cut (`app-sharing-milestone` + `familiar-deep-link-invitations` + `endo-app-sharing` + `familiar-app-ui-hosting`; now M8). On the 2026-05-22 monolithic `daemon-worker-import-from-mount` landing (sibling of `daemon-make-archive` § Phase 7 that ties `compartment-mapper.importLocation` to a `package.json`-rooted `EndoMount` source and the Rust `endor-npm-registry-proxy` + Go-like MVS resolver exposed as an `EndoRegistry` / `@registry` daemon capability). On the 2026-05-20 mount and git capability plans (three new design docs revised per design-panel review: structured-result-shape migration deferred to Phase 7, `tree(ref)` and `readOnly()` both live on the `Git` cap, `NativeGitBackend` hardening envelope split off the essential `GitBackend` contract, `EndoMountBacking` pinned to a hidden Exo facet, credential-injection mechanism named, native git pinned to >=2.30, restart-mid-operation tests added, open-question debt reduced from 20 to 2; landed on top of the same-day forge-gap-analysis Reference design and the same-day full grooming pass that reconciled milestone-totals, added the 2026-05-20 calibration round, re-projected the Summary by Milestone and Gantt, and refreshed Progress-as-of). On the 2026-05-19 status-only sweep that reconciled Status fields with shipped state on `llm`, the project-hygiene milestone (now M2) extracted from the gateway substrate, endopi raft added, PR #302 consolidation absorbed, and patterns-diagnostic-feedback added)*
 
 *Recently added or revised:
+[bytearray-uint8array-view](bytearray-uint8array-view.md) (added
+2026-06-30; data-model pivot for the OCapN `byteArray` passStyle per
+erights' directive on PR #429: `passStyleOf` attaches `byteArray` to a
+plain frozen `Uint8Array` backed by a plain frozen immutable
+`ArrayBuffer` (the view), and a bare immutable `ArrayBuffer` is no
+longer `byteArray` (not passable); the `capdata` / `smallcaps` /
+`encode-passable` / `marshal-justin` wire forms are unchanged and the JS
+boundary becomes `frozenBytes` / `thawnBytes` with the hex helpers
+re-cast to `Uint8Array`; supersedes the bare-buffer premise of PRs #429,
+#57, and upstream endojs/endo#3226; prototyped on the
+`feat/narrow-bytearray-to-uint8` branch),
 [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) (added
 2026-06-23; design 2 of 2 in a competing pair addressing the
 maintainer's directive on PR #500 to land SturdyRefs in
@@ -279,6 +290,7 @@ LLM-agent stack).*
 | [endor-tui](endor-tui.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [hex-package](hex-package.md) | 2026-04-23 | 2026-05-18 | **Complete** |
 | [endo-bytes](endo-bytes.md) | 2026-05-08 | 2026-05-10 | Implemented |
+| [bytearray-uint8array-view](bytearray-uint8array-view.md) | 2026-06-30 | 2026-06-30 | Proposed |
 | [endo-gateway-mcp](endo-gateway-mcp.md) | 2026-05-29 | 2026-05-29 | Not Started |
 | [gateway-package](gateway-package.md) | 2026-05-22 | 2026-06-29 | Proposed (absorbs the removed endo-gateway design) |
 | [agent-tools-mount-fs-tools](agent-tools-mount-fs-tools.md) | 2026-06-01 | 2026-06-25 | Superseded |
