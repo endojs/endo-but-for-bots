@@ -9,11 +9,12 @@
  * `designs/gateway-package.md` § Feature 2) that the host agent
  * binds and the gateway reads.
  *
- * The phase-1 skeleton holds only the in-memory map; the design's
- * Weblet formula resolution and content-tree serving are
- * follow-on work. The map records `(virtualHostName,
- * webletFormulaId)` pairs and exposes `bind`, `unbind`, `list`,
- * and `lookup`.
+ * This module holds only the in-memory routing map: it records
+ * `(virtualHostName, webletFormulaId)` pairs and exposes `bind`,
+ * `unbind`, `list`, `lookup`, and `has`. The design's Weblet
+ * formula resolution and content-tree serving (the path that
+ * consumes this map) live in `./serve.js`; persisting the map to
+ * the host agent's formula store remains follow-on work.
  *
  * Naming: virtual-host *names* are case-insensitive per RFC 7230
  * (HTTP `Host` headers), so this module normalizes to lowercase

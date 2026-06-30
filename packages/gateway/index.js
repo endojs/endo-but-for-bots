@@ -26,6 +26,7 @@ import {
   bindAddressFromEnv,
 } from './src/config.js';
 import { makeAppsNameHub } from './src/vhost.js';
+import { makeWebletResolver } from './src/serve.js';
 
 export {
   DEFAULT_BIND_ADDRESS,
@@ -37,8 +38,19 @@ export {
 } from './src/config.js';
 
 export { normalizeVirtualHostName, makeAppsNameHub } from './src/vhost.js';
+export {
+  makeWebletResolver,
+  normalizeRequestPath,
+  DEFAULT_INDEX,
+} from './src/serve.js';
+export {
+  inferContentType,
+  extensionOf,
+  DEFAULT_CONTENT_TYPE,
+  DEFAULT_MIME_TYPES,
+} from './src/mime.js';
 
-/** @import { GatewayConfig, BindAddress, GatewayPowers, Gateway } from './types.d.ts' */
+/** @import { GatewayConfig, BindAddress, GatewayPowers, Gateway, WebletResolver } from './types.d.ts' */
 
 const GatewayInterface = M.interface('Gateway', {
   start: M.call().returns(M.promise()),
@@ -46,6 +58,7 @@ const GatewayInterface = M.interface('Gateway', {
   getBindAddress: M.call().returns(M.promise()),
   getApps: M.call().returns(M.promise()),
   getConfig: M.call().returns(M.promise()),
+  getWebletResolver: M.call().returns(M.promise()),
 });
 
 /**
@@ -73,6 +86,14 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
   /** @type {BindAddress} */
   const resolvedBind = parseBindAddress(mergedConfig.bindAddress);
   const apps = makeAppsNameHub();
+  // Feature 2: when a content resolver is injected, stand up the
+  // virtual-host weblet resolver over the `@apps` table. Absent it,
+  // the gateway is the routing-table-only skeleton.
+  /** @type {WebletResolver | undefined} */
+  const webletResolver =
+    powers.content !== undefined
+      ? makeWebletResolver({ apps, content: powers.content })
+      : undefined;
 
   const exo = makeExo(
     'Gateway',
@@ -108,6 +129,9 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
       },
       async getConfig() {
         return mergedConfig;
+      },
+      async getWebletResolver() {
+        return webletResolver;
       },
     }),
   );
