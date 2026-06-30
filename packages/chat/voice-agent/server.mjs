@@ -1918,6 +1918,16 @@ const handler = async (req, res) => {
       if (!node || !node.isRoot) return json(res, 403, { error: 'ingest requires the root cap' });
       const t = String(transcript || '').trim();
       if (!t) return json(res, 400, { error: 'empty transcript' });
+      // IDEMPOTENT: a voice note can be re-POSTed — the ingest driver only marks a note SEEN on a recognized
+      // client response, so a slow turn / curl timeout / dual source (iOS Shortcut + NextCloud) re-sends it while
+      // the server already created the chat. Dedupe by normalized transcript within a window: a re-POST returns
+      // the SAME chat (no duplicate chat, no second analysis, no second push). [fix: two chats per voice note]
+      const normTx = s => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const nt = normTx(t); const DEDUP_MS = 24 * 3600 * 1000;
+      try {
+        const dup = (await readSeedChats()).find(s => s && s.transcript && (Date.now() - (s.ts || 0)) < DEDUP_MS && normTx(s.transcript) === nt);
+        if (dup) { log('ingest dedup → existing', dup.id, JSON.stringify(t).slice(0, 60)); return json(res, 200, { ok: true, chatId: dup.id, deduped: true }); }
+      } catch { /* fall through and create */ }
       const id = `chat-${crypto.randomBytes(6).toString('hex')}`;
       log('ingest (propose-only):', id, JSON.stringify(t).slice(0, 80));
       // PROPOSE-ONLY: no tools, no actions — just proposed action items + the capabilities an
