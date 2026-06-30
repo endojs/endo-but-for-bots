@@ -28,8 +28,10 @@ The pivot is already prototyped on the `feat/narrow-bytearray-to-uint8` branch
 view-based detection and JS boundary described here, and its
 `fix(marshal): read byteArray bytes through a genuine Uint8Array for rank
 compare` commit carries the encode-passable adjustment. This document is the
-design of record for that direction so the three PRs above can be retargeted or
-withdrawn against a written intent rather than against the bare-buffer premise.
+design of record for that direction. erights' disposition (PR #572) is to
+**withdraw all three PRs above and open a fresh view-based implementation PR**
+against this written intent rather than retarget them off the bare-buffer
+premise (Design Decision 6).
 
 ## What is the Problem Being Solved?
 
@@ -178,12 +180,13 @@ graph LR
 ```
 
 This design supersedes the **premise** of #429, #57, and upstream
-endojs/endo#3226. Whether each is **withdrawn** or **retargeted** onto the
-view-based model is a maintainer disposition this design surfaces rather than
-executes (see Open Questions). The `feat/narrow-bytearray-to-uint8` branch is the
-natural home for the retargeted implementation, since it already carries the
-view-based pass-style, the `frozenBytes`/`thawnBytes` boundary, and the
-downstream ocapn and rank-compare adjustments.
+endojs/endo#3226. erights' disposition (PR #572) is to **withdraw all three and
+open a fresh view-based implementation PR** rather than retarget the existing
+branches (Design Decision 6). The `feat/narrow-bytearray-to-uint8` branch is the
+natural seed for that fresh PR, since it already carries the view-based
+pass-style, the `frozenBytes`/`thawnBytes` boundary, and the downstream ocapn and
+rank-compare adjustments. Closing the upstream `endojs/endo#3226` is a
+maintainer-coordinated action.
 
 ## Dependencies
 
@@ -223,15 +226,17 @@ downstream ocapn and rank-compare adjustments.
 5. **One definition spans shimmed and native platforms** via the
    0-own-indices (emulated) versus exactly-`length`-own-indices (native) shape
    discrimination.
+6. **Withdraw #429 / #57 / endojs/endo#3226 and open a fresh view-based
+   implementation PR.** The three "admit immutable `ArrayBuffer` through codecs"
+   changes are premised on mapping the bare buffer, which this design supersedes.
+   Rather than retarget their branches onto the view model, all three are
+   withdrawn and a fresh implementation PR is opened against the view-based
+   design (erights, PR #572). The view-model implementation already lives largely
+   on `feat/narrow-bytearray-to-uint8`, which seeds the fresh PR. Closing the
+   upstream `endojs/endo#3226` is a maintainer-coordinated action.
 
 ## Open Questions
 
-- Disposition of #429 / #57 / endojs/endo#3226: withdraw all three and open a
-  fresh view-based implementation PR, or retarget the existing branches onto the
-  view model? This is a maintainer call. The implementation already lives largely
-  on `feat/narrow-bytearray-to-uint8`, which argues for retargeting #57 onto a
-  finished form of that branch and withdrawing the bare-buffer-premised #429 and
-  upstream #3226.
 - Helper naming: keep the wire-facing `byteArrayToHex` / `hexToByteArray` names
   (the passStyle is still "byteArray") alongside the JS-side `frozenBytes` /
   `thawnBytes` boundary, or unify on one vocabulary? The prototype keeps both: hex
