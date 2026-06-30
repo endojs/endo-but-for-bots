@@ -35,7 +35,6 @@
     "@endo/exo": "workspace:^",
     "@endo/exo-stream": "workspace:^",
     "@endo/fae": "workspace:^",
-    "@endo/far": "workspace:^",
     "@endo/lal": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^"

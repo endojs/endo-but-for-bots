@@ -33,8 +33,8 @@
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava"
   },
   "dependencies": {
+    "@endo/eventual-send": "workspace:^",
     "@endo/exo-stream": "workspace:^",
-    "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/monaco-wrapper": "workspace:^",
     "@endo/platform": "workspace:^",
@@ -44,6 +44,7 @@
   "devDependencies": {
     "@endo/init": "workspace:^",
     "@endo/lockdown": "workspace:^",
+    "@endo/pass-style": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",

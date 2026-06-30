@@ -34,8 +34,8 @@
   },
   "dependencies": {
     "@endo/conversation-tree": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
     "@endo/exo-stream": "workspace:^",
-    "@endo/far": "workspace:^",
     "preact": "^10.29.2"
   },
   "devDependencies": {

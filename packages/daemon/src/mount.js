@@ -3,7 +3,7 @@
 
 /** @import { FilePowers } from './types.js' */
 
-import { E } from '@endo/far';
+import { E } from '@endo/eventual-send';
 import { makeError, q, X } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { encodeBase64 } from '@endo/base64';

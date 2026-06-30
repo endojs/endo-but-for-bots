@@ -70,7 +70,6 @@
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/exo-stream": "workspace:^",
-    "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/markmdown": "workspace:^",
     "@endo/monaco-wrapper": "workspace:^",

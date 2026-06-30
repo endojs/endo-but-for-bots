@@ -52,7 +52,6 @@
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/exo-stream": "workspace:^",
-    "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/markmdown": "workspace:^",

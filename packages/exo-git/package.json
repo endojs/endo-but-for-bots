@@ -59,7 +59,6 @@
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
-    "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/platform": "workspace:^",

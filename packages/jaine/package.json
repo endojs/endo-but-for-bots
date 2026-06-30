@@ -33,10 +33,10 @@
     "@endo/exo": "workspace:^",
     "@endo/exo-stream": "workspace:^",
     "@endo/fae": "workspace:^",
-    "@endo/far": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/lal": "workspace:^",
     "@endo/marshal": "workspace:^",
+    "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/promise-kit": "workspace:^"
   },
