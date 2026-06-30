@@ -200,14 +200,22 @@ downstream ocapn and rank-compare adjustments.
 2. **A bare immutable `ArrayBuffer` is not passable (throws), with no new
    passStyle.** Keeps the marshalled universe single-rooted on the view and
    avoids two values competing for one byte sequence.
-3. **Sub-views are admitted (`byteOffset > 0` or `length < buffer.byteLength`
-   are valid byteArrays).** The detection validates the view against its own
-   `length`, not against whole-buffer span, so a frozen `Uint8Array` window over
-   an immutable buffer is a legitimate byteArray. `frozenBytes` always produces a
-   whole-buffer-spanning view (it slices the window into a fresh immutable
-   buffer), but hand-constructed sub-views remain valid on read. The alternative,
-   requiring `byteOffset === 0 && length === buffer.byteLength`, is recorded as an
-   open question.
+3. **Whole-buffer span is required (`byteOffset === 0 && length ===
+   buffer.byteLength`); sub-views are rejected.** The detection validates the
+   view against its backing buffer's full span, so a frozen `Uint8Array` is a
+   byteArray only when it covers its entire immutable buffer one-to-one.
+   `frozenBytes` already produces such a whole-buffer-spanning view (it slices
+   the window into a fresh immutable buffer), so it is unaffected; a
+   hand-constructed sub-view (`byteOffset > 0` or `length < buffer.byteLength`)
+   is not a byteArray and must be re-sliced into its own immutable buffer to
+   pass. This is the **restrictive** choice (erights, PR #572): it avoids the
+   data-reachability hazard of passing a `Uint8Array` view whose backing buffer
+   carries more data than the view intends to reveal. Permissive sub-views would
+   not significantly complicate equality or rank compare (those only need to
+   restrict themselves to the data in the view), and a future non-copying
+   `sliceToImmutable` keeps the cost of deriving a whole-buffer view from a
+   sub-view low, so admitting the permissive sub-view form later is deferred to
+   [endojs/endo-but-for-bots#573](https://github.com/endojs/endo-but-for-bots/issues/573).
 4. **Wire forms frozen; only the JS-side type flips.** The redesign is a
    data-model correction, not a protocol change; existing capdata / smallcaps /
    encode-passable streams keep decoding to equal byteArrays (now views).
@@ -217,12 +225,6 @@ downstream ocapn and rank-compare adjustments.
 
 ## Open Questions
 
-- Whole-buffer span: should the byteArray detection **require** `byteOffset === 0
-  && length === buffer.byteLength`, rejecting sub-views, or admit any frozen
-  `Uint8Array` window over an immutable buffer (the prototype's current behavior)?
-  Admitting sub-views is more permissive and matches the prototype; requiring
-  whole-buffer span makes the buffer-to-view correspondence one-to-one and may
-  simplify equality and rank reasoning.
 - Disposition of #429 / #57 / endojs/endo#3226: withdraw all three and open a
   fresh view-based implementation PR, or retarget the existing branches onto the
   view model? This is a maintainer call. The implementation already lives largely
