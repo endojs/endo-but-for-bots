@@ -3446,7 +3446,11 @@ const fmtRawContext = c => {
   L.push(`powers:   ${(c.powers || []).join(', ') || '(none)'}`);
   L.push(`captured: ${new Date(c.at).toLocaleString()}`);
   const msgs = c.messages || [];
-  L.push(`messages: ${msgs.length} — ${c.reconstructed ? 'reconstructed from this chat’s transcript + current persona/tools (no live capture since the last restart)' : 'the most recent provider messages API call'}`);
+  const provenance = c.preview
+    ? 'PREVIEW — the system prompt this agent will receive given its current permissions (persona + tool/capability manifest). No turn has run yet.'
+    : c.reconstructed ? 'reconstructed from this chat’s transcript + current persona/tools (no live capture since the last restart)'
+      : 'the most recent provider messages API call';
+  L.push(`messages: ${msgs.length} — ${provenance}`);
   L.push('');
   // the actual provider payload: a system message, then alternating user/assistant (+ tool results)
   for (const m of msgs) { L.push(`━━━ ${String(m.role || '?').toUpperCase()} ━━━`, m.content || '', ''); }
@@ -3482,7 +3486,7 @@ const rawContextUI = () => {
     // a restart) — same shape the agent's history uses.
     const history = activeTx.filter(m => m && (m.who === 'you' || m.who === 'agent') && (m.text || '').trim())
       .map(m => ({ role: m.who === 'you' ? 'user' : 'assistant', content: String(m.text) })).slice(-40);
-    let r; try { r = await (await fetch('/chat/context', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId, history }) })).json(); } catch (e) { r = { error: e.message }; }
+    let r; try { r = await (await fetch('/chat/context', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId, history, agent: chatAgent() }) })).json(); } catch (e) { r = { error: e.message }; }
     pre.textContent = (r && r.ok) ? fmtRawContext(r.context) : '⚠︎ ' + ((r && r.error) || 'could not load context');
   };
 };

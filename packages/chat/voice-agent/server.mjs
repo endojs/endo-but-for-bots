@@ -1453,18 +1453,26 @@ const handler = async (req, res) => {
     // faithful provider-shaped bundle from the chat's transcript (sent by the client) + the cap's CURRENT
     // persona + tool manifest. Cap-gated; no swissnums (the manifest describes caps by reference).
     if (req.method === 'POST' && u.pathname === '/chat/context') {
-      const { sessionId, cap, history } = await jsonBody(req);
+      const { sessionId, cap, history, agent } = await jsonBody(req);
       const node = nodeFor(cap);
       if (!node) return json(res, 403, { ok: false, error: 'a valid capability is required' });
       const sid = String(sessionId || '').slice(0, 64);
       const live = lastCtx.get(sid);
       if (live) return json(res, 200, { ok: true, context: live });
+      // Resolve the node/persona the way /chat does, so the preview reflects a chosen SPECIALIST (its
+      // confined ring + persona), not just the entry agent.
+      let runNode = node, runPersona = getPersona(), runAgentId = 'field-agent';
+      if (agent && agent !== 'field-agent' && (node.isRoot || node.powers.has('specialists'))) {
+        const spec = specialistFor(agent);
+        if (spec) { runNode = spec.node; runPersona = spec.persona || getPersona(); runAgentId = spec.id; }
+      }
       const hist = (Array.isArray(history) ? history : []).filter(m => m && (m.role === 'user' || m.role === 'assistant') && m.content).map(m => ({ role: m.role, content: String(m.content).slice(0, 8000) }));
-      if (!hist.length) return json(res, 200, { ok: false, error: 'no turn has run in this chat yet — send a message first' });
+      // No history (an EMPTY chat) is fine — show the SYSTEM PROMPT this agent will receive given its current
+      // permissions (persona + the tool/capability manifest its cap grants), so "{ }" works before any turn.
       let manifest = [];
-      try { const built = node.toolbox({ chatId: sid, userText: '', emit: () => {}, app: undefined, homeSubkey: null, charge: () => true, purse: makePurse(0), perProvider: {} }); manifest = built.manifest || []; } catch { /* manifest best-effort */ }
-      const sysText = `${getPersona() || ''}\n\n## Tools / capabilities the agent may call\n${manifest.map(m => `- ${m.name}(${m.args ? Object.keys(m.args).join(', ') : (m.methods || []).join('/')}): ${m.description || ''}`).join('\n')}`;
-      return json(res, 200, { ok: true, context: { at: Date.now(), agent: 'field-agent', model: 'default', powers: [...node.powers], reconstructed: true, messages: [{ role: 'system', content: sysText.slice(0, 24000) }, ...hist] } });
+      try { const built = runNode.toolbox({ chatId: sid, userText: '', emit: () => {}, app: undefined, homeSubkey: null, charge: () => true, purse: makePurse(0), perProvider: {} }); manifest = built.manifest || []; } catch { /* manifest best-effort */ }
+      const sysText = `${runPersona || ''}\n\n## Tools / capabilities the agent may call\n${manifest.map(m => `- ${m.name}(${m.args ? Object.keys(m.args).join(', ') : (m.methods || []).join('/')}): ${m.description || ''}`).join('\n')}`;
+      return json(res, 200, { ok: true, context: { at: Date.now(), agent: runAgentId, model: 'default', powers: [...runNode.powers], reconstructed: true, preview: !hist.length, messages: [{ role: 'system', content: sysText.slice(0, 24000) }, ...hist] } });
     }
     // ── voice/text turn: the cap decides the agent's reach. No cap → no powers. ──
     if (req.method === 'POST' && u.pathname === '/chat') {
