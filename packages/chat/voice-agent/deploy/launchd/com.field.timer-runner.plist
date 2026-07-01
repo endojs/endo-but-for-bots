@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.field.timer-runner — fires the agent's durable timers (notify | command) when due.
+
+  NOTE on the source path: on archua the systemd unit historically ran timer-runner.mjs from the
+  endo-bfb NON-llm checkout. The SAME file exists in this repo at packages/chat/capture/timer-runner.mjs
+  — the mac clone should run THIS in-repo copy (it resolves notify.mjs relative to itself, portable).
+
+  TEMPLATE — same placeholders + install steps as com.field.voice-agent.plist:
+
+    sed -e "s#/PATH/TO/REPO#$HOME/endo-bfb#g" \
+        -e "s#/PATH/TO/NODE#$(command -v node)#g" \
+        -e "s#/YOUR/HOME#$HOME#g" \
+        deploy/launchd/com.field.timer-runner.plist \
+        > ~/Library/LaunchAgents/com.field.timer-runner.plist
+    mkdir -p ~/Library/Logs/field
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.field.timer-runner.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.field.timer-runner</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/PATH/TO/NODE</string>
+    <string>/PATH/TO/REPO/packages/chat/capture/timer-runner.mjs</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/PATH/TO/REPO/packages/chat/capture</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>/YOUR/HOME</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/YOUR/HOME/Library/Logs/field/timer-runner.log</string>
+  <key>StandardErrorPath</key>
+  <string>/YOUR/HOME/Library/Logs/field/timer-runner.log</string>
+</dict>
+</plist>

@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.field.voice-agent — Agent C (the field agent, server.mjs) under launchd on macOS.
+  TEMPLATE: replace every /PATH/TO/… placeholder, then install as a per-user LaunchAgent:
+
+    sed -e "s#/PATH/TO/REPO#$HOME/endo-bfb#g" \
+        -e "s#/PATH/TO/NODE#$(command -v node)#g" \
+        -e "s#/YOUR/HOME#$HOME#g" \
+        deploy/launchd/com.field.voice-agent.plist \
+        > ~/Library/LaunchAgents/com.field.voice-agent.plist
+    mkdir -p ~/Library/Logs/field
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.field.voice-agent.plist
+    # stop/start:   launchctl kickstart -k gui/$(id -u)/com.field.voice-agent
+    # uninstall:    launchctl bootout gui/$(id -u)/com.field.voice-agent
+
+  Config lives in the FIELD_ENV file (simple KEY=VALUE; see RUN-ON-MAC.md) — field-up.mjs loads it
+  before starting the server, so secrets/host config stay OUT of this plist. Anything set in
+  EnvironmentVariables below overrides the file.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.field.voice-agent</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/PATH/TO/NODE</string>
+    <string>/PATH/TO/REPO/packages/chat/voice-agent/scripts/field-up.mjs</string>
+    <string>/YOUR/HOME/.config/field-agent/field.env</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/PATH/TO/REPO/packages/chat/voice-agent</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- launchd starts with a minimal env; make sure node + tools resolve. -->
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>/YOUR/HOME</string>
+    <!-- Per-instance overrides can go here (they beat the FIELD_ENV file), e.g.:
+    <key>FIELD_INSTANCE</key>
+    <string>dans-macbook</string>
+    -->
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/YOUR/HOME/Library/Logs/field/voice-agent.log</string>
+  <key>StandardErrorPath</key>
+  <string>/YOUR/HOME/Library/Logs/field/voice-agent.log</string>
+</dict>
+</plist>
