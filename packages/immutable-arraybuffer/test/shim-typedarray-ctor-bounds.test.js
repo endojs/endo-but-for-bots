@@ -50,10 +50,12 @@ const flavors = [
 
 for (const { name, Ctor, bytesPerElement } of flavors) {
   const tName = label => `${name}: ${label}`;
-  // Guard against the literal table drifting from the runtime constant.
-  if (Ctor.BYTES_PER_ELEMENT !== bytesPerElement) {
-    throw Error(`bytesPerElement table mismatch for ${name}`);
-  }
+  // Pin the literal `bytesPerElement` table against the runtime constant, so
+  // the arithmetic and boundary comparisons below rest on a value the engine
+  // agrees with.
+  test(tName('BYTES_PER_ELEMENT'), t => {
+    t.is(Ctor.BYTES_PER_ELEMENT, bytesPerElement);
+  });
 
   // Element counts derived from the fixed buffer size for this flavor.
   const byteLength = BUFFER_BYTE_LENGTH;
