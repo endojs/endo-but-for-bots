@@ -102,6 +102,7 @@ import { makeAgentRoster } from './agents-roster.mjs';
 import { makeHomeFolder } from './agent-home.mjs';
 import { sendMail } from './email-smtp.mjs';
 import { makeContacts } from './contacts.mjs';
+import { renderCheck } from './render-check.mjs';
 import { getTranscript } from './youtube.mjs';
 import { extractPdf } from './pdf-extract.mjs';
 // THE PERSONAL/PLATFORM SEAM (Packing up for Dweb): every personal coupling that used to be a hardcoded
@@ -2140,8 +2141,14 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // server cell you use in `cells` (they're cap-gated; an unreachable one is dropped here).
     toolbox.showComponent = harden({ run: async ({ source, cells, height, uses, writableCells } = {}) => {
       const src = String(source || '');
-      if (!/^\s*\(?\s*[a-zA-Z_$]/.test(src) || !src.includes('=>')) return { ok: false, error: 'source must be a function: (ui) => ui.create(...)' };
-      if (src.length > 8000) return { ok: false, error: 'component source too long (keep it under 8000 chars)' };
+      const valid = validateComponentSource(src); // the SSOT gate — accepts exactly what the frame's mount() accepts
+      if (!valid.ok) return { ok: false, error: valid.error };
+      // RENDER SMOKE (the chat-1cbe89a9 feedback loop): actually BUILD the component against a stub of the
+      // confined frame before showing it. A mount-time throw ("x is not defined", a misused ui.local grain)
+      // used to reach only the human — an inscrutable broken widget — while this step returned ok:true and
+      // the agent moved on believing it worked. Now the error IS the step result, in the same turn.
+      const smoke = await renderCheck(src, { kind: 'ui' });
+      if (!smoke.ok) return { ok: false, error: `the component FAILED a real render check — it was NOT shown to the user. It would break on screen with: ${smoke.error}. Fix the source and call showComponent again. (ui.local(initial) returns ONE grain — read fields via state.get().field, never state.field.get(). Every value you reference must be in scope where you use it.)` };
       const dropped = [];
       // gate ha:<handle> cells at designation time (same c-list rule as showEntityStatus)
       const gateHa = c => { const m = /^ha:(.+)$/.exec(c); if (!m) return true; if (powers.has('homeassistant') && node.haReach && !node.haReach(m[1])) { dropped.push(c); return false; } return true; };
@@ -2230,6 +2237,11 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         const src = String(source || '');
         if (!/^\s*[(a-zA-Z_$]/.test(src) || !src.includes('=>')) return { ok: false, error: 'source must be a SINGLE arrow function expression: (endowments, props) => vnode (no const/import/export, no JSX)' };
         if (src.length > 8000) return { ok: false, error: 'renderer source too long (keep it under 8000 chars)' };
+        // RENDER SMOKE (chat-1cbe89a9 loop): build the renderer once against stub endowments + generic
+        // sample props BEFORE registering — a throw comes back as THIS step's error so the author iterates
+        // now, instead of every object of this kind rendering blank for the human later.
+        const smoke = await renderCheck(src, { kind: 'fork', props: { value: { name: 'sample', state: 'sample', label: 'sample', text: 'sample', count: 1 }, methods: Array.isArray(methods) ? methods.map(String) : [], name: String(objectName || 'object') } });
+        if (!smoke.ok) return { ok: false, error: `the renderer FAILED a real render check — it was NOT registered. It would break on screen with: ${smoke.error}. Fix the source and call customView again.` };
         const r = customView.register({ kind: String(kind || ''), methods: Array.isArray(methods) ? methods : [], objectName: String(objectName || 'object'), source: src, owner: 'root' });
         return r && r.ok ? { ok: true, sig: r.sig, version: r.version, note: `Registered the custom view for ${kind ? `the ${kind}` : 'this object'} (v${r.version}). It now renders wherever this kind appears.` } : (r || { ok: false, error: 'custom views are unavailable here' });
       } });

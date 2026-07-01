@@ -34,6 +34,7 @@ import { makeInterjections } from './interjections.mjs';
 import { makeToolShares } from './tool-shares.mjs';
 import { makeComponentGit } from './component-git.mjs';
 import { makeComponentSync } from './component-sync.mjs';
+import { renderCheck } from './render-check.mjs';
 import { makeUserStore } from './user-store.mjs';
 import { makeByoStore } from './byo-store.mjs';
 import { makeIslandSource } from './island-source.mjs';
@@ -2667,14 +2668,20 @@ const handler = async (req, res) => {
       if (u.pathname === '/forks/shares') return json(res, 200, { ok: true, shares: forks.sharesFor(String(body.id || ''), owner) });
       if (u.pathname === '/forks/edit') {
         const id = String(body.id || '');
+        // RENDER SMOKE (chat-1cbe89a9 loop): a fork edit must MOUNT before it lands. Without this, a broken
+        // source was committed + applied live, confineComponent swallowed the throw (renders null), and the
+        // author never saw it — a silently blank widget. The error now comes back as the edit's result and
+        // the broken version is NEVER saved (the prior good version stays live).
+        const smokeFork = async src => { const s = await renderCheck(src, { kind: 'fork' }); return s.ok ? null : { ok: false, error: `the edited fork FAILED a real render check — the edit was NOT saved (the previous version stays live). It would break with: ${s.error}. Fix the source and edit again.` }; };
         // Direct source edit (deterministic; used by fork-from-existing + tooling), OR an agent edit: the
         // owner's micro-agent rewrites the source from a prompt, scoped to JUST this fork's (endowments,props)=>vnode.
-        if (typeof body.source === 'string') return json(res, 200, forks.edit(id, body.source, owner, 'edit'));
+        if (typeof body.source === 'string') { const bad = await smokeFork(body.source); if (bad) return json(res, 200, bad); return json(res, 200, forks.edit(id, body.source, owner, 'edit')); }
         const cur = forks.source(id, owner);
         if (cur === null) return json(res, 200, { ok: false, error: 'unknown fork (or not yours)' });
         let out; try { out = String((await opusComplete({ system: FORK_EDIT_SYS, prompt: `Current fork source:\n\`\`\`js\n${cur}\n\`\`\`\n\nRequested change: ${String(body.prompt || '')}`, maxTokens: 4000 })) || ''); }
         catch (e) { return json(res, 200, { ok: false, error: `edit agent failed: ${(e && e.message) || e}` }); }
         const code = extractJs(out); if (!code) return json(res, 200, { ok: false, error: 'the edit agent returned no code' });
+        const bad = await smokeFork(code); if (bad) return json(res, 200, bad);
         return json(res, 200, forks.edit(id, code, owner, String(body.prompt || 'agent edit').slice(0, 60)));
       }
       // P2-for-forks: the CONVERSATIONAL edit loop for a live fork — the same REAL agent loop components
@@ -2698,6 +2705,10 @@ const handler = async (req, res) => {
             let out2; try { out2 = String((await opusComplete({ system: FORK_EDIT_SYS, prompt: `Current fork source:\n\`\`\`js\n${cur}\n\`\`\`\n\nRequested change: ${String(prompt || '')}`, maxTokens: 4000 })) || ''); }
             catch (e) { return { ok: false, error: `edit agent failed: ${(e && e.message) || e}` }; }
             const code = extractJs(out2); if (!code) return { ok: false, error: 'the edit agent returned no code' };
+            // RENDER SMOKE (chat-1cbe89a9 loop): the error is THIS tool-step's result, so the conversational
+            // editor sees its own failure in the same turn and iterates — the broken version never lands.
+            const smoke2 = await renderCheck(code, { kind: 'fork' });
+            if (!smoke2.ok) return { ok: false, error: `the edited fork FAILED a real render check — the edit was NOT saved (the previous version stays live). It would break with: ${smoke2.error}. Rewrite the source (fix that error) and call editFork again.` };
             const r2 = forks.edit(id, code, owner, String(prompt || 'agent edit').slice(0, 60));
             if (r2 && r2.ok) edited = { version: r2.version };
             return r2;
@@ -2776,6 +2787,9 @@ const handler = async (req, res) => {
       // component and a standalone home at /c/<id>. (Cross-user share with a scoped cap is the next step.)
       if (u.pathname === '/components/break-out') {
         const src = String(body.source || ''); if (!/^\s*\(?\s*[a-zA-Z_$]/.test(src) || !src.includes('=>') || src.length > 8000) { const e = 'invalid component source (must be a function (ui) => …)'; flagErrorForFix('component-source-parse', e, `A broken-out component's source failed (ui)=>element validation. It began: ${src.slice(0, 200).replace(/\s+/g, ' ')}`).catch(() => {}); return json(res, 200, { ok: false, error: e }); }
+        // RENDER SMOKE: don't immortalize a component that can't mount — the library must hold working modules.
+        const boSmoke = await renderCheck(src, { kind: 'ui' });
+        if (!boSmoke.ok) return json(res, 200, { ok: false, error: `this component fails a render check (${boSmoke.error}) — fix it before breaking it out` });
         const cells = (Array.isArray(body.cells) ? body.cells : []).map(String).slice(0, 8);
         const name = String(body.name || 'component').slice(0, 60);
         const id = `uicomp-${crypto.randomBytes(5).toString('hex')}`;
