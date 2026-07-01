@@ -141,3 +141,66 @@ export const makeMeteredOpusDelegate = ({ purse, perProvider = {}, model = MODEL
   return makeMeteredDelegate({ delegate: args => runOpusDelegate(args), purse, perProvider, model });
 };
 harden(makeMeteredOpusDelegate);
+
+// ── composeDelegateProposal — the "spin up an attenuated agent" scoper ────────────
+//
+// When the entry agent wants to act via delegateTask/spawnSpecialist, it normally
+// composes an APPROVAL PROMPT ("I can spin up an attenuated agent with: X. Approve
+// it from this chat.") so dan can review the sub-agent before it runs. But asking
+// approval to spin up a REDUNDANT sub-agent is friction with no security payoff:
+// if the request needs a SINGLE low-risk, NON-destructive power that the CALLING
+// agent ALREADY HOLDS itself, delegating adds no authority the caller lacks and
+// removes none it has — so there is nothing to review. In that case skip the
+// approval-prompt path and signal DIRECT EXECUTION, so the caller just does it.
+//
+// A power is "low-risk / directly-executable" only when it is read-only / additive
+// with no write/destructive verb: today that is exactly `research` and `web`.
+// Anything else — host, home, images, notes-writes, meta powers, etc. — or a
+// MULTI-power request, still routes through the approval prompt.
+
+// The allow-list of powers safe to auto-execute (read-only, non-destructive).
+export const LOW_RISK_POWERS = harden(new Set(['research', 'web']));
+
+// Powers that are inherently destructive / high-authority — never auto-execute
+// even singly (host = arbitrary shell, home = filesystem writes, etc.).
+export const DESTRUCTIVE_POWERS = harden(new Set(['host', 'home']));
+
+const isLowRiskPower = p => LOW_RISK_POWERS.has(String(p || '').trim());
+
+// composeDelegateProposal({ proposals, powers, callerPowers }) →
+//   • { directExec: true, powers } — when it is a SINGLE low-risk power the caller
+//     already holds → caller should execute immediately (NO approval prompt text).
+//   • { directExec: false, message, powers } — otherwise → `message` is the
+//     approval-prompt text to show (proposals + "I can spin up an attenuated agent…").
+//
+// `callerPowers` is the set/array of powers the CALLING agent itself holds; when
+// omitted we conservatively assume the caller holds the low-risk power (the common
+// case: the entry agent holds web/research), so a single low-risk power still
+// short-circuits. If the caller does NOT hold the requested power, we fall back to
+// the approval prompt (there is a real grant to review).
+export const composeDelegateProposal = ({ proposals = '', powers = [], callerPowers } = {}) => {
+  const reqPowers = (Array.isArray(powers) ? powers : [powers]).map(p => String(p || '').trim()).filter(Boolean);
+  const base = String(proposals || '');
+  const approvalMessage = reqPowers.length
+    ? base + `\n\n— To act on this, I can spin up an attenuated agent with: ${reqPowers.join(', ')}. Approve it from this chat.`
+    : base;
+
+  const single = reqPowers.length === 1 ? reqPowers[0] : null;
+  const hasDestructive = reqPowers.some(p => DESTRUCTIVE_POWERS.has(p) || !isLowRiskPower(p));
+
+  // The caller "already holds" the power: if callerPowers given, require membership;
+  // if omitted, assume yes for a low-risk power (the entry agent typically holds web/research).
+  const callerHolds = single != null && (
+    callerPowers == null
+      ? true
+      : (callerPowers instanceof Set ? callerPowers.has(single) : Array.isArray(callerPowers) && callerPowers.includes(single))
+  );
+
+  if (single != null && isLowRiskPower(single) && !hasDestructive && callerHolds) {
+    // A single low-risk, non-destructive power the caller already holds → no
+    // redundant sub-agent to approve. Signal direct execution.
+    return harden({ directExec: true, powers: reqPowers, message: base });
+  }
+  return harden({ directExec: false, message: approvalMessage, powers: reqPowers });
+};
+harden(composeDelegateProposal);
