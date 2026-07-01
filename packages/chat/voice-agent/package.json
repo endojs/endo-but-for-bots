@@ -29,6 +29,8 @@
     "test:gauntlet": "node gauntlet.staging.test.cjs",
     "test:agent-profile": "node agent-profile.staging.test.cjs",
     "test:object-inspector": "node object-inspector.staging.test.cjs",
+    "test:render-guard": "node --test render-guard.test.mjs",
+    "test:render-smell": "node render-smell.staging.test.cjs",
     "test:blossom": "node --test blossom.test.mjs",
     "test:blossom-loop": "node blossom-loop.staging.test.cjs",
     "test:interactive-widget": "node interactive-widget.staging.test.cjs",

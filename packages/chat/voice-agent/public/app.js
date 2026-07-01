@@ -106,6 +106,10 @@ if (!cap) { try { cap = localStorage.getItem(CAP_KEY) || null; } catch {} }
 // so the developer agent fixes it automatically (server de-dupes + files a backlog item). Cap-gated; the
 // source snippet is render-safe (a widget's (ui)=>element body, never a swissnum).
 window.__fieldReportError = (error, source) => { try { if (!cap || !error) return; fetch('/error/flag', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, kind: 'component-render', error: String(error).slice(0, 300), source: String(source || '').slice(0, 500) }) }).catch(() => {}); } catch { /* */ } };
+// A confined component rendered a raw JS value as text ("[object Object]", a leaked promise, …) → route
+// the smell to /render-smell so the server files it to the owner feedback-loops view AND feeds the
+// correction back into that renderer's authoring loop so it self-corrects. Cap-gated; source is render-safe.
+window.__fieldReportSmell = (smells, meta) => { try { if (!cap || !Array.isArray(smells) || !smells.length) return; fetch('/render-smell', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, smells: smells.slice(0, 20), componentId: String((meta && meta.componentId) || '').slice(0, 80), name: String((meta && meta.name) || 'component').slice(0, 80), source: String((meta && meta.source) || '').slice(0, 2000) }) }).catch(() => {}); } catch { /* */ } };
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : String(Math.random())).slice(0, 36);

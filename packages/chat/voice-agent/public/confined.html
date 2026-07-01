@@ -55,6 +55,26 @@ const TAGS = new Set(['div','span','p','a','b','i','em','strong','small','h1','h
 const ATTRS = new Set(['class','id','type','placeholder','value','alt','width','height','title','min','max','step','for','colspan','rowspan']);
 const STYLE_OK = /^[a-zA-Z-]+$/;
 const safeUrl = (u) => { u = String(u || ''); return /^(https?:\/\/|#|data:image\/)/.test(u) ? u : '#'; };
+// ── render-guard (mirror of render-guard.mjs — KEEP IN LOCKSTEP) ───────────────────────────────
+// A JS object/promise dropped into a TEXT slot coerces via String() to "[object Xxx]" — the smell
+// the user sees instead of their data. slotText() renders a READABLE fallback instead AND records
+// the smell so mount() can report it to the host → owner feedback-loops + the agent's re-author loop.
+const SMELL_RE = /\[object [A-Za-z][\w$]*\]/;
+let __smells = [];
+const coercesToSmell = (v) => { try { return SMELL_RE.test(String(v)); } catch (e) { return false; } };
+const safeText = (v) => {
+  if (v == null) return '';
+  const t = typeof v;
+  if (t === 'string') return v;
+  if (t === 'number' || t === 'boolean' || t === 'bigint') return String(v);
+  if (t === 'symbol') return v.toString();
+  if (t === 'function') return '';
+  if (v && typeof v.then === 'function') return '⟨pending…⟩';
+  let out; try { out = JSON.stringify(v); } catch (e) { out = ''; }
+  if (!out || out === '{}' || out === '[]') { const n = (v.constructor && v.constructor.name) || 'object'; out = '⟨' + n + '⟩'; }
+  return out.length > 400 ? out.slice(0, 399) + '…' : out;
+};
+const slotText = (v, where) => { if (coercesToSmell(v)) __smells.push({ tag: (String(v).match(SMELL_RE) || ['[object Object]'])[0], where: where || '', preview: safeText(v).slice(0, 120) }); return safeText(v); };
 let report = () => {};
 
 const create = (tag) => {
@@ -62,14 +82,14 @@ const create = (tag) => {
   const el = document.createElement(TAGS.has(t) ? t : 'div');
   const w = {
     el,
-    text: (s) => { el.textContent = String(s == null ? '' : s); return w; },
+    text: (s, where) => { el.textContent = slotText(s, where); return w; },
     attr: (k, v) => { k = String(k); if (ATTRS.has(k)) el.setAttribute(k, String(v)); else if (k === 'href') el.setAttribute('href', safeUrl(v)); else if (k === 'src') el.setAttribute('src', safeUrl(v)); else if (/^(data|aria)-/.test(k)) el.setAttribute(k, String(v)); return w; },
     class: (c) => { el.className = String(c || ''); return w; },
     style: (obj) => { if (obj && typeof obj === 'object') for (const k in obj) { if (STYLE_OK.test(k)) try { el.style[k] = String(obj[k]); } catch (e) {} } return w; },
     on: (event, fn) => { const ev = String(event); if (['click','input','change','keydown'].includes(ev) && typeof fn === 'function') el.addEventListener(ev, (e) => { try { fn({ value: el.value, key: e.key, preventDefault: () => e.preventDefault() }); report(); } catch (err) {} }); return w; },
     push: (childOrChildren) => { const arr = Array.isArray(childOrChildren) ? childOrChildren : [childOrChildren]; for (const c of arr) { if (!c) continue; const node = c && c.el ? c.el : (typeof c === 'string' ? document.createTextNode(c) : null); if (node) el.appendChild(node); } return w; },
     // FOLLOW a grain: paint render(value) now + on every push. The "lazily written component" seam.
-    follow: (g, render) => { if (g && typeof g.subscribe === 'function') g.subscribe((v) => { try { el.textContent = render ? String(render(v)) : (v && typeof v === 'object' ? JSON.stringify(v) : String(v == null ? '' : v)); report(); } catch (e) {} }); return w; },
+    follow: (g, render) => { if (g && typeof g.subscribe === 'function') g.subscribe((v) => { try { el.textContent = slotText(render ? render(v) : v, 'live-cell'); report(); } catch (e) {} }); return w; },
     // follow but the render fn returns a {style}/text patch instead of just text (for richer live UI)
     followWith: (g, fn) => { if (g && typeof g.subscribe === 'function') g.subscribe((v) => { try { fn(v, w); report(); } catch (e) {} }); return w; },
   };
@@ -109,21 +129,21 @@ const apiGrain = (cellId) => {
 // any CHILDREN passed (a very common authoring mistake: `island('Badge', {}, [span(time)])` instead of
 // `island('Badge', {label: time})`). `txt` resolves the named value; if absent, the kids render — so neither
 // shape silently drops the content (the "times never show up" bug).
-const labelOrKids = (el, val, kids) => (val != null ? el.text(String(val)) : (kids ? el.push(kids) : el));
+const labelOrKids = (el, val, kids, where) => (val != null ? el.text(val, where) : (kids ? el.push(kids) : el));
 const KIT = {
-  Card: (p, kids) => create('div').class('cu-card').push(p.title ? create('div').class('cu-title').text(p.title) : null).push(p.body != null ? create('div').text(String(p.body)) : null).push(kids),
-  Btn: (p, kids) => { const b = create('button').class('cu-btn' + (p.variant === 'primary' ? ' primary' : p.variant === 'danger' ? ' danger' : '')); labelOrKids(b, p.label, kids); if (typeof p.onClick === 'function') b.on('click', () => p.onClick()); return b; },
-  Chip: (p, kids) => labelOrKids(create('span').class('cu-chip'), p.label, kids),
-  Badge: (p, kids) => labelOrKids(create('span').class('cu-badge'), p.label, kids),
-  Banner: (p, kids) => { const d = create('div').class('cu-banner ' + (['warn', 'error', 'ok'].includes(p.kind) ? p.kind : 'info')); if (p.icon) d.push(create('span').text(p.icon + ' ')); return labelOrKids(d, p.text, kids); },
-  Meta: (p, kids) => { const d = create('div').class('cu-meta'); if (Array.isArray(p.parts)) return d.text(p.parts.join(' · ')); return labelOrKids(d, p.text, kids); },
+  Card: (p, kids) => create('div').class('cu-card').push(p.title != null ? create('div').class('cu-title').text(p.title, 'Card.title') : null).push(p.body != null ? create('div').text(p.body, 'Card.body') : null).push(kids),
+  Btn: (p, kids) => { const b = create('button').class('cu-btn' + (p.variant === 'primary' ? ' primary' : p.variant === 'danger' ? ' danger' : '')); labelOrKids(b, p.label, kids, 'Btn.label'); if (typeof p.onClick === 'function') b.on('click', () => p.onClick()); return b; },
+  Chip: (p, kids) => labelOrKids(create('span').class('cu-chip'), p.label, kids, 'Chip.label'),
+  Badge: (p, kids) => labelOrKids(create('span').class('cu-badge'), p.label, kids, 'Badge.label'),
+  Banner: (p, kids) => { const d = create('div').class('cu-banner ' + (['warn', 'error', 'ok'].includes(p.kind) ? p.kind : 'info')); if (p.icon) d.push(create('span').text(safeText(p.icon) + ' ')); return labelOrKids(d, p.text, kids, 'Banner.text'); },
+  Meta: (p, kids) => { const d = create('div').class('cu-meta'); if (Array.isArray(p.parts)) return d.text(p.parts.map(x => slotText(x, 'Meta.parts')).join(' · ')); return labelOrKids(d, p.text, kids, 'Meta.text'); },
   Divider: () => create('hr').class('cu-divider'),
   Stack: (p, kids) => create('div').class('cu-stack').push(kids),
   Row: (p, kids) => create('div').class('cu-row').push(kids),
   EmptyState: (p, kids) => labelOrKids(create('div').class('cu-empty'), p.text != null ? p.text : (kids ? null : 'nothing here'), kids),
   ProgressBar: (p) => { const pct = Math.max(0, Math.min(100, Number(p.value) || 0)); return create('div').class('cu-prog').push(create('span').style({ width: pct + '%' })); },
-  Field: (p, kids) => create('label').class('cu-field').push(p.label ? create('span').class('cu-label').text(p.label) : null).push(kids),
-  TextField: (p) => { const i = create('input').class('cu-in').attr('type', p.type || 'text').attr('placeholder', p.placeholder || ''); if (p.value != null) i.attr('value', String(p.value)); if (typeof p.onInput === 'function') i.on('input', e => p.onInput(e.value)); return i; },
+  Field: (p, kids) => create('label').class('cu-field').push(p.label != null ? create('span').class('cu-label').text(p.label, 'Field.label') : null).push(kids),
+  TextField: (p) => { const i = create('input').class('cu-in').attr('type', p.type || 'text').attr('placeholder', p.placeholder || ''); if (p.value != null) i.attr('value', slotText(p.value, 'TextField.value')); if (typeof p.onInput === 'function') i.on('input', e => p.onInput(e.value)); return i; },
 };
 const island = (name, props, kids) => {
   const f = KIT[String(name)]; const p = (props && typeof props === 'object' && !Array.isArray(props)) ? props : {};
@@ -149,8 +169,21 @@ const UI = { create, grain: apiGrain, local: grain, h: create, island, use, kit:
 const fail = (msg) => { try { send({ type: 'error', error: String(msg) }); } catch (e) {} const d = document.createElement('div'); d.className = 'cu-err'; d.textContent = '⚠️ ' + msg; document.body.innerHTML = ''; document.body.appendChild(d); report(); }; // also REPORT the render failure to the host → auto-fix loop
 
 window.addEventListener('error', (e) => { /* swallow source parse/runtime errors so they don't escape; mount reports legibly */ try { e.preventDefault(); } catch (_) {} });
+// After a render settles, report any coercion smells to the host (feedback-loops + agent re-author).
+// Belt-and-suspenders: also scan the produced DOM text for a smell the kit sinks didn't originate
+// (e.g. an agent that String()-concatenated an object itself, or a raw-tag textContent write).
+const reportSmells = () => {
+  try {
+    const seen = new Set(__smells.map(s => s.tag + '|' + s.where));
+    const dom = String((document.body && document.body.textContent) || '');
+    const re = new RegExp(SMELL_RE.source, 'g'); let m;
+    while ((m = re.exec(dom))) { const k = m[0] + '|dom'; if (!seen.has(k)) { seen.add(k); __smells.push({ tag: m[0], where: 'dom', preview: dom.slice(Math.max(0, m.index - 30), m.index + 30) }); } }
+    if (__smells.length) send({ type: 'render-smell', smells: __smells.slice(0, 20) });
+  } catch (e) {}
+};
 const mount = (source, refs) => {
   document.body.innerHTML = '';
+  __smells = [];
   // Inject each REFERENCED component's source (agent-declared aliases the parent resolved server-side) as a
   // function ui.use(alias) calls — same inline-script seam + same sandbox as the primary source (no new authority).
   if (refs && typeof refs === 'object') { for (const alias in refs) { try { const rs = String((refs[alias] && refs[alias].source) || ''); if (!rs) continue; const rsc = document.createElement('script'); rsc.textContent = 'window.__cu_ref_tmp = (' + rs + ');'; document.head.appendChild(rsc); rsc.remove(); if (typeof window.__cu_ref_tmp === 'function') __cuRefs[String(alias)] = window.__cu_ref_tmp; window.__cu_ref_tmp = null; } catch (e) {} } }
@@ -167,6 +200,7 @@ const mount = (source, refs) => {
   if (!node) return fail('component must return ui.create(...) (an element)');
   document.body.appendChild(node);
   report();
+  reportSmells();
 };
 
 // report content height — DEBOUNCED + only when it actually changed (a rapidly-pushing cell can't flood the parent).
