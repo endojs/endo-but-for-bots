@@ -1985,6 +1985,7 @@ const ANTHROPIC_MODELS = [
   { id: 'anthropic:claude-haiku-4-5',  name: 'Claude Haiku',  cost: '$',   size: 'M',  speed: '⚡⚡⚡' },
   { id: 'anthropic:claude-sonnet-4-6', name: 'Claude Sonnet', cost: '$$',  size: 'L',  speed: '⚡⚡' },
   { id: 'anthropic:claude-opus-4-8',   name: 'Claude Opus',   cost: '$$$', size: 'XL', speed: '⚡' },
+  { id: 'anthropic:claude-fable-5',    name: 'Claude Fable',  cost: '$$$$', size: 'XL', speed: '⚡' },
 ].map(m => ({ id: m.id, name: m.name, size: m.size, label: `${m.name} · ${m.cost} · ${m.size} · ${m.speed}` }));
 const LOCAL_DEFAULT = { id: 'default', name: 'Gemma (local)', size: 'M', label: 'Gemma · local · free · ⚡⚡⚡' };
 // size→big ladder for "hold the send button to escalate to the next biggest model"
