@@ -884,7 +884,9 @@ const runProjectAgent = async (project, agent) => {
   // backlog) is recorded ONLY in the agent's run-log (visible in the timer
   // Detail view); it posts no feed notification and spawns no chat. This is what
   // stops the "⏰ … ran" wall with nothing to report.
-  const reportworthy = nProp > 0 || !out.ok;
+  // EXCEPTION: an agent flagged `alwaysReport: true` (e.g. the weekly self-eval — an honest
+  // "reviewed N chats, zero proposals" IS its deliverable) always lands in the feed + a run chat.
+  const reportworthy = nProp > 0 || !out.ok || !!agent.alwaysReport;
   let id = null;
   if (reportworthy) {
     // Persist the run as a reviewable, CONTINUABLE chat (a seed-chat) so the
@@ -902,7 +904,7 @@ const runProjectAgent = async (project, agent) => {
     await postFeed({
       agent: agent.name, avatar: '⏰', title: `${project.name} › ${agent.name}`,
       body: answer.slice(0, 8000), // store the full run summary so the click-to-expand modal isn't truncated (the card still shows a 400-char preview)
-      status: nProp ? `needs your input · ${nProp} proposal(s)` : 'run failed', note: `tools: ${(out.grantedPowers || agent.tools || []).join(', ')}`,
+      status: nProp ? `needs your input · ${nProp} proposal(s)` : (out.ok ? 'scheduled report' : 'run failed'), note: `tools: ${(out.grantedPowers || agent.tools || []).join(', ')}`,
       chatId: id, click: `${WEB_URL}/#chat=${id}`, // tapping the notification opens the run
     });
   } else {
