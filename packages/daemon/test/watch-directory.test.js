@@ -9,7 +9,7 @@ import os from 'os';
 import { makeFilePowers } from '../src/daemon-node-powers.js';
 
 /**
- * Allocate a fresh temp directory that is removed at test teardown.
+ * Allocate a fresh temporary directory that is removed at test teardown.
  *
  * Unit tests run in-process, so c8 captures every branch hit.  The
  * companion integration tests in endo.test.js drive the same code
@@ -19,19 +19,19 @@ import { makeFilePowers } from '../src/daemon-node-powers.js';
  * @param {import('ava').ExecutionContext} t
  * @param {string} label
  */
-const makeTempDir = async (t, label) => {
-  const dir = await fs.promises.mkdtemp(
-    path.join(os.tmpdir(), `watch-dir-${label}-`),
+const makeTemporaryDirectory = async (t, label) => {
+  const directory = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), `watch-directory-${label}-`),
   );
   t.teardown(async () => {
     await null;
     try {
-      await fs.promises.rm(dir, { recursive: true, force: true });
+      await fs.promises.rm(directory, { recursive: true, force: true });
     } catch {
       // already gone
     }
   });
-  return dir;
+  return directory;
 };
 
 const collect = async (events, predicate, timeoutMs = 2000) => {
@@ -57,23 +57,23 @@ const collect = async (events, predicate, timeoutMs = 2000) => {
 };
 
 test('watchDirectory yields a rename event after a debounce window', async t => {
-  const dir = await makeTempDir(t, 'rename');
+  const directory = await makeTemporaryDirectory(t, 'rename');
   const powers = makeFilePowers({ fs, path });
-  const { events, cancel } = powers.watchDirectory(dir);
+  const { events, cancel } = powers.watchDirectory(directory);
   t.teardown(() => cancel());
 
   // Race the watcher startup.
   await new Promise(resolve => setTimeout(resolve, 50));
-  await fs.promises.writeFile(path.join(dir, 'new.txt'), 'hello');
+  await fs.promises.writeFile(path.join(directory, 'new.txt'), 'hello');
 
-  const event = await collect(events, e => e.name === 'new.txt');
+  const event = await collect(events, candidate => candidate.name === 'new.txt');
   t.truthy(event, 'rename event should arrive');
   t.is(event.kind, 'replace');
   t.is(event.name, 'new.txt');
 });
 
 test('watchDirectory buffers events arriving before the consumer awaits next()', async t => {
-  const dir = await makeTempDir(t, 'buffer');
+  const directory = await makeTemporaryDirectory(t, 'buffer');
 
   // Stub fs.watch so we can deliver events deterministically without
   // racing the platform's debounce / coalesce behavior (which varies
@@ -84,8 +84,8 @@ test('watchDirectory buffers events arriving before the consumer awaits next()',
   // first next() call to drain.
   let stubListener;
   const stubWatcher = {
-    on(event, fn) {
-      if (event === 'change') stubListener = fn;
+    on(event, listener) {
+      if (event === 'change') stubListener = listener;
       return stubWatcher;
     },
     close() {},
@@ -93,7 +93,7 @@ test('watchDirectory buffers events arriving before the consumer awaits next()',
   const stubFs = { ...fs, watch: () => stubWatcher };
 
   const powers = makeFilePowers({ fs: stubFs, path });
-  const { events, cancel } = powers.watchDirectory(dir);
+  const { events, cancel } = powers.watchDirectory(directory);
   t.teardown(() => cancel());
 
   // Synchronously fire two rename events.  Both schedule debounced
@@ -117,27 +117,27 @@ test('watchDirectory buffers events arriving before the consumer awaits next()',
 });
 
 test('watchDirectory coalesces a quick rewrite of the same name', async t => {
-  const dir = await makeTempDir(t, 'coalesce');
+  const directory = await makeTemporaryDirectory(t, 'coalesce');
   const powers = makeFilePowers({ fs, path });
-  const { events, cancel } = powers.watchDirectory(dir);
+  const { events, cancel } = powers.watchDirectory(directory);
   t.teardown(() => cancel());
 
   await new Promise(resolve => setTimeout(resolve, 50));
   // Write, immediately remove, immediately re-write the same name.
   // The debounce window should collapse this into a single event.
-  await fs.promises.writeFile(path.join(dir, 'churn.txt'), '1');
-  await fs.promises.unlink(path.join(dir, 'churn.txt'));
-  await fs.promises.writeFile(path.join(dir, 'churn.txt'), '2');
+  await fs.promises.writeFile(path.join(directory, 'churn.txt'), '1');
+  await fs.promises.unlink(path.join(directory, 'churn.txt'));
+  await fs.promises.writeFile(path.join(directory, 'churn.txt'), '2');
 
-  const event = await collect(events, e => e.name === 'churn.txt');
+  const event = await collect(events, candidate => candidate.name === 'churn.txt');
   t.truthy(event, 'coalesced event should arrive');
   t.is(event.name, 'churn.txt');
 });
 
 test('watchDirectory cancel is idempotent', async t => {
-  const dir = await makeTempDir(t, 'idempotent');
+  const directory = await makeTemporaryDirectory(t, 'idempotent');
   const powers = makeFilePowers({ fs, path });
-  const { cancel } = powers.watchDirectory(dir);
+  const { cancel } = powers.watchDirectory(directory);
 
   cancel();
   cancel();
@@ -146,9 +146,9 @@ test('watchDirectory cancel is idempotent', async t => {
 });
 
 test('watchDirectory terminates the events stream after cancel()', async t => {
-  const dir = await makeTempDir(t, 'terminate');
+  const directory = await makeTemporaryDirectory(t, 'terminate');
   const powers = makeFilePowers({ fs, path });
-  const { events, cancel } = powers.watchDirectory(dir);
+  const { events, cancel } = powers.watchDirectory(directory);
 
   cancel();
 
@@ -163,9 +163,9 @@ test('watchDirectory terminates the events stream after cancel()', async t => {
 });
 
 test('watchDirectory unblocks pending next() callers on cancel()', async t => {
-  const dir = await makeTempDir(t, 'pending');
+  const directory = await makeTemporaryDirectory(t, 'pending');
   const powers = makeFilePowers({ fs, path });
-  const { events, cancel } = powers.watchDirectory(dir);
+  const { events, cancel } = powers.watchDirectory(directory);
 
   const iterator = events[Symbol.asyncIterator]();
   // Park two next() calls.  Both should resolve to { done: true }
@@ -184,9 +184,9 @@ test('watchDirectory unblocks pending next() callers on cancel()', async t => {
 });
 
 test('watchDirectory iterator.return() closes the watcher', async t => {
-  const dir = await makeTempDir(t, 'return');
+  const directory = await makeTemporaryDirectory(t, 'return');
   const powers = makeFilePowers({ fs, path });
-  const { events } = powers.watchDirectory(dir);
+  const { events } = powers.watchDirectory(directory);
 
   const iterator = events[Symbol.asyncIterator]();
   const returned = await iterator.return();
@@ -203,7 +203,7 @@ test('watchDirectory returns an immediately-closed stream when fs.watch throws',
   // throws ENOENT.  The production code emits a `console.error`
   // diagnostic on the failure path; we let it through since SES
   // freezes console and we cannot stub it.
-  const ghost = path.join(os.tmpdir(), `watch-dir-ghost-${Date.now()}-xyz`);
+  const ghost = path.join(os.tmpdir(), `watch-directory-ghost-${Date.now()}-xyz`);
   const powers = makeFilePowers({ fs, path });
 
   const result = powers.watchDirectory(ghost);
@@ -221,7 +221,7 @@ test('watchDirectory returns an immediately-closed stream when fs.watch throws',
 });
 
 test('watchDirectory ignores fs.watch events without a filename', async t => {
-  const dir = await makeTempDir(t, 'no-filename');
+  const directory = await makeTemporaryDirectory(t, 'no-filename');
 
   // Stub fs.watch so we can deliver a synthetic change event with
   // filename === null (the platform-conditional branch the
@@ -230,11 +230,11 @@ test('watchDirectory ignores fs.watch events without a filename', async t => {
   let stubErrorListener;
   let closed = false;
   const stubWatcher = {
-    on(event, fn) {
+    on(event, listener) {
       if (event === 'change') {
-        stubListener = fn;
+        stubListener = listener;
       } else if (event === 'error') {
-        stubErrorListener = fn;
+        stubErrorListener = listener;
       }
       return stubWatcher;
     },
@@ -248,7 +248,7 @@ test('watchDirectory ignores fs.watch events without a filename', async t => {
   };
 
   const powers = makeFilePowers({ fs: stubFs, path });
-  const { events, cancel } = powers.watchDirectory(dir);
+  const { events, cancel } = powers.watchDirectory(directory);
   t.teardown(() => cancel());
 
   // Fire two events the watcher must ignore.
@@ -262,7 +262,7 @@ test('watchDirectory ignores fs.watch events without a filename', async t => {
   // (the Buffer branch in production code).
   stubListener('rename', Buffer.from('legit.txt'));
 
-  const event = await collect(events, e => e.name === 'legit.txt');
+  const event = await collect(events, candidate => candidate.name === 'legit.txt');
   t.truthy(event, 'Buffer-named rename event should arrive');
   t.is(event.name, 'legit.txt');
 
@@ -278,15 +278,15 @@ test('watchDirectory ignores fs.watch events without a filename', async t => {
 });
 
 test('watchDirectory cancel clears pending debounced timers', async t => {
-  const dir = await makeTempDir(t, 'pending-clear');
+  const directory = await makeTemporaryDirectory(t, 'pending-clear');
 
   // Stub fs.watch so we can synthesise an event that schedules a
   // debounced timer, then cancel before the debounce window
   // elapses.  cancel() must drain the pending map.
   let stubListener;
   const stubWatcher = {
-    on(event, fn) {
-      if (event === 'change') stubListener = fn;
+    on(event, listener) {
+      if (event === 'change') stubListener = listener;
       return stubWatcher;
     },
     close() {},
@@ -294,7 +294,7 @@ test('watchDirectory cancel clears pending debounced timers', async t => {
   const stubFs = { ...fs, watch: () => stubWatcher };
 
   const powers = makeFilePowers({ fs: stubFs, path });
-  const { events, cancel } = powers.watchDirectory(dir);
+  const { events, cancel } = powers.watchDirectory(directory);
 
   // Schedule a debounced reconciliation, then cancel immediately
   // (well within the 50 ms debounce window).
@@ -312,7 +312,7 @@ test('watchDirectory cancel clears pending debounced timers', async t => {
 });
 
 test('watchDirectory tolerates watcher.close() throwing', async t => {
-  const dir = await makeTempDir(t, 'close-throws');
+  const directory = await makeTemporaryDirectory(t, 'close-throws');
 
   // Stub a watcher whose close() throws.  The cancel() path must
   // swallow the error.
@@ -327,7 +327,7 @@ test('watchDirectory tolerates watcher.close() throwing', async t => {
   const stubFs = { ...fs, watch: () => stubWatcher };
 
   const powers = makeFilePowers({ fs: stubFs, path });
-  const { cancel } = powers.watchDirectory(dir);
+  const { cancel } = powers.watchDirectory(directory);
 
   // cancel() must not throw even when the underlying watcher does.
   cancel();
