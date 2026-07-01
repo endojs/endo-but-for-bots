@@ -80,6 +80,11 @@ const pendingShare = _hashParams.get('chatshare') || null; // Feature B: opened 
 const pendingMinimizeApp = _hashParams.get('minimize-app') || null; // handoff from /apps/<name> → minimize into a fresh chat (cap restored from localStorage)
 const pendingForkToken = _hashParams.get('fork') || null; // a shared FORK link (#fork=<token>): open it inline so the recipient can use, adopt + re-share
 let pendingInbox = location.hash === '#inbox' || _hashParams.has('inbox'); // #inbox deep-link (a notification with no chat thread → open the 🔔 inbox)
+// #sched=<id> deep-link → that scheduled task's Detail card (config + run history). The id is a
+// DESIGNATOR, not a cap: authority comes from the cap already in localStorage, and the server's
+// owner-gated /projects/list means an id you don't own resolves to the same "not found" as one
+// that doesn't exist (no enumeration).
+let pendingSched = _hashParams.get('sched') || null;
 // A pasted link becomes an inline widget card (embedSiteInline) AND is staged here per-session so the next
 // send also tells the AGENT about it — otherwise the card is client-only and the agent never sees the link.
 // cap-hygiene: only the cap-STRIPPED URL is staged (the swissnum never reaches the agent/server).
@@ -3259,6 +3264,14 @@ const chatIdFromLink = u => {
   try { const url = new URL(u, location.href); if (url.origin !== location.origin) return ''; return new URLSearchParams(url.hash.slice(1)).get('chat') || ''; }
   catch { return ''; }
 };
+// a notification link to a scheduled task (#sched=<id>). Routed IN-APP regardless of which origin minted the
+// link (public chu vs tailnet) — the id is an origin-independent designator and this app is its only producer;
+// opening it in-app uses THIS browser's stored cap instead of bouncing through a possibly-capless other origin.
+const schedIdFromLink = u => {
+  if (typeof u !== 'string') return '';
+  try { const url = new URL(u, location.href); if (!/^https?:$/.test(url.protocol)) return ''; return (new URLSearchParams(url.hash.slice(1)).get('sched') || '').replace(/[^\w-]/g, ''); }
+  catch { return ''; }
+};
 const capLinkReg = new Map();
 const notifCard = (it, withDone) => {
   const meta = [it.agent ? esc((it.avatar ? it.avatar + ' ' : '') + it.agent) : '', it.status ? esc(it.status) : '', ...(it.links || []).map(l => {
@@ -3267,6 +3280,9 @@ const notifCard = (it, withDone) => {
     // a deep-link back to one of THIS app's chats → route IN-APP to that exact chat id.
     const chatId = chatIdFromLink(l && l.href);
     if (chatId) return `<a class="nlink" href="#" data-openchat="${esc(chatId)}">💬 open chat</a>`;
+    // a deep-link to a scheduled task's Detail → route IN-APP (openSchedDetail).
+    const schedId = schedIdFromLink(l && l.href);
+    if (schedId) return `<a class="nlink" href="#" data-opensched="${esc(schedId)}">⏰ scheduled task</a>`;
     // never let a swissnum become visible text: cap links fall back to a generic label, never the URL.
     const label = '📎 ' + esc((l && l.label) || (cap ? 'Open link' : raw));
     if (!l || !l.href) return label;
@@ -3283,6 +3299,8 @@ const notifLinkInfo = l => {
   const raw = (l && (l.url || l.href)) || '';
   const chatId = chatIdFromLink(l && l.href);
   if (chatId) return { label: '💬 open chat', open: () => switchChat(chatId) };
+  const schedId = schedIdFromLink(l && l.href);
+  if (schedId) return { label: '⏰ scheduled task', open: () => openSchedDetail(schedId) };
   const cap = isCapLink(raw) || isCapLink(l && l.href);
   const label = '📎 ' + ((l && l.label) || (cap ? 'Open link' : raw));
   const href = l && l.href;
@@ -3377,6 +3395,8 @@ const renderInbox = async () => {
   document.querySelectorAll('#att-list [data-capopen], #rec-list [data-capopen]').forEach(a => { a.onclick = e => { e.preventDefault(); const u = capLinkReg.get(a.dataset.capopen); if (u) window.open(u, '_blank', 'noopener,noreferrer'); }; });
   // chat deep-links route IN-APP to the specific chat id (not a fresh tab that re-resolves to the most recent chat).
   document.querySelectorAll('#att-list .nlink[data-openchat], #rec-list .nlink[data-openchat]').forEach(a => { a.onclick = e => { e.preventDefault(); switchChat(a.dataset.openchat); }; });
+  // scheduled-task deep-links route IN-APP to that task's Detail card.
+  document.querySelectorAll('#att-list .nlink[data-opensched], #rec-list .nlink[data-opensched]').forEach(a => { a.onclick = e => { e.preventDefault(); openSchedDetail(a.dataset.opensched); }; });
   renderChangelog();
 };
 // 🔧 the CHANGELOG of self-applied (auto-merged) improvements, each with a one-click Revert. Root-only;
@@ -4440,9 +4460,11 @@ const renderSettingsTimers = async body => {
           const right = document.createElement('div'); right.style.cssText = 'display:flex;gap:5px;flex:0 0 auto;align-items:center';
           const run = document.createElement('button'); run.className = 'mini'; run.textContent = 'Run now';
           run.onclick = async () => { run.disabled = true; run.textContent = 'running…'; const r = await pf('/projects/agents/run', { id: p.id, agentId: a.id }); run.textContent = r.error ? 'error' : '✓ ran'; setTimeout(() => { run.disabled = false; run.textContent = 'Run now'; }, 2500); };
+          const lk = document.createElement('button'); lk.className = 'mini'; lk.textContent = '🔗'; lk.title = 'Copy a link to this scheduled task';
+          lk.onclick = async () => flashBtn(lk, (await writeClipboard(`${location.origin}/#sched=${a.id}`)) ? '✓' : 'copy failed'); // deep-link carries ONLY the sched id (a designator, never a cap)
           const open = document.createElement('button'); open.className = 'mini'; open.textContent = 'Detail ›';
-          open.onclick = () => { openProjectId = p.id; closeModal(); renderProjects(); }; // → the rich per-agent Detail (prompt/powers/timing/runs)
-          right.append(run, open); row.append(main, right); el.appendChild(row);
+          open.onclick = () => { closeModal(); openSchedDetail(a.id); }; // → the rich per-agent Detail (prompt/powers/timing/runs), card spotlighted
+          right.append(run, lk, open); row.append(main, right); el.appendChild(row);
         }
       }
     }
@@ -4603,6 +4625,7 @@ const boot = async () => {
   setStatus('');
   refreshBadge(); setInterval(refreshBadge, 60000); // 🔔 notification badge
   if (pendingInbox) { pendingInbox = false; try { showTab('inbox'); } catch { /* */ } } // a notification's #inbox deep-link → open the 🔔 inbox (proposals/feed live here, not a chat thread)
+  if (pendingSched) { const sid = pendingSched; pendingSched = null; try { openSchedDetail(sid); } catch { /* */ } } // #sched=<id> deep-link → that scheduled task's Detail card
   loadModels(); loadAgentList(); loadProjectList(); // populate the header agent + model-provider selectors and the project menu
 };
 boot();
@@ -4657,7 +4680,8 @@ const uploadProjectFiles = async (pid, fileList) => {
   }
   renderProjectFiles(pid);
 };
-const renderProjects = async () => {
+const renderProjects = async (focusArg = null) => {
+  const focusSched = typeof focusArg === 'string' ? focusArg : null; // renderProjects doubles as a click handler — ignore a MouseEvent arg
   const d = await pf('/projects/list');
   if (d.error) { showModal(`<b>🕐 Projects</b><p>${esc(d.error)}</p>`); return; }
   const powers = d.powers || [];
@@ -4685,10 +4709,11 @@ const renderProjects = async () => {
   // a timer agent's runs = the scheduled seed-chats filed under it (kept out of the sidebar; here is their home)
   const agentRuns = ag => seedChats.filter(s => s && s.source === 'scheduled' && s.scheduled && s.scheduled.agent === ag.name && s.scheduled.project === p.name).sort((x, y) => (y.ts || 0) - (x.ts || 0));
   const agents = (p.scheduledAgents || []).map(a => { return `
-      <div style="border:1px solid var(--edge);border-radius:8px;padding:8px;margin:6px 0">
+      <div style="border:1px solid var(--edge);border-radius:8px;padding:8px;margin:6px 0" data-schedcard="${esc(a.id)}">
         <div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><b>⏰ ${esc(a.name)}</b>
-          <span><button class="mini" data-run="${p.id}|${a.id}">Run now</button> <button class="mini" data-delagent="${p.id}|${a.id}">×</button></span></div>
-        <div style="color:var(--mut);font-size:12px;margin-top:3px">${esc(cadenceLabel(a.schedule))} · tools: ${esc((a.tools || []).join(', ') || 'none')}${a.lastRun ? ` · ${a.lastRunChatId ? `<a href="#" data-openrun="${esc(a.lastRunChatId)}">last run ${esc(new Date(a.lastRun).toLocaleString())} ↗</a>` : `last ${esc(new Date(a.lastRun).toLocaleString())}`}` : ''}${a.nextAt ? ` · next ${esc(new Date(a.nextAt).toLocaleString())}` : ''}</div>
+          <span><button class="mini" data-run="${p.id}|${a.id}">Run now</button> <button class="mini" data-schedlink="${esc(a.id)}" title="Copy a link to this scheduled task">🔗</button> <button class="mini" data-delagent="${p.id}|${a.id}">×</button></span></div>
+        <div style="color:var(--mut);font-size:12px;margin-top:3px">${esc(cadenceLabel(a.schedule))} · tools: ${esc((a.tools || []).join(', ') || 'none')}${a.enabled === false ? ' · ⏸ disabled' : ''}${a.mode === 'implement' ? ' · mode: implement' : ''}${a.model && a.model !== 'default' ? ` · model: ${esc(a.model)}` : ''}${a.alwaysReport ? ' · always-reports' : ''}${a.lastRun ? ` · ${a.lastRunChatId ? `<a href="#" data-openrun="${esc(a.lastRunChatId)}">last run ${esc(new Date(a.lastRun).toLocaleString())} ↗</a>` : `last ${esc(new Date(a.lastRun).toLocaleString())}`}` : ''}${a.nextAt ? ` · next ${esc(new Date(a.nextAt).toLocaleString())}` : ''}</div>
+        ${a.note ? `<div style="color:var(--mut);font-size:11px;margin-top:2px;font-style:italic">📝 ${esc(String(a.note).slice(0, 300))}</div>` : ''}
         <div style="font-size:12px;margin-top:4px;white-space:pre-wrap">${esc((a.prompt || '').slice(0, 200))}</div>
         <details style="margin-top:6px"><summary class="mini" style="display:inline-block">✏️ edit prompt &amp; powers</summary>
           <div style="margin-top:6px;display:flex;flex-direction:column;gap:6px">
@@ -4699,7 +4724,7 @@ const renderProjects = async () => {
             <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--mut)">timing:</div><select class="hdr-sel" style="max-width:none;flex:1" data-ecad="${p.id}|${a.id}"><option value="-1">keep current · ${esc(cadenceLabel(a.schedule) || 'event-triggered')}</option>${CADENCES.map((c, i) => `<option value="${i}">${esc(c.label)}</option>`).join('')}</select></div>
             <div><button class="mini" data-saveagent="${p.id}|${a.id}">Save changes</button></div>
           </div></details>
-        <details style="margin-top:6px"><summary class="mini" style="display:inline-block">📁 run log (${(a.runs || []).length})</summary>
+        <details style="margin-top:6px" data-runlog="${esc(a.id)}"><summary class="mini" style="display:inline-block">📁 run log (${(a.runs || []).length})</summary>
           <div style="margin-top:6px;display:flex;flex-direction:column;gap:4px">${(a.runs || []).length ? (a.runs).map(r => `<div class="share" style="padding:5px 7px;align-items:flex-start"><div style="font-size:12px;min-width:0;flex:1"><div>${esc(new Date(r.at).toLocaleString())} ${r.ok === false ? '⚠️ failed' : (r.nProp ? `· ${r.nProp} proposal(s)` : '· ✓')}</div>${r.summary ? `<div style="color:var(--mut);font-size:11px;white-space:pre-wrap;word-break:break-word">${esc(String(r.summary).slice(0, 200))}</div>` : ''}</div>${r.chatId ? `<button class="mini" data-openrun="${esc(r.chatId)}">open</button>` : ''}</div>`).join('') : '<div style="color:var(--mut);font-size:12px">no runs yet — every run lands here (silent no-op runs too); the chat opens for runs that had something to report</div>'}</div>
         </details>
         <div data-out="${p.id}|${a.id}" style="font-size:12px;color:var(--acc);margin-top:4px"></div>
@@ -4779,6 +4804,11 @@ const renderProjects = async () => {
   m.querySelectorAll('[data-openrun]').forEach(b => b.onclick = async e => { e.preventDefault(); const cid = b.dataset.openrun; if (!cid) return; closeModal(); pendingChat = cid; await loadSeedChats(); tryOpenPendingChat(); }); // open a past scheduled run from the Projects view
   m.querySelectorAll('[data-delrun]').forEach(b => b.onclick = async () => { const id = b.dataset.delrun; if (!id || !window.confirm('Throw away this run?')) return; seedChats = seedChats.filter(s => s.id !== id); try { localStorage.removeItem(txKey(id)); } catch {} await pf('/seed-chats/delete', { id }); renderProjects(); }); // throw away one scheduled run
   m.querySelectorAll('[data-delagent]').forEach(b => b.onclick = async () => { const [pid, aid] = b.dataset.delagent.split('|'); await pf('/projects/agents/remove', { id: pid, agentId: aid }); renderProjects(); });
+  // 🔗 copy a deep-link to this scheduled task (the clips pattern): carries ONLY the sched id — a
+  // designator, never a cap; the opener's own stored cap governs what it resolves to.
+  m.querySelectorAll('[data-schedlink]').forEach(b => b.onclick = async () => { flashBtn(b, (await writeClipboard(`${location.origin}/#sched=${b.dataset.schedlink}`)) ? '✓' : 'copy failed'); });
+  // a #sched deep-link landed here → expand + spotlight that task's card (its run history included)
+  if (focusSched) { const card = m.querySelector(`[data-schedcard="${focusSched}"]`); if (card) { const dl = card.querySelector(`details[data-runlog="${focusSched}"]`); if (dl) dl.open = true; card.style.outline = '2px solid var(--acc)'; setTimeout(() => { card.style.outline = ''; }, 2500); try { card.scrollIntoView({ block: 'center' }); } catch { /* */ } } }
   m.querySelectorAll('[data-run]').forEach(b => b.onclick = async () => {
     const [pid, aid] = b.dataset.run.split('|'); const out = m.querySelector(`[data-out="${pid}|${aid}"]`);
     b.disabled = true; out.textContent = 'running…';
@@ -4786,6 +4816,20 @@ const renderProjects = async () => {
     out.textContent = r.error ? ('error: ' + r.error) : `✓ ${String(r.answer || '').slice(0, 300)}${r.proposals ? ` · ${r.proposals} proposal(s)` : ''}`;
     b.disabled = false;
   });
+};
+// #sched=<id> deep-link target: find the (owner-visible) project holding that scheduled task and open its
+// Detail with the task's card spotlighted + run history expanded. Owner/root-gated by the SAME authority as
+// the rest of the Projects surface — /projects/list only returns the caller's own projects, so an id you
+// don't own is indistinguishable from one that doesn't exist.
+const openSchedDetail = async schedId => {
+  const sid = String(schedId || '').replace(/[^\w-]/g, ''); // designator hygiene: sched ids are `sched-<hex>`
+  if (!sid) return;
+  const d = await pf('/projects/list');
+  if (d.error) { showModal(`<b>⏰ Scheduled task</b><p>${esc(d.error)}</p>`); return; }
+  const p = (d.projects || []).find(x => (x.scheduledAgents || []).some(a => a.id === sid));
+  if (!p) { showModal('<b>⏰ Scheduled task</b><p style="color:var(--mut)">Not found — it may have been removed, or your capability doesn\'t own it.</p>'); return; }
+  openProjectId = p.id;
+  await renderProjects(sid);
 };
 { const _pjBtn = $('projects-btn'); if (_pjBtn) _pjBtn.onclick = renderProjects; }
 

@@ -926,6 +926,9 @@ const runProjectAgent = async (project, agent) => {
       body: answer.slice(0, 8000), // store the full run summary so the click-to-expand modal isn't truncated (the card still shows a 400-char preview)
       status: nProp ? `needs your input · ${nProp} proposal(s)` : (out.ok ? 'scheduled report' : 'run failed'), note: `tools: ${(out.grantedPowers || agent.tools || []).join(', ')}`,
       chatId: id, click: `${WEB_URL}/#chat=${id}`, // tapping the notification opens the run
+      // deep-link to the TASK behind the run (its config + full run history) — carries only the sched
+      // id, a designator; the bell routes it in-app via the viewer's own stored cap (never a swissnum).
+      links: [{ label: 'scheduled task', url: `${WEB_URL}/#sched=${agent.id}` }],
     });
   } else {
     log('scheduled-agent: no-op (nothing to report), logged only:', project.name, '›', agent.name);
