@@ -155,6 +155,27 @@ Each time `m.fromCapData()` encounters a slot reference, it calls
 should create and return a proxy (or other representative) of the
 pass-by-presence object.
 
+## Promise pass styles
+
+Marshal recognizes two shapes as the `'promise'` pass style:
+
+1. A frozen native `Promise` instance (`isSafePromise(p)` is true).
+2. A frozen, non-thenable carrier minted by `makePromise()` from
+   `@endo/pass-style`. The carrier has no `then` method (own or
+   inherited beyond `Object.prototype`), so `await passStylePromise`
+   resolves to the carrier itself. To observe the eventual settlement,
+   call `HandledPromise.settle(carrier)` from `@endo/eventual-send`
+   (or `E.when(carrier, ...)`), which is the explicit synchronization
+   operation paired with subscription.
+
+Both shapes encode through `convertValToSlot` the same way (a single
+`'p'`-prefixed slot in the CapData / SmallCaps encodings), so existing
+`convertValToSlot` and `convertSlotToVal` callbacks need no source
+change. The choice between native and pass-style is the user's: native
+promises remain passable for backward compatibility; the pass-style
+carrier is the opt-in non-implicit-`await` alternative for hosts that
+want explicit synchronization across the cap-protocol boundary.
+
 # As a direct alternative to JSON
 
 This marshal package also exports `stringify` and `parse` functions that are

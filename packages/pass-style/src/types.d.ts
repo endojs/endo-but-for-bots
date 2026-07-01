@@ -61,12 +61,14 @@ export type PassStyle =
   | 'error'
   | 'promise';
 
-export type PassStyleMarker = 'tagged' | 'remotable';
+export type PassStyleMarker = 'tagged' | 'remotable' | 'promise';
 
 /**
  * Tagged has own [PASS_STYLE]: "tagged", [Symbol.toStringTag]: $tag.
  *
  * Remotable has a prototype chain in which the penultimate object has own [PASS_STYLE]: "remotable", [Symbol.toStringTag]: $iface (where both $tag and $iface must be strings, and the latter must either be "Remotable" or start with "Alleged: " or "DebugName: ").
+ *
+ * Pass-style promise has own [PASS_STYLE]: "promise" with a [Symbol.toStringTag] that begins with "Promise". The carrier is non-thenable and carries no settlement state; see `PassStylePromise`.
  */
 export type PassStyled<S extends PassStyleMarker, I extends InterfaceSpec> = {
   [PASS_STYLE]: S;
@@ -82,7 +84,20 @@ export type PassByRef =
   | RemotableBrand<any, any>
   | Promise<RemotableObject>
   | Promise<RemotableBrand<any, any>>
-  | Promise<PassByCopy>;
+  | Promise<PassByCopy>
+  | PassStylePromise;
+
+/**
+ * The non-thenable pass-style promise carrier produced by
+ * `makePromise()`. It satisfies `passStyleOf(x) === 'promise'`
+ * without being a native `Promise` or any thenable.
+ *
+ * The carrier is intentionally opaque: it carries no settlement state and
+ * exposes no methods. Producers track settlement in their own closure;
+ * subscribers observe settlement through `HandledPromise.subscribe` (or
+ * `HandledPromise.settle`) in `@endo/eventual-send`.
+ */
+export type PassStylePromise = PassStyled<'promise', `Promise${string}`>;
 
 /**
  * A Passable is acyclic data that can be marshalled. It must be hardened to
@@ -138,6 +153,7 @@ export type PassStyleOf = {
   (p: symbol): 'symbol';
   (p: null): 'null';
   (p: Promise<any>): 'promise';
+  (p: PassStylePromise): 'promise';
   (p: Error): 'error';
   (p: CopyTagged): 'tagged';
   (p: readonly any[]): 'copyArray';
@@ -202,6 +218,7 @@ export type RemotableMethodName = PropertyKey;
  */
 export type PassableCap =
   | Promise<any>
+  | PassStylePromise
   | RemotableObject
   | RemotableBrand<any, any>;
 

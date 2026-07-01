@@ -34,6 +34,8 @@ export {
   toThrowable,
 } from './src/passStyleOf.js';
 
+export { makePromise, isPassStylePromise } from './src/promise.js';
+
 export { makeTagged } from './src/makeTagged.js';
 export {
   Remotable,

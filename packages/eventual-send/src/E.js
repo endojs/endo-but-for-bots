@@ -250,19 +250,25 @@ const makeE = HandledPromise => {
           new Proxy(funcTarget, makeESendOnlyProxyHandler(x, HandledPromise)),
 
         /**
-         * E.when(x, res, rej) is equivalent to
-         * HandledPromise.resolve(x).then(res, rej)
+         * E.when(x, res, rej) layers on `HandledPromise.settle(x)` to walk
+         * through any chain of pass-style promises, native Promises, and
+         * HandledPromises until a non-promise Passable is reached, then
+         * invokes `res`/`rej`. For a native promise this is observably
+         * equivalent to `HandledPromise.resolve(x).then(res, rej)`; for a
+         * pass-style promise carrier it bridges to the carrier's
+         * subscriber notification (no implicit `await` synchronization,
+         * by construction).
          *
          * @template T
          * @template [U = T]
-         * @param {T|PromiseLike<T>} x value to convert to a handled promise
+         * @param {T|PromiseLike<T>} x value whose settlement to await
          * @param {(value: T) => ERef<U>} [onfulfilled]
          * @param {(reason: any) => ERef<U>} [onrejected]
          * @returns {Promise<U>}
          * @readonly
          */
         when: (x, onfulfilled, onrejected) =>
-          HandledPromise.resolve(x).then(
+          HandledPromise.settle(x).then(
             ...trackTurns([onfulfilled, onrejected]),
           ),
       },

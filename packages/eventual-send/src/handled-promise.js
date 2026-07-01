@@ -9,6 +9,11 @@ import {
   getMethodNames,
 } from './local.js';
 import { makePostponedHandler } from './postponed.js';
+import {
+  isPassStylePromiseShape,
+  isThenable,
+  subscribePassStylePromise,
+} from './pass-style-promise.js';
 
 const { Fail, details: X, quote: q, note: annotateError } = assert;
 
@@ -433,6 +438,15 @@ export const makeHandledPromise = () => {
       handle(target, 'applyMethodSendOnly', [prop, args]).catch(() => {});
     },
     resolve(value) {
+      // A pass-style promise carrier is an opaque, non-thenable token.
+      // Bridge into the subscription system: the returned native Promise
+      // walks the chain of pass-style/native promises down to the eventual
+      // ground value, which is what subsequent `.then(...)`-based dispatch
+      // (e.g., `E(x).method()` going through `handle`) needs.
+      if (isPassStylePromiseShape(value)) {
+        // eslint-disable-next-line no-use-before-define
+        return harden(HandledPromise.settle(value));
+      }
       // Resolving a Presence returns the pre-registered handled promise.
       let resolvedPromise = presenceToPromise.get(/** @type {any} */ (value));
       if (!resolvedPromise) {
@@ -452,6 +466,95 @@ export const makeHandledPromise = () => {
         resolvedPromise.then(resolve, reject);
       return harden(
         Promise.resolve().then(() => new HandledPromise(executeThen)),
+      );
+    },
+    /**
+     * Fire-once callback-based primitive that observes the eventual
+     * settlement of `x`. The `onFulfilled` callback receives the
+     * settlement target as its only argument; the optional `onRejected`
+     * callback receives the rejection reason.
+     *
+     * Behavior by argument shape:
+     *
+     * - A native (or HandledPromise) thenable: `subscribe` is equivalent
+     *   to `x.then(onFulfilled, onRejected)`, except that the return value
+     *   is `undefined` (subscribe does not chain).
+     * - A pass-style promise carrier (the non-thenable token from
+     *   `@endo/pass-style`'s `makePromise()`): the subscriber is
+     *   registered with the carrier's producer (via this package's
+     *   internal registry). When the producer settles via the kit's
+     *   `settle`/`reject` (or via a host-driven external settle channel),
+     *   subscribers fire on the next turn.
+     * - Any other passable: `onFulfilled(x)` fires on the next turn,
+     *   delivering the value verbatim.
+     *
+     * @param {any} x
+     * @param {(target: any) => void} onFulfilled
+     * @param {(reason: any) => void} [onRejected]
+     */
+    subscribe(x, onFulfilled, onRejected) {
+      typeof onFulfilled === 'function' ||
+        Fail`subscribe onFulfilled must be a function`;
+      const reject =
+        typeof onRejected === 'function'
+          ? onRejected
+          : reason => {
+              // Default rejection handler defers to the host's
+              // unhandled-rejection path on the next turn.
+              Promise.resolve().then(() => {
+                throw reason;
+              });
+            };
+      if (isPassStylePromiseShape(x)) {
+        subscribePassStylePromise(x, onFulfilled, reject);
+        return;
+      }
+      if (isThenable(x)) {
+        // Native Promise (or HandledPromise) -- delegate to .then.
+        // Wrap in a Promise.resolve().then to guarantee a future-turn
+        // notification (mirroring pass-style subscribe semantics).
+        Promise.resolve(x).then(onFulfilled, reject);
+        return;
+      }
+      // Not a promise -- deliver verbatim on the next turn.
+      Promise.resolve().then(() => onFulfilled(x));
+    },
+    /**
+     * Returns a native Promise that fulfills with the eventual settlement
+     * value (or rejects with the eventual rejection reason) of `x`,
+     * recursively walking through chains of pass-style promises, native
+     * Promises, and HandledPromises until a non-promise Passable is
+     * reached.
+     *
+     * Layered on `subscribe`: each hop in the chain re-subscribes to
+     * the next link. For a native promise, this collapses to
+     * `Promise.resolve(p)` semantics. For a non-promise passable, the
+     * returned Promise fulfills with the value on the next turn.
+     *
+     * @template T
+     * @param {T} x
+     * @returns {Promise<Awaited<T>>}
+     */
+    settle(x) {
+      return /** @type {Promise<Awaited<T>>} */ (
+        new Promise((resolve, reject) => {
+          /**
+           * Recursive: each call re-subscribes if the target is itself
+           * another promise or pass-style carrier.
+           *
+           * @param {any} target
+           */
+          const onFulfilled = target => {
+            if (isPassStylePromiseShape(target) || isThenable(target)) {
+              // eslint-disable-next-line no-use-before-define
+              HandledPromise.subscribe(target, onFulfilled, reject);
+              return;
+            }
+            resolve(target);
+          };
+          // eslint-disable-next-line no-use-before-define
+          HandledPromise.subscribe(x, onFulfilled, reject);
+        })
       );
     },
   };
@@ -543,6 +646,13 @@ export const makeHandledPromise = () => {
           if (pendingHandler) {
             // resolve to the answer from the specific pending handler,
             win('pendingHandler', pendingHandler, p);
+          } else if (isPassStylePromiseShape(p)) {
+            // Pass-style promise carrier: skip the synchronous-target
+            // optimization and wait for the resolve(p) → settle()
+            // contestant above to walk the chain to the eventual target.
+            // The carrier has no `then` so the next branch would have
+            // dispatched it as a presence (incorrect: messages must wait
+            // for settlement to find the real recipient).
           } else if (!p || typeof p.then !== 'function') {
             // Not a Thenable, so use it.
             win('forwardingHandler', forwardingHandler, p);
@@ -639,6 +749,8 @@ export const makeHandledPromise = () => {
  *   applyMethodSendOnly(target: unknown, prop: PropertyKey, args: unknown[]): void;
  *   get(target: unknown, prop: PropertyKey): Promise<unknown>;
  *   getSendOnly(target: unknown, prop: PropertyKey): void;
+ *   subscribe(x: unknown, onFulfilled: (target: any) => void, onRejected?: (reason: any) => void): void;
+ *   settle<T>(x: T): Promise<Awaited<T>>;
  * }} HandledPromiseStaticMethods
  */
 
