@@ -92,7 +92,7 @@ import { makeDistTrust } from './dist-trust.mjs';
 import { makeBlossom } from './blossom.mjs';
 import * as projects from './projects.mjs';
 import { makeMeetingScribe } from './meeting-scribe.mjs';
-import { opusComplete } from './delegate.mjs';
+import { opusComplete, composeDelegateProposal } from './delegate.mjs';
 import { runReviewPanel } from './review-panel.mjs';
 import { postInternal, listInternal } from './internal-messages.mjs';
 import { reviseToConverge } from './revise-loop.mjs';
@@ -2066,7 +2066,8 @@ const handler = async (req, res) => {
         isFilenameTitle(title) ? deriveTitle(t) : Promise.resolve(String(title).trim()),
         genSubAgentPrompt(t, proposals, powers),
       ]);
-      const agentMsg = proposals + (powers.length ? `\n\n— To act on this, I can spin up an attenuated agent with: ${powers.join(', ')}. Approve it from this chat.` : '');
+      const _prop = composeDelegateProposal({ proposals, powers, callerPowers: node && node.powers });
+      const agentMsg = _prop.message;
       const tr = { answer: agentMsg, toolsUsed: [], steps: [], proposedPowers: powers, proposedPrompt };
       notify({ title: '🎙 Voice note → proposed actions', message: proposals.slice(0, 180), click: `${WEB_URL}/#chat=${id}`, tags: ['memo'] }).catch(e => log('ingest push', e.message));
       const now = new Date().toISOString();
@@ -2093,7 +2094,8 @@ const handler = async (req, res) => {
       if (!seed || !seed.transcript) return json(res, 404, { error: 'no such ingested chat' });
       const { proposals, powers } = await ingestPropose(seed.transcript);
       const proposedPrompt = await genSubAgentPrompt(seed.transcript, proposals, powers);
-      const agentMsg = proposals + (powers.length ? `\n\n— To act on this, I can spin up an attenuated agent with: ${powers.join(', ')}. Approve it from this chat.` : '');
+      const _prop = composeDelegateProposal({ proposals, powers, callerPowers: node && node.powers });
+      const agentMsg = _prop.message;
       const tr = { answer: agentMsg, toolsUsed: [], steps: [], proposedPowers: powers, proposedPrompt };
       seed.versions = seed.versions || [];
       const v = seed.versions.length;
