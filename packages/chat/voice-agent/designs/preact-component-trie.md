@@ -1,13 +1,15 @@
 # Extensible UI: a trie of confined Preact component-projects
 
 Source: dan's voice note 2026-06-19 (`vault/inbox/processed/Extensible UI via Preact Confinement and Git Objects.md`).
-Status: **ALL 5 PHASES COMPLETE (2026-06-25), flag-gated behind `FIELD_LOCKDOWN` (off in prod).**
+Status: **ALL 5 PHASES COMPLETE (2026-06-25) — and LIVE: `FIELD_LOCKDOWN=1` is ON in prod**
+(drop-in `~/.config/systemd/user/voice-agent.service.d/lockdown.conf`, gated by the heavy-panel
+smoke; reversible by removing that file + daemon-reload + restart).
 P1 keystone (confineComponent inline, no iframe) + P2 grain/git-object + P3 alt-click on live forks +
 P4 sharing/upgrades (pin/try-on/accept/auto + inbox) + P5 distribution-trust (social-collateral gate).
 Proven by staging suites: `test:lockdown` 13/13, `test:forks` 14/14, `test:fork-widget` 10/10,
 `test:alt-fork` 5/5, `test:fork-upgrade` 10/10, `test:fork-distribution` 13/13 + unit forks 10/10,
-dist-trust 7/7. **Flipping `FIELD_LOCKDOWN=1` live is dan's call** (operator-app blast radius; reversible;
-needs a heavy-panel frozen-realm smoke first). Next big project: `islands-as-objects-inventory.md`.
+dist-trust 7/7 — and re-verified against the LIVE :8778 service under lockdown (boot, confined fork
+render, alt-click chip; 2026-07-01). Next big project: `islands-as-objects-inventory.md`.
 
 ## The one-sentence vision
 
@@ -147,8 +149,9 @@ Implications that change the phases below:
   `renderConfined`; real slices ported. ✅ **`confineComponent` (untrusted SOURCE → confined,
   inline, NO iframe) is now wired + proven**: `client/confined-source.js`
   (`makeConfinedFromSource`) + `__fieldIslands.renderSource`, which REFUSES unless the realm is
-  locked down. Severe-taming lockdown is **flag-gated** behind the server's `FIELD_LOCKDOWN` env
-  (OFF in production → zero change to the live realm; the strict CSP stays). When ON, the server
+  locked down. Severe-taming lockdown is **flag-gated** behind the server's `FIELD_LOCKDOWN` env —
+  **now ON in production** (the `lockdown.conf` drop-in; with it off, zero change to the live realm
+  and the strict CSP stays). When ON, the server
   serves the shell with `<html data-field-lockdown="1">` (islands.js reads it → `lockdown({
   overrideTaming:'severe' })` before app.js) AND widens the shell CSP to `script-src 'unsafe-eval'`.
   - **CSP gotcha (load-bearing, do not regress):** SES's `tameFunctionConstructors` REQUIRES
@@ -160,9 +163,10 @@ Implications that change the phases below:
     (vite/rollup break the taming) — the page loads the standalone compartment-mapper build
     `public/ses.umd.min.js` first; rebuild via `yarn build:ses-shim`.
   - Proven end-to-end against the real server by `lockdown-survive.staging.test.cjs`
-    (`yarn test:lockdown`, 12/12): app.js boots in the frozen realm, built-in islands + untrusted
-    forks render inline, a malicious fork's Function escape THROWS, and the live-default path refuses
-    untrusted source. **Flipping `FIELD_LOCKDOWN=1` live is dan's call** (it's the operator app).
+    (`yarn test:lockdown`, 13/13): app.js boots in the frozen realm, built-in islands + untrusted
+    forks render inline, a malicious fork's Function escape THROWS, and the flag-off path refuses
+    untrusted source. dan made the live call: **`FIELD_LOCKDOWN=1` shipped to the live service**
+    (systemd drop-in `lockdown.conf`), re-proven against :8778 itself 2026-07-01.
 - **Phase 2 — the grain layer + component = git object (DONE).** ✅ The
   cell/propagator substrate (`client/propagator.js`) and the **TMS grain**
   (`makeTmsCell`) — proven 15/15. ✅ **component = git-as-Endo object**
@@ -173,20 +177,37 @@ Implications that change the phases below:
   an earlier tree; history preserved) — proven 11/11. Wired into the tool lifecycle:
   a version is committed on admit; `/components/{history,read,revert}` (root) +
   `componentHistory`/`revertComponent` agent verbs; revert updates the live tool via
-  `customTools.setSource`. Remaining for later: the full `makeGit` exo wrapper (a
-  remotable, attenuable EndoGit cap for the trie, needs a daemon mount) and binding a
-  component's persisted DATA to grains so a runtime source-swap keeps the grains.
-- **Phase 3 — per-component edit agent (CORE DONE) + alt-click selection (remaining).**
+  `customTools.setSource`. ✅ The full **`makeGit` exo wrapper now exists too**
+  (`component-git.mjs` `gitObject(id)`): the remotable, attenuable EndoGit cap over a
+  lazily-built daemon mount — `filesystemAt(ref)` read-a-version-as-a-folder,
+  `worktree()` writable authoring + `add`/`commit`, `readOnly()` attenuation, plus the
+  file-granular `writeFile()` on top of it. Still open: binding a component's persisted
+  DATA to grains so a runtime source-swap keeps the grains (partial today — grain data
+  survives some paths, not all).
+- **Phase 3 — per-component edit agent (DONE) + alt-click selection (DONE).**
   ✅ The Component Studio (root "Components" tab): every admitted component shows its
   source version history + live grain data, with **✎ edit** (a confined agent edits
   ONLY that component's source → a new version, applied live), **fork**, and **revert**.
-  The edit agent is `editComponentSource` (`/components/edit`); it's scoped to the one
-  component's `make(powers)` source and its output runs the discipline panel. A seeded
-  `demo-counter` makes it tryable out of the box. REMAINING: the **Alt/Option-click
-  selection overlay** on *live rendered* UI — that needs UI components to BE mounted
-  registry component-projects (the full mounted trie), so an element carries its
-  component id; until UI islands are registry-backed, selection has nothing to target.
-  That (and binding the dev flow to fork→adversarial-review→diff) is the next trie step.
+  The edit agent is `editComponentSource` (`/components/edit`); the conversational loop
+  is `/components/edit-chat` (a real scoped agent: read source → clarify → edit, modal
+  chat via `openComponentEditChat`); both are scoped to the one component's source and
+  their output runs the discipline panel. A seeded `demo-counter` makes it tryable out
+  of the box. ✅ The **Alt/Option-click selection overlay** is BUILT + TESTED
+  (`componentSelect()` in `public/app.js`): hold Alt → hover outlines any element
+  carrying a component identity (`[data-component-id]`, `.gw-component`, or a live
+  mounted fork's `[data-fork-id]` — confined iframes go pointer-transparent while Alt
+  is held so the owner's gesture lands); click → a chip offers ✎ edit / ⑂|🍴 fork, and
+  an id-less inline chat component is broken out into a project object on first edit.
+  Proven by `test:component-select` 10/10 + `test:alt-fork` 5/5, live under
+  `FIELD_LOCKDOWN=1`. What IS still open here:
+  - **most app chrome is not registry-backed** — selection only targets elements that
+    carry a component identity (in-chat components, forks, Studio entries); the rest of
+    the shell isn't a mounted component-project yet, so it isn't alt-selectable. That
+    decomposition (the full mounted trie) is its own future workstream.
+  - **forks use the one-shot `/forks/edit`**, not the conversational agent loop that
+    components get via `/components/edit-chat` (P2-for-forks).
+  - **grain-data persistence across a source-swap is partial** (see Phase 2).
+  - binding the dev flow to fork→adversarial-review→diff.
 - **Phase 4 — sharing & upgrades.** Invite-carries-inbox; atomic accept/reject/
   auto upgrades; non-destructive try-on review; upstream/downstream element
   sharing; trust flags in invites → notifications feed.
