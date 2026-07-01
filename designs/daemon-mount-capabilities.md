@@ -521,7 +521,7 @@ Phase 5 import sites that touch both must disambiguate at the import
 keyword, typically as:
 
 ```js
-import { DirectoryInterface as PlatformDirectoryInterface } from '@endo/platform/fs';
+import { DirectoryInterface as PlatformDirectoryInterface } from '@endo/platform/fs.js';
 import { DirectoryInterface as EndoDirectoryInterface } from './interfaces.js';
 ```
 

@@ -30,11 +30,11 @@ import {
   renderConfined,
   unmount,
   HostPassthrough,
-} from '@endo/preact-container/renderer';
+} from '@endo/preact-container/renderer.js';
 import {
   confineComponent,
   isConfinedComponent,
-} from '@endo/preact-container/compartment';
+} from '@endo/preact-container/compartment.js';
 ```
 
 ## Provenance

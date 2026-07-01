@@ -15,7 +15,7 @@ import { mapReader } from '@endo/stream';
 import {
   ReadableBlobRangeInterface,
   ReadableTreeInterface,
-} from '@endo/platform/fs/lite';
+} from '@endo/platform/fs/lite.js';
 import { toSafeNumber } from '@endo/platform/fs/extended/shared/helpers.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';

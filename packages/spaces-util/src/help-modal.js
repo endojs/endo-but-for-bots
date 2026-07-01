@@ -6,7 +6,7 @@ import harden from '@endo/harden';
 /** @import { CommandDefinition } from './command-registry.js' */
 
 import { Fragment, h } from 'preact';
-import { renderConfined } from '@endo/preact-container/renderer';
+import { renderConfined } from '@endo/preact-container/renderer.js';
 
 import {
   getCategories,

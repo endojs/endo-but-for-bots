@@ -13,8 +13,10 @@ module.exports = {
   },
   rules: {
     'import/extensions': ['error', 'always', { ignorePackages: true }],
-    // Mirror `import/extensions` on the JSDoc `@import` surface: relative
-    // specifiers must carry a file extension; bare packages are exempt.
+    // Extend the extension policy to the JSDoc `@import` surface, which neither
+    // `import/extensions` nor `import/no-unresolved` parses: relative specifiers
+    // must carry a file extension, and `@endo/*` subpaths must carry `.js` when
+    // the target package's exports map only offers the `.js`-suffixed key.
     '@endo/jsdoc-import-extensions': 'error',
     'import/no-extraneous-dependencies': [
       'error',

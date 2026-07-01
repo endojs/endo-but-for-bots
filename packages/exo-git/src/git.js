@@ -7,7 +7,7 @@ import { makeExo } from '@endo/exo';
 import {
   readOnly as readOnlyFs,
   wrapBackend,
-} from '@endo/platform/fs/extended';
+} from '@endo/platform/fs/extended.js';
 
 import { makeGitFsBackend } from './git-filesystem.js';
 import { GitInterface } from './interfaces.js';

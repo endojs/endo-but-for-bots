@@ -74,7 +74,7 @@ Code mode is just an agent whose one tool is `execute`. `makeCodeModeAgent` is
 the code-mode preset of `defineAgent`:
 
 ```js
-import { makeCodeModeAgent } from '@endo/agentry/execute';
+import { makeCodeModeAgent } from '@endo/agentry/execute.js';
 
 const { agent } = makeCodeModeAgent({
   model,

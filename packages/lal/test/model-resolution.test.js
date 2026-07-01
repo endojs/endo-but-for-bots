@@ -1,5 +1,5 @@
 import test from '@endo/ses-ava/prepare-endo.js';
-import { makeEnvCredentials } from '@endo/agentry/harness';
+import { makeEnvCredentials } from '@endo/agentry/harness.js';
 
 import { makeWorkerGetApiKey } from '../model-resolution.js';
 

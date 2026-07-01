@@ -6,7 +6,7 @@ import '@endo/init/debug.js';
 
 import test from 'ava';
 import { h } from 'preact';
-import { renderConfined } from '@endo/preact-container/renderer';
+import { renderConfined } from '@endo/preact-container/renderer.js';
 import { FormulaView, humanizeName } from '@endo/spaces-util/formula-view.js';
 
 import { createDOM, tick } from '../helpers/dom-setup.js';

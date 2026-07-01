@@ -7,7 +7,7 @@
 
 import { createMonacoEditor } from '@endo/monaco-wrapper';
 import { h } from 'preact';
-import { renderConfined, unmount } from '@endo/preact-container/renderer';
+import { renderConfined, unmount } from '@endo/preact-container/renderer.js';
 import { petNamePathAutocomplete } from './petname-path-autocomplete.js';
 import { keyCombo, modKey } from './platform-keys.js';
 import { resolveErrorTrace, watchErrorTrace } from './error-trace.js';

@@ -2088,7 +2088,7 @@ export type DaemonicPersistencePowers = {
   initializePersistence: () => Promise<void>;
   provideRootNonce: () => Promise<RootNonceDescriptor>;
   provideRootKeypair: () => Promise<RootKeypairDescriptor>;
-  makeContentStore: () => import('@endo/platform/fs/lite/types').SnapshotStore;
+  makeContentStore: () => import('@endo/platform/fs/lite/types.js').SnapshotStore;
   readFormula: (
     formulaNumber: FormulaNumber,
   ) => Promise<{ node: string; formula: Formula }>;

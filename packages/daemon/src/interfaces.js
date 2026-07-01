@@ -10,7 +10,7 @@ import {
   directoryFileMethodGuards,
   rangeReadMethodGuards,
   getInfoMethodGuard,
-} from '@endo/platform/fs/lite';
+} from '@endo/platform/fs/lite.js';
 import {
   NamePathShape,
   NameOrPathShape,

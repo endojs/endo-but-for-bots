@@ -1,6 +1,6 @@
 // @ts-check
 
-import { makeSnapshotStore } from '@endo/platform/fs/lite';
+import { makeSnapshotStore } from '@endo/platform/fs/lite.js';
 
 /**
  * Minimal in-memory `SnapshotStore` for unit tests over `makeMount`.
@@ -10,13 +10,13 @@ import { makeSnapshotStore } from '@endo/platform/fs/lite';
  * content store.  Blob identity is derived from content so the same
  * bytes always stamp the same id.
  *
- * @returns {import('@endo/platform/fs/lite/types').SnapshotStore}
+ * @returns {import('@endo/platform/fs/lite/types.js').SnapshotStore}
  */
 export const makeMemoryStore = () => {
   /** @type {Map<string, Uint8Array>} */
   const blobs = new Map();
 
-  /** @type {import('@endo/platform/fs/lite/types').ContentStore} */
+  /** @type {import('@endo/platform/fs/lite/types.js').ContentStore} */
   const contentStore = harden({
     async store(readable) {
       const chunks = [];

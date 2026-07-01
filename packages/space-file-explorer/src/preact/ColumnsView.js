@@ -5,7 +5,7 @@ import { useState } from 'preact/hooks';
 import { EntryRow } from './EntryRow.js';
 
 /** @import { BrowserColumn, DirEntry, SelectedFile, FileExplorerActions } from './types.js' */
-/** @import { SafeDataTransfer } from '@endo/preact-container/renderer' */
+/** @import { SafeDataTransfer } from '@endo/preact-container/renderer.js' */
 
 // Path equality key (mirrors file-explorer.js `pathKey`); a pure presentational
 // helper, no authority.

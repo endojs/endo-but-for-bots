@@ -17,7 +17,7 @@
 
 import { mustMatch } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
-import { toolResultToSmallcaps, smallcapsMarshal } from '@endo/agentry/harness';
+import { toolResultToSmallcaps, smallcapsMarshal } from '@endo/agentry/harness.js';
 
 import { tools } from './tools/index.js';
 

@@ -4,7 +4,7 @@ import harden from '@endo/harden';
 
 import { h } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import { renderConfined } from '@endo/preact-container/renderer';
+import { renderConfined } from '@endo/preact-container/renderer.js';
 
 // Message picker, migrated from imperative DOM to a confined Preact component
 // rendered through a single `renderConfined`.

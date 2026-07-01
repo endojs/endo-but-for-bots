@@ -7,7 +7,7 @@ import { E } from '@endo/eventual-send';
 /** @import { ChannelMessage } from './channel-utils.js' */
 
 import { Fragment, h } from 'preact';
-import { renderConfined } from '@endo/preact-container/renderer';
+import { renderConfined } from '@endo/preact-container/renderer.js';
 
 /**
  * @typedef {object} ShareTarget

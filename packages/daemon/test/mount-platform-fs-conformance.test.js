@@ -20,7 +20,7 @@ import {
   FileInterface as PlatformFileInterface,
   ReadableTreeInterface,
   checkinTree,
-} from '@endo/platform/fs/lite';
+} from '@endo/platform/fs/lite.js';
 
 import { makeFilePowers } from '../src/daemon-node-powers.js';
 import { makeXsFilePowers } from '../src/bus-daemon-rust-xs-powers.js';

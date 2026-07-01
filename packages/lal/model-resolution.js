@@ -27,9 +27,9 @@ import {
   makeEnvCredentials,
   resolveModelString,
   resolveModel,
-} from '@endo/agentry/harness';
+} from '@endo/agentry/harness.js';
 
-/** @import { Credentials, GetApiKey } from '@endo/agentry/harness' */
+/** @import { Credentials, GetApiKey } from '@endo/agentry/harness.js' */
 
 export { resolveModelString, resolveModel };
 

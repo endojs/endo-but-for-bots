@@ -19,7 +19,7 @@ import harden from '@endo/harden';
 
 import { h } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import { renderConfined, unmount } from '@endo/preact-container/renderer';
+import { renderConfined, unmount } from '@endo/preact-container/renderer.js';
 import { tokenAutocompleteComponent } from './token-autocomplete.js';
 import { lookupPath } from './name-hub.js';
 

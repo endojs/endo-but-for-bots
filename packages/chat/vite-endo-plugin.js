@@ -7,7 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 
-import { systemCapture } from '@endo/platform/proc';
+import { systemCapture } from '@endo/platform/proc.js';
 import { whereEndoState } from '@endo/where';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));

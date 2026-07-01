@@ -1,5 +1,5 @@
 /**
- * Hand-written declarations covering the public exports `@endo/platform/fs/extended`
+ * Hand-written declarations covering the public exports `@endo/platform/fs/extended.js`
  * consumers reach for.  The package's runtime is JavaScript with
  * `@ts-check` JSDoc, but it does not have its own `tsc` emission
  * pipeline; without a `types` entrypoint, downstream packages whose
@@ -24,7 +24,7 @@
 // Mirror of `@endo/exo/exo-makers.js`'s `Exo` placeholder; declared
 // here so downstream consumers don't need to depend on that package
 // transitively just for the shape.
-declare module '@endo/platform/fs/extended' {
+declare module '@endo/platform/fs/extended.js' {
   export type ERef<T> = T | PromiseLike<T>;
 
   export interface Filesystem {

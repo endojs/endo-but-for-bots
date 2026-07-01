@@ -6,7 +6,7 @@
 
 import harden from '@endo/harden';
 
-import { Fragment, h, renderConfined } from '@endo/preact-container/renderer';
+import { Fragment, h, renderConfined } from '@endo/preact-container/renderer.js';
 import { useEffect, useState } from 'preact/hooks';
 
 import { lookupPath } from './name-hub.js';

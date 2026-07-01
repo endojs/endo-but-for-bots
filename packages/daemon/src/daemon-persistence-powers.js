@@ -20,7 +20,7 @@
  */
 
 import harden from '@endo/harden';
-import { makeSnapshotStore } from '@endo/platform/fs/lite';
+import { makeSnapshotStore } from '@endo/platform/fs/lite.js';
 
 import { toHex, fromHex } from './hex.js';
 
@@ -122,7 +122,7 @@ export const makeDaemonicPersistencePowers = (
     const { statePath } = config;
     const storageDirectoryPath = filePowers.joinPath(statePath, 'store-sha256');
 
-    /** @type {import('@endo/platform/fs/lite/types').ContentStore} */
+    /** @type {import('@endo/platform/fs/lite/types.js').ContentStore} */
     const rawStore = harden({
       /**
        * @param {AsyncIterable<Uint8Array> | AsyncIterator<Uint8Array>} readableOrIterator

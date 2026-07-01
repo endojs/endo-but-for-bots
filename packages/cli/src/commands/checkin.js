@@ -4,7 +4,7 @@ import path from 'path';
 import os from 'os';
 
 import { E } from '@endo/eventual-send';
-import { makeLocalTree } from '@endo/platform/fs/node';
+import { makeLocalTree } from '@endo/platform/fs/node.js';
 
 import { withEndoAgent } from '../context.js';
 import { parsePetNamePath } from '../pet-name.js';

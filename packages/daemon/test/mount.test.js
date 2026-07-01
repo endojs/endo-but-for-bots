@@ -14,7 +14,7 @@ import { M } from '@endo/patterns';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
-import { checkinTree } from '@endo/platform/fs/lite';
+import { checkinTree } from '@endo/platform/fs/lite.js';
 
 import { makeFilePowers } from '../src/daemon-node-powers.js';
 import { makeMount } from '../src/mount.js';

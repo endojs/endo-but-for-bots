@@ -21,7 +21,7 @@ import { mapReader } from '@endo/stream';
 // range-I/O surface (`getInfo` / `fetch`), so a remote reader of a git tree can
 // learn a blob's content hash + size in one round-trip and read byte ranges.
 // See designs/fs-interface-consolidation.md § C4.
-import { ReadableBlobRangeInterface } from '@endo/platform/fs/lite';
+import { ReadableBlobRangeInterface } from '@endo/platform/fs/lite.js';
 import { toSafeNumber } from '@endo/platform/fs/extended/shared/helpers.js';
 import { GitTreeInterface } from '@endo/exo-git';
 

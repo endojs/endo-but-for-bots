@@ -4,7 +4,7 @@ import harden from '@endo/harden';
 
 import { h } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import { renderConfined, unmount } from '@endo/preact-container/renderer';
+import { renderConfined, unmount } from '@endo/preact-container/renderer.js';
 
 // Inline define input, migrated from imperative `innerHTML` DOM to a confined
 // Preact component rendered through a single `renderConfined`. The exported
