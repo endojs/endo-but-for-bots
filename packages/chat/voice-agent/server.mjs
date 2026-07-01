@@ -1665,7 +1665,7 @@ const handler = async (req, res) => {
         lastCtx.set(sid, { at: Date.now(), agent: agentLabel, model: String(model || 'default'), powers: [...runNode.powers], messages: [
           { role: 'system', content: sysText.slice(0, 24000) },
           ...history.map(h => ({ role: h.role, content: String(h.content).slice(0, 8000) })),
-          { role: 'user', content: String(t).slice(0, 8000) },
+          { role: 'user', content: String(compErrNote + t).slice(0, 8000) }, // incl. injected render feedback — the truth of what the model sees
         ] });
       } catch { /* best-effort */ }
       const TURN_DEADLINE_MS = Number(process.env.TURN_DEADLINE_MS) || 360000; // hard per-turn limit → a LEGIBLE timeout, never a silent stall (the crowdsupply hang)
