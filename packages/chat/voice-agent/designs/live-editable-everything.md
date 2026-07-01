@@ -159,3 +159,42 @@ component instead of `window.prompt`. Each message → the component's edit endp
 the exchange (you → "make the header teal"; agent → "✓ updated — v3 · review: none. Applied live.")
 and re-renders the live component. The felt unlock: editing a component is a conversation with its
 agent.
+
+## The backlog facet (shipped): every project object carries its own backlog
+
+dan's rule, now structural: **an island/component project object includes a BACKLOG. Creating a
+component implicitly endows the creator with the right to add to and receive requests on its
+backlog** — issue requests, errors thrown, and things. No separate cap is minted and no string is
+namable: the backlog is keyed by the object's git identity (the same `uicomp-…`/`fork-…` id its
+owner already designates it by), and every backlog verb is gated by exactly the ownership check
+that object's other routes use. Authorship IS the endowment (the endowment-moment rule — no extra
+prompt); the empty backlog exists from birth (`/components/break-out`, `/forks/create`, admit).
+
+Three facets, by construction (`component-backlog.mjs` + routes in `server.mjs`):
+
+- **Owner facet** (implicit, creator-held): read/list (`/forks/backlog`, `/components/backlog`),
+  ack/done (`…/backlog/ack`), file own items (`…/backlog/add`, `from: 'owner'`). The edit chat is
+  where it surfaces: both `edit-chat` routes inject the object's OPEN backlog into the editor
+  agent's context (`contextNote` — the same open view the cell serves), and hand the agent
+  `resolveBacklogItem` so fixing an item clears it in-conversation.
+- **Add-only facet** (attenuated, for recipients): holding a share/fork token grants exactly one
+  extra verb — `…/backlog/report` (token, no cap). It returns no backlog state, and the token can
+  neither list, ack, nor subscribe. `from` is an opaque sha256 prefix of the token, so the owner
+  sees *which share* filed without the token ever landing on disk or screen (cap-hygiene).
+- **Runtime feeder**: the render-feedback loop's error reports now carry the failing object's
+  identity (`forkId`/`componentId` — an id, never a cap), and `/error/flag` also files them onto
+  that object's backlog, validated against the real stores. Re-throws MERGE.
+
+**Propagator discipline, not ad-hoc push.** The store is the one source of truth; writes go through
+the verbs; each mutation is a lattice-ish merge (dedupe by kind+title, `count` as the monotonic
+join; bounded at 200 with resolved items evicted first) and pushes per-object subscribers.
+`cellFor(id)` vends the live-cells cell interface — push-fed by the store's own mutations, never a
+poll loop — and rides the existing `/cells/subscribe` broker as **`backlog:<id>`** (owner-only; the
+add-only facet gains no subscription). The alt-click edit chat FOLLOWS that cell: the ⚑ badge and
+open-item list update live when an error auto-files or a recipient reports, and a ✓ ack repaints
+via the cell push. One cell, two readers: the owner's UI and the edit-chat injection read the same
+open view.
+
+Proof: `test:backlog` (11/11 unit) + `test:component-backlog` (28/28 staging — create→empty,
+error auto-files + merges, add-only files + cannot read, injection carries both, cell pushes the
+ack live, ack clears, same shape for uicomp- components).
