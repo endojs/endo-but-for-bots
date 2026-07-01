@@ -1,19 +1,10 @@
-/**
- * @deprecated Import `E` from `@endo/eventual-send` directly. `@endo/far` is a
- * plain re-exporter (endojs/endo-but-for-bots#543): importing a name through it
- * rather than from the package that originally exports it is discouraged, and
- * this re-export is slated for removal in a future major version.
- */
-export { E } from '@endo/eventual-send';
-
-/**
- * @deprecated Import `Far`, `getInterfaceOf`, and `passStyleOf` from
- * `@endo/pass-style` directly. `@endo/far` is a plain re-exporter
- * (endojs/endo-but-for-bots#543): importing these names through it rather than
- * from the package that originally exports them is discouraged, and this
- * re-export is slated for removal in a future major version.
- */
-export { Far, getInterfaceOf, passStyleOf } from '@endo/pass-style';
+// `@endo/far` used to re-export names that originate in other packages, without
+// renaming them or adding value. Per endojs/endo-but-for-bots#543 those plain
+// re-exports have been removed; import each name directly from the package that
+// originally exports it:
+//   - `E`, and the `FarRef` / `ERef` / `EOnly` / `EReturn` / `EResult` types,
+//     from `@endo/eventual-send`
+//   - `Far`, `getInterfaceOf`, `passStyleOf` from `@endo/pass-style`
 
 // eslint-disable-next-line import/export
 export * from './exports.js';
