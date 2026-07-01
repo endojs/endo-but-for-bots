@@ -43,6 +43,7 @@ import { scanText, smellFeedback } from './render-guard.mjs';
 import { inpaint as inpaintGpu } from './gpu-inpaint.mjs';
 import { STARTER_RING } from './system-map.mjs';
 import { makeInvitePolicies } from './invite-policy.mjs';
+import { makeInviteAllowances } from './invite-allowance.mjs';
 import { makeBlueskyEligibility } from './bluesky-raindrop.mjs';
 import { makeBlueskyClaim } from './bluesky-claim.mjs';
 import { makeBlueskyOAuth } from './bluesky-oauth.mjs';
@@ -475,11 +476,8 @@ const purseStore = makePurseStore({ file: `${VOICE_STATE_DIR}/purses.json` });
 // at ZERO (not the per-chat default allowance); only an eligible claim funds it. Set once bluesky-claim exists.
 let blueskyIsNamespace = () => false;
 const BSKY_NAMESPACE_SID = '_namespace'; // the single shared wallet a Bluesky namespace's chats all draw from
-const purseFor = (cap, sid) => {
-  const ns = blueskyIsNamespace(cap); // a signed-in Bluesky user's namespace?
-  const realSid = ns ? BSKY_NAMESPACE_SID : sid; // share one wallet across all their chats
-  const seed = ns ? 0 : defaultAllowance; // zero until they claim; the claim credits this same wallet
-  const k = `${cap}:${realSid}`;
+// purseAt: the one durable-purse accessor (rehydrate from purseStore, persist every mutation).
+const purseAt = (k, seed) => {
   let p = chatPurses.get(k);
   if (!p) {
     const saved = purseStore.get(k); // {balance, granted} if this purse was ever persisted
@@ -488,6 +486,30 @@ const purseFor = (cap, sid) => {
     chatPurses.set(k, p);
   }
   return p;
+};
+// ── INVITE-CARRIED ALLOWANCE (User Agency): an invite can carry a µUSD usage-credit allowance. The
+// member's caps then share ONE zero-seeded wallet credited exactly what the OWNER's invite wallet was
+// debited (conservation — fund() there is root-gated, so members can't mint credit). purseFor routes it.
+const inviteAllowances = makeInviteAllowances({ file: `${VOICE_STATE_DIR}/invite-allowances.json` });
+const ROOT_WALLET_SEED = Number(process.env.ROOT_WALLET_UUSD) || 100_000_000; // $100 default; owner tops up via /wallet/fund
+const rootWallet = () => purseAt('wallet:root', ROOT_WALLET_SEED);
+// grantFromRootWallet(uusd) — the CONSERVED credit source for owner-issued invites: assert-then-charge the
+// owner's invite wallet; `deposit(scopedCap)` credits the new member's shared wallet once the cap exists.
+// (Two-phase, same contract as invite-policy's fundAllowance — a refusal leaves both ledgers untouched.)
+const grantFromRootWallet = uusd => {
+  const w = rootWallet();
+  const amt = Math.max(0, Math.round(Number(uusd) || 0));
+  if (!w.canAfford(amt)) return { ok: false, error: `your invite wallet can't cover $${(amt / 1e6).toFixed(2)} (only $${(w.balance() / 1e6).toFixed(2)} left) — top it up under Settings → Usage`, remaining: w.balance() };
+  w.debit(amt);
+  return { ok: true, deposit: scopedCap => { const wid = inviteAllowances.fund(scopedCap, amt); purseAt(`invite-wallet:${wid}`, 0).credit(amt); }, remaining: w.balance() };
+};
+const purseFor = (cap, sid) => {
+  const wid = inviteAllowances.walletIdFor(cap); // an allowance-funded invite (or a cap minted from one)?
+  if (wid) return purseAt(`invite-wallet:${wid}`, 0); // ONE shared wallet, zero-seeded — the invite's grant funded it
+  const ns = blueskyIsNamespace(cap); // a signed-in Bluesky user's namespace?
+  const realSid = ns ? BSKY_NAMESPACE_SID : sid; // share one wallet across all their chats
+  const seed = ns ? 0 : defaultAllowance; // zero until they claim; the claim credits this same wallet
+  return purseAt(`${cap}:${realSid}`, seed);
 };
 // Central toll-bridge for EDIT (AI-credit spend) + SAVE/HOST (storage×time) rights, used by the SPWA
 // self-editors. Same µUSD purse ledger as inference, in a separate `toll:<account>` namespace.
@@ -567,6 +589,9 @@ setInterval(() => { fireDueNudges().catch(e => log('nudge tick', e && e.message)
 const blueskyInvitePolicies = makeInvitePolicies({
   file: `${CONFIG_DIR}/bluesky-policies.json`,
   mintNamespaceCap: ({ powers, label }) => { const r = mintScopedCap({ powers, label }); return { swiss: r.swiss, powers: r.powers }; },
+  // a policy created with an allowanceUusd funds each new member from the OWNER's invite wallet (conserved);
+  // the existing Bluesky policies carry no allowance, so this hook is inert for them.
+  fundAllowance: ({ uusd }) => grantFromRootWallet(uusd),
 });
 const blueskyEligibility = makeBlueskyEligibility({ configFile: `${CONFIG_DIR}/bluesky-raindrop.json` });
 const blueskyClaimStore = {
@@ -1701,7 +1726,7 @@ const handler = async (req, res) => {
       if (r.llmError) { turnDone('llmError', String(r.llmError).slice(0, 120)); setRunResult(sid, { state: 'error', node: runNode, text: t, startedAt, doneAt: Date.now() }); return json(res, 200, { error: r.llmError, llmError: true, retryable: true }); }
       // prepaid allowance spent mid-turn → return a DETERMINISTIC exhausted signal (no model
       // call was made to produce it). The client renders a static Top-up / Abandon card.
-      if (r.exhausted) { turnDone('exhausted', `${steps.length} step(s)`); saveResume(sid, r.resumeFrom); const exPayload = { exhausted: true, answer: r.answer || '', remaining: purse.balance(), allowance: purse.granted() }; setRunResult(sid, { state: 'exhausted', node: runNode, text: t, result: exPayload, startedAt, doneAt: Date.now() }); return json(res, 200, exPayload); }
+      if (r.exhausted) { turnDone('exhausted', `${steps.length} step(s)`); saveResume(sid, r.resumeFrom); const exPayload = { exhausted: true, answer: r.answer || '', remaining: purse.balance(), allowance: purse.granted(), invited: !!inviteAllowances.walletIdFor(cap) }; setRunResult(sid, { state: 'exhausted', node: runNode, text: t, result: exPayload, startedAt, doneAt: Date.now() }); return json(res, 200, exPayload); }
       // history keeps the multimodal user content so a follow-up can still refer to the attached image.
       const next = [...history, { role: 'user', content: buildUserContent(t, agentAttachments) }, { role: 'assistant', content: r.answer }].slice(-12);
       sessions.set(sid, next);
@@ -2381,6 +2406,7 @@ const handler = async (req, res) => {
       const held = node.isRoot ? ALL_POWERS : [...node.powers]; // monotonic: subset of what the caller holds
       const granted = (Array.isArray(powers) ? powers : []).filter(p => held.includes(p));
       const out = mintScopedCap({ powers: granted, label: title || 'subchat' });
+      inviteAllowances.adopt(cap, out.swiss); // an allowance-funded member's sub-chat spends the member's wallet (no-op otherwise)
       return json(res, 200, { scopedCap: out.swiss, powers: out.powers, name: out.name });
     }
     if (req.method === 'POST' && u.pathname === '/scope/mint') {
@@ -2391,13 +2417,35 @@ const handler = async (req, res) => {
     }
     // INVITE a new user (Phase 1): mint a persisted, confined starter cap. Default ring = least-privilege
     // stateless/read-only tools + the `contact` back-channel; the invitee can `requestAccess` for more.
+    // `allowanceUusd` (optional, User Agency): the invite CARRIES a usage-credit allowance — the owner's
+    // invite wallet is DEBITED it (conservation; refuse when it can't cover) and the member's shared
+    // zero-seeded wallet is CREDITED it. When it runs dry the member tops up with THEIR OWN payment
+    // (Stripe / MetaMask delegation) — the exhaustion card is the storefront.
     if (req.method === 'POST' && u.pathname === '/invite') {
-      const { cap, powers, label } = await jsonBody(req);
+      const { cap, powers, label, allowanceUusd } = await jsonBody(req);
       if (!nodeFor(cap)?.isRoot) return json(res, 403, { error: 'inviting needs your root capability' });
       const STARTER = STARTER_RING; // least-privilege starter ring (single source: system-map.mjs)
       const ring = (Array.isArray(powers) && powers.length) ? powers.filter(p => ALL_POWERS.includes(p)) : STARTER;
+      const uusd = Math.max(0, Math.round(Number(allowanceUusd) || 0));
+      let grant = null;
+      if (uusd > 0) { grant = grantFromRootWallet(uusd); if (!grant.ok) return json(res, 402, { error: grant.error, walletRemaining: grant.remaining }); }
       const out = mintScopedCap({ powers: ring, label: label || 'guest' });
-      return json(res, 200, { scopedCap: out.swiss, powers: out.powers, starter: STARTER });
+      if (grant) { grant.deposit(out.swiss); log('invite:', `funded "${label || 'guest'}" with ${uusd}µUSD from the invite wallet (${grant.remaining}µUSD left)`); }
+      return json(res, 200, { scopedCap: out.swiss, powers: out.powers, starter: STARTER, allowanceUusd: uusd, walletRemaining: rootWallet().balance() });
+    }
+    // The owner's invite wallet — the CONSERVED source of invite-carried allowances. Root-gated: fund()
+    // is the only balance-increaser anywhere in the invite-credit economy (members top up by PAYING).
+    if (req.method === 'POST' && u.pathname === '/wallet/status') {
+      const { cap } = await jsonBody(req);
+      if (!nodeFor(cap)?.isRoot) return json(res, 403, { error: 'the invite wallet is the owner\'s' });
+      const w = rootWallet();
+      return json(res, 200, { ok: true, remaining: w.balance(), granted: w.granted(), invites: inviteAllowances.list().map(x => ({ label: x.label, granted: x.granted, members: x.members, createdAt: x.createdAt })) });
+    }
+    if (req.method === 'POST' && u.pathname === '/wallet/fund') {
+      const { cap, amount } = await jsonBody(req);
+      if (!nodeFor(cap)?.isRoot) return json(res, 403, { error: 'funding the invite wallet needs your root capability' });
+      const w = rootWallet(); w.credit(Math.max(0, Math.round(Number(amount) || 0)));
+      return json(res, 200, { ok: true, remaining: w.balance(), granted: w.granted() });
     }
     // BYO INFERENCE: any holder of a cap connects THEIR OWN anthropic/openrouter account (key → vault, never
     // echoed). Their turns then run on it, unmetered. /status never returns the key (only whether one is set).
