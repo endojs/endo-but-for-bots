@@ -32,6 +32,7 @@
     "test:render-guard": "node --test render-guard.test.mjs",
     "test:render-smell": "node render-smell.staging.test.cjs",
     "test:sidebar-subagents": "node sidebar-subagents.staging.test.cjs",
+    "test:pendant-subagents": "node pendant-subagents.staging.test.cjs",
     "test:blossom": "node --test blossom.test.mjs",
     "test:blossom-loop": "node blossom-loop.staging.test.cjs",
     "test:interactive-widget": "node interactive-widget.staging.test.cjs",

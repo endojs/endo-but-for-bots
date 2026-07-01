@@ -318,7 +318,7 @@ export const makePendant = canvas => {
     return nd.lifeline;
   };
   const promoteToAgent = nd => {
-    if (!nd || nd.lifeline || nd === root || !DELEGATE.has(nd.name) || nd.name === 'research') return; // research keeps its own live subtree viz
+    if (!nd || nd.lifeline || nd === root || !DELEGATE.has(nd.name)) return; // research/delegate/specialist/role all get their own hyper-octahedron tower
     const i = subAgents.length; subAgents.push(nd);
     const colX = (root ? root.group.position.x : 0) + 2.2 + 1.7 * i; // its own column, to the right of the root spine
     const colY = yOfNode(root, nd.tCall || t0); // start at the Y of when the delegation went out (its call time)
@@ -457,7 +457,7 @@ export const makePendant = canvas => {
     // a delegate/specialist/research/employ is a real agentic loop → promote it to its OWN hyper-octahedron
     // lifeline (own column + spine) so the trace reads as a 3D sequence diagram. promoteToAgent calls
     // relayoutChildren itself (descending the kids on the new spine); otherwise lay them under the parent.
-    if (parent !== root && DELEGATE.has(parent.name) && parent.name !== 'research' && !parent.lifeline) promoteToAgent(parent);
+    if (parent !== root && DELEGATE.has(parent.name) && !parent.lifeline) promoteToAgent(parent);
     else relayoutChildren(parent);
   };
 
@@ -528,6 +528,11 @@ export const makePendant = canvas => {
     if (!root) reset();
     const nd = addNode(name, root, level1, { detail: detail || '', call: call || '' }); nd.pending = true; pendingQ.push(nd);
     if (name === 'research') activeResearch = nd;
+    // A sub-agent (research / delegate / specialist / employed role) is its OWN agentic loop → give it its own
+    // stretched-octahedron tower the moment it STARTS, so its context grows over time and the tasks it engages
+    // in descend on its own spine (its children stream in beside the root — a live 3D sequence diagram). For
+    // research this is essential: its subtree streams via rnode, so toolDone never re-triggers the promotion.
+    if (DELEGATE.has(name)) promoteToAgent(nd);
     relayoutLevel1(); fit();
   };
   const toolDone = (name, ok, detail, children, call, result, granted) => {
@@ -769,5 +774,8 @@ export const makePendant = canvas => {
   const setRootPowers = () => {};
 
   return { reset, scopeBegin, toolStart, toolDone, rnode, childDone, applyFinal, finish, showSteps, resize, setVisible, setListen, setRootPowers,
+    // introspection for tests: how many sub-agents got promoted to their OWN tower (guards the "research/
+    // specialist/role each becomes a hyper-octahedron lifeline" behaviour against a silent regression).
+    stats: () => ({ nodes: nodes.length, subAgents: subAgents.length, subAgentNames: subAgents.map(n => n.name) }),
     dispose: () => { renderer.setAnimationLoop(null); document.removeEventListener('pointerdown', onDocPtr); clearScene(); if (tip) tip.remove(); if (modal) modal.remove(); renderer.dispose(); } };
 };

@@ -846,6 +846,8 @@ if (typeof location !== 'undefined' && /[?&]tracetest=1\b/.test(location.search)
   window.__traceGeometry = traceGeometry;
   // open the 3D pendant on synthetic steps (no LLM turn) so the hyper-octahedron body can be screenshotted.
   window.__openPendant = async (steps, fs) => { try { const p = await ensurePendant(); if (pendantWrap) { pendantWrap.classList.remove('hide'); if (fs) pendantWrap.classList.add('fs'); } p.setVisible(true); if (fs && p.resize) p.resize(); p.showSteps(Array.isArray(steps) ? steps : []); return true; } catch (e) { return String((e && e.message) || e); } };
+  // introspect how many sub-agents got promoted to their own tower (the sub-agent-lifeline regression guard).
+  window.__pendantStats = async () => { try { const p = await ensurePendant(); return p.stats ? p.stats() : null; } catch (e) { return String((e && e.message) || e); } };
 }
 // clicking an agent MESSAGE grows its reasoning signature (without clobbering links/controls/text-selection).
 const wireMsgTrace = (b, trace) => {
