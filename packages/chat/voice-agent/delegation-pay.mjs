@@ -20,6 +20,35 @@ const DELEG_STORE = process.env.DELEGATION_STORE || `${HOME}/.local/state/field-
 export const loadGatorCfg = () => { try { const c = JSON.parse(fs.readFileSync(GATOR_CFG, 'utf8')); return (c && c.chargeServerUrl && c.treasury) ? c : null; } catch { return null; } };
 export const gatorConfigured = () => !!loadGatorCfg();
 
+// Normalize an ERC-7715 grant into the {permissionsContext, delegationManager, accountMetadata}
+// triple the settlement service redeems with (ERC-7710). Accepts the RAW wallet PermissionResponse
+// ({context, signerMeta:{delegationManager}, dependencyInfo}) or an already-normalized object.
+// Returns null when there is no permissions context — the one shape a redeem can't work without
+// (this is what used to slip through: a raw wallet blob the charge-server couldn't redeem).
+export const normalizeGrant = d => {
+  const g = (Array.isArray(d) ? d[0] : d) || null;
+  if (!g || typeof g !== 'object') return null;
+  const permissionsContext = g.permissionsContext || g.context;
+  if (typeof permissionsContext !== 'string' || !/^0x[0-9a-fA-F]+$/.test(permissionsContext)) return null;
+  const delegationManager = g.delegationManager || (g.signerMeta && g.signerMeta.delegationManager) || null;
+  const accountMetadata = Array.isArray(g.accountMetadata) ? g.accountMetadata : (Array.isArray(g.dependencyInfo) ? g.dependencyInfo : []);
+  return { permissionsContext, delegationManager, accountMetadata };
+};
+
+// The public facts a client needs to BUILD a correct ERC-7715 request: the signer (the settlement
+// delegate that will redeem), the chain, and the wei-per-USD rate (so the client sizes periodAmount).
+// Cached per process; null when the rail is off or the charge-server is unreachable. No secrets.
+let cachedInfo = null;
+export const grantParams = async (fetchImpl = fetch) => {
+  const cfg = loadGatorCfg();
+  if (!cfg) return null;
+  try {
+    if (!cachedInfo) { cachedInfo = await (await fetchImpl(`${cfg.chargeServerUrl}/info`)).json(); }
+    if (!cachedInfo || !cachedInfo.delegate || !cachedInfo.chainId) { cachedInfo = null; return null; }
+    return { chainId: cachedInfo.chainId, signer: cachedInfo.delegate, chain: cachedInfo.chain || cfg.chain || '', weiPerUsd: (BigInt(cfg.weiPerUusd || '0') * 1000000n).toString() };
+  } catch { cachedInfo = null; return null; }
+};
+
 const load = () => { try { return JSON.parse(fs.readFileSync(DELEG_STORE, 'utf8')); } catch { return {}; } };
 const save = o => { try { fs.mkdirSync(path.dirname(DELEG_STORE), { recursive: true }); fs.writeFileSync(DELEG_STORE, JSON.stringify(o, null, 2), { mode: 0o600 }); } catch { /* best effort */ } };
 const keyFor = (cap, sid) => crypto.createHash('sha256').update(`${cap}:${sid}`).digest('hex'); // cap-hygiene: the swissnum is never stored raw

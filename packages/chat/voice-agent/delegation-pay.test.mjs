@@ -36,3 +36,22 @@ test('status never leaks the delegation/key — only terms + remaining', () => {
   assert.equal(JSON.stringify(st).includes('sig'), false);
   assert.ok('periodRemaining' in st && 'periodUusd' in st);
 });
+
+test('normalizeGrant: raw ERC-7715 wallet response → the redeemable triple; junk/old-fixtures → null', () => {
+  const raw = { context: '0xabc123', signerMeta: { delegationManager: '0x1111111111111111111111111111111111111111' }, dependencyInfo: [{ factory: '0xf', factoryData: '0xd' }] };
+  assert.deepEqual(dp.normalizeGrant(raw), { permissionsContext: '0xabc123', delegationManager: '0x1111111111111111111111111111111111111111', accountMetadata: [{ factory: '0xf', factoryData: '0xd' }] });
+  assert.deepEqual(dp.normalizeGrant([raw]), dp.normalizeGrant(raw), 'array-wrapped (the wallet returns a list)');
+  const norm = { permissionsContext: '0xff00', delegationManager: null, accountMetadata: [] };
+  assert.deepEqual(dp.normalizeGrant(norm), norm, 'already-normalized passes through');
+  // the shapes that used to slip through and then fail at charge time
+  for (const junk of [null, undefined, 'x', {}, { sig: 'mock' }, { context: '0xMOCKGRANT' }, { context: 'deadbeef' }]) {
+    assert.equal(dp.normalizeGrant(junk), null, `rejects ${JSON.stringify(junk)}`);
+  }
+});
+
+test('grantParams: null when the settlement service is unreachable; signer+chain+rate when up', async () => {
+  assert.equal(await dp.grantParams(async () => { throw new Error('down'); }), null, 'unreachable → null (client refuses the wallet round-trip)');
+  const info = { ok: true, delegate: '0x2222222222222222222222222222222222222222', chainId: '0xe705', chain: 'linea-sepolia' };
+  const gp = await dp.grantParams(async () => ({ json: async () => info }));
+  assert.deepEqual(gp, { chainId: '0xe705', signer: info.delegate, chain: 'linea-sepolia', weiPerUsd: '1000000000000' }, 'weiPerUsd = weiPerUusd × 1e6');
+});
