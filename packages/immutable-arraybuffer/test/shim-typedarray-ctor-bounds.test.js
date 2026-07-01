@@ -91,14 +91,17 @@ for (const { name, Ctor, bpe } of flavors) {
     },
   );
 
-  test(tName('byteOffset 0, explicit length 0 -> empty view at the start'), t => {
-    const iab = freshIab();
-    const view = new Ctor(iab, 0, 0);
-    assertWrapperInvariants(t, view, iab);
-    t.is(view.byteOffset, 0);
-    t.is(view.byteLength, 0);
-    t.is(view.length, 0);
-  });
+  test(
+    tName('byteOffset 0, explicit length 0 -> empty view at the start'),
+    t => {
+      const iab = freshIab();
+      const view = new Ctor(iab, 0, 0);
+      assertWrapperInvariants(t, view, iab);
+      t.is(view.byteOffset, 0);
+      t.is(view.byteLength, 0);
+      t.is(view.length, 0);
+    },
+  );
 
   test(
     tName('byteOffset 0, explicit length = max that fits -> full view'),
@@ -124,17 +127,14 @@ for (const { name, Ctor, bpe } of flavors) {
     },
   );
 
-  test(
-    tName('aligned mid-buffer byteOffset, explicit fitting length'),
-    t => {
-      const iab = freshIab();
-      const view = new Ctor(iab, midByteOffset, midExplicitLength);
-      assertWrapperInvariants(t, view, iab);
-      t.is(view.byteOffset, midByteOffset);
-      t.is(view.byteLength, midExplicitLength * bpe);
-      t.is(view.length, midExplicitLength);
-    },
-  );
+  test(tName('aligned mid-buffer byteOffset, explicit fitting length'), t => {
+    const iab = freshIab();
+    const view = new Ctor(iab, midByteOffset, midExplicitLength);
+    assertWrapperInvariants(t, view, iab);
+    t.is(view.byteOffset, midByteOffset);
+    t.is(view.byteLength, midExplicitLength * bpe);
+    t.is(view.length, midExplicitLength);
+  });
 
   test(
     tName('byteOffset = byteLength, length 0 -> empty view at the end'),
@@ -173,7 +173,9 @@ for (const { name, Ctor, bpe } of flavors) {
   });
 
   test(
-    tName('aligned byteOffset but length one element past the max -> RangeError'),
+    tName(
+      'aligned byteOffset but length one element past the max -> RangeError',
+    ),
     t => {
       const iab = freshIab();
       // byteOffset 0 is valid; length maxLength + 1 requires one element more
