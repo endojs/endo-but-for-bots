@@ -699,12 +699,22 @@ const RICH_DIRECTIVE = '\n\nFORMAT HINT: this answer is best shown as a LIVE or 
 // Voice-note ingest is PROPOSE-ONLY: the agent takes NO actions, it produces proposed action items
 // (and, via the scoper, names the capabilities an attenuated agent would need to carry them out).
 // A pure completion (no toolbox) → it literally cannot act. gemma → Claude fallback.
-const INGEST_PERSONA = 'You received a VOICE NOTE transcript. You take NO actions whatsoever. Output a SHORT bulleted list of the concrete action items it implies. For any item that needs real work, note that a dedicated attenuated agent could be spun up for it. Be concise — proposals only, no preamble.';
+// A voice note is often a long, sprawling, stream-of-consciousness monologue that weaves together MANY
+// distinct threads. The old prompt asked for a "SHORT" / "concise" list, which collapsed a wide-ranging
+// note into a handful of summary bullets (under-decomposition). We now DECOMPOSE: one item per separable
+// action/idea/question/decision, granularity scaled to the note's breadth.
+const INGEST_PERSONA = 'You received a VOICE NOTE transcript — often a long, sprawling, stream-of-consciousness monologue that weaves together MANY distinct threads. You take NO actions whatsoever; you DECOMPOSE it.\n\nBreak the note into ALL of its distinct, concrete items — one bullet per separable action, idea, question, decision, or thread. Do NOT merge separate ideas into one bullet, and do NOT collapse a wide-ranging note into a few summary points: the NUMBER of items scales with the note\'s breadth — a quick one-topic note yields a bullet or two; a long multi-topic monologue must be decomposed THOROUGHLY into every separable thread, grouped under short **bold** theme headers when there are many. Prefer granular, independently-actionable items over broad ones — err on the side of MORE, finer sub-tasks (nothing distinct should be silently dropped). For any item that needs real work, note that a dedicated attenuated agent could be spun up for it.\n\nOutput ONLY the bulleted decomposition — no preamble, no closing summary.';
 const ingestPropose = async transcript => {
+  const text = String(transcript || '');
+  // A sprawling note needs the stronger reasoner to tease apart its threads — gemma under-decomposes long
+  // inputs — so route it to Claude FIRST (with more room), and keep gemma-first (cheap) for short notes.
+  const sprawling = text.length > 3000;
   let proposals = '';
-  try { const r = await callLLM([{ role: 'system', content: INGEST_PERSONA }, { role: 'user', content: transcript }], 'default'); proposals = String(r.text || '').trim(); } catch (e) { log('ingest gemma', e.message); }
-  if (!proposals) { try { proposals = String((await opusComplete({ system: INGEST_PERSONA, prompt: transcript, maxTokens: 2000 })) || '').trim(); } catch (e) { log('ingest claude', e.message); } }
-  const { proposed } = await scopePowers(transcript);
+  const tryGemma = async () => { try { const r = await callLLM([{ role: 'system', content: INGEST_PERSONA }, { role: 'user', content: text }], 'default'); return String(r.text || '').trim(); } catch (e) { log('ingest gemma', e.message); return ''; } };
+  const tryClaude = async () => { try { return String((await opusComplete({ system: INGEST_PERSONA, prompt: text, maxTokens: sprawling ? 3200 : 2000 })) || '').trim(); } catch (e) { log('ingest claude', e.message); return ''; } };
+  if (sprawling) proposals = (await tryClaude()) || (await tryGemma());
+  else proposals = (await tryGemma()) || (await tryClaude());
+  const { proposed } = await scopePowers(text);
   return { proposals: proposals || '(could not analyze the note)', powers: proposed };
 };
 // The OPERATING PROMPT a proposed attenuated sub-agent would run with. Approval = authorization, so dan
