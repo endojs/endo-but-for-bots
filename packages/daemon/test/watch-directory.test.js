@@ -66,7 +66,10 @@ test('watchDirectory yields a rename event after a debounce window', async t => 
   await new Promise(resolve => setTimeout(resolve, 50));
   await fs.promises.writeFile(path.join(directory, 'new.txt'), 'hello');
 
-  const event = await collect(events, candidate => candidate.name === 'new.txt');
+  const event = await collect(
+    events,
+    candidate => candidate.name === 'new.txt',
+  );
   t.truthy(event, 'rename event should arrive');
   t.is(event.kind, 'replace');
   t.is(event.name, 'new.txt');
@@ -129,7 +132,10 @@ test('watchDirectory coalesces a quick rewrite of the same name', async t => {
   await fs.promises.unlink(path.join(directory, 'churn.txt'));
   await fs.promises.writeFile(path.join(directory, 'churn.txt'), '2');
 
-  const event = await collect(events, candidate => candidate.name === 'churn.txt');
+  const event = await collect(
+    events,
+    candidate => candidate.name === 'churn.txt',
+  );
   t.truthy(event, 'coalesced event should arrive');
   t.is(event.name, 'churn.txt');
 });
@@ -203,7 +209,10 @@ test('watchDirectory returns an immediately-closed stream when fs.watch throws',
   // throws ENOENT.  The production code emits a `console.error`
   // diagnostic on the failure path; we let it through since SES
   // freezes console and we cannot stub it.
-  const ghost = path.join(os.tmpdir(), `watch-directory-ghost-${Date.now()}-xyz`);
+  const ghost = path.join(
+    os.tmpdir(),
+    `watch-directory-ghost-${Date.now()}-xyz`,
+  );
   const powers = makeFilePowers({ fs, path });
 
   const result = powers.watchDirectory(ghost);
@@ -262,7 +271,10 @@ test('watchDirectory ignores fs.watch events without a filename', async t => {
   // (the Buffer branch in production code).
   stubListener('rename', Buffer.from('legit.txt'));
 
-  const event = await collect(events, candidate => candidate.name === 'legit.txt');
+  const event = await collect(
+    events,
+    candidate => candidate.name === 'legit.txt',
+  );
   t.truthy(event, 'Buffer-named rename event should arrive');
   t.is(event.name, 'legit.txt');
 
