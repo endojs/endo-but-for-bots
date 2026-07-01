@@ -51,8 +51,10 @@ cap links keep working on the new instance**. The one rule that makes V0 safe:
 ## 1 — At camp: bring the vat up on the M1
 
 macOS cannot mount LUKS and has no systemd, so there are two routes. **Route 1 keeps the drive as
-the single body (preferred — no merge on return). Route 2 forks the body onto the mac (simpler
+the single body (no merge on return). Route 2 forks the body onto the mac (simpler
 runtime, but the copy becomes the truth and MUST be copied back).**
+
+> **CHOSEN (dan, 2026-07-01): Route 2.** The step-by-step guide is `RUN-ON-MAC.md`.
 
 ### Route 1 — Linux VM on the M1 (drive stays the body)
 
@@ -70,7 +72,8 @@ Inside the VM it is exactly the archua procedure:
 1. **Restore the personal data onto encrypted mac storage.** Create an encrypted APFS volume
    (Disk Utility), then unpack the `backup-file` tar into it:
    ```bash
-   gpg -d field-personal-<date>.tar.gz.gpg | tar -xz -C /Volumes/FieldPersonal
+   # backup-file's actual format is tar | zstd | gpg — decode in that order (brew install gnupg zstd):
+   gpg -d field-personal-<stamp>.tar.zst.gpg | zstd -d | tar -x -C /Volumes/FieldPersonal
    # yields: config/ vault/ state/ personal.json env
    ```
 2. **Runtime.** Node ≥ 24 + git; copy or clone the source (p1 snapshot works);
