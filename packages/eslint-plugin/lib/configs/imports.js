@@ -6,7 +6,16 @@ module.exports = {
     },
   },
   rules: {
-    'import/extensions': ['error', 'always', { ignorePackages: true }],
+    // Runtime `import`/`export` extension enforcement, including TypeScript
+    // `import type` specifiers (`checkTypeImports`).
+    'import/extensions': [
+      'error',
+      'always',
+      { ignorePackages: true, checkTypeImports: true },
+    ],
+    // JSDoc `@import` tags live in comments, outside `import/extensions`'
+    // reach; this rule enforces the same extension discipline on them.
+    '@endo/jsdoc-import-extensions': 'error',
     'import/no-extraneous-dependencies': [
       'error',
       {
