@@ -290,7 +290,7 @@ LLM-agent stack).*
 | [endor-tui](endor-tui.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [hex-package](hex-package.md) | 2026-04-23 | 2026-05-18 | **Complete** |
 | [endo-bytes](endo-bytes.md) | 2026-05-08 | 2026-05-10 | Implemented |
-| [bytearray-uint8array-view](bytearray-uint8array-view.md) | 2026-06-30 | 2026-06-30 | Proposed |
+| [bytearray-uint8array-view](bytearray-uint8array-view.md) | 2026-06-30 | 2026-07-01 | Proposed |
 | [endo-gateway-mcp](endo-gateway-mcp.md) | 2026-05-29 | 2026-05-29 | Not Started |
 | [gateway-package](gateway-package.md) | 2026-05-22 | 2026-06-29 | Proposed (absorbs the removed endo-gateway design) |
 | [agent-tools-mount-fs-tools](agent-tools-mount-fs-tools.md) | 2026-06-01 | 2026-06-25 | Superseded |
