@@ -21,8 +21,12 @@ export const loadGatorCfg = () => { try { const c = JSON.parse(fs.readFileSync(G
 export const gatorConfigured = () => !!loadGatorCfg();
 
 // Normalize an ERC-7715 grant into the {permissionsContext, delegationManager, accountMetadata}
-// triple the settlement service redeems with (ERC-7710). Accepts the RAW wallet PermissionResponse
-// ({context, signerMeta:{delegationManager}, dependencyInfo}) or an already-normalized object.
+// triple the settlement service redeems with (ERC-7710). Accepts, in order of currency:
+//   • CURRENT MetaMask Flask 13.x ExecutionPermissionResponse — request-echo + TOP-LEVEL
+//     {context, delegationManager, dependencies:[{factory,factoryData}]} (ground truth: the
+//     Flask 13.37 bundle schema + wallet-e2e probes, 2026-07-01);
+//   • the 2025 toolkit-0.12 shape ({context, signerMeta:{delegationManager}, dependencyInfo});
+//   • an already-normalized object.
 // Returns null when there is no permissions context — the one shape a redeem can't work without
 // (this is what used to slip through: a raw wallet blob the charge-server couldn't redeem).
 export const normalizeGrant = d => {
@@ -31,12 +35,13 @@ export const normalizeGrant = d => {
   const permissionsContext = g.permissionsContext || g.context;
   if (typeof permissionsContext !== 'string' || !/^0x[0-9a-fA-F]+$/.test(permissionsContext)) return null;
   const delegationManager = g.delegationManager || (g.signerMeta && g.signerMeta.delegationManager) || null;
-  const accountMetadata = Array.isArray(g.accountMetadata) ? g.accountMetadata : (Array.isArray(g.dependencyInfo) ? g.dependencyInfo : []);
+  const accountMetadata = [g.accountMetadata, g.dependencies, g.dependencyInfo].find(Array.isArray) || [];
   return { permissionsContext, delegationManager, accountMetadata };
 };
 
-// The public facts a client needs to BUILD a correct ERC-7715 request: the signer (the settlement
-// delegate that will redeem), the chain, and the wei-per-USD rate (so the client sizes periodAmount).
+// The public facts a client needs to BUILD a correct ERC-7715 request: `to` (the settlement
+// delegate that will redeem — current Flask's request field; `signer` kept as a legacy alias),
+// the chain, and the wei-per-USD rate (so the client sizes periodAmount).
 // Cached per process; null when the rail is off or the charge-server is unreachable. No secrets.
 let cachedInfo = null;
 export const grantParams = async (fetchImpl = fetch) => {
@@ -45,7 +50,7 @@ export const grantParams = async (fetchImpl = fetch) => {
   try {
     if (!cachedInfo) { cachedInfo = await (await fetchImpl(`${cfg.chargeServerUrl}/info`)).json(); }
     if (!cachedInfo || !cachedInfo.delegate || !cachedInfo.chainId) { cachedInfo = null; return null; }
-    return { chainId: cachedInfo.chainId, signer: cachedInfo.delegate, chain: cachedInfo.chain || cfg.chain || '', weiPerUsd: (BigInt(cfg.weiPerUusd || '0') * 1000000n).toString() };
+    return { chainId: cachedInfo.chainId, to: cachedInfo.delegate, signer: cachedInfo.delegate, chain: cachedInfo.chain || cfg.chain || '', weiPerUsd: (BigInt(cfg.weiPerUusd || '0') * 1000000n).toString() };
   } catch { cachedInfo = null; return null; }
 };
 

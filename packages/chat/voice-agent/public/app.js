@@ -1257,29 +1257,34 @@ const chatCap = () => (chats.find(c => c.id === sessionId) || {}).scopedCap || c
 // server auto-draws from it to keep this user's purse funded (inference + hosting) without a manual payment each
 // time. Returns {ok} | {ok:false,error}. The signed grant (permissions context) is opaque + forwarded — never
 // parsed, rendered, or persisted here; no key touches the page.
-// `grantParams` = {signer, chainId, weiPerUsd} from /pay/delegation/status. The 7715 SIGNER must be the
-// settlement delegate that redeems — the old raw wallet_grantPermissions call here named no signer at all,
-// so the wallet's grant (when it granted anything) was unredeemable by our charge-server.
+// `grantParams` = {to, signer, chainId, weiPerUsd} from /pay/delegation/status. The 7715 `to` (delegate)
+// must be the settlement delegate that redeems — the old raw wallet_grantPermissions call here named no
+// delegate at all, so the wallet's grant (when it granted anything) was unredeemable by our charge-server.
 const grantMetaMaskSubscription = async ({ periodUsd = 10, periodDays = 30, grantParams = null } = {}) => {
   const eth = window.ethereum;
   if (!eth || !eth.request) return { ok: false, error: 'No Ethereum wallet found — install MetaMask (advanced permissions).' };
   let gp = grantParams;
   if (!gp) { try { gp = (await (await fetch('/pay/delegation/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId }) })).json()).grant; } catch {} }
-  if (!gp || !gp.signer || !gp.chainId || !gp.weiPerUsd) return { ok: false, error: 'On-chain payments aren\'t fully set up (settlement service unreachable).' };
+  const delegate = gp && (gp.to || gp.signer); // `to` (current shape); `signer` = older servers' name for it
+  if (!gp || !delegate || !gp.chainId || !gp.weiPerUsd) return { ok: false, error: 'On-chain payments aren\'t fully set up (settlement service unreachable).' };
   const periodDuration = Math.max(1, periodDays) * 86400;
   const startTime = Math.floor(Date.now() / 1000);
   const periodAmount = '0x' + (BigInt(gp.weiPerUsd) * BigInt(Math.max(1, Math.round(periodUsd)))).toString(16); // the $ period cap, in wei
   let grants;
   try {
-    // ERC-7715 as MetaMask implements it (the delegation-toolkit wire shape): permission + signer + rules,
-    // amounts hex-encoded, expiry as a rule. The wallet returns an opaque signed permissions context that
-    // only the named signer (the settlement delegate) can redeem via ERC-7710.
+    // ERC-7715 as CURRENT MetaMask Flask (13.x) validates it — empirically verified against real Flask
+    // 13.25/13.31/13.37 (wallet-e2e probe-schema, 2026-07-01): `to` = the delegate address (the old
+    // signer:{type:'account',…} object is now rejected -32602), permission carries isAdjustmentAllowed,
+    // rule entries are exactly {type, data} (rule-level isAdjustmentAllowed also rejected). The wallet
+    // returns an opaque signed permissions context that only `to` (the settlement delegate) can redeem
+    // via ERC-7710. NOTE the chain must be on MetaMask's remote 7715 allowlist — Sepolia is, Linea
+    // Sepolia is NOT (-32004); the server-vended gp.chainId decides.
     grants = await eth.request({ method: 'wallet_requestExecutionPermissions', params: [{
       chainId: gp.chainId,
-      signer: { type: 'account', data: { address: gp.signer } },
+      to: delegate,
       permission: { type: 'native-token-periodic', isAdjustmentAllowed: true,
         data: { periodAmount, periodDuration, startTime, justification: `Agent C subscription — up to $${periodUsd} per ${periodDays} days, drawn automatically to keep your credit topped up` } },
-      rules: [{ type: 'expiry', isAdjustmentAllowed: false, data: { timestamp: startTime + periodDuration + 86400 } }], // outlive one period
+      rules: [{ type: 'expiry', data: { timestamp: startTime + periodDuration + 86400 } }], // outlive one period
     }] });
   } catch (e) { return { ok: false, error: 'Your wallet declined or lacks ERC-7715 recurring permissions (MetaMask Flask). ' + (e.message || '') }; }
   const grant = Array.isArray(grants) ? grants[0] : grants;

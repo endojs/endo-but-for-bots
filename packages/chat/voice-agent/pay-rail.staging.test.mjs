@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // pay-rail.staging.test.mjs — BILLING RAIL #3 end-to-end, like Joshua: a REAL on-chain redeem on
-// Linea Sepolia through the real stack (isolated voice-agent server → delegation-pay →
-// gator-charge settlement service → Pimlico bundler → DelegationManager), asserting BOTH
+// the CONFIGURED chain (gator-pay.json `chain`: sepolia = the 7715 rail chain, linea-sepolia = the
+// original proven scripted rail) through the real stack (isolated voice-agent server →
+// delegation-pay → gator-charge settlement service → Pimlico bundler → DelegationManager),
+// asserting BOTH
 // (a) the redeem landed on-chain (tx receipt success + exact wei delta at the treasury) and
 // (b) the purse was credited the right µUSD.
 //
@@ -9,7 +11,9 @@
 //   • gator-charge.service running (systemctl --user status gator-charge) on 127.0.0.1:8799
 //   • ~/.config/field-agent/gator-pay.json (chargeServerUrl/treasury/weiPerUusd/chain)
 //   • ~/.config/gator-pay/delegate.key + PIMLICO in /home/dan/.env (used by make-grant + charge-server)
-//   • the delegator smart account deployed + funded (node ~/gator-pay/testnet.mjs --redeem once)
+//   • the delegate EOA funded on the configured chain (else this test SKIPS, loudly — never fakes)
+//   • the delegator smart account deployed + funded
+//     (node ~/gator-pay/testnet.mjs --chain <chain> --redeem once)
 //
 // COST per run: $1 of test-ETH (weiPerUusd × 1e6 ≈ 0.0004 tETH) moves delegator → treasury (the
 // funding EOA, so value recycles), plus bundler gas from the delegate smart account. The grant is
@@ -28,8 +32,13 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOME = process.env.HOME || '/home/dan';
 const PORT = 8796;
 const BASE = `http://127.0.0.1:${PORT}`;
-const RPC = process.env.LINEA_SEPOLIA_RPC || 'https://rpc.sepolia.linea.build';
 const MAKE_GRANT = process.env.MAKE_GRANT || path.join(HOME, 'gator-pay/make-grant.mjs');
+// public RPC per supported chain (mirrors ~/gator-pay/chains.mjs; env overrides for flaky RPCs)
+const RPCS = {
+  sepolia: process.env.SEPOLIA_RPC || 'https://ethereum-sepolia-rpc.publicnode.com',
+  'linea-sepolia': process.env.LINEA_SEPOLIA_RPC || 'https://rpc.sepolia.linea.build',
+};
+let RPC = null; // resolved from the charge-server's advertised chain in step 0
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pay-rail-'));
 let srv = null;
@@ -49,7 +58,32 @@ const rpc = async (method, params) => (await (await fetch(RPC, { method: 'POST',
   let info;
   try { info = await (await fetch(`${cfg.chargeServerUrl}/info`)).json(); } catch {}
   if (!info || !info.delegate) die(`charge-server unreachable at ${cfg.chargeServerUrl} — systemctl --user start gator-charge`);
-  ok(info.chain === 'linea-sepolia' && /^0x/.test(info.chainId), `settlement service up: chain ${info.chain} (${info.chainId}), delegate ${info.delegate}`);
+  const CHAIN = info.chain;
+  if (!RPCS[CHAIN]) die(`charge-server chain "${CHAIN}" has no RPC mapping here (supported: ${Object.keys(RPCS).join(', ')})`);
+  ok((!cfg.chain || cfg.chain === CHAIN) && /^0x/.test(info.chainId), `settlement service up: chain ${CHAIN} (${info.chainId}) matches gator-pay.json, delegate ${info.delegate}`);
+  RPC = RPCS[CHAIN]; // used by the receipt/balance checks below
+
+  // ── 0.5 FUNDING GATE: on-chain runs need gas on the delegate EOA. No gas → SKIP loudly, never
+  //        fake a pass. (The EOA funds the delegator/delegate smart accounts + signs everything.)
+  if (info.eoa) {
+    const bal = BigInt((await rpc('eth_getBalance', [info.eoa, 'latest'])) || '0x0');
+    if (bal < 10n ** 15n) { // < 0.001 ETH: can't fund smart accounts or pay bundler gas
+      console.error(`
+╔════════════════════════════════════════════════════════════════════════════╗
+║  SKIPPED — pay-rail staging test NOT RUN (this is not a pass)               ║
+╚════════════════════════════════════════════════════════════════════════════╝
+  The delegate EOA ${info.eoa}
+  holds ${bal} wei on ${CHAIN} — not enough gas for a real on-chain redeem,
+  and this test never fakes one.
+
+  To unblock: send ~0.01 ${CHAIN} ETH to the EOA above, then:
+    1. node ~/gator-pay/testnet.mjs --chain ${CHAIN} --redeem   (deploy+fund the delegator once)
+    2. npm run test:pay-rail                                    (this test, for real)
+`);
+      process.exit(0); // skip — deliberately not a failure, loudly not a pass
+    }
+    ok(true, `delegate EOA ${info.eoa} has gas on ${CHAIN} (${bal} wei)`);
+  }
 
   // ── 1. isolated voice-agent server (fresh root cap + state; the REAL gator config) ──
   srv = spawn('node', ['server.mjs'], {
@@ -70,8 +104,8 @@ const rpc = async (method, params) => (await (await fetch(RPC, { method: 'POST',
   // ── 2. status advertises the rail + the grant params the client builds its 7715 request from ──
   const st = await post('/pay/delegation/status', { cap, sessionId: sid });
   ok(st.body.available === true, 'status: rail available (gator-pay.json present)');
-  ok(st.body.grant && st.body.grant.signer === info.delegate && st.body.grant.chainId === info.chainId && BigInt(st.body.grant.weiPerUsd) > 0n,
-    `status: grant params {signer=${st.body.grant && st.body.grant.signer}, chainId=${st.body.grant && st.body.grant.chainId}, weiPerUsd=${st.body.grant && st.body.grant.weiPerUsd}}`);
+  ok(st.body.grant && st.body.grant.to === info.delegate && st.body.grant.signer === info.delegate && st.body.grant.chainId === info.chainId && BigInt(st.body.grant.weiPerUsd) > 0n,
+    `status: grant params {to=${st.body.grant && st.body.grant.to}, chainId=${st.body.grant && st.body.grant.chainId}, weiPerUsd=${st.body.grant && st.body.grant.weiPerUsd}} (the 7715 \`to\` = the settlement delegate)`);
 
   // ── 3. REGRESSION: the old broken shapes (raw blob without a permissions context) are rejected ──
   for (const junk of [{ sig: 'mock' }, { context: '0xMOCKGRANT' }]) {
@@ -79,9 +113,10 @@ const rpc = async (method, params) => (await (await fetch(RPC, { method: 'POST',
     ok(r.status === 400, `grant rejects unredeemable delegation ${JSON.stringify(junk)} (${r.status})`);
   }
 
-  // ── 4. a REAL signed grant (raw ERC-7715 wallet-response shape, fresh salt) ──
-  const grant = await new Promise((resolve, reject) => execFile('node', [MAKE_GRANT, '--eth', '0.001'], { timeout: 120000 }, (e, out) => e ? reject(e) : resolve(JSON.parse(out))));
-  ok(!!grant.context && !!grant.signerMeta?.delegationManager, 'make-grant minted a real signed grant (context present)');
+  // ── 4. a REAL signed grant (raw CURRENT-Flask ERC-7715 response shape, fresh salt) ──
+  const grant = await new Promise((resolve, reject) => execFile('node', [MAKE_GRANT, '--eth', '0.001', '--chain', CHAIN], { timeout: 120000 },
+    (e, out, err) => e ? reject(new Error(`make-grant failed (${e.code}): ${String(err).trim() || e.message}`)) : resolve(JSON.parse(out))));
+  ok(!!grant.context && !!grant.delegationManager, 'make-grant minted a real signed grant (context + top-level delegationManager, the current wallet shape)');
   const g = await post('/pay/delegation/grant', { cap, sessionId: sid, delegation: grant, subscription: { periodUsd: 10, periodDays: 30 } });
   ok(g.status === 200 && g.body.ok === true && g.body.subscribed === true, 'grant accepted + subscription recorded');
 
