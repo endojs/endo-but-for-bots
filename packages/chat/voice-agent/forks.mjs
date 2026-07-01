@@ -83,6 +83,9 @@ export const makeForks = ({ file, makePurse, purseStore }) => {
     return edit(id, past.source, owner, `revert to v${v}`);
   };
   const remove = (id, owner) => { const f = get(id, owner); if (!f) return false; delete data.forks[String(id)]; save(); return true; };
+  // exists(id) — bare existence (no owner, NO source/state): lets the error→backlog feeder validate a
+  // reported fork identity without gaining any read on the fork.
+  const exists = id => !!data.forks[String(id)];
 
   const curVersion = f => f.history.length;
   const sourceAtVersion = (f, v) => (f.history[v - 1] || {}).source || f.source;
@@ -127,9 +130,12 @@ export const makeForks = ({ file, makePurse, purseStore }) => {
   // ── invite-carries-inbox: the OWNER messages recipients ("I changed X — update?"); recipients read it on open.
   const notifyRecipients = (id, owner, message) => { const f = get(id, owner); if (!f) return { ok: false, error: 'unknown fork (or not yours)' }; const msg = { at: new Date().toISOString(), message: String(message || '').slice(0, 280) }; let n = 0; for (const r of Object.values(data.shares)) { if (r.forkId === id && !r.revoked) { r.inbox = (r.inbox || []).concat(msg).slice(-20); n += 1; } } save(); return { ok: true, delivered: n }; };
   const shareInbox = token => { const r = shareRec(token); if (!r) return { ok: false, error: 'invalid share' }; return { ok: true, inbox: (r.inbox || []).slice(-20) }; };
+  // shareTarget(token) → { ok, forkId } and NOTHING else (no source, no owner, no inbox): the seam the
+  // add-only backlog verb uses — a valid share designates WHICH fork to file against, granting no read.
+  const shareTarget = token => { const r = shareRec(token); return r ? { ok: true, forkId: r.forkId } : { ok: false, error: 'this share link is no longer valid' }; };
   const revokeShare = (token, owner) => { const k = hash(String(token || '')); const r = data.shares[k]; if (!r || (owner && r.owner !== String(owner))) return false; r.revoked = true; save(); return true; };
   const sharesFor = (id, owner) => { const f = get(id, owner); if (!f) return []; return Object.entries(data.shares).filter(([, r]) => r.forkId === id && !r.revoked).map(([, r]) => { const p = purseOf(r); return { scheme: r.scheme, createdAt: r.createdAt, expiresAt: r.expiresAt || null, remaining: p ? p.balance() : null, granted: p ? p.granted() : null }; }); };
 
-  return harden({ create, get, source, list, read, edit, history, revert, remove, share, openShare, previewUpgrade, acceptUpgrade, setAutoAccept, notifyRecipients, shareInbox, revokeShare, sharesFor });
+  return harden({ create, get, source, list, read, edit, history, revert, remove, exists, share, openShare, previewUpgrade, acceptUpgrade, setAutoAccept, notifyRecipients, shareInbox, shareTarget, revokeShare, sharesFor });
 };
 harden(makeForks);

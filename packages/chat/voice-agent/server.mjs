@@ -87,6 +87,7 @@ import { makeTollBridge } from './toll-bridge.mjs';
 import { makeLiveCells } from './live-cells.mjs';
 import { makeComponentShares } from './component-shares.mjs';
 import { makeForks } from './forks.mjs';
+import { makeComponentBacklog } from './component-backlog.mjs';
 import { makeDistTrust } from './dist-trust.mjs';
 import { makeBlossom } from './blossom.mjs';
 import * as projects from './projects.mjs';
@@ -629,6 +630,23 @@ const componentShares = makeComponentShares({ file: `${VOICE_STATE_DIR}/componen
 // regardless (it only vends source strings, which the client refuses to render unless the realm is frozen).
 const forks = makeForks({ file: process.env.FORKS_STORE || `${VOICE_STATE_DIR}/forks.json`, makePurse, purseStore });
 const forkOwnerOf = cap => { const n = nodeFor(cap); if (!n) return null; return n.isRoot ? 'root' : `u:${crypto.createHash('sha256').update(`fork-owner:${String(cap)}`).digest('hex').slice(0, 16)}`; };
+// Every component/fork project-object carries its own BACKLOG (dan's rule: creating a component
+// IMPLICITLY endows the creator with the right to add to + receive requests on its backlog — issue
+// requests, errors thrown, and things). Keyed by the object's git identity; the owner facet
+// (read / ack / add) is gated by the SAME ownership checks the object's other routes use — designation
+// by the id already held, no new strings. Recipients get an attenuated ADD-ONLY verb (see the
+// /forks/backlog/report + /components/backlog/report routes); runtime errors auto-file via /error/flag.
+const componentBacklog = makeComponentBacklog({ file: process.env.BACKLOG_STORE || `${VOICE_STATE_DIR}/component-backlog.json` });
+// The backlog's READ/NOTIFY surface is a PROPAGATOR CELL (live-cells interface, push-fed by the store)
+// served through the one /cells/subscribe broker as `backlog:<id>` — owner-only (the attenuated add-only
+// facet gains NO subscription). A fork's backlog belongs to forkOwnerOf(cap); a component's to root.
+const backlogCellFor = (cap, id) => {
+  const target = String(id || '');
+  const mine = target.startsWith('fork-') ? !!forks.get(target, forkOwnerOf(cap)) : !!nodeFor(cap)?.isRoot;
+  return mine ? { cell: componentBacklog.cellFor(target) } : { error: 'not your component/fork' };
+};
+// opaque, NON-SECRET origin tag for a share-token filer (never the token itself — cap-hygiene).
+const backlogOriginOf = t => `share-${crypto.createHash('sha256').update(`backlog-origin:${String(t || '')}`).digest('hex').slice(0, 8)}`;
 // Distribution-trust (Phase 5): the social-collateral graph that decides which fork VERSIONS are approved
 // for end-user distribution. Root (the operator) is the base authority; trust flows outward via grants.
 const distTrust = makeDistTrust({ file: process.env.DIST_TRUST_STORE || `${VOICE_STATE_DIR}/dist-trust.json`, rootId: 'root' });
@@ -1473,7 +1491,7 @@ const handler = async (req, res) => {
       const shareCells = share ? new Set(share.cells.map(c => c.id)) : null;
       const resolve = id => share
         ? (shareCells.has(id) ? { cell: liveCells.cellForReader(id, shareCellReader(share.cells.find(c => c.id === id).handle)) } : { error: 'not in this share' })
-        : liveCells.cellFor(cap, id);
+        : (id.startsWith('backlog:') ? backlogCellFor(cap, id.slice('backlog:'.length)) : liveCells.cellFor(cap, id)); // backlog:<id> = the object's backlog cell (owner-only; push-fed by the store)
       const list = (Array.isArray(ids) ? ids : []).slice(0, 16).map(String);
       res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no', ...SEC });
       res.write(': ok\n\n');
@@ -1490,7 +1508,7 @@ const handler = async (req, res) => {
       // rescoped out of reach, OR the share token is revoked — a long-lived push stream can't keep leaking
       // after revocation. A failed write (half-open/dead socket) also ends it.
       const hb = setInterval(() => {
-        const gone = share ? !componentShares.get(shareToken) : (!nodeFor(cap) || list.some(id => liveCells.cellFor(cap, id).error));
+        const gone = share ? !componentShares.get(shareToken) : (!nodeFor(cap) || list.some(id => resolve(id).error)); // resolve (not cellFor) so a backlog: cell re-validates through its own owner gate
         if (gone) return teardown();
         try { if (res.write(': hb\n\n') === false) { /* backpressure ok */ } } catch { teardown(); }
       }, 15000);
@@ -2253,7 +2271,7 @@ const handler = async (req, res) => {
     // ── notification inbox (🔔): read the shared feed (data endowment) + per-cap
     //    dismissed-state. Agents post via the `notify`/`pushFeed` powers → feed.json. ──
     if (req.method === 'POST' && u.pathname === '/error/flag') {
-      const { cap, kind, error, source, sessionId, name } = await jsonBody(req);
+      const { cap, kind, error, source, sessionId, name, componentId, forkId } = await jsonBody(req);
       if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
       if (!error) return json(res, 200, { ok: false });
       const ctx = source ? `The failing component source began: ${String(source).slice(0, 300).replace(/\s+/g, ' ')}` : '';
@@ -2262,7 +2280,17 @@ const handler = async (req, res) => {
       // about the breakage on its next turn (not only the self-improvement backlog).
       const queued = sessionId ? pushComponentError(sessionId, { error, name }) : false;
       if (queued) log('component-error queued for chat', String(sessionId).slice(0, 40), '—', String(error).slice(0, 120));
-      return json(res, 200, { ok: true, filed, queued });
+      // BACKLOG feeder: an error that carries its component/fork IDENTITY also auto-files onto THAT
+      // object's own backlog (dedupe-by-count absorbs re-throws) — the object's owner sees it in the
+      // edit chat + the live backlog cell, whoever's browser it broke in. Identity is validated against
+      // the real stores so an arbitrary id can't grow a phantom backlog.
+      const targetId = String(forkId || componentId || '').slice(0, 80);
+      let backlogged = false;
+      if (targetId && (targetId.startsWith('fork-') ? forks.exists(targetId) : componentGit.exists(targetId))) {
+        const b = componentBacklog.add(targetId, { kind: 'error', title: String(error).slice(0, 200), body: source ? `source began: ${String(source).slice(0, 400).replace(/\s+/g, ' ')}` : '', from: 'runtime' });
+        backlogged = !!b.ok;
+      }
+      return json(res, 200, { ok: true, filed, queued, backlogged });
     }
     // ── /render-smell — a confined widget rendered a raw JS value as text ("[object Object]", a leaked
     //    promise, …). The client already showed a readable fallback (safeText); here we route the smell
@@ -2674,9 +2702,25 @@ const handler = async (req, res) => {
       if (u.pathname === '/forks/upgrade/accept') return json(res, 200, forks.acceptUpgrade(String(body.token || '')));
       if (u.pathname === '/forks/upgrade/auto') return json(res, 200, forks.setAutoAccept(String(body.token || ''), !!body.on));
       if (u.pathname === '/forks/inbox') return json(res, 200, forks.shareInbox(String(body.token || '')));
+      // ⚑ ADD-ONLY backlog filing by a SHARE RECIPIENT (token, NO cap): holding a share token grants
+      // exactly one extra verb — file an issue/request on the fork's backlog. NO read comes with it:
+      // the token cannot list, ack, or subscribe (the backlog cell is owner-only). `from` = an opaque
+      // hash-prefix tag of the token, so the owner sees WHICH share filed without ever seeing the token.
+      if (u.pathname === '/forks/backlog/report') {
+        const st = forks.shareTarget(String(body.token || ''));
+        if (!st.ok) return json(res, 403, { ok: false, error: st.error });
+        const r = componentBacklog.add(st.forkId, { kind: body.kind === 'request' ? 'request' : 'issue', title: body.title, body: body.body, from: backlogOriginOf(body.token) });
+        return json(res, 200, r.ok ? { ok: true, deduped: !!r.deduped } : r); // add-only: no item list/state echoes back
+      }
       const owner = forkOwnerOf(body.cap);
       if (!owner) return json(res, 403, { ok: false, error: 'a valid capability is required to own forks' });
-      if (u.pathname === '/forks/create') return json(res, 200, forks.create({ source: body.source, name: body.name, baseId: body.baseId || null, owner }));
+      if (u.pathname === '/forks/create') {
+        const r = forks.create({ source: body.source, name: body.name, baseId: body.baseId || null, owner });
+        // creating the fork IMPLICITLY endows its creator with the backlog owner facet — the empty
+        // backlog exists from birth, keyed by the same id the owner already designates the fork by.
+        if (r.ok) componentBacklog.ensure(r.id);
+        return json(res, 200, r);
+      }
       if (u.pathname === '/forks/list') return json(res, 200, { ok: true, forks: forks.list(owner) });
       if (u.pathname === '/forks/read') { const r = forks.read(String(body.id || ''), owner); return json(res, 200, r ? { ok: true, ...r } : { ok: false, error: 'unknown fork (or not yours)' }); }
       if (u.pathname === '/forks/history') { const h = forks.history(String(body.id || ''), owner); return json(res, 200, h ? { ok: true, versions: h } : { ok: false, error: 'unknown fork (or not yours)' }); }
@@ -2701,6 +2745,16 @@ const handler = async (req, res) => {
       }
       if (u.pathname === '/forks/review/status') { const id = String(body.id || ''); const r = forks.read(id, owner); const src = (r && r.source) || body.source; return json(res, 200, { ok: true, status: src ? distTrust.approvalFor(id, src) : { approved: false }, amReviewer: distTrust.isReviewer(owner) }); }
       if (u.pathname === '/forks/shares') return json(res, 200, { ok: true, shares: forks.sharesFor(String(body.id || ''), owner) });
+      // ── the fork's BACKLOG, owner facet (implicitly endowed at creation): read/list, ack/done, and
+      //    file the owner's own items. Gated by the SAME ownership check every other fork verb uses.
+      //    The live view is the `backlog:<id>` cell on /cells/subscribe — these are the write verbs.
+      if (u.pathname === '/forks/backlog' || u.pathname === '/forks/backlog/ack' || u.pathname === '/forks/backlog/add') {
+        const id = String(body.id || '');
+        if (!forks.get(id, owner)) return json(res, 200, { ok: false, error: 'unknown fork (or not yours)' });
+        if (u.pathname === '/forks/backlog/ack') return json(res, 200, componentBacklog.setStatus(id, body.itemId, String(body.status || 'done')));
+        if (u.pathname === '/forks/backlog/add') return json(res, 200, componentBacklog.add(id, { kind: body.kind, title: body.title, body: body.body, from: 'owner' }));
+        return json(res, 200, { ok: true, items: componentBacklog.list(id, { status: body.status ? String(body.status) : undefined }), counts: componentBacklog.counts(id) });
+      }
       if (u.pathname === '/forks/edit') {
         const id = String(body.id || '');
         // RENDER SMOKE (chat-1cbe89a9 loop): a fork edit must MOUNT before it lands. Without this, a broken
@@ -2726,10 +2780,13 @@ const handler = async (req, res) => {
       // question if needed (ask()), else edits + reports (answer()). The client maintains the thread.
       if (u.pathname === '/forks/edit-chat') {
         const id = String(body.id || ''); const message = String(body.message || '').trim();
-        if (!message) return json(res, 200, { ok: false, error: 'empty message' });
+        if (!message && !body.contextPreview) return json(res, 200, { ok: false, error: 'empty message' });
         const rec = forks.read(id, owner);
         if (!rec) return json(res, 200, { ok: false, error: 'unknown fork (or not yours)' });
         const name = rec.name || id;
+        // the fork's OPEN BACKLOG rides into the editor agent's context (same source of truth as the
+        // backlog:<id> cell) — "discuss editing it" arrives already informed by its filed issues/errors.
+        const blNote = componentBacklog.contextNote(id, name);
         const history = (Array.isArray(body.history) ? body.history : []).filter(m => m && (m.role === 'user' || m.role === 'assistant') && m.content).map(m => ({ role: m.role, content: String(m.content).slice(0, 8000) })).slice(-16);
         let edited = null;
         const toolbox = {
@@ -2748,12 +2805,19 @@ const handler = async (req, res) => {
             if (r2 && r2.ok) edited = { version: r2.version };
             return r2;
           } },
+          // the owner facet's resolution verb, in-conversation: fixed (or acknowledged) an item → clear it
+          // from the open view (the backlog cell pushes the change to any live badge immediately).
+          resolveBacklogItem: { run: async ({ itemId, status } = {}) => componentBacklog.setStatus(id, String(itemId || ''), status === 'ack' ? 'ack' : 'done') },
         };
         const manifest = [
           { name: 'readForkSource', description: `Read the CURRENT source of the "${name}" fork (a single (endowments, props) => vnode function expression). Read it before editing so you change the real code.`, args: {} },
           { name: 'editFork', description: `Apply a change to the "${name}" fork: an edit agent rewrites its (endowments,props)=>vnode source from your prompt, appends a new revertable version, and applies it LIVE. Make the prompt precise + self-contained.`, args: { prompt: 'string — a precise description of the change to make' } },
+          { name: 'resolveBacklogItem', description: `Mark an OPEN BACKLOG item of "${name}" resolved once you have addressed it (or 'ack' to acknowledge without fixing). Item ids are listed in your context under OPEN BACKLOG.`, args: { itemId: 'string — the backlog item id (bl-…)', status: "string — 'done' (default) or 'ack'" } },
         ];
-        const persona = `You are the focused editor agent for the live fork "${name}" — one confined UI component rendered inline. You can readForkSource() to see its current source and editFork({prompt}) to change it (a new revertable version, applied live). Converse with the owner: if the request is clear, make the change with editFork then answer() what you did; if it is genuinely ambiguous, ask() ONE specific clarifying question first. Keep the fork working. Be concise.`;
+        const persona = `You are the focused editor agent for the live fork "${name}" — one confined UI component rendered inline. You can readForkSource() to see its current source and editFork({prompt}) to change it (a new revertable version, applied live). Converse with the owner: if the request is clear, make the change with editFork then answer() what you did; if it is genuinely ambiguous, ask() ONE specific clarifying question first. Keep the fork working. Be concise.${blNote}`;
+        // contextPreview (owner-gated): return what the editor agent WOULD see — the observability seam
+        // the staging test uses to prove the backlog injection without an LLM turn (like /chat/context).
+        if (body.contextPreview) return json(res, 200, { ok: true, preview: true, persona, backlogOpen: componentBacklog.counts(id).open });
         let r; try { r = await AGENT_RUNNER({ toolbox, manifest, userText: message, history, persona, model: 'anthropic:claude-opus-4-8' }); }
         catch (e) { return json(res, 200, { ok: false, error: (e && e.message) || String(e) }); }
         return json(res, 200, { ok: true, answer: r.answer || '', asking: !!r.asking, blocked: !!r.blocked, edited, steps: (r.toolsUsed || []).map(x => x.name) });
@@ -2761,6 +2825,16 @@ const handler = async (req, res) => {
       return json(res, 404, { ok: false, error: 'unknown forks route' });
     }
 
+    // ⚑ ADD-ONLY backlog filing by a COMPONENT-SHARE RECIPIENT (token, NO cap — so it lives OUTSIDE the
+    // root-gated /components/ block below). Mirrors /forks/backlog/report: a valid share token designates
+    // WHICH component to file against and grants exactly that one verb — no list/ack/subscribe.
+    if (req.method === 'POST' && u.pathname === '/components/backlog/report') {
+      const { shareToken, title, body: text, kind } = await jsonBody(req);
+      const share = componentShares.get(String(shareToken || ''));
+      if (!share) return json(res, 403, { ok: false, error: 'this share link is no longer valid' });
+      const r = componentBacklog.add(share.componentId, { kind: kind === 'request' ? 'request' : 'issue', title, body: text, from: backlogOriginOf(shareToken) });
+      return json(res, 200, r.ok ? { ok: true, deduped: !!r.deduped } : r); // add-only: no backlog state echoes back
+    }
     // ONLY way a proposed tool becomes callable — never auto-injected. (Also the root-gated component
     // version ops, /components/* — review/admit/share/version all need the owner's root cap.)
     if (req.method === 'POST' && (u.pathname.startsWith('/tools') || u.pathname.startsWith('/components/'))) {
@@ -2797,7 +2871,7 @@ const handler = async (req, res) => {
         const r = customTools.admit(String(body.id || ''));
         // On admit, commit the component's SOURCE as a version into its git-as-Endo object (the start
         // of its lineage; later edits add versions, enabling fork + revert).
-        if (r.ok && t) { try { await componentGit.commit(t.id, sourceFilesOf(t), `admit: ${t.name}`); } catch (e) { log('component-git admit', e.message); } }
+        if (r.ok && t) { try { await componentGit.commit(t.id, sourceFilesOf(t), `admit: ${t.name}`); } catch (e) { log('component-git admit', e.message); } componentBacklog.ensure(t.id); } // admission = the component's birth as a project-object → its backlog exists from here
         return json(res, 200, r);
       }
       if (u.pathname === '/tools/reject') return json(res, 200, customTools.reject(String(body.id || '')));
@@ -2830,6 +2904,7 @@ const handler = async (req, res) => {
         const id = `uicomp-${crypto.randomBytes(5).toString('hex')}`;
         const files = { 'component.js': src, 'manifest.json': JSON.stringify({ name, cells, kind: 'ui-component', createdAt: new Date().toISOString() }, null, 2) };
         try { await componentGit.commit(id, files, `break out: ${name}`); } catch (e) { return json(res, 200, { ok: false, error: `could not save: ${(e && e.message) || e}` }); }
+        componentBacklog.ensure(id); // breaking it out IMPLICITLY endows the creator with its backlog (owner facet, empty from birth)
         return json(res, 200, { ok: true, id, name, url: `/c/${id}` });
       }
       if (u.pathname === '/components/ui') { // read a broken-out component back (for the standalone render)
@@ -2858,6 +2933,11 @@ const handler = async (req, res) => {
       if (u.pathname === '/components/share/revoke') return json(res, 200, { ok: componentShares.revoke(String(body.token || '')) });
       if (u.pathname === '/components/shares') return json(res, 200, { ok: true, shares: componentShares.listFor(String(body.id || '')) }); // redacted (no tokens)
       if (u.pathname === '/components/history') { const id = String(body.id || ''); return islandSource.isIsland(id) ? json(res, 200, { ok: true, versions: await islandSource.history(id) }) : json(res, 200, { ok: true, versions: await componentGit.history(id), grains: customTools.grainData(id) }); }
+      // ── the component's BACKLOG, owner facet (root cap — same gate as every /components/ verb; the
+      //    implicit endowment of having created/admitted it). Live view = the backlog:<id> cell.
+      if (u.pathname === '/components/backlog') { const id = String(body.id || ''); return json(res, 200, { ok: true, items: componentBacklog.list(id, { status: body.status ? String(body.status) : undefined }), counts: componentBacklog.counts(id) }); }
+      if (u.pathname === '/components/backlog/ack') return json(res, 200, componentBacklog.setStatus(String(body.id || ''), body.itemId, String(body.status || 'done')));
+      if (u.pathname === '/components/backlog/add') return json(res, 200, componentBacklog.add(String(body.id || ''), { kind: body.kind, title: body.title, body: body.body, from: 'owner' }));
       if (u.pathname === '/components/read') { const id = String(body.id || ''); const s = await (islandSource.isIsland(id) ? islandSource.readAt(id, String(body.version || 'HEAD')) : componentGit.readAt(id, String(body.version || 'HEAD'))); return json(res, 200, s ? { ok: true, ...s } : { ok: false, error: 'unknown component/version' }); }
       if (u.pathname === '/components/fork') { const id = String(body.id || ''); if (islandSource.isIsland(id)) return json(res, 200, { ok: false, error: 'forking an island component isn\'t supported yet — edit or revert it' }); return json(res, 200, await forkComponentTo(customTools, id, String(body.name || ''), String(body.version || 'HEAD'), 'owner')); }
       if (u.pathname === '/components/edit') { const id = String(body.id || ''); return json(res, 200, islandSource.isIsland(id) ? await editIslandSource(id, String(body.prompt || '')) : await editComponentSource(customTools, id, String(body.prompt || ''))); }
@@ -2867,21 +2947,29 @@ const handler = async (req, res) => {
       // needed (ask()), else edits + reports (answer()). The client maintains the thread + re-renders live.
       if (u.pathname === '/components/edit-chat') {
         const id = String(body.id || ''); const message = String(body.message || '').trim();
-        if (!message) return json(res, 200, { ok: false, error: 'empty message' });
+        if (!message && !body.contextPreview) return json(res, 200, { ok: false, error: 'empty message' });
         const isIsland = islandSource.isIsland(id); const t = isIsland ? null : customTools.get(id);
         if (!isIsland && !t) return json(res, 200, { ok: false, error: 'no such component' });
         const name = (t && t.name) || id;
+        // the component's OPEN BACKLOG rides into the editor agent's context (same source of truth as
+        // the backlog:<id> cell) — the edit chat opens already informed by its filed issues/errors.
+        const blNote = componentBacklog.contextNote(id, name);
         const history = (Array.isArray(body.history) ? body.history : []).filter(m => m && (m.role === 'user' || m.role === 'assistant') && m.content).map(m => ({ role: m.role, content: String(m.content).slice(0, 8000) })).slice(-16);
         let edited = null;
         const toolbox = {
           readComponentSource: { run: async () => { try { const snap = await (isIsland ? islandSource.readAt(id, 'HEAD') : componentGit.readAt(id, 'HEAD')); const files = (snap && snap.files) || (t ? sourceFilesOf(t) : {}); return { ok: true, name, files }; } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; } } },
           editComponent: { run: async ({ prompt } = {}) => { const r = isIsland ? await editIslandSource(id, String(prompt || '')) : await editComponentSource(customTools, id, String(prompt || '')); if (r && r.ok) edited = { version: r.version, review: r.review || null }; return r; } },
+          resolveBacklogItem: { run: async ({ itemId, status } = {}) => componentBacklog.setStatus(id, String(itemId || ''), status === 'ack' ? 'ack' : 'done') },
         };
         const manifest = [
           { name: 'readComponentSource', description: `Read the CURRENT source of the "${name}" component (a {relpath:content} file map). Read it before editing so you change the real code.`, args: {} },
           { name: 'editComponent', description: `Apply a change to the "${name}" component: an edit agent rewrites its source from your prompt, commits a new revertable version, and applies it LIVE. Make the prompt precise + self-contained.`, args: { prompt: 'string — a precise description of the change to make' } },
+          { name: 'resolveBacklogItem', description: `Mark an OPEN BACKLOG item of "${name}" resolved once you have addressed it (or 'ack' to acknowledge without fixing). Item ids are listed in your context under OPEN BACKLOG.`, args: { itemId: 'string — the backlog item id (bl-…)', status: "string — 'done' (default) or 'ack'" } },
         ];
-        const persona = `You are the focused editor agent for the live UI component "${name}". You can readComponentSource() to see its current source and editComponent({prompt}) to change it (a new revertable version, applied live). Converse with the owner: if the request is clear, make the change with editComponent then answer() what you did; if it is genuinely ambiguous, ask() ONE specific clarifying question first. Keep the component working. Be concise.`;
+        const persona = `You are the focused editor agent for the live UI component "${name}". You can readComponentSource() to see its current source and editComponent({prompt}) to change it (a new revertable version, applied live). Converse with the owner: if the request is clear, make the change with editComponent then answer() what you did; if it is genuinely ambiguous, ask() ONE specific clarifying question first. Keep the component working. Be concise.${blNote}`;
+        // contextPreview (root-gated like the whole block): the observability seam — what the editor
+        // agent WOULD see this turn, without an LLM run (the staging test's /chat/context equivalent).
+        if (body.contextPreview) return json(res, 200, { ok: true, preview: true, persona, backlogOpen: componentBacklog.counts(id).open });
         let r; try { r = await AGENT_RUNNER({ toolbox, manifest, userText: message, history, persona, model: 'anthropic:claude-opus-4-8' }); }
         catch (e) { return json(res, 200, { ok: false, error: (e && e.message) || String(e) }); }
         return json(res, 200, { ok: true, answer: r.answer || '', asking: !!r.asking, blocked: !!r.blocked, edited, steps: (r.toolsUsed || []).map(x => x.name) });
