@@ -40,6 +40,7 @@ import { makeIslandSource } from './island-source.mjs';
 import { reuseFirstPreamble } from './component-catalog.mjs';
 import { addBacklog } from './improvement-backlog.mjs';
 import { scanText, smellFeedback } from './render-guard.mjs';
+import { inpaint as inpaintGpu } from './gpu-inpaint.mjs';
 import { STARTER_RING } from './system-map.mjs';
 import { makeInvitePolicies } from './invite-policy.mjs';
 import { makeBlueskyEligibility } from './bluesky-raindrop.mjs';
@@ -1192,6 +1193,7 @@ const handler = async (req, res) => {
     if (u.pathname === '/ses.umd.min.js') return serveFile(res, 'ses.umd.min.js', 'text/javascript; charset=utf-8'); // standalone SES shim (taming intact), loaded before the page modules
     if (u.pathname === '/trace.js') return serveFile(res, 'trace.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/pendant.js') return serveFile(res, 'pendant.js', 'text/javascript; charset=utf-8');
+    if (u.pathname === '/inpaint.js') return serveFile(res, 'inpaint.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/three.module.js') return serveFile(res, 'three.module.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/cap-channel.js') return serveFile(res, 'cap-channel.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/trace-app.js') return serveFile(res, 'trace-app.js', 'text/javascript; charset=utf-8');
@@ -2208,6 +2210,19 @@ const handler = async (req, res) => {
       const ctx = `Component "${String(name || 'component').slice(0, 60)}".${source ? ` Its source began: ${String(source).slice(0, 300).replace(/\s+/g, ' ')}` : ''}`;
       const filed = await flagErrorForFix('render-smell', feedback, ctx);
       return json(res, 200, { ok: true, filed, feedback });
+    }
+    // ── /gpu/inpaint — FLUX.2 mask inpainting on tinix. Cap-gated (the widget itself holds no cap; the host
+    //    mediates this call). Body: { cap, image, mask (data-URL or base64 PNGs), prompt, seed? }. The mask is
+    //    WHITE where to regenerate. Returns { ok, dataUrl, info }. ──
+    if (req.method === 'POST' && u.pathname === '/gpu/inpaint') {
+      const { cap, image, mask, prompt, seed } = await jsonBody(req);
+      if (!nodeFor(cap)) return json(res, 403, { ok: false, error: 'no capability' });
+      const toBuf = s => Buffer.from(String(s || '').replace(/^data:image\/\w+;base64,/, ''), 'base64');
+      try {
+        const r = await inpaintGpu(toBuf(image), toBuf(mask), String(prompt || ''), { seed: Number.isFinite(seed) ? Number(seed) : undefined });
+        log('inpaint ok', `${r.info.bytes}B`, `${r.info.ms}ms`);
+        return json(res, 200, { ok: true, dataUrl: r.dataUrl, info: r.info });
+      } catch (e) { log('inpaint failed:', (e && e.message) || e); return json(res, 200, { ok: false, error: (e && e.message) || String(e) }); }
     }
     if (req.method === 'POST' && u.pathname === '/feed/load') {
       const { cap } = await jsonBody(req);

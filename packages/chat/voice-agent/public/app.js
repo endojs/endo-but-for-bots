@@ -1187,7 +1187,7 @@ const renderExhausted = (payload, spoken) => {
 
 // tap an attached/generated image to view it full-screen. src is set via the DOM
 // (never interpolated into innerHTML) — defensive even though src is app-controlled.
-const showImage = src => { showModal('<div id="imgview"></div>'); const v = $('imgview'); if (v) { const img = document.createElement('img'); img.src = src; img.style.cssText = 'max-width:86vw;max-height:80vh;border-radius:8px;display:block'; v.appendChild(img); } };
+const showImage = src => { showModal('<div id="imgview"></div>'); const v = $('imgview'); if (v) { const img = document.createElement('img'); img.src = src; img.style.cssText = 'max-width:86vw;max-height:80vh;border-radius:8px;display:block'; v.appendChild(img); const ip = document.createElement('button'); ip.className = 'mini'; ip.textContent = '🖌 Inpaint'; ip.style.cssText = 'margin-top:10px;background:var(--acc,#7c5cff);color:#fff;border:0;font-weight:600'; ip.onclick = () => { closeModal(); window.__openInpaint(src); }; v.appendChild(ip); } };
 // append attached images (urls) + file names to a message body
 const appendAtt = (body, imgUrls = [], fileNames = []) => {
   if (!imgUrls.length && !fileNames.length) return;
@@ -2862,6 +2862,32 @@ window.addEventListener('resize', () => { if (!$('trace-overlay').classList.cont
 //    body-anchored overlay (renderTx wipes #log mid-turn), tracking the latest .msg.user
 //    and reserving space beneath it so it never covers the answer. One reused WebGL
 //    context. Fed by the SSE step stream; reconciled from the final steps[]. ──
+// ── FLUX.2 inpaint widget (🖌): an authority-free mask-paint surface. It holds NO cap; the cap-gated GPU
+//    call is THIS host handler (→ /gpu/inpaint → tinix ComfyUI). Opened over any image via __openInpaint. ──
+let inpaintInst = null, inpaintOverlay = null, inpaintInit = null;
+const ensureInpaint = () => inpaintInit || (inpaintInit = (async () => {
+  const { makeInpaint } = await import('./inpaint.js');
+  inpaintOverlay = document.createElement('div');
+  inpaintOverlay.style.cssText = 'position:fixed;inset:0;z-index:9000;display:none;align-items:flex-start;justify-content:center;padding:24px;overflow:auto;background:rgba(0,0,0,.55)';
+  const panel = document.createElement('div'); panel.style.cssText = 'position:relative;margin:auto';
+  const close = document.createElement('button'); close.textContent = '✕'; close.title = 'close';
+  close.style.cssText = 'position:absolute;top:-10px;right:-10px;z-index:1;all:unset;cursor:pointer;background:var(--panel,#11141f);border:1px solid var(--edge,#262c3d);color:var(--ink,#e6edf3);width:26px;height:26px;border-radius:50%;text-align:center;line-height:26px';
+  close.onclick = () => { inpaintOverlay.style.display = 'none'; };
+  inpaintOverlay.onclick = e => { if (e.target === inpaintOverlay) inpaintOverlay.style.display = 'none'; };
+  inpaintInst = makeInpaint(panel);
+  try { window.__inpaint = inpaintInst; } catch { /* test/introspection hook */ }
+  panel.appendChild(close);
+  inpaintOverlay.appendChild(panel); document.body.appendChild(inpaintOverlay);
+  inpaintInst.onSubmit(async ({ imageDataUrl, maskDataUrl, prompt, opts }) => {
+    if (!cap) throw new Error('open this from your agent (no capability)');
+    const r = await (await fetch('/gpu/inpaint', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, image: imageDataUrl, mask: maskDataUrl, prompt, seed: opts && opts.seed }) })).json();
+    if (!r || !r.ok) throw new Error((r && r.error) || 'inpaint failed');
+    return { dataUrl: r.dataUrl, info: r.info };
+  });
+  return inpaintInst;
+})());
+window.__openInpaint = async dataUrl => { try { const p = await ensureInpaint(); inpaintOverlay.style.display = 'flex'; if (dataUrl) await p.open(dataUrl); return true; } catch (e) { return String((e && e.message) || e); } };
+
 let pendant = null, pendantWrap = null, pendantCanvas = null, pendantES = null, pendantRaf = 0, pendantInit = null;
 let pendantLive = false, liveChatId = ''; // a turn is mid-stream → don't clobber it with a saved-trace re-render
 let scoping = false; // the permissioning (scope) agent is researching → show its dodecahedron trace
