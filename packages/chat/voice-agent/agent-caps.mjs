@@ -105,6 +105,7 @@ import { makeContacts } from './contacts.mjs';
 import { renderCheck } from './render-check.mjs';
 import { getTranscript } from './youtube.mjs';
 import { extractPdf } from './pdf-extract.mjs';
+import { listAllChats as corpusListChats, readChatSanitized as corpusReadChat } from './chat-corpus.mjs';
 // THE PERSONAL/PLATFORM SEAM (Packing up for Dweb): every personal coupling that used to be a hardcoded
 // /home/dan literal now resolves through field-config, so pointing FIELD_PERSONAL_ROOT at the encrypted
 // volume moves dan's whole personal family together. Defaults are byte-identical to before on the NUC.
@@ -581,6 +582,11 @@ export const POWERS = harden({
   kazputer: { label: 'Manage Kazputers — give someone a new one (email invite), and administer your own (settings/coins; you confirm)', verbs: ['proposeGiveKazputer', 'kazputerStatus', 'proposeKazputerSetting', 'proposeKazputerCoins'] },
   dietician: { label: "Drive the dietician's restaurant pipeline — scan an area, evaluate spots for Alexa's diet, refresh + publish the food guides (publishing you confirm)", verbs: ['dietScanArea', 'dietEvaluateArea', 'dietBuildMap', 'dietStatus', 'dietRefreshSite'] },
   app: { label: 'Introspect + manage your own app state — list/read/retitle every conversation (chats, voice memos, voice notes) and see an overview of asks/feed/proposals', verbs: ['listChats', 'readChat', 'retitleChat', 'appState'] },
+  // chatCorpus — exists for SCHEDULED SELF-EVAL runs (the weekly eval agent). Unlike `app` (META, and its
+  // reads need a live-chat ctx.app the scheduler never binds), this reads the chat STORE FILES directly,
+  // is strictly read-only, and its transcript reader has sanitize (emails/phones/≥16-hex → placeholders)
+  // + a size clamp BUILT IN. Deliberately NOT in META_POWERS so a scheduled run can hold it.
+  chatCorpus: { label: 'Read-only SANITIZED view of the whole conversation corpus (for scheduled self-eval: list every chat + read laundered, size-clamped transcripts; no raw secrets, no writes)', verbs: ['listChats', 'readChatSanitized'] },
   selfImprove: { label: '⚠️ Autonomously IMPLEMENT system improvements (FAPO-style: propose precise targets to a backlog → drain one → implement on an isolated worktree → independently verify → flag-gated auto-merge with post-merge re-verify + auto-revert)', verbs: ['improveSystem', 'proposeImprovement', 'listImprovements', 'runNextImprovement', 'listChangelog', 'revertChange'] },
 });
 export const ALL_POWERS = harden(Object.keys(POWERS));
@@ -1489,9 +1495,16 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     //    reaches the agent — cap-hygiene). Retitling is the user's own metadata (reversible), so it
     //    fires directly; reads are free. (Motivating capture: "title the voice-note chats descriptively.")
     listChats: { reversible: false, args: {}, description: 'List EVERY conversation in this app — regular chats, voice memos, and ingested voice notes — with id, title, kind, turn count, and a preview. Use this to review your history (e.g. to give them better titles).',
-      run: async (a, agent, ctx) => (ctx && ctx.app ? { ok: true, conversations: await ctx.app.listChats() } : { ok: false, error: 'app state is only available in a live chat turn' }) },
+      // outside a live chat turn (a SCHEDULED run — no ctx.app) fall back to the read-only corpus view
+      // over the store files: same {id,title,ts,msgCount} shape, across ALL per-cap stores (chatCorpus).
+      run: async (a, agent, ctx) => (ctx && ctx.app ? { ok: true, conversations: await ctx.app.listChats() } : { ok: true, conversations: corpusListChats(), note: 'corpus view (all store files) — read a transcript with readChatSanitized' }) },
     readChat: { reversible: false, args: { id: 'string — a conversation id from listChats' }, description: 'Read one conversation in full (its transcript / messages), so you can understand what it is about — e.g. before retitling it.',
-      run: async ({ id }, agent, ctx) => (ctx && ctx.app ? await ctx.app.readChat(String(id || '')) : { ok: false, error: 'app state unavailable here' }) },
+      run: async ({ id }, agent, ctx) => (ctx && ctx.app ? await ctx.app.readChat(String(id || '')) : { ok: false, error: 'app state unavailable here — use readChatSanitized' }) },
+    // chatCorpus's reader (scheduled self-eval): sanitize + clamp happen INSIDE chat-corpus.mjs — there is
+    // no raw-transcript path through this verb, so a corpus harvest can't leak an email/phone/swissnum.
+    readChatSanitized: { reversible: false, args: { id: 'string — a conversation id from listChats', maxChars: 'number — optional transcript size clamp (default 8000; the middle is truncated, keeping the opening goal + final outcome)' },
+      description: 'Read one conversation as a SANITIZED transcript: emails, phone numbers, and long hex tokens are already replaced with stable placeholders, and the text is size-clamped. Use this (never a raw read) when harvesting conversations for evaluation — the laundering is built in.',
+      run: async ({ id, maxChars }) => corpusReadChat({ id, maxChars }) },
     retitleChat: { reversible: false, args: { id: 'string — a conversation id from listChats', title: 'string — the new, descriptive title' }, description: 'Rename a conversation (chat, voice memo, or voice note) to a more descriptive title. Applies immediately and shows on the next refresh. Reversible — just retitle again. Use after readChat to choose a good title.',
       run: async ({ id, title }, agent, ctx) => (ctx && ctx.app ? await ctx.app.retitle(String(id || ''), String(title || '')) : { ok: false, error: 'app state unavailable here' }) },
     appState: { reversible: false, args: {}, description: 'An overview of ALL your app state: counts of chats / voice memos / voice notes, open questions (asks), feed items, pending proposals, specialists, and whether a custom persona is set.',
