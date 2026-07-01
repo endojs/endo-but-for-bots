@@ -38,7 +38,7 @@ flag matches its class.
 
 | Class | Meaning | Gate | Verbs |
 | --- | --- | --- | --- |
-| `read` | Observe only, no side effect | none (free) | `searchNotes` `readNote` `searchDietNotes` `readDietNote` `consult` `fetchUrl` `haFind` `haTree` `haState` `agentsList` `agentStatus` `fileList` `fileRead` `listTimers` `contactsSearch` `contactsGet` `listSpecialists` `listConnectors` `listCustomTools` `listScheduledTasks` |
+| `read` | Observe only, no side effect | none (free) | `searchNotes` `readNote` `searchDietNotes` `readDietNote` `consult` `fetchUrl` `haFind` `haTree` `haState` `agentsList` `agentStatus` `fileList` `fileRead` `listTimers` `contactsSearch` `contactsGet` `listSpecialists` `listConnectors` `listCustomTools` `listScheduledTasks` `listChats` `readChatSanitized` |
 | `reversible` | Speculative; abortable mid-flight (barge-in retracts) | none (free, `reversible:true`) | `generateImage` |
 | `scoped-write` | Write confined to the agent's **own** sandboxed storage — its home folder, or its own component-source git objects (history-preserving) | none (immediate, but can't escape its dir / its own objects) | `fileWrite` `publishSite` `componentWriteFile` `forkComponent` `revertComponent` |
 | `render` | Emit an **ephemeral** UI widget/spec into the agent's *own* response — no persistence, no authority, no external effect; the live data a widget shows flows **separately** + cap-gated, so it's safe even from a confined cap | none (immediate; pure output) | `showEntityStatus` `showCountdowns` `showChoices` `showComponent` |

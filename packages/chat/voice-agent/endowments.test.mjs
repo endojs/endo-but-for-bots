@@ -30,6 +30,7 @@ const POLICY = {
   listConnectors: 'read', listCustomTools: 'read', // the wired/admitted tool menus (read-only)
   listScheduledTasks: 'read', // the recurring-task list (read-only)
   listChats: 'read', readChat: 'read', appState: 'read', // the app's own state (introspection)
+  readChatSanitized: 'read', // chatCorpus: sanitized+clamped transcript read over the store files (scheduled self-eval; laundering built in)
   browseWeb: 'read', screenshotWeb: 'read', // headless browser: observe a (JS-rendered) page; SSRF-guarded
   webSearch: 'read', // Brave web search — find pages (read-only)
   research: 'read', // research team: plan → parallel search/read/distill → cited synthesis (read-only)
