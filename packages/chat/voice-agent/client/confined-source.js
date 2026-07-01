@@ -20,12 +20,15 @@ export const lockdownActive = () => { try { return Object.isFrozen(Object.protot
 // makeConfinedFromSource(source) → a confined Preact component built from untrusted source.
 // `source` is a function-expression string: `(endowments, props) => vnode`. `endowments` (optional) seeds
 // the Compartment's globals (default none → the source sees only what confineComponent hands it at render).
-export const makeConfinedFromSource = (source, { name = 'forked-component', endowments = {} } = {}) => {
+// `onError` (optional) is confineComponent's telemetry hook: WITHOUT it a render-time throw is swallowed
+// (Confined returns null — a silently blank widget) and nobody, human or authoring agent, ever hears.
+// Callers should pass one that routes the error to the render-feedback loop (chat 1cbe89a9).
+export const makeConfinedFromSource = (source, { name = 'forked-component', endowments = {}, onError } = {}) => {
   // eslint-disable-next-line no-undef -- Compartment is a SES global (installed by `import 'ses'`)
   const compartment = new Compartment(endowments);
   const fn = compartment.evaluate(`(${String(source)})`);
   if (typeof fn !== 'function') {
     throw new TypeError('confined component source must evaluate to a function: (endowments, props) => vnode');
   }
-  return confineComponent(fn, { name });
+  return confineComponent(fn, { name, onError });
 };

@@ -33,8 +33,8 @@ export const mountForkInto = async (host, opts = {}) => {
   };
   const paint = src => {
     const ok = window.__fieldIslands && typeof window.__fieldIslands.renderSource === 'function'
-      && window.__fieldIslands.renderSource(src, stage, props);
-    note.textContent = ok ? '' : 'This fork renders only when the confined runtime is active (lockdown on).';
+      && window.__fieldIslands.renderSource(src, stage, props, { name: name || 'fork' }); // name → the render-feedback loop's error reports
+    note.textContent = ok ? '' : (stage.textContent ? '' : 'This fork renders only when the confined runtime is active (lockdown on).'); // a render error already painted its own ⚠ note
     return ok;
   };
   // Phase 4 recipient affordances: an owner's newer version is an UPGRADE you choose to take.

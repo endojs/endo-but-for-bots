@@ -394,14 +394,31 @@ const islands = {
   // The fork is seeded with FORK_VOCAB as compartment globals — the render-safe island vocabulary (h,
   // Fragment + every ui-kit primitive). That IS the fork's whole authority: pure render functions that emit
   // vnodes, no caps/DOM/fs/network. Under lockdown their `.constructor` is tamed, so they grant no escape.
-  renderSource(source, el, props) {
+  renderSource(source, el, props, opts) {
     if (!el) return false;
     if (!lockdownActive()) { el.textContent = '⚠︎ refusing untrusted source: realm not locked down'; return false; }
+    const name = String((opts && opts.name) || 'forked-component');
+    // RENDER-FEEDBACK LOOP (chat 1cbe89a9): confineComponent SWALLOWS a render-time throw (Confined
+    // returns null) unless onError is passed — the widget went silently blank and neither the human nor
+    // the authoring agent ever heard. Now: an inline ⚠ note for the human + __fieldReportError routes it
+    // to the chat's pending-error queue (the agent hears it next turn) and the auto-fix backlog.
+    let reported = false;
+    const onError = err => {
+      if (reported) return; reported = true; // Confined re-renders re-throw; one report per mount
+      const msg = (err && err.message) || String(err);
+      try { const note = document.createElement('div'); note.style.cssText = 'color:var(--bad,#f85149);font-size:11px;padding:4px 2px'; note.textContent = `⚠︎ ${name} threw while rendering: ${msg}`; el.appendChild(note); } catch { /* note is best-effort */ }
+      try { (globalThis.__fieldReportError || (() => {}))(`fork threw while rendering: ${msg}`, String(source || '').slice(0, 500), { name }); } catch { /* report is best-effort */ }
+      if (opts && typeof opts.onError === 'function') { try { opts.onError(err); } catch { /* caller hook must not break the render */ } }
+    };
     let C;
-    try { C = makeConfinedFromSource(source, { name: 'forked-component', endowments: FORK_VOCAB }); }
-    catch (e) { el.textContent = `⚠︎ bad component source: ${e && e.message}`; return false; }
+    try { C = makeConfinedFromSource(source, { name, endowments: FORK_VOCAB, onError }); }
+    catch (e) {
+      el.textContent = `⚠︎ bad component source: ${e && e.message}`;
+      try { (globalThis.__fieldReportError || (() => {}))(`fork source failed to evaluate: ${(e && e.message) || e}`, String(source || '').slice(0, 500), { name }); } catch { /* */ }
+      return false;
+    }
     tagComponent(el, 'confined-source', 'forked-component');
-    renderConfined(h(C, props || {}), el);
+    try { renderConfined(h(C, props || {}), el); } catch (e) { onError(e); return false; }
     return true;
   },
 };
