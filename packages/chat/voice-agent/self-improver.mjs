@@ -72,7 +72,9 @@ export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, l
   const mergeBranch = async (branch, goal, now) => {
     const dirty = await host.exec(`git -C ${shq(repo)} status --porcelain`, { timeoutMs: 30000 });
     if (!dirty.ok) return { merged: false, reason: 'could not read the live tree status — refusing to auto-merge (fail closed)', branch };
-    if (String(dirty.stdout || '').trim()) return { merged: false, reason: 'the live checkout has uncommitted changes — refusing to auto-merge (would risk clobbering work)', branch };
+    // `treeDirty` marks this refusal as NOT the change's fault — the branch is fine, the LIVE tree is
+    // blocked by someone's uncommitted work. improve() maps it to a STAGED (ready-to-review) outcome.
+    if (String(dirty.stdout || '').trim()) return { merged: false, treeDirty: true, reason: 'the live checkout has uncommitted changes — refusing to auto-merge (would risk clobbering work)', branch };
     // FAIL CLOSED on an unrecordable ledger: load it BEFORE merging so a corrupt/unwritable changelog blocks
     // the merge (never ship a change we cannot record for revert). A throw here = no merge happened.
     let l; try { l = loadLedger(); } catch (e) { return { merged: false, reason: `refusing to auto-merge — ${(e && e.message) || e} (a change we can't record in the changelog must not ship)`, branch }; }
@@ -113,6 +115,11 @@ export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, l
     // 3. MERGE (safe) — only a verified-green, conflict-free change lands. Gated by autoMerge.
     if (!autoMerge) return { ok: true, merged: false, attempted: true, verified: true, branch, goal: g, readyToReview: true, reason: 'verified green — branch is ready for you to review + merge (auto-merge is off)' };
     const r = await mergeBranch(branch, g, now);
+    // A DIRTY LIVE TREE is not a failure of the CHANGE: the branch is verified GREEN and kept intact —
+    // the merge is merely blocked on the operator's uncommitted work. Surface it exactly like the
+    // autoMerge-off path (readyToReview) so the caller records it as STAGED (no burned retry attempt)
+    // and raises the 🔔 staged-review card, instead of attributing a "failed attempt" to a good change.
+    if (!r.merged && r.treeDirty) return { ok: true, ...r, attempted: true, verified: true, goal: g, readyToReview: true, reason: `verified green — auto-merge deferred (${r.reason}). The branch is kept + staged for review; merge it from the 🔔 inbox once the live tree is clean.` };
     if (!r.merged) return { ok: true, ...r, attempted: true, verified: true, goal: g };
     // 4. POST-MERGE RE-VERIFY the MERGED live tree with the FULL default suite (NOT a weaker per-call
     //    command) — a change green IN ISOLATION can still break once merged (interaction with HEAD).

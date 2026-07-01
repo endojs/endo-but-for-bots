@@ -58,15 +58,23 @@ export const missingTargets = (goal, exists) => {
   return { ok: targets.length === 0 || missing.length < targets.length, targets, missing };
 };
 
+// map a selfImprover.improve() result to the backlog outcome status. THE one place the attribution rule
+// lives (agent-caps uses it): merged → 'merged'; verified-but-unmerged-through-no-fault-of-the-change
+// (auto-merge off, or the LIVE tree was dirty → readyToReview) → 'staged'; everything else → 'failed'.
+export const outcomeStatus = r => ((r && r.merged) ? 'merged' : (r && r.readyToReview) ? 'staged' : 'failed');
+
 // record the outcome of an attempt (FAPO attribution): 'merged' | 'staged' (verified, awaiting review) |
 // 'failed' (empty/red — keep the reason so the next attempt or the operator can learn). An unsuccessful attempt
 // returns the target to 'open' for a BOUNDED retry — but once it has racked up FAILURE_THRESHOLD (default 3)
 // unsuccessful attempts it is parked in a TERMINAL 'failed' status so it leaves the open queue permanently and
 // one persistently-failing target can never block the rest of the backlog from draining.
+// A 'staged' outcome does NOT charge the retry budget: the change was verified GREEN and is merely awaiting
+// review (e.g. auto-merge refused only because the live tree was dirty) — that is not a burned attempt, and if
+// the item is ever re-opened its budget must not be pre-charged by outcomes that were not the change's fault.
 export const recordOutcome = (id, { status, branch, reason, failureThreshold = FAILURE_THRESHOLD } = {}) => {
   const s = load(); const it = s.items.find(x => x.id === String(id));
   if (!it) return { ok: false, error: 'no such backlog item' };
-  it.attempts = (it.attempts || 0) + 1;
+  it.attempts = (it.attempts || 0) + (status === 'staged' ? 0 : 1);
   if (status === 'merged' || status === 'staged') {
     it.status = status; // a successful (or verified-staged) attempt is terminal
   } else if (it.attempts >= failureThreshold) {

@@ -52,6 +52,7 @@ test('a REGRESSION (verifies red) is REFUSED — not merged, the branch kept for
   const r = await si.improve({ goal: 'set value BAD', successCommand: 'sh check.sh', employExecutor: implementer('agentwt/bad1', 'BAD'), autoMerge: true, now: 't2' });
   assert.equal(r.merged, false, 'a failing change does NOT merge');
   assert.match(r.reason, /improvement|verification|pass/i);
+  assert.ok(!r.readyToReview, 'a verification-RED run is a genuine failure — never staged for review');
   assert.equal(read(path.join(repo, 'value.txt')), before, 'the live tree is unchanged');
   assert.match((await sh(`git -C ${q(repo)} branch --list agentwt/bad1`)).stdout, /agentwt\/bad1/, 'the rejected branch is kept');
 });
@@ -64,11 +65,19 @@ test('ROLLBACK reverts an auto-merge by its ledger id (history-preserving)', asy
   assert.equal(si.listMerges().find(x => x.id === m.id).rolledBack, true, 'the ledger marks it rolled back');
 });
 
-test('a dirty LIVE tree REFUSES the merge (never clobbers uncommitted work)', async () => {
+test('a dirty LIVE tree REFUSES the merge (never clobbers uncommitted work) — but the VERIFIED-GREEN run is STAGED, not failed', async () => {
   fs.writeFileSync(path.join(repo, 'uncommitted.txt'), 'WIP');
   const r = await si.improve({ goal: 'good change but base is dirty', successCommand: 'sh check.sh', employExecutor: implementer('agentwt/imp2', 'GOOD'), autoMerge: true, now: 't4' });
   assert.equal(r.merged, false, 'refuses to merge into a dirty tree');
   assert.match(r.reason, /uncommitted|dirty/i);
+  // the dirty tree is NOT the change's fault: the run verified green, so it must surface exactly like the
+  // autoMerge-off path — readyToReview (→ the caller records 'staged', burns no retry attempt, and raises
+  // the 🔔 staged-review card) — with the branch kept for the merge-from-inbox action.
+  assert.equal(r.verified, true, 'the change itself verified green');
+  assert.equal(r.treeDirty, true, 'the refusal is attributed to the dirty LIVE tree, not the change');
+  assert.equal(r.readyToReview, true, 'a verified run blocked ONLY by a dirty tree is STAGED for review');
+  assert.equal(r.branch, 'agentwt/imp2', 'the result carries the branch (the review card acts on it)');
+  assert.match((await sh(`git -C ${q(repo)} branch --list agentwt/imp2`)).stdout, /agentwt\/imp2/, 'the verified branch is kept');
   fs.rmSync(path.join(repo, 'uncommitted.txt'));
 });
 

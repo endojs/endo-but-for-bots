@@ -41,7 +41,7 @@ import { createProject, listProjects, addScheduledAgent, updateScheduledAgent, r
 import { proposeSpawn } from '../capture/agent-spawn.mjs';
 import { runOpusDelegate, makeMeteredOpusDelegate } from './delegate.mjs';
 import { makeSelfImprover } from './self-improver.mjs';
-import { listBacklog, addBacklog, nextOpen, recordOutcome, normalizeTestCmd, missingTargets } from './improvement-backlog.mjs';
+import { listBacklog, addBacklog, nextOpen, recordOutcome, outcomeStatus, normalizeTestCmd, missingTargets } from './improvement-backlog.mjs';
 import { makeWandPolicy, DEFAULT_WAND_POLICY } from './wand-policy.mjs';
 import { runAgentCode } from '../../ocapn-noise/codemode.mjs';
 import { dialIrohObject } from './iroh-objects.mjs';
@@ -1188,7 +1188,10 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         try {
           const vcmd = buildVerify(item.successCommand); // canonicalize the item's stored command (npm/yarn test → node --test) + deps preamble
           const r = await selfImprover.improve({ goal: item.goal, successCommand: vcmd, employExecutor: ({ goal: gg }) => runWorktreeExecutor({ goal: gg, successCommand: vcmd }), autoMerge: SELF_IMPROVE_AUTOMERGE, now: new Date().toISOString() });
-          const status = r.merged ? 'merged' : r.readyToReview ? 'staged' : 'failed';
+          // outcomeStatus is the ONE attribution rule (tested in improvement-backlog.test.mjs): a run that
+          // verified GREEN but couldn't merge through no fault of the change (auto-merge off, or the LIVE
+          // tree was dirty) is STAGED — it keeps its branch, burns no retry attempt, and raises the 🔔 card.
+          const status = outcomeStatus(r);
           recordOutcome(item.id, { status, branch: r.branch, reason: r.reason });
           // STAGED (verified but not merged) → raise an actionable 🔔 review so it doesn't sit silent in the
           // backlog: dan gets a notification with inline ✅ Merge / ❌ Discard he can act on right from the inbox.

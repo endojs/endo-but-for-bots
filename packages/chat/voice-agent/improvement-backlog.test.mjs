@@ -8,7 +8,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'backlog-test-'));
 process.env.IMPROVEMENT_BACKLOG = path.join(tmp, 'backlog.json');
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-const { addBacklog, listBacklog, nextOpen, recordOutcome, clearResolved, normalizeTestCmd, goalTargets, missingTargets, FAILURE_THRESHOLD } = await import('./improvement-backlog.mjs');
+const { addBacklog, listBacklog, nextOpen, recordOutcome, outcomeStatus, clearResolved, normalizeTestCmd, goalTargets, missingTargets, FAILURE_THRESHOLD } = await import('./improvement-backlog.mjs');
 after(() => { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* */ } });
 
 test('pre-flight target guard: a goal whose named paths all 404 is rejected; a real path (or none) passes', () => {
@@ -64,6 +64,34 @@ test('a FAILED attempt is recorded with its reason and returns to OPEN (bounded 
   // after maxAttempts, nextOpen skips it (no infinite churn)
   recordOutcome(r.id, { status: 'failed', reason: 'again' });
   assert.ok(nextOpen({ maxAttempts: 2 })?.id !== r.id, 'a target that failed maxAttempts is no longer picked');
+});
+
+test('a STAGED outcome (verified green, merge blocked through no fault of the change) burns NO retry attempt; failed still does', () => {
+  process.env.IMPROVEMENT_BACKLOG = path.join(tmp, 'staged-no-burn.json');
+  const r = addBacklog({ goal: 'In staged/file.mjs, a verified change blocked only by a dirty live tree, plus its test.' });
+  // one genuine failure first — the retry budget is charged
+  recordOutcome(r.id, { status: 'failed', reason: 'verification red' });
+  assert.equal(listBacklog().find(x => x.id === r.id).attempts, 1, 'a genuine failure burns an attempt');
+  // then the run verifies GREEN but auto-merge refuses ONLY because the live tree is dirty → staged
+  const out = recordOutcome(r.id, { status: 'staged', branch: 'agentwt/dirty1', reason: 'live tree dirty — staged for review' });
+  const it = listBacklog().find(x => x.id === r.id);
+  assert.equal(it.status, 'staged', 'recorded as staged, not another failed attempt');
+  assert.equal(it.attempts, 1, 'STAGED does not increment attempts — the change was green; the dirty tree is not its fault');
+  assert.equal(out.attempts, 1, 'the returned attempts count agrees');
+  assert.equal(it.lastOutcome.branch, 'agentwt/dirty1', 'the branch is kept on the record for the review card');
+});
+
+test('outcomeStatus (the ONE attribution rule agent-caps uses): dirty-tree/auto-merge-off verified runs → staged; red → failed', () => {
+  assert.equal(outcomeStatus({ merged: true }), 'merged');
+  // verified green, auto-merge refused ONLY on a dirty live tree (self-improver sets readyToReview + treeDirty)
+  assert.equal(outcomeStatus({ merged: false, verified: true, readyToReview: true, treeDirty: true, branch: 'agentwt/x' }), 'staged',
+    'dirty-tree + verified maps to staged → runNextImprovement records staged AND raises the 🔔 staged-review card (its raise condition is status===staged && branch)');
+  // verified green with auto-merge off (the pre-existing staged path) is unchanged
+  assert.equal(outcomeStatus({ merged: false, verified: true, readyToReview: true, branch: 'agentwt/y' }), 'staged');
+  // genuine failures still burn: verification red / empty branch / merge conflict never map to staged
+  assert.equal(outcomeStatus({ merged: false, verified: false, reason: 'red' }), 'failed');
+  assert.equal(outcomeStatus({ merged: false, empty: true }), 'failed');
+  assert.equal(outcomeStatus({ merged: false, verified: true, conflict: true, reason: 'merge conflict' }), 'failed', 'a real merge CONFLICT is not auto-staged');
 });
 
 test('de-dupe: re-proposing an identical OPEN goal does not duplicate it', () => {
