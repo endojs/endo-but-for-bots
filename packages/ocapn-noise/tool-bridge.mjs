@@ -5,8 +5,17 @@
 // (2026-06-28): control signals are scope functions, not forgeable in-band strings.
 import '@endo/init';
 import fs from 'node:fs';
+import os from 'node:os';
 
 const LLM = process.env.AGENT_LLM || 'http://192.168.50.226:8003/v1/chat/completions';
+
+// Personal-seam mirror of chat/voice-agent/field-config.mjs (this package must not import the chat
+// layer): the key-fallback locations resolve through HOME / FIELD_PERSONAL_ROOT / the same env
+// overrides, with byte-identical defaults on the NUC. HOST_ENV_FILE / FIELD_CONFIG_DIR seams.
+const HOME = process.env.HOME || os.homedir() || '/home/dan';
+const PERSONAL_ROOT = process.env.FIELD_PERSONAL_ROOT || '';
+const CONFIG_DIR = process.env.FIELD_CONFIG_DIR || (PERSONAL_ROOT ? `${PERSONAL_ROOT}/config` : `${HOME}/.config/field-agent`);
+const HOST_ENV_FILE = process.env.HOST_ENV_FILE || (PERSONAL_ROOT ? `${PERSONAL_ROOT}/env` : `${HOME}/.env`);
 
 // OpenRouter routing: a model id of `openrouter:<slug>` (chosen in the provider menu) is dispatched
 // to OpenRouter instead of the local gemma. The key is read lazily from the env, then the field-agent
@@ -16,8 +25,8 @@ let orKeyCache;
 const openrouterKey = () => {
   if (orKeyCache !== undefined) return orKeyCache;
   if (process.env.OPENROUTER_API_KEY) { orKeyCache = process.env.OPENROUTER_API_KEY.trim(); return orKeyCache; }
-  try { const s = fs.readFileSync('/home/dan/.config/field-agent/secrets/openrouter-api-key', 'utf8').trim(); if (s) { orKeyCache = s; return orKeyCache; } } catch { /* none */ }
-  try { const env = fs.readFileSync('/home/dan/.env', 'utf8'); const m = env.match(/^\s*OPENROUTER_API_KEY\s*=\s*(.+)\s*$/m); orKeyCache = m ? m[1].trim().replace(/^["']|["']$/g, '') : null; } catch { orKeyCache = null; }
+  try { const s = fs.readFileSync(`${CONFIG_DIR}/secrets/openrouter-api-key`, 'utf8').trim(); if (s) { orKeyCache = s; return orKeyCache; } } catch { /* none */ }
+  try { const env = fs.readFileSync(HOST_ENV_FILE, 'utf8'); const m = env.match(/^\s*OPENROUTER_API_KEY\s*=\s*(.+)\s*$/m); orKeyCache = m ? m[1].trim().replace(/^["']|["']$/g, '') : null; } catch { orKeyCache = null; }
   return orKeyCache;
 };
 
@@ -29,8 +38,8 @@ let anKeyCache;
 const anthropicKey = () => {
   if (anKeyCache !== undefined) return anKeyCache;
   if (process.env.ANTHROPIC_API_KEY) { anKeyCache = process.env.ANTHROPIC_API_KEY.trim(); return anKeyCache; }
-  try { const s = fs.readFileSync('/home/dan/.config/field-agent/secrets/anthropic-api-key', 'utf8').trim(); if (s) { anKeyCache = s; return anKeyCache; } } catch { /* none */ }
-  try { const env = fs.readFileSync('/home/dan/.env', 'utf8'); const m = env.match(/^\s*ANTHROPIC_API_KEY\s*=\s*(.+)\s*$/m); anKeyCache = m ? m[1].trim().replace(/^["']|["']$/g, '') : null; } catch { anKeyCache = null; }
+  try { const s = fs.readFileSync(`${CONFIG_DIR}/secrets/anthropic-api-key`, 'utf8').trim(); if (s) { anKeyCache = s; return anKeyCache; } } catch { /* none */ }
+  try { const env = fs.readFileSync(HOST_ENV_FILE, 'utf8'); const m = env.match(/^\s*ANTHROPIC_API_KEY\s*=\s*(.+)\s*$/m); anKeyCache = m ? m[1].trim().replace(/^["']|["']$/g, '') : null; } catch { anKeyCache = null; }
   return anKeyCache;
 };
 // OpenAI-style chat messages → Anthropic Messages format: `system` is a top-level field; user/assistant turns

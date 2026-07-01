@@ -12,19 +12,21 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { Far } from '@endo/marshal';
 
+import { HOME, CONFIG_DIR, STATE_DIR } from './field-config.mjs';
+
 const newHandle = () => crypto.randomBytes(8).toString('hex');
 
 // Registered Claude Code dev sessions (the Blacksmith). The field-agent-chats skill
 // writes these; we surface them as roster nodes whose route() enqueues a task to the
 // shared dev-queue the skill's inbox reads. Re-read fresh each call so a session that
 // registers after boot shows up live (no restart).
-const DEV_SESSIONS = '/home/dan/.config/field-agent/dev-sessions.json';
-const DEV_QUEUE = '/home/dan/.local/state/field-agent/dev-queue.jsonl';
+const DEV_SESSIONS = path.join(CONFIG_DIR, 'dev-sessions.json');
+const DEV_QUEUE = path.join(STATE_DIR, 'dev-queue.jsonl');
 // BENCHED BY DEFAULT: dev sessions (the Blacksmith) are OPT-IN. routeToDev + employ's code/write roles
 // resolve dev sessions via readDevs; while benched this returns [] so they refuse cleanly — nothing is
 // routed to a Blacksmith. (dan benched it; stopping the runner alone left the REGISTRATION routing tasks.
 // Enforce it at the source.) To un-bench deliberately: `touch ~/.config/field-agent/blacksmith-enabled`.
-const BLACKSMITH_ENABLE_FLAG = '/home/dan/.config/field-agent/blacksmith-enabled';
+const BLACKSMITH_ENABLE_FLAG = path.join(CONFIG_DIR, 'blacksmith-enabled');
 const blacksmithEnabled = () => { try { return fs.existsSync(BLACKSMITH_ENABLE_FLAG); } catch { return false; } };
 const readDevs = () => { if (!blacksmithEnabled()) return []; try { return JSON.parse(fs.readFileSync(DEV_SESSIONS, 'utf8')).sessions || []; } catch { return []; } };
 
@@ -72,7 +74,7 @@ const sshExec = (ip, cmd, cwd, timeoutMs = 60000) => new Promise(resolve => {
 // local shell), tinix (the GPU box, ssh), rovie (the rover, ssh). Config: ~/.config/field-agent/
 // machines.json [{name, ssh|local, role}]. Same shell-node shape as a persona: status()=read,
 // exec(cmd,{cwd})=the coarse terminal, readOnly() attenuates.
-const MACHINES_FILE = () => process.env.MACHINES_FILE || '/home/dan/.config/field-agent/machines.json'; // env-overridable for staging/tests
+const MACHINES_FILE = () => process.env.MACHINES_FILE || path.join(CONFIG_DIR, 'machines.json'); // env-overridable for staging/tests
 const readMachines = () => { try { const m = JSON.parse(fs.readFileSync(MACHINES_FILE(), 'utf8')); return Array.isArray(m) ? m : []; } catch { return []; } };
 const localExec = (cmd, cwd, timeoutMs = 60000) => new Promise(resolve => {
   const full = cwd ? `cd ${JSON.stringify(String(cwd))} && ${String(cmd || '')}` : String(cmd || '');
@@ -141,7 +143,7 @@ export const makeAgentRoster = async () => {
     const handle = newHandle();
     const target = m.ssh || m.host || m.name;
     const exec = (cmd, opts = {}) => (m.local ? localExec(cmd, opts.cwd, opts.timeoutMs || 60000) : sshTo(target, cmd, opts.cwd, opts.timeoutMs || 60000));
-    const repoPath = m.git ? String(m.git).replace(/^~(?=\/|$)/, '/home/dan') : '';
+    const repoPath = m.git ? String(m.git).replace(/^~(?=\/|$)/, HOME) : '';
     const repoStatus = async () => {
       const q = JSON.stringify(repoPath);
       const r = await localExec(`cd ${q} && echo "HEAD:$(git rev-parse --short HEAD 2>/dev/null)" && echo "BRANCH:$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" && echo "SUBJECT:$(git log -1 --format=%s 2>/dev/null)" && echo "DIRTY-START" && git status --porcelain 2>/dev/null`, null, 15000);

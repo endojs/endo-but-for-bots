@@ -30,9 +30,9 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import { execFile } from 'node:child_process';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { Far } from '@endo/marshal';
 
-import { generate } from '/home/dan/gpu-img/gen.mjs';
 import { makeObsidianGraph } from '../capture/obsidian-graph.mjs';
 import { consultReferences } from '../capture/consult.mjs';
 import { notify } from '../capture/notify.mjs';
@@ -109,7 +109,7 @@ import { listAllChats as corpusListChats, readChatSanitized as corpusReadChat } 
 // THE PERSONAL/PLATFORM SEAM (Packing up for Dweb): every personal coupling that used to be a hardcoded
 // /home/dan literal now resolves through field-config, so pointing FIELD_PERSONAL_ROOT at the encrypted
 // volume moves dan's whole personal family together. Defaults are byte-identical to before on the NUC.
-import { HOME_BASE as CFG_HOME_BASE, PERSONA_FILE as CFG_PERSONA_FILE, EMAIL_CFG as CFG_EMAIL_CFG, EMAIL_FROM as CFG_EMAIL_FROM, KAZPUTER_STATE as CFG_KAZPUTER_STATE, FEED_FILE as CFG_FEED_FILE, VAULT_DIR, STATE_DIR, VOICE_STATE_DIR, CONFIG_DIR } from './field-config.mjs';
+import { HOME_BASE as CFG_HOME_BASE, PERSONA_FILE as CFG_PERSONA_FILE, EMAIL_CFG as CFG_EMAIL_CFG, EMAIL_FROM as CFG_EMAIL_FROM, KAZPUTER_STATE as CFG_KAZPUTER_STATE, FEED_FILE as CFG_FEED_FILE, VAULT_DIR, STATE_DIR, VOICE_STATE_DIR, CONFIG_DIR, HOST_ENV_FILE, CALENDAR_CFG } from './field-config.mjs';
 
 export const HOME_BASE = CFG_HOME_BASE;
 const PERSONA_FILE = CFG_PERSONA_FILE; // the agent's self-authored, operator-confirmed instructions
@@ -230,12 +230,12 @@ export const makeWorktrees = ({ host, repo = WORKTREE_REPO, dir: baseDir = WORKT
 };
 harden(makeWorktrees);
 
-// Read a secret from the process env, falling back to ~/.env (the systemd unit
+// Read a secret from the process env, falling back to the host env file (the systemd unit
 // doesn't source ~/.env; the long-lived HA token lives there as HOMEASSISTANT=).
 let dotenvCache;
 const fromEnv = key => {
   if (process.env[key]) return process.env[key];
-  if (dotenvCache === undefined) { try { dotenvCache = fs.readFileSync('/home/dan/.env', 'utf8'); } catch { dotenvCache = ''; } }
+  if (dotenvCache === undefined) { try { dotenvCache = fs.readFileSync(HOST_ENV_FILE, 'utf8'); } catch { dotenvCache = ''; } }
   const m = dotenvCache.match(new RegExp(`^\\s*${key}\\s*=\\s*(.+)\\s*$`, 'm'));
   return m ? m[1].trim().replace(/^["']|["']$/g, '') : null;
 };
@@ -325,7 +325,26 @@ const postFeed = ({ title, body = '', status = '🗣️ from the voice agent', n
   });
 
 // ── headless browser worker (out-of-SES-realm; see browser-run.cjs). Returns parsed JSON.
-const BROWSER_RUN = '/home/dan/endo-bfb/packages/chat/voice-agent/browser-run.cjs';
+// Default is the IN-REPO worker next to this module (portable); BROWSER_RUN overrides.
+const BROWSER_RUN = process.env.BROWSER_RUN || path.join(path.dirname(fileURLToPath(import.meta.url)), 'browser-run.cjs');
+// ── GPU image generator (dan's gpu-img tool — OUTSIDE the repo). Lazy + env-pathed so module load
+// never depends on it: on a machine without the tool the `images` power degrades with a clear
+// message instead of blocking boot. GPU_IMG_GEN overrides the path.
+const GPU_IMG_GEN = process.env.GPU_IMG_GEN || '/home/dan/gpu-img/gen.mjs';
+let gpuGenP;
+const loadGenerate = () => {
+  if (!gpuGenP) {
+    gpuGenP = fs.existsSync(GPU_IMG_GEN)
+      ? import(pathToFileURL(GPU_IMG_GEN).href).then(m => {
+          if (typeof m.generate !== 'function') throw new Error(`${GPU_IMG_GEN} exports no generate()`);
+          return m.generate;
+        })
+      : Promise.reject(new Error(`image generation unavailable on this instance: no generator at ${GPU_IMG_GEN} (set GPU_IMG_GEN to enable)`));
+    gpuGenP.catch(() => {}); // pre-observe so a missing generator never surfaces as an unhandled rejection
+  }
+  return gpuGenP;
+};
+
 const runBrowser = args => new Promise(res => {
   execFile('node', [BROWSER_RUN, ...args], { timeout: 60000, maxBuffer: 16 * 1024 * 1024 }, (err, so, se) => {
     if (err) return res({ ok: false, error: String(se || err.message || '').slice(0, 300) });
@@ -380,6 +399,7 @@ const makeAffordances = ({ outDir }) => {
       generate: async ({ prompt }) => {
         const p = String(prompt || '').trim().slice(0, 400);
         if (!p) throw new Error('prompt required');
+        const generate = await loadGenerate(); // lazy: degrades with a clear error when the gpu-img tool is absent
         const r = await generate(p, { steps: 4, width: 512, height: 512, seed: Math.floor(Date.now() % 1e9) });
         const file = `${outDir}/image-${Date.now()}.png`;
         fs.writeFileSync(file, r._buf);
@@ -2978,7 +2998,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // in the field-calendar config (same server/user); reads are free, add/edit propose.
     buildContacts: async () => {
       try {
-        const cfg = JSON.parse(fs.readFileSync('/home/dan/.config/field-calendar/config.json', 'utf8'));
+        const cfg = JSON.parse(fs.readFileSync(CALENDAR_CFG, 'utf8'));
         const base = String(cfg.server || '').replace(/\/remote\.php.*$/, '').replace(/\/$/, '');
         if (!base || !cfg.user || !cfg.appPassword) return { ok: false, error: 'no NextCloud creds in field-calendar config' };
         contactsObj = makeContacts({ baseUrl: base, user: cfg.user, pass: cfg.appPassword, addressbook: 'contacts' });

@@ -11,9 +11,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
-const HOME = process.env.HOME || '/home/dan';
-const GATOR_CFG = process.env.GATOR_CONFIG || `${HOME}/.config/field-agent/gator-pay.json`;
-const DELEG_STORE = process.env.DELEGATION_STORE || `${HOME}/.local/state/field-agent/delegations.json`;
+import { CONFIG_DIR, STATE_DIR } from './field-config.mjs';
+
+// Personal-family paths resolve through field-config (byte-identical defaults on the NUC;
+// rebase onto FIELD_PERSONAL_ROOT when the personal volume is mounted).
+const GATOR_CFG = process.env.GATOR_CONFIG || path.join(CONFIG_DIR, 'gator-pay.json');
+const DELEG_STORE = process.env.DELEGATION_STORE || path.join(STATE_DIR, 'delegations.json');
 
 // gator-pay.json: { chargeServerUrl:"http://127.0.0.1:8799", treasury:"0x…payee",
 //   weiPerUusd:"<bigint string>", chain:"linea-sepolia" }. Absent → this rail is off.

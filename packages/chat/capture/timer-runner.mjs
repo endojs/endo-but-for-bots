@@ -7,10 +7,11 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const HOME = os.homedir();
-const STORE = path.join(HOME, '.local/state/field-timers/schedule.json');
-const NOTIFY = '/home/dan/endo-bfb/packages/chat/capture/notify.mjs';
+const STORE = process.env.TIMER_STORE || path.join(HOME, '.local/state/field-timers/schedule.json');
+const NOTIFY = process.env.NOTIFY_MJS || path.join(path.dirname(fileURLToPath(import.meta.url)), 'notify.mjs'); // in-repo sibling (portable)
 const POLL_MS = 10000;
 
 const log = (...a) => process.stderr.write(`[${new Date().toISOString()}] ${a.join(' ')}\n`);
@@ -22,7 +23,7 @@ const fire = a => new Promise(r => {
   if (a.type === 'notify') {
     child = spawn('node', [NOTIFY, '--title', a.title || 'timer', '--message', a.message || '', '--priority', a.priority || 'default'], { timeout: 20000 });
   } else if (a.type === 'command') {
-    child = spawn('bash', ['-lc', a.cmd || 'true'], { timeout: 10 * 60 * 1000, env: { ...process.env, PATH: `${process.env.PATH}:/home/dan/.local/bin` } });
+    child = spawn('bash', ['-lc', a.cmd || 'true'], { timeout: 10 * 60 * 1000, env: { ...process.env, PATH: `${process.env.PATH}:${HOME}/.local/bin` } });
   } else { return r({ code: -1 }); }
   child.on('close', code => r({ code })); child.on('error', () => r({ code: -1 }));
 });

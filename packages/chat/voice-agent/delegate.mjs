@@ -9,18 +9,20 @@
 // size can only invoke the caps in front of it.
 import fsp from 'node:fs/promises';
 
+import { HOST_ENV_FILE } from './field-config.mjs';
+
 const API = 'https://api.anthropic.com/v1/messages';
 const MODEL = process.env.DELEGATE_MODEL || 'claude-opus-4-8';
 const MAX_STEPS = 8; // default tool-use budget; an editing executor (read→implement→write-test→run-test→fix) needs more — see maxSteps param.
 
-// Load ANTHROPIC_API_KEY from the env, falling back to ~/.env (the service runs
-// with the key exported, but tests / one-offs may not).
+// Load ANTHROPIC_API_KEY from the env, falling back to the host env file (the service
+// runs with the key exported, but tests / one-offs may not).
 let cachedKey;
 const apiKey = async () => {
   if (cachedKey !== undefined) return cachedKey;
   if (process.env.ANTHROPIC_API_KEY) { cachedKey = process.env.ANTHROPIC_API_KEY; return cachedKey; }
   try {
-    const env = await fsp.readFile('/home/dan/.env', 'utf8');
+    const env = await fsp.readFile(HOST_ENV_FILE, 'utf8');
     const m = env.match(/^\s*ANTHROPIC_API_KEY\s*=\s*(.+)\s*$/m);
     cachedKey = m ? m[1].trim().replace(/^["']|["']$/g, '') : null;
   } catch { cachedKey = null; }

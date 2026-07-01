@@ -60,6 +60,16 @@ export const DASH_STATE_DIR = process.env.DASH_STATE_DIR || personalAt('state/fi
 
 // ── identity ─────────────────────────────────────────────────────────────────────────────────────────
 export const EMAIL_FROM = process.env.FIELD_EMAIL_FROM || 'bot@danfinlay.com';
+// INSTANCE IDENTITY: which physical instance of Agent C this is (archua NUC, dan's mac at camp, …).
+// Surfaces in the boot log + the /powers status payload so cap-holders and the operator can tell
+// WHICH vat they are talking to. (Vat-affinity design is a separate doc; this is only the seam.)
+export const INSTANCE_NAME = process.env.FIELD_INSTANCE || os.hostname();
+
+// ── host env file (secret fallback: ANTHROPIC_API_KEY / OPENROUTER_API_KEY / HOMEASSISTANT …) ────────
+// The systemd unit doesn't source ~/.env, so key readers fall back to this FILE. On the personal
+// volume the migrated key subset lives at <root>/env (field-personal migrate writes it), so personalAt
+// points there when FIELD_PERSONAL_ROOT is set. Override with HOST_ENV_FILE.
+export const HOST_ENV_FILE = process.env.HOST_ENV_FILE || personalAt('env', path.join(HOME, '.env'));
 
 // ── derived CONFIG-family files (all move together with CONFIG_DIR) ──────────────────────────────────
 const cfg = f => path.join(CONFIG_DIR, f);
@@ -73,6 +83,9 @@ export const OBJECTS_FILE = process.env.OBJECTS_FILE || cfg('accepted-objects.js
 export const USERS_FILE = process.env.USERS_FILE || cfg('users.json');
 export const ROOT_SWISS_FILE = process.env.SEED_FILE || cfg('root.swiss');
 export const KAZPUTER_STATE = process.env.KAZPUTER_STATE || personalAt('config/kazputer-phone/instances.json', `${HOME}/.config/kazputer-phone/instances.json`);
+// NextCloud calendar/contacts app-password config (read-only here; written by the calendar setup).
+// Not in the field-personal bind map today — on a volume it would live under config/field-calendar.
+export const CALENDAR_CFG = process.env.FIELD_CALENDAR_CFG || personalAt('config/field-calendar/config.json', `${HOME}/.config/field-calendar/config.json`);
 
 // ── derived STATE-family paths ───────────────────────────────────────────────────────────────────────
 export const HOME_BASE = process.env.FIELD_HOME_BASE || path.join(STATE_DIR, 'home');
@@ -81,7 +94,7 @@ export const AUTO_MERGE_LEDGER = process.env.AUTO_MERGE_LEDGER || path.join(STAT
 export const FEED_FILE = process.env.FEED_FILE || path.join(DASH_STATE_DIR, 'feed.json');
 
 // a compact snapshot for logging at boot (no secrets — just where the personal seam points).
-export const configSummary = () => ({ mode: FIELD_MODE, personalRoot: PERSONAL_ROOT || '(legacy home layout)', configDir: CONFIG_DIR, vault: VAULT_DIR, stateDir: STATE_DIR });
+export const configSummary = () => ({ instance: INSTANCE_NAME, mode: FIELD_MODE, personalRoot: PERSONAL_ROOT || '(legacy home layout)', configDir: CONFIG_DIR, vault: VAULT_DIR, stateDir: STATE_DIR });
 
 _harden(personalAt);
 _harden(configSummary);
