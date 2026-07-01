@@ -1034,7 +1034,7 @@ const retryTurn = async (payload, spoken, opts = {}) => {
     const body = opts.resume ? { ...payload, resume: true } : payload;
     const r = await (await fetch('/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json();
     if (r.error) { if (r.retryable || r.llmError) renderRetryableError(r.error, payload, spoken); else setStatus('chat: ' + r.error); return; } // provider error → transient retry card, not a stuck status
-    if (r.exhausted) { updateBudgetChip(r.remaining, r.allowance); renderExhausted(payload, spoken); return; }
+    if (r.exhausted) { updateBudgetChip(r.remaining, r.allowance); renderExhausted({ ...payload, invited: !!r.invited }, spoken); return; }
     renderAgentResponse(r);
     pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], steps: r.steps || [], agent: r.agentId, ui: r.ui || [] });
     pendantEnd(r.steps || []);
@@ -1084,7 +1084,7 @@ const fetchRunResult = async sid => {
 };
 const renderReattached = (r, sid) => {
   if (sid !== sessionId || !r) return;
-  if (r.exhausted) { const p = stalledTurnFromTx(); if (p) renderExhausted(p.payload, false); return; }
+  if (r.exhausted) { const p = stalledTurnFromTx(); if (p) renderExhausted({ ...p.payload, invited: !!r.invited }, false); return; }
   renderAgentResponse(r);
   pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], steps: r.steps || [], agent: r.agentId, ui: r.ui || [] });
   try { pendantEnd(r.steps || []); } catch {}
@@ -1142,9 +1142,13 @@ const renderExhausted = (payload, spoken) => {
   pendingResume[payload.sessionId] = { payload, spoken }; // retain the stalled turn so ANY top-up resumes it
   const card = document.createElement('div'); card.className = 'prop msg exhausted-card'; card.dataset.sid = payload.sessionId;
   // OWNER (root) comps credit for free; a non-root invitee PAYS to add credit (Phase 2 billing).
+  // `payload.invited` = this user's credit came CARRIED ON AN INVITE (a conserved allowance the inviter
+  // funded) — say so, and make "buy your own" the legible next step (User Agency: the top-up storefront).
   const blurb = isRoot ? 'This conversation has used up its budget. Top it up to keep going, or abandon the thread.'
+    : payload.invited ? 'The usage credit that came with your invite is used up. From here you buy your own — top up below and your stalled message resumes automatically.'
     : 'You\'ve used up the credit you were given. Add more to keep going — or abandon the thread.';
-  card.innerHTML = `<div class="ptitle">🪙 <span>Out of inference allowance</span></div><div class="pmeta">${blurb}</div><div class="pbtns"></div>`;
+  const title = isRoot ? 'Out of inference allowance' : 'Allowance exhausted — top up to continue';
+  card.innerHTML = `<div class="ptitle">🪙 <span>${title}</span></div><div class="pmeta">${blurb}</div><div class="pbtns"></div>`;
   const btns = card.querySelector('.pbtns');
   const top = document.createElement('button'); top.className = 'confirm'; top.textContent = isRoot ? 'Top up $0.50 & continue' : 'Add $5 credit';
   const aband = document.createElement('button'); aband.className = 'reject'; aband.textContent = 'Abandon thread';
@@ -3880,6 +3884,9 @@ const fillInviteBox = () => {
   const grantable = [...(heldPowers || [])].filter(p => !INVITE_HIDE.has(p));
   // default view = just the least-privilege STARTER ring as chips; "+ Add more" grants the rest of grantable.
   renderPowersPicker($('inv-powers'), { all: grantable, granted: grantable.filter(p => INVITE_STARTER.has(p)), itemShare: true });
+  // show what the OWNER's invite wallet can still cover — invite credit is CONSERVED (debited from this
+  // wallet, never minted from thin air); when a member uses theirs up they buy their own (Stripe/MetaMask).
+  (async () => { try { const w = await (await fetch('/wallet/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json(); if (w && w.ok && $('inv-wallet')) $('inv-wallet').innerHTML = `Optional starter credit — drawn from <b>your</b> invite wallet ($${(w.remaining / 1e6).toFixed(2)} available); when they use it up they buy their own.`; } catch { /* label keeps its static text */ } })();
 };
 // 🔌 Connectors (Phase 3 Lane A) — owner wires up API-service tools; key → vault, injected server-side.
 const fillConnectorsBox = async () => {
@@ -3907,12 +3914,16 @@ const fillConnectorsBox = async () => {
   const label = ($('inv-label').value || '').trim() || 'guest';
   const powers = [...document.querySelectorAll('#inv-powers input:checked')].map(x => x.value);
   if (!powers.length) { alert('pick at least one starter tool'); return; }
+  // the invite CARRIES this usage-credit allowance (µUSD) — conserved: the server debits YOUR invite
+  // wallet the same amount it credits the member's; a wallet that can't cover it refuses the invite.
+  const allowanceUusd = Math.max(0, Math.round((Number($('inv-credit') && $('inv-credit').value) || 0) * 1e6));
   im.disabled = true;
-  let r; try { r = await (await fetch('/invite', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, powers, label }) })).json(); } catch (e) { r = { error: e.message }; }
+  let r; try { r = await (await fetch('/invite', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, powers, label, allowanceUusd }) })).json(); } catch (e) { r = { error: e.message }; }
   im.disabled = false;
   if (!r || r.error || !r.scopedCap) { alert((r && r.error) || 'invite failed'); return; }
   const link = { url: `${location.origin}/#cap=${r.scopedCap}`, label: `invite · ${label}` };
-  $('inv-out').innerHTML = `<div class="sub" style="margin-bottom:6px">✓ Invite for <b>${esc(label)}</b> — tools: ${(r.powers || []).map(p => esc(p)).join(', ')}. Hand them this link (copy or QR — don't screenshot it):</div><div style="display:flex;gap:6px"><button class="mini" id="inv-copy">copy link</button><button class="mini" id="inv-qr">show QR</button></div>`;
+  const credit = r.allowanceUusd > 0 ? ` · funded with <b>$${(r.allowanceUusd / 1e6).toFixed(2)}</b> usage credit (your wallet: $${((r.walletRemaining || 0) / 1e6).toFixed(2)} left)` : '';
+  $('inv-out').innerHTML = `<div class="sub" style="margin-bottom:6px">✓ Invite for <b>${esc(label)}</b> — tools: ${(r.powers || []).map(p => esc(p)).join(', ')}${credit}. Hand them this link (copy or QR — don't screenshot it):</div><div style="display:flex;gap:6px"><button class="mini" id="inv-copy">copy link</button><button class="mini" id="inv-qr">show QR</button></div>`;
   $('inv-copy').onclick = e => copyLink(link, e.currentTarget);
   $('inv-qr').onclick = () => showQr(link);
 }; }

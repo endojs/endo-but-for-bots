@@ -70,7 +70,7 @@
 }
 </script>
 <style>
-  :root { --bg:#0d1117; --panel:#161b22; --edge:#30363d; --ink:#e6edf3; --mut:#8b949e; --acc:#7c5cff; --acc-fill:#7a4ce6; --acc2:#2ea043; --bad:#f85149; --you:#479cff; --you-fill:#1f6feb; --you-bg:#11243f; --you-edge:#1f3b63; --trace-bg:#0b0e14; --trace-edge:#21262d; --trace-ink:#9aa4b2; --trace-ok:#8fd0a8; --trace-bad:#ff9e9e; --trace-call:#9fb0c9; --trace-result:#c9a96e; --warn:#d29922; }
+  :root { --bg:#0d1117; --panel:#161b22; --edge:#30363d; --ink:#e6edf3; --mut:#8b949e; --acc:#7c5cff; --acc-fill:#7a4ce6; --acc2:#2ea043; --bad:#f85149; --you:#479cff; --you-fill:#1f6feb; --you-bg:#11243f; --you-edge:#1f3b63; --trace-bg:#0b0e14; --trace-edge:#21262d; --trace-ink:#9aa4b2; --trace-ok:#8fd0a8; --trace-bad:#ff9e9e; --trace-call:#9fb0c9; --trace-result:#c9a96e; --warn:#d29922; --ok:#3fb950; }
   * { box-sizing:border-box; }
   /* full-bleed on notched phones: viewport-fit=cover lets content reach the edges; the
      background behind the safe-area insets is the dark bg, and the fixed chrome (header/composer)
@@ -225,6 +225,10 @@
   .prop button.reject { background:transparent; border:1px solid var(--bad); color:var(--bad); padding:8px 15px; min-height:38px; border-radius:8px; cursor:pointer; font-size:13px; display:inline-flex; align-items:center; }
   .prop button:disabled { opacity:.5; cursor:default; }
   .prop .warn { color:var(--warn); font-size:12px; margin-top:8px; }
+  /* the allowance wall (exhaustion → top-up storefront): visually distinct so "out of credit" reads at a
+     glance — themed via --warn, which exists in BOTH palettes (+ :root fallback), per the theme matrix. */
+  .exhausted-card { border-left:3px solid var(--warn); }
+  .exhausted-card .ptitle { color:var(--warn); }
   .prop .pbtns label.kit-check { font-size:12px; color:var(--mut); margin-left:auto; } /* kit migration emits label.kit-check, not label.dontask — re-point so the opt-out still right-aligns + stays compact */
   .autofired { font-size:12px; color:var(--acc2); margin-top:6px; }
   /* inline feedback loop: a TYPED, answerable question (chat-inline or in the 🔔 inbox) */
@@ -580,6 +584,10 @@
       <div style="font-size:15px;margin-bottom:4px"><b>👤 Invite a new user</b></div>
       <div class="sub" style="margin-bottom:8px">Mint a starter invite — a confined link with a few functional/read-only tools plus a way to <b>message you</b>. They can <b>request more</b> (you approve). When their granted allowance runs out, they're prompted to add credit.</div>
       <input id="inv-label" class="hdr-sel" style="max-width:none;width:100%;margin-bottom:6px" placeholder="who is this for? (e.g. Alex)">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+        <input id="inv-credit" class="hdr-sel" type="number" min="0" step="0.25" style="max-width:110px" placeholder="$ credit">
+        <span class="sub" id="inv-wallet" style="flex:1">Optional starter credit — drawn from <b>your</b> invite wallet; when they use it up they buy their own.</span>
+      </div>
       <div class="sub" style="margin:2px 0 4px">Starter tools (adjustable):</div>
       <div id="inv-powers" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px"></div>
       <button class="go" id="inv-make">Create invite link</button>
