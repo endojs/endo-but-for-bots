@@ -2862,31 +2862,71 @@ window.addEventListener('resize', () => { if (!$('trace-overlay').classList.cont
 //    body-anchored overlay (renderTx wipes #log mid-turn), tracking the latest .msg.user
 //    and reserving space beneath it so it never covers the answer. One reused WebGL
 //    context. Fed by the SSE step stream; reconciled from the final steps[]. ──
-// ── FLUX.2 inpaint widget (🖌): an authority-free mask-paint surface. It holds NO cap; the cap-gated GPU
-//    call is THIS host handler (→ /gpu/inpaint → tinix ComfyUI). Opened over any image via __openInpaint. ──
-let inpaintInst = null, inpaintOverlay = null, inpaintInit = null;
-const ensureInpaint = () => inpaintInit || (inpaintInit = (async () => {
-  const { makeInpaint } = await import('./inpaint.js');
+// ── FLUX.2 inpaint (🖌): a PROPER CONFINED ISLAND. The mask-painter (public/inpaint-island.js) runs inside a
+//    /confined.html iframe using the canvas primitive — it holds NO cap. The ONE host-mediated seam is
+//    ui.call('inpaint',…), routed here to the cap-gated /gpu/inpaint → tinix ComfyUI. Opened over any image
+//    via __openInpaint(dataUrl). mountConfined is generic — reuse it for any confined-canvas island. ──
+let inpaintOverlay = null, inpaintPanel = null;
+const currentThemeVars = () => { try { const s = getComputedStyle(document.documentElement); const out = {}; for (const k of ['--bg', '--ink', '--mut', '--edge', '--acc', '--panel']) { const v = s.getPropertyValue(k); if (v) out[k] = v.trim(); } return out; } catch { return null; } };
+// Mount a confined component SOURCE into a fresh sandboxed iframe: transfer a private MessagePort, seed props +
+// theme, auto-size to the reported height, and route ui.call(method,args) → `onCall` (the HOST is the gate).
+const mountConfined = (container, source, { props = {}, onCall = null } = {}) => {
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute('sandbox', 'allow-scripts'); iframe.setAttribute('referrerpolicy', 'no-referrer');
+  iframe.style.cssText = 'width:520px;max-width:92vw;border:0;display:block;height:220px;border-radius:12px;background:#11141f';
+  container.appendChild(iframe);
+  let port = null;
+  const onReady = e => {
+    if (e.source !== iframe.contentWindow) return; const m = e.data; if (!m || m.__cu !== 1 || m.type !== 'ready') return;
+    window.removeEventListener('message', onReady);
+    const ch = new MessageChannel(); port = ch.port1;
+    port.onmessage = async pe => {
+      const pm = pe.data; if (!pm || pm.__cu !== 1) return;
+      if (pm.type === 'height') { iframe.style.height = Math.min(3000, Math.max(80, Number(pm.px) || 220)) + 'px'; }
+      else if (pm.type === 'call') { let ok = false, value = null, error = ''; try { value = onCall ? await onCall(String(pm.method || ''), pm.args || {}) : null; ok = true; } catch (err) { error = (err && err.message) || String(err); } try { port.postMessage({ __cu: 1, type: 'call-result', id: pm.id, ok, value, error }); } catch { /* */ } }
+      else if (pm.type === 'error') { try { (window.__fieldReportError || (() => {}))(String(pm.error || ''), 'confined-mount'); } catch { /* */ } }
+      else if (pm.type === 'render-smell') { try { (window.__fieldReportSmell || (() => {}))(Array.isArray(pm.smells) ? pm.smells : [], { name: 'inpaint-island' }); } catch { /* */ } }
+    };
+    try { port.start(); } catch { /* */ }
+    iframe.contentWindow.postMessage({ __cu: 1, type: 'mount', source, props, theme: currentThemeVars() }, '*', [ch.port2]);
+  };
+  window.addEventListener('message', onReady);
+  iframe.src = '/confined.html';
+  return iframe;
+};
+const ensureInpaintOverlay = () => {
+  if (inpaintOverlay) return;
   inpaintOverlay = document.createElement('div');
   inpaintOverlay.style.cssText = 'position:fixed;inset:0;z-index:9000;display:none;align-items:flex-start;justify-content:center;padding:24px;overflow:auto;background:rgba(0,0,0,.55)';
-  const panel = document.createElement('div'); panel.style.cssText = 'position:relative;margin:auto';
+  inpaintPanel = document.createElement('div'); inpaintPanel.style.cssText = 'position:relative;margin:auto';
   const close = document.createElement('button'); close.textContent = '✕'; close.title = 'close';
   close.style.cssText = 'position:absolute;top:-10px;right:-10px;z-index:1;all:unset;cursor:pointer;background:var(--panel,#11141f);border:1px solid var(--edge,#262c3d);color:var(--ink,#e6edf3);width:26px;height:26px;border-radius:50%;text-align:center;line-height:26px';
-  close.onclick = () => { inpaintOverlay.style.display = 'none'; };
-  inpaintOverlay.onclick = e => { if (e.target === inpaintOverlay) inpaintOverlay.style.display = 'none'; };
-  inpaintInst = makeInpaint(panel);
-  try { window.__inpaint = inpaintInst; } catch { /* test/introspection hook */ }
-  panel.appendChild(close);
-  inpaintOverlay.appendChild(panel); document.body.appendChild(inpaintOverlay);
-  inpaintInst.onSubmit(async ({ imageDataUrl, maskDataUrl, prompt, opts }) => {
-    if (!cap) throw new Error('open this from your agent (no capability)');
-    const r = await (await fetch('/gpu/inpaint', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, image: imageDataUrl, mask: maskDataUrl, prompt, seed: opts && opts.seed }) })).json();
-    if (!r || !r.ok) throw new Error((r && r.error) || 'inpaint failed');
-    return { dataUrl: r.dataUrl, info: r.info };
-  });
-  return inpaintInst;
-})());
-window.__openInpaint = async dataUrl => { try { const p = await ensureInpaint(); inpaintOverlay.style.display = 'flex'; if (dataUrl) await p.open(dataUrl); return true; } catch (e) { return String((e && e.message) || e); } };
+  const hide = () => { inpaintOverlay.style.display = 'none'; inpaintPanel.querySelectorAll('iframe').forEach(f => f.remove()); };
+  close.onclick = hide;
+  inpaintOverlay.onclick = e => { if (e.target === inpaintOverlay) hide(); };
+  inpaintPanel.appendChild(close); inpaintOverlay.appendChild(inpaintPanel); document.body.appendChild(inpaintOverlay);
+};
+const measureImage = url => new Promise(res => { const i = new Image(); i.onload = () => res({ w: i.naturalWidth || 512, h: i.naturalHeight || 512 }); i.onerror = () => res({ w: 512, h: 512 }); i.src = url; });
+window.__openInpaint = async dataUrl => {
+  try {
+    ensureInpaintOverlay();
+    inpaintPanel.querySelectorAll('iframe').forEach(f => f.remove()); // fresh mount per open
+    inpaintOverlay.style.display = 'flex';
+    if (!dataUrl) return true;
+    const [{ inpaintIsland }, dim] = await Promise.all([import('./inpaint-island.js'), measureImage(dataUrl)]);
+    window.__inpaintIframe = mountConfined(inpaintPanel, inpaintIsland.toString(), {
+      props: { image: dataUrl, width: dim.w, height: dim.h },
+      onCall: async (method, args) => {
+        if (method !== 'inpaint') throw new Error('unknown method: ' + method);
+        if (!cap) throw new Error('open this from your agent (no capability)');
+        const r = await (await fetch('/gpu/inpaint', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, image: args.image, mask: args.mask, prompt: args.prompt }) })).json();
+        if (!r || !r.ok) throw new Error((r && r.error) || 'inpaint failed');
+        return { dataUrl: r.dataUrl, info: r.info };
+      },
+    });
+    return true;
+  } catch (e) { return String((e && e.message) || e); }
+};
 
 let pendant = null, pendantWrap = null, pendantCanvas = null, pendantES = null, pendantRaf = 0, pendantInit = null;
 let pendantLive = false, liveChatId = ''; // a turn is mid-stream → don't clobber it with a saved-trace re-render

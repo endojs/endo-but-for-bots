@@ -51,7 +51,7 @@ const grain = (initial) => {
 };
 
 // element factory — a whitelisted, chainable wrapper. Defense-in-depth (the sandbox is the real boundary).
-const TAGS = new Set(['div','span','p','a','b','i','em','strong','small','h1','h2','h3','h4','ul','ol','li','img','button','input','label','br','hr','code','pre','table','thead','tbody','tr','td','th','section','header','footer','progress','meter']);
+const TAGS = new Set(['div','span','p','a','b','i','em','strong','small','h1','h2','h3','h4','ul','ol','li','img','button','input','label','br','hr','code','pre','table','thead','tbody','tr','td','th','section','header','footer','progress','meter','canvas','textarea']);
 const ATTRS = new Set(['class','id','type','placeholder','value','alt','width','height','title','min','max','step','for','colspan','rowspan']);
 const STYLE_OK = /^[a-zA-Z-]+$/;
 const safeUrl = (u) => { u = String(u || ''); return /^(https?:\/\/|#|data:image\/)/.test(u) ? u : '#'; };
@@ -86,7 +86,32 @@ const create = (tag) => {
     attr: (k, v) => { k = String(k); if (ATTRS.has(k)) el.setAttribute(k, String(v)); else if (k === 'href') el.setAttribute('href', safeUrl(v)); else if (k === 'src') el.setAttribute('src', safeUrl(v)); else if (/^(data|aria)-/.test(k)) el.setAttribute(k, String(v)); return w; },
     class: (c) => { el.className = String(c || ''); return w; },
     style: (obj) => { if (obj && typeof obj === 'object') for (const k in obj) { if (STYLE_OK.test(k)) try { el.style[k] = String(obj[k]); } catch (e) {} } return w; },
-    on: (event, fn) => { const ev = String(event); if (['click','input','change','keydown'].includes(ev) && typeof fn === 'function') el.addEventListener(ev, (e) => { try { fn({ value: el.value, key: e.key, preventDefault: () => e.preventDefault() }); report(); } catch (err) {} }); return w; },
+    on: (event, fn) => { const ev = String(event); const OK = ['click','input','change','keydown','pointerdown','pointermove','pointerup','pointerleave']; if (OK.includes(ev) && typeof fn === 'function') el.addEventListener(ev, (e) => { try { let x, y; if (e.clientX !== undefined) { const r = el.getBoundingClientRect(); const sx = (el.width && r.width) ? el.width / r.width : 1; const sy = (el.height && r.height) ? el.height / r.height : 1; x = (e.clientX - r.left) * sx; y = (e.clientY - r.top) * sy; } if (ev === 'pointerdown') { try { el.setPointerCapture(e.pointerId); } catch (_) {} } fn({ value: el.value, key: e.key, x, y, buttons: e.buttons, preventDefault: () => e.preventDefault() }); report(); } catch (err) {} }); return w; },
+    // ── attenuated 2D DRAWING facet for a <canvas> — the SAFE subset (pure draw ops + pixel export), NEVER the
+    //    raw element/context (a raw DOM node would leak .ownerDocument→window and defeat confinement). Drawing
+    //    is pure authority-free computation, so a canvas is a clean, first-class confined-UI foundation.
+    ctx: () => {
+      const c = el.getContext ? el.getContext('2d') : null; if (!c) return null;
+      const n = v => (Number.isFinite(+v) ? +v : 0);
+      const f = {
+        size: (w2, h2) => { el.width = n(w2); el.height = n(h2); return f; }, width: () => el.width, height: () => el.height,
+        clear: () => { c.clearRect(0, 0, el.width, el.height); return f; },
+        fillStyle: v => { c.fillStyle = String(v); return f; }, strokeStyle: v => { c.strokeStyle = String(v); return f; },
+        lineWidth: v => { c.lineWidth = n(v); return f; }, lineCap: v => { c.lineCap = String(v); return f; }, lineJoin: v => { c.lineJoin = String(v); return f; },
+        alpha: v => { c.globalAlpha = Math.max(0, Math.min(1, n(v))); return f; }, composite: v => { try { c.globalCompositeOperation = String(v); } catch (e) {} return f; },
+        beginPath: () => { c.beginPath(); return f; }, closePath: () => { c.closePath(); return f; },
+        moveTo: (x, y) => { c.moveTo(n(x), n(y)); return f; }, lineTo: (x, y) => { c.lineTo(n(x), n(y)); return f; },
+        arc: (x, y, r, a0, a1) => { c.arc(n(x), n(y), n(r), a0 == null ? 0 : n(a0), a1 == null ? Math.PI * 2 : n(a1)); return f; },
+        rect: (x, y, w2, h2) => { c.rect(n(x), n(y), n(w2), n(h2)); return f; },
+        fill: () => { c.fill(); return f; }, stroke: () => { c.stroke(); return f; },
+        fillRect: (x, y, w2, h2) => { c.fillRect(n(x), n(y), n(w2), n(h2)); return f; }, clearRect: (x, y, w2, h2) => { c.clearRect(n(x), n(y), n(w2), n(h2)); return f; },
+        dot: (x, y, r) => { c.beginPath(); c.arc(n(x), n(y), n(r), 0, Math.PI * 2); c.fill(); report(); return f; }, // filled circle — the paint-brush primitive
+        drawCanvas: (srcW, dx, dy, dw, dh) => { const s = srcW && srcW.el; if (s && s.getContext) { if (dw == null) c.drawImage(s, n(dx), n(dy)); else c.drawImage(s, n(dx), n(dy), n(dw), n(dh)); } report(); return f; },
+        drawImageUrl: (dataUrl, dx, dy, dw, dh) => new Promise(res => { const u = String(dataUrl || ''); if (!/^data:image\//.test(u)) { res(f); return; } const im = new Image(); im.onload = () => { try { if (dw == null) c.drawImage(im, n(dx), n(dy)); else c.drawImage(im, n(dx), n(dy), n(dw), n(dh)); } catch (e) {} report(); res(f); }; im.onerror = () => res(f); im.src = u; }),
+        toDataURL: type => { try { return el.toDataURL(/^image\/(png|jpeg|webp)$/.test(String(type)) ? String(type) : 'image/png'); } catch (e) { return ''; } },
+      };
+      return f;
+    },
     push: (childOrChildren) => { const arr = Array.isArray(childOrChildren) ? childOrChildren : [childOrChildren]; for (const c of arr) { if (!c) continue; const node = c && c.el ? c.el : (typeof c === 'string' ? document.createTextNode(c) : null); if (node) el.appendChild(node); } return w; },
     // FOLLOW a grain: paint render(value) now + on every push. The "lazily written component" seam.
     follow: (g, render) => { if (g && typeof g.subscribe === 'function') g.subscribe((v) => { try { el.textContent = slotText(render ? render(v) : v, 'live-cell'); report(); } catch (e) {} }); return w; },
@@ -100,6 +125,12 @@ const create = (tag) => {
 // (scoped, no shared window listener). `send` uses the port once it exists; 'ready' is the only pre-port msg.
 let CU_PORT = null;
 const send = (m) => { try { const msg = { __cu: 1, ...m }; if (CU_PORT) CU_PORT.postMessage(msg); else parent.postMessage(msg, '*'); } catch (e) {} }; // __cu tag on BOTH paths (the port path dropped it before)
+
+// ── ui.call(method, args) → Promise: the ONE imperative seam. The confined frame never holds a capability;
+//    it may only REQUEST a NAMED action, which the parent routes to a handler IT chose to expose (e.g. a
+//    cap-gated GPU job) and answers with a result. The parent is the gate; an un-exposed method just rejects.
+let __callId = 0; const __calls = new Map();
+const call = (method, args) => new Promise((resolve, reject) => { const id = ++__callId; __calls.set(id, { resolve, reject }); send({ type: 'call', id, method: String(method || ''), args: args == null ? {} : args }); });
 
 // ── the live-grain bridge: ui.grain(cellId) is a server cell the PARENT feeds us; ui.local(v) is client state. ──
 const cellGrains = new Map();
@@ -164,7 +195,7 @@ const use = (alias) => {
 };
 // ui.grain(id) is the cell seam (above): a granted WRITABLE cell (e.g. 'theme') is read by .subscribe and
 // driven by .set(value) — state that propagates, never a command. (No imperative effect/RPC channel.)
-const UI = { create, grain: apiGrain, local: grain, h: create, island, use, kit: Object.keys(KIT) };
+const UI = { create, grain: apiGrain, local: grain, h: create, island, use, call, props: {}, kit: Object.keys(KIT) };
 
 const fail = (msg) => { try { send({ type: 'error', error: String(msg) }); } catch (e) {} const d = document.createElement('div'); d.className = 'cu-err'; d.textContent = '⚠️ ' + msg; document.body.innerHTML = ''; document.body.appendChild(d); report(); }; // also REPORT the render failure to the host → auto-fix loop
 
@@ -214,8 +245,9 @@ window.addEventListener('message', (e) => {
   if (e.source !== parent) return; // only the parent's mount handshake comes over the window
   const m = e.data; if (!m || m.__cu !== 1 || m.type !== 'mount') return;
   const port = e.ports && e.ports[0];
-  if (port) { CU_PORT = port; port.onmessage = (pe) => { const pm = pe.data; if (!pm || pm.__cu !== 1) return; if (pm.type === 'cell') { const g = cellGrains.get(String(pm.id)); if (g) (g.assign || g.set)(pm.value); } else if (pm.type === 'theme') applyTheme(pm.vars); }; try { port.start(); } catch (e2) {} }
+  if (port) { CU_PORT = port; port.onmessage = (pe) => { const pm = pe.data; if (!pm || pm.__cu !== 1) return; if (pm.type === 'cell') { const g = cellGrains.get(String(pm.id)); if (g) (g.assign || g.set)(pm.value); } else if (pm.type === 'theme') applyTheme(pm.vars); else if (pm.type === 'call-result') { const p = __calls.get(pm.id); if (p) { __calls.delete(pm.id); if (pm.ok) p.resolve(pm.value); else p.reject(new Error(String(pm.error || 'call failed'))); } } }; try { port.start(); } catch (e2) {} }
   if (m.theme) applyTheme(m.theme);
+  UI.props = (m.props && typeof m.props === 'object' && !Array.isArray(m.props)) ? m.props : {}; // render-safe DATA the parent seeds (never a cap)
   mount(m.source, m.refs);
 });
 try { parent.postMessage({ __cu: 1, type: 'ready' }, '*'); } catch (e) {}

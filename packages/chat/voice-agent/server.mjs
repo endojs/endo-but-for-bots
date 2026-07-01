@@ -1193,7 +1193,7 @@ const handler = async (req, res) => {
     if (u.pathname === '/ses.umd.min.js') return serveFile(res, 'ses.umd.min.js', 'text/javascript; charset=utf-8'); // standalone SES shim (taming intact), loaded before the page modules
     if (u.pathname === '/trace.js') return serveFile(res, 'trace.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/pendant.js') return serveFile(res, 'pendant.js', 'text/javascript; charset=utf-8');
-    if (u.pathname === '/inpaint.js') return serveFile(res, 'inpaint.js', 'text/javascript; charset=utf-8');
+    if (u.pathname === '/inpaint-island.js') return serveFile(res, 'inpaint-island.js', 'text/javascript; charset=utf-8'); // the confined inpaint island's source (app.js imports it for .toString())
     if (u.pathname === '/three.module.js') return serveFile(res, 'three.module.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/cap-channel.js') return serveFile(res, 'cap-channel.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/trace-app.js') return serveFile(res, 'trace-app.js', 'text/javascript; charset=utf-8');
