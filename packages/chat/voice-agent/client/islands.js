@@ -62,7 +62,12 @@ import { SettingsShell } from './settings-shell.js';
 // the edit chat can address it. The global registry is the authoritative list of every live component on the
 // page (the substrate for "talk to the agent that owns it" + the P4 shell→island migration).
 const componentRegistry = (globalThis.__componentRegistry = globalThis.__componentRegistry || new Map());
-const tagComponent = (el, id, name) => { if (!el || !el.setAttribute) return el; try { el.setAttribute('data-component-id', String(id)); el.setAttribute('data-component-name', String(name)); componentRegistry.set(String(id), { name: String(name), at: Date.now() }); } catch { /* best effort */ } return el; };
+// TRUSTED-PATH GUARD (dan's hard boundary): the consent/permissions surfaces (scope-consent sheet, Shares
+// panel, auto-confirm rules, proposal confirms) are marked [data-trusted-path] and must NEVER acquire a
+// component identity — they are the unspoofable trusted path, not editable chrome. Refusing the tag here
+// (belt) pairs with componentSelect's explicit 🔒 refusal (braces) in app.js.
+const inTrustedPath = el => { try { return !!(el && el.closest && el.closest('[data-trusted-path]')); } catch { return false; } };
+const tagComponent = (el, id, name) => { if (!el || !el.setAttribute) return el; try { if (inTrustedPath(el)) return el; el.setAttribute('data-component-id', String(id)); el.setAttribute('data-component-name', String(name)); componentRegistry.set(String(id), { name: String(name), at: Date.now() }); } catch { /* best effort */ } return el; };
 
 // A render propagator: re-paints `view(...values)` into `el` whenever any wired cell changes.
 // This is the one kind of propagator whose effect is the DOM; logic propagators stay headless.
@@ -97,6 +102,10 @@ for (const [name, val] of Object.entries(uiKit)) {
       : val;
 }
 const FORK_VOCAB = Object.freeze({ h, Fragment, ...confinedKit });
+
+// APP-CHROME compile cache: source text → { C (confined component), bad (compile error), err (last mount
+// error) }. One Compartment per chrome VERSION, shared by every mount of it (see renderChrome below).
+const chromeCompiled = new Map();
 
 // ── Shares island ───────────────────────────────────────────────────────────────────────────────
 // One cell (the data grain) holds the render-safe rows; the render propagator wires it to SharesPanel.
@@ -384,6 +393,36 @@ const islands = {
     if (!C || !el) return false;
     tagComponent(el, `island-${name}`, name);
     renderConfined(h(C, props || {}), el);
+    return true;
+  },
+
+  // ── Render an APP-CHROME component from its registry SOURCE (chrome-… ids — see chrome-components.mjs).
+  // The same confined no-iframe path as renderSource (SES compartment + renderConfined; refuses outside
+  // lockdown), tuned for CHROME's render profile: the msg toolbar mounts once per visible message, so the
+  // source is COMPILED ONCE per version (one Compartment per source text, cached) and each mount is just a
+  // cheap preact render. Returns false on ANY failure — compile OR mount-time throw — so the caller can fall
+  // back to the original hardcoded DOM (never a dead toolbar); every failure is reported with the component's
+  // id, which auto-files onto its own backlog via /error/flag.
+  renderChrome(el, source, props, opts) {
+    if (!el) return false;
+    if (!lockdownActive()) return false; // chrome then falls back to the hardcoded DOM — same rule as forks
+    const componentId = String((opts && opts.componentId) || 'chrome');
+    const name = String((opts && opts.name) || componentId);
+    const report = msg => { try { (globalThis.__fieldReportError || (() => {}))(`chrome component failed: ${msg}`, String(source || '').slice(0, 500), { name, componentId }); } catch { /* best-effort */ } };
+    let entry = chromeCompiled.get(source);
+    if (!entry) {
+      if (chromeCompiled.size >= 24) chromeCompiled.clear(); // bounded: a long editing session can't grow it without limit
+      entry = { C: null, bad: null, err: null };
+      const slot = entry; // onError is bound at confine time; the slot makes each MOUNT's failure observable
+      try { entry.C = makeConfinedFromSource(source, { name, endowments: FORK_VOCAB, onError: e => { slot.err = e; } }); }
+      catch (e) { entry.bad = (e && e.message) || String(e); }
+      chromeCompiled.set(source, entry);
+    }
+    if (!entry.C) { report(entry.bad || 'source failed to evaluate'); return false; }
+    entry.err = null;
+    try { renderConfined(h(entry.C, props || {}), el); } catch (e) { entry.err = e; }
+    if (entry.err) { report((entry.err && entry.err.message) || String(entry.err)); return false; } // mount threw → caller falls back
+    tagComponent(el, componentId, name); // alt-clickable → its edit chat (the registry identity)
     return true;
   },
 

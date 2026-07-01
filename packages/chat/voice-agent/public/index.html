@@ -578,7 +578,9 @@
     <div id="log"></div>
   </div>
 
-  <div id="shares-view" class="card hide">
+  <!-- TRUSTED PATH: the power grant/revoke + auto-confirm-rules surface. Never editable chrome — alt-click
+       refuses it (🔒) and islands refuse to give anything inside it a component identity. -->
+  <div id="shares-view" class="card hide" data-trusted-path>
     <div class="sub" style="margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--edge)">🔑 <b>Powers.</b> This agent <b>reads</b> everything it holds and can only <b>propose</b> changes — every destructive action waits for your confirmation (or a "don't ask again" rule). Read-only = read + propose; writable powers can perform destructive actions (still confirmed). Grant one to someone else below.</div>
     <div id="invite-box" class="hide" style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--edge)">
       <div style="font-size:15px;margin-bottom:4px"><b>👤 Invite a new user</b></div>

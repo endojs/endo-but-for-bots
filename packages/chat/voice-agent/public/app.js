@@ -147,6 +147,31 @@ const componentErrorNote = (name, err) => {
 // the smell to /render-smell so the server files it to the owner feedback-loops view AND feeds the
 // correction back into that renderer's authoring loop so it self-corrects. Cap-gated; source is render-safe.
 window.__fieldReportSmell = (smells, meta) => { try { if (!cap || !Array.isArray(smells) || !smells.length) return; fetch('/render-smell', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, smells: smells.slice(0, 20), componentId: String((meta && meta.componentId) || '').slice(0, 80), name: String((meta && meta.name) || 'component').slice(0, 80), source: String((meta && meta.source) || '').slice(0, 2000) }) }).catch(() => {}); } catch { /* */ } };
+// ── APP CHROME as registry-backed components (increment 1 of the chrome decomposition —
+//    designs/preact-component-trie.md). Seeded chrome-* project-objects (chrome-components.mjs) render
+//    pieces of the shell through the confined no-iframe path: sources fetched ONCE per load (and after an
+//    edit), compiled once per version (islands renderChrome caches the Compartment), mounted per site. A
+//    failed mount returns false → the caller paints the ORIGINAL hardcoded DOM (never a dead toolbar) and
+//    the error auto-files onto the component's own backlog (renderChrome → __fieldReportError → /error/flag).
+//    Chrome components hold NO cap: the host passes exactly the affordance callbacks they may fire
+//    (onClip / onCopy / onSuggest) as props — the props ARE the ocap boundary. ──
+let chromeComps = {}; // id → { source, name, version }
+const loadChromeComps = async () => {
+  try { const r = await (await fetch('/chrome/components')).json(); if (r && r.ok && Array.isArray(r.components)) chromeComps = Object.fromEntries(r.components.map(c => [c.id, c])); }
+  catch { /* unreachable → every chrome site falls back to its hardcoded DOM */ }
+};
+let chromeReady = loadChromeComps();
+const mountChrome = (id, el, props) => {
+  const c = chromeComps[id]; const isl = window.__fieldIslands;
+  if (!c || !c.source || !isl || typeof isl.renderChrome !== 'function') return false;
+  try { return isl.renderChrome(el, c.source, props, { componentId: id, name: c.name || id }); } catch { return false; }
+};
+// After an edit/revert of a chrome component: re-fetch HEAD sources + repaint every chrome site live.
+const reloadChromeComps = async () => {
+  chromeReady = loadChromeComps(); await chromeReady;
+  try { renderTx(); } catch { /* transcript repaint is best-effort */ }
+  try { mountWelcome(); } catch { /* landing repaint is best-effort */ }
+};
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : String(Math.random())).slice(0, 36);
@@ -392,7 +417,7 @@ const bubble = (who, text, agent, at) => {
   // agent replies are Markdown (agents format even unprompted) → render it; user text stays literal (linkify only)
   const bodyEl = d.querySelector('.body');
   if (who === 'you') { linkify(bodyEl, text || '…'); } else { bodyEl.classList.add('md'); renderMarkdown(bodyEl, text || '…'); }
-  attachClipButton(d, bodyEl, text); // promote-on-attention: a quiet 🔗 in the corner → clip this message as a shareable page
+  attachMsgToolbar(d, bodyEl, text); // the per-message action strip (chrome-msg-toolbar component; falls back to the plain 🔗)
   log.appendChild(d); window.scrollTo(0, document.body.scrollHeight);
   return d.querySelector('.body');
 };
@@ -418,25 +443,43 @@ const clipAndShare = async ({ html, text, title }) => {
   if (!r || !r.ok) { setStatus('clip: ' + ((r && r.error) || 'failed')); return; }
   clipShareSheet(r);
 };
-const attachClipButton = (msgEl, bodyEl, text) => {
+// The per-message TOOLBAR is now app chrome (chrome-msg-toolbar, a registry-backed confined component):
+// 📋 copy + 🔗 clip. The HOST keeps every authority-bearing move — reading the selection/DOM, the clipboard,
+// the /clip/create call — and hands the component only two callbacks; the component is pure render. If the
+// chrome component fails to mount (or the registry is unreachable), the ORIGINAL hardcoded 🔗 button paints
+// instead, so the affordance never dies with a broken edit.
+const attachMsgToolbar = (msgEl, bodyEl, text) => {
   try {
     msgEl.style.position = 'relative';
-    const b = document.createElement('button'); b.className = 'msg-clip'; b.title = 'Clip & share this as a page'; b.textContent = '🔗';
-    b.style.cssText = 'all:unset;position:absolute;right:6px;bottom:4px;cursor:pointer;font-size:12px;opacity:.3;transition:opacity .15s;padding:2px 5px;border-radius:6px;line-height:1';
-    b.addEventListener('mouseenter', () => { b.style.opacity = '1'; });
-    b.addEventListener('mouseleave', () => { b.style.opacity = '.3'; });
-    b.addEventListener('click', e => {
-      e.stopPropagation();
-      // if the user highlighted a SEGMENT inside this message, clip just that; else the whole message.
+    // if the user highlighted a SEGMENT inside this message, clip just that; else the whole message.
+    const doClip = () => {
       const sel = window.getSelection && window.getSelection();
       let html = bodyEl.innerHTML, segText = text;
       if (sel && !sel.isCollapsed && bodyEl.contains(sel.anchorNode) && bodyEl.contains(sel.focusNode)) {
         const frag = sel.getRangeAt(0).cloneContents(); const tmp = document.createElement('div'); tmp.appendChild(frag); html = tmp.innerHTML; segText = sel.toString();
       }
       clipAndShare({ html, text: segText });
-    });
-    msgEl.appendChild(b);
-  } catch { /* the clip affordance is enhancement-only */ }
+    };
+    const doCopy = async () => { const okc = await writeClipboard(String(text || bodyEl.textContent || '')); setStatus(okc ? '📋 copied' : 'copy failed (clipboard permission?)'); };
+    const legacy = () => { // the pre-decomposition DOM — the guaranteed floor
+      const b = document.createElement('button'); b.className = 'msg-clip'; b.title = 'Clip & share this as a page'; b.textContent = '🔗';
+      b.style.cssText = 'all:unset;position:absolute;right:6px;bottom:4px;cursor:pointer;font-size:12px;opacity:.3;transition:opacity .15s;padding:2px 5px;border-radius:6px;line-height:1';
+      b.addEventListener('mouseenter', () => { b.style.opacity = '1'; });
+      b.addEventListener('mouseleave', () => { b.style.opacity = '.3'; });
+      b.addEventListener('click', e => { e.stopPropagation(); doClip(); });
+      msgEl.appendChild(b);
+    };
+    const host = document.createElement('div'); host.className = 'msg-toolbar';
+    host.style.cssText = 'position:absolute;right:6px;bottom:4px;opacity:.3;transition:opacity .15s';
+    host.addEventListener('mouseenter', () => { host.style.opacity = '1'; });
+    host.addEventListener('mouseleave', () => { host.style.opacity = '.3'; });
+    host.addEventListener('click', e => e.stopPropagation()); // host-side: toolbar taps never bubble into the message
+    msgEl.appendChild(host);
+    chromeReady.then(() => {
+      if (!host.isConnected) return; // the transcript re-rendered while sources loaded — this mount is gone
+      if (!mountChrome('chrome-msg-toolbar', host, { onClip: doClip, onCopy: doCopy })) { host.remove(); legacy(); }
+    }).catch(() => { try { host.remove(); } catch { /* */ } legacy(); });
+  } catch { /* the toolbar is enhancement-only */ }
 };
 
 // ── action-proposal cards: a destructive action the agent PROPOSED. Rendered by
@@ -540,7 +583,7 @@ const renderDiff = (a, b) => {
 // don't-ask toggle live in the island). The HOST owns the per-card state (dontAsk, resolved) + the
 // confirm/reject fetch flow, re-rendering via renderInto on each change. mayConfirm gates the buttons.
 const renderProposal = p => {
-  const card = document.createElement('div'); log.appendChild(card);
+  const card = document.createElement('div'); card.setAttribute('data-trusted-path', ''); log.appendChild(card); // Confirm/Reject renders an authority decision → trusted path, never editable chrome
   const mayConfirm = isRoot || heldPowers.has(p.power); // confirm only what you hold authority for (typo guard)
   let dontAsk = false; let resolved = '';
   const draw = () => {
@@ -1338,7 +1381,7 @@ const scopeChat = async prompt => {
     // A clean OAuth-style consent sheet rendered straight into the dim backdrop (no white card wrapper).
     // Shows ONLY the proposed powers; "Add more" reveals the rest. Approve mints the per-chat cap.
     const m = $('qrmodal');
-    m.innerHTML = `<div class="consent" role="dialog" aria-label="Approve this chat’s powers">
+    m.innerHTML = `<div class="consent" data-trusted-path role="dialog" aria-label="Approve this chat’s powers">
       <div class="consent-head"><div class="consent-badge">🔐</div><div style="min-width:0"><div class="consent-title">Approve this chat’s powers</div>${taskName ? `<div class="consent-sub">“${esc(taskName)}”</div>` : ''}</div></div>
       <div class="consent-note">This chat will be able to use <b>only</b> the powers you approve — nothing else is reachable to it.</div>
       <div class="consent-scopes">
@@ -2397,11 +2440,26 @@ const titleFrom = t => { const ch = chats.find(c => c.id === sessionId); if (ch 
 // tagline); the first message drops it to the bottom. Driven off the active tab + cap +
 // whether the transcript is still empty, so it stays correct across chat switches/reloads.
 const syncLanding = () => document.body.classList.toggle('landing', curTab === 'talk' && !!cap && !activeTx.length);
-// P4 (live-editable plan): the landing tagline is now an EDITABLE confined island where a static <div> used to
-// be — alt-click it and ask its agent to reword it. Mount once; if islands aren't up, the static text remains.
-(() => { const el = $('composer-tagline'); if (!el) return; const prev = el.textContent;
-  try { if (window.__fieldIslands && window.__fieldIslands.renderTaglineHero) { el.textContent = ''; window.__fieldIslands.renderTaglineHero(el); } } // clear the static text node so the island's render isn't doubled
-  catch (e) { try { el.textContent = prev || 'What can Agent C do for you?'; } catch { /* keep static */ } } })();
+// The landing WELCOME panel is app chrome (chrome-welcome, a registry-backed confined component): the
+// tagline + tappable starter suggestions. Live-editable via its edit chat (no rebuild, no reload).
+// Fallback ladder: chrome-welcome → the tagline-hero island (the previous incarnation) → the static text.
+const mountWelcome = () => {
+  const el = $('composer-tagline'); if (!el) return;
+  const prev = el.textContent;
+  const fallbackIsland = () => {
+    try { if (window.__fieldIslands && window.__fieldIslands.renderTaglineHero) { el.textContent = ''; window.__fieldIslands.renderTaglineHero(el); return; } } catch { /* fall through to static */ }
+    try { el.textContent = prev || 'What can Agent C do for you?'; } catch { /* keep whatever is there */ }
+  };
+  chromeReady.then(() => {
+    el.textContent = ''; // clear the static text node so the confined render isn't doubled
+    const okw = mountChrome('chrome-welcome', el, {
+      // the ONE affordance the welcome panel holds: put a starter prompt into the composer (never send).
+      onSuggest: s => { const t = $('text'); if (!t) return; t.value = String(s || ''); t.focus(); try { t.setSelectionRange(t.value.length, t.value.length); } catch { /* */ } },
+    });
+    if (!okw) { el.textContent = prev; fallbackIsland(); }
+  }).catch(fallbackIsland);
+};
+mountWelcome();
 
 // Re-grant/revoke this chat's powers in place (banner + Add / ×). Root-only; recovers an orphaned cap.
 const rescopeChat = async (cc, newPowers, notesFolder) => {
@@ -2594,7 +2652,7 @@ const renderTx = () => {
     const cc = curChatObj() || {};
     const manageable = isRoot && !!cc.scopedCap; // the OWNER can re-grant/revoke THIS chat's powers in place
     const xbtn = p => manageable ? ` <button class="chip-x" data-revoke="${esc(p)}" title="revoke ${esc(p)}">×</button>` : '';
-    const b = document.createElement('div'); b.className = 'powers-banner'; let show = true;
+    const b = document.createElement('div'); b.className = 'powers-banner'; b.setAttribute('data-trusted-path', ''); let show = true; // power grant/revoke UI = trusted path (never editable chrome)
     if (Array.isArray(ps) && ps.length) {
       b.innerHTML = `<span class="pb-label">🔑 this chat can</span>${ps.map(p => `<span class="chip" title="${esc(powerTip(p))}">${powerIcon(p)} ${esc(p)}${xbtn(p)}</span>`).join('')}${manageable ? '<button class="chip chip-add" data-addpower title="grant another power">+ Add</button>' : ''}`;
     } else if (isRoot && chatAgent() === 'field-agent' && !cc.shareToken) {
@@ -3538,7 +3596,13 @@ const openComponentEditChat = (id, name, { kind = 'component' } = {}) => {
       const r = await (await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: capFor, id, message: change, history: priorHistory }) })).json();
       if (!r.ok) msg = `⚠️ ${r.error || 'failed'}`;
       else { msg = r.answer || (r.edited ? '✓ updated.' : '(no reply)'); if (r.edited) msg += `  ·  v${r.edited.version}${r.edited.review && r.edited.review.worst && r.edited.review.worst !== 'none' ? ` · review: ${r.edited.review.worst}` : ''} — applied live`; }
-      if (r.edited) { try { renderTx(); } catch { /* re-render mounted components + forks */ } if (curTab === 'components') { try { refreshComponents(); } catch { /* */ } } }
+      if (r.edited) {
+        // an APP-CHROME edit applies LIVE: re-fetch the new HEAD source + repaint every chrome site
+        // (reloadChromeComps itself re-runs renderTx + the welcome mount); everything else re-renders in place.
+        if (/^chrome-/.test(String(id))) { try { await reloadChromeComps(); } catch { /* repaint is best-effort */ } }
+        else { try { renderTx(); } catch { /* re-render mounted components + forks */ } }
+        if (curTab === 'components') { try { refreshComponents(); } catch { /* */ } }
+      }
       pend.textContent = msg; hist.push({ who: 'agent', text: msg });
     } catch (e) { pend.textContent = `⚠️ ${e.message}`; }
     busyCe = false; logEl.scrollTop = logEl.scrollHeight; input.focus();
@@ -3595,12 +3659,20 @@ const componentSelect = () => {
   document.body.append(outline, hint, chip);
   // a "component" = any element carrying its project id (the Studio) OR a live in-chat confined component
   // OR a live mounted FORK ([data-fork-id]). Forks select for any cap-holder; components stay root-only.
-  const tagOf = el => (el && el.closest ? el.closest('[data-fork-id], [data-component-id], .gw-component') : null);
+  // TRUSTED PATH (dan's hard boundary, explicit DENYLIST not omission): anything inside [data-trusted-path]
+  // — the scope-consent sheet, the Shares panel (power grant/revoke + auto-confirm rules), proposal
+  // confirms — is NOT selectable chrome. Selection REFUSES it with a distinct 🔒 indicator so the boundary
+  // is legible, and tagComponent (islands.js) refuses to give those surfaces a component identity at all.
+  const trustedOf = el => { try { return el && el.closest ? el.closest('[data-trusted-path]') : null; } catch { return null; } };
+  const tagOf = el => (el && el.closest && !trustedOf(el) ? el.closest('[data-fork-id], [data-component-id], .gw-component') : null);
   const isForkEl = el => !!(el && el.closest && el.closest('[data-fork-id]'));
   const hasForks = () => !!document.querySelector('[data-fork-id]');
   const canEngage = () => isRoot || hasForks(); // forks are alt-selectable even without the root cap
   const setAlt = on => { altHeld = on; hint.style.display = on ? 'block' : 'none'; document.documentElement.classList.toggle('comp-select', on); if (!on && (!chip.style.display || chip.style.display === 'none')) { outline.style.display = 'none'; hoverEl = null; } };
-  const place = el => { if (!el) { outline.style.display = 'none'; return; } const r = el.getBoundingClientRect(); outline.style.display = 'block'; outline.style.left = `${r.left - 1}px`; outline.style.top = `${r.top - 1}px`; outline.style.width = `${r.width}px`; outline.style.height = `${r.height}px`; label.textContent = (el.closest && el.closest('[data-fork-id]') ? `⑂ ${el.closest('[data-fork-id]').getAttribute('data-fork-name') || 'fork'}` : '') || el.getAttribute('data-component-name') || el.getAttribute('data-component-id') || 'component'; }; // formal name, impact-colour monospace, top-left
+  const place = el => { if (!el) { outline.style.display = 'none'; return; } const r = el.getBoundingClientRect(); outline.style.display = 'block'; outline.style.borderStyle = 'solid'; outline.style.borderColor = 'var(--bad,#f85149)'; outline.style.boxShadow = '0 0 7px var(--bad,#f85149)'; label.style.color = 'var(--bad,#f85149)'; outline.style.left = `${r.left - 1}px`; outline.style.top = `${r.top - 1}px`; outline.style.width = `${r.width}px`; outline.style.height = `${r.height}px`; label.textContent = (el.closest && el.closest('[data-fork-id]') ? `⑂ ${el.closest('[data-fork-id]').getAttribute('data-fork-name') || 'fork'}` : '') || el.getAttribute('data-component-name') || el.getAttribute('data-component-id') || 'component'; }; // formal name, impact-colour monospace, top-left
+  // the 🔒 REFUSAL indicator: a muted, dashed outline + "🔒 trusted path" label — visibly NOT the edit
+  // affordance. Selection never proceeds from here (no chip, no edit chat, no break-out).
+  const placeTrusted = el => { if (!el) { outline.style.display = 'none'; return; } const r = el.getBoundingClientRect(); outline.style.display = 'block'; outline.style.borderStyle = 'dashed'; outline.style.borderColor = 'var(--mut,#8b949e)'; outline.style.boxShadow = 'none'; label.style.color = 'var(--mut,#8b949e)'; outline.style.left = `${r.left - 1}px`; outline.style.top = `${r.top - 1}px`; outline.style.width = `${r.width}px`; outline.style.height = `${r.height}px`; label.textContent = '🔒 trusted path'; };
   const clearChip = () => { chip.style.display = 'none'; outline.style.display = 'none'; };
   // Break out an id-less inline component into a project object, then edit it — so click-to-edit works on
   // freshly-generated chat components too (breaking out IS minting the editable, versioned project).
@@ -3623,11 +3695,18 @@ const componentSelect = () => {
   // engages select mode (which disables the iframes' pointer-events, letting the rest of the gesture land).
   addEventListener('mousemove', e => {
     if (!canEngage()) return;
-    if (e.altKey) { if (!altHeld) setAlt(true); const el = tagOf(e.target); if (el !== hoverEl) { hoverEl = el; place(el); } else if (el) place(el); }
-    else if (altHeld) setAlt(false);
+    if (e.altKey) {
+      if (!altHeld) setAlt(true);
+      const tp = trustedOf(e.target);
+      if (tp) { hoverEl = tp; placeTrusted(tp); return; } // 🔒 legible refusal — never the edit outline
+      const el = tagOf(e.target); if (el !== hoverEl) { hoverEl = el; place(el); } else if (el) place(el);
+    } else if (altHeld) setAlt(false);
   }, true);
   addEventListener('click', e => {
-    if (!e.altKey || !canEngage()) return; const el = tagOf(e.target); if (!el) return;
+    if (!e.altKey || !canEngage()) return;
+    const tp = trustedOf(e.target);
+    if (tp) { e.preventDefault(); e.stopPropagation(); placeTrusted(tp); setStatus('🔒 trusted path — consent & permission surfaces are not editable chrome'); return; }
+    const el = tagOf(e.target); if (!el) return;
     // LIVE FORK ([data-fork-id]): editable by any cap-holder via the /forks/* path. Takes priority over the
     // component branch (a fork mount is never also a Studio component).
     const forkEl = el.closest ? el.closest('[data-fork-id]') : null;
@@ -3866,7 +3945,6 @@ const refreshComponents = async () => {
   const pending = all.filter(t => t.status === 'pending');
   const tools = all.filter(t => t.status === 'admitted');
   updateComponentsBadge(pending.length);
-  if (!pending.length && !tools.length) { list.innerHTML = '<div class="pill">no components yet — ask the agent in chat to build a tool (proposeTool); it shows up here to review + admit</div>'; return; }
   // 🆕 PENDING REVIEW — agent-proposed tools awaiting your admit (the discipline panel ran on each).
   let html = '';
   if (pending.length) {
@@ -3888,6 +3966,21 @@ const refreshComponents = async () => {
     // final innerHTML at the end replaces this with everything (pending + admitted + islands).
     list.innerHTML = html; wireComponentActions();
   }
+  // APP CHROME (registry-backed shell pieces — live-edited through the confined path; no rebuild/reload).
+  let chromeHtml = '';
+  try {
+    const cr = await (await fetch('/chrome/components')).json();
+    const chromes = (cr && cr.components) || [];
+    if (chromes.length) {
+      const chh = {};
+      await Promise.all(chromes.map(async c => { try { const h2 = await (await fetch('/components/history', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: c.id }) })).json(); chh[c.id] = h2.versions || []; } catch { chh[c.id] = []; } }));
+      chromeHtml = `<div class="shares-sec">App chrome (live UI · applies on edit, no rebuild)</div>` + chromes.map(c => {
+        const vs = chh[c.id] || []; const cur = vs[0];
+        const rows = vs.map((v, k) => `<div class="cver"><span class="vmono">${esc(String(v.version).slice(0, 8))}</span> <span class="sub">${esc(v.summary || '')}</span>${k === 0 ? ' <span class="pill">current</span>' : ` <button class="mini" data-revert="${esc(c.id)}" data-ver="${esc(v.version)}">revert</button>`}</div>`).join('');
+        return `<div class="comp" data-component-id="${esc(c.id)}" data-component-name="${esc(c.name)}"><div class="comp-head"><b>${esc(c.name)}</b> <span class="pill">chrome${cur ? ` · v ${esc(String(cur.version).slice(0, 8))}` : ''}</span> <button class="mini" data-edit="${esc(c.id)}" data-name="${esc(c.name)}">✎ edit</button></div><div class="cvers">${rows || '<span class="sub">no versions yet</span>'}</div></div>`;
+      }).join('');
+    }
+  } catch { /* ignore — the section just doesn't render */ }
   // ISLANDS (confined-Preact UI components — their source is a client file, rebuilt on edit).
   let islandsHtml = '';
   try {
@@ -3903,7 +3996,7 @@ const refreshComponents = async () => {
       }).join('');
     }
   } catch { /* ignore */ }
-  if (!tools.length) { list.innerHTML = (html + islandsHtml) || '<div class="pill">no components yet</div>'; wireComponentActions(); return; }
+  if (!tools.length) { list.innerHTML = (html + chromeHtml + islandsHtml) || '<div class="pill">no components yet — ask the agent in chat to build a tool (proposeTool); it shows up here to review + admit</div>'; wireComponentActions(); return; }
   const hists = {}; const grains = {};
   await Promise.all(tools.map(async t => { try { const h = await (await fetch('/components/history', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: t.id }) })).json(); hists[t.id] = h.versions || []; grains[t.id] = h.grains || {}; } catch { hists[t.id] = []; grains[t.id] = {}; } }));
   if (pending.length) html += `<div class="shares-sec">Admitted</div>`;
@@ -3914,7 +4007,7 @@ const refreshComponents = async () => {
     const gview = gks.length ? `<div class="cgrains sub">🌱 data: ${gks.map(k => `${esc(k)}=${esc(JSON.stringify(grains[t.id][k]))}`).join(' · ')} <span style="opacity:.6">(survives edits/reverts)</span></div>` : '';
     return `<div class="comp" data-component-id="${esc(t.id)}" data-component-name="${esc(t.name)}"><div class="comp-head"><b>${esc(t.name)}</b> <span class="pill">${esc(t.kind || 'instance')}${cur ? ` · v ${esc(String(cur.version).slice(0, 8))}` : ''}</span> <button class="mini" data-edit="${esc(t.id)}" data-name="${esc(t.name)}">✎ edit</button> <button class="mini" data-fork="${esc(t.id)}" data-name="${esc(t.name)}">fork</button></div>${gview}<div class="cvers">${rows || '<span class="sub">no versions recorded yet</span>'}</div></div>`;
   }).join('');
-  list.innerHTML = html + islandsHtml;
+  list.innerHTML = html + chromeHtml + islandsHtml;
   wireComponentActions();
 };
 // admit / reject the pending proposals + the admitted-component actions
@@ -3925,7 +4018,7 @@ const wireComponentActions = () => {
   // ✨ revise — hand the panel's findings back to the developer to integrate/note/unify, then re-review.
   list.querySelectorAll('[data-revise]').forEach(b => { b.onclick = async () => { b.disabled = true; const t0 = b.textContent; b.textContent = '✨ revising…'; setStatus(`Revising "${b.dataset.name}" against the review panel…`); try { const r = await (await fetch('/tools/revise', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.revise }) })).json(); setStatus(r.ok ? `Revised "${b.dataset.name}" — ${r.converged ? '✓ converged (clean)' : `${r.rounds} round(s), worst now ${r.worst}`}.` : `revise: ${r.error || 'failed'}`); } catch (e) { setStatus('revise failed: ' + e.message); b.textContent = t0; b.disabled = false; } refreshComponents(); }; });
   list.querySelectorAll('[data-edit]').forEach(b => { b.onclick = () => editComponent(b.dataset.edit, b.dataset.name); });
-  list.querySelectorAll('[data-revert]').forEach(b => { b.onclick = async () => { if (!window.confirm('Revert the LIVE component to this version? Non-destructive — it makes a new version; the live tool then runs it.')) return; b.disabled = true; await fetch('/components/revert', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.revert, version: b.dataset.ver }) }); refreshComponents(); }; });
+  list.querySelectorAll('[data-revert]').forEach(b => { b.onclick = async () => { if (!window.confirm('Revert the LIVE component to this version? Non-destructive — it makes a new version; the live tool then runs it.')) return; b.disabled = true; await fetch('/components/revert', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.revert, version: b.dataset.ver }) }); if (/^chrome-/.test(String(b.dataset.revert))) { try { await reloadChromeComps(); } catch { /* repaint is best-effort */ } } refreshComponents(); }; });
   list.querySelectorAll('[data-fork]').forEach(b => { b.onclick = () => forkComponentAct(b.dataset.fork, b.dataset.name); });
 };
 

@@ -89,6 +89,7 @@ import { makeLiveCells } from './live-cells.mjs';
 import { makeComponentShares } from './component-shares.mjs';
 import { makeForks } from './forks.mjs';
 import { makeComponentBacklog } from './component-backlog.mjs';
+import { makeChromeComponents } from './chrome-components.mjs';
 import { makeDistTrust } from './dist-trust.mjs';
 import { makeBlossom } from './blossom.mjs';
 import * as projects from './projects.mjs';
@@ -267,6 +268,34 @@ const editIslandSource = async (id, prompt) => {
   catch (e) { return { ok: false, error: `edit agent failed: ${(e && e.message) || e}` }; }
   const code = extractJs(out); if (!code.trim()) return { ok: false, error: 'the edit agent returned nothing (model unavailable?)' };
   return islandSource.applySource(id, code, `edit: ${String(prompt).slice(0, 60)}`);
+};
+
+// Editing a CHROME component (app chrome as a registry-backed project-object — chrome-components.mjs).
+// Its source is the SAME `(endowments, props) => vnode` shape a fork uses (it renders through the fork
+// no-iframe path), so the fork edit persona applies. RENDER-CHECK GATE: the rewritten source must pass a
+// real render smoke BEFORE it is committed — a broken chrome edit is REFUSED and the previous version
+// stays live (the client additionally falls back to the hardcoded DOM if a mount still fails at runtime).
+// `sourceOverride` applies an exact source (no LLM) through the SAME gate — the deterministic tooling path.
+const editChromeSource = async (id, prompt, { sourceOverride } = {}) => {
+  const meta = chromeComponents.get(id); if (!meta) return { ok: false, error: 'unknown chrome component' };
+  let code;
+  if (sourceOverride != null) { code = String(sourceOverride); }
+  else {
+    if (!String(prompt || '').trim()) return { ok: false, error: 'describe the change you want' };
+    const snap = await componentGit.readAt(id, 'HEAD');
+    const cur = (snap && snap.files['component.js']) || '';
+    let out = '';
+    try { out = String((await opusComplete({ system: FORK_EDIT_SYS, prompt: `Current source of the "${meta.name}" app-chrome component (its callbacks arrive via props — keep calling them):\n\`\`\`js\n${cur}\n\`\`\`\n\nRequested change: ${String(prompt)}`, maxTokens: 4000 })) || ''); }
+    catch (e) { return { ok: false, error: `edit agent failed: ${(e && e.message) || e}` }; }
+    code = extractJs(out); if (!code.trim()) return { ok: false, error: 'the edit agent returned nothing (model unavailable?)' };
+  }
+  const smoke = await renderCheck(code, { kind: 'fork' });
+  if (!smoke.ok) return { ok: false, error: `the edited chrome component FAILED a real render check — the edit was NOT applied (the previous version stays live): ${smoke.error}` };
+  const head = await componentGit.readAt(id, 'HEAD');
+  const files = { ...((head && head.files) || {}), 'component.js': code };
+  const rec = await componentGit.commit(id, files, `edit: ${String(prompt || 'direct edit').slice(0, 60)}`);
+  componentSync.schedule(id); // mirror to the durable remote (no-op unless configured)
+  return { ok: true, version: rec.version, note: 'Edited — committed as a new revertable version; open chats re-render it live. Revert from the Components tab if you don\'t like it.' };
 };
 
 // Fork a component into a NEW pending tool: clone its git source lineage at `ref` + COPY its grain data.
@@ -650,6 +679,11 @@ const forkOwnerOf = cap => { const n = nodeFor(cap); if (!n) return null; return
 // by the id already held, no new strings. Recipients get an attenuated ADD-ONLY verb (see the
 // /forks/backlog/report + /components/backlog/report routes); runtime errors auto-file via /error/flag.
 const componentBacklog = makeComponentBacklog({ file: process.env.BACKLOG_STORE || `${VOICE_STATE_DIR}/component-backlog.json` });
+// The app's own CHROME as registry-backed components (increment 1 of the chrome decomposition):
+// seeded chrome-* project-objects in component-git — versioned, backlogged, alt-clickable, live-edited
+// through the SAME confined render path forks use. See chrome-components.mjs + designs/preact-component-trie.md.
+const chromeComponents = makeChromeComponents({ componentGit, componentBacklog });
+chromeComponents.ensureSeeded().catch(e => log('chrome seed', (e && e.message) || e));
 // The backlog's READ/NOTIFY surface is a PROPAGATOR CELL (live-cells interface, push-fed by the store)
 // served through the one /cells/subscribe broker as `backlog:<id>` — owner-only (the attenuated add-only
 // facet gains NO subscription). A fork's backlog belongs to forkOwnerOf(cap); a component's to root.
@@ -1296,6 +1330,14 @@ const handler = async (req, res) => {
     }
     if (u.pathname === '/component-app.js') return serveFile(res, 'component-app.js', 'text/javascript; charset=utf-8');
     if (u.pathname.startsWith('/c/') && req.method === 'GET') return serveFile(res, 'component-app.html', 'text/html; charset=utf-8'); // standalone home of a broken-out component (reads its id from the path)
+    // The app-CHROME components at HEAD (id + name + confined render source + version). As public as the
+    // app shell itself — chrome source is render-safe UI text (no cap, no secret; the client refuses to
+    // render it outside lockdown), and every viewer needs it to paint the shell. no-store: live on reload.
+    if (u.pathname === '/chrome/components' && req.method === 'GET') {
+      const components = await chromeComponents.heads();
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store, must-revalidate', ...SEC });
+      return res.end(JSON.stringify({ ok: true, components }));
+    }
     // ── islands-as-SPWAs: /apps/<name> serves a standalone host page that mounts island
     //    <name> from THIS origin (no per-app ngrok). The app name is in the path; the cap
     //    rides the #fragment (apps-host.js lifts it out of the address bar). ──
@@ -2961,7 +3003,14 @@ const handler = async (req, res) => {
       if (u.pathname === '/components/backlog/add') return json(res, 200, componentBacklog.add(String(body.id || ''), { kind: body.kind, title: body.title, body: body.body, from: 'owner' }));
       if (u.pathname === '/components/read') { const id = String(body.id || ''); const s = await (islandSource.isIsland(id) ? islandSource.readAt(id, String(body.version || 'HEAD')) : componentGit.readAt(id, String(body.version || 'HEAD'))); return json(res, 200, s ? { ok: true, ...s } : { ok: false, error: 'unknown component/version' }); }
       if (u.pathname === '/components/fork') { const id = String(body.id || ''); if (islandSource.isIsland(id)) return json(res, 200, { ok: false, error: 'forking an island component isn\'t supported yet — edit or revert it' }); return json(res, 200, await forkComponentTo(customTools, id, String(body.name || ''), String(body.version || 'HEAD'), 'owner')); }
-      if (u.pathname === '/components/edit') { const id = String(body.id || ''); return json(res, 200, islandSource.isIsland(id) ? await editIslandSource(id, String(body.prompt || '')) : await editComponentSource(customTools, id, String(body.prompt || ''))); }
+      if (u.pathname === '/components/edit') {
+        const id = String(body.id || '');
+        if (islandSource.isIsland(id)) return json(res, 200, await editIslandSource(id, String(body.prompt || '')));
+        // CHROME components edit through the fork-shaped path (render-check-gated; body.source = the exact-
+        // source tooling lane, same gate). Root-gated like the whole block — the owner edits the root chrome.
+        if (chromeComponents.isChrome(id)) return json(res, 200, await editChromeSource(id, String(body.prompt || ''), { sourceOverride: body.source != null ? String(body.source) : undefined }));
+        return json(res, 200, await editComponentSource(customTools, id, String(body.prompt || '')));
+      }
       // P2 of the live-editable plan: a REAL CodeMode agent loop scoped (by toolbox construction) to ONE
       // component — readComponentSource() + editComponent({prompt}) are its ENTIRE authority (lexical
       // confinement, the one agent loop). It converses: reads the source, asks ONE clarifying question if
@@ -2974,8 +3023,11 @@ const handler = async (req, res) => {
         // (which readComponentSource below already reads); recognize it so its edit chat (and backlog
         // injection) works, instead of 'no such component'.
         const isBrokenOut = !isIsland && !t && /^uicomp-/.test(id) && componentGit.exists(id);
-        if (!isIsland && !t && !isBrokenOut) return json(res, 200, { ok: false, error: 'no such component' });
-        let name = (t && t.name) || id;
+        // app-CHROME components (chrome-…) are project objects too — componentGit-backed like broken-out
+        // ones, but their edits run the render-check-gated chrome path (fork-shaped source).
+        const isChrome = !isIsland && !t && chromeComponents.isChrome(id);
+        if (!isIsland && !t && !isBrokenOut && !isChrome) return json(res, 200, { ok: false, error: 'no such component' });
+        let name = (t && t.name) || (isChrome && chromeComponents.get(id).name) || id;
         if (isBrokenOut) { try { const snap = await componentGit.readAt(id, 'HEAD'); name = (JSON.parse((snap && snap.files['manifest.json']) || '{}').name) || id; } catch { /* keep the id */ } }
         // the component's OPEN BACKLOG rides into the editor agent's context (same source of truth as
         // the backlog:<id> cell) — the edit chat opens already informed by its filed issues/errors.
@@ -2984,7 +3036,7 @@ const handler = async (req, res) => {
         let edited = null;
         const toolbox = {
           readComponentSource: { run: async () => { try { const snap = await (isIsland ? islandSource.readAt(id, 'HEAD') : componentGit.readAt(id, 'HEAD')); const files = (snap && snap.files) || (t ? sourceFilesOf(t) : {}); return { ok: true, name, files }; } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; } } },
-          editComponent: { run: async ({ prompt } = {}) => { const r = isIsland ? await editIslandSource(id, String(prompt || '')) : await editComponentSource(customTools, id, String(prompt || '')); if (r && r.ok) edited = { version: r.version, review: r.review || null }; return r; } },
+          editComponent: { run: async ({ prompt } = {}) => { const r = isIsland ? await editIslandSource(id, String(prompt || '')) : isChrome ? await editChromeSource(id, String(prompt || '')) : await editComponentSource(customTools, id, String(prompt || '')); if (r && r.ok) edited = { version: r.version, review: r.review || null }; return r; } },
           resolveBacklogItem: { run: async ({ itemId, status } = {}) => componentBacklog.setStatus(id, String(itemId || ''), status === 'ack' ? 'ack' : 'done') },
         };
         const manifest = [
@@ -3005,8 +3057,10 @@ const handler = async (req, res) => {
         if (islandSource.isIsland(id)) return json(res, 200, await islandSource.revert(id, version));
         const snap = await componentGit.readAt(id, version); if (!snap) return json(res, 200, { ok: false, error: 'unknown component/version' });
         const rv = await componentGit.revert(id, version); // new commit restoring the old tree (history kept)
-        const upd = customTools.setSource(id, snap.files); // point the LIVE tool at the reverted source + drop its cached instance
-        return json(res, 200, { ok: upd.ok !== false, version: rv.version, note: 'Reverted the component to the chosen version (a new version; history preserved). The live tool now runs the reverted source.' });
+        // Only a LIVE library tool needs its cached instance swapped; git-only components (chrome-…,
+        // broken-out uicomp-…) have no tool record — clients re-fetch the reverted HEAD on next render.
+        const upd = customTools.get(id) ? customTools.setSource(id, snap.files) : { ok: true };
+        return json(res, 200, { ok: upd.ok !== false, version: rv.version, note: 'Reverted the component to the chosen version (a new version; history preserved). The live component now runs the reverted source.' });
       }
       // SHARE a tool — as a factory (others host their own) or an attenuated, metered, priced instance.
       if (u.pathname === '/tools/share') {

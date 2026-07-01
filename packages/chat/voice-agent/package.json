@@ -47,7 +47,8 @@
     "test:render-check": "node --test render-check.test.mjs",
     "test:component-error-loop": "node component-error-loop.staging.test.cjs",
     "test:backlog": "node --test component-backlog.test.mjs",
-    "test:component-backlog": "node component-backlog.staging.test.cjs"
+    "test:component-backlog": "node component-backlog.staging.test.cjs",
+    "test:chrome": "node chrome-components.staging.test.cjs"
   },
   "dependencies": {
     "@endo/exo-git": "workspace:^",
