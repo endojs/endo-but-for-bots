@@ -339,6 +339,44 @@ cmd_mount_remote() {
 }
 cmd_unmount_remote() { fusermount3 -u "$REMOTE_MOUNT" 2>/dev/null || fusermount -u "$REMOTE_MOUNT" 2>/dev/null || sudo umount "$REMOTE_MOUNT" 2>/dev/null; mountpoint -q "$REMOTE_MOUNT" && c_red "  still mounted" || c_grn "  ✓ unmounted $REMOTE_MOUNT"; }
 
+# ── macOS (darwin) route ──────────────────────────────────────────────────────────────────────
+# The LUKS + bind-mount machinery above is LINUX-ONLY and is deliberately NOT ported. On a mac the
+# personal volume is any mounted ENCRYPTED volume (an APFS-encrypted sparsebundle works well) and the
+# service reads it via the ENV ROUTE: export FIELD_PERSONAL_ROOT=<mounted volume path> before starting
+# the server — field-config.mjs rebases the whole personal family (config/ vault/ state/ env) onto it,
+# and personal.json on the volume switches the service to personal mode. See RUN-ON-MAC.md.
+# `mac-init` is a thin convenience: hdiutil-create (first run) / attach an encrypted sparsebundle and
+# print the FIELD_PERSONAL_ROOT to export. No bind games, nothing automatic, passphrase is yours only.
+cmd_mac_init() {
+  local bundle="${1:-$HOME_DIR/FieldPersonal.sparsebundle}"
+  command -v hdiutil >/dev/null || die "hdiutil not found — mac-init is the macOS route"
+  if [ ! -d "$bundle" ]; then
+    c_ylw "  creating ENCRYPTED sparsebundle $bundle (APFS, grows as used, 64g ceiling)."
+    c_ylw "  You will set the passphrase now — ONLY you know it; no key is stored anywhere."
+    hdiutil create -type SPARSEBUNDLE -size 64g -fs APFS -volname FieldPersonal \
+      -encryption AES-256 -agentpass "$bundle" || die "hdiutil create failed"
+  fi
+  c_ylw "  attaching $bundle (asks your passphrase)…"
+  local mnt
+  mnt="$(hdiutil attach "$bundle" | awk -F'\t' '/\/Volumes\//{print $NF}' | tail -1)"
+  [ -n "$mnt" ] && [ -d "$mnt" ] || die "attach failed (no /Volumes mountpoint reported)"
+  mkdir -p "$mnt/config" "$mnt/state" "$mnt/vault"
+  [ -f "$mnt/personal.json" ] || printf '{\n  "user": "%s",\n  "created": "%s",\n  "note": "Agent C personal volume — presence here = personal mode"\n}\n' \
+    "$OWNER" "$(date -u +%FT%TZ)" > "$mnt/personal.json"
+  c_grn "✓ personal volume mounted at: $mnt"
+  echo
+  echo "  Point the service at it (put this in your FIELD_ENV file or shell):"
+  c_grn "    export FIELD_PERSONAL_ROOT=\"$mnt\""
+  echo "  Detach when done:  hdiutil detach \"$mnt\""
+}
+
+if [ "$(uname -s)" = Darwin ]; then
+  case "${1:-}" in
+    mac-init) shift; cmd_mac_init "$@"; exit 0 ;;
+    *) die "this is macOS — the LUKS/bind-mount commands are Linux-only. Use the ENV route: mount your encrypted volume and export FIELD_PERSONAL_ROOT=<its path> (field-config rebases config/vault/state onto it), or run: field-personal mac-init [bundle-path]. See RUN-ON-MAC.md." ;;
+  esac
+fi
+
 case "${1:-status}" in
   status)  cmd_status ;;
   init)    shift; cmd_init "$@" ;;
