@@ -90,6 +90,7 @@ import { makeComponentShares } from './component-shares.mjs';
 import { makeForks } from './forks.mjs';
 import { makeComponentBacklog } from './component-backlog.mjs';
 import { makeChromeComponents } from './chrome-components.mjs';
+import { makeTraceCells } from './trace-cells.mjs';
 import { makeDistTrust } from './dist-trust.mjs';
 import { makeBlossom } from './blossom.mjs';
 import * as projects from './projects.mjs';
@@ -102,7 +103,7 @@ import { notify, topicForKey } from '../capture/notify.mjs';
 import { writeRating, ratingsDir } from './eval-ratings.mjs';
 // THE PERSONAL/PLATFORM SEAM (Packing up for Dweb): personal config + state dirs resolve through
 // field-config so FIELD_PERSONAL_ROOT (the encrypted volume) moves them together. Defaults identical on the NUC.
-import { CONFIG_DIR, STATE_DIR, VOICE_STATE_DIR, DASH_STATE_DIR, FIELD_MODE, configSummary } from './field-config.mjs';
+import { CONFIG_DIR, STATE_DIR, VOICE_STATE_DIR, DASH_STATE_DIR, FIELD_MODE, INSTANCE_NAME, configSummary } from './field-config.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOME = process.env.HOME || '/home/dan';
@@ -694,6 +695,24 @@ const backlogCellFor = (cap, id) => {
 };
 // opaque, NON-SECRET origin tag for a share-token filer (never the token itself — cap-hygiene).
 const backlogOriginOf = t => `share-${crypto.createHash('sha256').update(`backlog-origin:${String(t || '')}`).digest('hex').slice(0, 8)}`;
+// The per-chat reasoning TRACE as a propagator cell (`trace:<sid>` on /cells/subscribe) — fed from the
+// SAME emitStep choke point that feeds the /chat/steps SSE, monotonic (append + settle, never rewind).
+// This is the DATA CONTRACT of the trace island (chrome-trace-view): the cell IS the interface.
+const traceCells = makeTraceCells();
+// NON-SECRET owner key for a cap — the same 'root' / 'u:<hash>' derivation /chat uses for turn ownership.
+const traceOwnerKeyOf = cap => (nodeFor(cap)?.isRoot ? 'root' : 'u:' + crypto.createHash('sha256').update(String(cap || '')).digest('hex').slice(0, 24));
+// trace:<sid> gate — the OWNER'S CHAT CONTEXT, like backlog cells gate on component/fork ownership:
+// a valid cap is required, and once a turn has BOUND the trace to the cap that ran it (bindOwner in
+// /chat), only that cap (or root) may subscribe. Before the first turn binds it, any valid cap may
+// attach (the same client that is about to POST /chat with the same cap) — the subscribe/turn race is
+// then closed by the stream's 15s re-validation heartbeat, which tears down a mismatched subscriber.
+const traceCellFor = (cap, sid) => {
+  const node = nodeFor(cap);
+  if (!node) return { error: 'no capability' };
+  const owner = traceCells.ownerOf(sid);
+  const mine = !owner || node.isRoot || owner === traceOwnerKeyOf(cap);
+  return mine ? { cell: traceCells.cellFor(sid) } : { error: 'not your chat trace' };
+};
 // Distribution-trust (Phase 5): the social-collateral graph that decides which fork VERSIONS are approved
 // for end-user distribution. Root (the operator) is the base authority; trust flows outward via grants.
 const distTrust = makeDistTrust({ file: process.env.DIST_TRUST_STORE || `${VOICE_STATE_DIR}/dist-trust.json`, rootId: 'root' });
@@ -1025,6 +1044,7 @@ const stepBuffers = new Map(); // sessionId → [obj]
 const STEP_BUF_MAX = 600;
 const resetStepBuffer = sid => { stepBuffers.set(sid, []); };
 const emitStep = (sid, obj) => {
+  try { traceCells.feed(sid, obj); } catch { /* the cell mirror never blocks the live stream */ } // trace:<sid> cell rides the same events
   let buf = stepBuffers.get(sid); if (!buf) { buf = []; stepBuffers.set(sid, buf); }
   buf.push(obj); if (buf.length > STEP_BUF_MAX) buf.splice(0, buf.length - STEP_BUF_MAX);
   const set = stepStreams.get(sid); if (!set || !set.size) return;
@@ -1345,7 +1365,7 @@ const handler = async (req, res) => {
     if (u.pathname === '/apps-host.js') return serveFile(res, 'apps-host.js', 'text/javascript; charset=utf-8');
     if (u.pathname.startsWith('/apps/') && req.method === 'GET') return serveFile(res, 'apps.html', 'text/html; charset=utf-8');
     // Public descriptive catalog (power → what it does) for UI tooltips. No authority, no secrets.
-    if (u.pathname === '/powers') return json(res, 200, { powers: POWER_CATALOG });
+    if (u.pathname === '/powers') return json(res, 200, { powers: POWER_CATALOG, instance: INSTANCE_NAME, mode: FIELD_MODE }); // the existing status surface also names WHICH instance answered (vat identity seam)
     if (u.pathname === '/successes' || u.pathname === '/usecases') { // W6 "Use cases" showcase (tailnet; public bind = operator's call). Own CSP so its inline hero/card script runs.
       try { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'" }); res.end(await fs.promises.readFile(path.join(HERE, 'public', 'successes.html'))); }
       catch { res.writeHead(404, SEC); res.end('not found'); }
@@ -1549,7 +1569,9 @@ const handler = async (req, res) => {
       const shareCells = share ? new Set(share.cells.map(c => c.id)) : null;
       const resolve = id => share
         ? (shareCells.has(id) ? { cell: liveCells.cellForReader(id, shareCellReader(share.cells.find(c => c.id === id).handle)) } : { error: 'not in this share' })
-        : (id.startsWith('backlog:') ? backlogCellFor(cap, id.slice('backlog:'.length)) : liveCells.cellFor(cap, id)); // backlog:<id> = the object's backlog cell (owner-only; push-fed by the store)
+        : (id.startsWith('backlog:') ? backlogCellFor(cap, id.slice('backlog:'.length))
+          : id.startsWith('trace:') ? traceCellFor(cap, id.slice('trace:'.length)) // trace:<sid> = the chat's live reasoning trace (owner-gated; feeds the trace island)
+            : liveCells.cellFor(cap, id)); // backlog:<id> = the object's backlog cell (owner-only; push-fed by the store)
       const list = (Array.isArray(ids) ? ids : []).slice(0, 16).map(String);
       res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no', ...SEC });
       res.write(': ok\n\n');
@@ -1666,7 +1688,8 @@ const handler = async (req, res) => {
           ms > PROXY_WINDOW_MS ? '| ⚠️ exceeded proxy window — inline response may not reach the client (client re-attaches via /chat/result)' : '', extra); };
       // mark this session as RUNNING server-side so a reopened tab can re-attach (vs. losing the run).
       setRunResult(sid, { state: 'running', node: runNode, text: t, startedAt });
-      if (!resumeMessages) resetStepBuffer(sid); // fresh turn → fresh live-trace buffer (a resume keeps building the same trace)
+      if (!resumeMessages) { resetStepBuffer(sid); traceCells.begin(sid); } // fresh turn → fresh live-trace buffer + a fresh trace-cell turn (a resume keeps building the same trace)
+      traceCells.bindOwner(sid, turnOwnerKey); // the trace:<sid> cell now belongs to THIS cap's owner key (first writer)
       // bind the app-state accessor to THIS cap + close over it (the swissnum never enters ctx — cap-hygiene).
       // ROOT-ONLY: the memo/seed/asks/feed stores are GLOBAL, so only the full root agent gets app-state —
       // a shared/sub-agent cap (which holds a confined subset) would otherwise see/mutate everything.
@@ -3511,7 +3534,7 @@ const main = async () => {
     setInterval(() => { componentSync.syncAll().catch(e => log('component-sync sweep', e.message)); }, 15 * 60 * 1000);
   }
 
-  { const c = configSummary(); log(`field mode: ${c.mode} | personal-root: ${c.personalRoot} | config: ${c.configDir} | vault: ${c.vault}`); }
+  { const c = configSummary(); log(`instance: ${c.instance} | field mode: ${c.mode} | personal-root: ${c.personalRoot} | config: ${c.configDir} | vault: ${c.vault}`); }
   for (const ip of BIND) { const s = http.createServer(handler); s.on('error', e => log('bind', ip, e.message)); s.listen(PORT, ip, () => log(`field agent on http://${ip}:${PORT}`)); }
   // cap-hygiene: don't print the all-powers root #cap link to the log on a normal boot. Show only a
   // fingerprint; the operator gets the full link by setting PRINT_ROOT_CAP=1 (first-run bootstrap only).
