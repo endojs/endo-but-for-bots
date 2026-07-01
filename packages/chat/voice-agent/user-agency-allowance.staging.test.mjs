@@ -136,6 +136,13 @@ const post = async (p, body) => { const r = await fetch(`${BASE}${p}`, { method:
   ok(ndrain.status === 200 && ndrain.body.remaining === 70_000, 'owner adjusted the namespace wallet via the parent cap');
   const nbs2 = await post('/budget', { cap: nsub.body.scopedCap, sessionId: 'ns-sub-one' });
   ok(nbs2.body.remaining === 70_000, 'the child reads the SAME wallet balance — parent and sub-chat spend one conserved pot');
+  // a REAL charge through the CHILD (live inference) debits the NAMESPACE wallet — visible from the parent
+  console.log('  … running a real namespace-child turn (local model)');
+  const nturn = await post('/chat', { cap: nsub.body.scopedCap, sessionId: 'ns-sub-one', text: 'Reply with just the word: pong', model: 'default' });
+  ok(nturn.status === 200 && !nturn.body.error && !nturn.body.exhausted, `namespace child turn ran (answer: ${JSON.stringify(String(nturn.body.answer || '').slice(0, 40))})`);
+  const nbp = await post('/budget', { cap: nsCap, sessionId: 'ns-chat-one' });
+  ok(nbp.body.remaining < 70_000, `the child's charge DEBITED the shared namespace wallet (70000 → ${nbp.body.remaining} µUSD, read via the PARENT cap)`);
+  ok((await post('/wallet/status', { cap: root })).body.remaining === wAfter, 'and wallet:root stayed untouched — the spend came from the namespace pot');
 
   cleanup();
   console.log(`\n${fail ? '✗' : '✓'} user-agency allowance: ${pass} passed, ${fail} failed`);
