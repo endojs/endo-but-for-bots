@@ -14,6 +14,7 @@
 //
 // Run: npm run test:user-agency   (in packages/chat/voice-agent)
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,6 +25,7 @@ const PORT = 8797;
 const BASE = `http://127.0.0.1:${PORT}`;
 const WALLET_SEED = 500_000;   // the owner's invite wallet, $0.50 — small so conservation is visible
 const ALLOWANCE = 300_000;     // the invite carries $0.30
+const NS_SEED = 120_000;       // a Bluesky namespace's conserved wallet seed, $0.12 (BLUESKY_NS_WALLET_UUSD)
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'user-agency-'));
 let srv = null;
@@ -43,7 +45,8 @@ const post = async (p, body) => { const r = await fetch(`${BASE}${p}`, { method:
       SEED_FILE: path.join(tmp, 'root.swiss'), OUT_DIR: path.join(tmp, 'out'),
       VOICE_STATE_DIR: path.join(tmp, 'voice-state'), DELEGATION_STORE: path.join(tmp, 'delegations.json'),
       PROJECTS_STORE: path.join(tmp, 'projects.json'), MEMO_RUNS_FILE: path.join(tmp, 'memo.json'),
-      ROOT_WALLET_UUSD: String(WALLET_SEED) },
+      ROOT_WALLET_UUSD: String(WALLET_SEED),
+      BLUESKY_NS_WALLET_UUSD: String(NS_SEED), BSKY_CLAIMS_FILE: path.join(tmp, 'bluesky-claims.json') },
     stdio: ['ignore', 'ignore', 'inherit'],
   });
   let up = false;
@@ -106,6 +109,33 @@ const post = async (p, body) => { const r = await fetch(`${BASE}${p}`, { method:
   if (ds.body.available) ok(!!(ds.body.grant && ds.body.grant.signer), 'delegation grant params present (client can build the ERC-7715 request)');
   const co = await post('/pay/checkout', { cap: member, sessionId: 'chat-one', amountUsd: 5 });
   ok(co.status === 200 || co.status === 503, `Stripe checkout rail answers the member (${co.status}${co.status === 503 ? ' — not provisioned, owner notified' : ''})`);
+
+  // ── 9. BLUESKY NAMESPACES: one CONSERVED per-namespace wallet, adopted by /subchat children ──
+  // A namespace cap is a scoped cap whose hash the claim store marks (bluesky-claim.mjs signIn does this
+  // after OAuth; here we mint the cap and mark it directly in the isolated BSKY_CLAIMS_FILE — the store
+  // re-reads per call, so the running server picks it up live). Before this fix a namespace's /subchat
+  // children fell through to fresh default-allowance purses minted from NOTHING.
+  const ns = await post('/scope/mint', { cap: root, powers: ['reference'], label: 'bsky-ns' });
+  ok(ns.status === 200 && !!ns.body.scopedCap, 'minted a scoped cap to serve as a Bluesky namespace');
+  const nsCap = ns.body.scopedCap;
+  fs.writeFileSync(path.join(tmp, 'bluesky-claims.json'), JSON.stringify({ byDid: {}, namespaces: { [crypto.createHash('sha256').update(nsCap).digest('hex')]: true } }));
+  const wBefore = (await post('/wallet/status', { cap: root })).body.remaining;
+  const nb1 = await post('/budget', { cap: nsCap, sessionId: 'ns-chat-one' }); // first use → the wallet is seeded
+  ok(nb1.body.remaining === NS_SEED, `namespace wallet seeded with BLUESKY_NS_WALLET_UUSD on first use (${nb1.body.remaining} µUSD, not the ${nb1.body.defaultAllowance} default)`);
+  const wAfter = (await post('/wallet/status', { cap: root })).body.remaining;
+  ok(wAfter === wBefore - NS_SEED, `the seed is a CONSERVED transfer — wallet:root debited exactly it (${wBefore} → ${wAfter})`);
+  const nb2 = await post('/budget', { cap: nsCap, sessionId: 'ns-chat-two' });
+  ok(nb2.body.remaining === NS_SEED, 'a second chat shares the ONE namespace wallet (no re-seed, no per-chat purse)');
+  const nsub = await post('/subchat', { cap: nsCap, powers: ['reference'], title: 'ns-sub' });
+  ok(nsub.status === 200 && !!nsub.body.scopedCap, 'namespace member minted a sub-chat cap');
+  const nbs = await post('/budget', { cap: nsub.body.scopedCap, sessionId: 'ns-sub-one' });
+  ok(nbs.body.remaining === NS_SEED, `the sub-cap ADOPTED the namespace wallet (${nbs.body.remaining} µUSD — no thin-air default purse)`);
+  ok((await post('/wallet/status', { cap: root })).body.remaining === wAfter, 'the sub-chat cost wallet:root NOTHING (one seed per namespace, ever)');
+  // drain the namespace wallet through the PARENT cap → the CHILD sees the same emptiness (same purse, not a lookalike)
+  const ndrain = await post('/budget/set', { cap: root, purseCap: nsCap, sessionId: 'ns-chat-one', amount: 70_000 });
+  ok(ndrain.status === 200 && ndrain.body.remaining === 70_000, 'owner adjusted the namespace wallet via the parent cap');
+  const nbs2 = await post('/budget', { cap: nsub.body.scopedCap, sessionId: 'ns-sub-one' });
+  ok(nbs2.body.remaining === 70_000, 'the child reads the SAME wallet balance — parent and sub-chat spend one conserved pot');
 
   cleanup();
   console.log(`\n${fail ? '✗' : '✓'} user-agency allowance: ${pass} passed, ${fail} failed`);

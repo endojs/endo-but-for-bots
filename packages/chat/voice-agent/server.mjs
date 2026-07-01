@@ -45,6 +45,7 @@ import { inpaint as inpaintGpu } from './gpu-inpaint.mjs';
 import { STARTER_RING } from './system-map.mjs';
 import { makeInvitePolicies } from './invite-policy.mjs';
 import { makeInviteAllowances } from './invite-allowance.mjs';
+import { makeBskyNsWallets } from './bluesky-ns-wallet.mjs';
 import { makeBlueskyEligibility } from './bluesky-raindrop.mjs';
 import { makeBlueskyClaim } from './bluesky-claim.mjs';
 import { makeBlueskyOAuth } from './bluesky-oauth.mjs';
@@ -505,13 +506,24 @@ const grantFromRootWallet = uusd => {
   w.debit(amt);
   return { ok: true, deposit: scopedCap => { const wid = inviteAllowances.fund(scopedCap, amt); purseAt(`invite-wallet:${wid}`, 0).credit(amt); }, remaining: w.balance() };
 };
+// Bluesky namespaces get ONE conserved wallet each (bluesky-ns-wallet.mjs): seeded from wallet:root on
+// first use (creation IS first use — the claim flow's grantCredits routes through purseFor), migrating
+// the legacy `${cap}:_namespace` purse balance in; /subchat children ADOPT it — no more thin-air default
+// purses for a namespace's sub-chats. Seed is configurable: BLUESKY_NS_WALLET_UUSD (µUSD, default $5).
+const BLUESKY_NS_WALLET_SEED = Number(process.env.BLUESKY_NS_WALLET_UUSD) || 5_000_000;
+const bskyNsWallets = makeBskyNsWallets({
+  file: `${VOICE_STATE_DIR}/bluesky-ns-wallets.json`,
+  purseAt, rootWallet, seedUusd: BLUESKY_NS_WALLET_SEED,
+  legacyKeyFor: nsCap => `${nsCap}:${BSKY_NAMESPACE_SID}`, // pre-registry namespaces kept credit here
+  log: m => log('bsky-wallet:', m),
+});
 const purseFor = (cap, sid) => {
   const wid = inviteAllowances.walletIdFor(cap); // an allowance-funded invite (or a cap minted from one)?
   if (wid) return purseAt(`invite-wallet:${wid}`, 0); // ONE shared wallet, zero-seeded — the invite's grant funded it
-  const ns = blueskyIsNamespace(cap); // a signed-in Bluesky user's namespace?
-  const realSid = ns ? BSKY_NAMESPACE_SID : sid; // share one wallet across all their chats
-  const seed = ns ? 0 : defaultAllowance; // zero until they claim; the claim credits this same wallet
-  return purseAt(`${cap}:${realSid}`, seed);
+  // a signed-in Bluesky user's namespace (or a sub-cap ADOPTED into one) → the namespace's conserved wallet
+  const nsWid = bskyNsWallets.walletIdFor(cap) || (blueskyIsNamespace(cap) ? bskyNsWallets.ensure(cap) : null);
+  if (nsWid) return purseAt(bskyNsWallets.purseKeyFor(nsWid), 0);
+  return purseAt(`${cap}:${sid}`, defaultAllowance);
 };
 // Central toll-bridge for EDIT (AI-credit spend) + SAVE/HOST (storage×time) rights, used by the SPWA
 // self-editors. Same µUSD purse ledger as inference, in a separate `toll:<account>` namespace.
@@ -596,9 +608,10 @@ const blueskyInvitePolicies = makeInvitePolicies({
   fundAllowance: ({ uusd }) => grantFromRootWallet(uusd),
 });
 const blueskyEligibility = makeBlueskyEligibility({ configFile: `${CONFIG_DIR}/bluesky-raindrop.json` });
+const BSKY_CLAIMS_FILE = process.env.BSKY_CLAIMS_FILE || `${CONFIG_DIR}/bluesky-claims.json`; // env: staging seam (like SEED_FILE/OUT_DIR)
 const blueskyClaimStore = {
-  read: () => { try { return JSON.parse(fs.readFileSync(`${CONFIG_DIR}/bluesky-claims.json`, 'utf8')); } catch { return { byDid: {}, namespaces: {} }; } },
-  write: d => { try { fs.mkdirSync(CONFIG_DIR, { recursive: true }); fs.writeFileSync(`${CONFIG_DIR}/bluesky-claims.json`, JSON.stringify(d, null, 2), { mode: 0o600 }); } catch { /* best-effort */ } },
+  read: () => { try { return JSON.parse(fs.readFileSync(BSKY_CLAIMS_FILE, 'utf8')); } catch { return { byDid: {}, namespaces: {} }; } },
+  write: d => { try { fs.mkdirSync(path.dirname(BSKY_CLAIMS_FILE), { recursive: true }); fs.writeFileSync(BSKY_CLAIMS_FILE, JSON.stringify(d, null, 2), { mode: 0o600 }); } catch { /* best-effort */ } },
 };
 const blueskyClaim = makeBlueskyClaim({
   eligibility: blueskyEligibility,
@@ -2475,7 +2488,10 @@ const handler = async (req, res) => {
       const held = node.isRoot ? ALL_POWERS : [...node.powers]; // monotonic: subset of what the caller holds
       const granted = (Array.isArray(powers) ? powers : []).filter(p => held.includes(p));
       const out = mintScopedCap({ powers: granted, label: title || 'subchat' });
-      inviteAllowances.adopt(cap, out.swiss); // an allowance-funded member's sub-chat spends the member's wallet (no-op otherwise)
+      if (!inviteAllowances.adopt(cap, out.swiss)) { // an allowance-funded member's sub-chat spends the member's wallet…
+        if (blueskyIsNamespace(cap)) bskyNsWallets.ensure(cap); // …a Bluesky member's spends their NAMESPACE wallet
+        bskyNsWallets.adopt(cap, out.swiss); // (both no-ops for a plain scoped cap — the default purse path applies)
+      }
       return json(res, 200, { scopedCap: out.swiss, powers: out.powers, name: out.name });
     }
     if (req.method === 'POST' && u.pathname === '/scope/mint') {
