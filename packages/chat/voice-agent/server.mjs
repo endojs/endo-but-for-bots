@@ -868,7 +868,9 @@ const runProjectAgent = async (project, agent) => {
   const meteredLLM = makeMeteredLLM({ callLLM, purse, perProvider });
   let out;
   try {
-    out = await runScheduledAgent({ powers: agent.tools || [], homeSubkey: project.homeSubkey, prompt: agent.prompt, persona: getPersona(), model: runModel, mode: agent.mode || 'recommend', llm: meteredLLM, budgetLine: budgetLine(purse.balance(), runModel) });
+    // purse+perProvider ride into the toolbox ctx so METERED SUB-DELEGATIONS (employ strong-tier,
+    // delegateTask, toolsmith) debit THIS run's purse and show up in its attributed spend.
+    out = await runScheduledAgent({ powers: agent.tools || [], homeSubkey: project.homeSubkey, prompt: agent.prompt, persona: getPersona(), model: runModel, mode: agent.mode || 'recommend', llm: meteredLLM, budgetLine: budgetLine(purse.balance(), runModel), purse, perProvider });
   } catch (e) { out = { ok: false, error: e.message }; }
   const spent = Object.values(perProvider).reduce((a, b) => a + b, 0);
   // attribute the cost: to the chat that created it (visible in that session's usage), else a per-agent

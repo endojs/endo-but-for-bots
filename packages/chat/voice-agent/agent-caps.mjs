@@ -1707,9 +1707,15 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
             // STRONG tier (or explicit "opus") → the bigger brain; falls back to gemma if no API key.
             if (wantOpus || (spec.tier === 'strong' && !wantLocal)) {
               const prompt = `${rolePersona}\n\nTASK:\n${taskS}\n\nReturn: ${spec.output}`;
-              const r = await runOpusDelegate({ prompt, toolbox: sub.toolbox, manifest: sub.manifest, grantedPowers: [...ring], signal: ac.signal });
+              // METERED like delegateTask/toolsmith above: when the turn supplied a purse (ctx.purse —
+              // live chats AND scheduled runs), the strong-tier Opus spend debits it. This closes the one
+              // employ purse bypass (a bare runOpusDelegate leaked Opus spend past every budget).
+              const runDelegate = makeMeteredOpusDelegate({ purse: ctx.purse, perProvider: ctx.perProvider });
+              let r;
+              try { r = await runDelegate({ prompt, toolbox: sub.toolbox, manifest: sub.manifest, grantedPowers: [...ring], signal: ac.signal }); }
+              catch (e) { if (e && e.code === 'INFERENCE_BUDGET_EXHAUSTED') r = { error: e.message }; else throw e; } // unfunded purse → fall through to the local tier, don't kill the run
               if (!r.error) out = harden({ ok: true, role: spec.role, via: 'opus', tier: spec.tier, answer: r.answer, toolsUsed: r.toolsUsed || [], granted: [...ring] });
-              // else fall through to local gemma (e.g. no ANTHROPIC_API_KEY)
+              // else fall through to local gemma (e.g. no ANTHROPIC_API_KEY, or an exhausted purse)
             }
             if (!out) {
               const r = await AGENT_RUNNER({ toolbox: sub.toolbox, manifest: sub.manifest, userText: `TASK:\n${taskS}\n\nReturn: ${spec.output}`, persona: rolePersona, signal: ac.signal,
@@ -2718,7 +2724,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // ring, ⊆ ALL_POWERS minus META), bound to the PROJECT's shared home folder via homeSubkey
   // (so every chat + scheduled agent in a Project read/write the same folder). Returns the
   // answer + any PROPOSALS it raised (it proposes; destructive actions still need confirm).
-  const runScheduledAgent = async ({ powers = [], homeSubkey = null, prompt = '', persona: personaOverride = '', model = 'default', mode = 'recommend', signal, emit = null, llm = null, budgetLine = '' } = {}) => {
+  const runScheduledAgent = async ({ powers = [], homeSubkey = null, prompt = '', persona: personaOverride = '', model = 'default', mode = 'recommend', signal, emit = null, llm = null, budgetLine = '', purse = null, perProvider = null } = {}) => {
     // `selfImprove` (autonomous implement→verify→auto-merge) is granted ONLY to IMPLEMENT-mode tasks; every
     // legacy/recommend-mode task has it stripped exactly like a META power, so they can only propose.
     // strip META as usual, EXCEPT grant `selfImprove` to IMPLEMENT-mode tasks (the one controlled exception).
@@ -2729,7 +2735,9 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       homeBinding: homeSubkey ? () => makeHome(homeSubkey) : null,
       id: `scheduled-${newSwiss()}`,
     });
-    const sub = node.toolbox({ chatId: `sched-${newSwiss().slice(0, 8)}` });
+    // thread the run's PURSE into the toolbox ctx so metered sub-delegations (employ strong-tier,
+    // delegateTask, toolsmith) debit the scheduled run's budget — not an invisible side fund.
+    const sub = node.toolbox({ chatId: `sched-${newSwiss().slice(0, 8)}`, ...(purse ? { purse, perProvider: perProvider || {} } : {}) });
     const proposalIds = []; const toolsUsed = [];
     // SOUL.md — a long-horizon agent's PERSISTENT WORKING MEMORY (CEO-Bench: refresh context each run,
     // carry only an agent-editable memory file). Each run starts fresh from SOUL.md (not a transcript),
