@@ -79,7 +79,7 @@ import { makePurseStore } from './purse-store.mjs';
 import { makeMeteredLLM } from './meter.mjs';
 import { listTimers, cancelTimer } from '../capture/timers.mjs';
 import { loadStripeCfg, stripeConfigured, recordPending, checkoutForm, verifyWebhook, settleEvent } from './pay.mjs';
-import { gatorConfigured, recordDelegation, redeemDelegation, getSubscription, subscriptionStatus, autoTopup } from './delegation-pay.mjs';
+import { gatorConfigured, recordDelegation, redeemDelegation, getSubscription, subscriptionStatus, autoTopup, normalizeGrant, grantParams } from './delegation-pay.mjs';
 import { budgetLine, costOf } from './costModel.mjs';
 import { makeTollBridge } from './toll-bridge.mjs';
 import { makeLiveCells } from './live-cells.mjs';
@@ -1842,18 +1842,26 @@ const handler = async (req, res) => {
     if (req.method === 'POST' && u.pathname === '/pay/delegation/status') {
       const { cap, sessionId } = await jsonBody(req);
       if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
-      return json(res, 200, { available: gatorConfigured(), ...subscriptionStatus(cap, String(sessionId || 'anon').slice(0, 64)) });
+      // `grant` = the public facts the client needs to build a CORRECT ERC-7715 request (the 7715
+      // signer = the settlement delegate, the chain, the wei/USD rate). Null when the charge-server
+      // is down — the client then refuses the wallet round-trip with a clear message.
+      const gp = gatorConfigured() ? await grantParams() : null;
+      return json(res, 200, { available: gatorConfigured(), grant: gp, ...subscriptionStatus(cap, String(sessionId || 'anon').slice(0, 64)) });
     }
     if (req.method === 'POST' && u.pathname === '/pay/delegation/grant') {
       const { cap, sessionId, delegation, subscription } = await jsonBody(req);
       if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
-      if (!delegation) return json(res, 400, { error: 'no delegation' });
+      // Normalize the ERC-7715 wallet response into the {permissionsContext, delegationManager,
+      // accountMetadata} triple the settlement service redeems with — and REJECT anything without a
+      // permissions context (a grant we could store but never redeem would fail at charge time).
+      const norm = normalizeGrant(delegation);
+      if (!norm) return json(res, 400, { error: 'no permissions context in the grant — expected an ERC-7715 wallet response' });
       // subscription {periodUsd, periodDays} → a RECURRING allowance the server auto-draws from. The on-chain
       // grant the user signed is periodic; we mirror its terms for our own per-period accounting.
       const sub = subscription && Number(subscription.periodUsd) > 0
         ? { periodUusd: Math.round(Number(subscription.periodUsd) * 1e6), periodMs: Math.max(1, Number(subscription.periodDays) || 30) * 86400000 }
         : null;
-      recordDelegation({ cap, sid: String(sessionId || 'anon').slice(0, 64), delegation, now: new Date().toISOString(), subscription: sub });
+      recordDelegation({ cap, sid: String(sessionId || 'anon').slice(0, 64), delegation: norm, now: new Date().toISOString(), subscription: sub });
       return json(res, 200, { ok: true, subscribed: !!sub });
     }
     if (req.method === 'POST' && u.pathname === '/pay/delegation/redeem') {
@@ -2620,6 +2628,41 @@ const handler = async (req, res) => {
         catch (e) { return json(res, 200, { ok: false, error: `edit agent failed: ${(e && e.message) || e}` }); }
         const code = extractJs(out); if (!code) return json(res, 200, { ok: false, error: 'the edit agent returned no code' });
         return json(res, 200, forks.edit(id, code, owner, String(body.prompt || 'agent edit').slice(0, 60)));
+      }
+      // P2-for-forks: the CONVERSATIONAL edit loop for a live fork — the same REAL agent loop components
+      // get via /components/edit-chat, scoped (by toolbox construction) to ONE fork: readForkSource() +
+      // editFork({prompt}) are its ENTIRE authority (lexical confinement; the owner gate is the cap above,
+      // so it can only ever touch THIS owner's fork). It converses: reads the source, asks ONE clarifying
+      // question if needed (ask()), else edits + reports (answer()). The client maintains the thread.
+      if (u.pathname === '/forks/edit-chat') {
+        const id = String(body.id || ''); const message = String(body.message || '').trim();
+        if (!message) return json(res, 200, { ok: false, error: 'empty message' });
+        const rec = forks.read(id, owner);
+        if (!rec) return json(res, 200, { ok: false, error: 'unknown fork (or not yours)' });
+        const name = rec.name || id;
+        const history = (Array.isArray(body.history) ? body.history : []).filter(m => m && (m.role === 'user' || m.role === 'assistant') && m.content).map(m => ({ role: m.role, content: String(m.content).slice(0, 8000) })).slice(-16);
+        let edited = null;
+        const toolbox = {
+          readForkSource: { run: async () => { const src = forks.source(id, owner); return src === null ? { ok: false, error: 'unknown fork (or not yours)' } : { ok: true, name, source: src }; } },
+          editFork: { run: async ({ prompt } = {}) => {
+            const cur = forks.source(id, owner);
+            if (cur === null) return { ok: false, error: 'unknown fork (or not yours)' };
+            let out2; try { out2 = String((await opusComplete({ system: FORK_EDIT_SYS, prompt: `Current fork source:\n\`\`\`js\n${cur}\n\`\`\`\n\nRequested change: ${String(prompt || '')}`, maxTokens: 4000 })) || ''); }
+            catch (e) { return { ok: false, error: `edit agent failed: ${(e && e.message) || e}` }; }
+            const code = extractJs(out2); if (!code) return { ok: false, error: 'the edit agent returned no code' };
+            const r2 = forks.edit(id, code, owner, String(prompt || 'agent edit').slice(0, 60));
+            if (r2 && r2.ok) edited = { version: r2.version };
+            return r2;
+          } },
+        };
+        const manifest = [
+          { name: 'readForkSource', description: `Read the CURRENT source of the "${name}" fork (a single (endowments, props) => vnode function expression). Read it before editing so you change the real code.`, args: {} },
+          { name: 'editFork', description: `Apply a change to the "${name}" fork: an edit agent rewrites its (endowments,props)=>vnode source from your prompt, appends a new revertable version, and applies it LIVE. Make the prompt precise + self-contained.`, args: { prompt: 'string — a precise description of the change to make' } },
+        ];
+        const persona = `You are the focused editor agent for the live fork "${name}" — one confined UI component rendered inline. You can readForkSource() to see its current source and editFork({prompt}) to change it (a new revertable version, applied live). Converse with the owner: if the request is clear, make the change with editFork then answer() what you did; if it is genuinely ambiguous, ask() ONE specific clarifying question first. Keep the fork working. Be concise.`;
+        let r; try { r = await AGENT_RUNNER({ toolbox, manifest, userText: message, history, persona, model: 'anthropic:claude-opus-4-8' }); }
+        catch (e) { return json(res, 200, { ok: false, error: (e && e.message) || String(e) }); }
+        return json(res, 200, { ok: true, answer: r.answer || '', asking: !!r.asking, blocked: !!r.blocked, edited, steps: (r.toolsUsed || []).map(x => x.name) });
       }
       return json(res, 404, { ok: false, error: 'unknown forks route' });
     }

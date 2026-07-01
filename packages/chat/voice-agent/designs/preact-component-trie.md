@@ -204,8 +204,11 @@ Implications that change the phases below:
     carry a component identity (in-chat components, forks, Studio entries); the rest of
     the shell isn't a mounted component-project yet, so it isn't alt-selectable. That
     decomposition (the full mounted trie) is its own future workstream.
-  - **forks use the one-shot `/forks/edit`**, not the conversational agent loop that
-    components get via `/components/edit-chat` (P2-for-forks).
+  - ~~forks use the one-shot `/forks/edit`~~ **DONE (2026-07-01)**: forks now get the
+    same conversational agent loop via `/forks/edit-chat` (owner-gated; toolbox =
+    `readForkSource` + `editFork`, its entire authority); Alt-click ✎ on a live fork
+    opens the same modal chat. Proven by `test:fork-edit-chat`. The one-shot
+    `/forks/edit` remains for deterministic/tooling edits.
   - **grain-data persistence across a source-swap is partial** (see Phase 2).
   - binding the dev flow to fork→adversarial-review→diff.
 - **Phase 4 — sharing & upgrades.** Invite-carries-inbox; atomic accept/reject/

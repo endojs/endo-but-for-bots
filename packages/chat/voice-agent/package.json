@@ -14,6 +14,7 @@
     "test:forks": "node forks-loop.staging.test.cjs",
     "test:fork-widget": "node fork-widget.staging.test.cjs",
     "test:alt-fork": "node alt-click-fork.staging.test.cjs",
+    "test:fork-edit-chat": "node fork-edit-chat.staging.test.cjs",
     "test:component-select": "node component-select.staging.test.cjs",
     "test:shape": "node shape-graph.staging.test.cjs",
     "test:control-protocol": "node --test eval/obstacles/10-control-protocol/spec.test.mjs",

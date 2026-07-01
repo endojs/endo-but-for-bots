@@ -1174,7 +1174,7 @@ const renderExhausted = (payload, spoken) => {
       mm.disabled = true;
       try {
         // Grant the recurring allowance once (skip if already subscribed), then draw a top-up + resume.
-        if (!s.subscribed) { const g = await grantMetaMaskSubscription({ periodUsd: 10, periodDays: 30 }); if (!g.ok) throw new Error(g.error); }
+        if (!s.subscribed) { const g = await grantMetaMaskSubscription({ periodUsd: 10, periodDays: 30, grantParams: s.grant }); if (!g.ok) throw new Error(g.error); }
         const r = await (await fetch('/pay/delegation/redeem', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId, amountUsd: 5 }) })).json();
         if (r.ok) { updateBudgetChip(r.remaining, r.allowance); await resumeIfPending(payload.sessionId); }
         else throw new Error(r.error || 'on-chain settlement failed');
@@ -1214,17 +1214,35 @@ const renderUserBubble = (text, attachments = []) => {
 const chatCap = () => (chats.find(c => c.id === sessionId) || {}).scopedCap || cap;
 // ERC-7715 SUBSCRIPTION: ask the wallet for a RECURRING (periodic) spending allowance — granted ONCE, then the
 // server auto-draws from it to keep this user's purse funded (inference + hosting) without a manual payment each
-// time. Returns {ok} | {ok:false,error}. The signed delegation is opaque + forwarded; no key touches the page.
-const grantMetaMaskSubscription = async ({ periodUsd = 10, periodDays = 30 } = {}) => {
+// time. Returns {ok} | {ok:false,error}. The signed grant (permissions context) is opaque + forwarded — never
+// parsed, rendered, or persisted here; no key touches the page.
+// `grantParams` = {signer, chainId, weiPerUsd} from /pay/delegation/status. The 7715 SIGNER must be the
+// settlement delegate that redeems — the old raw wallet_grantPermissions call here named no signer at all,
+// so the wallet's grant (when it granted anything) was unredeemable by our charge-server.
+const grantMetaMaskSubscription = async ({ periodUsd = 10, periodDays = 30, grantParams = null } = {}) => {
   const eth = window.ethereum;
   if (!eth || !eth.request) return { ok: false, error: 'No Ethereum wallet found — install MetaMask (advanced permissions).' };
-  let grant;
+  let gp = grantParams;
+  if (!gp) { try { gp = (await (await fetch('/pay/delegation/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId }) })).json()).grant; } catch {} }
+  if (!gp || !gp.signer || !gp.chainId || !gp.weiPerUsd) return { ok: false, error: 'On-chain payments aren\'t fully set up (settlement service unreachable).' };
+  const periodDuration = Math.max(1, periodDays) * 86400;
+  const startTime = Math.floor(Date.now() / 1000);
+  const periodAmount = '0x' + (BigInt(gp.weiPerUsd) * BigInt(Math.max(1, Math.round(periodUsd)))).toString(16); // the $ period cap, in wei
+  let grants;
   try {
-    grant = await eth.request({ method: 'wallet_grantPermissions', params: [{
-      expiry: Math.floor(Date.now() / 1000) + Math.max(1, periodDays) * 86400 + 86400, // outlive one period
-      permissions: [{ type: 'native-token-periodic', data: { periodAmount: '0x2386f26fc10000', periodDuration: Math.max(1, periodDays) * 86400, startTime: Math.floor(Date.now() / 1000) } }], // recurring cap
+    // ERC-7715 as MetaMask implements it (the delegation-toolkit wire shape): permission + signer + rules,
+    // amounts hex-encoded, expiry as a rule. The wallet returns an opaque signed permissions context that
+    // only the named signer (the settlement delegate) can redeem via ERC-7710.
+    grants = await eth.request({ method: 'wallet_requestExecutionPermissions', params: [{
+      chainId: gp.chainId,
+      signer: { type: 'account', data: { address: gp.signer } },
+      permission: { type: 'native-token-periodic', isAdjustmentAllowed: true,
+        data: { periodAmount, periodDuration, startTime, justification: `Agent C subscription — up to $${periodUsd} per ${periodDays} days, drawn automatically to keep your credit topped up` } },
+      rules: [{ type: 'expiry', isAdjustmentAllowed: false, data: { timestamp: startTime + periodDuration + 86400 } }], // outlive one period
     }] });
   } catch (e) { return { ok: false, error: 'Your wallet declined or lacks ERC-7715 recurring permissions (MetaMask Flask). ' + (e.message || '') }; }
+  const grant = Array.isArray(grants) ? grants[0] : grants;
+  if (!grant || !(grant.context || grant.permissionsContext)) return { ok: false, error: 'The wallet returned no permissions context — grant not usable.' };
   try {
     const r = await (await fetch('/pay/delegation/grant', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId, delegation: grant, subscription: { periodUsd, periodDays } }) })).json();
     return r && r.ok ? { ok: true } : { ok: false, error: (r && r.error) || 'grant failed' };
@@ -3386,7 +3404,7 @@ const editComponent = async (id, name) => {
 //    edit endpoint; the exchange renders as a chat; the live component re-renders. Session-only thread per id.
 const compEditThreads = {}; // `${kind}:${id}` → [{who, text}]
 const openComponentEditChat = (id, name, { kind = 'component' } = {}) => {
-  const endpoint = kind === 'fork' ? '/forks/edit' : '/components/edit';
+  const endpoint = kind === 'fork' ? '/forks/edit-chat' : '/components/edit-chat';
   const capFor = kind === 'fork' ? chatCap() : cap;
   const key = `${kind}:${id}`; const hist = compEditThreads[key] || (compEditThreads[key] = []);
   const ov = document.createElement('div'); ov.className = 'qrmodal';
@@ -3406,28 +3424,19 @@ const openComponentEditChat = (id, name, { kind = 'component' } = {}) => {
   const bubble = (who, text) => { const d = document.createElement('div'); d.style.cssText = `align-self:${who === 'you' ? 'flex-end' : 'flex-start'};max-width:86%;padding:7px 10px;border-radius:9px;font-size:13px;white-space:pre-wrap;background:${who === 'you' ? 'var(--acc-fill)' : 'rgba(127,127,127,.14)'};color:${who === 'you' ? '#fff' : 'var(--ink)'}`; d.textContent = text; logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight; return d; };
   hist.forEach(m => bubble(m.who, m.text));
   let busyCe = false;
-  // Components run the REAL agent loop (P2): a conversational editor that reads the source, asks clarifying
-  // questions, and edits — /components/edit-chat. Forks still use the one-shot /forks/edit (P2-for-forks TBD).
-  const realLoop = kind === 'component';
+  // BOTH kinds run the REAL agent loop (P2): a conversational editor that reads the source, asks clarifying
+  // questions, and edits — /components/edit-chat for components, /forks/edit-chat for forks (P2-for-forks).
   const send = async () => {
     const change = (input.value || '').trim(); if (!change || busyCe) return;
     busyCe = true; input.value = ''; bubble('you', change); hist.push({ who: 'you', text: change });
-    const pend = bubble('agent', realLoop ? '…' : '✎ editing…');
+    const pend = bubble('agent', '…');
     try {
       let msg;
-      if (realLoop) {
-        const priorHistory = hist.slice(0, -1).map(m => ({ role: m.who === 'you' ? 'user' : 'assistant', content: m.text }));
-        const r = await (await fetch('/components/edit-chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: capFor, id, message: change, history: priorHistory }) })).json();
-        if (!r.ok) msg = `⚠️ ${r.error || 'failed'}`;
-        else { msg = r.answer || (r.edited ? '✓ updated.' : '(no reply)'); if (r.edited) msg += `  ·  v${r.edited.version}${r.edited.review && r.edited.review.worst && r.edited.review.worst !== 'none' ? ` · review: ${r.edited.review.worst}` : ''} — applied live`; }
-        if (r.edited) { try { renderTx(); } catch { /* re-render mounted components */ } if (curTab === 'components') { try { refreshComponents(); } catch { /* */ } } }
-      } else {
-        const r = await (await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: capFor, id, prompt: change }) })).json();
-        msg = r.ok
-          ? `✓ updated — ${r.version != null ? `v${r.version}` : 'new version'}${r.review && r.review.worst && r.review.worst !== 'none' ? ` · review: ${r.review.worst}` : ''}. Applied live.`
-          : `⚠️ ${r.error || 'edit failed'}`;
-        try { renderTx(); } catch { /* re-render mounted forks */ } if (curTab === 'components') { try { refreshComponents(); } catch { /* */ } }
-      }
+      const priorHistory = hist.slice(0, -1).map(m => ({ role: m.who === 'you' ? 'user' : 'assistant', content: m.text }));
+      const r = await (await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: capFor, id, message: change, history: priorHistory }) })).json();
+      if (!r.ok) msg = `⚠️ ${r.error || 'failed'}`;
+      else { msg = r.answer || (r.edited ? '✓ updated.' : '(no reply)'); if (r.edited) msg += `  ·  v${r.edited.version}${r.edited.review && r.edited.review.worst && r.edited.review.worst !== 'none' ? ` · review: ${r.edited.review.worst}` : ''} — applied live`; }
+      if (r.edited) { try { renderTx(); } catch { /* re-render mounted components + forks */ } if (curTab === 'components') { try { refreshComponents(); } catch { /* */ } } }
       pend.textContent = msg; hist.push({ who: 'agent', text: msg });
     } catch (e) { pend.textContent = `⚠️ ${e.message}`; }
     busyCe = false; logEl.scrollTop = logEl.scrollHeight; input.focus();
