@@ -4303,10 +4303,37 @@ const renderSettingsInternal = async body => {
     </div>`).join('');
 };
 const renderSettingsUsage = async body => {
-  body.innerHTML = `<div class="set-sec"><div class="set-h">Default allowance for new conversations</div>
+  // 👛 Invite wallet (root only): the CONSERVED source every invite-carried allowance (and Bluesky
+  // namespace seed) is debited from. /wallet/fund is the owner's only balance-increaser — this row
+  // is its UI. Non-root users never see it (the routes are root-gated regardless).
+  const walletSec = isRoot ? `<div class="set-sec"><div class="set-h">👛 Invite wallet <span class="pmeta">· funds the credit your invites carry</span></div>
+    <div class="set-row"><span id="wallet-bal" class="pmeta">loading…</span></div>
+    <div class="set-row">$ <input id="wallet-fund-amt" type="number" step="1" min="0" value="10" style="width:88px"> <button class="mini" id="wallet-fund-go">Add to wallet</button> <span id="wallet-fund-msg" class="pmeta"></span></div>
+    <div class="pmeta">Every invite minted with a usage-credit allowance — and each Bluesky namespace's starting credit — is debited from this wallet (conserved: members can't mint credit, they top up by paying).</div></div>` : '';
+  body.innerHTML = `${walletSec}<div class="set-sec"><div class="set-h">Default allowance for new conversations</div>
     <div class="set-row">$ <input id="set-allow" type="number" step="0.10" min="0" style="width:88px"> <button class="mini" id="set-allow-save">Save</button> <span id="set-allow-msg" class="pmeta"></span></div>
     <div class="pmeta">Every new chat starts prepaid with this much inference budget.</div></div>
     <div class="set-sec"><div class="set-h">💸 Most expensive conversations <span class="pmeta">· by allowance used</span></div><div id="set-costs" class="pmeta">loading…</div></div>`;
+  if (isRoot) {
+    const drawWallet = async () => {
+      try {
+        const w = await (await fetch('/wallet/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json();
+        const el = $('wallet-bal'); if (!el) return;
+        if (w.error) { el.textContent = '⚠ ' + w.error; return; }
+        const n = (w.invites || []).length;
+        el.innerHTML = `<b style="color:var(--ink);font-size:15px">${fmtUsd(w.remaining)}</b> available · ${fmtUsd(w.granted)} ever funded${n ? ` · backing ${n} funded invite${n === 1 ? '' : 's'}` : ''}`;
+      } catch { const el = $('wallet-bal'); if (el) el.textContent = '(could not load the wallet)'; }
+    };
+    drawWallet();
+    const go = $('wallet-fund-go'); if (go) go.onclick = async () => {
+      const msg = $('wallet-fund-msg'); const amt = Math.round((Number($('wallet-fund-amt').value) || 0) * 1e6);
+      if (!amt) { msg.textContent = 'enter an amount'; return; }
+      go.disabled = true; msg.textContent = 'funding…';
+      try { const r = await (await fetch('/wallet/fund', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, amount: amt }) })).json(); msg.textContent = r.error ? '⚠ ' + r.error : `✓ added · ${fmtUsd(r.remaining)} available`; if (!r.error) drawWallet(); }
+      catch (e) { msg.textContent = '⚠ ' + e.message; }
+      go.disabled = false;
+    };
+  }
   try { const b = await (await fetch('/budget', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, purseCap: chatCap(), sessionId }) })).json(); if (b && b.defaultAllowance != null && $('set-allow')) $('set-allow').value = (b.defaultAllowance / 1e6).toFixed(2); } catch { /* */ }
   const sv = $('set-allow-save'); if (sv) sv.onclick = async () => { const msg = $('set-allow-msg'); const amt = Math.round((Number($('set-allow').value) || 0) * 1e6); msg.textContent = 'saving…'; try { const r = await (await fetch('/budget/default', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, amount: amt }) })).json(); msg.textContent = r.error ? r.error : `saved · ${fmtUsd(r.defaultAllowance)} / new chat`; } catch (e) { msg.textContent = e.message; } };
   // the leaderboard reads the server-cached spend LEDGER (allowance USED per chat, cumulative — one call, not N).
