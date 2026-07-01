@@ -2949,8 +2949,13 @@ const handler = async (req, res) => {
         const id = String(body.id || ''); const message = String(body.message || '').trim();
         if (!message && !body.contextPreview) return json(res, 200, { ok: false, error: 'empty message' });
         const isIsland = islandSource.isIsland(id); const t = isIsland ? null : customTools.get(id);
-        if (!isIsland && !t) return json(res, 200, { ok: false, error: 'no such component' });
-        const name = (t && t.name) || id;
+        // a BROKEN-OUT (uicomp-) component is a project object too — its source of truth is componentGit
+        // (which readComponentSource below already reads); recognize it so its edit chat (and backlog
+        // injection) works, instead of 'no such component'.
+        const isBrokenOut = !isIsland && !t && /^uicomp-/.test(id) && componentGit.exists(id);
+        if (!isIsland && !t && !isBrokenOut) return json(res, 200, { ok: false, error: 'no such component' });
+        let name = (t && t.name) || id;
+        if (isBrokenOut) { try { const snap = await componentGit.readAt(id, 'HEAD'); name = (JSON.parse((snap && snap.files['manifest.json']) || '{}').name) || id; } catch { /* keep the id */ } }
         // the component's OPEN BACKLOG rides into the editor agent's context (same source of truth as
         // the backlog:<id> cell) — the edit chat opens already informed by its filed issues/errors.
         const blNote = componentBacklog.contextNote(id, name);
