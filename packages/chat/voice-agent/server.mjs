@@ -1996,6 +1996,29 @@ const handler = async (req, res) => {
       seeds.unshift(seed); await writeSeedChats(seeds);
       return json(res, 200, { ok: true, chatId: id, proposedPowers: powers });
     }
+    // Re-decompose an already-ingested voice note under the CURRENT ingest prompt/model routing → appends a
+    // NEW version (the original is preserved; the version scrubber shows both). Useful after the ingest prompt
+    // improves — a note captured under the old, under-decomposing prompt can be regenerated in place.
+    if (req.method === 'POST' && u.pathname === '/ingest/regenerate') {
+      const { cap, chatId, label } = await jsonBody(req);
+      const node = nodeFor(cap);
+      if (!node || !node.isRoot) return json(res, 403, { error: 'root cap required' });
+      const seeds = await readSeedChats();
+      const seed = seeds.find(s => s && s.id === String(chatId));
+      if (!seed || !seed.transcript) return json(res, 404, { error: 'no such ingested chat' });
+      const { proposals, powers } = await ingestPropose(seed.transcript);
+      const proposedPrompt = await genSubAgentPrompt(seed.transcript, proposals, powers);
+      const agentMsg = proposals + (powers.length ? `\n\n— To act on this, I can spin up an attenuated agent with: ${powers.join(', ')}. Approve it from this chat.` : '');
+      const tr = { answer: agentMsg, toolsUsed: [], steps: [], proposedPowers: powers, proposedPrompt };
+      seed.versions = seed.versions || [];
+      const v = seed.versions.length;
+      seed.versions.push({ v, label: String(label || `re-decomposed ${v}`), env: { persona: 'ingest:propose-only' }, ...tr, at: new Date().toISOString() });
+      seed.proposedPowers = powers; seed.proposedPrompt = proposedPrompt;
+      if (Array.isArray(seed.tx) && seed.tx[1]) seed.tx[1] = { ...seed.tx[1], text: agentMsg, proposedPowers: powers, proposedPrompt };
+      await writeSeedChats(seeds);
+      log('ingest regenerate', seed.id, `v${v}`, `${proposals.length}c`);
+      return json(res, 200, { ok: true, version: v, chatId: seed.id, proposals });
+    }
     if (req.method === 'POST' && u.pathname === '/seed-chats/load') {
       const { cap } = await jsonBody(req);
       const node = nodeFor(cap);
