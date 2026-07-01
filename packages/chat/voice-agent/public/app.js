@@ -102,10 +102,38 @@ const talkAboutWidget = (spec) => {
 if (cap) { try { localStorage.setItem(CAP_KEY, cap); } catch {} }
 if (location.hash) { try { history.replaceState(null, '', location.pathname + location.search); } catch {} } // strip the fragment (cap and/or chat)
 if (!cap) { try { cap = localStorage.getItem(CAP_KEY) || null; } catch {} }
-// A confined component (or other surface) failed to render → route the error to the self-improvement loop
-// so the developer agent fixes it automatically (server de-dupes + files a backlog item). Cap-gated; the
-// source snippet is render-safe (a widget's (ui)=>element body, never a swissnum).
-window.__fieldReportError = (error, source) => { try { if (!cap || !error) return; fetch('/error/flag', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, kind: 'component-render', error: String(error).slice(0, 300), source: String(source || '').slice(0, 500) }) }).catch(() => {}); } catch { /* */ } };
+// A confined component (or other surface) failed to render → route the error (1) to the self-improvement
+// loop (server de-dupes + files a backlog item), (2) to THIS CHAT's pending-error queue so the AUTHORING
+// agent sees it as system feedback on its next turn (the chat-1cbe89a9 loop), and (3) as a visible system
+// note in the transcript so the human knows the agent will hear about it. Cap-gated; the source snippet is
+// render-safe (a widget's (ui)=>element body, never a swissnum).
+const __seenCompErrs = new Set(); // one note+report per identical error per page load (a re-rendered broken widget re-throws)
+window.__fieldReportError = (error, source, meta) => {
+  try {
+    if (!cap || !error) return;
+    const err = String(error).slice(0, 300);
+    const name = String((meta && meta.name) || '').slice(0, 80);
+    const dedup = `${sessionId}|${name}|${err}`;
+    if (__seenCompErrs.has(dedup)) return;
+    __seenCompErrs.add(dedup);
+    fetch('/error/flag', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, kind: 'component-render', error: err, source: String(source || '').slice(0, 500), sessionId, name }) }).catch(() => {});
+    componentErrorNote(name, err);
+  } catch { /* */ }
+};
+// the visible system note under the broken widget's message — themed via existing CSS vars (both palettes
+// define --bad/--panel/--mut/--ink), VISUAL-only (never enters the transcript/history; the AGENT hears the
+// same error server-side, injected into its next turn).
+const componentErrorNote = (name, err) => {
+  try {
+    const logEl = document.getElementById('log'); if (!logEl) return;
+    const d = document.createElement('div');
+    d.className = 'msg comp-err-note';
+    d.style.cssText = 'border:1px solid var(--bad);background:var(--panel);border-radius:10px;padding:8px 12px;margin:6px 0;font-size:12.5px;color:var(--ink)';
+    const head = document.createElement('div'); head.style.cssText = 'font-weight:600;color:var(--bad)'; head.textContent = `⚠️ ${name || 'component'} failed in your browser`;
+    const body = document.createElement('div'); body.style.cssText = 'color:var(--mut);margin-top:2px'; body.textContent = `${err} — the agent will see this error on its next turn and can fix it.`;
+    d.append(head, body); logEl.appendChild(d); window.scrollTo(0, document.body.scrollHeight);
+  } catch { /* */ }
+};
 // A confined component rendered a raw JS value as text ("[object Object]", a leaked promise, …) → route
 // the smell to /render-smell so the server files it to the owner feedback-loops view AND feeds the
 // correction back into that renderer's authoring loop so it self-corrects. Cap-gated; source is render-safe.

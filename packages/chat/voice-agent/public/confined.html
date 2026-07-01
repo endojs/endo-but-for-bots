@@ -86,7 +86,7 @@ const create = (tag) => {
     attr: (k, v) => { k = String(k); if (ATTRS.has(k)) el.setAttribute(k, String(v)); else if (k === 'href') el.setAttribute('href', safeUrl(v)); else if (k === 'src') el.setAttribute('src', safeUrl(v)); else if (/^(data|aria)-/.test(k)) el.setAttribute(k, String(v)); return w; },
     class: (c) => { el.className = String(c || ''); return w; },
     style: (obj) => { if (obj && typeof obj === 'object') for (const k in obj) { if (STYLE_OK.test(k)) try { el.style[k] = String(obj[k]); } catch (e) {} } return w; },
-    on: (event, fn) => { const ev = String(event); const OK = ['click','input','change','keydown','pointerdown','pointermove','pointerup','pointerleave']; if (OK.includes(ev) && typeof fn === 'function') el.addEventListener(ev, (e) => { try { let x, y; if (e.clientX !== undefined) { const r = el.getBoundingClientRect(); const sx = (el.width && r.width) ? el.width / r.width : 1; const sy = (el.height && r.height) ? el.height / r.height : 1; x = (e.clientX - r.left) * sx; y = (e.clientY - r.top) * sy; } if (ev === 'pointerdown') { try { el.setPointerCapture(e.pointerId); } catch (_) {} } fn({ value: el.value, key: e.key, x, y, buttons: e.buttons, preventDefault: () => e.preventDefault() }); report(); } catch (err) {} }); return w; },
+    on: (event, fn) => { const ev = String(event); const OK = ['click','input','change','keydown','pointerdown','pointermove','pointerup','pointerleave']; if (OK.includes(ev) && typeof fn === 'function') el.addEventListener(ev, (e) => { try { let x, y; if (e.clientX !== undefined) { const r = el.getBoundingClientRect(); const sx = (el.width && r.width) ? el.width / r.width : 1; const sy = (el.height && r.height) ? el.height / r.height : 1; x = (e.clientX - r.left) * sx; y = (e.clientY - r.top) * sy; } if (ev === 'pointerdown') { try { el.setPointerCapture(e.pointerId); } catch (_) {} } fn({ value: el.value, key: e.key, x, y, buttons: e.buttons, preventDefault: () => e.preventDefault() }); report(); } catch (err) { reportRuntime(err && err.message, 'a "' + ev + '" handler threw'); } }); return w; },
     // ── attenuated 2D DRAWING facet for a <canvas> — the SAFE subset (pure draw ops + pixel export), NEVER the
     //    raw element/context (a raw DOM node would leak .ownerDocument→window and defeat confinement). Drawing
     //    is pure authority-free computation, so a canvas is a clean, first-class confined-UI foundation.
@@ -180,7 +180,7 @@ const island = (name, props, kids) => {
   const f = KIT[String(name)]; const p = (props && typeof props === 'object' && !Array.isArray(props)) ? props : {};
   const k = kids == null ? [] : (Array.isArray(kids) ? kids : [kids]);
   if (typeof f !== 'function') return create('span').class('cu-chip').text('[unknown component: ' + name + ']');
-  try { return f(p, k); } catch (e) { return create('div').class('cu-err').text('⚠️ ' + name + ': ' + (e && e.message)); }
+  try { return f(p, k); } catch (e) { reportRuntime(e && e.message, 'island "' + name + '" threw'); return create('div').class('cu-err').text('⚠️ ' + name + ': ' + (e && e.message)); }
 };
 // ── ui.use(alias): render a PRIOR broken-out component the agent referenced. The parent resolved the agent's
 //    alias → that component's (render-safe, scrubbed) source SERVER-SIDE and shipped it in `refs` on mount; the
@@ -191,7 +191,7 @@ const __cuRefs = {};
 const use = (alias) => {
   const fn = __cuRefs[String(alias)];
   if (typeof fn !== 'function') return create('span').class('cu-chip').text('[unavailable: ' + alias + ']');
-  try { const r = fn(UI); return (r && r.el) ? r : create('div').text('[empty: ' + alias + ']'); } catch (e) { return create('div').class('cu-err').text('⚠️ ' + alias + ': ' + (e && e.message)); }
+  try { const r = fn(UI); return (r && r.el) ? r : create('div').text('[empty: ' + alias + ']'); } catch (e) { reportRuntime(e && e.message, 'referenced component "' + alias + '" threw'); return create('div').class('cu-err').text('⚠️ ' + alias + ': ' + (e && e.message)); }
 };
 // ui.grain(id) is the cell seam (above): a granted WRITABLE cell (e.g. 'theme') is read by .subscribe and
 // driven by .set(value) — state that propagates, never a command. (No imperative effect/RPC channel.)
@@ -199,7 +199,14 @@ const UI = { create, grain: apiGrain, local: grain, h: create, island, use, call
 
 const fail = (msg) => { try { send({ type: 'error', error: String(msg) }); } catch (e) {} const d = document.createElement('div'); d.className = 'cu-err'; d.textContent = '⚠️ ' + msg; document.body.innerHTML = ''; document.body.appendChild(d); report(); }; // also REPORT the render failure to the host → auto-fix loop
 
-window.addEventListener('error', (e) => { /* swallow source parse/runtime errors so they don't escape; mount reports legibly */ try { e.preventDefault(); } catch (_) {} });
+// RUNTIME errors AFTER a successful mount (an event handler throws, an uncaught async rejection, a kit
+// island's own render throw) used to be swallowed here — the human watched a dead widget while the
+// authoring agent believed it worked (chat 1cbe89a9). Report them to the host too (bounded + deduped per
+// mount); the host queues them for the AUTHORING agent's next turn as well as the auto-fix loop.
+let __rtReported = [];
+const reportRuntime = (msg, where) => { try { const m = String(msg || 'unknown error').slice(0, 280); if (__rtReported.length >= 4 || __rtReported.indexOf(m) >= 0) return; __rtReported.push(m); send({ type: 'error', error: (where ? where + ': ' : 'runtime error after mount: ') + m, runtime: true }); } catch (e) {} };
+window.addEventListener('error', (e) => { /* keep errors from escaping the frame — but REPORT them, never swallow silently */ try { e.preventDefault(); } catch (_) {} reportRuntime(e && e.message); });
+window.addEventListener('unhandledrejection', (e) => { try { e.preventDefault(); } catch (_) {} reportRuntime((e && e.reason && e.reason.message) || (e && e.reason) || 'unhandled promise rejection', 'unhandled rejection after mount'); });
 // After a render settles, report any coercion smells to the host (feedback-loops + agent re-author).
 // Belt-and-suspenders: also scan the produced DOM text for a smell the kit sinks didn't originate
 // (e.g. an agent that String()-concatenated an object itself, or a raw-tag textContent write).
@@ -215,6 +222,7 @@ const reportSmells = () => {
 const mount = (source, refs) => {
   document.body.innerHTML = '';
   __smells = [];
+  __rtReported = [];
   // Inject each REFERENCED component's source (agent-declared aliases the parent resolved server-side) as a
   // function ui.use(alias) calls — same inline-script seam + same sandbox as the primary source (no new authority).
   if (refs && typeof refs === 'object') { for (const alias in refs) { try { const rs = String((refs[alias] && refs[alias].source) || ''); if (!rs) continue; const rsc = document.createElement('script'); rsc.textContent = 'window.__cu_ref_tmp = (' + rs + ');'; document.head.appendChild(rsc); rsc.remove(); if (typeof window.__cu_ref_tmp === 'function') __cuRefs[String(alias)] = window.__cu_ref_tmp; window.__cu_ref_tmp = null; } catch (e) {} } }

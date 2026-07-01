@@ -215,7 +215,7 @@ const renderComponent = (spec, ctx) => {
         if (v) applyTheme({ name: String(val.name || 'custom').slice(0, 40), mode: (val.mode === 'light' || val.mode === 'dark') ? val.mode : undefined, vars: v });
       }
     }
-    else if (m.type === 'error') { try { (window.__fieldReportError || (() => {}))(String(m.error || 'render failed'), String(m.source || '')); } catch { /* */ } } // a confined component failed → route to the auto-fix loop
+    else if (m.type === 'error') { try { (window.__fieldReportError || (() => {}))(String(m.error || 'render failed'), String(spec.source || ''), { name: String(spec.name || spec.title || 'component'), componentId: String(spec.componentId || spec.id || '') }); } catch { /* */ } } // a confined component failed (mount OR runtime) → queue it for the AUTHORING agent's next turn + the auto-fix loop; the frame never had the source, the parent's spec does
     else if (m.type === 'render-smell') { try { (window.__fieldReportSmell || (() => {}))(Array.isArray(m.smells) ? m.smells : [], { componentId: String(spec.componentId || spec.id || ''), name: String(spec.name || spec.title || 'component'), source: spec.source }); } catch { /* */ } } // a value coerced to "[object Object]" on screen → route to feedback-loops + the renderer's re-author loop
   };
   // one-shot window listener JUST for the 'ready' handshake — removed the instant it fires (no accumulation).

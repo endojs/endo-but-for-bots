@@ -838,6 +838,25 @@ const flagErrorForFix = async (kind, error, context = '') => {
     return true;
   } catch (e) { log('flagErrorForFix', e.message); return false; }
 };
+// ── per-chat pending COMPONENT ERRORS (the async half of the render-feedback loop; chat 1cbe89a9) ──
+// A runtime error a delivered widget throws in the user's browser is posted back (/error/flag with a
+// sessionId), queued HERE per chat, and injected into the authoring agent's NEXT turn as system feedback —
+// so the agent that shipped the widget hears about the breakage, not just the self-improvement backlog.
+// Durable (survives a restart), bounded (≤5 per chat), deduped by error text.
+const COMP_ERRS_FILE = path.join(VOICE_STATE_DIR, 'component-errors.json');
+let compErrs = {}; try { compErrs = JSON.parse(fs.readFileSync(COMP_ERRS_FILE, 'utf8')) || {}; } catch { /* fresh */ }
+const saveCompErrs = () => { try { fs.mkdirSync(VOICE_STATE_DIR, { recursive: true }); fs.writeFileSync(COMP_ERRS_FILE, JSON.stringify(compErrs)); } catch (e) { log('compErrs save', e.message); } };
+const pushComponentError = (sid, { error, name }) => {
+  const id = String(sid || '').slice(0, 64); if (!id || !error) return false;
+  const list = compErrs[id] || (compErrs[id] = []);
+  const err = String(error).slice(0, 300);
+  if (list.some(x => x.error === err)) return false; // the same error re-thrown on re-render files once
+  list.push({ error: err, name: String(name || '').slice(0, 80), at: Date.now() });
+  if (list.length > 5) list.splice(0, list.length - 5);
+  saveCompErrs();
+  return true;
+};
+const takeComponentErrors = sid => { const id = String(sid || '').slice(0, 64); const list = compErrs[id]; if (!list || !list.length) return []; delete compErrs[id]; saveCompErrs(); return list; };
 const SCHED_RUN_BUDGET = Number(process.env.SCHED_RUN_BUDGET_UUSD) || defaultAllowance; // per-run µUSD ceiling — bounds a scheduled run so it can't leak unbounded inference
 const runProjectAgent = async (project, agent) => {
   log('scheduled-agent:', project.name, '›', agent.name, '| tools:', (agent.tools || []).join(','));
@@ -1546,6 +1565,14 @@ const handler = async (req, res) => {
       // restart) → null → the runner rebuilds from text+history = a normal full run. So `resume:true` is always
       // safe: it continues the in-flight run when it can, and cleanly re-runs from scratch when it can't.
       const resumeMessages = (resume === true) ? consumeResume(sid) : null;
+      // RENDER-FEEDBACK LOOP, async half (chat 1cbe89a9): a widget this chat's agent shipped earlier threw
+      // AFTER delivery in the user's browser. Those queued errors are injected into THIS turn as system
+      // feedback, so the agent sees its own breakage and repairs it instead of believing its widget works.
+      // (The sync half — render-check at authoring time — catches mount errors before delivery.)
+      const pendingCompErrs = resumeMessages ? [] : takeComponentErrors(sid);
+      const compErrNote = pendingCompErrs.length
+        ? `[SYSTEM render feedback — automatic, not typed by the user] Component widget(s) you rendered earlier in this chat FAILED in the user's browser:\n${pendingCompErrs.map(e => `- ${e.name ? `"${e.name}": ` : ''}${e.error}`).join('\n')}\nThe user saw a broken widget. Rebuild it correctly this turn (fix that exact error) or acknowledge the failure — do not claim it works.\n\n`
+        : '';
       runs.get(sid)?.abort();
       const ac = new AbortController(); runs.set(sid, ac);
       const startedAt = Date.now();
@@ -1641,7 +1668,7 @@ const handler = async (req, res) => {
       let deadlineHit = false; let deadlineT = null;
       let r = await Promise.race([
         AGENT_RUNNER({
-        toolbox, manifest, userText: t, history, resumeMessages, attachments: agentAttachments, signal: ac.signal, persona: runPersona, model: byo ? byo.modelId : String(model || 'default'),
+        toolbox, manifest, userText: compErrNote + t, history, resumeMessages, attachments: agentAttachments, signal: ac.signal, persona: runPersona, model: byo ? byo.modelId : String(model || 'default'),
         llm: capturingLLM, budgetLine: byo ? `Inference: running on YOUR OWN ${byo.provider} account (${byo.model}) — unlimited; the owner's prepaid allowance does not apply.` : budgetLine(purse.balance(), String(model || 'default')),
         allowResearch: runAgentId === 'field-agent', // the ENTRY agent gets the no-approval public-research handoff (research())
         takeInterjections: () => interjections.take(sid), // mid-turn re-steer: drained + folded into context at each step boundary
@@ -2222,12 +2249,16 @@ const handler = async (req, res) => {
     // ── notification inbox (🔔): read the shared feed (data endowment) + per-cap
     //    dismissed-state. Agents post via the `notify`/`pushFeed` powers → feed.json. ──
     if (req.method === 'POST' && u.pathname === '/error/flag') {
-      const { cap, kind, error, source } = await jsonBody(req);
+      const { cap, kind, error, source, sessionId, name } = await jsonBody(req);
       if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
       if (!error) return json(res, 200, { ok: false });
       const ctx = source ? `The failing component source began: ${String(source).slice(0, 300).replace(/\s+/g, ' ')}` : '';
       const filed = await flagErrorForFix(String(kind || 'runtime'), String(error), ctx);
-      return json(res, 200, { ok: true, filed });
+      // the render-feedback loop's async half: tie the error to ITS chat so the authoring agent hears
+      // about the breakage on its next turn (not only the self-improvement backlog).
+      const queued = sessionId ? pushComponentError(sessionId, { error, name }) : false;
+      if (queued) log('component-error queued for chat', String(sessionId).slice(0, 40), '—', String(error).slice(0, 120));
+      return json(res, 200, { ok: true, filed, queued });
     }
     // ── /render-smell — a confined widget rendered a raw JS value as text ("[object Object]", a leaked
     //    promise, …). The client already showed a readable fallback (safeText); here we route the smell
