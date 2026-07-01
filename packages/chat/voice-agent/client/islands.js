@@ -407,14 +407,14 @@ const islands = {
       if (reported) return; reported = true; // Confined re-renders re-throw; one report per mount
       const msg = (err && err.message) || String(err);
       try { const note = document.createElement('div'); note.style.cssText = 'color:var(--bad,#f85149);font-size:11px;padding:4px 2px'; note.textContent = `⚠︎ ${name} threw while rendering: ${msg}`; el.appendChild(note); } catch { /* note is best-effort */ }
-      try { (globalThis.__fieldReportError || (() => {}))(`fork threw while rendering: ${msg}`, String(source || '').slice(0, 500), { name }); } catch { /* report is best-effort */ }
+      try { (globalThis.__fieldReportError || (() => {}))(`fork threw while rendering: ${msg}`, String(source || '').slice(0, 500), { name, forkId: opts && opts.forkId, componentId: opts && opts.componentId }); } catch { /* report is best-effort */ } // identity rides along → the error ALSO auto-files onto that object's own backlog
       if (opts && typeof opts.onError === 'function') { try { opts.onError(err); } catch { /* caller hook must not break the render */ } }
     };
     let C;
     try { C = makeConfinedFromSource(source, { name, endowments: FORK_VOCAB, onError }); }
     catch (e) {
       el.textContent = `⚠︎ bad component source: ${e && e.message}`;
-      try { (globalThis.__fieldReportError || (() => {}))(`fork source failed to evaluate: ${(e && e.message) || e}`, String(source || '').slice(0, 500), { name }); } catch { /* */ }
+      try { (globalThis.__fieldReportError || (() => {}))(`fork source failed to evaluate: ${(e && e.message) || e}`, String(source || '').slice(0, 500), { name, forkId: opts && opts.forkId, componentId: opts && opts.componentId }); } catch { /* */ }
       return false;
     }
     tagComponent(el, 'confined-source', 'forked-component');

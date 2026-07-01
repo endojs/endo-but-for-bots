@@ -29,7 +29,21 @@ const app = document.getElementById('app');
   document.title = `${r.name} — component`;
   const t = document.getElementById('title'); if (t) t.textContent = r.name;
   const sub = document.querySelector('.sub'); if (sub && shareToken) sub.textContent = 'Shared with you — live, read-only, limited to this component’s data.';
+  // ⚑ ADD-ONLY issue filing (recipient): the share token lets you file an issue on the author's backlog
+  // for THIS component — and nothing more (no read of the backlog comes with it; the author sees it live).
+  if (shareToken && sub) {
+    const report = document.createElement('button');
+    report.textContent = '⚑ Report an issue';
+    report.style.cssText = 'margin-left:10px;font:inherit;font-size:11px;cursor:pointer;background:#161b22;border:1px solid #30363d;color:#e6edf3;border-radius:7px;padding:2px 8px';
+    report.onclick = async () => {
+      const title = window.prompt('⚑ Report an issue on this component to its author:');
+      if (!title) return;
+      let rr; try { rr = await (await fetch('/components/backlog/report', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ shareToken, title }) })).json(); } catch (e) { rr = { ok: false, error: e.message }; }
+      report.textContent = rr.ok ? '⚑ reported — thank you' : `⚠︎ ${rr.error || 'could not report'}`;
+    };
+    sub.appendChild(report);
+  }
   app.textContent = '';
   // pass the credential through as a cap OR a least-authority shareToken; the broker uses whichever is set.
-  renderWidgets(app, [{ type: 'component', source: r.source, cells: r.cells || [], height: 600 }], { cap, shareToken, onChoice: () => {} });
+  renderWidgets(app, [{ type: 'component', source: r.source, cells: r.cells || [], height: 600, componentId: id, name: r.name }], { cap, shareToken, onChoice: () => {} });
 })();

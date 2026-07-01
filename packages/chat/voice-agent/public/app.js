@@ -113,10 +113,14 @@ window.__fieldReportError = (error, source, meta) => {
     if (!cap || !error) return;
     const err = String(error).slice(0, 300);
     const name = String((meta && meta.name) || '').slice(0, 80);
+    // the failing object's IDENTITY (a uicomp-/fork- id — never a cap): when present, the server ALSO
+    // files the error onto that object's OWN backlog (the project carries its breakage with it).
+    const componentId = String((meta && meta.componentId) || '').slice(0, 80) || undefined;
+    const forkId = String((meta && meta.forkId) || '').slice(0, 80) || undefined;
     const dedup = `${sessionId}|${name}|${err}`;
     if (__seenCompErrs.has(dedup)) return;
     __seenCompErrs.add(dedup);
-    fetch('/error/flag', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, kind: 'component-render', error: err, source: String(source || '').slice(0, 500), sessionId, name }) }).catch(() => {});
+    fetch('/error/flag', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, kind: 'component-render', error: err, source: String(source || '').slice(0, 500), sessionId, name, componentId, forkId }) }).catch(() => {});
     componentErrorNote(name, err);
   } catch { /* */ }
 };
@@ -3444,16 +3448,56 @@ const openComponentEditChat = (id, name, { kind = 'component' } = {}) => {
   ov.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:60;background:rgba(0,0,0,.45)';
   ov.innerHTML = `<div class="qrcard" style="width:min(560px,93vw);max-height:84vh;display:flex;flex-direction:column;text-align:left;padding:0;overflow:hidden">
     <div style="padding:11px 14px;border-bottom:1px solid var(--edge);display:flex;align-items:center;gap:8px">
-      <b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">🧩 ${esc(name)} <span class="pill">live edit</span></b>
+      <b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">🧩 ${esc(name)} <span class="pill">live edit</span> <span class="pill" data-ce-bl style="display:none;color:var(--bad)">⚑ 0</span></b>
       <button class="mini" data-ce-close>✕</button></div>
     <div id="ce-log" style="flex:1;overflow:auto;padding:12px 14px;display:flex;flex-direction:column;gap:8px;min-height:120px">
+      <div data-ce-backlog style="display:none;border:1px solid var(--edge);border-radius:9px;padding:8px 10px;font-size:12px"></div>
       <div class="pmeta">Talk to <b>${esc(name)}</b>'s agent — describe a change and it edits this component live (a new, revertable version, applied on the spot). e.g. "make the header teal", "add a copy button", "show the newest first". Revert any version in the Components tab.</div></div>
     <div style="padding:10px 12px;border-top:1px solid var(--edge);display:flex;gap:6px">
       <input id="ce-input" class="hdr-sel" style="flex:1;min-width:0" placeholder="Describe a change to ${esc(name)}…" autocomplete="off">
       <button class="mini primary" id="ce-send">Send</button></div></div>`;
   document.body.appendChild(ov);
   const logEl = ov.querySelector('#ce-log'), input = ov.querySelector('#ce-input');
-  const close = () => ov.remove(); ov.querySelector('[data-ce-close]').onclick = close; ov.onclick = e => { if (e.target === ov) close(); };
+  const close = () => { try { blAbort.abort(); } catch { /* */ } ov.remove(); }; ov.querySelector('[data-ce-close]').onclick = close; ov.onclick = e => { if (e.target === ov) close(); };
+  // ── the object's BACKLOG, live: FOLLOW the backlog:<id> propagator cell over the one /cells/subscribe
+  //    broker (owner-only server-side — a non-owner just never sees the panel). The store PUSHES on every
+  //    add/ack (an auto-filed runtime error, a recipient's ⚑ report), so the badge + list update with no
+  //    refresh. ✓ marks an item done via the owner facet's ack verb; the cell push repaints this panel.
+  const blAbort = new AbortController();
+  const blPill = ov.querySelector('[data-ce-bl]'), blBox = ov.querySelector('[data-ce-backlog]');
+  const ackPath = kind === 'fork' ? '/forks/backlog/ack' : '/components/backlog/ack';
+  const paintBacklog = v => {
+    const items = (v && v.open) || [];
+    blPill.style.display = items.length ? '' : 'none'; blPill.textContent = `⚑ ${items.length}`;
+    blBox.style.display = items.length ? '' : 'none'; blBox.innerHTML = '';
+    if (!items.length) return;
+    const head = document.createElement('div'); head.style.cssText = 'font-weight:600;color:var(--bad);margin-bottom:4px'; head.textContent = `⚑ ${items.length} open backlog item${items.length === 1 ? '' : 's'} — the agent sees these too`; blBox.appendChild(head);
+    for (const it of items.slice(0, 8)) {
+      const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:6px;align-items:flex-start;padding:2px 0';
+      const txt = document.createElement('div'); txt.style.cssText = 'flex:1;min-width:0;color:var(--ink)';
+      txt.textContent = `[${it.kind}] ${it.title}${it.count > 1 ? ` (×${it.count})` : ''}`;
+      const sub = document.createElement('div'); sub.style.cssText = 'font-size:10px;color:var(--mut)'; sub.textContent = `from ${it.from || 'unknown'}`; txt.appendChild(sub);
+      const done = document.createElement('button'); done.className = 'mini'; done.textContent = '✓'; done.title = 'mark resolved';
+      done.onclick = async () => { done.disabled = true; try { await fetch(ackPath, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: capFor, id, itemId: it.id, status: 'done' }) }); } catch { /* the cell push repaints either way */ } };
+      row.append(txt, done); blBox.appendChild(row);
+    }
+  };
+  (async () => { // one open stream; the server pushes the current value + every change (never polls)
+    try {
+      const res = await fetch('/cells/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: capFor, cells: [`backlog:${id}`] }), signal: blAbort.signal });
+      if (!res.ok || !res.body) return;
+      const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read(); if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i; while ((i = buf.indexOf('\n\n')) >= 0) {
+          const block = buf.slice(0, i); buf = buf.slice(i + 2);
+          const line = block.split('\n').find(l => l.startsWith('data:')); if (!line) continue;
+          try { const m = JSON.parse(line.slice(5).trim()); if (m && !m.error && m.value) paintBacklog(m.value); } catch { /* ignore malformed frame */ }
+        }
+      }
+    } catch { /* aborted / not the owner — panel stays hidden */ }
+  })();
   const bubble = (who, text) => { const d = document.createElement('div'); d.style.cssText = `align-self:${who === 'you' ? 'flex-end' : 'flex-start'};max-width:86%;padding:7px 10px;border-radius:9px;font-size:13px;white-space:pre-wrap;background:${who === 'you' ? 'var(--acc-fill)' : 'rgba(127,127,127,.14)'};color:${who === 'you' ? '#fff' : 'var(--ink)'}`; d.textContent = text; logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight; return d; };
   hist.forEach(m => bubble(m.who, m.text));
   let busyCe = false;

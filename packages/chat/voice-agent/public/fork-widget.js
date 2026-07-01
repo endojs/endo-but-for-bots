@@ -28,12 +28,12 @@ export const mountForkInto = async (host, opts = {}) => {
   // recipient → owner, and the next render must follow it to /forks/read. For recipients the open result
   // also carries Phase-4 upgrade/inbox metadata.
   const fetchSource = async () => {
-    if (shareToken) { const o = await pf('/forks/open', { token: shareToken }); if (!o.ok) return { error: o.error }; name = o.name; return o; }
+    if (shareToken) { const o = await pf('/forks/open', { token: shareToken }); if (!o.ok) return { error: o.error }; name = o.name; if (o.id && !id) id = o.id; return o; } // keep the fork's id (non-secret) so a runtime error report carries its identity → the author's backlog
     const r = await pf('/forks/read', { cap, id }); if (!r.ok) return { error: r.error }; name = r.name; return { source: r.source };
   };
   const paint = src => {
     const ok = window.__fieldIslands && typeof window.__fieldIslands.renderSource === 'function'
-      && window.__fieldIslands.renderSource(src, stage, props, { name: name || 'fork' }); // name → the render-feedback loop's error reports
+      && window.__fieldIslands.renderSource(src, stage, props, { name: name || 'fork', forkId: id || undefined }); // name + identity → the render-feedback loop files errors on THIS fork's own backlog
     note.textContent = ok ? '' : (stage.textContent ? '' : 'This fork renders only when the confined runtime is active (lockdown on).'); // a render error already painted its own ⚠ note
     return ok;
   };
@@ -86,6 +86,15 @@ export const mountForkInto = async (host, opts = {}) => {
     const r = await pf('/forks/notify', { cap, id, message });
     note.textContent = r.ok ? `notified ${r.delivered} recipient${r.delivered === 1 ? '' : 's'}` : '⚠︎ ' + r.error;
   };
+  // ⚑ ADD-ONLY issue filing (recipient): holding the share link lets you file an issue/request on the
+  // author's backlog for this fork — and nothing more (no read of the backlog comes with it). The author
+  // sees it in their edit chat + live backlog badge, tagged by an opaque prefix of this share (never the token).
+  const doReport = async () => {
+    const title = window.prompt(`⚑ Report an issue on "${name || 'this fork'}" to its author (what's wrong, or what you need):`);
+    if (!title) return;
+    const r = await pf('/forks/backlog/report', { token: shareToken, title });
+    note.textContent = r.ok ? (r.deduped ? 'already reported — the author sees it (noted again)' : 'reported — the author will see it') : '⚠︎ ' + (r.error || 'could not report');
+  };
   const doAdopt = async () => {
     const o = await pf('/forks/open', { token: shareToken }); if (!o.ok) { note.textContent = '⚠︎ ' + o.error; return; }
     const c = await pf('/forks/create', { cap, source: o.source, name: `${o.name || 'fork'} (mine)`, baseId: o.id });
@@ -98,7 +107,7 @@ export const mountForkInto = async (host, opts = {}) => {
   const rebuildBar = () => {
     bar.innerHTML = '';
     bar.append(el('span', { style: 'font-size:12px;color:var(--mut,#7d8590)' }, [`⑂ ${name || 'fork'}`]));
-    if (shareToken) bar.append(btn('⑂ Make mine', doAdopt, 'adopt this shared fork as your own to edit + re-share'));
+    if (shareToken) { bar.append(btn('⑂ Make mine', doAdopt, 'adopt this shared fork as your own to edit + re-share')); bar.append(btn('⚑ Report', doReport, 'file an issue on the author’s backlog for this fork (add-only)')); }
     else { bar.append(btn('✎ Edit', doEdit, 'agent edits this fork')); bar.append(btn('⇪ Share', doShare, 'mint a re-shareable link')); bar.append(btn('✉ Notify', doNotify, 'tell recipients you changed it')); }
     // Tag the host with the fork's identity so Alt-click selection can act on a LIVE mounted fork (owner
     // forks only — a shared fork isn't yours to edit until you "Make mine"). data-fork-name shows in the chip.
