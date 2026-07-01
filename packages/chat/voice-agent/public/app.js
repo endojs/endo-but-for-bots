@@ -1121,7 +1121,7 @@ const retryTurn = async (payload, spoken, opts = {}) => {
     updateBudgetChip(r.remaining, r.allowance);
     if (spoken) await speak(r.answer || '');
   } catch (e) { setStatus('error: ' + e.message); }
-  finally { try { pendantES && pendantES.close(); } catch {} pendantLive = false; if (pendant) pendant.finish(); setStatus(on ? 'listening…' : ''); }
+  finally { traceIslandEnd(); try { pendantES && pendantES.close(); } catch {} pendantLive = false; if (pendant) pendant.finish(); setStatus(on ? 'listening…' : ''); }
 };
 // A chat that ran out of allowance retains its UNANSWERED turn so that ANY top-up path — the
 // exhausted card, the 🪙 chip, or a payment — RESUMES it (not just the card button). Keyed by the
@@ -1190,7 +1190,7 @@ const reattachRun = async sid => {
     try {
       for (;;) {
         await new Promise(res => setTimeout(res, 3000));
-        if (sid !== sessionId) { try { pendantES && pendantES.close(); } catch {} pendantLive = false; return false; } // navigated away — stop the live trace; pick it up next time
+        if (sid !== sessionId) { traceIslandEnd(); try { pendantES && pendantES.close(); } catch {} pendantLive = false; return false; } // navigated away — stop the live trace; pick it up next time
         const cur = await fetchRunResult(sid);
         if (!cur || cur.state === 'running') continue;
         if (cur.result) renderReattached(cur.result, sid); else { try { pendantEnd([]); } catch {} await resumeIfPending(sid, { reconstruct: true }); } // renderReattached calls pendantEnd → reconciles the full trace
@@ -1555,7 +1555,7 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
   finally {
     busy = false; if (sendBtn) sendBtn.disabled = false;        // ALWAYS release — the bug was leaving this wedged on a stale turn
     if (myTurn === turn) { setStatus(on ? 'listening…' : ''); setMic(on ? 'listening' : ''); }
-    try { pendantES && pendantES.close(); } catch {} pendantLive = false; if (pendant) pendant.finish(); // never leave the step stream open
+    traceIslandEnd(); try { pendantES && pendantES.close(); } catch {} pendantLive = false; if (pendant) pendant.finish(); // never leave the step stream / trace-cell stream open
     if (queuedSend) setTimeout(flushQueued, 0); // a message typed mid-turn was queued → send it now the turn is done
   }
   // committed → the message was sent (a post-commit error/timeout is shown in-band; the user turn stays + is
@@ -3172,6 +3172,79 @@ const maybeEmbedPastedSite = e => {
   if (looksLikeSiteUrl(txt)) { e.preventDefault(); embedSiteInline({ url: txt }); return true; }
   return false;
 };
+// ── TRACE ISLAND (chrome-trace-view): the in-turn LIVE trace as a registry-backed, fork-riffable
+//    chrome component. THE CELL IS THE INTERFACE: the host opens ONE /cells/subscribe stream for this
+//    chat's `trace:<sid>` cell (fed server-side from the same emitStep events as /chat/steps, monotonic)
+//    and re-renders the island on every push — the confined component holds no cap and never fetches.
+//    Fallback ladder: island mounts → it owns the turn's trace surface; the island fails (broken edit,
+//    registry unreachable, no lockdown) → the LEGACY 3D pendant paints instead (never a silent turn), and
+//    the failure auto-files onto chrome-trace-view's own backlog via renderChrome's error report. ──
+let traceIsland = null; // { host, ctrl, sid } — the active island instance for the running turn
+const traceIslandEnd = () => { if (!traceIsland) return; try { traceIsland.ctrl.abort(); } catch { /* */ } try { traceIsland.host.remove(); } catch { /* */ } traceIsland = null; };
+// the running-glow keyframes the seeded island source uses (documented in its header) — host-provided,
+// like lp-kf for the live-progress bubble (a confined component cannot inject a <style> tag).
+const traceKeyframes = () => { if (document.getElementById('ti-kf')) return; const st = document.createElement('style'); st.id = 'ti-kf'; st.textContent = '@keyframes ti-pulse{0%,100%{opacity:.45;transform:scale(.88)}50%{opacity:1;transform:scale(1.1)}}'; document.head.appendChild(st); };
+// ⊿3D from the island: open the classic 3D pendant FULLSCREEN on the same live stream (the server
+// replays the fan-out so far over /chat/steps, then streams new steps — the "jump into the trace" path).
+const openLive3D = async (promptText, sid) => {
+  try {
+    const p = await ensurePendant();
+    pendantWrap.classList.remove('hide'); p.setVisible(true); p.reset(promptText || '');
+    try { pendantES && pendantES.close(); } catch { /* */ }
+    pendantES = new EventSource('/chat/steps?sid=' + encodeURIComponent(sid));
+    pendantES.onmessage = e => { try { const m = JSON.parse(e.data); if (m.t === 'start') p.toolStart(m.name, m.detail, m.call); else if (m.t === 'done') p.toolDone(m.name, m.ok, m.detail, m.children, m.call, m.result, m.granted); else if (m.t === 'rnode') p.rnode(m); else if (m.t === 'child-done') p.childDone(m.parent, m.name, m.ok); else if (m.t === 'end') { try { pendantES.close(); } catch { /* */ } } } catch { /* */ } };
+    if (!pendantFs) togglePendantFs();
+  } catch { /* the 3D view is enhancement-only */ }
+};
+const traceIslandBegin = async (promptText, sid) => {
+  try {
+    await chromeReady;
+    const c = chromeComps['chrome-trace-view'];
+    const isl = window.__fieldIslands;
+    if (!c || !c.source || !isl || typeof isl.renderChrome !== 'function') return false;
+    traceIslandEnd(); traceKeyframes();
+    const host = document.createElement('div');
+    host.className = 'msg trace-island-host';
+    host.style.cssText = 'padding:0;border:0;background:none;max-width:none';
+    log.appendChild(host); window.scrollTo(0, document.body.scrollHeight);
+    const handlers = { onOpen3D: () => openLive3D(promptText, sid) };
+    if (!mountChrome('chrome-trace-view', host, { trace: { sid, turn: 0, status: 'running', progress: 'Thinking…', steps: [], nodes: [] }, ...handlers })) { host.remove(); return false; }
+    const ctrl = new AbortController();
+    const inst = { host, ctrl, sid, baseTurn: null, sawFresh: false, frames: 0 };
+    traceIsland = inst;
+    window.__traceIsland = inst; // test seam: frame count + sid (render-safe step names only, no cap)
+    (async () => { // one open stream; the server pushes the current value + every change (never polls)
+      try {
+        const res = await fetch('/cells/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), cells: ['trace:' + sid] }), signal: ctrl.signal });
+        if (!res.ok || !res.body) return;
+        const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+        for (;;) {
+          const { done, value } = await reader.read(); if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let i; while ((i = buf.indexOf('\n\n')) >= 0) {
+            const block = buf.slice(0, i); buf = buf.slice(i + 2);
+            const line = block.split('\n').find(l => l.startsWith('data:')); if (!line) continue;
+            let m; try { m = JSON.parse(line.slice(5).trim()); } catch { continue; }
+            if (!m || m.error || !m.value || traceIsland !== inst) continue;
+            const v = m.value;
+            // the cell replays its CURRENT value on subscribe — a finished PREVIOUS turn replays first
+            // when we attach just before POST /chat lands. Skip stale completed turns; render this one.
+            if (!inst.sawFresh) { if (v.status === 'done' && (v.steps || []).length) { inst.baseTurn = v.turn; continue; } inst.sawFresh = true; }
+            if (inst.baseTurn != null && v.turn === inst.baseTurn) continue;
+            if (!inst.host.isConnected) { try { log.appendChild(inst.host); } catch { /* */ } } // a mid-turn renderTx rebuilt the log
+            if (!mountChrome('chrome-trace-view', inst.host, { trace: v, ...handlers })) {
+              // a live edit broke the island MID-TURN (the error auto-filed onto its backlog via
+              // renderChrome) → the legacy pendant takes over the still-running trace.
+              traceIslandEnd(); pendantBeginLegacy(promptText, sid); return;
+            }
+            inst.frames += 1;
+          }
+        }
+      } catch { /* aborted / network drop — the SVG trace record still lands with the answer */ }
+    })();
+    return true;
+  } catch { return false; }
+};
 const ensurePendant = () => pendantInit || (pendantInit = (async () => {
   pendantWrap = document.createElement('div'); pendantWrap.id = 'pendant-wrap'; pendantWrap.className = 'hide';
   pendantCanvas = document.createElement('canvas'); pendantCanvas.id = 'pendant-canvas';
@@ -3236,8 +3309,14 @@ const positionPendant = () => {
 };
 const schedulePendantPosition = () => { if (pendantRaf) return; pendantRaf = requestAnimationFrame(() => { pendantRaf = 0; positionPendant(); }); };
 const hidePendant = () => { if (pendantWrap) pendantWrap.classList.add('hide'); if (pendant) pendant.setVisible(false); log.querySelectorAll('.msg.user').forEach(el => { el.style.marginBottom = ''; }); try { pendantES && pendantES.close(); } catch {} };
+// A turn's trace surface: the TRACE ISLAND first (chrome-trace-view — fork/riff/edit like any chrome
+// component), the legacy 3D pendant as the guaranteed fallback (island refused / broken / no lockdown).
 const pendantBegin = async (promptText, sid = sessionId) => {
-  pendantLive = true; liveChatId = sid; pendantShapeMode = false; // a real turn reclaims the pendant from any Settings shape view
+  pendantLive = true; liveChatId = sid; pendantShapeMode = false; // a real turn reclaims the trace surface from any Settings shape view
+  if (await traceIslandBegin(promptText, sid)) return; // the island owns this turn; no host-side /chat/steps SSE, no 3D canvas
+  await pendantBeginLegacy(promptText, sid);
+};
+const pendantBeginLegacy = async (promptText, sid = sessionId) => {
   try {
     const p = await ensurePendant();
     pendantWrap.classList.remove('hide'); p.setVisible(true);
@@ -3249,7 +3328,7 @@ const pendantBegin = async (promptText, sid = sessionId) => {
     pendantES.onerror = () => {}; // degrade silently — applyFinal reconciles from the final steps[]
   } catch { /* pendant is enhancement-only; never block the turn */ }
 };
-const pendantEnd = steps => { clearLiveProgress(); try { pendantES && pendantES.close(); } catch {} pendantLive = false; if (pendant) { pendant.finish(); pendant.applyFinal(steps || []); } hidePendant(); }; // done WORKING → hide the live 3D animation; the per-message SVG trace (above the message) becomes the record. Tap an SVG to reopen the 3D on demand.
+const pendantEnd = steps => { clearLiveProgress(); traceIslandEnd(); try { pendantES && pendantES.close(); } catch {} pendantLive = false; if (pendant) { pendant.finish(); pendant.applyFinal(steps || []); } hidePendant(); }; // done WORKING → remove the live trace island / hide the 3D animation; the per-message SVG trace (above the message) becomes the record. Tap an SVG to reopen the 3D on demand.
 // re-render the latest turn's SAVED trace when opening/returning to a chat (persistence across navigation)
 const pendantShowFor = async id => {
   if (pendantShapeMode) return; // a Settings agent-shape graph is up — don't reclaim the pendant with a chat trace

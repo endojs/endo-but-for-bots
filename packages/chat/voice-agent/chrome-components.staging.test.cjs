@@ -48,7 +48,8 @@ const jpost = (p, b) => fetch(`${BASE}${p}`, { method: 'POST', headers: { 'conte
 
   // ── 1. the registry: seeded at boot, served at HEAD ─────────────────────────────────────────────
   const reg = await jget('/chrome/components');
-  ok(reg.ok && Array.isArray(reg.components) && reg.components.length === 2, `GET /chrome/components lists the seeded chrome (${(reg.components || []).length})`);
+  ok(reg.ok && Array.isArray(reg.components) && reg.components.length === 3, `GET /chrome/components lists the seeded chrome (${(reg.components || []).length})`);
+  ok((reg.components || []).some(c => c.id === 'chrome-trace-view' && /THE CELL IS THE INTERFACE/.test(c.source)), 'chrome-trace-view seeded with the cell-contract header (the schema riffers see in the edit chat)');
   const tb = (reg.components || []).find(c => c.id === 'chrome-msg-toolbar');
   const wc = (reg.components || []).find(c => c.id === 'chrome-welcome');
   ok(!!tb && /props\.onClip/.test(tb.source) && /msg-clip/.test(tb.source), 'chrome-msg-toolbar seeded with the clip/copy source');
