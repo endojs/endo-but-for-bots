@@ -106,6 +106,13 @@
   .chat-item { display:flex; align-items:center; justify-content:space-between; gap:6px; padding:9px 10px; border-radius:8px; cursor:pointer; font-size:14px; }
   .chat-item:hover { background:rgba(127,127,127,.14); } /* neutral translucent — reads on both light + dark sidebars */
   .chat-item.on { background:#1f6feb22; border:1px solid #1f3b63; }
+  .chat-item .ci-title { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } /* truncate long titles so the twist + delete stay put */
+  .chat-item.child { padding-left:24px; font-size:13px; } /* a sub-agent chat, nested under the chat that spawned it */
+  .ci-sub { opacity:.45; } /* the ↳ marker on a sub-agent row */
+  .ci-twist { flex:none; width:14px; text-align:center; opacity:.6; cursor:pointer; user-select:none; font-size:11px; } /* disclosure triangle for a parent with sub-agent chats */
+  .ci-twist:hover { opacity:1; }
+  .ci-twist-sp { flex:none; width:14px; } /* alignment spacer for a row with no children */
+  .ci-kidcount { flex:none; opacity:.5; font-size:11px; margin-left:2px; } /* "3" sub-agents badge */
   .ci-title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   /* red dot: this chat is requesting user interaction (an unanswered ask) */
   .ci-dot { display:inline-block; width:7px; height:7px; margin-right:6px; border-radius:50%; background:var(--bad); box-shadow:0 0 5px var(--bad); vertical-align:middle; }

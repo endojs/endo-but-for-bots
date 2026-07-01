@@ -2638,31 +2638,68 @@ const renderChatList = () => {
 // ONE recency-sorted list (voice memos are provenance, marked 🎙, not a category). Filtered by the
 // search box + paginated to chatShowN with a "show more" — so nothing is ever hidden permanently.
 const scheduledSeedIds = () => new Set(seedChats.filter(s => s.source === 'scheduled').map(s => s.id));
+// Which parent rows are EXPANDED to reveal their sub-agent chats. Persisted; default collapsed (tidy sidebar).
+const EXPAND_KEY = 'field-agent-expanded';
+let expandedParents = (() => { try { return new Set(JSON.parse(localStorage.getItem(EXPAND_KEY) || '[]')); } catch { return new Set(); } })();
+const saveExpanded = () => { try { localStorage.setItem(EXPAND_KEY, JSON.stringify([...expandedParents].slice(-200))); } catch { /* */ } };
+// One row's HTML. `lead` is the disclosure triangle (parent), the ↳ marker (child), or an alignment spacer.
+const chatRowHtml = (it, lead = '', child = false, kidCount = 0) => {
+  const needs = openAsks.some(a => a.origin && a.origin.kind === 'chat' && a.origin.chatId === it.id);
+  const perm = it.shared ? (it.shareMode === 'write' ? '<span class="ci-perm" title="shared link · you can post">✍️ </span>' : '<span class="ci-perm" title="shared link · read-only">🔒 </span>') : '';
+  const badge = kidCount ? `<span class="ci-kidcount" title="${kidCount} sub-agent chat${kidCount > 1 ? 's' : ''}">${kidCount}</span>` : '';
+  return `<div class="chat-item ${child ? 'child' : ''} ${it.id === sessionId ? 'on' : ''}" data-id="${esc(it.id)}">${lead}<span class="ci-title"${it.voice ? '' : ' title="double-click to rename"'}>${needs ? '<span class="ci-dot" title="awaiting your reply"></span>' : ''}${perm}${child ? '<span class="ci-sub">↳ </span>' : ''}${it.voice ? '🎙 ' : ''}${esc(it.title)}</span>${badge}<button class="ci-del mini" data-del="${esc(it.id)}" title="delete">×</button></div>`;
+};
 const renderChatItems = () => {
   const box = $('chat-items'); if (!box) return;
   // Scheduled-agent runs (⏰ timer chats) are kept OUT of the sidebar — too noisy. They live in seedChats,
   // are openable via the project/feed deep-link, and GC server-side after a week. Filter both newly-arrived
   // and any already-adopted ones (older clients folded them into `chats`).
   const sched = scheduledSeedIds();
-  const all = [
-    // sort by most recent ACTIVITY (last message), falling back to origin date for a chat with no message yet
-    ...chats.filter(c => !sched.has(c.id)).map(c => ({ id: c.id, title: c.title || 'New chat', ts: c.lastMsgAt || c.ts || 0, voice: false, shared: !!(c.shared && c.shareToken), shareMode: c.shareMode })),
-    ...memoRuns.map(r => ({ id: r.id, title: r.title || 'voice note', ts: Date.parse(r.date) || 0, voice: true })),
-  ].sort((a, b) => b.ts - a.ts);
+  const chatItems = chats.filter(c => !sched.has(c.id)).map(c => ({ id: c.id, title: c.title || 'New chat', ts: c.lastMsgAt || c.ts || 0, voice: false, shared: !!(c.shared && c.shareToken), shareMode: c.shareMode, parentId: c.parentId || '' }));
+  const memoItems = memoRuns.map(r => ({ id: r.id, title: r.title || 'voice note', ts: Date.parse(r.date) || 0, voice: true, parentId: '' }));
+  const all = [...chatItems, ...memoItems];
+  const byId = new Map(all.map(it => [it.id, it]));
+  // A sub-agent chat (specialist / scoped sub-chat) whose parent is present → nest it under that parent.
+  const kids = new Map(); // parentId → [child items]
+  for (const it of chatItems) { if (it.parentId && byId.has(it.parentId) && it.parentId !== it.id) { const a = kids.get(it.parentId) || []; a.push(it); kids.set(it.parentId, a); } }
+  const isChild = it => it.parentId && byId.has(it.parentId) && it.parentId !== it.id;
+  const byTsDesc = (a, b) => b.ts - a.ts;
   const f = chatFilter.trim().toLowerCase();
-  const items = f ? all.filter(it => (it.title || '').toLowerCase().includes(f)) : all;
-  const shown = items.slice(0, chatShowN);
-  box.innerHTML = items.length
-    ? shown.map(it => {
-        const needs = openAsks.some(a => a.origin && a.origin.kind === 'chat' && a.origin.chatId === it.id);
-        const perm = it.shared ? (it.shareMode === 'write' ? '<span class="ci-perm" title="shared link · you can post">✍️ </span>' : '<span class="ci-perm" title="shared link · read-only">🔒 </span>') : '';
-        return `<div class="chat-item ${it.id === sessionId ? 'on' : ''}" data-id="${esc(it.id)}"><span class="ci-title"${it.voice ? '' : ' title="double-click to rename"'}>${needs ? '<span class="ci-dot" title="awaiting your reply"></span>' : ''}${perm}${it.voice ? '🎙 ' : ''}${esc(it.title)}</span><button class="ci-del mini" data-del="${esc(it.id)}" title="delete">×</button></div>`;
-      }).join('') + (items.length > shown.length ? `<button class="ci-more mini" style="width:100%;margin-top:4px;opacity:.85">show ${items.length - shown.length} more</button>` : '')
+  const matches = it => (it.title || '').toLowerCase().includes(f);
+
+  let html = '';
+  let total = 0; // top-level count (for pagination); children don't count against the page
+  if (f) {
+    // While SEARCHING, show a flat list of every matching chat (parent or child) so nothing hides behind a
+    // collapsed parent — a child keeps its ↳ marker so its sub-agent origin stays legible.
+    const hits = all.filter(matches).sort(byTsDesc);
+    total = hits.length;
+    html = hits.slice(0, chatShowN).map(it => chatRowHtml(it, isChild(it) ? '' : '<span class="ci-twist-sp"></span>', isChild(it))).join('');
+  } else {
+    // roots = everything that isn't a nested child; sort by most recent activity, bubbling a root up when one
+    // of its sub-agent chats is more recent (an active specialist surfaces the chat that spawned it).
+    const roots = all.filter(it => !isChild(it));
+    const rootActivity = it => Math.max(it.ts, ...((kids.get(it.id) || []).map(k => k.ts)), it.ts);
+    roots.sort((a, b) => rootActivity(b) - rootActivity(a));
+    total = roots.length;
+    for (const it of roots.slice(0, chatShowN)) {
+      const myKids = (kids.get(it.id) || []).sort(byTsDesc);
+      const open = expandedParents.has(it.id);
+      const lead = myKids.length
+        ? `<span class="ci-twist" data-twist="${esc(it.id)}" title="${open ? 'hide' : 'show'} ${myKids.length} sub-agent chat${myKids.length > 1 ? 's' : ''}">${open ? '▾' : '▸'}</span>`
+        : '<span class="ci-twist-sp"></span>';
+      html += chatRowHtml(it, lead, false, myKids.length);
+      if (open) for (const k of myKids) html += chatRowHtml(k, '<span class="ci-twist-sp"></span>', true);
+    }
+  }
+  box.innerHTML = total
+    ? html + (total > chatShowN ? `<button class="ci-more mini" style="width:100%;margin-top:4px;opacity:.85">show ${total - chatShowN} more</button>` : '')
     : `<div class="pill">${f ? 'no matches' : 'no chats'}</div>`;
   box.querySelectorAll('.chat-item .ci-title').forEach(s => {
     s.onclick = () => switchChat(s.parentElement.dataset.id);
     s.ondblclick = e => { e.stopPropagation(); startRename(s); };
   });
+  box.querySelectorAll('.ci-twist[data-twist]').forEach(t => { t.onclick = e => { e.stopPropagation(); const id = t.dataset.twist; if (expandedParents.has(id)) expandedParents.delete(id); else expandedParents.add(id); saveExpanded(); renderChatItems(); }; });
   box.querySelectorAll('[data-del]').forEach(b => { b.onclick = e => { e.stopPropagation(); deleteChat(b.dataset.del); }; });
   const more = box.querySelector('.ci-more'); if (more) more.onclick = () => { chatShowN += CHAT_PAGE; renderChatItems(); };
 };
