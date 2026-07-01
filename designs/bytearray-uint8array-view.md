@@ -33,8 +33,9 @@ design of record for that direction. erights' disposition (PR #572) is to
 **withdraw all three PRs above and open a fresh view-based implementation PR**
 against this written intent rather than retarget them off the bare-buffer
 premise (Design Decision 6). erights executed the withdrawal on 2026-06-30,
-closing #429, #57, and endojs/endo#3226; opening the fresh view-based PR is the
-remaining step.
+closing #429, #57, and endojs/endo#3226. The fresh view-based implementation PR is
+[#475](https://github.com/endojs/endo-but-for-bots/pull/475)
+(`feat/narrow-bytearray-to-uint8` → `master`), open and ready for review.
 
 ## What is the Problem Being Solved?
 
@@ -189,8 +190,10 @@ branches (Design Decision 6). The `feat/narrow-bytearray-to-uint8` branch is the
 natural seed for that fresh PR, since it already carries the view-based
 pass-style, the `frozenBytes`/`thawnBytes` boundary, and the downstream ocapn and
 rank-compare adjustments. erights closed all three PRs — #429, #57, and the
-upstream `endojs/endo#3226` — on 2026-06-30, completing the withdrawal; opening
-the fresh view-based PR remains.
+upstream `endojs/endo#3226` — on 2026-06-30, completing the withdrawal. The
+fresh view-based implementation PR is
+[#475](https://github.com/endojs/endo-but-for-bots/pull/475), seeded from
+`feat/narrow-bytearray-to-uint8` against `master`.
 
 ## Dependencies
 
@@ -238,7 +241,9 @@ the fresh view-based PR remains.
    design (erights, PR #572). The view-model implementation already lives largely
    on `feat/narrow-bytearray-to-uint8`, which seeds the fresh PR. erights closed
    #429, #57, and the upstream `endojs/endo#3226` on 2026-06-30, executing the
-   withdrawal; opening the fresh view-based PR remains.
+   withdrawal. The fresh view-based implementation PR is
+   [#475](https://github.com/endojs/endo-but-for-bots/pull/475), open and ready
+   for review.
 7. **Keep both helper vocabularies.** The wire-facing `byteArrayToHex` /
    `hexToByteArray` names stay for the codecs (the passStyle is still
    "byteArray"), alongside the JS-side `frozenBytes` / `thawnBytes` boundary for
