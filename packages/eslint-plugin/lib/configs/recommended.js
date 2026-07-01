@@ -76,6 +76,12 @@ module.exports = {
     '@endo/no-assign-to-exported-let-var-or-function': 'error',
     '@endo/no-harden-pattern-maker': 'warn',
     '@endo/no-multi-name-local-export': 'error',
+    // Steer new code toward makeExo(); Far() is discouraged but not forbidden,
+    // so this is a warning with a documented eslint-disable escape hatch rather
+    // than an error. Far remains in wide use across the tree, so raising it to
+    // `error` would break CI wholesale; keep it `warn` until the tree is
+    // migrated. See lib/rules/prefer-make-exo.js.
+    '@endo/prefer-make-exo': 'warn',
     'guard-for-in': 'error',
     'no-self-compare': 'error',
   },
