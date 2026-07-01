@@ -40,7 +40,8 @@
     "test:interactive-widget": "node interactive-widget.staging.test.cjs",
     "test:heavy-smoke": "node heavy-panel-smoke.staging.test.cjs",
     "test:blossom-studio": "node blossom-studio.staging.test.cjs",
-    "test:pay-rail": "node pay-rail.staging.test.mjs"
+    "test:pay-rail": "node pay-rail.staging.test.mjs",
+    "test:user-agency": "node user-agency-allowance.staging.test.mjs"
   },
   "dependencies": {
     "@endo/exo-git": "workspace:^",
