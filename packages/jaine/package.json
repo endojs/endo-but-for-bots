@@ -2,7 +2,7 @@
   "name": "@endo/jaine",
   "version": "0.1.0",
   "private": true,
-  "description": "Stateless channel-mention agent — each mention starts a fresh LLM context",
+  "description": "Stateless channel-mention agent \u2014 each mention starts a fresh LLM context",
   "author": "Endo contributors",
   "license": "Apache-2.0",
   "repository": {
@@ -47,7 +47,8 @@
   },
   "eslintConfig": {
     "extends": [
-      "plugin:@endo/internal"
+      "plugin:@endo/internal",
+      "plugin:@endo/prefer-makeexo"
     ]
   }
 }

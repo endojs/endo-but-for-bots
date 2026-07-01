@@ -2,7 +2,7 @@
   "name": "@endo/sandbox",
   "version": "0.0.1",
   "private": true,
-  "description": "POSIX sandbox plugin for Endo — confined process / filesystem / network slices",
+  "description": "POSIX sandbox plugin for Endo \u2014 confined process / filesystem / network slices",
   "keywords": [],
   "author": "Endo contributors",
   "license": "Apache-2.0",
@@ -64,7 +64,8 @@
   },
   "eslintConfig": {
     "extends": [
-      "plugin:@endo/internal"
+      "plugin:@endo/internal",
+      "plugin:@endo/prefer-makeexo"
     ]
   },
   "sesAvaConfigs": {

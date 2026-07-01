@@ -2,7 +2,7 @@
   "name": "@endo/space-chat",
   "version": "0.1.0",
   "private": true,
-  "description": "Default 1:1 chat (inbox) space for Endo Chat — the recipient-filtered single-sender mailbox view",
+  "description": "Default 1:1 chat (inbox) space for Endo Chat \u2014 the recipient-filtered single-sender mailbox view",
   "keywords": [
     "endo",
     "chat",
@@ -44,7 +44,8 @@
   },
   "eslintConfig": {
     "extends": [
-      "plugin:@endo/internal"
+      "plugin:@endo/internal",
+      "plugin:@endo/prefer-makeexo"
     ],
     "env": {
       "browser": true

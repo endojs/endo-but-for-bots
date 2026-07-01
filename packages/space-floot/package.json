@@ -2,7 +2,7 @@
   "name": "@endo/space-floot",
   "version": "0.1.0",
   "private": true,
-  "description": "Floot voice-assistant space for Endo Chat — streaming LLM sessions with optional mic + spoken replies",
+  "description": "Floot voice-assistant space for Endo Chat \u2014 streaming LLM sessions with optional mic + spoken replies",
   "keywords": [
     "endo",
     "floot",
@@ -40,7 +40,8 @@
   },
   "eslintConfig": {
     "extends": [
-      "plugin:@endo/internal"
+      "plugin:@endo/internal",
+      "plugin:@endo/prefer-makeexo"
     ],
     "env": {
       "browser": true

@@ -2,7 +2,7 @@
   "name": "@endo/space-channel",
   "version": "0.1.0",
   "private": true,
-  "description": "Multiuser channel space family for Endo Chat — the channel, forum, outliner, and microblog views plus their shared channel/react/edit substrate",
+  "description": "Multiuser channel space family for Endo Chat \u2014 the channel, forum, outliner, and microblog views plus their shared channel/react/edit substrate",
   "keywords": [
     "endo",
     "chat",
@@ -64,7 +64,8 @@
   },
   "eslintConfig": {
     "extends": [
-      "plugin:@endo/internal"
+      "plugin:@endo/internal",
+      "plugin:@endo/prefer-makeexo"
     ],
     "env": {
       "browser": true
