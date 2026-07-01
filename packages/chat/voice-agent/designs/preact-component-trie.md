@@ -200,10 +200,10 @@ Implications that change the phases below:
   an id-less inline chat component is broken out into a project object on first edit.
   Proven by `test:component-select` 10/10 + `test:alt-fork` 5/5, live under
   `FIELD_LOCKDOWN=1`. What IS still open here:
-  - **most app chrome is not registry-backed** — selection only targets elements that
-    carry a component identity (in-chat components, forks, Studio entries); the rest of
-    the shell isn't a mounted component-project yet, so it isn't alt-selectable. That
-    decomposition (the full mounted trie) is its own future workstream.
+  - ~~most app chrome is not registry-backed~~ **CHROME DECOMPOSITION BEGUN (2026-07-01,
+    increment 1)** — see "App chrome as registry-backed components" below. Two shell
+    pieces converted (`chrome-msg-toolbar`, `chrome-welcome`); the rest of the shell is
+    still hardcoded/island-only — convert piece by piece with the recipe below.
   - ~~forks use the one-shot `/forks/edit`~~ **DONE (2026-07-01)**: forks now get the
     same conversational agent loop via `/forks/edit-chat` (owner-gated; toolbox =
     `readForkSource` + `editFork`, its entire authority); Alt-click ✎ on a live fork
@@ -217,6 +217,87 @@ Implications that change the phases below:
 - **Phase 5 — distribution trust.** The "valid for distribution" capability as a
   social-collateral act; admin review gate for end-user distribution;
   exfiltration-proof verification of a confined container.
+
+## App chrome as registry-backed components (increment 1 — SHIPPED 2026-07-01)
+
+"The app feels like yours, edit anything" used to stop at the shell: alt-click only
+targeted elements that already carried a component identity. Increment 1 makes the
+monolithic chrome itself decomposable: a chrome piece becomes a **seeded `chrome-…`
+project-object** in component-git, rendered through the **existing confined no-iframe
+path** (the fork pipeline: `(endowments, props) => vnode`, SES compartment under
+`FIELD_LOCKDOWN`, `renderConfined`) — so it gets versions/revert, a backlog, alt-click
+→ edit chat, and the render-check gate, all for free. Proven end-to-end by
+`chrome-components.staging.test.cjs` (`yarn test:chrome`, 36/36).
+
+**Converted so far:**
+- `chrome-msg-toolbar` — the per-message action strip (🔗 clip + 📋 copy). Mounts once
+  per message; perf is a non-issue because the source is **compiled once per version**
+  (one Compartment, cached in `islands.js renderChrome`) and each mount is a plain
+  preact render — measured 0.11 ms/mount (first mount incl. compile 0.4 ms).
+- `chrome-welcome` — the empty-chat landing panel (tagline + starter-suggestion chips
+  that fill the composer).
+
+**The architecture (each part is load-bearing):**
+- `chrome-components.mjs` — the seed registry. Seeds commit on first boot only; user
+  edits survive restarts. Seeding also `componentBacklog.ensure`s (implicit endowment).
+- `GET /chrome/components` — HEAD sources for every chrome id (public-safe render text,
+  no cap, `no-store`). The client fetches once per load + after an edit/revert.
+- **Authority model:** a chrome component is a pure render propagator. The HOST keeps
+  every authority-bearing move (selection/DOM reads, clipboard, `/clip/create`) and
+  passes only the affordance callbacks it may fire (`onClip`/`onCopy`/`onSuggest`) as
+  props — the props ARE the ocap boundary.
+- **Edit lane:** `/components/edit` + `/components/edit-chat` recognize `chrome-` ids →
+  `editChromeSource` (FORK_EDIT_SYS persona; `body.source` = exact-source tooling lane).
+  **Render-check gate:** the rewritten source must pass `renderCheck(kind:'fork')`
+  BEFORE commit — a broken edit is refused, the previous version stays live.
+- **Live apply:** after an edit-chat edit or a Studio revert of a `chrome-` id, the
+  client re-fetches HEAD + repaints (`reloadChromeComps` → `renderTx` + welcome mount).
+  No vite rebuild, no page reload (unlike islands).
+- **Fallback floor:** `renderChrome` returns false on compile OR mount-time failure →
+  the caller paints the ORIGINAL hardcoded DOM (never a dead toolbar), and the failure
+  auto-files onto the component's own backlog (`__fieldReportError` → `/error/flag` →
+  `componentBacklog`).
+- Chrome components appear in the Component Studio ("App chrome" section: edit +
+  version history + revert).
+
+**THE TRUSTED-PATH DENYLIST (dan's hard boundary — never regress).** The
+consent/permission surfaces are NOT editable chrome: the scope-consent sheet, the
+Shares panel (power grant/revoke + auto-confirm rules), the powers banner, and
+proposal Confirm/Reject cards. Enforced by an **explicit denylist mechanism**, not
+omission: they carry `data-trusted-path`, and
+1. `componentSelect` (app.js) refuses anything inside `[data-trusted-path]` with a
+   distinct dashed **"🔒 trusted path"** indicator — no chip, no edit chat, ever;
+2. `tagComponent` (islands.js) refuses to give any element inside a trusted container
+   a component identity at all (so the identity can't even exist to be selected);
+3. the staging test asserts the consent sheet can never acquire a component identity
+   and that alt-click on it and on the Shares panel yields the 🔒 refusal.
+Residual (flagged, deliberate): `island-shares-panel` remains editable via the
+root-only Studio path (a deliberate operator act on source, not an in-situ alt-click);
+its rendered mount can no longer be tagged or selected.
+
+**Recipe — converting the NEXT chrome piece (checklist for future workers):**
+1. Pick a piece whose authority-bearing behavior can stay host-side. Write its render
+   as a `(endowments, props) => vnode` seed in `chrome-components.mjs` (stable id
+   `chrome-<piece>`; keep load-bearing class names, e.g. `.msg-clip`). Callbacks come
+   in via props; the seed must pass `renderCheck(kind:'fork')`.
+2. In app.js, replace the hardcoded render with a `mountChrome('chrome-<piece>', host,
+   props)` call **behind `chromeReady`**, keeping the original DOM builder as the
+   fallback branch (`if (!mountChrome(...)) legacy()`); repaint the piece inside
+   `reloadChromeComps` if it lives outside `renderTx`.
+3. Do NOT convert anything on the trusted-path denylist; if the piece renders
+   authority decisions, mark it `data-trusted-path` instead.
+4. Extend `chrome-components.staging.test.cjs`: renders confined + tagged, alt-click
+   selects → edit chat addresses the id, a broken edit is refused, live apply, the
+   fallback paints the legacy DOM + backlog auto-file.
+5. Run the battery: `test:chrome`, `test:component-select`, `test:alt-fork`,
+   `test:component-error-loop`, `test:component-backlog`, `test:fork-edit-chat`,
+   `test:theme`, `test:confinement`, `test:lockdown` (+ any island test for the piece).
+
+Still open for chrome (increment 2+): non-root users get their own VARIANT (fork
+model: owner edits root, others fork — today chrome editing is root-only and one
+shared root variant); converting larger shell regions (header, composer, sidebar)
+whose islands currently need a rebuild; grain-backed chrome (wire chrome pieces to
+cells instead of imperative re-mounts).
 
 ## Open sequencing decisions (for dan)
 
