@@ -32,34 +32,34 @@ const BUFFER_BYTE_LENGTH = 24;
 // reading `Ctor.BYTES_PER_ELEMENT`, which is typed `unknown`) so the arithmetic
 // and boundary comparisons below operate on a known `number`.
 /**
- * @type {Array<{name: string, Ctor: Function, bpe: number}>}
+ * @type {Array<{name: string, Ctor: Function, bytesPerElement: number}>}
  */
 const flavors = [
-  { name: 'Int8Array', Ctor: Int8Array, bpe: 1 },
-  { name: 'Int16Array', Ctor: Int16Array, bpe: 2 },
-  { name: 'Int32Array', Ctor: Int32Array, bpe: 4 },
-  { name: 'Uint8Array', Ctor: Uint8Array, bpe: 1 },
-  { name: 'Uint8ClampedArray', Ctor: Uint8ClampedArray, bpe: 1 },
-  { name: 'Uint16Array', Ctor: Uint16Array, bpe: 2 },
-  { name: 'Uint32Array', Ctor: Uint32Array, bpe: 4 },
-  { name: 'Float32Array', Ctor: Float32Array, bpe: 4 },
-  { name: 'Float64Array', Ctor: Float64Array, bpe: 8 },
-  { name: 'BigInt64Array', Ctor: BigInt64Array, bpe: 8 },
-  { name: 'BigUint64Array', Ctor: BigUint64Array, bpe: 8 },
+  { name: 'Int8Array', Ctor: Int8Array, bytesPerElement: 1 },
+  { name: 'Int16Array', Ctor: Int16Array, bytesPerElement: 2 },
+  { name: 'Int32Array', Ctor: Int32Array, bytesPerElement: 4 },
+  { name: 'Uint8Array', Ctor: Uint8Array, bytesPerElement: 1 },
+  { name: 'Uint8ClampedArray', Ctor: Uint8ClampedArray, bytesPerElement: 1 },
+  { name: 'Uint16Array', Ctor: Uint16Array, bytesPerElement: 2 },
+  { name: 'Uint32Array', Ctor: Uint32Array, bytesPerElement: 4 },
+  { name: 'Float32Array', Ctor: Float32Array, bytesPerElement: 4 },
+  { name: 'Float64Array', Ctor: Float64Array, bytesPerElement: 8 },
+  { name: 'BigInt64Array', Ctor: BigInt64Array, bytesPerElement: 8 },
+  { name: 'BigUint64Array', Ctor: BigUint64Array, bytesPerElement: 8 },
 ];
 
-for (const { name, Ctor, bpe } of flavors) {
+for (const { name, Ctor, bytesPerElement } of flavors) {
   const tName = label => `${name}: ${label}`;
   // Guard against the literal table drifting from the runtime constant.
-  if (Ctor.BYTES_PER_ELEMENT !== bpe) {
-    throw Error(`bpe table mismatch for ${name}`);
+  if (Ctor.BYTES_PER_ELEMENT !== bytesPerElement) {
+    throw Error(`bytesPerElement table mismatch for ${name}`);
   }
 
   // Element counts derived from the fixed buffer size for this flavor.
   const byteLength = BUFFER_BYTE_LENGTH;
-  const maxLength = byteLength / bpe; // whole number: 24 is a multiple of bpe.
+  const maxLength = byteLength / bytesPerElement; // whole number: 24 is a multiple of bytesPerElement.
   // An aligned, nonzero, mid-buffer offset (one element in) that leaves room.
-  const midByteOffset = bpe;
+  const midByteOffset = bytesPerElement;
   const midInferredLength = maxLength - 1; // length omitted -> infers to end.
   const midExplicitLength = 1; // one element at the mid offset; always fits.
 
@@ -132,7 +132,7 @@ for (const { name, Ctor, bpe } of flavors) {
     const view = new Ctor(iab, midByteOffset, midExplicitLength);
     assertWrapperInvariants(t, view, iab);
     t.is(view.byteOffset, midByteOffset);
-    t.is(view.byteLength, midExplicitLength * bpe);
+    t.is(view.byteLength, midExplicitLength * bytesPerElement);
     t.is(view.length, midExplicitLength);
   });
 
@@ -153,12 +153,12 @@ for (const { name, Ctor, bpe } of flavors) {
   // -------------------------------------------------------------------------
 
   // Misalignment is only possible when an element spans more than one byte.
-  if (bpe > 1) {
+  if (bytesPerElement > 1) {
     test(
       tName('byteOffset not a multiple of BYTES_PER_ELEMENT -> RangeError'),
       t => {
         const iab = freshIab();
-        // 1 is in range (< byteLength) but not a multiple of bpe (bpe > 1),
+        // 1 is in range (< byteLength) but not a multiple of bytesPerElement (bytesPerElement > 1),
         // so the only defect is misalignment.
         t.throws(() => new Ctor(iab, 1), { instanceOf: RangeError });
       },
@@ -167,7 +167,7 @@ for (const { name, Ctor, bpe } of flavors) {
 
   test(tName('byteOffset past the end -> RangeError'), t => {
     const iab = freshIab();
-    t.throws(() => new Ctor(iab, byteLength + bpe), {
+    t.throws(() => new Ctor(iab, byteLength + bytesPerElement), {
       instanceOf: RangeError,
     });
   });
@@ -179,7 +179,7 @@ for (const { name, Ctor, bpe } of flavors) {
     t => {
       const iab = freshIab();
       // byteOffset 0 is valid; length maxLength + 1 requires one element more
-      // than the buffer holds, so byteOffset + length*bpe > byteLength.
+      // than the buffer holds, so byteOffset + length*bytesPerElement > byteLength.
       t.throws(() => new Ctor(iab, 0, maxLength + 1), {
         instanceOf: RangeError,
       });
