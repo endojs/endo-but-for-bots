@@ -14,6 +14,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
+import { STARTER_RING } from './system-map.mjs';
+
 const id = (p = 'mem') => `${p}-${crypto.randomBytes(6).toString('hex')}`;
 const hash = s => crypto.createHash('sha256').update(String(s)).digest('hex').slice(0, 32);
 
@@ -68,7 +70,7 @@ export const makeInvitePolicies = ({ file, mintNamespaceCap, fundAllowance } = {
       if (!f || f.ok !== true || typeof f.deposit !== 'function') return { ok: false, error: (f && f.error) || 'membership allowance unavailable — the inviter cannot cover it' };
       deposit = f.deposit;
     }
-    const ring = policy.ring || ['reference', 'research', 'images', 'contact', 'home']; // = STARTER_RING; least-privilege
+    const ring = policy.ring || STARTER_RING; // least-privilege (single source of truth: system-map.mjs)
     const minted = mintNamespaceCap({ powers: ring, label: `member-${hash(who).slice(0, 8)}` });
     if (deposit) { try { deposit(minted.swiss); } catch { /* wallet credit is the injector's job; a throw here must not lose the member */ } }
     d.members[memberKey] = { cap: minted.swiss, ring: minted.powers, policyId, ...(deposit ? { allowanceUusd: allowance } : {}), joinedAt: new Date().toISOString() };
@@ -77,5 +79,6 @@ export const makeInvitePolicies = ({ file, mintNamespaceCap, fundAllowance } = {
   };
   const memberCount = policyId => Object.keys(read().members).filter(k => k.startsWith(`${policyId}:`)).length;
 
-  return { createPolicy, listPolicies, getPolicy, removePolicy, redeem, memberCount };
+  return harden({ createPolicy, listPolicies, getPolicy, removePolicy, redeem, memberCount });
 };
+harden(makeInvitePolicies);
