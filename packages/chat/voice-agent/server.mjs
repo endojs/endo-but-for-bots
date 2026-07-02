@@ -528,7 +528,33 @@ const chatPurses = new Map(); // `${cap}:${sid}` → purse
 // Durable balances: a purse's mutations persist (hashed key → {balance,granted}); on boot a chat's purse
 // rehydrates from disk instead of resetting to the default allowance. (Increment 6 swaps this for agora's
 // journaled bank behind the same shape.)
-const purseStore = makePurseStore({ file: `${VOICE_STATE_DIR}/purses.json` });
+// ── INT-5: guard purses.json (a MONEY store) BEFORE the purse-store loads it. purse-store's own loader
+//    bare-catches a parse error into `{}` — a silent wipe of EVERY balance, then persisted on the next debit.
+//    Here we, before that loader runs: (a) refuse to start when the file exists-but-won't-parse and there's no
+//    usable `.bak` (a loud STORE_CORRUPT, never a silent reset); (b) restore from the last-known-good `.bak`
+//    when the live file is corrupt, OR has been reset to empty `{}` while the `.bak` still holds balances (i.e.
+//    a prior wipe already happened); (c) refresh the `.bak` after a clean, non-empty load, and keep it fresh on
+//    a 60s unref'd interval, so recovery loses at most a minute of debits rather than the whole ledger.
+//    (Residual: purse-store's 800ms write debounce can still lose <1s of debits on an uncatchable SIGKILL/OOM;
+//    closing that fully means editing purse-store.mjs, which another worker owns — flagged as a follow-up.) ──
+const PURSES_FILE = `${VOICE_STATE_DIR}/purses.json`;
+const nonEmptyObj = o => o && typeof o === 'object' && Object.keys(o).length > 0;
+const guardPursesFile = () => {
+  let liveRaw;
+  try { liveRaw = fs.readFileSync(PURSES_FILE, 'utf8'); } catch (e) { if (e && e.code === 'ENOENT') return; throw e; } // absent → fresh box, nothing to guard
+  let live; try { live = JSON.parse(liveRaw); } catch { live = undefined; }
+  let bak = null; try { bak = JSON.parse(fs.readFileSync(`${PURSES_FILE}.bak`, 'utf8')); } catch { bak = null; }
+  if (live === undefined) { // corrupt live file
+    if (nonEmptyObj(bak)) { fs.copyFileSync(`${PURSES_FILE}.bak`, PURSES_FILE); log('INT-5: purses.json was corrupt — restored from .bak'); return; }
+    const err = new Error("refusing to start: purses.json exists but won't parse and no usable .bak (money store — investigate before restarting)"); err.code = 'STORE_CORRUPT'; throw err;
+  }
+  if (!nonEmptyObj(live) && nonEmptyObj(bak)) { fs.copyFileSync(`${PURSES_FILE}.bak`, PURSES_FILE); log('INT-5: purses.json was empty but .bak held balances — restored from .bak'); return; } // a prior silent wipe
+  if (nonEmptyObj(live)) { try { fs.copyFileSync(PURSES_FILE, `${PURSES_FILE}.bak`); } catch { /* best-effort */ } } // refresh last-known-good
+};
+try { guardPursesFile(); } catch (e) { if (e && e.code === 'STORE_CORRUPT') { log('FATAL', e.message); process.exit(1); } throw e; }
+const purseStore = makePurseStore({ file: PURSES_FILE });
+// keep the .bak recent (validated non-empty only) so a later corruption falls back to near-current balances.
+setInterval(() => { try { const d = JSON.parse(fs.readFileSync(PURSES_FILE, 'utf8')); if (nonEmptyObj(d)) fs.copyFileSync(PURSES_FILE, `${PURSES_FILE}.bak`); } catch { /* skip — never overwrite a good .bak with a torn read */ } }, 60_000).unref?.();
 // Bluesky-claim namespaces are ZERO-UNTIL-CLAIM (dan): every chat under such a namespace shares ONE wallet seeded
 // at ZERO (not the per-chat default allowance); only an eligible claim funds it. Set once bluesky-claim exists.
 let blueskyIsNamespace = () => false;
