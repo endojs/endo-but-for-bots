@@ -1278,6 +1278,14 @@ const processAttachments = async (list, homeSubkey = null) => {
 const handler = async (req, res) => {
   try {
     const u = new URL(req.url, 'http://x');
+    // REL-2 test seams (only exist when REL_TEST_ROUTES=1 — never in production). They exercise the two
+    // process-killing paths the fix must survive: a route that throws AFTER the response ended (the outer
+    // catch must NOT double-end), and a stray promise rejection (the global handler must log + keep serving).
+    if (process.env.REL_TEST_ROUTES === '1') {
+      if (u.pathname === '/rel-test/throw-after-end') { json(res, 200, { ok: true }); throw new Error('REL-2 injected throw AFTER res ended'); }
+      if (u.pathname === '/rel-test/unhandled-rejection') { Promise.reject(new Error('REL-2 injected stray rejection')); return json(res, 200, { ok: true }); }
+      if (u.pathname === '/rel-test/ping') return json(res, 200, { alive: true });
+    }
     if (u.pathname === '/' || u.pathname === '/index.html') return serveShell(res, 'index.html', 'text/html; charset=utf-8');
 
     // ── Sign in with Bluesky → claim credits ─────────────────────────────────────────────────────────────────
@@ -1640,6 +1648,16 @@ const handler = async (req, res) => {
       const t = String(text || '').trim();
       const node = nodeFor(cap);
       if (!node) return json(res, 403, { error: 'no capability — open this app with your #cap= link to grant the agent powers' });
+      // REL-1: the WHOLE turn body runs under one try/catch/finally so a throw at ANY in-window call
+      // site (runNode.toolbox()/purseFor/getSubscription/byoStore.forTurn/the AGENT_RUNNER race) becomes
+      // a TERMINAL runResults state + a friendly retryable JSON reply — never an escaped rejection that
+      // (a) reaches the plaintext outer catch (client JSON-parse dead-end, no assistant turn) and
+      // (b) leaves runResults[sid]='running' + runs populated so /chat/result reports running forever
+      // (the silent client hang). sid/ac/deadlineT are hoisted so the catch/finally can clean up.
+      let sid = String(sessionId || 'anon').slice(0, 64);
+      let ac = null;
+      let deadlineT = null;
+      try {
       // Entrypoint agent: 'field-agent' (Agent C) runs as the cap itself. Any other value names a
       // SPECIALIST to run AS — the turn executes with the specialist's CONFINED ring + persona (not
       // root). Only a cap that OWNS specialists (root, or one holding `specialists`) may act as one.
@@ -1662,7 +1680,7 @@ const handler = async (req, res) => {
       const chatHomeSubkey = chatProject ? chatProject.homeSubkey : (runNode.isRoot ? 'root' : null);
       const { agentAttachments, savedRefs } = await processAttachments(attachments, chatHomeSubkey);
       if (!t && !agentAttachments.length) return json(res, 400, { error: 'empty' });
-      const sid = sid0;
+      sid = sid0;
       // RESUME a topped-up turn from its saved in-flight transcript (one-shot). Missing (e.g. after a service
       // restart) → null → the runner rebuilds from text+history = a normal full run. So `resume:true` is always
       // safe: it continues the in-flight run when it can, and cleanly re-runs from scratch when it can't.
@@ -1676,7 +1694,7 @@ const handler = async (req, res) => {
         ? `[SYSTEM render feedback — automatic, not typed by the user] Component widget(s) you rendered earlier in this chat FAILED in the user's browser:\n${pendingCompErrs.map(e => `- ${e.name ? `"${e.name}": ` : ''}${e.error}`).join('\n')}\nThe user saw a broken widget. Rebuild it correctly this turn (fix that exact error) or acknowledge the failure — do not claim it works.\n\n`
         : '';
       runs.get(sid)?.abort();
-      const ac = new AbortController(); runs.set(sid, ac);
+      ac = new AbortController(); runs.set(sid, ac);
       const startedAt = Date.now();
       // EVERY turn logs its OUTCOME + DURATION on the way out — so a stall is diagnosable from logs alone:
       // a `turn-done … done … 95000ms … opus` line says the turn FINISHED server-side and was slow enough that
@@ -1688,6 +1706,10 @@ const handler = async (req, res) => {
           ms > PROXY_WINDOW_MS ? '| ⚠️ exceeded proxy window — inline response may not reach the client (client re-attaches via /chat/result)' : '', extra); };
       // mark this session as RUNNING server-side so a reopened tab can re-attach (vs. losing the run).
       setRunResult(sid, { state: 'running', node: runNode, text: t, startedAt });
+      // REL-1 test seam (only when REL_TEST_CHAT_THROW=1): simulate an in-window throw AFTER the run is
+      // registered (runs.set + runResults='running') to prove the try/catch/finally leaves a terminal
+      // runResults state + no stuck run, and returns retryable JSON — never the plaintext outer catch.
+      if (process.env.REL_TEST_CHAT_THROW === '1') throw new Error('REL-1 injected in-window throw');
       if (!resumeMessages) { resetStepBuffer(sid); traceCells.begin(sid); } // fresh turn → fresh live-trace buffer + a fresh trace-cell turn (a resume keeps building the same trace)
       traceCells.bindOwner(sid, turnOwnerKey); // the trace:<sid> cell now belongs to THIS cap's owner key (first writer)
       // bind the app-state accessor to THIS cap + close over it (the swissnum never enters ctx — cap-hygiene).
@@ -1768,7 +1790,7 @@ const handler = async (req, res) => {
         ] });
       } catch { /* best-effort */ }
       const TURN_DEADLINE_MS = Number(process.env.TURN_DEADLINE_MS) || 360000; // hard per-turn limit → a LEGIBLE timeout, never a silent stall (the crowdsupply hang)
-      let deadlineHit = false; let deadlineT = null;
+      let deadlineHit = false; deadlineT = null;
       let r = await Promise.race([
         AGENT_RUNNER({
         toolbox, manifest, userText: compErrNote + t, history, resumeMessages, attachments: agentAttachments, signal: ac.signal, persona: runPersona, model: byo ? byo.modelId : String(model || 'default'),
@@ -1886,6 +1908,24 @@ const handler = async (req, res) => {
         }
       } catch { /* push is best-effort */ }
       return json(res, 200, donePayload);
+      } catch (e) {
+        // REL-1 TERMINAL error path: an in-window throw lands here (NOT the plaintext outer catch).
+        // Persist a terminal runResults state so /chat/result reports a real outcome (never 'running'
+        // forever), and reply with friendly, retryable, cap-scrubbed JSON the client can parse.
+        log('chat-handler:', sid, '| ERROR |', (e && e.stack) || (e && e.message) || String(e));
+        const friendly = 'Something went wrong while I was working on that — please try again.';
+        try { setRunResult(sid, { state: 'error', text: '', startedAt: Date.now(), doneAt: Date.now(), result: { error: friendly, retryable: true } }); } catch { /* */ }
+        if (!res.writableEnded && !res.headersSent) return json(res, 200, { error: scrubCaps(friendly), retryable: true });
+        return;
+      } finally {
+        // REL-1 / P2-2: cleanup ALWAYS runs — even on a throw — so a failed turn leaves NO stuck run,
+        // NO dangling 6-min deadline timer, and NO orphaned live-trace buffer (the residue that made
+        // /chat/result report 'running' forever). Guarded + idempotent (the success path already ran it).
+        try { if (ac && runs.get(sid) === ac) runs.delete(sid); } catch { /* */ }
+        try { if (deadlineT) clearTimeout(deadlineT); } catch { /* */ }
+        try { stepBuffers.delete(sid); } catch { /* */ }
+        try { interjections.drop(sid); } catch { /* */ }
+      }
     }
 
     // ── MULTI-USER: per-user capabilities (invite-only). /user/init mints a persistent user-cap ONLY for
@@ -3486,7 +3526,20 @@ const handler = async (req, res) => {
     }
 
     res.writeHead(404, SEC); res.end('not found');
-  } catch (e) { if (!res.headersSent) res.writeHead(500, SEC); res.end('error'); log('handler', e.message); }
+  } catch (e) {
+    log('handler', (e && e.stack) || (e && e.message) || String(e));
+    // REL-2: NEVER double-end. If the response was already streamed/ended (an SSE route, or a route
+    // that json()'d and then threw) an unconditional res.end() throws ERR_STREAM_WRITE_AFTER_END
+    // INSIDE this catch = uncaught = process crash = ALL in-memory state (runResults/runs/sessions/
+    // purses) lost = mass simultaneous zero-turn. Only respond when the socket is still open, and
+    // reply with JSON (not the plaintext "error" the client's res.json() choked on).
+    if (!res.writableEnded) {
+      try {
+        if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json', ...SEC });
+        res.end(JSON.stringify({ error: 'internal error', retryable: true }));
+      } catch { /* peer gone / already ended — nothing more to do */ }
+    }
+  }
 };
 
 const main = async () => {
@@ -3568,5 +3621,17 @@ const main = async () => {
 
 // flush durable balances on a clean shutdown (systemd restart sends SIGTERM) so the last debits persist.
 for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { for (const ac of runs.values()) { try { ac.abort(); } catch { /* */ } } try { purseStore.flushNow(); } catch { /* best-effort */ } process.exit(0); });
+
+// REL-2: a stray rejection or an uncaught throw must NOT take the process down. A crash drops ALL
+// in-memory state (runResults / runs / sessions / chatPurses) at once → every open chat gets a
+// simultaneous zero-turn, and any un-flushed purse debits are lost. So: LOG and KEEP SERVING. We also
+// best-effort flush the durable purse balances (the one bit of money state that lives in memory between
+// its 800ms debounce) so an unexpected throw doesn't quietly lose recent debits.
+// TRADE-OFF (called out honestly): keeping the process alive after an uncaughtException means we may be
+// running on after a genuinely corrupt state. That is a deliberate choice here — for THIS service a lost
+// in-memory map (mass zero-turn) is a worse, more visible failure than continuing degraded until the
+// next systemd restart. Every such event is logged loudly for follow-up.
+process.on('unhandledRejection', reason => { try { log('unhandledRejection:', (reason && reason.stack) || (reason && reason.message) || String(reason)); } catch { /* */ } });
+process.on('uncaughtException', err => { try { log('uncaughtException:', (err && err.stack) || (err && err.message) || String(err)); } catch { /* */ } try { purseStore.flushNow(); } catch { /* */ } });
 
 main().catch(e => { log('FATAL', e && e.stack || e); process.exit(1); });
