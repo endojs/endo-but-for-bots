@@ -338,6 +338,11 @@ const chatStorePath = cap => path.join(CHATS_DIR, crypto.createHash('sha256').up
 // notification inbox (the 🔔 bell): the dashboard's durable feed is the shared data
 // endowment; per-cap dismissed-state lives here. An entry "needs attention" by its status.
 const FEED_FILE = `${DASH_STATE_DIR}/feed.json`;
+// INC-2 (per-user isolation): the feed STORE is partitioned per owner — ROOT (user-0 = dan) reads/writes the
+// shared FEED_FILE (byte-identical to today), a non-root owner gets its OWN feed-<ownerKey>.json in the same
+// dir, keyed by the SAME non-secret ownerKey the ARCH-2 feed:<owner> cell + traceOwnerKeyOf gate on (so the
+// store key lines up with the cell). The ownerKey is already a hash — no swissnum in the path.
+const feedFileFor = ownerKey => (!ownerKey || ownerKey === 'root') ? FEED_FILE : path.join(DASH_STATE_DIR, `feed-${String(ownerKey).replace(/[^a-z0-9]/gi, '_').slice(0, 40)}.json`);
 const NOTIF_DIR = `${VOICE_STATE_DIR}/notif-triage`;
 const notifStorePath = cap => path.join(NOTIF_DIR, crypto.createHash('sha256').update(String(cap || '')).digest('hex').slice(0, 40) + '.json');
 // review/confirm/decision are the operator-action notification kinds ("needs review",
@@ -2867,14 +2872,15 @@ const handler = async (req, res) => {
     }
     if (req.method === 'POST' && u.pathname === '/feed/load') {
       const { cap } = await jsonBody(req);
-      if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
-      // The feed (FEED_FILE) is dan's OWN dashboard inbox — agent proposals, "needs attention" bodies,
-      // notification bell contents. It is a single global stream (only the dismissed-state is per-cap), so
-      // any invited guest's scoped cap used to read dan's entire feed. Content is ROOT-ONLY; a non-root cap
-      // gets an EMPTY inbox (the 🔔 bell renders nothing) rather than a leak. (Cap-scoped listNotifications
-      // remains available to a chat dan explicitly granted the `feed` power, via its confined toolbox.)
-      if (!nodeFor(cap)?.isRoot) return json(res, 200, { items: [], attentionCount: 0 });
-      let entries = []; try { entries = (JSON.parse(await fs.promises.readFile(FEED_FILE, 'utf8')).entries) || []; } catch {}
+      const feedNode = nodeFor(cap);
+      if (!feedNode) return json(res, 403, { error: 'no capability' });
+      // INC-2: the feed is PER-OWNER. ROOT (dan) reads the shared FEED_FILE — agent proposals, "needs
+      // attention" bodies, bell contents — EXACTLY as before. A non-root cap reads ITS OWN feed-<ownerKey>.json
+      // (empty until its own agents post there), NEVER dan's stream: a tenant sees only its own inbox, and dan's
+      // is never exposed to a guest. (Supersedes the old "root-only content, else empty" gate — same safety, plus
+      // tenants now get a real, isolated inbox.) Dismissed-state stays per-cap (notifStorePath).
+      const feedFile = feedFileFor(traceOwnerKeyOf(cap));
+      let entries = []; try { entries = (JSON.parse(await fs.promises.readFile(feedFile, 'utf8')).entries) || []; } catch {}
       let dismissed = []; try { dismissed = (JSON.parse(await fs.promises.readFile(notifStorePath(cap), 'utf8')).dismissed) || []; } catch {}
       const ds = new Set(dismissed);
       const items = entries.slice(0, 80).map(e => ({
@@ -2888,8 +2894,9 @@ const handler = async (req, res) => {
     if (req.method === 'POST' && u.pathname === '/feed/item') {
       const { cap, id } = await jsonBody(req);
       if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
-      if (!nodeFor(cap)?.isRoot) return json(res, 200, { ok: false }); // dan's feed content is root-only (see /feed/load)
-      let entries = []; try { entries = (JSON.parse(await fs.promises.readFile(FEED_FILE, 'utf8')).entries) || []; } catch {}
+      // INC-2: read the item from the PRESENTING cap's OWN feed (root = FEED_FILE; a tenant = its own file) —
+      // a tenant can only expand items in its own inbox, never a foreign owner's (dan's stays dan's).
+      let entries = []; try { entries = (JSON.parse(await fs.promises.readFile(feedFileFor(traceOwnerKeyOf(cap)), 'utf8')).entries) || []; } catch {}
       const e = entries.find(x => x && x.id === String(id || ''));
       if (!e) return json(res, 200, { ok: false });
       return json(res, 200, { ok: true, item: { id: e.id, title: e.title || '', body: String(e.body || ''), status: e.status || '', note: e.note || '', agent: e.agent || '', date: e.date, chatId: e.chatId || null, links: (e.links || []).map(feedLinkHref) } });

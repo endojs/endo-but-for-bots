@@ -306,14 +306,33 @@ const fetchBytes = async (u, { maxBytes = 32 * 1024 * 1024, timeoutMs = 30000 } 
   return { ok: true, bytes: new Uint8Array(res.buffer), finalUrl: res.url || u };
 };
 
-// ── post to the daily dashboard feed (shell out to the proven feed.mjs CLI) ───
-const postFeed = ({ title, body = '', status = '🗣️ from the voice agent', note = '', links = [], agent = '' }) =>
-  new Promise(res => {
+// ── INC-2 (per-user isolation): the notification feed is partitioned per user. ROOT (user-0 = dan) keeps the
+// SHARED dashboard FEED_FILE, written through the proven feed.mjs CLI — BYTE-IDENTICAL to today. A non-root
+// owner (an invited user granted the personal `feed` power) gets its OWN feed file, keyed by the same
+// non-secret ownerKey the ARCH-2 feed:<owner> cell + /feed/load gate on, so its notifications never land in —
+// or leak from — dan's inbox. The swissnum never appears in the path (ownerKey is already a hash).
+const FEED_DIR_C = path.dirname(FEED_FILE);
+const feedFileFor = owner => (!owner || owner === 'root') ? FEED_FILE : path.join(FEED_DIR_C, `feed-${String(owner).replace(/[^a-z0-9]/gi, '_').slice(0, 40)}.json`);
+// direct per-owner append (the non-root path; root uses the CLI below). Matches the feed.json schema the
+// dashboard + /feed/load read. Bounded + torn-write-safe.
+const appendOwnerFeed = (owner, entry) => { try {
+  const file = feedFileFor(owner);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  let feed = { entries: [] }; try { feed = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* fresh */ }
+  feed.entries = [{ id: `fa-${crypto.randomBytes(6).toString('hex')}`, date: new Date().toISOString(), ...entry }, ...(feed.entries || [])].slice(0, 400);
+  writeJsonAtomic(file, feed, { pretty: true });
+  return { ok: true };
+} catch (e) { return { ok: false, error: (e && e.message) || String(e) }; } };
+// post to the daily feed. owner==='root' → the proven feed.mjs CLI (unchanged); a tenant → its own file.
+const postFeed = ({ title, body = '', status = '🗣️ from the voice agent', note = '', links = [], agent = '', owner = 'root', kind } = {}) => {
+  if (owner && owner !== 'root') return Promise.resolve(appendOwnerFeed(owner, { ...(kind ? { kind } : {}), title: String(title || 'note'), body: String(body), status, note: String(note || ''), agent: String(agent || ''), links: (Array.isArray(links) ? links : []).filter(Boolean).map(String) }));
+  return new Promise(res => {
     const a = ['post', '--title', String(title || 'note'), '--status', status, '--note', note, '--body', String(body)];
     if (agent) a.push('--agent', String(agent));
     for (const l of links) if (l) a.push('--link', String(l));
     execFile('node', [FEED_MJS, ...a], { timeout: 30000 }, (err, so, se) => res({ ok: !err, error: err ? (se || err.message) : '' }));
   });
+};
 
 // ── headless browser worker (out-of-SES-realm; see browser-run.cjs). Returns parsed JSON.
 // Default is the IN-REPO worker next to this module (portable); BROWSER_RUN overrides.
@@ -398,11 +417,13 @@ const makeAffordances = ({ outDir }) => {
       },
       abort: async () => { try { await fetch(`${COMFY_URL}/interrupt`, { method: 'POST' }); } catch {} },
     }),
+    // INC-2: the toolbox verbs pass the acting cap's owner (ctx.ownerKey); root/user-0 = 'root' → dan's shared
+    // feed (unchanged), a tenant → its OWN per-owner feed file (post/notify write it, recent reads it).
     feed: Far('Feed', {
-      help: () => 'dan\'s notification feed (the 🔔 inbox). post({title,body,links}) = routine; notify({title,body,agent}) = a "needs your attention" action item; recent() reads the inbox.',
-      post: async ({ title, body, links } = {}) => postFeed({ title, body, links: Array.isArray(links) ? links : [] }),
-      notify: async ({ title, body, agent, link } = {}) => postFeed({ title, body, status: '🔔 needs your attention', agent: String(agent || ''), links: link ? [String(link)] : [] }),
-      recent: async (n = 40) => { try { const j = JSON.parse(fs.readFileSync(FEED_FILE, 'utf8')); return (j.entries || []).slice(0, n).map(e => harden({ id: e.id, date: e.date, title: e.title, status: e.status || '', agent: e.agent || '' })); } catch { return []; } },
+      help: () => 'Your notification feed (the 🔔 inbox). post({title,body,links}) = routine; notify({title,body,agent}) = a "needs your attention" action item; recent() reads the inbox.',
+      post: async ({ title, body, links } = {}, owner = 'root') => postFeed({ title, body, links: Array.isArray(links) ? links : [], owner }),
+      notify: async ({ title, body, agent, link } = {}, owner = 'root') => postFeed({ title, body, status: '🔔 needs your attention', kind: 'notification', agent: String(agent || ''), links: link ? [String(link)] : [], owner }),
+      recent: async (n = 40, owner = 'root') => { try { const j = JSON.parse(fs.readFileSync(feedFileFor(owner), 'utf8')); return (j.entries || []).slice(0, n).map(e => harden({ id: e.id, date: e.date, title: e.title, status: e.status || '', agent: e.agent || '' })); } catch { return []; } },
     }),
     phone: Far('Phone', {
       help: () => 'Push a notification to dan\'s phone (ntfy). push({title, message, click}).',
@@ -1431,11 +1452,11 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     generateImage: { reversible: true, args: { prompt: 'string — what to draw' }, description: 'Generate an image on the GPU. Returns the saved path.',
       run: async ({ prompt }) => aff.images.generate({ prompt }), abort: () => aff.images.abort() },
     pushFeed: { reversible: false, args: { title: 'string', body: 'string' }, description: 'Post a routine item to your daily feed.',
-      run: async ({ title, body }, agent, ctx) => aff.feed.post({ title, body, links: chatLink(ctx) ? [chatLink(ctx)] : [] }) },
-    notify: { reversible: false, args: { title: 'string', body: 'string' }, description: 'Raise a NOTIFICATION / action item to dan\'s "Needs your attention" inbox (the 🔔 bell). Use for things he should see or act on.',
-      run: async ({ title, body }, agent, ctx) => aff.feed.notify({ title, body, agent, link: chatLink(ctx) }) },
-    listNotifications: { reversible: false, args: {}, description: 'Read recent items in dan\'s notification inbox (what is in the 🔔 feed).',
-      run: async () => ({ ok: true, items: await aff.feed.recent() }) },
+      run: async ({ title, body }, agent, ctx = {}) => aff.feed.post({ title, body, links: chatLink(ctx) ? [chatLink(ctx)] : [] }, ctx.ownerKey) }, // INC-2: writes THIS user's feed
+    notify: { reversible: false, args: { title: 'string', body: 'string' }, description: 'Raise a NOTIFICATION / action item to your "Needs your attention" inbox (the 🔔 bell). Use for things you should see or act on.',
+      run: async ({ title, body }, agent, ctx = {}) => aff.feed.notify({ title, body, agent, link: chatLink(ctx) }, ctx.ownerKey) }, // INC-2: writes THIS user's feed
+    listNotifications: { reversible: false, args: {}, description: 'Read recent items in your notification inbox (what is in the 🔔 feed).',
+      run: async (a, agent, ctx = {}) => ({ ok: true, items: await aff.feed.recent(40, ctx.ownerKey) }) }, // INC-2: reads THIS user's feed
     askOperator: { reversible: false, args: { title: 'string — short title of the decision you need', questions: 'array — [{q, type, options?, key?}]; type ∈ text|choice|multiselect|bool|number|approve-reject|secret; options[] for choice/multiselect; for a `secret` question add key:"<name>" (e.g. "brave-api-key") to store it in the named key vault tools read from' },
       description: 'Raise a STRUCTURED, TYPED question for dan to answer INLINE (radios / checkboxes / yes-no / number / approve-reject) rather than a vague "would you like me to…". Use when you genuinely need a decision to proceed. He answers right in the app and you continue. PREFER this over ending your reply with an open question.',
       run: async ({ title, questions }, agent, ctx) => { const ask = addAsk({ title: String(title || ''), questions: Array.isArray(questions) ? questions : [], origin: { kind: 'chat', chatId: (ctx && ctx.chatId) || '' }, requestedBy: agent || 'field-agent' }); return harden({ asked: true, askId: ask.id, title: ask.title, questions: ask.questions.length, note: 'Raised a typed question for dan; he answers it inline and you continue.' }); } },
