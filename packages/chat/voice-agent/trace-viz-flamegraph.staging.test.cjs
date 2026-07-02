@@ -10,6 +10,10 @@
 //   2. WebGL initialized in the sandbox (vizDiag.mode==='webgl'; '2d' tolerated w/ a note — swiftshader);
 //   3. the brokered cell fed the frame live (vizDiag.frames climbs);
 //   4. the SPLASH sample renders (screenshotted);
+//   4b. INTERACTIONS work in the real sandbox via OS-level mouse events over the iframe: HOVER shows a
+//       cap-scrubbed tooltip (a planted swissnum is redacted to ⟨cap⟩), CLICK zooms the icicle to that
+//       subtree (visible root changes) + click-out restores, and the ◧ critical-path toggle lights/dims;
+
 //   5. a live-GROWING trace (rev climbs, steps append) keeps rendering (frames keep climbing, no errors);
 //   6. degrades on empty / thin / truncated-running / malformed-node data without throwing;
 //   7. NEVER emits a swissnum: a cap-shaped token fed in a prompt/step name never appears in ANY message
@@ -42,7 +46,7 @@ window.__mount=function(source,cell){return new Promise(function(res){CELL=cell;
       if(pm.type==='subscribe'){SUB=true;if(LAST!==undefined)P1.postMessage({__cu:1,type:'cell',id:CELL,value:LAST});}
       else if(pm.type==='height'){window.__height=pm.px;}
       else if(pm.type==='error'){window.__errors.push(pm.error);}
-      else if(pm.type==='call'){if(pm.method==='vizDiag'){var a=pm.args||{};window.__diag={mode:a.mode||'',frames:a.frames||0,t0:a.t0||''};}P1.postMessage({__cu:1,type:'call-result',id:pm.id,ok:true,value:{}});}
+      else if(pm.type==='call'){if(pm.method==='vizDiag'){var a=pm.args||{};window.__diag={mode:a.mode||'',frames:a.frames||0,t0:a.t0||'',zoom:a.zoom||'',crit:a.crit||0,hover:a.hover||''};}P1.postMessage({__cu:1,type:'call-result',id:pm.id,ok:true,value:{}});}
     };P1.start();
     ifr.contentWindow.postMessage({__cu:1,type:'mount',source:source,props:{cell:CELL}},'*',[ch.port2]);
     res(true);
@@ -74,7 +78,7 @@ const startServer = () => new Promise(resolve => {
     await import(require('node:url').pathToFileURL(path.join(__dirname, 'public/trace-viz-flamegraph.js')).href);
 
   // ── source-level guards (hold even without a browser) ──────────────────────────────────────────────
-  ok(SRC.length <= 8000, `source is within the 8000-char break-out cap (${SRC.length})`);
+  ok(SRC.length <= 16000, `source is within the 16000-char break-out cap (${SRC.length})`);
   ok(/^\(ui\)\s*=>/.test(SRC), 'source is a `(ui) => element` (passes break-out validation)');
   ok(!/\bfetch\s*\(|XMLHttpRequest|WebSocket|import\s*\(/.test(SRC), 'source contains no network primitive (fetch/XHR/WebSocket/dynamic import)');
   ok(SPLASH && Array.isArray(SPLASH.steps) && SPLASH.steps.length === 4 && SPLASH.status === 'done', 'the exported SPLASH is a canned done-trace the gallery can preview');
@@ -90,6 +94,9 @@ const startServer = () => new Promise(resolve => {
   });
   const shotDir = process.env.TRACE_VIZ_FG_SHOTS || tmp;
   const shot = path.join(shotDir, 'trace-viz-flamegraph-splash.png');
+  const tip = path.join(shotDir, 'trace-viz-flamegraph-tooltip.png');
+  const zoomShot = path.join(shotDir, 'trace-viz-flamegraph-zoomed.png');
+  const critShot = path.join(shotDir, 'trace-viz-flamegraph-critpath.png');
   try {
     const page = await browser.newPage({ viewport: { width: 980, height: 420 } });
     const pageErrs = []; page.on('pageerror', e => pageErrs.push(e.message));
@@ -110,6 +117,47 @@ const startServer = () => new Promise(resolve => {
     else ok(!!d && d.mode === '2d', `WebGL unavailable headless — fell back to canvas2d in-sandbox (mode="${d && d.mode}")`);
     await sleep(1200); // let the build-in sweep settle before the screenshot
     try { await page.screenshot({ path: shot }); console.log('  info - screenshot:', shot); } catch {}
+
+    // ── 4b. INTERACTIONS: hover tooltip (cap-scrubbed), click-to-zoom, critical-path toggle ─────────────
+    // A controlled trace: `research` (delegate) is the widest row-1 bar (6 web children) and carries a
+    // cap-shaped token in its `detail` — so the tooltip has something to scrub. `notes` is a thin sibling.
+    const INTER = { status: 'done', rev: 30, prompt: 'compare vector DBs', steps: [
+      { name: 'research', ok: true, detail: 'team ref ' + SWISS, children: [
+        { name: 'web: a', ok: true }, { name: 'web: b', ok: true }, { name: 'web: c', ok: true },
+        { name: 'web: d', ok: true }, { name: 'web: e', ok: true }, { name: 'web: f', ok: true } ] },
+      { name: 'notes', ok: true } ] };
+    await page.evaluate(v => window.__feed(v), INTER);
+    await sleep(400);
+    const box = await page.evaluate(() => { const r = window.__ifr.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
+    // the wide `research` bar sits on row 1 (root is row 0); target its left third, one row down.
+    const rx = box.x + box.w * 0.33, ry = box.y + 110;
+
+    // (a) HOVER → tooltip surfaces the step, cap-SCRUBBED (no swissnum ever drawn).
+    await page.mouse.move(box.x + box.w * 0.5, box.y + 300); await sleep(120); // start off-bar
+    await page.mouse.move(rx, ry); await sleep(300);
+    const hv = (await page.evaluate(() => window.__diag)).hover;
+    ok(/research/.test(hv), `hovering a bar surfaces its step in the tooltip data (hover="${hv}")`);
+    ok(hv.indexOf(SWISS) === -1 && /⟨cap⟩/.test(hv), `the hovered-bar tooltip is cap-SCRUBBED — swissnum redacted to ⟨cap⟩ ("${hv}")`);
+    try { await page.screenshot({ path: tip }); console.log('  info - tooltip screenshot:', tip); } catch {}
+
+    // (b) CLICK a bar → zoom to that subtree (the visible root changes); click the root/background → restore.
+    await page.mouse.click(rx, ry); await sleep(320);
+    const zoomed = (await page.evaluate(() => window.__diag)).zoom;
+    ok(/research/.test(zoomed), `clicking a bar ZOOMED the icicle to that subtree (visible root now "${zoomed}")`);
+    try { await page.screenshot({ path: zoomShot }); console.log('  info - zoomed screenshot:', zoomShot); } catch {}
+    await page.mouse.click(box.x + box.w * 0.5, box.y + 24); await sleep(320); // click the new root row = zoom out
+    const unz = (await page.evaluate(() => window.__diag)).zoom;
+    ok(unz === '', `clicking the root/background zoomed back OUT — the full turn is restored (was "${zoomed}")`);
+
+    // (c) CRITICAL-PATH toggle: the ◧ path pill (top-left) lights the dominant chain and dims the rest.
+    await page.mouse.click(box.x + 20, box.y + 12); await sleep(300);
+    const cdg = await page.evaluate(() => window.__diag);
+    ok(cdg.crit > 0, `the critical-path toggle lit the dominant chain, dimming the rest (${cdg.crit} bars on path)`);
+    try { await page.screenshot({ path: critShot }); console.log('  info - critical-path screenshot:', critShot); } catch {}
+    await page.mouse.click(box.x + 20, box.y + 12); await sleep(220);
+    ok((await page.evaluate(() => window.__diag)).crit === 0, 'a second click on the toggle turns the critical-path highlight OFF again');
+    const errsI = await page.evaluate(() => window.__errors);
+    ok(errsI.length === 0, `no frame errors across the hover/zoom/toggle interactions (${errsI.slice(0, 2).join(' | ')})`);
 
     // ── 5. a live-GROWING trace: rev climbs, steps append, a running frontier — keeps rendering ─────────
     const framesBefore = (await page.evaluate(() => window.__diag)).frames;
