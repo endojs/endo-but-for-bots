@@ -75,6 +75,18 @@ const optArrayBufferMaxByteLength = getOwnPropertyDescriptor(
 // Captured before the shim can shadow any of the global TypedArray constructors.
 const TypedArray = getPrototypeOf(Uint8Array);
 
+/**
+ * `TypedArray` above is a value (the %TypedArray% intrinsic), so it cannot
+ * double as a type under tsgo (TS2749). `getPrototypeOf(Uint8Array)` is typed
+ * `any`, so master's existing `@type {WeakMap<TypedArray, TypedArray>}` and
+ * `@param {TypedArray}` annotations were effectively `any` under tsc. This
+ * typedef gives the value a same-named type that preserves that loose behavior
+ * (the accessor/method bodies pass `this`, typed `object`, straight through to
+ * the native TypedArray operations).
+ *
+ * @typedef {any} TypedArray
+ */
+
 const typedArrayPrototype = getPrototypeOf(Uint8Array.prototype);
 const { set: uint8ArraySet } = typedArrayPrototype;
 // @ts-expect-error TS doesn't know it'll be there
@@ -775,33 +787,35 @@ export const freezableTypedArrayLibProperties = {
   // Accessors: `buffer`, `byteLength`, `byteOffset`, `length`
   // -------------------------------------------------------------------------
 
+  // A `this` parameter cannot be declared on an accessor (tsgo TS2784), so the
+  // accessor bodies narrow `this` to TypedArray with an inline cast instead.
   /**
-   * @this {object}
    * @returns {ArrayBuffer}
    */
   get buffer() {
-    return apply(virtualTypedArrayBufferGetter, this, []);
+    const ta = /** @type {TypedArray} */ (/** @type {unknown} */ (this));
+    return apply(virtualTypedArrayBufferGetter, ta, []);
   },
   /**
-   * @this {object}
    * @returns {number}
    */
   get byteLength() {
-    return apply(typedArrayByteLengthGetter, amplifyTypedArray(this), []);
+    const ta = /** @type {TypedArray} */ (/** @type {unknown} */ (this));
+    return apply(typedArrayByteLengthGetter, amplifyTypedArray(ta), []);
   },
   /**
-   * @this {object}
    * @returns {number}
    */
   get byteOffset() {
-    return apply(typedArrayByteOffsetGetter, amplifyTypedArray(this), []);
+    const ta = /** @type {TypedArray} */ (/** @type {unknown} */ (this));
+    return apply(typedArrayByteOffsetGetter, amplifyTypedArray(ta), []);
   },
   /**
-   * @this {object}
    * @returns {number}
    */
   get length() {
-    return apply(typedArrayLengthGetter, amplifyTypedArray(this), []);
+    const ta = /** @type {TypedArray} */ (/** @type {unknown} */ (this));
+    return apply(typedArrayLengthGetter, amplifyTypedArray(ta), []);
   },
 
   // -------------------------------------------------------------------------

@@ -50,14 +50,24 @@ const {
  */
 const makeHubParentPath = ast => {
   const wrapper = { type: 'File', container: ast };
-  // @ts-expect-error - XXX unsure
-  return BabelNodePath.get({
-    hub: new BabelHub(),
-    parentPath: null,
-    parent: wrapper,
-    container: wrapper,
-    key: 'container',
-  });
+  // The synthetic root-path options do not match Babel's `NodePath.get` param
+  // type (the wrapper is not a real Babel `Node`). tsc suppresses the whole
+  // call with one `@ts-expect-error`, but tsgo also emits argument-level
+  // sub-diagnostics that the directive does not cover, so cast the options
+  // object instead.
+  return /** @type {NodePath} */ (
+    /** @type {unknown} */ (
+      BabelNodePath.get(
+        /** @type {any} */ ({
+          hub: new BabelHub(),
+          parentPath: null,
+          parent: wrapper,
+          container: wrapper,
+          key: 'container',
+        }),
+      )
+    )
+  );
 };
 
 /**
