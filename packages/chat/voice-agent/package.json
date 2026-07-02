@@ -75,7 +75,8 @@
     "test:purse-unit": "node --test purse-unit.test.mjs",
     "test:contacts-email": "node --test contacts-email.test.mjs",
     "test:power-attenuation": "node --test power-attenuation.test.mjs",
-    "test:by-reference": "node --test power-by-reference.test.mjs"
+    "test:by-reference": "node --test power-by-reference.test.mjs",
+    "test:audit-arch4": "node audit-arch4-sec11-port6.staging.test.mjs"
   },
   "dependencies": {
     "@endo/exo-git": "workspace:^",

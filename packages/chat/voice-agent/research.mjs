@@ -13,9 +13,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { VOICE_STATE_DIR } from './field-config.mjs';
+import { VOICE_STATE_DIR, AGENT_LLM } from './field-config.mjs';
 
-const LLM = process.env.AGENT_LLM || 'http://192.168.50.226:8003/v1/chat/completions';
+// PORT-6: the AGENT_LLM endpoint now comes from the centralized field-config seam (byte-identical
+// default; honors the same process.env.AGENT_LLM override), so a single TINIX_HOST/AGENT_LLM env
+// relocates gemma for server.mjs + research.mjs together.
+const LLM = AGENT_LLM;
 // Personal-family path resolves through field-config (byte-identical default on the NUC;
 // rebases onto FIELD_PERSONAL_ROOT when the personal volume is mounted).
 const NOTES_DIR = path.join(VOICE_STATE_DIR, 'research');

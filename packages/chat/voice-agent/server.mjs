@@ -111,7 +111,7 @@ import { writeJsonAtomic, loadJson } from './write-json-atomic.mjs';
 import { addCandidate as addStory, listPublished as listPublishedStories, listCandidates as listStoryCandidates, publishStory, discardStory } from './stories.mjs';
 // THE PERSONAL/PLATFORM SEAM (Packing up for Dweb): personal config + state dirs resolve through
 // field-config so FIELD_PERSONAL_ROOT (the encrypted volume) moves them together. Defaults identical on the NUC.
-import { CONFIG_DIR, STATE_DIR, VOICE_STATE_DIR, DASH_STATE_DIR, FIELD_MODE, INSTANCE_NAME, configSummary } from './field-config.mjs';
+import { CONFIG_DIR, STATE_DIR, VOICE_STATE_DIR, DASH_STATE_DIR, FIELD_MODE, INSTANCE_NAME, configSummary, STT_URL, AGENT_LLM } from './field-config.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOME = process.env.HOME || '/home/dan';
@@ -146,7 +146,7 @@ const BASE_URL = process.env.PUBLIC_BASE_URL || `http://100.83.80.102:${PORT}`;
 // public web origin (agentc.chu.vmkqx.com) for notification `click` links, not the tailnet BASE_URL. Falls back to
 // BASE_URL if PUBLIC_WEB_URL is unset (e.g. in tests).
 const WEB_URL = process.env.PUBLIC_WEB_URL || BASE_URL;
-const WHISPER = process.env.STT_URL || 'http://192.168.50.226:8000/v1/audio/transcriptions';
+const WHISPER = STT_URL; // PORT-6: centralized in field-config (byte-identical default; same STT_URL env override)
 const STT_MODEL = process.env.STT_MODEL || 'deepdml/faster-whisper-large-v3-turbo-ct2';
 const OUT = process.env.OUT_DIR || `${VOICE_STATE_DIR}/out`;
 const toolShares = makeToolShares({ dir: `${VOICE_STATE_DIR}/tool-shares` }); // share-as-factory/instance + meter + charge
@@ -1101,9 +1101,17 @@ const flagErrorForFix = async (kind, error, context = '') => {
 const COMP_ERRS_FILE = path.join(VOICE_STATE_DIR, 'component-errors.json');
 let compErrs = {}; try { compErrs = JSON.parse(fs.readFileSync(COMP_ERRS_FILE, 'utf8')) || {}; } catch { /* fresh */ }
 const saveCompErrs = () => { try { fs.mkdirSync(VOICE_STATE_DIR, { recursive: true }); fs.writeFileSync(COMP_ERRS_FILE, JSON.stringify(compErrs)); } catch (e) { log('compErrs save', e.message); } };
-const pushComponentError = (sid, { error, name }) => {
+// SEC-11: the queue is keyed by (OWNER, sid), where owner is derived SERVER-SIDE from the reporter's cap
+// (traceOwnerKeyOf) — NOT trusted from the client's sessionId alone. So a guest reporting an error with a
+// spoofed sessionId can only ever write into ITS OWN owner-scoped slot; the real chat owner's next turn
+// reads the (ownerKey, sid) slot derived from THEIR cap, so a guest can't inject into another chat's
+// authoring loop. The owner prefix is fixed-format ('root' | 'u:<24 hex>') and cannot be forged, so a
+// sid containing the separator still can't cross into another owner's namespace.
+const compErrKey = (ownerKey, sid) => `${String(ownerKey || '')} ${String(sid || '').slice(0, 64)}`;
+const pushComponentError = (ownerKey, sid, { error, name }) => {
   const id = String(sid || '').slice(0, 64); if (!id || !error) return false;
-  const list = compErrs[id] || (compErrs[id] = []);
+  const key = compErrKey(ownerKey, id);
+  const list = compErrs[key] || (compErrs[key] = []);
   const err = String(error).slice(0, 300);
   if (list.some(x => x.error === err)) return false; // the same error re-thrown on re-render files once
   list.push({ error: err, name: String(name || '').slice(0, 80), at: Date.now() });
@@ -1111,7 +1119,7 @@ const pushComponentError = (sid, { error, name }) => {
   saveCompErrs();
   return true;
 };
-const takeComponentErrors = sid => { const id = String(sid || '').slice(0, 64); const list = compErrs[id]; if (!list || !list.length) return []; delete compErrs[id]; saveCompErrs(); return list; };
+const takeComponentErrors = (ownerKey, sid) => { const key = compErrKey(ownerKey, sid); const list = compErrs[key]; if (!list || !list.length) return []; delete compErrs[key]; saveCompErrs(); return list; };
 const SCHED_RUN_BUDGET = Number(process.env.SCHED_RUN_BUDGET_UUSD) || defaultAllowance; // per-run µUSD ceiling — bounds a scheduled run so it can't leak unbounded inference
 const runProjectAgent = async (project, agent) => {
   log('scheduled-agent:', project.name, '›', agent.name, '| tools:', (agent.tools || []).join(','));
@@ -1984,7 +1992,7 @@ const handler = async (req, res) => {
       // AFTER delivery in the user's browser. Those queued errors are injected into THIS turn as system
       // feedback, so the agent sees its own breakage and repairs it instead of believing its widget works.
       // (The sync half — render-check at authoring time — catches mount errors before delivery.)
-      const pendingCompErrs = resumeMessages ? [] : takeComponentErrors(sid);
+      const pendingCompErrs = resumeMessages ? [] : takeComponentErrors(traceOwnerKeyOf(cap), sid); // SEC-11: owner-scoped by THIS turn's cap
       const compErrNote = pendingCompErrs.length
         ? `[SYSTEM render feedback — automatic, not typed by the user] Component widget(s) you rendered earlier in this chat FAILED in the user's browser:\n${pendingCompErrs.map(e => `- ${e.name ? `"${e.name}": ` : ''}${e.error}`).join('\n')}\nThe user saw a broken widget. Rebuild it correctly this turn (fix that exact error) or acknowledge the failure — do not claim it works.\n\n`
         : '';
@@ -2434,11 +2442,25 @@ const handler = async (req, res) => {
 
     // ── cross-device chat sync: the chat list + transcripts, stored server-side
     //    keyed by the presenting cap. Same root link on phone + laptop → same chats. ──
+    // ARCH-4 CLIENT NOTE (for the app.js owner) — the SERVER is now the version authority:
+    //   • /chats/save returns `{ ok, trimmed, seq }`; /chats/load returns `{ data, seq }`. `seq` is a
+    //     monotonic per-cap integer the server stamps (persisted as data._seq). It REPLACES the old
+    //     wall-clock `UPD_KEY = Date.now()` / `data.updated` LWW version vector.
+    //   • Client change (tiny): keep the last server `seq` next to the localStorage bundle (e.g.
+    //     localStorage `chatsSeq`). On /chats/load, ADOPT the remote bundle only when `remote.seq >
+    //     localSeq` (NOT when `data.updated >= localUpdated`); then set localSeq = remote.seq. On a
+    //     successful /chats/save, set localSeq = the returned `seq`. Treat localStorage as a cache keyed
+    //     to that seq. This removes the skewed-clock-always-wins bug — a stale device can no longer clobber
+    //     a higher-seq state, and per-field title/active divergence stops.
+    //   • Backward-compatible: an old client that still sends `updated` and ignores `seq` keeps working
+    //     (the server ignores the client clock for versioning and still populates `updated` on disk).
     if (req.method === 'POST' && u.pathname === '/chats/load') {
       const { cap } = await jsonBody(req);
       if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
-      try { return json(res, 200, { data: JSON.parse(await fs.promises.readFile(chatStorePath(cap), 'utf8')) }); }
-      catch { return json(res, 200, { data: null }); }
+      // ARCH-4: return the SERVER-authoritative `seq` alongside the bundle so the client can adopt-when-higher
+      // (seq is the version vector, replacing the old wall-clock `data.updated` LWW). Absent/legacy store → 0.
+      try { const data = JSON.parse(await fs.promises.readFile(chatStorePath(cap), 'utf8')); return json(res, 200, { data, seq: Number(data && data._seq) || 0 }); }
+      catch { return json(res, 200, { data: null, seq: 0 }); }
     }
     // ── memo ingest: a voice memo's transcript → the entry agent processes it,
     //    capturing the trace → stored as a traceable "memo run" (field-capture posts here). ──
@@ -2724,7 +2746,7 @@ const handler = async (req, res) => {
       if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
       const models = [{ id: 'default', label: 'Gemma (local · default)' }];
       try {
-        const r = await fetch((process.env.AGENT_LLM || 'http://192.168.50.226:8003/v1/chat/completions').replace('/chat/completions', '/models'), { signal: AbortSignal.timeout(4000) });
+        const r = await fetch(AGENT_LLM.replace('/chat/completions', '/models'), { signal: AbortSignal.timeout(4000) }); // PORT-6: centralized in field-config
         const j = await r.json();
         for (const id of (j.data || []).map(m => m.id).filter(Boolean)) if (id !== 'default') models.push({ id, label: `${id} (local)` });
       } catch {}
@@ -2794,7 +2816,10 @@ const handler = async (req, res) => {
       const filed = efOwner ? await flagErrorForFix(String(kind || 'runtime'), String(error), ctx) : false;
       // the render-feedback loop's async half: tie the error to ITS chat so the authoring agent hears
       // about the breakage on its next turn (not only the self-improvement backlog).
-      const queued = sessionId ? pushComponentError(sessionId, { error: efAttributed, name }) : false;
+      // SEC-11: bind the queued error to the OWNER the SERVER derives from this request's cap (traceOwnerKeyOf),
+      // not to the caller's raw sessionId — so a spoofed sessionId lands in the reporter's own owner-scoped slot
+      // and can never target another chat's authoring loop.
+      const queued = sessionId ? pushComponentError(traceOwnerKeyOf(cap), sessionId, { error: efAttributed, name }) : false;
       if (queued) log('component-error queued for chat', String(sessionId).slice(0, 40), '—', String(error).slice(0, 120));
       // BACKLOG feeder: an error that carries its component/fork IDENTITY also auto-files onto THAT
       // object's own backlog (dedupe-by-count absorbs re-throws) — the object's owner sees it in the
@@ -2928,8 +2953,23 @@ const handler = async (req, res) => {
         // INT-2: atomic temp+rename so a crash mid-write can't torn a cap's whole chat history (the
         // in-process withChatLock only serializes THIS process's writers). d === the parsed bundle; s is its
         // (possibly trimmed) serialization — write d so the on-disk file is always a whole, parseable bundle.
-        await withChatLock(cap, () => { writeJsonAtomic(chatStorePath(cap), d); }); // serialize vs the agent's retitle
-        return json(res, 200, { ok: true, trimmed });
+        // ARCH-4: SERVER-AUTHORITATIVE monotonic version. Cross-device sync used to use the client's wall-clock
+        // (`data.updated = Date.now()`) as the LWW version vector, so a device with a SKEWED clock always won and
+        // could clobber a newer state. Here the SERVER reads the last persisted `_seq` and increments it — done
+        // INSIDE the chat lock so concurrent saves serialize and the seq strictly increases. The returned `seq`
+        // is the authority; the client treats its localStorage bundle as a cache keyed to this server seq (adopt
+        // a remote bundle only when its seq is HIGHER, never on wall-clock). We still keep `updated` populated so
+        // an OLD client that reads it keeps working (informational only — it no longer decides the winner).
+        let seq = 0;
+        await withChatLock(cap, () => {
+          let prev = 0;
+          try { prev = Number((loadJson(chatStorePath(cap), {}) || {})._seq) || 0; } catch { prev = 0; }
+          seq = prev + 1;
+          d._seq = seq;
+          d.updated = Date.now(); // legacy field, kept live for old clients; not the version authority anymore
+          writeJsonAtomic(chatStorePath(cap), d);
+        }); // serialize vs the agent's retitle
+        return json(res, 200, { ok: true, trimmed, seq });
       } catch (e) { return json(res, 500, { error: e.message }); }
     }
 
@@ -4062,7 +4102,7 @@ const main = async () => {
   // fingerprint; the operator gets the full link by setting PRINT_ROOT_CAP=1 (first-run bootstrap only).
   if (process.env.PRINT_ROOT_CAP === '1') log(`ROOT CAP LINK (full bundle): ${BASE_URL}/#cap=${rootSwiss}`);
   else log(`ROOT CAP ready (fp ${rootSwiss.slice(0, 6)}…; set PRINT_ROOT_CAP=1 to print the full link)`);
-  log(`STT ${WHISPER}; LLM gemma tinix:8003; delegate ${process.env.DELEGATE_MODEL || 'claude-opus-4-8'}`);
+  log(`STT ${WHISPER}; LLM gemma ${AGENT_LLM}; delegate ${process.env.DELEGATE_MODEL || 'claude-opus-4-8'}`);
 };
 
 // flush durable balances on a clean shutdown (systemd restart sends SIGTERM) so the last debits persist.
