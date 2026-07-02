@@ -35,8 +35,100 @@ const runProgram = async (code, endow) => {
   }
 };
 
-const safeJson = v => { try { return JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? String(x) : x)); } catch { return String(v); } };
+// A non-throwing, descriptive walk for values JSON.stringify chokes on (live Endo remotables whose proxy
+// traps throw mid-stringify, circular graphs, bare functions). It NEVER yields a raw "[object Object]":
+// records become { k: v } literals, arrays are element-walked, remotables surface their interface tag, and
+// every per-property access is guarded. This is the fallback for safeJson + the object-channel `sample`.
+const describeValue = (v, depth = 0, seen = new WeakSet()) => {
+  if (v === null || v === undefined) return String(v);
+  const t = typeof v;
+  if (t === 'string') return JSON.stringify(v.length > 2000 ? `${v.slice(0, 2000)}…` : v);
+  if (t === 'number' || t === 'boolean') return String(v);
+  if (t === 'bigint') return `${v}n`;
+  if (t === 'symbol') { try { return v.toString(); } catch { return '«symbol»'; } }
+  if (t === 'function') return `[Function ${v.name || 'anon'}]`;
+  if (depth > 6) return '…';
+  if (seen.has(v)) return '«circular»';
+  seen.add(v);
+  if (Array.isArray(v)) return `[${v.slice(0, 50).map(x => { try { return describeValue(x, depth + 1, seen); } catch { return '«?»'; } }).join(', ')}${v.length > 50 ? `, …(+${v.length - 50})` : ''}]`;
+  try { if (typeof v.then === 'function') return '[Promise]'; } catch { /* thenable getter threw */ }
+  let keys = null; try { keys = Object.keys(v); } catch { keys = null; }
+  if (keys && keys.length) return `{ ${keys.slice(0, 40).map(k => { let val; try { val = describeValue(v[k], depth + 1, seen); } catch { val = '«throws»'; } return `${k}: ${val}`; }).join(', ')}${keys.length > 40 ? ', …' : ''} }`;
+  // no enumerable own keys → likely a remotable/presence; surface its interface tag if any
+  let tag = '[remotable]'; try { const s = Object.prototype.toString.call(v); tag = s.includes('Alleged') ? `[${s.slice(8, -1)}]` : '[remotable object]'; } catch { /* */ }
+  return tag;
+};
+const safeJson = v => { try { const s = JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? String(x) : x)); return s === undefined ? describeValue(v) : s; } catch { return describeValue(v); } };
 const clip = (s, n) => { const t = String(s == null ? '' : s); return t.length > n ? `${t.slice(0, n)}…[${t.length - n} more chars]` : t; };
+
+// ── OBJECT CHANNEL (increment 1a) ────────────────────────────────────────────────────────────────────────
+// When a program hands answer()/ask()/blocked() a NON-STRING value — a live Endo Remotable/exo, a plain
+// object/array, a promise, or a bare capability — we must NOT coerce it to "[object Object]" and LOSE the live
+// data. Instead we CAPTURE a structured, cap-SAFE descriptor and carry it out-of-band on the turn result as the
+// `objects` channel (mirrors how tool widgets ride on `ui`). The queued CLIENT increment renders these via its
+// valNode drill-down tree + the blossom renderer library, with a "🌱 blossom this / change how this looks"
+// affordance. THE CONTRACT — one descriptor per captured object:
+//   {
+//     kind:      'object' | 'array' | 'remotable' | 'promise' | 'cap',  // best-effort type tag
+//     name:      string,     // a human label (interface tag / "Array(n)" / constructor), NEVER a swissnum
+//     methods:   string[],   // callable method names (via __getMethodNames__ or own function props), sorted
+//     sample:    string,     // render-safe, cap-SCRUBBED JSON/preview of the value (bounded ~1200 chars)
+//     preview:   string,     // one-line clip used for the in-text placeholder
+//     redacted?: boolean,    // true ⇒ the value WAS a bare cap/swissnum: sample is a marker, not the secret
+//   }
+// The SERVER enriches each with `blossomSig` (= blossom.sigOf(methods, kind)) at /chat assembly time, since the
+// blossom renderer library lives server-side; codemode stays free of that coupling. Cap hygiene: `sample` and
+// `name` are scrubbed here (and again server-side); a value that is nothing but a cap/swissnum is redacted.
+const CAP_RE = /#cap=[0-9a-fA-F]{16,}|#k=[\w-]{16,}|#agent=[\w-]{8,}|\b[0-9a-f]{32}\b/;
+// a string that is NOTHING BUT a cap/swissnum (anchored) → redact the whole reply; an EMBEDDED cap inside prose
+// is merely scrubbed (prose preserved) via scrubCapText.
+const BARE_CAP_RE = /^\s*(?:#cap=[0-9a-fA-F]{16,}|#k=[\w-]{16,}|#agent=[\w-]{8,}|[0-9a-f]{32})\s*$/;
+const scrubCapText = s => String(s == null ? '' : s)
+  .replace(/#cap=[0-9a-fA-F]{16,}/g, '#cap=«redacted»')
+  .replace(/#k=[\w-]{16,}/g, '#k=«redacted»')
+  .replace(/#agent=[\w-]{8,}/g, '#agent=«redacted»')
+  .replace(/\b[0-9a-f]{32}\b/g, '«swissnum»');
+const methodNamesOf = o => {
+  try { if (o && typeof o.__getMethodNames__ === 'function') return [...new Set([...o.__getMethodNames__()].map(String).filter(Boolean))].sort(); } catch { /* */ }
+  try { if (o && typeof o === 'object') return [...new Set(Object.keys(o).filter(k => { try { return typeof o[k] === 'function'; } catch { return false; } }))].sort(); } catch { /* */ }
+  return [];
+};
+const ifaceTag = o => { try { const s = Object.prototype.toString.call(o); if (s.includes('Alleged')) return s.slice(8, -1); } catch { /* */ } return ''; };
+// Build a cap-safe descriptor for a value handed to a turn-ender, or null if it is an ordinary scalar/string
+// that needs no object channel (a plain string reply, a number, a boolean).
+const describeRef = v => {
+  if (v == null) return null;
+  const t = typeof v;
+  if (t === 'string') {
+    // a string reply that IS nothing but a bare cap/swissnum → redact it entirely (never surface the secret).
+    // (An EMBEDDED cap inside prose is handled by scrubCapText at the call site, which keeps the prose.)
+    return BARE_CAP_RE.test(v) ? { kind: 'cap', name: 'capability', methods: [], sample: '«redacted capability»', preview: '«redacted capability»', redacted: true } : null;
+  }
+  if (t !== 'object' && t !== 'function') return null; // number/boolean/bigint/symbol → coerce, no channel
+  let hasGMN = false; try { hasGMN = typeof v.__getMethodNames__ === 'function'; } catch { /* */ }
+  // a bare thenable (not a remotable) → the "[object Promise]" smell
+  let thenable = false; try { thenable = typeof v.then === 'function' && !hasGMN; } catch { /* */ }
+  if (thenable) return { kind: 'promise', name: 'Promise', methods: [], sample: '[Promise — hand answer() the awaited value, not the promise]', preview: '[Promise]' };
+  const methods = methodNamesOf(v);
+  const sample = scrubCapText(clip(safeJson(v), 1200));
+  let kind; let name;
+  if (Array.isArray(v)) { kind = 'array'; name = `Array(${v.length})`; }
+  else {
+    const tag = ifaceTag(v);
+    let hasKeys = false; try { hasKeys = Object.keys(v).length > 0; } catch { /* */ }
+    // a __getMethodNames__-bearing exo/Far, an interface-tagged presence, or a keyless object with methods → remotable
+    if (hasGMN || tag || (methods.length && !hasKeys)) { kind = 'remotable'; name = tag || 'remotable'; }
+    else { let cn = ''; try { cn = v.constructor && v.constructor.name; } catch { /* */ } kind = 'object'; name = cn && cn !== 'Object' ? cn : 'object'; }
+  }
+  return { kind, name: scrubCapText(name), methods, sample, preview: clip(sample, 160) };
+};
+// The clean, legible in-text placeholder that REPLACES the destroyed "[object Object]" — references the carried
+// descriptor so even before the rich client render ships, the user sees something meaningful.
+const refPlaceholder = d => {
+  if (d.redacted) return '🌱 capability (redacted — not shown)';
+  const summary = d.methods && d.methods.length ? `${d.methods.slice(0, 4).join(', ')}${d.methods.length > 4 ? ', …' : ''}` : (d.name || 'value');
+  return `🌱 ${d.kind} — ${d.name && d.name !== d.kind ? d.name : summary} (unrendered object)`;
+};
 
 // Extract a JS program from the model reply: a ```js fenced block (preferred), else a bare ``` block.
 const extractCode = reply => {
@@ -103,11 +195,26 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
   // intercepts the captured `finalReply` BEFORE treating that unwind as a program error. All three deliver text
   // the user sees; the kind is a STRUCTURED signal (asking/blocked) for the server/client (logging, "needs you",
   // distinct rendering) — no prose-parsing required.
-  let finalReply = null; // { kind: 'answer'|'ask'|'blocked', text }
+  let finalReply = null; // { kind: 'answer'|'ask'|'blocked', text, objects: [descriptor,...] }
   const REPLY_SENTINEL = '__codemode_reply__';
-  // text is usually a string; if a program passes an OBJECT (e.g. a tool's structured result handed straight to
-  // answer()), render it as readable JSON rather than the useless "[object Object]".
-  const endTurn = (kind, text) => { finalReply = { kind, text: text == null ? '' : (typeof text === 'string' ? text : safeJson(text)) }; throw new Error(REPLY_SENTINEL); };
+  // text is usually a string. If a program passes an OBJECT/array/remotable/promise/cap (e.g. a tool's structured
+  // result or a live inventory object handed straight to answer()), we DO NOT coerce it to "[object Object]" and
+  // lose it: we CAPTURE a cap-safe descriptor on the `objects` channel (see the CONTRACT above) and put a clean,
+  // legible placeholder in the reply text. A bare cap/swissnum (object OR string) is redacted, never surfaced.
+  const endTurn = (kind, value) => {
+    const objects = [];
+    let text;
+    if (value == null) text = '';
+    else if (typeof value === 'string') {
+      const d = describeRef(value); // non-null only when the whole string IS a cap/swissnum
+      if (d) { objects.push(d); text = refPlaceholder(d); } else text = scrubCapText(value);
+    } else {
+      const d = describeRef(value);
+      if (d) { objects.push(d); text = refPlaceholder(d); } else text = scrubCapText(safeJson(value)); // scalars: coerce as before
+    }
+    finalReply = { kind, text, objects };
+    throw new Error(REPLY_SENTINEL);
+  };
   endow.answer = harden(text => endTurn('answer', text));
   endow.ask = harden(question => endTurn('ask', question));
   endow.blocked = harden(reason => endTurn('blocked', reason));
@@ -271,7 +378,7 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     // parsed from prose). Return it BEFORE touching r.ok/r.error: the sentinel unwind shows up as a program
     // "throw", but the captured finalReply supersedes it. (A program that set the reply then hit a real error
     // still delivers it — better than going silent.) The kind rides along as a structured asking/blocked flag.
-    if (finalReply != null) { const { kind, text } = finalReply; onStep({ kind: 'answer', text }); return harden({ answer: text, toolsUsed: used, ...(kind === 'ask' ? { asking: true } : kind === 'blocked' ? { blocked: true } : kind === 'research' ? { researching: true } : {}) }); }
+    if (finalReply != null) { const { kind, text, objects } = finalReply; onStep({ kind: 'answer', text, ...(objects && objects.length ? { objects } : {}) }); return harden({ answer: text, toolsUsed: used, ...(objects && objects.length ? { objects } : {}), ...(kind === 'ask' ? { asking: true } : kind === 'blocked' ? { blocked: true } : kind === 'research' ? { researching: true } : {}) }); }
     // REL-3: a metered sub-call (delegateTask) refused for lack of allowance (re-thrown from wrapCall) →
     // surface the WHOLE turn as EXHAUSTED so the client shows the deterministic top-up card, handing back
     // the in-flight transcript so a top-up RESUMES here rather than re-running the delegation.
