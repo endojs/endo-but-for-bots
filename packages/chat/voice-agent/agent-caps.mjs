@@ -250,7 +250,18 @@ const vaultWritePath = rel => {
   return p;
 };
 // Is vault-relative path `p` inside `prefix` (empty prefix = whole vault)? For confining a notes share.
-const underPrefix = (p, prefix) => { if (!prefix) return true; const a = String(p || '').replace(/^\/+/, ''); const b = String(prefix).replace(/\/+$/, ''); return a === b || a.startsWith(`${b}/`); };
+// SECURITY: canonicalize `p` FIRST (collapse . and ..) then contain. A raw string-prefix test is fooled
+// by "Dietician/../Personal/secret.md" — it passes the `Dietician/` check, but read/write then resolves
+// with path.resolve which collapses the `..` and escapes the scope. Normalising here (resolve-then-contain,
+// mirroring resolveJailedCwd) makes the guard see the SAME path the filesystem will, so `..` can't escape.
+export const underPrefix = (p, prefix) => {
+  const a = path.posix.normalize(String(p || '').replace(/^\/+/, ''));
+  if (a === '..' || a.startsWith('../')) return false; // traversal escaped above the vault root
+  if (!prefix) return true;
+  const b = path.posix.normalize(String(prefix).replace(/^\/+/, '').replace(/\/+$/, ''));
+  return a === b || a.startsWith(`${b}/`);
+};
+harden(underPrefix);
 // Resolve a vault-relative path for READING a directory/file; refuses to escape the vault.
 const vaultReadPath = rel => {
   const p = path.resolve(VAULT, String(rel || '').replace(/^\/+/, ''));
