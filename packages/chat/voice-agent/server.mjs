@@ -541,6 +541,7 @@ const purseAt = (k, seed) => {
     p = makePurse(saved ? saved.balance : seed, { granted: saved ? saved.granted : undefined, onChange: (b, g) => purseStore.set(k, b, g) });
     if (!saved) purseStore.set(k, p.balance(), p.granted()); // record the initial grant so a restart before any spend still restores it
     chatPurses.set(k, p);
+    if (chatPurses.size > CHAT_PURSE_MAX) { const oldest = chatPurses.keys().next().value; if (oldest !== k) chatPurses.delete(oldest); } // P2-1: bound the cache — evicted entries rehydrate from purseStore on next access
   }
   return p;
 };
@@ -1098,6 +1099,26 @@ const saveResume = (sid, transcript) => {
   if (pendingResumes.size > 200) for (const [k, r] of pendingResumes) if (Date.now() - (r.at || 0) > RESUME_TTL) pendingResumes.delete(k);
 };
 const consumeResume = sid => { const r = pendingResumes.get(sid); if (!r) return null; pendingResumes.delete(sid); return (Date.now() - (r.at || 0) > RESUME_TTL) ? null : r.transcript; }; // one-shot
+// ── P2-1: bound the previously-UNBOUNDED per-chat Maps. `sessions` (full transcripts) + `lastCtx` (≤12k/turn
+//    context bundles) grew with every distinct chat ever seen — the largest leak. `chatPurses` cached a purse
+//    per (cap,sid) forever. We now LRU+TTL-sweep them, mirroring runResults/pendingResumes. `sessionSeen` is
+//    the LRU clock for sessions+lastCtx (both keyed by sid); re-inserting on touch makes Map iteration order =
+//    LRU. Eviction is SAFE: `sessions` reconstructs from the persisted chat bundle on the next turn, `lastCtx`
+//    is a best-effort viewer, and a `chatPurses` entry rehydrates from the durable purseStore on next access.
+//    (spendLedger is intentionally NOT swept here — it's persisted user/billing content, so evicting it in
+//    memory would drop leaderboard history on the next whole-map write; a disk-side rotation is a follow-up.) ──
+const SESSION_TTL = 6 * 60 * 60 * 1000; // 6h since last activity
+const SESSION_MAX = Number(process.env.SESSION_MAX) || 2000;
+const CHAT_PURSE_MAX = Number(process.env.CHAT_PURSE_MAX) || 5000;
+const sessionSeen = new Map(); // sid → last-touch ms
+const touchSession = sid => { if (!sid) return; sessionSeen.delete(sid); sessionSeen.set(sid, Date.now()); if (sessionSeen.size > SESSION_MAX) { const oldest = sessionSeen.keys().next().value; sessions.delete(oldest); lastCtx.delete(oldest); sessionSeen.delete(oldest); } }; // bound between sweeps too
+const sweepSessions = () => {
+  const now = Date.now();
+  for (const [sid, t] of sessionSeen) if (now - t > SESSION_TTL) { sessions.delete(sid); lastCtx.delete(sid); sessionSeen.delete(sid); }
+  while (sessionSeen.size > SESSION_MAX) { const oldest = sessionSeen.keys().next().value; sessions.delete(oldest); lastCtx.delete(oldest); sessionSeen.delete(oldest); } // evict LRU head
+  while (chatPurses.size > CHAT_PURSE_MAX) { const oldest = chatPurses.keys().next().value; chatPurses.delete(oldest); } // safe: rehydrates from purseStore
+};
+setInterval(sweepSessions, 10 * 60 * 1000).unref?.(); // periodic TTL sweep; size caps also enforced on touch
 // ── live step stream (the inline 3D "pendant"): per-session SSE writers. Carries ONLY
 //    tool NAMES + ok/children (no cap, no payload) so the chat can animate the fan-out in
 //    real time. Keyed by sessionId; cap-hygiene preserved (the swissnum never rides this URL). ──
@@ -1829,6 +1850,7 @@ const handler = async (req, res) => {
       // Conversation memory: PREFER the client's durable transcript (it survives this service being
       // restarted — the in-memory `sessions` map is volatile and capped, which made the agent forget
       // earlier turns after every deploy). Fall back to the in-process map only if the client sent none.
+      touchSession(sid); // P2-1: mark this chat's session/lastCtx as recently used for the LRU+TTL sweep
       const history = (Array.isArray(clientHistory) && clientHistory.length)
         ? clientHistory.filter(m => m && (m.role === 'user' || m.role === 'assistant') && m.content).map(m => ({ role: m.role, content: String(m.content) })).slice(-24)
         : (sessions.get(sid) || []);
