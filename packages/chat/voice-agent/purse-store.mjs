@@ -12,7 +12,23 @@ import path from 'node:path';
 
 export const hashKey = key => crypto.createHash('sha256').update(String(key)).digest('hex');
 
-export const makePurseStore = ({ file, debounceMs = 800 }) => {
+// INT-5: flush every live money-store on process teardown. ONE pair of process listeners for the whole module
+// (not one per store) so a test that spins up many stores never trips the MaxListeners warning. 'exit' catches
+// process.exit() (FATAL paths, the uncaughtException handler); 'beforeExit' catches a natural event-loop drain.
+// SIGKILL/OOM still can't be caught — that is why the debounce is short.
+const exitFlushers = new Set();
+let exitHooksInstalled = false;
+const installExitHooks = () => {
+  if (exitHooksInstalled) return;
+  exitHooksInstalled = true;
+  const flushAll = () => { for (const f of exitFlushers) { try { f(); } catch { /* best-effort */ } } };
+  process.on('exit', flushAll);
+  process.on('beforeExit', flushAll);
+};
+
+// INT-5: money-write debounce. Shortened from 800ms → 250ms so an ungraceful death (OOM/SIGKILL, which no
+// handler can catch) loses at most ~¼s of debits instead of ~1s. Overridable per store.
+export const makePurseStore = ({ file, debounceMs = 250, registerExitFlush = true } = {}) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   let data = {};
   try { data = JSON.parse(fs.readFileSync(file, 'utf8')) || {}; } catch { data = {}; }
@@ -24,6 +40,12 @@ export const makePurseStore = ({ file, debounceMs = 800 }) => {
     catch { /* best-effort; a missed write loses at most a few seconds of debits */ }
   };
   const schedule = () => { pending = true; if (!timer) timer = setTimeout(flush, debounceMs); };
+  const flushNow = () => { if (pending || timer) { clearTimeout(timer); flush(); } };
+
+  // INT-5: register this store's flush with the module-wide exit hooks so an ungraceful teardown doesn't drop
+  // the debounce window (see installExitHooks above). Opt-out with registerExitFlush:false in unit tests that
+  // don't want the process listener.
+  if (registerExitFlush) { installExitHooks(); exitFlushers.add(flushNow); }
 
   return {
     // returns { balance, granted } for a key's HASH, or undefined if never persisted
@@ -36,7 +58,7 @@ export const makePurseStore = ({ file, debounceMs = 800 }) => {
     creditByHash: (h, uusd) => { const cur = data[h] || { balance: 0, granted: 0 }; cur.balance = (Math.round(cur.balance) || 0) + Math.max(0, Math.round(Number(uusd) || 0)); data[h] = cur; schedule(); return cur.balance; },
     remove: key => { const h = hashKey(key); if (h in data) { delete data[h]; schedule(); } },
     // write immediately (used on shutdown so the last debits aren't lost)
-    flushNow: () => { if (pending || timer) { clearTimeout(timer); flush(); } },
+    flushNow,
   };
 };
 harden(makePurseStore);
