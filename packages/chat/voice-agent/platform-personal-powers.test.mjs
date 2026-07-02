@@ -112,7 +112,7 @@ test('PLATFORM mode: a delegated specialist cannot receive a personal power its 
   const fa = mk(t, 'platform');
   const parent = fa.nodeFor(fa.mintScopedCap({ powers: ['web', 'research', 'specialists'], label: 'par' }).swiss);
   await parent.toolbox().toolbox.spawnSpecialist.run({ name: 'plat-kid', powers: ['web', 'host', 'email', 'research'] });
-  const kid = fa.specialistFor('plat-kid').node;
+  const kid = fa.specialistFor('plat-kid', parent.ownerKey).node; // INC-2: spawner's namespace
   for (const p of kid.bundle.names()) assert.ok(!PERSONAL_POWERS.includes(p), `child power ${p} is platform-only`);
   for (const p of ['host', 'email']) assert.ok(!kid.bundle.has(p), `child cannot hold personal power ${p}`);
   // and only same-identity refs the root actually holds flowed down

@@ -98,7 +98,7 @@ test('a delegated child holds the SAME ref identities as its parent (by referenc
   const parent = fa.nodeFor(fa.mintScopedCap({ powers: ['web', 'home', 'reference', 'specialists'], label: 'par' }).swiss);
   // spawn a confined sub-agent (the delegation edge) requesting a subset + a power the parent lacks
   await parent.toolbox().toolbox.spawnSpecialist.run({ name: 'byref-kid', powers: ['web', 'reference', 'email', 'specialists'] });
-  const kid = fa.specialistFor('byref-kid').node;
+  const kid = fa.specialistFor('byref-kid', parent.ownerKey).node; // INC-2: spawner's namespace
 
   // subset by name
   for (const p of kid.bundle.names()) assert.ok(parent.bundle.has(p), `child power ${p} ⊆ parent`);

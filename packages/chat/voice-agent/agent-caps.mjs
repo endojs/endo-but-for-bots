@@ -668,6 +668,14 @@ export const PLATFORM_ADMIN_POWERS = harden([...PLATFORM_POWERS]);
 const VERB_TO_POWER = (() => { const m = {}; for (const [pw, def] of Object.entries(POWERS)) for (const v of (def.verbs || [])) m[v] = pw; return harden(m); })();
 export const resolvePower = name => { const n = String(name || ''); return POWERS[n] ? n : (VERB_TO_POWER[n] || n); };
 
+// ── INC-2 (per-user isolation): the NON-SECRET per-user namespace key for a presenting cap/swiss. IDENTICAL
+// derivation to the server's traceOwnerKeyOf so the four per-user stores (specialists / custom-tools / timers /
+// feed) key on the SAME value the ARCH-2 feed/asks cells + clip/story owner gates already use. It is a one-way
+// hash — the swissnum NEVER appears in a store path/value (cap-hygiene). Root is a separate literal 'root'
+// (legacy/unkeyed data = user-0 = dan); this helper only ever produces the non-root 'u:<24 hex>' form.
+export const ownerKeyForCap = cap => `u:${crypto.createHash('sha256').update(String(cap || '')).digest('hex').slice(0, 24)}`;
+harden(ownerKeyForCap);
+
 // ── designation by REFERENCE (the ocap-correct power model) ───────────────────
 // makeCapabilityBundle(refs) holds Far power refs by petname; attenuate(requested)
 // returns a structural SUBSET that cannot fabricate an absent ref. It lives in a
@@ -996,7 +1004,12 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   const loadWandPolicyFile = () => { try { const j = JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, 'wand-policy.json'), 'utf8')); return Array.isArray(j) ? j : (j.entries || []); } catch { return null; } };
   const wand = makeWandPolicy(wandPolicy || loadWandPolicyFile() || DEFAULT_WAND_POLICY);
   let specialists = [];
-  try { specialists = JSON.parse(fs.readFileSync(SPECIALISTS_FILE, 'utf8')).specialists || []; } catch { specialists = []; }
+  // INC-2 (per-user isolation): every specialist record carries an `owner` (the per-user namespace key of the
+  // cap that spawned it). LEGACY records (pre-INC-2, no owner field) are user-0 = dan → 'root', so personal-mode
+  // behaviour is byte-identical. list/find/spawn/remove are all scoped by owner (below); builtins are shared.
+  try { specialists = (JSON.parse(fs.readFileSync(SPECIALISTS_FILE, 'utf8')).specialists || []).map(s => ({ ...s, owner: s.owner || 'root' })); } catch { specialists = []; }
+  // owner-scoped views over the single specialists array (the store stays one file; owner only gates ACCESS).
+  const specialistsFor = owner => specialists.filter(s => (s.owner || 'root') === String(owner || 'root'));
   const saveSpecialists = () => { try { fs.mkdirSync(path.dirname(SPECIALISTS_FILE), { recursive: true }); fs.writeFileSync(SPECIALISTS_FILE, JSON.stringify({ specialists }, null, 2), { mode: 0o600 }); } catch (e) { /* best effort */ } };
 
   // ── BUILT-IN AGENTS — curated, code-defined domain agents (the Dietician, …). They behave EXACTLY like
@@ -1186,7 +1199,10 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     act: harden(async (a = {}) => { const n = nd.haReach(e.handle); if (!n || !n.act) return { ok: false, error: `"${e.name}" is not actuable / not in reach — haFind it again` }; try { return n.act(String((a && a.action) || ''), (a && a.data) || {}); } catch (err) { return { ok: false, error: err.message }; } }),
   });
   const specSlug = name => `spec-${String(name || 'x').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'x'}`;
-  const findSpecialist = ref => { const r = String(ref || ''); return specialists.find(s => s.id === r || s.id === specSlug(r) || s.name.toLowerCase() === r.toLowerCase()) || builtinSpecs.find(s => s.id === r || s.name.toLowerCase() === r.toLowerCase()); };
+  // INC-2: resolve a specialist ONLY within the caller's own namespace (owner) — a tenant can never name, run,
+  // inspect, or "act as" another tenant's specialist. Builtins are curated/shared, so they resolve for anyone.
+  // owner defaults to 'root' (legacy/root behaviour unchanged). Two tenants may reuse the same slug/name safely.
+  const findSpecialist = (ref, owner = 'root') => { const r = String(ref || ''); return specialistsFor(owner).find(s => s.id === r || s.id === specSlug(r) || s.name.toLowerCase() === r.toLowerCase()) || builtinSpecs.find(s => s.id === r || s.name.toLowerCase() === r.toLowerCase()); };
   const specNodes = new Map(); // id → its agent-node (built lazily / at boot)
 
   // a run-context (ctx) is threaded into the verbs at toolbox-build time; the only
@@ -2066,12 +2082,12 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       // one within your own bounds is pre-approved. It may inherit `specialists` too → it can spawn its own
       // sub-specialists, so trees sprawl arbitrarily deep, every level ⊆ the one above. (A spawned specialist's
       // own destructive ACTIONS still surface for confirmation unless you granted it autonomy.)
-      toolbox.listSpecialists = harden({ run: async () => ({ ok: true, specialists: [...builtinList(), ...specialists.map(s => ({ id: s.id, name: s.name, domain: s.domain, powers: s.powers, autonomy: listAutoRules(s.id).map(r => r.kind), spawnedFrom: s.spawnedFrom || null }))] }) });
+      toolbox.listSpecialists = harden({ run: async () => ({ ok: true, specialists: [...builtinList(), ...specialistsFor(node.ownerKey).map(s => ({ id: s.id, name: s.name, domain: s.domain, powers: s.powers, autonomy: listAutoRules(s.id).map(r => r.kind), spawnedFrom: s.spawnedFrom || null }))] }) }); // INC-2: only THIS user's specialists (+ shared builtins)
       toolbox.spawnSpecialist = harden({ run: async ({ name, domain, powers: want = [], instructions } = {}) => {
         const reqd = [...new Set(Array.isArray(want) ? want : [])];
         const granted = regrantNames(node.bundle, reqd); // by-reference: requested ∩ held-refs, META stripped — structurally ⊆ you
         const dropped = reqd.filter(p => !granted.includes(p));
-        const r = spawnSpecialist({ name, domain, powers: granted, instructions, spawnedFromChatId: ctx.chatId }); // r.url (its #cap) is NOT returned — cap hygiene
+        const r = spawnSpecialist({ name, domain, powers: granted, instructions, spawnedFromChatId: ctx.chatId, owner: node.ownerKey }); // INC-2: spawned INTO this user's namespace; r.url (its #cap) is NOT returned — cap hygiene
         return harden({ ok: !!r.ok, id: r.id, name: r.name, domain: String(domain || ''), powers: granted,
           // drop a persistent, expandable SPECIALIST ISLAND right here in the chat — inspect it (its ring/instructions/
           // standing nudges/runs) or open its own thread, by the name you gave it. (cap hygiene: no swissnum.)
@@ -2086,7 +2102,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         // STANDING work runs on the background tick (outside a metered turn), so — unlike in-turn spawn/ask, which
         // self-meter — it's gated up front on budget: you need a non-empty purse (root excepted). "Within budget."
         if (!node.isRoot && !(ctx.purse && typeof ctx.purse.balance === 'function' && ctx.purse.balance() > 0)) return { ok: false, error: 'scheduling a standing specialist needs available budget (it runs in the background on your allowance) — top up or claim credits first.' };
-        const spec = findSpecialist(String(name || '')); if (!spec) return { ok: false, error: `no specialist "${name}" — list them with listSpecialists` };
+        const spec = findSpecialist(String(name || ''), node.ownerKey); if (!spec) return { ok: false, error: `no specialist "${name}" — list them with listSpecialists` };
         const schedule = everyMs ? { kind: 'interval', everyMs: Number(everyMs) } : atIso ? { kind: 'once', atIso: String(atIso) } : { kind: 'once', afterMs: Number(afterMs || 0) };
         const n = specialistNudges.add({ specialistId: spec.id, specialistName: spec.name, chatId: ctx.chatId || '', request: String(request || ''), schedule, label });
         return { ok: true, nudgeId: n.id, specialist: spec.name, nextAt: new Date(n.nextAt).toISOString(), recurring: schedule.kind === 'interval', note: `${spec.name} will ${schedule.kind === 'interval' ? `run this every ${Math.round((Number(everyMs)) / 60000)}m` : `run this once at ${new Date(n.nextAt).toLocaleString()}`}, reporting back into this chat.` };
@@ -2414,7 +2430,10 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // systemMap — ALWAYS available, read-only. The whole system's shape: every power+verbs, the roles +
     // their default rings, the default endowment per agent type, and the canonical review/process flows.
     // Use it to MAP/GRAPH the system (agents as nodes, endowments as held powers, flows as edges).
-    toolbox.systemMap = harden({ run: async () => ({ ok: true, ...buildSystemMap({ ALL_POWERS, POWERS, META_POWERS, roleList, specialists }) }) });
+    // INC-1 residual + INC-2: render the mode-gated power set (ROOT_POWERS = PLATFORM_POWERS in platform mode,
+    // = ALL_POWERS in personal mode — byte-identical for dan), so a platform tenant is never shown dan's PERSONAL
+    // power names/labels as display metadata; and scope the specialist list to THIS user's own namespace.
+    toolbox.systemMap = harden({ run: async () => ({ ok: true, ...buildSystemMap({ ALL_POWERS: ROOT_POWERS, POWERS, META_POWERS, roleList, specialists: specialistsFor(node.ownerKey) }) }) });
     manifest.push({ name: 'systemMap', reversible: false, args: {},
       description: 'Introspect the WHOLE system as structured data: the full power catalog (each power → its verbs + whether it is meta), the roles + their default tool rings, the default endowment per agent type (entry agent, invitee, role, specialist, delegate), and the canonical review/escalation/billing FLOWS. Use this to generate a graph/map of the agents, their default endowments, and how review flows through the system.' });
     // generic cross-object SEARCH — fan out to EVERY searchable object this cap holds
@@ -2486,7 +2505,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
 
   // A node = a holder of a SUBSET of powers, with the right to use + re-share
   // them. The root holds ALL_POWERS. share() mints a child node (single power).
-  const makeAgentNode = ({ powers, labelOf = 'agent', name = '', isRoot = false, haBinding = null, agBinding = null, contactsBinding = null, homeBinding = null, timersBinding = null, notesBinding = null, cwdBinding = null, wandBinding = null, id = null }) => {
+  const makeAgentNode = ({ powers, labelOf = 'agent', name = '', isRoot = false, haBinding = null, agBinding = null, contactsBinding = null, homeBinding = null, timersBinding = null, notesBinding = null, cwdBinding = null, wandBinding = null, id = null, ownerKey = null }) => {
     // The bundle of real power-REFERENCES this node holds — an attenuated subset of
     // the root bundle. `powers` (the requested name list) can only ever REACH the
     // refs the root actually holds: a bogus/absent name is silently dropped, never
@@ -2504,6 +2523,14 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // can't leak one's "don't ask again" rule onto the other). Specialists pass no
     // `id`, so they keep their persisted unique slug (labelOf); root is 'root'.
     node.id = isRoot ? 'root' : (id || labelOf);
+    // INC-2 (per-user isolation): the NON-SECRET per-user namespace key this node acts under — the SAME
+    // derivation the server's traceOwnerKeyOf uses (root → 'root'; else a one-way hash of the presenting cap,
+    // NEVER the swiss itself). It partitions the four per-user stores (specialists / custom-tools / timers /
+    // feed) so one tenant can't see or mutate another's. Set EXPLICITLY where node.id isn't the raw cap
+    // (registerScoped's id is a truncated `scoped-…`; a specialist's id is a slug + inherits its SPAWNER's
+    // namespace) — everywhere else `id` IS the full swiss so the hash matches the server's key. Root is 'root'
+    // (legacy/unkeyed data = user-0 = dan); a non-root node NEVER defaults to 'root' (fail-closed).
+    node.ownerKey = isRoot ? 'root' : (ownerKey || ownerKeyForCap(id || labelOf));
     // A human DISPLAY name distinct from the stable id — so attributions (feed, internal messages, trace) read
     // descriptively instead of "scoped-9786c66e". Derived without an LLM: an explicit name, else a humanized
     // labelOf, else the id. Callers (mintScopedCap, delegates, specialists) pass a context-derived name.
@@ -2782,8 +2809,8 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       listAutoConfirm: () => harden(listAutoRules(node.id)),
       revokeAutoConfirm: kind => harden({ revoked: removeAutoRule(node.id, String(kind || '')), kind: String(kind || '') }),
       // the entry agent's specialist roster (inventory) — list + retire
-      listSpecialists: () => harden((node.isRoot || powerSet.has('specialists')) ? [...builtinList(), ...specialists.map(s => ({ id: s.id, name: s.name, domain: s.domain, powers: s.powers, autonomy: listAutoRules(s.id).map(r => r.kind), spawnedFrom: s.spawnedFrom || null }))] : []),
-      removeSpecialist: ref => { if (!node.isRoot && !powerSet.has('specialists')) throw new Error("you don't hold specialists"); return harden(removeSpecialist(ref)); },
+      listSpecialists: () => harden((node.isRoot || powerSet.has('specialists')) ? [...builtinList(), ...specialistsFor(node.ownerKey).map(s => ({ id: s.id, name: s.name, domain: s.domain, powers: s.powers, autonomy: listAutoRules(s.id).map(r => r.kind), spawnedFrom: s.spawnedFrom || null }))] : []), // INC-2: this user's specialists only (+ shared builtins)
+      removeSpecialist: ref => { if (!node.isRoot && !powerSet.has('specialists')) throw new Error("you don't hold specialists"); return harden(removeSpecialist(ref, node.ownerKey)); }, // INC-2: scoped to this user's namespace
     });
 
     // The per-turn toolbox + manifest for the LLM (only this node's powers).
@@ -2797,33 +2824,43 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // Build a specialist's node: confined to its granted powers, its own id (so its
   // proposals + auto-confirm rules scope to it), inheriting the root HA/agent bindings.
   const registerSpecialist = spec => {
-    const node = makeAgentNode({ powers: spec.powers, labelOf: spec.id, id: spec.id, haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, wandBinding: () => wand }); // inherits the wand policy (still gated by entries + ⊆ this node)
-    specNodes.set(spec.id, node);
+    // INC-2: a specialist runs IN ITS SPAWNER'S namespace (spec.owner) — so it reads/writes the SAME per-user
+    // stores its spawner does (its own custom-tools/timers land under the spawner, not a fresh tenant). Builtins
+    // (spec.owner undefined) → 'root'. Its id is a slug (not a cap), so ownerKey MUST be passed explicitly.
+    const node = makeAgentNode({ powers: spec.powers, labelOf: spec.id, id: spec.id, ownerKey: spec.owner || 'root', haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, wandBinding: () => wand }); // inherits the wand policy (still gated by entries + ⊆ this node)
+    specNodes.set(specKey(spec), node);
     if (spec.swiss) locator.set(spec.swiss, { node }); // its own invite link — directly addressable
     return node;
   };
-  const getSpecNode = spec => specNodes.get(spec.id) || registerSpecialist(spec);
-  const spawnSpecialist = ({ name, domain, powers, instructions, spawnedFromChatId }) => {
+  // INC-2: specNodes are keyed by (owner, id) so two tenants may hold same-slug specialists without one's node
+  // clobbering the other's. (spec.swiss is already globally unique, so the locator keying is unaffected.)
+  const specKey = s => `${s.owner || 'root'}::${s.id}`;
+  const getSpecNode = spec => specNodes.get(specKey(spec)) || registerSpecialist(spec);
+  const spawnSpecialist = ({ name, domain, powers, instructions, spawnedFromChatId, owner = 'root' }) => {
     const id = specSlug(name);
+    const own = String(owner || 'root');
     // by-reference against the ROOT bundle (= ALL_POWERS): a defensive re-intersection at the
     // persist boundary — callers already attenuated, but a specialist never persists META / a
     // non-existent power. Equivalent to `powers ∩ ALL_POWERS minus META`.
     const granted = regrantNames(rootPowerBundle, powers);
-    const existing = specialists.find(s => s.id === id);
+    // INC-2: re-spawn matches ONLY within THIS owner's namespace (a foreign tenant's same-slug specialist is
+    // invisible + untouched), so a tenant can neither read nor overwrite another tenant's specialist.
+    const existing = specialistsFor(own).find(s => s.id === id);
     const swiss = existing?.swiss || newSwiss();
-    const spec = { id, name: String(name || id), domain: String(domain || ''), powers: granted, instructions: String(instructions || ''), swiss, createdAt: existing?.createdAt || new Date().toISOString(), spawnedFrom: existing?.spawnedFrom || (spawnedFromChatId ? String(spawnedFromChatId) : null) };
-    specialists = specialists.filter(s => s.id !== id).concat(spec);
+    const spec = { id, owner: own, name: String(name || id), domain: String(domain || ''), powers: granted, instructions: String(instructions || ''), swiss, createdAt: existing?.createdAt || new Date().toISOString(), spawnedFrom: existing?.spawnedFrom || (spawnedFromChatId ? String(spawnedFromChatId) : null) };
+    specialists = specialists.filter(s => !(s.id === id && (s.owner || 'root') === own)).concat(spec);
     saveSpecialists();
     registerSpecialist(spec);
     return harden({ ok: true, id, name: spec.name, powers: granted, url: `${baseUrl}/#cap=${swiss}` });
   };
-  const removeSpecialist = ref => {
-    const spec = findSpecialist(ref);
-    if (!spec) return harden({ ok: false, error: 'no such specialist' });
-    specialists = specialists.filter(s => s.id !== spec.id);
+  const removeSpecialist = (ref, owner = 'root') => {
+    const spec = findSpecialist(ref, owner);
+    if (!spec || spec.builtin) return harden({ ok: false, error: 'no such specialist' });
+    const own = String(spec.owner || 'root');
+    specialists = specialists.filter(s => !(s.id === spec.id && (s.owner || 'root') === own));
     saveSpecialists();
     if (spec.swiss) locator.delete(spec.swiss);
-    specNodes.delete(spec.id);
+    specNodes.delete(specKey(spec));
     return harden({ ok: true, id: spec.id });
   };
   // Run a specialist (gemma) with ITS confined bundle + ITS instructions. Its proposals
@@ -2848,18 +2885,19 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       try { const cfg = await fillSpecialist({ name: String(name || ''), request: String(request || ''), origin: String(origin || ''), availablePowers: granted }); if (cfg) { domain = domain || String(cfg.domain || ''); instructions = instructions || String(cfg.instructions || ''); } }
       catch { /* the LLM only flavours domain/instructions — never authority; ignore failure */ }
     }
-    const made = spawnSpecialist({ name: String(name || 'specialist'), domain, powers: granted, instructions, spawnedFromChatId: `wand:${String(name || '').slice(0, 40)}` });
+    const made = spawnSpecialist({ name: String(name || 'specialist'), domain, powers: granted, instructions, spawnedFromChatId: `wand:${String(name || '').slice(0, 40)}`, owner: (caller && caller.ownerKey) || 'root' }); // INC-2: wand-minted INTO the caller's namespace
     return harden({ ...made, domain, granted, viaPolicy: entry.match });
   };
   const makeAskSpecialist = (origin = '', caller = null) => {
     let active = null;
+    const callerOwner = (caller && caller.ownerKey) || 'root'; // INC-2: resolve specialists in the CALLER's namespace only
     return {
       run: async ({ name, request } = {}) => {
-        let spec = findSpecialist(name);
+        let spec = findSpecialist(name, callerOwner);
         let autoCreated = null;
         if (!spec) { // the named specialist doesn't exist → wave the wand: materialize it (⊆ caller), then proceed
           const made = await fillMissingSpecialist({ name, request, origin, caller });
-          if (made && made.ok) { spec = findSpecialist(made.id) || findSpecialist(name); if (spec) autoCreated = { id: made.id, name: made.name, domain: made.domain, powers: made.granted }; }
+          if (made && made.ok) { spec = findSpecialist(made.id, callerOwner) || findSpecialist(name, callerOwner); if (spec) autoCreated = { id: made.id, name: made.name, domain: made.domain, powers: made.granted }; }
           if (!spec) return { ok: false, error: `no specialist "${name}" — list them with listSpecialists` };
         }
         const sub = getSpecNode(spec).toolbox();
@@ -2994,7 +3032,10 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   const registerScoped = ({ swiss, powers, label, notesFolder = '' }) => {
     // notesFolder scopes the `notes` power to a single vault subtree (least authority); empty → whole vault.
     const notesBinding = (notesFolder && (Array.isArray(powers) ? powers : []).includes('notes')) ? () => makeNotesView(notesFolder) : null;
-    const node = makeAgentNode({ powers, labelOf: `chat-${String(label || 'chat').replace(/[^\w-]/g, '_').slice(0, 32)}`, name: String(label || '').trim(), haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, contactsBinding: () => contactsObj, wandBinding: () => wand, notesBinding, id: `scoped-${String(swiss).slice(0, 8)}` });
+    // INC-2: node.id is a TRUNCATED `scoped-<8hex>` (unique per share, but not the raw cap), so derive the
+    // per-user ownerKey from the FULL swiss — matching the server's traceOwnerKeyOf(cap) exactly, so this cap's
+    // specialists/custom-tools/timers/feed land in (and read from) the SAME namespace the feed cell gates on.
+    const node = makeAgentNode({ powers, labelOf: `chat-${String(label || 'chat').replace(/[^\w-]/g, '_').slice(0, 32)}`, name: String(label || '').trim(), haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, contactsBinding: () => contactsObj, wandBinding: () => wand, notesBinding, id: `scoped-${String(swiss).slice(0, 8)}`, ownerKey: ownerKeyForCap(swiss) });
     locator.set(swiss, { node });
     return node;
   };
@@ -3043,9 +3084,14 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // owner — no live human, so any destructive step just queues as a proposal). The server tick calls this for due
   // nudges, then files the answer as a seed-chat in the nudge's chat + pushes a deep-linked notification.
   const runSpecialistNudge = async nudge => {
-    const spec = findSpecialist(nudge.specialistId) || findSpecialist(nudge.specialistName);
+    // INC-2: a standing nudge is fired SERVER-SIDE (not a tenant read), so resolve the referenced specialist
+    // across owners, then run it in ITS OWN namespace — a nudge for a tenant's specialist wakes that specialist,
+    // not a same-slug one belonging to someone else (prefer the swiss the nudge recorded, else id/name).
+    const anyOwner = ref => { const r = String(ref || ''); return specialists.find(s => s.swiss === r) || specialists.find(s => s.id === r || s.id === specSlug(r) || s.name.toLowerCase() === r.toLowerCase()) || builtinSpecs.find(s => s.id === r || s.name.toLowerCase() === r.toLowerCase()); };
+    const spec = anyOwner(nudge.specialistId) || anyOwner(nudge.specialistName);
     if (!spec) return harden({ ok: false, error: 'specialist no longer exists' });
-    try { return harden(await makeAskSpecialist('', rootNode).run({ name: spec.id, request: nudge.request })); }
+    const caller = (spec.owner && spec.owner !== 'root') ? { ...rootNode, ownerKey: spec.owner } : rootNode;
+    try { return harden(await makeAskSpecialist('', caller).run({ name: spec.id, request: nudge.request })); }
     catch (e) { return harden({ ok: false, error: String((e && e.message) || e) }); }
   };
 
@@ -3078,7 +3124,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     nodeFor: swiss => locator.get(String(swiss || ''))?.node || null,
     // resolve a specialist by id/name → its CONFINED node + persona, so a chat can run AS it
     // (the entrypoint-agent picker). Returns null if there's no such specialist.
-    specialistFor: ref => { const spec = findSpecialist(ref); if (!spec) return null; const fd = getFoldDocs(spec.id); return harden({ id: spec.id, name: spec.name, node: getSpecNode(spec), persona: spec.builtin ? builtinPersona(spec.id) : (spec.instructions || ''), powers: [...spec.powers], foldDocs: fd.foldDocs, foldScope: fd.foldScope }); },
+    specialistFor: (ref, owner = 'root') => { const spec = findSpecialist(ref, owner); if (!spec) return null; const fd = getFoldDocs(spec.id); return harden({ id: spec.id, name: spec.name, node: getSpecNode(spec), persona: spec.builtin ? builtinPersona(spec.id) : (spec.instructions || ''), powers: [...spec.powers], foldDocs: fd.foldDocs, foldScope: fd.foldScope }); }, // INC-2: only the caller's own namespace (+ shared builtins)
     // fold an agent's standing reference docs into a persona (the reusable "documents on hand" pattern), and
     // read/write the per-agent fold-docs config (used by the server's chat turn + the Agent editor).
     foldedPersonaFor,
@@ -3103,7 +3149,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         const spec = findSpecialist(aid); if (!spec) return harden({ ok: false, error: 'no such agent' });
         if (typeof instructions === 'string') {
           if (spec.builtin) setBuiltinPersona(spec.id, instructions);
-          else { const rec = specialists.find(s => s.id === spec.id); if (rec) { const updated = { ...rec, instructions: String(instructions) }; specialists = specialists.filter(s => s.id !== spec.id).concat(updated); saveSpecialists(); registerSpecialist(updated); } }
+          else { const own = String(spec.owner || 'root'); const rec = specialists.find(s => s.id === spec.id && (s.owner || 'root') === own); if (rec) { const updated = { ...rec, owner: own, instructions: String(instructions) }; specialists = specialists.filter(s => !(s.id === spec.id && (s.owner || 'root') === own)).concat(updated); saveSpecialists(); registerSpecialist(updated); } } // INC-2: scope the mutation to this owner's namespace
         }
       }
       const key = foldId || findSpecialist(aid)?.id;

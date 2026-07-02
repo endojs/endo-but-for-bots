@@ -196,7 +196,8 @@ test('spawnSpecialist grants requested ∩ parent.powers MINUS META — a sub-ag
   for (const bad of ['email', 'subagent', 'app', 'selfImprove']) assert.ok(!r.powers.includes(bad), `${bad} must not flow to the sub-agent`);
 
   // the persisted specialist's node agrees, and its toolbox exposes none of the stripped verbs.
-  const kid = fa.specialistFor('kid').node;
+  // INC-2: a specialist is spawned into its spawner's namespace, so resolve it within parent.ownerKey.
+  const kid = fa.specialistFor('kid', parent.ownerKey).node;
   assert.deepEqual([...kid.powers].sort(), ['home', 'specialists', 'web'], 'the specialist node holds exactly the confined ring');
   for (const p of kid.powers) assert.ok(parent.powers.has(p), `child power ${p} ⊆ parent`);
   const { toolbox: kidTb } = kid.toolbox();
@@ -211,11 +212,11 @@ test('no amplification down a delegation chain — grandchild ⊆ child ⊆ pare
   const fa = mkRoot(t);
   const parent = fa.nodeFor(fa.mintScopedCap({ powers: ['web', 'home', 'specialists'], label: 'p' }).swiss);
   const kidRing = await parent.toolbox().toolbox.spawnSpecialist.run({ name: 'kid2', powers: ['web', 'home', 'specialists'] });
-  const kid = fa.specialistFor('kid2').node;
+  const kid = fa.specialistFor('kid2', parent.ownerKey).node; // INC-2: spawner's namespace
 
   // the grandchild ASKS for host + vm — names NO ancestor in this chain ever held.
   const gcRing = await kid.toolbox().toolbox.spawnSpecialist.run({ name: 'grandkid2', powers: ['web', 'home', 'host', 'vm', 'specialists'] });
-  const grandkid = fa.specialistFor('grandkid2').node;
+  const grandkid = fa.specialistFor('grandkid2', parent.ownerKey).node; // INC-2: same namespace (inherited down the chain)
 
   assert.deepEqual([...gcRing.powers].sort(), ['home', 'specialists', 'web'], 'grandchild grant drops host+vm (never held upchain)');
   // subset at every hop

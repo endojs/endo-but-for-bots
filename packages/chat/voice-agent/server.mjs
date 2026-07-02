@@ -1934,7 +1934,7 @@ const handler = async (req, res) => {
       // confined ring + persona), not just the entry agent.
       let runNode = node, runPersona = getPersona(), runAgentId = 'field-agent';
       if (agent && agent !== 'field-agent' && (node.isRoot || node.powers.has('specialists'))) {
-        const spec = specialistFor(agent);
+        const spec = specialistFor(agent, node.ownerKey); // INC-2: only THIS cap's own specialists (+ shared builtins)
         if (spec) { runNode = spec.node; runPersona = spec.persona || getPersona(); runAgentId = spec.id; }
       }
       const hist = (Array.isArray(history) ? history : []).filter(m => m && (m.role === 'user' || m.role === 'assistant') && m.content).map(m => ({ role: m.role, content: String(m.content).slice(0, 8000) }));
@@ -1967,7 +1967,7 @@ const handler = async (req, res) => {
       let runNode = node, runPersona = getPersona();
       let runAgentId = 'field-agent';
       if (agent && agent !== 'field-agent' && (node.isRoot || node.powers.has('specialists'))) {
-        const spec = specialistFor(agent);
+        const spec = specialistFor(agent, node.ownerKey); // INC-2: only THIS cap's own specialists (+ shared builtins)
         if (spec) { runNode = spec.node; runPersona = spec.persona || getPersona(); runAgentId = spec.id; }
       }
       // Fold this agent's STANDING reference docs into its persona (read once, scope-jailed) — the reusable
@@ -3854,7 +3854,7 @@ const handler = async (req, res) => {
       const { cap, id } = await jsonBody(req);
       const node = nodeFor(cap);
       if (!node || !(node.isRoot || (node.powers && node.powers.has('specialists')))) return json(res, 403, { error: 'specialists capability required' });
-      const spec = specialistFor(String(id || ''));
+      const spec = specialistFor(String(id || ''), node.ownerKey); // INC-2: only THIS cap's own specialists (+ shared builtins)
       if (!spec) return json(res, 404, { error: 'no such specialist' });
       let nudges = []; try { nudges = specialistNudges.list({ specialistId: spec.id }).map(n => ({ id: n.id, request: n.request, recurring: n.schedule.kind === 'interval', nextAt: n.nextAt ? new Date(n.nextAt).toISOString() : null, runs: n.runs, status: n.status })); } catch { /* */ }
       let runs = []; try { runs = (await readSeedChats()).filter(s => s && s.source === 'specialist-nudge' && s.scheduled && s.scheduled.specialist === spec.name).slice(0, 8).map(s => ({ id: s.id, title: s.title, at: s.ts, request: String(s.transcript || '').slice(0, 200) })); } catch { /* */ }
