@@ -2,10 +2,15 @@
 > The CURATED, current plan is `../SELF-IMPROVEMENT-ROADMAP.md` (incl. §6 self-tuning). This file is the
 > original deep design detail — concrete API sketches — preserved on request; treat the roadmap as
 > authoritative where they differ.
-
----
-
-I have a complete, grounded picture. Here is the design doc.
+>
+> **SPINE BUILT (2026-07-02).** The eval harness described here is in the tree at `../eval/`:
+> `harness.mjs`, `eval.mjs` (CLI), `tree.mjs`, `aggregate.mjs`, `anonymize.mjs` (+ `anonymize.test.mjs`),
+> `score.mjs`, plus `obstacles/`, `candidates/`, and `results/`. The §6 self-tuning organs also landed —
+> `harvest.mjs` (§6b), `orchestration.mjs` (§6c), `champions.mjs` (§6d). Naming diverged slightly from
+> the sketch (the price table lives in the top-level `costModel.mjs` rather than an `eval/prices.mjs`;
+> scoring is `score.mjs`). What remains is the *operational* loop driver (a timer/heartbeat to run
+> propose→implement→eval→adopt continuously) and its human/eval-gated adoption policy — see the roadmap
+> §7 E2/E3.
 
 ---
 

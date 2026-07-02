@@ -1,5 +1,14 @@
 # Promote on attention — "oh, this!" turns a message (or a segment) into a shareable object
 
+> **SHIPPED — the content grade, as "clip" (2026-07-02).** The "smallest shippable slice" (§"Smallest
+> shippable slice", step 1) is live: a 🔗 affordance in each message's corner **clips** the bubble (or a
+> highlighted segment) into a shareable, owner-keyed, **revocable** page. Server routes `POST /clip/create`
+> · `/clip/list` · `/clip/revoke` (`server.mjs`), client promotion via `attachMsgToolbar` (`public/app.js`);
+> clip links are cap-scrubbed in the trace/corpus (the `/clips/<key>` redaction rule). **App grade** (step 3
+> — reify the selection into a real component via apps-on-the-fly) and the **live/voice grades** (step 4)
+> remain the follow-on. So read the "only missing piece is the gesture" framing below as *content grade
+> done*; the naming landed as **"clip."** (memory `clips_promote_on_attention`.)
+
 Brainstorm (dan, 2026-06-29). Trigger: a small model (gemma) produced a decent "Alameda County Fair
 plan" — but as **plain markdown**, "not one of our apps." dan: *let the framework do the heavy lifting.*
 An output like that should be **shareable as a page, like any component**. Which implies the general move:

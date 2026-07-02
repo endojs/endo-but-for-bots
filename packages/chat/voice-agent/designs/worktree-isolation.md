@@ -67,6 +67,16 @@ bind-mount only the worktree, deny the rest — tracked separately (see the
 `endo_sandbox_genie` memory). Binding the worktree host facet through a bwrap slice is the
 natural next increment, and is what would make `host` itself a real boundary.
 
+> **UPDATE — bwrap confinement SHIPPED (2026-07-02).** The "natural next increment" above is
+> done. `hostExec` on a `jail`-bound worktree node now runs **inside a bwrap sandbox** when
+> `bwrap` is present: `agent-caps.mjs` (`BWRAP_BIN`/`WORKTREE_BWRAP`/`BWRAP_BASE`, and the
+> `if (WORKTREE_BWRAP)` branch in the shared host `exec`) binds **only** the worktree dir with
+> `--unshare-all` (no network; secrets / other state / write-elsewhere denied); it **falls back to
+> the cwd-jail** (the softer isolation described above) only when bwrap is absent or `WORKTREE_BWRAP=0`.
+> The same sandbox wraps the render-check child (`render-check.mjs`, which **fails closed** — skips
+> rather than executing unsandboxed). So on this host `host` *is* a real boundary for worktree roles;
+> the cwd-jail caveats above apply to the bwrap-absent fallback. Proven by `bwrap-confinement.test.mjs`.
+
 ## Safe-teardown specifics (from adversarial review)
 
 - **Reclaim never force-deletes.** If `git worktree add` fails, `create()` runs only

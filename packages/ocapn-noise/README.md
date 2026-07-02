@@ -113,6 +113,15 @@ Transport plugins:
   `@endo/stream-node`.
 - `@endo/ocapn-noise/transport/ws`: `WebSocket`; resolves to a Node
   variant today, with a browser variant planned via the same subpath.
+- `@endo/ocapn-noise/transport/iroh`: dial-by-pubkey QUIC over
+  `@number0/iroh` (an `optionalDependency`). Dial by stable EndpointId
+  (derived from a persisted 32-byte seed) with **no `host:port`** and no
+  open TCP listeners; NAT traversal + relay come for free. The locator
+  carries `iroh:id` (+ optional `iroh:addr`) hints instead of `tcp:*`.
+  See `IROH-MIGRATION.md` for migrating a `tcp` service onto it (the
+  layers above the transport — caps, attenuation, revocation, swissnums —
+  are unchanged). Because QUIC frames are large, the 65519-byte Noise
+  message ceiling does not apply on this transport.
 
 ```js
 import { cborCodec } from '@endo/ocapn/cbor';

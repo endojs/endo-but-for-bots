@@ -16,8 +16,20 @@ The design's main de-risk (§4 speaker labelling) and the operator's explicit pr
 - `meeting-scribe.mjs` — `makeMeetingScribe({diarizeUrl})` → a hardened cap: `start({hints})`, `ingest(sid, audioBytes, mime)→{segments}`, `end(sid)→{transcript,speakers,segments}`, `help()`. The backend URL is **confined inside** the cap (callers get only the verbs — the design's "swappable Endo cap"). Self-host today; a cloud streaming diarizer drops into the same slot.
 - **Proven**: `meeting-scribe-test.mjs` — the field agent ingested a real chunk via the cap → tinix backend → diarized transcript. ✅
 
+## ✅ M1 rest (server + client) — SHIPPED (single-shot), 2026-07-02
+The live app path landed as a **single-shot** recorder (record the whole meeting → diarize the full
+clip once → speaker-labelled transcript into the chat), not the streaming-timeslice design:
+- **Server:** `meetingScribe = makeMeetingScribe()` is instantiated live (`server.mjs`); route
+  `POST /meeting/transcribe` (`start`→`ingest`→`end` on the cap) returns `{transcript,speakers,segments}`,
+  plus `POST /meeting/list`. (The route name is `/meeting/transcribe`, not the design's `/meeting/ingest`.)
+- **Client:** `startMeeting()`/`stopMeeting()` behind the mic button (`mtgBtn`) in `public/app.js`; the
+  diarized transcript is pushed into the conversation as a `meetingScribe`-tool message.
+
 ## ⏳ Remaining (scoped — live-app / multi-day; needs operator product calls)
-- **M1 rest (server + client):** a `/meeting/ingest` route (sibling of `/stt`) that calls `meetingScribe` + persists per-cap under `~/.local/state/voice-agent/meetings/`; `/meeting/load` for replay; client `startMeeting()` (open-mic + `MediaRecorder` timeslices) + live diarized-transcript view + Scribe advisor panel. (server.mjs + public/ — additive but live; needs a restart.)
+- **Live-streaming variant of M1:** `MediaRecorder` timeslices → incremental ingest, a live
+  diarized-transcript view, per-cap persistence + `/meeting/load` replay, and the Scribe advisor panel.
+  (The single-shot path above covers the batch case; streaming is the follow-on and depends on the
+  cross-chunk continuity fix below.)
 - **M2 — PIN trusted-path:** in meeting mode, force destructive/auth verbs down the propose path (disable `dontAskAgain`); `/confirm` gains a PIN check before `commitProposal`. Salted PIN hash per root cap, rate-limited. (Voice can only PROPOSE; only a PIN-confirmed on-screen tap commits.)
 - **M3 — Participant mode:** agent speaks (browser TTS → Moshi on tinix GPU4 :8998 for full-duplex); addressed-only → proactive; suppress self-audio from diarization.
 - **M4 — Endo sharing:** `meetingSession` cap with attenuated `transcript`/`live` facets; share/revoke a read-only live transcript over the network — **rides the now-proven Iroh transport** (`makeIrohTransport`).

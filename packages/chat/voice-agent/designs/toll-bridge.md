@@ -2,6 +2,16 @@
 > The CURATED, current plan is `../SELF-IMPROVEMENT-ROADMAP.md` (incl. §6 self-tuning). This file is the
 > original deep design detail — concrete API sketches — preserved on request; treat the roadmap as
 > authoritative where they differ.
+>
+> **SHIPPED — the meter / purse / toll core (2026-07-02).** The primitives designed here are in the tree:
+> `../meter.mjs` (the metered LLM/provider seam), `../purse.mjs` (`makePurse` + the single new primitive
+> `makeBoundedSubPurse` for `Σ children ≤ parent`, tested in `../purse-subpurse.test.mjs`), `../costModel.mjs`
+> (the µUSD rate table, §6), `../toll-bridge.mjs`, and `../purse-store.mjs` (durable per-cap purse — the §5
+> persistence gap, closed). This is roadmap Increments 0–1: a visible per-chat budget that decreases on real
+> token usage, refusing at zero. **Still pending** (see roadmap §2/§5): real (non-fake) rates for the paid
+> providers (Inc 4) and the full prepaid-`createSubAgent` funding path threaded through all three spawn sites
+> (Inc 5) — the `makeBoundedSubPurse` primitive exists; wiring `payment` through `delegateTask`/`employ`/
+> `spawnSpecialist` end-to-end is the remaining work. Read §3/§6 as *primitive done, spawn-site wiring TODO*.
 
 ---
 

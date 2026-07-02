@@ -2,6 +2,15 @@
 > The CURATED, current plan is `../SELF-IMPROVEMENT-ROADMAP.md` (incl. §6 self-tuning). This file is the
 > original deep design detail — concrete API sketches — preserved on request; treat the roadmap as
 > authoritative where they differ.
+>
+> **STATUS: the SKILL layer is UNBUILT (as of 2026-07-02).** The `skills.mjs` module (`makeSkillLibrary`,
+> §1/§5) was scaffolded but **never wired** into the agent loop — no `readSkill` verb was added, no
+> `skillList()` block reached the `sys` array, no role cited a skill, and no `skills/<name>/SKILL.md`
+> directory was ever created. Its only consumer was its own test. It was therefore **removed as dead code**
+> in the 2026-07-01 audit (P6 DEAD-1) — do not expect `skills.mjs` in the tree. So treat the "smallest first
+> increment" (§5) as **not yet done**: to revive this, re-create `skills.mjs` *and* land the three wiring
+> steps (verb, `sys` index, role citation) together. NB the measurement rail this design leans on (§4, the
+> eval-suite A/B loop) **does** exist now (`../eval/`) — only the skill *content + citation* layer is missing.
 
 ---
 
