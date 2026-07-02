@@ -194,17 +194,40 @@ const extractCode = reply => {
   return open ? open[1].trim() : null;
 };
 
-export const runAgentCode = async ({ toolbox, manifest, userText, history = [], onStep = () => {}, signal, persona = '', attachments = [], model = 'default', llm, budgetLine = '', resumeMessages = null, callLLM = defaultCallLLM, buildUserContent = defaultBuildUserContent, takeInterjections = () => [], allowResearch = false } = {}) => {
+export const runAgentCode = async ({ toolbox, manifest, userText, history = [], onStep = () => {}, signal, persona = '', attachments = [], model = 'default', llm, budgetLine = '', resumeMessages = null, callLLM = defaultCallLLM, buildUserContent = defaultBuildUserContent, takeInterjections = () => [], allowResearch = false, persist = null, sideEffectLedger = null, destructiveVerbs = null } = {}) => {
   const invoke = llm || callLLM;
   const used = [];
+  // P1-5: injected, OPTIONAL capabilities (endowments of the LOOP, NOT of the program's Compartment — SES
+  // confinement is unchanged; the program can't name them). `persist(transcript)` durably saves the in-flight
+  // transcript-with-outputs at each step boundary so a restart RECOVERS by replay, not re-run. `sideEffectLedger`
+  // (+ `destructiveVerbs`) is the at-most-once guard for destructive verbs. Both default null → byte-identical to
+  // the pre-P1-5 loop (the in-process top-up resume path in resume.test.mjs is unaffected).
+  const persistTranscript = typeof persist === 'function' ? persist : null;
+  const ledger = sideEffectLedger && destructiveVerbs && typeof destructiveVerbs.has === 'function' ? sideEffectLedger : null;
   // Wrap every toolbox verb as an async fn the program can call: `await name(args)`. Each emits the
   // same onStep events as the classic loop, so the trace/pendant + toolsUsed keep working.
   // wrap one invocation so it emits the trace + records usage + never throws past the sandbox.
   const wrapCall = (label, fn) => harden(async (args = {}) => {
     if (signal?.aborted) throw new Error('aborted');
     onStep({ kind: 'tool-start', name: label, args });
-    try { const r = await fn(args || {}); used.push({ name: label, args, result: r }); onStep({ kind: 'tool', name: label, args, result: r }); return r; }
+    // P1-5 IDEMPOTENCY LEDGER: for a DESTRUCTIVE verb, consult a durable at-most-once ledger so a recovery
+    // re-run (after a mid-turn restart) that re-invokes an already-committed side effect returns the PRIOR
+    // result instead of firing it AGAIN. Fail-safe: a null callKey (ledger unavailable) → run the verb normally.
+    const guarded = !!(ledger && destructiveVerbs.has(label));
+    let callKey = null;
+    if (guarded) {
+      callKey = ledger.callKey(label, args);
+      const prior = callKey ? ledger.recall(callKey) : null;
+      if (prior && prior.hit) { used.push({ name: label, args, result: prior.result }); onStep({ kind: 'tool', name: label, args, result: prior.result, replayed: true }); return prior.result; }
+      if (callKey) ledger.markPending(callKey); // write-ahead intent: a crash mid-effect leaves a durable trace
+    }
+    try {
+      const r = await fn(args || {});
+      if (callKey) ledger.settle(callKey, r); // record iff it committed a real effect; else clear the pending marker
+      used.push({ name: label, args, result: r }); onStep({ kind: 'tool', name: label, args, result: r }); return r;
+    }
     catch (e) {
+      if (callKey) ledger.clearPending(callKey); // a throw = no committed effect → let a retry/replay run it
       // REL-3: budget exhaustion during a METERED sub-call (delegateTask → Opus refuses before any paid
       // call when the purse can't cover its floor) is NOT an ordinary tool error to be swallowed and run
       // past — it must route to the turn-level EXHAUSTED / top-up path. Re-throw so the loop converts it.
@@ -508,6 +531,12 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     // return value; never let an onStep throw break the agent (the loop's own guards still decide control flow).
     try { onStep({ kind: 'trajectory', failStreak, repeatErr, lastError }); } catch { /* observers must not break the loop */ }
     messages.push({ role: 'user', content: `OUTPUT:\n${parts.join('\n')}` });
+    // P1-5 STEP-BOUNDARY PERSIST: a tool (or several) just executed and its OUTPUT is now in the transcript. Save
+    // the accumulating transcript-with-outputs durably (excluding the system prompt — the server re-adds a fresh
+    // one on resume, exactly as the in-process top-up path does). On a mid-turn restart the recovery path loads
+    // THIS as resumeMessages, so the replayed program SEES the prior tool OUTPUTs and does NOT re-invoke them —
+    // recovery becomes a replay, not a re-fire. Best-effort: a persist failure must never break the turn.
+    if (persistTranscript) { try { persistTranscript(messages.slice(1)); } catch { /* durable persist is best-effort */ } }
   }
 };
 harden(runAgentCode);
