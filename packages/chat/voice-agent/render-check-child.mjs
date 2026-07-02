@@ -4,17 +4,22 @@
 // while the authoring agent's tool step said ok:true (the chat-1cbe89a9 failure).
 //
 // Isolation model (deliberate, in order):
-//   1. THROWAWAY CHILD PROCESS with a hard timeout in the parent (render-check.mjs) — a `while(true)`
-//      in a component body kills THIS process, never the live server.
-//   2. BARE ENVIRONMENT — the parent spawns us with env={PATH} only; no cap, secret, or state dir here.
-//   3. SHADOWED AMBIENT GLOBALS — the source is evaluated via `new Function` with process/require/
-//      Buffer/fetch/… shadowed to undefined, so the node ambient surface is out of lexical reach.
+//   1. KERNEL SANDBOX (the SECURITY boundary) — the parent (render-check.mjs) spawns this process INSIDE
+//      bwrap: `--unshare-all` (NO network), a minimal READ-ONLY system + repo, nothing else. So even a
+//      full in-child escape (`this.process`, `Function.prototype.constructor`, dynamic `import()` — none
+//      of which lexical shadowing closes) cannot read a secret, write a file, or reach the network. This
+//      is why we can safely EXECUTE agent source here to smoke-test its mount.
+//   2. THROWAWAY CHILD PROCESS with a hard timeout in the parent — a `while(true)` in a component body
+//      kills THIS process, never the live server.
+//   3. BARE ENVIRONMENT — the parent spawns us with env={PATH} only; no cap, secret, or state dir here.
+//   4. SHADOWED AMBIENT GLOBALS — defense-in-depth + fidelity: process/require/Buffer/fetch/… are shadowed
+//      to undefined so a component that touches them fails the SAME way it would in the browser frame.
 // We intentionally do NOT evaluate in a SES Compartment: the compartment scope proxy resolves an
 // UNKNOWN VARIABLE READ to `undefined` instead of throwing, which is exactly the bug class we exist to
 // catch (chat-1cbe89a9 v1: a bare `safeSaleAmount` → ReferenceError in the REAL browser iframe). Plain
 // function evaluation reproduces the iframe's semantics; for forks it is deliberately STRICTER than the
 // production compartment (an undefined variable is a bug either way — better a loud check than a silent
-// "undefined" on screen). The real confinement boundary for this code remains the browser sandbox.
+// "undefined" on screen). Confinement is provided by bwrap (above), not by this eval mode.
 //
 // Two kinds, matching the two live render pipelines:
 //   ui   — showComponent / break-out sources: `(ui) => element`, mounted by public/confined.html.

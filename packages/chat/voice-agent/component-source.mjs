@@ -17,33 +17,39 @@
 //       foo => bar => baz; somethingElse()  // parses but yields a fn only by luck / or a non-fn
 //   • `includes('=>')` is satisfied by a `=>` ANYWHERE (e.g. inside a string), not by an actual arrow head.
 //
-// The fix is to validate the source the EXACT way the frame consumes it: wrap it as `(<source>)`,
-// PARSE+evaluate just that outer expression (which does NOT run the component body — an arrow's body
-// only runs when called), and require the result to be a function. This makes the server's accept-set
-// IDENTICAL to the frame's, so a source that passes here can never produce that mount error.
+// The fix is to validate the source the EXACT way the frame consumes it — wrap it as `(<source>)` and
+// PARSE it — but WITHOUT EVER EXECUTING it. This module runs in the live, root-authority server process,
+// and it is reachable from agent-authored source via the showComponent tool (an indirect prompt-injection
+// path). The previous implementation invoked the compiled wrapper (`new Function(...)()`), which EVALUATES
+// the outer expression in-process at validation time. Evaluating an expression is NOT free: a top-level
+// IIFE `(function(){ …evil… })()` or comma-operator payload `(evil(), (ui) => …)` runs `evil()` during
+// that evaluation — arbitrary code with ambient Node authority, before the isolated render check ever ran.
+//
+// Fix: compile-ONLY. `new Function('return (<src>);')` PARSES the source (throwing SyntaxError on invalid
+// syntax) but does not run any of it until the compiled function is CALLED — and we never call it. So no
+// agent-authored code executes here. Function-ness and mount-safety are decided downstream by the ALREADY
+// ISOLATED render-check child (a separate process with shadowed globals and a hard timeout — render-check.mjs),
+// which showComponent runs immediately after this gate. The server never executes component source in-process.
 
-// Validate a confined-component source string.
-// Returns { ok:true, fn } if `(<source>)` evaluates to a function (mirroring public/confined.html mount),
-// or { ok:false, error } with a precise reason otherwise. `maxLen` (default 8000) bounds size like before.
+// Validate a confined-component source string (SYNTAX-ONLY — never executes the source).
+// Returns { ok:true } if `(<source>)` PARSES (mirroring what public/confined.html injects), or
+// { ok:false, error } with a precise reason otherwise. `maxLen` (default 8000) bounds size like before.
+// NOTE: this no longer confirms the source evaluates to a function — that (and full mount-safety) is the
+// job of the isolated render-check child; doing it here would require executing agent code in-process.
 export const validateComponentSource = (source, { maxLen = 8000 } = {}) => {
   const src = String(source == null ? '' : source);
   if (!src.trim()) return { ok: false, error: 'source must be a function: (ui) => ui.create(...)' };
   if (src.length > maxLen) return { ok: false, error: `component source too long (keep it under ${maxLen} chars)` };
-  let fn;
   try {
-    // `return (<source>)` — the SAME wrapping the confined frame uses (it injects `(' + source + ')`).
-    // Evaluating this returns the arrow/function VALUE; it does NOT invoke the body (no call site), so it
-    // is as safe as shipping the text to the sandbox already is, and it catches BOTH parse errors and
-    // not-a-function results that the old regex let slip through to the live mount error.
+    // COMPILE-ONLY: `return (<source>)` is parsed (SyntaxError on bad syntax) but the compiled function is
+    // NEVER invoked, so nothing in the source — not even a top-level IIFE / comma-operator side effect —
+    // executes in this process. (Contrast the removed `…)()` which DID execute it. Do not re-add the call.)
     // eslint-disable-next-line no-new-func
-    fn = new Function(`return (${src}\n);`)();
+    new Function(`return (${src}\n);`);
   } catch (e) {
     return { ok: false, error: `source failed to parse — it must be a function (ui) => ui.create(...): ${(e && e.message) || e}` };
   }
-  if (typeof fn !== 'function') {
-    return { ok: false, error: 'source must be a function: (ui) => ui.create(...)' };
-  }
-  return { ok: true, fn };
+  return { ok: true };
 };
 
 export default validateComponentSource;
