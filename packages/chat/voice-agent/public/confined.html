@@ -220,8 +220,26 @@ const fail = (msg) => { try { send({ type: 'error', error: String(msg) }); } cat
 // mount); the host queues them for the AUTHORING agent's next turn as well as the auto-fix loop.
 let __rtReported = [];
 const reportRuntime = (msg, where) => { try { const m = String(msg || 'unknown error').slice(0, 280); if (__rtReported.length >= 4 || __rtReported.indexOf(m) >= 0) return; __rtReported.push(m); send({ type: 'error', error: (where ? where + ': ' : 'runtime error after mount: ') + m, runtime: true }); } catch (e) {} };
-window.addEventListener('error', (e) => { /* keep errors from escaping the frame — but REPORT them, never swallow silently */ try { e.preventDefault(); } catch (_) {} reportRuntime(e && e.message); });
-window.addEventListener('unhandledrejection', (e) => { try { e.preventDefault(); } catch (_) {} reportRuntime((e && e.reason && e.reason.message) || (e && e.reason) || 'unhandled promise rejection', 'unhandled rejection after mount'); });
+// PROVENANCE FILTER (dan's invariant: extension/wallet noise is NEVER the component's fault). A browser
+// extension's content script runs in EVERY frame — including this opaque-origin sandbox — and injects its
+// own globals (e.g. a wallet provider MetaMask puts a window.ethereum into all_frames). In an opaque-origin
+// frame that provider can't reach its extension background, so ~10s later its init REJECTS ("Failed to
+// connect to MetaMask") — an unhandled rejection that DID NOT originate in the component. Report it and the
+// host misattributes it as a component error (red note, agent "rebuild it" turn, auto-fix backlog goal, and
+// — for the trace island — a mid-run teardown of a viz that is rendering fine). So: an error whose
+// filename/stack is an EXTENSION origin, or whose message is the known wallet-provider-noise class, is
+// dropped here (left in the console, never sent over the port). This is a source-level filter for the whole
+// extension-noise class, not just MetaMask.
+const EXT_ORIGIN_RE = /(?:chrome|moz|safari-web)-extension:\/\//i;
+const WALLET_NOISE_RE = /Failed to connect to MetaMask|MetaMask extension not found|Lost connection to ["']?MetaMask|@metamask\b|ethereum provider|\binpage\.js\b|StreamProvider|Received invalid isUnlocked/i;
+const isForeignError = (msg, stackOrFile) => { try { const s = String(stackOrFile || ''); if (s && EXT_ORIGIN_RE.test(s)) return true; if (WALLET_NOISE_RE.test(String(msg || ''))) return true; } catch (_) {} return false; };
+window.addEventListener('error', (e) => { /* keep errors from escaping the frame — but REPORT them, never swallow silently */
+  if (isForeignError(e && e.message, (e && e.filename) || (e && e.error && e.error.stack))) return; // extension-injected script's error → not the component's; leave it in the console
+  try { e.preventDefault(); } catch (_) {} reportRuntime(e && e.message); });
+window.addEventListener('unhandledrejection', (e) => {
+  const reason = e && e.reason;
+  if (isForeignError((reason && reason.message) || reason, reason && reason.stack)) return; // extension/wallet-provider rejection → not the component's; don't preventDefault (leave it in the console)
+  try { e.preventDefault(); } catch (_) {} reportRuntime((reason && reason.message) || reason || 'unhandled promise rejection', 'unhandled rejection after mount'); });
 // After a render settles, report any coercion smells to the host (feedback-loops + agent re-author).
 // Belt-and-suspenders: also scan the produced DOM text for a smell the kit sinks didn't originate
 // (e.g. an agent that String()-concatenated an object itself, or a raw-tag textContent write).
