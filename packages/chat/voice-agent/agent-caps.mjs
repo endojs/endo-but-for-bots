@@ -635,6 +635,21 @@ export const resolvePower = name => { const n = String(name || ''); return POWER
 // affordance imports above. POWERS / META_POWERS remain DISPLAY-ONLY metadata.
 export { makeCapabilityBundle } from './agent-caps-bundle.mjs';
 
+// Proposal types that ALWAYS confirm — they can NEVER be "don't ask again"-remembered / auto-fired.
+// Physical-world (locks!) + EXTERNAL/HIGH-authority actions: outbound sends, host-shell delegation, and
+// self-modification must not silently fire on an accrued auto-confirm rule. (Security R5: tightening auth
+// is the safe/reversible direction and matches dan's "email SEND behind confirm" + endowment-moment rule;
+// dan can relax specific ones later.) Exported so the denylist is directly assertable in tests.
+export const NEVER_AUTO = harden(new Set([
+  'home-assistant',   // physical world (locks!)
+  'accept-invite',    // accepting external authority
+  'email',            // outbound email send
+  'buffer-post', 'buffer-blast', 'buffer-delete', // social-media publish/delete (external channel)
+  'subagent',         // grants a sub-agent the HOST shell — the highest-authority delegation
+  'system-prompt',    // self-modification of the agent's own instructions
+  'give-kazputer', 'kazputer-setting', 'kazputer-coins', // provisioning / mutating a kid's Kazputer
+]));
+
 // ── build the agent. Returns the locator + a root node holding ALL powers. ────
 // makeFieldAgent({ outDir, baseUrl }) →
 //   { locator, register, rootNode, rootSwiss(set later), toolboxFor, manifestFor }
@@ -882,7 +897,6 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   //    HomeAssistant is EXCLUDED — physical-world actions (locks!) always confirm;
   //    per-entity HA autonomy is future work needing per-cap attribution. ──────────
   const AUTOCONFIRM_FILE = autoConfirmFile || path.join(CONFIG_DIR, 'auto-confirm.json');
-  const NEVER_AUTO = new Set(['home-assistant', 'accept-invite']); // physical-world + EXTERNAL-authority actions ALWAYS confirm (spawning a confined sub-agent no longer proposes — it's structurally within bounds)
   let autoRules = [];
   try { autoRules = JSON.parse(fs.readFileSync(AUTOCONFIRM_FILE, 'utf8')).rules || []; } catch { autoRules = []; }
   const saveAutoRules = () => { try { fs.mkdirSync(path.dirname(AUTOCONFIRM_FILE), { recursive: true }); fs.writeFileSync(AUTOCONFIRM_FILE, JSON.stringify({ rules: autoRules }, null, 2), { mode: 0o600 }); } catch (e) { /* best effort */ } };
