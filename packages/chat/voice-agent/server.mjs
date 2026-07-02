@@ -1094,18 +1094,27 @@ const emitStep = (sid, obj) => {
   for (const r of set) { try { r.write(line); } catch { /* dropped */ } }
 };
 // a short "what did this action do" string for inspection — the query/url/path/prompt (no contents, no cap).
-const detailFromArgs = (a) => { if (!a || typeof a !== 'object') return ''; const v = a.query || a.url || a.path || a.q || a.prompt || a.task || a.cmd || a.message || a.title || ''; return String(v || '').slice(0, 200); };
+const detailFromArgs = (a) => { if (!a || typeof a !== 'object') return ''; const v = a.query || a.url || a.path || a.q || a.prompt || a.task || a.cmd || a.message || a.title || ''; return scrubCaps(String(v || '')).slice(0, 200); }; // SEC-14: scrub before slicing so a persisted trace detail (step.detail) never carries a cap/token
 // Full-but-bounded text of a tool invocation / result, for the trace's inspectable modal.
 // CAP-HYGIENE: never leak a swissnum/secret into the trace, and never ship a base64 blob (e.g. a PNG).
 const SECRET_KEY = /swiss|secret|token|password|authorization|api[_-]?key|cookie|\bcap\b/i;
 // VALUE-level cap scrub: elide cap-bearing substrings even when they appear in free text (a tool result
 // that echoed a #cap link, share token, or a bare 32-hex swissnum). Targets the app's cap SHAPES only, so
 // it won't redact 16-hex HA handles or 64-hex hashes. Used by safeText (covers the trace stream + persistence).
+// SEC-13: broadened so the OTHER cap-bearing shapes (path-style share/download links, 24+-hex tokens,
+// base64url share tokens) can't persist into a trace/corpus/render either. Order matters — redact the
+// STRUCTURED forms (fragments, then path links) first so the generic hex/base64url sweeps that follow only
+// hit BARE tokens. The generic base64url sweep is deliberately aggressive (it over-redacts a stray 22+-char
+// identifier) — a leaked swissnum is the red line, an over-redacted trace string is not. (The client-side
+// half — app.js `scrubCap` — is another worker's file; noted in the report as a follow-up so the two stay
+// in lock-step.)
 const scrubCaps = s => String(s == null ? '' : s)
   .replace(/#cap=[0-9a-fA-F]{16,}/g, '#cap=«redacted»')
   .replace(/#k=[\w-]{16,}/g, '#k=«redacted»')
   .replace(/#agent=[\w-]{8,}/g, '#agent=«redacted»')
-  .replace(/\b[0-9a-f]{32}\b/g, '«swissnum»');
+  .replace(/\/(dl|sites|clips)\/[A-Za-z0-9_-]{6,}/g, '/$1/«redacted»') // path-style cap/share links: /dl/<swissnum>, /sites/<8hex>, /clips/<key>
+  .replace(/\b[0-9a-f]{24,}\b/g, '«swissnum»')                        // 24+-hex: 32-hex swissnums, 48-hex tool-shares, sha hashes
+  .replace(/[A-Za-z0-9_-]{22,}/g, '«token»');                         // base64url runs: 24-char share tokens etc.
 // P1-7 ANSWER-HYGIENE (the "[object Object] in purple" fix): even if some path slips a raw coercion through,
 // NEVER persist/render "[object Object]" (or [object Promise]/[object Map]…). codemode now captures such values
 // as structured descriptors on the `objects` channel (see codemode.mjs CONTRACT) and puts a 🌱 placeholder in the
@@ -2980,7 +2989,7 @@ const handler = async (req, res) => {
       if (u.pathname === '/forks/backlog/report') {
         const st = forks.shareTarget(String(body.token || ''));
         if (!st.ok) return json(res, 403, { ok: false, error: st.error });
-        const r = componentBacklog.add(st.forkId, { kind: body.kind === 'request' ? 'request' : 'issue', title: body.title, body: body.body, from: backlogOriginOf(body.token) });
+        const r = componentBacklog.addOnlyFacet(st.forkId).add({ kind: body.kind === 'request' ? 'request' : 'issue', title: body.title, body: body.body, from: backlogOriginOf(body.token) }); // SEC-15: this route holds ONLY the add-only facet, never the full bag
         return json(res, 200, r.ok ? { ok: true, deduped: !!r.deduped } : r); // add-only: no item list/state echoes back
       }
       const owner = forkOwnerOf(body.cap);
@@ -3103,7 +3112,7 @@ const handler = async (req, res) => {
       const { shareToken, title, body: text, kind } = await jsonBody(req);
       const share = componentShares.get(String(shareToken || ''));
       if (!share) return json(res, 403, { ok: false, error: 'this share link is no longer valid' });
-      const r = componentBacklog.add(share.componentId, { kind: kind === 'request' ? 'request' : 'issue', title, body: text, from: backlogOriginOf(shareToken) });
+      const r = componentBacklog.addOnlyFacet(share.componentId).add({ kind: kind === 'request' ? 'request' : 'issue', title, body: text, from: backlogOriginOf(shareToken) }); // SEC-15: add-only facet only, not the full bag
       return json(res, 200, r.ok ? { ok: true, deduped: !!r.deduped } : r); // add-only: no backlog state echoes back
     }
     // ONLY way a proposed tool becomes callable — never auto-injected. (Also the root-gated component
