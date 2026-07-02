@@ -16,13 +16,15 @@ const SRC = `(ui) => ui.island("Card", {}, [
   ]),
   ui.island("Banner", {}, [ui.create("span").text("Toddler Picks")]),
 ])`;
+const { startIsolatedServer, loadChromium, launchBrowser } = require('./test-harness.cjs');
 (async () => {
-  let chromium = null; try { ({ chromium } = require('/usr/lib/node_modules/@playwright/cli/node_modules/playwright-core')); } catch {}
+  const chromium = loadChromium();
   if (!chromium) { console.log('  SKIP - no chromium'); console.log(`\n${pass} passed, ${fail} failed (skipped)`); process.exit(0); }
-  const br = await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'], env: { ...process.env, LD_LIBRARY_PATH: '/var/lib/obsidian/oldlibs' } });
+  const srv = await startIsolatedServer();
+  const br = await launchBrowser(chromium);
   try {
     const page = await br.newPage();
-    await page.goto('http://127.0.0.1:8778/confined.html', { waitUntil: 'load' }); await page.waitForTimeout(500);
+    await page.goto(`${srv.base}/confined.html`, { waitUntil: 'load' }); await page.waitForTimeout(500);
     await page.evaluate(src => { window.postMessage({ __cu: 1, type: 'mount', source: src }, '*'); }, SRC);
     await page.waitForTimeout(700);
     const r = await page.evaluate(() => { const t = document.body.textContent || ''; return { badge: /2:30 PM/.test(t), chip: /pigs/.test(t), banner: /Toddler Picks/.test(t), badgeText: (document.querySelector('.cu-badge') || {}).textContent }; });
@@ -30,6 +32,6 @@ const SRC = `(ui) => ui.island("Card", {}, [
     ok(r.chip, 'a Chip with text as a child renders it');
     ok(r.banner, 'a Banner with text as a child renders it');
     await page.close();
-  } finally { await br.close(); }
+  } finally { await br.close(); srv.close(); }
   console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('staging test error:', e && e.stack || e); process.exit(2); });

@@ -1,8 +1,10 @@
+const { startIsolatedServer, loadChromium, launchBrowser } = require('./test-harness.cjs');
 const ok=(c,m)=>{console.log((c?'  ok - ':'  FAIL - ')+m); if(!c)process.exitCode=1;};
 (async()=>{
-  let chromium=null; try{({chromium}=require('/usr/lib/node_modules/@playwright/cli/node_modules/playwright-core'))}catch{}
+  const chromium=loadChromium();
   if(!chromium){console.log('SKIP');return}
-  const br=await chromium.launch({executablePath:'/usr/bin/chromium',headless:true,args:['--no-sandbox','--disable-gpu','--disable-dev-shm-usage'],env:{...process.env,LD_LIBRARY_PATH:'/var/lib/obsidian/oldlibs'}});
+  const srv=await startIsolatedServer();
+  const br=await launchBrowser(chromium);
   try{
     const page=await br.newPage(); const errs=[]; page.on('pageerror',e=>errs.push(e.message));
     await page.route('**/app.js',r=>r.fulfill({status:200,contentType:'application/javascript',body:'/*blocked*/'}));
@@ -14,7 +16,7 @@ const ok=(c,m)=>{console.log((c?'  ok - ':'  FAIL - ')+m); if(!c)process.exitCod
         {name:'Forest',vars:{'--acc':'#22cc66','--bg':'#0c130c','--panel':'#162016','--edge':'#2a3','--ink':'#eef','--mut':'#9a9'}},
         {name:'Amber',vars:{'--acc':'#ffaa22','--bg':'#1a1206','--panel':'#241a0c','--edge':'#420','--ink':'#fed','--mut':'#a97'}}]}],{});
       window.__d=true;`}));
-    await page.goto('http://127.0.0.1:8778/',{waitUntil:'domcontentloaded'});
+    await page.goto(`${srv.base}/`,{waitUntil:'domcontentloaded'});
     await page.evaluate(()=>{const s=document.createElement('script');s.type='module';s.src='/__t.mjs';document.body.appendChild(s);});
     await page.waitForFunction(()=>window.__d===true,{timeout:5000});
     const r1=await page.evaluate(()=>{const w=document.querySelector('.gw-theme'); return {chips:w.querySelectorAll('button').length, hasKeep:/Keep/.test(w.textContent), hasRevert:/Revert/.test(w.textContent), tryOn:/Try on a theme/.test(w.textContent), acc0:getComputedStyle(document.documentElement).getPropertyValue('--acc').trim()};});
@@ -32,5 +34,5 @@ const ok=(c,m)=>{console.log((c?'  ok - ':'  FAIL - ')+m); if(!c)process.exitCod
     ok(accAfter!=='#22cc66','Revert restores the original (not the tried-on accent)');
     ok(errs.length===0,'no page errors ('+errs.slice(0,2).join(' | ')+')');
     await page.close();
-  } finally{await br.close();}
+  } finally{await br.close();srv.close();}
 })();
