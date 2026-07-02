@@ -112,11 +112,111 @@ const TRACE_VIEW_SOURCE = `// TRACE ISLAND (chrome-trace-view) — the LIVE reas
   ]);
 }`;
 
+// The COMPONENT STUDIO list itself — the Components-tab section list, as editable chrome (wave 1 of the
+// chrome decomposition beyond the first three pieces). dan's ask: the section ORDER used to be a hardcoded
+// concat in app.js (pending+admitted, then chrome, then islands) — he wanted to reorder it and couldn't.
+// Now the order lives in SECTION_ORDER IN THIS SOURCE, so "show islands before app chrome" / "put admitted
+// at the top" is a one-sentence edit chat, persisted as a git commit that survives reload. Like every chrome
+// piece: PURE RENDER PROPAGATOR (no cap, no DOM, no network). The HOST keeps every authority-bearing move —
+// admit / reject / revise / edit / revert / fork are real component-lifecycle actions and stay host-gated
+// EXACTLY as before — and passes only render-safe data + the affordance callbacks it may fire; the props ARE
+// the ocap boundary. The header schema travels WITH the source so a riffer sees the contract in the edit chat.
+const STUDIO_SOURCE = `// CHROME-STUDIO (chrome-studio) — the Components/Studio LIST (its sections + their order + layout).
+// THE SECTION ORDER IS DATA IN THIS SOURCE (see SECTION_ORDER below). Reorder it in one sentence in the
+// edit chat ("put islands above app chrome") — the change persists as a git commit and survives reload.
+// PURE RENDER: this component holds NO cap, NO DOM, NO network. The HOST does every authority-bearing move
+// (admit/reject/revise/edit/revert/fork are real, host-gated component-lifecycle actions — unchanged) and
+// feeds only render-safe data + affordance callbacks. The props ARE the ocap boundary.
+//
+// props (all render-safe — no swissnum / cap / share token ever crosses this boundary):
+//   props.pending  = [{ id, name, by, worst, findings, code, revise:{converged,rounds,worst}|null }]
+//   props.admitted = [{ id, name, kind, versions:[{version,summary,current}], grains:[{k,v}] }]
+//   props.chrome   = [{ id, name, versions:[{version,summary,current}] }]
+//   props.islands  = [{ id, name, versions:[{version,summary,current}] }]
+//   props.onAdmit(id)  props.onReject(id)  props.onRevise(id)                     — pending-review actions
+//   props.onEdit(id)   props.onFork(id)    props.onRevert(id, version)            — lifecycle actions
+// REORDER / RIFF FREELY: any (endowments, props) => vnode honoring THIS contract can replace this list
+// (drop a section, regroup, re-lay-out). PER-USER runtime order is the deferred 'chrome-prefs grain'
+// (designs/preact-component-trie.md); today's source-committed order is shared + reload-durable = dan's ask.
+(endowments, props) => {
+  const h = endowments.h;
+  const p = props || {};
+  const arr = x => (Array.isArray(x) ? x : []);
+  const pending = arr(p.pending), admitted = arr(p.admitted), chrome = arr(p.chrome), islands = arr(p.islands);
+  const call = (fn, a, b) => { if (typeof fn === 'function') fn(a, b); };
+  const short = v => String(v || '').slice(0, 8);
+  const sec = label => h('div', { class: 'shares-sec' }, label);
+  const pill = (text, bad) => h('span', { class: bad ? 'pill bad' : 'pill' }, text);
+  // version-history rows (shared by admitted / chrome / islands): newest first; current is a pill, older
+  // versions offer a non-destructive revert (a new commit that re-runs an earlier tree — history preserved).
+  const verRows = (id, versions) => {
+    const vs = arr(versions);
+    if (!vs.length) return [h('span', { class: 'sub' }, 'no versions yet')];
+    return vs.map((v, k) => h('div', { class: 'cver', key: v.version || k }, [
+      h('span', { class: 'vmono' }, short(v.version)), ' ',
+      h('span', { class: 'sub' }, String(v.summary || '')), ' ',
+      (k === 0 || v.current)
+        ? pill('current')
+        : h('button', { class: 'mini', onClick: () => call(p.onRevert, id, v.version) }, 'revert'),
+    ]));
+  };
+  // a library/chrome/island card: header (name + kind pill + ✎ edit [+ fork]) then its version history.
+  const compCard = (c, kindLabel, canFork) => {
+    const cur = arr(c.versions)[0];
+    const head = [
+      h('b', null, String(c.name || c.id)), ' ',
+      pill(kindLabel + (cur ? ' · v ' + short(cur.version) : '')), ' ',
+      h('button', { class: 'mini', onClick: () => call(p.onEdit, c.id) }, '✎ edit'),
+    ];
+    if (canFork) head.push(' ', h('button', { class: 'mini', onClick: () => call(p.onFork, c.id) }, 'fork'));
+    const kids = [h('div', { class: 'comp-head' }, head)];
+    if (arr(c.grains).length) kids.push(h('div', { class: 'cgrains sub' },
+      '🌱 data: ' + c.grains.map(g => g.k + '=' + JSON.stringify(g.v)).join(' · ') + ' (survives edits/reverts)'));
+    kids.push(h('div', { class: 'cvers' }, verRows(c.id, c.versions)));
+    // data-component-id lets alt-click target THIS piece (edit its own source); alt-clicking the list chrome
+    // (outside any card) selects chrome-studio itself — the host tags the outer mount.
+    return h('div', { class: 'comp', 'data-component-id': c.id, 'data-component-name': c.name || c.id }, kids);
+  };
+  // pending-review card: findings + admit / ✨ revise / reject and a collapsed view-code disclosure.
+  const pendCard = t => {
+    const rv = t.revise;
+    return h('div', { class: 'comp' }, [
+      h('div', { class: 'comp-head' }, [
+        h('b', null, String(t.name || t.id)), ' ',
+        pill('by ' + String(t.by || '?') + ' · panel: ' + String(t.worst || 'reviewing…'), t.worst === 'critical'), ' ',
+        h('button', { class: 'mini', onClick: () => call(p.onAdmit, t.id) }, 'admit'), ' ',
+        h('button', { class: 'mini', title: 'Hand the panel findings back to the developer, then re-review', onClick: () => call(p.onRevise, t.id) }, '✨ revise'), ' ',
+        h('button', { class: 'mini bad', onClick: () => call(p.onReject, t.id) }, 'reject'),
+      ]),
+      h('div', { class: 'sub', style: 'margin:4px 0 0 6px' }, String(t.findings || 'running the discipline panel…')),
+      rv ? h('div', { class: 'sub', style: 'margin:3px 0 0 8px' },
+        '🔧 revise: ' + (rv.converged ? '✓ converged' : (String(rv.rounds || 0) + ' round(s) · worst ' + String(rv.worst || '?')))) : null,
+      t.code ? h('details', { style: 'margin:5px 0 0 6px' }, [
+        h('summary', { class: 'mini', style: 'display:inline-block' }, 'view code'),
+        h('pre', { class: 'codeview' }, String(t.code)),
+      ]) : null,
+    ]);
+  };
+  // ★ SECTION ORDER — EDIT THIS LINE to reorder the studio (e.g. move 'islands' before 'chrome'). ★
+  const SECTION_ORDER = ['pending', 'admitted', 'chrome', 'islands'];
+  const SECTIONS = {
+    pending: () => (pending.length ? [sec('🆕 Pending review (' + pending.length + ')'), ...pending.map(pendCard)] : []),
+    admitted: () => (admitted.length ? [sec('Admitted'), ...admitted.map(c => compCard(c, c.kind || 'instance', true))] : []),
+    chrome: () => (chrome.length ? [sec('App chrome (live UI · applies on edit, no rebuild)'), ...chrome.map(c => compCard(c, 'chrome', false))] : []),
+    islands: () => (islands.length ? [sec('Islands (live UI · rebuilt on edit)'), ...islands.map(c => compCard(c, 'island', false))] : []),
+  };
+  const body = [];
+  for (const name of SECTION_ORDER) { const f = SECTIONS[name]; if (f) body.push(...f()); }
+  if (!body.length) body.push(h('div', { class: 'pill' }, 'no components yet — ask the agent in chat to build a tool (proposeTool); it shows up here to review + admit'));
+  return h('div', { class: 'studio-list' }, body);
+}`;
+
 // The registry: stable ids (they are ADDRESSES — edit chats, backlogs, and git lineages key off them).
 const CHROME = harden([
   { id: 'chrome-msg-toolbar', name: 'Message toolbar', source: MSG_TOOLBAR_SOURCE },
   { id: 'chrome-welcome', name: 'Welcome panel', source: WELCOME_SOURCE },
   { id: 'chrome-trace-view', name: 'Trace view (live)', source: TRACE_VIEW_SOURCE, cells: ['trace:<chatId>'] },
+  { id: 'chrome-studio', name: 'Component Studio', source: STUDIO_SOURCE },
 ]);
 
 export const makeChromeComponents = ({ componentGit, componentBacklog }) => {

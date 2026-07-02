@@ -171,6 +171,9 @@ const reloadChromeComps = async () => {
   chromeReady = loadChromeComps(); await chromeReady;
   try { renderTx(); } catch { /* transcript repaint is best-effort */ }
   try { mountWelcome(); } catch { /* landing repaint is best-effort */ }
+  // chrome-studio IS the Components-tab list — repaint it too (audit flagged this repaint set only covered
+  // renderTx + welcome). refreshComponents re-aggregates the props + re-mounts chrome-studio (or falls back).
+  try { if (typeof curTab !== 'undefined' && curTab === 'components' && typeof refreshComponents === 'function') refreshComponents(); } catch { /* Studio repaint is best-effort */ }
 };
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -4056,15 +4059,91 @@ const ISLAND_PREVIEW = {
   }, { onCopy() {}, onQr() {}, onAdjustToggle() {}, onAdjustField() {}, onSave() {}, onRevoke() {}, onNewField() {}, onCreate() {} }),
 };
 
+// ── Shared, host-gated component-lifecycle actions — the authority-bearing moves. Used by chrome-studio's
+//    prop callbacks (below) AND by the imperative fallback (wireComponentActions). The confined chrome-studio
+//    component only RENDERS + calls these back; it never holds the cap. Admits/reverts stay exactly as gated
+//    as before (window.confirm on critical/destructive; the fetch carries the operator's cap). ──
+const studioAdmit = async (id, name) => {
+  let r = await (await fetch('/tools/admit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id }) })).json();
+  if (r.blocked === 'critical' && !window.confirm(`The review panel flagged a CRITICAL issue in "${name}". Admit anyway?`)) return;
+  if (r.blocked === 'critical') { r = await (await fetch('/tools/admit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id, override: true }) })).json(); }
+  setStatus(r.ok ? `Admitted "${name}" — it's now a live component.` : `admit: ${r.error || 'failed'}`);
+  refreshComponents();
+};
+const studioReject = async (id, name) => {
+  if (!window.confirm(`Reject "${name}"? It's discarded.`)) return;
+  await fetch('/tools/reject', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id }) });
+  refreshComponents();
+};
+const studioRevise = async (id, name) => {
+  setStatus(`Revising "${name}" against the review panel…`);
+  try { const r = await (await fetch('/tools/revise', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id }) })).json(); setStatus(r.ok ? `Revised "${name}" — ${r.converged ? '✓ converged (clean)' : `${r.rounds} round(s), worst now ${r.worst}`}.` : `revise: ${r.error || 'failed'}`); }
+  catch (e) { setStatus('revise failed: ' + e.message); }
+  refreshComponents();
+};
+const studioRevert = async (id, version) => {
+  if (!window.confirm('Revert the LIVE component to this version? Non-destructive — it makes a new version; the live tool then runs it.')) return;
+  await fetch('/components/revert', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id, version }) });
+  if (/^chrome-/.test(String(id))) { try { await reloadChromeComps(); } catch { /* repaint is best-effort */ } }
+  refreshComponents();
+};
+
 const refreshComponents = async () => {
   const list = $('components-list'); if (!list) return;
+  // ── aggregate the FOUR data sources into ONE render-safe props object (the audit's plan). Every action
+  //    becomes a HOST callback (props ARE the boundary — no new authority in the confined component). ──
   let all = [];
   try { const r = await (await fetch('/tools/review', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json(); all = r.tools || []; }
   catch { list.innerHTML = '<div class="pill">could not load components</div>'; return; }
   const pending = all.filter(t => t.status === 'pending');
   const tools = all.filter(t => t.status === 'admitted');
   updateComponentsBadge(pending.length);
-  // 🆕 PENDING REVIEW — agent-proposed tools awaiting your admit (the discipline panel ran on each).
+  // App chrome (registry-backed shell pieces) + per-id history.
+  let chromes = []; const chh = {};
+  try { const cr = await (await fetch('/chrome/components')).json(); chromes = (cr && cr.components) || [];
+    await Promise.all(chromes.map(async c => { try { const h2 = await (await fetch('/components/history', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: c.id }) })).json(); chh[c.id] = h2.versions || []; } catch { chh[c.id] = []; } })); }
+  catch { /* section just omitted */ }
+  // Islands (confined-Preact UI whose source is a client file) + per-id history.
+  let islandList = []; const ih = {};
+  try { const ir = await (await fetch('/components/islands', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json(); islandList = ir.islands || [];
+    await Promise.all(islandList.map(async i => { try { const h = await (await fetch('/components/history', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: i.id }) })).json(); ih[i.id] = h.versions || []; } catch { ih[i.id] = []; } })); }
+  catch { /* section just omitted */ }
+  // Admitted library tools: history + live grain data.
+  const hists = {}; const grains = {};
+  await Promise.all(tools.map(async t => { try { const h = await (await fetch('/components/history', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: t.id }) })).json(); hists[t.id] = h.versions || []; grains[t.id] = h.grains || {}; } catch { hists[t.id] = []; grains[t.id] = {}; } }));
+
+  const nameOf = id => { for (const a of [tools, chromes, islandList]) { const x = a.find(e => e.id === id); if (x) return x.name; } return id; };
+  const vmap = vs => (vs || []).map((v, i) => ({ version: v.version, summary: v.summary || '', current: i === 0 }));
+  const props = {
+    pending: pending.map(t => {
+      const rv = t.review; const rl = t.reviseLog;
+      return {
+        id: t.id, name: t.name, by: t.proposedBy || '?', worst: rv ? rv.worst : 'reviewing…',
+        findings: rv ? rv.findings.map(f => `${f.discipline}: ${f.severity}`).join(' · ') : 'running the discipline panel…',
+        code: t.code || (t.files ? Object.entries(t.files).map(([k, v]) => `// ${k}\n${v}`).join('\n\n') : ''),
+        revise: rl ? { converged: !!rl.converged, rounds: rl.rounds || 0, worst: rl.worst || '?' } : null,
+      };
+    }),
+    admitted: tools.map(t => ({ id: t.id, name: t.name, kind: t.kind || 'instance', versions: vmap(hists[t.id]), grains: Object.entries(grains[t.id] || {}).map(([k, v]) => ({ k, v })) })),
+    chrome: chromes.map(c => ({ id: c.id, name: c.name, versions: vmap(chh[c.id]) })),
+    islands: islandList.map(i => ({ id: i.id, name: i.name, versions: vmap(ih[i.id]) })),
+    // the affordance callbacks — the ocap boundary. Names are resolved host-side from the fetched data.
+    onAdmit: id => { const t = pending.find(x => x.id === id); studioAdmit(id, t ? t.name : id); },
+    onReject: id => { const t = pending.find(x => x.id === id); studioReject(id, t ? t.name : id); },
+    onRevise: id => { const t = pending.find(x => x.id === id); studioRevise(id, t ? t.name : id); },
+    onEdit: id => editComponent(id, nameOf(id)),
+    onFork: id => forkComponentAct(id, nameOf(id)),
+    onRevert: (id, version) => studioRevert(id, version),
+  };
+  // (a) mount chrome-studio through the confined path (registry-backed → its section ORDER is alt-click
+  //     editable). (b) renderChrome returns false on ANY failure — compile/mount throw, or lockdown off —
+  //     so we fall through to the imperative LEGACY builder below (the anti-brick floor: never a dead list).
+  await chromeReady;
+  if (mountChrome('chrome-studio', list, props)) return;
+
+  // ── LEGACY FALLBACK (NEVER deleted — anti-brick floor per the recipe). The original imperative builder,
+  //    reusing the data already fetched above; wired by wireComponentActions. Reachable whenever chrome-studio
+  //    can't render, so admit/edit/revert stay usable even if a broken chrome-studio edit slips the gate. ──
   let html = '';
   if (pending.length) {
     html += `<div class="shares-sec">🆕 Pending review (${pending.length})</div>`;
@@ -4073,51 +4152,30 @@ const refreshComponents = async () => {
       const findings = rv ? rv.findings.map(f => `${esc(f.discipline)}: ${esc(f.severity)}`).join(' · ') : 'running the discipline panel…';
       const code = t.code || (t.files ? Object.entries(t.files).map(([k, v]) => `// ${k}\n${v}`).join('\n\n') : '');
       const sevClass = sev === 'critical' ? ' bad' : '';
-      // the review→revise DIALOGUE: each round shows how the panel's criticisms were integrated/noted/unified.
       const rl = t.reviseLog;
       const dialogue = rl ? `<details style="margin:6px 0 0 6px" open><summary class="mini" style="display:inline-block">🔧 revise dialogue · ${rl.converged ? '✓ converged' : `${esc(String(rl.rounds || 0))} round(s) · worst ${esc(rl.worst || '?')}`}</summary>${(rl.log || []).map(r => r.error
         ? `<div class="sub" style="margin:3px 0 0 8px;color:var(--bad)">round ${esc(String(r.round))}: ${esc(r.error)}</div>`
         : `<div class="sub" style="margin:5px 0 0 8px"><b>round ${esc(String(r.round))}</b> · ${esc(r.worstBefore || '?')} → ${esc(r.worstAfter || '?')}</div>${(r.resolutions || []).map(x => `<div class="sub" style="margin:1px 0 0 16px">• ${esc(x.finding || '')} ${x.action ? `<span class="pill">${esc(x.action)}</span>` : ''} ${esc(x.how || '')}</div>`).join('')}`).join('')}</details>` : '';
       return `<div class="comp"><div class="comp-head"><b>${esc(t.name)}</b> <span class="pill${sevClass}">by ${esc(t.proposedBy || '?')} · panel: ${esc(sev)}</span> <button class="mini" data-admit="${esc(t.id)}" data-name="${esc(t.name)}" data-worst="${esc(rv ? rv.worst : '')}">admit</button> <button class="mini" data-revise="${esc(t.id)}" data-name="${esc(t.name)}" title="Hand the panel's findings back to the developer to integrate / note / unify into an elegant solution, then re-review">✨ revise</button> <button class="mini bad" data-reject="${esc(t.id)}" data-name="${esc(t.name)}">reject</button></div><div class="sub" style="margin:4px 0 0 6px">${findings}</div>${dialogue}<details style="margin:5px 0 0 6px"><summary class="mini" style="display:inline-block">view code</summary><pre class="codeview">${esc(code)}</pre></details></div>`;
     }).join('');
-    // PAINT THE PENDING NOW — don't make the badge's count diverge from an empty list while the slower
-    // islands + per-tool history fetches below run (the "Components (7) but nothing listed" bug). The
-    // final innerHTML at the end replaces this with everything (pending + admitted + islands).
-    list.innerHTML = html; wireComponentActions();
   }
-  // APP CHROME (registry-backed shell pieces — live-edited through the confined path; no rebuild/reload).
   let chromeHtml = '';
-  try {
-    const cr = await (await fetch('/chrome/components')).json();
-    const chromes = (cr && cr.components) || [];
-    if (chromes.length) {
-      const chh = {};
-      await Promise.all(chromes.map(async c => { try { const h2 = await (await fetch('/components/history', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: c.id }) })).json(); chh[c.id] = h2.versions || []; } catch { chh[c.id] = []; } }));
-      chromeHtml = `<div class="shares-sec">App chrome (live UI · applies on edit, no rebuild)</div>` + chromes.map(c => {
-        const vs = chh[c.id] || []; const cur = vs[0];
-        const rows = vs.map((v, k) => `<div class="cver"><span class="vmono">${esc(String(v.version).slice(0, 8))}</span> <span class="sub">${esc(v.summary || '')}</span>${k === 0 ? ' <span class="pill">current</span>' : ` <button class="mini" data-revert="${esc(c.id)}" data-ver="${esc(v.version)}">revert</button>`}</div>`).join('');
-        return `<div class="comp" data-component-id="${esc(c.id)}" data-component-name="${esc(c.name)}"><div class="comp-head"><b>${esc(c.name)}</b> <span class="pill">chrome${cur ? ` · v ${esc(String(cur.version).slice(0, 8))}` : ''}</span> <button class="mini" data-edit="${esc(c.id)}" data-name="${esc(c.name)}">✎ edit</button></div><div class="cvers">${rows || '<span class="sub">no versions yet</span>'}</div></div>`;
-      }).join('');
-    }
-  } catch { /* ignore — the section just doesn't render */ }
-  // ISLANDS (confined-Preact UI components — their source is a client file, rebuilt on edit).
+  if (chromes.length) {
+    chromeHtml = `<div class="shares-sec">App chrome (live UI · applies on edit, no rebuild)</div>` + chromes.map(c => {
+      const vs = chh[c.id] || []; const cur = vs[0];
+      const rows = vs.map((v, k) => `<div class="cver"><span class="vmono">${esc(String(v.version).slice(0, 8))}</span> <span class="sub">${esc(v.summary || '')}</span>${k === 0 ? ' <span class="pill">current</span>' : ` <button class="mini" data-revert="${esc(c.id)}" data-ver="${esc(v.version)}">revert</button>`}</div>`).join('');
+      return `<div class="comp" data-component-id="${esc(c.id)}" data-component-name="${esc(c.name)}"><div class="comp-head"><b>${esc(c.name)}</b> <span class="pill">chrome${cur ? ` · v ${esc(String(cur.version).slice(0, 8))}` : ''}</span> <button class="mini" data-edit="${esc(c.id)}" data-name="${esc(c.name)}">✎ edit</button></div><div class="cvers">${rows || '<span class="sub">no versions yet</span>'}</div></div>`;
+    }).join('');
+  }
   let islandsHtml = '';
-  try {
-    const ir = await (await fetch('/components/islands', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json();
-    const islands = ir.islands || [];
-    if (islands.length) {
-      const ih = {};
-      await Promise.all(islands.map(async i => { try { const h = await (await fetch('/components/history', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: i.id }) })).json(); ih[i.id] = h.versions || []; } catch { ih[i.id] = []; } }));
-      islandsHtml = `<div class="shares-sec">Islands (live UI · rebuilt on edit)</div>` + islands.map(i => {
-        const vs = ih[i.id] || []; const cur = vs[0];
-        const rows = vs.map((v, k) => `<div class="cver"><span class="vmono">${esc(String(v.version).slice(0, 8))}</span> <span class="sub">${esc(v.summary || '')}</span>${k === 0 ? ' <span class="pill">current</span>' : ` <button class="mini" data-revert="${esc(i.id)}" data-ver="${esc(v.version)}">revert</button>`}</div>`).join('');
-        return `<div class="comp" data-component-id="${esc(i.id)}" data-component-name="${esc(i.name)}"><div class="comp-head"><b>${esc(i.name)}</b> <span class="pill">island${cur ? ` · v ${esc(String(cur.version).slice(0, 8))}` : ''}</span> <button class="mini" data-edit="${esc(i.id)}" data-name="${esc(i.name)}">✎ edit</button></div><div class="cvers">${rows || '<span class="sub">no versions yet</span>'}</div></div>`;
-      }).join('');
-    }
-  } catch { /* ignore */ }
+  if (islandList.length) {
+    islandsHtml = `<div class="shares-sec">Islands (live UI · rebuilt on edit)</div>` + islandList.map(i => {
+      const vs = ih[i.id] || []; const cur = vs[0];
+      const rows = vs.map((v, k) => `<div class="cver"><span class="vmono">${esc(String(v.version).slice(0, 8))}</span> <span class="sub">${esc(v.summary || '')}</span>${k === 0 ? ' <span class="pill">current</span>' : ` <button class="mini" data-revert="${esc(i.id)}" data-ver="${esc(v.version)}">revert</button>`}</div>`).join('');
+      return `<div class="comp" data-component-id="${esc(i.id)}" data-component-name="${esc(i.name)}"><div class="comp-head"><b>${esc(i.name)}</b> <span class="pill">island${cur ? ` · v ${esc(String(cur.version).slice(0, 8))}` : ''}</span> <button class="mini" data-edit="${esc(i.id)}" data-name="${esc(i.name)}">✎ edit</button></div><div class="cvers">${rows || '<span class="sub">no versions yet</span>'}</div></div>`;
+    }).join('');
+  }
   if (!tools.length) { list.innerHTML = (html + chromeHtml + islandsHtml) || '<div class="pill">no components yet — ask the agent in chat to build a tool (proposeTool); it shows up here to review + admit</div>'; wireComponentActions(); return; }
-  const hists = {}; const grains = {};
-  await Promise.all(tools.map(async t => { try { const h = await (await fetch('/components/history', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: t.id }) })).json(); hists[t.id] = h.versions || []; grains[t.id] = h.grains || {}; } catch { hists[t.id] = []; grains[t.id] = {}; } }));
   if (pending.length) html += `<div class="shares-sec">Admitted</div>`;
   html += tools.map(t => {
     const vs = hists[t.id] || []; const cur = vs[0];

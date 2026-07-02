@@ -48,7 +48,7 @@ const jpost = (p, b) => fetch(`${BASE}${p}`, { method: 'POST', headers: { 'conte
 
   // ── 1. the registry: seeded at boot, served at HEAD ─────────────────────────────────────────────
   const reg = await jget('/chrome/components');
-  ok(reg.ok && Array.isArray(reg.components) && reg.components.length === 3, `GET /chrome/components lists the seeded chrome (${(reg.components || []).length})`);
+  ok(reg.ok && Array.isArray(reg.components) && reg.components.length === 4, `GET /chrome/components lists the seeded chrome (${(reg.components || []).length})`);
   ok((reg.components || []).some(c => c.id === 'chrome-trace-view' && /THE CELL IS THE INTERFACE/.test(c.source)), 'chrome-trace-view seeded with the cell-contract header (the schema riffers see in the edit chat)');
   const tb = (reg.components || []).find(c => c.id === 'chrome-msg-toolbar');
   const wc = (reg.components || []).find(c => c.id === 'chrome-welcome');
@@ -81,6 +81,33 @@ const jpost = (p, b) => fetch(`${BASE}${p}`, { method: 'POST', headers: { 'conte
   // ── 4. its BACKLOG exists from birth (implicit endowment) ───────────────────────────────────────
   const bl = await jpost('/components/backlog', { cap: rootCap, id: 'chrome-msg-toolbar' });
   ok(bl.ok === true && bl.counts && typeof bl.counts.open === 'number', 'the chrome component has a backlog owner facet from birth');
+
+  // ── 4b. chrome-studio: the Components/Studio LIST itself is registry-backed chrome (wave 1) ──────
+  // dan's ask: the Studio's section ORDER was a hardcoded concat in app.js; now it's DATA in the source
+  // (SECTION_ORDER) → "reorder sections" is a one-line source edit, persisted as a git commit.
+  const studioOf = r => (r.components || []).find(c => c.id === 'chrome-studio');
+  const s0 = studioOf(reg);
+  ok(!!s0, 'chrome-studio is seeded + served at HEAD (the Studio list is now editable chrome)');
+  ok(s0 && /SECTION_ORDER/.test(s0.source) && /props\.onAdmit/.test(s0.source) && /THE SECTION ORDER IS DATA/.test(s0.source),
+    'chrome-studio ships SECTION_ORDER + the props/callback contract in its header (riffers see the schema in the edit chat)');
+  ok(s0 && /^[0-9a-f]{6,40}$/.test(String(s0.version)), `chrome-studio carries a real git version (${s0 && String(s0.version).slice(0, 8)})`);
+  // anti-brick floor 1: a throwing edit is REFUSED by the render check; HEAD stays live
+  const sbad = await jpost('/components/edit', { cap: rootCap, id: 'chrome-studio', source: '(endowments, props) => { throw new Error("studio boom") }' });
+  ok(sbad.ok === false && /render check/i.test(sbad.error || ''), `a throwing chrome-studio edit is REFUSED by the render check (${(sbad.error || '').slice(0, 50)}…)`);
+  ok(studioOf(await jget('/chrome/components')).version === s0.version, 'chrome-studio HEAD is unchanged after the refused edit (previous version stays live)');
+  // REORDER the sections purely by editing the source (the whole point) — exact-source lane, deterministic
+  const reordered = s0.source.replace(/const SECTION_ORDER = \[[^\]]*\];/, "const SECTION_ORDER = ['islands', 'chrome', 'admitted', 'pending'];");
+  ok(reordered !== s0.source, 'the SECTION_ORDER line is present + rewritable (reorder = a one-line source edit)');
+  const sedit = await jpost('/components/edit', { cap: rootCap, id: 'chrome-studio', source: reordered });
+  ok(sedit.ok === true && sedit.version && sedit.version !== s0.version, `a section-order edit passes the gate + commits a new version (${String(sedit.version || '').slice(0, 8)})`);
+  const s1 = studioOf(await jget('/chrome/components'));
+  ok(/\['islands', 'chrome', 'admitted', 'pending'\]/.test(s1.source), 'the served HEAD carries the REORDERED SECTION_ORDER (persists as a git commit → survives reload)');
+  const shist = await jpost('/components/history', { cap: rootCap, id: 'chrome-studio' });
+  ok(shist.ok && (shist.versions || []).length >= 2, `chrome-studio git lineage records the reorder version (${(shist.versions || []).length} versions)`);
+  // revert restores the seed order (non-destructive; history preserved)
+  const srev = await jpost('/components/revert', { cap: rootCap, id: 'chrome-studio', version: s0.version });
+  ok(srev.ok === true, 'chrome-studio reverts to the seed order (non-destructive)');
+  ok(/\['pending', 'admitted', 'chrome', 'islands'\]/.test(studioOf(await jget('/chrome/components')).source), 'after revert the served SECTION_ORDER is the seed order again (HEAD moved back, history kept)');
 
   // ── browser half ────────────────────────────────────────────────────────────────────────────────
   let chromium = null;
@@ -288,6 +315,97 @@ const jpost = (p, b) => fetch(`${BASE}${p}`, { method: 'POST', headers: { 'conte
     const item = (bl2.items || []).find(i => i.kind === 'error' && /chrome component failed/.test(i.title));
     ok(!!item, `the mount failure auto-filed onto chrome-msg-toolbar's OWN backlog ("${item && item.title.slice(0, 60)}…")`);
     await page2.close();
+
+    // ── 12. chrome-studio renders the Studio list confined + alt-selectable + section order is DATA ──
+    await page.evaluate(() => { const t = document.getElementById('tab-components'); if (t) t.click(); });
+    await page.waitForSelector('#components-list[data-component-id=chrome-studio]', { timeout: 12000 }).catch(() => {});
+    const st = await page.evaluate(() => {
+      const list = document.getElementById('components-list');
+      const secs = [...(list ? list.querySelectorAll('.shares-sec') : [])].map(s => s.textContent);
+      const ci = secs.findIndex(s => /App chrome/.test(s));
+      const ii = secs.findIndex(s => /Islands/.test(s));
+      return { tagged: list && list.getAttribute('data-component-id'), secs,
+        hasChrome: ci >= 0, hasIsl: ii >= 0, chromeBeforeIsl: ci >= 0 && ii >= 0 && ci < ii };
+    });
+    ok(st.tagged === 'chrome-studio', `the Components list is rendered by the confined chrome-studio component (tagged ${st.tagged})`);
+    ok(st.hasChrome && st.hasIsl, `chrome-studio renders the App chrome + Islands sections (${st.secs.join(' | ').slice(0, 80)})`);
+    ok(st.chromeBeforeIsl, 'the seed SECTION_ORDER puts App chrome BEFORE Islands (the order is DATA in the source — reorder it to swap)');
+    // alt-click the list chrome OUTSIDE any card (a section header) → closest() resolves to the
+    // chrome-studio-tagged list → the chip names the Studio (registry identity). Clicking a card would
+    // instead select THAT card's component (data-component-id) — the intended per-piece drill-in.
+    const stSel = await page.evaluate(() => {
+      const sec = document.querySelector('#components-list .shares-sec');
+      const r = sec.getBoundingClientRect();
+      sec.dispatchEvent(new MouseEvent('click', { bubbles: true, altKey: true, clientX: r.left + 4, clientY: r.top + 4 }));
+      // the selection CHIP is the floating element carrying data-act=edit + data-act=x (in document.body,
+      // not inside the list). Its innerHTML is rewritten on each selection → its text names the target.
+      const x = document.querySelector('button[data-act=x]');
+      const chip = x && x.parentElement;
+      return { label: chip ? chip.textContent : '', shown: !!chip && getComputedStyle(chip).display === 'flex' };
+    });
+    ok(stSel.shown && /Component Studio/.test(stSel.label), `alt-click the Studio selects chrome-studio by registry identity ("${stSel.label.slice(0, 40)}")`);
+    // REVERT through the CALLBACK path: chrome-studio has >1 version (reorder+revert above) → its own row
+    // shows a revert button → clicking it fires props.onRevert → host studioRevert → /components/revert.
+    let revertCall = null;
+    await page.route('**/components/revert', r => { try { revertCall = JSON.parse(r.request().postData() || '{}'); } catch {} r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) }); });
+    page.on('dialog', d => d.accept());
+    const hadRevert = await page.evaluate(() => {
+      const b = [...document.querySelectorAll('#components-list button')].find(x => (x.textContent || '') === 'revert');
+      if (b) b.click(); return !!b;
+    });
+    await page.waitForTimeout(500);
+    ok(hadRevert && revertCall && /^chrome-/.test(String(revertCall.id || '')), `a revert button in the confined Studio fires the onRevert CALLBACK host-side (id ${revertCall && revertCall.id}) — actions stay host-gated`);
+
+    // ── 13. ADMIT through the CALLBACK path (fresh page, fake pending tool via routed /tools/review) ──
+    const page3 = await browser.newPage({ viewport: { width: 1100, height: 900 } });
+    await page3.route('**/tools/review', r => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, tools: [
+      { id: 'pend-1', status: 'pending', name: 'Fake pending tool', proposedBy: 'agent-x', review: { worst: 'none', findings: [{ discipline: 'safety', severity: 'none' }] }, code: 'const x = 1;' },
+    ] }) }));
+    let admitCall = null;
+    await page3.route('**/tools/admit', r => { try { admitCall = JSON.parse(r.request().postData() || '{}'); } catch {} r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) }); });
+    await page3.addInitScript(c => { try { localStorage.setItem('field-agent-cap', c); } catch {} }, rootCap);
+    await page3.goto(`${BASE}/`, { waitUntil: 'load' });
+    await page3.waitForTimeout(1500);
+    await page3.evaluate(() => { const t = document.getElementById('tab-components'); if (t) t.click(); });
+    await page3.waitForSelector('#components-list[data-component-id=chrome-studio]', { timeout: 12000 }).catch(() => {});
+    const adm = await page3.evaluate(() => {
+      const list = document.getElementById('components-list');
+      const pendingSec = [...list.querySelectorAll('.shares-sec')].some(s => /Pending review/.test(s.textContent));
+      const admitBtn = [...list.querySelectorAll('button')].find(b => (b.textContent || '') === 'admit');
+      if (admitBtn) admitBtn.click();
+      return { pendingSec, hadAdmit: !!admitBtn };
+    });
+    await page3.waitForTimeout(500);
+    ok(adm.pendingSec && adm.hadAdmit, 'chrome-studio renders the Pending review section + an admit button from the props');
+    ok(admitCall && admitCall.id === 'pend-1', `clicking admit fires the onAdmit CALLBACK to the host with the right id (${admitCall && admitCall.id})`);
+    await page3.close();
+
+    // ── 14. FALLBACK: a broken chrome-studio source → the imperative LEGACY Studio list (+ backlog) ──
+    const page4 = await browser.newPage({ viewport: { width: 1100, height: 900 } });
+    await page4.route('**/chrome/components', r => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, components: [
+      { id: 'chrome-msg-toolbar', name: 'Message toolbar', version: 'v', source: '(e,p)=>e.h("div",null,"tb")' },
+      { id: 'chrome-welcome', name: 'Welcome panel', version: 'v', source: '(e,p)=>e.h("div",null,"wc")' },
+      { id: 'chrome-trace-view', name: 'Trace view (live)', version: 'v', source: '(e,p)=>e.h("div",null,"tv")' },
+      { id: 'chrome-studio', name: 'Component Studio', version: 'broken', source: '(endowments, props) => { throw new Error("staged chrome-studio breakage") }' },
+    ] }) }));
+    await page4.addInitScript(c => { try { localStorage.setItem('field-agent-cap', c); } catch {} }, rootCap);
+    await page4.goto(`${BASE}/`, { waitUntil: 'load' });
+    await page4.waitForTimeout(1500);
+    await page4.evaluate(() => { const t = document.getElementById('tab-components'); if (t) t.click(); });
+    await page4.waitForTimeout(1800);
+    const fbs = await page4.evaluate(() => {
+      const list = document.getElementById('components-list');
+      return { tagged: list && list.getAttribute('data-component-id'),
+        legacyEditBtns: list ? list.querySelectorAll('[data-edit]').length : 0, // imperative fallback wires data-edit
+        chromeSec: [...(list ? list.querySelectorAll('.shares-sec') : [])].some(s => /App chrome/.test(s.textContent)) };
+    });
+    ok(fbs.tagged !== 'chrome-studio', 'a broken chrome-studio does NOT tag the list (the confined mount refused → fell through)');
+    ok(fbs.legacyEditBtns >= 1 && fbs.chromeSec, `the broken Studio falls back to a WORKING imperative list (${fbs.legacyEditBtns} data-edit ✎ buttons) — admit/edit/revert still reachable`);
+    await page4.waitForTimeout(1200); // let /error/flag land
+    const sbl = await jpost('/components/backlog', { cap: rootCap, id: 'chrome-studio' });
+    const sItem = (sbl.items || []).find(i => i.kind === 'error' && /chrome component failed/.test(i.title));
+    ok(!!sItem, `the chrome-studio mount failure auto-filed onto its OWN backlog ("${sItem && sItem.title.slice(0, 50)}…")`);
+    await page4.close();
 
     ok(errs.length === 0, `no page errors (${errs.slice(0, 2).join(' | ')})`);
     await page.close();

@@ -228,7 +228,7 @@ project-object** in component-git, rendered through the **existing confined no-i
 path** (the fork pipeline: `(endowments, props) => vnode`, SES compartment under
 `FIELD_LOCKDOWN`, `renderConfined`) — so it gets versions/revert, a backlog, alt-click
 → edit chat, and the render-check gate, all for free. Proven end-to-end by
-`chrome-components.staging.test.cjs` (`yarn test:chrome`, 37/37).
+`chrome-components.staging.test.cjs` (`yarn test:chrome`, 63/63).
 
 **Converted so far:**
 - `chrome-msg-toolbar` — the per-message action strip (🔗 clip + 📋 copy). Mounts once
@@ -251,6 +251,37 @@ path** (the fork pipeline: `(endowments, props) => vnode`, SES compartment under
   monotonic frames through the cell; chips grow mid-turn; alt-click chips it; a
   scripted list-renderer riff receives the same frames; a throwing edit is
   render-check-refused; a broken island → pendant fallback + backlog auto-file).
+- `chrome-studio` — **the Component Studio LIST itself (wave 1, 2026-07-01)**, dan: he
+  wanted to reorder the Studio's sections and couldn't — the order was a hardcoded concat
+  in `app.js` (`pending+admitted html + chromeHtml + islandsHtml`). Now the whole list is
+  one confined component whose **section order is DATA in the source** — a `SECTION_ORDER`
+  array (`['pending','admitted','chrome','islands']`). "Show islands before app chrome" /
+  "put admitted at the top" is a one-sentence edit chat, persisted as a git commit that
+  **survives reload — no new runtime state needed** (this is the whole point of the ask).
+  - **THE SECTION-ORDER-VIA-SOURCE PATTERN.** Layout/order that today is hardcoded DOM
+    concatenation becomes an *ordered list in the component source*; reordering is a source
+    edit (⇒ a git version ⇒ reload-durable). No per-user prefs, no store, no schema — the
+    committed source IS the persisted order. Reach for this whenever "I want to rearrange
+    the shell" is the ask and the arrangement can be shared across viewers.
+  - **DEFERRED: the `chrome-prefs` grain.** Per-USER runtime order/prefs (each viewer their
+    own arrangement, live-toggleable, not a shared commit) is out of scope here — it wants a
+    subscribable per-user grain (the cell-as-interface pattern) feeding an `order` prop, not
+    a source edit. Named for a later wave; do NOT build drag-reorder/prefs into chrome-studio.
+  - Authority: the confined component only RENDERS + calls back. Admit / reject / revise /
+    edit / revert / fork are the trust-sensitive component-lifecycle actions — they stay
+    **host-gated exactly as before** (`studioAdmit`/`studioReject`/`studioRevise`/`studioRevert`
+    + `editComponent`/`forkComponentAct` in app.js, cap-carrying, `window.confirm` on
+    critical/destructive). The host aggregates the 4 fetches (`/tools/review`,
+    `GET /chrome/components`, `/components/islands`, per-id `/components/history`) into ONE
+    render-safe props object `{pending, admitted, chrome, islands, on*}` and mounts via
+    `renderChrome`. **The imperative builder is KEPT as the fallback branch** (renderChrome
+    returns false → the original `innerHTML` list + `wireComponentActions`) — the anti-brick
+    floor: a broken chrome-studio edit degrades to a working legacy list you can still
+    admit/edit/revert from. `reloadChromeComps` repaints it (refreshComponents) too. Proven
+    by `chrome-components.staging.test.cjs` (63/63: seeded w/ the props-schema header;
+    reorder round-trips + persists via git; a throwing edit is render-check-refused; alt-click
+    ✎/⑂ chip names the Studio; admit + revert fire correctly through the CALLBACK path; a
+    broken source falls back to a WORKING imperative list + auto-files to `backlog:chrome-studio`).
 
 **The architecture (each part is load-bearing):**
 - `chrome-components.mjs` — the seed registry. Seeds commit on first boot only; user
