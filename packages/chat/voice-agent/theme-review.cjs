@@ -14,6 +14,8 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { loadChromium, launchBrowser } = require('./test-harness.cjs'); // PORT-5: portable playwright/chromium/LD seams (mac-friendly)
+
 const HERE = __dirname;
 const PUB = path.join(HERE, 'public');
 const NAME = process.argv[2] || 'KitSampler';
@@ -118,12 +120,11 @@ const PROBE = () => {
 };
 
 (async () => {
-  let chromium = null;
-  try { ({ chromium } = require('/usr/lib/node_modules/@playwright/cli/node_modules/playwright-core')); } catch {}
+  const chromium = loadChromium();
   if (!chromium) { console.log('SKIP — playwright-core unavailable'); process.exit(0); }
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const port = server.address().port;
-  const browser = await chromium.launch({ executablePath: process.env.FIELD_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'], env: { ...process.env, LD_LIBRARY_PATH: process.env.FIELD_CHROMIUM_LDPATH || '/var/lib/obsidian/oldlibs' } });
+  const browser = await launchBrowser(chromium);
   const report = { component: NAME, generatedFor: 'adversarial theme review', themes: {}, renderError: null, screenshots: {} };
   try {
     const page = await browser.newPage();

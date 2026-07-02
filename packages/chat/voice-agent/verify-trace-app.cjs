@@ -2,15 +2,14 @@
 // Drives the REAL app in chromium: boots with the root cap, opens the trace app, and
 // asserts the iframe completed the handshake (its #status cleared + #title came back over
 // the channel via chat.getInfo()). Same-origin iframe → contentDocument is readable.
-const { chromium } = require('/usr/lib/node_modules/@playwright/cli/node_modules/playwright-core');
+const { loadChromium, launchBrowser } = require('./test-harness.cjs'); // PORT-5: portable playwright/chromium/LD seams (mac-friendly)
 const fs = require('fs');
 
 (async () => {
+  const chromium = loadChromium();
+  if (!chromium) { console.log('SKIP — playwright-core unavailable'); process.exit(0); }
   const ROOT = fs.readFileSync(`${process.env.HOME}/.config/field-agent/root.swiss`, 'utf8').trim();
-  const browser = await chromium.launch({
-    executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox'],
-    env: { ...process.env, LD_LIBRARY_PATH: '/var/lib/obsidian/oldlibs' },
-  });
+  const browser = await launchBrowser(chromium);
   const page = await browser.newPage();
   const errors = [];
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });

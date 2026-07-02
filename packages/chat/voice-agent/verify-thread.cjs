@@ -2,12 +2,14 @@
 // task), expand its thread, confirm the earlier reply shows IN the thread, send a new
 // reply from the thread composer, and confirm it lands in the thread — AND that the
 // reply is NOT a top-level chat bubble (context isolation).
-const { chromium } = require('/usr/lib/node_modules/@playwright/cli/node_modules/playwright-core');
+const { loadChromium, launchBrowser } = require('./test-harness.cjs'); // PORT-5: portable playwright/chromium/LD seams (mac-friendly)
 const fs = require('fs');
 
 (async () => {
+  const chromium = loadChromium();
+  if (!chromium) { console.log('SKIP — playwright-core unavailable'); process.exit(0); }
   const ROOT = fs.readFileSync(`${process.env.HOME}/.config/field-agent/root.swiss`, 'utf8').trim();
-  const browser = await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox'], env: { ...process.env, LD_LIBRARY_PATH: '/var/lib/obsidian/oldlibs' } });
+  const browser = await launchBrowser(chromium);
   const page = await browser.newPage();
   await page.goto(`http://127.0.0.1:8778/#cap=${ROOT}&chat=chat-482a9b534c80`, { waitUntil: 'load', timeout: 20000 });
   await page.waitForFunction(() => { const s = document.getElementById('scope'); return s && !/connecting/.test(s.textContent); }, { timeout: 20000 });
