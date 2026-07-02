@@ -45,6 +45,7 @@ import { listBacklog, addBacklog, nextOpen, recordOutcome, outcomeStatus, normal
 import { makeWandPolicy, DEFAULT_WAND_POLICY } from './wand-policy.mjs';
 import { runAgentCode } from '../../ocapn-noise/codemode.mjs';
 import { dialIrohObject } from './iroh-objects.mjs';
+import { makeCapabilityBundle } from './agent-caps-bundle.mjs'; // designation by REFERENCE — the ocap-correct power core
 // Boot-safe: this module only static-imports node builtins; it lazy-loads @endo/daemon on first USE (when an
 // agent actually redeems an Endo invitation), so importing it can never crash voice-agent boot.
 import * as endoPeer from './endo-peer-bridge.mjs';
@@ -611,8 +612,12 @@ export const resolvePower = name => { const n = String(name || ''); return POWER
 // makeCapabilityBundle(refs) holds Far power refs by petname; attenuate(requested)
 // returns a structural SUBSET that cannot fabricate an absent ref. It lives in a
 // dependency-free sibling so the permission CORE is testable without the heavy
-// affordance imports above. POWERS / META_POWERS remain DISPLAY-ONLY metadata.
-export { makeCapabilityBundle } from './agent-caps-bundle.mjs';
+// affordance imports above. As of ARCH-6 it is the SOURCE OF TRUTH for what a node
+// holds: each node holds a bundle of real power-references (see makePowerBundle in
+// makeFieldAgent) and its Set<string> of power names is DERIVED from that bundle.
+// POWERS / META_POWERS remain DISPLAY-ONLY metadata (labels + the delegation-edge
+// policy denylist); they no longer *carry* authority — the held refs do.
+export { makeCapabilityBundle };
 
 // Proposal types that ALWAYS confirm — they can NEVER be "don't ask again"-remembered / auto-fired.
 // Physical-world (locks!) + EXTERNAL/HIGH-authority actions: outbound sends, host-shell delegation, and
@@ -899,14 +904,23 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   const specialistNudges = makeSpecialistNudges({ file: path.join(CONFIG_DIR, 'specialist-nudges.json') });
   // NON-DELEGABLE powers: the few that grant authority nothing downstream can bound — `subagent` reaches the
   // real HOST shell (escapes confinement), `app` + `selfImprove` are root-only self-modification. Everything
-  // ELSE (delegate, specialists, roles, …) is delegable: a node re-grants only powers it already holds (the
-  // `node.powers.has(p)` checks below), so every sub-agent is a SUBSET of its parent and can never escalate.
-  // That invariant — not a permission prompt — is what makes spawning within your bounds safe and lets trees
-  // sprawl arbitrarily deep, each level ⊆ the one above.
-  // ⚠️ OCAP DEBT: that subset is enforced today by a NAME-SET (powers are STRINGS), which is itself the ocap
-  // smell dan flagged — the correct form is designation by REFERENCE (hold the cap object; pass a subset of
-  // refs; you can't name what you don't hold). Tracked as urgent maintenance: ~/TODO/ocap-designate-by-reference.md.
-  // Until then: do NOT add new string-name capability designation.
+  // ELSE (delegate, specialists, roles, …) is delegable: a node re-grants only powers it already holds, so
+  // every sub-agent is a SUBSET of its parent and can never escalate. That invariant — not a permission prompt
+  // — is what makes spawning within your bounds safe and lets trees sprawl arbitrarily deep, each level ⊆ above.
+  //
+  // ARCH-6 (designation by REFERENCE): as of this change that subset is enforced BY REFERENCE, not by a
+  // trusted name-set. Each node HOLDS `node.bundle` — an attenuated sub-bundle of `rootPowerBundle` (built
+  // near makeAgentNode) carrying the real power-references; `node.powers` (the Set<string>) is DERIVED from it.
+  // The toolbox is wired from the affordance refs the held bundle carries, and every delegation edge re-grants
+  // via `regrantNames(node.bundle, want)` = held-bundle.attenuate(want minus META) — you can only hand out a
+  // subset of refs you already hold; a name you never held resolves to no ref (can't be fabricated).
+  // NEXT INCREMENT (documented, not yet done — string-name reads that remain, all still ⊆-safe): the
+  // ctx-closured special blocks in toolboxAndManifestFor still GATE on the derived `powers.has(power)` (they
+  // need node/ctx closures the flat power-ref doesn't yet carry — fold those affordances into the ref next);
+  // the customtools tool-ring (ctx.ownPowers) still filters names; and the OPERATOR/root mint paths
+  // (mintScopedCap/updateScopedCap/makeScheduledNode/runWorktreeExecutor) intersect ALL_POWERS by name (they
+  // are root ops, and per contract mintScopedCap deliberately KEEPS META — do not route them through the
+  // META-stripping regrant helper). Ticket: ~/TODO/ocap-designate-by-reference.md.
   const META_POWERS = new Set(['subagent', 'app', 'selfImprove', 'toolsmith']); // toolsmith hands a sub-agent a VM → stays at the entry level, never sub-delegated
   // WAND POLICY (Phase 5): the held authority to auto-mint a specialist on a name-miss — option → ~/.config
   // file → conservative default. A node only auto-mints if it HOLDS this (node.wandBinding) AND the name matches
@@ -1559,10 +1573,15 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // node-bound propose: tags every proposal with WHO created it, so "don't ask
     // again" rules are scoped to this agent (root, share, or specialist).
     const np = spec => propose({ ...spec, agent: node.id });
-    for (const power of powers) {
-      for (const v of POWERS[power].verbs) {
-        const b = baseVerb[v];
-        if (!b) continue; // delegate/createInvite handled specially
+    // DESIGNATION BY REFERENCE: wire each held power's verbs from the affordance REFS
+    // carried by the power-reference in this node's bundle — not by looking up a
+    // string name in a global table. A power the node doesn't hold isn't in the
+    // bundle, so its verbs can't appear; a name it never held resolves to no ref.
+    // (The richer ctx-closured verbs — employ/spawnSpecialist/haFind/… — are still
+    // added by the `powers.has(power)` special blocks below.)
+    for (const power of node.bundle.names()) {
+      const pref = node.bundle.get(power);
+      for (const { name: v, aff: b } of pref.verbs()) {
         // inject the acting agent's id (run's 2nd arg) + the run-context (3rd arg:
         // chatId, so notify/push verbs can deep-link the originating chat)
         toolbox[v] = harden(b.abort ? { run: a => b.run(a, node.id, ctx), abort: b.abort } : { run: a => b.run(a, node.id, ctx) });
@@ -1608,7 +1627,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       let activeDelegate = null;
       toolbox.delegateTask = harden({
         run: async ({ prompt, powers: want = [], nickname }) => {
-          const granted = new Set([...(Array.isArray(want) ? want : [])].filter(p => node.powers.has(p) && !META_POWERS.has(p)));
+          const granted = regrantNames(node.bundle, want); // by-reference: requested ∩ held-refs, META stripped
           // The sub-agent is its OWN node: its own (fresh) home folder + c-list,
           // inheriting this node's HA binding for any HA authority granted. So a
           // delegate asked to "build a site" gets its own home to write + publish
@@ -1653,7 +1672,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
           if (!String(task || '').trim()) return { ok: false, error: 'describe the task the tool must accomplish' };
           // the toolsmith's ring: a VM to prototype in (kernel-isolated; host as fallback), a scratch folder,
           // research + library access to design/propose/test — ⊆ what the entry agent holds, never META.
-          const ring = [...new Set(['vm', 'host', 'home', 'web', 'research', 'reference', 'youtube', 'customtools', 'feed'].filter(p => node.powers.has(p) && !META_POWERS.has(p)))];
+          const ring = regrantNames(node.bundle, ['vm', 'host', 'home', 'web', 'research', 'reference', 'youtube', 'customtools', 'feed']); // by-reference ∩ held-refs, META stripped
           if (!ring.includes('vm') && !ring.includes('host')) return { ok: false, error: 'forging a tool needs a VM — you do not hold the vm/host power to pass to the toolsmith.' };
           const fid = `forge-${newSwiss().slice(0, 8)}`;
           const smith = makeAgentNode({ powers: ring, labelOf: `toolsmith-${fid}`, haBinding: node.haBinding, agBinding: node.agBinding, id: `toolsmith-${fid}` });
@@ -1709,7 +1728,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
           // EVERY role → a fresh sub-node confined to the INTERSECTION of the
           // role's ring and THIS node's powers (least privilege; can't exceed your
           // authority — lexical, not prompt). meta-powers stripped (one level deep).
-          const ring = new Set([...spec.powers].filter(p => node.powers.has(p) && !META_POWERS.has(p)));
+          const ring = new Set(regrantNames(node.bundle, spec.powers)); // by-reference: role ring ∩ held-refs, META stripped
           if (Array.isArray(want) && want.length) { const keep = new Set(want); for (const p of [...ring]) if (!keep.has(p)) ring.delete(p); } // optional caller-narrowing only SUBTRACTS
           const rkey = crypto.randomBytes(3).toString('hex');
           const petName = String(nickname || '').trim() || genPetName(); // agent-proposed name, else a friendly pet name
@@ -1982,7 +2001,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       toolbox.listSpecialists = harden({ run: async () => ({ ok: true, specialists: [...builtinList(), ...specialists.map(s => ({ id: s.id, name: s.name, domain: s.domain, powers: s.powers, autonomy: listAutoRules(s.id).map(r => r.kind), spawnedFrom: s.spawnedFrom || null }))] }) });
       toolbox.spawnSpecialist = harden({ run: async ({ name, domain, powers: want = [], instructions } = {}) => {
         const reqd = [...new Set(Array.isArray(want) ? want : [])];
-        const granted = reqd.filter(p => node.powers.has(p) && !META_POWERS.has(p)); // structurally ⊆ you (the cap graph IS the bound)
+        const granted = regrantNames(node.bundle, reqd); // by-reference: requested ∩ held-refs, META stripped — structurally ⊆ you
         const dropped = reqd.filter(p => !granted.includes(p));
         const r = spawnSpecialist({ name, domain, powers: granted, instructions, spawnedFromChatId: ctx.chatId }); // r.url (its #cap) is NOT returned — cap hygiene
         return harden({ ok: !!r.ok, id: r.id, name: r.name, domain: String(domain || ''), powers: granted,
@@ -2360,14 +2379,55 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     return { toolbox: harden(toolbox), manifest: harden(manifest) };
   };
 
+  // ── designation by REFERENCE: the root authority bundle (ARCH-6) ────────────
+  // The ROOT holds one power-REFERENCE per power name. Each power-reference HOLDS
+  // that power's real verb affordances (refs into the `baseVerb` closure above),
+  // so *holding the ref IS holding the affordances* — there is no forgeable string
+  // in the path from "held" to "can call". A sub-agent's authority is an ATTENUATED
+  // SUBSET of these refs (rootPowerBundle.attenuate(names) at the delegation edge),
+  // never a name it merely utters. The Set<string> each node exposes is DERIVED
+  // from the bundle it holds (below), so the bundle — not the name-set — is the
+  // source of truth. (The verbs wired here are only those with a `baseVerb` impl;
+  // the richer ctx-closured verbs — employ/spawnSpecialist/haFind/… — are still
+  // added by the `powers.has(power)` special blocks in toolboxAndManifestFor, which
+  // read the DERIVED set. Folding those into the ref is the next ARCH-6 increment.)
+  const makePowerRef = pname => harden(Far('PowerRef', {
+    name: () => pname,
+    label: () => POWERS[pname].label,
+    // the concrete verb affordances this power grants (name + the real baseVerb ref)
+    verbs: () => harden(POWERS[pname].verbs
+      .map(v => (baseVerb[v] ? harden({ name: v, aff: baseVerb[v] }) : null))
+      .filter(Boolean)),
+  }));
+  const rootPowerBundle = makeCapabilityBundle(
+    Object.fromEntries(ALL_POWERS.map(p => [p, makePowerRef(p)])),
+  );
+  // The DELEGATION EDGE, by reference: re-grant to a sub-agent by intersecting the
+  // requested names with the bundle you HOLD (attenuate — an absent/unheld name is
+  // dropped, never minted) and stripping META (the non-delegable powers). You can
+  // only hand out a subset of the refs you already hold; the returned names then
+  // materialize as the child's own attenuated bundle in makeAgentNode. Equivalent
+  // to the old `[...want].filter(p => held.has(p) && !META)` — but the intersection
+  // is now against held REFERENCES, not a trusted string-set.
+  const regrantNames = (heldBundle, requested) => heldBundle
+    .attenuate([...(Array.isArray(requested) ? requested : [])].filter(p => !META_POWERS.has(p)))
+    .names();
+
   // A node = a holder of a SUBSET of powers, with the right to use + re-share
   // them. The root holds ALL_POWERS. share() mints a child node (single power).
   const makeAgentNode = ({ powers, labelOf = 'agent', name = '', isRoot = false, haBinding = null, agBinding = null, contactsBinding = null, homeBinding = null, timersBinding = null, notesBinding = null, cwdBinding = null, wandBinding = null, id = null }) => {
-    const powerSet = new Set(powers);
+    // The bundle of real power-REFERENCES this node holds — an attenuated subset of
+    // the root bundle. `powers` (the requested name list) can only ever REACH the
+    // refs the root actually holds: a bogus/absent name is silently dropped, never
+    // minted (makeCapabilityBundle.attenuate). The Set<string> below is DERIVED from
+    // it, so every downstream `node.powers.has(...)` check reads THROUGH the held
+    // bundle rather than trusting the raw name list.
+    const bundle = rootPowerBundle.attenuate(Array.isArray(powers) ? powers : [...powers]);
+    const powerSet = new Set(bundle.names());
     const shares = new Map(); // swiss → { power, label, createdAt, url, ha? }
     // homeBinding = () → this cap's home folder object (its own sub-dir).
     const home = homeBinding || (() => makeHome(isRoot ? 'root' : `cap-${labelOf}`.replace(/[^\w-]/g, '_').slice(0, 40)));
-    const node = { powers: powerSet, isRoot, haBinding, agBinding, contactsBinding, homeBinding: home, timersBinding, notesBinding, cwdBinding, wandBinding };
+    const node = { powers: powerSet, bundle, isRoot, haBinding, agBinding, contactsBinding, homeBinding: home, timersBinding, notesBinding, cwdBinding, wandBinding };
     // Stable agent identity for auto-confirm rules. Must be UNIQUE per cap — shares
     // pass their swissnum as `id` so two same-LABEL shares don't collide (and thus
     // can't leak one's "don't ask again" rule onto the other). Specialists pass no
@@ -2674,7 +2734,10 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   const getSpecNode = spec => specNodes.get(spec.id) || registerSpecialist(spec);
   const spawnSpecialist = ({ name, domain, powers, instructions, spawnedFromChatId }) => {
     const id = specSlug(name);
-    const granted = [...new Set((Array.isArray(powers) ? powers : []).filter(p => ALL_POWERS.includes(p) && !META_POWERS.has(p)))];
+    // by-reference against the ROOT bundle (= ALL_POWERS): a defensive re-intersection at the
+    // persist boundary — callers already attenuated, but a specialist never persists META / a
+    // non-existent power. Equivalent to `powers ∩ ALL_POWERS minus META`.
+    const granted = regrantNames(rootPowerBundle, powers);
     const existing = specialists.find(s => s.id === id);
     const swiss = existing?.swiss || newSwiss();
     const spec = { id, name: String(name || id), domain: String(domain || ''), powers: granted, instructions: String(instructions || ''), swiss, createdAt: existing?.createdAt || new Date().toISOString(), spawnedFrom: existing?.spawnedFrom || (spawnedFromChatId ? String(spawnedFromChatId) : null) };
@@ -2703,11 +2766,11 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // (→ the caller falls back to the plain "no such specialist"). So auto-minting is a held, enumerated, bounded
   // authority — not "any name conjures new powers".
   const fillMissingSpecialist = async ({ name, request = '', origin = '', caller } = {}) => {
-    if (!caller || !caller.powers) return null;
+    if (!caller || !caller.bundle) return null;
     const policy = caller.wandBinding && caller.wandBinding();
     const entry = policy && policy.match(String(name || ''));
     if (!entry) return null; // no held wand authority, or this name isn't an allowed specialization → graceful miss
-    const granted = [...new Set((entry.powers || []).filter(p => caller.powers.has(p) && !META_POWERS.has(p)))]; // entry ceiling ∩ caller — never escalates
+    const granted = regrantNames(caller.bundle, entry.powers || []); // by-reference: entry ceiling ∩ caller's held refs, META stripped — never escalates
     let domain = entry.domain || '';
     let instructions = entry.instructions || '';
     if (typeof fillSpecialist === 'function' && (!domain || !instructions)) {
