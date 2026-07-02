@@ -31,7 +31,13 @@ const runProgram = async (code, endow) => {
     const value = await compartment.evaluate(`(async () => {\n${String(code)}\n})()`);
     return { ok: true, value, logs };
   } catch (e) {
-    return { ok: false, error: (e && e.message) || String(e), logs };
+    // P1-7(a): distinguish a PARSE failure (the generated program didn't compile — truncation, an unbalanced
+    // brace/quote/fence) from a RUNTIME throw. A SyntaxError is thrown SYNCHRONOUSLY by compartment.evaluate
+    // before the async IIFE ever runs; the loop uses this flag to auto-retry program-generation once instead
+    // of surfacing the raw SyntaxError as the turn result. (Name-check too: SES compartments share primordials
+    // with the start compartment, so `instanceof` holds — the name guard is belt-and-suspenders.)
+    const syntax = e instanceof SyntaxError || (!!e && e.name === 'SyntaxError');
+    return { ok: false, error: (e && e.message) || String(e), logs, ...(syntax ? { syntax: true } : {}) };
   }
 };
 
@@ -130,6 +136,51 @@ const refPlaceholder = d => {
   return `🌱 ${d.kind} — ${d.name && d.name !== d.kind ? d.name : summary} (unrendered object)`;
 };
 
+// ── ANSWER-CHANNEL HYGIENE (P1-7) ──────────────────────────────────────────────────────────────────────────
+// The user-visible reply must never BE a raw artefact of the machinery: a whole ```js program dumped as the
+// answer, a raw provider-error JSON blob, or a stray unfenced program. These are malfunctions, not replies.
+// Detect them defensively (all guards non-throwing, bounded) and REPLACE with a clean recovery message. Prose
+// that merely CONTAINS a code snippet or the word "error" is untouched — only a WHOLE-answer artefact is caught.
+// (The `[object Object]` smell is handled separately by the object channel above + server-side de-smell.)
+const FENCE_WHOLE_RE = /^\s*```[\s\S]*```\s*$/;
+// a raw provider-error blob: a JSON object/array whose top level carries an error/message/type key alongside a
+// telltale transport/limit token (429/5xx/rate-limit/overloaded/…). Anchored to a JSON-looking start to avoid
+// catching ordinary prose that merely mentions "error".
+const looksLikeProviderError = s => {
+  const t = String(s == null ? '' : s).trim();
+  if (!(t.startsWith('{') || t.startsWith('['))) return false;
+  return /["']?(error|message|type|status)["']?\s*:/.test(t)
+    && /(rate.?limit|overloaded|invalid_request|api|token|quota|status|\b(?:429|500|502|503|529)\b|unauthor|forbidden|exception|econnreset|timed?.?out)/i.test(t);
+};
+// an unfenced JS PROGRAM emitted as if it were prose: starts like a JS statement AND carries program structure.
+// Kept strict (both conditions) so a natural-language sentence that happens to start with "if"/"for" is not caught.
+const looksLikeRawProgram = s => {
+  const t = String(s == null ? '' : s).trim();
+  if (t.length < 8) return false;
+  const startsJs = /^(?:await\s|const\s|let\s|var\s|function\s|async\s|for\s*\(|while\s*\(|if\s*\(|switch\s*\(|try\s*\{|return\s|answer\s*\(|ask\s*\(|blocked\s*\(|\/\/)/.test(t);
+  const hasStructure = /=>/.test(t) || /;\s*$/m.test(t) || /\bawait\s+\w+\s*\(/.test(t) || /^\s*(?:const|let|var)\s+\w+\s*=/.test(t);
+  return startsJs && hasStructure;
+};
+// Lint one piece of user-visible answer text; returns a clean message if it is a raw artefact, else the input.
+const answerHygiene = text => {
+  const t = String(text == null ? '' : text);
+  const trimmed = t.trim();
+  if (!trimmed) return text;
+  // (1) the WHOLE answer is a single fenced code block → a program/log dump leaked in place of a reply.
+  if (FENCE_WHOLE_RE.test(trimmed) && (trimmed.match(/```/g) || []).length >= 2) {
+    return 'I generated a code step instead of a reply. Let me try that again — could you restate what you need?';
+  }
+  // (2) a raw provider-error JSON blob became the reply.
+  if (looksLikeProviderError(trimmed)) {
+    return 'I hit a temporary problem reaching the model just now. Please try again in a moment.';
+  }
+  // (3) an unfenced program dumped as prose.
+  if (looksLikeRawProgram(trimmed)) {
+    return 'I started to write a code step but did not run it as a reply. Let me try again — could you restate what you need?';
+  }
+  return text;
+};
+
 // Extract a JS program from the model reply: a ```js fenced block (preferred), else a bare ``` block.
 const extractCode = reply => {
   const s = String(reply || '');
@@ -211,6 +262,18 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     } else {
       const d = describeRef(value);
       if (d) { objects.push(d); text = refPlaceholder(d); } else text = scrubCapText(safeJson(value)); // scalars: coerce as before
+    }
+    // P1-7(b): lint the user-visible answer — a raw ```program dump / provider-error blob / unfenced program
+    // must never BE the reply. Only for a plain-string reply; a 🌱 object placeholder (objects.length>0) is fine.
+    if (objects.length === 0) text = answerHygiene(text);
+    // P1-3: an EMPTY explicit turn-ender — answer("")/answer()/whitespace — with NO other captured content is a
+    // STALL, not a reply. Do not emit a silent empty assistant bubble: convert it to a `blocked` with a clear
+    // message so the DATA is honest (mirrors the empty-model-response path below). A turn that legitimately
+    // answers with an object/array/remotable (objects.length>0 → 🌱 placeholder text) is NOT clobbered, and the
+    // research handoff (kind==='research', intentionally empty by design) is left untouched.
+    if (kind !== 'research' && objects.length === 0 && !String(text == null ? '' : text).trim()) {
+      kind = 'blocked';
+      text = '(the agent ended its turn without a message)';
     }
     finalReply = { kind, text, objects };
     throw new Error(REPLY_SENTINEL);
@@ -304,6 +367,7 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
   let repeatErr = 0; // consecutive identical throws → the agent is wedged; break out and REPORT it
   let failStreak = 0; // consecutive throws of ANY kind → catches alternating/non-identical errors repeatErr misses
   let emptyRetries = 0; // the model returned NOTHING (no program, no answer) → nudge it to act, then report honestly
+  let syntaxRetries = 0; // P1-7(a): the generated program failed to PARSE → feed the error back and retry ONCE
   let round = 0;
   for (;;) {
     if (signal?.aborted) return cancelled();
@@ -349,9 +413,16 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
       //     not a marker.
       const bare = /^\s*(answer|ask|blocked)\(\s*(['"`])([\s\S]*)\2\s*\)\s*;?\s*$/i.exec(reply);
       if (bare) {
-        const kind = bare[1].toLowerCase(); const text = bare[3];
+        const kind = bare[1].toLowerCase();
+        // P1-7(b): even an unfenced bare turn-ender goes through the answer-channel lint (a raw program/blob
+        // wrapped in answer(...) must not surface verbatim).
+        let text = answerHygiene(bare[3]);
+        // P1-3: an empty bare turn-ender (e.g. `answer("")`) is a STALL, not a reply — report it as blocked
+        // (research handoffs are intentionally empty and are not emitted as a bare unfenced call).
+        let flag = kind;
+        if (!String(text == null ? '' : text).trim()) { text = '(the agent ended its turn without a message)'; flag = 'blocked'; }
         onStep({ kind: 'answer', text });
-        return harden({ answer: text, toolsUsed: used, ...(kind === 'ask' ? { asking: true } : kind === 'blocked' ? { blocked: true } : kind === 'research' ? { researching: true } : {}) });
+        return harden({ answer: text, toolsUsed: used, ...(flag === 'ask' ? { asking: true } : flag === 'blocked' ? { blocked: true } : flag === 'research' ? { researching: true } : {}) });
       }
       // (2) a non-empty natural-language reply → deliver it as the answer. A model replying in prose IS its reply;
       //     there is no marker to parse. (3) empty → a MODEL stall: nudge it to ACT + end with a turn-ender
@@ -366,6 +437,10 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
         }
         answer = lastError ? stallMessage(lastError)
           : 'The model returned an empty response for this — that usually means the current model (the local default) stalled on a multi-step request, not that anything is unclear. Try again, or switch to a stronger model (the Claude options in the header) for this kind of follow-up action.';
+      } else {
+        // P1-7(b): the reply is prose (no fenced program was extracted). Guard the channel: a raw provider-error
+        // blob, a stray unfenced program, or a whole ```block dumped as prose must not be delivered verbatim.
+        answer = answerHygiene(answer);
       }
       onStep({ kind: 'answer', text: answer });
       return harden({ answer, toolsUsed: used });
@@ -385,6 +460,21 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     if (!r.ok && /INFERENCE_BUDGET_EXHAUSTED/.test(String(r.error || ''))) {
       onStep({ kind: 'tool-error', name: 'model', error: r.error });
       return harden({ answer: stallMessage(lastError) + ' (The prepaid allowance for this chat is used up.)', toolsUsed: used, exhausted: true, resumeFrom: messages.slice(1) });
+    }
+    // P1-7(a): the generated PROGRAM did not PARSE (SyntaxError — a truncated/cut-off program, an unbalanced
+    // brace/quote/fence). Do NOT surface the raw SyntaxError as the turn result (nor let it feed the failStreak
+    // stall as raw error text): AUTO-RETRY the program-generation ONCE with the parse error fed back so the model
+    // can fix/resend. If it STILL doesn't parse, stop and return a clean `blocked` stall — never the raw error.
+    if (!r.ok && r.syntax) {
+      onStep({ kind: 'tool-error', name: 'model', error: `program did not parse: ${r.error}` });
+      if (syntaxRetries < 1 && !signal?.aborted) {
+        syntaxRetries += 1;
+        messages.push({ role: 'user', content: `Your program did not PARSE (SyntaxError: ${clip(r.error, 400)}). It was likely cut off or has an unbalanced brace/quote/fence. Re-send a COMPLETE, SHORTER \`\`\`js program that parses cleanly — close every brace and the \`\`\` fence — and end by calling exactly one turn-ender: answer("…"), ask("…"), or blocked("…").` });
+        continue;
+      }
+      const answer = "I couldn't complete this — the step I tried to run didn't parse as a valid program, even after a retry. Could you rephrase or narrow the request and I'll try again?";
+      onStep({ kind: 'answer', text: answer });
+      return harden({ answer, toolsUsed: used, blocked: true, stalled: true });
     }
     const parts = [];
     if (r.logs.length) parts.push(`logs:\n${clip(r.logs.join('\n'), 8000)}`);
