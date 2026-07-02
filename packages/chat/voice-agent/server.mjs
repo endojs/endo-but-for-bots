@@ -958,6 +958,40 @@ const sharePurseFor = tok => {
 };
 const capHash = c => crypto.createHash('sha256').update(String(c || '')).digest('hex').slice(0, 16);
 
+// ── SEC-10: gate the toll routes (/toll/check|edit|save|unpublish|account). They take an opaque `account`
+//    secret and only ever DECREASE a balance (charge/accrue), so a leaked account can be GRIEFED (drained to
+//    zero) but not stolen from. Previously they were UNGATED + UNLIMITED, so any reachable caller could probe
+//    or grief any account it learned. Now: (1) require a valid CAP on every toll route — you must hold a
+//    capability to touch the meter at all (designation-by-reference, not a bare string); (2) BIND each account
+//    to the first non-root cap that touches it (trust-on-first-use) so a DIFFERENT cap can't drain someone
+//    else's account (root is always allowed — it funds accounts on the owner's behalf); (3) rate-limit per
+//    cap to blunt probing/griefing bursts. The old comment claimed "loopback only" — nothing enforced it and
+//    the service also binds tailnet, so we DROP that stale claim in favour of the cap gate above (a stronger
+//    control than an IP check). Ownership binding is in-memory (re-binds TOFU after a restart); acceptable
+//    because charge-only-decreases + the cap gate + the rate limit already remove the theft and most of the
+//    grief surface — a persisted binding is a follow-up. ──
+const tollOwnerKeyOf = cap => (nodeFor(cap)?.isRoot ? 'root' : 'u:' + crypto.createHash('sha256').update(`toll-owner:${String(cap || '')}`).digest('hex').slice(0, 16));
+const tollAcctKey = account => crypto.createHash('sha256').update(`toll-acct:${String(account || '')}`).digest('hex').slice(0, 24);
+const tollAccountOwner = new Map(); // account-hash → owner-key (first non-root cap to touch it)
+const tollRate = new Map(); // owner-key → { n, windowStart }
+const TOLL_RATE_MAX = Number(process.env.TOLL_RATE_MAX) || 60; // ≤60 toll ops / window per cap
+const TOLL_RATE_WINDOW = 10_000;
+const tollGate = (cap, account) => {
+  const node = nodeFor(cap);
+  if (!node) return { code: 403, error: 'a capability is required to use the toll meter' };
+  const ok = tollOwnerKeyOf(cap);
+  const now = Date.now(); const r = tollRate.get(ok);
+  if (!r || now - r.windowStart > TOLL_RATE_WINDOW) tollRate.set(ok, { n: 1, windowStart: now });
+  else if (++r.n > TOLL_RATE_MAX) return { code: 429, error: 'rate limit — too many toll operations, slow down' };
+  if (!node.isRoot) {
+    const ak = tollAcctKey(account);
+    const bound = tollAccountOwner.get(ak);
+    if (bound && bound !== ok) return { code: 403, error: 'this toll account belongs to another capability' };
+    if (!bound) tollAccountOwner.set(ak, ok); // trust-on-first-use
+  }
+  return { ok: true };
+};
+
 const FEED_DIR = path.dirname(FEED_FILE);
 // P2-4: feed.json is a read→push→write store hit by many concurrent server-side writers (auto-admit,
 // error-flag, /pay·/chat notices, triageTick). Interleaved RMW dropped entries. Serialize EVERY server-side
@@ -2094,16 +2128,18 @@ const handler = async (req, res) => {
     //    allowance. Amounts are µUSD integers. Any valid cap manages its OWN chats'
     //    purses; only root may move the global default-allowance for new chats. ──
     // ── TOLL-BRIDGE: the SPWA self-editors report EDIT spend (AI credits) + SAVE/HOST rent
-    //    (storage×time) here, so both land in the central µUSD ledger. The `account` is a
-    //    host-side secret (never in a browser); check/edit/save only DECREASE a balance.
-    //    fund is the only credit op and is ROOT-gated — that's how "publishing rights come out
-    //    of the allowance you grant when sharing" (fund the sharee's account from their grant). ──
+    //    (storage×time) here, so both land in the central µUSD ledger. The `account` is an opaque
+    //    secret; check/edit/save only DECREASE a balance. SEC-10: these routes are now CAP-GATED +
+    //    rate-limited + bound-to-first-cap via tollGate() (see its header) — a valid capability is
+    //    required and an account can only be touched by the cap that owns it (or root). fund is the
+    //    only credit op and is ROOT-gated — that's how "publishing rights come out of the allowance
+    //    you grant when sharing" (fund the sharee's account from their grant). ──
     if (req.method === 'GET' && u.pathname === '/toll/quote') return json(res, 200, { ok: true, ...tollBridge.quote() });
-    if (req.method === 'POST' && u.pathname === '/toll/check') { const { account } = await jsonBody(req); return json(res, 200, tollBridge.check(String(account || ''))); }
-    if (req.method === 'POST' && u.pathname === '/toll/edit') { const { account, model, usage } = await jsonBody(req); return json(res, 200, tollBridge.chargeEdit({ account: String(account || ''), model, usage })); }
-    if (req.method === 'POST' && u.pathname === '/toll/save') { const { account, key, bytes, appName } = await jsonBody(req); return json(res, 200, tollBridge.chargeSave({ account: String(account || ''), key: String(key || ''), bytes: Number(bytes) || 0, appName })); }
-    if (req.method === 'POST' && u.pathname === '/toll/unpublish') { const { account, key } = await jsonBody(req); return json(res, 200, tollBridge.unregister(String(account || ''), String(key || ''))); }
-    if (req.method === 'POST' && u.pathname === '/toll/account') { const { account } = await jsonBody(req); return json(res, 200, tollBridge.accountStatus(String(account || ''))); }
+    if (req.method === 'POST' && u.pathname === '/toll/check') { const { cap, account } = await jsonBody(req); const g = tollGate(cap, account); if (!g.ok) return json(res, g.code, { error: g.error }); return json(res, 200, tollBridge.check(String(account || ''))); }
+    if (req.method === 'POST' && u.pathname === '/toll/edit') { const { cap, account, model, usage } = await jsonBody(req); const g = tollGate(cap, account); if (!g.ok) return json(res, g.code, { error: g.error }); return json(res, 200, tollBridge.chargeEdit({ account: String(account || ''), model, usage })); }
+    if (req.method === 'POST' && u.pathname === '/toll/save') { const { cap, account, key, bytes, appName } = await jsonBody(req); const g = tollGate(cap, account); if (!g.ok) return json(res, g.code, { error: g.error }); return json(res, 200, tollBridge.chargeSave({ account: String(account || ''), key: String(key || ''), bytes: Number(bytes) || 0, appName })); }
+    if (req.method === 'POST' && u.pathname === '/toll/unpublish') { const { cap, account, key } = await jsonBody(req); const g = tollGate(cap, account); if (!g.ok) return json(res, g.code, { error: g.error }); return json(res, 200, tollBridge.unregister(String(account || ''), String(key || ''))); }
+    if (req.method === 'POST' && u.pathname === '/toll/account') { const { cap, account } = await jsonBody(req); const g = tollGate(cap, account); if (!g.ok) return json(res, g.code, { error: g.error }); return json(res, 200, tollBridge.accountStatus(String(account || ''))); }
     if (req.method === 'POST' && u.pathname === '/toll/fund') {
       const { cap, account, amount } = await jsonBody(req);
       if (!nodeFor(cap)?.isRoot) return json(res, 403, { error: 'funding an account is the owner\'s grant — root cap required' });
