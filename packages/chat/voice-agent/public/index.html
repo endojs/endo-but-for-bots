@@ -332,13 +332,12 @@
   #attach { background:transparent; border:1px solid var(--edge) !important; color:var(--mut); }
   #attach:hover { color:var(--ink); border-color:var(--acc) !important; }
   @keyframes pulse { 0%,100%{box-shadow:0 0 0 0 rgba(31,111,235,.5)} 50%{box-shadow:0 0 0 12px rgba(31,111,235,0)} }
-  /* Google-style landing: before the first message the composer floats in the screen's
-     vertical centre with a tagline; sending the first message drops it back to the bottom
-     (transform-animated) while the typed message pops in at the top as a chat bubble. */
-  .composer { transition:transform .55s cubic-bezier(.22,1,.36,1); }
-  body.landing .composer { transform:translateY(-42vh); background:none; }
+  /* Landing screen: before the first message the empty chat shows a WELCOME panel (chrome-welcome)
+     in normal content flow, with the composer DOCKED at the bottom. The welcome sits above the input
+     (pushing it down) and never overlays the input or a [data-trusted-path] surface. Sending the first
+     message hides the panel and the typed message pops in at the top as a chat bubble. */
   body.landing #composer-tagline { display:block; }
-  #composer-tagline { display:none; max-width:960px; margin:0 auto 16px; text-align:center; color:var(--mut); font-size:21px; font-weight:500; letter-spacing:.2px; }
+  #composer-tagline { display:none; max-width:960px; margin:14vh auto 24px; text-align:center; color:var(--mut); font-size:21px; font-weight:500; letter-spacing:.2px; }
   @keyframes bubblePop { 0%{ transform:translateY(34px) scale(.55); opacity:0; } 62%{ transform:translateY(0) scale(1.04); opacity:1; } 100%{ transform:none; } }
   .msg.pop { animation:bubblePop .5s cubic-bezier(.22,1,.36,1); }
   /* honor reduced-motion: neutralize decorative CSS animation + transitions for users who ask for it */
@@ -576,6 +575,10 @@
   <div id="talk">
     <div id="chat-bar" class="chat-bar hide"></div>
     <div id="log"></div>
+    <!-- The empty-chat WELCOME panel (chrome-welcome mounts here) lives in NORMAL CONTENT FLOW — above
+         the docked composer, below the powers banner — so it can never overlay the input or occlude a
+         [data-trusted-path] surface. It only occupies space on the landing screen (body.landing). -->
+    <div id="composer-tagline">What can Agent C do for you?</div>
   </div>
 
   <!-- TRUSTED PATH: the power grant/revoke + auto-confirm-rules surface. Never editable chrome — alt-click
@@ -675,7 +678,6 @@
 </main>
 <div id="siri-orb"><div class="orb"></div></div>
 <div class="composer" id="composer">
-  <div id="composer-tagline">What can Agent C do for you?</div>
   <div id="status"></div>
   <div id="attachrow" class="attachrow hide"></div>
   <div class="inputrow">

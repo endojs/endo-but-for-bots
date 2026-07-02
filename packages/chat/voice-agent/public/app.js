@@ -2436,8 +2436,8 @@ const forkIntoChat = async ({ source, name, baseId }) => {
 window.forkIntoChat = forkIntoChat; // reachable from the components/apps surfaces
 const titleFrom = t => { const ch = chats.find(c => c.id === sessionId); if (ch && (!ch.title || ch.title === 'New chat')) { ch.title = t.slice(0, 40); saveChats(); renderChatList(); } };
 
-// Google-style landing: an empty chat centres the composer in mid-screen (with a
-// tagline); the first message drops it to the bottom. Driven off the active tab + cap +
+// Landing screen: an empty chat shows the WELCOME panel in normal content flow (above the docked
+// composer) with a tagline; the first message hides it. Driven off the active tab + cap +
 // whether the transcript is still empty, so it stays correct across chat switches/reloads.
 const syncLanding = () => document.body.classList.toggle('landing', curTab === 'talk' && !!cap && !activeTx.length);
 // The landing WELCOME panel is app chrome (chrome-welcome, a registry-backed confined component): the
@@ -3269,8 +3269,8 @@ const positionPendant = () => {
     if ((on || scoping) && !pendantLive) {
       const lr = log.getBoundingClientRect();
       // Anchor to the INPUT BOX (not the whole composer/tagline) and FIT the pendant into the space
-      // ABOVE it, so on mobile's landing view (composer floated up via -42vh) it can never overflow
-      // the top of the screen — it hugs just over the input box, shrinking if room is tight.
+      // ABOVE it, so on the landing view (composer docked at the bottom) it can never overflow the
+      // top of the screen — it hugs just over the input box, shrinking if room is tight.
       const box = ($('text') || $('composer')).getBoundingClientRect();
       const avail = Math.max(80, box.top - 16);            // usable height above the input
       const h = Math.max(110, Math.min(200, avail));        // fit within it

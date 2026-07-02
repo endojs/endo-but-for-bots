@@ -107,15 +107,48 @@ const jpost = (p, b) => fetch(`${BASE}${p}`, { method: 'POST', headers: { 'conte
     // ── 5. the WELCOME panel renders confined + registry-tagged on the fresh landing ──────────────
     await page.waitForSelector('#composer-tagline [data-component-id=chrome-welcome], #composer-tagline[data-component-id=chrome-welcome]', { timeout: 10000 }).catch(() => {});
     const wr = await page.evaluate(() => {
+      const overlaps = (a, b) => !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom);
       const el = document.getElementById('composer-tagline');
       const tagged = el && (el.getAttribute('data-component-id') || (el.querySelector('[data-component-id]') || {}).getAttribute?.('data-component-id'));
       const sug = el ? [...el.querySelectorAll('button.welcome-suggest')] : [];
+      // GEOMETRY (dan: the suggestions must NOT overlay the input or clobber the trusted path — they sit
+      // in normal flow and push the input box DOWN). Measure BEFORE clicking a suggestion (the click only
+      // fills the composer; it must not change the landing layout).
+      const landing = document.body.classList.contains('landing');
+      const wRect = el ? el.getBoundingClientRect() : null;
+      const composer = document.getElementById('composer');
+      const cRect = composer ? composer.getBoundingClientRect() : null;
+      const text = document.getElementById('text');
+      const tRect = text ? text.getBoundingClientRect() : null;
+      // the composer sits BELOW the welcome panel (its top is at/under the panel's bottom) → no overlap.
+      const composerBelow = !!(wRect && cRect) && cRect.top >= wRect.bottom - 1;
+      const welcomeOverComposer = !!(wRect && cRect) && overlaps(wRect, cRect);
+      // the welcome panel must not overlap ANY [data-trusted-path] surface currently on screen.
+      const tp = [...document.querySelectorAll('[data-trusted-path]')]
+        .filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+      const tpCount = tp.length;
+      const welcomeOverTrusted = !!wRect && tp.some(e => overlaps(wRect, e.getBoundingClientRect()));
+      // the input box is fully visible + not occluded: its centre point hits #text (not something on top).
+      let inputClickable = false;
+      if (tRect && tRect.width > 0 && tRect.height > 0) {
+        const top = document.elementFromPoint(tRect.left + tRect.width / 2, tRect.top + tRect.height / 2);
+        inputClickable = !!top && (top === text || text.contains(top));
+      }
       if (sug[0]) sug[0].click();
-      return { tagged, nSuggest: sug.length, composer: (document.getElementById('text') || {}).value || '' };
+      return { tagged, nSuggest: sug.length, composer: (document.getElementById('text') || {}).value || '',
+        landing, composerBelow, welcomeOverComposer, tpCount, welcomeOverTrusted, inputClickable,
+        wRect: wRect && { top: Math.round(wRect.top), bottom: Math.round(wRect.bottom) },
+        cTop: cRect && Math.round(cRect.top) };
     });
     ok(wr.tagged === 'chrome-welcome', `the landing welcome panel is the chrome-welcome component (tagged ${wr.tagged})`);
     ok(wr.nSuggest >= 3, `welcome renders starter suggestions (${wr.nSuggest})`);
     ok(wr.composer.length > 0, `tapping a suggestion fills the composer ("${wr.composer.slice(0, 40)}…")`);
+    // ── 5b. IN-FLOW LAYOUT: the welcome panel pushes the input DOWN, never overlays it or the trusted path ─
+    ok(wr.landing, 'the fresh boot opens the empty landing chat (welcome panel visible)');
+    ok(wr.composerBelow && !wr.welcomeOverComposer, `the welcome panel is in normal flow ABOVE the docked composer — composer top (${wr.cTop}) is below the panel bottom (${wr.wRect && wr.wRect.bottom}); no overlap`);
+    ok(wr.tpCount >= 1, `at least one [data-trusted-path] surface is on the landing screen (${wr.tpCount}) — the powers banner`);
+    ok(!wr.welcomeOverTrusted, 'the welcome panel does NOT overlap any [data-trusted-path] surface (the trusted path is never occluded)');
+    ok(wr.inputClickable, 'the composer input box is fully visible + clickable (nothing overlays it at its centre)');
 
     // ── 6. the CONSENT SHEET is trusted path: 🔒 refusal + no component identity ──────────────────
     // force a FRESH chat (the consent scoper runs on a chat's FIRST message only)
