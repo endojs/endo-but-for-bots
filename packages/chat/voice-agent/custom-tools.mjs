@@ -139,10 +139,27 @@ export const makeCustomTools = ({ fix } = {}) => {
     const ts = load(); const t = ts.find(x => x.id === String(id)); if (!t) return { ok: false, error: 'no such tool' };
     if (t.files) t.files = files; else t.code = String((files && (files['tool.js'] ?? Object.values(files)[0])) || '');
     save(ts); instances.delete(t.id); built.delete(t.id);
-    return { ok: true };
+    // ARCH-9: a source swap is a schema MIGRATION MOMENT. Run the grain migration hook so a renamed/repurposed
+    // grain field evolves instead of orphaning (default: preserve unknown keys + warn — never silently drop).
+    const migration = grainStore.migrate(String(id), { source: sourceTextOf(files) });
+    return { ok: true, ...(migration.changed || migration.orphans.length ? { grainMigration: migration } : {}) };
   };
+  // The plain source TEXT for migration directive/declared-name scanning (a single-file body or a joined
+  // multi-file map). Migration only READS it (never eval'd), so a join is enough to spot @grain-migrate lines.
+  const sourceTextOf = files => (typeof files === 'string') ? files : Object.values(files || {}).map(v => String(v ?? '')).join('\n');
   // Copy one component's grain DATA to another id — used when a fork should start from the source's data.
   const copyGrains = (fromId, toId) => { grainStore.copy(String(fromId), String(toId)); return { ok: true }; };
+  // Run the grain schema-MIGRATION hook for ANY component id (tool, island, or git-only uicomp/chrome) on a
+  // source swap — grains are keyed by id, so this evolves data uniformly regardless of the component's kind.
+  const migrateGrains = (id, { source, migrate } = {}) => grainStore.migrate(String(id), { source: sourceTextOf(source), migrate });
+  // Write a grain for ANY component id — the ONE server-side write surface that makes islands + broken-out
+  // uicomp components first-class in the grain path (their DATA lives in the same id-keyed store a tool's does,
+  // SEPARATE from source, so it survives edit/revert). `merge` (optional) accumulates via addContent.
+  const setGrain = (id, name, value, merge) => {
+    const cell = grainStore.grainsFor(String(id)).cell(String(name), merge ? { merge: String(merge) } : {});
+    const v = merge ? cell.addContent(value) : cell.set(value);
+    return { ok: true, name: String(name), value: v };
+  };
   // The component's live grain DATA {name: value} — read-only, for the Studio (shows data survives edits).
   const grainData = id => grainStore.dump(String(id));
   const list = owner => load().filter(t => t.status === 'admitted' && inScope(t, owner)).map(t => ({ id: t.id, name: t.name, description: t.description, args: t.args, kind: t.kind || 'instance' }));
@@ -213,5 +230,5 @@ export const makeCustomTools = ({ fix } = {}) => {
     return harden({ ok: false, error: r.error });
   };
 
-  return { propose, pendingBy, get, list, listAll, setReview, setReviseLog, setSource, copyGrains, grainData, admit, reject, deleteAllForOwner, call, methodsOf, getInstance, exportClass, importClass, logHeal };
+  return { propose, pendingBy, get, list, listAll, setReview, setReviseLog, setSource, copyGrains, migrateGrains, setGrain, grainData, admit, reject, deleteAllForOwner, call, methodsOf, getInstance, exportClass, importClass, logHeal };
 };
