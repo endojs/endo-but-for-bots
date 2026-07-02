@@ -35,10 +35,7 @@ const invalid = [
   {
     // Nested Far calls each report.
     code: `Far('Outer', { inner: () => Far('Inner', {}) });`,
-    errors: [
-      { messageId: 'preferMakeExo' },
-      { messageId: 'preferMakeExo' },
-    ],
+    errors: [{ messageId: 'preferMakeExo' }, { messageId: 'preferMakeExo' }],
   },
 ];
 
