@@ -65,7 +65,11 @@
     "test:trace-viz": "node trace-viz-island.staging.test.cjs",
     "test:trace-views": "node trace-views-gallery.staging.test.cjs",
     "test:stories": "node --test stories.test.mjs",
-    "test:magic-stories": "node magic-stories.staging.test.cjs"
+    "test:magic-stories": "node magic-stories.staging.test.cjs",
+    "test:toll-bridge": "node --test toll-bridge.test.mjs",
+    "test:tool-bridge-unit": "node --test tool-bridge-unit.test.mjs",
+    "test:purse-unit": "node --test purse-unit.test.mjs",
+    "test:contacts-email": "node --test contacts-email.test.mjs"
   },
   "dependencies": {
     "@endo/exo-git": "workspace:^",
