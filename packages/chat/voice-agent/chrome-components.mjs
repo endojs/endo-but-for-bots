@@ -260,12 +260,85 @@ const STUDIO_SOURCE = `// CHROME-STUDIO (chrome-studio) — the Components/Studi
   return h('div', { class: 'studio-list' }, body);
 }`;
 
+// The per-message CONTROLS row (ISL-2 · chrome-msg-controls) — the ↻ retry / ✎ edit / 🔊 audio + ◀ k/n ▶
+// fork-pager rendered INSIDE the user prompt bubble it acts on. Promoted from the vite `message-controls`
+// island + its app.js inline twin (userBubbleControls) into the single confined chrome lane (ARCH-1). The
+// classes msg-ctrl / mc-btn / mc-nav / mc-count are load-bearing (live CSS + muscle memory target them).
+// Host props are the ocap boundary — pure scalars + affordance callbacks; the component holds no cap/DOM.
+const MSG_CONTROLS_SOURCE = `// CHROME-MSG-CONTROLS (chrome-msg-controls) — the per-message action row: ↻ retry, ✎ edit, 🔊 audio (if
+// any), and a ◀ k/n ▶ fork navigator when the prompt has variants. PURE RENDER: no cap, no DOM, no network.
+// props (all render-safe scalars): { hasAudio, varIx, varCount }
+//   props.onRetry()  props.onEdit()  props.onPlayAudio()  props.onFork(delta)   — host callbacks (the boundary)
+// RIFF FREELY: any (endowments, props) => vnode honoring this contract can replace the row.
+(endowments, props) => {
+  const h = endowments.h;
+  const p = props || {};
+  const mk = (label, title, fn) => h('button', {
+    class: 'mc-btn', title,
+    onClick: () => { if (typeof fn === 'function') fn(); },
+  }, label);
+  const kids = [
+    mk('↻', 'Retry this prompt — clears everything below + forks a new branch from here', p.onRetry),
+    mk('✎', 'Edit + retry this prompt (forks from here)', p.onEdit),
+  ];
+  if (p.hasAudio) kids.push(mk('🔊', 'Play the original audio', p.onPlayAudio));
+  const vc = Number(p.varCount) || 1;
+  const vi = Number(p.varIx) || 0;
+  if (vc > 1) {
+    kids.push(h('span', { class: 'mc-nav' }, [
+      mk('◀', 'Previous fork of this prompt', () => { if (typeof p.onFork === 'function') p.onFork(-1); }),
+      h('span', { class: 'mc-count' }, (vi + 1) + '/' + vc),
+      mk('▶', 'Next fork of this prompt', () => { if (typeof p.onFork === 'function') p.onFork(1); }),
+    ]));
+  }
+  return h('div', { class: 'msg-ctrl' }, kids);
+}`;
+
+// The OUT-OF-ALLOWANCE card (ISL-3/DEAD-3 · chrome-exhausted) — the prepaid-budget wall: a conversation ran
+// out of inference credit. DETERMINISTIC gate (no model produced it). Promoted from the vite `exhausted-card`
+// island + its app.js inline twin (renderExhausted) into the confined chrome lane. The AUTHORITY-bearing
+// moves — the Stripe /pay/checkout, the /budget/topup comp, and the MetaMask ERC-7715 settlement — stay HOST
+// callbacks; this component only renders the card + fires onTopUp/onAbandon/onMetaMask. The host owns all
+// view STATE (busy / note / metamask availability) and re-mounts on change: props ARE the boundary. NOTE the
+// `.exhausted-card` (host mount) + `.confirm` button classes are load-bearing (a staging test drives them).
+const EXHAUSTED_SOURCE = `// CHROME-EXHAUSTED (chrome-exhausted) — the allowance-exhausted top-up / abandon card. PURE RENDER: no cap,
+// no DOM, no network; the real payment/top-up calls are HOST callbacks (the props boundary). The host holds
+// the view state and re-mounts on change.
+// props (render-safe): { isRoot, invited, busy, note, noteBad, showMetaMask, metaMaskLabel, metaMaskBusy }
+//   props.onTopUp()  props.onAbandon()  props.onMetaMask()   — host callbacks (do the real fetch/settlement)
+// invited = this user's credit came CARRIED ON AN INVITE (a conserved allowance the inviter funded) — say so.
+(endowments, props) => {
+  const h = endowments.h;
+  const p = props || {};
+  const isRoot = !!p.isRoot;
+  const blurb = isRoot
+    ? 'This conversation has used up its budget. Top it up to keep going, or abandon the thread.'
+    : p.invited
+      ? 'The usage credit that came with your invite is used up. From here you buy your own — top up below and your stalled message resumes automatically.'
+      : "You've used up the credit you were given. Add more to keep going — or abandon the thread.";
+  const title = isRoot ? 'Out of inference allowance' : 'Allowance exhausted — top up to continue';
+  const call = fn => () => { if (typeof fn === 'function') fn(); };
+  const btns = [
+    h('button', { class: 'confirm', disabled: !!p.busy, onClick: call(p.onTopUp) }, isRoot ? 'Top up $0.50 & continue' : 'Add $5 credit'),
+  ];
+  if (p.showMetaMask) btns.push(h('button', { class: 'confirm', disabled: !!p.metaMaskBusy, onClick: call(p.onMetaMask) }, p.metaMaskLabel || '⛓️ Subscribe with MetaMask'));
+  btns.push(h('button', { class: 'reject', disabled: !!p.busy, onClick: call(p.onAbandon) }, 'Abandon thread'));
+  if (p.note) btns.push(h('span', { class: 'pmeta', style: 'font-size:12px;color:' + (p.noteBad ? 'var(--bad)' : 'var(--mut)') }, String(p.note)));
+  return h('div', null, [
+    h('div', { class: 'ptitle' }, ['🪙 ', h('span', null, title)]),
+    h('div', { class: 'pmeta' }, blurb),
+    h('div', { class: 'pbtns' }, btns),
+  ]);
+}`;
+
 // The registry: stable ids (they are ADDRESSES — edit chats, backlogs, and git lineages key off them).
 const CHROME = harden([
   { id: 'chrome-msg-toolbar', name: 'Message toolbar', source: MSG_TOOLBAR_SOURCE },
   { id: 'chrome-welcome', name: 'Welcome panel', source: WELCOME_SOURCE },
   { id: 'chrome-trace-view', name: 'Trace view (live)', source: TRACE_VIEW_SOURCE, cells: ['trace:<chatId>'] },
   { id: 'chrome-studio', name: 'Component Studio', source: STUDIO_SOURCE },
+  { id: 'chrome-msg-controls', name: 'Message controls', source: MSG_CONTROLS_SOURCE },
+  { id: 'chrome-exhausted', name: 'Out-of-allowance card', source: EXHAUSTED_SOURCE },
 ]);
 
 export const makeChromeComponents = ({ componentGit, componentBacklog }) => {

@@ -1405,22 +1405,21 @@ const renderRetryableError = (msg, payload, spoken) => {
   btns.append(retry, dismiss);
   log.appendChild(card); window.scrollTo(0, document.body.scrollHeight);
 };
+// Promoted to app chrome (chrome-exhausted, a registry-backed confined component — ARCH-1/ISL-3). The card
+// mounts through the confined path; the AUTHORITY-bearing moves (Stripe checkout, /budget/topup comp,
+// MetaMask settlement) stay HOST callbacks — the confined component only renders + fires them. The host holds
+// the view STATE (busy / note / metamask availability) and re-mounts on change (props ARE the boundary). If
+// the component can't mount (lockdown off / bad edit) we fall back to the identical hardcoded card below.
 const renderExhausted = (payload, spoken) => {
   pendingResume[payload.sessionId] = { payload, spoken }; // retain the stalled turn so ANY top-up resumes it
   const card = document.createElement('div'); card.className = 'prop msg exhausted-card'; card.dataset.sid = payload.sessionId;
-  // OWNER (root) comps credit for free; a non-root invitee PAYS to add credit (Phase 2 billing).
-  // `payload.invited` = this user's credit came CARRIED ON AN INVITE (a conserved allowance the inviter
-  // funded) — say so, and make "buy your own" the legible next step (User Agency: the top-up storefront).
-  const blurb = isRoot ? 'This conversation has used up its budget. Top it up to keep going, or abandon the thread.'
-    : payload.invited ? 'The usage credit that came with your invite is used up. From here you buy your own — top up below and your stalled message resumes automatically.'
-    : 'You\'ve used up the credit you were given. Add more to keep going — or abandon the thread.';
-  const title = isRoot ? 'Out of inference allowance' : 'Allowance exhausted — top up to continue';
-  card.innerHTML = `<div class="ptitle">🪙 <span>${title}</span></div><div class="pmeta">${blurb}</div><div class="pbtns"></div>`;
-  const btns = card.querySelector('.pbtns');
-  const top = document.createElement('button'); top.className = 'confirm'; top.textContent = isRoot ? 'Top up $0.50 & continue' : 'Add $5 credit';
-  const aband = document.createElement('button'); aband.className = 'reject'; aband.textContent = 'Abandon thread';
-  top.onclick = async () => {
-    top.disabled = aband.disabled = true;
+  const invited = !!payload.invited; // credit CARRIED ON AN INVITE (a conserved allowance the inviter funded)
+
+  // ── chrome path: host-owned view state; chrome-exhausted re-mounts on each change (the props boundary). ──
+  const st = { busy: false, note: '', noteBad: false, showMetaMask: false, metaMaskLabel: '', metaMaskBusy: false, mmSubscribed: false, mmGrant: null };
+  const onAbandon = () => { card.remove(); newChat(); };
+  const onTopUp = async () => {
+    st.busy = true; st.note = ''; paint();
     try {
       if (isRoot) { // owner comp: free top-up
         const b = await (await fetch('/budget/topup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, purseCap: chatCap(), sessionId, amount: 500000 }) })).json();
@@ -1428,32 +1427,84 @@ const renderExhausted = (payload, spoken) => {
         updateBudgetChip(b.remaining, b.allowance); await resumeIfPending(payload.sessionId);
       } else { // invitee: pay via Stripe Checkout (purse is credited on the webhook, then reload to continue)
         const r = await (await fetch('/pay/checkout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId, amountUsd: 5 }) })).json();
-        if (r.url) { window.open(r.url, '_blank'); btns.insertAdjacentHTML('beforeend', '<span style="color:var(--mut);font-size:12px">Opening secure checkout… your credit is added once payment completes — then send your message again.</span>'); }
-        else if (r.needsOwner) { btns.insertAdjacentHTML('beforeend', '<span style="color:var(--mut);font-size:12px">Paid top-ups aren\'t set up yet — the owner has been notified.</span>'); }
+        if (r.url) { window.open(r.url, '_blank'); st.note = 'Opening secure checkout… your credit is added once payment completes — then send your message again.'; st.noteBad = false; paint(); }
+        else if (r.needsOwner) { st.note = 'Paid top-ups aren\'t set up yet — the owner has been notified.'; st.noteBad = false; paint(); }
         else throw new Error(r.error || 'checkout failed');
       }
-    } catch (e) { top.disabled = aband.disabled = false; btns.insertAdjacentHTML('beforeend', `<span style="color:var(--bad);font-size:12px">${esc(e.message)}</span>`); }
+    } catch (e) { st.busy = false; st.note = e.message; st.noteBad = true; paint(); }
   };
-  aband.onclick = () => { card.remove(); newChat(); };
-  btns.append(top, aband);
-  // BILLING RAIL #3 (invitees): pay on-chain with a MetaMask ERC-7715 delegation. Shown only when the
-  // gator-pay settlement service is configured + the wallet supports advanced permissions.
-  if (!isRoot) (async () => {
-    let s; try { s = await (await fetch('/pay/delegation/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId }) })).json(); if (!s.available) return; } catch { return; }
-    const mm = document.createElement('button'); mm.className = 'confirm'; mm.textContent = s.subscribed ? '⛓️ Top up from your subscription' : '⛓️ Subscribe with MetaMask';
-    mm.onclick = async () => {
-      mm.disabled = true;
+  const onMetaMask = async () => {
+    st.metaMaskBusy = true; st.note = ''; paint();
+    try {
+      // Grant the recurring allowance once (skip if already subscribed), then draw a top-up + resume.
+      if (!st.mmSubscribed) { const g = await grantMetaMaskSubscription({ periodUsd: 10, periodDays: 30, grantParams: st.mmGrant }); if (!g.ok) throw new Error(g.error); }
+      const r = await (await fetch('/pay/delegation/redeem', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId, amountUsd: 5 }) })).json();
+      if (r.ok) { updateBudgetChip(r.remaining, r.allowance); await resumeIfPending(payload.sessionId); }
+      else throw new Error(r.error || 'on-chain settlement failed');
+    } catch (e) { st.metaMaskBusy = false; st.note = e.message; st.noteBad = true; paint(); }
+  };
+  const paint = () => mountChrome('chrome-exhausted', card, {
+    isRoot, invited, busy: st.busy, note: st.note, noteBad: st.noteBad,
+    showMetaMask: st.showMetaMask, metaMaskLabel: st.metaMaskLabel, metaMaskBusy: st.metaMaskBusy,
+    onTopUp, onAbandon, onMetaMask,
+  });
+
+  // ── legacy fallback: the pre-chrome hardcoded card (unchanged behavior), built into `card`. ──
+  const legacy = () => {
+    const blurb = isRoot ? 'This conversation has used up its budget. Top it up to keep going, or abandon the thread.'
+      : invited ? 'The usage credit that came with your invite is used up. From here you buy your own — top up below and your stalled message resumes automatically.'
+      : 'You\'ve used up the credit you were given. Add more to keep going — or abandon the thread.';
+    const title = isRoot ? 'Out of inference allowance' : 'Allowance exhausted — top up to continue';
+    card.innerHTML = `<div class="ptitle">🪙 <span>${title}</span></div><div class="pmeta">${blurb}</div><div class="pbtns"></div>`;
+    const btns = card.querySelector('.pbtns');
+    const top = document.createElement('button'); top.className = 'confirm'; top.textContent = isRoot ? 'Top up $0.50 & continue' : 'Add $5 credit';
+    const aband = document.createElement('button'); aband.className = 'reject'; aband.textContent = 'Abandon thread';
+    top.onclick = async () => {
+      top.disabled = aband.disabled = true;
       try {
-        // Grant the recurring allowance once (skip if already subscribed), then draw a top-up + resume.
-        if (!s.subscribed) { const g = await grantMetaMaskSubscription({ periodUsd: 10, periodDays: 30, grantParams: s.grant }); if (!g.ok) throw new Error(g.error); }
-        const r = await (await fetch('/pay/delegation/redeem', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId, amountUsd: 5 }) })).json();
-        if (r.ok) { updateBudgetChip(r.remaining, r.allowance); await resumeIfPending(payload.sessionId); }
-        else throw new Error(r.error || 'on-chain settlement failed');
-      } catch (e) { mm.disabled = false; btns.insertAdjacentHTML('beforeend', `<span style="color:var(--bad);font-size:12px">${esc(e.message)}</span>`); }
+        if (isRoot) {
+          const b = await (await fetch('/budget/topup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, purseCap: chatCap(), sessionId, amount: 500000 }) })).json();
+          if (b.error) throw new Error(b.error);
+          updateBudgetChip(b.remaining, b.allowance); await resumeIfPending(payload.sessionId);
+        } else {
+          const r = await (await fetch('/pay/checkout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId, amountUsd: 5 }) })).json();
+          if (r.url) { window.open(r.url, '_blank'); btns.insertAdjacentHTML('beforeend', '<span style="color:var(--mut);font-size:12px">Opening secure checkout… your credit is added once payment completes — then send your message again.</span>'); }
+          else if (r.needsOwner) { btns.insertAdjacentHTML('beforeend', '<span style="color:var(--mut);font-size:12px">Paid top-ups aren\'t set up yet — the owner has been notified.</span>'); }
+          else throw new Error(r.error || 'checkout failed');
+        }
+      } catch (e) { top.disabled = aband.disabled = false; btns.insertAdjacentHTML('beforeend', `<span style="color:var(--bad);font-size:12px">${esc(e.message)}</span>`); }
     };
-    btns.insertBefore(mm, aband);
-  })();
-  log.appendChild(card); window.scrollTo(0, document.body.scrollHeight);
+    aband.onclick = () => { card.remove(); newChat(); };
+    btns.append(top, aband);
+    if (!isRoot) (async () => {
+      let s; try { s = await (await fetch('/pay/delegation/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId }) })).json(); if (!s.available) return; } catch { return; }
+      const mm = document.createElement('button'); mm.className = 'confirm'; mm.textContent = s.subscribed ? '⛓️ Top up from your subscription' : '⛓️ Subscribe with MetaMask';
+      mm.onclick = async () => {
+        mm.disabled = true;
+        try {
+          if (!s.subscribed) { const g = await grantMetaMaskSubscription({ periodUsd: 10, periodDays: 30, grantParams: s.grant }); if (!g.ok) throw new Error(g.error); }
+          const r = await (await fetch('/pay/delegation/redeem', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId, amountUsd: 5 }) })).json();
+          if (r.ok) { updateBudgetChip(r.remaining, r.allowance); await resumeIfPending(payload.sessionId); }
+          else throw new Error(r.error || 'on-chain settlement failed');
+        } catch (e) { mm.disabled = false; btns.insertAdjacentHTML('beforeend', `<span style="color:var(--bad);font-size:12px">${esc(e.message)}</span>`); }
+      };
+      btns.insertBefore(mm, aband);
+    })();
+  };
+
+  log.appendChild(card);
+  if (paint()) {
+    // BILLING RAIL #3 (invitees): probe the MetaMask ERC-7715 settlement rail; if available, surface it.
+    if (!isRoot) (async () => {
+      let s; try { s = await (await fetch('/pay/delegation/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId }) })).json(); if (!s.available) return; } catch { return; }
+      st.showMetaMask = true; st.mmSubscribed = !!s.subscribed; st.mmGrant = s.grant;
+      st.metaMaskLabel = s.subscribed ? '⛓️ Top up from your subscription' : '⛓️ Subscribe with MetaMask';
+      paint();
+    })();
+  } else {
+    legacy(); // chrome couldn't mount → the identical hardcoded card (never a dead wall)
+  }
+  window.scrollTo(0, document.body.scrollHeight);
 };
 
 // tap an attached/generated image to view it full-screen. src is set via the DOM
@@ -2818,21 +2869,35 @@ const editPrompt = (uIx, bodyEl) => {
   ta.focus(); ta.setSelectionRange(orig.length, orig.length);
 };
 // the retry / edit / audio + fork-pager controls, rendered INSIDE the user prompt bubble they act on.
+// Promoted to app chrome (chrome-msg-controls, a registry-backed confined component — ARCH-1/ISL-2): mount
+// the confined component and fall back to the identical hardcoded row if it can't (lockdown off / bad edit).
 const userBubbleControls = (uIx, m, bodyEl) => {
   const fc = forkCount(m), fi = forkIndex(m);
-  const row = document.createElement('div'); row.className = 'msg-ctrl';
-  const mk = (label, title, fn) => { const b = document.createElement('button'); b.className = 'mc-btn'; b.textContent = label; b.title = title; b.onclick = fn; return b; };
-  row.appendChild(mk('↻', 'Retry this prompt — clears everything below + forks a new branch from here', () => runRetry(uIx, m.text || '')));
-  row.appendChild(mk('✎', 'Edit + retry this prompt (forks from here)', () => editPrompt(uIx, bodyEl)));
-  if (m.audio) row.appendChild(mk('🔊', 'Play the original audio', () => { try { new Audio(m.audio).play(); } catch { /* */ } }));
-  if (fc > 1) {
-    const nav = document.createElement('span'); nav.className = 'mc-nav';
-    nav.appendChild(mk('◀', 'Previous fork of this prompt', () => pageFork(uIx, -1)));
-    const c = document.createElement('span'); c.className = 'mc-count'; c.textContent = `${fi + 1}/${fc}`; nav.appendChild(c);
-    nav.appendChild(mk('▶', 'Next fork of this prompt', () => pageFork(uIx, 1)));
-    row.appendChild(nav);
-  }
-  bodyEl.appendChild(row); // INSIDE the bubble — the controls visibly belong to the prompt they fork
+  // legacy fallback: the pre-chrome imperative row (unchanged), appended straight into the bubble.
+  const legacy = () => {
+    const row = document.createElement('div'); row.className = 'msg-ctrl';
+    const mk = (label, title, fn) => { const b = document.createElement('button'); b.className = 'mc-btn'; b.textContent = label; b.title = title; b.onclick = fn; return b; };
+    row.appendChild(mk('↻', 'Retry this prompt — clears everything below + forks a new branch from here', () => runRetry(uIx, m.text || '')));
+    row.appendChild(mk('✎', 'Edit + retry this prompt (forks from here)', () => editPrompt(uIx, bodyEl)));
+    if (m.audio) row.appendChild(mk('🔊', 'Play the original audio', () => { try { new Audio(m.audio).play(); } catch { /* */ } }));
+    if (fc > 1) {
+      const nav = document.createElement('span'); nav.className = 'mc-nav';
+      nav.appendChild(mk('◀', 'Previous fork of this prompt', () => pageFork(uIx, -1)));
+      const c = document.createElement('span'); c.className = 'mc-count'; c.textContent = `${fi + 1}/${fc}`; nav.appendChild(c);
+      nav.appendChild(mk('▶', 'Next fork of this prompt', () => pageFork(uIx, 1)));
+      row.appendChild(nav);
+    }
+    bodyEl.appendChild(row);
+  };
+  const host = document.createElement('div'); bodyEl.appendChild(host); // INSIDE the bubble — controls belong to the prompt they fork
+  const ok = mountChrome('chrome-msg-controls', host, {
+    hasAudio: !!m.audio, varIx: fi, varCount: fc,
+    onRetry: () => runRetry(uIx, m.text || ''),
+    onEdit: () => editPrompt(uIx, bodyEl),
+    onPlayAudio: () => { try { new Audio(m.audio).play(); } catch { /* */ } },
+    onFork: delta => pageFork(uIx, delta),
+  });
+  if (!ok) { host.remove(); legacy(); } // chrome couldn't mount → the identical hardcoded row (never a dead bubble)
 };
 // A propose-only sub-agent (voice-note ingest) → let dan READ the prompt the agent would run AND APPROVE it
 // (approval = authorization). Shows the granted powers + a collapsible prompt; for older proposals that
