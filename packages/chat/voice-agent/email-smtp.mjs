@@ -11,11 +11,17 @@ import tls from 'node:tls';
 
 const b64 = s => Buffer.from(String(s), 'utf8').toString('base64');
 
-const buildMessage = ({ from, to, subject, body }) => {
+// SECURITY: strip CR/LF from any value interpolated into an SMTP command or header line. Without this an
+// agent-proposed `to` (or `from`) containing "\r\n" injects extra RCPT TO / arbitrary headers (SMTP/header
+// injection — extra recipients, spoofed headers, a smuggled DATA body). Only `subject` was stripped before.
+export const stripCrlf = s => String(s == null ? '' : s).replace(/[\r\n]+/g, ' ').trim();
+harden(stripCrlf);
+
+export const buildMessage = ({ from, to, subject, body }) => {
   const headers = [
-    `From: ${from}`,
-    `To: ${to}`,
-    `Subject: ${String(subject || '').replace(/[\r\n]+/g, ' ')}`,
+    `From: ${stripCrlf(from)}`,
+    `To: ${stripCrlf(to)}`,
+    `Subject: ${stripCrlf(subject)}`,
     `Date: ${new Date().toUTCString()}`,
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset=utf-8',
@@ -24,6 +30,7 @@ const buildMessage = ({ from, to, subject, body }) => {
   const safeBody = String(body == null ? '' : body).replace(/\r?\n/g, '\r\n').replace(/^\./gm, '..');
   return `${headers}\r\n\r\n${safeBody}`;
 };
+harden(buildMessage);
 
 export const sendMail = ({ host, port = 465, user, pass, from, to, subject, body, timeoutMs = 20000 }) =>
   new Promise((resolve, reject) => {
@@ -31,16 +38,20 @@ export const sendMail = ({ host, port = 465, user, pass, from, to, subject, body
       reject(new Error('missing smtp config (need host, user, pass, from, to)'));
       return;
     }
+    // CR/LF-strip the envelope addresses before they reach the RCPT TO / MAIL FROM commands AND the
+    // To:/From: headers (buildMessage) — closes SMTP-command + header injection via an agent-proposed `to`.
+    const safeFrom = stripCrlf(from);
+    const safeTo = stripCrlf(to);
     // steps[i] = [ expected reply code for the message we just received, command to send next ]
     const steps = [
       ['220', `EHLO ${host}`],
       ['250', 'AUTH LOGIN'],
       ['334', b64(user)],
       ['334', b64(pass)],
-      ['235', `MAIL FROM:<${from}>`],
-      ['250', `RCPT TO:<${to}>`],
+      ['235', `MAIL FROM:<${safeFrom}>`],
+      ['250', `RCPT TO:<${safeTo}>`],
       ['250', 'DATA'],
-      ['354', `${buildMessage({ from, to, subject, body })}\r\n.`],
+      ['354', `${buildMessage({ from: safeFrom, to: safeTo, subject, body })}\r\n.`],
       ['250', 'QUIT'],
       ['221', null],
     ];
