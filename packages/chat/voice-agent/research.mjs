@@ -13,9 +13,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { VOICE_STATE_DIR } from './field-config.mjs';
+
 const LLM = process.env.AGENT_LLM || 'http://192.168.50.226:8003/v1/chat/completions';
-const HOME = process.env.HOME || '/home/dan';
-const NOTES_DIR = `${HOME}/.local/state/voice-agent/research`;
+// Personal-family path resolves through field-config (byte-identical default on the NUC;
+// rebases onto FIELD_PERSONAL_ROOT when the personal volume is mounted).
+const NOTES_DIR = path.join(VOICE_STATE_DIR, 'research');
 
 const callModel = async (messages, { maxTokens = 800, temperature = 0.3 } = {}) => {
   const r = await fetch(LLM, { method: 'POST', headers: { 'content-type': 'application/json' },

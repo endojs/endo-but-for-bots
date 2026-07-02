@@ -6,8 +6,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const HOME = process.env.HOME || '/home/dan';
-const FILE = process.env.INTERNAL_MESSAGES_FILE || `${HOME}/.local/state/field-agent/internal-messages.json`;
+import { STATE_DIR } from './field-config.mjs';
+
+// Personal-family path resolves through field-config (byte-identical default on the NUC;
+// rebases onto FIELD_PERSONAL_ROOT when the personal volume is mounted).
+const FILE = process.env.INTERNAL_MESSAGES_FILE || path.join(STATE_DIR, 'internal-messages.json');
 const CAP = 600;
 
 const read = () => { try { return JSON.parse(fs.readFileSync(FILE, 'utf8')).messages || []; } catch { return []; } };

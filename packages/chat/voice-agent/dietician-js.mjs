@@ -10,6 +10,7 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 
+import { HOME, VAULT_DIR, personalAt } from './field-config.mjs';
 import { makeFsFolder } from '../dietician-app/fs-folder.mjs';
 import { makeDietStore } from '../dietician-app/store.mjs';
 import { makePipeline } from '../dietician-app/core.mjs';
@@ -18,9 +19,11 @@ import { makeJudge } from '../dietician-app/providers/judge.mjs';
 import { makeAnthropicComplete } from '../dietician-app/providers/anthropic.mjs';
 import { SEED_CITIES } from '../dietician-app/cities.mjs';
 
-const HOME = process.env.HOME || '/home/dan';
 const PERSON = process.env.DIET_PERSON || 'alexa';
-const INSTANCE_ROOT = process.env.DIET_ROOT_DIR || `${HOME}/.local/state/dietician-app/instances/${PERSON}`;
+// The dietician-app state lives in its OWN ~/.local/state/dietician-app namespace (not field-agent's),
+// so there is no direct field-config export; rebase it with personalAt the same way field-config does
+// (byte-identical default on the NUC; moves onto FIELD_PERSONAL_ROOT with the rest of the personal family).
+const INSTANCE_ROOT = process.env.DIET_ROOT_DIR || `${personalAt('state/dietician-app', `${HOME}/.local/state/dietician-app`)}/instances/${PERSON}`;
 const HOST = process.env.DIETICIAN_HOST || 'agent@10.89.0.8'; // used ONLY for the publish step (write HTML → git push)
 
 const store = makeDietStore(makeFsFolder(INSTANCE_ROOT), { person: PERSON });
@@ -30,7 +33,7 @@ const judge = makeJudge({ complete: makeAnthropicComplete() });
 // source of truth for evaluation. specStore overrides readSpec to read the vault note (frontmatter + blockquote
 // header stripped), falling back to the instance diet.md. So a change like "more gluten in Europe" takes effect
 // immediately, with no separate spec-edit verb.
-const VAULT = process.env.OBSIDIAN_VAULT || `${HOME}/obsidian/vault`;
+const VAULT = VAULT_DIR; // field-config: honors OBSIDIAN_VAULT, else rebases onto FIELD_PERSONAL_ROOT
 const PERSON_NAME = PERSON.charAt(0).toUpperCase() + PERSON.slice(1);
 const readVaultSpec = () => {
   try { return fs.readFileSync(`${VAULT}/Dietician/${PERSON_NAME} — Diet.md`, 'utf8').replace(/^---\n[\s\S]*?\n---\n/, '').trim().replace(/^(> .*(\n|$))+/, '').trim(); }

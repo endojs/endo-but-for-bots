@@ -5,12 +5,15 @@
 // connector record, the transcript, or the DOM (the `op run` runtime-injection pattern from the
 // research). Connectors are grantable (the `connectors` power) + revocable (remove).
 import fs from 'node:fs';
+import path from 'node:path';
 import crypto from 'node:crypto';
 
+import { CONFIG_DIR } from './field-config.mjs';
 import { writeJsonAtomic } from './write-json-atomic.mjs';
 
-const HOME = process.env.HOME || '/home/dan';
-const STORE = process.env.CONNECTORS_STORE || `${HOME}/.config/field-agent/connectors.json`;
+// Personal-family path resolves through field-config (byte-identical default on the NUC;
+// rebases onto FIELD_PERSONAL_ROOT when the personal volume is mounted).
+const STORE = process.env.CONNECTORS_STORE || path.join(CONFIG_DIR, 'connectors.json');
 
 // makeConnectors({ getSecret, ssrfOk, fetchImpl }) → registry + call(). The secret VALUE is never
 // stored here — only `secretName`, a reference into the named vault resolved at call time.

@@ -4,10 +4,14 @@
 // NEVER from code or chat (same pattern as email-smtp.mjs).
 //   key: ~/.config/field-agent/brave.json  →  { "apiKey": "BSA…" }   (or env BRAVE_API_KEY)
 import fs from 'node:fs';
+import path from 'node:path';
+
+import { CONFIG_DIR } from './field-config.mjs';
 import { getSecret } from './asks-store.mjs';
 
-const HOME = process.env.HOME || '/home/dan';
-const CFG = `${HOME}/.config/field-agent/brave.json`;
+// Personal-family path resolves through field-config (byte-identical default on the NUC;
+// rebases onto FIELD_PERSONAL_ROOT when the personal volume is mounted).
+const CFG = path.join(CONFIG_DIR, 'brave.json');
 const ENDPOINT = 'https://api.search.brave.com/res/v1/web/search';
 
 // key sources, in order: BRAVE_API_KEY env → the named key vault ('brave-api-key', which

@@ -18,11 +18,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
-const HOME = process.env.HOME || '/home/dan';
-export const ASKS_FILE = `${HOME}/.local/state/field-dashboard/asks.json`;
+import { CONFIG_DIR, DASH_STATE_DIR } from './field-config.mjs';
+
+// Personal-family paths resolve through field-config (byte-identical defaults on the NUC;
+// rebase onto FIELD_PERSONAL_ROOT when the personal volume is mounted).
+export const ASKS_FILE = path.join(DASH_STATE_DIR, 'asks.json');
 // secret/auth answers NEVER land in asks.json, the transcript, or the DOM-persisted
 // state. They are written here, mode 0600, and only a path pointer is recorded.
-export const SECRETS_DIR = `${HOME}/.config/field-agent/secrets`;
+export const SECRETS_DIR = path.join(CONFIG_DIR, 'secrets');
 
 export const ASK_TYPES = ['text', 'choice', 'multiselect', 'bool', 'number', 'approve-reject', 'secret'];
 

@@ -6,13 +6,16 @@
 // CAP HYGIENE: the swissnum NEVER goes to Stripe. /pay/checkout stores {cap, sid, uusd} server-side
 // under a random `payId`, and only `payId` travels in Stripe metadata; the webhook maps it back.
 import fs from 'node:fs';
+import path from 'node:path';
 import crypto from 'node:crypto';
 
+import { CONFIG_DIR, STATE_DIR } from './field-config.mjs';
 import { writeJsonAtomic, loadJson } from './write-json-atomic.mjs';
 
-const HOME = process.env.HOME || '/home/dan';
-const STRIPE_CFG = process.env.STRIPE_CONFIG || `${HOME}/.config/field-agent/stripe.json`;
-const PAY_STORE = process.env.PAY_STORE || `${HOME}/.local/state/field-agent/pending-payments.json`;
+// Personal-family paths resolve through field-config (byte-identical defaults on the NUC;
+// rebase onto FIELD_PERSONAL_ROOT when the personal volume is mounted). delegation-pay.mjs is the model.
+const STRIPE_CFG = process.env.STRIPE_CONFIG || path.join(CONFIG_DIR, 'stripe.json');
+const PAY_STORE = process.env.PAY_STORE || path.join(STATE_DIR, 'pending-payments.json');
 
 // stripe.json: { secretKey, webhookSecret, successUrl?, cancelUrl? }. Absent → payments not set up.
 export const loadStripeCfg = () => { try { const c = JSON.parse(fs.readFileSync(STRIPE_CFG, 'utf8')); return (c && c.secretKey) ? c : null; } catch { return null; } };

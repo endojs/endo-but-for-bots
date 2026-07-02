@@ -12,14 +12,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { CONFIG_DIR, STATE_DIR as FIELD_STATE_DIR } from './field-config.mjs';
 import { bundleMakeBody, bundleFiles, instantiateBundle } from './tool-bundle.mjs';
 import { makeGrainStore } from './grain-store.mjs';
 import { makeSelfHealer } from './self-heal.mjs';
 import { writeJsonAtomic } from './write-json-atomic.mjs';
 
-const HOME = process.env.HOME || '/home/dan';
-const STORE = process.env.CUSTOM_TOOLS_STORE || `${HOME}/.config/field-agent/custom-tools.json`;
-const STATE_DIR = process.env.CUSTOM_TOOLS_STATE || `${HOME}/.local/state/field-agent/tool-state`;
+// Personal-family paths resolve through field-config (byte-identical defaults on the NUC;
+// rebase onto FIELD_PERSONAL_ROOT when the personal volume is mounted).
+const STORE = process.env.CUSTOM_TOOLS_STORE || path.join(CONFIG_DIR, 'custom-tools.json');
+const STATE_DIR = process.env.CUSTOM_TOOLS_STATE || path.join(FIELD_STATE_DIR, 'tool-state');
 const clip = (s, n) => { const t = String(s == null ? '' : s); return t.length > n ? `${t.slice(0, n)}…` : t; };
 
 // THE canonical tool-authoring contract — the same document the agent has when it writes a tool, so a fixer
@@ -66,7 +68,7 @@ export const makeCustomTools = ({ fix } = {}) => {
   const bundleFor = async tool => { if (!built.has(tool.id)) built.set(tool.id, await bundleFiles(tool.files, tool.entry || 'tool.js')); return built.get(tool.id); };
   // DURABLE GRAINS — the component's DATA as mergeable, subscribable cells, keyed by component id and
   // stored SEPARATELY from its git source, so the data SURVIVES a source swap (revert/fork/edit).
-  const grainStore = makeGrainStore({ dir: process.env.COMPONENT_GRAINS || `${HOME}/.local/state/field-agent/component-grains` });
+  const grainStore = makeGrainStore({ dir: process.env.COMPONENT_GRAINS || path.join(FIELD_STATE_DIR, 'component-grains') });
   const instantiate = async tool => {
     const powers = harden({ state: makeState(tool.id), grains: grainStore.grainsFor(tool.id), console: harden({ log: () => {}, error: () => {} }) });
     if (tool.bundle) return instantiateBundle(tool.bundle, powers); // imported class — a real Endo bundle
