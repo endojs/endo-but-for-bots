@@ -19,9 +19,13 @@ import { E } from '@endo/far';
 
 import { makeNativeGitBackend } from '@endo/git';
 
+import { hostGitLock } from './host-git-mutex.mjs';
+
 const execFileP = promisify(execFile);
 
-export const makeComponentGit = ({ baseDir }) => {
+// `lock` (default: the shared host-git mutex) serializes the tree-MUTATING ops against every other host-git
+// writer (self-improver merge, componentSync push) — see host-git-mutex.mjs (P2-5). Reads stay lock-free.
+export const makeComponentGit = ({ baseDir, lock = fn => hostGitLock.runExclusive(fn) }) => {
   fs.mkdirSync(baseDir, { recursive: true });
   const backends = new Map(); // id → NativeGitBackend
   const repoDir = id => path.join(baseDir, encodeURIComponent(String(id)).replace(/%/g, '_'));
@@ -57,7 +61,9 @@ export const makeComponentGit = ({ baseDir }) => {
   };
 
   // Commit a component's files as a new VERSION. Returns { version (commit oid), summary, at }.
-  const commit = async (id, files, message = 'update') => {
+  // `commitInner` is the unlocked body; `commit` acquires the host-git mutex. revert() calls commitInner
+  // (NOT commit) so it holds the lock exactly once — this non-reentrant mutex would deadlock on re-acquire.
+  const commitInner = async (id, files, message = 'update') => {
     const { dir, backend } = await ensureRepo(id);
     writeTree(dir, files);
     await execFileP('git', ['add', '-A'], { cwd: dir }); // -A captures additions, edits, AND deletions
@@ -67,6 +73,7 @@ export const makeComponentGit = ({ baseDir }) => {
     const rec = await backend.commit(String(message || 'update'));
     return { version: rec.oid, summary: rec.summary, at: rec.committedAt };
   };
+  const commit = (id, files, message = 'update') => lock(() => commitInner(id, files, message));
 
   // Read a component's files AT a version (default latest) — the immutable git tree as a file map.
   const readAt = async (id, ref = 'HEAD') => {
@@ -95,7 +102,7 @@ export const makeComponentGit = ({ baseDir }) => {
 
   // FORK: clone the whole repo to a NEW component id at `fromRef` — an independent lineage the forker
   // owns and can diverge, while the original is untouched.
-  const fork = async (srcId, newId, fromRef = 'HEAD') => {
+  const fork = (srcId, newId, fromRef = 'HEAD') => lock(async () => {
     const { dir: srcDir } = await ensureRepo(srcId);
     const dstDir = repoDir(newId);
     if (fs.existsSync(path.join(dstDir, '.git'))) throw new Error(`component "${newId}" already exists`);
@@ -107,15 +114,15 @@ export const makeComponentGit = ({ baseDir }) => {
     backends.set(newId, makeNativeGitBackend({ repoRoot: dstDir }));
     const [head] = await (backends.get(newId)).log({ maxCount: 1 });
     return { id: newId, forkedFrom: srcId, version: head ? head.oid : null };
-  };
+  });
 
   // REVERT: re-commit the tree at `toRef` as a new HEAD — non-destructive (history is preserved; you can
-  // go forward or back again). Returns the new version.
-  const revert = async (id, toRef) => {
+  // go forward or back again). Returns the new version. Locks ONCE (calls commitInner, not the locked commit).
+  const revert = (id, toRef) => lock(async () => {
     const snapshot = await readAt(id, toRef);
     if (!snapshot) throw new Error(`unknown version ${toRef}`);
-    return commit(id, snapshot.files, `revert to ${String(toRef).slice(0, 12)}`);
-  };
+    return commitInner(id, snapshot.files, `revert to ${String(toRef).slice(0, 12)}`);
+  });
 
   const exists = id => fs.existsSync(path.join(repoDir(id), '.git'));
   // Permanently remove a component's repo (e.g. throwing a broken-out component out of the gallery, or a
@@ -158,7 +165,7 @@ export const makeComponentGit = ({ baseDir }) => {
 
   // Author ONE file through the writable file-object (the mount), then stage + commit → a new version.
   // The file-granular counterpart to commit() — edit/add a single file without resending the whole tree.
-  const writeFile = async (id, relpath, content, message = 'edit') => {
+  const writeFile = (id, relpath, content, message = 'edit') => lock(async () => {
     const rel = String(relpath).replace(/^[/\\]+/, '');
     if (!rel || rel.includes('..')) throw new Error('bad path');
     const git = await gitObject(id);
@@ -168,7 +175,7 @@ export const makeComponentGit = ({ baseDir }) => {
     await E(git).add([entry]);
     const c = await E(git).commit(String(message || 'edit'));
     return { version: c.oid, files: (await readAt(id, 'HEAD')).files };
-  };
+  });
 
   return { commit, readAt, history, fork, revert, exists, list, gitObject, writeFile, remove };
 };

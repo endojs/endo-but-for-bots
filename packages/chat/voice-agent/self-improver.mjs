@@ -19,6 +19,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { hostGitLock } from './host-git-mutex.mjs';
+
 const shq = s => `'${String(s).replace(/'/g, `'\\''`)}'`; // POSIX single-quote for shell interpolation
 const slug = s => String(s).replace(/[^\w.-]+/g, '_').slice(0, 60) || 'x';
 const tail = (r, n = 1600) => String((r && (r.stderr || r.stdout)) || '').slice(-n);
@@ -30,7 +32,7 @@ const tail = (r, n = 1600) => String((r && (r.stderr || r.stdout)) || '').slice(
 //   verifyDir   — scratch dir for the independent verification checkout.
 //   ledgerFile  — JSON file of every auto-merge (the rollback record + the morning digest source).
 //   defaultTest — the verification command run IN the branch's worktree (a task may override per-run).
-export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, ledgerFile, defaultTest = 'echo no-test-configured && false', timeoutMs = 600000 } = {}) => {
+export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, ledgerFile, defaultTest = 'echo no-test-configured && false', timeoutMs = 600000, lock = fn => hostGitLock.runExclusive(fn) } = {}) => {
   const vbase = verifyDir || path.join(repo, '..', '.self-improve-verify');
   // The ledger is the ONLY record that makes an auto-merge revertible from the UI, so its read/write is
   // authoritative — NOT best-effort. Missing file → fresh ledger; a present-but-CORRUPT file THROWS rather
@@ -52,7 +54,9 @@ export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, l
   const verifyBranch = async (branch, command, now) => {
     const dir = path.join(vbase, slug(branch) + '-' + slug(String(now || 'v')));
     await host.exec(`mkdir -p ${shq(vbase)}`, { timeoutMs: 15000 });
-    const add = await host.exec(`git -C ${shq(repo)} worktree add --quiet --detach ${shq(dir)} ${shq(branch)}`, { timeoutMs: 120000 });
+    // The worktree add/remove touch the shared git dir → serialize them (brief) against other host-git
+    // writers (P2-5). The long test RUN below is deliberately NOT under the lock (it must not block commits).
+    const add = await lock(() => host.exec(`git -C ${shq(repo)} worktree add --quiet --detach ${shq(dir)} ${shq(branch)}`, { timeoutMs: 120000 }));
     // TRI-STATE: `ran` distinguishes "the tests RAN and were red" (a real regression → revert) from
     // "we could not even RUN them" (infra: checkout/runner failure → do NOT revert a good merge).
     if (!add.ok) return { ok: false, ran: false, reason: `could not check out ${branch} to verify: ${tail(add, 200)}` };
@@ -63,13 +67,15 @@ export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, l
     } catch (e) {
       result = { ok: false, ran: false, reason: `verification could not run: ${String((e && e.message) || e)}` };
     } finally {
-      await host.exec(`git -C ${shq(repo)} worktree remove --force ${shq(dir)} ; git -C ${shq(repo)} worktree prune`, { timeoutMs: 30000 });
+      await lock(() => host.exec(`git -C ${shq(repo)} worktree remove --force ${shq(dir)} ; git -C ${shq(repo)} worktree prune`, { timeoutMs: 30000 }));
     }
     return result;
   };
 
-  // merge `branch` into the live baseBranch — SAFE: refuse on a dirty tree, abort on conflict.
-  const mergeBranch = async (branch, goal, now) => {
+  // merge `branch` into the live baseBranch — SAFE: refuse on a dirty tree, abort on conflict. The ENTIRE
+  // check-then-merge window runs under the host-git mutex (P2-5) so a concurrent componentGit commit /
+  // componentSync push can't slip an index.lock in between the status read and the merge.
+  const mergeBranch = (branch, goal, now) => lock(async () => {
     const dirty = await host.exec(`git -C ${shq(repo)} status --porcelain`, { timeoutMs: 30000 });
     if (!dirty.ok) return { merged: false, reason: 'could not read the live tree status — refusing to auto-merge (fail closed)', branch };
     // `treeDirty` marks this refusal as NOT the change's fault — the branch is fine, the LIVE tree is
@@ -91,7 +97,7 @@ export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, l
     // commit message ("self-improve: <goal>") is the fallback recovery handle (git log --grep self-improve:).
     try { saveLedger(l); } catch (e) { return { merged: true, branch, mergeCommit, baseBefore: before, id, ledgerRecorded: false, reason: `MERGED but the changelog write FAILED (${(e && e.message) || e}) — it won't appear in the 🔧 changelog. Find it: git -C ${repo} log --grep "self-improve:"; revert: git -C ${repo} revert -m 1 ${mergeCommit}` }; }
     return { merged: true, branch, mergeCommit, baseBefore: before, id };
-  };
+  });
 
   // THE LOOP. employExecutor({ goal }) → { branch } (the branch holding the implemented change), or null.
   // autoMerge=false → fork + implement + VERIFY, then STOP with a verified branch ready for review (the
@@ -135,8 +141,9 @@ export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, l
     return { ok: true, attempted: true, verified: true, merged: false, revertedAfterMerge: true, rolledBack: true, branch, mergeCommit: r.mergeCommit, goal: g, reason: 'the MERGED tree failed post-merge re-verification — auto-reverted the merge', testTail: pv.testTail };
   };
 
-  // ROLLBACK — revert an auto-merge by its ledger id (revert the merge commit; history preserved).
-  const rollback = async ({ id, now } = {}) => {
+  // ROLLBACK — revert an auto-merge by its ledger id (revert the merge commit; history preserved). Under the
+  // host-git mutex (P2-5): the check-then-revert window mutates the live tree like the merge does.
+  const rollback = ({ id, now } = {}) => lock(async () => {
     let l; try { l = loadLedger(); } catch (e) { return { ok: false, error: `cannot read the changelog to revert — ${(e && e.message) || e}` }; }
     const e = l.merges.find(x => x.id === id);
     if (!e) return { ok: false, error: `no merge ${id} in the ledger` };
@@ -150,7 +157,7 @@ export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, l
     e.rolledBack = true; e.rolledBackAt = String(now || '');
     try { saveLedger(l); } catch (err) { return { ok: true, id, revertedMerge: e.mergeCommit, goal: e.goal, ledgerUpdateFailed: true, warning: `reverted on disk, but the changelog could not be updated (${(err && err.message) || err}) — it may still show as revertable` }; }
     return { ok: true, id, revertedMerge: e.mergeCommit, goal: e.goal };
-  };
+  });
 
   const listMerges = ({ limit = 20 } = {}) => loadLedger().merges.slice(-limit).reverse();
 

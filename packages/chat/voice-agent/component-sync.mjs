@@ -9,10 +9,14 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { hostGitLock } from './host-git-mutex.mjs';
+
 const sh = (cmd, args, cwd) => new Promise(res => execFile(cmd, args, { cwd, timeout: 90000, maxBuffer: 8 * 1024 * 1024 }, (err, so, se) => res({ ok: !err, out: String(so || ''), err: String((se || (err && err.message)) || '') })));
 const encId = id => encodeURIComponent(String(id)).replace(/%/g, '_'); // matches component-git's repoDir encoding
 
-export const makeComponentSync = ({ baseDir, remote = process.env.COMPONENT_GIT_REMOTE || '', branchPrefix = 'comp', log = () => {} }) => {
+// `lock` (default: the shared host-git mutex) serializes each push against componentGit commits + the
+// self-improver merge, so concurrent `git` invocations don't collide on index.lock (P2-5).
+export const makeComponentSync = ({ baseDir, remote = process.env.COMPONENT_GIT_REMOTE || '', branchPrefix = 'comp', log = () => {}, lock = fn => hostGitLock.runExclusive(fn) }) => {
   const enabled = !!remote;
   const repoDir = id => path.join(baseDir, encId(id));
   const branchOf = id => `${branchPrefix}/${encId(id)}`;
@@ -22,7 +26,7 @@ export const makeComponentSync = ({ baseDir, remote = process.env.COMPONENT_GIT_
   const pushOne = async id => {
     if (!enabled) return { ok: false, skipped: true };
     const dir = repoDir(id); if (!isRepo(dir)) return { ok: false, error: 'no such component repo' };
-    const r = await sh('git', ['push', remote, `+HEAD:refs/heads/${branchOf(id)}`], dir);
+    const r = await lock(() => sh('git', ['push', remote, `+HEAD:refs/heads/${branchOf(id)}`], dir)); // serialize vs commits/merge (P2-5)
     if (!r.ok) { log('component-sync push', id, r.err.slice(0, 160)); return { ok: false, error: r.err.slice(0, 200) }; }
     return { ok: true, branch: branchOf(id) };
   };
