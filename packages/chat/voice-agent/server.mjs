@@ -3120,11 +3120,22 @@ const handler = async (req, res) => {
     if (req.method === 'POST' && u.pathname === '/share/create') {
       const { cap, chatId, title, tx, scopedCap, mode, allowanceUsd, name } = await jsonBody(req);
       if (!nodeFor(cap)?.isRoot) return json(res, 403, { error: 'sharing needs your root capability' });
+      const wantWrite = mode === 'write';
+      const scopedNode = nodeFor(scopedCap);
+      // SECURITY: a WRITE share DRIVES the agent under `scopedCap` (see /share/post → AGENT_RUNNER). It MUST
+      // be an explicit, VALID, NON-ROOT confined cap. The old fallback `nodeFor(scopedCap) ? scopedCap : cap`
+      // silently substituted the caller's ROOT cap when scopedCap was omitted/mistyped — so the link holder
+      // could drive the full root agent (HA, host shell, email, payments) via /share/post. Refuse instead.
+      if (wantWrite && !scopedNode) return json(res, 400, { error: 'a write share needs an explicit, valid scoped capability (the chat\'s confined cap) — refusing to fall back to your root capability' });
+      if (wantWrite && scopedNode.isRoot) return json(res, 400, { error: 'refusing to create a write share driven by your ROOT capability — pass the chat\'s confined (non-root) cap as scopedCap' });
+      // Read shares never drive the agent; store a scoped cap ONLY if it's a valid non-root cap (never root —
+      // a root scopedCap would also leak ALL_POWERS through /share/open's endowment display), else nothing.
+      const storedScopedCap = (scopedNode && !scopedNode.isRoot) ? scopedCap : '';
       const token = crypto.randomBytes(16).toString('hex');
       const rec = {
         token, name: String(name || '').slice(0, 80), chatId: String(chatId || ''), title: String(title || 'Shared chat').slice(0, 120),
-        tx: Array.isArray(tx) ? tx.slice(-200) : [], scopedCap: nodeFor(scopedCap) ? scopedCap : cap, // the chat's confined cap drives a write-share
-        mode: mode === 'write' ? 'write' : 'read', allowanceUsd: Math.max(0, Number(allowanceUsd) || 0), createdAt: new Date().toISOString(),
+        tx: Array.isArray(tx) ? tx.slice(-200) : [], scopedCap: storedScopedCap, // the chat's confined (non-root) cap drives a write-share
+        mode: wantWrite ? 'write' : 'read', allowanceUsd: Math.max(0, Number(allowanceUsd) || 0), createdAt: new Date().toISOString(),
       };
       await fs.promises.mkdir(SHARED_DIR, { recursive: true });
       await fs.promises.writeFile(path.join(SHARED_DIR, `${token}.json`), JSON.stringify(rec, null, 2));
