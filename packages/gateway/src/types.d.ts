@@ -871,6 +871,37 @@ export type BootstrapPathInfo = SocketPathInfo;
 export type BootstrapPathResolution = SocketPathResolution;
 
 // ---------------------------------------------------------------------
+// runtime-paths.js
+// ---------------------------------------------------------------------
+
+/**
+ * Per-host path-resolution info. Parallel to `SocketPathInfo`, named
+ * separately because the gateway directory resolver may grow
+ * platform-specific fallbacks the sock resolver does not need.
+ */
+export interface GatewayPathInfo {
+  /** Home directory for fallback resolution. */
+  home: string;
+  /** User name for fallback resolution (currently unused; reserved). */
+  user?: string;
+}
+
+export type GatewayPathSource =
+  | 'override'
+  | 'system-linux'
+  | 'system-darwin'
+  | 'user-xdg'
+  | 'user-xdg-fallback'
+  | 'user-darwin';
+
+export interface GatewayPathResolution {
+  /** The resolved directory or file path. */
+  path: string;
+  /** Diagnostic label naming which rule produced the path. */
+  source: GatewayPathSource;
+}
+
+// ---------------------------------------------------------------------
 // index.js
 // ---------------------------------------------------------------------
 

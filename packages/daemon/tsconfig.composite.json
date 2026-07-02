@@ -27,6 +27,9 @@
       "path": "../exo/tsconfig.composite.json"
     },
     {
+      "path": "../exo-stream/tsconfig.composite.json"
+    },
+    {
       "path": "../far/tsconfig.composite.json"
     },
     {
@@ -61,6 +64,9 @@
     },
     {
       "path": "../where/tsconfig.composite.json"
+    },
+    {
+      "path": "../zip/tsconfig.composite.json"
     }
   ]
 }

@@ -311,6 +311,28 @@ npx ava test/config.test.js        # config-shape unit tests
 npx ava test/vhost.test.js         # virtual-host NameHub tests
 ```
 
+## Running as a system service
+
+The `endo` CLI's `gateway` subcommand group manages the gateway's
+lifecycle on a developer machine and on a system-service host:
+
+```sh
+endo gateway start                 # background-fork the daemon
+endo gateway stop                  # SIGTERM + cleanup
+endo gateway log -f                # tail the log
+endo gateway where                 # print resolved paths
+endo gateway install-systemd       # print a starter systemd unit
+```
+
+Service-mode auto-detection consults `geteuid() == 0`,
+`INVOCATION_ID` (set by systemd), and an explicit `--system` flag.
+A starter systemd unit ships at `systemd/endo-gateway.service`; a
+launchd plist ships at `systemd/com.endojs.endo-gateway.plist`.
+
+See `docs/system-service.md` for the full install procedure on
+Linux (systemd) and macOS (launchd), per-platform path layouts, and
+security considerations.
+
 ## Design
 
 See `designs/gateway-package.md` for the overarching design

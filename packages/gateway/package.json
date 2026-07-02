@@ -42,6 +42,8 @@
     "./src/resource-ledger.js": "./src/resource-ledger.js",
     "./src/familiar-publish.js": "./src/familiar-publish.js",
     "./src/node-familiar-publish-powers.js": "./src/node-familiar-publish-powers.js",
+    "./src/runtime-paths.js": "./src/runtime-paths.js",
+    "./src/gateway-node.js": "./src/gateway-node.js",
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -63,12 +65,12 @@
     "@endo/exo": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/hex": "workspace:^",
+    "@endo/init": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/promise-kit": "workspace:^",
     "@endo/stream": "workspace:^"
   },
   "devDependencies": {
-    "@endo/init": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",

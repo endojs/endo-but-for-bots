@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd LaunchDaemon plist for the Endo Gateway service on macOS.
+
+  Install as `/Library/LaunchDaemons/com.endojs.endo-gateway.plist`.
+  See `packages/gateway/docs/system-service.md` for the per-platform
+  install procedure.
+
+  This file mirrors the systemd unit's shape (Type=simple,
+  Restart=on-failure, hardened directories under
+  /usr/local/var/...).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.endojs.endo-gateway</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/endo</string>
+        <string>gateway</string>
+        <string>run</string>
+        <string>--system</string>
+    </array>
+
+    <key>UserName</key>
+    <string>_endo</string>
+    <key>GroupName</key>
+    <string>_endo</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>ENDO_GATEWAY_STATE_DIR</key>
+        <string>/usr/local/var/lib/endo-gateway</string>
+        <key>ENDO_GATEWAY_RUNTIME_DIR</key>
+        <string>/usr/local/var/run/endo-gateway</string>
+        <key>ENDO_GATEWAY_LOG_DIR</key>
+        <string>/usr/local/var/log/endo-gateway</string>
+        <key>ENDO_GATEWAY_CACHE_DIR</key>
+        <string>/usr/local/var/cache/endo-gateway</string>
+        <key>ENDO_GATEWAY_CONFIG_FILE</key>
+        <string>/usr/local/etc/endo-gateway/config.toml</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/usr/local/var/log/endo-gateway/gateway.log</string>
+    <key>StandardErrorPath</key>
+    <string>/usr/local/var/log/endo-gateway/gateway.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>/usr/local/var/lib/endo-gateway</string>
+</dict>
+</plist>
