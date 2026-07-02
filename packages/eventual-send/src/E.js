@@ -208,8 +208,12 @@ const makeE = HandledPromise => {
        * @param {T} x target for method/function call
        * @returns {ECallableOrMethods<RemoteFunctions<T>>} method/function call proxy
        */
-      // @ts-expect-error XXX typedef
-      x => new Proxy(funcTarget, makeEProxyHandler(x, HandledPromise)),
+      x =>
+        /** @type {ECallableOrMethods<RemoteFunctions<T>>} */ (
+          /** @type {unknown} */ (
+            new Proxy(funcTarget, makeEProxyHandler(x, HandledPromise))
+          )
+        ),
       {
         /**
          * E.get(x) returns a proxy on which you can get arbitrary properties.
@@ -222,8 +226,12 @@ const makeE = HandledPromise => {
          * @returns {EGetters<LocalRecord<T>>} property get proxy
          * @readonly
          */
-        // @ts-expect-error XXX typedef
-        get: x => new Proxy(objTarget, makeEGetProxyHandler(x, HandledPromise)),
+        get: x =>
+          /** @type {EGetters<LocalRecord<T>>} */ (
+            /** @type {unknown} */ (
+              new Proxy(objTarget, makeEGetProxyHandler(x, HandledPromise))
+            )
+          ),
 
         /**
          * E.resolve(x) converts x to a handled promise. It is
@@ -246,8 +254,11 @@ const makeE = HandledPromise => {
          * @readonly
          */
         sendOnly: x =>
-          // @ts-expect-error XXX typedef
-          new Proxy(funcTarget, makeESendOnlyProxyHandler(x, HandledPromise)),
+          /** @type {ESendOnlyCallableOrMethods<RemoteFunctions<T>>} */ (
+            /** @type {unknown} */ (
+              new Proxy(funcTarget, makeESendOnlyProxyHandler(x, HandledPromise))
+            )
+          ),
 
         /**
          * E.when(x, res, rej) is equivalent to
