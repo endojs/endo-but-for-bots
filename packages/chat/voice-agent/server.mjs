@@ -1391,6 +1391,7 @@ const handler = async (req, res) => {
     if (u.pathname === '/trace-app.js') return serveFile(res, 'trace-app.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/widget.js') return serveFile(res, 'widget.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/grain-ui.js') return serveFile(res, 'grain-ui.js', 'text/javascript; charset=utf-8');
+    if (u.pathname === '/trace-viz-3d.js') return serveFile(res, 'trace-viz-3d.js', 'text/javascript; charset=utf-8'); // the reference Tier-2 WebGL trace viz (grain-ui imports it; it also seeds the forkable uicomp git object)
     if (u.pathname === '/theme.js') return serveFile(res, 'theme.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/fork-model.js') return serveFile(res, 'fork-model.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/fork-widget.js') return serveFile(res, 'fork-widget.js', 'text/javascript; charset=utf-8'); // mounts a confined fork inline in a chat

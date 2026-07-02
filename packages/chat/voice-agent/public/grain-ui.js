@@ -215,7 +215,19 @@ const renderComponent = (spec, ctx) => {
         if (v) applyTheme({ name: String(val.name || 'custom').slice(0, 40), mode: (val.mode === 'light' || val.mode === 'dark') ? val.mode : undefined, vars: v });
       }
     }
-    else if (m.type === 'error') { try { (window.__fieldReportError || (() => {}))(String(m.error || 'render failed'), String(spec.source || ''), { name: String(spec.name || spec.title || 'component'), componentId: String(spec.componentId || spec.id || '') }); } catch { /* */ } } // a confined component failed (mount OR runtime) → queue it for the AUTHORING agent's next turn + the auto-fix loop; the frame never had the source, the parent's spec does
+    else if (m.type === 'call') {
+      // The ONE imperative seam a confined component may use (confined.html ui.call). The PARENT is the gate:
+      // only NAMED, parent-chosen methods resolve; anything else is refused (so ui.call never HANGS — the
+      // component path had no handler before, which silently stalled every call). `vizDiag` is a render-safe
+      // telemetry echo (frame count + renderer mode) a live viz reports so the host + staging tests can see
+      // the brokered cell reached the sandbox — it carries NO cap and NO swissnum.
+      const method = String(m.method || ''); const args = (m.args && typeof m.args === 'object') ? m.args : {};
+      if (method === 'vizDiag') {
+        try { wrap.__vizFrames = Number(args.frames) || 0; wrap.__vizRev = Number(args.rev) || 0; wrap.__vizMode = String(args.mode || ''); wrap.__vizSteps = Number(args.steps) || 0; if (typeof wrap.__onVizFrame === 'function') wrap.__onVizFrame(wrap.__vizFrames, args); } catch { /* */ }
+        try { port && port.postMessage({ __cu: 1, type: 'call-result', id: m.id, ok: true, value: {} }); } catch { /* */ }
+      } else { try { port && port.postMessage({ __cu: 1, type: 'call-result', id: m.id, ok: false, error: 'method not exposed' }); } catch { /* */ } }
+    }
+    else if (m.type === 'error') { try { (window.__fieldReportError || (() => {}))(String(m.error || 'render failed'), String(spec.source || ''), { name: String(spec.name || spec.title || 'component'), componentId: String(spec.componentId || spec.id || '') }); } catch { /* */ } try { if (ctx && typeof ctx.onComponentError === 'function') ctx.onComponentError(String(m.error || 'render failed')); } catch { /* */ } } // a confined component failed (mount OR runtime) → queue it for the AUTHORING agent's next turn + the auto-fix loop AND let the caller (e.g. the trace island) run its fallback ladder; the frame never had the source, the parent's spec does
     else if (m.type === 'render-smell') { try { (window.__fieldReportSmell || (() => {}))(Array.isArray(m.smells) ? m.smells : [], { componentId: String(spec.componentId || spec.id || ''), name: String(spec.name || spec.title || 'component'), source: spec.source }); } catch { /* */ } } // a value coerced to "[object Object]" on screen → route to feedback-loops + the renderer's re-author loop
   };
   // one-shot window listener JUST for the 'ready' handshake — removed the instant it fires (no accumulation).
@@ -223,14 +235,44 @@ const renderComponent = (spec, ctx) => {
     if (e.source !== iframe.contentWindow) return; const m = e.data; if (!m || m.__cu !== 1 || m.type !== 'ready') return;
     window.removeEventListener('message', onReady);
     const ch = new MessageChannel(); port = ch.port1; port.onmessage = onPort; try { port.start(); } catch { /* */ }
-    try { iframe.contentWindow.postMessage({ __cu: 1, type: 'mount', source: String(spec.source || ''), theme: theme.get().vars, refs: (spec.refs && typeof spec.refs === 'object') ? spec.refs : undefined }, '*', [ch.port2]); } catch { /* */ }
+    try { iframe.contentWindow.postMessage({ __cu: 1, type: 'mount', source: String(spec.source || ''), theme: theme.get().vars, props: (spec.props && typeof spec.props === 'object' && !Array.isArray(spec.props)) ? spec.props : undefined, refs: (spec.refs && typeof spec.refs === 'object') ? spec.refs : undefined }, '*', [ch.port2]); } catch { /* */ } // forward render-safe props (never a cap) → confined.html UI.props; the trace-viz reads props.cell here
     // PROPAGATE the user's global theme DOWN into the confined widget (read-only style data, never a cap),
     // so it always matches the user's chosen style and re-themes live when they switch.
     releases.push(theme.subscribe(t => { try { port && port.postMessage({ __cu: 1, type: 'theme', vars: t.vars }); } catch { /* */ } }));
   };
   window.addEventListener('message', onReady);
-  track(() => { window.removeEventListener('message', onReady); try { port && port.close(); } catch { /* */ } for (const r of releases) { try { r(); } catch { /* */ } } });
+  const disposeThis = track(() => { window.removeEventListener('message', onReady); try { port && port.close(); } catch { /* */ } for (const r of releases) { try { r(); } catch { /* */ } } });
+  // Explicit teardown so a caller that removes THIS widget on its own (e.g. the trace island ending a turn)
+  // closes its cell stream now instead of leaking it until the next chat-switch disposeAllWidgets.
+  try { wrap.__dispose = () => { try { cleanups.delete(disposeThis); } catch { /* */ } try { disposeThis(); } catch { /* */ } }; } catch { /* */ }
   iframe.src = '/confined.html'; // the trusted runtime (own no-network CSP); source + a private port arrive on the 'ready' handshake
+  return wrap;
+}
+
+// ── TRACE-VIZ ISLAND: mount the Tier-2 (sandboxed-iframe, WebGL-capable) trace visualization for `sid`.
+//    It rides renderComponent — the SAME cell-brokering + component-identity + backlog path as any confined
+//    component — so the iframe SUBSCRIBES to `trace:<sid>` and the PARENT brokers that cell IN over the
+//    private MessagePort using the cap here (the cap NEVER crosses into the frame; the frame has no network
+//    at all — confined.html's CSP is default-src 'none'). `componentId` is the seeded uicomp git id, which
+//    makes the island alt-selectable → edit chat, forkable, and auto-files render errors onto ITS backlog.
+//    Returns the wrapper (with .__dispose to tear the stream + iframe down); `onError` fires if the confined
+//    viz fails to mount/throws so the caller can run its fallback ladder (→ chrome island → legacy pendant).
+export const mountTraceViz = async (host, { cap, sid, componentId, name, source, height, onError, onVizFrame } = {}) => {
+  if (!host || !sid) return null;
+  const cellId = `trace:${sid}`;
+  // LAZY-LOAD the reference source (kept out of grain-ui's top-level imports so this module always loads even
+  // before the /trace-viz-3d.js route is up — the live app never hard-depends on it; Tier-2 is opt-in).
+  // window.__traceVizSourceOverride is a TEST-ONLY seam (inject a throwing source to exercise the fallback).
+  let src = source || (typeof window !== 'undefined' && window.__traceVizSourceOverride) || '';
+  let vizName = name;
+  if (!src) { try { const m = await import('./trace-viz-3d.js'); src = m.TRACE_VIZ_3D_SOURCE; vizName = vizName || m.TRACE_VIZ_NAME; } catch { return null; } }
+  if (!src) return null;
+  const spec = { type: 'component', source: src, cells: [cellId], componentId: componentId || undefined, name: vizName || 'Trace 3D', height: Number(height) || 300, props: { cell: cellId, sid: String(sid) } };
+  let wrap;
+  try { wrap = renderComponent(spec, { cap, onComponentError: onError }); } catch { return null; }
+  if (!wrap) return null;
+  if (typeof onVizFrame === 'function') { try { wrap.__onVizFrame = onVizFrame; } catch { /* */ } }
+  try { host.appendChild(wrap); } catch { return null; }
   return wrap;
 };
 

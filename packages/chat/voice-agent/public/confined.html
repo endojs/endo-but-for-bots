@@ -40,6 +40,21 @@
 // The agent's component is a function (ui) => element. `ui` hands it create()/grain()/local() — never the
 // DOM, never the network. A GRAIN is { get, set, subscribe }; an element .follow(grain) subscribes + paints
 // on every push (no polling). Live grains are fed by the PARENT over postMessage (it holds the cap).
+//
+// ── RAW-CANVAS / WebGL ESCAPE HATCH (the trace-viz contract) ──────────────────────────────────────
+// The curated kit above is defense-in-depth, NOT the boundary — the boundary is THIS iframe (opaque
+// origin, sandbox="allow-scripts" without allow-same-origin, CSP default-src 'none' = NO network). So a
+// component may reach for the RAW canvas + WebGL, which are pure, authority-free computation:
+//     const canvas = ui.create('canvas').el;              // the raw <canvas> node
+//     const gl = canvas.getContext('webgl');              // or getContext('2d') — real WebGL, no network
+//     const g  = ui.grain(ui.props.cell);                 // a PARENT-brokered cell (e.g. 'trace:<chatId>')
+//     g.subscribe(v => …); requestAnimationFrame(loop);   // rAF is an iframe global; guard w/ typeof
+//     ui.call('vizDiag', {frames}) → Promise               // optional host echo (a parent-gated method)
+// This is why a WebGL/SVG trace view lives HERE and not in the SES no-iframe path (whose sanitizer has no
+// <canvas>/<svg>). A trace-viz SOURCE is `(ui) => element` that draws the live trace cell into a canvas;
+// see public/trace-viz-3d.js for the reference (a 3D neon force-directed graph). FORK it freely — any
+// (ui)=>element honoring the same cell contract can replace the view; the cell feeds every fork the same
+// frames. Everything below is UNCHANGED; the escape hatch needs no new API (the canvas + rAF already exist).
 
 const grain = (initial) => {
   let value = initial; const subs = new Set();
