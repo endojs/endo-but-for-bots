@@ -4,14 +4,14 @@
 // outputPerToken] in µUSD/token — which is numerically identical to $/1M tokens
 // (e.g. Opus 4.8 at $5/$25 per 1M → [5, 25]). Catalog verified 2026-05-26.
 //
-// Increment 1 note: local gemma (model 'default') is genuinely FREE, but we give it a
-// FAKE non-zero rate here so the per-chat budget visibly moves on free local inference
-// while we prove the spine. Increment 4 flips gemma to [0, 0] and meters the real
-// (paid) Anthropic / OpenRouter paths.
+// Local gemma (model 'default') is genuinely FREE and is priced [0, 0] — a free local
+// turn debits nothing from the purse. Only the real (paid) Anthropic / OpenRouter paths
+// are metered. (Inc 1 briefly used a fake non-zero rate to prove the spine; flipped to
+// [0, 0] per P1-9 so the free model isn't billed.)
 
 // model/provider key → [inMicroUSDPerTok, outMicroUSDPerTok]
 const RATES = {
-  'gemma-tinix': [1, 4], // FAKE test rate for Inc 1 (real = [0, 0]); flip at Inc 4
+  'gemma-tinix': [0, 0], // local gemma is genuinely FREE — never bill it (was a fake [1,4] test rate for Inc 1)
   'anthropic:claude-opus-4-8': [5, 25],
   'anthropic:claude-opus-4-7': [5, 25],
   'anthropic:claude-opus-4-6': [5, 25],
@@ -51,7 +51,7 @@ export const rateFor = (model = 'default') => {
   if (m.startsWith('openrouter:')) return OPENROUTER_RATES[m.slice('openrouter:'.length)] || [1, 3];
   const p = providerOf(m);
   if (RATES[p]) return RATES[p];
-  return p.startsWith('anthropic:') ? [5, 25] : [1, 4]; // unknown anthropic → opus-priced; unknown local → fake gemma rate
+  return p.startsWith('anthropic:') ? [5, 25] : [0, 0]; // unknown anthropic → opus-priced; unknown local → free (gemma)
 };
 harden(rateFor);
 
