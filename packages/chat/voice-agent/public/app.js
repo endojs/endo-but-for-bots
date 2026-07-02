@@ -2233,7 +2233,16 @@ const openRerun = r => {
   if (!r) return; const cur = ((r.versions || [])[memoVersion] || {}).env || {};
   const endpoint = String(r.id).startsWith('memo-') ? '/memo/rerun' : '/chat/rerun';
   const refresh = String(r.id).startsWith('memo-') ? loadMemos : loadSeedChats;
-  showModal(`<div class="qrlabel">↻ Re-run "${esc(r.title)}" under changed instructions</div><span class="qrwarn">Edit the agent's instructions, then re-run the same transcript to see how the trace changes.</span><textarea id="rr-persona" rows="5" style="width:340px;max-width:84vw" placeholder="(agent instructions — blank = default)">${esc(cur.persona || '')}</textarea><div id="rr-status" class="pill"></div><button class="mini" id="rr-go">Re-run</button>`);
+  showModal(`<div class="qrlabel">↻ Re-run "${esc(r.title)}" under changed instructions</div><span class="qrwarn">Edit the agent's instructions, then re-run the same transcript to see how the trace changes.</span><textarea id="rr-persona" rows="5" style="width:340px;max-width:84vw" placeholder="(agent instructions — blank = default)">${esc(cur.persona || '')}</textarea><div id="rr-status" class="pill"></div><button class="mini" id="rr-go">Re-run</button>${r.scheduled && r.scheduled.agent ? ` <button class="mini" id="rr-config">⚙️ Edit this agent's full config →</button>` : ''}`);
+  // a scheduled run's "change environment" → the rich per-agent Detail (editable prompt/powers/model/mode
+  // + the assembled-toolbox context view). Resolve the sched agent by its project+name (the seed-chat
+  // carries names, never a cap), then open its Detail card.
+  { const rc = $('rr-config'); if (rc) rc.onclick = async () => {
+    const d = await pf('/projects/list'); const pr = (d.projects || []).find(x => x.name === r.scheduled.project);
+    const ag = pr && (pr.scheduledAgents || []).find(x => x.name === r.scheduled.agent);
+    if (ag) { closeModal(); openProjectId = pr.id; renderProjects(ag.id); }
+    else setStatus('couldn\'t find that scheduled agent — open it from 🕐 Projects');
+  }; }
   $('rr-go').onclick = async () => {
     $('rr-go').disabled = true; $('rr-status').textContent = 'running…';
     const res = await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: r.id, persona: $('rr-persona').value }) }).then(x => x.json()).catch(e => ({ ok: false, error: e.message }));
@@ -4987,6 +4996,19 @@ const uploadProjectFiles = async (pid, fileList) => {
   }
   renderProjectFiles(pid);
 };
+// power → verbs catalog (the toolbox each power contributes to the agent at run time). /powers carries
+// labels but not verbs; /agent/shape (owner-gated) returns the root field-agent's held powers WITH their
+// verbs — a scheduled agent's ring is a subset of grantable powers, so this map resolves any tool to the
+// verbs it grants. Cached once per session; falls back to bare power names when not root / offline.
+let powerVerbs = {};
+const loadPowerVerbs = async () => {
+  if (Object.keys(powerVerbs).length) return powerVerbs;
+  try {
+    const s = await (await fetch('/agent/shape', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, agent: 'field-agent' }) })).json();
+    for (const pw of (s && s.powers) || []) powerVerbs[pw.name] = { label: pw.label, verbs: pw.verbs || [] };
+  } catch { /* not root / offline → the context view shows power names without their verbs */ }
+  return powerVerbs;
+};
 const renderProjects = async (focusArg = null) => {
   const focusSched = typeof focusArg === 'string' ? focusArg : null; // renderProjects doubles as a click handler — ignore a MouseEvent arg
   const d = await pf('/projects/list');
@@ -5013,6 +5035,7 @@ const renderProjects = async (focusArg = null) => {
   const p = projects.find(x => x.id === openProjectId);
   if (!p) { openProjectId = null; return renderProjects(); }
   await loadSeedChats(); // refresh so each timer agent's runs folder reflects the latest scheduled runs
+  await loadPowerVerbs(); // resolve each agent's tools → the verbs they grant (for the "full context" view)
   // a timer agent's runs = the scheduled seed-chats filed under it (kept out of the sidebar; here is their home)
   const agentRuns = ag => seedChats.filter(s => s && s.source === 'scheduled' && s.scheduled && s.scheduled.agent === ag.name && s.scheduled.project === p.name).sort((x, y) => (y.ts || 0) - (x.ts || 0));
   const agents = (p.scheduledAgents || []).map(a => { return `
@@ -5022,14 +5045,25 @@ const renderProjects = async (focusArg = null) => {
         <div style="color:var(--mut);font-size:12px;margin-top:3px">${esc(cadenceLabel(a.schedule))} · tools: ${esc((a.tools || []).join(', ') || 'none')}${a.enabled === false ? ' · ⏸ disabled' : ''}${a.mode === 'implement' ? ' · mode: implement' : ''}${a.model && a.model !== 'default' ? ` · model: ${esc(a.model)}` : ''}${a.alwaysReport ? ' · always-reports' : ''}${a.lastRun ? ` · ${a.lastRunChatId ? `<a href="#" data-openrun="${esc(a.lastRunChatId)}">last run ${esc(new Date(a.lastRun).toLocaleString())} ↗</a>` : `last ${esc(new Date(a.lastRun).toLocaleString())}`}` : ''}${a.nextAt ? ` · next ${esc(new Date(a.nextAt).toLocaleString())}` : ''}</div>
         ${a.note ? `<div style="color:var(--mut);font-size:11px;margin-top:2px;font-style:italic">📝 ${esc(String(a.note).slice(0, 300))}</div>` : ''}
         <div style="font-size:12px;margin-top:4px;white-space:pre-wrap">${esc((a.prompt || '').slice(0, 200))}</div>
-        <details style="margin-top:6px"><summary class="mini" style="display:inline-block">✏️ edit prompt &amp; powers</summary>
+        <details style="margin-top:6px"><summary class="mini" style="display:inline-block">✏️ edit prompt, powers &amp; environment</summary>
           <div style="margin-top:6px;display:flex;flex-direction:column;gap:6px">
             <input class="hdr-sel" style="max-width:none" data-ename="${p.id}|${a.id}" value="${esc(a.name)}">
             <textarea data-eprompt="${p.id}|${a.id}" style="background:var(--panel);border:1px solid var(--edge);color:var(--ink);border-radius:7px;padding:6px;min-height:90px">${esc(a.prompt || '')}</textarea>
             <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--mut)">tools (its ring):</div><button class="mini" data-epropose="${p.id}|${a.id}">✨ propose from prompt</button></div>
             <div data-etools="${p.id}|${a.id}"></div>
-            <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--mut)">timing:</div><select class="hdr-sel" style="max-width:none;flex:1" data-ecad="${p.id}|${a.id}"><option value="-1">keep current · ${esc(cadenceLabel(a.schedule) || 'event-triggered')}</option>${CADENCES.map((c, i) => `<option value="${i}">${esc(c.label)}</option>`).join('')}</select></div>
+            <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--mut);min-width:48px">timing:</div><select class="hdr-sel" style="max-width:none;flex:1" data-ecad="${p.id}|${a.id}"><option value="-1">keep current · ${esc(cadenceLabel(a.schedule) || 'event-triggered')}</option>${CADENCES.map((c, i) => `<option value="${i}">${esc(c.label)}</option>`).join('')}</select></div>
+            <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--mut);min-width:48px">model:</div><select class="hdr-sel" style="max-width:none;flex:1" data-emodel="${p.id}|${a.id}"><option value="default"${(!a.model || a.model === 'default') ? ' selected' : ''}>instance default</option>${(a.model && a.model !== 'default' && !modelList.some(md => md.id === a.model)) ? `<option value="${esc(a.model)}" selected>${esc(a.model)}</option>` : ''}${modelList.map(md => `<option value="${esc(md.id)}"${a.model === md.id ? ' selected' : ''}>${esc(md.label)}</option>`).join('')}</select></div>
+            <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--mut);min-width:48px">mode:</div><select class="hdr-sel" style="max-width:none;flex:1" data-emode="${p.id}|${a.id}"><option value="recommend"${a.mode !== 'implement' ? ' selected' : ''}>recommend · propose only (default)</option><option value="implement"${a.mode === 'implement' ? ' selected' : ''}>implement · autonomous (needs selfImprove)</option></select></div>
+            <div style="display:flex;align-items:center;gap:16px;font-size:12px;color:var(--mut)"><label style="display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" data-eenabled="${p.id}|${a.id}"${a.enabled !== false ? ' checked' : ''}> enabled</label><label style="display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" data-ealways="${p.id}|${a.id}"${a.alwaysReport ? ' checked' : ''}> always report (even a no-op run)</label></div>
             <div><button class="mini" data-saveagent="${p.id}|${a.id}">Save changes</button></div>
+          </div></details>
+        <details style="margin-top:6px"><summary class="mini" style="display:inline-block">🧬 what it runs with (full context)</summary>
+          <div style="margin-top:6px;font-size:12px;color:var(--ink);display:flex;flex-direction:column;gap:6px">
+            <div><span style="color:var(--mut)">model:</span> ${esc(a.model && a.model !== 'default' ? a.model : 'instance default')} · <span style="color:var(--mut)">mode:</span> ${esc(a.mode === 'implement' ? 'implement (autonomous)' : 'recommend (propose only)')} · <span style="color:var(--mut)">schedule:</span> ${esc(cadenceLabel(a.schedule) || (a.trigger ? 'event: ' + (a.trigger.source || a.trigger.kind) : 'event-triggered'))} · ${a.enabled === false ? '⏸ disabled' : '▶ enabled'}${a.alwaysReport ? ' · always-reports' : ''}</div>
+            <div><span style="color:var(--mut)">persona:</span> runs under the shared field-agent persona — scheduled agents carry no separate soul/cursor.</div>
+            <div><span style="color:var(--mut)">assembled toolbox</span> — the verbs its ring (${(a.tools || []).length} power${(a.tools || []).length === 1 ? '' : 's'}) grants at run time:</div>
+            <div style="display:flex;flex-direction:column;gap:3px">${(a.tools || []).length ? (a.tools).map(t => { const v = (powerVerbs[t] && powerVerbs[t].verbs) || null; return `<div style="border:1px solid var(--edge);border-radius:7px;padding:4px 8px"><span title="${esc(powerTip(t))}">${powerIcon(t)} <b>${esc(t)}</b></span>${v && v.length ? ` <span style="color:var(--mut)">→ ${esc(v.join(', '))}</span>` : ' <span style="color:var(--mut)">→ (verbs resolve with the root cap)</span>'}</div>`; }).join('') : '<div style="color:var(--mut)">no powers — this agent runs with an empty ring (text-only reasoning)</div>'}</div>
+            <div style="color:var(--mut);font-size:11px">The fully-materialized toolbox/persona the server assembles per run (incl. this project's home-folder handles) isn't rendered here — a live <code>/projects/agents/context-preview</code> endpoint is the follow-up.</div>
           </div></details>
         <details style="margin-top:6px" data-runlog="${esc(a.id)}"><summary class="mini" style="display:inline-block">📁 run log (${(a.runs || []).length})</summary>
           <div style="margin-top:6px;display:flex;flex-direction:column;gap:4px">${(a.runs || []).length ? (a.runs).map(r => `<div class="share" style="padding:5px 7px;align-items:flex-start"><div style="font-size:12px;min-width:0;flex:1"><div>${esc(new Date(r.at).toLocaleString())} ${r.ok === false ? '⚠️ failed' : (r.nProp ? `· ${r.nProp} proposal(s)` : '· ✓')}</div>${r.summary ? `<div style="color:var(--mut);font-size:11px;white-space:pre-wrap;word-break:break-word">${esc(String(r.summary).slice(0, 200))}</div>` : ''}</div>${r.chatId ? `<button class="mini" data-openrun="${esc(r.chatId)}">open</button>` : ''}</div>`).join('') : '<div style="color:var(--mut);font-size:12px">no runs yet — every run lands here (silent no-op runs too); the chat opens for runs that had something to report</div>'}</div>
@@ -5104,6 +5138,12 @@ const renderProjects = async (focusArg = null) => {
     const patch = { name, prompt, tools };
     const cv = m.querySelector(`[data-ecad="${pid}|${aid}"]`); // adjust timing (–1 = keep current/event schedule)
     if (cv && cv.value !== '-1') patch.schedule = CADENCES[+cv.value].schedule;
+    // "change environment" — model + mode; plus pause/report toggles. All merge server-side via the
+    // existing /projects/agents/update blanket-Object.assign, so no route change is needed.
+    const mv = m.querySelector(`[data-emodel="${pid}|${aid}"]`); if (mv) patch.model = mv.value;
+    const mo = m.querySelector(`[data-emode="${pid}|${aid}"]`); if (mo) patch.mode = mo.value;
+    const en = m.querySelector(`[data-eenabled="${pid}|${aid}"]`); if (en) patch.enabled = en.checked;
+    const ar = m.querySelector(`[data-ealways="${pid}|${aid}"]`); if (ar) patch.alwaysReport = ar.checked;
     const r = await pf('/projects/agents/update', { id: pid, agentId: aid, patch });
     if (r.error) alert(r.error);
     renderProjects();
