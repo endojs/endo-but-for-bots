@@ -8,7 +8,9 @@
 // LoadImageMask(mask, red) → CLIPTextEncode+FluxGuidance → InpaintModelConditioning(noise_mask) →
 // KSampler(cfg 1, denoise 1) → VAEDecode → SaveImage. Node names verified against /object_info.
 
-const COMFY = process.env.COMFY_URL || 'http://192.168.50.226:8188';
+import { COMFY_URL } from './field-config.mjs';
+
+const COMFY = COMFY_URL; // ComfyUI base (tinix :8188) — from field-config ENDPOINTS (env: COMFY_URL)
 const UNET = process.env.FLUX2_UNET || 'flux2-dev-Q4_K_M.gguf';
 const CLIP = process.env.FLUX2_CLIP || 'Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf';
 const VAE = process.env.FLUX2_VAE || 'flux2-vae.safetensors';
