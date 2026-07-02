@@ -14,6 +14,7 @@ import { theme, cycleTheme, initTheme } from './theme.js'; // the user's global 
 import { forkRetry, forkPage, forkCount, forkIndex } from './fork-model.js'; // retry-as-fork data-model (pure, unit-tested)
 import { renderMarkdown } from './md.js'; // safe Markdown→DOM for agent replies + the notification modal
 import { mountForkInto } from './fork-widget.js'; // mount a confined FORK (in-tree, no-iframe) inline in a chat
+import { shouldAdoptRemote } from './chat-sync-version.mjs'; // ARCH-4: server-`seq` version vector for cross-device sync (pure, unit-tested)
 initTheme(); // restore the saved theme + start applying it to :root as CSS vars
 // P4 (shell→island): render the header bar from its EDITABLE island — BEFORE anything else touches the header
 // (the theme toggle below + app.js's by-id wiring). The confined renderer keeps `id`, so app.js's getElementById
@@ -2543,6 +2544,13 @@ const saveTx = () => { try { localStorage.setItem(txKey(sessionId), JSON.stringi
 //    cap, so the same root link shows the same chats on phone + laptop. localStorage
 //    is the fast/offline cache; the server is the shared source of truth. ──────────
 const UPD_KEY = 'field-agent-updated';
+// ARCH-4: the server stamps a monotonic per-cap `seq` on every /chats/save and returns it
+// (and on /chats/load). We cache it beside the bundle and adopt a remote bundle only when its
+// seq is HIGHER — a stale/skewed-clock device can no longer clobber a higher-seq state. The old
+// UPD_KEY wall-clock is kept only for the legacy-server fallback (a server that returns no seq).
+const SEQ_KEY = 'field-agent-chats-seq';
+const localChatSeq = () => { try { return +(localStorage.getItem(SEQ_KEY) || 0); } catch { return 0; } };
+const setChatSeq = n => { try { localStorage.setItem(SEQ_KEY, String(n)); } catch {} };
 let syncTimer = null;
 function bundleAll(updated) {
   // INT-3: persist only THIS cap's own chats — exclude adopted seed-chats (they're a read-time view merged
@@ -2565,7 +2573,11 @@ function scheduleSync() {
   if (!chats.length && !initialSyncDone) return;
   const now = Date.now(); try { localStorage.setItem(UPD_KEY, String(now)); } catch {} // mark local as freshest
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(() => { fetch('/chats/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, data: bundleAll(now) }) }).catch(() => {}); }, 1500);
+  syncTimer = setTimeout(() => {
+    fetch('/chats/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, data: bundleAll(now) }) })
+      .then(r => r.json()).then(r => { if (r && typeof r.seq === 'number') setChatSeq(r.seq); }) // ARCH-4: adopt the server-stamped seq for our write
+      .catch(() => {});
+  }, 1500);
 }
 function adoptBundle(b, { keepActive = false } = {}) {
   if (!b || !Array.isArray(b.chats)) return false;
@@ -2603,13 +2615,18 @@ async function syncLoad({ keepActive = false } = {}) {
   if (!cap) return;
   try {
     const r = await fetch('/chats/load', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) });
-    const { data } = await r.json();
+    const resp = await r.json();
+    const { data } = resp;
     initialSyncDone = true; // we've now seen the server's bundle — pushes (incl. a legit empty list) are safe from here
-    const localUpdated = +(localStorage.getItem(UPD_KEY) || 0);
-    // adopt the server's chats only if they're at least as fresh as our last local edit
-    if (data && Array.isArray(data.chats) && data.chats.length && (data.updated || 0) >= localUpdated) {
-      if (adoptBundle(data, { keepActive })) { renderChatList(); if (!keepActive) renderTx(); tryOpenPendingChat(); }
-    } else { scheduleSync(); } // server empty/older → push our local state up
+    // ARCH-4: adopt on the server-authoritative `seq` (adopt-when-higher), NOT wall-clock LWW. If the
+    // server returns no seq (older server), shouldAdoptRemote falls back to the legacy `updated` gate.
+    const hasChats = !!(data && Array.isArray(data.chats) && data.chats.length);
+    const remoteSeq = (resp && typeof resp.seq === 'number') ? resp.seq : null;
+    const adopt = shouldAdoptRemote({ hasChats, remoteSeq, localSeq: localChatSeq(),
+      remoteUpdated: (data && data.updated) || 0, localUpdated: +(localStorage.getItem(UPD_KEY) || 0) });
+    if (adopt) {
+      if (adoptBundle(data, { keepActive })) { if (remoteSeq !== null) setChatSeq(remoteSeq); renderChatList(); if (!keepActive) renderTx(); tryOpenPendingChat(); }
+    } else { scheduleSync(); } // server empty/older-or-equal-seq → push our local state up
   } catch {}
 }
 const pushTx = (who, text, extra = {}) => { activeTx.push({ who, text, at: Date.now(), ...extra }); saveTx(); const cc = chats.find(c => c.id === sessionId); if (cc) { cc.lastMsgAt = Date.now(); saveChats(); renderChatList(); } }; // any message (you/agent/widget) bumps the chat's recency → sidebar re-sorts
