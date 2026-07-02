@@ -461,6 +461,10 @@ const renderSitePreview = spec => {
 const renderSpecialist = (spec, ctx) => {
   const name = String(spec.name || 'specialist'); const domain = String(spec.domain || ''); const powers = Array.isArray(spec.powers) ? spec.powers : [];
   const escTxt = s => { const d = document.createElement('div'); d.textContent = String(s == null ? '' : s); return d.innerHTML; };
+  // SEC-17: escTxt round-trips through textContent, which escapes < > & but NOT " or ' — unsafe in an
+  // ATTRIBUTE context (a " breaks out of the attribute → XSS). escAttr escapes quotes too; use it whenever
+  // a value is interpolated inside quotes of an HTML-string attribute.
+  const escAttr = s => escTxt(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   const wrap = document.createElement('div'); wrap.className = 'gw gw-spec'; wrap.style.cssText = `${STYLE};margin:8px 0;border:1px solid var(--edge,#30363d);border-radius:12px;overflow:hidden;background:var(--panel,#161b22)`;
   const head = document.createElement('div'); head.style.cssText = 'display:flex;align-items:center;gap:9px;padding:9px 12px';
   const ic = document.createElement('span'); ic.textContent = '🧑‍🔬'; ic.style.fontSize = '16px';
@@ -484,7 +488,7 @@ const renderSpecialist = (spec, ctx) => {
       const sec = (label, html) => { const s = document.createElement('div'); s.style.cssText = 'margin-bottom:9px'; s.innerHTML = `<div style="color:var(--mut,#8b949e);font-size:10px;letter-spacing:.04em;margin-bottom:3px">${label}</div>${html}`; panel.appendChild(s); return s; };
       if (r.instructions) sec('INSTRUCTIONS', `<div style="white-space:pre-wrap">${escTxt(String(r.instructions).slice(0, 1400))}</div>`);
       if ((r.nudges || []).length) sec('STANDING NUDGES', r.nudges.map(n => `<div>⏰ ${escTxt(String(n.request).slice(0, 90))} — ${n.recurring ? 'recurring' : 'once'}${n.nextAt ? `, next ${escTxt(new Date(n.nextAt).toLocaleString())}` : ''} <span style="color:var(--mut,#8b949e)">(${n.runs} run${n.runs === 1 ? '' : 's'})</span></div>`).join(''));
-      if ((r.runs || []).length) { const s = sec('RECENT RUNS', r.runs.map(run => `<div data-openrun="${escTxt(run.id)}" style="cursor:pointer;color:var(--acc,#7c5cff)">🔁 ${escTxt(run.title)} <span style="color:var(--mut,#8b949e)">— ${escTxt(new Date(run.at).toLocaleString())}</span></div>`).join('')); s.querySelectorAll('[data-openrun]').forEach(el => el.onclick = () => { if (ctx && ctx.onOpenRun) ctx.onOpenRun(el.getAttribute('data-openrun')); }); }
+      if ((r.runs || []).length) { const s = sec('RECENT RUNS', r.runs.map(run => `<div data-openrun="${escAttr(run.id)}" style="cursor:pointer;color:var(--acc,#7c5cff)">🔁 ${escTxt(run.title)} <span style="color:var(--mut,#8b949e)">— ${escTxt(new Date(run.at).toLocaleString())}</span></div>`).join('')); s.querySelectorAll('[data-openrun]').forEach(el => el.onclick = () => { if (ctx && ctx.onOpenRun) ctx.onOpenRun(el.getAttribute('data-openrun')); }); }
       if (!r.instructions && !(r.nudges || []).length && !(r.runs || []).length) panel.textContent = 'No instructions, standing nudges, or runs yet — chat with it or schedule one.';
       loaded = true;
     } catch (e) { panel.textContent = 'could not load: ' + e.message; }
