@@ -419,8 +419,12 @@ const bubble = (who, text, agent, at) => {
   if (at) { const ts = document.createElement('span'); ts.className = 'msg-time'; ts.style.cssText = 'margin-left:7px;font-size:10px;font-weight:400;color:var(--mut);opacity:.65'; ts.textContent = fmtMsgTime(at); ts.title = new Date(at).toLocaleString(); w.appendChild(ts); }
   // agent replies are Markdown (agents format even unprompted) → render it; user text stays literal (linkify only)
   const bodyEl = d.querySelector('.body');
-  if (who === 'you') { linkify(bodyEl, text || '…'); } else { bodyEl.classList.add('md'); renderMarkdown(bodyEl, text || '…'); }
-  attachMsgToolbar(d, bodyEl, text); // the per-message action strip (chrome-msg-toolbar component; falls back to the plain 🔗)
+  // CAP HYGIENE (defense-in-depth; the server already scrubs answers): never render a #cap=/swissnum an
+  // agent reply might echo — into the bubble OR into a clip promoted from it (attachMsgToolbar). User text
+  // is left literal (it's their own input, linkified not clipped-by-default).
+  const shownText = who === 'you' ? (text == null ? '' : text) : scrubCap(text == null ? '' : text);
+  if (who === 'you') { linkify(bodyEl, shownText || '…'); } else { bodyEl.classList.add('md'); renderMarkdown(bodyEl, shownText || '…'); }
+  attachMsgToolbar(d, bodyEl, shownText); // the per-message action strip (chrome-msg-toolbar component; falls back to the plain 🔗)
   log.appendChild(d); window.scrollTo(0, document.body.scrollHeight);
   return d.querySelector('.body');
 };
@@ -2604,6 +2608,7 @@ const appendProposalPrompt = (parent, m) => {
   const cc = chats.find(c => c.id === sessionId);
   const approved = !!(cc && Array.isArray(cc.scopedPowers) && cc.scopedPowers.length); // already granted → consumed
   const wrap = document.createElement('div'); wrap.style.cssText = 'margin-top:6px';
+  wrap.setAttribute('data-trusted-path', ''); // "✅ Approve & run · grants …" grants powers + runs the agent = an authority decision → trusted path (explicit marker, never editable chrome)
   // resolve (generating + caching if needed) the proposed prompt; returns '' on failure
   const resolvePrompt = async () => {
     if (m.proposedPrompt) return m.proposedPrompt;
@@ -4651,7 +4656,7 @@ const renderSettingsFiles = async body => {
     sg.disabled = false;
     if (!r || r.error) { if (out) out.textContent = (r && r.error) || 'share failed'; return; }
     if (out) { out.innerHTML = `✓ scoped link for <b>${esc(st.root)}</b> ($${(allow / 1e6).toFixed(2)}) <button class="mini" id="fb-share-copy">Copy link</button> <span id="fb-share-msg" style="color:var(--acc)"></span>`;
-      const cb = $('fb-share-copy'); if (cb) cb.onclick = async () => { try { await navigator.clipboard.writeText(r.url); $('fb-share-msg').textContent = 'copied'; } catch { $('fb-share-msg').textContent = 'copy failed — link in console'; console.log(r.url); } }; }
+      const cb = $('fb-share-copy'); if (cb) cb.onclick = async () => { try { await navigator.clipboard.writeText(r.url); $('fb-share-msg').textContent = 'copied'; } catch { $('fb-share-msg').textContent = 'copy failed — tap Copy link again'; } }; } // cap-hygiene: never log a #cap= link to the console (it IS the credential)
   }; }
   { const mb = $('fb-minimize'); if (mb) mb.onclick = () => { closeModal(); minimizeAppToChat('file-browser'); }; } // bring this app into a chat as a live inline widget
   list();
