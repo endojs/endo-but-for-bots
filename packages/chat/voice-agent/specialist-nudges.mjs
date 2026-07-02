@@ -31,12 +31,16 @@ export const makeSpecialistNudges = ({ file, now = () => Date.now() } = {}) => {
    * @param {object} n
    * @param {string} n.specialistId   the specialist's stable id
    * @param {string} n.specialistName display name (for titles/notifications)
+   * @param {string} [n.owner]        INC-2: the OWNER namespace the specialist lives in ('root' | 'u:<hash>').
+   *   A nudge fires SERVER-SIDE (no cap in hand), so it must record which owner's namespace to resolve its
+   *   specialist within — else a same-slug specialist under a DIFFERENT owner could be woken. Non-secret
+   *   (already a hash); omitted on legacy nudges, which fall back to a cross-owner lookup.
    * @param {string} n.chatId         the chat the team lives in (the nudge's run links back here)
    * @param {string} n.request        what to ask the specialist each time it wakes
    * @param {object} n.schedule       { kind:'interval', everyMs } | { kind:'once', atIso } | { kind:'once', afterMs }
    * @param {string} [n.label]
    */
-  const add = ({ specialistId, specialistName, chatId, request, schedule, label } = {}) => {
+  const add = ({ specialistId, specialistName, owner, chatId, request, schedule, label } = {}) => {
     if (!specialistId) throw new Error('specialistId required');
     if (!schedule || !schedule.kind) throw new Error('schedule { kind:interval|once, … } required');
     const d = read();
@@ -45,7 +49,7 @@ export const makeSpecialistNudges = ({ file, now = () => Date.now() } = {}) => {
       : schedule.atIso ? Date.parse(schedule.atIso)
       : base + Math.max(0, Number(schedule.afterMs) || 0);
     if (!Number.isFinite(nextAt)) throw new Error('could not compute next fire time');
-    const n = { id: `nudge-${crypto.randomBytes(5).toString('hex')}`, specialistId: String(specialistId), specialistName: String(specialistName || specialistId), chatId: String(chatId || ''), request: String(request || ''), schedule, label: String(label || ''), nextAt, status: 'active', createdAt: new Date(base).toISOString(), lastRun: null, runs: 0 };
+    const n = { id: `nudge-${crypto.randomBytes(5).toString('hex')}`, specialistId: String(specialistId), specialistName: String(specialistName || specialistId), owner: String(owner || 'root'), chatId: String(chatId || ''), request: String(request || ''), schedule, label: String(label || ''), nextAt, status: 'active', createdAt: new Date(base).toISOString(), lastRun: null, runs: 0 };
     d.nudges.unshift(n); write(d);
     return harden({ ...n });
   };

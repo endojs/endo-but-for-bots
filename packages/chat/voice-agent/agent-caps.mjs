@@ -2130,7 +2130,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         if (!node.isRoot && !(ctx.purse && typeof ctx.purse.balance === 'function' && ctx.purse.balance() > 0)) return { ok: false, error: 'scheduling a standing specialist needs available budget (it runs in the background on your allowance) — top up or claim credits first.' };
         const spec = findSpecialist(String(name || ''), node.ownerKey); if (!spec) return { ok: false, error: `no specialist "${name}" — list them with listSpecialists` };
         const schedule = everyMs ? { kind: 'interval', everyMs: Number(everyMs) } : atIso ? { kind: 'once', atIso: String(atIso) } : { kind: 'once', afterMs: Number(afterMs || 0) };
-        const n = specialistNudges.add({ specialistId: spec.id, specialistName: spec.name, chatId: ctx.chatId || '', request: String(request || ''), schedule, label });
+        const n = specialistNudges.add({ specialistId: spec.id, specialistName: spec.name, owner: spec.owner || node.ownerKey || 'root', chatId: ctx.chatId || '', request: String(request || ''), schedule, label }); // INC-2: tag the nudge with the specialist's OWNER so the server-side fire resolves in the right namespace
         return { ok: true, nudgeId: n.id, specialist: spec.name, nextAt: new Date(n.nextAt).toISOString(), recurring: schedule.kind === 'interval', note: `${spec.name} will ${schedule.kind === 'interval' ? `run this every ${Math.round((Number(everyMs)) / 60000)}m` : `run this once at ${new Date(n.nextAt).toLocaleString()}`}, reporting back into this chat.` };
       } });
       toolbox.listSpecialistNudges = harden({ run: async () => ({ ok: true, nudges: specialistNudges.list().map(n => ({ id: n.id, specialist: n.specialistName, request: n.request, recurring: n.schedule.kind === 'interval', nextAt: n.nextAt ? new Date(n.nextAt).toISOString() : null, runs: n.runs, status: n.status })) }) });
@@ -3158,11 +3158,14 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // owner — no live human, so any destructive step just queues as a proposal). The server tick calls this for due
   // nudges, then files the answer as a seed-chat in the nudge's chat + pushes a deep-linked notification.
   const runSpecialistNudge = async nudge => {
-    // INC-2: a standing nudge is fired SERVER-SIDE (not a tenant read), so resolve the referenced specialist
-    // across owners, then run it in ITS OWN namespace — a nudge for a tenant's specialist wakes that specialist,
-    // not a same-slug one belonging to someone else (prefer the swiss the nudge recorded, else id/name).
+    // INC-2: a standing nudge is fired SERVER-SIDE (not a tenant read), so it must resolve its specialist within
+    // the OWNER NAMESPACE the nudge recorded — a nudge for a tenant's specialist wakes THAT specialist, not a
+    // same-slug one belonging to someone else. New nudges carry `owner` (tagged at scheduleSpecialist); resolve
+    // scoped to it (findSpecialist = that owner's roster + shared builtins). Legacy nudges (pre-owner-tag) fall
+    // back to the old cross-owner lookup so they keep firing.
     const anyOwner = ref => { const r = String(ref || ''); return specialists.find(s => s.swiss === r) || specialists.find(s => s.id === r || s.id === specSlug(r) || s.name.toLowerCase() === r.toLowerCase()) || builtinSpecs.find(s => s.id === r || s.name.toLowerCase() === r.toLowerCase()); };
-    const spec = anyOwner(nudge.specialistId) || anyOwner(nudge.specialistName);
+    const resolve = nudge.owner ? ref => findSpecialist(ref, nudge.owner) : anyOwner;
+    const spec = resolve(nudge.specialistId) || resolve(nudge.specialistName);
     if (!spec) return harden({ ok: false, error: 'specialist no longer exists' });
     const caller = (spec.owner && spec.owner !== 'root') ? { ...rootNode, ownerKey: spec.owner } : rootNode;
     try { return harden(await makeAskSpecialist('', caller).run({ name: spec.id, request: nudge.request })); }

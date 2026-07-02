@@ -65,3 +65,11 @@ test('no cap/secret is ever stored in a nudge record', () => {
   const n = s.add({ specialistId: 'spec1', specialistName: 'X', request: 'r', schedule: { kind: 'interval', everyMs: 3_600_000 } });
   assert.ok(!/cap|swiss|secret|token/i.test(JSON.stringify(n)));
 });
+
+test('INC-2: a nudge records its specialist OWNER namespace (defaults to root when omitted)', () => {
+  const { s } = mk();
+  const tagged = s.add({ specialistId: 'spec1', specialistName: 'X', owner: 'u:beefcafe', request: 'r', schedule: { kind: 'once', afterMs: 0 } });
+  assert.equal(tagged.owner, 'u:beefcafe', 'the provided owner is persisted so a server-side fire resolves in the right namespace');
+  const legacy = s.add({ specialistId: 'spec2', specialistName: 'Y', request: 'r', schedule: { kind: 'once', afterMs: 0 } });
+  assert.equal(legacy.owner, 'root', 'an omitted owner defaults to root (user-0 / back-compat)');
+});
