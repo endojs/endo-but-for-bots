@@ -1,0 +1,67 @@
+{
+  "turn": 1,
+  "status": "done",
+  "rev": 22,
+  "truncated": false,
+  "steps": [
+    {
+      "i": 0,
+      "name": "plan",
+      "status": "done",
+      "ok": true,
+      "detail": "find meeting status, then draft reminder"
+    },
+    {
+      "i": 1,
+      "name": "web.search",
+      "status": "done",
+      "ok": true,
+      "call": "\"Millbrook council\" agenda Thursday",
+      "result": "3 hits: council.gov/agenda-2214, patch.com/millbrook-council, cached patch.com/millbrook-council"
+    },
+    {
+      "i": 2,
+      "name": "web.fetch",
+      "status": "done",
+      "ok": false,
+      "call": "council.gov/agenda-2214",
+      "result": "ERR 503 upstream — empty body"
+    },
+    {
+      "i": 3,
+      "name": "web.fetch",
+      "status": "done",
+      "ok": true,
+      "call": "patch.com/millbrook-council",
+      "result": "meeting MOVED to Friday 7pm, agenda #2214"
+    },
+    {
+      "i": 4,
+      "name": "delegate:verify",
+      "status": "done",
+      "ok": true,
+      "call": "confirm agenda #2214 date",
+      "detail": "cross-check date",
+      "children": [
+        {
+          "name": "reader",
+          "detail": "confirms Friday per patch + calendar cache"
+        }
+      ],
+      "result": "CONFIRMED: Friday, not Thursday, agenda #2214"
+    },
+    {
+      "i": 5,
+      "name": "answer",
+      "status": "done",
+      "ok": true,
+      "call": "draft reminder for agenda #2214",
+      "result": "Meeting moved to Friday 7pm — reminder ready to send",
+      "granted": [
+        "email-send",
+        "contacts"
+      ]
+    }
+  ],
+  "nodes": []
+}
