@@ -44,12 +44,30 @@ export const providerOf = (model = 'default') => {
 };
 harden(providerOf);
 
+// Test-only rate override (NEVER set in production). `FIELD_TEST_RATE_OVERRIDES` is a JSON
+// map of accounting-key (e.g. "gemma-tinix") → [inPerTok, outPerTok] in µUSD/tok. It lets an
+// ISOLATED staging test PRICE the otherwise-free local model so it can prove the metering +
+// allowance-conservation spine end-to-end WITHOUT a real paid-API round-trip. Parsed once at
+// load; production leaves it unset so gemma stays genuinely free (P1-9).
+const RATE_OVERRIDES = (() => {
+  try {
+    const raw = (typeof process !== 'undefined' && process.env && process.env.FIELD_TEST_RATE_OVERRIDES) || '';
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    return o && typeof o === 'object' ? o : null;
+  } catch {
+    return null;
+  }
+})();
+
 // [in, out] µUSD/token for a model id. Unknown ids fall back to a NON-ZERO rate so an
 // unrecognised paid model is never silently billed as free.
 export const rateFor = (model = 'default') => {
   const m = String(model || 'default');
+  const key = providerOf(m); // accounting key: 'gemma-tinix' | 'anthropic:…' | 'openrouter:…'
+  if (RATE_OVERRIDES && Array.isArray(RATE_OVERRIDES[key])) return RATE_OVERRIDES[key];
   if (m.startsWith('openrouter:')) return OPENROUTER_RATES[m.slice('openrouter:'.length)] || [1, 3];
-  const p = providerOf(m);
+  const p = key;
   if (RATES[p]) return RATES[p];
   return p.startsWith('anthropic:') ? [5, 25] : [0, 0]; // unknown anthropic → opus-priced; unknown local → free (gemma)
 };

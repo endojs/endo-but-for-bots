@@ -13,6 +13,7 @@
 // Step 3 performs real (local-model) inference — the box's default LLM must be reachable.
 //
 // Run: npm run test:user-agency   (in packages/chat/voice-agent)
+import '@endo/init'; // SES: gives `harden` for the direct costModel import below (first, so it runs before it)
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -20,7 +21,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { costOf, rateFor } from './costModel.mjs';
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+// Test-only cost seam: price the (production-free) local model so the real /chat turns below
+// DEBIT the funded wallet — proving the metering + allowance-CONSERVATION spine end-to-end with
+// deterministic local inference (no paid-API round-trip). Production leaves this unset (P1-9).
+const TEST_RATE_OVERRIDES = JSON.stringify({ 'gemma-tinix': [1, 4] });
 const PORT = 8797;
 const BASE = `http://127.0.0.1:${PORT}`;
 const WALLET_SEED = 500_000;   // the owner's invite wallet, $0.50 — small so conservation is visible
@@ -46,6 +53,7 @@ const post = async (p, body) => { const r = await fetch(`${BASE}${p}`, { method:
       VOICE_STATE_DIR: path.join(tmp, 'voice-state'), DELEGATION_STORE: path.join(tmp, 'delegations.json'),
       PROJECTS_STORE: path.join(tmp, 'projects.json'), MEMO_RUNS_FILE: path.join(tmp, 'memo.json'),
       ROOT_WALLET_UUSD: String(WALLET_SEED),
+      FIELD_TEST_RATE_OVERRIDES: TEST_RATE_OVERRIDES,
       BLUESKY_NS_WALLET_UUSD: String(NS_SEED), BSKY_CLAIMS_FILE: path.join(tmp, 'bluesky-claims.json') },
     stdio: ['ignore', 'ignore', 'inherit'],
   });
@@ -54,6 +62,12 @@ const post = async (p, body) => { const r = await fetch(`${BASE}${p}`, { method:
   if (!up) die('isolated server did not boot');
   ok(up, 'isolated server booted');
   const root = fs.readFileSync(path.join(tmp, 'root.swiss'), 'utf8').trim();
+
+  // ── P1-9 invariant: in PRODUCTION the local model is genuinely FREE. This runs in the test's
+  // own process (no FIELD_TEST_RATE_OVERRIDES here — only the server child got it), so it reads
+  // the real rate table. The metered turns below run against the priced child seam. ──
+  ok(rateFor('default')[0] === 0 && rateFor('default')[1] === 0, 'local gemma is priced [0,0] by default (P1-9: free local model)');
+  ok(costOf('default', { prompt_tokens: 2000, completion_tokens: 2000 }) === 0, 'a free-model turn debits nothing by default (0 µUSD)');
 
   // ── 2. the owner's invite wallet is root-gated + seeded ──
   const w0 = await post('/wallet/status', { cap: root });
@@ -90,7 +104,7 @@ const post = async (p, body) => { const r = await fetch(`${BASE}${p}`, { method:
   const turn = await post('/chat', { cap: member, sessionId: 'chat-one', text: 'Reply with just the word: pong', model: 'default' });
   ok(turn.status === 200 && !turn.body.error && !turn.body.exhausted, `member turn ran (answer: ${JSON.stringify(String(turn.body.answer || '').slice(0, 40))})`);
   const b3 = await post('/budget', { cap: member, sessionId: 'chat-one' });
-  ok(b3.body.remaining < ALLOWANCE, `the turn DEBITED the invite-funded wallet (${ALLOWANCE} → ${b3.body.remaining} µUSD)`);
+  ok(b3.body.remaining < ALLOWANCE, `the (priced-seam) turn DEBITED the invite-funded wallet (${ALLOWANCE} → ${b3.body.remaining} µUSD)`);
   ok(b3.body.allowance === ALLOWANCE, `wallet's total-granted still shows the invite's allowance (${b3.body.allowance})`);
   const w2 = await post('/wallet/status', { cap: root });
   ok(w2.body.remaining === WALLET_SEED - ALLOWANCE, 'member spend came from the MEMBER wallet — owner wallet untouched (conserved)');
@@ -141,7 +155,7 @@ const post = async (p, body) => { const r = await fetch(`${BASE}${p}`, { method:
   const nturn = await post('/chat', { cap: nsub.body.scopedCap, sessionId: 'ns-sub-one', text: 'Reply with just the word: pong', model: 'default' });
   ok(nturn.status === 200 && !nturn.body.error && !nturn.body.exhausted, `namespace child turn ran (answer: ${JSON.stringify(String(nturn.body.answer || '').slice(0, 40))})`);
   const nbp = await post('/budget', { cap: nsCap, sessionId: 'ns-chat-one' });
-  ok(nbp.body.remaining < 70_000, `the child's charge DEBITED the shared namespace wallet (70000 → ${nbp.body.remaining} µUSD, read via the PARENT cap)`);
+  ok(nbp.body.remaining < 70_000, `the child's (priced-seam) charge DEBITED the shared namespace wallet (70000 → ${nbp.body.remaining} µUSD, read via the PARENT cap)`);
   ok((await post('/wallet/status', { cap: root })).body.remaining === wAfter, 'and wallet:root stayed untouched — the spend came from the namespace pot');
 
   cleanup();
