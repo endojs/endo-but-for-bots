@@ -20,13 +20,13 @@
   },
   "dependencies": {
     "@eslint-community/eslint-utils": "^4.7.0",
-    "@typescript-eslint/eslint-plugin": "8.59.2",
-    "@typescript-eslint/parser": "8.59.2",
-    "@typescript-eslint/utils": "8.59.2",
+    "@typescript-eslint/eslint-plugin": "8.62.0",
+    "@typescript-eslint/parser": "8.62.0",
+    "@typescript-eslint/utils": "8.62.0",
     "requireindex": "~1.2.0",
     "tsutils": "~3.21.0",
     "typescript": "catalog:dev",
-    "typescript-eslint": "8.59.2"
+    "typescript-eslint": "8.62.0"
   },
   "peerDependencies": {
     "eslint-plugin-unicorn": "^56.0.1"
