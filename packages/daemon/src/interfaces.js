@@ -117,13 +117,36 @@ export const DismisserInterface = M.interface('EndoDismisser', {
   dismiss: M.call().returns(M.promise()),
 });
 
-// CRITICAL: HandleInterface must use defaultGuards: 'passable' to preserve
-// envelope object identity when passed through E() calls. Explicit guards
-// like M.remotable('Envelope') cause envelope identity loss and "mail fraud"
-// errors.
+// Shape of a single epithet entry as exposed by Handle.epithets().
+// `principal` is a remote Handle reference (resolved at read time from
+// the persisted formula identifier).  See designs/daemon-capability-persona.md.
+export const EpithetShape = M.splitRecord({
+  relationship: M.string(),
+  principal: M.remotable('Handle'),
+});
+
+// HandleInterface uses defaultGuards: 'passable' so that the envelope-
+// carrying methods (`receive`, `open`) preserve envelope object identity
+// when passed through E() calls; explicit guards like
+// M.remotable('Envelope') on those methods cause envelope identity loss
+// and "mail fraud" errors, so they are intentionally unlisted and inherit
+// the passable default. The persona methods (`epithets`, `verify`) do
+// not carry envelopes, so they declare explicit guards on top of the
+// passable default: their argument and return shapes are well-defined
+// and benefit from boundary checking.
 export const HandleInterface = M.interface(
   'EndoHandle',
-  {},
+  {
+    // Read this Handle's epithet chain (most-recent first).
+    // `callWhen` awaits the implementation's returned promise so the
+    // `EpithetShape` array shape is checked at the boundary against
+    // the resolved value, not the promise wrapper.
+    epithets: M.callWhen().returns(M.arrayOf(EpithetShape)),
+    // Confirm or deny that the given subordinate Handle stands in the
+    // named relationship to this Handle. Returns false if the subordinate
+    // has no matching epithet whose principal is this Handle.
+    verify: M.callWhen(M.remotable('Handle'), M.string()).returns(M.boolean()),
+  },
   { defaultGuards: 'passable' },
 );
 

@@ -68,15 +68,20 @@ const assertPowersNameOrPath = nameOrPath => {
 /**
  * Normalizes host or guest options, providing default values.
  * @param {MakeHostOrGuestOptions | undefined} opts
- * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath }}
+ * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, epithets?: ReadonlyArray<{ relationship: string }> }}
  */
 const normalizeHostOrGuestOptions = opts => {
   const agentName = /** @type {NameOrPath | undefined} */ (opts?.agentName);
+  const epithets =
+    /** @type {ReadonlyArray<{ relationship: string }> | undefined} */ (
+      opts?.epithets
+    );
   return {
     introducedNames: /** @type {Record<Name, PetName>} */ (
       opts?.introducedNames ?? Object.create(null)
     ),
     ...(agentName !== undefined && { agentName }),
+    ...(epithets !== undefined && epithets.length > 0 && { epithets }),
   };
 };
 
@@ -1180,7 +1185,11 @@ export const makeHostMaker = ({
      */
     const makeChildHost = async (
       petName,
-      { introducedNames = Object.create(null), agentName = undefined } = {},
+      {
+        introducedNames = Object.create(null),
+        agentName = undefined,
+        epithets = undefined,
+      } = {},
     ) => {
       let host = await getNamedAgent(petName, 'host');
       if (host === undefined) {
@@ -1189,6 +1198,28 @@ export const makeHostMaker = ({
           : petName
             ? `host:${petName}`
             : 'host';
+
+        // Compose the composite persona chain: new epithets stamped with
+        // this host's handle as principal, prepended to this host's own
+        // inherited chain. See `designs/daemon-capability-persona.md`
+        // § Recursive epithet chains and `makeGuest` (above) for the same
+        // composition.
+        /** @type {ReadonlyArray<import('./types.js').Epithet> | undefined} */
+        let compositeEpithets;
+        if (epithets !== undefined && epithets.length > 0) {
+          const ownFormula = /** @type {import('./types.js').HandleFormula} */ (
+            await getFormulaForId(handleId)
+          );
+          const ownChain = ownFormula.epithets ?? [];
+          const newEpithets = epithets.map(({ relationship }) =>
+            harden({
+              relationship,
+              principal: /** @type {FormulaIdentifier} */ (handleId),
+            }),
+          );
+          compositeEpithets = harden([...newEpithets, ...ownChain]);
+        }
+
         const { value, id } =
           // Behold, recursion:
           await formulateHost(
@@ -1202,6 +1233,7 @@ export const makeHostMaker = ({
             undefined,
             handleId,
             hostLabel,
+            compositeEpithets,
           );
         host = { value: Promise.resolve(value), id };
       }
@@ -1237,7 +1269,11 @@ export const makeHostMaker = ({
      */
     const makeGuest = async (
       handleName,
-      { introducedNames = Object.create(null), agentName = undefined } = {},
+      {
+        introducedNames = Object.create(null),
+        agentName = undefined,
+        epithets = undefined,
+      } = {},
     ) => {
       let guest = await getNamedAgent(handleName, 'guest');
       if (guest === undefined) {
@@ -1246,6 +1282,29 @@ export const makeHostMaker = ({
           : handleName
             ? `guest:${handleName}`
             : 'guest';
+
+        // Compose the composite epithet chain: prepend each new epithet
+        // (which the daemon stamps with this host's handle as principal)
+        // to this host's own inherited chain. The result reads
+        // most-recent-first: caller's new epithets, then this host's
+        // chain. See designs/daemon-capability-persona.md § Recursive
+        // epithet chains.
+        /** @type {ReadonlyArray<import('./types.js').Epithet> | undefined} */
+        let compositeEpithets;
+        if (epithets !== undefined && epithets.length > 0) {
+          const ownFormula = /** @type {import('./types.js').HandleFormula} */ (
+            await getFormulaForId(handleId)
+          );
+          const ownChain = ownFormula.epithets ?? [];
+          const newEpithets = epithets.map(({ relationship }) =>
+            harden({
+              relationship,
+              principal: /** @type {FormulaIdentifier} */ (handleId),
+            }),
+          );
+          compositeEpithets = harden([...newEpithets, ...ownChain]);
+        }
+
         const { value, id } =
           // Behold, recursion:
           await formulateGuest(
@@ -1256,6 +1315,7 @@ export const makeHostMaker = ({
               /** @type {NameOrPath | undefined} */ (agentName),
             ),
             guestLabel,
+            compositeEpithets,
           );
         guest = { value: Promise.resolve(value), id };
       }

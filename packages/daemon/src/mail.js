@@ -1621,11 +1621,100 @@ export const makeMailboxMaker = ({
       return harden(externalized);
     };
 
+    // Persona surface: read the epithet chain off this handle's formula
+    // and answer verification queries about subordinate handles whose
+    // chains claim this handle as their principal. See
+    // designs/daemon-capability-persona.md.
+    //
+    // The chain is persisted as formula identifiers; we resolve each
+    // principal to a remote Handle reference at read time so callers
+    // can verify each link by E()-sending to the principal.
+
+    /**
+     * @returns {Promise<ReadonlyArray<{ relationship: string, principal: Handle }>>}
+     */
+    const epithets = async () => {
+      const ownFormula =
+        /** @type {import('./types.js').HandleFormula | undefined} */ (
+          await getFormulaForId(selfId).catch(error => {
+            // Treat a missing formula (ReferenceError from
+            // daemon-database.js readFormula) as an empty chain: the
+            // handle predates the persona feature, so its formula
+            // legitimately omits the field. Re-throw any other error
+            // (corrupt JSON, IO failure) rather than silently
+            // failing-open to an empty chain.
+            if (error instanceof ReferenceError) {
+              return undefined;
+            }
+            throw error;
+          })
+        );
+      const chain = ownFormula?.epithets ?? [];
+      const resolved = await Promise.all(
+        chain.map(async ({ relationship, principal }) => {
+          const principalHandle = /** @type {Handle} */ (
+            await provide(principal, 'handle')
+          );
+          return harden({ relationship, principal: principalHandle });
+        }),
+      );
+      return harden(resolved);
+    };
+
+    /**
+     * Confirm whether a subordinate handle's most-recent epithet names
+     * *this* handle as its principal under the given relationship.
+     *
+     * The verifier reads the subordinate's own epithets (a public read)
+     * and checks pass-invariant equality between the subordinate's
+     * top-link principal and this handle. Equality holds because the
+     * daemon caches handle exos by formula id (`provide(id, 'handle')`
+     * returns the same exo), and this verifier's own `handle` exo is
+     * exactly the cached exo for `selfId`.
+     *
+     * Restrictions:
+     * - **Local-node only.** Pass-invariant Handle identity is provided
+     *   by the local daemon's exo cache; a Handle that arrives over
+     *   OCapN as a remote presence is a different object from any local
+     *   exo. The `===` check therefore returns `false` even on a
+     *   truthful claim when the verifier's cached exo and the
+     *   subordinate's top-link principal cross a node boundary.
+     *   Cross-node verification is open follow-up work (see
+     *   designs/daemon-capability-persona.md § Open Questions).
+     * - **Top link only.** This default policy checks only that the
+     *   subordinate's most-recent epithet names this handle as
+     *   principal. Walking the full chain (verifying each inherited
+     *   link against its respective principal) is the caller's
+     *   responsibility: read the chain via `E(handle).epithets()` and
+     *   invoke `verify` on each principal in turn.
+     *
+     * @param {Handle} subordinateHandle
+     * @param {string} relationship
+     * @returns {Promise<boolean>}
+     */
+    const verify = async (subordinateHandle, relationship) => {
+      const subordinateChain =
+        /** @type {ReadonlyArray<{ relationship: string, principal: Handle }>} */ (
+          await E(subordinateHandle).epithets()
+        );
+      if (subordinateChain.length === 0) {
+        return false;
+      }
+      const [topLink] = subordinateChain;
+      if (topLink.relationship !== relationship) {
+        return false;
+      }
+      // eslint-disable-next-line no-use-before-define
+      return topLink.principal === handle;
+    };
+
     const handle = makeExo('Handle', HandleInterface, {
       receive,
       open,
       receiveEdit,
       openEdit,
+      epithets,
+      verify,
     });
 
     await loadMailboxState();

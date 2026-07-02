@@ -6748,3 +6748,324 @@ test('readLog follow discovers new logs and settles on disconnect', async t => {
   cancel(Error('readLog follow new-log test done'));
   t.is(await pending, 'settled');
 });
+
+// --- daemon-capability-persona ---
+// designs/daemon-capability-persona.md: a Handle carries a persona chain
+// of `{ relationship, principal }` epithets stamped at creation time by
+// the creating agent. The chain is immutable to the holder, additive
+// only through delegation, and verifiable by asking each principal in
+// the chain.
+
+test('persona: handle without epithets returns an empty chain', async t => {
+  const { host } = await prepareHost(t);
+
+  const hostHandle = await E(host).lookup('@self');
+  const chain = await E(hostHandle).epithets();
+  t.deepEqual([...chain], [], 'top-level host carries no inherited claims');
+});
+
+test('persona: creating a guest with epithets stores the chain', async t => {
+  const { host } = await prepareHost(t);
+
+  const aifred = await E(host).provideGuest('aifred', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  const aifredHandle = await E(aifred).lookup('@self');
+  const chain = await E(aifredHandle).epithets();
+
+  t.is(chain.length, 1, 'one inherited epithet');
+  t.is(chain[0].relationship, 'assistant', 'relationship preserved');
+});
+
+test('persona: epithet principal equals the creating handle', async t => {
+  const { host } = await prepareHost(t);
+
+  const hostHandle = await E(host).lookup('@self');
+  const aifred = await E(host).provideGuest('aifred', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  const aifredHandle = await E(aifred).lookup('@self');
+  const chain = await E(aifredHandle).epithets();
+
+  // Pass-invariant Handle equality: the principal returned by the
+  // chain is the same exo as the host's @self handle, because the
+  // daemon caches handle exos by formula id.
+  t.is(
+    chain[0].principal,
+    hostHandle,
+    'principal is the same Handle as the creator',
+  );
+});
+
+test('persona: verify confirms a valid relationship', async t => {
+  const { host } = await prepareHost(t);
+
+  const hostHandle = await E(host).lookup('@self');
+  const aifred = await E(host).provideGuest('aifred', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  const aifredHandle = await E(aifred).lookup('@self');
+
+  const confirmed = await E(hostHandle).verify(aifredHandle, 'assistant');
+  t.true(confirmed, 'creator confirms its own delegation');
+});
+
+test('persona: verify denies a wrong relationship name', async t => {
+  const { host } = await prepareHost(t);
+
+  const hostHandle = await E(host).lookup('@self');
+  const aifred = await E(host).provideGuest('aifred', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  const aifredHandle = await E(aifred).lookup('@self');
+
+  const wrongRelationship = await E(hostHandle).verify(
+    aifredHandle,
+    'majordomo',
+  );
+  t.false(wrongRelationship, 'creator denies a relationship it did not stamp');
+});
+
+test('persona: verify denies when asked of the wrong principal', async t => {
+  const { host } = await prepareHost(t);
+
+  // Create two siblings of the same host. The host stamped both with the
+  // relationship 'assistant'; their principals point at the host, not at
+  // each other.
+  const aifred = await E(host).provideGuest('aifred', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  const bertie = await E(host).provideGuest('bertie', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  const aifredHandle = await E(aifred).lookup('@self');
+  const bertieHandle = await E(bertie).lookup('@self');
+
+  // Bertie is not Aifred's principal, so Bertie's verify must say no
+  // even though the relationship name matches.
+  const verdict = await E(bertieHandle).verify(aifredHandle, 'assistant');
+  t.false(
+    verdict,
+    'a non-principal handle denies a relationship it did not stamp',
+  );
+});
+
+test('persona: verify denies when the subordinate carries no epithets', async t => {
+  const { host } = await prepareHost(t);
+
+  const hostHandle = await E(host).lookup('@self');
+  // A plain guest with no persona chain.
+  const plain = await E(host).provideGuest('plain');
+  const plainHandle = await E(plain).lookup('@self');
+
+  const verdict = await E(hostHandle).verify(plainHandle, 'assistant');
+  t.false(verdict, 'a chainless subordinate cannot be verified');
+});
+
+test('persona: chains propagate recursively through delegated provideHost + provideGuest', async t => {
+  const { host } = await prepareHost(t);
+
+  const hostHandle = await E(host).lookup('@self');
+
+  // Host (Alice) creates Aifred as her assistant. Aifred is a child
+  // host (not a guest) so it can in turn provideGuest a sub-delegate.
+  const aifred = await E(host).provideHost('aifred', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  const aifredHandle = await E(aifred).lookup('@self');
+
+  // Aifred creates Jarvis as Aifred's majordomo. The daemon prepends
+  // Aifred's inherited chain so Jarvis carries both links.
+  const jarvis = await E(aifred).provideGuest('jarvis', {
+    epithets: [{ relationship: 'majordomo' }],
+  });
+  const jarvisHandle = await E(jarvis).lookup('@self');
+
+  const chain = await E(jarvisHandle).epithets();
+  t.is(
+    chain.length,
+    2,
+    'composite chain has the new link plus the inherited one',
+  );
+  t.is(chain[0].relationship, 'majordomo', 'newest link first');
+  t.is(chain[1].relationship, 'assistant', 'inherited link follows');
+  t.is(
+    chain[0].principal,
+    aifredHandle,
+    "Jarvis's top-link principal is Aifred",
+  );
+  t.is(
+    chain[1].principal,
+    hostHandle,
+    "the inherited link's principal is the original creator (Alice)",
+  );
+
+  // Each link verifies against its respective principal.
+  t.true(
+    await E(aifredHandle).verify(jarvisHandle, 'majordomo'),
+    'Aifred confirms Jarvis as majordomo',
+  );
+  t.true(
+    await E(hostHandle).verify(aifredHandle, 'assistant'),
+    'Alice confirms Aifred as assistant',
+  );
+});
+
+test('persona: epithet principals survive intermediate-agent removal under GC', async t => {
+  // Regression for the formula-graph dep gap on the `handle` formula:
+  // `extractLabeledDeps`'s `case 'handle'` must list `epithets[*].principal`
+  // as dependencies so the formula GC graph treats principals named only
+  // through a downstream delegate's epithet chain as reachable. The bug
+  // (missing dep edges) lets the GC sweep collect a principal whose
+  // sole inbound reference is a deeper handle's persona chain; the
+  // deeper handle's `epithets()` call then fails because
+  // `provide(principal, 'handle')` cannot resolve a deleted formula.
+  //
+  // In a single-node chain like the one below, the standard `hostHandle`
+  // / `hostAgent` deps on `host` and `guest` formulas already retain the
+  // immediate ancestor; the bug surfaces in scenarios where those deps
+  // are not present (e.g. cross-node principals, or after future
+  // refactors that detach the agency lineage from the epithet lineage).
+  // This test asserts the structural invariant the dep edges provide:
+  // after dropping the intermediate agent's pet name and letting the GC
+  // sweep run, the deeper handle's chain still resolves end-to-end and
+  // each principal remains a live, queryable Handle.
+  // See designs/daemon-capability-persona.md § Recursive epithet chains.
+  const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+  const { host } = await makeHost(config, cancelled);
+
+  const hostHandle = await E(host).lookup('@self');
+
+  // Build the Alice -> Aifred -> Jarvis chain.
+  const aifred = await E(host).provideHost('aifred', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  await E(aifred).provideGuest('jarvis', {
+    epithets: [{ relationship: 'majordomo' }],
+  });
+
+  const aifredHandleId = await E(host).identify('aifred');
+  const jarvisHandleId = await E(aifred).identify('jarvis');
+
+  // Give Jarvis an independent reference path in the top host's pet
+  // store so the test can observe Jarvis after Aifred is dropped from
+  // the host's pet names.
+  await E(host).storeIdentifier(['jarvis-pin'], jarvisHandleId);
+
+  // Drop Aifred's pet-store edge from the top host. The structural
+  // claim the fix codifies is that the persona chain on Jarvis's
+  // handle counts as a graph-level reference to Aifred's handle.
+  await E(host).remove('aifred');
+
+  // Yield to let the GC sweep settle, then assert both handles are
+  // still on disk.
+  await waitForCondition(async () => {
+    return (
+      formulaExistsInDb(config.statePath, jarvisHandleId) &&
+      formulaExistsInDb(config.statePath, aifredHandleId)
+    );
+  });
+  t.true(
+    formulaExistsInDb(config.statePath, jarvisHandleId),
+    "Jarvis's handle formula is retained by the pet-store pin",
+  );
+  t.true(
+    formulaExistsInDb(config.statePath, aifredHandleId),
+    "Aifred's handle formula is retained (epithet dep edge is the " +
+      'structural guarantee even when other deps coincidentally retain it)',
+  );
+
+  // The behavioural surface: resolving Jarvis's persona chain still
+  // returns both principals as live Handle references.
+  const jarvisHandle = await E(host).lookup(['jarvis-pin']);
+  const chain = await E(jarvisHandle).epithets();
+  t.is(chain.length, 2, 'chain length preserved across GC');
+  t.is(chain[0].relationship, 'majordomo', 'newest link preserved');
+  t.is(chain[1].relationship, 'assistant', 'inherited link preserved');
+  t.is(
+    chain[1].principal,
+    hostHandle,
+    "the inherited link's principal is still the live top-host handle",
+  );
+  // Verify Aifred's handle is still a live exo by exercising its
+  // verify() method; the call would fail if the underlying handle
+  // formula had been collected.
+  t.true(
+    await E(chain[0].principal).verify(jarvisHandle, 'majordomo'),
+    "Aifred's handle is still live and verifies its own delegation",
+  );
+});
+
+test('persona: handle formulas predating the feature load with an empty chain', async t => {
+  // Backward-compatibility regression: a `handle` formula written
+  // before the persona feature existed lacks the `epithets` field
+  // entirely. The Handle exo's `epithets()` must report an empty
+  // chain in that case rather than throwing or surfacing internal
+  // shape errors. We simulate the pre-feature on-disk shape by
+  // creating a guest with epithets, stopping the daemon, rewriting
+  // its handle formula to drop the field, and restarting.
+  const { cancelled, config, host } = await prepareHost(t);
+
+  const aifred = await E(host).provideGuest('aifred', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  const aifredHandleId = await E(aifred).identify('@self');
+
+  await stop(config);
+
+  const db = openTestDb(config.statePath);
+  const { number: handleNumber } = parseId(aifredHandleId);
+  const { node, formula } = db.readFormula(handleNumber);
+  // Strip the field to match the pre-PR-#306 shape.
+  const { epithets: _stripped, ...preFeatureFormula } = formula;
+  t.false(
+    'epithets' in preFeatureFormula,
+    'precondition: rewritten formula has no epithets field',
+  );
+  db.writeFormula(handleNumber, node, preFeatureFormula);
+  db.close();
+
+  await restart(config);
+
+  const { host: hostAfter } = await makeHost(config, cancelled);
+  // Resolve the pet name 'aifred' (a Handle in the host's pet store)
+  // and read its epithet chain. The Handle now points at a formula
+  // shaped like a pre-PR-#306 handle (no `epithets` field), so the
+  // implementation's fallback path must produce an empty chain.
+  const aifredHandleAfter = await E(hostAfter).lookup('aifred');
+  const chain = await E(aifredHandleAfter).epithets();
+  t.deepEqual(
+    [...chain],
+    [],
+    'a handle formula without the epithets field reports an empty chain',
+  );
+});
+
+test('persona: verify of self denies (a handle is not its own subordinate)', async t => {
+  // Calling `verify(myself, ...)` on my own handle must return
+  // false: my own handle's top-link principal is whoever created
+  // me, not myself, so the equality check at the top link fails.
+  // For the top-level host, the chain is empty, which is also a
+  // deny case by the chain-length-zero path.
+  const { host } = await prepareHost(t);
+
+  const hostHandle = await E(host).lookup('@self');
+  const selfVerdict = await E(hostHandle).verify(hostHandle, 'assistant');
+  t.false(selfVerdict, 'top-level host denies a self-verify (empty chain)');
+
+  // Same property holds for a delegated handle: Aifred's top-link
+  // principal is the host, not Aifred, so Aifred verifying itself
+  // also denies.
+  const aifred = await E(host).provideGuest('aifred', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  const aifredHandle = await E(aifred).lookup('@self');
+  const aifredSelfVerdict = await E(aifredHandle).verify(
+    aifredHandle,
+    'assistant',
+  );
+  t.false(
+    aifredSelfVerdict,
+    'a delegated handle denies a self-verify (top-link principal is the creator, not self)',
+  );
+});
