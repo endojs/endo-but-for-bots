@@ -31,6 +31,10 @@ const jpost = (p, b) => fetch(`${BASE}${p}`, { method: 'POST', headers: { 'conte
   srv = spawn('node', ['server.mjs'], {
     cwd: __dirname,
     env: { ...process.env, PORT: String(PORT), BIND: '127.0.0.1', PRINT_ROOT_CAP: '1', FIELD_LOCKDOWN: '1',
+      // Pin PUBLIC_BASE_URL to the loopback origin the browser actually loads: the default (tailnet IP) makes
+      // a boot-time resource load cross-origin and ABORT, wedging the client at "connecting…" (tab-components
+      // never un-hides). Same-origin here → boot completes deterministically. (Pre-existing flake, not the SUT.)
+      PUBLIC_BASE_URL: BASE,
       SEED_FILE: path.join(tmp, 'root.swiss'), OUT_DIR: path.join(tmp, 'out'),
       VOICE_STATE_DIR: path.join(tmp, 'voice-state'), DASH_STATE_DIR: path.join(tmp, 'dash-state'),
       COMPONENT_GIT_DIR: path.join(tmp, 'component-git'), BACKLOG_STORE: path.join(tmp, 'component-backlog.json'),
@@ -108,6 +112,19 @@ const jpost = (p, b) => fetch(`${BASE}${p}`, { method: 'POST', headers: { 'conte
   const srev = await jpost('/components/revert', { cap: rootCap, id: 'chrome-studio', version: s0.version });
   ok(srev.ok === true, 'chrome-studio reverts to the seed order (non-destructive)');
   ok(/\['pending', 'admitted', 'chrome', 'islands'\]/.test(studioOf(await jget('/chrome/components')).source), 'after revert the served SECTION_ORDER is the seed order again (HEAD moved back, history kept)');
+
+  // ── 4c. chrome-studio SORT + FOLD contract lives in the seed source (dan 2026-07-02) ────────────
+  //   most-recent(proxy)-first + fold the long tail, needs-review pinned+unfolded, + the increment-2 note.
+  const s0src = s0.source;
+  ok(/byRecent/.test(s0src) && /versions\.length/.test(s0src), 'chrome-studio sorts sections by a byRecent() recency proxy (versions.length — the only per-item activity signal in props)');
+  ok(/FOLD_AT/.test(s0src) && /show '\s*\+\s*rest\s*\+\s*' more/.test(s0src) && /endowments\.useState/.test(s0src), 'chrome-studio folds the long tail behind a useState "show N more" toggle');
+  ok(/NEVER (?:sorted-away or )?folded/.test(s0src) && /pending: \(\) =>/.test(s0src), 'needs-review (pending) is pinned top + exempt from the fold in the source');
+  ok(/INCREMENT-2 FOLLOW-UP/.test(s0src) && /usageCount/.test(s0src) && /updatedAt/.test(s0src), 'the increment-2 gap (per-component usageCount + updatedAt need a store/props addition) is documented in the source header');
+  // it still compiles + passes the render-check gate: an exact re-commit of the seed source is accepted
+  // (a broken source would be REFUSED — proven for the throwing case in §4b above).
+  const sReedit = await jpost('/components/edit', { cap: rootCap, id: 'chrome-studio', source: s0src });
+  ok(sReedit.ok === true, 'the sort+fold seed source passes the real render-check gate (an exact re-commit is accepted)');
+  await jpost('/components/revert', { cap: rootCap, id: 'chrome-studio', version: s0.version }); // back to seed HEAD
 
   // ── browser half ────────────────────────────────────────────────────────────────────────────────
   let chromium = null;
@@ -406,6 +423,59 @@ const jpost = (p, b) => fetch(`${BASE}${p}`, { method: 'POST', headers: { 'conte
     const sItem = (sbl.items || []).find(i => i.kind === 'error' && /chrome component failed/.test(i.title));
     ok(!!sItem, `the chrome-studio mount failure auto-filed onto its OWN backlog ("${sItem && sItem.title.slice(0, 50)}…")`);
     await page4.close();
+
+    // ── 15. SORT + FOLD (dan 2026-07-02): recency(proxy)-sorted sections, a long-tail fold, needs-review
+    //   pinned + NEVER folded. Fresh page with routed data: 8 pending + 9 admitted; one admitted item (a8)
+    //   carries extra versions so byRecent (versions.length proxy) floats it to the TOP. Real chrome-studio
+    //   source (we DON'T route /chrome/components) renders it. ──
+    const page5 = await browser.newPage({ viewport: { width: 1100, height: 900 } });
+    const p5errs = []; page5.on('pageerror', e => p5errs.push(e.message));
+    const pend5 = []; for (let i = 0; i < 8; i++) pend5.push({ id: 'p' + i, status: 'pending', name: 'pending' + i, proposedBy: 'agent-x', review: { worst: 'none', findings: [{ discipline: 'safety', severity: 'none' }] }, code: 'const x=1;' });
+    const adm5 = []; for (let i = 0; i < 9; i++) adm5.push({ id: 'a' + i, status: 'admitted', name: 'tool' + i, kind: 'instance' });
+    await page5.route('**/tools/review', r => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, tools: [...pend5, ...adm5] }) }));
+    // per-id history: a8 has 5 versions (most-edited → recency-proxy top); everyone else 1.
+    await page5.route('**/components/history', r => { let id = ''; try { id = JSON.parse(r.request().postData() || '{}').id; } catch {} const n = id === 'a8' ? 5 : 1; const versions = []; for (let k = 0; k < n; k++) versions.push({ version: 'v' + id + k, summary: 's' }); r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, versions, grains: {} }) }); });
+    await page5.route('**/components/islands', r => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, islands: [] }) }));
+    await page5.addInitScript(c => { try { localStorage.setItem('field-agent-cap', c); } catch {} }, rootCap);
+    await page5.goto(`${BASE}/`, { waitUntil: 'load' });
+    await page5.waitForTimeout(1500);
+    await page5.evaluate(() => { const t = document.getElementById('tab-components'); if (t) t.click(); });
+    await page5.waitForSelector('#components-list[data-component-id=chrome-studio]', { timeout: 12000 }).catch(() => {});
+    const readStudio = () => page5.evaluate(() => {
+      const list = document.getElementById('components-list');
+      // the confined studio mounts as #components-list > div.studio-list > [headers + cards + folds]; walk a
+      // FLAT document-ordered query (headers precede their cards) tracking the current section.
+      const nodes = list ? [...list.querySelectorAll('.shares-sec, .comp, .studio-fold')] : [];
+      const sections = {}; let cur = null;
+      for (const el of nodes) {
+        if (el.classList.contains('shares-sec')) { const t = el.textContent || ''; cur = /Pending/.test(t) ? 'pending' : /Admitted/.test(t) ? 'admitted' : /App chrome/.test(t) ? 'chrome' : /Islands/.test(t) ? 'islands' : 't'; sections[cur] = sections[cur] || { cards: [], fold: null }; continue; }
+        if (!cur) continue;
+        if (el.classList.contains('studio-fold')) { sections[cur].fold = el.textContent || ''; continue; }
+        if (el.classList.contains('comp')) sections[cur].cards.push((el.querySelector('b') || {}).textContent || '');
+      }
+      const folds = list ? [...list.querySelectorAll('.studio-fold')] : [];
+      return { tagged: list && list.getAttribute('data-component-id'), sections, totalComp: list ? list.querySelectorAll('.comp').length : 0, foldCount: folds.length, foldDataAttrs: folds.map(f => f.getAttribute('data-fold')) };
+    });
+    const st0 = await readStudio();
+    ok(st0.tagged === 'chrome-studio', `§15 renders through the real confined chrome-studio (tagged ${st0.tagged})`);
+    ok(st0.sections.pending && st0.sections.pending.cards.length === 8 && st0.sections.pending.fold === null, `needs-review shows ALL 8 pending items and is NEVER folded (${st0.sections.pending && st0.sections.pending.cards.length} cards, fold=${st0.sections.pending && st0.sections.pending.fold})`);
+    ok(st0.sections.admitted && st0.sections.admitted.cards.length === 6 && /show 3 more/.test(st0.sections.admitted.fold || ''), `the 9-item Admitted section folds to the top 6 + a "▸ show 3 more" toggle (${st0.sections.admitted && st0.sections.admitted.cards.length} shown, fold="${st0.sections.admitted && st0.sections.admitted.fold}")`);
+    ok(st0.sections.chrome && st0.sections.chrome.cards.length <= 6 && st0.sections.chrome.fold === null, `the short App-chrome section (${st0.sections.chrome && st0.sections.chrome.cards.length}) is NOT folded (only the long tail folds)`);
+    ok(st0.foldCount === 1 && !st0.foldDataAttrs.includes('pending'), `exactly ONE fold toggle on the page (admitted), never on needs-review (${st0.foldDataAttrs.join(',')})`);
+    ok(st0.sections.admitted && st0.sections.admitted.cards[0] === 'tool8', `byRecent floats the most-edited item (a8, 5 versions) to the TOP of Admitted (first card="${st0.sections.admitted && st0.sections.admitted.cards[0]}") — the recency proxy sorts`);
+    // expand the tail
+    await page5.evaluate(() => { const b = document.querySelector('.studio-fold[data-fold=admitted]'); if (b) b.click(); });
+    await page5.waitForTimeout(300);
+    const st1 = await readStudio();
+    ok(st1.sections.admitted && st1.sections.admitted.cards.length === 9 && /show less/.test(st1.sections.admitted.fold || ''), `clicking "show more" reveals the full 9-item tail + flips to "▾ show less" (${st1.sections.admitted && st1.sections.admitted.cards.length} cards, fold="${st1.sections.admitted && st1.sections.admitted.fold}")`);
+    ok(st1.totalComp === st0.totalComp + 3, `the 3 hidden long-tail cards appear on expand (${st0.totalComp} → ${st1.totalComp})`);
+    // collapse again
+    await page5.evaluate(() => { const b = document.querySelector('.studio-fold[data-fold=admitted]'); if (b) b.click(); });
+    await page5.waitForTimeout(300);
+    const st2 = await readStudio();
+    ok(st2.sections.admitted && st2.sections.admitted.cards.length === 6 && /show 3 more/.test(st2.sections.admitted.fold || ''), 'clicking "show less" re-folds the long tail (6 shown again) — the toggle is fully reversible');
+    ok(p5errs.length === 0, `§15 no page errors (${p5errs.slice(0, 2).join(' | ')})`);
+    await page5.close();
 
     ok(errs.length === 0, `no page errors (${errs.slice(0, 2).join(' | ')})`);
     await page.close();

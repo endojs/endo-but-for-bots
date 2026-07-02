@@ -116,14 +116,35 @@ const TRACE_VIEW_SOURCE = `// TRACE ISLAND (chrome-trace-view) — the LIVE reas
 // chrome decomposition beyond the first three pieces). dan's ask: the section ORDER used to be a hardcoded
 // concat in app.js (pending+admitted, then chrome, then islands) — he wanted to reorder it and couldn't.
 // Now the order lives in SECTION_ORDER IN THIS SOURCE, so "show islands before app chrome" / "put admitted
-// at the top" is a one-sentence edit chat, persisted as a git commit that survives reload. Like every chrome
+// at the top" is a one-sentence edit chat, persisted as a git commit that survives reload. It also SORTS
+// each section most-recent-first (a versions-length recency PROXY — see the source header for the timestamp/
+// usageCount gap) and FOLDS the long tail behind a "show N more" toggle so nobody wades through every little
+// thing anyone ever made; needs-review stays pinned on top, unfolded. Like every chrome
 // piece: PURE RENDER PROPAGATOR (no cap, no DOM, no network). The HOST keeps every authority-bearing move —
 // admit / reject / revise / edit / revert / fork are real component-lifecycle actions and stay host-gated
 // EXACTLY as before — and passes only render-safe data + the affordance callbacks it may fire; the props ARE
 // the ocap boundary. The header schema travels WITH the source so a riffer sees the contract in the edit chat.
-const STUDIO_SOURCE = `// CHROME-STUDIO (chrome-studio) — the Components/Studio LIST (its sections + their order + layout).
+const STUDIO_SOURCE = `// CHROME-STUDIO (chrome-studio) — the Components/Studio LIST (its sections, their ORDER, SORT + FOLD).
 // THE SECTION ORDER IS DATA IN THIS SOURCE (see SECTION_ORDER below). Reorder it in one sentence in the
 // edit chat ("put islands above app chrome") — the change persists as a git commit and survives reload.
+//
+// SORT + FOLD (dan's ask 2026-07-02: "most-recent, needs-review at the top, then most-used after that, and
+// then a fold at some point … nobody should see every little thing anyone ever made"):
+//   • NEEDS-REVIEW (props.pending) stays pinned at the very TOP and is NEVER folded — you must see every
+//     item awaiting your admit/reject.
+//   • Admitted / chrome / islands render most-RECENT-first via byRecent(). RECENCY SIGNAL GAP: props carry
+//     NO per-item timestamp today, so byRecent uses versions.length (how many commits a piece has) as an
+//     ACTIVITY proxy — a more-edited piece floats up — with a stable insertion-order tiebreak. This is a
+//     PROXY, not true recency; see the increment-2 note below.
+//   • FOLD THE LONG TAIL: each sorted section shows the first FOLD_AT (6); the rest hide behind a
+//     "▸ show N more" toggle (endowments.useState — local, ephemeral UI state). No hooks → show all (never
+//     hide content you can't reveal: the anti-brick floor). Needs-review is exempt (never folded).
+// INCREMENT-2 FOLLOW-UP (needs a store/props addition held by OTHER workers — do NOT fake it here): real
+//   "most-used" ordering needs a per-component usageCount (bumped when a component mounts/renders) and real
+//   "most-recent" needs an updatedAt timestamp — NEITHER exists in props today. Add both to the studio
+//   props feed (app.js refreshComponents, sourced from the component store), then extend byRecent to prefer
+//   updatedAt, then usageCount, then the versions-length proxy. Tracked in designs/preact-component-trie.md.
+//
 // PURE RENDER: this component holds NO cap, NO DOM, NO network. The HOST does every authority-bearing move
 // (admit/reject/revise/edit/revert/fork are real, host-gated component-lifecycle actions — unchanged) and
 // feeds only render-safe data + affordance callbacks. The props ARE the ocap boundary.
@@ -136,10 +157,15 @@ const STUDIO_SOURCE = `// CHROME-STUDIO (chrome-studio) — the Components/Studi
 //   props.onAdmit(id)  props.onReject(id)  props.onRevise(id)                     — pending-review actions
 //   props.onEdit(id)   props.onFork(id)    props.onRevert(id, version)            — lifecycle actions
 // REORDER / RIFF FREELY: any (endowments, props) => vnode honoring THIS contract can replace this list
-// (drop a section, regroup, re-lay-out). PER-USER runtime order is the deferred 'chrome-prefs grain'
-// (designs/preact-component-trie.md); today's source-committed order is shared + reload-durable = dan's ask.
+// (drop a section, regroup, re-lay-out, re-sort, re-fold). PER-USER runtime order is the deferred
+// 'chrome-prefs grain' (designs/preact-component-trie.md); today's source-committed order is shared + durable.
 (endowments, props) => {
   const h = endowments.h;
+  // local UI state for the per-section long-tail FOLD. hooks come from confineComponent's endowments; if a
+  // renderer lacks them we degrade to "show everything" (never hide what you can't expand — anti-brick).
+  const hasHooks = typeof endowments.useState === 'function';
+  const useState = endowments.useState || (v => [v, () => {}]);
+  const [expanded, setExpanded] = useState({}); // { [sectionName]: true } — which long tails are open
   const p = props || {};
   const arr = x => (Array.isArray(x) ? x : []);
   const pending = arr(p.pending), admitted = arr(p.admitted), chrome = arr(p.chrome), islands = arr(p.islands);
@@ -147,6 +173,27 @@ const STUDIO_SOURCE = `// CHROME-STUDIO (chrome-studio) — the Components/Studi
   const short = v => String(v || '').slice(0, 8);
   const sec = label => h('div', { class: 'shares-sec' }, label);
   const pill = (text, bad) => h('span', { class: bad ? 'pill bad' : 'pill' }, text);
+  // RECENCY SORT (proxy): most-edited (most versions) first, stable insertion-order tiebreak. NOTE THE GAP —
+  // there is no timestamp/usageCount in props today (increment-2 follow-up in the header); versions.length
+  // is the only per-item activity signal available. Total-order-stable so ties never reshuffle on re-render.
+  const byRecent = items => arr(items)
+    .map((c, i) => ({ c, i, n: arr(c.versions).length }))
+    .sort((a, b) => (b.n - a.n) || (a.i - b.i))
+    .map(x => x.c);
+  const FOLD_AT = 6; // show the first N of a section; the long tail hides behind a "show N more" toggle
+  // fold(name, cards): the anti-long-tail primitive. Short sections (or a hookless renderer) render whole;
+  // long ones render the head + a toggle that reveals/hides the rest (local, ephemeral useState per section).
+  const fold = (name, cards) => {
+    if (!hasHooks || cards.length <= FOLD_AT) return cards;
+    const open = !!expanded[name];
+    const rest = cards.length - FOLD_AT;
+    const toggle = h('button', {
+      class: 'mini studio-fold', 'data-fold': name, key: '__fold_' + name,
+      onClick: () => setExpanded({ ...expanded, [name]: !open }),
+      style: 'margin:6px 0 2px 4px',
+    }, open ? '▾ show less' : ('▸ show ' + rest + ' more'));
+    return open ? [...cards, toggle] : [...cards.slice(0, FOLD_AT), toggle];
+  };
   // version-history rows (shared by admitted / chrome / islands): newest first; current is a pill, older
   // versions offer a non-destructive revert (a new commit that re-runs an earlier tree — history preserved).
   const verRows = (id, versions) => {
@@ -200,10 +247,12 @@ const STUDIO_SOURCE = `// CHROME-STUDIO (chrome-studio) — the Components/Studi
   // ★ SECTION ORDER — EDIT THIS LINE to reorder the studio (e.g. move 'islands' before 'chrome'). ★
   const SECTION_ORDER = ['pending', 'admitted', 'chrome', 'islands'];
   const SECTIONS = {
+    // NEEDS-REVIEW: pinned to the top, NEVER sorted-away or folded — every pending item stays fully visible.
     pending: () => (pending.length ? [sec('🆕 Pending review (' + pending.length + ')'), ...pending.map(pendCard)] : []),
-    admitted: () => (admitted.length ? [sec('Admitted'), ...admitted.map(c => compCard(c, c.kind || 'instance', true))] : []),
-    chrome: () => (chrome.length ? [sec('App chrome (live UI · applies on edit, no rebuild)'), ...chrome.map(c => compCard(c, 'chrome', false))] : []),
-    islands: () => (islands.length ? [sec('Islands (live UI · rebuilt on edit)'), ...islands.map(c => compCard(c, 'island', false))] : []),
+    // the rest: most-recent-first (byRecent), then fold the long tail behind a "show N more" toggle.
+    admitted: () => (admitted.length ? [sec('Admitted (' + admitted.length + ')'), ...fold('admitted', byRecent(admitted).map(c => compCard(c, c.kind || 'instance', true)))] : []),
+    chrome: () => (chrome.length ? [sec('App chrome (live UI · applies on edit, no rebuild)'), ...fold('chrome', byRecent(chrome).map(c => compCard(c, 'chrome', false)))] : []),
+    islands: () => (islands.length ? [sec('Islands (live UI · rebuilt on edit)'), ...fold('islands', byRecent(islands).map(c => compCard(c, 'island', false)))] : []),
   };
   const body = [];
   for (const name of SECTION_ORDER) { const f = SECTIONS[name]; if (f) body.push(...f()); }
