@@ -2,6 +2,17 @@
 > The CURATED, current plan is `../SELF-IMPROVEMENT-ROADMAP.md` (incl. §6 self-tuning). This file is the
 > original deep design detail — concrete API sketches — preserved on request; treat the roadmap as
 > authoritative where they differ.
+>
+> **SHIPPED — on a different substrate (2026-07-02).** The collateral spine described below is **built and
+> live**, but NOT on the agora `makeBank` ledger this doc locks in as its "substrate decision" (§1). It
+> shipped on the field agent's own purse substrate: **`invite-allowance.mjs` + `purse-store.mjs`** (plus
+> `purse.mjs`'s `makeBoundedSubPurse` for the monotonic `Σ children ≤ parent` bound), with `createInvite`
+> wired directly into the node toolbox in `agent-caps.mjs`. So wherever this doc says "stand up
+> `makeBank()` in-process" or treats agora as the ledger of record, read that as **deferred** — the agora
+> `makeBank` migration is Increment 6 (roadmap §5 D1), not a prerequisite that was met. Everything else
+> (invite mints a multi-power root cap + funds a bounded sub-purse; inference draws it down; hard-refuse
+> at zero; revoke; restart-survivable via the durable purse store) matches the shipped behaviour — only
+> the money backend differs from these sketches.
 
 ---
 

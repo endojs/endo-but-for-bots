@@ -7,8 +7,15 @@ Origin: dan's vision (2026-06-16) triggered by the Bluesky post about recursive 
 the credential — an agent can't spawn what it can't pay for.** Synthesized from a 10-agent
 understand→design pass (workflow `wf_ffc46d65-0f8`), grounded in the existing fleet code.
 
-Status: **decisions D1–D5 locked (2026-06-16); Increments 0–1 SHIPPED + proven on the live agent.**
-Next: Increment 2 (eval spine). See the "Shipped" note after §2.
+Status: **decisions D1–D5 locked (2026-06-16); much of the spine now SHIPPED** (re-audited 2026-07-02).
+Landed in code: Increments 0–1 (meter + bounded purse + visible budget), **Increment 2 eval spine**
+(`eval/` — `harness`/`tree`/`score`/`aggregate`/`anonymize`), the **Increment 5 primitive**
+`makeBoundedSubPurse` (`purse.mjs`, tested `purse-subpurse.test.mjs`), **Increment 7 invitations**
+(`createInvite` wired into the toolbox in `agent-caps.mjs`; `invite-allowance.mjs`/`purse-store.mjs` —
+NB shipped on the field's own purse substrate, not agora `makeBank`, which stays deferred to Inc 6 per
+D1), and the **§6 self-tuning organs** (`eval/orchestration.mjs`, `eval/harvest.mjs`,
+`eval/champions.mjs`). Next: real-rate metering (Inc 4) + prepaid `createSubAgent` end-to-end (Inc 5)
++ operational wiring of the §6/§7 loop. See the "Shipped" note after §2 and the flipped markers in §6/§7.
 
 ---
 
@@ -223,6 +230,13 @@ model menu). The arch tree (#2) becomes per-model lineages, each with a current 
 `agent-roles.mjs`; the #2 harness/tree; the #1 meter (cost). **New:** the harvest/novelty/anonymize
 pipeline, the config-space search runner, and the per-model `champions.json`.
 
+> **SHIPPED (2026-07-02):** the three "New" organs above now exist in `eval/`:
+> `harvest.mjs` (§6b — scan chat store + capture inbox, novelty-filter, anonymize → candidates),
+> `orchestration.mjs` + `score.mjs` (§6a/§6c — the orchestration-config search space + its inner
+> scoring step), and `champions.mjs` (§6d — the per-model champion store). What remains is *operational*
+> wiring (a timer/heartbeat to run the search continuously — see §7 E2) and auto-adoption policy (below,
+> still human/eval-gated).
+
 **Open question (dan):** how aggressive is auto-adoption? Default rec — the search + harvest run
 continuously and **propose** champions; **promotion to the live default stays eval-gated + human-gated**
 (stable-across-repeats win, no cost regression), never silent.
@@ -247,7 +261,10 @@ import the cap model + run the eval (Inc 2, SHIPPED), **streaming every step int
 purse. Essentially Agent C spawning Claude-Code-like dev agents, traced. **Dial RESOLVED (dan):**
 worktree-only floor = no prompt; powers flow from the parent (attenuated); granting an *auto-approved*
 write/web tool is a user-approval **endowment moment** (memory `endowment-moment-approval`;
-`designs/dev-spawner.md`).
+`designs/dev-spawner.md`). **SHIPPED (2026-07-02):** the worktree-isolated, bwrap-confined dev-spawner
+substrate is in code — `self-improver.mjs`, `component-git.mjs`, `render-check.mjs`, with
+`worktree.test.mjs` + `bwrap-confinement.test.mjs` (bwrap confinement proven — see
+`designs/worktree-isolation.md`). Remaining: full trace-streaming polish (E6) + the timer heartbeat (E2).
 
 **E2 — Timers that fire an AGENT TURN** (not just a notification). `timers` is notify-only today
 (`{type:command}` deliberately unexposed). Extend `timer-runner` to POST a chat turn so Agent C has a
@@ -255,10 +272,14 @@ heartbeat: periodically pull Garden (§6b/#4), research agentic flows (web/brows
 
 **E3 — The variation→eval→champion (genetic) loop runners** (§6c/d). Mutate arch configs
 (roles/tool-rings/prompt-variants) → score on the suite → select + record per-model champions. The
-"genetic evolution." Designed; needs building.
+"genetic evolution." **SHIPPED (2026-07-02):** `eval/orchestration.mjs` (search space) + `eval/score.mjs`
+(inner scoring step) + `eval/champions.mjs` (per-model champion store) are in code. Remaining: the
+periodic *driver* that runs the loop (needs E2's timer heartbeat) and the auto-adoption policy.
 
 **E4 — Garden pull + agentic-flows research** (§6b, #4). The harvest/import pipeline + a periodic
-research-and-propose-variations step. Designed; needs building.
+research-and-propose-variations step. **SHIPPED (2026-07-02):** the harvest/novelty/anonymize pipeline
+is `eval/harvest.mjs` + `eval/anonymize.mjs`. Remaining: the periodic research-and-propose step (also
+gated on E2's heartbeat).
 
 **E5 — Toll-bridge Inc 4/5** (real rates + prepaid `createSubAgent`). Required so the autonomous dev/eval
 fan-out is **budget-bounded** — you can't put it on a timer without the purse binding it.

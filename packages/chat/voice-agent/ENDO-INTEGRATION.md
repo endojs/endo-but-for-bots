@@ -2,7 +2,8 @@
 
 Canonical, code-grounded reference for how the **Agent C / voice-agent** system actually uses
 Endo — written to stop the ocap claims from drifting in the memories and docs. Audited
-2026-06-16 against the live tree.
+2026-06-16 against the live tree; **re-audited 2026-07-02** (World-B files consolidated onto the
+Iroh transport — see the migration note below).
 
 ## TL;DR
 
@@ -12,10 +13,14 @@ There are **two parallel ocap worlds in this repo, and they are not yet connecte
   an **in-process, single-vat ocap system on SES + `Far`, with a web-key edge** (an unguessable
   bearer "swissnum" carried in the URL fragment over plain HTTP+JSON). Real attenuation /
   revocation / POLA — *within one trusted process*. No marshaling crosses a vat boundary.
-- **World B — the OCapN/Noise stack** (`ocapn-noise/gpu-lease*.mjs`, `imagegen-server.mjs`,
-  `paid-capability.mjs`, `noise-root.mjs`/keystone): **genuine distributed ocap** — `Far`
-  objects **marshaled (CBOR) over an OCapN/Noise netlayer**, revocable + rate-limited, proven
-  end-to-end (GpuLease, image-gen-as-capability, the keystone noise root).
+- **World B — the OCapN distributed stack** (`ocapn-noise/imagegen-server-iroh.mjs`,
+  `iroh-root.mjs`/keystone): **genuine distributed ocap** — `Far` objects **marshaled (CBOR) over
+  an OCapN netlayer**, revocable + rate-limited, proven end-to-end (GpuLease, image-gen-as-capability,
+  the keystone root). The transport is now **Iroh QUIC (dial-by-pubkey, no open ports)**; the
+  original noise-over-TCP exemplars (`gpu-lease-server.mjs`, `imagegen-server.mjs`,
+  `paid-capability.mjs`, `noise-root.mjs`) have since been removed or migrated onto the Iroh
+  netlayer — see `ocapn-noise/IROH-MIGRATION.md`. Everything **above** the transport (marshal,
+  attenuation, revocation, swissnums) is unchanged by that swap.
 
 Same object discipline (`Far`) in both. The difference is whether a **vat boundary is actually
 crossed by a marshal codec + netlayer**. In World A it never is; in World B it is.
@@ -76,23 +81,29 @@ membrane between mutually-suspicious vats.
 
 ## World B — the OCapN/Noise stack (real marshaled objects)
 
-`ocapn-noise/gpu-lease-server.mjs` (and siblings) import the real wire:
+`ocapn-noise/imagegen-server-iroh.mjs` / `iroh-root.mjs` (and their migration templates) import the
+real wire:
 
 ```js
 import { makeOcapn } from '@endo/ocapn';
-import { cborCodec } from '@endo/ocapn/cbor';                 // the marshal codec
-import { makeOcapnNoiseNetwork } from '@endo/ocapn-noise';    // the netlayer
-import { makeTcpTransport } from '@endo/ocapn-noise/transport/tcp';
-import { makeGpuLeaseController } from './gpu-lease.mjs';
+import { cborCodec } from '@endo/ocapn/cbor';                  // the marshal codec
+import { makeOcapnNoiseNetwork } from '@endo/ocapn-noise';     // the netlayer
+import { makeIrohTransport } from '@endo/ocapn-noise/transport/iroh';  // dial-by-pubkey QUIC
 ```
 
-So lease / controller / inventory facets are `Far` objects **marshaled with CBOR and transmitted
-over an OCapN/Noise/TCP netlayer between vats**, with revocation + rate-limiting. This is a
-genuine cross-vat marshal boundary — capability objects passing over the network. Proven:
-GpuLease (time-boxed/rate-limited/revocable GPU render), image-gen-as-capability
-(`imagegen-server.mjs`/`-dial.mjs`, with a chunked bytes-reader for the 65519-byte CapTP message
-ceiling), the keystone noise root (`noise-root.mjs`), and the paid-capability synthesis
-(`paid-capability.mjs`).
+So the vended facets are `Far` objects **marshaled with CBOR and transmitted over an OCapN netlayer
+between vats**, with revocation + rate-limiting. This is a genuine cross-vat marshal boundary —
+capability objects passing over the network. Proven end-to-end: GpuLease
+(time-boxed/rate-limited/revocable GPU render), image-gen-as-capability (`imagegen-server-iroh.mjs`),
+and the keystone root (`iroh-root.mjs`). The transport is **Iroh QUIC**: `iroh-root.mjs` is a
+deployable root node with **zero TCP listeners** (asserted via `ss` in `test/iroh-root.test.js`),
+and `test/iroh-captp.test.js` round-trips a real `@endo/ocapn` `E(greeter).hello()` over it through
+the **unchanged** `makeOcapnNoiseNetwork`+`makeOcapn` stack. QUIC also dissolves the 65519-byte Noise
+message ceiling (a 200 KB single frame round-trips), so the chunked bytes-reader workaround is no
+longer required on iroh-backed caps. *(The prior noise-over-TCP files — `gpu-lease*.mjs`,
+`imagegen-server.mjs`/`-dial.mjs`, `paid-capability.mjs`, `noise-root.mjs` — are no longer in the
+tree; the GpuLease/paid-capability designs were proven on that substrate and have since been
+consolidated. See `ocapn-noise/IROH-MIGRATION.md`.)*
 
 > Footnote on terminology: this is `@endo/ocapn` — the **newer** OCapN stack (CBOR) — not the
 > classic `@endo/captp`/netstring **daemon** stack (which the project also doesn't run). "CapTP"
@@ -107,7 +118,7 @@ ceiling), the keystone noise root (`noise-root.mjs`), and the paid-capability sy
 | Object discipline | `Far` remotables, `harden` | `Far` remotables, `harden` |
 | Vat boundary crossed? | **No** — single process | **Yes** — between vats over the wire |
 | Marshal codec | none (objects never serialized) | **CBOR** (`@endo/ocapn/cbor`) |
-| Transport | HTTP+JSON (browser ↔ server) | **Noise/TCP netlayer** |
+| Transport | HTTP+JSON (browser ↔ server) | **OCapN netlayer — Iroh QUIC** (dial-by-pubkey; formerly Noise/TCP) |
 | The "cap" on the wire | a **bearer swissnum** (random hex), re-resolved server-side | a **live remote presence** (a real reference) |
 | Identity | random-hex web-key in a `Map` | OCapN keyId / sturdyref |
 | Attenuation / revocation | real, in-process | real, across the boundary |
@@ -115,17 +126,20 @@ ceiling), the keystone noise root (`noise-root.mjs`), and the paid-capability sy
 
 ## The gap (and the proof)
 
-The two worlds **don't talk to each other**:
+The two worlds are **now partially bridged** — one power crosses, most do not:
 
-- The voice agent's `images` power is `Far('Images', …)` (`agent-caps.mjs:185`) whose `generate`
-  calls `generate()` imported from `/home/dan/gpu-img/gen.mjs` (`:35`, `:190`) — which just
+- **Bridged (2026-07-02):** the voice agent's `objects` power holds real remote presences —
+  `iroh-objects.mjs` (in `voice-agent/`, so the harness now *does* import from `ocapn-noise/`
+  beyond `tool-bridge.mjs`) **dials endo-iroh refs over the Iroh transport** (`src/iroh-dialer.js`),
+  lazy-loaded so the native binding can't crash server boot. This is the harness genuinely holding a
+  marshaled cross-vat cap — the first realized "Bridge" below (`objects`, not yet `images`).
+- **Still in-process:** the `images` power (`Far('Images', …)` in `agent-caps.mjs`) calls
+  `generate()` imported from `GPU_IMG_GEN` (defaults to `/home/dan/gpu-img/gen.mjs`), which just
   `fetch`es ComfyUI at `http://192.168.50.226:8188`. **In-process Far facet → direct HTTP. No
-  lease, no OCapN, no marshal.**
-- World B has a real `GpuLease` for that exact resource — but **no voice-agent file imports from
-  `ocapn-noise/` except `tool-bridge.mjs`** (the agent loop). The harness is not on the wire.
+  lease, no OCapN, no marshal.** Migrating this to a dialed GpuLease-style cap over iroh is Bridge #1.
 
-So: the project *does* marshal capability objects over the boundary (GpuLease et al.); the
-**voice-agent harness specifically does not** — it consumes the GPU (and everything else) in-process.
+So: the project *does* marshal capability objects over the boundary, and the harness now consumes
+**some** of them over the wire (`objects`); the GPU-image path specifically still runs in-process.
 
 ## Bridges — how World A joins World B (the integration roadmap)
 
@@ -143,12 +157,14 @@ Each bridge turns an in-process World-A facet into a real marshaled World-B capa
    `ENDO-GIT-REMOTE.md`).
 4. **Endo git-remote object over OCapN** — git/PR rights as a passable, attenuable cap
    (submitPR-but-not-merge), the GitHub-like API with no GitHub.
-5. **Iroh transport under all of it** — adopt upstream **draft PR #446** (`feat(daemon): iroh network
-   transport — "dial keys, not IPs" + TLS`; branch `claude/iroh-endo-daemon-network-6xeoc1`): a daemon
-   `EndoNetwork` transport (dial-by-NodeId QUIC+TLS, NAT traversal + relay) alongside TCP/libp2p/ws-relay,
-   plus a CapTP write-serialization fix. Rebase/run it, then migrate GpuLease + the harness bridges onto
-   it. Beneath the OCapN/ocap layer; removes open ports → confined-slice egress safe.
-   (memo `iroh_v1_service_transport`.)
+5. **Iroh transport under all of it** — **LANDED (2026-07-02).** `@endo/ocapn-noise/transport/iroh`
+   (`src/transports/iroh.js`) is a real, proven transport plugin: dial-by-EndpointId QUIC bidi stream,
+   **no host:port**, stable EndpointId from a persisted 32-byte seed, `@number0/iroh` as an
+   optionalDependency. Real ocap round-trips over it (`test/iroh-captp.test.js`), `iroh-root.mjs`
+   listens with **zero TCP ports**, and the live voice-agent `objects` power already dials endo-iroh
+   refs (`iroh-objects.mjs`, lazy-loaded). Sits **beneath** the OCapN/ocap layer (marshal/attenuation/
+   revocation unchanged); removes open ports → confined-slice egress safe. What remains is operational
+   rollout of the rest of the fleet services. (memo `iroh_v1_service_transport`; `IROH-MIGRATION.md`.)
 
 ## Claims hygiene (how to describe this accurately)
 
