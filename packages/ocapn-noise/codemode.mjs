@@ -20,10 +20,13 @@ const runProgram = async (code, endow) => {
     log: (...a) => { logs.push(a.map(x => (typeof x === 'string' ? x : safeJson(x))).join(' ')); },
     error: (...a) => { logs.push(`ERROR: ${a.map(x => (typeof x === 'string' ? x : safeJson(x))).join(' ')}`); },
   });
-  // Endowments become the Compartment's globals. The cap fns close over host authority — that IS
-  // the authority bridge; nothing else (no process/require/fs/import) is reachable from inside.
-  const compartment = new Compartment(harden({ ...endow, console: con }));
   try {
+    // Endowments become the Compartment's globals. The cap fns close over host authority — that IS
+    // the authority bridge; nothing else (no process/require/fs/import) is reachable from inside.
+    // REL-3: construct the Compartment INSIDE the try — a throw from `new Compartment` (e.g. a bad
+    // endowment) must become a structured {ok:false,error}, never an escaped rejection that unwinds
+    // the whole agent loop (and, upstream, the /chat window).
+    const compartment = new Compartment(harden({ ...endow, console: con }));
     // wrap as an async IIFE so the program may `await` caps and `return` a value
     const value = await compartment.evaluate(`(async () => {\n${String(code)}\n})()`);
     return { ok: true, value, logs };
@@ -58,7 +61,13 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     if (signal?.aborted) throw new Error('aborted');
     onStep({ kind: 'tool-start', name: label, args });
     try { const r = await fn(args || {}); used.push({ name: label, args, result: r }); onStep({ kind: 'tool', name: label, args, result: r }); return r; }
-    catch (e) { onStep({ kind: 'tool-error', name: label, error: (e && e.message) || String(e) }); return harden({ ok: false, error: (e && e.message) || String(e) }); }
+    catch (e) {
+      // REL-3: budget exhaustion during a METERED sub-call (delegateTask → Opus refuses before any paid
+      // call when the purse can't cover its floor) is NOT an ordinary tool error to be swallowed and run
+      // past — it must route to the turn-level EXHAUSTED / top-up path. Re-throw so the loop converts it.
+      if (e && e.code === 'INFERENCE_BUDGET_EXHAUSTED') throw e;
+      onStep({ kind: 'tool-error', name: label, error: (e && e.message) || String(e) }); return harden({ ok: false, error: (e && e.message) || String(e) });
+    }
   });
   const argSig = a => Object.keys(a || {}).length ? 'args' : '';
   const argDoc = a => Object.keys(a || {}).length ? ` — args {${Object.keys(a).map(k => `${k}: ${a[k]}`).join('; ')}}` : '';
@@ -202,7 +211,18 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
       const inj = takeInterjections() || [];
       if (inj.length) { messages.push({ role: 'user', content: `[the user interjected mid-turn — take this into account in what you do next]\n${inj.join('\n')}` }); onStep({ kind: 'interjection', text: inj.join('\n') }); }
     } catch { /* an interjection source must never break the loop */ }
-    const out = await invoke(messages, model);
+    // REL-3: the "callLLM never throws" invariant is now ENFORCED here, not merely assumed. A provider
+    // fetch that rejects (network reset, a throw inside a BYO key path, a metered-LLM edge) would
+    // otherwise escape the loop as a rejection → the /chat Promise.race rejects → (pre-REL-1) the
+    // plaintext outer catch + a stuck 'running' run. Turn ANY throw into the same structured llmError
+    // the {error} return already produces (retryable, never persisted as the agent's reply).
+    let out;
+    try { out = await invoke(messages, model); }
+    catch (e) {
+      const msg = (e && e.message) || String(e);
+      onStep({ kind: 'tool-error', name: 'model', error: msg });
+      return harden({ answer: '', toolsUsed: used, llmError: msg });
+    }
     // Even out-of-allowance is legible: hand back a clear note (the server still flags `exhausted`).
     // Hand back the in-flight transcript (minus the system prompt) so a top-up can RESUME exactly here —
     // continuing the reasoning rather than re-running every prior step.
@@ -252,6 +272,13 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     // "throw", but the captured finalReply supersedes it. (A program that set the reply then hit a real error
     // still delivers it — better than going silent.) The kind rides along as a structured asking/blocked flag.
     if (finalReply != null) { const { kind, text } = finalReply; onStep({ kind: 'answer', text }); return harden({ answer: text, toolsUsed: used, ...(kind === 'ask' ? { asking: true } : kind === 'blocked' ? { blocked: true } : kind === 'research' ? { researching: true } : {}) }); }
+    // REL-3: a metered sub-call (delegateTask) refused for lack of allowance (re-thrown from wrapCall) →
+    // surface the WHOLE turn as EXHAUSTED so the client shows the deterministic top-up card, handing back
+    // the in-flight transcript so a top-up RESUMES here rather than re-running the delegation.
+    if (!r.ok && /INFERENCE_BUDGET_EXHAUSTED/.test(String(r.error || ''))) {
+      onStep({ kind: 'tool-error', name: 'model', error: r.error });
+      return harden({ answer: stallMessage(lastError) + ' (The prepaid allowance for this chat is used up.)', toolsUsed: used, exhausted: true, resumeFrom: messages.slice(1) });
+    }
     const parts = [];
     if (r.logs.length) parts.push(`logs:\n${clip(r.logs.join('\n'), 8000)}`);
     if (r.ok) { parts.push(`returned: ${clip(safeJson(r.value), 12000)}`); repeatErr = 0; failStreak = 0; lastError = ''; }
