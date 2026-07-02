@@ -3,8 +3,8 @@
 import '@endo/init/debug.js';
 
 import test from 'ava';
+import { makeVoiceInput } from '@endo/spaces-util/voice-input.js';
 import { createDOM, tick } from '../helpers/dom-setup.js';
-import { makeVoiceInput } from '../../voice-input.js';
 
 const {
   window: testWindow,
