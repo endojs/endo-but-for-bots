@@ -2407,6 +2407,12 @@ const handler = async (req, res) => {
     if (req.method === 'POST' && u.pathname === '/feed/load') {
       const { cap } = await jsonBody(req);
       if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
+      // The feed (FEED_FILE) is dan's OWN dashboard inbox — agent proposals, "needs attention" bodies,
+      // notification bell contents. It is a single global stream (only the dismissed-state is per-cap), so
+      // any invited guest's scoped cap used to read dan's entire feed. Content is ROOT-ONLY; a non-root cap
+      // gets an EMPTY inbox (the 🔔 bell renders nothing) rather than a leak. (Cap-scoped listNotifications
+      // remains available to a chat dan explicitly granted the `feed` power, via its confined toolbox.)
+      if (!nodeFor(cap)?.isRoot) return json(res, 200, { items: [], attentionCount: 0 });
       let entries = []; try { entries = (JSON.parse(await fs.promises.readFile(FEED_FILE, 'utf8')).entries) || []; } catch {}
       let dismissed = []; try { dismissed = (JSON.parse(await fs.promises.readFile(notifStorePath(cap), 'utf8')).dismissed) || []; } catch {}
       const ds = new Set(dismissed);
@@ -2421,6 +2427,7 @@ const handler = async (req, res) => {
     if (req.method === 'POST' && u.pathname === '/feed/item') {
       const { cap, id } = await jsonBody(req);
       if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
+      if (!nodeFor(cap)?.isRoot) return json(res, 200, { ok: false }); // dan's feed content is root-only (see /feed/load)
       let entries = []; try { entries = (JSON.parse(await fs.promises.readFile(FEED_FILE, 'utf8')).entries) || []; } catch {}
       const e = entries.find(x => x && x.id === String(id || ''));
       if (!e) return json(res, 200, { ok: false });
