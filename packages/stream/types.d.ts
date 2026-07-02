@@ -7,8 +7,7 @@ export interface AsyncSpring<TValue> {
 }
 
 export interface AsyncQueue<TSpringValue, TSinkValue = TSpringValue>
-  extends AsyncSpring<TSpringValue>,
-    AsyncSink<TSinkValue> {}
+  extends AsyncSpring<TSpringValue>, AsyncSink<TSinkValue> {}
 
 // Stream is nearly identical to AsyncGenerator and AsyncGenerator should
 // probably be identical to this definition of Stream.
@@ -92,6 +91,17 @@ export declare function mapReader<
 >(
   reader: Stream<TReadIn, TWrite, TReadReturn, TWriteReturn>,
   transform: (value: TReadIn) => TReadOut,
+): Stream<TReadOut, TWrite, TReadReturn, TWriteReturn>;
+
+export declare function flatMapReader<
+  TReadIn,
+  TReadOut = TReadIn,
+  TWrite = undefined,
+  TReadReturn = undefined,
+  TWriteReturn = undefined,
+>(
+  reader: Stream<TReadIn, TWrite, TReadReturn, TWriteReturn>,
+  transform: (value: TReadIn) => Iterable<TReadOut> | AsyncIterable<TReadOut>,
 ): Stream<TReadOut, TWrite, TReadReturn, TWriteReturn>;
 
 export declare function mapWriter<

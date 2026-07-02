@@ -1,6 +1,6 @@
 {
   "name": "@endo/eslint-plugin",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "description": "ESLint plugin for using Endo",
   "keywords": [
     "eslint",
@@ -20,14 +20,17 @@
   },
   "dependencies": {
     "@eslint-community/eslint-utils": "^4.7.0",
-    "@typescript-eslint/eslint-plugin": "8.39.1",
-    "@typescript-eslint/parser": "8.39.1",
-    "@typescript-eslint/utils": "8.39.1",
+    "@typescript-eslint/eslint-plugin": "^8.39.1",
+    "@typescript-eslint/parser": "^8.39.1",
+    "@typescript-eslint/utils": "^8.39.1",
     "eslint-plugin-import": "catalog:dev",
     "requireindex": "~1.2.0",
     "tsutils": "~3.21.0",
     "typescript": "catalog:dev",
-    "typescript-eslint": "8.39.1"
+    "typescript-eslint": "^8.39.1"
+  },
+  "peerDependencies": {
+    "eslint-plugin-unicorn": "^56.0.1"
   },
   "devDependencies": {
     "@types/mocha": "^10",
@@ -67,6 +70,22 @@
     "rules": {
       "import/extensions": "off"
     },
+    "overrides": [
+      {
+        "files": [
+          "lib/rules/*.js"
+        ],
+        "rules": {
+          "object-shorthand": [
+            "error",
+            "always",
+            {
+              "avoidQuotes": false
+            }
+          ]
+        }
+      }
+    ],
     "env": {
       "node": true
     }

@@ -1,6 +1,6 @@
 {
   "name": "@endo/ses-ava",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Virtualize AVA's test to work better under SES.",
   "keywords": [
     "ses",
@@ -44,7 +44,7 @@
     "@endo/env-options": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/init": "workspace:^",
-    "ava": "^5.3.0 || ^6.1.2",
+    "ava": "^6 || ^7 || ^8",
     "ses": "workspace:^"
   },
   "devDependencies": {

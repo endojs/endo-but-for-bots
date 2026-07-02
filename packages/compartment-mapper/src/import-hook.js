@@ -22,6 +22,7 @@ import { unpackReadPowers } from './powers.js';
  * @import {
  *   ImportHook,
  *   ImportNowHook,
+ *   ModuleDescriptor,
  *   RedirectStaticModuleInterface,
  *   StaticModuleType,
  *   VirtualModuleSource
@@ -96,10 +97,12 @@ const noop = () => {};
 const resolveLocation = (rel, abs) =>
   /** @type {FileUrlString} */ (new URL(rel, abs).toString());
 
-// this is annoying
-function getImportsFromRecord(record) {
-  return (has(record, 'record') ? record.record.imports : record.imports) || [];
-}
+// A record arrives in one of two shapes — either wrapped, with the payload
+// under a nested `record` property, or unwrapped — so we must probe for
+// `record.record` before reading `imports`. That dual shape is the annoying
+// part, and it is unchanged by the arrow/`function`-keyword spelling.
+const getImportsFromRecord = record =>
+  (has(record, 'record') ? record.record.imports : record.imports) || [];
 
 // Node.js default resolution allows for an incomplement specifier that does not include a suffix.
 // https://nodejs.org/api/modules.html#all-together
@@ -755,7 +758,7 @@ export const makeImportHookMaker = (
  * @param {MakeImportNowHookMakerOptions} options
  * @returns {ImportNowHookMaker}
  */
-export function makeImportNowHookMaker(
+export const makeImportNowHookMaker = (
   readPowers,
   baseLocation,
   {
@@ -769,7 +772,7 @@ export function makeImportNowHookMaker(
     moduleSourceHook,
     log = noop,
   },
-) {
+) => {
   // Set of specifiers for modules (scoped to compartment) whose parser is not
   // using heuristics to determine imports.
   /** @type {Map<string, Set<string>>} compartment name ->* module specifier */
@@ -812,7 +815,7 @@ export function makeImportNowHookMaker(
      * If it doesn't exist, then throw an exception.
      * @param {string} moduleSpecifier
      * @param {CompartmentDescriptor} compartmentDescriptor
-     * @returns {VirtualModuleSource}
+     * @returns {ModuleDescriptor}
      */
     const importExitModuleOrFail = (moduleSpecifier, compartmentDescriptor) => {
       if (exitModuleImportNowHook) {
@@ -848,7 +851,7 @@ export function makeImportNowHookMaker(
     };
 
     if (!isSyncParseFn(parse)) {
-      return function impossibleTransformImportNowHook() {
+      return () => {
         throw new Error(
           'Dynamic requires are only possible with synchronous parsers and no asynchronous module transforms in options',
         );
@@ -951,4 +954,4 @@ export function makeImportNowHookMaker(
     return importNowHook;
   };
   return makeImportNowHook;
-}
+};

@@ -6,7 +6,6 @@
 
 /**
  * @import {TransformedResult, TransformedResultWithSourceMap} from './generate.js'
- * @import {SourceMapOption} from './generate.js'
  */
 
 import { transformAst } from './transform-ast.js';
@@ -17,13 +16,13 @@ import { generate } from './generate.js';
  * Options for {@link evadeCensorSync}
  *
  * @typedef EvadeCensorOptions
- * @property {SourceMapOption | undefined} [sourceMap] - Original source map in JSON string or object form
+ * @property {object | string | undefined} [sourceMap] - Original source map in JSON string or object form
  * @property {string | undefined} [sourceUrl] - URL or filepath of the original source in `code`
  * @property {boolean | undefined} [elideComments] - Empties the comments but preserves interior newlines.
  * @property {import('./parse-ast.js').SourceType | undefined} [sourceType] - Module source type
  * @property {boolean | undefined} [onlyComments] - if true, will limit transformation to
 comment contents, preserving code positions within each line
-* @property {(path: import('@babel/traverse').NodePath) => void} [customVisitor] - A visitor function to be called on each node, in addition to the standard transforms. Receives the same path argument as a normal Babel visitor.
+ * @property {(path: import('@babel/traverse').NodePath) => void} [customVisitor] - A visitor function to be called on each node, in addition to the standard transforms. Receives the same path argument as a normal Babel visitor.
  * @property {boolean | undefined} [useLocationUnmap] - deprecated, vestigial
  * @public
  */
@@ -63,7 +62,7 @@ comment contents, preserving code positions within each line
  * @param {EvadeCensorOptions} [options] - Options for the transform
  * @public
  */
-export function evadeCensorSync(source, options) {
+export const evadeCensorSync = (source, options) => {
   const {
     sourceMap,
     sourceUrl,
@@ -89,7 +88,7 @@ export function evadeCensorSync(source, options) {
     });
   }
   return generate(ast, { source });
-}
+};
 
 /**
  * Apply SES censorship evasion transforms on the given code `source`
@@ -127,6 +126,5 @@ export function evadeCensorSync(source, options) {
  * @param {EvadeCensorOptions} [options] - Options for the transform
  * @public
  */
-export async function evadeCensor(source, options) {
-  return evadeCensorSync(source, options);
-}
+export const evadeCensor = async (source, options) =>
+  evadeCensorSync(source, options);

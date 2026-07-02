@@ -1,4 +1,3 @@
-/* eslint-disable func-names */
 /**
  * @module Ensure each named export is followed by a call to `harden` function
  */
@@ -122,12 +121,31 @@ module.exports = {
     /** @type {Array<ESTree.ExportNamedDeclaration & Rule.NodeParentExtension>} */
     const exportNodes = [];
 
+    /**
+     * Returns true when the initializer is a call expression of the form
+     * `M.something(...)`. Such calls return values that are already hardened
+     * by Pattern makers, so a follow-up `harden(name)` would be redundant.
+     * @param {ESTree.Node | null | undefined} init
+     * @returns {boolean}
+     */
+    const isPatternMakerCall = init => {
+      if (!init || init.type !== 'CallExpression') {
+        return false;
+      }
+      const { callee } = init;
+      if (callee.type !== 'MemberExpression') {
+        return false;
+      }
+      const { object } = callee;
+      return object.type === 'Identifier' && object.name === 'M';
+    };
+
     return {
       /** @param {ESTree.ExportNamedDeclaration & Rule.NodeParentExtension} node */
       ExportNamedDeclaration(node) {
         exportNodes.push(node);
       },
-      'Program:exit': function () {
+      'Program:exit'() {
         const sourceCode = context.getSourceCode();
 
         for (const exportNode of exportNodes) {
@@ -139,16 +157,21 @@ module.exports = {
           if (exportNode.declaration) {
             if (exportNode.declaration.type === 'VariableDeclaration') {
               for (const declaration of exportNode.declaration.declarations) {
-                const recognized = pushDeclaredNames(
-                  declaration.id,
-                  exportNames,
-                );
-                if (!recognized) {
-                  allRecognized = false;
-                  context.report({
-                    node: declaration,
-                    messageId: 'unknownBindingPattern',
-                  });
+                // Skip Pattern maker initializers like `M.string()` or
+                // `M.arrayOf(...)`; their results are already hardened, so
+                // a follow-up `harden(name)` is redundant.
+                if (!isPatternMakerCall(declaration.init)) {
+                  const recognized = pushDeclaredNames(
+                    declaration.id,
+                    exportNames,
+                  );
+                  if (!recognized) {
+                    allRecognized = false;
+                    context.report({
+                      node: declaration,
+                      messageId: 'unknownBindingPattern',
+                    });
+                  }
                 }
               }
             } else if (exportNode.declaration.type === 'FunctionDeclaration') {

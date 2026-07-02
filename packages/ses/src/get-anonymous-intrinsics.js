@@ -16,7 +16,6 @@ import {
   globalThis,
   assign,
   AsyncGeneratorFunctionInstance,
-  ArrayBuffer,
 } from './commons.js';
 import { InertCompartment } from './compartment.js';
 
@@ -90,6 +89,10 @@ export const getAnonymousIntrinsics = () => {
 
   // 25.2.1 The GeneratorFunction Constructor
 
+  // GeneratorFunctionInstance and AsyncFunctionInstance below retain the
+  // `function` keyword by deliberate exception: named generator/async-function
+  // sentinels used only to reach intrinsic constructors via getConstructorOf,
+  // not naturally object members. See docs/house-style/function-keyword.md.
   // eslint-disable-next-line no-empty-function
   function* GeneratorFunctionInstance() {}
   const GeneratorFunction = getConstructorOf(GeneratorFunctionInstance);
@@ -165,15 +168,6 @@ export const getAnonymousIntrinsics = () => {
       // eslint-disable-next-line @endo/no-polymorphic-call
       globalThis.AsyncIterator.from({ next() {} }),
     );
-  }
-
-  const ab = new ArrayBuffer(0);
-  // eslint-disable-next-line @endo/no-polymorphic-call
-  const iab = ab.sliceToImmutable();
-  const iabProto = getPrototypeOf(iab);
-  if (iabProto !== ArrayBuffer.prototype) {
-    // In a native implementation, these will be the same prototype
-    intrinsics['%ImmutableArrayBufferPrototype%'] = iabProto;
   }
 
   return intrinsics;

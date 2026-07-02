@@ -14,8 +14,8 @@ import type {
 } from '../policy-format.js';
 import type { CanonicalName } from './canonical-name.js';
 import type { FileUrlString } from './external.js';
-import type { SomePackagePolicy } from './policy-schema.js';
 import type { PatternDescriptor } from './pattern-replacement.js';
+import type { SomePackagePolicy } from './policy-schema.js';
 import type { LiteralUnion } from './typescript.js';
 
 /**
@@ -58,10 +58,9 @@ export type PackageCompartmentMapDescriptor = CompartmentMapDescriptor<
   FileUrlString
 >;
 
-export interface FileCompartmentDescriptor
-  extends CompartmentDescriptor<
-    FileModuleConfiguration | CompartmentModuleConfiguration
-  > {
+export interface FileCompartmentDescriptor extends CompartmentDescriptor<
+  FileModuleConfiguration | CompartmentModuleConfiguration
+> {
   location: FileUrlString;
 }
 
@@ -88,8 +87,7 @@ export type PackageCompartmentDescriptorName = LiteralUnion<
   FileUrlString
 >;
 
-export interface PackageCompartmentDescriptor
-  extends CompartmentDescriptor<CompartmentModuleConfiguration> {
+export interface PackageCompartmentDescriptor extends CompartmentDescriptor<CompartmentModuleConfiguration> {
   label: LiteralUnion<
     typeof ATTENUATORS_COMPARTMENT | typeof ENTRY_COMPARTMENT,
     string
@@ -122,23 +120,24 @@ export interface PackageCompartmentDescriptor
  * one for a given library or application `package.json`.
  */
 export interface CompartmentDescriptor<
-  T extends ModuleConfiguration = ModuleConfiguration,
-  U extends string = string,
+  TModuleConfiguration extends ModuleConfiguration = ModuleConfiguration,
+  TCompartmentName extends string = string,
+  TPackagePolicy extends SomePackagePolicy = SomePackagePolicy,
 > {
-  label: CanonicalName<U>;
+  label: CanonicalName<TCompartmentName>;
   /**
    * the name of the originating package suitable for constructing a sourceURL
    * prefix that will match it to files in a developer workspace.
    */
   name: string;
-  modules: Record<string, T>;
+  modules: Record<string, TModuleConfiguration>;
   scopes?: Record<string, ScopeDescriptor>;
   /** language for extension */
   parsers?: LanguageForExtension;
   /** language for module specifier */
   types?: LanguageForModuleSpecifier;
   /** policy specific to compartment */
-  policy?: SomePackagePolicy;
+  policy?: TPackagePolicy;
 
   location: string;
   /**
@@ -154,15 +153,37 @@ export interface CompartmentDescriptor<
   retained?: true;
 }
 
+/**
+ * Any {@link CompartmentDescriptor}
+ */
+export type SomeCompartmentDescriptor = CompartmentDescriptor<any, any, any>;
+
+/**
+ * Any {@link CompartmentDescriptor} with a non-nullish
+ * {@link CompartmentDescriptor.policy} property
+ */
+export type SomeCompartmentDescriptorWithPolicy =
+  CompartmentDescriptorWithPolicy<any, any, any>;
+
+/**
+ * A {@link CompartmentDescriptor} with a non-nullish
+ * {@link CompartmentDescriptor.policy} property
+ */
 export type CompartmentDescriptorWithPolicy<
-  T extends ModuleConfiguration = ModuleConfiguration,
-> = Omit<CompartmentDescriptor<T>, 'policy'> & { policy: SomePackagePolicy };
+  TModuleConfiguration extends ModuleConfiguration = ModuleConfiguration,
+  TCompartmentName extends string = string,
+  TPackagePolicy extends SomePackagePolicy = SomePackagePolicy,
+> = Omit<
+  CompartmentDescriptor<TModuleConfiguration, TCompartmentName, TPackagePolicy>,
+  'policy'
+> & {
+  policy: TPackagePolicy;
+};
 
 /**
  * A compartment descriptor digested by `digestCompartmentMap()`
  */
-export interface DigestedCompartmentDescriptor
-  extends CompartmentDescriptor<ModuleConfiguration> {
+export interface DigestedCompartmentDescriptor extends CompartmentDescriptor<ModuleConfiguration> {
   path: never;
   retained: never;
   scopes: never;
@@ -211,8 +232,7 @@ export interface ErrorModuleConfiguration extends BaseModuleConfiguration {
 /**
  * This module configuration is a reference to another module in a a compartment descriptor (it may be the same compartment descriptor)
  */
-export interface CompartmentModuleConfiguration
-  extends BaseModuleConfiguration {
+export interface CompartmentModuleConfiguration extends BaseModuleConfiguration {
   /**
    * The name of the compartment that contains this module.
    */
