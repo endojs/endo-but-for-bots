@@ -111,7 +111,7 @@ import { writeJsonAtomic, loadJson } from './write-json-atomic.mjs';
 // THE PERSONAL/PLATFORM SEAM (Packing up for Dweb): every personal coupling that used to be a hardcoded
 // /home/dan literal now resolves through field-config, so pointing FIELD_PERSONAL_ROOT at the encrypted
 // volume moves dan's whole personal family together. Defaults are byte-identical to before on the NUC.
-import { HOME_BASE as CFG_HOME_BASE, PERSONA_FILE as CFG_PERSONA_FILE, EMAIL_CFG as CFG_EMAIL_CFG, EMAIL_FROM as CFG_EMAIL_FROM, KAZPUTER_STATE as CFG_KAZPUTER_STATE, FEED_FILE as CFG_FEED_FILE, VAULT_DIR, STATE_DIR, VOICE_STATE_DIR, CONFIG_DIR, HOST_ENV_FILE, CALENDAR_CFG, COMFY_URL, HOMEASSISTANT_URL as CFG_HA_URL, KAZPUTER_URL as CFG_KAZPUTER_URL, VM_HOST as CFG_VM_HOST } from './field-config.mjs';
+import { HOME_BASE as CFG_HOME_BASE, PERSONA_FILE as CFG_PERSONA_FILE, EMAIL_CFG as CFG_EMAIL_CFG, EMAIL_FROM as CFG_EMAIL_FROM, KAZPUTER_STATE as CFG_KAZPUTER_STATE, FEED_FILE as CFG_FEED_FILE, VAULT_DIR, STATE_DIR, VOICE_STATE_DIR, CONFIG_DIR, HOST_ENV_FILE, CALENDAR_CFG, COMFY_URL, HOMEASSISTANT_URL as CFG_HA_URL, KAZPUTER_URL as CFG_KAZPUTER_URL, VM_HOST as CFG_VM_HOST, FIELD_MODE } from './field-config.mjs';
 
 export const HOME_BASE = CFG_HOME_BASE;
 const PERSONA_FILE = CFG_PERSONA_FILE; // the agent's self-authored, operator-confirmed instructions
@@ -602,6 +602,66 @@ export const POWERS = harden({
 });
 export const ALL_POWERS = harden(Object.keys(POWERS));
 harden(POWERS);
+
+// ── PLATFORM vs PERSONAL power split (Packing-up-for-Dweb P2) ──────────────────────────────────
+// The machine runs in two modes (field-config FIELD_MODE). In PLATFORM mode — a clean, multi-tenant
+// Agent C safe to hand strangers — the ROOT node must NOT hold any of dan's personal/admin authority;
+// in PERSONAL mode (dan's encrypted volume present) dan is the privileged user-0 and holds everything.
+//
+// CLASSIFICATION PRINCIPLE (fail-closed): a power is PLATFORM only if a stranger's fresh instance can
+// hold it WITHOUT reaching dan's personal data, credentials, notification channels, the host, or the
+// admin/self-modification surface — i.e. it is self-contained and tenant-scoped. Everything that reaches
+// dan's vault, address book, home, email/social creds, phone/feed/inbox, the dev VM or THIS host, the
+// persona/machine fleet, or that self-modifies the agent/codebase is PERSONAL. **When unsure → PERSONAL**
+// (the platform gets LESS). The confined component/render/fork verbs (showComponent/forkComponent/…) are
+// NOT power-gated at all — they are always-on in both modes — so they are absent from both lists.
+//
+// PLATFORM (safe multi-tenant capabilities):
+//   web/research/youtube/browser — public web + a bounded research team (no dan-data reach).
+//   images                        — GPU image generation (the gpu-lease family).
+//   objects                       — accept Endo invites into the tenant's OWN inventory + call held objects
+//                                   (each accept is tenant-confirmed; reaches only what the tenant accepted).
+//   roles/specialists/delegate    — spawn sub-agents CONFINED to a SUBSET of the tenant's own ring
+//                                   (a delegate can only re-grant powers its parent already holds → never
+//                                   an escalation; the by-reference bundle enforces it).
+//   schedule                      — recurring autonomous tasks that run with the tenant's OWN (platform-safe)
+//                                   ring; does NOT ping dan (that is `timers`, which is PERSONAL).
+//   home                          — publish the tenant's own self-scoped scratch as a site / download link
+//                                   (outward sharing of the per-cap scratch; the scratch r/w itself is free).
+//   customtools                   — run admitted, owner-reviewed, SANDBOXED pure-JS tools (no fs/net/shell).
+export const PLATFORM_POWERS = harden([
+  'web', 'research', 'youtube', 'images', 'browser',
+  'objects', 'roles', 'specialists', 'delegate', 'schedule', 'home', 'customtools',
+]);
+// PERSONAL (dan's data / creds / channels / host / admin / meta — never reachable in platform mode):
+//   notes/notes.dietician/jotNote/editNote — dan's vault (read + write).
+//   reference        — reaches friky's Kiwix / little-free-library (dan's box) → fail-closed to PERSONAL.
+//   feed/contact/phone/timers — reach dan's feed, ntfy push, back-channel + the human-pinging scheduler.
+//   connectors       — calls services with dan's server-injected API keys.
+//   homeassistant    — dan's Home Assistant (physical world: locks).
+//   email/buffer     — send with dan's email / social-media credentials.
+//   contacts         — dan's address book.
+//   kazputer/dietician — provision/administer dan's Kazputer network + household dietician pipeline.
+//   vm/host/agents   — the dev VM shell, THIS host's shell, and the persona/machine fleet (admin).
+//   selfPrompt/subagent/toolsmith/app/selfImprove — self-modification + host-shell delegation + whole-app
+//                      introspection (the META powers) — root-only self-modification authority.
+//   chatCorpus       — reads the WHOLE conversation corpus (cross-tenant leak in a multi-tenant instance).
+export const PERSONAL_POWERS = harden(ALL_POWERS.filter(p => !PLATFORM_POWERS.includes(p)));
+// The platform-admin cap's ring: administers the PLATFORM but holds NO personal power. Today = the full
+// platform ring (finer tenant-management verbs would be a future dedicated power); minted from this set so
+// even the platform operator's cap structurally cannot reach dan's personal authority — true in BOTH modes.
+export const PLATFORM_ADMIN_POWERS = harden([...PLATFORM_POWERS]);
+// PARTITION INVARIANT (fail-closed guard, checked at load): PLATFORM ⊎ PERSONAL == ALL_POWERS, disjoint,
+// and no META power ever lands in PLATFORM. A mis-classification that would leak authority throws at boot.
+{
+  const _meta = ['subagent', 'app', 'selfImprove', 'toolsmith'];
+  const _overlap = PLATFORM_POWERS.filter(p => PERSONAL_POWERS.includes(p));
+  const _union = new Set([...PLATFORM_POWERS, ...PERSONAL_POWERS]);
+  const _metaLeak = PLATFORM_POWERS.filter(p => _meta.includes(p));
+  if (_overlap.length) throw Error(`PLATFORM/PERSONAL powers overlap: ${_overlap.join(', ')}`);
+  if (_union.size !== ALL_POWERS.length || !ALL_POWERS.every(p => _union.has(p))) throw Error('PLATFORM ⊎ PERSONAL must equal ALL_POWERS');
+  if (_metaLeak.length) throw Error(`META power(s) must never be PLATFORM: ${_metaLeak.join(', ')}`);
+}
 // A requested capability name may be a POWER ("selfPrompt") or a VERB ("proposeSystemPrompt") — the agent
 // naturally asks for the verb it needs. Map either to the grantable POWER so requestAccess + the Grant UI
 // name something the operator can actually grant (the #1 reason a power request wasn't surfaceable).
@@ -637,7 +697,15 @@ export const NEVER_AUTO = harden(new Set([
 // ── build the agent. Returns the locator + a root node holding ALL powers. ────
 // makeFieldAgent({ outDir, baseUrl }) →
 //   { locator, register, rootNode, rootSwiss(set later), toolboxFor, manifestFor }
-export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFile, fillSpecialist, wandPolicy, customView = {}, peerBridge = endoPeer, peerRedemption = process.env.FIELD_AGENT_PEER_REDEMPTION === '1' } = {}) => {
+export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFile, fillSpecialist, wandPolicy, customView = {}, peerBridge = endoPeer, peerRedemption = process.env.FIELD_AGENT_PEER_REDEMPTION === '1', fieldMode = FIELD_MODE } = {}) => {
+  // ── PLATFORM vs PERSONAL gate (Packing-up-for-Dweb P2). The ROOT holds ALL_POWERS in personal mode; in
+  //    platform mode it holds ONLY PLATFORM_POWERS. This is the ONE narrowing — the root power BUNDLE (built
+  //    below from ROOT_POWERS) is the source of truth, so in platform mode a personal power's REFERENCE never
+  //    exists anywhere in the graph: no mint / regrant / delegate / wand can fabricate it (attenuate can only
+  //    hand out refs that are held). Mode is a param (defaulting to field-config FIELD_MODE) so it is testable
+  //    without env/module-cache games; the live server passes none → uses FIELD_MODE. ──
+  const PLATFORM_MODE = fieldMode === 'platform';
+  const ROOT_POWERS = PLATFORM_MODE ? PLATFORM_POWERS : ALL_POWERS;
   const aff = makeAffordances({ outDir });
   // worktree manager for write-capable role sub-agents (runs on the UNCONFINED host shell).
   const worktrees = makeWorktrees({ host: aff.host });
@@ -730,7 +798,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // executor (Opus) jailed to it, commit its working tree to a branch on teardown, return { branch }.
   const runWorktreeExecutor = async ({ goal, successCommand, signal } = {}) => {
     const spec = getRole('executor');
-    const ring = [...new Set((spec.powers || []).filter(p => ALL_POWERS.includes(p) && !META_POWERS.has(p)))]; // host/home/web/research
+    const ring = [...new Set((spec.powers || []).filter(p => ROOT_POWERS.includes(p) && !META_POWERS.has(p)))]; // host/home/web/research (⊆ the root's mode-gated held set)
     const wtId = `improve-${newSwiss().slice(0, 10)}`;
     let wt = null;
     try { wt = await worktrees.create(wtId); } catch (e) { return { branch: null, error: `worktree setup failed: ${String((e && e.message) || e)}` }; }
@@ -2399,8 +2467,11 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       .map(v => (baseVerb[v] ? harden({ name: v, aff: baseVerb[v] }) : null))
       .filter(Boolean)),
   }));
+  // Built from ROOT_POWERS, NOT ALL_POWERS: in personal mode that is ALL_POWERS (full authority); in
+  // platform mode it is PLATFORM_POWERS, so no personal power-reference is ever minted — the root (and
+  // therefore every node/mint/delegate attenuated from it) literally cannot reach a personal power.
   const rootPowerBundle = makeCapabilityBundle(
-    Object.fromEntries(ALL_POWERS.map(p => [p, makePowerRef(p)])),
+    Object.fromEntries(ROOT_POWERS.map(p => [p, makePowerRef(p)])),
   );
   // The DELEGATION EDGE, by reference: re-grant to a sub-agent by intersecting the
   // requested names with the bundle you HOLD (attenuate — an absent/unheld name is
@@ -2720,7 +2791,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     return node;
   };
 
-  const rootNode = makeAgentNode({ powers: ALL_POWERS, labelOf: 'root', isRoot: true, haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, contactsBinding: () => contactsObj, wandBinding: () => wand });
+  const rootNode = makeAgentNode({ powers: ROOT_POWERS, labelOf: 'root', isRoot: true, haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, contactsBinding: () => contactsObj, wandBinding: () => wand }); // ROOT_POWERS = ALL_POWERS (personal) | PLATFORM_POWERS (platform)
 
   // ── specialist lifecycle (uses makeAgentNode + the locator) ─────────────────
   // Build a specialist's node: confined to its granted powers, its own id (so its
@@ -2824,7 +2895,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // `selfImprove` (autonomous implement→verify→auto-merge) is granted ONLY to IMPLEMENT-mode tasks; every
     // legacy/recommend-mode task has it stripped exactly like a META power, so they can only propose.
     // strip META as usual, EXCEPT grant `selfImprove` to IMPLEMENT-mode tasks (the one controlled exception).
-    const granted = [...new Set((Array.isArray(powers) ? powers : []).filter(p => ALL_POWERS.includes(p) && (!META_POWERS.has(p) || (p === 'selfImprove' && mode === 'implement'))))];
+    const granted = [...new Set((Array.isArray(powers) ? powers : []).filter(p => ROOT_POWERS.includes(p) && (!META_POWERS.has(p) || (p === 'selfImprove' && mode === 'implement'))))];
     const node = makeAgentNode({
       powers: granted, labelOf: `scheduled-${homeSubkey || 'global'}`,
       haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null,
@@ -2928,7 +2999,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     return node;
   };
   const mintScopedCap = ({ powers = [], label = '', notesFolder = '' } = {}) => {
-    const granted = [...new Set((Array.isArray(powers) ? powers : []).filter(p => ALL_POWERS.includes(p)))];
+    const granted = [...new Set((Array.isArray(powers) ? powers : []).filter(p => ROOT_POWERS.includes(p)))]; // ⊆ the root's mode-gated held set (bundle attenuation is the real gate; this keeps the reported set honest)
     const nf = cleanNotesFolder(notesFolder);
     const swiss = newSwiss();
     // a DESCRIPTIVE name (no LLM round trip) so the agent reads "notes + web agent" / its given label, not the
@@ -2940,11 +3011,24 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     scopedCaps = scopedCaps.concat({ swiss, powers: granted, label: name, ...(nf ? { notesFolder: nf } : {}) }); saveScoped(); // survive restarts
     return harden({ ok: true, swiss, powers: granted, name, notesFolder: nf || undefined, url: `${baseUrl}/#cap=${swiss}` });
   };
+  // ── PLATFORM-ADMIN cap (Packing-up-for-Dweb P2) ─────────────────────────────────────────────────
+  // A cap that administers the PLATFORM but holds NO personal power. Requested powers are intersected with
+  // PLATFORM_ADMIN_POWERS (⊆ PLATFORM_POWERS, disjoint from PERSONAL_POWERS), so a personal power can never
+  // even be requested; the by-reference bundle attenuation in mintScopedCap then guarantees the minted node
+  // holds ONLY platform refs. This holds in BOTH modes — in PERSONAL mode dan can hand a platform operator a
+  // cap that structurally cannot reach his vault/host/creds; in PLATFORM mode it equals the (already
+  // personal-free) root ring. The defensive assertion makes a future mis-classification fail loudly.
+  const mintPlatformAdmin = ({ label = 'platform-admin', powers = PLATFORM_ADMIN_POWERS } = {}) => {
+    const want = [...new Set((Array.isArray(powers) ? powers : [...powers]).filter(p => PLATFORM_ADMIN_POWERS.includes(p)))];
+    const leaked = want.filter(p => PERSONAL_POWERS.includes(p));
+    if (leaked.length) throw Error(`platform-admin may not hold personal powers: ${leaked.join(', ')}`);
+    return mintScopedCap({ powers: want, label });
+  };
   // Re-scope an EXISTING chat cap to a new power set (add/revoke powers): re-register the SAME swiss
   // with the new ring + persist. The cap stays the same (the chat link doesn't change), its authority
   // changes. Returns the new ring. (Root authority — the server gates this on the root cap.)
   const rescopeCap = (swiss, powers, notesFolder) => {
-    const granted = [...new Set((Array.isArray(powers) ? powers : []).filter(p => ALL_POWERS.includes(p)))];
+    const granted = [...new Set((Array.isArray(powers) ? powers : []).filter(p => ROOT_POWERS.includes(p)))];
     const rec = scopedCaps.find(c => c.swiss === String(swiss));
     if (!rec) return harden({ ok: false, error: 'unknown scoped cap' });
     // notesFolder: undefined → keep the existing scope; '' → clear (whole vault); a path → scope to it.
@@ -2970,6 +3054,9 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     specialistNudges,
     runSpecialistNudge,
     mintScopedCap,
+    mintPlatformAdmin, // mint a platform-admin cap (holds only PLATFORM_ADMIN_POWERS — no personal authority)
+    mode: fieldMode, // 'personal' | 'platform' — which authority regime this instance was built under
+    rootPowers: harden([...ROOT_POWERS]), // the exact power-set the root holds in this mode (introspection)
     // human-visible CHANGELOG of self-applied (auto-merged) improvements + one-click revert. The server
     // gates both on the ROOT cap. revert = git revert -m 1 of the recorded merge commit (history-preserving).
     changelog: harden({
