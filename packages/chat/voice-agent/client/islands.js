@@ -49,7 +49,6 @@ import { TraceSignature } from './trace-signature.js';
 import { ObjectBrowser } from './object-browser.js';
 import { ShareLinkManager } from './share-link-manager.js';
 import { FileBrowser } from './file-browser.js';
-import { TaglineHero } from './tagline-hero.js';
 import { HeaderBar } from './header-bar.js';
 import { InputRow } from './input-row.js';
 import { DrawerFrame } from './drawer-frame.js';
@@ -78,7 +77,7 @@ const renderPropagator = (el, cells, view) =>
 // the HOST owns + re-renders, e.g. the ask/proposal cards appended individually into the chat log).
 const COMPONENTS = {
   SharesPanel, NotificationCard, ChangelogList, PowersBanner, KitSampler, AskCard, ProposalCard,
-  ChatList, MessageControls, ChatMetaBar, DevTaskCard, ExhaustedCard, TraceSignature, ObjectBrowser, ShareLinkManager, FileBrowser, TaglineHero,
+  ChatList, MessageControls, ChatMetaBar, DevTaskCard, ExhaustedCard, TraceSignature, ObjectBrowser, ShareLinkManager, FileBrowser,
 };
 
 // The authoring vocabulary handed to an untrusted FORK as compartment globals (see renderSource): preact's
@@ -331,14 +330,6 @@ const islands = {
   // re-render). For per-card surfaces where the HOST owns the state + calls this again on each change —
   // e.g. the ask/proposal cards appended individually into the chat log (live wiring). Returns false if
   // the name is unknown.
-  // The landing tagline (P4 leaf): a confined, alt-clickable, EDITABLE island where a static <div> used to be.
-  renderTaglineHero(el, text) {
-    if (!el) return false;
-    tagComponent(el, 'island-tagline-hero', 'Landing tagline');
-    renderConfined(h(TaglineHero, { text }), el);
-    return true;
-  },
-
   // The header bar (P4 shell leaf): renders the structure into the existing <header>; app.js wires by id.
   renderHeaderBar(el) {
     if (!el) return false;

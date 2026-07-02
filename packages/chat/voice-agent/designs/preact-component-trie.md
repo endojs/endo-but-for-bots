@@ -437,7 +437,28 @@ stay host callbacks, view state re-mounts). Both keep their legacy DOM as fallba
 seed count, so `chrome-components.staging.test.cjs`'s `reg.components.length === 4` needs a one-line
 bump to `=== 6` (only that assertion; 77/78 pass) — left for the staging-test owner.
 
-**Increment 2 landed (this pass):** `chrome-dev-task-card` (ISL-3 — the Blacksmith/dev task card, mounted at
+**Increment 3 landed (this pass):** `chrome-notification-card` (ISL-3 — the 🔔 inbox "Recent activity" list, mounted
+at `renderInbox`'s `rec-list`; the NotificationCard island → imperative `notifCard` stay as the fallback ladder) and
+`chrome-changelog` (ISL-3 — the 🔧 self-applied-changes log, mounted at `renderChangelog`'s `chg-list`; the
+ChangelogList island → imperative rows stay as fallback). Both keep their load-bearing classes (`.notif`/`.ntitle`/
+`.nbody`/`.nmeta`/`.ndone`/`.nlink`; `.ncard`/`.chg-revert`/`.pill`) so live CSS + selectors match, hold NO cap
+(props are the ocap boundary), and — for notifications — preserve cap-hygiene by construction: links carry a
+`{ label }` only, `onOpenLink(itemIdx, linkIdx)` has the host resolve + open the real (out-of-DOM) href/cap so a
+swissnum never enters the DOM. `renderInbox`/`renderChangelog` `await chromeReady` before deciding (no chrome↔island
+flip-flop), and `reloadChromeComps` now repaints the inbox live after an edit/revert. **DEAD-3 CLOSED for
+`island-tagline-hero`:** fully superseded by `chrome-welcome`, it is now REMOVED — the client file
+(`client/tagline-hero.js`), the `island-source.mjs` registry row, and the `client/islands.js`
+import/`COMPONENTS`/`renderTaglineHero` entries are deleted; the `mountWelcome` fallback ladder is now
+`chrome-welcome → static text` (the island rung is gone). The chrome seed count is now 11 — the convergence staging
+test asserts `>= 6` and `chrome-components.staging.test.cjs` asserts `>= 4`, so adding pieces stays green (its fold
+assertion was made count-agnostic: top 6 + a "▸ show N more" toggle). Proof: `chrome-islands-convergence.staging.test.cjs`
+(57/57 — each new piece renders confined, host callbacks fire, notification links render NO href/#cap, a broken edit is
+render-check-refused, and the removed tagline-hero method is asserted gone with the app still booting) + a live isolated-server
+smoke (inbox renders with 0 page errors; `chrome-welcome` still mounts + tags after the island removal). Regressions green:
+`test:chrome` (78/78), `test:theme`, `test:confinement` (11/11), `test:component-select` (23/23), `inbox-island` (5/5),
+`islands-ui` (22/22).
+
+**Increment 2 landed (prior pass):** `chrome-dev-task-card` (ISL-3 — the Blacksmith/dev task card, mounted at
 `devCard`; the imperative build became `legacyDevCard` fallback; `/thread/reply` + expand/draft view-state
 stay host callbacks, host re-mounts on change), `chrome-ask-card` (ISL-3 — the inline feedback-loop card,
 mounted at `buildAskCard`'s `draw()`; the AskCard *island* is the fallback, a static title the final rung;
@@ -459,11 +480,11 @@ a broken edit falls back to legacy, host callbacks fire).
 | `island-message-controls` | `userBubbleControls` | ✅ **DONE → chrome-msg-controls** |
 | `island-exhausted-card` | `renderExhausted` | ✅ **DONE → chrome-exhausted** |
 | `island-msg-toolbar`*(n/a)* | — | ✅ already chrome (`chrome-msg-toolbar`) |
-| `island-tagline-hero` | landing text | ✅ superseded by `chrome-welcome` (fallback ladder keeps the island); **delete** = coordinated pass (sibling-owned island files) |
+| `island-tagline-hero` | landing text | ✅ **REMOVED (DEAD-3, increment 3)** — client file + registry/barrel entries deleted; `chrome-welcome` is the sole path (fallback ladder = chrome-welcome → static text) |
 | `island-ask-card` | `buildAskCard`/AskCard | ✅ **DONE → chrome-ask-card** (twin AskCard island kept as fallback) |
 | `island-dev-task-card` | `devCard` | ✅ **DONE → chrome-dev-task-card** (imperative `legacyDevCard` kept as fallback) |
-| `island-notifications` | inbox cards | ⬜ ISL-3 · promote inbox cards to chrome |
-| `island-changelog` | inbox cards | ⬜ ISL-3 · promote inbox cards to chrome |
+| `island-notifications` | inbox cards | ✅ **DONE → chrome-notification-card** (increment 3; NotificationCard island + imperative `notifCard` kept as fallback ladder) |
+| `island-changelog` | inbox cards | ✅ **DONE → chrome-changelog** (increment 3; ChangelogList island + imperative rows kept as fallback) |
 | `island-chat-list` | `renderChatList` | ⬜ ISL-3 · `chrome-chat-list` — **complex** (twin adds search/nesting/inflight/pagination; port those into props first) |
 | `island-chat-meta-bar` | `renderChatBar` | ✅ **DONE → chrome-chat-bar** (both memo + chat modes; legacy innerHTML kept as fallback; `applyShareMode` stays a host concern) |
 | `island-object-browser` | object nav | ⬜ DEAD-3 gallery-dup · promote or delete |

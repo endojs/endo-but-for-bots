@@ -29,7 +29,7 @@ const ISLANDS = [
   { id: 'island-object-browser', name: 'Object browser', file: 'client/object-browser.js' },
   { id: 'island-share-link-manager', name: 'Share link manager', file: 'client/share-link-manager.js' },
   { id: 'island-file-browser', name: 'File browser', file: 'client/file-browser.js' },
-  { id: 'island-tagline-hero', name: 'Landing tagline', file: 'client/tagline-hero.js' },
+  // island-tagline-hero removed (ARCH-1 increment 3 / DEAD-3): fully superseded by chrome-welcome.
   { id: 'island-header-bar', name: 'Header bar', file: 'client/header-bar.js' },
   { id: 'island-input-row', name: 'Composer input row', file: 'client/input-row.js' },
   { id: 'island-drawer-frame', name: 'Sidebar / drawer', file: 'client/drawer-frame.js' },

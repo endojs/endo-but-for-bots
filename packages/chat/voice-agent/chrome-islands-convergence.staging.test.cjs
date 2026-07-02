@@ -4,6 +4,10 @@
 // twins are promoted onto the git-backed CHROME lane —
 //   • message-controls (island + userBubbleControls twin)  → chrome-msg-controls  (ISL-2)
 //   • exhausted-card   (island + renderExhausted twin)      → chrome-exhausted     (ISL-3/DEAD-3)
+// Increment 2 added chrome-dev-task-card / chrome-ask-card / chrome-chat-bar. Increment 3 (this pass) adds:
+//   • notifications    (island + notifCard twin, rec-list)  → chrome-notification-card (ISL-3)
+//   • changelog        (island + imperative rows twin)      → chrome-changelog          (ISL-3)
+// and REMOVES the fully-superseded island-tagline-hero (DEAD-3; chrome-welcome covers it) — asserted below.
 // Each is now a `(endowments, props) => vnode` source seeded into component-git at boot, rendered through
 // the confined no-iframe path under FIELD_LOCKDOWN, alt-click-selectable by registry identity, live-editable
 // (render-check-gated: a throwing edit is REFUSED and the seed stays), and mounted by the host with the
@@ -57,6 +61,20 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
   ok(/^[0-9a-f]{6,40}$/.test(String(dt.version)) && /^[0-9a-f]{6,40}$/.test(String(ac.version)) && /^[0-9a-f]{6,40}$/.test(String(cb.version)),
     'each increment-2 piece carries a real git version (its own lineage + backlog)');
 
+  // ── increment 3: chrome-notification-card / chrome-changelog seeded with their contracts ──────────────
+  const nc = byId['chrome-notification-card'] || {};
+  const cg = byId['chrome-changelog'] || {};
+  ok(reg.ok && byId['chrome-notification-card'] && byId['chrome-changelog'],
+    'increment-3 pieces (chrome-notification-card / chrome-changelog) are both seeded + served');
+  ok(/'notif card-open'|notif card-open/.test(nc.source) && /nlink/.test(nc.source) && /props\.onOpenLink/.test(nc.source) && /props\.onOpen\b/.test(nc.source),
+    'chrome-notification-card source carries the .notif/.nlink classes + the onOpen/onOpenLink contract (links are label-only — cap-hygienic)');
+  ok(/chg-revert/.test(cg.source) && /ncard/.test(cg.source) && /props\.onRevert/.test(cg.source),
+    'chrome-changelog source carries the .ncard/.chg-revert classes + the onRevert contract');
+  ok(nc.source.length < 16000 && cg.source.length < 16000,
+    `both increment-3 sources are under the 16k source cap (${nc.source.length}/${cg.source.length})`);
+  ok(/^[0-9a-f]{6,40}$/.test(String(nc.version)) && /^[0-9a-f]{6,40}$/.test(String(cg.version)),
+    'each increment-3 piece carries a real git version (its own lineage + backlog)');
+
   // ── 2. render-check gate: a THROWING edit is REFUSED — the live piece can only degrade to its own seed ─
   const badMc = await jpost('/components/edit', { cap: srv.cap, id: 'chrome-msg-controls', source: '(endowments, props) => { throw new Error("mc boom") }' });
   ok(badMc.ok === false && /render check/i.test(badMc.error || ''), `a throwing chrome-msg-controls edit is refused by the render check (${(badMc.error || '').slice(0, 46)}…)`);
@@ -69,6 +87,10 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
   // the same render-check gate protects the increment-2 pieces (proves the alt-click edit lane works for them)
   const badDt = await jpost('/components/edit', { cap: srv.cap, id: 'chrome-dev-task-card', source: '(endowments, props) => { throw new Error("dt boom") }' });
   ok(badDt.ok === false && /render check/i.test(badDt.error || ''), 'a throwing chrome-dev-task-card edit is refused by the render check (seed preserved)');
+  const badNc = await jpost('/components/edit', { cap: srv.cap, id: 'chrome-notification-card', source: '(endowments, props) => { throw new Error("nc boom") }' });
+  ok(badNc.ok === false && /render check/i.test(badNc.error || ''), 'a throwing chrome-notification-card edit is refused by the render check (seed preserved)');
+  const badCg = await jpost('/components/edit', { cap: srv.cap, id: 'chrome-changelog', source: 'garbage(((' });
+  ok(badCg.ok === false, 'an unparseable chrome-changelog edit is refused (seed preserved)');
 
   // ── 3. a GOOD edit lands as a new version (proves the alt-click edit-chat lane works for the new ids) ──
   const V2 = mc.source.replace('const kids = [', 'const kids = [ /* mc-v2 */');
@@ -192,6 +214,40 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
           openedParent, openedProj };
       }
 
+      // chrome-notification-card: confined mount of the recent-activity list; open a card + a label-only link.
+      {
+        const el = document.createElement('div'); document.body.appendChild(el);
+        let opened = null; let openedLink = null; let done = null;
+        const okn = isl.renderChrome(el, idx['chrome-notification-card'].source,
+          { items: [{ id: 'n1', title: 'Voice note → actions', time: '2m', body: 'Book Berlin', agent: 'capture', avatar: '🤖', status: 'needs input', links: [{ label: '💬 open chat' }], attention: true }],
+            withDone: true, onOpen(id) { opened = id; }, onDone(id) { done = id; }, onOpenLink(ii, li) { openedLink = [ii, li]; } },
+          { componentId: 'chrome-notification-card', name: 'Notification list' });
+        const link = el.querySelector('.nlink'); if (link) link.click();
+        const doneBtn = el.querySelector('.ndone'); if (doneBtn) doneBtn.click();
+        const cardEl = el.querySelector('.notif'); if (cardEl) cardEl.click();
+        // cap-hygiene: no swissnum / href ever enters the rendered DOM (links are label-only, host-resolved).
+        const html = el.innerHTML;
+        out.nc = { okn, title: /Voice note/.test(el.textContent), hasLink: !!el.querySelector('.nlink'), att: !!el.querySelector('.notif.att'),
+          opened, openedLink, done, noHref: !/href=|#cap=/.test(html), id: el.getAttribute('data-component-id') };
+      }
+
+      // chrome-changelog: confined mount; a live row offers ↩ Revert → onRevert(id); a reverted row is a pill.
+      {
+        const el = document.createElement('div'); document.body.appendChild(el);
+        let reverted = null;
+        const okg = isl.renderChrome(el, idx['chrome-changelog'].source,
+          { merges: [{ id: 'm1', goal: 'add clearResolved()', when: 'today', sha: 'a1b2c3d4', rolledBack: false },
+            { id: 'm2', goal: 'older change', when: 'yesterday', sha: '9f8e7d6c', rolledBack: true, revertedWhen: 'today' }],
+            onRevert(id) { reverted = id; } },
+          { componentId: 'chrome-changelog', name: 'Changelog' });
+        const rev = el.querySelector('.chg-revert'); if (rev) rev.click();
+        out.cg = { okg, rows: el.querySelectorAll('.ncard').length, hasRevert: !!el.querySelector('.chg-revert'),
+          hasPill: !!el.querySelector('.pill'), reverted, id: el.getAttribute('data-component-id') };
+      }
+
+      // DEAD-3: the removed tagline-hero island's render method is GONE — the app boots + renders without it.
+      out.deadTagline = { removed: typeof isl.renderTaglineHero !== 'function', stillHasChrome: typeof isl.renderChrome === 'function' };
+
       // broken edit → renderChrome returns FALSE (the host then paints the legacy fallback, never a blank).
       {
         const el = document.createElement('div'); document.body.appendChild(el);
@@ -227,6 +283,18 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
     ok(r.cb.vnext === true && r.cb.rerun === true, 'clicking ▶ + "↻ Re-run" fires onVersionNext/onRerun — host callbacks (memo mode)');
     ok(r.cb.okc === true && r.cb.chatTitle && r.cb.badge, 'chrome-chat-bar (chat mode) renders the title + the 🔒 read-only share-rights badge from props');
     ok(r.cb.openedParent === 'p1' && r.cb.openedProj === 'pr1', 'clicking the ↑parent + 📂project chips fires onOpenParent/onOpenProject — host callbacks (chat mode)');
+
+    ok(r.nc.okn === true && r.nc.title && r.nc.hasLink && r.nc.att, 'chrome-notification-card renders confined (a .notif.att card with body + a label-only .nlink)');
+    ok(r.nc.opened === 'n1' && Array.isArray(r.nc.openedLink) && r.nc.openedLink[0] === 0 && r.nc.done === 'n1',
+      'clicking the card fires onOpen("n1"), the link fires onOpenLink(0,0), Done fires onDone("n1") — host callbacks, the props boundary');
+    ok(r.nc.noHref, 'the notification card renders NO href / #cap= — links are label-only, the host resolves them out-of-DOM (cap-hygiene)');
+    ok(r.nc.id === 'chrome-notification-card', 'the notification list mount is alt-click-selectable by registry identity');
+
+    ok(r.cg.okg === true && r.cg.rows === 2 && r.cg.hasRevert && r.cg.hasPill, 'chrome-changelog renders confined (2 .ncard rows: a live ↩ Revert + a reverted pill)');
+    ok(r.cg.reverted === 'm1', 'clicking ↩ Revert fires onRevert("m1") — a host callback (the real git revert stays host-side)');
+    ok(r.cg.id === 'chrome-changelog', 'the changelog mount is alt-click-selectable by registry identity');
+
+    ok(r.deadTagline.removed && r.deadTagline.stillHasChrome, 'DEAD-3: the tagline-hero island render method is removed (superseded by chrome-welcome) and the app still boots + renders chrome');
 
     ok(r.broken.returnedFalse, 'a throwing chrome source → renderChrome returns FALSE → the host falls back to the legacy DOM (never a blank)');
     ok(errs.length === 0, `no uncaught page errors during the confined mounts (${errs.slice(0, 2).join(' | ')})`);
