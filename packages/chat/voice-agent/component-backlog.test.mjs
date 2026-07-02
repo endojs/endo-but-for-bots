@@ -146,3 +146,27 @@ test('remove drops the whole backlog (and pushes the empty view)', () => {
   assert.deepEqual(backlog.counts('uicomp-r'), { open: 0, total: 0 });
   assert.equal(seen[seen.length - 1].counts.total, 0);
 });
+
+test('SEC-15 addOnlyFacet: STRUCTURAL add-only — bound to one id, exposes ONLY add', () => {
+  const { backlog } = setup();
+  const facet = backlog.addOnlyFacet('uicomp-sec15');
+  // the facet's SHAPE is the boundary: it carries add and nothing else (no read/list/resolve/remove).
+  assert.deepEqual(Object.keys(facet), ['add'], 'facet exposes exactly { add }');
+  for (const forbidden of ['list', 'open', 'counts', 'setStatus', 'remove', 'cellFor', 'contextNote']) {
+    assert.equal(facet[forbidden], undefined, `facet must NOT expose ${forbidden}`);
+  }
+  // it files against the id it was bound to…
+  const r = facet.add({ kind: 'issue', title: 'reported via share link', from: 'abc' });
+  assert.equal(r.ok, true);
+  assert.equal(backlog.list('uicomp-sec15').length, 1, 'the add landed on the bound component');
+  // …and CANNOT reach any other component's backlog (add ignores any id in the item payload).
+  facet.add({ id: 'uicomp-other', kind: 'issue', title: 'attempt to cross-file' });
+  assert.deepEqual(backlog.counts('uicomp-other'), { open: 0, total: 0 }, 'no cross-object write');
+  assert.equal(backlog.list('uicomp-sec15').length, 2, 'the second add also stayed on the bound id');
+});
+
+test('SEC-15 addOnlyFacet is frozen (hardened) — cannot be augmented with a read verb', () => {
+  const { backlog } = setup();
+  const facet = backlog.addOnlyFacet('uicomp-frozen');
+  assert.throws(() => { facet.list = () => 'leak'; }, 'hardened facet refuses new properties');
+});

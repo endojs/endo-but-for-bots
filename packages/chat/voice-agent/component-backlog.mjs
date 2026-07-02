@@ -68,6 +68,13 @@ export const makeComponentBacklog = ({ file, maxItems = 200 } = {}) => {
     return { ok: true, id: item.id, deduped: false, count: 1 };
   };
 
+  // SEC-15: the ADD-ONLY facet, now STRUCTURAL rather than route discipline. A share/fork recipient (and
+  // the /components|forks/backlog/report routes) hold ONLY this object — bound to one componentId by
+  // construction — so add-only is enforced by the SHAPE of the capability they were handed (no list/open/
+  // counts/setStatus/remove/cellFor to reach), not by a route remembering to call the right method. The
+  // holder can file exactly one kind of thing against exactly one object and read nothing back.
+  const addOnlyFacet = id => { const k = clean(id, 80); return harden({ add: item => add(k, item) }); };
+
   // owner reads — never reachable from the add-only facet (the routes enforce that; nothing here is).
   const list = (id, { status } = {}) => { const rec = recFor(clean(id, 80)); const items = (rec && rec.items) || []; return (status ? items.filter(it => it.status === status) : items).map(itemView); };
   const open = id => list(id, { status: 'open' });
@@ -115,6 +122,6 @@ export const makeComponentBacklog = ({ file, maxItems = 200 } = {}) => {
     return `\n\nOPEN BACKLOG for "${clean(name || id, 80)}" — ${items.length} item(s) filed against this component (runtime errors auto-file; share recipients file issues). Address what's relevant this conversation and resolve items you fix with resolveBacklogItem:\n${items.map(it => `- [${it.kind}] ${it.title}${it.count > 1 ? ` (×${it.count})` : ''}${it.body ? ` — ${clean(it.body, 200)}` : ''} (item ${it.id}, from ${it.from || 'unknown'})`).join('\n')}`;
   };
 
-  return harden({ ensure, add, list, open, counts, setStatus, remove, cellFor, contextNote });
+  return harden({ ensure, add, addOnlyFacet, list, open, counts, setStatus, remove, cellFor, contextNote });
 };
 harden(makeComponentBacklog);
