@@ -34,6 +34,7 @@
     "test:render-guard": "node --test render-guard.test.mjs",
     "test:render-smell": "node render-smell.staging.test.cjs",
     "test:sidebar-subagents": "node sidebar-subagents.staging.test.cjs",
+    "test:seed-live": "node seed-live-rows.staging.test.cjs",
     "test:pendant-subagents": "node pendant-subagents.staging.test.cjs",
     "test:inpaint-widget": "node inpaint-widget.staging.test.cjs",
     "test:blossom": "node --test blossom.test.mjs",
@@ -54,6 +55,7 @@
     "test:component-backlog": "node component-backlog.staging.test.cjs",
     "test:chrome": "node chrome-components.staging.test.cjs",
     "test:trace-cells": "node --test trace-cells.test.mjs",
+    "test:seed-cells": "node --test seed-cells.test.mjs",
     "test:trace-island": "node trace-island.staging.test.cjs"
   },
   "dependencies": {

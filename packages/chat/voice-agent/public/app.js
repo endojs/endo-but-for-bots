@@ -2062,6 +2062,47 @@ const loadSeedChats = async () => {
     if (added) { saveChats(); renderChatList(); tryOpenPendingChat(); }
   } catch {}
 };
+// ── LIVE inbound-capture rows: FOLLOW the seeds:<owner> propagator cell over the one /cells/subscribe
+//    broker (owner-gated server-side — a non-owner just never sees any). The /ingest pipeline PUSHES a
+//    stage on every transition (received → understanding → proposed), so a voice note appears in the chats
+//    list the instant it arrives and advances while it's analyzed — no polling. `self` resolves server-side
+//    to THIS cap's own owner key (no key in the request → cap-hygiene). When a capture reaches proposed/done
+//    its seed-chat has landed, so we pull it via loadSeedChats and the in-flight row dedupes away.
+let inflightSeeds = []; // [{ id, title?, stage, at, chatId? }] — the current seeds:self cell value
+let seedCellAbort = null;
+const STAGE_LABEL = { received: '🎙️ received…', transcribing: '🎙️ transcribing…', understanding: '🧠 understanding…', proposed: '✍️ proposing…', done: '✓ ready' };
+const subscribeSeedCells = async () => {
+  if (!cap || seedCellAbort) return; // one stream for the life of the tab
+  seedCellAbort = new AbortController();
+  try {
+    const res = await fetch('/cells/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, cells: ['seeds:self'] }), signal: seedCellAbort.signal });
+    if (!res.ok || !res.body) { seedCellAbort = null; return; }
+    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+    for (;;) {
+      const { done, value } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i; while ((i = buf.indexOf('\n\n')) >= 0) {
+        const block = buf.slice(0, i); buf = buf.slice(i + 2);
+        const line = block.split('\n').find(l => l.startsWith('data:')); if (!line) continue;
+        try {
+          const m = JSON.parse(line.slice(5).trim());
+          if (m && !m.error && Array.isArray(m.value)) {
+            inflightSeeds = m.value;
+            // a capture that reached proposed/done has a real seed-chat now — adopt it promptly so the
+            // in-flight row resolves into the normal row (loadSeedChats dedupes; then it drops out here).
+            if (inflightSeeds.some(c => (c.stage === 'proposed' || c.stage === 'done') && c.chatId && !chats.some(x => x.id === c.chatId))) loadSeedChats();
+            renderChatItems();
+          }
+        } catch { /* ignore malformed frame */ }
+      }
+    }
+  } catch { /* aborted / no cap → no live rows (the finished seed-chat still lands via loadSeedChats) */ }
+  seedCellAbort = null;
+};
+// in-flight rows to SHOW: still processing (no seed-chat adopted yet). Dedupe against adopted chats +
+// loaded seed-chats so a capture never renders twice once its real row has landed.
+const visibleInflightSeeds = () => inflightSeeds.filter(c => !c.chatId || (!chats.some(x => x.id === c.chatId) && !seedChats.some(s => s.id === c.chatId)));
+const inflightRowHtml = c => `<div class="chat-item inflight" data-inflight="${esc(c.id)}"><span class="ci-spin"></span><span class="ci-title">${esc(c.title || '')}<span class="ci-stage">${esc(STAGE_LABEL[c.stage] || c.stage)}</span></span></div>`;
 // ── per-chat top-level agent + model-provider selectors. The model choice is
 //    remembered PER AGENT and applied to new chats with that agent. ───────────────────
 const MODELS_KEY = 'field-agent-model-by-agent';
@@ -2835,8 +2876,10 @@ const renderChatItems = () => {
       if (open) for (const k of myKids) html += chatRowHtml(k, '<span class="ci-twist-sp"></span>', true);
     }
   }
-  box.innerHTML = total
-    ? html + (total > chatShowN ? `<button class="ci-more mini" style="width:100%;margin-top:4px;opacity:.85">show ${total - chatShowN} more</button>` : '')
+  // LIVE inbound captures pinned at the TOP (not while searching — they have no stable title to match yet).
+  const inflightHtml = (f ? [] : visibleInflightSeeds()).map(inflightRowHtml).join('');
+  box.innerHTML = (total || inflightHtml)
+    ? inflightHtml + html + (total > chatShowN ? `<button class="ci-more mini" style="width:100%;margin-top:4px;opacity:.85">show ${total - chatShowN} more</button>` : '')
     : `<div class="pill">${f ? 'no matches' : 'no chats'}</div>`;
   box.querySelectorAll('.chat-item .ci-title').forEach(s => {
     s.onclick = () => switchChat(s.parentElement.dataset.id);
@@ -2939,6 +2982,7 @@ const initChats = () => {
   syncLoad({ keepActive: true }); // pull the shared (cross-device) chat list WITHOUT stealing focus from the blank chat
   loadMemos(); setInterval(loadMemos, 60000); // surface incoming voice memos as traceable runs
   loadSeedChats(); setInterval(loadSeedChats, 60000); // adopt ingested voice-note chats into the list
+  subscribeSeedCells(); // FOLLOW the seeds:self cell → show inbound captures being processed live at the top of the list
   loadDevUpdates(); setInterval(loadDevUpdates, 20000); // surface Blacksmith dev-task status in the chat
 };
 $('hamburger').onclick = toggleDrawer;

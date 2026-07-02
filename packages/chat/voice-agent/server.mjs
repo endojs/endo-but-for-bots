@@ -92,6 +92,7 @@ import { makeForks } from './forks.mjs';
 import { makeComponentBacklog } from './component-backlog.mjs';
 import { makeChromeComponents } from './chrome-components.mjs';
 import { makeTraceCells } from './trace-cells.mjs';
+import { makeSeedCells } from './seed-cells.mjs';
 import { makeDistTrust } from './dist-trust.mjs';
 import { makeBlossom } from './blossom.mjs';
 import * as projects from './projects.mjs';
@@ -738,6 +739,20 @@ const traceCellFor = (cap, sid) => {
   const owner = traceCells.ownerOf(sid);
   const mine = !owner || node.isRoot || owner === traceOwnerKeyOf(cap);
   return mine ? { cell: traceCells.cellFor(sid) } : { error: 'not your chat trace' };
+};
+// IN-FLIGHT capture progress as a propagator cell (`seeds:<ownerKey>` on /cells/subscribe) — fed from the
+// /ingest pipeline (received → understanding → proposed) so the chats list shows a voice note being
+// processed live, before its seed-chat lands. Keyed by the SAME non-secret owner key trace cells use.
+const seedCells = makeSeedCells();
+// seeds:<key> gate — a valid cap may follow its OWN captures (key 'self' or its own owner key); root may
+// follow any owner's. A cap asking for a FOREIGN owner key (that isn't root) is refused. Re-checked on the
+// 15s heartbeat like every other cell, so a revoked/rescoped cap stops receiving.
+const seedCellFor = (cap, key) => {
+  const node = nodeFor(cap);
+  if (!node) return { error: 'no capability' };
+  const own = traceOwnerKeyOf(cap);
+  const resolved = (key === 'self' || key === '') ? own : ((node.isRoot || key === own) ? key : null);
+  return resolved ? { cell: seedCells.cellFor(resolved) } : { error: 'not your captures' };
 };
 // Distribution-trust (Phase 5): the social-collateral graph that decides which fork VERSIONS are approved
 // for end-user distribution. Root (the operator) is the base authority; trust flows outward via grants.
@@ -1611,7 +1626,8 @@ const handler = async (req, res) => {
         ? (shareCells.has(id) ? { cell: liveCells.cellForReader(id, shareCellReader(share.cells.find(c => c.id === id).handle)) } : { error: 'not in this share' })
         : (id.startsWith('backlog:') ? backlogCellFor(cap, id.slice('backlog:'.length))
           : id.startsWith('trace:') ? traceCellFor(cap, id.slice('trace:'.length)) // trace:<sid> = the chat's live reasoning trace (owner-gated; feeds the trace island)
-            : liveCells.cellFor(cap, id)); // backlog:<id> = the object's backlog cell (owner-only; push-fed by the store)
+            : id.startsWith('seeds:') ? seedCellFor(cap, id.slice('seeds:'.length)) // seeds:<key> = the owner's IN-FLIGHT capture-ingest progress (owner-gated; feeds the chats-list live rows)
+              : liveCells.cellFor(cap, id)); // backlog:<id> = the object's backlog cell (owner-only; push-fed by the store)
       const list = (Array.isArray(ids) ? ids : []).slice(0, 16).map(String);
       res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no', ...SEC });
       res.write(': ok\n\n');
@@ -2211,6 +2227,16 @@ const handler = async (req, res) => {
     //    continuable chat. Runs the entry agent on the transcript with chatId set
     //    (so any push it raises deep-links back here), stores a seed-chat the SPA
     //    adopts into its chat list. This is "the voice note becomes a new chat". ──
+    // TEST SEAM (only when SEED_CELL_TEST_SEAM=1): drive a seeds:<owner> stage transition deterministically,
+    // so staging tests exercise the real cell + broker + client render without depending on the LLM ingest
+    // path (which reaches gemma/Claude). Root-gated exactly like /ingest. Never mounted in production.
+    if (process.env.SEED_CELL_TEST_SEAM === '1' && req.method === 'POST' && u.pathname === '/ingest/_test-stage') {
+      const { cap, id, stage: st, title, chatId } = await jsonBody(req);
+      const node = nodeFor(cap);
+      if (!node || !node.isRoot) return json(res, 403, { error: 'root cap required' });
+      seedCells.stage(traceOwnerKeyOf(cap), String(id || ''), String(st || ''), { title, chatId });
+      return json(res, 200, { ok: true });
+    }
     if (req.method === 'POST' && u.pathname === '/ingest') {
       const { transcript, title, source, cap } = await jsonBody(req);
       const node = nodeFor(cap);
@@ -2229,10 +2255,20 @@ const handler = async (req, res) => {
       } catch { /* fall through and create */ }
       const id = `chat-${crypto.randomBytes(6).toString('hex')}`;
       log('ingest (propose-only):', id, JSON.stringify(t).slice(0, 80));
+      // LIVE PROGRESS: surface this capture in the owner's chats list the INSTANT it arrives, then advance
+      // its stage as we work — the seeds:<owner> cell pushes each transition (received → understanding →
+      // proposed) so dan watches the note being processed instead of waiting for the finished row.
+      // (NOTE: the transcript is already in hand here — whisper STT runs UPSTREAM, in the browser mic path
+      //  or the field-capture service; a true "received/transcribing" audio-arrival signal from :8770 is a
+      //  cross-service follow-up, out of scope for this in-voice-agent pipeline.)
+      const ownerKey = traceOwnerKeyOf(cap);
+      const provTitle = isFilenameTitle(title) ? '' : String(title || '').trim(); // a real caller title shows immediately; a filename placeholder waits for the derived one
+      seedCells.stage(ownerKey, id, 'received', { title: provTitle });
       // PROPOSE-ONLY: no tools, no actions — just proposed action items + the capabilities an
       // attenuated agent would need (the scoper). Then push the proposals to dan's phone.
       // analyze the note AND derive a descriptive title concurrently (the entry agent labels the note so
       // it's browsable — not "capture-20260621T…"); keep the caller's title only if it's a real one.
+      seedCells.stage(ownerKey, id, 'understanding');
       const { proposals, powers } = await ingestPropose(t);
       // derive a browsable title + the proposed sub-agent's operating prompt concurrently (both depend on the
       // note; the prompt also folds in the proposed actions + powers so you can review what you'd approve).
@@ -2252,8 +2288,11 @@ const handler = async (req, res) => {
       // re-check AFTER the (seconds-long) analysis: a CONCURRENT re-POST of the same note may have created its
       // chat while we were working (the start-of-handler check passed for both). Close that race here.
       const raced = seeds.find(s => s && s.transcript && (Date.now() - (s.ts || 0)) < DEDUP_MS && normTx(s.transcript) === nt);
-      if (raced) { log('ingest dedup (raced)', raced.id); return json(res, 200, { ok: true, chatId: raced.id, deduped: true }); }
+      if (raced) { log('ingest dedup (raced)', raced.id); seedCells.stage(ownerKey, id, 'done', { chatId: raced.id }); return json(res, 200, { ok: true, chatId: raced.id, deduped: true }); }
       seeds.unshift(seed); await writeSeedChats(seeds);
+      // the seed-chat now exists: flip the in-flight row to 'proposed' with its real title + chatId, so the
+      // client resolves it into the normal seed-chat row (loadSeedChats adopts it; the in-flight row dedupes away).
+      seedCells.stage(ownerKey, id, 'proposed', { title: seed.title, chatId: id });
       return json(res, 200, { ok: true, chatId: id, proposedPowers: powers });
     }
     // Re-decompose an already-ingested voice note under the CURRENT ingest prompt/model routing → appends a

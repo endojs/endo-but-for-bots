@@ -188,6 +188,12 @@
   .ci-title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   /* red dot: this chat is requesting user interaction (an unanswered ask) */
   .ci-dot { display:inline-block; width:7px; height:7px; margin-right:6px; border-radius:50%; background:var(--bad); box-shadow:0 0 5px var(--bad); vertical-align:middle; }
+  /* an INBOUND capture being processed live (seeds:<owner> cell) — a spinner + stage label, resolves into a normal row when its seed-chat lands */
+  .chat-item.inflight { cursor:default; opacity:.9; }
+  .chat-item.inflight:hover { background:transparent; }
+  .ci-spin { flex:none; width:11px; height:11px; margin-right:2px; border:2px solid var(--edge); border-top-color:var(--acc); border-radius:50%; animation:ci-spin .8s linear infinite; }
+  @keyframes ci-spin { to { transform:rotate(360deg); } }
+  .ci-stage { color:var(--mut); font-size:11px; font-style:italic; margin-left:5px; }
   .ci-section { color:var(--mut); font-size:10px; text-transform:uppercase; letter-spacing:.5px; padding:12px 10px 4px; border-top:1px solid var(--edge); margin-top:8px; }
   /* per-chat top bar: comment-to-dev + memo version scrubber */
   .chat-bar { display:flex; align-items:center; gap:10px; padding:8px 4px 10px; border-bottom:1px solid var(--edge); margin-bottom:10px; font-size:13px; flex-wrap:wrap; }
