@@ -9,7 +9,8 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
-const STORE = path.join(os.homedir(), '.local/state/field-timers/schedule.json');
+// env-overridable so tests (and a relocated personal volume) never touch the live schedule; default unchanged.
+const STORE = process.env.FIELD_TIMERS_STORE || path.join(os.homedir(), '.local/state/field-timers/schedule.json');
 const H = x => (typeof harden === 'function' ? harden(x) : x);
 const now = () => Date.now();
 const iso = ms => new Date(ms).toISOString();
@@ -18,20 +19,28 @@ const read = async () => { try { return JSON.parse(await fsp.readFile(STORE, 'ut
 const write = async s => { s.updated = new Date().toISOString(); await fsp.mkdir(path.dirname(STORE), { recursive: true }); await fsp.writeFile(STORE, JSON.stringify(s, null, 2)); };
 
 // plain core
-export const addTimer = async ({ kind, everyMs, dueAt, action, label = '' }) => {
+// INC-2 (per-user isolation): every timer belongs to an OWNER (the non-secret per-user namespace key of the
+// cap that set it; root/user-0 = 'root'). The store stays ONE file — the timer-runner daemon still reads it
+// whole and fires ALL due timers regardless of owner — but list/cancel are scoped so a tenant can only see or
+// cancel ITS OWN timers. A LEGACY (owner-less) record = user-0 → 'root', so personal mode is byte-identical.
+export const addTimer = async ({ kind, everyMs, dueAt, action, label = '', owner = 'root' }) => {
   if (!action || !action.type) throw new Error('action {type:notify|command,...} required');
   const s = await read();
   if (!Array.isArray(s.timers)) s.timers = [];
   const id = `t-${crypto.randomBytes(4).toString('hex')}`;
-  const t = { id, kind, label, action, status: 'active', created: new Date().toISOString() };
+  const t = { id, owner: String(owner || 'root'), kind, label, action, status: 'active', created: new Date().toISOString() };
   if (kind === 'interval') { t.everyMs = everyMs; t.nextAt = iso(now() + everyMs); }
   else { t.dueAt = dueAt; } // 'once'
   s.timers.push(t);
   await write(s);
   return { ok: true, id, fires: kind === 'interval' ? t.nextAt : t.dueAt };
 };
-export const cancelTimer = async id => { const s = await read(); const t = (s.timers || []).find(x => x.id === id); if (t) t.status = 'cancelled'; await write(s); return { ok: !!t }; };
-export const listTimers = async () => (await read()).timers || [];
+// cancel a timer. When `owner` is given (the tenant-facing path), only a timer in THAT namespace is cancellable
+// (a foreign timer is refused → { ok:false }); omit owner for the runner / internal callers (any timer).
+export const cancelTimer = async (id, owner) => { const s = await read(); const t = (s.timers || []).find(x => x.id === id && (owner === undefined || (x.owner || 'root') === String(owner))); if (t) t.status = 'cancelled'; await write(s); return { ok: !!t }; };
+// list timers. With an `owner` → only that namespace's (legacy/owner-less = 'root'); WITHOUT → ALL of them
+// (the timer-runner daemon fires every owner's due timers; do NOT scope that path).
+export const listTimers = async owner => { const all = (await read()).timers || []; return owner === undefined ? all : all.filter(t => (t.owner || 'root') === String(owner)); };
 
 // endo object (Far loaded lazily so plain core + CLI run without SES)
 export const makeTimers = async () => {

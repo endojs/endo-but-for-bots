@@ -429,20 +429,22 @@ const makeAffordances = ({ outDir }) => {
     // timers.mjs also supports {type:'command'} (arbitrary shell) — that is
     // deliberately NOT exposed, since it would let a holder (or an Opus delegate)
     // escape the cap sandbox into a host shell.
+    // INC-2: the toolbox verbs pass the acting cap's owner (ctx.ownerKey) as the last arg, so a tenant's
+    // wake-ups/reminders are set/listed/cancelled ONLY within its own namespace (root/user-0 = 'root').
     timers: Far('Timers', {
       help: () => 'Schedule durable wake-ups/reminders (survive restarts). schedule({delayMs|atIso,title,message}), repeat({everyMs,title,message}), cancel(id), list(). Wake-ups fire as a phone push — they CANNOT run shell commands.',
-      schedule: async ({ delayMs, atIso, title, message, priority } = {}) => {
+      schedule: async ({ delayMs, atIso, title, message, priority } = {}, owner = 'root') => {
         const action = { type: 'notify', title: String(title || 'Reminder'), message: String(message || ''), priority: priority || 'default' };
         const dueAt = atIso ? String(atIso) : new Date(Date.now() + Math.max(0, Number(delayMs) || 0)).toISOString();
-        return addTimer({ kind: 'once', dueAt, action, label: String(title || '') });
+        return addTimer({ kind: 'once', dueAt, action, label: String(title || ''), owner });
       },
-      repeat: async ({ everyMs, title, message, priority } = {}) => {
+      repeat: async ({ everyMs, title, message, priority } = {}, owner = 'root') => {
         const ms = Math.max(1000, Number(everyMs) || 0);
         const action = { type: 'notify', title: String(title || 'Reminder'), message: String(message || ''), priority: priority || 'default' };
-        return addTimer({ kind: 'interval', everyMs: ms, action, label: String(title || '') });
+        return addTimer({ kind: 'interval', everyMs: ms, action, label: String(title || ''), owner });
       },
-      cancel: async id => cancelTimer(String(id || '')),
-      list: async () => listTimers(),
+      cancel: async (id, owner = 'root') => cancelTimer(String(id || ''), owner),
+      list: async (owner = 'root') => listTimers(owner),
     }),
     // ── EXECUTORS for destructive actions ──────────────────────────────────
     // These hold the REAL authority to mutate the world. They are NEVER put in
@@ -1474,14 +1476,14 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       run: async ({ title, message }, agent, ctx) => { const link = chatLink(ctx); return aff.phone.push({ title, message: link ? `${String(message || '')}\n\n→ open chat: ${link}` : message, click: link }); } },
     scheduleWakeup: { reversible: false, args: { delayMs: 'number — ms from now (omit if using atIso)', atIso: 'string — ISO time (optional, instead of delayMs)', title: 'string', message: 'string' },
       description: 'Schedule a one-off wake-up/reminder that pushes to your phone at a future time. Survives restarts.',
-      run: async ({ delayMs, atIso, title, message }, agent, ctx = {}) => (ctx.timers || aff.timers).schedule({ delayMs, atIso, title, message }) },
+      run: async ({ delayMs, atIso, title, message }, agent, ctx = {}) => (ctx.timers || aff.timers).schedule({ delayMs, atIso, title, message }, ctx.ownerKey) }, // INC-2: owner-scoped (a granular timer-share binding ignores the extra arg)
     repeatEvery: { reversible: false, args: { everyMs: 'number — interval in ms', title: 'string', message: 'string' },
       description: 'Schedule a REPEATING reminder (interval) that pushes to your phone. Survives restarts.',
-      run: async ({ everyMs, title, message }, agent, ctx = {}) => (ctx.timers || aff.timers).repeat({ everyMs, title, message }) },
+      run: async ({ everyMs, title, message }, agent, ctx = {}) => (ctx.timers || aff.timers).repeat({ everyMs, title, message }, ctx.ownerKey) }, // INC-2: owner-scoped
     cancelTimer: { reversible: false, args: { id: 'string — timer id from listTimers' }, description: 'Cancel a scheduled timer/interval by id.',
-      run: async ({ id }, agent, ctx = {}) => (ctx.timers || aff.timers).cancel(id) },
+      run: async ({ id }, agent, ctx = {}) => (ctx.timers || aff.timers).cancel(id, ctx.ownerKey) }, // INC-2: a tenant can only cancel ITS OWN timers
     listTimers: { reversible: false, args: {}, description: 'List your scheduled timers and intervals.',
-      run: async (a, agent, ctx = {}) => ({ ok: true, timers: await (ctx.timers || aff.timers).list() }) },
+      run: async (a, agent, ctx = {}) => ({ ok: true, timers: await (ctx.timers || aff.timers).list(ctx.ownerKey) }) }, // INC-2: only this user's timers
     // ── SCHEDULED TASKS: recurring autonomous runs that DO the work (vs timers, which just ping a human).
     //    The created task runs `prompt` with a tool ring ⊆ the creator's own powers (no escalation), so a
     //    request like "check X daily and notify me" becomes a self-running job, not a "remind me" reminder. ──
@@ -2651,13 +2653,13 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       if (!powerSet.has('timers')) throw new Error("you don't hold timers");
       const tid = String(id || '');
       const cur = (node.timersBinding && node.timersBinding()) || aff.timers;
-      const all = await cur.list();
+      const all = await cur.list(node.ownerKey); // INC-2: scope to the SHARER's namespace
       const t = (all || []).find(x => x.id === tid);
       if (!t) throw new Error('timer not in your reach');
       const noNew = async () => harden({ ok: false, error: 'this share can only view/cancel its one timer' });
       const one = harden({
-        list: async () => harden(((await cur.list()) || []).filter(x => x.id === tid)),
-        cancel: async cid => (String(cid) === tid ? cur.cancel(tid) : harden({ ok: false, error: 'not in this share' })),
+        list: async () => harden(((await cur.list(node.ownerKey)) || []).filter(x => x.id === tid)),
+        cancel: async cid => (String(cid) === tid ? cur.cancel(tid, node.ownerKey) : harden({ ok: false, error: 'not in this share' })),
         schedule: noNew, repeat: noNew,
       });
       const clean = String(label || t.label || tid).trim().slice(0, 80);
@@ -2749,7 +2751,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       timersTree: async handle => {
         if (!powerSet.has('timers')) throw new Error('no timers held');
         const cur = (node.timersBinding && node.timersBinding()) || aff.timers;
-        const all = (await cur.list()) || [];
+        const all = (await cur.list(node.ownerKey)) || []; // INC-2: this user's timers only (a granular binding ignores the arg)
         if (!handle) return harden({ kind: 'timers', name: 'Timers', children: all.filter(t => t.status !== 'cancelled').map(t => ({ handle: t.id, label: t.label || t.id, kind: 'timer', leaf: true, sub: t.kind === 'interval' ? `every ${Math.round((t.everyMs || 0) / 1000)}s` : (t.dueAt || 'once') })) });
         const t = all.find(x => x.id === String(handle));
         if (!t) throw new Error('timer not found');
