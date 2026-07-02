@@ -42,6 +42,7 @@
     "./src/resource-ledger.js": "./src/resource-ledger.js",
     "./src/familiar-publish.js": "./src/familiar-publish.js",
     "./src/node-familiar-publish-powers.js": "./src/node-familiar-publish-powers.js",
+    "./src/x-forwarded.js": "./src/x-forwarded.js",
     "./package.json": "./package.json"
   },
   "scripts": {

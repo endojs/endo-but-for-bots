@@ -47,6 +47,11 @@ const defaultPowers = (opts = {}) =>
     // serveRepo adapter; tests that don't exercise the Git path
     // get a stub that 401s every request.
     serveRepo: async () => undefined,
+    // Feature 9: suppress the trusted-proxy startup warning in
+    // tests by default. The Feature-9 tests below opt in by
+    // supplying their own `logWarning` capture recorder.
+    /** @param {string} _message */
+    logWarning: _message => {},
   });
 
 /**
@@ -743,6 +748,102 @@ test('start propagates a publisher error and marks the gateway unstartable', asy
     },
   });
   await t.throwsAsync(() => E(g).start(), { message: /disk full/ });
+});
+
+// -- Feature 9: HTTPS-proxy startup warning -----------------------
+
+/**
+ * Build a `logWarning` power that captures each emitted message
+ * into a buffer, plus the buffer itself for inspection. Used by
+ * the Feature 9 startup-warning tests; the `logWarning` power
+ * shape is part of the public `GatewayPowers` interface.
+ */
+const makeWarningRecorder = () => {
+  /** @type {string[]} */
+  const calls = [];
+  return {
+    calls,
+    /** @param {string} message */
+    logWarning: message => {
+      calls.push(message);
+    },
+  };
+};
+
+test('Gateway emits the HTTPS-proxy warning when bound to 0.0.0.0 with no trusted proxies', async t => {
+  // Regression: an operator who launches the gateway with the
+  // default `0.0.0.0:3469` bind and no `trustedProxyCidrs` is
+  // exposed to bearer tokens crossing an unencrypted link. The
+  // warning is the only nudge they get; if it ever stops firing,
+  // public deployments degrade silently.
+  const rec = makeWarningRecorder();
+  const g = makeGateway({
+    powers: {
+      ...defaultPowers(),
+      logWarning: rec.logWarning,
+    },
+    config: { bindAddress: '0.0.0.0:3469' },
+  });
+  await E(g).start();
+  const match = rec.calls.find(c =>
+    /Bound to 0\.0\.0\.0:3469 with no trusted proxy configured/.test(c),
+  );
+  t.truthy(match, 'expected the Feature-9 warning to fire');
+  t.regex(/** @type {string} */ (match), /bearer tokens/);
+});
+
+test('Gateway suppresses the HTTPS-proxy warning on a loopback bind', async t => {
+  // Regression: an operator who binds 127.0.0.1 is not exposing
+  // the gateway publicly; the warning would be noise. If this
+  // assertion fails, the warning fires on every local-dev start
+  // and trains operators to ignore it.
+  const rec = makeWarningRecorder();
+  const g = makeGateway({
+    powers: {
+      ...defaultPowers(),
+      logWarning: rec.logWarning,
+    },
+    config: { bindAddress: '127.0.0.1:0' },
+  });
+  await E(g).start();
+  t.deepEqual(rec.calls, []);
+});
+
+test('Gateway suppresses the HTTPS-proxy warning when trustedProxyCidrs is configured', async t => {
+  // Regression: an operator who has configured a trusted-proxy
+  // CIDR list has explicitly opted in to the HTTPS-terminating-
+  // proxy deployment; the warning would be redundant.
+  const rec = makeWarningRecorder();
+  const g = makeGateway({
+    powers: {
+      ...defaultPowers(),
+      logWarning: rec.logWarning,
+    },
+    config: {
+      bindAddress: '0.0.0.0:3469',
+      trustedProxyCidrs: harden(['10.0.0.0/8']),
+    },
+  });
+  await E(g).start();
+  t.deepEqual(rec.calls, []);
+});
+
+test('Gateway emits the HTTPS-proxy warning on an IPv6 wildcard bind', async t => {
+  // The `::` IPv6 wildcard is the IPv6 analog of `0.0.0.0`; it
+  // means "bind every interface". The warning must fire here too,
+  // otherwise an operator who happens to bind v6 dodges the
+  // bearer-token warning the v4 bind would have shown.
+  const rec = makeWarningRecorder();
+  const g = makeGateway({
+    powers: {
+      ...defaultPowers(),
+      logWarning: rec.logWarning,
+    },
+    config: { bindAddress: '[::]:3469' },
+  });
+  await E(g).start();
+  const match = rec.calls.find(c => /no trusted proxy configured/.test(c));
+  t.truthy(match, 'expected the Feature-9 warning to fire on [::]:3469');
 });
 
 test('Gateway.getBindAddress is what gets published', async t => {

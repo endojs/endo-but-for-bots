@@ -62,6 +62,8 @@ import { E, Far } from '@endo/far';
 import { makeError, q, X } from '@endo/errors';
 import { atob } from '@endo/base64';
 
+import { parseForwardedRequest } from './x-forwarded.js';
+
 /** @import { Reader, Writer } from '@endo/stream' */
 /** @import {
  *   GitService,
@@ -72,6 +74,7 @@ import { atob } from '@endo/base64';
  *   DaemonRepoCapability,
  *   ServeRepo,
  *   GitHttpHandler,
+ *   ForwardedRequest,
  * } from './types.d.ts' */
 
 /**
@@ -315,6 +318,17 @@ harden(GitHttpHandlerInterface);
  * @property {ServeRepo} serveRepo The bearer-token-to-daemon-repo
  *   resolver the gateway is wired with. See the `ServeRepo` typedef
  *   in `types.d.ts`.
+ * @property {ReadonlyArray<string>} [trustedProxyCidrs] Feature 9:
+ *   CIDR ranges trusted to set `X-Forwarded-*` headers. When the
+ *   request's `peerAddress` is inside one of these ranges, the
+ *   handler honors the `X-Forwarded-For`, `X-Forwarded-Proto`, and
+ *   `X-Forwarded-Host` headers per
+ *   `designs/gateway-package.md` § Feature 9; otherwise it ignores
+ *   them. Defaults to an empty array (no proxy trusted).
+ * @property {number} [maxProxyHops] Feature 9: maximum number of
+ *   `X-Forwarded-For` hops to trust when the peer is a trusted
+ *   proxy. Defaults to `1` (trust only the immediate upstream
+ *   hop). See `parseForwardedRequest` for the semantics.
  */
 
 /**
@@ -391,10 +405,29 @@ const errorResponse = (status, message, withChallenge = false) => {
  * @param {GitHttpDeps} deps
  * @returns {GitHttpHandler}
  */
-export const makeGitHttpHandler = ({ serveRepo }) => {
+export const makeGitHttpHandler = ({
+  serveRepo,
+  trustedProxyCidrs = harden([]),
+  maxProxyHops = 1,
+}) => {
   if (typeof serveRepo !== 'function') {
     throw makeError(X`makeGitHttpHandler requires a serveRepo function`);
   }
+  if (!Array.isArray(trustedProxyCidrs)) {
+    throw makeError(
+      X`makeGitHttpHandler: trustedProxyCidrs must be an array, got ${q(typeof trustedProxyCidrs)}`,
+    );
+  }
+  if (
+    typeof maxProxyHops !== 'number' ||
+    !Number.isInteger(maxProxyHops) ||
+    maxProxyHops < 1
+  ) {
+    throw makeError(
+      X`makeGitHttpHandler: maxProxyHops must be a positive integer, got ${q(maxProxyHops)}`,
+    );
+  }
+  const frozenCidrs = harden([...trustedProxyCidrs]);
 
   const exo = makeExo(
     'GitHttpHandler',
@@ -405,7 +438,7 @@ export const makeGitHttpHandler = ({ serveRepo }) => {
         if (request === null || typeof request !== 'object') {
           throw makeError(X`handleRequest expects a request object`);
         }
-        const { method, path, query, headers, body } = request;
+        const { method, path, query, headers, body, peerAddress } = request;
         if (typeof method !== 'string' || method.length === 0) {
           throw makeError(
             X`handleRequest: request.method must be a non-empty string`,
@@ -423,6 +456,27 @@ export const makeGitHttpHandler = ({ serveRepo }) => {
           throw makeError(
             X`handleRequest: request.body must be a Uint8Array, got ${q(typeof body)}`,
           );
+        }
+
+        // Feature 9: when the embedder supplied a peer-address on
+        // the request, run the X-Forwarded parser under the
+        // configured trusted-proxy CIDR allowlist. The recovered
+        // shape (caller IP, scheme, host) informs the error logs
+        // and is forwarded to the daemon repo capability so a
+        // downstream handler can key per-caller rate limits or
+        // audit logs by the original client IP. When no peer is
+        // supplied (an embedder that has not wired it yet, the
+        // current daemon callers), the forwarded shape stays
+        // `undefined` and the rest of the handler is unaffected.
+        /** @type {ForwardedRequest | undefined} */
+        let forwarded;
+        if (typeof peerAddress === 'string' && peerAddress.length > 0) {
+          forwarded = parseForwardedRequest({
+            headers,
+            peerAddress,
+            trustedCidrs: frozenCidrs,
+            maxHops: maxProxyHops,
+          });
         }
 
         // Parse the URL path. A non-Git path returns 400 from the
@@ -503,13 +557,21 @@ export const makeGitHttpHandler = ({ serveRepo }) => {
         // capability already names the formula's ref within the
         // daemon's single object store; the methods do not take a
         // repo-id argument.
+        // Diagnostic context. When the forwarded parser ran, the
+        // log carries the recovered caller-IP and scheme; when it
+        // did not (no `peerAddress` on the request), the log
+        // carries `direct` to make the omission visible.
+        const callerContext = forwarded
+          ? `caller=${forwarded.callerIp} scheme=${forwarded.scheme} trusted=${forwarded.trusted}`
+          : `direct`;
+
         /** @type {DaemonRepoCapability | undefined} */
         let repo;
         try {
           repo = await serveRepo(harden({ token }));
         } catch (e) {
           console.error(
-            `[Gateway] serveRepo threw:`,
+            `[Gateway] serveRepo threw (${callerContext}):`,
             /** @type {Error} */ (e).message,
           );
           return errorResponse(500, 'Internal Server Error\n');
@@ -525,22 +587,39 @@ export const makeGitHttpHandler = ({ serveRepo }) => {
         // Forward to the appropriate method on the daemon repo
         // capability. Pass the request headers through verbatim so
         // the capability can read Content-Type, Accept, Git-Protocol,
-        // etc. The capability owns the actual git server.
+        // etc. The capability owns the actual git server. When the
+        // X-Forwarded parser ran, the recovered request shape rides
+        // along on a new `forwarded` field so a downstream daemon
+        // implementation can key per-caller rate limits or audit
+        // logs by the original client IP without duplicating the
+        // parse. A capability that does not consume the field
+        // ignores it (the call site is `harden({ ... })`-shaped).
+        const baseArgs = forwarded
+          ? { service, headers, forwarded }
+          : { service, headers };
         try {
           if (operation === 'info/refs') {
-            return await E(repo).infoRefs(harden({ service, headers }));
+            return await E(repo).infoRefs(harden(baseArgs));
           }
           if (operation === 'git-upload-pack') {
             return await E(repo).gitUploadPack(
-              harden({ requestBody: body, headers }),
+              harden(
+                forwarded
+                  ? { requestBody: body, headers, forwarded }
+                  : { requestBody: body, headers },
+              ),
             );
           }
           return await E(repo).gitReceivePack(
-            harden({ requestBody: body, headers }),
+            harden(
+              forwarded
+                ? { requestBody: body, headers, forwarded }
+                : { requestBody: body, headers },
+            ),
           );
         } catch (e) {
           console.error(
-            `[Gateway] ${operation} threw:`,
+            `[Gateway] ${operation} threw (${callerContext}):`,
             /** @type {Error} */ (e).message,
           );
           return errorResponse(500, 'Internal Server Error\n');
