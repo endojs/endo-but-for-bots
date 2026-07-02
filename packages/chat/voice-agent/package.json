@@ -49,6 +49,7 @@
     "test:heavy-smoke": "node heavy-panel-smoke.staging.test.cjs",
     "test:pay-rail": "node pay-rail.staging.test.mjs",
     "test:reliability": "node rel-reliability.staging.test.mjs",
+    "test:p15-restart": "node p15-restart-idempotency.staging.test.mjs",
     "test:atomic-store": "node --test write-json-atomic.test.mjs",
     "test:credit-intents": "node --test credit-intents.test.mjs",
     "test:user-agency": "node user-agency-allowance.staging.test.mjs",

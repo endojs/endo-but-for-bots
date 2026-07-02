@@ -52,6 +52,8 @@ import { makeBlueskyEligibility } from './bluesky-raindrop.mjs';
 import { makeBlueskyClaim } from './bluesky-claim.mjs';
 import { makeBlueskyOAuth } from './bluesky-oauth.mjs';
 import { makeBskyHandoffs } from './bsky-handoff.mjs';
+import { writeJsonAtomic as writeJsonAtomicStore, loadJson as loadJsonStore } from './write-json-atomic.mjs';
+import { makeSideEffectLedger, DESTRUCTIVE_VERBS } from './side-effect-ledger.mjs';
 const connectors = makeConnectors({ getSecret }); // owner-side registry (same connectors.json the agent calls)
 // SELF-HEAL (designs/self-healing-errors.md): when an admitted custom tool THROWS at runtime, rewrite its source
 // so the original call RESOLVES with the repaired value instead of bubbling an error. Single-file tools (the body
@@ -1219,18 +1221,45 @@ const setRunResult = (sid, v) => {
   runResults.set(sid, { ...v, at: Date.now() });
   if (runResults.size > 300) for (const [k, r] of runResults) if (Date.now() - (r.at || 0) > RUN_RESULT_TTL) runResults.delete(k);
 };
-// SEAMLESS TOP-UP RESUME: when a turn runs out of allowance mid-flight, the reasoning loop hands back its
-// in-flight transcript (prior reasoning + tool OUTPUTs). We stash it here keyed by session; a `resume:true`
-// /chat after the top-up replays it so the agent CONTINUES from where it stopped instead of re-running every
-// step. In-memory + one-shot + TTL-pruned (a restart loses it → the resume cleanly falls back to a full run).
-const pendingResumes = new Map(); // sessionId → { transcript:[{role,content}], at }
+// SEAMLESS TOP-UP RESUME + P1-5 CRASH-RECOVERY REPLAY: the reasoning loop hands back (on exhaustion) — AND now
+// persists at every step boundary (the injected `persist` sink, see the /chat handler) — its in-flight transcript
+// (prior reasoning + tool OUTPUTs). We keep it BOTH in-memory (fast top-up resume) AND DURABLY on disk, keyed by a
+// hash of the session, so it SURVIVES A SERVER RESTART. On recovery, `resume:true` (top-up) or a same-turn re-send
+// replays it → the agent continues from where it stopped and already-executed tools are NOT re-run. `turnKey`
+// (= hash(sid+userText)) tags the record so a DIFFERENT question after a restart is recognised as a new turn (and
+// the stale transcript discarded) rather than wrongly replayed. Cap-hygiene: stored under the voice state dir with
+// the same protection as chat bundles (mode 0600, path keyed by a HASH — never a swissnum).
+const pendingResumes = new Map(); // sessionId → { transcript:[{role,content}], turnKey, at }
 const RESUME_TTL = 60 * 60 * 1000;
-const saveResume = (sid, transcript) => {
-  if (!Array.isArray(transcript) || !transcript.length) { pendingResumes.delete(sid); return; }
-  pendingResumes.set(sid, { transcript, at: Date.now() });
+const RESUME_DIR = `${VOICE_STATE_DIR}/turn-resume`;
+try { fs.mkdirSync(RESUME_DIR, { recursive: true, mode: 0o700 }); } catch { /* best-effort */ }
+const resumePathFor = sid => path.join(RESUME_DIR, crypto.createHash('sha256').update(String(sid || '')).digest('hex').slice(0, 40) + '.json');
+const saveResume = (sid, transcript, turnKey = '') => {
+  if (!Array.isArray(transcript) || !transcript.length) { pruneResume(sid); return; }
+  const rec = { transcript, turnKey: String(turnKey || ''), at: Date.now() };
+  pendingResumes.set(sid, rec);
   if (pendingResumes.size > 200) for (const [k, r] of pendingResumes) if (Date.now() - (r.at || 0) > RESUME_TTL) pendingResumes.delete(k);
+  try { writeJsonAtomicStore(resumePathFor(sid), rec, { mode: 0o600 }); } catch { /* durable persist is best-effort */ }
 };
-const consumeResume = sid => { const r = pendingResumes.get(sid); if (!r) return null; pendingResumes.delete(sid); return (Date.now() - (r.at || 0) > RESUME_TTL) ? null : r.transcript; }; // one-shot
+// Read (without consuming) the saved resume record for a session — in-memory first, else the durable disk copy
+// (which is how a RESTARTED server sees a transcript the pre-restart process wrote). Null if none/expired.
+const peekResume = sid => {
+  let r = pendingResumes.get(sid);
+  if (!r) { try { const d = loadJsonStore(resumePathFor(sid), null); if (d && Array.isArray(d.transcript)) r = d; } catch { r = null; } }
+  if (!r) return null;
+  if (Date.now() - (r.at || 0) > RESUME_TTL) { pruneResume(sid); return null; }
+  return r;
+};
+const consumeResume = sid => { const r = peekResume(sid); pruneResume(sid); return r ? r.transcript : null; }; // one-shot (clears mem + disk)
+function pruneResume(sid) { pendingResumes.delete(sid); try { fs.rmSync(resumePathFor(sid), { force: true }); } catch { /* best-effort */ } }
+// P1-5 IDEMPOTENCY LEDGER for destructive verbs (defense-in-depth behind the replay above): a durable at-most-once
+// guard so that if a recovery re-run somehow re-invokes an already-committed destructive verb (email/buffer send,
+// note/file write, host/vm shell, timer, kazputer, GPU spend, or an auto-confirmed propose→commit), it returns the
+// prior result as a no-op instead of firing twice. Turn-scoped facet; pruned on clean completion; TTL-swept.
+const sideEffectLedger = makeSideEffectLedger({ dir: `${VOICE_STATE_DIR}/side-effect-ledger` });
+setInterval(() => { try { sideEffectLedger.sweep(RESUME_TTL); } catch { /* */ } // GC ledgers for turns that ended non-cleanly (llmError/timeout/cancel keep theirs for a possible retry)
+  try { const now = Date.now(); for (const f of fs.readdirSync(RESUME_DIR)) { if (!f.endsWith('.json')) continue; const p = path.join(RESUME_DIR, f); try { if (now - fs.statSync(p).mtimeMs > RESUME_TTL) fs.rmSync(p, { force: true }); } catch { /* */ } } } catch { /* */ }
+}, 10 * 60 * 1000).unref?.();
 
 // ── P1-6: UNANSWERED-TURN WATCHDOG (imp-ae117636) ────────────────────────────────────────────────────────
 // The ~13% zero-turn: a run that dies silently leaving the user's message with no assistant reply. Two
@@ -1979,6 +2008,13 @@ const handler = async (req, res) => {
       let sid = String(sessionId || 'anon').slice(0, 64);
       let ac = null;
       let deadlineT = null;
+      // P1-5: hoisted so the catch/finally can prune the durable recovery artifacts. `turnKey` = hash(sid+text)
+      // identifies THIS turn stably across a restart-recovery re-send; `turnLedger` is its idempotency facet;
+      // `keepResume` defaults true so a NON-clean terminal (llmError/timeout/cancel/throw) LEAVES the durable
+      // transcript+ledger for a retry — only a CLEAN completion (or a completed resume) prunes them.
+      let turnKey = '';
+      let turnLedger = null;
+      let keepResume = true;
       try {
       // Entrypoint agent: 'field-agent' (Agent C) runs as the cap itself. Any other value names a
       // SPECIALIST to run AS — the turn executes with the specialist's CONFINED ring + persona (not
@@ -2006,7 +2042,22 @@ const handler = async (req, res) => {
       // RESUME a topped-up turn from its saved in-flight transcript (one-shot). Missing (e.g. after a service
       // restart) → null → the runner rebuilds from text+history = a normal full run. So `resume:true` is always
       // safe: it continues the in-flight run when it can, and cleanly re-runs from scratch when it can't.
-      const resumeMessages = (resume === true) ? consumeResume(sid) : null;
+      // P1-5: identify this turn stably (survives a restart — the client reconstructs the same sid+text) and build
+      // its idempotency facet. `persistTurn` is the injected step-boundary sink handed to the runner: it saves the
+      // in-flight transcript durably so a restart RECOVERS by replay, not by re-running every executed tool.
+      turnKey = crypto.createHash('sha256').update(sid + '\n' + t).digest('hex').slice(0, 40);
+      turnLedger = sideEffectLedger.forTurn(turnKey);
+      const persistTurn = transcript => { try { saveResume(sid, transcript, turnKey); } catch { /* best-effort */ } };
+      // RESUME vs CRASH-RECOVERY REPLAY:
+      //  • resume:true (top-up) → consume the saved transcript (now durable across a restart) and CONTINUE.
+      //  • otherwise → normally a fresh full run. BUT if a durable in-flight transcript exists for THIS EXACT turn
+      //    (same sid+text — a same-turn re-send after a mid-turn restart, which is what the client's reconstruct
+      //    path does), REPLAY it so already-executed tools aren't re-run. A transcript for a DIFFERENT turn means
+      //    the user moved on → discard it and run fresh. A normal fresh turn has NO saved transcript (pruned on
+      //    completion), so this leaves the normal path byte-identical.
+      let resumeMessages = null;
+      if (resume === true) resumeMessages = consumeResume(sid);
+      else { const saved = peekResume(sid); if (saved && saved.turnKey === turnKey) resumeMessages = consumeResume(sid); else if (saved) pruneResume(sid); }
       // RENDER-FEEDBACK LOOP, async half (chat 1cbe89a9): a widget this chat's agent shipped earlier threw
       // AFTER delivery in the user's browser. Those queued errors are injected into THIS turn as system
       // feedback, so the agent sees its own breakage and repairs it instead of believing its widget works.
@@ -2052,6 +2103,16 @@ const handler = async (req, res) => {
       // toolbox ctx so the DELEGATED (Opus) path can be metered against the SAME chat purse as callLLM.
       const perProvider = {};
       let { toolbox, manifest } = runNode.toolbox({ chatId: sid, userText: t, emit: ev => emitStep(sid, ev), app: boundApp, homeSubkey: chatProject ? chatProject.homeSubkey : null, charge, purse, perProvider }); // chatId → deep-links; userText → delegates/specialists carry the originating request; emit → pendant stream; app → root state; homeSubkey → project folder; charge → paid-connector billing
+      // ── P1-5 TEST SEAM (only when P15_TEST_SEAM=1 — never in production). Inject a DESTRUCTIVE `testFire` verb
+      //    whose fire-count is a FILE (so it survives a restart → proves "exactly once TOTAL across a restart")
+      //    plus (below) a scripted LLM, so the kill-mid-turn-then-recover money-shot is driveable over HTTP with
+      //    NO model + NO real side effects. `testFire` is in DESTRUCTIVE_VERBS, so the ledger guards it. ──
+      if (process.env.P15_TEST_SEAM === '1') {
+        const CF = process.env.P15_TEST_COUNTER || path.join(VOICE_STATE_DIR, 'p15-counter');
+        const testFire = harden({ run: async () => { let n = 0; try { n = parseInt(fs.readFileSync(CF, 'utf8'), 10) || 0; } catch { n = 0; } n += 1; fs.writeFileSync(CF, String(n)); return harden({ ok: true, marker: 'TESTFIRE_OK', n }); } });
+        toolbox = harden({ ...toolbox, testFire });
+        manifest = [...manifest, { name: 'testFire', args: {}, description: 'TEST: a destructive fire with a durable counter' }];
+      }
       // ONE classifier pass (dan), TWO axes: scope (simple→can't delegate) + format (rich→prefer a widget).
       const cls = t ? await classifyTurn(t) : { simple: false, rich: false };
       // STRUCTURAL no-delegate-for-simple-reads guard: a simple turn can't delegate/spawn even at full power.
@@ -2097,6 +2158,18 @@ const handler = async (req, res) => {
       const capturingLLM = (messages, mdl) => {
         const effModel = byo ? byo.modelId : String(mdl || model || 'default');
         try { lastCtx.set(sid, { at: Date.now(), agent: agentLabel, model: effModel, powers: [...runNode.powers], messages: (Array.isArray(messages) ? messages : []).map(m => ({ role: m.role, content: ctxText(m.content).slice(0, 12000) })) }); } catch { /* viewer is best-effort */ }
+        // P1-5 TEST SEAM: a deterministic scripted LLM (no provider, no metering). Turn 1 (no prior OUTPUT) writes
+        // a program that fires the destructive `testFire` and returns its result; once that OUTPUT is in the
+        // transcript it ANSWERS. P15_TEST_HANG=1 makes the post-fire step BLOCK (so the test can SIGKILL the
+        // server exactly mid-turn — after the fire, before completion); a restarted server (no HANG) answers.
+        if (process.env.P15_TEST_SEAM === '1') {
+          const seen = (Array.isArray(messages) ? messages : []).map(m => ctxText(m.content)).join('\n');
+          if (/TESTFIRE_OK/.test(seen)) {
+            if (process.env.P15_TEST_HANG === '1') return new Promise(() => {}); // never resolves → hang mid-turn until killed
+            return Promise.resolve({ text: "```js\nanswer('recovered-ok');\n```" });
+          }
+          return Promise.resolve({ text: '```js\nconst r = await testFire({});\nreturn r;\n```' });
+        }
         // BYO → straight to callLLM with the user's key + their provider model; the owner's purse stays untouched.
         if (byo) return callLLM(messages, byo.modelId, { apiKey: byo.key });
         return meteredLLM(messages, mdl);
@@ -2117,6 +2190,7 @@ const handler = async (req, res) => {
       let r = await Promise.race([
         AGENT_RUNNER({
         toolbox, manifest, userText: compErrNote + t, history, resumeMessages, attachments: agentAttachments, signal: ac.signal, persona: runPersona, model: byo ? byo.modelId : String(model || 'default'),
+        persist: persistTurn, sideEffectLedger: turnLedger, destructiveVerbs: DESTRUCTIVE_VERBS, // P1-5: durable step-boundary replay + at-most-once destructive-verb guard
         llm: capturingLLM, budgetLine: byo ? `Inference: running on YOUR OWN ${byo.provider} account (${byo.model}) — unlimited; the owner's prepaid allowance does not apply.` : budgetLine(purse.balance(), String(model || 'default')),
         allowResearch: runAgentId === 'field-agent', // the ENTRY agent gets the no-approval public-research handoff (research())
         takeInterjections: () => interjections.take(sid), // mid-turn re-steer: drained + folded into context at each step boundary
@@ -2202,11 +2276,11 @@ const handler = async (req, res) => {
       if (r.llmError) { turnDone('llmError', String(r.llmError).slice(0, 120)); setRunResult(sid, { state: 'error', node: runNode, text: t, startedAt, doneAt: Date.now() }); return json(res, 200, { error: r.llmError, llmError: true, retryable: true }); }
       // prepaid allowance spent mid-turn → return a DETERMINISTIC exhausted signal (no model
       // call was made to produce it). The client renders a static Top-up / Abandon card.
-      if (r.exhausted) { turnDone('exhausted', `${steps.length} step(s)`); saveResume(sid, r.resumeFrom); const exPayload = { exhausted: true, answer: r.answer || '', remaining: purse.balance(), allowance: purse.granted(), invited: !!inviteAllowances.walletIdFor(cap) }; setRunResult(sid, { state: 'exhausted', node: runNode, text: t, result: exPayload, startedAt, doneAt: Date.now() }); return json(res, 200, exPayload); }
+      if (r.exhausted) { turnDone('exhausted', `${steps.length} step(s)`); saveResume(sid, r.resumeFrom, turnKey); const exPayload = { exhausted: true, answer: r.answer || '', remaining: purse.balance(), allowance: purse.granted(), invited: !!inviteAllowances.walletIdFor(cap) }; setRunResult(sid, { state: 'exhausted', node: runNode, text: t, result: exPayload, startedAt, doneAt: Date.now() }); return json(res, 200, exPayload); } // keepResume stays true → the durable transcript+ledger survive for the top-up resume
       // history keeps the multimodal user content so a follow-up can still refer to the attached image.
       const next = [...history, { role: 'user', content: buildUserContent(t, agentAttachments) }, { role: 'assistant', content: r.answer }].slice(-12);
       sessions.set(sid, next);
-      pendingResumes.delete(sid); // a completed turn supersedes any stale saved resume for this session
+      keepResume = false; // P1-5: a CLEAN completion → the finally prunes the durable transcript + idempotency ledger (a completed turn supersedes any saved resume)
       const proposals = proposalIds.map(getProposal).filter(Boolean);
       const asks = askIds.map(getAsk).filter(Boolean); // typed questions raised this turn → rendered inline
       // how the turn ENDED: the CodeMode reply kind (answer/ask/blocked) — a structured signal from the scope
@@ -2259,6 +2333,10 @@ const handler = async (req, res) => {
         try { if (deadlineT) clearTimeout(deadlineT); } catch { /* */ }
         try { stepBuffers.delete(sid); } catch { /* */ }
         try { interjections.drop(sid); } catch { /* */ }
+        // P1-5: on a CLEAN completion, drop the durable recovery artifacts (transcript + idempotency ledger). On a
+        // NON-clean terminal (exhausted → resumable; llmError/timeout/cancel/throw → retriable) keepResume stays
+        // true so they survive for the resume/retry; the periodic sweep GCs those eventually.
+        try { if (!keepResume) { pruneResume(sid); if (turnLedger) turnLedger.prune(); } } catch { /* */ }
       }
     }
 
