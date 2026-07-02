@@ -57,7 +57,9 @@ const BUILTINS = ['dietician', 'researcher', 'home', 'scheduler', 'image-studio'
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 800 } });
     page.on('pageerror', e => console.error('  [pageerror]', e.message));
-    await page.goto(`${BASE}/#cap=${rootCap}`, { waitUntil: 'domcontentloaded' });
+    // cap-hygiene: inject the cap via localStorage BEFORE navigation, never in the URL fragment.
+    await page.addInitScript(c => { try { localStorage.setItem('field-agent-cap', c); } catch {} }, rootCap);
+    await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     // wait for loadAgentList to populate the header select with the built-ins
     await page.waitForFunction(() => { const s = document.getElementById('agent-sel'); return s && s.querySelector('optgroup[label="Agents"]'); }, { timeout: 15000 });
 

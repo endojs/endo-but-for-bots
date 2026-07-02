@@ -59,7 +59,10 @@ const cleanup = () => { try { srv && srv.kill('SIGKILL'); } catch {} try { fs.rm
     const page = await browser.newPage();
     const errs = [];
     page.on('pageerror', e => errs.push(String(e && e.message || e)));
-    await page.goto(`${BASE}/#cap=${rootCap}`, { waitUntil: 'load' });
+    // cap-hygiene: inject the cap via localStorage BEFORE navigation, never in the URL fragment — a nav/timeout
+    // error would otherwise echo the swissnum into the test log.
+    await page.addInitScript(c => { try { localStorage.setItem('field-agent-cap', c); } catch {} }, rootCap);
+    await page.goto(`${BASE}/`, { waitUntil: 'load' });
     // wait for the app to expose the staging seam
     await page.waitForFunction(() => typeof window.renderAgentResponse === 'function', { timeout: 15000 }).catch(() => {});
     ok(await page.evaluate(() => typeof window.renderAgentResponse === 'function'), 'app booted; renderAgentResponse seam present');

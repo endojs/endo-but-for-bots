@@ -66,7 +66,9 @@ const SWISS = /\b[0-9a-f]{32}\b/i;                  // a bare swissnum (this sta
     try {
       const page = await browser.newPage({ viewport: { width: 1100, height: 800 } });
       page.on('pageerror', e => console.error('  [pageerror]', e.message));
-      await page.goto(`${BASE}/#cap=${rootCap}`, { waitUntil: 'domcontentloaded' });
+      // cap-hygiene: inject the cap via localStorage BEFORE navigation, never in the URL fragment.
+      await page.addInitScript(c => { try { localStorage.setItem('field-agent-cap', c); } catch {} }, rootCap);
+      await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
       // wait for boot to set isRoot (settings is owner-gated)
       await page.waitForFunction(() => document.getElementById('drawer-foot'), { timeout: 15000 });
       await sleep(1500);

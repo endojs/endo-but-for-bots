@@ -152,7 +152,9 @@ const post = (p, body) => fetch(`${BASE}${p}`, { method: 'POST', headers: { 'con
       const app = await br.newPage({ viewport: { width: 1100, height: 900 } });
       let flaggedBody = null;
       await app.route('**/error/flag', async route => { try { flaggedBody = route.request().postDataJSON(); } catch {} await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"queued":true}' }); });
-      await app.goto(`${BASE}/#cap=${cap}`);
+      // cap-hygiene: inject the cap via localStorage BEFORE navigation, never in the URL fragment.
+      await app.addInitScript(c => { try { localStorage.setItem('field-agent-cap', c); } catch {} }, cap);
+      await app.goto(`${BASE}/`);
       await app.waitForFunction(() => typeof window.__fieldReportError === 'function', null, { timeout: 15000 });
       await app.evaluate(() => window.__fieldReportError('component threw while building: safeSaleAmount is not defined', '(ui) => …', { name: 'Equity Slice Simulator' }));
       await app.waitForSelector('.comp-err-note', { timeout: 5000 });

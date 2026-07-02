@@ -48,7 +48,9 @@ const STEPS = [
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
     page.on('pageerror', e => errs.push(e.message));
-    await page.goto(`${BASE}/?tracetest=1#cap=${rootCap}`, { waitUntil: 'domcontentloaded' });
+    // cap-hygiene: inject the cap via localStorage BEFORE navigation, never in the URL fragment.
+    await page.addInitScript(c => { try { localStorage.setItem('field-agent-cap', c); } catch {} }, rootCap);
+    await page.goto(`${BASE}/?tracetest=1`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => typeof window.__openPendant === 'function', { timeout: 15000 });
     const opened = await page.evaluate(steps => window.__openPendant(steps, true), STEPS);
     ok(opened === true, `__openPendant rendered the trace with two sub-agents (returned ${JSON.stringify(opened)})`);
