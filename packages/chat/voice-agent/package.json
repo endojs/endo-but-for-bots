@@ -38,6 +38,7 @@
     "test:pendant-subagents": "node pendant-subagents.staging.test.cjs",
     "test:inpaint-widget": "node inpaint-widget.staging.test.cjs",
     "test:blossom": "node --test blossom.test.mjs",
+    "test:blossom-objects": "node blossom-objects.staging.test.cjs",
     "test:blossom-loop": "node blossom-loop.staging.test.cjs",
     "test:interactive-widget": "node interactive-widget.staging.test.cjs",
     "test:heavy-smoke": "node heavy-panel-smoke.staging.test.cjs",

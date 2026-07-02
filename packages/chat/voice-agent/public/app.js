@@ -489,6 +489,129 @@ const attachMsgToolbar = (msgEl, bodyEl, text) => {
   } catch { /* the toolbar is enhancement-only */ }
 };
 
+// ── 🌱 BLOSSOM OBJECTS IN MESSAGES (increment 1b) — a reply can hand answer()/ask()/blocked() a LIVE value
+//    (a remotable, a record, an array) that would otherwise be destroyed to "[object Object]". The server carries
+//    it as a cap-safe descriptor on donePayload.objects (see server.mjs OBJECT CHANNEL + codemode describeRef):
+//      { kind, name, methods:[…], sample:<render-safe JSON/preview string>, preview, redacted?, blossomSig }
+//    and drops a clean text placeholder ("🌱 {kind} — {name} (unrendered object)") where the value was. We render
+//    each descriptor RICHLY, in place of that placeholder: the generic valNode drill-down tree by default (readable,
+//    explorable), plus a "🌱 blossom this" affordance that authors/uses a bespoke confined renderer for the object's
+//    INTERFACE (pet-naming: once blossomed, every object of that kind renders that way). Cap-hygiene: the sample is
+//    treated as untrusted (client scrubCap pass even though the server scrubbed); a redacted cap is a chip, never a value.
+const blossomObjFetch = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then(r => r.json()).catch(() => null);
+// Reconstruct the exact in-text placeholder codemode emitted for a descriptor, so we can find it in the rendered
+// markdown and swap the rich render in at that spot (keep in lock-step with codemode.mjs refPlaceholder).
+const objPlaceholderText = d => {
+  if (d.redacted) return '🌱 capability (redacted — not shown)';
+  const nm = (d.name && d.name !== d.kind) ? d.name
+    : ((d.methods && d.methods.length) ? d.methods.slice(0, 4).join(', ') + (d.methods.length > 4 ? ', …' : '') : (d.name || 'value'));
+  return `🌱 ${d.kind} — ${nm} (unrendered object)`;
+};
+// Turn the descriptor's sample (a server-scrubbed JSON/preview STRING) into something valNode can drill into.
+// Defense-in-depth: run our own scrubCap over the raw text first (a swissnum must never reach the DOM), THEN parse.
+const parseObjSample = sample => {
+  const raw = scrubCap(sample == null ? '' : String(sample));
+  try { const v = JSON.parse(raw); if (v && typeof v === 'object') return v; } catch { /* not JSON — a preview string */ }
+  return raw;
+};
+// Render ONE object descriptor as an inline card: header (kind · name · methods) + a value view. Default view is
+// the valNode tree; if a bespoke renderer already exists for this interface it's used instead; a 🌱 control lets the
+// user author/revise one (which then applies to every object of the same kind — the pet-naming loop).
+const renderObjectDescriptor = d => {
+  const card = document.createElement('div');
+  card.className = 'msg-object';
+  card.style.cssText = 'margin:8px 0;border:1px solid var(--edge);border-radius:9px;padding:8px 10px;background:var(--panel,rgba(127,127,127,.06))';
+  const kindIcon = { remotable: '⛓', array: '≣', object: '{}', promise: '⏳', cap: '🔒' }[d.kind] || '🌱';
+  const methods = Array.isArray(d.methods) ? d.methods : [];
+  const head = document.createElement('div');
+  head.style.cssText = 'display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:12px';
+  head.innerHTML = `<span class="pill" title="${esc(d.kind)}">${kindIcon} ${esc(scrubCap(d.name || d.kind || 'object'))}</span>` +
+    (methods.length ? `<span class="pmeta" style="font-size:11px">${methods.slice(0, 6).map(m => `<code>${esc(scrubCap(m))}</code>`).join(' ')}${methods.length > 6 ? ' …' : ''}</span>` : '');
+  card.appendChild(head);
+  // A redacted capability is NEVER expanded — chip only, no value fetched or shown (stack-wide cap hygiene).
+  if (d.redacted) {
+    const chip = document.createElement('div');
+    chip.className = 'pill';
+    chip.style.cssText = 'margin-top:6px;color:var(--mut)';
+    chip.textContent = '🔒 capability — redacted, not shown';
+    chip.title = 'a live capability was handed back; its value is a secret and is never rendered';
+    card.appendChild(chip);
+    return card;
+  }
+  const mount = document.createElement('div');
+  mount.style.cssText = 'margin-top:6px';
+  const data = parseObjSample(d.sample);
+  const paintTree = () => { mount.innerHTML = ''; const tree = valNode(data, null); mount.appendChild(tree); const hd = tree.querySelector('div[style*="cursor"]'); if (hd) hd.click(); }; // auto-expand one level
+  paintTree();
+  card.appendChild(mount);
+  // Blossom is keyed on the object's INTERFACE (kind + method-set). Method-less plain data (blossomSig 'sig-empty',
+  // or no methods → a too-generic "any object" key) keeps the valNode tree — the right default; no bespoke path.
+  const sig = d.blossomSig || '';
+  const blossomable = !!methods.length && sig && sig !== 'sig-empty';
+  if (blossomable) {
+    // If a bespoke renderer for this interface is already authored, render THROUGH it (the confined path); else the
+    // valNode tree stands. Either way, offer a 🌱 control to author (or revise) how this KIND of object looks.
+    (async () => {
+      try {
+        const r = await blossomObjFetch('/blossom/for', { cap, methods, kind: d.kind }); const e = r && r.entry;
+        if (e && e.status === 'ready' && e.sig) {
+          const s = await blossomObjFetch('/blossom/source', { cap, sig: e.sig });
+          if (s && s.ok && window.__fieldIslands && window.__fieldIslands.renderSource) {
+            const view = document.createElement('div');
+            // props.value = the scrubbed snapshot; these are DEAD descriptors (no live handle) so no props.call.
+            const ok = window.__fieldIslands.renderSource(s.source, view, { value: data, name: d.name, kind: d.kind, methods });
+            if (ok) { mount.innerHTML = ''; mount.appendChild(view); }
+          }
+        }
+      } catch { /* a broken renderer never strands the tree */ }
+    })();
+    const bar = document.createElement('div');
+    bar.style.cssText = 'margin-top:6px';
+    const btn = document.createElement('button'); btn.className = 'mini';
+    btn.textContent = '🌱 change how this looks';
+    btn.title = 'author (or revise) a custom view for this kind of object — it then applies to every object of this interface';
+    btn.onclick = () => { try { requestCustomView({ name: d.name || d.kind, kind: d.kind, methods, data, callable: false }); } catch (e) { setStatus('blossom: ' + e.message); } };
+    bar.appendChild(btn);
+    card.appendChild(bar);
+  }
+  return card;
+};
+// Walk the rendered bubble's TEXT nodes for `placeholder` and splice `node` in at that spot (so the rich render sits
+// exactly where the object was in the sentence). Returns true if anchored; false → the caller appends at the end.
+const anchorObjectAt = (bodyEl, placeholder, node) => {
+  if (!placeholder) return false;
+  try {
+    const walker = document.createTreeWalker(bodyEl, NodeFilter.SHOW_TEXT);
+    let tn;
+    while ((tn = walker.nextNode())) {
+      const idx = tn.nodeValue.indexOf(placeholder);
+      if (idx < 0) continue;
+      const rest = tn.splitText(idx);
+      rest.nodeValue = rest.nodeValue.slice(placeholder.length); // strip the placeholder text; leave any trailing prose
+      rest.parentNode.insertBefore(node, rest);
+      return true;
+    }
+  } catch { /* fall back to append */ }
+  return false;
+};
+// Render every carried object into the bubble body: replace its text placeholder in place when we can find it,
+// otherwise append it below the prose. Isolated per-object so one bad descriptor can't swallow the rest.
+const renderMessageObjects = (bodyEl, objects) => {
+  const list = Array.isArray(objects) ? objects : [];
+  if (!list.length || !bodyEl) return;
+  let tail = null; // lazily-created container for descriptors whose placeholder wasn't found in the text
+  for (const d of list) {
+    try {
+      const node = renderObjectDescriptor(d);
+      if (!anchorObjectAt(bodyEl, objPlaceholderText(d), node)) {
+        if (!tail) { tail = document.createElement('div'); tail.className = 'msg-objects'; tail.style.cssText = 'margin-top:6px'; bodyEl.appendChild(tail); }
+        tail.appendChild(node);
+      }
+    } catch (e) { console.error('renderObjectDescriptor failed', e); }
+  }
+};
+window.renderMessageObjects = renderMessageObjects; window.renderObjectDescriptor = renderObjectDescriptor; // staging hooks (mirror window.appendLeafBlossom)
+
 // ── action-proposal cards: a destructive action the agent PROPOSED. Rendered by
 //    type; only the operator (root cap) sees Confirm/Reject. Confirm fires the
 //    real (operator-held) action; the agent never could. ────────────────────────
@@ -1071,6 +1194,7 @@ const renderAgentResponse = r => {
   if (r.toolsUsed?.length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + r.toolsUsed.join(', '); body.parentNode.appendChild(e); }
   ((r.images && r.images.length ? r.images : (r.imageUrls || [])) || []).forEach(src => { const im = document.createElement('img'); im.src = src; body.appendChild(im); }); // data-URLs in the moment; durable /uploads urls as fallback (e.g. the share-post path)
   try { if (Array.isArray(r.ui) && r.ui.length) renderWidgets(body, r.ui, { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet, onTalk: talkAboutWidget, onOpenSpecialist, onOpenRun }); } catch (e) { console.error('renderWidgets failed', e); } // live/interactive widgets
+  try { if (Array.isArray(r.objects) && r.objects.length) renderMessageObjects(body, r.objects); } catch (e) { console.error('renderMessageObjects failed', e); } // 🌱 carried live values → rich, blossom-able render
   (r.autoFired || []).forEach(a => { const e = document.createElement('div'); e.className = 'autofired'; e.textContent = `✓ auto-confirmed: ${a.title}${a.ok === false ? ' (failed)' : ''}`; body.parentNode.appendChild(e); }); // fired via a "don't ask again" rule
   // Each card renders INDEPENDENTLY — one malformed proposal/access-request/ask must never abort the rest
   // (the answer is already shown above; a throwing Grant card used to swallow the whole turn's render).
@@ -1082,6 +1206,7 @@ const renderAgentResponse = r => {
   window.scrollTo(0, document.body.scrollHeight);
   schedulePendantPosition(); // the answer bubble shifted layout — re-anchor the pendant
 };
+window.renderAgentResponse = renderAgentResponse; // staging hook: drive a full answer render (incl. 🌱 object channel)
 
 // ── prepaid inference budget (toll-bridge, Inc 1) ─────────────────────────────
 // The header chip shows THIS conversation's remaining allowance; it updates from every
@@ -1124,7 +1249,7 @@ const retryTurn = async (payload, spoken, opts = {}) => {
     if (r.error) { if (r.retryable || r.llmError) renderRetryableError(r.error, payload, spoken); else setStatus('chat: ' + r.error); return; } // provider error → transient retry card, not a stuck status
     if (r.exhausted) { updateBudgetChip(r.remaining, r.allowance); renderExhausted({ ...payload, invited: !!r.invited }, spoken); return; }
     renderAgentResponse(r);
-    pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], steps: r.steps || [], agent: r.agentId, ui: r.ui || [] });
+    pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], steps: r.steps || [], agent: r.agentId, ui: r.ui || [], objects: r.objects || [] });
     pendantEnd(r.steps || []);
     updateBudgetChip(r.remaining, r.allowance);
     if (spoken) await speak(r.answer || '');
@@ -1174,7 +1299,7 @@ const renderReattached = (r, sid) => {
   if (sid !== sessionId || !r) return;
   if (r.exhausted) { const p = stalledTurnFromTx(); if (p) renderExhausted({ ...p.payload, invited: !!r.invited }, false); return; }
   renderAgentResponse(r);
-  pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], steps: r.steps || [], agent: r.agentId, ui: r.ui || [] });
+  pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], steps: r.steps || [], agent: r.agentId, ui: r.ui || [], objects: r.objects || [] });
   try { pendantEnd(r.steps || []); } catch {}
   if (r.remaining != null) updateBudgetChip(r.remaining, r.allowance);
   refreshBadge();
@@ -1448,7 +1573,7 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
       if (stale()) return true;
       if (r.error) { setStatus('share: ' + r.error); return true; } // committed → don't re-insert the sent text
       if (r.exhausted) { renderAgentResponse({ answer: 'The shared spend allowance for this chat is used up.' }); pushTx('agent', '(allowance spent)'); setStatus(''); ok = true; return true; }
-      renderAgentResponse(r); pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], ui: r.ui || [] }); setStatus(''); ok = true;
+      renderAgentResponse(r); pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], ui: r.ui || [], objects: r.objects || [] }); setStatus(''); ok = true;
       if (typeof r.len === 'number') shareCursor[sessionId] = r.len; // we already rendered our 2 turns → advance the live-poll cursor past them
       return true; // keep imageUrls so a recipient-generated image survives reload
     }
@@ -1526,7 +1651,7 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     // durable server URLs for the attached images → persist these (survive reload + cross-device sync)
     const urls = (r.attachments || []).filter(a => a.kind === 'image' && a.url).map(a => a.url);
     if (urls.length) { tx.attachUrls = urls; saveTx(); }
-    renderAgentResponse(r); pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], steps: r.steps || [], agent: r.agentId, ui: r.ui || [], vmodel: payload.model, vagent: payload.agent }); // ui = widget specs; vmodel/vagent = the params of this attempt (fork 0) for W2 fork/retry
+    renderAgentResponse(r); pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], steps: r.steps || [], agent: r.agentId, ui: r.ui || [], objects: r.objects || [], vmodel: payload.model, vagent: payload.agent }); // ui = widget specs; vmodel/vagent = the params of this attempt (fork 0) for W2 fork/retry
     pendantEnd(r.steps || []); // settle the pendant + reconcile any steps the live stream missed
     updateBudgetChip(r.remaining, r.allowance); // toll-bridge: reflect this turn's spend in the budget chip
     refreshBadge(); // the turn may have posted a notification
@@ -2749,6 +2874,7 @@ const renderTx = () => {
         const b = bubble('agent', v.answer, v.agentId || m.agent, m.at);
         const imgs = asArr(m.imageUrls).length ? asArr(m.imageUrls) : asArr(m.images).filter(s => typeof s === 'string' && s.startsWith('data:')); imgs.forEach(src => { const im = document.createElement('img'); im.src = src; b.appendChild(im); });
         if (_arr(v.ui).length) renderWidgets(b, _arr(v.ui), { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet, onTalk: talkAboutWidget, onOpenSpecialist, onOpenRun }); // re-hydrate live widgets
+        try { if (_arr(m.objects).length) renderMessageObjects(b, _arr(m.objects)); } catch (e) { console.error('renderMessageObjects (replay) failed', e); } // 🌱 re-render carried objects on reload
         if (_arr(v.tools).length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + _arr(v.tools).join(', '); b.parentNode.appendChild(e); }
         appendProposalPrompt(b.parentNode, m); // a propose-only sub-agent → "🔍 View proposed agent prompt"
         continue;
