@@ -14,6 +14,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { E } from '@endo/eventual-send';
@@ -112,7 +113,20 @@ import { CONFIG_DIR, STATE_DIR, VOICE_STATE_DIR, DASH_STATE_DIR, FIELD_MODE, INS
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOME = process.env.HOME || '/home/dan';
 const PORT = Number(process.env.PORT) || 8778;
-const BIND = (process.env.BIND ? process.env.BIND.split(',').map(s => s.trim()).filter(Boolean) : ['100.83.80.102', '127.0.0.1']); // tailnet IP + loopback — never 0.0.0.0 (overridable for staging)
+// PORT-1: `BIND` addresses. An EXPLICIT `BIND` env is used verbatim (the operator's override — must keep
+// working, incl. for staging). The DEFAULT (archua's tailnet IP + loopback) is SELF-HEALING: filter it to the
+// addresses actually present on THIS host via os.networkInterfaces(), so a fresh vat / a different box doesn't
+// EADDRNOTAVAIL on an IP it doesn't have. Loopback is the guaranteed fallback if nothing else survives. The
+// default candidate list is overridable via BIND_DEFAULT (a comma-list that is STILL filtered) so the
+// self-heal is testable without the archua tailnet IP present. Never 0.0.0.0.
+const localAddrs = () => { try { return new Set(Object.values(os.networkInterfaces()).flat().filter(Boolean).map(i => i.address)); } catch { return new Set(['127.0.0.1']); } };
+const BIND = (() => {
+  if (process.env.BIND) return process.env.BIND.split(',').map(s => s.trim()).filter(Boolean); // explicit override, verbatim
+  const candidates = (process.env.BIND_DEFAULT ? process.env.BIND_DEFAULT.split(',').map(s => s.trim()).filter(Boolean) : ['100.83.80.102', '127.0.0.1']);
+  const here = localAddrs();
+  const present = candidates.filter(a => here.has(a));
+  return present.length ? present : ['127.0.0.1']; // self-heal: only bind addresses this host actually has
+})();
 // FIELD_LOCKDOWN couples the two halves of the confined-fork render path so they can NEVER drift apart:
 // (1) the app shell is served with a lockdown marker (<html data-field-lockdown="1">) that islands.js reads
 //     to call lockdown({overrideTaming:'severe'}) before app.js runs, and
