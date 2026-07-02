@@ -93,6 +93,52 @@ export const WORKTREE_DIR = process.env.FIELD_AGENT_WORKTREE_DIR || path.join(ST
 export const AUTO_MERGE_LEDGER = process.env.AUTO_MERGE_LEDGER || path.join(STATE_DIR, 'auto-merge-ledger.json');
 export const FEED_FILE = process.env.FEED_FILE || path.join(DASH_STATE_DIR, 'feed.json');
 
+// ── ENDPOINTS (PORT-6 seam) ────────────────────────────────────────────────────────────────────────
+// The one source of truth for the network endpoints that used to be scattered as bare literals across
+// ≥6 modules (server.mjs, research.mjs, meeting-scribe.mjs, gpu-inpaint.mjs, agent-caps.mjs,
+// dietician-js.mjs, …). Every constant below keeps its CURRENT live default (archua LAN) and honors the
+// SAME per-endpoint env var the consumer already reads, so importing it is a drop-in — plus the two host
+// bases (TINIX_HOST/FRIKY_HOST) let a camp/mac instance relocate the whole GPU box with one override.
+//
+// MIGRATION FOLLOW-UPS (do NOT do here — those files are sibling-owned; this is only the seam):
+//   • agent-caps.mjs:125   HA_URL           → import HOMEASSISTANT_URL (already env-overridable; centralize)
+//   • agent-caps.mjs:398   ComfyUI /interrupt is HARDCODED with NO env override → import COMFY_URL (the PORT-6 bug)
+//   • agent-caps.mjs:119   KAZPUTER_URL     → import KAZPUTER_URL
+//   • agent-caps.mjs:126   VM_HOST          → import VM_HOST
+//   • server.mjs:132       WHISPER (STT_URL)→ import STT_URL
+//   • server.mjs:2449      AGENT_LLM        → import AGENT_LLM
+//   • research.mjs:18      LLM (AGENT_LLM)  → import AGENT_LLM
+//   • meeting-scribe.mjs:12 MEETING_DIARIZE_URL → import MEETING_DIARIZE_URL
+//   • gpu-inpaint.mjs:11   COMFY (COMFY_URL)→ import COMFY_URL
+//   • dietician-js.mjs:27  DIETICIAN_HOST   → import DIETICIAN_HOST
+//
+// Host bases: overriding TINIX_HOST alone moves gemma-LLM + whisper-STT + ComfyUI + the diarizer together
+// (they all live on the tinix GPU box). A per-endpoint env var still wins over the derived default.
+export const TINIX_HOST = process.env.TINIX_HOST || '192.168.50.226'; // the TinyBox GPU box (gemma / whisper / ComfyUI / diarizer)
+export const FRIKY_HOST = process.env.FRIKY_HOST || '192.168.50.74'; // the sibling Unraid box (gitea / ntfy / kiwix / media)
+const tinix = port => `http://${TINIX_HOST}:${port}`;
+
+export const ENDPOINTS = _harden({
+  // GPU-box (tinix) services — OpenAI-compatible inference + ComfyUI + the diarizer.
+  AGENT_LLM: process.env.AGENT_LLM || `${tinix(8003)}/v1/chat/completions`, // local gemma (server.mjs, research.mjs)
+  STT_URL: process.env.STT_URL || `${tinix(8000)}/v1/audio/transcriptions`, // whisper STT (server.mjs)
+  COMFY_URL: process.env.COMFY_URL || tinix(8188), // ComfyUI base — /interrupt,/prompt,/upload,… (gpu-inpaint, agent-caps abort)
+  MEETING_DIARIZE_URL: process.env.MEETING_DIARIZE_URL || `${tinix(8004)}/diarize`, // sherpa-onnx diarizer (meeting-scribe)
+  // Home LAN / persona hosts.
+  HOMEASSISTANT_URL: (process.env.HOMEASSISTANT_URL || 'http://192.168.50.11:8123').replace(/\/$/, ''), // HA REST (agent-caps)
+  KAZPUTER_URL: process.env.KAZPUTER_URL || 'http://127.0.0.1:8779', // kazputer-phone RPC, loopback same-host (agent-caps)
+  VM_HOST: process.env.VM_HOST || 'agent@10.89.0.3', // agent-code dev persona (agent-caps agentExec)
+  DIETICIAN_HOST: process.env.DIETICIAN_HOST || 'agent@10.89.0.8', // dietician persona, publish step only (dietician-js)
+  TINIX_HOST,
+  FRIKY_HOST,
+});
+
+// Named exports too, so a consumer can `import { AGENT_LLM } from './field-config.mjs'` without the bag.
+export const {
+  AGENT_LLM, STT_URL, COMFY_URL, MEETING_DIARIZE_URL,
+  HOMEASSISTANT_URL, KAZPUTER_URL, VM_HOST, DIETICIAN_HOST,
+} = ENDPOINTS;
+
 // a compact snapshot for logging at boot (no secrets — just where the personal seam points).
 export const configSummary = () => ({ instance: INSTANCE_NAME, mode: FIELD_MODE, personalRoot: PERSONAL_ROOT || '(legacy home layout)', configDir: CONFIG_DIR, vault: VAULT_DIR, stateDir: STATE_DIR });
 
