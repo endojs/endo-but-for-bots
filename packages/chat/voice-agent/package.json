@@ -69,7 +69,8 @@
     "test:toll-bridge": "node --test toll-bridge.test.mjs",
     "test:tool-bridge-unit": "node --test tool-bridge-unit.test.mjs",
     "test:purse-unit": "node --test purse-unit.test.mjs",
-    "test:contacts-email": "node --test contacts-email.test.mjs"
+    "test:contacts-email": "node --test contacts-email.test.mjs",
+    "test:power-attenuation": "node --test power-attenuation.test.mjs"
   },
   "dependencies": {
     "@endo/exo-git": "workspace:^",
