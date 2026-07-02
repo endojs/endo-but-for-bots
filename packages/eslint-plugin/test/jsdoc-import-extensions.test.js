@@ -17,7 +17,12 @@ const writePkg = (name, exportsMap) => {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, 'package.json'),
-    JSON.stringify({ name, version: '0.0.0', type: 'module', exports: exportsMap }),
+    JSON.stringify({
+      name,
+      version: '0.0.0',
+      type: 'module',
+      exports: exportsMap,
+    }),
   );
 };
 // Migrated: only the `.js`-suffixed subpath key is offered.

@@ -179,8 +179,7 @@ module.exports = {
             const specifier = match[2];
             const flagged =
               !hasExtension(specifier) &&
-              (isRelative(specifier) ||
-                endoSubpathNeedsJs(specifier, fromDir));
+              (isRelative(specifier) || endoSubpathNeedsJs(specifier, fromDir));
             if (flagged) {
               const [startInValue, endInValue] = match.indices[2];
               context.report({
