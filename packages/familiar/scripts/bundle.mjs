@@ -49,7 +49,7 @@ await build({
 
 await build({
   ...shared,
-  entryPoints: [path.join(repoRoot, 'packages/daemon/src/daemon-node.js')],
+  entryPoints: [path.join(repoRoot, 'packages/daemon/src/manager-node.js')],
   outfile: path.join(familiarRoot, 'bundles/endo-daemon.mjs'),
 });
 

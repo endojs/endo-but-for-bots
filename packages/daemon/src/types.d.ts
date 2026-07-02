@@ -2016,7 +2016,7 @@ export type FilePowers = {
 
 export type AssertValidNameFn = (name: string) => void;
 
-export type DaemonDatabase = import('./daemon-database.js').DaemonDatabase;
+export type DaemonDatabase = import('./manager-database.js').DaemonDatabase;
 
 export type PetStorePowers = {
   makeIdentifiedPetStore: (
