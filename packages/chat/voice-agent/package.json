@@ -57,6 +57,7 @@
     "test:chat-corpus": "node --test chat-corpus.test.mjs",
     "test:render-check": "node --test render-check.test.mjs",
     "test:component-error-loop": "node component-error-loop.staging.test.cjs",
+    "test:ext-noise": "node extension-noise-provenance.staging.test.cjs",
     "test:grain": "node --test grain-store.test.mjs",
     "test:grain-persist": "node grain-persistence.staging.test.mjs",
     "test:backlog": "node --test component-backlog.test.mjs",
