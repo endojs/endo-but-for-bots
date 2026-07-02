@@ -1857,7 +1857,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
           }
           const subNode = makeAgentNode({ powers: [...ring], labelOf: nick, haBinding: node.haBinding, agBinding: node.agBinding, cwdBinding: wt ? () => wt.dir : null, id: `${nick}-${rkey}` });
           const sub = subNode.toolbox(ctx); // inherit the originating chat (deep-links)
-          const proposalIds = []; const autoFired = []; const toolsUsed = [];
+          const proposalIds = []; const autoFired = []; const toolsUsed = []; const accessRequests = [];
           const ac = new AbortController(); activeEmploy = ac;
           let out = null;
           try {
@@ -1876,7 +1876,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
               let r;
               try { r = await runDelegate({ prompt, toolbox: sub.toolbox, manifest: sub.manifest, grantedPowers: [...ring], signal: ac.signal }); }
               catch (e) { if (e && e.code === 'INFERENCE_BUDGET_EXHAUSTED') r = { error: e.message }; else throw e; } // unfunded purse → fall through to the local tier, don't kill the run
-              if (!r.error) out = harden({ ok: true, role: spec.role, via: 'opus', tier: spec.tier, answer: r.answer, toolsUsed: r.toolsUsed || [], granted: [...ring] });
+              if (!r.error) out = harden({ ok: true, role: spec.role, via: 'opus', tier: spec.tier, answer: r.answer, toolsUsed: r.toolsUsed || [], granted: [...ring], ...(Array.isArray(r.accessRequests) && r.accessRequests.length ? { accessRequests: r.accessRequests } : {}) });
               // else fall through to local gemma (e.g. no ANTHROPIC_API_KEY, or an exhausted purse)
             }
             if (!out) {
@@ -1884,8 +1884,8 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
                 // a REAL caller model id wins; the "gemma"/"local"/"default" sentinels (wantLocal) and
                 // the tier fall through to localModelFor (the role's local model, 'default' today).
                 model: (model && !wantOpus && !wantLocal) ? String(model) : localModelFor(spec.tier),
-                onStep: s => { if (s.kind !== 'tool' || !s.result) return; if (s.result.proposed && s.result.id) proposalIds.push(s.result.id); if (s.result.autoConfirmed) autoFired.push({ title: s.result.title, type: s.result.type, ok: s.result.fired !== false }); if (s.name) toolsUsed.push({ name: s.name }); } });
-              out = harden({ ok: true, role: spec.role, via: 'local', tier: spec.tier, answer: r.answer, toolsUsed: toolsUsed.length ? toolsUsed : (r.toolsUsed || []), proposalIds, autoFired, granted: [...ring] });
+                onStep: s => { if (s.kind !== 'tool' || !s.result) return; if (s.result.proposed && s.result.id) proposalIds.push(s.result.id); if (s.result.autoConfirmed) autoFired.push({ title: s.result.title, type: s.result.type, ok: s.result.fired !== false }); if (s.result.accessRequest && s.result.accessRequest.power) accessRequests.push(s.result.accessRequest); if (s.name) toolsUsed.push({ name: s.name }); } });
+              out = harden({ ok: true, role: spec.role, via: 'local', tier: spec.tier, answer: r.answer, toolsUsed: toolsUsed.length ? toolsUsed : (r.toolsUsed || []), proposalIds, autoFired, granted: [...ring], ...(accessRequests.length ? { accessRequests } : {}) });
             }
           } finally {
             if (activeEmploy === ac) activeEmploy = null;
@@ -2244,12 +2244,20 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       const p = resolvePower(raw); // a verb name (e.g. proposeSystemPrompt) → its grantable POWER (selfPrompt)
       if (powers.has(p)) return { ok: true, alreadyHeld: true, note: `you already hold "${p}".` };
       const label = (POWERS[p] && POWERS[p].label) || p;
-      await aff.feed.notify({ title: `🔓 ${node.id} requests the "${p}" power`, body: reason || '(no reason given)', agent: node.id, link: chatLink(ctx) });
-      try { await aff.phone.push({ title: `🔓 power request: ${p}`, message: `${node.id}: ${reason}`.slice(0, 150), click: chatLink(ctx) || '' }); } catch { /* best-effort */ }
-      // accessRequest → the server surfaces an ACTIONABLE Grant card in the chat (one-click grant, not just
-      // a passive notification): the owner grants "p" to this chat in place. Returns the resolved power so
-      // the agent reports the right name.
-      return { ok: true, requested: p, accessRequest: { power: p, label, why: reason }, note: `Asked the owner to grant "${p}". A Grant prompt now appears in this chat — once approved, ask me again and I'll continue.` };
+      await aff.feed.notify({ title: `🔓 ${node.name || node.id} requests the "${p}" power`, body: reason || '(no reason given)', agent: node.id, link: chatLink(ctx) });
+      try { await aff.phone.push({ title: `🔓 power request: ${p}`, message: `${node.name || node.id}: ${reason}`.slice(0, 150), click: chatLink(ctx) || '' }); } catch { /* best-effort */ }
+      // accessRequest → the server surfaces an ACTIONABLE Grant card (one-click grant, not just a passive
+      // notification). `requester` tells the card WHICH node to widen: a specialist widens ITS OWN bundle
+      // (∩ its grantor's ceiling), a chat/delegate/role widens the chat's scoped cap in place. Returns the
+      // resolved power so the agent reports the right name.
+      const requester = { kind: node.kind || 'chat', id: node.id, owner: node.ownerKey, display: node.name || node.id };
+      const isSubAgent = requester.kind === 'specialist' || requester.kind === 'scheduled';
+      // Honest per-context note: a sub-agent's request does NOT put a Grant card in ITS OWN transcript — it
+      // bubbles up to the owner (the chat that ran it, or the inbox). Never claim a prompt "appears here".
+      const note = isSubAgent
+        ? `Asked the owner to grant "${p}". The owner has been notified and gets a one-click Grant card (in the chat that ran me, or their inbox) — once approved, ask me again and I'll continue.`
+        : `Asked the owner to grant "${p}". A Grant prompt now appears in this chat — once approved, ask me again and I'll continue.`;
+      return { ok: true, requested: p, accessRequest: { power: p, label, why: reason, requester }, note };
     } });
     manifest.push({ name: 'requestAccess', reversible: false,
       args: { power: 'string — the capability you need (e.g. notes, web, images, research)', why: 'string — why you need it (helps the owner decide)' },
@@ -2280,11 +2288,12 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       if (!f) return { ok: false, error: 'name the folder you need (e.g. "the field/plans")' };
       const reason = String(why || '').slice(0, 1000);
       const label = `notes: ${f}`;
-      await aff.feed.notify({ title: `🔓 ${node.id} requests notes scoped to "${f}"`, body: reason || '(no reason given)', agent: node.id, link: chatLink(ctx) });
-      try { await aff.phone.push({ title: `🔓 notes folder: ${f}`, message: `${node.id}: ${reason}`.slice(0, 150), click: chatLink(ctx) || '' }); } catch { /* best-effort */ }
+      await aff.feed.notify({ title: `🔓 ${node.name || node.id} requests notes scoped to "${f}"`, body: reason || '(no reason given)', agent: node.id, link: chatLink(ctx) });
+      try { await aff.phone.push({ title: `🔓 notes folder: ${f}`, message: `${node.name || node.id}: ${reason}`.slice(0, 150), click: chatLink(ctx) || '' }); } catch { /* best-effort */ }
       // accessRequest carries notesFolder → the Grant card grants `notes` scoped to JUST this subtree (least
       // authority), not the whole vault. The owner approves in-chat; the chat's notes reach becomes `f`.
-      return { ok: true, requested: 'notes', notesFolder: f, accessRequest: { power: 'notes', notesFolder: f, label, why: reason }, note: `Asked the owner to grant notes scoped to JUST "${f}" (least authority — nothing else in the vault). Once approved, searchNotes/readNote see only that folder.` };
+      const requester = { kind: node.kind || 'chat', id: node.id, owner: node.ownerKey, display: node.name || node.id };
+      return { ok: true, requested: 'notes', notesFolder: f, accessRequest: { power: 'notes', notesFolder: f, label, why: reason, requester }, note: `Asked the owner to grant notes scoped to JUST "${f}" (least authority — nothing else in the vault). Once approved, searchNotes/readNote see only that folder.` };
     } });
     manifest.push(
       { name: 'noteFolders', reversible: false, args: { under: 'string — OPTIONAL subfolder to list under (default: your whole reach)' }, description: 'Map the NOTES folder tree you can reach — folder names + note counts (NO contents). Use it to find the SMALLEST folder that covers your task before reading, so you take least authority. (You see only folders within your granted reach.)' },
@@ -2561,6 +2570,12 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // descriptively instead of "scoped-9786c66e". Derived without an LLM: an explicit name, else a humanized
     // labelOf, else the id. Callers (mintScopedCap, delegates, specialists) pass a context-derived name.
     node.name = isRoot ? 'Agent C' : (String(name || '').trim() || String(labelOf || '').replace(/^(chat|improve-exec)-/, '').replace(/[_-]+/g, ' ').trim() || node.id);
+    // WHAT KIND of requester this node is, for requestAccess → the Grant card routes an approval to the RIGHT
+    // node (a chat scoped-cap rescope vs a specialist widen). Default 'chat' (a per-chat scoped cap); root is
+    // 'root'; registerSpecialist / runScheduledAgent override this to 'specialist' / 'scheduled'. Delegates &
+    // role sub-agents keep 'chat' — they are ⊆ their caller, so widening the caller's chat cap is the correct
+    // (ephemeral-safe) grant target (the next delegation then inherits the power).
+    node.kind = isRoot ? 'root' : 'chat';
 
     // ── C-LIST: the set of HA handles this cap may name. Seeded with the held
     //    node; grows ONLY by navigating down from it. Enforces that authority is
@@ -2853,7 +2868,8 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // INC-2: a specialist runs IN ITS SPAWNER'S namespace (spec.owner) — so it reads/writes the SAME per-user
     // stores its spawner does (its own custom-tools/timers land under the spawner, not a fresh tenant). Builtins
     // (spec.owner undefined) → 'root'. Its id is a slug (not a cap), so ownerKey MUST be passed explicitly.
-    const node = makeAgentNode({ powers: spec.powers, labelOf: spec.id, id: spec.id, ownerKey: spec.owner || 'root', haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, wandBinding: () => wand }); // inherits the wand policy (still gated by entries + ⊆ this node)
+    const node = makeAgentNode({ powers: spec.powers, labelOf: spec.id, name: spec.name, id: spec.id, ownerKey: spec.owner || 'root', haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, wandBinding: () => wand }); // inherits the wand policy (still gated by entries + ⊆ this node)
+    node.kind = 'specialist'; // requestAccess from a specialist → the Grant card widens THIS specialist's bundle (not the chat cap)
     specNodes.set(specKey(spec), node);
     if (spec.swiss) locator.set(spec.swiss, { node }); // its own invite link — directly addressable
     return node;
@@ -2878,6 +2894,32 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     saveSpecialists();
     registerSpecialist(spec);
     return harden({ ok: true, id, name: spec.name, powers: granted, url: `${baseUrl}/#cap=${swiss}` });
+  };
+  // WIDEN a specialist's held powers by ONE grant, capped at its GRANTOR's ceiling (the ocap invariant: an
+  // agent can NEVER hold more than the one who granted it). The grantor is the specialist's OWNER namespace:
+  //   • owner 'root' (dan) → ceiling = ROOT_POWERS (all he holds);
+  //   • a tenant 'u:…'     → ceiling = the tenant's own scoped-cap ring (found by non-secret ownerKey).
+  // A power the grantor lacks is REFUSED (fail-closed) — no widening from root behind the grantor's back.
+  // Widening is by RE-SPAWN with the same slug ⇒ same swiss ⇒ same node re-registered, its bundle
+  // re-attenuated by-reference (spawnSpecialist → registerSpecialist → makeAgentNode.rootPowerBundle.attenuate).
+  // Root-gated by the server (only the root cap can drive /access/grant). Returns the specialist's new ring.
+  const grantSpecialistPower = (ref, owner = 'root', power = '', notesFolder = '') => {
+    const own = String(owner || 'root');
+    const spec = findSpecialist(ref, own);
+    if (!spec) return harden({ ok: false, error: 'no such specialist' });
+    if (spec.builtin) return harden({ ok: false, error: 'a built-in specialist\'s powers are fixed' });
+    const p = resolvePower(String(power || ''));
+    if (!p) return harden({ ok: false, error: 'name the power to grant' });
+    // The GRANTOR ceiling — what the specialist's owner may itself delegate.
+    let ceiling;
+    if (own === 'root') ceiling = ROOT_POWERS;
+    else { const ownerCap = scopedCaps.find(c => ownerKeyForCap(c.swiss) === own); ceiling = ownerCap ? [...ownerCap.powers] : []; }
+    if (!ceiling.includes(p)) return harden({ ok: false, ceilingExceeded: true, error: `the grantor does not hold "${p}" — a specialist can never exceed its grantor's authority` });
+    if (spec.powers.includes(p) && (!notesFolder || notesFolder === spec.notesFolder)) return harden({ ok: true, id: spec.id, powers: [...spec.powers], alreadyHeld: true });
+    // requested ∪ existing, then intersected with the ceiling (defensive — a prior over-grant can't survive).
+    const nextPowers = [...new Set([...spec.powers, p])].filter(x => ceiling.includes(x));
+    const res = spawnSpecialist({ name: spec.name, domain: spec.domain, powers: nextPowers, instructions: spec.instructions, spawnedFromChatId: spec.spawnedFrom, owner: own });
+    return harden({ ok: res.ok !== false, id: spec.id, powers: res.powers, granted: p });
   };
   const removeSpecialist = (ref, owner = 'root') => {
     const spec = findSpecialist(ref, owner);
@@ -2927,7 +2969,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
           if (!spec) return { ok: false, error: `no specialist "${name}" — list them with listSpecialists` };
         }
         const sub = getSpecNode(spec).toolbox();
-        const proposalIds = []; const autoFired = []; const toolsUsed = [];
+        const proposalIds = []; const autoFired = []; const toolsUsed = []; const accessRequests = [];
         const ac = new AbortController(); active = ac;
         // Carry the originating request so the specialist's record shows what led to it.
         const lead = origin ? `The user's original request that led to this (context):\n"${String(origin).slice(0, 1200)}"\n\nWhat I'm asking you to do:\n` : '';
@@ -2937,12 +2979,15 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
               if (s.kind !== 'tool' || !s.result) return;
               if (s.result.proposed && s.result.id) proposalIds.push(s.result.id);
               if (s.result.autoConfirmed) autoFired.push({ title: s.result.title, type: s.result.type, ok: s.result.fired !== false });
+              // the confined specialist ASKED for a power it lacks → bubble it up so the owner gets an actionable
+              // Grant card (else it dies here as a passive notification — the eval's "requested access, nothing fired").
+              if (s.result.accessRequest && s.result.accessRequest.power) accessRequests.push(s.result.accessRequest);
               // push the RICH step (name + args + result) so the specialist's actual work shows as nested
               // octahedrons in the trace — not just a name. (Matches delegateTask; the parent's onStep at
               // server.mjs maps rv.toolsUsed → step.children with detail/call/result.)
               if (s.name) toolsUsed.push({ name: s.name, args: s.args, result: s.result });
             } });
-          return harden({ ok: true, specialist: spec.name, answer: r.answer, proposalIds, autoFired, toolsUsed, ...(autoCreated ? { autoCreated } : {}) });
+          return harden({ ok: true, specialist: spec.name, answer: r.answer, proposalIds, autoFired, toolsUsed, ...(accessRequests.length ? { accessRequests } : {}), ...(autoCreated ? { autoCreated } : {}) });
         } finally { if (active === ac) active = null; }
       },
       abort: () => { try { active?.abort(); } catch { /* best effort */ } },
@@ -2966,10 +3011,12 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       homeBinding: homeSubkey ? () => makeHome(homeSubkey) : null,
       id: `scheduled-${newSwiss()}`,
     });
+    node.kind = 'scheduled'; // a server-side recurring run — its requestAccess surfaces to the owner's inbox, not a live chat card
+
     // thread the run's PURSE into the toolbox ctx so metered sub-delegations (employ strong-tier,
     // delegateTask, toolsmith) debit the scheduled run's budget — not an invisible side fund.
     const sub = node.toolbox({ chatId: `sched-${newSwiss().slice(0, 8)}`, ...(purse ? { purse, perProvider: perProvider || {} } : {}) });
-    const proposalIds = []; const toolsUsed = [];
+    const proposalIds = []; const toolsUsed = []; const accessRequests = [];
     // SOUL.md — a long-horizon agent's PERSISTENT WORKING MEMORY (CEO-Bench: refresh context each run,
     // carry only an agent-editable memory file). Each run starts fresh from SOUL.md (not a transcript),
     // does its task, and rewrites SOUL.md with what it learned + if-then contingencies for next time.
@@ -2992,6 +3039,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         const rv = (s.result && typeof s.result === 'object') ? s.result : {};
         if (s.name) toolsUsed.push(s.name);
         if (rv.proposed && rv.id) proposalIds.push(rv.id);
+        if (rv.accessRequest && rv.accessRequest.power) accessRequests.push(rv.accessRequest); // a scheduled run asked for a power → surface to the owner's inbox
         if (emit) emit({ t: 'done', name: s.name, ok: rv.ok !== false, detail: detailOf(s.args), call: sx(s.args), result: sx(s.result) });
       },
     });
@@ -3003,7 +3051,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       if (m && m[1].trim()) { try { fs.mkdirSync(path.dirname(soulPath), { recursive: true }); fs.writeFileSync(soulPath, `${m[1].trim()}\n`); soulUpdated = true; } catch { /* best effort */ } }
       answer = answer.replace(/<SOUL>[\s\S]*?<\/SOUL>/i, '').trim();
     }
-    return harden({ ok: true, answer, toolsUsed, proposalIds, grantedPowers: granted, soulUpdated });
+    return harden({ ok: true, answer, toolsUsed, proposalIds, grantedPowers: granted, soulUpdated, ...(accessRequests.length ? { accessRequests } : {}) });
   };
 
   // ── PER-CHAT SCOPED CAP (plan-then-confine) ──────────────────────────────────
@@ -3140,6 +3188,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // origin.kind==='self-improve'. Root-gated by the server (same gate as the asks endpoints).
     actOnStagedReview: ({ branch, goal, backlogId, decision } = {}) => actOnStagedReview({ branch, goal, backlogId, decision }),
     rescopeCap, // re-grant/revoke a chat cap's powers in place (same swiss) — root-gated by the server
+    grantSpecialistPower, // widen a specialist's held powers by one grant, capped at its grantor's ceiling — root-gated by the server
     locator,
     rootNode,
     fillMissingSpecialist, // MAGIC WAND: materialize a named-but-missing specialist, confined ⊆ a caller node

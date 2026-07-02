@@ -55,6 +55,10 @@ export const runOpusDelegate = async ({ prompt, toolbox, manifest, grantedPowers
   ].join(' ');
   const messages = [{ role: 'user', content: String(prompt || '') }];
   const toolsUsed = [];
+  // A confined delegate can ASK for a power it lacks (requestAccess) — capture those so the caller can bubble
+  // them to the owner's Grant card instead of dropping them (the delegate is ephemeral; the grant lands on the
+  // caller's chat cap, which the next delegation inherits).
+  const accessRequests = [];
   // Increment 0: accumulate token usage across the delegate's steps so the metered seam
   // can price the (paid) Opus path. (Request body sends no temperature/top_p/thinking, so
   // it is already adaptive-thinking-compatible on claude-opus-4-8 — no 400 risk here.)
@@ -80,7 +84,7 @@ export const runOpusDelegate = async ({ prompt, toolbox, manifest, grantedPowers
     const toolUses = content.filter(c => c.type === 'tool_use');
     if (data.stop_reason !== 'tool_use' || toolUses.length === 0) {
       const answer = content.filter(c => c.type === 'text').map(c => c.text).join('\n').trim();
-      return { answer: answer || '(no answer)', toolsUsed, model: MODEL, granted: grantedPowers, usage };
+      return { answer: answer || '(no answer)', toolsUsed, model: MODEL, granted: grantedPowers, usage, ...(accessRequests.length ? { accessRequests } : {}) };
     }
 
     // dispatch each requested tool ONLY into the attenuated bundle.
@@ -91,6 +95,7 @@ export const runOpusDelegate = async ({ prompt, toolbox, manifest, grantedPowers
       try {
         const out = await cap.run(tu.input || {}, signal);
         toolsUsed.push({ name: tu.name, args: tu.input });
+        if (out && out.accessRequest && out.accessRequest.power) accessRequests.push(out.accessRequest);
         results.push({ type: 'tool_result', tool_use_id: tu.id, content: JSON.stringify(out).slice(0, 4000) });
       } catch (e) {
         if (signal?.aborted) return { answer: '(delegation cancelled)', toolsUsed, cancelled: true };
@@ -99,7 +104,7 @@ export const runOpusDelegate = async ({ prompt, toolbox, manifest, grantedPowers
     }
     messages.push({ role: 'user', content: results });
   }
-  return { answer: '(reached delegation step limit)', toolsUsed, model: MODEL, granted: grantedPowers, usage };
+  return { answer: '(reached delegation step limit)', toolsUsed, model: MODEL, granted: grantedPowers, usage, ...(accessRequests.length ? { accessRequests } : {}) };
 };
 harden(runOpusDelegate);
 
