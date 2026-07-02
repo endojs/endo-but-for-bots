@@ -43,7 +43,7 @@ const ISLANDS = [
   { id: 'island-trace', name: 'Trace view (3D)', file: 'public/pendant.js', plain: true },
 ];
 
-export const makeIslandSource = ({ here, componentGit }) => {
+export const makeIslandSource = ({ here, componentGit, migrateGrains }) => {
   const env = { ...process.env, PATH: `${process.env.HOME || '/home/dan'}/.local/bin:${process.env.PATH || ''}` }; // corepack lives in the user prefix
   const get = id => ISLANDS.find(i => i.id === String(id)) || null;
   const isIsland = id => !!get(id);
@@ -71,7 +71,12 @@ export const makeIslandSource = ({ here, componentGit }) => {
       const b = isl.plain ? { ok: true } : await rebuild(); // plain islands are served directly — no vite rebuild
       if (!b.ok) { fs.writeFileSync(abs, backup); return { ok: false, error: `build failed (reverted, live unchanged): ${b.error}` }; }
       const rec = await componentGit.commit(id, filesOf(isl), message || 'edit');
-      return { ok: true, version: rec.version, note: `Edited${isl.plain ? '' : ' + rebuilt'} the island. Reload the page to see it. Revert from the Components tab if needed.` };
+      // ARCH-9: an island's source just swapped — run the grain schema-migration hook so island DATA (keyed
+      // by component id, SEPARATE from the client source) evolves/preserves instead of orphaning. Islands are
+      // now first-class in the grain path (same hook a tool's setSource runs). Best-effort: never fail the edit.
+      let grainMigration = null;
+      try { if (migrateGrains) grainMigration = migrateGrains(id, { source: String(newSource ?? '') }); } catch { /* a migration hiccup must not wedge a good edit */ }
+      return { ok: true, version: rec.version, ...(grainMigration && (grainMigration.changed || grainMigration.orphans.length) ? { grainMigration } : {}), note: `Edited${isl.plain ? '' : ' + rebuilt'} the island. Reload the page to see it. Revert from the Components tab if needed.` };
     } catch (e) { try { fs.writeFileSync(abs, backup); } catch { /* ignore */ } return { ok: false, error: (e && e.message) || String(e) }; }
   };
   const revert = async (id, ref) => { const src = await readSourceText(id, ref); if (src === null) return { ok: false, error: 'unknown version' }; return applySource(id, src, `revert to ${String(ref).slice(0, 12)}`); };

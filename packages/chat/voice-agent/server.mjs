@@ -177,7 +177,7 @@ const componentSync = makeComponentSync({ baseDir: COMPONENT_GIT_DIR, log: (...a
 const userStore = makeUserStore({ file: process.env.USERS_FILE || `${CONFIG_DIR}/users.json` });
 // BYO inference: a user can connect their OWN anthropic/openrouter account → their turns run unmetered on it.
 const byoStore = makeByoStore({ file: process.env.BYO_STORE || `${CONFIG_DIR}/byo-providers.json`, getSecret, storeNamedSecret });
-const islandSource = makeIslandSource({ here: HERE, componentGit }); // confined-Preact ISLANDS as versioned components (edit = rewrite client file + rebuild)
+const islandSource = makeIslandSource({ here: HERE, componentGit, migrateGrains: (id, opts) => customTools.migrateGrains(id, opts) }); // confined-Preact ISLANDS as versioned components (edit = rewrite client file + rebuild); grains survive/evolve a source swap (ARCH-9)
 // A tool's source as a {relpath: content} file map for the component-git store (single-file → tool.js).
 const sourceFilesOf = t => (t.files && typeof t.files === 'object' && Object.keys(t.files).length ? t.files : { 'tool.js': String(t.code || '') });
 // Propose a tool FROM a {path:content} files map — single-file ({tool.js}) → code; else a multi-file class.
@@ -333,7 +333,11 @@ const editChromeSource = async (id, prompt, { sourceOverride } = {}) => {
   const files = { ...((head && head.files) || {}), 'component.js': code };
   const rec = await componentGit.commit(id, files, `edit: ${String(prompt || 'direct edit').slice(0, 60)}`);
   componentSync.schedule(id); // mirror to the durable remote (no-op unless configured)
-  return { ok: true, version: rec.version, note: 'Edited — committed as a new revertable version; open chats re-render it live. Revert from the Components tab if you don\'t like it.' };
+  // ARCH-9: a chrome component is git-only (no tool record → no setSource). Run the grain schema-migration
+  // hook on its source swap too, so any grain DATA it holds evolves/preserves instead of orphaning.
+  let grainMigration = null;
+  try { grainMigration = customTools.migrateGrains(id, { source: code }); } catch { /* never fail a good edit on a migration hiccup */ }
+  return { ok: true, version: rec.version, ...(grainMigration && (grainMigration.changed || grainMigration.orphans.length) ? { grainMigration } : {}), note: 'Edited — committed as a new revertable version; open chats re-render it live. Revert from the Components tab if you don\'t like it.' };
 };
 
 // Fork a component into a NEW pending tool: clone its git source lineage at `ref` + COPY its grain data.
@@ -3708,7 +3712,16 @@ const handler = async (req, res) => {
       }
       if (u.pathname === '/components/share/revoke') return json(res, 200, { ok: componentShares.revoke(String(body.token || '')) });
       if (u.pathname === '/components/shares') return json(res, 200, { ok: true, shares: componentShares.listFor(String(body.id || '')) }); // redacted (no tokens)
-      if (u.pathname === '/components/history') { const id = String(body.id || ''); return islandSource.isIsland(id) ? json(res, 200, { ok: true, versions: await islandSource.history(id) }) : json(res, 200, { ok: true, versions: await componentGit.history(id), grains: customTools.grainData(id) }); }
+      // ARCH-9: grains are keyed by component id + live SEPARATE from source, so EVERY component kind — island,
+      // tool, broken-out uicomp, chrome — surfaces its DATA here (islands were the gap: they got versions but no grains).
+      if (u.pathname === '/components/history') { const id = String(body.id || ''); return islandSource.isIsland(id) ? json(res, 200, { ok: true, versions: await islandSource.history(id), grains: customTools.grainData(id) }) : json(res, 200, { ok: true, versions: await componentGit.history(id), grains: customTools.grainData(id) }); }
+      // ARCH-9: WRITE a grain for ANY component id (root-gated like the whole block). The one server-side write
+      // surface that lets an island / broken-out uicomp component HOLD durable grain data (survives edit/revert).
+      if (u.pathname === '/components/grain') {
+        const id = String(body.id || ''); const name = String(body.name || '');
+        if (!id || !name) return json(res, 200, { ok: false, error: 'need a component id + grain name' });
+        return json(res, 200, customTools.setGrain(id, name, body.value, body.merge ? String(body.merge) : undefined));
+      }
       // ── the component's BACKLOG, owner facet (root cap — same gate as every /components/ verb; the
       //    implicit endowment of having created/admitted it). Live view = the backlog:<id> cell.
       if (u.pathname === '/components/backlog') { const id = String(body.id || ''); return json(res, 200, { ok: true, items: componentBacklog.list(id, { status: body.status ? String(body.status) : undefined }), counts: componentBacklog.counts(id) }); }
@@ -3772,8 +3785,11 @@ const handler = async (req, res) => {
         const rv = await componentGit.revert(id, version); // new commit restoring the old tree (history kept)
         // Only a LIVE library tool needs its cached instance swapped; git-only components (chrome-…,
         // broken-out uicomp-…) have no tool record — clients re-fetch the reverted HEAD on next render.
-        const upd = customTools.get(id) ? customTools.setSource(id, snap.files) : { ok: true };
-        return json(res, 200, { ok: upd.ok !== false, version: rv.version, note: 'Reverted the component to the chosen version (a new version; history preserved). The live component now runs the reverted source.' });
+        // ARCH-9: BOTH paths must run the grain schema-migration hook — setSource does it for a tool; a
+        // git-only component has no setSource, so call migrateGrains directly with the reverted source, so
+        // its grains evolve/preserve instead of orphaning across the revert (the flagged gap).
+        const upd = customTools.get(id) ? customTools.setSource(id, snap.files) : customTools.migrateGrains(id, { source: snap.files });
+        return json(res, 200, { ok: upd.ok !== false, version: rv.version, ...(upd.grainMigration ? { grainMigration: upd.grainMigration } : (upd.changed || upd.orphans ? { grainMigration: upd } : {})), note: 'Reverted the component to the chosen version (a new version; history preserved). The live component now runs the reverted source.' });
       }
       // SHARE a tool — as a factory (others host their own) or an attenuated, metered, priced instance.
       if (u.pathname === '/tools/share') {
