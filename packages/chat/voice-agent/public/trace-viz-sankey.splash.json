@@ -1,0 +1,61 @@
+{
+  "turn": 1,
+  "status": "done",
+  "progress": 1,
+  "rev": 22,
+  "truncated": false,
+  "agent": "field-agent",
+  "steps": [
+    {
+      "i": 0,
+      "name": "mintLease",
+      "status": "done",
+      "ok": true,
+      "detail": "GPU · TTL 5m · rate 3",
+      "granted": [
+        "gpu"
+      ],
+      "result": "lease#… (attenuated)"
+    },
+    {
+      "i": 1,
+      "name": "delegateTask",
+      "status": "done",
+      "ok": true,
+      "detail": "→ artist: draw the card",
+      "granted": [
+        "images"
+      ],
+      "children": [
+        {
+          "name": "renderImage",
+          "detail": "balloons, watercolor"
+        },
+        {
+          "name": "upscale",
+          "detail": "2x"
+        }
+      ]
+    },
+    {
+      "i": 2,
+      "name": "lookupContact",
+      "status": "done",
+      "ok": true,
+      "detail": "Alex",
+      "result": "a***@…"
+    },
+    {
+      "i": 3,
+      "name": "sendEmail",
+      "status": "done",
+      "ok": true,
+      "granted": [
+        "email"
+      ],
+      "detail": "to Alex · 1 attachment",
+      "result": "sent ✓"
+    }
+  ],
+  "nodes": []
+}
