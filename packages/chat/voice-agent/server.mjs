@@ -104,6 +104,7 @@ import { reviseToConverge } from './revise-loop.mjs';
 import { notify, topicForKey } from '../capture/notify.mjs';
 import { writeRating, ratingsDir } from './eval-ratings.mjs';
 import { writeJsonAtomic, loadJson } from './write-json-atomic.mjs';
+import { addCandidate as addStory, listPublished as listPublishedStories, listCandidates as listStoryCandidates, publishStory, discardStory } from './stories.mjs';
 // THE PERSONAL/PLATFORM SEAM (Packing up for Dweb): personal config + state dirs resolve through
 // field-config so FIELD_PERSONAL_ROOT (the encrypted volume) moves them together. Defaults identical on the NUC.
 import { CONFIG_DIR, STATE_DIR, VOICE_STATE_DIR, DASH_STATE_DIR, FIELD_MODE, INSTANCE_NAME, configSummary } from './field-config.mjs';
@@ -2773,6 +2774,44 @@ const handler = async (req, res) => {
       if (u.pathname === '/clip/list') return json(res, 200, { clips: listClips(ownerKey) });
       if (u.pathname === '/clip/revoke') return json(res, 200, revokeClip({ ownerKey, token: body.token }));
       return json(res, 404, { error: 'unknown clip route' });
+    }
+    // 🪄 MAGIC STORIES (MAGIC-STORIES-1/2): the ⭐ collector + the gallery. A cap-holder NOMINATES the flow of
+    // one of their turns ("what made this possible"); the trace-cell snapshot supplies the ocap SHAPE (steps +
+    // delegation `granted` edges). The store SANITIZES before persist and the publish gate refuses any residual
+    // identity — so a published story is a provably cap-free, identity-free showcase artifact. Publishing +
+    // seeing candidates is ROOT-gated (the review act); the published gallery is readable by any cap-holder.
+    if (req.method === 'POST' && u.pathname.startsWith('/stories')) {
+      const body = await jsonBody(req);
+      const node = nodeFor(body.cap);
+      if (!node) return json(res, 403, { error: 'no capability' });
+      if (u.pathname === '/stories/save') {
+        // capture the flow SHAPE from the trace cell of the nominated turn (owner-checked), keeping only
+        // render-safe structure (name/ok/status/granted/children) — NOT raw call/result payloads. The store's
+        // mandatory sanitizer then launders whatever remains before it is ever written.
+        const sid = String(body.sid || '');
+        let flow = null;
+        if (sid) {
+          const owner = traceCells.ownerOf(sid);
+          const mine = node.isRoot || !owner || owner === ('u:' + crypto.createHash('sha256').update(String(body.cap || '')).digest('hex').slice(0, 24));
+          if (mine) {
+            const snap = traceCells.snapshot(sid);
+            const trimStep = s => ({ name: s.name, ok: s.ok, status: s.status, ...(Array.isArray(s.granted) && s.granted.length ? { granted: s.granted } : {}), ...(Array.isArray(s.children) && s.children.length ? { children: s.children.map(c => ({ name: c && c.name })) } : {}) });
+            flow = { status: snap.status || 'done', prompt: String(body.title || '').slice(0, 140), steps: (snap.steps || []).map(trimStep), nodes: (snap.nodes || []).map(n => ({ key: n.key, parent: n.parent, state: n.state, label: n.label })) };
+          }
+        }
+        const r = addStory({ title: body.title, why: body.why, quality: body.quality, flow, by: node.isRoot ? 'root' : 'guest' });
+        return json(res, r.ok ? 200 : 400, r);
+      }
+      if (u.pathname === '/stories/list') return json(res, 200, { ok: true, published: listPublishedStories(), candidates: node.isRoot ? listStoryCandidates() : [], canReview: !!node.isRoot });
+      if (u.pathname === '/stories/publish') {
+        if (!node.isRoot) return json(res, 403, { error: 'publishing a story needs your root capability' });
+        return json(res, 200, publishStory(body.id));
+      }
+      if (u.pathname === '/stories/discard') {
+        if (!node.isRoot) return json(res, 403, { error: 'discarding a story needs your root capability' });
+        return json(res, 200, discardStory(body.id));
+      }
+      return json(res, 404, { error: 'unknown stories route' });
     }
     // CONNECTORS (Phase 3 Lane A): the owner wires up an API-service tool. The secret value is stored
     // in the named vault (never echoed back / never in the connector record) and injected at call time.

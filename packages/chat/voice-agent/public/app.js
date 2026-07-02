@@ -22,7 +22,7 @@ initTheme(); // restore the saved theme + start applying it to :root as CSS vars
 (() => {
   const hdr = document.querySelector('header');
   if (!hdr || !window.__fieldIslands || !window.__fieldIslands.renderHeaderBar) return;
-  const NEED = ['hamburger', 'new-chat-top', 'trash-chat-top', 'scope', 'budget', 'agent-sel', 'model-sel', 'tab-talk', 'tab-shares', 'tab-components', 'bell-btn', 'bell-badge', 'info-btn', 'projects-btn', 'chatshare-btn', 'hooks-btn'];
+  const NEED = ['hamburger', 'new-chat-top', 'trash-chat-top', 'scope', 'budget', 'agent-sel', 'model-sel', 'tab-talk', 'tab-shares', 'tab-components', 'stories-btn', 'bell-btn', 'bell-badge', 'info-btn', 'projects-btn', 'chatshare-btn', 'hooks-btn'];
   const snapshot = hdr.innerHTML;
   try {
     window.__fieldIslands.renderHeaderBar(hdr);
@@ -468,6 +468,17 @@ const attachMsgToolbar = (msgEl, bodyEl, text) => {
       clipAndShare({ html, text: segText });
     };
     const doCopy = async () => { const okc = await writeClipboard(String(text || bodyEl.textContent || '')); setStatus(okc ? '📋 copied' : 'copy failed (clipboard permission?)'); };
+    // ⭐ SAVE AS STORY (MAGIC-STORIES-1): nominate THIS flow as a candidate for the 🪄 gallery. Host-gated (the
+    // authority-bearing move is ours); the payload is the already-flowing trace context (sanitized server-side).
+    const doSaveStory = () => saveStoryFromMessage(String(text || bodyEl.textContent || ''));
+    // a host-owned ⭐ button, always present (independent of the confined chrome-msg-toolbar), so the affordance
+    // never dies with a broken component edit — sits just left of the copy/clip toolbar.
+    const star = document.createElement('button'); star.className = 'msg-star'; star.title = 'Save this flow as a Magic Story'; star.textContent = '⭐';
+    star.style.cssText = 'all:unset;position:absolute;right:34px;bottom:4px;cursor:pointer;font-size:12px;opacity:.3;transition:opacity .15s;padding:2px 5px;border-radius:6px;line-height:1';
+    star.addEventListener('mouseenter', () => { star.style.opacity = '1'; });
+    star.addEventListener('mouseleave', () => { star.style.opacity = '.3'; });
+    star.addEventListener('click', e => { e.stopPropagation(); doSaveStory(); });
+    msgEl.appendChild(star);
     const legacy = () => { // the pre-decomposition DOM — the guaranteed floor
       const b = document.createElement('button'); b.className = 'msg-clip'; b.title = 'Clip & share this as a page'; b.textContent = '🔗';
       b.style.cssText = 'all:unset;position:absolute;right:6px;bottom:4px;cursor:pointer;font-size:12px;opacity:.3;transition:opacity .15s;padding:2px 5px;border-radius:6px;line-height:1';
@@ -484,7 +495,7 @@ const attachMsgToolbar = (msgEl, bodyEl, text) => {
     msgEl.appendChild(host);
     chromeReady.then(() => {
       if (!host.isConnected) return; // the transcript re-rendered while sources loaded — this mount is gone
-      if (!mountChrome('chrome-msg-toolbar', host, { onClip: doClip, onCopy: doCopy })) { host.remove(); legacy(); }
+      if (!mountChrome('chrome-msg-toolbar', host, { onClip: doClip, onCopy: doCopy, onSaveStory: doSaveStory })) { host.remove(); legacy(); }
     }).catch(() => { try { host.remove(); } catch { /* */ } legacy(); });
   } catch { /* the toolbar is enhancement-only */ }
 };
@@ -3554,6 +3565,128 @@ const openTraceViewsGallery = () => {
 };
 const hideTraceViewsGallery = () => { if (__traceGalleryOverlay) __traceGalleryOverlay.style.display = 'none'; };
 try { window.openTraceViewsGallery = openTraceViewsGallery; } catch { /* */ } // reachable from tests + other surfaces
+
+// ══ 🪄 MAGIC STORIES ══ a gallery of flows this harness made possible + the ⭐ collector that feeds it.
+// dan (2026-07-02): "a fun-filled gallery of interesting stories sanitized from identity implications
+// representing different flows made possible by this system — especially ones that leverage the object-
+// capability, multi-hop delegation, and composition qualities." The showcase that makes the ocap thesis
+// obvious. Sanitization is server-side + mandatory (stories.mjs); nothing here ever renders a raw cap.
+const STORY_QUALITIES = [
+  ['multi-hop-delegation', '🔗 Multi-hop delegation'], ['composition', '🧩 Composition'],
+  ['revocation', '⛔ Revocation'], ['confinement', '🔒 Confinement'],
+  ['attenuation', '🎚️ Attenuation'], ['paid-capability', '💰 Paid capability'], ['other', '✨ Other'],
+];
+const storyQualityLabel = q => (STORY_QUALITIES.find(([k]) => k === q) || ['other', '✨ Other'])[1];
+
+// ⭐ COLLECTOR — nominate the CURRENT chat's just-completed flow as a story candidate. A small form captures a
+// title + "what made this possible" + which ocap quality it shows; the server pulls the trace SHAPE (delegation
+// edges) from the live trace cell and sanitizes before persisting. `seedText` prefills the title from the message.
+const saveStoryFromMessage = seedText => {
+  const seed = String(seedText || '').replace(/\s+/g, ' ').trim().slice(0, 90);
+  const opts = STORY_QUALITIES.map(([k, label], i) => `<option value="${k}"${i === 0 ? ' selected' : ''}>${esc(label)}</option>`).join('');
+  showModal(`<div class="qrlabel">⭐ Save this flow as a Magic Story</div>
+    <div style="text-align:left;font-size:12px;color:var(--mut);margin:2px 0 8px">Sanitized before it's saved — no names, emails, or capabilities are ever stored. It becomes a candidate for the 🪄 gallery once you review it.</div>
+    <label style="display:block;font-size:11px;color:var(--mut);margin-bottom:2px">Title</label>
+    <input id="story-title" type="text" maxlength="140" value="${esc(seed)}" placeholder="e.g. Shared a device that composed with a stranger's agent" style="width:100%;box-sizing:border-box;padding:7px 9px;border:1px solid var(--edge);border-radius:8px;background:var(--bg);color:var(--ink);font-size:13px;margin-bottom:8px">
+    <label style="display:block;font-size:11px;color:var(--mut);margin-bottom:2px">What made this possible? (the ocap quality it shows)</label>
+    <textarea id="story-why" maxlength="400" rows="3" placeholder="A capability passed hand to hand, attenuating at each edge…" style="width:100%;box-sizing:border-box;padding:7px 9px;border:1px solid var(--edge);border-radius:8px;background:var(--bg);color:var(--ink);font-size:13px;margin-bottom:8px;resize:vertical"></textarea>
+    <label style="display:block;font-size:11px;color:var(--mut);margin-bottom:2px">Quality</label>
+    <select id="story-quality" style="width:100%;box-sizing:border-box;padding:7px 9px;border:1px solid var(--edge);border-radius:8px;background:var(--bg);color:var(--ink);font-size:13px;margin-bottom:10px">${opts}</select>
+    <button class="mini primary" id="story-save" style="width:100%">⭐ Save as story candidate</button>`);
+  const btn = $('story-save');
+  if (btn) btn.onclick = async () => {
+    const title = ($('story-title') || {}).value || seed;
+    if (!String(title || '').trim()) { setStatus('a story needs a title'); return; }
+    btn.disabled = true; btn.textContent = 'saving…';
+    let r; try { r = await (await fetch('/stories/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sid: sessionId, title, why: ($('story-why') || {}).value || '', quality: ($('story-quality') || {}).value || 'other' }) })).json(); } catch (e) { r = { error: e.message }; }
+    if (r && r.ok) { closeModal(); setStatus(`⭐ Saved as a story candidate${r.scrubbed ? ` (${r.scrubbed} identity detail${r.scrubbed === 1 ? '' : 's'} sanitized)` : ''} — review it in 🪄`); }
+    else { btn.disabled = false; btn.textContent = '⭐ Save as story candidate'; setStatus('story: ' + ((r && r.error) || 'failed')); }
+  };
+};
+try { window.saveStoryFromMessage = saveStoryFromMessage; } catch { /* */ }
+
+// render ONE story card: its title, the ocap quality it demonstrates, "what made this possible", and — where a
+// flow shape was captured — a small cap-free authority/data-flow viz of the flow (the ocap lens, reusing the
+// trace-viz splash-card mechanism). Candidate cards also carry the review actions (Publish / Discard).
+let __storyVizSource = null; // memoized: the Sankey (authority & data flow) viz source, the ocap lens for a story
+const storyVizSource = async () => {
+  if (__storyVizSource !== null) return __storyVizSource;
+  try { const kinds = await loadTraceVizKinds(); const k = kinds.find(x => x.key === 'sankey') || kinds.find(x => x.key === 'provenance') || kinds[0]; __storyVizSource = k ? k.source : ''; }
+  catch { __storyVizSource = ''; }
+  return __storyVizSource;
+};
+const renderStoryCard = async (s, { review, onChanged } = {}) => {
+  const card = document.createElement('div'); card.setAttribute('data-story', s.id);
+  card.style.cssText = 'border:1px solid var(--edge);border-radius:12px;padding:12px;background:var(--bg);overflow:hidden;position:relative';
+  const q = document.createElement('div'); q.style.cssText = 'font-size:10px;font-weight:600;color:var(--acc);letter-spacing:.02em;margin-bottom:3px'; q.textContent = storyQualityLabel(s.quality);
+  const h = document.createElement('div'); h.style.cssText = 'font-size:13px;font-weight:600;line-height:1.3'; h.textContent = s.title; // textContent — a story title is never HTML
+  card.append(q, h);
+  if (s.why) { const w = document.createElement('div'); w.className = 'sub'; w.style.cssText = 'font-size:11.5px;margin:4px 0 8px;line-height:1.4;color:var(--mut)'; w.textContent = s.why; card.appendChild(w); }
+  // the flow viz — a confined splash card fed the story's canned (sanitized) flow shape, cap-free.
+  if (s.flow && Array.isArray(s.flow.steps) && s.flow.steps.length) {
+    const slot = document.createElement('div'); slot.style.cssText = 'pointer-events:none;border-radius:9px;overflow:hidden;border:1px solid var(--edge);margin-top:6px'; card.appendChild(slot);
+    try { const gu = await import('./grain-ui.js'); const src = await storyVizSource(); if (src) gu.mountVizSplash(slot, { source: src, splash: s.flow, height: 170, cellId: 'story:' + s.id }); else slot.remove(); }
+    catch { slot.remove(); }
+  }
+  if (review) {
+    const bar = document.createElement('div'); bar.style.cssText = 'display:flex;gap:6px;margin-top:10px';
+    const pub = document.createElement('button'); pub.className = 'mini primary'; pub.setAttribute('data-story-publish', s.id); pub.textContent = '✅ Publish';
+    const dis = document.createElement('button'); dis.className = 'mini'; dis.setAttribute('data-story-discard', s.id); dis.textContent = '🗑️ Discard';
+    pub.onclick = async () => { pub.disabled = true; let r; try { r = await (await fetch('/stories/publish', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), id: s.id }) })).json(); } catch (e) { r = { error: e.message }; } if (r && r.ok) { setStatus('🪄 Story published to the gallery'); if (onChanged) onChanged(); } else { pub.disabled = false; setStatus('publish: ' + ((r && (r.error || (r.leaks && 'still contains identity'))) || 'failed')); } };
+    dis.onclick = async () => { dis.disabled = true; try { await fetch('/stories/discard', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), id: s.id }) }); } catch { /* */ } setStatus('story discarded'); if (onChanged) onChanged(); };
+    bar.append(pub, dis); card.appendChild(bar);
+  }
+  return card;
+};
+
+// the 🪄 gallery modal: published stories up top (the showcase), a review queue below for the operator.
+let __magicOverlay = null;
+const openMagicStories = () => {
+  if (!__magicOverlay) {
+    const ov = document.createElement('div'); ov.id = 'magic-stories-overlay'; ov.setAttribute('data-magic-stories', '');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:9400;display:none;align-items:center;justify-content:center;background:rgba(4,8,14,.72);backdrop-filter:blur(4px);padding:20px';
+    ov.innerHTML = `<div style="width:min(1000px,94vw);max-height:88vh;display:flex;flex-direction:column;background:var(--bg,#0d1117);border:1px solid var(--acc,#7c5cff);border-radius:16px;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.7)">
+      <div style="display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid var(--edge)"><b style="flex:1">🪄 Magic Stories — flows this harness made possible</b><button class="mini" id="ms-x">✕</button></div>
+      <div id="ms-body" style="flex:1;overflow:auto;padding:14px"></div></div>`;
+    document.body.appendChild(ov);
+    ov.addEventListener('click', e => { if (e.target === ov) hideMagicStories(); });
+    ov.querySelector('#ms-x').onclick = hideMagicStories;
+    __magicOverlay = ov;
+  }
+  __magicOverlay.style.display = 'flex';
+  refreshMagicStories();
+};
+const hideMagicStories = () => { if (__magicOverlay) __magicOverlay.style.display = 'none'; };
+const refreshMagicStories = async () => {
+  if (!__magicOverlay) return;
+  const body = __magicOverlay.querySelector('#ms-body'); body.innerHTML = '<div class="sub" style="padding:8px 2px;font-size:12px">loading…</div>';
+  let r; try { r = await (await fetch('/stories/list', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap() }) })).json(); } catch (e) { r = { error: e.message }; }
+  body.innerHTML = '';
+  if (!r || !r.ok) { body.innerHTML = `<div class="sub" style="padding:8px 2px;font-size:12px">could not load stories (${esc((r && r.error) || 'error')})</div>`; return; }
+  const published = r.published || []; const candidates = r.candidates || [];
+  // PUBLISHED (the showcase)
+  if (published.length) {
+    const grid = document.createElement('div'); grid.style.cssText = GALLERY_GRID; grid.setAttribute('data-story-grid', '');
+    for (const s of published) grid.appendChild(await renderStoryCard(s, {}));
+    body.appendChild(grid);
+  } else {
+    const empty = document.createElement('div'); empty.setAttribute('data-story-empty', '');
+    empty.style.cssText = 'text-align:center;padding:34px 16px;color:var(--mut)';
+    empty.innerHTML = '<div style="font-size:34px;margin-bottom:8px">🪄</div><div style="font-size:14px;font-weight:600;color:var(--ink)">No published stories yet</div><div style="font-size:12px;margin-top:5px;max-width:440px;margin-inline:auto;line-height:1.5">Hit the ⭐ on any message to nominate the flow that produced it. The best ones show off multi-hop delegation and composition — a capability passed hand to hand, or a device composed with someone else\'s agent.</div>';
+    body.appendChild(empty);
+  }
+  // REVIEW QUEUE (operator only)
+  if (r.canReview) {
+    const hr = document.createElement('div'); hr.style.cssText = 'margin:16px 0 8px;font-size:12px;font-weight:600;color:var(--ink);display:flex;align-items:center;gap:6px';
+    hr.textContent = `🔔 Needs review${candidates.length ? ` (${candidates.length})` : ''}`; body.appendChild(hr);
+    if (candidates.length) {
+      const grid = document.createElement('div'); grid.style.cssText = GALLERY_GRID; grid.setAttribute('data-story-review-grid', '');
+      for (const s of candidates) grid.appendChild(await renderStoryCard(s, { review: true, onChanged: refreshMagicStories }));
+      body.appendChild(grid);
+    } else { const n = document.createElement('div'); n.className = 'sub'; n.style.cssText = 'font-size:12px;color:var(--mut)'; n.textContent = 'No story candidates waiting.'; body.appendChild(n); }
+  }
+};
+try { window.openMagicStories = openMagicStories; } catch { /* */ }
 // Tier-2 is OPT-IN for now (dan-gated policy call — it changes the central trace surface + the prior
 // chrome-trace-view test asserts the divs island). Enable per-instance with localStorage
 // field-trace-tier2='1' (or window.__traceVizTier2 = true). When on: Tier-2 WebGL island → (on failure)
@@ -3949,6 +4082,7 @@ const renderChangelog = async () => {
 };
 const toggleSection = (headId, listId) => { const list = $(listId), head = $(headId); list.classList.toggle('hide'); head.querySelector('.caret').textContent = list.classList.contains('hide') ? '▸' : '▾'; };
 if ($('bell-btn')) $('bell-btn').onclick = () => showTab('inbox');
+if ($('stories-btn')) $('stories-btn').onclick = () => openMagicStories();
 if ($('att-head')) $('att-head').onclick = () => toggleSection('att-head', 'att-list');
 if ($('rec-head')) $('rec-head').onclick = () => toggleSection('rec-head', 'rec-list');
 if ($('chg-head')) $('chg-head').onclick = () => toggleSection('chg-head', 'chg-list');
