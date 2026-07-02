@@ -79,12 +79,28 @@ export const makeInboxCells = ({ feedFile, asksFile, devFile, now = () => Date.n
     return cell;
   };
 
+  // INC-2 residual — per-TENANT feed files. The root feed is `feed.json`; a non-root owner's feed is
+  // `feed-<sanitizedOwnerKey>.json` in the SAME dir (server.mjs feedFileFor). The watch used to match only the
+  // exact `feed.json` basename, so a tenant's write bumped nothing (its bell refreshed on the next /feed/load
+  // poll instead of instantly). Recover the ownerKey from the filename and bump THAT owner's cell. The key
+  // space is exactly {'root'} ∪ {'u:'+hex} (traceOwnerKeyOf), whose only sanitized char is ':'→'_', so the
+  // inverse (strip 'feed-'/'.json', 'u_'→'u:') is unambiguous — the bump lands on the SAME key the feed:<owner>
+  // cell subscribes under.
+  const feedBase = feedFile ? path.basename(feedFile) : null;
+  const feedDir = feedFile ? path.dirname(feedFile) : null;
+  const feedOwnerFromBase = base => {
+    if (feedBase && base === feedBase) return 'root';
+    const m = /^feed-([a-z0-9_]+)\.json$/i.exec(base);
+    return m ? m[1].replace(/^u_/, 'u:') : null; // inverse of feedFileFor's sanitize for the u:<hex> key space
+  };
+
   // fs.watch(dir) — feed.json + asks.json share DASH_STATE_DIR (one watcher covers both). Watch the DIR (not
-  // the file) so a temp+rename replace, or a first-ever create, is still seen. Debounced per family.
+  // the file) so a temp+rename replace, or a first-ever create, is still seen. Debounced per (family, ownerKey)
+  // so a tenant write and a root write don't clobber each other's coalescing timer.
   const watchers = [];
   const timers = new Map();
   if (watch) {
-    const dirs = new Map(); // dir → { [basename]: 'feed'|'asks' }
+    const dirs = new Map(); // dir → { [basename]: 'asks'|'dev' } (feed is matched by prefix, not exact basename)
     const arm = (file, fam) => {
       if (!file) return;
       const dir = path.dirname(file);
@@ -93,17 +109,24 @@ export const makeInboxCells = ({ feedFile, asksFile, devFile, now = () => Date.n
       m[base] = fam;
       dirs.set(dir, m);
     };
-    arm(feedFile, 'feed');
+    arm(feedFile, 'feed'); // registers the dir; the callback resolves feed files by prefix (root + per-tenant)
     arm(asksFile, 'asks');
     arm(devFile, 'dev');
     for (const [dir, bases] of dirs) {
       try { fs.mkdirSync(dir, { recursive: true }); } catch { /* best-effort */ }
       try {
         const w = fs.watch(dir, (_ev, fn) => {
-          const fam = fn && bases[String(fn)];
+          if (!fn) return;
+          const base = String(fn);
+          let fam;
+          let key = 'root';
+          const owner = (feedDir && dir === feedDir) ? feedOwnerFromBase(base) : null;
+          if (owner) { fam = 'feed'; key = owner; } // root feed.json OR a per-tenant feed-<owner>.json
+          else { fam = bases[base]; if (fam === 'feed') return; } // asks/dev exact-match (feed handled above)
           if (!fam) return;
-          clearTimeout(timers.get(fam));
-          timers.set(fam, setTimeout(() => bump(fam), debounceMs));
+          const tk = `${fam}:${key}`;
+          clearTimeout(timers.get(tk));
+          timers.set(tk, setTimeout(() => bump(fam, key), debounceMs));
         });
         w.unref?.();
         watchers.push(w);
