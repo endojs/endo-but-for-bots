@@ -2214,6 +2214,10 @@ const CHAT_PAGE = 40;
 let chatShowN = CHAT_PAGE;
 let memoRuns = []; // server-owned traceable runs, one per incoming voice memo (versioned)
 let seedChats = []; // ingested voice-note chats (full objects incl. versions) — the harness applies here too
+// INT-3: an adopted seed-chat is a READ-TIME view (unioned into the list from the global seed-chats store) —
+// it must never be persisted into THIS cap's store, or it fans out into every cap's bundle with independently
+// mutable (diverging) titles. isSeedId gates it out of the sync bundle; the server drops it too (defense-in-depth).
+const isSeedId = id => seedChats.some(s => s.id === id);
 let memoVersion = 0; // which version of the active run (memo OR seed-chat) is shown
 // a "run" = anything with a versions[] harness: a memo run or an ingested seed-chat
 const runFor = id => memoRuns.find(r => r.id === id) || seedChats.find(r => r.id === id) || null;
@@ -2490,11 +2494,14 @@ const saveTx = () => { try { localStorage.setItem(txKey(sessionId), JSON.stringi
 const UPD_KEY = 'field-agent-updated';
 let syncTimer = null;
 function bundleAll(updated) {
-  const b = { chats, active: sessionId, updated, deleted: [...deletedIds].slice(-2000),
-    tx: Object.fromEntries(chats.map(c => [c.id, stripImg(loadTx(c.id)).slice(-200)])) };
-  // Keep the payload under the server limit by trimming the OLDEST chats' transcripts first (chats[0] is
+  // INT-3: persist only THIS cap's own chats — exclude adopted seed-chats (they're a read-time view merged
+  // back in by loadSeedChats). Persisting them replicated the seed into every cap's store with diverging titles.
+  const ownChats = chats.filter(c => c && c.id && !isSeedId(c.id));
+  const b = { chats: ownChats, active: sessionId, updated, deleted: [...deletedIds].slice(-2000),
+    tx: Object.fromEntries(ownChats.map(c => [c.id, stripImg(loadTx(c.id)).slice(-200)])) };
+  // Keep the payload under the server limit by trimming the OLDEST chats' transcripts first (ownChats[0] is
   // newest). The LIST — which must never be lost — always rides; only old transcripts drop from the sync.
-  const order = chats.map(c => c.id);
+  const order = ownChats.map(c => c.id);
   for (let i = order.length - 1; i >= 0 && JSON.stringify(b).length > 5 * 1024 * 1024; i -= 1) delete b.tx[order[i]];
   return b;
 }

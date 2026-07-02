@@ -2781,6 +2781,17 @@ const handler = async (req, res) => {
       if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
       try {
         const d = (data && typeof data === 'object') ? data : {};
+        // INT-3: seed-chats are a GLOBAL, read-time view — they must NEVER be persisted into a per-cap store.
+        // A client (old or new) that includes an adopted seed id in its bundle would otherwise fan the seed out
+        // into every cap's chats/<hash>.json (1305 rows → 191 unique), each copy independently mutable so titles
+        // diverge. Drop any seed-owned id here (defense in depth: the client's bundleAll also excludes them).
+        try {
+          const seedIds = new Set((await readSeedChats()).map(c => c && c.id).filter(Boolean));
+          if (seedIds.size) {
+            if (Array.isArray(d.chats)) d.chats = d.chats.filter(c => !(c && seedIds.has(c.id)));
+            if (d.tx && typeof d.tx === 'object') for (const id of seedIds) delete d.tx[id];
+          }
+        } catch { /* seed store unreadable → persist as-is (never fail the save) */ }
         const LIMIT = 6 * 1024 * 1024;
         let s = JSON.stringify(d);
         let trimmed = 0;
