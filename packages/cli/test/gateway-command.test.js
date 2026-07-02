@@ -65,15 +65,29 @@ test('endo gateway where prints the resolved user-mode paths', async t => {
   t.regex(stdout, /^config: .*endo-gateway/mu);
 });
 
-test('endo gateway where --system uses Linux system paths', async t => {
+test('endo gateway where --system uses the platform system paths', async t => {
   const { stdout, exitCode } = await runEndo(['gateway', 'where', '--system']);
   t.is(exitCode, 0);
   t.regex(stdout, /^mode: system$/mu);
-  t.regex(stdout, /^state: \/var\/lib\/endo-gateway$/mu);
-  t.regex(stdout, /^runtime: \/run\/endo-gateway$/mu);
-  t.regex(stdout, /^log: \/var\/log\/endo-gateway$/mu);
-  t.regex(stdout, /^cache: \/var\/cache\/endo-gateway$/mu);
-  t.regex(stdout, /^config: \/etc\/endo-gateway\/config\.toml$/mu);
+  // System-mode paths are platform-specific by design (Linux FHS vs the
+  // macOS `/usr/local/var/...` layout, per designs/gateway-package.md
+  // § Feature 10); assert against whichever platform this matrix leg runs on.
+  if (process.platform === 'darwin') {
+    t.regex(stdout, /^state: \/usr\/local\/var\/lib\/endo-gateway$/mu);
+    t.regex(stdout, /^runtime: \/usr\/local\/var\/run\/endo-gateway$/mu);
+    t.regex(stdout, /^log: \/usr\/local\/var\/log\/endo-gateway$/mu);
+    t.regex(stdout, /^cache: \/usr\/local\/var\/cache\/endo-gateway$/mu);
+    t.regex(
+      stdout,
+      /^config: \/usr\/local\/etc\/endo-gateway\/config\.toml$/mu,
+    );
+  } else {
+    t.regex(stdout, /^state: \/var\/lib\/endo-gateway$/mu);
+    t.regex(stdout, /^runtime: \/run\/endo-gateway$/mu);
+    t.regex(stdout, /^log: \/var\/log\/endo-gateway$/mu);
+    t.regex(stdout, /^cache: \/var\/cache\/endo-gateway$/mu);
+    t.regex(stdout, /^config: \/etc\/endo-gateway\/config\.toml$/mu);
+  }
 });
 
 test('endo gateway where --json emits parseable JSON', async t => {
