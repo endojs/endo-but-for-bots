@@ -1,6 +1,6 @@
 #!/bin/sh
 
-set -e 
+set -e
 
 echo "yarn version: $(yarn --version)"
 
@@ -15,15 +15,58 @@ are_engines_installed() {
     [ -f "$HOME/.esvu/bin/xs" ] && [ -f "$HOME/.esvu/bin/v8" ]
 }
 
+# Retry an esvu install a few times to ride out a transient hiccup
+# fetching the Moddable XS release on GitHub or the V8 canary build on
+# Google's chromium-v8 GCS bucket (endojs/endo#3289). The job-level
+# actions/cache for ~/.esvu (in ci.yml's test-xs job) is the load-bearing
+# defense against the underlying flake; this retry only covers the
+# cache-miss path where esvu actually has to fetch.
+#
+# Backoff is exponential with a small randomized component so that
+# repeated CI starts on the same upstream blip do not all hammer the
+# release server in lock-step (which a constant-delay retry can do).
+# A persistent outage will still fail after attempts are exhausted;
+# the retry is not a substitute for the cache.
+#
+# On every attempt we capture the combined output; on the final failure
+# the captured output of the last attempt is what the caller prints
+# before exit 1.
+install_engine_with_retry() {
+    engine=$1
+    attempts=3
+    base_delay=5
+    i=1
+    while [ "$i" -le "$attempts" ]; do
+        if output=$(yarn dlx esvu install "$engine" 2>&1); then
+            INSTALL_OUTPUT=$output
+            return 0
+        fi
+        INSTALL_OUTPUT=$output
+        if [ "$i" -lt "$attempts" ]; then
+            # exponential backoff: base_delay * 2^(i-1), plus 0..4s of jitter.
+            # awk's srand() is the most portable random source for /bin/sh.
+            backoff=$((base_delay * (1 << (i - 1))))
+            jitter=$(awk 'BEGIN{srand(); print int(rand() * 5)}')
+            delay=$((backoff + jitter))
+            echo "esvu install $engine attempt $i/$attempts failed; retrying in ${delay}s..."
+            sleep "$delay"
+        fi
+        i=$((i + 1))
+    done
+    return 1
+}
+
 if are_engines_installed; then
     echo "Engines already installed. Skipping installation."
 else
     echo "Installing engines..."
-    INSTALL_OUTPU_XS=$(yarn dlx esvu install xs 2>&1) || INSTALL_STATUS_XS=$?
-    INSTALL_OUTPU_V8=$(yarn dlx esvu install v8 2>&1) || INSTALL_STATUS_V8=$?
+    install_engine_with_retry xs || INSTALL_STATUS_XS=$?
+    INSTALL_OUTPU_XS=$INSTALL_OUTPUT
+    install_engine_with_retry v8 || INSTALL_STATUS_V8=$?
+    INSTALL_OUTPU_V8=$INSTALL_OUTPUT
 fi
 
-if [ -n "$INSTALL_STATUS_XS" ] || [ -n "$INSTALL_STATUS_V8" ]; then 
+if [ -n "$INSTALL_STATUS_XS" ] || [ -n "$INSTALL_STATUS_V8" ]; then
     if are_engines_installed; then
         echo "Engines installed successfully despite esvu error."
     else
