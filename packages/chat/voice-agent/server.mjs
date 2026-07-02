@@ -27,7 +27,7 @@ import { runAgentCode } from '../../ocapn-noise/codemode.mjs';
 // SES Compartment endowed with exactly its caps (lexical confinement), and ends the turn via the
 // answer()/ask()/blocked() scope functions. The legacy text-marker loop (runAgent) was retired. See codemode.mjs.
 const AGENT_RUNNER = runAgentCode;
-import { readAsks, getAsk, answerAsk, setAskStatus, formatAnswers, getSecret, storeNamedSecret } from './asks-store.mjs';
+import { readAsks, getAsk, answerAsk, setAskStatus, formatAnswers, getSecret, storeNamedSecret, ASKS_FILE } from './asks-store.mjs';
 import { makeConnectors } from './connectors.mjs';
 import { makeCustomTools, TOOL_AUTHORING_GUIDE } from './custom-tools.mjs';
 import { makeReviewedFixer } from './self-heal.mjs';
@@ -95,6 +95,7 @@ import { makeComponentBacklog } from './component-backlog.mjs';
 import { makeChromeComponents } from './chrome-components.mjs';
 import { makeTraceCells } from './trace-cells.mjs';
 import { makeSeedCells } from './seed-cells.mjs';
+import { makeInboxCells } from './inbox-cells.mjs';
 import { makeDistTrust } from './dist-trust.mjs';
 import { makeBlossom } from './blossom.mjs';
 import * as projects from './projects.mjs';
@@ -820,6 +821,22 @@ const seedCellFor = (cap, key) => {
   const resolved = (key === 'self' || key === '') ? own : ((node.isRoot || key === own) ? key : null);
   return resolved ? { cell: seedCells.cellFor(resolved) } : { error: 'not your captures' };
 };
+// The 🔔 BELL + INBOX as PUSH cells (`feed:<ownerKey>` / `asks:<ownerKey>` on /cells/subscribe) instead of a
+// 60s poll. Push-fed when feed.json / asks.json change (fs.watch on DASH_STATE_DIR — catches the agent-facing
+// notify/pushFeed writer + the off-app asks drain too), plus explicit bump() at the server's own mutation
+// sites. The value is a bare {rev,at} POKE — the client re-reads the owner-gated /feed/load + /asks/load on a
+// push, so the per-cap dismissed-state + the root-only content gate stay exactly where they are (cap-hygiene).
+const inboxCells = makeInboxCells({ feedFile: FEED_FILE, asksFile: ASKS_FILE });
+// feed:/asks:<key> gate — a valid cap may follow its OWN inbox (key 'self' or its own owner key); root may
+// follow any owner's. A foreign owner key (non-root) is refused. Re-checked on the 15s heartbeat like every
+// other cell. Content is root-only, so a non-root cap's own-key cell is a valid-but-idle empty inbox.
+const inboxCellFor = (cap, family, key) => {
+  const node = nodeFor(cap);
+  if (!node) return { error: 'no capability' };
+  const own = traceOwnerKeyOf(cap);
+  const resolved = (key === 'self' || key === '') ? own : ((node.isRoot || key === own) ? key : null);
+  return resolved ? { cell: inboxCells.cellFor(family, resolved) } : { error: 'not your inbox' };
+};
 // Distribution-trust (Phase 5): the social-collateral graph that decides which fork VERSIONS are approved
 // for end-user distribution. Root (the operator) is the base authority; trust flows outward via grants.
 const distTrust = makeDistTrust({ file: process.env.DIST_TRUST_STORE || `${VOICE_STATE_DIR}/dist-trust.json`, rootId: 'root' });
@@ -1054,6 +1071,7 @@ const postFeed = async entry => withFeedLock(async () => {
     let feed = { entries: [] }; try { feed = JSON.parse(await fs.promises.readFile(FEED_FILE, 'utf8')); } catch {}
     feed.entries = [{ id: `sched-${crypto.randomBytes(6).toString('hex')}`, date: new Date().toISOString(), kind: 'notification', ...entry }, ...(feed.entries || [])].slice(0, 400);
     writeJsonAtomic(FEED_FILE, feed, { pretty: true }); // INT-1: torn-write-safe (not guarded — the feed is notifications, not money; a bad byte tolerantly resets)
+    try { inboxCells.bump('feed'); } catch { /* the 🔔 bell push is best-effort; the fs.watch also catches this write */ }
   } catch (e) { log('postFeed', e.message); }
 });
 // Route a live runtime error to the self-improvement loop so the developer agent fixes it automatically
@@ -1781,7 +1799,9 @@ const handler = async (req, res) => {
         : (id.startsWith('backlog:') ? backlogCellFor(cap, id.slice('backlog:'.length))
           : id.startsWith('trace:') ? traceCellFor(cap, id.slice('trace:'.length)) // trace:<sid> = the chat's live reasoning trace (owner-gated; feeds the trace island)
             : id.startsWith('seeds:') ? seedCellFor(cap, id.slice('seeds:'.length)) // seeds:<key> = the owner's IN-FLIGHT capture-ingest progress (owner-gated; feeds the chats-list live rows)
-              : liveCells.cellFor(cap, id)); // backlog:<id> = the object's backlog cell (owner-only; push-fed by the store)
+              : id.startsWith('feed:') ? inboxCellFor(cap, 'feed', id.slice('feed:'.length)) // feed:<key> = the owner's 🔔 notification inbox (owner-gated poke; the client re-reads /feed/load on a push)
+                : id.startsWith('asks:') ? inboxCellFor(cap, 'asks', id.slice('asks:'.length)) // asks:<key> = the owner's inline-feedback asks (owner-gated poke; the client re-reads /asks/load on a push)
+                  : liveCells.cellFor(cap, id)); // backlog:<id> = the object's backlog cell (owner-only; push-fed by the store)
       const list = (Array.isArray(ids) ? ids : []).slice(0, 16).map(String);
       res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no', ...SEC });
       res.write(': ok\n\n');
@@ -2627,6 +2647,7 @@ const handler = async (req, res) => {
       if (!node || !node.isRoot) return json(res, 403, { error: 'root cap required' });
       const ask = answerAsk(id, answers || {});
       if (!ask) return json(res, 404, { error: 'no such ask' });
+      try { inboxCells.bump('asks'); } catch { /* asks: cell push best-effort (fs.watch also catches asks.json) */ }
       log('ask answered:', ask.id, ask.origin && ask.origin.kind);
       // STAGED-BRANCH REVIEW: a self-improve approve/reject is ACTED ON right here — no off-app flush needed.
       // APPROVE → safe-merge the verified branch (post-merge re-verify + auto-revert); REJECT → discard it. The
@@ -2656,6 +2677,7 @@ const handler = async (req, res) => {
         try { enqueueReply({ doc: (a.origin && a.origin.doc) || '', label: a.title, title: a.title, prompt }); setAskStatus(a.id, 'done'); }
         catch (e) { log('flush enqueue failed', a.id, e.message); }
       }
+      try { inboxCells.bump('asks'); } catch { /* asks: cell push best-effort */ }
       return json(res, 200, { ok: true, flushed: pend.length });
     }
     // ── notification inbox (🔔): read the shared feed (data endowment) + per-cap

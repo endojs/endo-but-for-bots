@@ -4027,6 +4027,41 @@ const showNotifModal = it => {
 };
 const loadFeed = async () => { try { return await (await fetch('/feed/load', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json(); } catch { return null; } };
 const refreshBadge = async () => { if (!cap) return; await loadAsks(); const d = await loadFeed(); const attN = d ? (d.items || []).filter(i => i.attention && !i.dismissed).length : 0; setBellBadge(openAsks.length + attN); };
+// ── generic cell FOLLOWER over the one /cells/subscribe broker: one kept-open SSE stream, pushes replace a
+//    poll. Reused for the 🔔 bell (feed:/asks:) below. onValue(id, value) fires on the initial snapshot + on
+//    every change; a per-id `error` frame (owner gate / revoked cap) is ignored (the slow fallback covers it).
+const followCells = (ids, onValue) => {
+  if (!cap) return () => {};
+  const ac = new AbortController();
+  (async () => {
+    try {
+      const res = await fetch('/cells/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, cells: ids }), signal: ac.signal });
+      if (!res.ok || !res.body) return;
+      const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read(); if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i; while ((i = buf.indexOf('\n\n')) >= 0) {
+          const block = buf.slice(0, i); buf = buf.slice(i + 2);
+          const line = block.split('\n').find(l => l.startsWith('data:')); if (!line) continue;
+          try { const m = JSON.parse(line.slice(5).trim()); if (m && !m.error && m.value !== undefined) onValue(m.id, m.value); } catch { /* malformed frame */ }
+        }
+      }
+    } catch { /* aborted / no cap → the slow fallback poll still refreshes */ }
+  })();
+  return () => { try { ac.abort(); } catch { /* */ } };
+};
+// 🔔 BELL + INBOX, event-driven: FOLLOW feed:self + asks:self. The server pushes a {rev,at} poke the instant
+// feed.json / asks.json change (a new proposal, a raised/answered ask) — we then re-read the owner-gated feed
+// + asks (refreshBadge; and repaint the inbox if it's open). This REPLACES the 60s badge poll; a slow
+// fallback poll remains as a safety net until the cell path has proven itself in the wild.
+let inboxCellAbort = null;
+let badgeDebounce = null;
+const bumpInbox = () => { clearTimeout(badgeDebounce); badgeDebounce = setTimeout(() => { refreshBadge(); if (typeof curTab !== 'undefined' && curTab === 'inbox') { try { renderInbox(); } catch { /* */ } } }, 150); };
+const subscribeInboxCells = () => {
+  if (!cap || inboxCellAbort) return; // one stream for the life of the tab
+  inboxCellAbort = followCells(['feed:self', 'asks:self'], () => bumpInbox());
+};
 const renderInbox = async () => {
   await loadAsks();
   const d = await loadFeed(); if (!d) return;
@@ -5646,7 +5681,7 @@ const boot = async () => {
   if (pendingMinimizeApp) { try { minimizeAppToChat(pendingMinimizeApp); } catch (e) { console.warn('minimize-app handoff', e); } } // /apps → "minimize to chat" landed here
   if (pendingForkToken) { try { openForkInChat({ shareToken: pendingForkToken, name: 'shared fork' }, '⑂ Shared fork'); } catch (e) { console.warn('fork handoff', e); } } // #fork=<token> shared link → open inline
   setStatus('');
-  refreshBadge(); setInterval(refreshBadge, 60000); // 🔔 notification badge
+  refreshBadge(); subscribeInboxCells(); setInterval(refreshBadge, 180000); // 🔔 notification badge: PUSH-driven via feed:/asks: cells; a slow 3-min poll stays as a safety-net fallback
   if (pendingInbox) { pendingInbox = false; try { showTab('inbox'); } catch { /* */ } } // a notification's #inbox deep-link → open the 🔔 inbox (proposals/feed live here, not a chat thread)
   if (pendingSched) { const sid = pendingSched; pendingSched = null; try { openSchedDetail(sid); } catch { /* */ } } // #sched=<id> deep-link → that scheduled task's Detail card
   loadModels(); loadAgentList(); loadProjectList(); // populate the header agent + model-provider selectors and the project menu
