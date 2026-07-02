@@ -751,7 +751,7 @@ const blueskyOAuth = makeBlueskyOAuth({
   sessionFile: `${VOICE_STATE_DIR}/bluesky-oauth-session.json`,
 });
 // Least-authority cross-user share tokens for a broken-out component: subscribe-only to its frozen cells.
-const componentShares = makeComponentShares({ file: `${VOICE_STATE_DIR}/component-shares.json`, makePurse, purseStore });
+const componentShares = makeComponentShares({ file: `${VOICE_STATE_DIR}/component-shares.json`, purseAt }); // P1-8: route allowance purses through the cached purseAt (no per-open fresh purse → no double-spend)
 // User-owned FORKS of confined Preact components (the in-tree, no-iframe model). Any cap-holder owns forks;
 // owner = a stable, NON-SECRET id derived from the cap ('root' for the root cap, else a one-way hash — never
 // the cap itself, cap-hygiene). Forks render via client renderSource under lockdown; the store is live-safe

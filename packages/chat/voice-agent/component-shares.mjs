@@ -24,13 +24,16 @@ import { writeJsonAtomic } from './write-json-atomic.mjs';
 const hash = t => crypto.createHash('sha256').update(`cshare:${t}`).digest('hex');
 const now = () => Date.now();
 
-// makeComponentShares({ file, makePurse, purseStore }) — makePurse+purseStore power the allowance scheme.
-export const makeComponentShares = ({ file, makePurse, purseStore }) => {
+// makeComponentShares({ file, purseAt }) — `purseAt(key, seed)` is the server's ONE cached durable-purse
+// accessor (same one invite wallets use). Routing allowance purses through it (P1-8) means every open of a
+// given share reads and debits the SAME in-memory purse instance — so two concurrent opens serialize their
+// debits instead of both reading balance X and both writing X−perOpen (a lost debit / double-spend).
+export const makeComponentShares = ({ file, purseAt }) => {
   let data = {};
   try { data = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* fresh */ }
   const save = () => { try { writeJsonAtomic(file, data, { pretty: true }); } catch { /* best-effort */ } }; // INT-1: torn-write-safe
   const purseKeyFor = th => `cshare:${th}`; // namespace in the shared purse-store (hashed key)
-  const purseOf = rec => { if (!rec || !rec.purseKey || !makePurse || !purseStore) return null; const s = purseStore.get(rec.purseKey); return makePurse(s ? s.balance : 0, { granted: s ? s.granted : 0, onChange: (b, g) => purseStore.set(rec.purseKey, b, g) }); };
+  const purseOf = rec => { if (!rec || !rec.purseKey || !purseAt) return null; return purseAt(rec.purseKey, 0); };
 
   // create({ componentId, cells:[{id, handle}], readOnly, charge }) → plaintext token (shown once).
   // charge: { scheme:'free'|'expires'|'allowance', hours?, total?(µUSD), perOpen?(µUSD) }
@@ -39,7 +42,7 @@ export const makeComponentShares = ({ file, makePurse, purseStore }) => {
     const scheme = ['free', 'expires', 'allowance'].includes(charge.scheme) ? charge.scheme : 'free';
     const rec = { componentId: String(componentId), cells: (cells || []).map(c => ({ id: String(c.id), handle: String(c.handle || '') })), readOnly: !!readOnly, createdAt: new Date().toISOString(), revoked: false, scheme };
     if (scheme === 'expires') rec.expiresAt = now() + Math.max(1, Math.min(8760, Number(charge.hours) || 24)) * 3600e3; // 1h..1yr
-    if (scheme === 'allowance' && makePurse && purseStore) { rec.purseKey = purseKeyFor(th); rec.perOpen = Math.max(1, Math.round(Number(charge.perOpen) || 10000)); const total = Math.max(rec.perOpen, Math.round(Number(charge.total) || 1000000)); const p = makePurse(total, { onChange: (b, g) => purseStore.set(rec.purseKey, b, g) }); purseStore.set(rec.purseKey, p.balance(), p.granted()); }
+    if (scheme === 'allowance' && purseAt) { rec.purseKey = purseKeyFor(th); rec.perOpen = Math.max(1, Math.round(Number(charge.perOpen) || 10000)); const total = Math.max(rec.perOpen, Math.round(Number(charge.total) || 1000000)); purseAt(rec.purseKey, total); } // purseAt seeds + persists the fresh (random-token-keyed) purse and caches it for opens
     data[th] = rec; save();
     return token;
   };
