@@ -145,9 +145,7 @@ export const HandleInterface = M.interface(
     // Confirm or deny that the given subordinate Handle stands in the
     // named relationship to this Handle. Returns false if the subordinate
     // has no matching epithet whose principal is this Handle.
-    verify: M.callWhen(M.remotable('Handle'), M.string()).returns(
-      M.boolean(),
-    ),
+    verify: M.callWhen(M.remotable('Handle'), M.string()).returns(M.boolean()),
   },
   { defaultGuards: 'passable' },
 );
