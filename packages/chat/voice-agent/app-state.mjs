@@ -10,6 +10,8 @@
 // Pure dependency injection (no hard-coded paths) → unit-testable with temp files.
 import fs from 'node:fs';
 
+import { writeJsonAtomic } from './write-json-atomic.mjs';
+
 export const makeAppStore = ({ chatStorePath, readMemoRuns, writeMemoRuns, readSeedChats, writeSeedChats, readAsks, feedFile, withChatLock } = {}) => {
   // serialize per-cap bundle writes with the client's /chats/save so a retitle can't
   // clobber concurrently-saved turns/chats (and vice-versa). No lock injected → direct (tests).
@@ -51,7 +53,7 @@ export const makeAppStore = ({ chatStorePath, readMemoRuns, writeMemoRuns, readS
       // stale snapshot (which would drop turns/chats the client saved concurrently).
       await lock(cap, async () => {
         const b = await readBundle(cap); const c = b && Array.isArray(b.chats) && b.chats.find(x => x.id === i);
-        if (c && c.title !== t) { c.title = t; b.updated = Date.now(); try { await fs.promises.writeFile(chatStorePath(cap), JSON.stringify(b)); changed.push('chat'); } catch { /* best effort */ } }
+        if (c && c.title !== t) { c.title = t; b.updated = Date.now(); try { writeJsonAtomic(chatStorePath(cap), b); changed.push('chat'); } catch { /* best effort */ } } // INT-2: atomic — a crash mid-retitle can't torn the cap's history
       });
     }
     return { ok: changed.length > 0, id: i, title: t, updated: changed, note: changed.length ? 'Title updated — it appears on the next sync/refresh.' : `No conversation found with id "${i}".` };

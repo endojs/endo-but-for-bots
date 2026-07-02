@@ -2528,8 +2528,10 @@ const handler = async (req, res) => {
           if (s.length > LIMIT) { d.tx = {}; s = JSON.stringify(d); } // pathological huge list → keep the list, drop all tx
         }
         if (s.length > LIMIT) return json(res, 413, { error: 'chat list itself exceeds the size limit' }); // metadata-only is tiny; should never happen
-        await fs.promises.mkdir(CHATS_DIR, { recursive: true });
-        await withChatLock(cap, () => fs.promises.writeFile(chatStorePath(cap), s)); // serialize vs the agent's retitle
+        // INT-2: atomic temp+rename so a crash mid-write can't torn a cap's whole chat history (the
+        // in-process withChatLock only serializes THIS process's writers). d === the parsed bundle; s is its
+        // (possibly trimmed) serialization — write d so the on-disk file is always a whole, parseable bundle.
+        await withChatLock(cap, () => { writeJsonAtomic(chatStorePath(cap), d); }); // serialize vs the agent's retitle
         return json(res, 200, { ok: true, trimmed });
       } catch (e) { return json(res, 500, { error: e.message }); }
     }
