@@ -56,7 +56,8 @@
     "test:chrome": "node chrome-components.staging.test.cjs",
     "test:trace-cells": "node --test trace-cells.test.mjs",
     "test:seed-cells": "node --test seed-cells.test.mjs",
-    "test:trace-island": "node trace-island.staging.test.cjs"
+    "test:trace-island": "node trace-island.staging.test.cjs",
+    "test:trace-viz": "node trace-viz-island.staging.test.cjs"
   },
   "dependencies": {
     "@endo/exo-git": "workspace:^",

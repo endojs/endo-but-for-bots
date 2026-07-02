@@ -3258,7 +3258,63 @@ const openLive3D = async (promptText, sid) => {
     if (!pendantFs) togglePendantFs();
   } catch { /* the 3D view is enhancement-only */ }
 };
+// ── TRACE-VIZ ISLAND (Tier-2) ── dan (2026-07-02): the SVG/WebGL trace must be an alt-clickable, forkable
+//    island; the SES no-iframe fork path's sanitizer has NO <canvas>/<svg>, so a WebGL trace view needs the
+//    sandboxed opaque-origin IFRAME runtime (public/confined.html). This mounts the reference 3D force-graph
+//    viz (public/trace-viz-3d.js) via grain-ui.mountTraceViz: the iframe subscribes to trace:<sid> and the
+//    PARENT brokers that cell in over a private MessagePort (the cap never crosses; the frame has no network).
+//    It is the DEFAULT trace surface with a clean fallback ladder — Tier-2 WebGL → chrome-trace-view (divs)
+//    → legacy 3D pendant — so a failure NEVER blanks the turn. (This block lives in the trace region, far
+//    from componentSelect; the view-switching worker owns that.)
+const TRACE_VIZ_LS = 'field-trace-viz-id';
+let __traceVizSeed = null; // memoized seed promise: ONE /components/break-out per session gives the viz its git id
+const ensureTraceVizSeeded = async () => {
+  try { const c = localStorage.getItem(TRACE_VIZ_LS); if (c) return c; } catch { /* */ }
+  if (__traceVizSeed) return __traceVizSeed;
+  __traceVizSeed = (async () => {
+    try {
+      const { TRACE_VIZ_3D_SOURCE } = await import('./trace-viz-3d.js');
+      const r = await (await fetch('/components/break-out', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), source: TRACE_VIZ_3D_SOURCE, name: 'Trace 3D (force graph)', cells: ['trace:<chatId>'] }) })).json();
+      if (r && r.ok && r.id) { try { localStorage.setItem(TRACE_VIZ_LS, r.id); } catch { /* */ } return r.id; }
+    } catch { /* best-effort: the island still renders live without a git id (just not forkable this session) */ }
+    return null;
+  })();
+  return __traceVizSeed;
+};
+const traceVizIslandBegin = async (promptText, sid) => {
+  try {
+    const gu = await import('./grain-ui.js');
+    if (!gu || typeof gu.mountTraceViz !== 'function') return false;
+    traceIslandEnd();
+    const host = document.createElement('div');
+    host.className = 'msg trace-island-host';
+    host.style.cssText = 'padding:0;border:0;background:none;max-width:none';
+    log.appendChild(host); window.scrollTo(0, document.body.scrollHeight);
+    const componentId = await ensureTraceVizSeeded().catch(() => null); // its uicomp git id (alt-click/fork/backlog)
+    const inst = { host, sid, tier2: true, frames: 0, ctrl: { abort() {} } };
+    let fellBack = false;
+    const onError = () => { // the confined viz failed to mount/threw → the LEGACY 3D pendant takes over (never a blank turn)
+      if (fellBack) return; fellBack = true;
+      try { traceIslandEnd(); } catch { /* */ }
+      try { pendantBeginLegacy(promptText, sid); } catch { /* */ }
+    };
+    const wrap = await gu.mountTraceViz(host, { cap: chatCap(), sid, componentId, name: 'Trace 3D (force graph)', height: 300, onError, onVizFrame: n => { inst.frames = n; } });
+    if (!wrap) { try { host.remove(); } catch { /* */ } return false; }
+    inst.ctrl = { abort: () => { try { wrap.__dispose && wrap.__dispose(); } catch { /* */ } } };
+    traceIsland = inst; window.__traceIsland = inst; // test seam: { frames, sid, tier2 }
+    return true;
+  } catch { return false; }
+};
+// Tier-2 is OPT-IN for now (dan-gated policy call — it changes the central trace surface + the prior
+// chrome-trace-view test asserts the divs island). Enable per-instance with localStorage
+// field-trace-tier2='1' (or window.__traceVizTier2 = true). When on: Tier-2 WebGL island → (on failure)
+// legacy 3D pendant; when off / unavailable: the chrome-trace-view island → (call site) legacy pendant.
+const traceTier2On = () => { try { return window.__traceVizTier2 === true || localStorage.getItem('field-trace-tier2') === '1'; } catch { return false; } };
 const traceIslandBegin = async (promptText, sid) => {
+  if (traceTier2On()) { try { if (await traceVizIslandBegin(promptText, sid)) return true; } catch { /* fall through to chrome */ } }
+  return traceChromeIslandBegin(promptText, sid);
+};
+const traceChromeIslandBegin = async (promptText, sid) => {
   try {
     await chromeReady;
     const c = chromeComps['chrome-trace-view'];
