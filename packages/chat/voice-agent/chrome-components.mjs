@@ -331,6 +331,152 @@ const EXHAUSTED_SOURCE = `// CHROME-EXHAUSTED (chrome-exhausted) — the allowan
   ]);
 }`;
 
+// The DEV-TASK card (ISL-3 · chrome-dev-task-card) — a Blacksmith/dev task routed from a chat, promoted from
+// the app.js imperative twin (`devCard`) into the confined chrome lane. PURE RENDER: the real /thread/reply
+// POST + the expand/draft view state stay HOST callbacks (the host re-mounts on change). Promoting it also
+// drops the twin's `linkify` (the confined lane returns vnodes, not DOM) — the task/result render as plain
+// text, matching the DevTaskCard island. The .msg/.who/.body/.dev-thread* classes are load-bearing.
+const DEV_TASK_CARD_SOURCE = `// CHROME-DEV-TASK-CARD (chrome-dev-task-card) — a Blacksmith/dev task routed from a chat: who + status, the
+// task + result, and a collapsible reply thread (replies route ONLY to the dev task, never the top-level
+// conversation). PURE RENDER: no cap, no DOM, no network. The HOST owns view state (expanded + the reply
+// draft) and re-mounts on change; the real /thread/reply POST is a host callback (the props boundary).
+// props (render-safe): { task:{id,to,status,task,result,thread:[{role,text}]}, accent, who, expanded, draft }
+//   props.onToggle()  props.onReplyChange(v)  props.onReplySend()   — host callbacks
+// Classes .msg/.who/.body/.dev-thread/.dev-thread-toggle/.dev-thread-body/.dev-thread-msg/.dev-thread-row are load-bearing.
+(endowments, props) => {
+  const h = endowments.h;
+  const p = props || {};
+  const task = p.task || {};
+  const accent = p.accent || '';
+  const who = p.who || task.to || 'blacksmith';
+  const expanded = !!p.expanded;
+  const thread = Array.isArray(task.thread) ? task.thread : [];
+  const statusLabel = task.status === 'done' ? '✓ done' : task.status === 'error' ? '⚠ error' : '⏳ working…';
+  const send = () => { if (typeof p.onReplySend === 'function') p.onReplySend(); };
+  const threadUi = expanded ? h('div', { class: 'dev-thread-body', style: accent ? 'border-color:' + accent : undefined }, [
+    ...thread.map((m, i) => h('div', { class: 'dev-thread-msg', key: i }, [
+      h('b', { style: 'color:' + (m.role === 'you' ? 'var(--you)' : (accent || 'var(--acc)')) }, m.role === 'you' ? 'you' : who), ' ', m.text || '',
+    ])),
+    h('div', { class: 'dev-thread-row kit-rowx' }, [
+      h('input', { class: 'kit-in', value: p.draft || '', placeholder: 'reply to ' + who + '…',
+        onInput: e => { if (typeof p.onReplyChange === 'function') p.onReplyChange(e.target.value); },
+        onKeyDown: e => { if (e.key === 'Enter') send(); } }),
+      h('button', { class: 'mini primary', onClick: send }, 'Send'),
+    ]),
+  ]) : null;
+  return h('div', { class: 'msg', style: accent ? 'border-color:' + accent : undefined }, [
+    h('div', { class: 'who', style: accent ? 'color:' + accent : undefined }, '🔨 ' + who + ' · ' + statusLabel),
+    h('div', { class: 'body' }, (task.task || '') + (task.result ? '\\n\\n→ ' + task.result : '')),
+    h('div', { class: 'dev-thread' }, [
+      h('button', { class: 'dev-thread-toggle', 'aria-expanded': String(expanded), style: accent ? 'color:' + accent : undefined,
+        onClick: () => { if (typeof p.onToggle === 'function') p.onToggle(); } },
+        (expanded ? '▾' : '▸') + ' reply in thread' + (thread.length ? ' (' + thread.length + ')' : '')),
+      threadUi,
+    ]),
+  ]);
+}`;
+
+// The ASK card (ISL-3 · chrome-ask-card) — the inline feedback loop, promoted from the app.js twin
+// (buildAskCard, which rendered through the AskCard island). PURE RENDER. The HOST owns the in-progress
+// answers (per ask id) + the answered status and re-mounts on each change; the real /asks/answer POST is a
+// host callback. SECRET HYGIENE lives in the source: a 'secret' answer is a masked, UNCONTROLLED password
+// field — read into host state on submit, never bound back / re-rendered; once answered it becomes a chip.
+const ASK_CARD_SOURCE = `// CHROME-ASK-CARD (chrome-ask-card) — a STRUCTURED, typed question an agent raised, answered with
+// type-appropriate controls right here. PURE RENDER: no cap, no DOM, no network. The HOST owns the answers +
+// answered status and re-mounts on each change; the real /asks/answer POST is a host callback.
+// SECRET HYGIENE: a 'secret' answer is a masked, UNCONTROLLED password field — its value is read into host
+// state on submit and never bound back / re-rendered; once answered it becomes a 'stored securely' chip.
+// props (render-safe): { ask:{id,title,body,requestedBy,questions:[{id,q,type,options}]}, answers:{qid:value}, status, accent }
+//   props.onChange(qid,value)  props.onSubmit(askId)  props.onOpenOrigin()   — host callbacks
+// Classes .ask/.ask-title/.ask-body/.ask-q/.ask-qtext/.ask-ctrl/.ask-btns + kit (.pill/.mini/.kit-in/.kit-stack/.kit-rowx/.kit-check) are load-bearing.
+(endowments, props) => {
+  const h = endowments.h;
+  const p = props || {};
+  const ask = p.ask || {};
+  const answers = p.answers || {};
+  const status = p.status || '';
+  const dis = !!status;
+  const onChange = typeof p.onChange === 'function' ? p.onChange : () => {};
+  const chip = label => h('span', { class: 'pill' }, label == null ? '' : String(label));
+  const control = q => {
+    const v = answers[q.id];
+    if (q.type === 'choice' || q.type === 'bool' || q.type === 'approve-reject') {
+      const opts = q.type === 'bool' ? [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }]
+        : q.type === 'approve-reject' ? [{ value: 'approve', label: '✅ Approve' }, { value: 'reject', label: '❌ Reject' }]
+          : (q.options || []).map(o => ({ value: o, label: o }));
+      return h('div', { class: 'kit-rowx' }, opts.map((o, i) => h('label', { class: 'kit-check', key: i }, [
+        h('input', { type: 'radio', name: ask.id + '-' + q.id, value: o.value, checked: String(o.value) === String(v), disabled: dis || undefined, onChange: () => onChange(q.id, o.value) }),
+        h('span', null, o.label),
+      ])));
+    }
+    if (q.type === 'multiselect') {
+      const cur = Array.isArray(v) ? v : [];
+      return h('div', { class: 'kit-stack' }, (q.options || []).map((o, i) => h('label', { class: 'kit-check', key: i }, [
+        h('input', { type: 'checkbox', checked: cur.includes(o), disabled: dis || undefined, onChange: e => onChange(q.id, e.target.checked ? [...cur, o] : cur.filter(x => x !== o)) }),
+        h('span', null, o),
+      ])));
+    }
+    if (q.type === 'number') return h('input', { class: 'kit-in', type: 'number', value: v == null ? '' : String(v), placeholder: 'number', disabled: dis || undefined, onInput: e => onChange(q.id, e.target.value === '' ? null : Number(e.target.value)) });
+    if (q.type === 'secret') return dis
+      ? chip('🔒 stored securely — never shown again')
+      : h('input', { class: 'kit-in', type: 'password', autocomplete: 'off', placeholder: '🔒 stored securely — never shown or logged', onInput: e => onChange(q.id, e.target.value) });
+    return h('textarea', { class: 'kit-in', rows: 2, placeholder: 'your answer', disabled: dis || undefined, onInput: e => onChange(q.id, e.target.value) }, v || '');
+  };
+  return h('div', { class: 'ask', style: p.accent ? 'border-left:3px solid ' + p.accent : undefined }, [
+    h('div', { class: 'ask-title' }, ['❓ ', h('span', null, ask.title || ''), ask.requestedBy ? h('span', null, [' ', chip(ask.requestedBy)]) : null]),
+    ask.body ? h('div', { class: 'ask-body' }, ask.body) : null,
+    ...(ask.questions || []).map((q, i) => h('div', { class: 'ask-q', key: i }, [
+      h('div', { class: 'ask-qtext' }, q.q),
+      h('div', { class: 'ask-ctrl' }, control(q)),
+    ])),
+    h('div', { class: 'ask-btns' }, [
+      dis ? chip('✓ answered') : h('button', { class: 'mini primary', onClick: () => { if (typeof p.onSubmit === 'function') p.onSubmit(ask.id); } }, 'Submit'),
+      (typeof p.onOpenOrigin === 'function') ? h('button', { class: 'mini', onClick: () => p.onOpenOrigin() }, '→ open conversation') : null,
+    ]),
+  ]);
+}`;
+
+// The per-chat TOP BAR (ISL-2 · chrome-chat-bar) — promoted from the app.js twin (renderChatBar). Two modes:
+//   memo: 🎙 title + a version scrubber (◀ label k/n ▶) + "Re-run / change env"
+//   chat: title + ↑parent chip + 📂project chip + a share-rights badge (✍️/🔒)
+// PURE RENDER: the actual navigation (selectVersion / openRerun / open project / switchChat) + the composer
+// gating (applyShareMode) stay HOST concerns. Classes .cb-title/.cb-scrub/.cb-right/.cb-parent/.cb-proj are load-bearing.
+const CHAT_BAR_SOURCE = `// CHROME-CHAT-BAR (chrome-chat-bar) — the per-chat top bar. PURE RENDER: no cap, no DOM, no network; every
+// action is a HOST callback (the props boundary). Two modes:
+//   props.mode === 'memo': { title, versionLabel, varIx, varCount } + onVersionPrev/onVersionNext/onRerun
+//   props.mode === 'chat': { title, shareMode:''|'write'|'read', metered, parent:{id,title,available}, project:{id,name} }
+//                          + onOpenParent(id)/onOpenProject(id)
+// Classes .cb-title/.cb-scrub/.cb-right/.cb-parent/.cb-proj + .mini/.pill are load-bearing (live CSS + selectors).
+(endowments, props) => {
+  const h = endowments.h;
+  const p = props || {};
+  const title = p.title || 'chat';
+  const spacer = h('span', { style: 'flex:1' });
+  if (p.mode === 'memo') {
+    const varIx = Number(p.varIx) || 0;
+    const varCount = Number(p.varCount) || 1;
+    const scrub = varCount > 1 ? h('span', { class: 'cb-scrub kit-rowx' }, [
+      h('button', { class: 'mini', disabled: varIx <= 0 || undefined, onClick: () => { if (typeof p.onVersionPrev === 'function') p.onVersionPrev(); } }, '◀'),
+      h('b', null, p.versionLabel || ('v' + varIx)),
+      h('span', { class: 'pill' }, (varIx + 1) + '/' + varCount),
+      h('button', { class: 'mini', disabled: varIx >= varCount - 1 || undefined, onClick: () => { if (typeof p.onVersionNext === 'function') p.onVersionNext(); } }, '▶'),
+    ]) : null;
+    return h('div', { class: 'kit-rowx' }, [
+      h('span', { class: 'cb-title' }, '🎙 ' + title), scrub, spacer,
+      h('button', { class: 'mini', onClick: () => { if (typeof p.onRerun === 'function') p.onRerun(); } }, '↻ Re-run / change env'),
+    ]);
+  }
+  const parent = p.parent || null;
+  const project = p.project || null;
+  const parentChip = parent ? (parent.available
+    ? h('button', { class: 'mini cb-parent', title: 'open the chat this was created from', onClick: () => { if (typeof p.onOpenParent === 'function') p.onOpenParent(parent.id); } }, '↑ from: ' + (parent.title || 'parent chat'))
+    : h('span', { class: 'mini', style: 'opacity:.6', title: 'the originating chat is no longer available' }, '↑ from: ' + (parent.title || 'parent chat'))) : null;
+  const projChip = project ? h('button', { class: 'mini cb-proj', title: "open this project's shared files", onClick: () => { if (typeof p.onOpenProject === 'function') p.onOpenProject(project.id); } }, '📂 ' + (project.name || 'project')) : null;
+  const badge = p.shareMode === 'write' ? h('span', { class: 'cb-right write' }, '✍️ live room · you can post' + (p.metered ? ' · metered allowance' : ''))
+    : p.shareMode === 'read' ? h('span', { class: 'cb-right ro' }, "🔒 live room · read-only — view, can't post") : null;
+  return h('div', { class: 'kit-rowx' }, [h('span', { class: 'cb-title' }, title), parentChip, projChip, spacer, badge]);
+}`;
+
 // The registry: stable ids (they are ADDRESSES — edit chats, backlogs, and git lineages key off them).
 const CHROME = harden([
   { id: 'chrome-msg-toolbar', name: 'Message toolbar', source: MSG_TOOLBAR_SOURCE },
@@ -339,6 +485,9 @@ const CHROME = harden([
   { id: 'chrome-studio', name: 'Component Studio', source: STUDIO_SOURCE },
   { id: 'chrome-msg-controls', name: 'Message controls', source: MSG_CONTROLS_SOURCE },
   { id: 'chrome-exhausted', name: 'Out-of-allowance card', source: EXHAUSTED_SOURCE },
+  { id: 'chrome-dev-task-card', name: 'Dev task card', source: DEV_TASK_CARD_SOURCE },
+  { id: 'chrome-ask-card', name: 'Ask card', source: ASK_CARD_SOURCE },
+  { id: 'chrome-chat-bar', name: 'Chat top bar', source: CHAT_BAR_SOURCE },
 ]);
 
 export const makeChromeComponents = ({ componentGit, componentBacklog }) => {

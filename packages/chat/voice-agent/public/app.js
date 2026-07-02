@@ -840,14 +840,18 @@ const buildAskCard = ask => {
     refreshBadge();
   };
   const draw = () => {
+    const props = {
+      ask: { id: ask.id, title: ask.title, body: ask.body, requestedBy: ask.requestedBy, questions: ask.questions },
+      answers: askAnswers[ask.id], status, accent: frameColor(ask.requestedBy),
+      onChange: (qid, v) => { askAnswers[ask.id][qid] = v; draw(); },
+      onSubmit: submit,
+      onOpenOrigin: hasOrigin ? openOrigin : undefined,
+    };
+    // ARCH-1/ISL-3: render through the confined chrome lane (alt-click-editable/forkable). The AskCard
+    // ISLAND is the fallback (unchanged), and a static title the final rung — the card is never blank.
+    if (mountChrome('chrome-ask-card', card, props)) return;
     if (window.__fieldIslands && window.__fieldIslands.renderInto) {
-      window.__fieldIslands.renderInto('AskCard', card, {
-        ask: { id: ask.id, title: ask.title, body: ask.body, requestedBy: ask.requestedBy, questions: ask.questions },
-        answers: askAnswers[ask.id], status, accent: frameColor(ask.requestedBy),
-        onChange: (qid, v) => { askAnswers[ask.id][qid] = v; draw(); },
-        onSubmit: submit,
-        onOpenOrigin: hasOrigin ? openOrigin : undefined,
-      });
+      window.__fieldIslands.renderInto('AskCard', card, props);
     } else { card.className = 'ask msg'; card.innerHTML = `<div class="ask-title">❓ <span>${esc(ask.title || '')}</span></div>`; }
   };
   draw();
@@ -865,7 +869,30 @@ const loadDevUpdates = async () => {
     if (JSON.stringify(next) !== JSON.stringify(devTasks)) { devTasks = next; renderTx(); } } catch {}
 };
 const devThreadOpen = {}; // taskId → expanded? (so a thread stays open across re-renders)
+const devDrafts = {};     // taskId → in-progress reply draft (host-owned; chrome-dev-task-card is stateless)
+// ARCH-1/ISL-3: the dev-task card renders through the confined chrome lane (chrome-dev-task-card), with the
+// pre-chrome imperative card (legacyDevCard, below) as the fallback. The host owns the expand/draft view
+// state and re-mounts on change; the real /thread/reply POST stays a host callback (props are the boundary).
 const devCard = t => {
+  const who = t.to || 'blacksmith'; const col = frameColor(who);
+  const host = document.createElement('div');
+  const doReply = async () => {
+    const v = (devDrafts[t.id] || '').trim(); if (!v) return;
+    devDrafts[t.id] = ''; paint();
+    await fetch('/thread/reply', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, parent: t.id, chatId: sessionId, text: v }) }).catch(() => {});
+    await loadDevUpdates();
+  };
+  const paint = () => mountChrome('chrome-dev-task-card', host, {
+    task: { id: t.id, to: t.to, status: t.status, task: t.task, result: t.result, thread: t.thread || [] },
+    accent: col, who, expanded: !!devThreadOpen[t.id], draft: devDrafts[t.id] || '',
+    onToggle: () => { devThreadOpen[t.id] = !devThreadOpen[t.id]; renderTx(); },
+    onReplyChange: v => { devDrafts[t.id] = v; paint(); },
+    onReplySend: doReply,
+  });
+  if (paint()) { log.appendChild(host); return; } // confined chrome path
+  legacyDevCard(t); // chrome couldn't mount → the identical imperative card (never blank)
+};
+const legacyDevCard = t => {
   const who = t.to || 'blacksmith'; const col = frameColor(who);
   const d = document.createElement('div'); d.className = 'msg'; d.style.borderColor = col;
   const status = t.status === 'done' ? '✓ done' : t.status === 'error' ? '⚠ error' : '⏳ working…';
@@ -2456,6 +2483,25 @@ const renderChatBar = () => {
   if (!sessionId || curTab !== 'talk') { bar.classList.add('hide'); return; }
   bar.classList.remove('hide');
   const run = runFor(sessionId); // memo run or ingested seed-chat: both carry the versions[] eval harness
+  // ARCH-1/ISL-2: render the bar through the confined chrome lane (chrome-chat-bar); actions are host
+  // callbacks (props are the boundary). The legacy innerHTML build below is the fallback — never blank.
+  const chromeProps = run
+    ? (() => { const vs = run.versions || []; return {
+        mode: 'memo', title: run.title || 'chat', versionLabel: (vs[memoVersion] || {}).label || ('v' + memoVersion),
+        varIx: memoVersion, varCount: vs.length,
+        onVersionPrev: () => selectVersion(memoVersion - 1), onVersionNext: () => selectVersion(memoVersion + 1),
+        onRerun: () => openRerun(run) }; })()
+    : (() => { const c = chats.find(x => x.id === sessionId) || {};
+        const par = c.parentId ? chats.find(x => x.id === c.parentId) : null;
+        const pj = c.projectId ? projectList.find(x => x.id === c.projectId) : null;
+        return { mode: 'chat', title: c.title || 'chat',
+          shareMode: (c.shared && c.shareToken) ? (c.shareMode === 'write' ? 'write' : 'read') : '',
+          metered: !!c.shareAllowance,
+          parent: c.parentId ? { id: c.parentId, title: (par && par.title) || c.parentTitle || 'parent chat', available: !!par } : null,
+          project: c.projectId ? { id: c.projectId, name: (pj && pj.name) || 'project' } : null,
+          onOpenParent: id => switchChat(id),
+          onOpenProject: id => { openProjectId = id; renderProjects(); } }; })();
+  if (mountChrome('chrome-chat-bar', bar, chromeProps)) { applyShareMode(); return; }
   if (run) {
     const vs = run.versions || [];
     const icon = String(sessionId).startsWith('memo-') ? '🎙 ' : '🎙 ';

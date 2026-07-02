@@ -437,6 +437,21 @@ stay host callbacks, view state re-mounts). Both keep their legacy DOM as fallba
 seed count, so `chrome-components.staging.test.cjs`'s `reg.components.length === 4` needs a one-line
 bump to `=== 6` (only that assertion; 77/78 pass) — left for the staging-test owner.
 
+**Increment 2 landed (this pass):** `chrome-dev-task-card` (ISL-3 — the Blacksmith/dev task card, mounted at
+`devCard`; the imperative build became `legacyDevCard` fallback; `/thread/reply` + expand/draft view-state
+stay host callbacks, host re-mounts on change), `chrome-ask-card` (ISL-3 — the inline feedback-loop card,
+mounted at `buildAskCard`'s `draw()`; the AskCard *island* is the fallback, a static title the final rung;
+secret hygiene — the masked, uncontrolled password field — travels IN the source), and `chrome-chat-bar`
+(ISL-2 — the per-chat top bar in both memo + chat modes, mounted at `renderChatBar`; the legacy `innerHTML`
+build is the fallback; `applyShareMode` stays a host concern). Each promoted piece keeps its load-bearing
+classes (`.msg`/`.dev-thread*`, `.ask*`, `.cb-*`) + kit classes so live CSS + staging selectors match, holds
+NO cap (props are the ocap boundary), and gets alt-click-edit/fork/backlog/render-check for free. `tagline-hero`
+is fully superseded by `chrome-welcome` (its deletion is a coordinated sibling-owned pass, so the island stays
+a harmless fallback rung). The chrome seed count is now 9 — the convergence staging test asserts `>= 6`, and
+`chrome-components.staging.test.cjs` now asserts `>= 4`, so adding pieces stays green. Proof:
+`chrome-islands-convergence.staging.test.cjs` (extended — each new piece renders confined, alt-click tags it,
+a broken edit falls back to legacy, host callbacks fire).
+
 **Remaining islands — convergence status (continue one per worker):**
 
 | Island (id) | inline twin? | status / wave |
@@ -444,13 +459,13 @@ bump to `=== 6` (only that assertion; 77/78 pass) — left for the staging-test 
 | `island-message-controls` | `userBubbleControls` | ✅ **DONE → chrome-msg-controls** |
 | `island-exhausted-card` | `renderExhausted` | ✅ **DONE → chrome-exhausted** |
 | `island-msg-toolbar`*(n/a)* | — | ✅ already chrome (`chrome-msg-toolbar`) |
-| `island-tagline-hero` | landing text | ✅ already chrome (`chrome-welcome`); **delete tagline-hero** once welcome trusted |
-| `island-ask-card` | chat ask render | ⬜ ISL-3 · `chrome-ask-card` (S; pure props, kit deps) |
-| `island-dev-task-card` | chat dev-task render | ⬜ ISL-3 · `chrome-dev-task-card` (S; pure props) |
+| `island-tagline-hero` | landing text | ✅ superseded by `chrome-welcome` (fallback ladder keeps the island); **delete** = coordinated pass (sibling-owned island files) |
+| `island-ask-card` | `buildAskCard`/AskCard | ✅ **DONE → chrome-ask-card** (twin AskCard island kept as fallback) |
+| `island-dev-task-card` | `devCard` | ✅ **DONE → chrome-dev-task-card** (imperative `legacyDevCard` kept as fallback) |
 | `island-notifications` | inbox cards | ⬜ ISL-3 · promote inbox cards to chrome |
 | `island-changelog` | inbox cards | ⬜ ISL-3 · promote inbox cards to chrome |
 | `island-chat-list` | `renderChatList` | ⬜ ISL-3 · `chrome-chat-list` — **complex** (twin adds search/nesting/inflight/pagination; port those into props first) |
-| `island-chat-meta-bar` | chat top bar | ⬜ ISL-2 · `chrome-chat-bar` (M) |
+| `island-chat-meta-bar` | `renderChatBar` | ✅ **DONE → chrome-chat-bar** (both memo + chat modes; legacy innerHTML kept as fallback; `applyShareMode` stays a host concern) |
 | `island-object-browser` | object nav | ⬜ DEAD-3 gallery-dup · promote or delete |
 | `island-trace-signature` | trace strip | ⬜ DEAD-3 gallery-dup · promote or delete (chrome-trace-view already covers the live trace) |
 | `island-file-browser` | file picker | ⬜ M · `chrome-file-browser` |

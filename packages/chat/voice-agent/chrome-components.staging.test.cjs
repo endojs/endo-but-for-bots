@@ -460,8 +460,10 @@ const jpost = (p, b) => fetch(`${BASE}${p}`, { method: 'POST', headers: { 'conte
     ok(st0.tagged === 'chrome-studio', `§15 renders through the real confined chrome-studio (tagged ${st0.tagged})`);
     ok(st0.sections.pending && st0.sections.pending.cards.length === 8 && st0.sections.pending.fold === null, `needs-review shows ALL 8 pending items and is NEVER folded (${st0.sections.pending && st0.sections.pending.cards.length} cards, fold=${st0.sections.pending && st0.sections.pending.fold})`);
     ok(st0.sections.admitted && st0.sections.admitted.cards.length === 6 && /show 3 more/.test(st0.sections.admitted.fold || ''), `the 9-item Admitted section folds to the top 6 + a "▸ show 3 more" toggle (${st0.sections.admitted && st0.sections.admitted.cards.length} shown, fold="${st0.sections.admitted && st0.sections.admitted.fold}")`);
-    ok(st0.sections.chrome && st0.sections.chrome.cards.length <= 6 && st0.sections.chrome.fold === null, `the short App-chrome section (${st0.sections.chrome && st0.sections.chrome.cards.length}) is NOT folded (only the long tail folds)`);
-    ok(st0.foldCount === 1 && !st0.foldDataAttrs.includes('pending'), `exactly ONE fold toggle on the page (admitted), never on needs-review (${st0.foldDataAttrs.join(',')})`);
+    // ARCH-1 increment 2 grew App chrome to 9 pieces, so it now crosses the 6-item fold threshold and folds
+    // to its top 6 + a "▸ show 3 more" toggle — exactly like the 9-item Admitted section (needs-review still never folds).
+    ok(st0.sections.chrome && st0.sections.chrome.cards.length === 6 && /show 3 more/.test(st0.sections.chrome.fold || ''), `the 9-item App-chrome section folds to the top 6 + a "▸ show 3 more" toggle (${st0.sections.chrome && st0.sections.chrome.cards.length} shown, fold="${st0.sections.chrome && st0.sections.chrome.fold}")`);
+    ok(st0.foldCount === 2 && !st0.foldDataAttrs.includes('pending'), `TWO fold toggles on the page (admitted + App-chrome), never on needs-review (${st0.foldDataAttrs.join(',')})`);
     ok(st0.sections.admitted && st0.sections.admitted.cards[0] === 'tool8', `byRecent floats the most-edited item (a8, 5 versions) to the TOP of Admitted (first card="${st0.sections.admitted && st0.sections.admitted.cards[0]}") — the recency proxy sorts`);
     // expand the tail
     await page5.evaluate(() => { const b = document.querySelector('.studio-fold[data-fold=admitted]'); if (b) b.click(); });
