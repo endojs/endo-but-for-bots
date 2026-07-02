@@ -1,12 +1,28 @@
-// chat-sync-version.test.mjs — ARCH-4 client-side unit proof for the cross-device chat-sync
-// version vector. The server stamps a monotonic per-cap `seq`; the client adopts a remote bundle
-// only when its seq is strictly HIGHER than the local one (replacing the old wall-clock LWW that
-// let a skewed-clock device always win). Backward-compatible: with no server `seq`, fall back to
-// the legacy `updated` gate. Mirrors the exact decision app.js wires into syncLoad/scheduleSync.
+// chat-sync-version.test.mjs — ARCH-4 client-side unit proof for the cross-device chat-sync version vector.
+// The server stamps a monotonic per-cap `seq`; the client adopts a remote bundle only when its seq is
+// strictly HIGHER than the local one (replacing the old wall-clock LWW that let a skewed-clock device always
+// win). Backward-compatible: with no server `seq`, fall back to the legacy `updated` gate.
+//
+// This tests the REAL shipped decision — it extracts the `shouldAdoptRemote` function verbatim from
+// public/app.js (between the @seq-adopt-decision markers) and evals it, so the assertions can never drift
+// from what runs in the browser. (app.js as a whole can't be imported in Node — it's a DOM/browser module —
+// but that one function is deliberately pure + self-contained precisely so it can be lifted out and tested.)
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { shouldAdoptRemote } from './public/chat-sync-version.mjs';
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const appJs = fs.readFileSync(path.join(HERE, 'public', 'app.js'), 'utf8');
+const m = appJs.match(/\/\/ @seq-adopt-decision[\s\S]*?\nfunction shouldAdoptRemote[\s\S]*?\n}\n\/\/ @end-seq-adopt-decision/);
+if (!m) throw new Error('could not extract shouldAdoptRemote from public/app.js (markers moved?)');
+// eslint-disable-next-line no-eval
+const shouldAdoptRemote = (0, eval)(`(${m[0].match(/function shouldAdoptRemote[\s\S]*?\n}/)[0]})`);
+
+test('ARCH-4: the seq-adopt decision was extracted from the shipped app.js', () => {
+  assert.equal(typeof shouldAdoptRemote, 'function');
+});
 
 test('ARCH-4: adopt-when-higher on the server seq (not wall-clock)', () => {
   // a HIGHER remote seq is adopted even when our wall-clock is newer (skewed-clock device can't win)

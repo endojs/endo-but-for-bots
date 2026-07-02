@@ -14,7 +14,6 @@ import { theme, cycleTheme, initTheme } from './theme.js'; // the user's global 
 import { forkRetry, forkPage, forkCount, forkIndex } from './fork-model.js'; // retry-as-fork data-model (pure, unit-tested)
 import { renderMarkdown } from './md.js'; // safe Markdown→DOM for agent replies + the notification modal
 import { mountForkInto } from './fork-widget.js'; // mount a confined FORK (in-tree, no-iframe) inline in a chat
-import { shouldAdoptRemote } from './chat-sync-version.mjs'; // ARCH-4: server-`seq` version vector for cross-device sync (pure, unit-tested)
 initTheme(); // restore the saved theme + start applying it to :root as CSS vars
 // P4 (shell→island): render the header bar from its EDITABLE island — BEFORE anything else touches the header
 // (the theme toggle below + app.js's by-id wiring). The confined renderer keeps `id`, so app.js's getElementById
@@ -2597,6 +2596,16 @@ const UPD_KEY = 'field-agent-updated';
 const SEQ_KEY = 'field-agent-chats-seq';
 const localChatSeq = () => { try { return +(localStorage.getItem(SEQ_KEY) || 0); } catch { return 0; } };
 const setChatSeq = n => { try { localStorage.setItem(SEQ_KEY, String(n)); } catch {} };
+// @seq-adopt-decision — ARCH-4 version-vector rule (extracted verbatim + unit-tested by chat-sync-version.test.mjs).
+// Keep it a PURE, self-contained fn (no closure refs): the server stamps a monotonic per-cap `seq`; adopt the
+// remote bundle only when its seq is strictly HIGHER than ours (a stale/skewed-clock device can't clobber a
+// higher-seq state). Fall back to the legacy wall-clock gate only when the server returns no `seq` (old server).
+function shouldAdoptRemote({ hasChats, remoteSeq, localSeq = 0, remoteUpdated = 0, localUpdated = 0 }) {
+  if (!hasChats) return false;
+  if (typeof remoteSeq === 'number') return remoteSeq > (localSeq || 0);
+  return (remoteUpdated || 0) >= (localUpdated || 0);
+}
+// @end-seq-adopt-decision
 let syncTimer = null;
 function bundleAll(updated) {
   // INT-3: persist only THIS cap's own chats — exclude adopted seed-chats (they're a read-time view merged
