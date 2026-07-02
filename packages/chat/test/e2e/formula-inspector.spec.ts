@@ -268,7 +268,9 @@ test.describe('Formula Inspector (Value modal back face)', () => {
       ).toContainText('eval-id-1');
     });
 
-    test.fixme('an unretained value shows the empty state', async ({ page }) => {
+    test.fixme('an unretained value shows the empty state', async ({
+      page,
+    }) => {
       await setupHarness(page);
       // my-key has an empty retention snapshot (unretained).
       await page.locator('.pet-item-row >> text=my-key').click();
