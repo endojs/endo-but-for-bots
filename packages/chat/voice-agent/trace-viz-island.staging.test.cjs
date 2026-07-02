@@ -160,7 +160,9 @@ const BROKEN_SOURCE = `(ui) => { throw new Error("staged webgl trace breakage");
     localStorage.setItem('field-agent-chats', JSON.stringify([{ id, title: 'vizchat', ts: Date.now(), lastMsgAt: Date.now() }]));
     localStorage.setItem('field-agent-active', id);
     localStorage.setItem('field-agent-tx-' + id, JSON.stringify([{ who: 'you', text: 'warmup' }, { who: 'agent', text: 'ready' }]));
-    localStorage.setItem('field-trace-tier2', '1');            // opt IN to the Tier-2 WebGL trace surface
+    // NO field-trace-tier2 set on purpose: Tier-2 WebGL is the DEFAULT surface (dan's 2026-07 policy call),
+    // so the island must mount with no opt-in flag. This proves default-ON; trace-island.staging.test.cjs
+    // sets field-trace-tier2='0' to prove the opt-OUT legacy path.
     localStorage.setItem('field-trace-viz-id', vid);           // its uicomp git id (identity from turn 1)
     if (ov) window.__traceVizSourceOverride = ov;              // test-only: swap the mounted viz source
   } catch {} }, { c: rootCap, id: chatId, vid: vizId, ov: override || '' });

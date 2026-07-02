@@ -3491,11 +3491,11 @@ const traceViewsBar = inst => {
   bar.append(lbl, views, rot);
   return bar;
 };
-// TIER-2 GATING (opt-in mode, dan-gated default): the WebGL views need field-trace-tier2. The gallery + its
-// splash cards render REGARDLESS (a splash card is a plain confined component, no flag needed). Only making a
-// view your LIVE trace lens needs Tier-2 — so if it's off we show a legible banner offering to enable it.
-// Clicking "Enable" is the USER opting IN per-instance; the code default stays OFF (dan's policy call — see
-// the report). We never flip the default here.
+// TIER-2 GATING (default-ON as of dan's 2026-07 policy call): the WebGL views are the default live trace
+// surface. The gallery + its splash cards render REGARDLESS (a splash card is a plain confined component, no
+// flag needed). This banner only shows when the user has EXPLICITLY opted OUT (field-trace-tier2='0'): then
+// their live trace uses the legacy surface and we offer a one-click way back IN. Clicking "Enable" sets
+// field-trace-tier2='1' (forces on). The code default is ON — traceTier2On() only returns false on explicit opt-out.
 const renderTraceGate = el => {
   if (!el) return;
   if (traceTier2On()) { el.style.display = 'none'; el.innerHTML = ''; return; }
@@ -3687,11 +3687,12 @@ const refreshMagicStories = async () => {
   }
 };
 try { window.openMagicStories = openMagicStories; } catch { /* */ }
-// Tier-2 is OPT-IN for now (dan-gated policy call — it changes the central trace surface + the prior
-// chrome-trace-view test asserts the divs island). Enable per-instance with localStorage
-// field-trace-tier2='1' (or window.__traceVizTier2 = true). When on: Tier-2 WebGL island → (on failure)
-// legacy 3D pendant; when off / unavailable: the chrome-trace-view island → (call site) legacy pendant.
-const traceTier2On = () => { try { return window.__traceVizTier2 === true || localStorage.getItem('field-trace-tier2') === '1'; } catch { return false; } };
+// Tier-2 is the DEFAULT trace surface (dan's 2026-07 policy call). It is ON unless the user/test EXPLICITLY
+// opts OUT with localStorage field-trace-tier2='0' (or window.__traceVizTier2 === false) — the escape hatch
+// that keeps the legacy chrome-trace-view divs island reachable (some users/tests need it). Setting
+// field-trace-tier2='1' also forces it on. When on: Tier-2 WebGL island → (on failure, at traceIslandBegin)
+// the chrome-trace-view island → (call site) legacy 3D pendant. So a WebGL init failure NEVER blanks the trace.
+const traceTier2On = () => { try { return !(window.__traceVizTier2 === false || localStorage.getItem('field-trace-tier2') === '0'); } catch { return true; } };
 const traceIslandBegin = async (promptText, sid) => {
   if (traceTier2On()) { try { if (await traceVizIslandBegin(promptText, sid)) return true; } catch { /* fall through to chrome */ } }
   return traceChromeIslandBegin(promptText, sid);

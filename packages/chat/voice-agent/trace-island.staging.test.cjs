@@ -199,6 +199,7 @@ const LIST_SOURCE = `// riff: the trace as a PLAIN LIST — same cell contract (
       localStorage.setItem('field-agent-chats', JSON.stringify([{ id, title: 'tracechat', ts: Date.now(), lastMsgAt: Date.now() }]));
       localStorage.setItem('field-agent-active', id);
       localStorage.setItem('field-agent-tx-' + id, JSON.stringify([{ who: 'you', text: 'warmup' }, { who: 'agent', text: 'ready' }])); // prior turns → the consent scoper is skipped (not a first message)
+      localStorage.setItem('field-trace-tier2', '0'); // EXPLICIT opt-OUT: Tier-2 WebGL is now the DEFAULT surface; this suite proves the LEGACY chrome-trace-view divs island (the opt-out escape hatch stays covered). The default WebGL surface is proven by trace-viz-island.staging.test.cjs.
     } catch {} }, { c: rootCap, id: chatId });
     const openChatAndSend = async page => {
       await page.evaluate(() => { const it = [...document.querySelectorAll('.chat-item .ci-title')].find(s => /tracechat/.test(s.textContent)); if (it) it.click(); });

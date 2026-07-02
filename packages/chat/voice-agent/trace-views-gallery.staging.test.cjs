@@ -108,19 +108,21 @@ const SPLASH_JSON = ['timeline', 'provenance', 'sankey']; // the 3 that ship a s
     args: ['--no-sandbox', '--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--disable-dev-shm-usage'],
     env: { ...process.env, LD_LIBRARY_PATH: process.env.FIELD_CHROMIUM_LDPATH || '/var/lib/obsidian/oldlibs' } });
   const shotDir = process.env.TRACE_VIEWS_SHOTS || tmp;
-  // seed: cap + a prior chat (skips the consent scoper). tier2 optional per-page (off for the gate test).
+  // seed: cap + a prior chat (skips the consent scoper). tier2 explicit per-page: Tier-2 is now the DEFAULT
+  // surface, so the gate test must EXPLICITLY opt OUT ('0') to surface the "Enable Tier-2" banner; the live
+  // turn opts IN ('1'). (Passing no flag would leave it at the ON default — not what the gate test wants.)
   const seed = (page, chatId, tier2) => page.addInitScript(({ c, id, t }) => { try {
     localStorage.setItem('field-agent-cap', c);
     localStorage.setItem('field-agent-chats', JSON.stringify([{ id, title: 'viewschat', ts: Date.now(), lastMsgAt: Date.now() }]));
     localStorage.setItem('field-agent-active', id);
     localStorage.setItem('field-agent-tx-' + id, JSON.stringify([{ who: 'you', text: 'warmup' }, { who: 'agent', text: 'ready' }]));
-    if (t) localStorage.setItem('field-trace-tier2', '1');
+    localStorage.setItem('field-trace-tier2', t ? '1' : '0');
   } catch {} }, { c: rootCap, id: chatId, t: !!tier2 });
   try {
     // ── 3. the Component-Studio "Trace views" section renders all 5 SPLASH CARDS ───────────────────────
     const page = await browser.newPage({ viewport: { width: 1200, height: 1000 } });
     const errs = []; page.on('pageerror', e => errs.push(e.message));
-    await seed(page, 'tv-studio-1', false); // Tier-2 OFF: splash cards must render anyway
+    await seed(page, 'tv-studio-1', false); // EXPLICIT opt-OUT (field-trace-tier2='0'): splash cards must render anyway
     await page.goto(`${BASE}/`, { waitUntil: 'load' });
     await page.waitForSelector('#tab-components:not(.hide)', { timeout: 15000 });
     await page.evaluate(() => document.getElementById('tab-components').click());
@@ -140,13 +142,13 @@ const SPLASH_JSON = ['timeline', 'provenance', 'sankey']; // the 3 that ship a s
     const modalCards = await page.evaluate(() => [...document.querySelectorAll('#tv-gallery-overlay [data-trace-view]')].map(c => c.getAttribute('data-trace-view')));
     ok(modalCards.length === 5, `the 🔭 gallery modal shows all 5 splash cards (${modalCards.length})`);
 
-    // ── 5. picking a card sets it active (persisted) + surfaces the Tier-2 gate (Tier-2 is OFF here) ────
+    // ── 5. picking a card sets it active (persisted) + surfaces the Tier-2 gate (opted OUT here: '0') ────
     await page.evaluate(() => { const c = document.querySelector('#tv-gallery-overlay [data-trace-view="sankey"]'); if (c) c.click(); });
     await page.waitForTimeout(600);
     const choice = await page.evaluate(() => localStorage.getItem('field-trace-viz-choice'));
     ok(choice === 'sankey', `picking the Sankey card set it as the active trace view (persisted: "${choice}")`);
     const gate = await page.evaluate(() => !!document.querySelector('#tv-gallery-overlay [data-enable-tier2]'));
-    ok(gate, 'with Tier-2 OFF, selecting a WebGL view surfaces the legible "Enable Tier-2" gate (default not flipped silently)');
+    ok(gate, 'with Tier-2 explicitly opted OUT (\'0\'), selecting a WebGL view surfaces the legible "Enable Tier-2" gate (the opt-out escape hatch back in)');
     const active = await page.evaluate(() => { const c = document.querySelector('#tv-gallery-overlay [data-trace-view="sankey"]'); return c ? /active/.test(c.textContent || '') : false; });
     ok(active, 'the active view is badged "active" in the gallery after the pick');
     await page.close();
