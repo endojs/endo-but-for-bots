@@ -827,7 +827,7 @@ const seedCellFor = (cap, key) => {
 // notify/pushFeed writer + the off-app asks drain too), plus explicit bump() at the server's own mutation
 // sites. The value is a bare {rev,at} POKE — the client re-reads the owner-gated /feed/load + /asks/load on a
 // push, so the per-cap dismissed-state + the root-only content gate stay exactly where they are (cap-hygiene).
-const inboxCells = makeInboxCells({ feedFile: FEED_FILE, asksFile: ASKS_FILE });
+const inboxCells = makeInboxCells({ feedFile: FEED_FILE, asksFile: ASKS_FILE, devFile: DEV_QUEUE_FILE });
 // feed:/asks:<key> gate — a valid cap may follow its OWN inbox (key 'self' or its own owner key); root may
 // follow any owner's. A foreign owner key (non-root) is refused. Re-checked on the 15s heartbeat like every
 // other cell. Content is root-only, so a non-root cap's own-key cell is a valid-but-idle empty inbox.
@@ -1873,7 +1873,8 @@ const handler = async (req, res) => {
             : id.startsWith('seeds:') ? seedCellFor(cap, id.slice('seeds:'.length)) // seeds:<key> = the owner's IN-FLIGHT capture-ingest progress (owner-gated; feeds the chats-list live rows)
               : id.startsWith('feed:') ? inboxCellFor(cap, 'feed', id.slice('feed:'.length)) // feed:<key> = the owner's 🔔 notification inbox (owner-gated poke; the client re-reads /feed/load on a push)
                 : id.startsWith('asks:') ? inboxCellFor(cap, 'asks', id.slice('asks:'.length)) // asks:<key> = the owner's inline-feedback asks (owner-gated poke; the client re-reads /asks/load on a push)
-                  : liveCells.cellFor(cap, id)); // backlog:<id> = the object's backlog cell (owner-only; push-fed by the store)
+                  : id.startsWith('dev:') ? inboxCellFor(cap, 'dev', id.slice('dev:'.length)) // dev:<key> = the Blacksmith dev-task queue (owner-gated poke; the client re-reads /dev/updates on a push)
+                    : liveCells.cellFor(cap, id)); // backlog:<id> = the object's backlog cell (owner-only; push-fed by the store)
       const list = (Array.isArray(ids) ? ids : []).slice(0, 16).map(String);
       res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no', ...SEC });
       res.write(': ok\n\n');
@@ -2714,6 +2715,7 @@ const handler = async (req, res) => {
       try { for (const ln of (await fs.promises.readFile(DEV_QUEUE_FILE, 'utf8')).split('\n').filter(Boolean)) { try { const o = JSON.parse(ln); if (o.id === String(parent) && o.to) to = o.to; } catch {} } } catch {}
       await fs.promises.mkdir(path.dirname(DEV_QUEUE_FILE), { recursive: true });
       await fs.promises.appendFile(DEV_QUEUE_FILE, `${JSON.stringify({ id: `rep-${crypto.randomBytes(5).toString('hex')}`, to, task: t, replyTo: String(parent), thread: String(parent), status: 'pending', at: new Date().toISOString(), chatId: String(chatId || '') })}\n`);
+      try { inboxCells.bump('dev'); } catch { /* dev: cell push best-effort (fs.watch also catches the queue write) */ }
       return json(res, 200, { ok: true });
     }
     // available model-providers for the per-chat model picker (local tinix models).

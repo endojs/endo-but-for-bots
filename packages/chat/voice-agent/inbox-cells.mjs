@@ -23,19 +23,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const FAMILIES = ['feed', 'asks'];
+const FAMILIES = ['feed', 'asks', 'dev'];
 
 /**
  * @param {object} opts
  * @param {string} [opts.feedFile] path to feed.json (its directory is watched)
  * @param {string} [opts.asksFile] path to asks.json (its directory is watched)
+ * @param {string} [opts.devFile] path to the Blacksmith dev-task queue (its directory is watched)
  * @param {() => number} [opts.now]
  * @param {number} [opts.debounceMs] coalesce the burst of events an atomic temp+rename fires
  * @param {boolean} [opts.watch] set false in unit tests that drive bump() directly
  */
-export const makeInboxCells = ({ feedFile, asksFile, now = () => Date.now(), debounceMs = 120, watch = true } = {}) => {
-  const state = { feed: new Map(), asks: new Map() }; // family → Map(ownerKey → { rev, at })
-  const listeners = { feed: new Map(), asks: new Map() }; // family → Map(ownerKey → Set<fn>)
+export const makeInboxCells = ({ feedFile, asksFile, devFile, now = () => Date.now(), debounceMs = 120, watch = true } = {}) => {
+  const state = { feed: new Map(), asks: new Map(), dev: new Map() }; // family → Map(ownerKey → { rev, at })
+  const listeners = { feed: new Map(), asks: new Map(), dev: new Map() }; // family → Map(ownerKey → Set<fn>)
 
   const valOf = (fam, key) => state[fam].get(key) || { rev: 0, at: 0 };
   const notifyKey = (fam, key) => {
@@ -94,6 +95,7 @@ export const makeInboxCells = ({ feedFile, asksFile, now = () => Date.now(), deb
     };
     arm(feedFile, 'feed');
     arm(asksFile, 'asks');
+    arm(devFile, 'dev');
     for (const [dir, bases] of dirs) {
       try { fs.mkdirSync(dir, { recursive: true }); } catch { /* best-effort */ }
       try {

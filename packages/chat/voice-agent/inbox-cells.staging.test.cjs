@@ -68,7 +68,7 @@ const revsSeen = frames => frames.filter(f => !f.error && f.value && typeof f.va
     cwd: __dirname,
     env: { ...process.env, PORT: String(PORT), BIND: '127.0.0.1',
       SEED_FILE: path.join(tmp, 'root.swiss'), OUT_DIR: path.join(tmp, 'out'),
-      DASH_STATE_DIR: dash, VOICE_STATE_DIR: voice,
+      DASH_STATE_DIR: dash, VOICE_STATE_DIR: voice, FIELD_STATE_DIR: path.join(tmp, 'state'),
       MEMO_RUNS_FILE: path.join(tmp, 'memo.json'), SEED_CHATS_FILE: path.join(tmp, 'seed-chats.json'),
       PROJECTS_STORE: path.join(tmp, 'projects.json'), PRINT_ROOT_CAP: '1' },
     stdio: ['ignore', 'ignore', 'ignore'],
@@ -105,6 +105,14 @@ const revsSeen = frames => frames.filter(f => !f.error && f.value && typeof f.va
   const askRevs = revsSeen(a1.frames);
   ok(askRevs.includes(0), 'asks:self delivers the initial snapshot (rev 0)');
   ok(askRevs.some(r => r >= 1), 'asks:self PUSHES when asks.json changes (fs.watch trigger)');
+
+  // ── 2b. dev:self pushes when the Blacksmith dev-task queue changes (/thread/reply appends → bump) ───
+  const devP = collectStream({ cap: rootCap, cells: ['dev:self'] }, 'dev:self', frames => revsSeen(frames).some(r => r >= 1));
+  await sleep(300);
+  await post('/thread/reply', { cap: rootCap, parent: 'task-staging1', chatId: 'c1', text: 'a staging dev follow-up' });
+  const d1 = await devP;
+  ok(revsSeen(d1.frames).includes(0), 'dev:self delivers the initial snapshot (rev 0)');
+  ok(revsSeen(d1.frames).some(r => r >= 1), 'dev:self PUSHES when the dev-task queue changes');
 
   // ── 3. owner gate: a NON-OWNER scoped cap is refused the owner's feed:root / asks:root cells ────────
   const inv = await post('/invite', { cap: rootCap, powers: ['reference'], label: 'InboxGuest' });

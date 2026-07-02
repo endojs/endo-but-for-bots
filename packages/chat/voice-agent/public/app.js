@@ -3170,7 +3170,7 @@ const initChats = () => {
   loadMemos(); setInterval(loadMemos, 60000); // surface incoming voice memos as traceable runs
   loadSeedChats(); setInterval(loadSeedChats, 60000); // adopt ingested voice-note chats into the list
   subscribeSeedCells(); // FOLLOW the seeds:self cell → show inbound captures being processed live at the top of the list
-  loadDevUpdates(); setInterval(loadDevUpdates, 20000); // surface Blacksmith dev-task status in the chat
+  loadDevUpdates(); setInterval(loadDevUpdates, 120000); // Blacksmith dev-task status: PUSH-driven via the dev:self cell (subscribeInboxCells); a slow 2-min poll stays as a safety-net fallback
 };
 $('hamburger').onclick = toggleDrawer;
 $('drawer-close').onclick = closeDrawer;
@@ -4060,7 +4060,10 @@ let badgeDebounce = null;
 const bumpInbox = () => { clearTimeout(badgeDebounce); badgeDebounce = setTimeout(() => { refreshBadge(); if (typeof curTab !== 'undefined' && curTab === 'inbox') { try { renderInbox(); } catch { /* */ } } }, 150); };
 const subscribeInboxCells = () => {
   if (!cap || inboxCellAbort) return; // one stream for the life of the tab
-  inboxCellAbort = followCells(['feed:self', 'asks:self'], () => bumpInbox());
+  // feed:/asks: → refresh the badge/inbox; dev: → refresh the Blacksmith dev-task cards in the open chat.
+  inboxCellAbort = followCells(['feed:self', 'asks:self', 'dev:self'], id => {
+    if (String(id).startsWith('dev:')) { try { loadDevUpdates(); } catch { /* */ } } else bumpInbox();
+  });
 };
 const renderInbox = async () => {
   await loadAsks();
