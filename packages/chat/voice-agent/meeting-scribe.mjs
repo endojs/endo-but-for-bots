@@ -9,7 +9,9 @@
 // speaker labels are consistent WITHIN a chunk but NOT yet stitched ACROSS chunks. Streaming
 // label-continuity (diart / cloud streaming / embedding-centroid stitching) is the M1+ follow-up.
 
-const DEFAULT_URL = process.env.MEETING_DIARIZE_URL || 'http://192.168.50.226:8004/diarize';
+import { MEETING_DIARIZE_URL } from './field-config.mjs';
+
+const DEFAULT_URL = MEETING_DIARIZE_URL; // sherpa-onnx diarizer (tinix :8004) — from field-config ENDPOINTS (env: MEETING_DIARIZE_URL)
 
 export const makeMeetingScribe = ({ diarizeUrl = DEFAULT_URL, fetchImpl } = {}) => {
   const doFetch = fetchImpl || globalThis.fetch;
