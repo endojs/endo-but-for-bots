@@ -110,20 +110,20 @@ import { writeJsonAtomic, loadJson } from './write-json-atomic.mjs';
 // THE PERSONAL/PLATFORM SEAM (Packing up for Dweb): every personal coupling that used to be a hardcoded
 // /home/dan literal now resolves through field-config, so pointing FIELD_PERSONAL_ROOT at the encrypted
 // volume moves dan's whole personal family together. Defaults are byte-identical to before on the NUC.
-import { HOME_BASE as CFG_HOME_BASE, PERSONA_FILE as CFG_PERSONA_FILE, EMAIL_CFG as CFG_EMAIL_CFG, EMAIL_FROM as CFG_EMAIL_FROM, KAZPUTER_STATE as CFG_KAZPUTER_STATE, FEED_FILE as CFG_FEED_FILE, VAULT_DIR, STATE_DIR, VOICE_STATE_DIR, CONFIG_DIR, HOST_ENV_FILE, CALENDAR_CFG } from './field-config.mjs';
+import { HOME_BASE as CFG_HOME_BASE, PERSONA_FILE as CFG_PERSONA_FILE, EMAIL_CFG as CFG_EMAIL_CFG, EMAIL_FROM as CFG_EMAIL_FROM, KAZPUTER_STATE as CFG_KAZPUTER_STATE, FEED_FILE as CFG_FEED_FILE, VAULT_DIR, STATE_DIR, VOICE_STATE_DIR, CONFIG_DIR, HOST_ENV_FILE, CALENDAR_CFG, COMFY_URL, HOMEASSISTANT_URL as CFG_HA_URL, KAZPUTER_URL as CFG_KAZPUTER_URL, VM_HOST as CFG_VM_HOST } from './field-config.mjs';
 
 export const HOME_BASE = CFG_HOME_BASE;
 const PERSONA_FILE = CFG_PERSONA_FILE; // the agent's self-authored, operator-confirmed instructions
 const EMAIL_CFG = CFG_EMAIL_CFG; // SMTP relay creds for the email power (never in code/chat)
 const EMAIL_FROM = CFG_EMAIL_FROM; // default From for the bot's outbound mail
-const KAZPUTER_URL = process.env.KAZPUTER_URL || 'http://127.0.0.1:8779'; // kazputer-phone RPC (loopback, same host)
+const KAZPUTER_URL = CFG_KAZPUTER_URL; // kazputer-phone RPC (loopback, same host) — from field-config ENDPOINTS
 const KAZPUTER_STATE = CFG_KAZPUTER_STATE; // holds the provisioner cap (read live)
 
 const FEED_MJS = path.resolve(process.env.FEED_MJS || '/home/dan/endo-bfb/packages/chat/dashboard/feed.mjs');
 const FEED_FILE = CFG_FEED_FILE; // the dashboard's durable feed — reused as the notification data endowment (the 🔔 bell reads it)
 const VAULT = VAULT_DIR; // env-overridable via OBSIDIAN_VAULT (field-config); rebases onto the personal volume
-const HA_URL = (process.env.HOMEASSISTANT_URL || 'http://192.168.50.11:8123').replace(/\/$/, '');
-const VM_HOST = process.env.VM_HOST || 'agent@10.89.0.3'; // the agent-code dev persona
+const HA_URL = CFG_HA_URL; // Home Assistant REST base (trailing slash stripped in field-config) — from ENDPOINTS
+const VM_HOST = CFG_VM_HOST; // the agent-code dev persona — from field-config ENDPOINTS
 const newSwiss = () => crypto.randomBytes(16).toString('hex');
 
 // ── per-sub-agent git WORKTREE isolation ─────────────────────────────────────
@@ -395,7 +395,7 @@ const makeAffordances = ({ outDir }) => {
         fs.writeFileSync(file, r._buf);
         return harden({ ok: true, savedTo: file, prompt: p, bytes: r.info.bytes, ms: r.info.ms });
       },
-      abort: async () => { try { await fetch('http://192.168.50.226:8188/interrupt', { method: 'POST' }); } catch {} },
+      abort: async () => { try { await fetch(`${COMFY_URL}/interrupt`, { method: 'POST' }); } catch {} },
     }),
     feed: Far('Feed', {
       help: () => 'dan\'s notification feed (the 🔔 inbox). post({title,body,links}) = routine; notify({title,body,agent}) = a "needs your attention" action item; recent() reads the inbox.',
