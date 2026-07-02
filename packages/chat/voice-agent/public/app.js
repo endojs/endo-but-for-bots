@@ -125,9 +125,17 @@ if (!cap && _bskyHandoff) {
 // note in the transcript so the human knows the agent will hear about it. Cap-gated; the source snippet is
 // render-safe (a widget's (ui)=>element body, never a swissnum).
 const __seenCompErrs = new Set(); // one note+report per identical error per page load (a re-rendered broken widget re-throws)
+// PROVENANCE BELT (stale clients): a browser EXTENSION (e.g. a wallet provider MetaMask injects into every
+// iframe) can produce an "error" a not-yet-updated confined.html reports over its port. Such extension/wallet
+// noise is NEVER a component fault — drop it here too (no red note, no /error/flag POST) so an old client
+// can't paint a phantom "component failed" verdict or re-pollute the backlog/feed/agent turns. Matches the
+// same signatures the confined-frame filter uses.
+const __EXT_ORIGIN_RE = /(?:chrome|moz|safari-web)-extension:\/\//i;
+const __WALLET_NOISE_RE = /Failed to connect to MetaMask|MetaMask extension not found|Lost connection to ["']?MetaMask|@metamask\b|ethereum provider|\binpage\.js\b|StreamProvider|Received invalid isUnlocked/i;
 window.__fieldReportError = (error, source, meta) => {
   try {
     if (!cap || !error) return;
+    if (__EXT_ORIGIN_RE.test(String(error)) || __WALLET_NOISE_RE.test(String(error))) return; // extension/wallet noise — never a component error
     const err = String(error).slice(0, 300);
     const name = String((meta && meta.name) || '').slice(0, 80);
     // the failing object's IDENTITY (a uicomp-/fork- id — never a cap): when present, the server ALSO
@@ -3641,7 +3649,13 @@ const traceVizIslandBegin = async (promptText, sid) => {
     const overriding = typeof window !== 'undefined' && !!window.__traceVizSourceOverride;
     const inst = { host, sid, tier2: true, frames: 0, ctrl: { abort() {} }, promptText, vizKey: kind ? kind.key : '3d' };
     let fellBack = false;
-    const onError = () => { // the confined viz failed to mount/threw → the LEGACY 3D pendant takes over (never a blank turn)
+    const onError = (_msg, opts) => { // the confined viz failed → the LEGACY 3D pendant takes over (never a blank turn)
+      // FALLBACK ONLY for a MOUNT-phase failure (the viz never came up) or a viz that has produced ZERO frames.
+      // A POST-MOUNT runtime rejection (opts.runtime) in a viz that is ALREADY rendering (frames > 0) must NOT
+      // tear it down — that's how an unrelated browser-extension/wallet rejection injected into the sandbox
+      // (e.g. MetaMask's "Failed to connect to MetaMask", now also filtered at the source in confined.html)
+      // killed a healthy WebGL trace mid-run. Runtime noise gets reported, never made fatal to a live view.
+      if (opts && opts.runtime && inst.frames > 0) return;
       if (fellBack) return; fellBack = true;
       try { traceIslandEnd(); } catch { /* */ }
       try { pendantBeginLegacy(promptText, sid); } catch { /* */ }
