@@ -2,13 +2,14 @@
 // input-row-island.staging.test.cjs — P4: the composer input row is now a confined, alt-clickable, editable
 // island, and the composer STILL SENDS (the critical regression). Renders structure with every id + form attrs;
 // app.js wires #text/#send by id after mount. Snapshot→restore fallback can never blank the composer.
-const fs = require('node:fs');
-const cap = fs.readFileSync(require('node:os').homedir() + '/.config/field-agent/root.swiss', 'utf8').trim();
+const { startIsolatedServer, loadChromium, launchBrowser } = require('./test-harness.cjs');
 let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail++; console.error('  FAIL -', m); } };
 (async () => {
-  let chromium = null; try { ({ chromium } = require('/usr/lib/node_modules/@playwright/cli/node_modules/playwright-core')); } catch {}
+  const chromium = loadChromium();
   if (!chromium) { console.log('  SKIP - no chromium'); console.log(`\n${pass} passed, ${fail} failed (skipped)`); process.exit(0); }
-  const br = await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'], env: { ...process.env, LD_LIBRARY_PATH: '/var/lib/obsidian/oldlibs' } });
+  const srv = await startIsolatedServer();
+  const cap = srv.cap;
+  const br = await launchBrowser(chromium);
   try {
     const page = await br.newPage(); const errs = []; page.on('pageerror', e => errs.push(e.message));
     let chatText = null, editBody = null;
@@ -26,7 +27,7 @@ let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; console.log('  o
         localStorage.setItem('field-agent-tx-' + id, JSON.stringify([{ who: 'you', text: 'hi' }, { who: 'agent', text: 'hello' }]));
       } catch {}
     }, cap);
-    await page.goto('http://127.0.0.1:8778/', { waitUntil: 'load' }); await page.waitForTimeout(4000);
+    await page.goto(`${srv.base}/`, { waitUntil: 'load' }); await page.waitForTimeout(4000);
     await page.evaluate(() => { const it = [...document.querySelectorAll('.chat-item .ci-title')].find(s => /inputrow/.test(s.textContent)); if (it) it.click(); }); await page.waitForTimeout(500);
     const r1 = await page.evaluate(() => { const f = document.getElementById('file'); return { isIsland: document.querySelector('.inputrow').getAttribute('data-component-id'), missing: ['attach', 'file', 'text', 'send', 'mic', 'meeting-btn'].filter(i => !document.getElementById(i)), accept: f && f.getAttribute('accept'), multiple: f && f.hasAttribute('multiple'), ph: document.getElementById('text').getAttribute('placeholder') }; });
     ok(r1.isIsland === 'island-input-row', 'the input row IS the island');
@@ -43,6 +44,6 @@ let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; console.log('  o
     ok(editBody && editBody.id === 'island-input-row', 'alt-click → edit chat targets island-input-row');
     ok(errs.length === 0, `no page errors (${errs.slice(0, 2).join(' | ')})`);
     await page.close();
-  } finally { await br.close(); }
+  } finally { await br.close(); srv.close(); }
   console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('staging test error:', e && e.stack || e); process.exit(2); });

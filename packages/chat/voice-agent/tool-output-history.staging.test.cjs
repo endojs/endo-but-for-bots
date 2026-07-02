@@ -6,14 +6,15 @@
 // note's content + the tool name + the reuse hint are present.
 //
 // Run: node tool-output-history.staging.test.cjs   (exits non-zero on failure; SKIPs without chromium)
-const fs = require('node:fs');
-const cap = fs.readFileSync(require('node:os').homedir() + '/.config/field-agent/root.swiss', 'utf8').trim();
+const { startIsolatedServer, loadChromium, launchBrowser } = require('./test-harness.cjs');
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail++; console.error('  FAIL -', m); } };
 (async () => {
-  let chromium = null; try { ({ chromium } = require('/usr/lib/node_modules/@playwright/cli/node_modules/playwright-core')); } catch {}
+  const chromium = loadChromium();
   if (!chromium) { console.log('  SKIP - no chromium'); console.log(`\n${pass} passed, ${fail} failed (skipped)`); process.exit(0); }
-  const br = await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'], env: { ...process.env, LD_LIBRARY_PATH: '/var/lib/obsidian/oldlibs' } });
+  const srv = await startIsolatedServer();
+  const cap = srv.cap;
+  const br = await launchBrowser(chromium);
   try {
     const page = await br.newPage();
     await page.addInitScript((c) => {
@@ -42,7 +43,7 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
         return orig(u, o);
       };
     }, cap);
-    await page.goto('http://127.0.0.1:8778/', { waitUntil: 'load' }); await page.waitForTimeout(3500);
+    await page.goto(`${srv.base}/`, { waitUntil: 'load' }); await page.waitForTimeout(3500);
     await page.evaluate(() => { const it = [...document.querySelectorAll('.chat-item .ci-title')].find(s => /diet/.test(s.textContent)); if (it) it.click(); });
     await page.waitForTimeout(600);
     await page.fill('#text', 'what about corn again?'); await page.evaluate(() => { const b = document.getElementById('send'); b && b.click(); });
@@ -57,6 +58,6 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
     ok(r.hasDelegateOut, "a sub-agent's RETURNED output (the top-level delegate result) IS kept in context");
     ok(!r.hasChildren, "a sub-agent's INTERNAL tool calls are EXCLUDED — context isolation is the point of a sub-agent");
     await page.close();
-  } finally { await br.close(); }
+  } finally { await br.close(); srv.close(); }
   console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('staging test error:', e && e.stack || e); process.exit(2); });
