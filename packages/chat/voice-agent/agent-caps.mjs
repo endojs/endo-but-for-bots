@@ -28,11 +28,11 @@ import '@endo/init';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import dns from 'node:dns/promises';
 import { execFile } from 'node:child_process';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { Far } from '@endo/marshal';
 
+import { ssrfGuard } from './ssrf.mjs';
 import { makeObsidianGraph } from '../capture/obsidian-graph.mjs';
 import { consultReferences } from '../capture/consult.mjs';
 import { notify } from '../capture/notify.mjs';
@@ -270,42 +270,27 @@ const vaultReadPath = rel => {
   return p;
 };
 
-// ── SSRF-guarded outbound GET (copied from the capture agent's FetchLink) ─────
-const isPrivateIp = ip => {
-  if (ip.includes(':')) {
-    const l = ip.toLowerCase();
-    return l === '::1' || l === '::' || l.startsWith('fc') || l.startsWith('fd') || l.startsWith('fe80') || l.startsWith('::ffff:127') || l.startsWith('::ffff:10.') || l.startsWith('::ffff:192.168');
-  }
-  const p = ip.split('.').map(Number);
-  if (p.length !== 4 || p.some(Number.isNaN)) return true;
-  const [a, b] = p;
-  return a === 10 || a === 127 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || a >= 224;
-};
-const ssrfOk = async u => {
-  let url; try { url = new URL(u); } catch { return false; }
-  if (!/^https?:$/.test(url.protocol)) return false;
-  try { const recs = await dns.lookup(url.hostname, { all: true }); return recs.length > 0 && recs.every(r => !isPrivateIp(r.address)); }
-  catch { return false; }
-};
+// ── SSRF-guarded outbound HTTP (DNS-rebinding / TOCTOU proof — see ssrf.mjs) ───
+// `ssrfOk` is a boolean advisory gate (used by the out-of-process browser worker
+// + connectors). `safeFetch` is the ENFORCING path: it resolves once, asserts
+// every address is public, and PINS the vetted IP onto the socket so the dial
+// can't be rebound to loopback/LAN between the check and the connect, re-vetting
+// every redirect hop. The raw `fetch` used to re-resolve independently — the hole.
+const { ssrfOk, safeFetch } = ssrfGuard;
 const stripHtml = h => h
   .replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
   .replace(/<[^>]+>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s+/g, ' ').trim();
 const fetchPage = async (u, { maxBytes = 1_500_000, timeoutMs = 12000 } = {}) => {
   if (!(await ssrfOk(u))) return { ok: false, error: 'blocked/invalid url' };
   let res;
-  try { res = await fetch(u, { redirect: 'follow', signal: AbortSignal.timeout(timeoutMs), headers: { 'user-agent': 'field-agent/1.0 (+tailnet, read-only)' } }); }
+  // safeFetch resolves + PINS the vetted IP and re-vets every redirect hop, so the
+  // socket can't be rebound to a private address after the check (SEC-9 TOCTOU).
+  try { res = await safeFetch(u, { maxBytes, timeoutMs, headers: { 'user-agent': 'field-agent/1.0 (+tailnet, read-only)' } }); }
   catch (e) { return { ok: false, error: e.message }; }
   if (!res.ok) return { ok: false, error: `http ${res.status}` };
-  if (res.url && res.url !== u && !(await ssrfOk(res.url))) return { ok: false, error: 'redirected to blocked host' };
   const ct = res.headers.get('content-type') || '';
   if (!/text\/html|text\/plain|application\/(xhtml|json)/.test(ct)) return { ok: false, error: `unsupported type ${ct.split(';')[0]}` };
-  const reader = res.body.getReader(); const chunks = []; let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read(); if (done) break;
-    total += value.length; if (total > maxBytes) { try { await reader.cancel(); } catch {} return { ok: false, error: 'too large' }; }
-    chunks.push(Buffer.from(value));
-  }
-  const html = Buffer.concat(chunks).toString('utf8');
+  const html = res.buffer.toString('utf8');
   const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '').replace(/\s+/g, ' ').trim().slice(0, 200);
   return { ok: true, title, text: stripHtml(html).slice(0, 8000), finalUrl: res.url || u };
 };
@@ -314,17 +299,10 @@ const fetchPage = async (u, { maxBytes = 1_500_000, timeoutMs = 12000 } = {}) =>
 const fetchBytes = async (u, { maxBytes = 32 * 1024 * 1024, timeoutMs = 30000 } = {}) => {
   if (!(await ssrfOk(u))) return { ok: false, error: 'blocked/invalid url' };
   let res;
-  try { res = await fetch(u, { redirect: 'follow', signal: AbortSignal.timeout(timeoutMs), headers: { 'user-agent': 'field-agent/1.0 (+tailnet, read-only)' } }); }
+  try { res = await safeFetch(u, { maxBytes, timeoutMs, headers: { 'user-agent': 'field-agent/1.0 (+tailnet, read-only)' } }); }
   catch (e) { return { ok: false, error: e.message }; }
   if (!res.ok) return { ok: false, error: `http ${res.status}` };
-  if (res.url && res.url !== u && !(await ssrfOk(res.url))) return { ok: false, error: 'redirected to blocked host' };
-  const reader = res.body.getReader(); const chunks = []; let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read(); if (done) break;
-    total += value.length; if (total > maxBytes) { try { await reader.cancel(); } catch {} return { ok: false, error: 'too large' }; }
-    chunks.push(Buffer.from(value));
-  }
-  return { ok: true, bytes: new Uint8Array(Buffer.concat(chunks)), finalUrl: res.url || u };
+  return { ok: true, bytes: new Uint8Array(res.buffer), finalUrl: res.url || u };
 };
 
 // ── post to the daily dashboard feed (shell out to the proven feed.mjs CLI) ───
@@ -785,7 +763,9 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   let haTrie = null;
   let agentRoster = null; // the agent-personas roster object trie (built at boot)
   let contactsObj = null; // dan's NextCloud address book (CardDAV), built at boot
-  const connectorsObj = makeConnectors({ getSecret, ssrfOk }); // owner-configured API-service tools (key injected server-side)
+  // fetchImpl = the SSRF-pinning safeFetch (SEC-9): connectors call PUBLIC services only, and the
+  // vetted IP is pinned onto the socket so a rebinding host can't slip the check → dial to LAN/loopback.
+  const connectorsObj = makeConnectors({ getSecret, ssrfOk, fetchImpl: (u, o = {}) => safeFetch(u, { ...o, timeoutMs: 30000, maxBytes: 16 * 1024 * 1024 }) }); // owner-configured API-service tools (key injected server-side)
   const customToolsObj = makeCustomTools(); // agent-PROPOSED, human-reviewed code tools (admitted → callable, SES-sandboxed)
   const toolSharesObj = makeToolShares({ dir: path.join(VOICE_STATE_DIR, 'tool-shares') }); // same store the server consumer-routes read
   const componentGitObj = makeComponentGit({ baseDir: path.join(VOICE_STATE_DIR, 'component-git') }); // a component's source as a git-as-Endo object (version/fork/revert)
