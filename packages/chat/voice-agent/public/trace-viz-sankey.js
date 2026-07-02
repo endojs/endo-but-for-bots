@@ -36,7 +36,7 @@
 // with no granted[] and no children it is an honest data spine; empty/idle → a bare You→… stub.
 //
 // It starts with `(ui) =>` (NOT a `//` comment) so it passes break-out's `(ui)=>element` validation; a
-// short contract note travels INSIDE the body. Keep it ≤ 8000 chars and fully DEFENSIVE: render-check
+// short contract note travels INSIDE the body. Keep it ≤ 16000 chars and fully DEFENSIVE: render-check
 // runs it in a Node stub where ui.create().el has no getContext, requestAnimationFrame/document/
 // getComputedStyle are undefined, and the grain starts undefined — so every ambient global is
 // typeof-guarded and the animation loop is never reached there.

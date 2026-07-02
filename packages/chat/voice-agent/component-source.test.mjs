@@ -57,3 +57,16 @@ test('empty / oversize sources are rejected', () => {
   assert.equal(validateComponentSource('   ').ok, false);
   assert.equal(validateComponentSource(`(ui) => ui.create('div')`, { maxLen: 5 }).ok, false);
 });
+
+test('the default source cap is 16000: ~12k accepts, >16k refuses (still parse-only)', () => {
+  // a valid arrow whose body is padded with a long comment so length — not syntax — is what varies
+  const arrow = pad => `(ui) => { /* ${'x'.repeat(pad)} */ return ui.create('div'); }`;
+  const at12k = arrow(12000); // ~12k chars, well under the raised cap
+  assert.ok(at12k.length > 8000 && at12k.length < 16000, `sanity: 12k source is between the old and new caps (${at12k.length})`);
+  assert.equal(validateComponentSource(at12k).ok, true, 'a ~12k component (was refused under 8000) now validates');
+  const over16k = arrow(17000); // comfortably over the 16000 cap
+  assert.ok(over16k.length > 16000, `sanity: source exceeds the cap (${over16k.length})`);
+  const r = validateComponentSource(over16k);
+  assert.equal(r.ok, false, 'a >16k component is still refused');
+  assert.match(r.error, /too long.*16000/, 'the refusal cites the 16000 cap');
+});

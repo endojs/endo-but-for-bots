@@ -17,7 +17,7 @@
 // Layout (longest-path layering) + consumption-edge INFERENCE are pure functions of the render-safe snapshot.
 // Fully DEFENSIVE: render-check.mjs runs it in a Node stub where ui.create().el has no getContext,
 // requestAnimationFrame is undefined, and there is no DOM — it must not throw and must return an element.
-// ≤ 8000 chars (break-out cap).
+// ≤ 16000 chars (break-out cap).
 //
 // RENDERER: canvas2d, colorblind-considered. color = PROV kind (blue step, violet sub-agent, teal data, amber
 // capability, light-violet answer); diamond = capability, ring = answer, red stroke = failed. EDGE STYLE is
@@ -29,7 +29,7 @@
 // conclusion" defect this view exists to surface (exposed as badIntoAnswer in the vizDiag echo; see the test).
 // Capability nodes float in a top gutter lane above the step they authorize (authority "raining down").
 // (WebGL for very large graphs, per-kind PROV shapes, richer inference rules, and hover focus-ancestry are the
-// spec's next layers, deferred here to fit the 8000-char confinement cap; a fork can add any of them on this
+// spec's next layers, deferred here to fit the 16000-char confinement cap; a fork can add any of them on this
 // same contract — that is the point of the break-out substrate.)
 //
 // CAP HYGIENE (stack-wide `cap_hygiene_no_render`): capability nodes + granted edges show the power NAME only

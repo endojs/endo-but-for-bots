@@ -3166,7 +3166,7 @@ const handler = async (req, res) => {
       // source + its declared cells are committed to component-git, so it gets history/fork/revert like any
       // component and a standalone home at /c/<id>. (Cross-user share with a scoped cap is the next step.)
       if (u.pathname === '/components/break-out') {
-        const src = String(body.source || ''); if (!/^\s*\(?\s*[a-zA-Z_$]/.test(src) || !src.includes('=>') || src.length > 8000) { const e = 'invalid component source (must be a function (ui) => …)'; flagErrorForFix('component-source-parse', e, `A broken-out component's source failed (ui)=>element validation. It began: ${src.slice(0, 200).replace(/\s+/g, ' ')}`).catch(() => {}); return json(res, 200, { ok: false, error: e }); }
+        const src = String(body.source || ''); if (!/^\s*\(?\s*[a-zA-Z_$]/.test(src) || !src.includes('=>') || src.length > 16000) { const e = 'invalid component source (must be a function (ui) => …)'; flagErrorForFix('component-source-parse', e, `A broken-out component's source failed (ui)=>element validation. It began: ${src.slice(0, 200).replace(/\s+/g, ' ')}`).catch(() => {}); return json(res, 200, { ok: false, error: e }); }
         // RENDER SMOKE: don't immortalize a component that can't mount — the library must hold working modules.
         const boSmoke = await renderCheck(src, { kind: 'ui' });
         if (!boSmoke.ok) return json(res, 200, { ok: false, error: `this component fails a render check (${boSmoke.error}) — fix it before breaking it out` });

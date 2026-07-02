@@ -33,10 +33,10 @@
 
 // Validate a confined-component source string (SYNTAX-ONLY — never executes the source).
 // Returns { ok:true } if `(<source>)` PARSES (mirroring what public/confined.html injects), or
-// { ok:false, error } with a precise reason otherwise. `maxLen` (default 8000) bounds size like before.
+// { ok:false, error } with a precise reason otherwise. `maxLen` (default 16000) bounds size like before.
 // NOTE: this no longer confirms the source evaluates to a function — that (and full mount-safety) is the
 // job of the isolated render-check child; doing it here would require executing agent code in-process.
-export const validateComponentSource = (source, { maxLen = 8000 } = {}) => {
+export const validateComponentSource = (source, { maxLen = 16000 } = {}) => {
   const src = String(source == null ? '' : source);
   if (!src.trim()) return { ok: false, error: 'source must be a function: (ui) => ui.create(...)' };
   if (src.length > maxLen) return { ok: false, error: `component source too long (keep it under ${maxLen} chars)` };

@@ -15,7 +15,7 @@
 //
 // It starts with `(ui) =>` (NOT a `//` comment) so it passes break-out's `(ui)=>element` validation; the
 // contract doc lives INSIDE the body so it travels with the git object (shown in the alt-click edit chat).
-// Keep it ≤ 8000 chars (break-out cap) and fully DEFENSIVE: render-check.mjs runs it in a Node stub where
+// Keep it ≤ 16000 chars (break-out cap) and fully DEFENSIVE: render-check.mjs runs it in a Node stub where
 // ui.create().el has no getContext, requestAnimationFrame is undefined, and there is no DOM.
 //
 // FULL CONTRACT (also summarized in the source header + public/confined.html):

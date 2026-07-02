@@ -31,7 +31,7 @@
 // or long base32/64 token is masked) and truncated before paint; nothing is ever put in the DOM / a URL / an
 // href / the clipboard. `granted[]` would render as power-kind glyphs, never the capability reference.
 //
-// Keep ≤ 8000 chars (break-out cap) and fully DEFENSIVE: render-check runs it in a Node stub where
+// Keep ≤ 16000 chars (break-out cap) and fully DEFENSIVE: render-check runs it in a Node stub where
 // ui.create().el has no getContext, requestAnimationFrame/document/getComputedStyle/devicePixelRatio are
 // undefined, and there is no DOM. Every ambient is typeof-guarded; a missing canvas/context returns the
 // wrapper without throwing (mode 'none', no loop).

@@ -20,7 +20,7 @@
 //   value   = { status:'running'|'done', rev, prompt?, steps:[{name,ok?,status,children?,granted?}], nodes:[{key,parent?,state?}] }
 //
 // The SOURCE starts with `(ui) =>` (NOT a `//`) so it passes break-out's `(ui)=>element` validation; the
-// contract travels inside the body. Kept dense to stay ≤ 8000 chars (the break-out cap) and fully DEFENSIVE:
+// contract travels inside the body. Kept dense to stay ≤ 16000 chars (the break-out cap) and fully DEFENSIVE:
 // render-check.mjs runs it in a Node stub where ui.create().el has no getContext, requestAnimationFrame is
 // undefined, and there is no DOM — every environment touch below is typeof-guarded or try/caught.
 export const TRACE_VIZ_FLAMEGRAPH_SOURCE = `(ui)=>{

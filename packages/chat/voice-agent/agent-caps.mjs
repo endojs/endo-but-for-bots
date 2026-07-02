@@ -2235,7 +2235,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       for (const alias of Object.keys(usesMap).slice(0, 4)) {
         const id = String(usesMap[alias] || ''); if (!id.startsWith('uicomp-')) continue;
         let snap = null; try { snap = await componentGitObj.readAt(id, 'HEAD'); } catch { /* */ }
-        if (!snap || !snap.files || !snap.files['component.js'] || snap.files['component.js'].length > 8000) continue; // bound the injected ref source (defense-in-depth; matches the break-out cap)
+        if (!snap || !snap.files || !snap.files['component.js'] || snap.files['component.js'].length > 16000) continue; // bound the injected ref source (defense-in-depth; matches the break-out cap)
         let meta = {}; try { meta = JSON.parse(snap.files['manifest.json'] || '{}'); } catch { /* */ }
         const refCells = (Array.isArray(meta.cells) ? meta.cells : []).map(String).filter(c => /^ha:/.test(c) && gateHa(c)); // ONLY reachable ha: cells fold in
         for (const c of refCells) if (!declared.includes(c)) declared.push(c);
@@ -2308,7 +2308,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       toolbox.customView = harden({ run: async ({ kind, methods, objectName, source } = {}) => {
         const src = String(source || '');
         if (!/^\s*[(a-zA-Z_$]/.test(src) || !src.includes('=>')) return { ok: false, error: 'source must be a SINGLE arrow function expression: (endowments, props) => vnode (no const/import/export, no JSX)' };
-        if (src.length > 8000) return { ok: false, error: 'renderer source too long (keep it under 8000 chars)' };
+        if (src.length > 16000) return { ok: false, error: 'renderer source too long (keep it under 16000 chars)' };
         // RENDER SMOKE (chat-1cbe89a9 loop): build the renderer once against stub endowments + generic
         // sample props BEFORE registering — a throw comes back as THIS step's error so the author iterates
         // now, instead of every object of this kind rendering blank for the human later.

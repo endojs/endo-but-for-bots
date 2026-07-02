@@ -119,6 +119,17 @@ const BROKEN_SOURCE = `(ui) => { throw new Error("staged webgl trace breakage");
   const bl0 = await jpost('/components/backlog', { cap: rootCap, id: vizId });
   ok(bl0.ok === true && Array.isArray(bl0.items), 'breaking it out endowed it with a backlog (owner facet, empty at birth)');
 
+  // ── 1b. the break-out SOURCE CAP is 16000 (raised from 8000): a ~12k component now breaks out, >16k refused ──
+  const padArrow = n => `(ui) => { /* ${'x'.repeat(n)} */ return ui.create('div').text('big'); }`;
+  const big12k = padArrow(12000);
+  ok(big12k.length > 8000 && big12k.length < 16000, `sanity: the 12k source sits between the old (8000) and new (16000) caps (${big12k.length} chars)`);
+  const bo12 = await jpost('/components/break-out', { cap: rootCap, source: big12k, name: 'Twelve-K component', cells: [] });
+  ok(bo12.ok === true && /^uicomp-/.test(String(bo12.id || '')), `a ~12k component (refused under the old 8000 cap) now breaks out + passes render-check (${bo12.id || bo12.error})`);
+  const over16k = padArrow(17000);
+  ok(over16k.length > 16000, `sanity: the oversize source exceeds the cap (${over16k.length} chars)`);
+  const boBig = await jpost('/components/break-out', { cap: rootCap, source: over16k, name: 'Too big', cells: [] });
+  ok(boBig.ok === false && /invalid component source/.test(String(boBig.error || '')), 'a >16k component is still refused at break-out (the length gate holds)');
+
   // ── 2. the committed source documents the cell contract (what the alt-click edit chat shows) ─────────
   const lu = await jpost('/components/list-ui', { cap: rootCap });
   const rec = (lu.components || []).find(c => c.id === vizId);
