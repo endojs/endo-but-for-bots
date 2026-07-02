@@ -140,7 +140,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [20.x, 22.x, 24.x]
+        # Node 20 dropped: ava@8 (catalog `dev`) pulls emittery@2.0.0, whose
+        # `emit` uses `Iterator.prototype.filter` (index.js:780), a helper
+        # unavailable on Node 20. Every package's ava run crashes on Node 20
+        # with `results.values(...).filter is not a function`, so the whole
+        # 20.x lane is red regardless of package. ava@8 engines is
+        # `^22.20 || ^24.12 || >=26`; master already dropped 20.x from this
+        # matrix for the same reason.
+        node-version: [22.x, 24.x]
         platform: [ubuntu-latest, macos-15]
         # windows-latest exhibited flakey tests that are not yet worth the
         # trouble to investigate, and blocked us from upgrading yarn from 1 to
@@ -306,7 +313,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [20.x, 24.x]
+        # Node 20 dropped: ava@8 / emittery@2 require Node 22+ (see the `test`
+        # job matrix comment). c8 runs the same ava suite, so 20.x crashes
+        # identically.
+        node-version: [24.x]
         platform: [ubuntu-latest]
 
     steps:
