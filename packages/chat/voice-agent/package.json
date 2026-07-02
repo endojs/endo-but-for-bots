@@ -42,6 +42,7 @@
     "test:blossom-studio": "node blossom-studio.staging.test.cjs",
     "test:pay-rail": "node pay-rail.staging.test.mjs",
     "test:reliability": "node rel-reliability.staging.test.mjs",
+    "test:atomic-store": "node --test write-json-atomic.test.mjs",
     "test:user-agency": "node user-agency-allowance.staging.test.mjs",
     "test:bsky-wallet": "node --test bluesky-ns-wallet.test.mjs",
     "test:chat-corpus": "node --test chat-corpus.test.mjs",

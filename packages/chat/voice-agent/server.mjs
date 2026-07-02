@@ -101,6 +101,7 @@ import { postInternal, listInternal } from './internal-messages.mjs';
 import { reviseToConverge } from './revise-loop.mjs';
 import { notify, topicForKey } from '../capture/notify.mjs';
 import { writeRating, ratingsDir } from './eval-ratings.mjs';
+import { writeJsonAtomic, loadJson } from './write-json-atomic.mjs';
 // THE PERSONAL/PLATFORM SEAM (Packing up for Dweb): personal config + state dirs resolve through
 // field-config so FIELD_PERSONAL_ROOT (the encrypted volume) moves them together. Defaults identical on the NUC.
 import { CONFIG_DIR, STATE_DIR, VOICE_STATE_DIR, DASH_STATE_DIR, FIELD_MODE, INSTANCE_NAME, configSummary } from './field-config.mjs';
@@ -357,9 +358,11 @@ const fileSafe = (root, rel) => {
 //    break-out → minimize → fork → re-share lifecycle. ──
 const appKey = c => crypto.createHash('sha256').update(String(c || '')).digest('hex').slice(0, 16);
 const APP_SHARES_FILE = `${VOICE_STATE_DIR}/app-shares.json`;
+// INT-1: AUTHORITY store (app-share records + their allowances) — atomic write + .bak + guarded load so a
+// corrupt-but-present file can't silently drop every shared-app grant.
 let appShares = {};
-try { appShares = JSON.parse(fs.readFileSync(APP_SHARES_FILE, 'utf8')) || {}; } catch { appShares = {}; }
-const saveAppShares = () => { try { fs.mkdirSync(path.dirname(APP_SHARES_FILE), { recursive: true }); fs.writeFileSync(APP_SHARES_FILE, JSON.stringify(appShares, null, 2)); } catch { /* */ } };
+try { appShares = loadJson(APP_SHARES_FILE, {}, { guard: true }) || {}; } catch (e) { if (e && e.code === 'STORE_CORRUPT') throw e; appShares = {}; }
+const saveAppShares = () => { try { writeJsonAtomic(APP_SHARES_FILE, appShares, { pretty: true, bak: true }); } catch { /* */ } };
 const appShareFor = cap => (cap ? appShares[appKey(cap)] || null : null);
 // file roots a caller may reach: ALL for root; for a file-browser app-share, only its attenuated subset.
 const allowedFileRoots = (node, cap) => {
@@ -498,7 +501,9 @@ const SPEND_LEDGER_FILE = `${OUT}/spend-ledger.json`;
 const spendLedger = new Map();
 try { const d = JSON.parse(fs.readFileSync(SPEND_LEDGER_FILE, 'utf8')); if (d && typeof d === 'object') for (const [k, v] of Object.entries(d)) spendLedger.set(k, Number(v) || 0); } catch { /* none yet */ }
 let spendSaveT = null;
-const saveSpendLedger = () => { if (spendSaveT) return; spendSaveT = setTimeout(() => { spendSaveT = null; try { fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(SPEND_LEDGER_FILE, JSON.stringify(Object.fromEntries(spendLedger))); } catch { /* */ } }, 2000); };
+// INT-1: atomic write (this is a derived leaderboard tally — the purse is the money truth — so it's
+// torn-write-safe but not guarded/boot-blocking on corruption).
+const saveSpendLedger = () => { if (spendSaveT) return; spendSaveT = setTimeout(() => { spendSaveT = null; try { writeJsonAtomic(SPEND_LEDGER_FILE, Object.fromEntries(spendLedger)); } catch { /* */ } }, 2000); };
 const addSpend = (sid, uusd) => { const a = Math.max(0, Math.round(Number(uusd) || 0)); if (!a) return; spendLedger.set(String(sid), (spendLedger.get(String(sid)) || 0) + a); saveSpendLedger(); };
 const chatPurses = new Map(); // `${cap}:${sid}` → purse
 // Durable balances: a purse's mutations persist (hashed key → {balance,granted}); on boot a chat's purse
@@ -905,7 +910,7 @@ const postFeed = async entry => {
     await fs.promises.mkdir(FEED_DIR, { recursive: true });
     let feed = { entries: [] }; try { feed = JSON.parse(await fs.promises.readFile(FEED_FILE, 'utf8')); } catch {}
     feed.entries = [{ id: `sched-${crypto.randomBytes(6).toString('hex')}`, date: new Date().toISOString(), kind: 'notification', ...entry }, ...(feed.entries || [])].slice(0, 400);
-    await fs.promises.writeFile(FEED_FILE, JSON.stringify(feed, null, 2));
+    writeJsonAtomic(FEED_FILE, feed, { pretty: true }); // INT-1: torn-write-safe (not guarded — the feed is notifications, not money; a bad byte tolerantly resets)
   } catch (e) { log('postFeed', e.message); }
 };
 // Route a live runtime error to the self-improvement loop so the developer agent fixes it automatically

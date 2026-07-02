@@ -106,6 +106,7 @@ import { renderCheck } from './render-check.mjs';
 import { getTranscript } from './youtube.mjs';
 import { extractPdf } from './pdf-extract.mjs';
 import { listAllChats as corpusListChats, readChatSanitized as corpusReadChat } from './chat-corpus.mjs';
+import { writeJsonAtomic, loadJson } from './write-json-atomic.mjs';
 // THE PERSONAL/PLATFORM SEAM (Packing up for Dweb): every personal coupling that used to be a hardcoded
 // /home/dan literal now resolves through field-config, so pointing FIELD_PERSONAL_ROOT at the encrypted
 // volume moves dan's whole personal family together. Defaults are byte-identical to before on the NUC.
@@ -1024,16 +1025,20 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // confined chat — its cap 403s, the chat silently can't send). Persist {swiss, powers, label}
   // and re-register at boot, the same durability the root swiss already has.
   const SCOPED_FILE = process.env.SCOPED_CAPS_FILE || path.join(CONFIG_DIR, 'scoped-caps.json'); // env-overridable for tests
+  // INT-1: AUTHORITY store (scoped/shared caps) — atomic write + .bak + guarded load. A corrupt-but-present
+  // file must NOT silently reset to [] (that would revoke every share/invite the operator ever minted).
   let scopedCaps = [];
-  try { scopedCaps = JSON.parse(fs.readFileSync(SCOPED_FILE, 'utf8')).caps || []; } catch { scopedCaps = []; }
-  const saveScoped = () => { try { fs.mkdirSync(path.dirname(SCOPED_FILE), { recursive: true }); fs.writeFileSync(SCOPED_FILE, JSON.stringify({ caps: scopedCaps }, null, 2), { mode: 0o600 }); } catch (e) { /* best effort */ } };
+  try { scopedCaps = loadJson(SCOPED_FILE, { caps: [] }, { guard: true }).caps || []; } catch (e) { if (e && e.code === 'STORE_CORRUPT') throw e; scopedCaps = []; }
+  const saveScoped = () => { try { writeJsonAtomic(SCOPED_FILE, { caps: scopedCaps }, { pretty: true, mode: 0o600, bak: true }); } catch (e) { /* best effort */ } };
   // ── INVENTORY: external Endo capabilities the agent ACCEPTED (each via an owner-confirmed proposal) — the
   //    inbound counterpart to createInvite. The swissnum is held host-side (mode 0600), NEVER spoken/rendered;
   //    the object is called over the standard /rpc {swissnum, method, args} seam (the same one createInvite shares).
   const OBJECTS_FILE = process.env.OBJECTS_FILE || path.join(CONFIG_DIR, 'accepted-objects.json'); // env-overridable for tests
+  // INT-1: AUTHORITY store (accepted inventory objects) — atomic write + .bak + guarded load (a corrupt file
+  // must not silently drop every external capability the agent accepted).
   let acceptedObjects = [];
-  try { acceptedObjects = JSON.parse(fs.readFileSync(OBJECTS_FILE, 'utf8')).objects || []; } catch { acceptedObjects = []; }
-  const saveAcceptedObjects = () => { try { fs.mkdirSync(path.dirname(OBJECTS_FILE), { recursive: true }); fs.writeFileSync(OBJECTS_FILE, JSON.stringify({ objects: acceptedObjects }, null, 2), { mode: 0o600 }); } catch (e) { /* best effort */ } };
+  try { acceptedObjects = loadJson(OBJECTS_FILE, { objects: [] }, { guard: true }).objects || []; } catch (e) { if (e && e.code === 'STORE_CORRUPT') throw e; acceptedObjects = []; }
+  const saveAcceptedObjects = () => { try { writeJsonAtomic(OBJECTS_FILE, { objects: acceptedObjects }, { pretty: true, mode: 0o600, bak: true }); } catch (e) { /* best effort */ } };
   // Parse an invite into { origin (HTTP only), swissnum, transport, address }. A non-HTTP scheme (iroh://,
   // ocapn://) has no HTTP origin — `new URL(...).origin` returns the STRING "null", which used to be stored
   // and then dialed as `fetch("null/rpc")` (the "Failed to parse URL from null/rpc" bug). We now keep origin

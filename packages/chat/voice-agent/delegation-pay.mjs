@@ -12,6 +12,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 import { CONFIG_DIR, STATE_DIR } from './field-config.mjs';
+import { writeJsonAtomic, loadJson } from './write-json-atomic.mjs';
 
 // Personal-family paths resolve through field-config (byte-identical defaults on the NUC;
 // rebase onto FIELD_PERSONAL_ROOT when the personal volume is mounted).
@@ -57,8 +58,10 @@ export const grantParams = async (fetchImpl = fetch) => {
   } catch { cachedInfo = null; return null; }
 };
 
-const load = () => { try { return JSON.parse(fs.readFileSync(DELEG_STORE, 'utf8')); } catch { return {}; } };
-const save = o => { try { fs.mkdirSync(path.dirname(DELEG_STORE), { recursive: true }); fs.writeFileSync(DELEG_STORE, JSON.stringify(o, null, 2), { mode: 0o600 }); } catch { /* best effort */ } };
+// INT-1: MONEY/AUTHORITY store (spending delegations) — atomic write + .bak + guarded load (refuse to
+// silently reset the users' granted spending authorizations to {} on a corrupt-but-present file).
+const load = () => loadJson(DELEG_STORE, {}, { guard: true });
+const save = o => { try { writeJsonAtomic(DELEG_STORE, o, { pretty: true, mode: 0o600, bak: true }); } catch { /* best effort */ } };
 const keyFor = (cap, sid) => crypto.createHash('sha256').update(`${cap}:${sid}`).digest('hex'); // cap-hygiene: the swissnum is never stored raw
 
 // Store the user's granted delegation, keyed by a HASH of {cap,sid} (the swissnum never lands on disk).

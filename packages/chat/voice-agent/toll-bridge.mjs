@@ -19,7 +19,8 @@
 // ledger the inference toll-bridge uses, so edit-spend and hosting land in ONE accounting.
 
 import crypto from 'node:crypto';
-import fs from 'node:fs';
+
+import { writeJsonAtomic, loadJson } from './write-json-atomic.mjs';
 
 const DAY_MS = 86_400_000;
 // Hosting rate: storage × time. Default ≈ $0.02 / MB / 30 days = 667 µUSD per MB-day. Storage
@@ -42,9 +43,11 @@ export const makeTollBridge = ({ purseStore, makePurse, costOf, ledgerFile, host
   };
 
   // hosting ledger: key → { account, bytes, appName, since, lastTick, accrued, delinquent }
+  // INT-1: MONEY store (hosting-rent ledger) — atomic write + .bak + guarded load (a corrupt-but-present
+  // ledger must NOT silently reset to {}, which would erase every artifact's accrued rent + delinquency).
   let ledger = {};
-  try { ledger = JSON.parse(fs.readFileSync(ledgerFile, 'utf8')); } catch { /* fresh */ }
-  const saveLedger = () => { try { fs.writeFileSync(ledgerFile, JSON.stringify(ledger, null, 2)); } catch { /* best-effort */ } };
+  try { ledger = loadJson(ledgerFile, {}, { guard: true }); } catch (e) { if (e && e.code === 'STORE_CORRUPT') throw e; /* other IO → fresh */ }
+  const saveLedger = () => { try { writeJsonAtomic(ledgerFile, ledger, { pretty: true, bak: true }); } catch { /* best-effort */ } };
   const rentDue = (e, now) => { const last = Date.parse(e.lastTick || e.since) || now; return Math.round(((e.bytes || 0) / 1e6) * hostRate * Math.max(0, now - last) / DAY_MS); };
 
   // Accrue storage rent for every artifact up to `now`, debiting each owner's account. Short-paid

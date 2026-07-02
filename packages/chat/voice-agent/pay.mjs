@@ -6,8 +6,9 @@
 // CAP HYGIENE: the swissnum NEVER goes to Stripe. /pay/checkout stores {cap, sid, uusd} server-side
 // under a random `payId`, and only `payId` travels in Stripe metadata; the webhook maps it back.
 import fs from 'node:fs';
-import path from 'node:path';
 import crypto from 'node:crypto';
+
+import { writeJsonAtomic, loadJson } from './write-json-atomic.mjs';
 
 const HOME = process.env.HOME || '/home/dan';
 const STRIPE_CFG = process.env.STRIPE_CONFIG || `${HOME}/.config/field-agent/stripe.json`;
@@ -17,8 +18,11 @@ const PAY_STORE = process.env.PAY_STORE || `${HOME}/.local/state/field-agent/pen
 export const loadStripeCfg = () => { try { const c = JSON.parse(fs.readFileSync(STRIPE_CFG, 'utf8')); return (c && c.secretKey) ? c : null; } catch { return null; } };
 export const stripeConfigured = () => !!loadStripeCfg();
 
-const loadPays = () => { try { return JSON.parse(fs.readFileSync(PAY_STORE, 'utf8')); } catch { return {}; } };
-const savePays = o => { try { fs.mkdirSync(path.dirname(PAY_STORE), { recursive: true }); fs.writeFileSync(PAY_STORE, JSON.stringify(o, null, 2), { mode: 0o600 }); } catch { /* best effort */ } };
+// INT-1: MONEY store — atomic writes (temp+fsync+rename), a .bak of the last-known-good, and a GUARDED
+// load that refuses to silently reset to {} on a corrupt-but-present file (it would drop pending payments
+// mid-redeem). A throw here surfaces the corruption instead of quietly losing money state.
+const loadPays = () => loadJson(PAY_STORE, {}, { guard: true });
+const savePays = o => { try { writeJsonAtomic(PAY_STORE, o, { pretty: true, mode: 0o600, bak: true }); } catch { /* best effort */ } };
 
 // Record a pending payment; returns the payId that travels in Stripe metadata (no cap leaves the host).
 export const recordPending = ({ cap, sid, uusd, now }) => {
