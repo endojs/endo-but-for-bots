@@ -201,8 +201,9 @@ Implications that change the phases below:
   Proven by `test:component-select` 10/10 + `test:alt-fork` 5/5, live under
   `FIELD_LOCKDOWN=1`. What IS still open here:
   - ~~most app chrome is not registry-backed~~ **CHROME DECOMPOSITION BEGUN (2026-07-01,
-    increment 1)** — see "App chrome as registry-backed components" below. Two shell
-    pieces converted (`chrome-msg-toolbar`, `chrome-welcome`); the rest of the shell is
+    increment 1)** — see "App chrome as registry-backed components" below. Three shell
+    pieces converted (`chrome-msg-toolbar`, `chrome-welcome`, and `chrome-trace-view` —
+    the trace view as a data-fed, fork-riffable island); the rest of the shell is
     still hardcoded/island-only — convert piece by piece with the recipe below.
   - ~~forks use the one-shot `/forks/edit`~~ **DONE (2026-07-01)**: forks now get the
     same conversational agent loop via `/forks/edit-chat` (owner-gated; toolbox =
@@ -227,7 +228,7 @@ project-object** in component-git, rendered through the **existing confined no-i
 path** (the fork pipeline: `(endowments, props) => vnode`, SES compartment under
 `FIELD_LOCKDOWN`, `renderConfined`) — so it gets versions/revert, a backlog, alt-click
 → edit chat, and the render-check gate, all for free. Proven end-to-end by
-`chrome-components.staging.test.cjs` (`yarn test:chrome`, 36/36).
+`chrome-components.staging.test.cjs` (`yarn test:chrome`, 37/37).
 
 **Converted so far:**
 - `chrome-msg-toolbar` — the per-message action strip (🔗 clip + 📋 copy). Mounts once
@@ -236,6 +237,20 @@ path** (the fork pipeline: `(endowments, props) => vnode`, SES compartment under
   preact render — measured 0.11 ms/mount (first mount incl. compile 0.4 ms).
 - `chrome-welcome` — the empty-chat landing panel (tagline + starter-suggestion chips
   that fill the composer).
+- `chrome-trace-view` — **the TRACE VIEW as an island (2026-07-01)**, dan: "make the
+  trace view an island … properly fork & riffable. I suspect people will have a lot of
+  interesting ways they want to visualize a trace." The first **DATA-FED chrome piece**
+  — see "The cell-as-interface pattern" below. During a turn the island (a 2D neon
+  fan-out: pulsing running chips, ok/fail settling, children counts, live progress
+  line, a ⊿3D chip) replaces the in-turn 3D pendant; the pendant remains (a) one tap
+  away via ⊿3D — fullscreen on the same live `/chat/steps` replay — and (b) the
+  automatic fallback whenever the island refuses/breaks, including a live edit breaking
+  it MID-turn. Voice-listening, the permissioning dodecahedron, and agent-shape views
+  stay pendant-native. Proven by `trace-island.staging.test.cjs` (`yarn
+  test:trace-island`, 32/32: a REAL turn against a stub CodeMode LLM streams ≥4
+  monotonic frames through the cell; chips grow mid-turn; alt-click chips it; a
+  scripted list-renderer riff receives the same frames; a throwing edit is
+  render-check-refused; a broken island → pendant fallback + backlog auto-file).
 
 **The architecture (each part is load-bearing):**
 - `chrome-components.mjs` — the seed registry. Seeds commit on first boot only; user
@@ -275,6 +290,27 @@ Residual (flagged, deliberate): `island-shares-panel` remains editable via the
 root-only Studio path (a deliberate operator act on source, not an in-situ alt-click);
 its rendered mount can no longer be tagged or selected.
 
+**The cell-as-interface pattern (data-fed islands — how chrome-trace-view is wired):**
+a chrome piece that renders LIVE DATA never fetches and never parses SSE. Instead:
+1. The server folds its event stream into a **monotonic propagator cell** served by the
+   one `/cells/subscribe` broker. For the trace: `trace-cells.mjs` rides the `emitStep`
+   choke point (the same events as `/chat/steps`) — steps append then settle in place
+   (merge, never rewind), `rev` only grows, a new turn bumps `turn`, `rnode` upserts the
+   research sub-tree. Ownership binds first-writer to the cap that runs the turn and the
+   subscribe gate re-validates on the 15s heartbeat (like `backlog:` cells).
+2. The HOST holds the cap + ONE subscribe stream and re-renders the island on every
+   push (`app.js traceIslandBegin`): `mountChrome(id, host, { trace: value, …handlers })`
+   — compile-once-per-version makes the per-push render a cheap preact diff.
+3. **THE CELL IS THE INTERFACE.** The value schema is documented in the seeded source's
+   HEADER COMMENT, so anyone alt-clicking into the edit chat sees the contract before
+   riffing. Any `(endowments, props) => vnode` honoring the same props contract can
+   replace the viz entirely (list, timeline, graph…) — the cell feeds every fork the
+   same frames. The component stays pure render: no cap, no network, host callbacks
+   (`onOpen3D`) as props.
+4. A mid-stream mount failure (e.g. a live edit that breaks the island while data is
+   flowing) falls back to the piece's legacy renderer and auto-files the error — the
+   data keeps flowing either way because the stream belongs to the HOST, not the island.
+
 **Recipe — converting the NEXT chrome piece (checklist for future workers):**
 1. Pick a piece whose authority-bearing behavior can stay host-side. Write its render
    as a `(endowments, props) => vnode` seed in `chrome-components.mjs` (stable id
@@ -296,8 +332,12 @@ its rendered mount can no longer be tagged or selected.
 Still open for chrome (increment 2+): non-root users get their own VARIANT (fork
 model: owner edits root, others fork — today chrome editing is root-only and one
 shared root variant); converting larger shell regions (header, composer, sidebar)
-whose islands currently need a rebuild; grain-backed chrome (wire chrome pieces to
-cells instead of imperative re-mounts).
+whose islands currently need a rebuild; ~~grain-backed chrome~~ **BEGUN** — the trace
+island is the first cell-fed chrome piece (the cell-as-interface pattern above); wire
+the remaining data-showing pieces to cells the same way. Trace-specific residuals:
+WebGL/three riffs need the Tier-2 iframe runtime (the no-iframe sanitizer allowlist has
+no canvas/svg tags — the default island is div-based on purpose, ⊿3D opens the classic
+pendant); per-user trace-island VARIANTS ride the same fork-model open above.
 
 ## Open sequencing decisions (for dan)
 
