@@ -36,6 +36,8 @@ export interface FeatureToggles {
   gitHttp: boolean;
   /** Feature 4: sock bootstrap for local CapTP relay registration. */
   sockBootstrap: boolean;
+  /** Feature 5: Familiar-bundled fallback publisher. */
+  familiarBundled: boolean;
   /** Feature 6: public CapTP relay (opt-in). */
   captpRelay: boolean;
   /** Feature 7: admin daemon (sock-only). */
@@ -928,6 +930,59 @@ export interface GatewayPowers {
    * in-memory hub from `vhost.js`, preserving the phase-1 behavior.
    */
   appsFormulaStore?: AppsFormulaStore;
+  /**
+   * Required when `familiarBundled` is enabled (Feature 5). The
+   * publisher writes the gateway's resolved bind address to a
+   * caller-configurable file so the Familiar Electron shell's
+   * `localhttp://` protocol handler can proxy to the right address.
+   * Supply the package's own Node-backed publisher via
+   * `makeFamiliarPublisher({ io: makeNodeFamiliarPublishPowers(),
+   * publishPath })`, or an embedder-shaped equivalent.
+   */
+  familiarPublish?: FamiliarPublisher;
+}
+
+// ---------------------------------------------------------------------
+// familiar-publish.js
+// ---------------------------------------------------------------------
+
+/**
+ * The narrow filesystem surface the Familiar publisher consumes.
+ * Kept tight so the portable core never sees `node:fs` directly; an
+ * Endor or browser-side embedder provides its own adapter that maps
+ * to whatever persistence the host offers.
+ */
+export interface IoPowers {
+  /**
+   * Atomic write of UTF-8 text to `path`. If the parent directory
+   * does not exist, the adapter is responsible for creating it.
+   */
+  writeFile(path: string, contents: string): Promise<void>;
+  /**
+   * Remove the file at `path`. Must not throw when the file is
+   * already absent (`ENOENT` is treated as success).
+   */
+  removeFile(path: string): Promise<void>;
+}
+
+/**
+ * The Familiar fallback publisher (Feature 5).
+ */
+export interface FamiliarPublisher {
+  /**
+   * Render the gateway URL for `bindAddress` and write it to the
+   * configured publish path. The publisher renders as
+   * `http://<host>:<port>\n` to match the existing daemon's payload
+   * shape.
+   */
+  publish(bindAddress: string): Promise<void>;
+  /**
+   * Remove the published file. A no-op when no publish has
+   * occurred. Tolerates an externally-removed file.
+   */
+  cleanup(): Promise<void>;
+  /** The configured absolute path. */
+  getPublishPath(): string;
 }
 
 export interface Gateway {

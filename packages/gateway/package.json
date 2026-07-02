@@ -40,6 +40,8 @@
     "./src/relay-policy.js": "./src/relay-policy.js",
     "./src/git-http.js": "./src/git-http.js",
     "./src/resource-ledger.js": "./src/resource-ledger.js",
+    "./src/familiar-publish.js": "./src/familiar-publish.js",
+    "./src/node-familiar-publish-powers.js": "./src/node-familiar-publish-powers.js",
     "./package.json": "./package.json"
   },
   "scripts": {

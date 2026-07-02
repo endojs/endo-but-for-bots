@@ -214,3 +214,32 @@ test('bindAddressFromEnv ignores an empty ENDO_HTTP_ADDR', t => {
     '127.0.0.1:8920',
   );
 });
+
+test('familiarBundled defaults to false', t => {
+  // Regression: the Familiar-bundled variant (Feature 5) is opt-in.
+  // The system-service and standalone deployments must not
+  // suddenly start publishing a state file by default. If this
+  // assertion fails, every non-Familiar embedder is silently
+  // promoted to a configuration that requires an `io` adapter.
+  t.false(defaultFeatureToggles.familiarBundled);
+});
+
+test('mergeGatewayConfig accepts familiarBundled true', t => {
+  // The Familiar-bundled variant runs without the system-side
+  // features (sockBootstrap, ocapnWebSocket, etc.). Verify the
+  // dependency validator does not reject the Familiar sample
+  // configuration from the design.
+  const cfg = mergeGatewayConfig({
+    bindAddress: '127.0.0.1:0',
+    enableFeatures: {
+      ...defaultFeatureToggles,
+      familiarBundled: true,
+      sockBootstrap: false,
+      adminDaemon: false,
+      gitHttp: false,
+      captpRelay: false,
+      ocapnWebSocket: false,
+    },
+  });
+  t.true(cfg.enableFeatures.familiarBundled);
+});
