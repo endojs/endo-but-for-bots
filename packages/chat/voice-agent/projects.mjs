@@ -45,6 +45,20 @@ export const listProjects = owner => {
 export const projectOwner = pid => { const p = load().projects[pid]; return p ? (p.owner || 'root') : null; };
 export const getProject = pid => load().projects[pid] || null;
 
+// INC-3 (delete-my-data / P4): remove EVERY project in one owner's namespace and return the removed records so
+// the caller can also delete each project's HOME_BASE/<homeSubkey> folder (owned by projects, not here). Legacy
+// (owner-less) projects = 'root'. Fail-closed: a FALSY owner is refused (returns []) so a stray call can never
+// wipe every project. Idempotent (returns [] when the owner has none). torn-write-safe via the atomic save.
+export const deleteProjectsForOwner = owner => {
+  const own = String(owner || '');
+  if (!own) return [];
+  const s = load();
+  const mine = Object.values(s.projects).filter(p => (p.owner || 'root') === own);
+  for (const p of mine) delete s.projects[p.id];
+  if (mine.length) save(s);
+  return mine.map(p => ({ id: p.id, homeSubkey: p.homeSubkey || projectHomeSubkey(p.id) }));
+};
+
 const mutate = (pid, fn) => {
   const s = load();
   const p = s.projects[pid];

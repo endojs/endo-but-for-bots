@@ -41,6 +41,19 @@ export const cancelTimer = async (id, owner) => { const s = await read(); const 
 // list timers. With an `owner` → only that namespace's (legacy/owner-less = 'root'); WITHOUT → ALL of them
 // (the timer-runner daemon fires every owner's due timers; do NOT scope that path).
 export const listTimers = async owner => { const all = (await read()).timers || []; return owner === undefined ? all : all.filter(t => (t.owner || 'root') === String(owner)); };
+// INC-3 (delete-my-data / P4): REMOVE every timer in one owner's namespace (not just cancel — the record is
+// gone, so nothing fires + nothing lingers in Settings). Fail-closed: a FALSY owner is refused (returns
+// {removed:0}) so a stray call can NEVER wipe root/every tenant's schedule. Idempotent (0 when none left).
+export const deleteTimersForOwner = async owner => {
+  const own = String(owner || '');
+  if (!own) return { removed: 0 };
+  const s = await read();
+  const before = (s.timers || []).length;
+  s.timers = (s.timers || []).filter(t => (t.owner || 'root') !== own);
+  const removed = before - s.timers.length;
+  if (removed) await write(s);
+  return { removed };
+};
 
 // endo object (Far loaded lazily so plain core + CLI run without SES)
 export const makeTimers = async () => {

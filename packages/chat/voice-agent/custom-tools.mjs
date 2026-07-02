@@ -149,6 +149,25 @@ export const makeCustomTools = ({ fix } = {}) => {
   const admit = id => { const ts = load(); const t = ts.find(x => x.id === String(id)); if (!t) return { ok: false, error: 'no such proposal' }; t.status = 'admitted'; save(ts); instances.delete(t.id); built.delete(t.id); return { ok: true, id: t.id, name: t.name }; };
   const reject = id => { instances.delete(String(id)); built.delete(String(id)); save(load().filter(t => t.id !== String(id))); return { ok: true, id: String(id) }; };
 
+  // INC-3 (delete-my-data / P4): remove EVERY tool in one owner's namespace — record, cached instance/bundle,
+  // durable per-tool state file, AND its grain data — so a tenant's authored-tools library is fully gone. Owner
+  // is the non-secret per-user namespace key (ownerOf-matched, so legacy/owner-less = 'root'). Fail-closed: a
+  // FALSY owner is refused (returns {removed:0}) so a stray call can NEVER wipe root/every tenant. Idempotent:
+  // an owner with nothing left removes 0.
+  const deleteAllForOwner = owner => {
+    const own = String(owner || '');
+    if (!own || own === undefined) return { removed: 0, ids: [] }; // guard: never delete-all on an empty owner
+    const ts = load();
+    const mine = ts.filter(t => ownerOf(t) === own);
+    for (const t of mine) {
+      instances.delete(t.id); built.delete(t.id);
+      try { fs.rmSync(path.join(STATE_DIR, `${t.id}.json`), { force: true }); } catch { /* best effort */ }
+      try { grainStore.drop(t.id); } catch { /* best effort */ }
+    }
+    if (mine.length) save(ts.filter(t => ownerOf(t) !== own));
+    return { removed: mine.length, ids: mine.map(t => t.id) };
+  };
+
   // append a self-heal patch record to a tool — the audit trail for auto-repairs (recovery first, review later).
   const logHeal = (id, entry) => { const ts = load(); const t = ts.find(x => x.id === String(id)); if (!t) return; t.healLog = (t.healLog || []).concat({ ...entry, at: new Date().toISOString() }).slice(-20); save(ts); };
   const healer = makeSelfHealer({ fix });
@@ -194,5 +213,5 @@ export const makeCustomTools = ({ fix } = {}) => {
     return harden({ ok: false, error: r.error });
   };
 
-  return { propose, pendingBy, get, list, listAll, setReview, setReviseLog, setSource, copyGrains, grainData, admit, reject, call, methodsOf, getInstance, exportClass, importClass, logHeal };
+  return { propose, pendingBy, get, list, listAll, setReview, setReviseLog, setSource, copyGrains, grainData, admit, reject, deleteAllForOwner, call, methodsOf, getInstance, exportClass, importClass, logHeal };
 };

@@ -45,6 +45,17 @@ export const makeUserStore = ({ file }) => {
   // This is how a user's edits/forks of the SHELL diverge from everyone else's without affecting them.
   const setRoot = (userCap, root) => { const r = recOf(userCap); if (!r) return { ok: false, error: 'unknown user' }; r.rec.root = String(root || CANONICAL_ROOT); save(); return { ok: true, root: r.rec.root }; };
 
+  // DELETE (INC-3 / P4 delete-my-data): forget a user's record entirely. Self-authorizing — the caller PRESENTS
+  // the user-cap (designation by reference), exactly like get/prefs/root; holding it is the authorization, so a
+  // holder can only ever delete their OWN record. Idempotent: an unknown/already-deleted cap is a safe no-op
+  // ({ existed: false }). torn-write-safe via the same atomic save. No swissnum touches disk (keyed by hash).
+  const del = userCap => {
+    const r = recOf(userCap);
+    if (!r) return { ok: true, existed: false };
+    delete data.users[r.h];
+    save();
+    return { ok: true, existed: true };
+  };
   const count = () => Object.keys(data.users).length;
-  return { mint, get, setPrefs, setRoot, count, CANONICAL_ROOT };
+  return { mint, get, setPrefs, setRoot, delete: del, count, CANONICAL_ROOT };
 };

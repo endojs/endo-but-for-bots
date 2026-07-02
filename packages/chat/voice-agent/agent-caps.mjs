@@ -3268,6 +3268,33 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         return { ok: !d.error, name: inst.name, error: d.error };
       } catch (e) { return { ok: false, error: e.message }; }
     },
+    // ── INC-3 (delete-my-data / P4): wipe one user's specialists + REVOKE their scoped caps ──────────────
+    // The server calls this as part of /user/data/delete, having already derived the non-secret ownerKey from
+    // the PRESENTING cap (never a client-supplied id) and refused root. Here we (1) remove every specialist in
+    // that namespace — with its standing nudges, its locator entry (its own invite link stops resolving), and
+    // its cached spec-node; (2) REVOKE every scoped cap whose non-secret owner key is this user's — locator
+    // delete makes nodeFor() return null (the cap stops resolving) and the record is dropped from the durable
+    // scoped-caps store; (3) belt-and-suspenders, revoke the presenting swiss itself (NEVER the root node).
+    // Fail-closed: a falsy or 'root' ownerKey is refused so a stray call can never nuke user-0/dan. Idempotent.
+    deleteOwnerData: ({ ownerKey, swiss } = {}) => {
+      const own = String(ownerKey || '');
+      if (!own || own === 'root') return harden({ ok: false, error: 'refusing to delete root/empty owner' });
+      // 1. specialists owned by this user (+ their nudges / invite links / spec nodes)
+      const mine = specialists.filter(s => (s.owner || 'root') === own);
+      for (const s of mine) {
+        if (s.swiss) locator.delete(s.swiss);
+        specNodes.delete(specKey(s));
+        try { specialistNudges.cancel(s.id); } catch { /* best effort */ }
+      }
+      if (mine.length) { specialists = specialists.filter(s => (s.owner || 'root') !== own); saveSpecialists(); }
+      // 2. scoped caps whose non-secret owner key is this user's → stop resolving + forget
+      const capsMine = scopedCaps.filter(c => ownerKeyForCap(c.swiss) === own);
+      for (const c of capsMine) locator.delete(c.swiss);
+      if (capsMine.length) { scopedCaps = scopedCaps.filter(c => ownerKeyForCap(c.swiss) !== own); saveScoped(); }
+      // 3. the presenting cap itself (if it wasn't a persisted scoped cap) — but NEVER the root node
+      if (swiss) { const rec = locator.get(String(swiss)); if (rec && rec.node !== rootNode) locator.delete(String(swiss)); }
+      return harden({ ok: true, specialists: mine.length, scopedCaps: capsMine.length });
+    },
   });
 };
 harden(makeFieldAgent);
