@@ -50,6 +50,7 @@ import { makeBskyNsWallets } from './bluesky-ns-wallet.mjs';
 import { makeBlueskyEligibility } from './bluesky-raindrop.mjs';
 import { makeBlueskyClaim } from './bluesky-claim.mjs';
 import { makeBlueskyOAuth } from './bluesky-oauth.mjs';
+import { makeBskyHandoffs } from './bsky-handoff.mjs';
 const connectors = makeConnectors({ getSecret }); // owner-side registry (same connectors.json the agent calls)
 // SELF-HEAL (designs/self-healing-errors.md): when an admitted custom tool THROWS at runtime, rewrite its source
 // so the original call RESOLVES with the repaired value instead of bubbling an error. Single-file tools (the body
@@ -750,6 +751,13 @@ const blueskyOAuth = makeBlueskyOAuth({
   stateFile: `${VOICE_STATE_DIR}/bluesky-oauth-state.json`,
   sessionFile: `${VOICE_STATE_DIR}/bluesky-oauth-session.json`,
 });
+// SEC-16: one-time, short-lived handoff for the OAuth scoped cap. The 302 Location must NOT carry the
+// swissnum in its #fragment — a proxy (ngrok etc.) logs response headers, so the cap could land in a log.
+// Instead the redirect carries a single-use NONCE that the client swaps for the cap via a POST body (never a
+// header/URL). In-memory + short TTL: the swissnum never touches disk or any log, and a logged nonce is dead
+// the instant it is redeemed (or after the TTL).
+const bskyHandoffs = makeBskyHandoffs({ ttlMs: 120_000 });
+setInterval(() => bskyHandoffs.sweep(), 60_000).unref?.();
 // Least-authority cross-user share tokens for a broken-out component: subscribe-only to its frozen cells.
 const componentShares = makeComponentShares({ file: `${VOICE_STATE_DIR}/component-shares.json`, purseAt }); // P1-8: route allowance purses through the cached purseAt (no per-open fresh purse → no double-spend)
 // User-owned FORKS of confined Preact components (the in-tree, no-iframe model). Any cap-holder owns forks;
@@ -1504,12 +1512,21 @@ const handler = async (req, res) => {
           // sign them in to their own namespace (eligible → funded; otherwise zero until they claim). The cap rides
           // the URL FRAGMENT (client-only, as every invite link in this app does) — the app stores it and strips it.
           log('bsky', `sign-in: ${r.eligible ? `eligible${r.granted ? ` (+${r.granted}µUSD)` : ' (already funded)'}` : 'unclaimed — zero balance'}`);
-          res.writeHead(302, { location: `${blueskyPublicUrl}/#cap=${r.scopedCap}`, 'cache-control': 'no-store', ...SEC });
+          // SEC-16: hand off via a one-time nonce, NOT the swissnum in the redirect fragment (proxy-loggable).
+          // The client swaps `#bsky-handoff=<nonce>` for the cap at POST /bsky/handoff (body, not a header/URL).
+          res.writeHead(302, { location: `${blueskyPublicUrl}/#bsky-handoff=${bskyHandoffs.mint(r.scopedCap)}`, 'cache-control': 'no-store', ...SEC });
           return res.end();
         }
         res.writeHead(302, { location: '/bsky?status=error', 'cache-control': 'no-store', ...SEC });
         return res.end();
       } catch (e) { log('bsky', 'callback', e.message); res.writeHead(302, { location: '/bsky?status=error', ...SEC }); return res.end(); }
+    }
+    // SEC-16: swap a one-time OAuth handoff nonce for the scoped cap (over the response BODY — the swissnum
+    // never rides a URL or header). Single-use + short TTL: a proxy-logged nonce is dead the moment it is used.
+    if (u.pathname === '/bsky/handoff' && req.method === 'POST') {
+      const { nonce } = await jsonBody(req);
+      const c = bskyHandoffs.redeem(nonce);
+      return json(res, 200, c ? { ok: true, cap: c } : { ok: false, error: 'this sign-in handoff has expired or was already used — please sign in again' });
     }
 
     if (u.pathname === '/app.js') return serveFile(res, 'app.js', 'text/javascript; charset=utf-8');

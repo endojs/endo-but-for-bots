@@ -72,6 +72,9 @@ initTheme(); // restore the saved theme + start applying it to :root as CSS vars
 const CAP_KEY = 'field-agent-cap';
 const _hashParams = new URLSearchParams(location.hash.slice(1));
 let cap = _hashParams.get('cap');
+// SEC-16: a Bluesky OAuth sign-in returns `#bsky-handoff=<nonce>` (a one-time token, NOT the swissnum — the
+// cap must never ride a redirect header a proxy could log). We swap it for the real cap via a POST body below.
+const _bskyHandoff = _hashParams.get('bsky-handoff');
 // deep-link: #chat=<id> opens that chat once it resolves. The cap is read from
 // localStorage (already there from the initial #cap link), so a notification's
 // chat link carries NO swissnum — cap-hygiene preserved.
@@ -107,6 +110,15 @@ const talkAboutWidget = (spec) => {
 if (cap) { try { localStorage.setItem(CAP_KEY, cap); } catch {} }
 if (location.hash) { try { history.replaceState(null, '', location.pathname + location.search); } catch {} } // strip the fragment (cap and/or chat)
 if (!cap) { try { cap = localStorage.getItem(CAP_KEY) || null; } catch {} }
+// SEC-16: redeem a Bluesky OAuth handoff nonce for the actual scoped cap (POST body — never a URL/header).
+// Top-level await (app.js is a module): the swap resolves before the rest of boot reads `cap`.
+if (!cap && _bskyHandoff) {
+  try {
+    const r = await fetch('/bsky/handoff', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ nonce: _bskyHandoff }) });
+    const d = await r.json().catch(() => ({}));
+    if (d && d.ok && d.cap) { cap = d.cap; try { localStorage.setItem(CAP_KEY, cap); } catch {} }
+  } catch {}
+}
 // A confined component (or other surface) failed to render → route the error (1) to the self-improvement
 // loop (server de-dupes + files a backlog item), (2) to THIS CHAT's pending-error queue so the AUTHORING
 // agent sees it as system feedback on its next turn (the chat-1cbe89a9 loop), and (3) as a visible system
