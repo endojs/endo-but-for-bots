@@ -42,7 +42,6 @@
     "test:blossom-loop": "node blossom-loop.staging.test.cjs",
     "test:interactive-widget": "node interactive-widget.staging.test.cjs",
     "test:heavy-smoke": "node heavy-panel-smoke.staging.test.cjs",
-    "test:blossom-studio": "node blossom-studio.staging.test.cjs",
     "test:pay-rail": "node pay-rail.staging.test.mjs",
     "test:reliability": "node rel-reliability.staging.test.mjs",
     "test:atomic-store": "node --test write-json-atomic.test.mjs",
