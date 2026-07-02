@@ -166,6 +166,43 @@ tailscale serve --bg http://127.0.0.1:8778
 # → https://<mac-name>.taildd002.ts.net  — use it as PUBLIC_BASE_URL above
 ```
 
+### EVENT_MODE — no tailscale, just a LAN (DWeb Camp / meshcore)
+
+At a venue with **no internet and no tailscale** — just a local Wi-Fi/mesh LAN — there is no
+`tailscale serve` HTTPS to give the mic its secure context, and the default bind (loopback +
+tailnet) won't be reachable from a phone on the LAN. `EVENT_MODE` is the opt-in switch for that
+situation. Set in the env file (§3) **instead of** `PUBLIC_BASE_URL`/`BIND`:
+
+```bash
+EVENT_MODE=1                  # LAN event mode: LAN bind + LAN share-origin + self-signed HTTPS
+#EVENT_LAN_IP=192.168.1.42    # optional: pin the LAN IP if the host has several private addresses
+                              #   (a real Wi-Fi LAN alongside e.g. bridge IPs). Auto-picks the first
+                              #   RFC-1918 address otherwise. `ipconfig getifaddr en0` shows yours.
+#EVENT_CERT_DIR=...           # optional: where the self-signed cert/key live (default: <config>/event-tls)
+```
+
+When `EVENT_MODE=1`, the server (leave `BIND` and `PUBLIC_BASE_URL` UNSET so the mode derives them):
+
+1. **also binds this host's LAN (RFC-1918) address** (10/8, 172.16/12, 192.168/16) in addition to
+   loopback — still self-heal-filtered to addresses actually present, still **never** `0.0.0.0`/public
+   (public exposure stays an explicit, separate operator step);
+2. **mints every share / invite / `#cap` link at the LAN origin** (`https://<lan-ip>:8778`) so a phone
+   on the same LAN can open them (instead of the unreachable tailnet/ngrok origin);
+3. **serves HTTPS with a self-signed cert** generated on first boot under `<config>/event-tls/`
+   (`cert.pem` + `key.pem`, via `openssl` — regenerated automatically if the LAN IP changes). This gives
+   `getUserMedia` its secure context without tailscale.
+
+> **Accept the cert once per device.** It is self-signed, so each phone/laptop shows a certificate
+> warning the first time it opens `https://<lan-ip>:8778` — tap through it ("proceed to site" / "visit
+> this website"). After that the mic works and the warning doesn't recur on that device. If `openssl`
+> is missing the server logs a clear `event-tls` warning and falls back to plain HTTP on the same LAN
+> address — text chat still works, but the mic will only work on `localhost` until a cert exists.
+
+The seam lives in `field-config.mjs` (`EVENT_MODE`, `LAN_IP`, `lanAddresses()`, `EVENT_CERT_*`,
+`eventOrigin()`) so it composes with the `FIELD_PERSONAL_ROOT` volume story — the cert lands under the
+personal config dir and moves with the volume. `EVENT_MODE` is **off by default** (unset), so a normal
+archua/tailscale boot is unaffected.
+
 ## 4 — First boot
 
 ```bash
@@ -174,7 +211,10 @@ node scripts/field-up.mjs ~/.config/field-agent/field.env
 ```
 
 Boot log must show `instance: dans-macbook | field mode: personal | personal-root:
-/Volumes/FieldPersonal …` and `field agent on http://127.0.0.1:8778`.
+/Volumes/FieldPersonal …` and `field agent on http://127.0.0.1:8778`. Under `EVENT_MODE=1` the
+same line shows `field agent on https://<lan-ip>:8778` (and a loopback `https://127.0.0.1:8778`),
+plus a one-time `event-tls generated self-signed cert …` line; the config summary shows
+`event: <lan-ip>`.
 
 ## 5 — launchd (supervised, survives reboot)
 
@@ -212,7 +252,9 @@ personal mode — unlock it (Finder / `diskutil apfs unlockVolume FieldPersonal`
 - [ ] A chat turn completes (proves the AGENT_LLM path).
 - [ ] Scheduled agents are visible (the `#sched=` link / ask the agent to list scheduled
       agents) — they travel with the vat and now fire HERE.
-- [ ] Mic works on the tailscale-serve HTTPS origin (secure-context check).
+- [ ] Mic works on the tailscale-serve HTTPS origin (secure-context check). **Under `EVENT_MODE`:**
+      open `https://<lan-ip>:8778` from a phone on the same LAN, accept the self-signed cert warning
+      once, then the mic works there — and a shared link opens on the phone without tailscale.
 
 ## 7 — At camp, daily
 
