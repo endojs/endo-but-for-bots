@@ -80,11 +80,13 @@ const revsSeen = frames => frames.filter(f => !f.error && f.value && typeof f.va
   if (!up) { cleanup(); process.exit(1); }
   const rootCap = fs.readFileSync(swissPath, 'utf8').trim();
 
-  // ── 1. feed:self pushes when a feed entry is written ───────────────────────────────────────────────
-  // subscribe first, then write a feed entry via /error/flag (root → flagErrorForFix → postFeed).
+  // ── 1. feed:self pushes when feed.json is written (the fs.watch trigger — this is the cross-process path
+  //    the agent-facing notify/pushFeed writer takes) ─────────────────────────────────────────────────
+  const feedFile = path.join(dash, 'feed.json');
   const feedP = collectStream({ cap: rootCap, cells: ['feed:self'] }, 'feed:self', frames => revsSeen(frames).some(r => r >= 1));
   await sleep(300); // let the stream attach (initial rev:0 snapshot arrives)
-  await post('/error/flag', { cap: rootCap, kind: 'runtime', error: 'a synthetic staging error to drive a feed entry', source: '(x) => x' });
+  // write a feed entry directly (mirrors the external notify/pushFeed writer → fs.watch push).
+  fs.writeFileSync(feedFile, JSON.stringify({ entries: [{ id: 'sched-staging1', date: new Date().toISOString(), kind: 'notification', title: 'A staging notification', status: '🔔 needs your attention' }] }, null, 2));
   const f1 = await feedP;
   const feedRevs = revsSeen(f1.frames);
   ok(feedRevs.includes(0), 'feed:self delivers the initial snapshot (rev 0)');

@@ -96,6 +96,7 @@ import { makeChromeComponents } from './chrome-components.mjs';
 import { makeTraceCells } from './trace-cells.mjs';
 import { makeSeedCells } from './seed-cells.mjs';
 import { makeInboxCells } from './inbox-cells.mjs';
+import { detectStuckRuns, scanUnansweredBundle } from './turn-watchdog.mjs';
 import { makeDistTrust } from './dist-trust.mjs';
 import { makeBlossom } from './blossom.mjs';
 import * as projects from './projects.mjs';
@@ -1203,6 +1204,77 @@ const saveResume = (sid, transcript) => {
   if (pendingResumes.size > 200) for (const [k, r] of pendingResumes) if (Date.now() - (r.at || 0) > RESUME_TTL) pendingResumes.delete(k);
 };
 const consumeResume = sid => { const r = pendingResumes.get(sid); if (!r) return null; pendingResumes.delete(sid); return (Date.now() - (r.at || 0) > RESUME_TTL) ? null : r.transcript; }; // one-shot
+
+// ── P1-6: UNANSWERED-TURN WATCHDOG (imp-ae117636) ────────────────────────────────────────────────────────
+// The ~13% zero-turn: a run that dies silently leaving the user's message with no assistant reply. Two
+// shapes, both handled here on a periodic tick (the ingress-warden reuses scanUnansweredBundle on disk as
+// the cross-process net for when the server itself is down):
+//   (a) an in-memory runResults[sid]='running' whose run is DEAD (!runs.has(sid) — /chat/result still lies
+//       'running' in this case — or older than the per-turn deadline). We RETRY ONCE via traceRun, persist a
+//       terminal runResults so /chat/result stops lying, and notify() the outcome with the #chat deep link.
+//   (b) a PERSISTED chat (any cap's synced bundle on disk) ending on a user message with no assistant turn,
+//       recently. No in-memory run holds it (the server may have restarted), so we can't re-run it without
+//       the cap — we notify() an alert with the #chat deep link so the operator can reopen + retry.
+const WATCHDOG_DEADLINE_MS = Number(process.env.TURN_DEADLINE_MS) || 360000; // same 360s the /chat deadline uses
+const WATCHDOG_INTERVAL_MS = Number(process.env.WATCHDOG_INTERVAL_MS) || 120000;
+const wdRetrying = new Set(); // sids whose retry is in flight (so a concurrent tick doesn't double-fire)
+// The retry re-runs through traceRun (real LLM). Under the test seam it runs a deterministic offline stub so
+// the watchdog is provable without the model — the DETECTION + terminal-state + notify path is what we assert.
+const wdTraceRun = process.env.WATCHDOG_TEST_SEAM === '1'
+  ? async (_node, text) => ({ answer: `(watchdog test recovery for: ${String(text).slice(0, 40)})`, toolsUsed: [], steps: [] })
+  : traceRun;
+const wdNotifiedChat = new Set(); // persisted chatIds already alerted (in-memory dedupe; re-arms on restart)
+// retry ONE stuck run: re-run its transcript through the SAME node (bounded by traceRun's fresh allowance
+// purse), persist the outcome as a terminal runResults so a re-attaching client renders it, and push a
+// deep-linked notification (cap-scrubbed — a swissnum must never reach a notify payload).
+const wdRetryStuckRun = async ({ sid, text }) => {
+  if (wdRetrying.has(sid)) return; wdRetrying.add(sid);
+  const rr = runResults.get(sid);
+  const node = rr && rr.node;
+  try {
+    if (!node || !text.trim()) { // nothing to re-run against → just stop the 'running' lie + alert
+      setRunResult(sid, { state: 'error', node, text, startedAt: (rr && rr.startedAt) || Date.now(), doneAt: Date.now(), result: { error: 'That turn was interrupted — please try again.', retryable: true } });
+      await notify({ title: '⚠️ A chat turn was left unanswered', message: scrubCaps(text).slice(0, 160), click: `${WEB_URL}/#chat=${sid}`, tags: ['warning'] }).catch(() => {});
+      return;
+    }
+    log('watchdog: retrying stuck run', sid, `(${(rr && rr.reason) || '?'})`);
+    const tr = await wdTraceRun(node, text, getPersona(), sid);
+    const answer = scrubCaps(tr.answer || '');
+    setRunResult(sid, { state: 'done', node, text, startedAt: (rr && rr.startedAt) || Date.now(), doneAt: Date.now(),
+      result: { answer, endKind: 'answer', toolsUsed: (tr.toolsUsed || []).map(n => ({ name: n })), steps: tr.steps || [], recovered: true } });
+    await notify({ title: '✅ Recovered a stuck chat turn', message: answer.slice(0, 160) || 'finished', click: `${WEB_URL}/#chat=${sid}`, tags: ['robot'] }).catch(() => {});
+  } catch (e) {
+    log('watchdog: retry failed', sid, e && e.message);
+    setRunResult(sid, { state: 'error', node, text, startedAt: (rr && rr.startedAt) || Date.now(), doneAt: Date.now(), result: { error: 'That turn failed twice — please try again.', retryable: true } });
+    await notify({ title: '⚠️ A chat turn could not be recovered', message: scrubCaps(text).slice(0, 160), click: `${WEB_URL}/#chat=${sid}`, tags: ['warning'] }).catch(() => {});
+  } finally { wdRetrying.delete(sid); }
+};
+const turnWatchdogTick = async () => {
+  // (a) in-memory stuck runs → retry + notify
+  let stuck = [];
+  try { stuck = detectStuckRuns({ runResults, runs, now: Date.now(), deadlineMs: WATCHDOG_DEADLINE_MS }); } catch (e) { log('watchdog detect', e && e.message); }
+  for (const s of stuck) { const rr = runResults.get(s.sid); if (rr) rr.reason = s.reason; wdRetryStuckRun(s).catch(e => log('watchdog retry', e && e.message)); }
+  // (b) persisted chats on disk ending on a user message with no assistant reply → notify (no in-memory run
+  //     holds them; skip any sid already covered by (a)). Bounded to RECENT breakage; deduped per chatId.
+  try {
+    const files = await fs.promises.readdir(CHATS_DIR).catch(() => []);
+    for (const f of files) {
+      if (!f.endsWith('.json')) continue;
+      let bundle; try { bundle = JSON.parse(await fs.promises.readFile(path.join(CHATS_DIR, f), 'utf8')); } catch { continue; }
+      const unanswered = scanUnansweredBundle(bundle, { now: Date.now(), deadlineMs: WATCHDOG_DEADLINE_MS });
+      for (const u of unanswered) {
+        if (wdNotifiedChat.has(u.chatId) || wdRetrying.has(u.chatId)) continue;
+        const rr = runResults.get(u.chatId);
+        if (rr && rr.state === 'running') continue; // (a) owns a live/stuck run for this chat
+        wdNotifiedChat.add(u.chatId);
+        if (wdNotifiedChat.size > 2000) wdNotifiedChat.clear();
+        log('watchdog: unanswered persisted chat', u.chatId);
+        await notify({ title: '⚠️ A chat turn was left unanswered', message: scrubCaps(u.lastUserText).slice(0, 160), click: `${WEB_URL}/#chat=${u.chatId}`, tags: ['warning'] }).catch(() => {});
+      }
+    }
+  } catch (e) { log('watchdog scan', e && e.message); }
+};
+setInterval(() => { turnWatchdogTick().catch(e => log('watchdog tick', e && e.message)); }, WATCHDOG_INTERVAL_MS).unref?.();
 // ── P2-1: bound the previously-UNBOUNDED per-chat Maps. `sessions` (full transcripts) + `lastCtx` (≤12k/turn
 //    context bundles) grew with every distinct chat ever seen — the largest leak. `chatPurses` cached a purse
 //    per (cap,sid) forever. We now LRU+TTL-sweep them, mirroring runResults/pendingResumes. `sessionSeen` is
@@ -2413,6 +2485,30 @@ const handler = async (req, res) => {
       if (!node || !node.isRoot) return json(res, 403, { error: 'root cap required' });
       seedCells.stage(traceOwnerKeyOf(cap), String(id || ''), String(st || ''), { title, chatId });
       return json(res, 200, { ok: true });
+    }
+    // TEST SEAM (only when WATCHDOG_TEST_SEAM=1): drive the P1-6 unanswered-turn watchdog deterministically.
+    // _inject-run seeds a runResults entry in the DEAD shape (state 'running' with no live run controller, or
+    // stale past the deadline); _tick runs one watchdog pass and returns each injected sid's resulting state
+    // (so a staging test proves detection → retry → terminal state → notify). Root-gated. Never in production.
+    if (process.env.WATCHDOG_TEST_SEAM === '1' && req.method === 'POST' && u.pathname === '/watchdog/_inject-run') {
+      const { cap, sid, text, stale } = await jsonBody(req);
+      const node = nodeFor(cap);
+      if (!node || !node.isRoot) return json(res, 403, { error: 'root cap required' });
+      const s = String(sid || '');
+      // DEAD shape: state 'running' but NOT in the runs map (/chat/result would still lie 'running'). `stale`
+      // backdates startedAt past the deadline (the overran-run shape); default is the no-run shape.
+      setRunResult(s, { state: 'running', node, text: String(text || ''), startedAt: stale ? (Date.now() - WATCHDOG_DEADLINE_MS - 1000) : Date.now() });
+      runs.delete(s); // ensure no live controller
+      return json(res, 200, { ok: true, injected: s });
+    }
+    if (process.env.WATCHDOG_TEST_SEAM === '1' && req.method === 'POST' && u.pathname === '/watchdog/_tick') {
+      const { cap, sids } = await jsonBody(req);
+      if (!nodeFor(cap)?.isRoot) return json(res, 403, { error: 'root cap required' });
+      await turnWatchdogTick();
+      // give the async retry a beat to land its terminal state
+      await new Promise(r => setTimeout(r, 200));
+      const states = {}; for (const s of (Array.isArray(sids) ? sids : [])) { const rr = runResults.get(String(s)); states[String(s)] = rr ? { state: rr.state, recovered: !!(rr.result && rr.result.recovered) } : null; }
+      return json(res, 200, { ok: true, states, notifiedChats: [...wdNotifiedChat] });
     }
     if (req.method === 'POST' && u.pathname === '/ingest') {
       const { transcript, title, source, cap } = await jsonBody(req);
