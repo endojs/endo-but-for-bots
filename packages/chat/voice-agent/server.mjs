@@ -453,6 +453,14 @@ const readSeedChats = async () => { try { const all = (JSON.parse(await fs.promi
 // scheduled-run TTL still trims the ephemeral ones so this bound only ever bites truly ancient user notes.
 const SEED_CHATS_MAX = Number(process.env.SEED_CHATS_MAX) || 5000;
 const writeSeedChats = async chats => { await fs.promises.mkdir(path.dirname(SEED_CHATS_FILE), { recursive: true }); await fs.promises.writeFile(SEED_CHATS_FILE, JSON.stringify({ chats: chats.slice(0, SEED_CHATS_MAX) }, null, 2)); };
+// P2-3: seed-chats.json is a single global store hit by ≥4 async read-modify-write writers (voice-note
+// ingest, ingest/regenerate, gen-prompt, delete, chat/rerun, nudge + scheduled seeds). Interleaved RMW
+// dropped writes (last-writer-wins on a stale array). Serialize every write critical section through one
+// promise-chain lock (mirrors withChatLock). Callers do any SLOW work (LLM/agent runs) OUTSIDE the lock,
+// then run a fast read→modify→write inside it. mutateSeeds is the fast-path helper.
+let seedLock = Promise.resolve();
+const withSeedLock = fn => { const run = seedLock.then(fn, fn); seedLock = run.then(() => {}, () => {}); return run; };
+const mutateSeeds = mutator => withSeedLock(async () => { const seeds = await readSeedChats(); const out = await mutator(seeds); await writeSeedChats(seeds); return out; });
 
 // ── operator-defined specialist ROLES (Settings → Specialists). Persisted here,
 //    merged over the built-in agent-roles catalog via setCustomRoles so a custom
@@ -651,7 +659,7 @@ const fireDueNudges = async () => {
         transcript: n.request, scheduled: { specialist: n.specialistName, at: now, parentChat: n.chatId || '' },
         tx: [{ who: 'you', text: n.request }, { who: 'agent', text: answer, tools: (r && r.toolsUsed) || [], steps: [] }],
         versions: [{ v: 0, label: 'nudge run', env: { persona: `specialist:${n.specialistName}` }, answer, toolsUsed: (r && r.toolsUsed) || [], steps: [], at: now }] };
-      try { const seeds = await readSeedChats(); seeds.unshift(seed); await writeSeedChats(seeds); } catch (e) { log('nudge seed', e.message); }
+      try { await mutateSeeds(seeds => { seeds.unshift(seed); }); } catch (e) { log('nudge seed', e.message); } // P2-3: serialized RMW
       try { await notify({ title: `🔁 ${n.specialistName}`, message: answer.slice(0, 180), click: `${WEB_URL}/#chat=${id}`, tags: ['robot'] }); } catch { /* best-effort */ }
       specialistNudges.fired(n.id);
       log('nudge', `fired ${n.specialistName} (${n.id})`);
@@ -950,14 +958,21 @@ const sharePurseFor = tok => {
 const capHash = c => crypto.createHash('sha256').update(String(c || '')).digest('hex').slice(0, 16);
 
 const FEED_DIR = path.dirname(FEED_FILE);
-const postFeed = async entry => {
+// P2-4: feed.json is a read→push→write store hit by many concurrent server-side writers (auto-admit,
+// error-flag, /pay·/chat notices, triageTick). Interleaved RMW dropped entries. Serialize EVERY server-side
+// feed write through one promise-chain lock (mirrors withChatLock) so the read and the write are one
+// critical section. NOTE: the agent-facing `notify`/`pushFeed` cap writes feed.json from feed.mjs (another
+// worker's file) on its own path — folding that writer into this lock is a cross-module follow-up.
+let feedLock = Promise.resolve();
+const withFeedLock = fn => { const run = feedLock.then(fn, fn); feedLock = run.then(() => {}, () => {}); return run; };
+const postFeed = async entry => withFeedLock(async () => {
   try {
     await fs.promises.mkdir(FEED_DIR, { recursive: true });
     let feed = { entries: [] }; try { feed = JSON.parse(await fs.promises.readFile(FEED_FILE, 'utf8')); } catch {}
     feed.entries = [{ id: `sched-${crypto.randomBytes(6).toString('hex')}`, date: new Date().toISOString(), kind: 'notification', ...entry }, ...(feed.entries || [])].slice(0, 400);
     writeJsonAtomic(FEED_FILE, feed, { pretty: true }); // INT-1: torn-write-safe (not guarded — the feed is notifications, not money; a bad byte tolerantly resets)
   } catch (e) { log('postFeed', e.message); }
-};
+});
 // Route a live runtime error to the self-improvement loop so the developer agent fixes it automatically
 // (e.g. "component source must be a function (ui) => element"). De-duped per process by signature; the
 // backlog itself also de-dupes identical goals, so a recurring error files ONE fix task + one feed notice.
@@ -1035,7 +1050,7 @@ const runProjectAgent = async (project, agent) => {
         tx: [{ who: 'you', text: agent.prompt }, { who: 'agent', text: answer, tools: usedTools, steps: [] }],
         versions: [{ v: 0, label: 'scheduled run', env: { persona: `scheduled:${agent.name}` }, answer, toolsUsed: usedTools, steps: [], at: now }],
       };
-      const seeds = await readSeedChats(); seeds.unshift(seed); await writeSeedChats(seeds);
+      await mutateSeeds(seeds => { seeds.unshift(seed); }); // P2-3: serialized RMW
     } catch (e) { log('sched seed-chat', e.message); }
     await postFeed({
       agent: agent.name, avatar: '⏰', title: `${project.name} › ${agent.name}`,
@@ -2307,12 +2322,16 @@ const handler = async (req, res) => {
       const seed = { id, title: derivedTitle || String(title || '').trim() || t.slice(0, 48) || 'voice note', ts: Date.now(), source: String(source || 'voice'), transcript: t, proposeOnly: true, proposedPowers: powers, proposedPrompt,
         tx: [{ who: 'you', text: t }, { who: 'agent', text: agentMsg, tools: [], steps: [], proposedPowers: powers, proposedPrompt }],
         versions: [{ v: 0, label: 'original', env: { persona: 'ingest:propose-only' }, ...tr, at: now }] };
-      const seeds = await readSeedChats();
-      // re-check AFTER the (seconds-long) analysis: a CONCURRENT re-POST of the same note may have created its
-      // chat while we were working (the start-of-handler check passed for both). Close that race here.
-      const raced = seeds.find(s => s && s.transcript && (Date.now() - (s.ts || 0)) < DEDUP_MS && normTx(s.transcript) === nt);
+      // P2-3: the read (raced re-check) + write is one critical section — a concurrent re-POST of the same
+      // note must see our write, and neither write may clobber the other.
+      const raced = await mutateSeeds(seeds => {
+        // re-check AFTER the (seconds-long) analysis: a CONCURRENT re-POST of the same note may have created
+        // its chat while we were working (the start-of-handler check passed for both). Close that race here.
+        const dupe = seeds.find(s => s && s.transcript && (Date.now() - (s.ts || 0)) < DEDUP_MS && normTx(s.transcript) === nt);
+        if (dupe) return dupe;
+        seeds.unshift(seed); return null;
+      });
       if (raced) { log('ingest dedup (raced)', raced.id); seedCells.stage(ownerKey, id, 'done', { chatId: raced.id }); return json(res, 200, { ok: true, chatId: raced.id, deduped: true }); }
-      seeds.unshift(seed); await writeSeedChats(seeds);
       // the seed-chat now exists: flip the in-flight row to 'proposed' with its real title + chatId, so the
       // client resolves it into the normal seed-chat row (loadSeedChats adopts it; the in-flight row dedupes away).
       seedCells.stage(ownerKey, id, 'proposed', { title: seed.title, chatId: id });
@@ -2325,22 +2344,27 @@ const handler = async (req, res) => {
       const { cap, chatId, label } = await jsonBody(req);
       const node = nodeFor(cap);
       if (!node || !node.isRoot) return json(res, 403, { error: 'root cap required' });
-      const seeds = await readSeedChats();
-      const seed = seeds.find(s => s && s.id === String(chatId));
-      if (!seed || !seed.transcript) return json(res, 404, { error: 'no such ingested chat' });
-      const { proposals, powers } = await ingestPropose(seed.transcript);
-      const proposedPrompt = await genSubAgentPrompt(seed.transcript, proposals, powers);
+      const existing = (await readSeedChats()).find(s => s && s.id === String(chatId));
+      if (!existing || !existing.transcript) return json(res, 404, { error: 'no such ingested chat' });
+      // slow LLM work runs OUTSIDE the seed lock (P2-3); we re-find + apply under the lock below.
+      const { proposals, powers } = await ingestPropose(existing.transcript);
+      const proposedPrompt = await genSubAgentPrompt(existing.transcript, proposals, powers);
       const _prop = composeDelegateProposal({ proposals, powers, callerPowers: node && node.powers });
       const agentMsg = _prop.message;
       const tr = { answer: agentMsg, toolsUsed: [], steps: [], proposedPowers: powers, proposedPrompt };
-      seed.versions = seed.versions || [];
-      const v = seed.versions.length;
-      seed.versions.push({ v, label: String(label || `re-decomposed ${v}`), env: { persona: 'ingest:propose-only' }, ...tr, at: new Date().toISOString() });
-      seed.proposedPowers = powers; seed.proposedPrompt = proposedPrompt;
-      if (Array.isArray(seed.tx) && seed.tx[1]) seed.tx[1] = { ...seed.tx[1], text: agentMsg, proposedPowers: powers, proposedPrompt };
-      await writeSeedChats(seeds);
-      log('ingest regenerate', seed.id, `v${v}`, `${proposals.length}c`);
-      return json(res, 200, { ok: true, version: v, chatId: seed.id, proposals });
+      const out = await mutateSeeds(seeds => {
+        const seed = seeds.find(s => s && s.id === String(chatId));
+        if (!seed) return { gone: true };
+        seed.versions = seed.versions || [];
+        const v = seed.versions.length;
+        seed.versions.push({ v, label: String(label || `re-decomposed ${v}`), env: { persona: 'ingest:propose-only' }, ...tr, at: new Date().toISOString() });
+        seed.proposedPowers = powers; seed.proposedPrompt = proposedPrompt;
+        if (Array.isArray(seed.tx) && seed.tx[1]) seed.tx[1] = { ...seed.tx[1], text: agentMsg, proposedPowers: powers, proposedPrompt };
+        return { v, id: seed.id };
+      });
+      if (out.gone) return json(res, 404, { error: 'no such ingested chat' });
+      log('ingest regenerate', out.id, `v${out.v}`, `${proposals.length}c`);
+      return json(res, 200, { ok: true, version: out.v, chatId: out.id, proposals });
     }
     if (req.method === 'POST' && u.pathname === '/seed-chats/load') {
       const { cap } = await jsonBody(req);
@@ -2354,18 +2378,21 @@ const handler = async (req, res) => {
       const { cap, id } = await jsonBody(req);
       const node = nodeFor(cap);
       if (!node || !node.isRoot) return json(res, 403, { error: 'no capability' });
-      const seeds = await readSeedChats();
-      const s = seeds.find(x => x && x.id === String(id || ''));
-      if (!s) return json(res, 404, { ok: false, error: 'no such seed chat' });
-      if (s.proposedPrompt) return json(res, 200, { ok: true, prompt: s.proposedPrompt, cached: true });
-      const proposals = (s.versions && s.versions[0] && s.versions[0].answer) || (s.tx && s.tx[1] && s.tx[1].text) || '';
-      const prompt = await genSubAgentPrompt(s.transcript || (s.tx && s.tx[0] && s.tx[0].text) || '', proposals, s.proposedPowers || []);
+      const s0 = (await readSeedChats()).find(x => x && x.id === String(id || ''));
+      if (!s0) return json(res, 404, { ok: false, error: 'no such seed chat' });
+      if (s0.proposedPrompt) return json(res, 200, { ok: true, prompt: s0.proposedPrompt, cached: true });
+      const proposals = (s0.versions && s0.versions[0] && s0.versions[0].answer) || (s0.tx && s0.tx[1] && s0.tx[1].text) || '';
+      // slow LLM work OUTSIDE the seed lock (P2-3); re-find + cache under the lock below.
+      const prompt = await genSubAgentPrompt(s0.transcript || (s0.tx && s0.tx[0] && s0.tx[0].text) || '', proposals, s0.proposedPowers || []);
       if (!prompt) return json(res, 200, { ok: false, error: 'could not generate a prompt' });
-      // cache it back onto the seed (+ its version + agent tx message) so it persists + syncs
-      s.proposedPrompt = prompt;
-      if (s.versions && s.versions[0]) s.versions[0].proposedPrompt = prompt;
-      if (s.tx && s.tx[1]) s.tx[1].proposedPrompt = prompt;
-      await writeSeedChats(seeds);
+      await mutateSeeds(seeds => {
+        const s = seeds.find(x => x && x.id === String(id || ''));
+        if (!s) return; // deleted meanwhile — nothing to cache
+        // cache it back onto the seed (+ its version + agent tx message) so it persists + syncs
+        s.proposedPrompt = prompt;
+        if (s.versions && s.versions[0]) s.versions[0].proposedPrompt = prompt;
+        if (s.tx && s.tx[1]) s.tx[1].proposedPrompt = prompt;
+      });
       return json(res, 200, { ok: true, prompt });
     }
     // Throw away a single seed-chat (a scheduled-agent run, viewed from its timer agent's runs folder).
@@ -2373,8 +2400,7 @@ const handler = async (req, res) => {
       const { cap, id } = await jsonBody(req);
       const node = nodeFor(cap);
       if (!node || !node.isRoot) return json(res, 403, { error: 'no capability' });
-      const seeds = await readSeedChats();
-      await writeSeedChats(seeds.filter(s => s && s.id !== String(id || '')));
+      await withSeedLock(async () => { const seeds = await readSeedChats(); await writeSeedChats(seeds.filter(s => s && s.id !== String(id || ''))); }); // P2-3: serialized RMW
       return json(res, 200, { ok: true });
     }
     // re-run an ingested chat's transcript under a CHANGED environment (system-prompt
@@ -2383,18 +2409,25 @@ const handler = async (req, res) => {
       const { cap, id, persona, label } = await jsonBody(req);
       const node = nodeFor(cap);
       if (!node || !node.isRoot) return json(res, 403, { error: 'root cap required' });
-      const seeds = await readSeedChats(); const seed = seeds.find(s => s.id === String(id));
-      if (!seed) return json(res, 404, { error: 'no such chat' });
-      if (!seed.versions || !seed.versions.length) { // old seed-chats (pre-versioning): synthesize v0 from tx
-        const a = (seed.tx || []).find(m => m.who === 'agent') || {};
-        seed.versions = [{ v: 0, label: 'original', env: { persona: '' }, answer: a.text || '', toolsUsed: a.tools || [], steps: a.steps || [], at: seed.ts ? new Date(seed.ts).toISOString() : new Date().toISOString() }];
-      }
-      const overridePersona = typeof persona === 'string' ? persona : (seed.versions[0].env.persona || getPersona() || '');
-      const tr = await traceRun(node, seed.transcript, overridePersona, seed.id);
-      const v = seed.versions.length;
-      seed.versions.push({ v, label: String(label || `re-run ${v}`), env: { persona: overridePersona }, ...tr, at: new Date().toISOString() });
-      await writeSeedChats(seeds);
-      return json(res, 200, { ok: true, version: v, chat: seed });
+      const s0 = (await readSeedChats()).find(s => s.id === String(id));
+      if (!s0) return json(res, 404, { error: 'no such chat' });
+      const v0env = (s0.versions && s0.versions[0] && s0.versions[0].env) || { persona: '' };
+      const overridePersona = typeof persona === 'string' ? persona : (v0env.persona || getPersona() || '');
+      // traceRun is a FULL agent turn — run it OUTSIDE the seed lock (P2-3), then append the version under it.
+      const tr = await traceRun(node, s0.transcript, overridePersona, s0.id);
+      const out = await mutateSeeds(seeds => {
+        const seed = seeds.find(s => s.id === String(id));
+        if (!seed) return { gone: true };
+        if (!seed.versions || !seed.versions.length) { // old seed-chats (pre-versioning): synthesize v0 from tx
+          const a = (seed.tx || []).find(m => m.who === 'agent') || {};
+          seed.versions = [{ v: 0, label: 'original', env: { persona: '' }, answer: a.text || '', toolsUsed: a.tools || [], steps: a.steps || [], at: seed.ts ? new Date(seed.ts).toISOString() : new Date().toISOString() }];
+        }
+        const v = seed.versions.length;
+        seed.versions.push({ v, label: String(label || `re-run ${v}`), env: { persona: overridePersona }, ...tr, at: new Date().toISOString() });
+        return { v, seed };
+      });
+      if (out.gone) return json(res, 404, { error: 'no such chat' });
+      return json(res, 200, { ok: true, version: out.v, chat: out.seed });
     }
     if (req.method === 'POST' && u.pathname === '/memos/load') {
       const { cap } = await jsonBody(req);
