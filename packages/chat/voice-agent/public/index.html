@@ -674,7 +674,10 @@
     </details>
     <div id="components-list"></div>
   </div>
-  <div id="qrmodal" class="qrmodal hide"></div>
+  <!-- generic modal host: carries cap hand-offs (invite/share QR + copy), add-a-power, sub-chat cap minting,
+       BYO-key/billing secrets, agent profiles — an AUTHORITY surface. data-trusted-path on the HOST means
+       everything rendered into it inherits the component-select refusal (trustedOf/inTrustedPath use closest). -->
+  <div id="qrmodal" class="qrmodal hide" data-trusted-path></div>
 </main>
 <div id="siri-orb"><div class="orb"></div></div>
 <div class="composer" id="composer">

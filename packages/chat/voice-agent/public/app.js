@@ -618,6 +618,7 @@ const renderProposal = p => {
 const renderAccessRequest = a => {
   const cc = curChatObj() || {};
   const card = document.createElement('div'); card.className = 'prop msg';
+  card.setAttribute('data-trusted-path', ''); // Grant button = an authority decision → trusted path, never editable chrome
   // notesFolder → a LEAST-AUTHORITY notes grant: scope the chat's notes to JUST that vault subtree (not all notes)
   const scopeNote = a.notesFolder ? ` <span class="pill" title="least authority — only this folder">📁 ${esc(a.notesFolder)}</span>` : '';
   const title = a.notesFolder ? `Grant notes — scoped to just “${esc(a.notesFolder)}”?` : `Grant the “${esc(a.power)}” capability to this chat?`;
@@ -3717,22 +3718,25 @@ const forkForkAct = async (id, name) => {
 // Hold Alt/Option → hovering outlines the lowest-level element tagged with its component id; click →
 // a chip offers ✎ edit (a focused agent for THAT component) / 🍴 fork. Works on any [data-component-id]
 // element, so it lights up wherever a component is rendered (the Components tab today; mounted UI
-// component-projects as the trie grows). Owner-only.
+// component-projects as the trie grows). Owner-only. On MOBILE (no Alt, no hover) the header ⌥ button
+// is a sticky ONE-SHOT modifier: arm → next tap selects (see the sticky block inside).
 const componentSelect = () => {
   let altHeld = false, hoverEl = null;
   // While Alt is held, drop pointer-events on confined-component iframes so the PARENT receives the hover
   // and click (a sandboxed iframe otherwise swallows them — the reason in-chat components were unselectable).
   // pointer-events:none grants the frame nothing: the sandbox/CSP boundary is untouched; it only routes the
   // OWNER's pointer to the wrapper while Alt is down, and restores normal interaction the instant Alt lifts.
-  const sstyle = document.createElement('style'); sstyle.textContent = '.comp-select .gw-component iframe{pointer-events:none!important}.comp-select .gw-component{cursor:pointer}'; document.head.appendChild(sstyle);
+  const sstyle = document.createElement('style'); sstyle.textContent = '.comp-select .gw-component iframe{pointer-events:none!important}.comp-select .gw-component{cursor:pointer}#comp-select-btn.armed{color:#fff;background:var(--acc-fill,#7a4ce6);border-radius:8px;box-shadow:0 0 0 2px var(--acc,#7c5cff)}'; document.head.appendChild(sstyle);
   const outline = document.createElement('div');
   outline.style.cssText = 'position:fixed;z-index:9000;pointer-events:none;border:1px solid var(--bad,#f85149);box-shadow:0 0 7px var(--bad,#f85149);display:none;transition:all .05s ease;'; // 1px impact-colour line (themes via --bad)
   const label = document.createElement('div');
   label.style.cssText = 'position:absolute;top:0;left:0;color:var(--bad,#f85149);background:rgba(0,0,0,.6);font:600 11px ui-monospace,Menlo,Consolas,monospace;padding:1px 5px;white-space:nowrap;';
   outline.appendChild(label);
+  const HINT_ALT = '⌥ Alt-click a component to edit it with its agent';
+  const HINT_STICKY = 'Tap a component to edit it — tap the ⌥ button again to cancel';
   const hint = document.createElement('div');
   hint.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:9001;background:#0d1117f2;border:1px solid var(--acc,#39d3ff);color:#e6edf3;font:12px -apple-system,sans-serif;padding:6px 13px;border-radius:20px;display:none;pointer-events:none;';
-  hint.textContent = '⌥ Alt-click a component to edit it with its agent';
+  hint.textContent = HINT_ALT;
   const chip = document.createElement('div');
   chip.style.cssText = 'position:fixed;z-index:9002;display:none;gap:6px;background:#0d1117f7;border:1px solid var(--acc,#39d3ff);border-radius:10px;padding:6px 7px;box-shadow:0 10px 34px rgba(0,0,0,.6);font:12px -apple-system,sans-serif;align-items:center;';
   document.body.append(outline, hint, chip);
@@ -3748,6 +3752,22 @@ const componentSelect = () => {
   const hasForks = () => !!document.querySelector('[data-fork-id]');
   const canEngage = () => isRoot || hasForks(); // forks are alt-selectable even without the root cap
   const setAlt = on => { altHeld = on; hint.style.display = on ? 'block' : 'none'; document.documentElement.classList.toggle('comp-select', on); if (!on && (!chip.style.display || chip.style.display === 'none')) { outline.style.display = 'none'; hoverEl = null; } };
+  // ── ⌥ STICKY one-shot modifier (mobile: no Alt key, no hover). A header button ARMS select mode for the
+  // NEXT tap, sticky-keys/caps style: armed → the same outline/hint UI as holding Alt; the next tap on a
+  // taggable element runs the normal chip flow then AUTO-DISARMS (one-shot). A tap on a trusted-path surface
+  // 🔒-refuses and STAYS armed (so the user can pick a valid target); a tap on empty space, Escape, or the
+  // button itself cancels. Desktop alt-hover/click is untouched — the button also works there (discoverability).
+  let stickyArmed = false;
+  const isSelectActive = e => !!(e && e.altKey) || stickyArmed;
+  const stickyBtn = document.createElement('button');
+  stickyBtn.id = 'comp-select-btn'; stickyBtn.className = 'iconbtn hide'; stickyBtn.textContent = '⌥';
+  stickyBtn.title = 'Select a component to edit (one tap)'; stickyBtn.setAttribute('aria-label', 'Select a component to edit (one tap)');
+  const hdrEl = document.querySelector('header'); if (hdrEl) hdrEl.appendChild(stickyBtn);
+  const armSticky = () => { stickyArmed = true; stickyBtn.classList.add('armed'); hint.textContent = HINT_STICKY; setAlt(true); };
+  const disarmSticky = () => { if (!stickyArmed) return; stickyArmed = false; stickyBtn.classList.remove('armed'); setAlt(false); hint.textContent = HINT_ALT; };
+  stickyBtn.onclick = () => { if (stickyArmed) disarmSticky(); else if (canEngage()) armSticky(); };
+  const syncStickyBtn = () => { const on = canEngage(); stickyBtn.classList.toggle('hide', !on); if (!on) disarmSticky(); };
+  syncStickyBtn(); setInterval(syncStickyBtn, 3000); // isRoot lands async at boot; forks mount later
   const place = el => { if (!el) { outline.style.display = 'none'; return; } const r = el.getBoundingClientRect(); outline.style.display = 'block'; outline.style.borderStyle = 'solid'; outline.style.borderColor = 'var(--bad,#f85149)'; outline.style.boxShadow = '0 0 7px var(--bad,#f85149)'; label.style.color = 'var(--bad,#f85149)'; outline.style.left = `${r.left - 1}px`; outline.style.top = `${r.top - 1}px`; outline.style.width = `${r.width}px`; outline.style.height = `${r.height}px`; label.textContent = (el.closest && el.closest('[data-fork-id]') ? `⑂ ${el.closest('[data-fork-id]').getAttribute('data-fork-name') || 'fork'}` : '') || el.getAttribute('data-component-name') || el.getAttribute('data-component-id') || 'component'; }; // formal name, impact-colour monospace, top-left
   // the 🔒 REFUSAL indicator: a muted, dashed outline + "🔒 trusted path" label — visibly NOT the edit
   // affordance. Selection never proceeds from here (no chip, no edit chat, no break-out).
@@ -3766,26 +3786,44 @@ const componentSelect = () => {
     editComponent(r.id, r.name || nm); // now it's a project object → edit it with its focused agent
   };
   addEventListener('keydown', e => { if ((e.key === 'Alt' || e.altKey) && canEngage()) setAlt(true); });
-  addEventListener('keyup', e => { if (e.key === 'Alt' || !e.altKey) setAlt(false); });
-  addEventListener('blur', () => setAlt(false)); // alt-tab / focus loss → never leave iframes disabled
+  addEventListener('keyup', e => { if ((e.key === 'Alt' || !e.altKey) && !stickyArmed) setAlt(false); });
+  addEventListener('blur', () => { if (!stickyArmed) setAlt(false); }); // alt-tab / focus loss → never leave iframes disabled (sticky survives — it's an explicit mode)
   // Drive selection off EACH event's own altKey, not just a captured Alt keydown. The keydown frequently never
   // reaches the window — focus sits inside a sandboxed component iframe, or the OS/browser swallows Alt — which
   // is why holding Alt did nothing. mousemove/click both carry altKey regardless of focus, so any Alt-move
   // engages select mode (which disables the iframes' pointer-events, letting the rest of the gesture land).
   addEventListener('mousemove', e => {
     if (!canEngage()) return;
-    if (e.altKey) {
+    if (isSelectActive(e)) {
       if (!altHeld) setAlt(true);
       const tp = trustedOf(e.target);
       if (tp) { hoverEl = tp; placeTrusted(tp); return; } // 🔒 legible refusal — never the edit outline
       const el = tagOf(e.target); if (el !== hoverEl) { hoverEl = el; place(el); } else if (el) place(el);
     } else if (altHeld) setAlt(false);
   }, true);
+  // Touch preview while ARMED: touching paints the same outline/🔒 the mouse hover would (tap-to-select is
+  // the essential path; this is live feedback). elementFromPoint sees the component WRAPPER because sticky
+  // mode already dropped the confined iframes' pointer-events (the same routing trick as Alt).
+  const touchPreview = e => {
+    if (!stickyArmed || !canEngage()) return;
+    const t = (e.touches && e.touches[0]) || null; if (!t) return;
+    const under = document.elementFromPoint(t.clientX, t.clientY);
+    const tp = trustedOf(under);
+    if (tp) { hoverEl = tp; placeTrusted(tp); return; }
+    const el = tagOf(under); hoverEl = el; place(el);
+  };
+  addEventListener('touchstart', touchPreview, { capture: true, passive: true });
+  addEventListener('touchmove', touchPreview, { capture: true, passive: true });
   addEventListener('click', e => {
-    if (!e.altKey || !canEngage()) return;
+    if (stickyArmed && e.target && e.target.closest && e.target.closest('#comp-select-btn')) return; // the button's own tap — its onclick toggles
+    if (!isSelectActive(e) || !canEngage()) return;
     const tp = trustedOf(e.target);
-    if (tp) { e.preventDefault(); e.stopPropagation(); placeTrusted(tp); setStatus('🔒 trusted path — consent & permission surfaces are not editable chrome'); return; }
-    const el = tagOf(e.target); if (!el) return;
+    if (tp) { e.preventDefault(); e.stopPropagation(); placeTrusted(tp); setStatus('🔒 trusted path — consent & permission surfaces are not editable chrome'); return; } // sticky STAYS armed — pick a valid target
+    const el = tagOf(e.target);
+    if (!el) { // armed tap on empty space = cancel (sticky only; the alt path just passes through, as before)
+      if (stickyArmed && !e.altKey && !(chip.contains(e.target) || outline.contains(e.target))) { e.preventDefault(); e.stopPropagation(); disarmSticky(); }
+      return;
+    }
     // LIVE FORK ([data-fork-id]): editable by any cap-holder via the /forks/* path. Takes priority over the
     // component branch (a fork mount is never also a Studio component).
     const forkEl = el.closest ? el.closest('[data-fork-id]') : null;
@@ -3798,6 +3836,7 @@ const componentSelect = () => {
       chip.querySelector('[data-act=fedit]').onclick = () => { clearChip(); openComponentEditChat(fid, fname, { kind: 'fork' }); };
       chip.querySelector('[data-act=ffork]').onclick = () => { clearChip(); forkForkAct(fid, fname); };
       chip.querySelector('[data-act=x]').onclick = clearChip;
+      disarmSticky(); // ONE-SHOT: selection landed — the sticky modifier releases (chip + outline stay)
       return;
     }
     if (!isRoot) return; // component selection (Studio + in-chat components) stays owner-only
@@ -3810,8 +3849,9 @@ const componentSelect = () => {
     chip.querySelector('[data-act=edit]').onclick = () => { clearChip(); if (id) openComponentEditChat(id, name, { kind: 'component' }); else breakOutThenEdit(spec, name); };
     const fk = chip.querySelector('[data-act=fork]'); if (fk) fk.onclick = () => { clearChip(); forkComponentAct(id, name); };
     chip.querySelector('[data-act=x]').onclick = clearChip;
+    disarmSticky(); // ONE-SHOT: selection landed — the sticky modifier releases (chip + outline stay)
   }, true);
-  addEventListener('keydown', e => { if (e.key === 'Escape') clearChip(); });
+  addEventListener('keydown', e => { if (e.key === 'Escape') { clearChip(); disarmSticky(); } });
   addEventListener('scroll', () => { if (chip.style.display === 'flex') clearChip(); }, true);
 };
 componentSelect();

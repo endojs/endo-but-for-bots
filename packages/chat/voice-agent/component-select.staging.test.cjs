@@ -9,6 +9,11 @@
 //      (so the OWNER's pointer reaches the wrapper — the actual fix),
 //   2. Alt-hover paints the 1px highlight, themed via --bad (NOT the old hard-coded red),
 //   3. Alt-click on an id-less inline component surfaces the "edit (break out)" chip.
+// Plus the ⌥ STICKY one-shot modifier (mobile: no Alt key, no hover) — driven from a REAL touch context:
+//   4. the header ⌥ button reveals for the owner; tapping it ARMS select mode (active ring, hint, iframe
+//      pointer-events dropped), a touch previews the outline, the next tap on a component runs the normal
+//      chip flow then AUTO-DISARMS (one-shot), a tap on a trusted-path surface 🔒-refuses and STAYS armed,
+//      a tap on empty space cancels, Escape cancels.
 //
 // Run: node component-select.staging.test.cjs   (exits non-zero on any failure; SKIPs cleanly w/o chromium)
 
@@ -119,6 +124,130 @@ const cleanup = () => { try { srv && srv.kill('SIGKILL'); } catch {} try { fs.rm
     await page.waitForTimeout(120);
     const restored = await page.evaluate(() => getComputedStyle(document.querySelector('#__test_box .gw-component iframe')).pointerEvents);
     ok(restored === 'auto', `releasing Alt restores the iframe's pointer-events — got: ${restored}`);
+
+    // ── ⌥ STICKY one-shot modifier — a REAL TOUCH context (mobile: no Alt key, no hover) ──────────────
+    const ctx = await browser.newContext({ hasTouch: true, isMobile: true, viewport: { width: 480, height: 900 } });
+    const mp = await ctx.newPage();
+    await mp.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    await mp.evaluate(c => localStorage.setItem('field-agent-cap', c), rootCap);
+    await mp.goto(`${BASE}/`, { waitUntil: 'load' });
+    await mp.waitForSelector('#tab-components:not(.hide)', { timeout: 15000 });
+    // same in-chat confined component + a trusted-path surface (the consent-sheet class of chrome)
+    await mp.evaluate(async (cap) => {
+      const mod = await import('/grain-ui.js');
+      const box = document.createElement('div'); box.id = '__test_box'; box.style.cssText = 'position:fixed;left:60px;top:300px;width:360px;z-index:1';
+      document.body.appendChild(box);
+      mod.renderWidgets(box, [{ type: 'component', name: 'TestComp', height: 120, cells: [],
+        source: "(ui)=>ui.create('div').push([ui.create('h3').text('HELLO-COMP')])" }], { cap });
+      const tr = document.createElement('div'); tr.setAttribute('data-trusted-path', ''); tr.id = '__trusted';
+      tr.textContent = 'consent surface'; tr.style.cssText = 'position:fixed;left:60px;top:520px;width:200px;height:56px;z-index:1;border:1px solid #888';
+      document.body.appendChild(tr);
+    }, rootCap);
+    await mp.waitForSelector('#__test_box .gw-component iframe', { timeout: 8000 });
+    await mp.waitForTimeout(900);
+    // the header ⌥ button reveals for the owner (visibility syncs on a 3s tick after isRoot lands)
+    await mp.waitForSelector('#comp-select-btn:not(.hide)', { timeout: 10000 });
+    ok(true, 'sticky ⌥ button revealed in the header for the owner');
+    // ARM: tap the button once
+    await mp.tap('#comp-select-btn');
+    await mp.waitForTimeout(120);
+    const STICKY_HINT = 'Tap a component to edit it — tap the ⌥ button again to cancel';
+    const armed = await mp.evaluate(hintTxt => ({
+      armed: document.getElementById('comp-select-btn').classList.contains('armed'),
+      mode: document.documentElement.classList.contains('comp-select'),
+      framePE: getComputedStyle(document.querySelector('#__test_box .gw-component iframe')).pointerEvents,
+      hint: [...document.querySelectorAll('div')].some(d => d.textContent === hintTxt && getComputedStyle(d).position === 'fixed' && getComputedStyle(d).display !== 'none'),
+    }), STICKY_HINT);
+    ok(armed.armed && armed.mode, 'tapping ⌥ ARMS select mode (active button state + comp-select mode)');
+    ok(armed.framePE === 'none', `armed mode drops the confined iframe's pointer-events — got: ${armed.framePE}`);
+    ok(armed.hint, 'the armed hint reads "Tap a component to edit it — tap the ⌥ button again to cancel"');
+    // touch PREVIEW: a synthetic touchstart over the component paints the same outline hover would
+    const wrap2 = await mp.locator('#__test_box .gw-component').boundingBox();
+    const tcx = wrap2.x + wrap2.width / 2, tcy = wrap2.y + wrap2.height / 2;
+    const preview = await mp.evaluate(({ x, y }) => {
+      const t = new Touch({ identifier: 1, target: document.body, clientX: x, clientY: y });
+      window.dispatchEvent(new TouchEvent('touchstart', { touches: [t], bubbles: true }));
+      const label = [...document.querySelectorAll('div')].find(d => d.textContent === 'TestComp' && getComputedStyle(d).position === 'absolute');
+      const outline = label && label.parentElement;
+      return !!outline && getComputedStyle(outline).display !== 'none';
+    }, { x: tcx, y: tcy });
+    ok(preview, 'while armed, touching the component previews the highlight outline');
+    // SELECT: tap the component → normal chip flow + AUTO-DISARM (one-shot)
+    await mp.touchscreen.tap(tcx, tcy);
+    await mp.waitForTimeout(200);
+    const sel = await mp.evaluate(() => {
+      const btn = [...document.querySelectorAll('button')].find(b => /break out/i.test(b.textContent || ''));
+      const chipEl = btn && btn.closest('div');
+      return {
+        chip: !!btn && !!chipEl && getComputedStyle(chipEl).display !== 'none',
+        armed: document.getElementById('comp-select-btn').classList.contains('armed'),
+        mode: document.documentElement.classList.contains('comp-select'),
+        framePE: getComputedStyle(document.querySelector('#__test_box .gw-component iframe')).pointerEvents,
+      };
+    });
+    ok(sel.chip, 'armed tap on the confined component surfaces the “edit (break out)” chip');
+    ok(!sel.armed && !sel.mode, 'selection AUTO-DISARMS the sticky modifier (one-shot)');
+    ok(sel.framePE === 'auto', `auto-disarm restores the iframe's pointer-events — got: ${sel.framePE}`);
+    await mp.evaluate(() => document.querySelector('[data-act="x"]').click()); // close the chip
+    // TRUSTED PATH: re-arm, tap the consent surface → dashed 🔒 refusal, modifier STAYS armed
+    await mp.tap('#comp-select-btn');
+    await mp.waitForTimeout(120);
+    await mp.tap('#__trusted');
+    await mp.waitForTimeout(150);
+    const tr = await mp.evaluate(() => {
+      const label = [...document.querySelectorAll('div')].find(d => d.textContent === '🔒 trusted path' && getComputedStyle(d).position === 'absolute');
+      const outline = label && label.parentElement;
+      const xBtn = document.querySelector('[data-act="x"]');
+      return {
+        refused: !!outline && getComputedStyle(outline).display !== 'none' && getComputedStyle(outline).borderTopStyle === 'dashed',
+        armed: document.getElementById('comp-select-btn').classList.contains('armed'),
+        chipShown: xBtn ? getComputedStyle(xBtn.closest('div')).display !== 'none' : false,
+      };
+    });
+    ok(tr.refused && !tr.chipShown, 'armed tap on a trusted-path surface shows the dashed 🔒 refusal (no chip)');
+    ok(tr.armed, 'trusted-path refusal keeps the modifier ARMED (pick a valid target)');
+    // CANCEL: a tap on empty space disarms
+    await mp.touchscreen.tap(240, 200);
+    await mp.waitForTimeout(150);
+    const cancelled = await mp.evaluate(() => document.getElementById('comp-select-btn').classList.contains('armed') || document.documentElement.classList.contains('comp-select'));
+    ok(!cancelled, 'armed tap on empty space CANCELS (disarms)');
+    // CANCEL: Escape disarms too
+    await mp.tap('#comp-select-btn');
+    await mp.waitForTimeout(120);
+    await mp.keyboard.press('Escape');
+    await mp.waitForTimeout(120);
+    const esc = await mp.evaluate(() => document.getElementById('comp-select-btn').classList.contains('armed') || document.documentElement.classList.contains('comp-select'));
+    ok(!esc, 'Escape disarms the sticky modifier');
+    // ── hygiene: #qrmodal (cap hand-offs, add-a-power, billing secrets, agent profiles) is a TRUSTED-PATH
+    // HOST — a component rendered INSIDE it inherits the 🔒 refusal (closest('[data-trusted-path]')).
+    // Arm FIRST (the modal overlays the header button), then unhide the modal with a component in it.
+    await mp.tap('#comp-select-btn');
+    await mp.waitForTimeout(120);
+    await mp.evaluate(async (cap) => {
+      const mod = await import('/grain-ui.js');
+      const m = document.getElementById('qrmodal'); m.classList.remove('hide');
+      const box = document.createElement('div'); box.id = '__modal_box'; box.style.cssText = 'width:360px';
+      m.appendChild(box);
+      mod.renderWidgets(box, [{ type: 'component', name: 'ModalComp', height: 100, cells: [],
+        source: "(ui)=>ui.create('div').push([ui.create('h3').text('IN-MODAL')])" }], { cap });
+    }, rootCap);
+    await mp.waitForSelector('#__modal_box .gw-component iframe', { timeout: 8000 });
+    await mp.waitForTimeout(600);
+    const mb = await mp.locator('#__modal_box .gw-component').boundingBox();
+    await mp.touchscreen.tap(mb.x + mb.width / 2, mb.y + mb.height / 2);
+    await mp.waitForTimeout(150);
+    const modal = await mp.evaluate(() => {
+      const label = [...document.querySelectorAll('div')].find(d => d.textContent === '🔒 trusted path' && getComputedStyle(d).position === 'absolute');
+      const outline = label && label.parentElement;
+      const xBtn = document.querySelector('[data-act="x"]');
+      return {
+        refused: !!outline && getComputedStyle(outline).display !== 'none' && getComputedStyle(outline).borderTopStyle === 'dashed',
+        armed: document.getElementById('comp-select-btn').classList.contains('armed'),
+        chipShown: xBtn ? getComputedStyle(xBtn.closest('div')).display !== 'none' : false,
+      };
+    });
+    ok(modal.refused && !modal.chipShown, 'a component rendered INSIDE #qrmodal is 🔒-refused (trusted-path host seals the cap hand-off surface)');
+    await ctx.close();
   } finally { await browser.close(); }
 
   console.log(`\n${pass} passed, ${fail} failed`);
