@@ -63,9 +63,7 @@ export interface RegionMethods {
     anchor: 'top' | 'middle' | 'bottom',
   ): Promise<void>;
   drawCells(col: number, row: number, grid: Cell[][]): Promise<void>;
-  events(
-    kinds: ('key' | 'mouse' | 'paste' | 'focus' | 'resize')[],
-  ): unknown;
+  events(kinds: ('key' | 'mouse' | 'paste' | 'focus' | 'resize')[]): unknown;
   close(): Promise<void>;
 }
 
@@ -106,22 +104,22 @@ export interface InspectorSurface {
    * route worker `console.*` through the same writer that backs region
    * text; logs always land in the inspector pane.
    */
-  appendLog(
-    record: {
-      level: 'trace' | 'debug' | 'info' | 'warn' | 'error';
-      message: string;
-      worker?: string;
-      time?: number;
-      fields?: Record<string, unknown>;
-    },
-  ): Promise<void>;
+  appendLog(record: {
+    level: 'trace' | 'debug' | 'info' | 'warn' | 'error';
+    message: string;
+    worker?: string;
+    time?: number;
+    fields?: Record<string, unknown>;
+  }): Promise<void>;
 
   /**
    * Append a telemetry sample.  Stub — see TODO above.
    */
-  appendSample(
-    sample: { name: string; value: number; tags?: Record<string, string> },
-  ): Promise<void>;
+  appendSample(sample: {
+    name: string;
+    value: number;
+    tags?: Record<string, string>;
+  }): Promise<void>;
 
   /**
    * Open or focus the inspector window.  Resolves once the window is
