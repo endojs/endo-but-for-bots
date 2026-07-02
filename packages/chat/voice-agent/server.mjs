@@ -1885,6 +1885,8 @@ const handler = async (req, res) => {
     //    ROOT cap may write eval ground-truth (an attenuated chat cap must not be able to forge its own
     //    grade). The cap rides in the body; we gate on nodeFor(cap)?.isRoot and land the record 0600 at
     //    eval/results/ratings/<chatId>.json via the shared eval-ratings helper. ──
+    //    INC-7 KEEP (operator/eval API — no in-app UI by design): ground-truth ratings feed the eval harness
+    //    (eval/), not the chat surface; server-rate.test.mjs asserts the write + root gate. Kept as-is.
     if (req.method === 'POST' && u.pathname === '/eval/rate') {
       const { cap, chatId, rating, comment, by } = await jsonBody(req);
       if (!nodeFor(cap)) return json(res, 403, { error: 'no capability — open this app with your #cap= link' });
@@ -3516,6 +3518,8 @@ const handler = async (req, res) => {
       }
       if (u.pathname === '/forks/list') return json(res, 200, { ok: true, forks: forks.list(owner) });
       if (u.pathname === '/forks/read') { const r = forks.read(String(body.id || ''), owner); return json(res, 200, r ? { ok: true, ...r } : { ok: false, error: 'unknown fork (or not yours)' }); }
+      // INC-7 KEEP (intended API): a fork's version log — the fork-side sibling of the wired /components/history.
+      // No standalone in-app history browser yet (forks surface via the shape-graph + fork-widget); forks-loop.staging.test asserts it.
       if (u.pathname === '/forks/history') { const h = forks.history(String(body.id || ''), owner); return json(res, 200, h ? { ok: true, versions: h } : { ok: false, error: 'unknown fork (or not yours)' }); }
       if (u.pathname === '/forks/revert') return json(res, 200, forks.revert(String(body.id || ''), body.version, owner));
       if (u.pathname === '/forks/remove') return json(res, 200, { ok: forks.remove(String(body.id || ''), owner) });
@@ -3524,6 +3528,9 @@ const handler = async (req, res) => {
       if (u.pathname === '/forks/notify') return json(res, 200, forks.notifyRecipients(String(body.id || ''), owner, String(body.message || ''))); // owner → recipients' inboxes ("I changed X — update?")
       // ── Phase 5 distribution-trust (social collateral). grant/revoke a reviewer; approve/unapprove a fork
       //    VERSION for end-user distribution; query the graph + a fork's status. Owner = the caller's id.
+      //    INC-7 KEEP (intended API / operator surface): the reviewer-graph API is exercised end-to-end by
+      //    fork-distribution.staging.test.cjs (grant → approve → unapprove). A dedicated in-app reviewer panel
+      //    is a future build (P4/social-collateral direction); these routes are the vetted surface it will drive.
       if (u.pathname === '/forks/review/reviewers') return json(res, 200, { ok: true, reviewers: distTrust.reviewers(), me: owner, amReviewer: distTrust.isReviewer(owner) });
       if (u.pathname === '/forks/review/grant') return json(res, 200, distTrust.grantReviewer(owner, String(body.reviewerId || '')));
       if (u.pathname === '/forks/review/revoke-reviewer') return json(res, 200, distTrust.revokeReviewer(owner, String(body.reviewerId || '')));
@@ -3723,6 +3730,10 @@ const handler = async (req, res) => {
         const token = componentShares.create({ componentId: id, cells: resolved, readOnly: true, charge: body.charge || {} }); // charge: {scheme:free|expires|allowance, hours?, total?, perOpen?}
         return json(res, 200, { ok: true, id, name: meta.name || id, url: `/c/${id}#k=${token}`, cells: resolved.map(c => c.id), scheme: (body.charge && body.charge.scheme) || 'free' }); // url carries the token in the fragment (copy, don't render)
       }
+      // INC-7 KEEP (intended API): list/revoke the share links minted by /components/share (a broken-out
+      // component + its brokered cells, read-only). listFor is token-REDACTED by design (cap-hygiene), so a
+      // full in-app management view is deferred: revoke here is token-driven, so surfacing revoke in the Shares
+      // panel first needs a non-secret revokeById in component-shares.mjs (mirroring /tools/share/revoke's id).
       if (u.pathname === '/components/share/revoke') return json(res, 200, { ok: componentShares.revoke(String(body.token || '')) });
       if (u.pathname === '/components/shares') return json(res, 200, { ok: true, shares: componentShares.listFor(String(body.id || '')) }); // redacted (no tokens)
       // ARCH-9: grains are keyed by component id + live SEPARATE from source, so EVERY component kind — island,
