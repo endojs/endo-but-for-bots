@@ -3708,6 +3708,7 @@ const openComponentEditChat = (id, name, { kind = 'component' } = {}) => {
   input.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } };
   setTimeout(() => input.focus(), 30);
 };
+window.openComponentEditChat = openComponentEditChat; // reachable from the 🔀 switch "try before adopt" + tests
 const forkComponentAct = async (id, name) => {
   const fname = window.prompt(`Fork "${name}" — name your fork:`, `${name}-fork`); if (!fname) return;
   const r = await (await fetch('/components/fork', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id, name: fname }) })).json();
@@ -3775,7 +3776,7 @@ const componentSelect = () => {
   // 🔒-refuses and STAYS armed (so the user can pick a valid target); a tap on empty space, Escape, or the
   // button itself cancels. Desktop alt-hover/click is untouched — the button also works there (discoverability).
   let stickyArmed = false;
-  const isSelectActive = e => !!(e && e.altKey) || stickyArmed;
+  const isSelectActive = e => !!(e && e.altKey) || stickyArmed || switchArmed; // switchArmed set below (same closure scope)
   const stickyBtn = document.createElement('button');
   stickyBtn.id = 'comp-select-btn'; stickyBtn.className = 'iconbtn hide'; stickyBtn.textContent = '⌥';
   stickyBtn.title = 'Select a component to edit (one tap)'; stickyBtn.setAttribute('aria-label', 'Select a component to edit (one tap)');
@@ -3802,6 +3803,172 @@ const componentSelect = () => {
     if (!r || !r.ok || !r.id) { setStatus('break out: ' + ((r && r.error) || 'failed')); return; }
     editComponent(r.id, r.name || nm); // now it's a project object → edit it with its focused agent
   };
+
+  // ══ 🔀 VIEW SWITCH — rotate a component through ALTERNATIVE VIEWS of the SAME data (dan's marquee gesture)
+  // While a component is focused (⌥-hover, or after the sticky ⌥ arm) holding SHIFT — or the 🔀 toolbar toggle
+  // next to ⌥, or the 🔀 chip button — enters SWITCH mode: the SAME props re-render through a DIFFERENT confined
+  // (endowments,props)=>vnode source, previewed LIVE in an app-switcher overlay, committed only on Adopt/Enter.
+  //   • ↑ / ↓  + scroll  — this component's HISTORY versions, a commit log (/components/history → /components/read)
+  //   • ←                — UPSTREAM: toward the canonical / one-size-fits-all (the component itself / its seed)
+  //   • →                — DOWNSTREAM: peers' forks & shared variants (/forks/list) — the social / custom axis
+  //   • Enter / ✓ Adopt  — pop the focused view into position: a version SETTLES via /components/revert; a fork
+  //                        via the existing fork-adopt path (openForkInChat). NO new server route.
+  //   • 💬 chat          — "try before adopt": route the focused candidate into its edit chat first.
+  // A candidate that fails to render is kept OUT of rotation with a legible note — the live view is never touched
+  // until adopt, and a broken source can't strand the user on a blank. Trusted-path surfaces are un-switchable
+  // (same 🔒 refusal as select). PEER-VARIANT GAP: a first-class "other people's variants of THIS component"
+  // feed isn't reachable from the existing client routes (dist-trust surfaces are review-scoped), and /forks/*
+  // vends only the CURRENT source of a fork (no per-version fork source) — so the downstream axis falls back to
+  // the owner's OWN forks (current source each) and full ↑/↓ history is the CANONICAL node's. Noted, not worked
+  // around with a server route (a reliability worker is in server.mjs).
+  const swFetch = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then(r => r.json()).catch(() => null);
+  const srcOfFiles = f => { if (!f) return ''; if (f['component.js'] || f['tool.js'] || f['index.js']) return f['component.js'] || f['tool.js'] || f['index.js']; const js = Object.keys(f).find(k => /\.js$/.test(k)); return js ? f[js] : ''; };
+  let switchState = null; // { id, kind, name, props, nodes:[{kind,id,label,versions?,curSrc?}], xi, vi, homeXi, ui:{...} }
+  const buildNodes = async (id, kind, name) => {
+    const nodes = [];
+    nodes.push(kind === 'fork' ? { kind: 'fork', id, label: `⑂ ${name}` } : { kind: 'component', id, label: `${name} · canonical` }); // the focused node, upstream-most
+    try { const fl = await swFetch('/forks/list', { cap: chatCap() }); if (fl && fl.ok) for (const f of (fl.forks || [])) { if (f.id === id) continue; nodes.push({ kind: 'fork', id: f.id, label: `⑂ ${f.name || 'fork'}` }); } } catch { /* forks are the optional downstream axis */ }
+    return nodes;
+  };
+  const loadVersions = async node => {
+    if (node.versions) return node.versions;
+    if (node.kind === 'fork') {
+      const r = await swFetch('/forks/read', { cap: chatCap(), id: node.id }); // /forks/* vends only the CURRENT source (the per-version gap)
+      node.versions = [{ source: (r && r.ok) ? r.source : '', label: 'current', at: (r && r.updatedAt) || '' }];
+    } else {
+      const h = await swFetch('/components/history', { cap, id: node.id }); // newest-first: vi 0 = HEAD (live)
+      const vs = (h && h.ok && Array.isArray(h.versions)) ? h.versions : [];
+      node.versions = vs.map(v => ({ version: v.version, label: v.summary || String(v.version).slice(0, 8), at: v.at, source: null }));
+      if (!node.versions.length) { const r = await swFetch('/components/read', { cap, id: node.id, version: 'HEAD' }); if (r && r.ok) node.versions = [{ version: 'HEAD', source: srcOfFiles(r.files) || r.source || '', label: 'HEAD' }]; }
+    }
+    return node.versions;
+  };
+  const versionSource = async (node, vi) => {
+    const v = node.versions[vi]; if (!v) return '';
+    if (v.source != null) return v.source;
+    const r = await swFetch('/components/read', { cap, id: node.id, version: v.version });
+    v.source = (r && r.ok) ? (srcOfFiles(r.files) || r.source || '') : '';
+    return v.source;
+  };
+  const swStyle = document.createElement('style');
+  swStyle.textContent = '#sw-overlay{position:fixed;inset:0;z-index:9500;display:none;background:rgba(4,8,14,.72);backdrop-filter:blur(4px);align-items:center;justify-content:center}#sw-card{width:min(720px,92vw);max-height:84vh;display:flex;flex-direction:column;background:var(--bg,#0d1117);border:1px solid var(--acc,#39d3ff);border-radius:16px;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.7)}#sw-bar{display:flex;align-items:center;gap:8px;padding:9px 13px;border-bottom:1px solid var(--edge);font:12px -apple-system,sans-serif;color:var(--ink)}#sw-stage{position:relative;flex:1;min-height:140px;overflow:auto;padding:14px;background:var(--panel,#0d1117)}#sw-preview{transition:transform .22s cubic-bezier(.2,.8,.2,1),opacity .22s}#sw-foot{display:flex;align-items:center;gap:8px;padding:9px 13px;border-top:1px solid var(--edge)}#sw-foot .grow{flex:1;color:var(--mut);font:11px -apple-system,sans-serif}.sw-arrow{color:var(--mut);border:1px solid var(--edge);border-radius:8px;padding:2px 8px;font:12px -apple-system,sans-serif}.sw-arrow.on{color:var(--acc);border-color:var(--acc)}#comp-switch-btn.armed{color:#fff;background:var(--acc-fill,#7a4ce6);border-radius:8px;box-shadow:0 0 0 2px var(--acc,#7c5cff)}';
+  document.head.appendChild(swStyle);
+  const swOverlay = document.createElement('div'); swOverlay.id = 'sw-overlay'; swOverlay.setAttribute('data-switch-overlay', '');
+  swOverlay.innerHTML = `<div id="sw-card">
+    <div id="sw-bar"><b id="sw-title" style="flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">🔀 switch views</b>
+      <span id="sw-pos" class="pill"></span><span style="flex:1"></span>
+      <span class="sw-arrow" id="sw-up">↑↓ history</span><span class="sw-arrow" id="sw-lr">← canonical · social →</span></div>
+    <div id="sw-stage"><div id="sw-preview"></div></div>
+    <div id="sw-foot"><span class="grow" id="sw-status">↑/↓ or scroll = versions · ←/→ = canonical ↔ forks · Enter = adopt · Esc = cancel</span>
+      <button class="mini" id="sw-chat">💬 chat</button><button class="mini primary" id="sw-adopt">✓ Adopt</button><button class="mini" id="sw-x">✕</button></div></div>`;
+  document.body.appendChild(swOverlay);
+  const swEls = { title: swOverlay.querySelector('#sw-title'), pos: swOverlay.querySelector('#sw-pos'), stage: swOverlay.querySelector('#sw-stage'), preview: swOverlay.querySelector('#sw-preview'), status: swOverlay.querySelector('#sw-status'), up: swOverlay.querySelector('#sw-up'), lr: swOverlay.querySelector('#sw-lr') };
+  swOverlay.addEventListener('click', e => { if (e.target === swOverlay) closeSwitch('switch cancelled'); });
+  const setSwStatus = m => { if (swEls.status) swEls.status.textContent = m; };
+  const animateSwap = (axis, dir) => {
+    const c = swEls.preview; if (!c) return;
+    const from = axis === 'x' ? `translateX(${dir > 0 ? '44px' : '-44px'})` : `translateY(${dir > 0 ? '34px' : '-34px'})`;
+    c.style.transition = 'none'; c.style.transform = from; c.style.opacity = '0';
+    requestAnimationFrame(() => { c.style.transition = 'transform .22s cubic-bezier(.2,.8,.2,1),opacity .22s'; c.style.transform = 'none'; c.style.opacity = '1'; });
+  };
+  const paintPreview = (src, node) => {
+    const host = swEls.preview; host.innerHTML = ''; const isl = window.__fieldIslands; let ok = false, threw = false;
+    try {
+      if (isl && node.kind === 'component' && typeof isl.renderChrome === 'function') ok = isl.renderChrome(host, src, switchState.props, { componentId: node.id, name: switchState.name }); // reuse the chrome compile-cache
+      // renderSource SWALLOWS a render-time throw (Confined returns null + fires onError) — catch that signal
+      // so a broken candidate lands on the unified fallback, never a blank/partial (the live view is untouched).
+      else if (isl && typeof isl.renderSource === 'function') ok = isl.renderSource(src, host, switchState.props, { name: node.label, forkId: node.kind === 'fork' ? node.id : undefined, onError: () => { threw = true; } });
+    } catch { ok = false; }
+    if (!ok || threw) host.innerHTML = '<div style="padding:16px;color:var(--mut);font:12px -apple-system,sans-serif">⚠︎ this view couldn’t render — kept out of rotation. Your live view is untouched.</div>';
+    return ok && !threw;
+  };
+  const paintBar = node => {
+    swEls.title.textContent = `🔀 ${node.label}`;
+    const nver = (node.versions || []).length; const at = node.versions && node.versions[switchState.vi] && node.versions[switchState.vi].at;
+    swEls.pos.textContent = node.kind === 'component' ? `v ${switchState.vi + 1}/${nver}${switchState.vi === 0 ? ' · live' : ''}` : 'fork';
+    swEls.up.classList.toggle('on', node.kind === 'component' && nver > 1);
+    swEls.lr.classList.toggle('on', switchState.nodes.length > 1);
+    if (at) setSwStatus(`${node.versions[switchState.vi].label} · ${new Date(at).toLocaleString()}`);
+  };
+  const showCandidate = async (axis, dir) => {
+    const node = switchState.nodes[switchState.xi];
+    await loadVersions(node);
+    if (switchState.vi >= node.versions.length) switchState.vi = node.versions.length - 1;
+    if (switchState.vi < 0) switchState.vi = 0;
+    const src = node.kind === 'component' ? await versionSource(node, switchState.vi) : node.versions[0].source;
+    if (!switchState) return; // closed mid-flight
+    paintPreview(src, node); paintBar(node); animateSwap(axis, dir);
+  };
+  const moveX = async dir => { const n = Math.max(0, Math.min(switchState.nodes.length - 1, switchState.xi + dir)); if (n === switchState.xi) return; switchState.xi = n; switchState.vi = 0; await showCandidate('x', dir); };
+  const moveV = async dir => { const node = switchState.nodes[switchState.xi]; if (node.kind !== 'component') return; const n = Math.max(0, Math.min((node.versions || []).length - 1, switchState.vi + dir)); if (n === switchState.vi) return; switchState.vi = n; await showCandidate('y', dir); };
+  const repaintLive = async id => { try { if (/^chrome-/.test(String(id))) { await reloadChromeComps(); } else { renderTx(); if (curTab === 'components') refreshComponents(); } } catch { /* live repaint is best-effort */ } };
+  const adopt = async () => {
+    if (!switchState) return; const node = switchState.nodes[switchState.xi];
+    if (node.kind === 'component') {
+      const v = node.versions[switchState.vi]; if (!v || !v.version) { closeSwitch(); return; }
+      if (switchState.xi === switchState.homeXi && switchState.vi === 0) { closeSwitch('already the live view'); return; } // HEAD of the canonical = nothing to settle
+      setSwStatus('adopting…');
+      const r = await swFetch('/components/revert', { cap, id: node.id, version: v.version });
+      if (r && r.ok) { const nid = node.id; closeSwitch(`Adopted “${v.label}” as the live view (v${String(r.version || '').slice(0, 8)}).`); repaintLive(nid); }
+      else setSwStatus(`adopt: ${(r && r.error) || 'failed'}`);
+    } else { // a FORK variant → the existing fork-adopt path (opens it inline; the fork widget's onAdopt settles it)
+      const name = node.label.replace(/^⑂\s*/, ''); closeSwitch(`Opening ⑂ ${name} to adopt…`);
+      try { openForkInChat({ id: node.id, name }, `⑂ ${name}`); } catch { /* */ }
+    }
+  };
+  const chatCandidate = () => { if (!switchState) return; const node = switchState.nodes[switchState.xi]; const kind = node.kind === 'fork' ? 'fork' : 'component'; const id = node.id; const nm = switchState.name || node.label; closeSwitch(); try { openComponentEditChat(id, nm, { kind }); } catch { /* */ } };
+  swOverlay.querySelector('#sw-adopt').onclick = adopt;
+  swOverlay.querySelector('#sw-chat').onclick = chatCandidate;
+  swOverlay.querySelector('#sw-x').onclick = () => closeSwitch('switch cancelled');
+  const onSwitchKey = e => {
+    if (!switchState) return;
+    if (e.key === 'Escape') { e.preventDefault(); closeSwitch('switch cancelled'); return; }
+    if (e.key === 'Enter') { e.preventDefault(); adopt(); return; }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); moveX(-1); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); moveX(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); moveV(1); }   // up the commit log = older
+    else if (e.key === 'ArrowDown') { e.preventDefault(); moveV(-1); } // down = newer, toward HEAD
+  };
+  const onSwitchWheel = e => { if (!switchState) return; e.preventDefault(); if (e.deltaY > 0) moveV(1); else if (e.deltaY < 0) moveV(-1); };
+  function closeSwitch(msg) {
+    switchState = null; swOverlay.style.display = 'none'; try { swEls.preview.innerHTML = ''; } catch { /* */ }
+    removeEventListener('keydown', onSwitchKey, true); swOverlay.removeEventListener('wheel', onSwitchWheel);
+    if (msg) setStatus(msg);
+  }
+  const enterSwitch = async el => {
+    if (!el || switchState) return;
+    if (trustedOf(el)) { placeTrusted(el); setStatus('🔒 trusted path — consent & permission surfaces are not switchable views'); return; }
+    clearChip(); disarmSticky();
+    const forkEl = el.closest ? el.closest('[data-fork-id]') : null;
+    let id, kind, name, props;
+    if (forkEl) { id = forkEl.getAttribute('data-fork-id'); kind = 'fork'; name = forkEl.getAttribute('data-fork-name') || 'fork'; props = el.__lastProps || forkEl.__lastProps || {}; }
+    else {
+      const compEl = (el.closest && el.closest('[data-component-id]')) || el;
+      id = compEl && compEl.getAttribute && compEl.getAttribute('data-component-id');
+      if (!id) { setStatus('break this component out into a project first — then its views are switchable'); return; }
+      kind = 'component'; name = (compEl.getAttribute('data-component-name')) || 'component'; props = compEl.__lastProps || {};
+    }
+    if (kind === 'component' && !isRoot) { setStatus('switching component views needs the root capability'); return; }
+    setStatus('🔀 gathering alternative views…');
+    const nodes = await buildNodes(id, kind, name);
+    switchState = { id, kind, name, props, nodes, xi: 0, vi: 0, homeXi: 0 };
+    swOverlay.style.display = 'flex';
+    addEventListener('keydown', onSwitchKey, true); swOverlay.addEventListener('wheel', onSwitchWheel, { passive: false });
+    await showCandidate('x', 0);
+  };
+
+  // ── 🔀 toolbar toggle (mobile + discoverability), sibling of the ⌥ button: arms switch-on-next-tap. ──
+  let switchArmed = false;
+  const switchBtn = document.createElement('button');
+  switchBtn.id = 'comp-switch-btn'; switchBtn.className = 'iconbtn hide'; switchBtn.textContent = '🔀';
+  switchBtn.title = 'Switch a component through its alternative views (one tap, then ←/→/↑/↓)'; switchBtn.setAttribute('aria-label', 'Switch a component through its alternative views');
+  if (hdrEl) hdrEl.appendChild(switchBtn);
+  const armSwitch = () => { switchArmed = true; switchBtn.classList.add('armed'); hint.textContent = 'Tap a component to switch its views — tap 🔀 again to cancel'; setAlt(true); };
+  const disarmSwitch = () => { if (!switchArmed) return; switchArmed = false; switchBtn.classList.remove('armed'); setAlt(false); hint.textContent = HINT_ALT; };
+  switchBtn.onclick = () => { if (switchArmed) disarmSwitch(); else if (canEngage()) { disarmSticky(); armSwitch(); } };
+  const syncSwitchBtn = () => { const on = canEngage(); switchBtn.classList.toggle('hide', !on); if (!on) disarmSwitch(); };
+  syncSwitchBtn(); setInterval(syncSwitchBtn, 3000);
+
   addEventListener('keydown', e => { if ((e.key === 'Alt' || e.altKey) && canEngage()) setAlt(true); });
   addEventListener('keyup', e => { if ((e.key === 'Alt' || !e.altKey) && !stickyArmed) setAlt(false); });
   addEventListener('blur', () => { if (!stickyArmed) setAlt(false); }); // alt-tab / focus loss → never leave iframes disabled (sticky survives — it's an explicit mode)
@@ -3822,7 +3989,7 @@ const componentSelect = () => {
   // the essential path; this is live feedback). elementFromPoint sees the component WRAPPER because sticky
   // mode already dropped the confined iframes' pointer-events (the same routing trick as Alt).
   const touchPreview = e => {
-    if (!stickyArmed || !canEngage()) return;
+    if (!(stickyArmed || switchArmed) || !canEngage()) return;
     const t = (e.touches && e.touches[0]) || null; if (!t) return;
     const under = document.elementFromPoint(t.clientX, t.clientY);
     const tp = trustedOf(under);
@@ -3832,15 +3999,18 @@ const componentSelect = () => {
   addEventListener('touchstart', touchPreview, { capture: true, passive: true });
   addEventListener('touchmove', touchPreview, { capture: true, passive: true });
   addEventListener('click', e => {
-    if (stickyArmed && e.target && e.target.closest && e.target.closest('#comp-select-btn')) return; // the button's own tap — its onclick toggles
+    if ((stickyArmed || switchArmed) && e.target && e.target.closest && (e.target.closest('#comp-select-btn') || e.target.closest('#comp-switch-btn'))) return; // a toolbar button's own tap — its onclick toggles
+    if (switchState) return; // the switch overlay owns input while it's up
     if (!isSelectActive(e) || !canEngage()) return;
     const tp = trustedOf(e.target);
-    if (tp) { e.preventDefault(); e.stopPropagation(); placeTrusted(tp); setStatus('🔒 trusted path — consent & permission surfaces are not editable chrome'); return; } // sticky STAYS armed — pick a valid target
+    if (tp) { e.preventDefault(); e.stopPropagation(); placeTrusted(tp); setStatus(switchArmed ? '🔒 trusted path — consent & permission surfaces are not switchable views' : '🔒 trusted path — consent & permission surfaces are not editable chrome'); return; } // armed modifier STAYS armed — pick a valid target
     const el = tagOf(e.target);
-    if (!el) { // armed tap on empty space = cancel (sticky only; the alt path just passes through, as before)
-      if (stickyArmed && !e.altKey && !(chip.contains(e.target) || outline.contains(e.target))) { e.preventDefault(); e.stopPropagation(); disarmSticky(); }
+    if (!el) { // armed tap on empty space = cancel (sticky/switch only; the alt path just passes through, as before)
+      if ((stickyArmed || switchArmed) && !e.altKey && !(chip.contains(e.target) || outline.contains(e.target))) { e.preventDefault(); e.stopPropagation(); disarmSticky(); disarmSwitch(); }
       return;
     }
+    // 🔀 SWITCH-armed (toolbar/next-tap): a valid target enters view-switch (one-shot), before the edit chip.
+    if (switchArmed) { e.preventDefault(); e.stopPropagation(); const t = el; disarmSwitch(); enterSwitch(t); return; }
     // LIVE FORK ([data-fork-id]): editable by any cap-holder via the /forks/* path. Takes priority over the
     // component branch (a fork mount is never also a Studio component).
     const forkEl = el.closest ? el.closest('[data-fork-id]') : null;
@@ -3848,9 +4018,10 @@ const componentSelect = () => {
       e.preventDefault(); e.stopPropagation();
       const fid = forkEl.getAttribute('data-fork-id'); const fname = forkEl.getAttribute('data-fork-name') || 'fork';
       const r = el.getBoundingClientRect();
-      chip.innerHTML = `<span style="color:var(--mut)">⑂ ${esc(fname)}</span> <button class="mini" data-act="fedit">✎ edit</button> <button class="mini" data-act="ffork">⑂ fork</button> <button class="mini" data-act="x">✕</button>`;
-      chip.style.display = 'flex'; chip.style.left = `${Math.min(r.left, innerWidth - 240)}px`; chip.style.top = `${Math.min(r.bottom + 6, innerHeight - 44)}px`; place(el);
+      chip.innerHTML = `<span style="color:var(--mut)">⑂ ${esc(fname)}</span> <button class="mini" data-act="fedit">✎ edit</button> <button class="mini" data-act="fswitch">🔀 switch</button> <button class="mini" data-act="ffork">⑂ fork</button> <button class="mini" data-act="x">✕</button>`;
+      chip.style.display = 'flex'; chip.style.left = `${Math.min(r.left, innerWidth - 300)}px`; chip.style.top = `${Math.min(r.bottom + 6, innerHeight - 44)}px`; place(el);
       chip.querySelector('[data-act=fedit]').onclick = () => { clearChip(); openComponentEditChat(fid, fname, { kind: 'fork' }); };
+      chip.querySelector('[data-act=fswitch]').onclick = () => { const t = el; clearChip(); enterSwitch(t); };
       chip.querySelector('[data-act=ffork]').onclick = () => { clearChip(); forkForkAct(fid, fname); };
       chip.querySelector('[data-act=x]').onclick = clearChip;
       disarmSticky(); // ONE-SHOT: selection landed — the sticky modifier releases (chip + outline stay)
@@ -3861,14 +4032,17 @@ const componentSelect = () => {
     const id = el.getAttribute('data-component-id'); const name = el.getAttribute('data-component-name') || 'component'; const spec = el.__componentSpec;
     const r = el.getBoundingClientRect();
     const editLabel = id ? '✎ edit' : '⤴ edit (break out)';
-    chip.innerHTML = `<span style="color:var(--mut)">🧩 ${esc(name)}</span> <button class="mini" data-act="edit">${editLabel}</button> ${id ? '<button class="mini" data-act="fork">🍴 fork</button>' : ''} <button class="mini" data-act="x">✕</button>`;
-    chip.style.display = 'flex'; chip.style.left = `${Math.min(r.left, innerWidth - 240)}px`; chip.style.top = `${Math.min(r.bottom + 6, innerHeight - 44)}px`; place(el);
+    chip.innerHTML = `<span style="color:var(--mut)">🧩 ${esc(name)}</span> <button class="mini" data-act="edit">${editLabel}</button> ${id ? '<button class="mini" data-act="switch">🔀 switch</button> <button class="mini" data-act="fork">🍴 fork</button>' : ''} <button class="mini" data-act="x">✕</button>`;
+    chip.style.display = 'flex'; chip.style.left = `${Math.min(r.left, innerWidth - (id ? 320 : 240))}px`; chip.style.top = `${Math.min(r.bottom + 6, innerHeight - 44)}px`; place(el);
     chip.querySelector('[data-act=edit]').onclick = () => { clearChip(); if (id) openComponentEditChat(id, name, { kind: 'component' }); else breakOutThenEdit(spec, name); };
+    const sw = chip.querySelector('[data-act=switch]'); if (sw) sw.onclick = () => { const t = el; clearChip(); enterSwitch(t); };
     const fk = chip.querySelector('[data-act=fork]'); if (fk) fk.onclick = () => { clearChip(); forkComponentAct(id, name); };
     chip.querySelector('[data-act=x]').onclick = clearChip;
     disarmSticky(); // ONE-SHOT: selection landed — the sticky modifier releases (chip + outline stay)
   }, true);
-  addEventListener('keydown', e => { if (e.key === 'Escape') { clearChip(); disarmSticky(); } });
+  // SHIFT while a component is ⌥-focused (or sticky-armed) → enter 🔀 view-switch on that focused component.
+  addEventListener('keydown', e => { if (e.key === 'Shift' && !switchState && (altHeld || stickyArmed) && hoverEl && !trustedOf(hoverEl)) { disarmSticky(); enterSwitch(hoverEl); } });
+  addEventListener('keydown', e => { if (e.key === 'Escape' && !switchState) { clearChip(); disarmSticky(); disarmSwitch(); } });
   addEventListener('scroll', () => { if (chip.style.display === 'flex') clearChip(); }, true);
 };
 componentSelect();

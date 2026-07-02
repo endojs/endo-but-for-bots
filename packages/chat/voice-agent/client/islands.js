@@ -423,6 +423,7 @@ const islands = {
     try { renderConfined(h(entry.C, props || {}), el); } catch (e) { entry.err = e; }
     if (entry.err) { report((entry.err && entry.err.message) || String(entry.err)); return false; } // mount threw → caller falls back
     tagComponent(el, componentId, name); // alt-clickable → its edit chat (the registry identity)
+    try { el.__lastProps = props || {}; } catch { /* the props snapshot powers 🔀 view-switch (re-render the SAME props through another source); best-effort */ }
     return true;
   },
 
@@ -458,6 +459,7 @@ const islands = {
     }
     tagComponent(el, 'confined-source', 'forked-component');
     try { renderConfined(h(C, props || {}), el); } catch (e) { onError(e); return false; }
+    try { el.__lastProps = props || {}; } catch { /* the props snapshot powers 🔀 view-switch (re-render the SAME props through another source); best-effort */ }
     return true;
   },
 };
