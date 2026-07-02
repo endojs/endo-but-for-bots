@@ -35,7 +35,7 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
   const ex = byId['chrome-exhausted'] || {};
   ok(/mc-btn/.test(mc.source) && /props\.onFork/.test(mc.source) && /msg-ctrl/.test(mc.source),
     'chrome-msg-controls source carries the load-bearing classes (msg-ctrl/mc-btn) + the onFork contract');
-  ok(/\.confirm/.test(ex.source) && /props\.onTopUp/.test(ex.source) && /props\.onAbandon/.test(ex.source),
+  ok(/'confirm'/.test(ex.source) && /props\.onTopUp/.test(ex.source) && /props\.onAbandon/.test(ex.source),
     'chrome-exhausted source carries the .confirm button + the onTopUp/onAbandon contract');
   ok(/^[0-9a-f]{6,40}$/.test(String(mc.version)) && /^[0-9a-f]{6,40}$/.test(String(ex.version)),
     `both promoted pieces carry a real git version (${String(mc.version).slice(0, 8)} / ${String(ex.version).slice(0, 8)})`);
@@ -47,7 +47,7 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
   ok(badEx.ok === false, 'an unparseable chrome-exhausted edit is refused (seed preserved)');
   const reg2 = await jget('/chrome/components');
   const b2 = Object.fromEntries((reg2.components || []).map(c => [c.id, c]));
-  ok(/mc-btn/.test((b2['chrome-msg-controls'] || {}).source) && /\.confirm/.test((b2['chrome-exhausted'] || {}).source),
+  ok(/mc-btn/.test((b2['chrome-msg-controls'] || {}).source) && /'confirm'/.test((b2['chrome-exhausted'] || {}).source),
     'after the refused edits the served HEAD sources are still the seeds (history untouched)');
 
   // ── 3. a GOOD edit lands as a new version (proves the alt-click edit-chat lane works for the new ids) ──

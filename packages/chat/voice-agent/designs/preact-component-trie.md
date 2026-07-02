@@ -381,3 +381,88 @@ pendant); per-user trace-island VARIANTS ride the same fork-model open above.
 3. **First slice to port** — a self-contained leaf (e.g. the budget chip, the
    composer, a message bubble, or the Shares panel) to validate confined-render
    + project-backing + runtime-swap before widening.
+
+## ARCH-1 convergence — island → chrome, island-by-island
+
+**Why (AUDIT-WORKLIST ARCH-1).** Two parallel UI-component lanes exist: (A) vite-built
+**islands** (`client/*.js` → `public/islands/islands.js`, edit = file-rewrite + `yarn
+build:islands` + reload, handed to `renderConfined` with the whole bundle in scope — NOT
+per-component compartment-confined) and (B) git-backed **chrome components** (`(endowments,
+props) => vnode` sources in `chrome-components.mjs`, rendered via `confineComponent` in a
+fresh SES Compartment, no build, alt-click-editable, forkable, backlog'd). ARCH-1 = **collapse
+A into B**: re-express each island as a chrome-component source so `confineComponent` becomes
+the *one* UI unit — closing the confinement gap and the tri-lane `/components/edit` routing.
+Do it **island-by-island with the legacy DOM kept as fallback**, not big-bang.
+
+**Promote-an-island recipe (extends the "convert the NEXT chrome piece" checklist above with the
+island-specific wrinkle: an island usually ALSO has an app.js *inline twin* — the twin becomes the
+fallback, the vite island becomes a removable duplicate):**
+
+1. **Seed the source.** Add `<PIECE>_SOURCE` + a `{ id:'chrome-<piece>', name, source }` row to
+   `CHROME` in `chrome-components.mjs`. Translate the island body mechanically: `import { h }` →
+   `endowments.h`; kit deps (`IconBtn`, `EmptyState`, …) are available as `endowments.<Name>`
+   (they ride `FORK_VOCAB`) — or inline them to keep the source self-contained/portable. **Keep the
+   load-bearing class names** (`msg-ctrl`/`mc-btn`, `.confirm`/`.reject`, `.exhausted-card`, …) —
+   live CSS, muscle memory, and staging selectors target them. Carry the props/contract header IN
+   the source (riffers read it in the edit chat). Stay under the 16 000-char source cap
+   (`component-source.mjs` `validateComponentSource`). Only render-safe props cross — no cap/swissnum.
+2. **Mount via the chrome path with the twin as fallback.** At the inline-twin site in app.js, build
+   a host `div`, `mountChrome('chrome-<piece>', host, props)`; `if (!ok) { host.remove(); legacy() }`
+   where `legacy()` is the *pre-existing imperative DOM builder* (kept verbatim). For a stateful card,
+   the host holds the view state and **re-mounts on change** (`paint()` calls `mountChrome` again) —
+   props ARE the boundary; the real fetch/settlement stays a host callback. Repaint inside
+   `reloadChromeComps` if the piece lives outside `renderTx`.
+3. **Free wins:** alt-click-select → edit chat, fork, backlog, render-check gate, revert — all by
+   virtue of the chrome path. Actions stay host callbacks: **no new authority**.
+4. **Retire the duplicate (see BLOCKER below).** With the inline twin now the fallback, the vite
+   island is redundant. Fully removing it touches `island-source.mjs` (the `ISLANDS` registry),
+   `component-catalog.mjs`, the `client/<piece>.js` file, the `client/islands.js` barrel
+   (import + `COMPONENTS` + `render<Piece>` method + its cell), the `ISLAND_PREVIEW` gallery entry
+   in app.js, and `islands-ui.test.mjs` / `theme-matrix.staging.test.cjs` / `theme-review.cjs` — then
+   `yarn build:islands`. **Do this as a coordinated pass** (many of those files are owned by other
+   workers in a swarm session) — until then the leftover vite island is a harmless third
+   representation, not a live path.
+5. **Prove like Joshua.** A staging test on an isolated server (ephemeral port + mkdtemp via
+   `test-harness.cjs` — never the live :8778): the piece renders confined, alt-click tags it by
+   identity, a throwing edit is refused (seed preserved), a broken source → `renderChrome` returns
+   false → legacy fallback, and clicks fire the host callbacks. See
+   `chrome-islands-convergence.staging.test.cjs`.
+
+**Increment 1 landed (this pass):** `chrome-msg-controls` (ISL-2 — the per-message ↻/✎/🔊 + ◀k/n▶
+fork pager, mounted at `userBubbleControls`) and `chrome-exhausted` (ISL-3/DEAD-3 — the
+out-of-allowance top-up/abandon card, mounted at `renderExhausted`; Stripe/`budget/topup`/MetaMask
+stay host callbacks, view state re-mounts). Both keep their legacy DOM as fallback. Proof:
+`chrome-islands-convergence.staging.test.cjs` (23/23) + the real exhausted→resume flow still green
+(`empty-and-resume-reattach.staging.test.cjs` 11/11). NOTE: adding two chrome pieces bumped the
+seed count, so `chrome-components.staging.test.cjs`'s `reg.components.length === 4` needs a one-line
+bump to `=== 6` (only that assertion; 77/78 pass) — left for the staging-test owner.
+
+**Remaining islands — convergence status (continue one per worker):**
+
+| Island (id) | inline twin? | status / wave |
+| --- | --- | --- |
+| `island-message-controls` | `userBubbleControls` | ✅ **DONE → chrome-msg-controls** |
+| `island-exhausted-card` | `renderExhausted` | ✅ **DONE → chrome-exhausted** |
+| `island-msg-toolbar`*(n/a)* | — | ✅ already chrome (`chrome-msg-toolbar`) |
+| `island-tagline-hero` | landing text | ✅ already chrome (`chrome-welcome`); **delete tagline-hero** once welcome trusted |
+| `island-ask-card` | chat ask render | ⬜ ISL-3 · `chrome-ask-card` (S; pure props, kit deps) |
+| `island-dev-task-card` | chat dev-task render | ⬜ ISL-3 · `chrome-dev-task-card` (S; pure props) |
+| `island-notifications` | inbox cards | ⬜ ISL-3 · promote inbox cards to chrome |
+| `island-changelog` | inbox cards | ⬜ ISL-3 · promote inbox cards to chrome |
+| `island-chat-list` | `renderChatList` | ⬜ ISL-3 · `chrome-chat-list` — **complex** (twin adds search/nesting/inflight/pagination; port those into props first) |
+| `island-chat-meta-bar` | chat top bar | ⬜ ISL-2 · `chrome-chat-bar` (M) |
+| `island-object-browser` | object nav | ⬜ DEAD-3 gallery-dup · promote or delete |
+| `island-trace-signature` | trace strip | ⬜ DEAD-3 gallery-dup · promote or delete (chrome-trace-view already covers the live trace) |
+| `island-file-browser` | file picker | ⬜ M · `chrome-file-browser` |
+| `island-header-bar` | header | ⬜ ISL-4 shell (M) — needs the id-contract check folded into the fallback |
+| `island-input-row` | composer row | ⬜ ISL-4 shell (M) |
+| `island-drawer-frame` | sidebar frame | ⬜ ISL-4 shell (M) |
+| `island-inbox-view` | notifications view | ⬜ ISL-4 shell (M) |
+| `island-message-bubble` | bubble shell | ⬜ ISL-4 shell (M) |
+| `island-settings-modal` | settings shell | ⬜ ISL-4 shell (M) |
+| `island-shares-panel` | Shares panel | 🔒 **KEEP island** — trusted-path denylist (never chrome) |
+| `island-powers-banner` | powers banner | 🔒 **KEEP island** — trusted-path denylist |
+| `island-proposal-card` | proposal confirm | 🔒 **KEEP island** — authority decision = trusted path |
+| `island-share-link-manager` | share links | 🔒 review — cap hand-off surface; likely KEEP |
+| `island-ui-kit` | — | ⚙️ foundational primitives (already confined via `FORK_VOCAB`); not a standalone piece |
+| `island-trace` (3D) | pendant | ⚙️ KEEP — plain WebGL pendant; needs the Tier-2 iframe runtime (div trace already = `chrome-trace-view`) |
