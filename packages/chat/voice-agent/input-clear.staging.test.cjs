@@ -6,14 +6,15 @@
 // Stubs /chat with three responder modes and asserts the input is empty after each send.
 //
 // Run: node input-clear.staging.test.cjs   (exits non-zero on failure; SKIPs without chromium)
-const fs = require('node:fs'); const os = require('node:os');
-const cap = fs.readFileSync(os.homedir() + '/.config/field-agent/root.swiss', 'utf8').trim();
+const { startIsolatedServer, loadChromium, launchBrowser } = require('./test-harness.cjs');
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail++; console.error('  FAIL -', m); } };
 (async () => {
-  let chromium = null; try { ({ chromium } = require('/usr/lib/node_modules/@playwright/cli/node_modules/playwright-core')); } catch {}
+  const chromium = loadChromium();
   if (!chromium) { console.log('  SKIP - no chromium'); console.log(`\n${pass} passed, ${fail} failed (skipped)`); process.exit(0); }
-  const br = await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'], env: { ...process.env, LD_LIBRARY_PATH: '/var/lib/obsidian/oldlibs' } });
+  const srv = await startIsolatedServer();
+  const cap = srv.cap;
+  const br = await launchBrowser(chromium);
   const test = async (label, mode) => {
     const page = await br.newPage();
     await page.addInitScript((m) => { const orig = window.fetch; window.fetch = (u, o) => { u = String(u);
@@ -26,7 +27,7 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
       return orig(u, o);
     }; }, mode);
     await page.addInitScript(c => { try { localStorage.setItem('field-agent-cap', c); } catch {} }, cap);
-    await page.goto('http://127.0.0.1:8778/', { waitUntil: 'load' }); await page.waitForTimeout(2500);
+    await page.goto(`${srv.base}/`, { waitUntil: 'load' }); await page.waitForTimeout(2500);
     await page.fill('#text', 'my important message');
     await page.evaluate(() => { const b = document.getElementById('send'); b && b.click(); });
     await page.waitForTimeout(2500);
@@ -35,6 +36,6 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
     await page.close();
   };
   try { await test('gateway-timeout', 'timeout'); await test('provider-error', 'error'); await test('success', 'success'); }
-  finally { await br.close(); }
+  finally { await br.close(); srv.close(); }
   console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('staging test error:', e && e.stack || e); process.exit(2); });

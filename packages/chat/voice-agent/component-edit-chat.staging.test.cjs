@@ -3,14 +3,15 @@
 // (designs/live-editable-everything.md): Alt-click ✎ edit on a component opens a CONVERSATIONAL edit chat with
 // the component's agent (NOT a one-shot window.prompt). Sending a message edits the component live via its edit
 // endpoint and the exchange renders as a chat. Runs against the live service on :8778 with the root cap.
-const fs = require('node:fs');
-const cap = fs.readFileSync(require('node:os').homedir() + '/.config/field-agent/root.swiss', 'utf8').trim();
+const { startIsolatedServer, loadChromium, launchBrowser } = require('./test-harness.cjs');
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail++; console.error('  FAIL -', m); } };
 (async () => {
-  let chromium = null; try { ({ chromium } = require('/usr/lib/node_modules/@playwright/cli/node_modules/playwright-core')); } catch {}
+  const chromium = loadChromium();
   if (!chromium) { console.log('  SKIP - no chromium'); console.log(`\n${pass} passed, ${fail} failed (skipped)`); process.exit(0); }
-  const br = await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'], env: { ...process.env, LD_LIBRARY_PATH: '/var/lib/obsidian/oldlibs' } });
+  const srv = await startIsolatedServer();
+  const cap = srv.cap;
+  const br = await launchBrowser(chromium);
   try {
     const page = await br.newPage();
     const errs = []; page.on('pageerror', e => errs.push(e.message));
@@ -30,7 +31,7 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
     });
     await page.route('**/chat/steps**', r => r.fulfill({ status: 200, contentType: 'text/event-stream', body: '' }));
     await page.addInitScript(c => { try { localStorage.setItem('field-agent-cap', c); } catch {} }, cap);
-    await page.goto('http://127.0.0.1:8778/', { waitUntil: 'load' }); await page.waitForTimeout(3500);
+    await page.goto(`${srv.base}/`, { waitUntil: 'load' }); await page.waitForTimeout(3500);
     // an owner (root) holds component-edit rights; inject a tagged component (any [data-component-id] / .gw-component
     // element is alt-selectable — the trie tags them at render; we inject one to isolate the alt-click → edit-chat wiring).
     await page.evaluate(() => { const d = document.createElement('div'); d.className = 'gw-component'; d.setAttribute('data-component-id', 'test-comp'); d.setAttribute('data-component-name', 'Test Panel'); d.style.cssText = 'width:220px;height:60px'; d.textContent = 'test'; document.body.appendChild(d); });
@@ -54,6 +55,6 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
     ok(/v3/.test(await page.evaluate(() => document.getElementById('ce-log').innerText)), 'an applied edit shows the new live version');
     ok(errs.length === 0, `no page errors (${errs.slice(0, 2).join('; ')})`);
     await page.close();
-  } finally { await br.close(); }
+  } finally { await br.close(); srv.close(); }
   console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('staging test error:', e && e.stack || e); process.exit(2); });

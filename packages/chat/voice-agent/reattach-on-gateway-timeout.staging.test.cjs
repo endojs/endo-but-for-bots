@@ -7,14 +7,15 @@
 //
 // We stub the network: /chat → a 504 HTML page (proxy timeout); /chat/result → a finished `done` answer.
 // Assert: the persisted answer renders, AND /chat was POSTed exactly once (no wasteful re-run).
-const fs = require('node:fs');
-const cap = fs.readFileSync(require('node:os').homedir() + '/.config/field-agent/root.swiss', 'utf8').trim();
+const { startIsolatedServer, loadChromium, launchBrowser } = require('./test-harness.cjs');
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail++; console.error('  FAIL -', m); } };
 (async () => {
-  let chromium = null; try { ({ chromium } = require('/usr/lib/node_modules/@playwright/cli/node_modules/playwright-core')); } catch {}
+  const chromium = loadChromium();
   if (!chromium) { console.log('  SKIP - no chromium'); console.log(`\n${pass} passed, ${fail} failed (skipped)`); process.exit(0); }
-  const br = await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'], env: { ...process.env, LD_LIBRARY_PATH: '/var/lib/obsidian/oldlibs' } });
+  const srv = await startIsolatedServer();
+  const cap = srv.cap;
+  const br = await launchBrowser(chromium);
   try {
     const page = await br.newPage();
     let chatPosts = 0, resultPosts = 0;
@@ -33,7 +34,7 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
         localStorage.setItem('field-agent-tx-' + id, JSON.stringify([]));
       } catch {}
     }, cap);
-    await page.goto('http://127.0.0.1:8778/', { waitUntil: 'load' }); await page.waitForTimeout(3500);
+    await page.goto(`${srv.base}/`, { waitUntil: 'load' }); await page.waitForTimeout(3500);
     await page.evaluate(() => { const it = [...document.querySelectorAll('.chat-item .ci-title')].find(s => /reattach/.test(s.textContent)); if (it) it.click(); });
     await page.waitForTimeout(500);
     await page.fill('#text', 'a long question that the proxy will time out');
@@ -45,6 +46,6 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
     ok(chatPosts === 1, `the turn is NOT re-run — /chat POSTed exactly once (got ${chatPosts})`);
     ok(resultPosts >= 1, `the client re-attached via /chat/result (got ${resultPosts} call(s))`);
     await page.close();
-  } finally { await br.close(); }
+  } finally { await br.close(); srv.close(); }
   console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('staging test error:', e && e.stack || e); process.exit(2); });
