@@ -1616,7 +1616,7 @@ const handler = async (req, res) => {
       // joined mid-run sees the whole fan-out, not just steps after it connected.
       const buf = stepBuffers.get(sid); if (buf && buf.length) { for (const obj of buf) { try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* */ } } }
       let set = stepStreams.get(sid); if (!set) { set = new Set(); stepStreams.set(sid, set); } set.add(res);
-      const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch { /* closed */ } }, 15000);
+      const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch { /* closed */ } }, 15000); hb.unref?.(); // P2-7: the open socket keeps the loop alive; the heartbeat needn't
       req.on('close', () => { clearInterval(hb); set.delete(res); if (!set.size) stepStreams.delete(sid); });
       return undefined; // keep the connection open
     }
@@ -1670,7 +1670,7 @@ const handler = async (req, res) => {
         const gone = share ? !componentShares.get(shareToken) : (!nodeFor(cap) || list.some(id => resolve(id).error)); // resolve (not cellFor) so a backlog: cell re-validates through its own owner gate
         if (gone) return teardown();
         try { if (res.write(': hb\n\n') === false) { /* backpressure ok */ } } catch { teardown(); }
-      }, 15000);
+      }, 15000); hb.unref?.(); // P2-7: parity — don't hold the loop open on the timer alone
       req.on('close', teardown); res.on('close', teardown); res.on('error', teardown);
       try { req.socket.setTimeout(120000, teardown); } catch { /* */ } // half-open guard: no traffic in 2m → drop
       return undefined; // keep open
@@ -3732,7 +3732,7 @@ const main = async () => {
       }
     } catch (e) { log('schedTick', e.message); } finally { ticking = false; }
   };
-  setInterval(() => { schedTick().catch(e => log('schedTick', e && e.message)); }, 30000);
+  setInterval(() => { schedTick().catch(e => log('schedTick', e && e.message)); }, 30000).unref?.(); // P2-7: parity with the other background intervals — don't keep the process alive on its own
 
   // ── W4 PROPAGATOR-FIRST: a scheduled agent can be EVENT-triggered (trigger:{kind:'event',source}) — it
   //    fires the moment a doc lands in the watched vault folder, not on a clock. (dan: "wrap things into
@@ -3761,7 +3761,7 @@ const main = async () => {
   if (componentSync.enabled) {
     log(`component-git sync ON → ${componentSync.remote}`);
     componentSync.syncAll().then(r => log(`component-git sync: pushed ${r.pushed}${r.failed ? `, ${r.failed} failed` : ''}`)).catch(e => log('component-sync boot', e.message));
-    setInterval(() => { componentSync.syncAll().catch(e => log('component-sync sweep', e.message)); }, 15 * 60 * 1000);
+    setInterval(() => { componentSync.syncAll().catch(e => log('component-sync sweep', e.message)); }, 15 * 60 * 1000).unref?.(); // P2-7: parity — background sweep shouldn't hold the event loop open
   }
 
   { const c = configSummary(); log(`instance: ${c.instance} | field mode: ${c.mode} | personal-root: ${c.personalRoot} | config: ${c.configDir} | vault: ${c.vault}`); }
