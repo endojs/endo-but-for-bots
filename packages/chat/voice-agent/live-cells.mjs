@@ -72,6 +72,6 @@ export const makeLiveCells = ({ nodeFor }) => {
     return { error: `unknown cell kind: ${kind}` };
   };
 
-  return { cellFor, cellForReader };
+  return harden({ cellFor, cellForReader });
 };
 harden(makeLiveCells);

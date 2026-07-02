@@ -22,7 +22,9 @@ const DELEG_STORE = process.env.DELEGATION_STORE || path.join(STATE_DIR, 'delega
 // gator-pay.json: { chargeServerUrl:"http://127.0.0.1:8799", treasury:"0x…payee",
 //   weiPerUusd:"<bigint string>", chain:"linea-sepolia" }. Absent → this rail is off.
 export const loadGatorCfg = () => { try { const c = JSON.parse(fs.readFileSync(GATOR_CFG, 'utf8')); return (c && c.chargeServerUrl && c.treasury) ? c : null; } catch { return null; } };
+harden(loadGatorCfg);
 export const gatorConfigured = () => !!loadGatorCfg();
+harden(gatorConfigured);
 
 // Normalize an ERC-7715 grant into the {permissionsContext, delegationManager, accountMetadata}
 // triple the settlement service redeems with (ERC-7710). Accepts, in order of currency:
@@ -42,6 +44,7 @@ export const normalizeGrant = d => {
   const accountMetadata = [g.accountMetadata, g.dependencies, g.dependencyInfo].find(Array.isArray) || [];
   return { permissionsContext, delegationManager, accountMetadata };
 };
+harden(normalizeGrant);
 
 // The public facts a client needs to BUILD a correct ERC-7715 request: `to` (the settlement
 // delegate that will redeem — current Flask's request field; `signer` kept as a legacy alias),
@@ -57,6 +60,7 @@ export const grantParams = async (fetchImpl = fetch) => {
     return { chainId: cachedInfo.chainId, to: cachedInfo.delegate, signer: cachedInfo.delegate, chain: cachedInfo.chain || cfg.chain || '', weiPerUsd: (BigInt(cfg.weiPerUusd || '0') * 1000000n).toString() };
   } catch { cachedInfo = null; return null; }
 };
+harden(grantParams);
 
 // INT-1: MONEY/AUTHORITY store (spending delegations) — atomic write + .bak + guarded load (refuse to
 // silently reset the users' granted spending authorizations to {} on a corrupt-but-present file).
@@ -77,8 +81,11 @@ export const recordDelegation = ({ cap, sid, delegation, now, subscription = nul
   };
   save(o); return { ok: true };
 };
+harden(recordDelegation);
 export const hasDelegation = (cap, sid) => !!load()[keyFor(cap, sid)];
+harden(hasDelegation);
 export const getSubscription = (cap, sid) => { const r = load()[keyFor(cap, sid)]; return r && r.sub ? r.sub : null; };
+harden(getSubscription);
 
 // Subscription state for the UI — never returns the delegation/key, only terms + how much of THIS period is left.
 export const subscriptionStatus = (cap, sid, now = Date.now()) => {
@@ -90,6 +97,7 @@ export const subscriptionStatus = (cap, sid, now = Date.now()) => {
   const redeemedThisPeriod = elapsed >= rec.sub.periodMs ? 0 : (rec.periodRedeemed || 0);
   return { subscribed: true, configured, periodUusd: rec.sub.periodUusd, periodMs: rec.sub.periodMs, periodRedeemed: redeemedThisPeriod, periodRemaining: Math.max(0, rec.sub.periodUusd - redeemedThisPeriod), resetsInMs: Math.max(0, rec.sub.periodMs - elapsed), totalRedeemed: rec.redeemed || 0 };
 };
+harden(subscriptionStatus);
 
 // AUTO-TOP-UP: redeem up to `uusd` from the subscription to refill the purse, RESPECTING the period cap (resets
 // each period). The caller credits the purse on ok (so the purse stays the single real-time ledger). This is
@@ -109,9 +117,11 @@ export const autoTopup = async ({ cap, sid, uusd, fetchImpl = fetch, now = Date.
   const o2 = load(); const rec2 = o2[k]; if (rec2) { rec2.periodStart = new Date(start).toISOString(); rec2.periodRedeemed = redeemed + want; save(o2); }
   return { ok: true, uusd: want, ref: r.ref };
 };
+harden(autoTopup);
 
 // µUSD → on-chain wei via the configured rate. Kept here so the conversion is one place.
 export const uusdToWei = (cfg, uusd) => (BigInt(Math.max(0, Math.round(Number(uusd) || 0))) * BigInt(cfg.weiPerUusd || '0'));
+harden(uusdToWei);
 
 // Redeem `uusd` worth against the stored delegation via the charge-server; returns {ok, ref|error}.
 // On ok the CALLER credits the purse (so the purse stays the single real-time ledger).
@@ -129,3 +139,4 @@ export const redeemDelegation = async ({ cap, sid, uusd, fetchImpl = fetch }) =>
   const o = load(); const k = keyFor(cap, sid); if (o[k]) { o[k].redeemed = (o[k].redeemed || 0) + Math.round(Number(uusd) || 0); save(o); }
   return { ok: true, ref: r.ref, uusd: Math.round(Number(uusd) || 0) };
 };
+harden(redeemDelegation);

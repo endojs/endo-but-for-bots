@@ -47,6 +47,7 @@ export const KIT = [
   ['Drawer', 'a slide-in side panel'],
   ['Stepper', 'a multi-step progress indicator'],
 ];
+harden(KIT);
 
 // composed ISLANDS (client/*.js) — whole, themed, tested pieces of the app. Reuse one wholesale when it fits.
 export const ISLANDS = [
@@ -66,6 +67,7 @@ export const ISLANDS = [
   ['PowersBanner', 'the "this chat can…" power chips (revoke / add)'],
   ['KitSampler', 'a living sample of every kit primitive (design-system reference)'],
 ];
+harden(ISLANDS);
 
 // live WIDGET verbs the agent emits in a reply (rendered by the host into grain-backed widgets).
 export const WIDGETS = [
@@ -73,17 +75,21 @@ export const WIDGETS = [
   ['showCountdowns', 'one or more LIVE countdown timers (cooking steps, reminders)'],
   ['showChoices', 'a "pick one" choice set the user taps'],
 ];
+harden(WIDGETS);
 
 // The curated subset of the kit re-expressed PURELY in-frame (over ui.create) + reachable as ui.island(name,…)
 // inside a confined showComponent reply widget — see public/confined.html. Distinct from the main-origin
 // island bundle (which can't load in the no-network sandbox): this is a render-only, no-authority look.
 export const KIT_IN_FRAME = ['Card', 'Btn', 'Chip', 'Badge', 'Banner', 'Meta', 'Stack', 'Row', 'Divider', 'EmptyState', 'ProgressBar', 'Field', 'TextField'];
+harden(KIT_IN_FRAME);
 
 const fmt = rows => rows.map(([n, d]) => `  - ${n}: ${d}`).join('\n');
 
 // the human/agent-facing catalog text.
 export const catalogText = () => `KIT PRIMITIVES (compose these):\n${fmt(KIT)}\n\nISLANDS (reuse whole):\n${fmt(ISLANDS)}\n\nLIVE WIDGET VERBS (in a reply):\n${fmt(WIDGETS)}\n\nKIT INSIDE A REPLY WIDGET — reachable as ui.island(name, props, children) within a confined showComponent (render-only, themed):\n  ${KIT_IN_FRAME.join(', ')}\n\nCONFINED CANVAS (for drawing / painting / plotting / charts / small games): a <canvas> IS a first-class confined surface — don't ask the host to mount a raw widget for it. \`ui.create('canvas').ctx()\` returns an attenuated 2D facet (size/clear/fillStyle/strokeStyle/lineWidth/alpha/composite/beginPath/moveTo/lineTo/arc/rect/fill/stroke/fillRect/dot(x,y,r)/drawCanvas(otherCanvas)/drawImageUrl(dataUrl)/toDataURL()) — pure drawing, never the raw element. Read pointer coordinates from pointer events: \`c.on('pointerdown'|'pointermove'|'pointerup', e => { e.x; e.y; })\` (canvas-pixel coords). Seed data the host passes via \`ui.props\`. Invoke a HOST-GATED action (e.g. a cap-backed GPU/network job the frame itself can't do) via \`await ui.call('method', args)\` — the frame holds NO capability; the host is the gate. Reference impl: public/inpaint-island.js (a FLUX.2 mask-painter). PREFER this over a host-mounted imperative widget unless you specifically need WebGL/Three or a shared long-lived GL context.`;
+harden(catalogText);
 
 // the reuse-first directive prepended to component-authoring system prompts.
 export const reuseFirstPreamble = () =>
   `REUSE FIRST. Agent C already ships themed, tested UI building blocks. Before writing new markup, COMPOSE these — reach for a kit primitive or whole island that fits the need. Create a NEW component ONLY when none of them meets the need; and when you must, build it FROM kit primitives, use theme vars only (never hardcoded colours — light/dark must both work), keep it general + stateless, and prefer it become reusable rather than one-off. ACCENT has two tokens: var(--acc)/var(--you) for accent TEXT/borders, and var(--acc-fill)/var(--you-fill) for a solid accent BACKGROUND behind white text (white passes WCAG AA on the -fill tokens; --acc as a fill does not).\n\n${catalogText()}`;
+harden(reuseFirstPreamble);
