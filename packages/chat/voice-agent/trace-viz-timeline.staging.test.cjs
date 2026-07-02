@@ -37,11 +37,16 @@ const loadMod = async () => import(require('node:url').pathToFileURL(path.join(D
 
 // ── a faithful recording stub of confined.html's `ui` (kind 'ui'): create/grain/local/call/props +
 //    a recording canvas-2d context. Mirrors public/confined.html's create()/apiGrain()/call(). ────────
-const makeRecUI = cellValue => {
+// opts.motion === true → prefers-reduced-motion:reduce is FALSE (the splash sweep runs); default is
+// reduced-motion so span geometry is full + stable (widths don't change frame-to-frame, which keeps the
+// hover hit-test + pan/zoom assertions deterministic — the sweep is proven in its own dedicated test).
+const makeRecUI = (cellValue, opts) => {
   const diag = [];
   const raf = [];
+  const handlers = {}; // event -> [fn], recorded from the overlay canvas's .on(...) (mirrors confined.html)
   global.requestAnimationFrame = fn => { raf.push(fn); return raf.length; };
   global.devicePixelRatio = 1;
+  global.matchMedia = () => ({ matches: !(opts && opts.motion) }); // reduced-motion unless opts.motion
   let ctx = null;
   const mkCtx = () => {
     const calls = []; const st = { globalAlpha: 1, fillStyle: '', strokeStyle: '' };
@@ -53,30 +58,41 @@ const makeRecUI = cellValue => {
       get strokeStyle() { return st.strokeStyle; }, set strokeStyle(v) { st.strokeStyle = v; },
       set lineWidth(v) {}, set font(v) {}, set textBaseline(v) {}, set textAlign(v) {}, set lineJoin(v) {},
       clearRect() {}, fillRect(...a) { rec('fillRect', a); }, strokeRect(...a) { rec('strokeRect', a); },
-      beginPath() {}, moveTo() {}, lineTo() {}, stroke() { rec('stroke', []); }, fill() {}, arcTo() {}, closePath() {}, setLineDash() {},
+      beginPath() {}, moveTo() {}, lineTo() {}, stroke() { rec('stroke', []); }, fill() { rec('fill', []); }, arcTo() {}, closePath() {}, setLineDash() {},
       measureText(t) { return { width: String(t).length * 6 }; }, fillText(t) { rec('fillText', [t]); },
     };
   };
   const canvas = { width: 0, height: 0, clientWidth: 900, clientHeight: 300, getContext(k) { if (k === '2d') { ctx = ctx || mkCtx(); return ctx; } return null; } };
-  const create = tag => { const el = tag === 'canvas' ? canvas : {}; const w = { el, style: () => w, push: () => w, on: () => w }; return w; };
+  const create = tag => { const el = tag === 'canvas' ? canvas : {}; const w = { el, style: () => w, push: () => w, on: (ev, fn) => { (handlers[ev] = handlers[ev] || []).push(fn); return w; } }; return w; };
   const grain = () => ({ subscribe(fn) { if (cellValue !== undefined) { try { fn(cellValue); } catch (e) {} } return () => {}; }, get: () => cellValue, set() {} });
   const ui = { create, grain, local: grain, call: (m, a) => { if (m === 'vizDiag') diag.push(a); return Promise.resolve({}); }, props: { cell: cellValue !== undefined ? 'trace:x' : '' } };
-  return { ui, diag, tick: () => { raf.splice(0).forEach(fn => fn(16)); }, ctx: () => ctx };
+  const fire = (ev, arg) => { (handlers[ev] || []).forEach(fn => { try { fn(arg); } catch (e) {} }); };
+  return { ui, diag, fire, tick: () => { raf.splice(0).forEach(fn => fn(16)); }, ctx: () => ctx, clear: () => { if (ctx) ctx.calls.length = 0; } };
+};
+
+// mount the SOURCE against the recording stub; the returned handle lets a test drive interactions
+// (fire pointer events), step frames (tick), and read what got drawn (spans/texts/strokes).
+const mount = (SRC, cellValue, opts) => {
+  const rec = makeRecUI(cellValue, opts);
+  const fn = eval(`(${SRC})`); // the confined.html mount() path also evaluates the source expression
+  const wrap = fn(rec.ui);
+  const spans = () => { const c = rec.ctx(); if (!c) return []; return c.calls.filter(x => x.n === 'fillRect' && (Math.abs(x.alpha - 0.95) < 0.01 || Math.abs(x.alpha - 0.4) < 0.01)).map(x => ({ x: x.a[0], y: x.a[1], w: x.a[2], h: x.a[3], alpha: x.alpha })); };
+  const texts = () => { const c = rec.ctx(); return c ? c.calls.filter(x => x.n === 'fillText').map(x => String(x.a[0])).join(' | ') : ''; };
+  const strokeColors = () => { const c = rec.ctx(); return c ? c.calls.filter(x => x.n === 'stroke').map(x => x.stroke) : []; };
+  return { wrap: !!(wrap && wrap.el), mode: rec.ctx() ? '2d' : 'none', ...rec, spans, texts, strokeColors };
 };
 
 // evaluate + render ONE snapshot; returns an analysis of what got drawn (never throws out).
 const renderOnce = (SRC, cellValue) => {
-  const { ui, diag, tick, ctx } = makeRecUI(cellValue);
-  const fn = eval(`(${SRC})`); // the confined.html mount() path also evaluates the source expression
-  const wrap = fn(ui);
-  tick();
-  const c = ctx();
+  const h = mount(SRC, cellValue);
+  h.tick();
+  const c = h.ctx();
   const rects = c ? c.calls.filter(x => x.n === 'fillRect') : [];
   const bright = rects.filter(x => Math.abs(x.alpha - 0.95) < 0.01).length;
   const dim = rects.filter(x => Math.abs(x.alpha - 0.4) < 0.01).length;
   const gold = !!c && c.calls.some(x => x.n === 'stroke' && /227,\s*179,\s*65/.test(x.stroke));
   const texts = c ? c.calls.filter(x => x.n === 'fillText').map(x => String(x.a[0])).join(' | ') : '';
-  return { wrap: !!(wrap && wrap.el), mode: c ? '2d' : 'none', bright, dim, gold, texts, diag };
+  return { wrap: h.wrap, mode: c ? '2d' : 'none', bright, dim, gold, texts, diag: h.diag };
 };
 
 const SWISS = '#SwiSs1AbCdEfGhIjKlMnOpQrStUvWxYz0123';
@@ -88,7 +104,7 @@ const SWISS_RE = /#?[A-Za-z0-9_-]{22,}/;
   const SPLASH = mod.TRACE_VIZ_TIMELINE_SPLASH;
 
   // ── contract + hygiene of the committed source itself ──────────────────────────────────────────────
-  ok(SRC.length <= 8000, `source is within the break-out cap (${SRC.length} ≤ 8000 chars)`);
+  ok(SRC.length <= 16000, `source is within the (raised) break-out cap (${SRC.length} ≤ 16000 chars)`);
   ok(/^\(ui\)=>/.test(SRC), 'source is a `(ui) => element` (passes break-out validation)');
   ok(/TRACE-VIZ/.test(SRC) && /FORK FREELY/.test(SRC) && /ui\.grain\(ui\.props\.cell\)/.test(SRC), 'the source documents the cell contract + the riff invitation (what the edit-chat shows)');
   ok(!/\bfetch\s*\(|XMLHttpRequest|WebSocket|\bimport\s*\(/.test(SRC), 'no network primitive in the source (fetch/XHR/WebSocket/dynamic import)');
@@ -139,6 +155,73 @@ const SWISS_RE = /#?[A-Za-z0-9_-]{22,}/;
   ok(grew, 'the growing trace renders at every step (start → fan-out → join) without throwing');
   ok(litBottleneck, 'as the trace grows the critical path re-computes (2 agents, the heavy "Alpha" lane on the path)');
   ok(noSwiss, 'a #cap-shaped token injected into a step name is SCRUBBED everywhere it could surface (labels + bottleneck chip)');
+
+  // ── RESTORED INTERACTION LAYER (the features dropped to fit under 8000, now back under 16000) ───────
+
+  // (1) HOVER TOOLTIP — hovering a span draws a cap-SCRUBBED tooltip (agent/step name, kind, ok, duration).
+  const tipSnap = { status: 'done', steps: [
+    { name: 'scope', agent: 'orchestrator', ok: true, t0: 0, t1: 0.2 },
+    { name: `web ${SWISS}`, agent: 'Alpha', ok: true, t0: 0.3, t1: 4.5 }, // the widest span (the one we hover)
+    { name: 'read', agent: 'Beta', ok: false, t0: 0.3, t1: 1.0 },
+    { name: 'synthesize', agent: 'orchestrator', ok: true, t0: 4.6, t1: 5.2 },
+  ] };
+  {
+    const h = mount(SRC, tipSnap); // default = reduced-motion → full, stable span widths for a deterministic hit-test
+    h.tick();
+    const widest = h.spans().reduce((a, b) => (b.w > a.w ? b : a)); // the Alpha "web" span
+    h.clear();
+    h.fire('pointermove', { x: widest.x + widest.w / 2, y: widest.y + widest.h / 2 }); // hover its center (no prior pointerdown ⇒ hit-test)
+    h.tick();
+    const tip = h.texts();
+    ok(/Alpha/.test(tip), `hovering a span shows a tooltip naming the agent lane ("Alpha") — got: ${(tip.match(/Alpha[^|]*/) || [''])[0].trim()}`);
+    ok(/web/.test(tip) && /ok/.test(tip) && /4\.2s/.test(tip), 'the tooltip carries the step name + ok/fail + duration (web · ✓ ok · 4.2s)');
+    ok(!SWISS_RE.test(tip), 'the tooltip is cap-SCRUBBED: a #cap-shaped token planted in the hovered span name never reaches the tooltip');
+  }
+
+  // (2) ZOOM / SCRUB / PAN — a drag (DevTools-style: horizontal = pan, vertical = zoom) moves the visible window.
+  {
+    const h = mount(SRC, SPLASH);
+    h.tick();
+    const s1 = h.spans().map(r => r.x);
+    const spread1 = Math.max(...s1) - Math.min(...s1);
+    h.fire('pointerdown', { x: 450, y: 150 });
+    h.fire('pointermove', { x: 250, y: 60 }); // drag left+up → pan left, zoom in
+    h.clear();
+    h.tick();
+    const s2 = h.spans().map(r => r.x);
+    const spread2 = Math.max(...s2) - Math.min(...s2);
+    ok(spread2 > spread1 * 1.2, `zoom changed the time scale: span spread widened ${spread1.toFixed(0)}px → ${spread2.toFixed(0)}px`);
+    ok(Math.abs(Math.min(...s2) - Math.min(...s1)) > 2, 'pan changed the visible window (the left-most span moved)');
+    // a bounded release restores nothing catastrophic — after pointerup the view is stable, still renders
+    h.fire('pointerup', {});
+    h.clear(); h.tick();
+    ok(h.spans().length === 8, 'after pointerup the (zoomed) view keeps rendering all spans — interaction stays bounded/defensive');
+  }
+
+  // (3) FORK/JOIN CONNECTORS for the SLACK lanes (thin grey connectors, distinct from the gold ribbon).
+  {
+    const h = mount(SRC, SPLASH); // slack lanes = Jaeger + Zipkin (DevTools is the critical lane → rides the ribbon)
+    h.tick();
+    const cons = h.strokeColors().some(c => /139,\s*148,\s*163/.test(c || ''));
+    ok(cons, 'thin fork/join connectors render for the dimmed (slack) lanes so spawn/return is legible everywhere');
+    ok(h.strokeColors().some(c => /227,\s*179,\s*65/.test(c || '')), 'the gold critical-path ribbon still threads the critical lane (both connector styles coexist)');
+  }
+
+  // (4) IN-SPAN TEXT LABELS — short step labels are drawn inside spans wide enough to hold them.
+  {
+    const lab = renderOnce(SRC, SPLASH).texts;
+    ok(/synthesize/.test(lab), 'in-span labels draw the step name inside wide spans ("synthesize" is a span label, not a lane label)');
+  }
+
+  // (5) SPLASH SWEEP + prefers-reduced-motion — the playhead sweeps under motion, and is SUPPRESSED under reduce.
+  {
+    const moving = mount(SRC, SPLASH, { motion: true }); // prefers-reduced-motion:reduce = false
+    moving.tick(); // one frame → sweep is mid-flight → a playhead line is drawn
+    ok(moving.strokeColors().some(c => /227,\s*179,\s*65,\s*\.70/.test(c || '')), 'splash sweep animation: a playhead line sweeps across while the trace reveals (motion allowed)');
+    const still = mount(SRC, SPLASH); // default reduced-motion
+    still.tick();
+    ok(!still.strokeColors().some(c => /227,\s*179,\s*65,\s*\.70/.test(c || '')), 'prefers-reduced-motion:reduce SUPPRESSES the sweep playhead (no animation)');
+  }
 
   // ── BROWSER: mount in the REAL Tier-2 runtime (public/confined.html) ───────────────────────────────
   let chromium = null;
@@ -202,10 +285,32 @@ const SWISS_RE = /#?[A-Za-z0-9_-]{22,}/;
     ok(!!d0 && d0.ag === 3 && d0.cp === 4, `the critical path was computed INSIDE the sandbox (agents=${d0 && d0.ag}, lit spans=${d0 && d0.cp})`);
     ok(!!d0 && d0.bn === 'web' && !SWISS_RE.test(d0.bn || ''), `the bottleneck is named (scrubbed) — "${d0 && d0.bn}"`);
 
-    // screenshot the splash
+    // screenshot the splash (let the sweep settle first)
+    await sleep(900);
     let shot = '';
     try { shot = path.join(shotDir, 'trace-viz-timeline-splash.png'); await page.screenshot({ path: shot }); console.log('  info - screenshot:', shot); } catch {}
     ok(!!shot && fs.existsSync(shot) && fs.statSync(shot).size > 1000, 'screenshotted the splash card (non-trivial PNG)');
+
+    // drive the RESTORED interactions IN THE REAL FRAME + screenshot the tooltip and a zoomed state.
+    // The iframe sits at the body's top-left (~8px margin); a span center is ~(8+455, 8+150).
+    const OX = 8, OY = 8;
+    try {
+      await page.mouse.move(OX + 300, OY + 120); await sleep(40);
+      await page.mouse.move(OX + 450, OY + 250); // hover the wide DevTools "web" span (bottom lane) → tooltip
+      await sleep(120);
+      const tshot = path.join(shotDir, 'trace-viz-timeline-tooltip.png');
+      await page.screenshot({ path: tshot }); console.log('  info - screenshot:', tshot);
+      ok(fs.existsSync(tshot) && fs.statSync(tshot).size > 1000, 'screenshotted the hover TOOLTIP over a span (non-trivial PNG)');
+    } catch (e) { ok(false, `tooltip screenshot failed: ${e && e.message}`); }
+    try {
+      await page.mouse.move(OX + 450, OY + 160); await page.mouse.down();
+      await page.mouse.move(OX + 250, OY + 60, { steps: 6 }); // drag left+up → pan + zoom in
+      await sleep(120);
+      const zshot = path.join(shotDir, 'trace-viz-timeline-zoomed.png');
+      await page.screenshot({ path: zshot }); console.log('  info - screenshot:', zshot);
+      await page.mouse.up();
+      ok(fs.existsSync(zshot) && fs.statSync(zshot).size > 1000, 'screenshotted a ZOOMED/panned state (drag-to-zoom in the real frame; non-trivial PNG)');
+    } catch (e) { ok(false, `zoom screenshot failed: ${e && e.message}`); }
 
     // feed a swissnum-tainted growing snapshot; assert the sandbox re-computes + never echoes the swissnum
     await page.evaluate(sw => window.__feed({ status: 'done', steps: [{ name: 'scope', agent: 'orchestrator', ok: true, t0: 0, t1: 0.2 }, { name: `web ${sw}`, agent: 'Alpha', ok: true, t0: 0.3, t1: 4.5 }, { name: 'read', agent: 'Beta', ok: false, t0: 0.3, t1: 1.0 }, { name: 'synthesize', agent: 'orchestrator', ok: true, t0: 4.6, t1: 5.2 }] }), SWISS);
