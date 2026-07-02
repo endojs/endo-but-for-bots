@@ -99,6 +99,7 @@ const MAX_CONFIG_DIR_LENGTH = Math.max(
 // New labels added here must either remain prefix-disjoint after
 // truncation or pick distinct first segments that do not collapse.
 let configCounter = 0;
+/** @param {string} label */
 const makeConfig = label => {
   configCounter += 1;
   const suffix = String(configCounter).padStart(4, '0');
