@@ -29,6 +29,11 @@ export const makePurseStore = ({ file, debounceMs = 800 }) => {
     // returns { balance, granted } for a key's HASH, or undefined if never persisted
     get: key => data[hashKey(key)],
     set: (key, balance, granted) => { data[hashKey(key)] = { balance: Math.round(balance) || 0, granted: Math.round(granted) || 0 }; schedule(); },
+    // INT-6: credit by the ALREADY-HASHED key. Boot replay of an unapplied payment credit only holds the
+    // HASH of the routing key (the raw cap/swissnum is never persisted — cap-hygiene), so it can't call
+    // set()/get() which hash their argument. Adds uusd to the existing persisted balance (base 0 if absent);
+    // safe because replay runs before any live purse rehydrates from this store. Returns the new balance.
+    creditByHash: (h, uusd) => { const cur = data[h] || { balance: 0, granted: 0 }; cur.balance = (Math.round(cur.balance) || 0) + Math.max(0, Math.round(Number(uusd) || 0)); data[h] = cur; schedule(); return cur.balance; },
     remove: key => { const h = hashKey(key); if (h in data) { delete data[h]; schedule(); } },
     // write immediately (used on shutdown so the last debits aren't lost)
     flushNow: () => { if (pending || timer) { clearTimeout(timer); flush(); } },

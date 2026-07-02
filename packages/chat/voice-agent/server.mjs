@@ -78,7 +78,8 @@ const selfHealFixer = makeReviewedFixer({
 const customTools = makeCustomTools(process.env.SELF_HEAL === '0' ? {} : { fix: selfHealFixer }); // owner-side review/admit (same custom-tools.json the agent reads)
 import { makeAppStore } from './app-state.mjs';
 import { makePurse } from './purse.mjs';
-import { makePurseStore } from './purse-store.mjs';
+import { makePurseStore, hashKey } from './purse-store.mjs';
+import { makeCreditIntents } from './credit-intents.mjs';
 import { makeMeteredLLM } from './meter.mjs';
 import { listTimers, cancelTimer } from '../capture/timers.mjs';
 import { loadStripeCfg, stripeConfigured, recordPending, checkoutForm, verifyWebhook, settleEvent } from './pay.mjs';
@@ -560,6 +561,26 @@ const purseFor = (cap, sid) => {
   if (nsWid) return purseAt(bskyNsWallets.purseKeyFor(nsWid), 0);
   return purseAt(`${cap}:${sid}`, defaultAllowance);
 };
+// INT-6: the ROUTING KEY purseFor() resolves to (mirrors the branches above), and its HASH — the only
+// purse identifier the credit-intents journal persists (never the raw cap/swissnum — cap-hygiene). Used to
+// make a paid-money credit crash-safe: journal→credit→flush→mark, and replay any unapplied credit on boot.
+const routingKeyFor = (cap, sid) => {
+  const wid = inviteAllowances.walletIdFor(cap);
+  if (wid) return `invite-wallet:${wid}`;
+  const nsWid = bskyNsWallets.walletIdFor(cap) || (blueskyIsNamespace(cap) ? bskyNsWallets.ensure(cap) : null);
+  if (nsWid) return bskyNsWallets.purseKeyFor(nsWid);
+  return `${cap}:${sid}`;
+};
+const hashedKeyFor = (cap, sid) => hashKey(routingKeyFor(cap, sid));
+const creditIntents = makeCreditIntents({
+  file: `${VOICE_STATE_DIR}/credit-intents.json`,
+  flushPurse: () => { try { purseStore.flushNow(); } catch { /* */ } },
+  creditByHash: (h, uusd) => purseStore.creditByHash(h, uusd),
+});
+// creditPurseDurable — the ONE crash-safe "credit the purse for a real payment" path (Stripe / on-chain
+// redeem / subscription top-up). Idempotent per stable `id` (payId / tx ref). Returns { applied, already }.
+const creditPurseDurable = (id, cap, sid, uusd, kind) =>
+  creditIntents.apply(id, { hashedKey: hashedKeyFor(cap, sid), uusd, kind }, () => purseFor(cap, sid).credit(uusd));
 // Central toll-bridge for EDIT (AI-credit spend) + SAVE/HOST (storage×time) rights, used by the SPWA
 // self-editors. Same µUSD purse ledger as inference, in a separate `toll:<account>` namespace.
 const tollBridge = makeTollBridge({ purseStore, makePurse, costOf, ledgerFile: `${VOICE_STATE_DIR}/hosting-ledger.json` });
@@ -1728,7 +1749,7 @@ const handler = async (req, res) => {
       // unified purse) just keep flowing without a manual payment each time. Best-effort; failure → the normal
       // exhaustion flow still applies. Threshold = the default per-chat allowance (≈ one chat's worth of headroom).
       if (purse.balance() < defaultAllowance && getSubscription(cap, sid)) {
-        try { const tu = await autoTopup({ cap, sid, uusd: defaultAllowance }); if (tu.ok) { purse.credit(tu.uusd); log('pay', `subscription auto-top-up +${tu.uusd}µUSD for ${sid} (tx ${tu.ref})`); } } catch (e) { log('pay', 'auto-topup', e.message); }
+        try { const tu = await autoTopup({ cap, sid, uusd: defaultAllowance }); if (tu.ok) { creditPurseDurable(`topup:${tu.ref || `${sid}:${Date.now()}`}`, cap, sid, tu.uusd, 'subscription'); log('pay', `subscription auto-top-up +${tu.uusd}µUSD for ${sid} (tx ${tu.ref})`); } } catch (e) { log('pay', 'auto-topup', e.message); } // INT-6: crash-safe credit (journal→credit→flush→mark; replay on boot)
       }
       const charge = uusd => { const amt = Math.max(0, Math.round(Number(uusd) || 0)); if (!amt) return true; if (!purse.canAfford(amt)) return false; purse.debit(amt); return true; };
       // prepaid inference toll-bridge for THIS turn: ONE perProvider ledger, threaded into the
@@ -2038,8 +2059,10 @@ const handler = async (req, res) => {
       const raw = (await rawBody(req)).toString('utf8');
       if (!verifyWebhook(raw, req.headers['stripe-signature'], cfg.webhookSecret)) return json(res, 400, { error: 'bad signature' });
       let evt; try { evt = JSON.parse(raw); } catch { return json(res, 400, { error: 'bad json' }); }
-      const settled = settleEvent(evt); // idempotent: a payId credits at most once
-      if (settled) { purseFor(settled.cap, settled.sid).credit(settled.uusd); log('pay', `credited ${settled.uusd}µUSD to ${settled.sid} (payId ${settled.payId})`); }
+      const settled = settleEvent(evt); // idempotent: a payId settles at most once
+      // INT-6: journal the owed credit BEFORE crediting so a crash between settle and credit doesn't lose
+      // the user's money — replayed on boot; idempotent per payId.
+      if (settled) { creditPurseDurable(`stripe:${settled.payId}`, settled.cap, settled.sid, settled.uusd, 'stripe'); log('pay', `credited ${settled.uusd}µUSD to ${settled.sid} (payId ${settled.payId})`); }
       return json(res, 200, { received: true });
     }
     // ── BILLING RAIL #3: pay with an ERC-7710 delegation granted via MetaMask advanced permissions
@@ -2080,7 +2103,10 @@ const handler = async (req, res) => {
         if (r.needsOwner) await postFeed({ title: '⛓️ Delegated payment not set up — an invitee wants to pay on-chain', body: 'Run the gator-pay charge-server + add ~/.config/field-agent/gator-pay.json {chargeServerUrl, treasury, weiPerUusd} to enable ERC-7715/7710 settlement.', status: '🔔 needs your attention' });
         return json(res, r.needsOwner ? 503 : 402, { error: r.error, needsOwner: !!r.needsOwner });
       }
-      const p = purseFor(cap, sid); p.credit(uusd); // settled on-chain → credit the real-time purse
+      // INT-6: settled on-chain (redeemDelegation already bumped .redeemed) → credit the real-time purse
+      // crash-safely (journal the owed credit first; replay on boot; idempotent per on-chain tx ref).
+      creditPurseDurable(`deleg:${r.ref || `${sid}:${Date.now()}`}`, cap, sid, uusd, 'delegation');
+      const p = purseFor(cap, sid);
       log('pay', `delegation redeem ok: credited ${uusd}µUSD to ${sid} (tx ${r.ref})`);
       return json(res, 200, { ok: true, ref: r.ref, remaining: p.balance(), allowance: p.granted() });
     }
@@ -3552,6 +3578,10 @@ const handler = async (req, res) => {
 const main = async () => {
   fs.mkdirSync(OUT, { recursive: true });
   fs.mkdirSync(UPLOADS, { recursive: true });
+  // INT-6: replay any payment credit a prior crash left unapplied (user paid, purse never got it), then
+  // bound the journal. Runs BEFORE the server listens / any purse rehydrates, so a replayed credit lands in
+  // the persisted store cleanly. Idempotent: only 'pending' intents are re-applied.
+  try { const replayed = creditIntents.replayPending(); if (replayed) { purseStore.flushNow(); log('pay', `replayed ${replayed} unapplied credit(s) from a prior crash`); } creditIntents.prune(); } catch (e) { log('pay', 'credit-intent replay', e && e.message); }
   // persist the root swissnum so dan's link is stable across restarts.
   let rootSwiss;
   try { rootSwiss = (await fs.promises.readFile(SEED_FILE, 'utf8')).trim(); } catch {}
