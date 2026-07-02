@@ -4,14 +4,42 @@ import net from 'net';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
 import { test } from './_util.js';
-import { makeClient } from '../src/client/index.js';
+import { makeOcapn } from '../src/client/index.js';
 import { makeTcpNetLayer } from '../src/netlayers/tcp-test-only.js';
 import { encodeSwissnum } from '../src/client/util.js';
+import { syrupCodec } from '../src/syrup/index.js';
 
 const COMMA = ','.charCodeAt(0);
 const COLON = ':'.charCodeAt(0);
 const ZERO = '0'.charCodeAt(0);
 const NINE = '9'.charCodeAt(0);
+
+/**
+ * @template T
+ * @typedef {{ netlayer?: T }} NetlayerRef
+ */
+
+/**
+ * Wrap `makeTcpNetLayer` so its resolved netlayer is captured in
+ * `netlayerRef.netlayer`, since the single-network `makeOcapn` API does
+ * not otherwise expose the underlying network for the test to inspect.
+ * The extra `options` (`specifiedDesignator`, `framing`) are merged into
+ * the netlayer construction.
+ *
+ * @param {NetlayerRef<Awaited<ReturnType<typeof makeTcpNetLayer>>>} netlayerRef
+ * @param {{ specifiedDesignator?: string, framing?: 'syrup' | 'none' }} options
+ */
+const captureTcpNetLayer =
+  (netlayerRef, options) =>
+  /**
+   * @param {import('../src/client/types.js').NetlayerHandlers} handlers
+   * @param {import('../src/client/types.js').Logger} logger
+   */
+  (handlers, logger) =>
+    makeTcpNetLayer({ handlers, logger, ...options }).then(netlayer => {
+      netlayerRef.netlayer = netlayer;
+      return netlayer;
+    });
 
 /**
  * Establishes a TCP server that accepts a single inbound connection,
@@ -94,17 +122,23 @@ test('syrup framing wraps outgoing bytes with <length>:<payload> and contains no
   const sniffer = await makeSnifferServer();
   t.teardown(() => sniffer.close());
 
-  const client = makeClient({ debugLabel: 'syrup-sniff', debugMode: true });
-  t.teardown(() => client.shutdown());
-
-  const netlayer = await client.registerNetlayer((handlers, logger) =>
-    makeTcpNetLayer({
-      handlers,
-      logger,
+  /** @type {NetlayerRef<Awaited<ReturnType<typeof makeTcpNetLayer>>>} */
+  const netlayerRef = {};
+  const client = await makeOcapn({
+    codec: syrupCodec,
+    network: captureTcpNetLayer(netlayerRef, {
       specifiedDesignator: 'sniff-A',
       framing: 'syrup',
     }),
-  );
+    debugLabel: 'syrup-sniff',
+    debugMode: true,
+  });
+  t.teardown(() => client.shutdown());
+
+  if (!netlayerRef.netlayer) {
+    throw Error('makeTcpNetLayer did not resolve a netlayer');
+  }
+  const netlayer = netlayerRef.netlayer;
 
   // Trigger an outbound handshake to the sniffer. The sniffer
   // half-closes its write side as soon as the first chunk arrives,
@@ -170,44 +204,47 @@ test('syrup framing wraps outgoing bytes with <length>:<payload> and contains no
 });
 
 test('syrup framing round-trip through the test-only TCP netlayer', async t => {
-  const swissnumTable = new Map();
-  swissnumTable.set(
+  const objectTable = new Map();
+  objectTable.set(
     'Echo',
     Far('echo', {
       echo: value => value,
     }),
   );
 
-  const clientA = makeClient({
+  /** @type {NetlayerRef<Awaited<ReturnType<typeof makeTcpNetLayer>>>} */
+  const netlayerRefA = {};
+  /** @type {NetlayerRef<Awaited<ReturnType<typeof makeTcpNetLayer>>>} */
+  const netlayerRefB = {};
+
+  const clientA = await makeOcapn({
+    codec: syrupCodec,
+    network: captureTcpNetLayer(netlayerRefA, {
+      specifiedDesignator: 'syrup-A',
+      framing: 'syrup',
+    }),
     debugLabel: 'syrup-A',
     debugMode: true,
   });
-  const clientB = makeClient({
+  const clientB = await makeOcapn({
+    codec: syrupCodec,
+    network: captureTcpNetLayer(netlayerRefB, {
+      specifiedDesignator: 'syrup-B',
+      framing: 'syrup',
+    }),
     debugLabel: 'syrup-B',
+    locator: objectTable,
     debugMode: true,
-    swissnumTable,
   });
   t.teardown(() => {
     clientA.shutdown();
     clientB.shutdown();
   });
 
-  await clientA.registerNetlayer((handlers, logger) =>
-    makeTcpNetLayer({
-      handlers,
-      logger,
-      specifiedDesignator: 'syrup-A',
-      framing: 'syrup',
-    }),
-  );
-  const netlayerB = await clientB.registerNetlayer((handlers, logger) =>
-    makeTcpNetLayer({
-      handlers,
-      logger,
-      specifiedDesignator: 'syrup-B',
-      framing: 'syrup',
-    }),
-  );
+  if (!netlayerRefB.netlayer) {
+    throw Error('makeTcpNetLayer did not resolve a netlayer');
+  }
+  const netlayerB = netlayerRefB.netlayer;
 
   const session = await clientA.provideSession(netlayerB.location);
   const bootstrap = session.getBootstrap();
