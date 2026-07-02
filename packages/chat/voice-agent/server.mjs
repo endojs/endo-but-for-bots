@@ -111,6 +111,7 @@ import { reviseToConverge } from './revise-loop.mjs';
 import { notify, topicForKey } from '../capture/notify.mjs';
 import { writeRating, ratingsDir } from './eval-ratings.mjs';
 import { writeJsonAtomic, loadJson } from './write-json-atomic.mjs';
+import { makeTollOwnership } from './toll-ownership.mjs';
 import { addCandidate as addStory, listPublished as listPublishedStories, listCandidates as listStoryCandidates, publishStory, discardStory } from './stories.mjs';
 // THE PERSONAL/PLATFORM SEAM (Packing up for Dweb): personal config + state dirs resolve through
 // field-config so FIELD_PERSONAL_ROOT (the encrypted volume) moves them together. Defaults identical on the NUC.
@@ -1058,12 +1059,12 @@ const capHash = c => crypto.createHash('sha256').update(String(c || '')).digest(
 //    else's account (root is always allowed — it funds accounts on the owner's behalf); (3) rate-limit per
 //    cap to blunt probing/griefing bursts. The old comment claimed "loopback only" — nothing enforced it and
 //    the service also binds tailnet, so we DROP that stale claim in favour of the cap gate above (a stronger
-//    control than an IP check). Ownership binding is in-memory (re-binds TOFU after a restart); acceptable
-//    because charge-only-decreases + the cap gate + the rate limit already remove the theft and most of the
-//    grief surface — a persisted binding is a follow-up. ──
+//    control than an IP check). SEC-10 residual: the account→owner binding is now PERSISTED (toll-ownership.mjs
+//    via writeJsonAtomic) so ownership survives a restart — a post-restart claim by a different cap is still
+//    refused, instead of the old in-memory map re-TOFUing on the next touch. ──
 const tollOwnerKeyOf = cap => (nodeFor(cap)?.isRoot ? 'root' : 'u:' + crypto.createHash('sha256').update(`toll-owner:${String(cap || '')}`).digest('hex').slice(0, 16));
 const tollAcctKey = account => crypto.createHash('sha256').update(`toll-acct:${String(account || '')}`).digest('hex').slice(0, 24);
-const tollAccountOwner = new Map(); // account-hash → owner-key (first non-root cap to touch it)
+const tollOwnership = makeTollOwnership({ file: `${VOICE_STATE_DIR}/toll-ownership.json` }); // account-hash → owner-key, DURABLE (first non-root cap to touch it owns it, across restarts)
 const tollRate = new Map(); // owner-key → { n, windowStart }
 const TOLL_RATE_MAX = Number(process.env.TOLL_RATE_MAX) || 60; // ≤60 toll ops / window per cap
 const TOLL_RATE_WINDOW = 10_000;
@@ -1075,10 +1076,9 @@ const tollGate = (cap, account) => {
   if (!r || now - r.windowStart > TOLL_RATE_WINDOW) tollRate.set(ok, { n: 1, windowStart: now });
   else if (++r.n > TOLL_RATE_MAX) return { code: 429, error: 'rate limit — too many toll operations, slow down' };
   if (!node.isRoot) {
-    const ak = tollAcctKey(account);
-    const bound = tollAccountOwner.get(ak);
-    if (bound && bound !== ok) return { code: 403, error: 'this toll account belongs to another capability' };
-    if (!bound) tollAccountOwner.set(ak, ok); // trust-on-first-use
+    // trust-on-first-use, DURABLE: first non-root cap to touch this account owns it; a different cap is refused
+    // even after a restart (the binding is persisted).
+    if (!tollOwnership.claim(tollAcctKey(account), ok).ok) return { code: 403, error: 'this toll account belongs to another capability' };
   }
   return { ok: true };
 };
