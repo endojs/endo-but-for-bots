@@ -908,7 +908,18 @@ const STEP_ICON = { research: '🔎', delegateTask: '🤝', employ: '🧑‍🔬
 const SIG_MAX = 500;
 // defense-in-depth cap scrub at render (the server safeText-scrubs the main path, but the scoper trace
 // stringifies separately — never render a #cap / share token / bare swissnum that slipped through).
-const scrubCap = s => String(s == null ? '' : s).replace(/#cap=[0-9a-fA-F]{16,}/g, '#cap=«redacted»').replace(/#k=[\w-]{16,}/g, '#k=«redacted»').replace(/#agent=[\w-]{8,}/g, '#agent=«redacted»').replace(/\b[0-9a-f]{32}\b/g, '«swissnum»');
+// Broadened (SEC-13) to mirror the server scrubCaps: besides #cap/#k/#agent fragments and a bare 32-hex
+// swissnum, redact url-borne share/download tokens (/dl/…, /sites/…, /clips/…, /c/…), any long hex run
+// (≥24, catches 48-hex tool-shares + 8-hex clip ids in a path), and any base64url token run (≥22 chars,
+// catches 24-char share tokens). Fragment rules run first (specific); path + generic token rules after.
+const scrubCap = s => String(s == null ? '' : s)
+  .replace(/#cap=[0-9a-fA-F]{16,}/g, '#cap=«redacted»')
+  .replace(/#k=[\w-]{16,}/g, '#k=«redacted»')
+  .replace(/#agent=[\w-]{8,}/g, '#agent=«redacted»')
+  .replace(/#fork=[\w-]{16,}/g, '#fork=«redacted»')
+  .replace(/\/(dl|sites|clips|c)\/[A-Za-z0-9_-]{8,}/g, '/$1/«redacted»')
+  .replace(/\b[0-9a-f]{24,}\b/g, '«swissnum»')
+  .replace(/(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{22,}(?![A-Za-z0-9_-])/g, '«token»');
 const stepRow = (s, depth) => {
   const row = document.createElement('div'); row.style.cssText = `margin:3px 0;padding-left:${depth * 14}px`;
   const head = document.createElement('div'); head.style.cssText = `font:600 12px ui-monospace,Menlo,Consolas,monospace;color:${s.ok === false ? 'var(--trace-bad)' : 'var(--trace-ok)'}`;
@@ -1201,7 +1212,16 @@ const renderAgentResponse = r => {
   // throws on malformed data — otherwise one bad card swallows the whole turn (the "answer + the permission
   // request both vanished" bug). Each piece is isolated; the answer comes first and unconditionally.
   try { if (_arr(r.steps).length) log.appendChild(traceGeometry(r.steps)); } catch (e) { console.error('traceGeometry failed', e); } // the SVG trace sits ABOVE the message (tap it for the 3D)
-  const body = bubble('agent', r.answer || '…', r.agentId, Date.now());
+  // P1-3: a program that ends its turn with answer("")/answer() sends { answer:'' } with no flag. Rather than
+  // render a bare '…' (indistinguishable from a still-thinking bubble), show a clear "ended without a message"
+  // affordance — UNLESS the turn produced other renderable content (a widget, object, image, or actionable card),
+  // in which case that content is the reply and an empty text bubble is correct. (Server half: reject/placeholder
+  // an empty turn-ender in ocapn-noise/codemode.mjs endTurn — not this file; noted for the server worker.)
+  const answerText = (r.answer == null ? '' : String(r.answer)).trim();
+  const hasAux = !!((r.images && r.images.length) || (r.imageUrls && r.imageUrls.length)
+    || (Array.isArray(r.ui) && r.ui.length) || (Array.isArray(r.objects) && r.objects.length)
+    || (r.proposals && r.proposals.length) || (r.accessRequests && r.accessRequests.length) || (r.asks && r.asks.length));
+  const body = bubble('agent', answerText || (hasAux ? '' : '⏹ The agent ended its turn without a message.'), r.agentId, Date.now());
   if (r.toolsUsed?.length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + r.toolsUsed.join(', '); body.parentNode.appendChild(e); }
   ((r.images && r.images.length ? r.images : (r.imageUrls || [])) || []).forEach(src => { const im = document.createElement('img'); im.src = src; body.appendChild(im); }); // data-URLs in the moment; durable /uploads urls as fallback (e.g. the share-post path)
   try { if (Array.isArray(r.ui) && r.ui.length) renderWidgets(body, r.ui, { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet, onTalk: talkAboutWidget, onOpenSpecialist, onOpenRun }); } catch (e) { console.error('renderWidgets failed', e); } // live/interactive widgets
@@ -1256,7 +1276,13 @@ const retryTurn = async (payload, spoken, opts = {}) => {
     // resume:true → the server CONTINUES the topped-up turn from its saved in-flight transcript (it does NOT
     // re-run the reasoning/tool-use already done); if the server no longer has it, it transparently full-reruns.
     const body = opts.resume ? { ...payload, resume: true } : payload;
-    const r = await (await fetch('/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json();
+    const cr = await fetch('/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    // P1-2 (resume path): a long resumed turn can outlive the public proxy's window → an ngrok HTML 502/504
+    // page, which chokes .json() ("Unexpected token '<', <!DOCTYPE…") and dead-ends the resume. The turn is
+    // still running server-side, so treat a non-JSON/!ok response like a drop and reattach (renders the result
+    // when it lands) instead of throwing a parse error into the catch as a stuck status.
+    if (!cr.ok || !/application\/json/i.test(cr.headers.get('content-type') || '')) throw new Error('gateway-timeout: the proxy returned a non-JSON response (the resumed turn is likely still running) — reattaching');
+    const r = await cr.json();
     if (r.error) { if (r.retryable || r.llmError) renderRetryableError(r.error, payload, spoken); else setStatus('chat: ' + r.error); return; } // provider error → transient retry card, not a stuck status
     if (r.exhausted) { updateBudgetChip(r.remaining, r.allowance); renderExhausted({ ...payload, invited: !!r.invited }, spoken); return; }
     renderAgentResponse(r);
@@ -1264,7 +1290,12 @@ const retryTurn = async (payload, spoken, opts = {}) => {
     pendantEnd(r.steps || []);
     updateBudgetChip(r.remaining, r.allowance);
     if (spoken) await speak(r.answer || '');
-  } catch (e) { setStatus('error: ' + e.message); }
+  } catch (e) {
+    // A dropped/timed-out resume must RE-ATTACH (the answer lands server-side), not show a dead "error:" status.
+    const dropped = /Failed to fetch|NetworkError|load failed|aborted|gateway-timeout/i.test(e.message || '');
+    if (dropped) { setStatus('⏳ still working on the server — reattaching (safe to leave; the answer will land here)…'); try { pendantEnd([]); } catch {} const sidAtDrop = payload.sessionId || sessionId; setTimeout(() => { if (!busy && sessionId === sidAtDrop) reattachRun(sidAtDrop).catch(() => {}); }, 1800); }
+    else setStatus('error: ' + e.message);
+  }
   finally { traceIslandEnd(); try { pendantES && pendantES.close(); } catch {} pendantLive = false; if (pendant) pendant.finish(); setStatus(on ? 'listening…' : ''); }
 };
 // A chat that ran out of allowance retains its UNANSWERED turn so that ANY top-up path — the
@@ -4199,16 +4230,10 @@ const forkComponentAct = async (id, name) => {
   setStatus(r.ok ? `Forked → "${fname}" — queued for review; admit it in the Components tab.` : `fork: ${r.error || 'failed'}`);
   if (curTab === 'components') refreshComponents();
 };
-// ── live FORK actions (Alt-click on a mounted [data-fork-id] fork → edit/fork). Available to ANY cap-holder
-//    (forks are owner-gated by the cap, not root). Distinct from forkComponentAct (the /components git path).
-const forkEditAct = async (id, name) => {
-  const change = window.prompt(`✎ Edit fork "${name}" — describe the change. The fork's agent rewrites its (endowments,props)=>vnode source (a new version), applied live:`);
-  if (!change) return;
-  setStatus(`✎ editing "${name}"…`);
-  const r = await (await fetch('/forks/edit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), id, prompt: change }) })).json();
-  setStatus(r.ok ? `Edited "${name}" → v${r.version}. Revert in the fork's history.` : `edit: ${r.error || 'failed'}`);
-  renderTx(); // re-render so the mounted fork widget re-fetches + repaints the new source
-};
+// ── live FORK actions (Alt-click on a mounted [data-fork-id] fork → fork). Editing routes through the
+//    conversational openComponentEditChat({kind:'fork'}) (the alt-click ✎ chip + the fork-widget ✎ button);
+//    the old one-shot forkEditAct window.prompt→/forks/edit was removed (DEAD-2) so a mounted fork offers ONE
+//    editor. Distinct from forkComponentAct (the /components git path).
 const forkForkAct = async (id, name) => {
   const r = await (await fetch('/forks/read', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), id }) })).json();
   if (!r.ok) { setStatus(`fork: ${r.error || 'failed'}`); return; }

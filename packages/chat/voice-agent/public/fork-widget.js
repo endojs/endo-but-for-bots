@@ -65,13 +65,13 @@ export const mountForkInto = async (host, opts = {}) => {
     }
   };
 
-  const doEdit = async () => {
-    const prompt = window.prompt(`Describe the change to "${name || 'this fork'}":`);
-    if (!prompt) return;
-    note.textContent = 'editing…';
-    const r = await pf('/forks/edit', { cap, id, prompt });
-    if (!r.ok) { note.textContent = '⚠︎ ' + r.error; return; }
-    note.textContent = `saved v${r.version}`; render();
+  // ✎ Edit — open the CONVERSATIONAL edit chat (openComponentEditChat, kind:'fork') rather than a one-shot
+  // window.prompt → /forks/edit. A mounted fork now offers ONE editor (the same one the alt-click ✎ chip uses);
+  // the chat's send edits this fork live via /forks/edit-chat and re-renders it. (DEAD-2: the two-editor split
+  // is gone.) Falls back to a plain note if the host app hasn't published the chat opener.
+  const doEdit = () => {
+    if (typeof window.openComponentEditChat === 'function' && id) { window.openComponentEditChat(id, name || 'fork', { kind: 'fork' }); return; }
+    note.textContent = 'live edit unavailable here — open this fork from a chat to edit it';
   };
   const doShare = async () => {
     const r = await pf('/forks/share', { cap, id, charge: { scheme: 'free' } });
