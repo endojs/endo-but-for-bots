@@ -48,7 +48,9 @@
     "test:component-error-loop": "node component-error-loop.staging.test.cjs",
     "test:backlog": "node --test component-backlog.test.mjs",
     "test:component-backlog": "node component-backlog.staging.test.cjs",
-    "test:chrome": "node chrome-components.staging.test.cjs"
+    "test:chrome": "node chrome-components.staging.test.cjs",
+    "test:trace-cells": "node --test trace-cells.test.mjs",
+    "test:trace-island": "node trace-island.staging.test.cjs"
   },
   "dependencies": {
     "@endo/exo-git": "workspace:^",
