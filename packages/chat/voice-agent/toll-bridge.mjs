@@ -43,27 +43,63 @@ export const makeTollBridge = ({ purseStore, makePurse, costOf, ledgerFile, host
   };
 
   // hosting ledger: key → { account, bytes, appName, since, lastTick, accrued, delinquent }
-  // INT-1: MONEY store (hosting-rent ledger) — atomic write + .bak + guarded load (a corrupt-but-present
-  // ledger must NOT silently reset to {}, which would erase every artifact's accrued rent + delinquency).
+  // ARCH-5 / INT-1: this ledger lives BESIDE purses.json (the money). It is METADATA-ONLY accounting — the
+  // PURSE is the single source of truth for balances; `accrued` here is informational bookkeeping (total
+  // rent ever scheduled for an artifact), never the money. Two guarantees keep the two files from desyncing
+  // balances across a crash between their writes:
+  //   (1) atomic writes + .bak + guarded load (a corrupt-but-present ledger must NOT silently reset to {},
+  //       which would erase every artifact's accrual clock and delinquency); and
+  //   (2) MONEY-SAFE ORDERING in accrue()/chargeSave(): the advanced accrual CLOCK is persisted BEFORE the
+  //       purse is debited, so a torn cross-file write can only ever UNDER-charge (a forgiven window, favors
+  //       the user) — never repeat a charge. Combined with reconcile-on-load, a torn write can't desync money.
   let ledger = {};
   try { ledger = loadJson(ledgerFile, {}, { guard: true }); } catch (e) { if (e && e.code === 'STORE_CORRUPT') throw e; /* other IO → fresh */ }
   const saveLedger = () => { try { writeJsonAtomic(ledgerFile, ledger, { pretty: true, bak: true }); } catch { /* best-effort */ } };
   const rentDue = (e, now) => { const last = Date.parse(e.lastTick || e.since) || now; return Math.round(((e.bytes || 0) / 1e6) * hostRate * Math.max(0, now - last) / DAY_MS); };
 
+  // Reconcile-on-load: writeJsonAtomic makes the ledger internally torn-proof, but a corrupt-but-parseable
+  // entry (or a garbage/future `lastTick` from a bad byte or clock skew) must not be able to synthesize a
+  // phantom rent debit on the next accrue. Drop malformed entries and clamp any missing/future/unparseable
+  // tick to now — so accrual only ever runs forward from a sane clock.
+  const reconcile = (nowMs = Date.now()) => {
+    let changed = false;
+    for (const [k, e] of Object.entries(ledger)) {
+      if (!e || typeof e !== 'object' || !e.account) { delete ledger[k]; changed = true; continue; }
+      const bytes = Math.max(0, Math.round(Number(e.bytes) || 0));
+      if (bytes !== e.bytes) { e.bytes = bytes; changed = true; }
+      const accrued = Math.max(0, Math.round(Number(e.accrued) || 0));
+      if (accrued !== e.accrued) { e.accrued = accrued; changed = true; }
+      const tick = Date.parse(e.lastTick || e.since);
+      if (!Number.isFinite(tick) || tick > nowMs) { e.lastTick = new Date(nowMs).toISOString(); changed = true; }
+    }
+    if (changed) saveLedger();
+    return changed;
+  };
+  reconcile();
+
   // Accrue storage rent for every artifact up to `now`, debiting each owner's account. Short-paid
   // entries are flagged delinquent (not auto-removed — taking down a site is the operator's call).
+  // MONEY-SAFE ORDERING (ARCH-5): compute every debit, persist the advanced clock + bookkeeping to the
+  // ledger FIRST, then charge the purses. A crash between the two = an uncharged window (safe), never a
+  // repeated charge. Deferred debits track a per-purse committed amount so several artifacts on one account
+  // still stop at the account's balance (the same bound the old inline-debit loop had).
   const accrue = (now = Date.now()) => {
-    let total = 0; const delinquent = [];
+    let total = 0; const delinquent = []; const committed = new Map(); const debits = [];
     for (const [k, e] of Object.entries(ledger)) {
       const due = rentDue(e, now);
       if (due <= 0) continue;
-      const p = accountPurse(e.account); const pay = Math.min(due, p.balance());
-      if (pay > 0) p.debit(pay);
+      const p = accountPurse(e.account);
+      const already = committed.get(p) || 0;
+      const pay = Math.max(0, Math.min(due, p.balance() - already));
       e.lastTick = new Date(now).toISOString(); e.accrued = (e.accrued || 0) + pay;
       e.delinquent = pay < due; if (e.delinquent) delinquent.push(k);
+      if (pay > 0) { committed.set(p, already + pay); debits.push([p, pay]); }
       total += pay;
     }
-    if (total > 0 || delinquent.length) saveLedger();
+    if (total > 0 || delinquent.length) {
+      saveLedger();                       // persist the advanced accrual clock FIRST…
+      for (const [p, pay] of debits) p.debit(pay); // …then charge (torn write here = uncharged window, never double-charge)
+    }
     return { total, delinquent };
   };
 
@@ -93,9 +129,12 @@ export const makeTollBridge = ({ purseStore, makePurse, costOf, ledgerFile, host
     const deltaMb = Math.max(0, (newBytes - (existing ? existing.bytes : 0))) / 1e6;
     const upfront = existing ? Math.round(deltaMb * hostRate) : Math.max(1, Math.round((newBytes / 1e6) * hostRate)); // one day's rent on first publish / growth
     if (upfront > 0 && !p.canAfford(upfront)) return { ok: false, error: 'insufficient hosting allowance for this size', need: upfront, remaining: p.balance() };
-    if (upfront > 0) p.debit(upfront);
+    // MONEY-SAFE ORDERING (ARCH-5): register the artifact (advance the ledger) BEFORE debiting the upfront
+    // rent — a torn write then leaves the app hosted but the upfront un-charged (safe: accrue collects it as
+    // ongoing rent), never charged-with-no-record.
     ledger[String(key)] = { account: String(account), bytes: newBytes, appName: String(appName || ''), since: existing ? existing.since : new Date(now).toISOString(), lastTick: new Date(now).toISOString(), accrued: (existing ? existing.accrued || 0 : 0) + upfront, delinquent: false };
     saveLedger();
+    if (upfront > 0) p.debit(upfront);
     return { ok: true, charged: upfront, remaining: p.balance() };
   };
 
@@ -103,6 +142,6 @@ export const makeTollBridge = ({ purseStore, makePurse, costOf, ledgerFile, host
   const fund = ({ account, uusd }) => { const p = accountPurse(account); p.credit(Math.max(0, Math.round(uusd || 0))); return { ok: true, remaining: p.balance(), allowance: p.granted() }; };
   const accountStatus = (account, now = Date.now()) => { accrue(now); const p = accountPurse(account); const hosting = Object.entries(ledger).filter(([, e]) => e.account === String(account)).map(([key, e]) => ({ key, appName: e.appName, bytes: e.bytes, since: e.since, accrued: e.accrued, delinquent: !!e.delinquent })); return { remaining: p.balance(), allowance: p.granted(), hosting }; };
 
-  return harden({ accountPurse, quote, check, chargeEdit, chargeSave, unregister, fund, accrue, accountStatus });
+  return harden({ accountPurse, quote, check, chargeEdit, chargeSave, unregister, fund, accrue, accountStatus, reconcile });
 };
 harden(makeTollBridge);
