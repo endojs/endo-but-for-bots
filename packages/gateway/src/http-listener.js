@@ -87,6 +87,7 @@ import {
   OCAPN_WEBSOCKET_LEGACY_PATH,
 } from './ocapn-ws.js';
 import { parseForwardedRequest } from './x-forwarded.js';
+import { fetchWebletResponse } from './weblet-fetch.js';
 
 /** @import { Server, IncomingMessage, ServerResponse } from 'node:http' */
 /** @import { Socket } from 'node:net' */
@@ -100,6 +101,7 @@ import { parseForwardedRequest } from './x-forwarded.js';
  *   ForwardedRequest,
  *   HttpListener,
  *   HttpListenerBoundAddress,
+ *   ServeWeblet,
  *   WsUpgradeAdapter,
  *   WsUpgradeContext,
  * } from './types.d.ts'
@@ -293,6 +295,12 @@ harden(makeWsWriter);
  *   `ocapnHandler` is supplied; otherwise upgrade requests cannot
  *   be served. The Node-side adapter using the `ws` package
  *   lives at `./node-ws-upgrade.js`.
+ * @property {ServeWeblet} [serveWeblet] Phase 11b: the
+ *   embedder-supplied weblet-content adapter the listener calls
+ *   per Host-header-matched HTTP request. When omitted, the
+ *   listener surfaces a 501 carrying `X-Endo-Weblet-Formula` so
+ *   the Phase-11a host-header routing posture stays observable
+ *   until a daemon-side adapter lands.
  * @property {ReadonlyArray<string>} [trustedProxyCidrs] Feature 9
  *   CIDR allowlist. Defaults to empty (no proxy trusted).
  * @property {number} [maxProxyHops] Feature 9 hop budget.
@@ -314,6 +322,7 @@ export const makeHttpListener = ({
   gitHttpHandler,
   ocapnHandler,
   wsUpgrade,
+  serveWeblet,
   trustedProxyCidrs = harden([]),
   maxProxyHops = 1,
   logWarning,
@@ -431,17 +440,18 @@ export const makeHttpListener = ({
 
   /**
    * Consult the `AppsNameHub` for the request's Host header. On a
-   * hit, return a 501 carrying the resolved formula identifier so a
-   * daemon-side prototype can observe routing without pretending
-   * to serve content; the static-CAS fetch lands in Phase 11b.
-   * On a miss, fall through to a 404.
+   * hit, dispatch into the Phase-11b weblet-fetch path when a
+   * `serveWeblet` power is configured; otherwise fall back to the
+   * Phase-11a 501 placeholder carrying the resolved formula
+   * identifier. On a miss, fall through to a 404.
    *
    * @param {IncomingMessage} req
    * @param {ServerResponse} res
    * @param {URL} url
+   * @param {ForwardedRequest} forwarded
    * @returns {Promise<void>}
    */
-  const handleApps = async (req, res, url) => {
+  const handleApps = async (req, res, url, forwarded) => {
     const hostHeader = req.headers.host;
     const host = hostHeaderName(
       Array.isArray(hostHeader) ? hostHeader[0] : hostHeader,
@@ -475,15 +485,81 @@ export const makeHttpListener = ({
       writePlain(res, 500, 'Internal Server Error\n');
       return;
     }
-    // The static-CAS resolution path lands in Phase 11b. Surface
-    // the resolved formula identifier so a daemon-side prototype
-    // can observe routing without pretending to serve content.
-    res.statusCode = 501;
-    res.setHeader('content-type', 'text/plain; charset=utf-8');
+    if (serveWeblet === undefined) {
+      // Phase-11a fallback posture. Embedders that have not wired
+      // a daemon-side adapter still observe routing via the
+      // X-Endo-Weblet-Formula header.
+      res.statusCode = 501;
+      res.setHeader('content-type', 'text/plain; charset=utf-8');
+      res.setHeader('x-endo-weblet-formula', formulaId);
+      res.end(
+        `Weblet content fetch not yet implemented (host=${host}, formula=${formulaId})\n`,
+      );
+      return;
+    }
+    const ifNoneMatchRaw = req.headers['if-none-match'];
+    const ifNoneMatch = Array.isArray(ifNoneMatchRaw)
+      ? ifNoneMatchRaw[0]
+      : ifNoneMatchRaw;
+    const response = await fetchWebletResponse({
+      webletFormulaId: formulaId,
+      pathSuffix: url.pathname,
+      ...(ifNoneMatch === undefined ? {} : { ifNoneMatch }),
+      forwarded,
+      serveWeblet,
+      logWarning: warn,
+    });
+    res.statusCode = response.status;
     res.setHeader('x-endo-weblet-formula', formulaId);
-    res.end(
-      `Weblet content fetch not yet implemented (host=${host}, formula=${formulaId})\n`,
-    );
+    for (const [name, value] of response.headers) {
+      res.setHeader(name, value);
+    }
+    if (response.body !== undefined) {
+      // Pump the reader's chunks to the response. The adapter's
+      // contract is total over its body iterator; an in-flight
+      // throw is surfaced as a destroy() so the client sees the
+      // connection drop rather than a partial body the gateway
+      // could not reconcile with its already-sent headers.
+      try {
+        for (;;) {
+          // eslint-disable-next-line no-await-in-loop
+          const next = await response.body.next();
+          if (next.done) break;
+          const chunk = next.value;
+          if (!(chunk instanceof Uint8Array)) {
+            throw makeError(
+              X`serveWeblet body yielded a non-Uint8Array chunk: ${q(typeof chunk)}`,
+            );
+          }
+          if (chunk.byteLength > 0) {
+            // Skip the zero-byte chunk; some streams emit them at
+            // EOF as a sentinel and Node will happily write zero
+            // bytes but the chunked encoding wastes a frame.
+            res.write(
+              Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength),
+            );
+          }
+        }
+        res.end();
+      } catch (e) {
+        warn(
+          `[Gateway] weblet body stream threw mid-response: ${/** @type {Error} */ (e).message}`,
+        );
+        try {
+          // The headers are already sent; the cleanest signal a
+          // client can interpret is a connection drop.
+          res.destroy(/** @type {Error} */ (e));
+        } catch (_e2) {
+          // ignore
+        }
+      }
+      return;
+    }
+    if (response.textBody !== undefined) {
+      res.end(response.textBody);
+      return;
+    }
+    res.end();
   };
 
   /**
@@ -527,7 +603,7 @@ export const makeHttpListener = ({
       // owns the response shape.
       task = handleGit(req, res, url);
     } else {
-      task = handleApps(req, res, url);
+      task = handleApps(req, res, url, forwarded);
     }
     /** @type {Promise<void>} */
     const tracked = task.catch(e => {

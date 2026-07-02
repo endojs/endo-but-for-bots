@@ -45,6 +45,7 @@
     "./src/x-forwarded.js": "./src/x-forwarded.js",
     "./src/http-listener.js": "./src/http-listener.js",
     "./src/node-ws-upgrade.js": "./src/node-ws-upgrade.js",
+    "./src/weblet-fetch.js": "./src/weblet-fetch.js",
     "./package.json": "./package.json"
   },
   "scripts": {
