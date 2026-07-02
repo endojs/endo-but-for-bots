@@ -6140,3 +6140,45 @@ const startMeeting = async () => {
 };
 const stopMeeting = () => { mtgOn = false; document.body.classList.remove('meeting-live'); if (mtgBtn) { mtgBtn.textContent = '👥'; mtgBtn.title = 'Record a multi-speaker meeting (diarized)'; } try { mtgRec && mtgRec.state !== 'inactive' && mtgRec.stop(); } catch {} };
 if (mtgBtn) mtgBtn.onclick = () => (mtgOn ? stopMeeting() : startMeeting());
+
+// ── 🗂 Past meetings — browse the diarized transcripts this capability has recorded. The record-meeting flow
+//    (👥 → /meeting/transcribe) persists a TRANSCRIPT-ONLY record per cap server-side (raw audio never leaves
+//    home); /meeting/list reads them back newest-first. This is the history-browse half the feature was
+//    missing: transcribe WRITES history, this READS it. No swissnum in a record (ids are mtg-<hex>, not caps).
+const meetingRowsCache = [];
+const insertMeetingIntoChat = m => { pushTx('agent', `🎙️ Meeting transcript — ${(m.speakers || []).length} speaker(s)\n\n${m.transcript || '(no speech detected)'}`, { tools: ['meetingScribe'] }); renderTx(); };
+const showMeetingTranscript = m => {
+  const when = String(m.at || '').replace('T', ' ').slice(0, 16);
+  showModal(`<div class="qrlabel">🎙️ Meeting — ${esc(when)} · ${esc(String((m.speakers || []).length))} speaker(s)</div><pre class="codeview" style="text-align:left;max-height:58vh;overflow:auto;white-space:pre-wrap">${esc(String(m.transcript || '(no speech detected)'))}</pre><button class="mini" data-mtg-back>← back</button> <button class="mini primary" data-mtg-tochat>→ insert into chat</button>`);
+  const back = document.querySelector('[data-mtg-back]'); if (back) back.onclick = renderMeetingList;
+  const tc = document.querySelector('[data-mtg-tochat]'); if (tc) tc.onclick = () => { insertMeetingIntoChat(m); closeModal(); };
+};
+const renderMeetingList = () => {
+  if (!meetingRowsCache.length) { showModal('<div class="qrlabel">🗂 Past meetings</div><div class="pmeta">No recorded meetings yet. Tap 👥 to record one — it’s diarized locally on your tinix box and the transcript lands here.</div>'); return; }
+  const rows = meetingRowsCache.map((m, i) => {
+    const when = String(m.at || '').replace('T', ' ').slice(0, 16);
+    const spk = (m.speakers || []).length;
+    const preview = String(m.transcript || '').replace(/\s+/g, ' ').slice(0, 90);
+    return `<div class="share"><div style="min-width:0"><b>${esc(when || 'meeting')}</b> <span class="pill">${esc(String(spk))} speaker${spk === 1 ? '' : 's'}</span><div class="sub" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%">${esc(preview) || '(no speech detected)'}</div></div><div style="white-space:nowrap"><button class="mini" data-mtg-open="${i}">open</button> <button class="mini" data-mtg-chat="${i}">→ chat</button></div></div>`;
+  }).join('');
+  showModal(`<div class="qrlabel">🗂 Past meetings (${meetingRowsCache.length})</div><div style="text-align:left;max-height:60vh;overflow:auto">${rows}</div>`);
+  document.querySelectorAll('[data-mtg-open]').forEach(b => { b.onclick = () => showMeetingTranscript(meetingRowsCache[+b.dataset.mtgOpen]); });
+  document.querySelectorAll('[data-mtg-chat]').forEach(b => { b.onclick = () => { insertMeetingIntoChat(meetingRowsCache[+b.dataset.mtgChat]); closeModal(); }; });
+};
+const openMeetingHistory = async () => {
+  if (!cap) { setStatus('no capability — open your #cap= link'); return; }
+  showModal('<div class="qrlabel">🗂 Past meetings</div><div class="pmeta">loading…</div>');
+  try {
+    const r = await (await fetch('/meeting/list', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json();
+    meetingRowsCache.length = 0; meetingRowsCache.push(...((r && r.meetings) || []));
+  } catch (e) { showModal(`<div class="qrlabel">🗂 Past meetings</div><div class="err">could not load: ${esc(e.message)}</div>`); return; }
+  renderMeetingList();
+};
+if (mtgBtn) {
+  const mtgHistBtn = document.createElement('button');
+  mtgHistBtn.id = 'meeting-hist-btn'; mtgHistBtn.type = 'button'; mtgHistBtn.textContent = '🗂';
+  mtgHistBtn.title = 'Past meetings — browse the diarized transcripts you’ve recorded';
+  if (mtgBtn.className) mtgHistBtn.className = mtgBtn.className;
+  mtgHistBtn.onclick = openMeetingHistory;
+  mtgBtn.insertAdjacentElement('afterend', mtgHistBtn);
+}
