@@ -12,36 +12,21 @@
 //     question renders (asking turn), the second turn carries the history + shows the applied version.
 // Run: node fork-edit-chat.staging.test.cjs   (exits non-zero on any failure; SKIPs client layer w/o chromium)
 
-const { spawn } = require('node:child_process');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
+const { startIsolatedServer, loadChromium, launchBrowser } = require('./test-harness.cjs');
 
-const PORT = 8798;
-const BASE = `http://127.0.0.1:${PORT}`;
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fork-edit-chat-'));
-let srv = null;
+let srv = null, BASE = '';
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail++; console.error('  FAIL -', m); } };
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-const cleanup = () => { try { srv && srv.kill('SIGKILL'); } catch {} try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {} };
+const cleanup = () => { try { srv && srv.close(); } catch {} };
 const post = (p, body) => fetch(`${BASE}${p}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
 (async () => {
-  // ── layer 1: the SERVER route on an ISOLATED instance ────────────────────────────────────────────────
-  srv = spawn('node', ['server.mjs'], {
-    cwd: __dirname,
-    env: { ...process.env, PORT: String(PORT), BIND: '127.0.0.1', FIELD_LOCKDOWN: '1',
-      SEED_FILE: path.join(tmp, 'root.swiss'), OUT_DIR: path.join(tmp, 'out'),
-      PROJECTS_STORE: path.join(tmp, 'projects.json'), MEMO_RUNS_FILE: path.join(tmp, 'memo.json'),
-      FORKS_STORE: path.join(tmp, 'forks.json'), PRINT_ROOT_CAP: '1' },
-    stdio: ['ignore', 'ignore', 'ignore'],
-  });
-  let up = false;
-  for (let i = 0; i < 60; i++) { try { const r = await fetch(`${BASE}/`); if (r.ok || r.status === 404) { up = true; break; } } catch {} await sleep(500); }
-  ok(up, 'isolated server booted (FIELD_LOCKDOWN=1)');
-  if (!up) { cleanup(); process.exit(1); }
-  const cap = fs.readFileSync(path.join(tmp, 'root.swiss'), 'utf8').trim();
+  // ── layer 1: the SERVER route on an ISOLATED instance (ALSO used for the client layer below — one
+  //    isolated server for both, so the client half never touches the live :8778 service) ─────────────
+  srv = await startIsolatedServer();
+  BASE = srv.base;
+  const cap = srv.cap;
+  ok(!!cap, 'isolated server booted (FIELD_LOCKDOWN=1) on an ephemeral port');
 
   // the route EXISTS and is owner-gated: no/bad cap → 403 (never the agent loop)
   const noCap = await post('/forks/edit-chat', { id: 'x', message: 'hi' });
@@ -62,17 +47,14 @@ const post = (p, body) => fetch(`${BASE}${p}`, { method: 'POST', headers: { 'con
   ok(edited.ok && edited.version === 2, `the fork's edit path round-trips one edit (v1 → v${edited.version})`);
   const readBack = await (await post('/forks/read', { cap, id: created.id })).json();
   ok(readBack.ok && /FEC-V2/.test(readBack.source || ''), 'the edited source reads back live');
-  srv.kill('SIGKILL'); srv = null;
 
-  // ── layer 2: the CLIENT wiring against the LIVE service (:8778, root cap) ────────────────────────────
-  let chromium = null; try { ({ chromium } = require('/usr/lib/node_modules/@playwright/cli/node_modules/playwright-core')); } catch {}
+  // ── layer 2: the CLIENT wiring against the SAME isolated server (its own root cap) ──────────────────
+  const chromium = loadChromium();
   if (!chromium) {
     console.log('  SKIP - client-wiring layer (playwright-core unavailable)');
     console.log(`\n${pass} passed, ${fail} failed`); cleanup(); process.exit(fail ? 1 : 0);
   }
-  const liveCap = fs.readFileSync(path.join(os.homedir(), '.config/field-agent/root.swiss'), 'utf8').trim();
-  const br = await chromium.launch({ executablePath: process.env.FIELD_CHROMIUM || '/usr/bin/chromium', headless: true,
-    args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'], env: { ...process.env, LD_LIBRARY_PATH: process.env.FIELD_CHROMIUM_LDPATH || '/var/lib/obsidian/oldlibs' } });
+  const br = await launchBrowser(chromium);
   let liveForkId = null;
   try {
     const page = await br.newPage({ viewport: { width: 1100, height: 900 } });
@@ -88,8 +70,8 @@ const post = (p, body) => fetch(`${BASE}${p}`, { method: 'POST', headers: { 'con
         : { ok: true, answer: 'Made the border teal.', asking: false, edited: { version: 2 }, steps: ['readForkSource', 'editFork'] };
       r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
     });
-    await page.addInitScript(c => { try { localStorage.setItem('field-agent-cap', c); } catch {} }, liveCap);
-    await page.goto('http://127.0.0.1:8778/', { waitUntil: 'load' });
+    await page.addInitScript(c => { try { localStorage.setItem('field-agent-cap', c); } catch {} }, cap);
+    await page.goto(`${BASE}/`, { waitUntil: 'load' });
     await page.waitForSelector('#tab-components:not(.hide)', { timeout: 20000 });
 
     // mount a REAL live fork (cleaned up below), then Alt-click it → chip → ✎ edit
@@ -126,10 +108,10 @@ const post = (p, body) => fetch(`${BASE}${p}`, { method: 'POST', headers: { 'con
     ok(/Made the border teal\./.test(log), "the agent's reply renders");
     ok(/v2/.test(log), 'an applied edit shows the new live version');
     ok(errs.length === 0, `no page errors (${errs.slice(0, 2).join('; ')})`);
-    // clean up: remove the test fork from live state (real request; the route intercept only covered edit-chat)
+    // clean up: remove the test fork from the isolated state (real request; the route intercept only covered edit-chat)
     if (liveForkId) {
       const rm = await page.evaluate(async id => (await (await fetch('/forks/remove', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: localStorage.getItem('field-agent-cap'), id }) })).json()), liveForkId);
-      ok(rm && rm.ok, 'test fork removed from live state');
+      ok(rm && rm.ok, 'test fork removed from the isolated state');
     }
     await page.close();
   } finally { await br.close(); }
