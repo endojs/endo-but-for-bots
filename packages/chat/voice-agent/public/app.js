@@ -780,26 +780,45 @@ const renderProposal = p => {
 // owner" notification that had nothing to act on. Server already resolved a verb name → its grantable power.
 const renderAccessRequest = a => {
   const cc = curChatObj() || {};
+  const req = a.requester || {}; // { kind, id, owner, display } — WHO asked (a specialist widens itself, not the chat)
+  const kind = req.kind || 'chat';
+  const isSpecialist = kind === 'specialist';
+  const who = isSpecialist ? `specialist “${esc(req.display || req.id || 'sub-agent')}”`
+    : kind === 'delegate' ? 'a delegate'
+    : kind === 'role' ? 'a role sub-agent'
+    : kind === 'scheduled' ? 'a scheduled agent'
+    : 'this chat';
   const card = document.createElement('div'); card.className = 'prop msg';
   card.setAttribute('data-trusted-path', ''); // Grant button = an authority decision → trusted path, never editable chrome
-  // notesFolder → a LEAST-AUTHORITY notes grant: scope the chat's notes to JUST that vault subtree (not all notes)
+  // notesFolder → a LEAST-AUTHORITY notes grant: scope notes to JUST that vault subtree (not all notes)
   const scopeNote = a.notesFolder ? ` <span class="pill" title="least authority — only this folder">📁 ${esc(a.notesFolder)}</span>` : '';
-  const title = a.notesFolder ? `Grant notes — scoped to just “${esc(a.notesFolder)}”?` : `Grant the “${esc(a.power)}” capability to this chat?`;
+  const title = a.notesFolder ? `Grant notes — scoped to just “${esc(a.notesFolder)}” — to ${who}?` : `Grant the “${esc(a.power)}” capability to ${who}?`;
   card.innerHTML = `<div class="ptitle">🔓 <span>${title}</span></div><div class="pmeta">${esc(a.label || a.power)}${scopeNote}${a.why ? ' — ' + esc(a.why) : ''}</div><div class="pbtns"></div>`;
   const btns = card.querySelector('.pbtns');
-  if (!isRoot || !cc.scopedCap) { btns.innerHTML = '<span class="pmeta">only the owner can grant powers (open this chat with your root link)</span>'; }
+  // A specialist widen only needs the ROOT cap (server dispatches to grantSpecialistPower); a chat/delegate/role
+  // widen re-scopes the CHAT's cap in place, so it needs a live scoped cap here.
+  if (!isRoot || (!isSpecialist && !cc.scopedCap)) { btns.innerHTML = '<span class="pmeta">only the owner can grant powers (open this chat with your root link)</span>'; }
   else {
     const g = document.createElement('button'); g.className = 'confirm'; g.textContent = a.notesFolder ? `Grant this folder` : 'Grant';
     const d = document.createElement('button'); d.className = 'reject'; d.textContent = 'Not now';
     g.onclick = async () => {
       g.disabled = d.disabled = true;
-      const cur = cc.scopedPowers || [];
-      await rescopeChat(cc, [...new Set([...cur, a.power])], a.notesFolder || undefined);
-      const granted = (cc.scopedPowers || []).includes(a.power);
+      let granted = false; let err = '';
+      if (isSpecialist) {
+        // widen the SPECIALIST's own bundle (∩ its grantor's ceiling) — NOT the chat cap
+        const r = await pf('/access/grant', { requester: req, power: a.power, notesFolder: a.notesFolder || undefined });
+        granted = !!(r && r.ok && (Array.isArray(r.powers) ? r.powers.includes(a.power) : true));
+        err = (r && r.error) || (r && r.ceilingExceeded ? 'the grantor lacks that power' : '');
+      } else {
+        // chat / delegate / role → widen the chat's scoped cap in place (a delegate is ⊆ its caller)
+        const cur = cc.scopedPowers || [];
+        await rescopeChat(cc, [...new Set([...cur, a.power])], a.notesFolder || undefined);
+        granted = (cc.scopedPowers || []).includes(a.power);
+        if (granted) renderChatBar();
+      }
       btns.innerHTML = granted
-        ? `<span style="color:var(--acc2);font-size:13px">✓ granted “${esc(a.power)}” — ask me again and I’ll continue</span>`
-        : '<span style="color:var(--bad);font-size:12px">grant failed — try the powers banner (+ Add)</span>';
-      if (granted) renderChatBar();
+        ? `<span style="color:var(--acc2);font-size:13px">✓ granted “${esc(a.power)}” to ${who} — ask me again and I’ll continue</span>`
+        : `<span style="color:var(--bad);font-size:12px">grant failed${err ? ' — ' + esc(err) : ' — try the powers banner (+ Add)'}</span>`;
     };
     d.onclick = () => { card.remove(); };
     btns.append(g, d);

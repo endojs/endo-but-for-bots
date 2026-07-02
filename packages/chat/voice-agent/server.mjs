@@ -709,7 +709,7 @@ const fillSpecialist = process.env.SELF_HEAL === '0' ? undefined : async ({ name
 // makeFieldAgent runs before `blossom` exists, so the server populates `customView.register` below; the tool
 // reads it at call-time. This is the seam that lets a NORMAL chat agent (visible in the trace) be the studio.
 const customView = {};
-const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, specialistNudges, runSpecialistNudge, mintScopedCap, rescopeCap, specialistFor, foldedPersonaFor, getFoldDocs, setFoldDocs, agentConfig, saveAgentConfig, haResolveReadOnly, changelog, actOnStagedReview, publishClip, revokeClip, listClips, deleteOwnerData } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL, fillSpecialist, customView });
+const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, specialistNudges, runSpecialistNudge, mintScopedCap, rescopeCap, grantSpecialistPower, specialistFor, foldedPersonaFor, getFoldDocs, setFoldDocs, agentConfig, saveAgentConfig, haResolveReadOnly, changelog, actOnStagedReview, publishClip, revokeClip, listClips, deleteOwnerData } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL, fillSpecialist, customView });
 liveCells = makeLiveCells({ nodeFor }); // browser-subscribable live grains (cap-gated)
 
 // ── STANDING SPECIALIST NUDGES tick ──────────────────────────────────────────────────────────────────────────
@@ -2228,6 +2228,7 @@ const handler = async (req, res) => {
           if (rv.autoConfirmed) autoFired.push({ title: rv.title, type: rv.type, ok: rv.fired !== false }); // "don't ask again" fired it
           if (rv.asked && rv.askId) askIds.push(rv.askId); // the agent raised a typed question → render it inline
           if (rv.accessRequest && rv.accessRequest.power) accessRequests.push(rv.accessRequest); // requestAccess → actionable Grant card
+          if (Array.isArray(rv.accessRequests)) accessRequests.push(...rv.accessRequests.filter(a => a && a.power)); // nested: a CONFINED sub-agent (specialist / delegate / role) asked for a power → bubble up so the owner gets an actionable Grant card
           if (Array.isArray(rv.proposalIds)) proposalIds.push(...rv.proposalIds); // nested (specialist) proposals bubble up
           if (Array.isArray(rv.autoFired)) autoFired.push(...rv.autoFired);
           const step = { name: s.name, ok: rv.ok !== false };
@@ -3829,6 +3830,23 @@ const handler = async (req, res) => {
       if (rc.ok) return json(res, 200, { scopedCap: rc.swiss, powers: rc.powers, notesFolder: rc.notesFolder, recovered: false });
       const out = mintScopedCap({ powers: want, label: label || 'chat', notesFolder: notesFolder || '' }); // orphaned/unknown → recover with a fresh live cap
       return json(res, 200, { scopedCap: out.swiss, powers: out.powers, notesFolder: out.notesFolder, recovered: true });
+    }
+    // Grant a power a CONFINED SUB-AGENT requested (requestAccess). Root-only. NEVER auto-confirmable — this is
+    // a trusted-path decision (no proposal type, no "don't ask again" rule can ever fire it). Dispatches by the
+    // requester's kind: a SPECIALIST widens ITS OWN bundle (∩ its grantor's ceiling — an agent can never exceed
+    // its grantor); a chat/delegate/role requester is handled client-side by /chat/rescope (widen the chat cap
+    // the sub-agent is ⊆ of). By-reference throughout — the grant re-attenuates the node's held refs.
+    if (req.method === 'POST' && u.pathname === '/access/grant') {
+      const { cap, requester, power, notesFolder } = await jsonBody(req);
+      if (!nodeFor(cap)?.isRoot) return json(res, 403, { error: 'granting a power needs your root capability' });
+      const kind = requester && requester.kind;
+      if (kind === 'specialist') {
+        const rc = grantSpecialistPower(String(requester.id || ''), String(requester.owner || 'root'), String(power || ''), notesFolder || '');
+        return json(res, 200, rc.ok ? { ok: true, kind, id: rc.id, powers: rc.powers, granted: rc.granted, alreadyHeld: !!rc.alreadyHeld } : { ok: false, error: rc.error, ceilingExceeded: !!rc.ceilingExceeded });
+      }
+      // chat/root/delegate/role/scheduled → the durable widen target is a chat scoped cap; the client uses
+      // /chat/rescope for that (it holds the chat's swiss). Reaching here means a kind we don't grant server-side.
+      return json(res, 400, { ok: false, error: `access grant for requester kind "${kind || '(none)'}" is handled via /chat/rescope on the chat's cap` });
     }
 
     // ── SHARE A CHAT (Feature B): the owner mints a link to a chat; anyone with the link (even a
