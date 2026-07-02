@@ -21,7 +21,7 @@
  * The bundle step writes ~10 MiB into `bundles/`; allow generous time.
  *
  * The bundles are emitted as ESM (`.mjs`) rather than CJS so that
- * `packages/daemon/src/daemon-node.js`'s module-level `await` (since the
+ * `packages/daemon/src/manager-node.js`'s module-level `await` (since the
  * SQLite migration) survives bundling — esbuild rejects top-level
  * `await` under `format: 'cjs'`.  See `scripts/bundle.mjs` for the
  * pipeline.
