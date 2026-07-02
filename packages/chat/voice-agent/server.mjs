@@ -1090,6 +1090,12 @@ const scrubCaps = s => String(s == null ? '' : s)
   .replace(/#k=[\w-]{16,}/g, '#k=«redacted»')
   .replace(/#agent=[\w-]{8,}/g, '#agent=«redacted»')
   .replace(/\b[0-9a-f]{32}\b/g, '«swissnum»');
+// P1-7 ANSWER-HYGIENE (the "[object Object] in purple" fix): even if some path slips a raw coercion through,
+// NEVER persist/render "[object Object]" (or [object Promise]/[object Map]…). codemode now captures such values
+// as structured descriptors on the `objects` channel (see codemode.mjs CONTRACT) and puts a 🌱 placeholder in the
+// text; this is the belt-and-suspenders that de-smells any residual raw blob in the final answer TEXT, pointing
+// the user at the carried object descriptor. Applied at answer-finalization, after scrubCaps.
+const deSmellAnswer = s => String(s == null ? '' : s).replace(/\[object (?:Object|Promise|Map|Set|Array|Arguments|Async\w*|Generator\w*|Error)\]/g, '🌱 (unrendered object — see attached)');
 // A SAFE descriptive walk for values JSON.stringify chokes on — arrays of REMOTABLES/presences (live ocap
 // refs whose proxy traps throw mid-stringify) were falling through to String(v) = "[object Object],…",
 // discarding the goods. This never throws and never yields a bare [object Object]: records become
@@ -1918,8 +1924,19 @@ const handler = async (req, res) => {
       // CAP HYGIENE: the model's answer() can echo a #cap=/swissnum (e.g. it called shareHa/shareAgent/
       // shareContact, which return a #cap= URL). Scrub it before it's rendered to the DOM, persisted, or
       // pushed as a notification — a swissnum must never land in the render/store/log path (stack-wide rule).
-      const safeAnswer = scrubCaps(r.answer);
-      const donePayload = { answer: safeAnswer, endKind, ...(r.asking ? { asking: true } : {}), ...(r.blocked ? { blocked: true } : {}), images, imageUrls, ui: uiWidgets, toolsUsed: r.toolsUsed.map(x => x.name), steps, proposals, autoFired, asks, accessRequests, agentId: runNode.id, attachments: savedRefs, remaining: purse.balance(), allowance: purse.granted(), spent: Object.values(perProvider).reduce((a, b) => a + b, 0), perProvider };
+      const safeAnswer = deSmellAnswer(scrubCaps(r.answer));
+      // OBJECT CHANNEL (increment 1a): live values the agent handed answer()/ask()/blocked() that would have been
+      // destroyed to "[object Object]" arrive as structured descriptors on r.objects (see codemode.mjs CONTRACT).
+      // Enrich each with its blossom signature (= sigOf(methods, kind) — the "type" the renderer library keys on)
+      // so the CLIENT can look up / author a renderer, and re-scrub every string field (defense in depth: a
+      // swissnum must never reach the DOM/store/log). The queued client increment renders `objects[]` via the
+      // valNode drill-down tree + blossom, with a "🌱 blossom this / change how this looks" affordance.
+      const objectChannel = (Array.isArray(r.objects) ? r.objects : []).slice(0, 12).map(d => {
+        const methods = Array.isArray(d.methods) ? d.methods.map(String) : [];
+        const kind = String(d.kind || 'object');
+        return { kind, name: scrubCaps(String(d.name || kind)), methods, sample: scrubCaps(String(d.sample || '')), preview: scrubCaps(String(d.preview || '')), ...(d.redacted ? { redacted: true } : {}), blossomSig: blossom.sigOf(methods, kind) };
+      });
+      const donePayload = { answer: safeAnswer, endKind, ...(r.asking ? { asking: true } : {}), ...(r.blocked ? { blocked: true } : {}), images, imageUrls, ui: uiWidgets, ...(objectChannel.length ? { objects: objectChannel } : {}), toolsUsed: r.toolsUsed.map(x => x.name), steps, proposals, autoFired, asks, accessRequests, agentId: runNode.id, attachments: savedRefs, remaining: purse.balance(), allowance: purse.granted(), spent: Object.values(perProvider).reduce((a, b) => a + b, 0), perProvider };
       turnDone(endKind === 'answer' ? 'done' : `done(${endKind})`, `${steps.length} step(s) [${steps.map(s => s.name).filter(Boolean).join(' → ') || 'direct answer'}] | ${Object.values(perProvider).reduce((a, b) => a + b, 0)}µUSD | ${String(r.answer || '').length}ch${proposals.length ? ` | ${proposals.length} proposal(s)` : ''}${accessRequests.length ? ` | ${accessRequests.length} access-request(s)` : ''}${asks.length ? ` | ${asks.length} ask(s)` : ''}`);
       // PERSIST the finished turn so it survives a closed tab — the client re-attaches on reopen.
       setRunResult(sid, { state: 'done', node: runNode, text: t, result: donePayload, startedAt, doneAt: Date.now() });
