@@ -2668,7 +2668,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     node.cap = Far(`FieldAgentNode(${labelOf})`, {
       help: () => `Field agent node. Powers held: ${[...powerSet].join(', ') || 'none'}. describe(), share(power,name), listShares(), revoke(swiss)${powerSet.has('homeassistant') ? ', haTree(handle?), shareHa(handle,name,{readOnly})' : ''}.`,
       describe: () => harden({
-        kind: powerSet.size === ALL_POWERS.length ? 'root' : 'share',
+        kind: isRoot ? 'root' : 'share', // the actual root node (mode-independent) — not a count of held powers (a platform root holds only PLATFORM_POWERS)
         label: labelOf,
         powers: [...powerSet].map(p => ({ name: p, label: POWERS[p].label })),
         canMint: [...powerSet],
