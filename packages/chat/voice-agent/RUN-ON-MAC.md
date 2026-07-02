@@ -119,6 +119,45 @@ Optional seams (archua-identical defaults): `HOST_ENV_FILE`, `GPU_IMG_GEN` (abse
 darwin default is `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`; the Linux
 LD_LIBRARY_PATH shim is never applied on darwin), `FEED_MJS`, `MACHINES_FILE`.
 
+**GPU-box endpoints (the tinix family), if you stand any of them up at camp.** `field-config.mjs`
+centralizes them (the PORT-6 `ENDPOINTS` seam); each keeps its existing env var. Set `TINIX_HOST` to
+relocate the whole box in one shot (gemma-LLM, whisper-STT, ComfyUI, diarizer all derive from it), or
+override one at a time: `AGENT_LLM`, `STT_URL`, `COMFY_URL` (the ComfyUI base — the `images`/inpaint
+power's abort/interrupt reads it), `MEETING_DIARIZE_URL`. Left unset at camp they point at the
+home-LAN GPU box (unreachable off-tailnet) and degrade cleanly per §"What degrades".
+
+**Home-rooted worktree/Blacksmith seams** (needed only if you use the self-editing / dev-agent roles at
+camp — else ignore):
+
+- `FIELD_AGENT_WORKTREE_REPO` — the git repo the worktree/Blacksmith roles clone worktrees FROM. On
+  archua this is the live `~/endo-bfb-llm` checkout; on the mac point it at wherever you cloned
+  `field-preact` (`~/endo-bfb` per §0). If the clone basename differs from archua's, this is the seam
+  that reconciles it.
+- `FIELD_AGENT_GIT_COMMON` — the shared `.git` common-dir the worktrees attach to (the
+  `git worktree add` parent). Defaults alongside the worktree repo; set it only if you keep the
+  object store somewhere other than the repo's own `.git`.
+- `COMFY_URL` — see the GPU-box paragraph above (the ComfyUI base for the inpaint/images abort path
+  that today has no per-call override in `agent-caps.mjs`).
+
+**Clone-basename note (`endo-bfb` vs `endo-bfb-llm`).** archua runs the LIVE service from the worktree
+checkout named **`endo-bfb-llm`** (branch `field-preact`); the guide above clones the source to
+**`~/endo-bfb`**. That basename difference is fine for *serving* (nothing hardcodes the repo name in the
+serving path), but the worktree/Blacksmith roles resolve their repo via `FIELD_AGENT_WORKTREE_REPO` — so
+if you use those roles, set it to your actual clone path (`~/endo-bfb`) rather than assuming the archua
+`endo-bfb-llm` name.
+
+**What degrades with no bwrap.** macOS has no `bwrap`. The worktree/Blacksmith (dev-agent) roles then
+fall back to a **cwd-jail** (a working-directory confinement in-process) — *not* a kernel sandbox. It
+still scopes file paths, but a determined program is not kernel-isolated the way it is on archua. Treat
+the self-editing/dev roles as lower-assurance at camp; if you don't need them, don't employ them there.
+
+> **iroh dial (PORT-2).** The peer-redemption / iroh transport uses the native `@number0/iroh` addon. A
+> `darwin-arm64` prebuild **is** published (`@number0/iroh-darwin-arm64@1.0.0`, os=darwin cpu=arm64), so
+> `yarn install` on the M1 should fetch it automatically — but it's a lazy+optional dep, so **verify at
+> install time** that it actually loaded (`node -e "require('@number0/iroh')"` in the ocapn-noise package)
+> before relying on peer-redemption; if it didn't, iroh dial is unavailable (the rest of the app is
+> unaffected).
+
 **Secure context for the mic:** `getUserMedia` needs HTTPS. `tailscale serve` works the same on
 macOS (Tailscale.app or `brew install tailscale`):
 
