@@ -200,6 +200,10 @@ const renderComponent = (spec, ctx) => {
         const push = t => { try { port && port.postMessage({ __cu: 1, type: 'cell', id: 'theme', value: { name: t.name, mode: t.mode, vars: t.vars } }); } catch { /* */ } };
         push(theme.get()); releases.push(theme.subscribe(push)); return;
       }
+      // SPLASH/SEED: a CANNED, cap-free value the caller pre-supplies for this exact cell id (the trace-view
+      // gallery feeds each viz its own splash-example trace this way — no server cell, no cap, no stream). One
+      // push, then done; the confined viz renders the offline example the instant it subscribes.
+      if (ctx && ctx.seedCells && Object.prototype.hasOwnProperty.call(ctx.seedCells, id)) { try { port && port.postMessage({ __cu: 1, type: 'cell', id, value: ctx.seedCells[id] }); } catch { /* */ } return; }
       if (ctx && ctx.sample) { try { port && port.postMessage({ __cu: 1, type: 'cell', id, value: dummyForCell(id) }); } catch { /* */ } return; } // GALLERY preview: feed generated dummy data — no server cell, no cap
       if (!auth || !allowedCells.has(id)) return; // undeclared / no credential → ignore
       const { grain, release } = acquireCell(auth, id); releases.push(release);
@@ -272,6 +276,74 @@ export const mountTraceViz = async (host, { cap, sid, componentId, name, source,
   try { wrap = renderComponent(spec, { cap, onComponentError: onError }); } catch { return null; }
   if (!wrap) return null;
   if (typeof onVizFrame === 'function') { try { wrap.__onVizFrame = onVizFrame; } catch { /* */ } }
+  try { host.appendChild(wrap); } catch { return null; }
+  return wrap;
+};
+
+// ── THE TRACE-VIEW GALLERY SET ── the curated 5 "well-researched ways to view how a complicated task got
+//    done". Each is a confined Tier-2 `(ui)=>element` on the SAME trace:<sid> cell contract — the live cell
+//    is the interface, so ONE running turn feeds every one of them. This registry is the single source of
+//    truth for the gallery cards AND the island's switchable view set. `caption` is the one-line "what
+//    analysis this makes effective", distilled from each source's header/spec.
+export const TRACE_VIZ_KINDS = ([
+  { key: '3d', module: './trace-viz-3d.js', srcExport: 'TRACE_VIZ_3D_SOURCE', nameExport: 'TRACE_VIZ_NAME', splashExport: '', caption: 'Constellation — the shape of the reasoning: order and branching of every step, as a 3D force graph.' },
+  { key: 'flamegraph', module: './trace-viz-flamegraph.js', srcExport: 'TRACE_VIZ_FLAMEGRAPH_SOURCE', nameExport: 'TRACE_VIZ_FLAMEGRAPH_NAME', splashExport: 'TRACE_VIZ_FLAMEGRAPH_SPLASH', caption: 'Flame / icicle — where the effort went: proportion of work and nesting depth (the long pole at a glance).' },
+  { key: 'timeline', module: './trace-viz-timeline.js', srcExport: 'TRACE_VIZ_TIMELINE_SOURCE', nameExport: 'TRACE_VIZ_TIMELINE_NAME', splashExport: 'TRACE_VIZ_TIMELINE_SPLASH', caption: 'Critical Path — parallelism across agents and the one step that gated completion.' },
+  { key: 'provenance', module: './trace-viz-provenance.js', srcExport: 'TRACE_VIZ_PROVENANCE_SOURCE', nameExport: 'TRACE_VIZ_PROVENANCE_NAME', splashExport: 'TRACE_VIZ_PROVENANCE_SPLASH', caption: 'Provenance DAG — why this answer: the evidence and the authority the conclusion actually rests on.' },
+  { key: 'sankey', module: './trace-viz-sankey.js', srcExport: 'TRACE_VIZ_SANKEY_SOURCE', nameExport: 'TRACE_VIZ_SANKEY_NAME', splashExport: 'TRACE_VIZ_SANKEY_SPLASH', caption: 'Authority & data flow — least-authority as a narrowing silhouette (the ocap lens).' },
+]);
+// (client module — not SES-hardened, matching app.js/grain-ui.js convention; the shapes are read-only data)
+
+// a shared, cap-free canonical splash (the trace-cell shape every viz understands) — the fallback the 3D
+// reference uses (it ships no *_SPLASH export and no .splash.json), so its gallery card still renders offline.
+const SHARED_TRACE_SPLASH = ({
+  status: 'done', rev: 9, prompt: 'Compare 3 vector DBs → recommendation',
+  steps: [
+    { name: 'notes', ok: true, status: 'done' },
+    { name: 'research', ok: true, status: 'done', granted: ['research'], children: [
+      { name: '❓ pgvector at our scale?', status: 'done', children: [{ name: 'web', ok: true, status: 'done' }, { name: 'read', ok: true, status: 'done' }] },
+      { name: '❓ Qdrant vs Weaviate?', status: 'done', children: [{ name: 'web', ok: false, status: 'done' }, { name: 'web', ok: true, status: 'done' }] },
+    ] },
+    { name: 'editNote', ok: true, status: 'done', granted: ['notes'] },
+  ],
+  nodes: [
+    { key: 'root', state: 'done' }, { key: 'notes', parent: 'root', state: 'done' },
+    { key: 'research', parent: 'root', state: 'done' }, { key: 'q1', parent: 'research', state: 'done' },
+    { key: 'q2', parent: 'research', state: 'done' }, { key: 'editNote', parent: 'root', state: 'done' },
+  ],
+});
+
+// LOAD the 5 viz (source + display name + splash + caption). Splash resolution HANDLES BOTH conventions:
+// prefer the sibling `<basename>.splash.json` if it is served, else the module's `*_SPLASH` export, else the
+// shared canonical splash. Best-effort per kind: a module that fails to import is dropped, never fatal.
+export const loadTraceVizKinds = async () => {
+  const out = [];
+  for (const k of TRACE_VIZ_KINDS) {
+    try {
+      const mod = await import(k.module);
+      const source = mod[k.srcExport];
+      if (!source) continue;
+      const name = mod[k.nameExport] || k.key;
+      let splash = null;
+      try { const r = await fetch(k.module.replace(/\.js$/, '.splash.json')); if (r && r.ok) splash = await r.json(); } catch { /* no json → fall through */ }
+      if (!splash && k.splashExport && mod[k.splashExport]) splash = mod[k.splashExport];
+      if (!splash) splash = SHARED_TRACE_SPLASH;
+      out.push({ key: k.key, name, source, caption: k.caption, splash });
+    } catch { /* a viz that won't import is simply absent from the gallery */ }
+  }
+  return out;
+};
+
+// ── mount ONE trace-viz splash card: a small confined instance of `source` rendering its OWN canned splash
+//    trace, fed cap-free through the cell (seedCells) so it previews offline (no live cell, no cap). This is
+//    the same confined runtime a live viz uses; only the data source differs (a canned value, not a stream).
+export const mountVizSplash = (host, { source, splash, height, cellId } = {}) => {
+  if (!host || !source) return null;
+  const cid = cellId || 'trace:splash';
+  const spec = { type: 'component', source: String(source), cells: [cid], height: Number(height) || 190, props: { cell: cid, splash } };
+  let wrap;
+  try { wrap = renderComponent(spec, { seedCells: { [cid]: splash } }); } catch { return null; }
+  if (!wrap) return null;
   try { host.appendChild(wrap); } catch { return null; }
   return wrap;
 };

@@ -3407,6 +3407,21 @@ const ensureTraceVizSeeded = async () => {
   })();
   return __traceVizSeed;
 };
+// ── THE 5 TRACE VIEWS ── the switchable set for the trace island + the gallery cards. dan (2026-07-02):
+//    "a gallery of a few different well-researched ways one might view how a complicated task is completed."
+//    The 5 confined Tier-2 viz are alternative SOURCES for the ONE trace island — the live trace:<sid> cell
+//    is the interface, so rotating the view just re-mounts the island with a different source over the SAME
+//    cell. The active choice persists per-user in localStorage (a durable per-user server store is a
+//    follow-up). Default '3d' keeps the reference surface (+ its seeded git id → alt-click/fork/backlog).
+const TRACE_VIZ_CHOICE_LS = 'field-trace-viz-choice';
+const traceVizChoice = () => { try { return localStorage.getItem(TRACE_VIZ_CHOICE_LS) || '3d'; } catch { return '3d'; } };
+const setTraceVizChoice = k => { try { localStorage.setItem(TRACE_VIZ_CHOICE_LS, String(k)); } catch { /* */ } };
+let __traceVizKinds = null; // memoized load of the 5 viz (source+name+splash+caption) from grain-ui's registry
+const loadTraceVizKinds = async () => {
+  if (__traceVizKinds) return __traceVizKinds;
+  try { const gu = await import('./grain-ui.js'); __traceVizKinds = (typeof gu.loadTraceVizKinds === 'function') ? await gu.loadTraceVizKinds() : []; } catch { __traceVizKinds = []; }
+  return __traceVizKinds;
+};
 const traceVizIslandBegin = async (promptText, sid) => {
   try {
     const gu = await import('./grain-ui.js');
@@ -3416,21 +3431,129 @@ const traceVizIslandBegin = async (promptText, sid) => {
     host.className = 'msg trace-island-host';
     host.style.cssText = 'padding:0;border:0;background:none;max-width:none';
     log.appendChild(host); window.scrollTo(0, document.body.scrollHeight);
-    const componentId = await ensureTraceVizSeeded().catch(() => null); // its uicomp git id (alt-click/fork/backlog)
-    const inst = { host, sid, tier2: true, frames: 0, ctrl: { abort() {} } };
+    // pick the user's chosen view from the 5 (default: the 3D reference). Only the 3D reference carries a
+    // seeded uicomp git id this session (ensureTraceVizSeeded broke it out); the others mount name-only
+    // (still live + switchable via "views ▾", just not fork/backlog-tagged this session — noted follow-up).
+    const kinds = await loadTraceVizKinds().catch(() => []);
+    const choiceKey = traceVizChoice();
+    const kind = kinds.find(k => k.key === choiceKey) || kinds.find(k => k.key === '3d') || null;
+    const componentId = (kind && kind.key === '3d') || !kind ? await ensureTraceVizSeeded().catch(() => null) : null;
+    // honor the TEST-ONLY source override (window.__traceVizSourceOverride, used to exercise variant/broken
+    // paths): when it's set, let mountTraceViz apply it — don't pass our curated source over the top of it.
+    const overriding = typeof window !== 'undefined' && !!window.__traceVizSourceOverride;
+    const inst = { host, sid, tier2: true, frames: 0, ctrl: { abort() {} }, promptText, vizKey: kind ? kind.key : '3d' };
     let fellBack = false;
     const onError = () => { // the confined viz failed to mount/threw → the LEGACY 3D pendant takes over (never a blank turn)
       if (fellBack) return; fellBack = true;
       try { traceIslandEnd(); } catch { /* */ }
       try { pendantBeginLegacy(promptText, sid); } catch { /* */ }
     };
-    const wrap = await gu.mountTraceViz(host, { cap: chatCap(), sid, componentId, name: 'Trace 3D (force graph)', height: 300, onError, onVizFrame: n => { inst.frames = n; } });
+    // a slim control bar: which view is live + a "views ▾" gallery opener + a 🔀 quick-rotate through the 5.
+    host.appendChild(traceViewsBar(inst));
+    const wrap = await gu.mountTraceViz(host, { cap: chatCap(), sid, componentId, name: (kind && kind.name) || 'Trace 3D (force graph)', source: overriding ? undefined : ((kind && kind.source) || undefined), height: 300, onError, onVizFrame: n => { inst.frames = n; } });
     if (!wrap) { try { host.remove(); } catch { /* */ } return false; }
     inst.ctrl = { abort: () => { try { wrap.__dispose && wrap.__dispose(); } catch { /* */ } } };
-    traceIsland = inst; window.__traceIsland = inst; // test seam: { frames, sid, tier2 }
+    traceIsland = inst; window.__traceIsland = inst; // test seam: { frames, sid, tier2, vizKey }
     return true;
   } catch { return false; }
 };
+// re-render the LIVE island through a different view (set the active source + re-mount over the SAME cell).
+// Composed-vs-direct note: the shipped 🔀 view-switch overlay (commit 39aedd2fd) keys strictly on a
+// component's git history + /forks/* — it can't take a CURATED in-memory source set without seeding all 5 as
+// git objects (a server round-trip). So the island switch is implemented DIRECTLY here (re-mount with the
+// chosen source); deeper composition (the 5 as the overlay's upstream/peer node set) is the noted follow-up.
+const switchTraceViz = async key => {
+  setTraceVizChoice(key);
+  const inst = traceIsland;
+  if (inst && inst.tier2 && inst.sid) { try { await traceVizIslandBegin(inst.promptText || '', inst.sid); } catch { /* */ } }
+};
+// the on-island control bar: the current view's name + a gallery opener + a quick rotate (dan's 🔀 gesture).
+const traceViewsBar = inst => {
+  const bar = document.createElement('div');
+  bar.className = 'trace-views-bar'; bar.setAttribute('data-trace-views-bar', '');
+  bar.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 8px 5px;font:11px -apple-system,sans-serif;color:var(--mut)';
+  const lbl = document.createElement('span'); lbl.textContent = 'trace view'; lbl.style.cssText = 'opacity:.7';
+  const views = document.createElement('button'); views.className = 'mini'; views.textContent = 'views ▾'; views.title = 'See 5 ways to view how this task got done';
+  views.onclick = () => openTraceViewsGallery();
+  const rot = document.createElement('button'); rot.className = 'mini'; rot.textContent = '🔀'; rot.title = 'Rotate this trace through the next view (same data, different lens)'; rot.setAttribute('data-trace-rotate', '');
+  rot.onclick = async () => { const kinds = await loadTraceVizKinds(); if (!kinds.length) return; const i = Math.max(0, kinds.findIndex(k => k.key === traceVizChoice())); await switchTraceViz(kinds[(i + 1) % kinds.length].key); };
+  bar.append(lbl, views, rot);
+  return bar;
+};
+// TIER-2 GATING (opt-in mode, dan-gated default): the WebGL views need field-trace-tier2. The gallery + its
+// splash cards render REGARDLESS (a splash card is a plain confined component, no flag needed). Only making a
+// view your LIVE trace lens needs Tier-2 — so if it's off we show a legible banner offering to enable it.
+// Clicking "Enable" is the USER opting IN per-instance; the code default stays OFF (dan's policy call — see
+// the report). We never flip the default here.
+const renderTraceGate = el => {
+  if (!el) return;
+  if (traceTier2On()) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.cssText = 'display:block;margin:0 0 12px;padding:9px 12px;border:1px solid var(--warn,#d29922);border-radius:10px;font-size:12px;background:rgba(210,153,34,.09);color:var(--ink)';
+  el.textContent = 'These are WebGL views. Your live trace uses the lightweight surface until you turn on the Tier-2 WebGL trace — then your chosen view renders under each answer. ';
+  const btn = document.createElement('button'); btn.className = 'mini primary'; btn.textContent = 'Enable Tier-2 WebGL trace'; btn.style.marginLeft = '4px'; btn.setAttribute('data-enable-tier2', '');
+  btn.onclick = () => { try { localStorage.setItem('field-trace-tier2', '1'); } catch { /* */ } renderTraceGate(el); setStatus('Tier-2 WebGL trace enabled — your next answer uses your chosen view.'); };
+  el.appendChild(btn);
+};
+// make `k` the active trace view (persist + re-render any live island), then refresh the surface it was
+// picked from (moves the "active" highlight + updates the gate).
+const pickTraceView = async (k, refresh) => {
+  await switchTraceViz(k.key);
+  setStatus(`Trace view set: ${k.name}`);
+  if (typeof refresh === 'function') { try { refresh(); } catch { /* */ } }
+};
+// build the 5 SPLASH CARDS into `host`: each mounts a small confined instance of its viz rendering its OWN
+// canned splash-example trace (cap-free, fed through the cell) — so at a glance you see the distinct ways to
+// read a trace. Clicking a card makes it the active view. Reused by the modal + the Component-Studio section.
+const buildTraceViewsGrid = async (host, opts) => {
+  const o = opts || {}; host.innerHTML = '';
+  let gu, kinds;
+  try { gu = await import('./grain-ui.js'); kinds = await loadTraceVizKinds(); } catch { kinds = []; }
+  if (!kinds || !kinds.length) { host.innerHTML = '<div class="sub" style="padding:8px 2px;font-size:11px">trace views unavailable (viz sources failed to load)</div>'; return; }
+  const active = o.activeKey || traceVizChoice();
+  const grid = document.createElement('div'); grid.style.cssText = GALLERY_GRID;
+  for (const k of kinds) {
+    const isActive = k.key === active;
+    const card = document.createElement('div'); card.setAttribute('data-trace-view', k.key);
+    card.style.cssText = `border:1px solid ${isActive ? 'var(--acc,#7c5cff)' : 'var(--edge)'};border-radius:12px;padding:10px;background:var(--bg);overflow:hidden;cursor:pointer;position:relative` + (isActive ? ';box-shadow:0 0 0 1px var(--acc,#7c5cff)' : '');
+    const h = document.createElement('div'); h.style.cssText = 'font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px'; h.textContent = k.name;
+    if (isActive) { const b = document.createElement('span'); b.textContent = 'active'; b.style.cssText = 'font-size:9px;font-weight:600;background:var(--acc-fill,#6b3fd6);color:#fff;border-radius:8px;padding:1px 6px'; h.appendChild(b); }
+    const sub = document.createElement('div'); sub.className = 'sub'; sub.style.cssText = 'font-size:11px;margin:2px 0 8px;line-height:1.35'; sub.textContent = k.caption;
+    const slot = document.createElement('div'); slot.style.cssText = 'pointer-events:none'; // the CARD owns the click; the confined iframe never sees it
+    card.append(h, sub, slot);
+    try { gu.mountVizSplash(slot, { source: k.source, splash: k.splash, height: 190, cellId: 'trace:splash-' + k.key }); } catch { slot.textContent = 'preview unavailable'; }
+    card.onclick = () => { if (typeof o.onPick === 'function') o.onPick(k); };
+    grid.appendChild(card);
+  }
+  host.appendChild(grid);
+};
+// a self-refreshing Trace-views section (gate banner + the 5 cards). Picking re-renders both in place.
+const mountTraceViewsSection = host => {
+  const gate = document.createElement('div'); const grid = document.createElement('div');
+  host.append(gate, grid);
+  const refresh = () => { renderTraceGate(gate); buildTraceViewsGrid(grid, { onPick: k => pickTraceView(k, refresh) }); };
+  refresh();
+};
+// the "🔭 Trace views" GALLERY modal — reached from "views ▾" on the live trace island (and mirrored in the
+// Component Studio tab). Shows all 5 splash cards at once so, at a glance, you see the ways to read a trace.
+let __traceGalleryOverlay = null;
+const openTraceViewsGallery = () => {
+  if (!__traceGalleryOverlay) {
+    const ov = document.createElement('div'); ov.id = 'tv-gallery-overlay'; ov.setAttribute('data-trace-gallery', '');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:9400;display:none;align-items:center;justify-content:center;background:rgba(4,8,14,.72);backdrop-filter:blur(4px);padding:20px';
+    ov.innerHTML = `<div style="width:min(980px,94vw);max-height:88vh;display:flex;flex-direction:column;background:var(--bg,#0d1117);border:1px solid var(--acc,#7c5cff);border-radius:16px;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.7)">
+      <div style="display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid var(--edge)"><b style="flex:1">🔭 Trace views — ways to see how a task got done</b><button class="mini" id="tv-x">✕</button></div>
+      <div id="tv-body" style="flex:1;overflow:auto;padding:14px"></div></div>`;
+    document.body.appendChild(ov);
+    ov.addEventListener('click', e => { if (e.target === ov) hideTraceViewsGallery(); });
+    ov.querySelector('#tv-x').onclick = hideTraceViewsGallery;
+    __traceGalleryOverlay = ov;
+  }
+  __traceGalleryOverlay.style.display = 'flex';
+  const body = __traceGalleryOverlay.querySelector('#tv-body'); body.innerHTML = '';
+  mountTraceViewsSection(body);
+};
+const hideTraceViewsGallery = () => { if (__traceGalleryOverlay) __traceGalleryOverlay.style.display = 'none'; };
+try { window.openTraceViewsGallery = openTraceViewsGallery; } catch { /* */ } // reachable from tests + other surfaces
 // Tier-2 is OPT-IN for now (dan-gated policy call — it changes the central trace surface + the prior
 // chrome-trace-view test asserts the divs island). Enable per-instance with localStorage
 // field-trace-tier2='1' (or window.__traceVizTier2 = true). When on: Tier-2 WebGL island → (on failure)
@@ -4356,6 +4479,11 @@ const renderGallery = () => {
   const grid = document.createElement('div'); grid.style.cssText = GALLERY_GRID;
   for (const s of gallerySamples()) grid.appendChild(galleryCard(s.title, s.sub, slot => renderWidgets(slot, [s.spec], { cap, onChoice: t => setStatus(`(gallery sample) you'd choose: ${t}`) })));
   host.appendChild(grid);
+  // 1b) TRACE VIEWS — the 5 confined ways to see how a complicated task got done (they're forkable components
+  //     too). Each card is a live splash render; clicking one makes it your live trace view.
+  const tvHd = document.createElement('div'); tvHd.className = 'shares-sec'; tvHd.style.cssText = 'margin:18px 0 8px'; tvHd.textContent = 'Trace views · how a task got done';
+  host.appendChild(tvHd);
+  const tvSec = document.createElement('div'); host.appendChild(tvSec); mountTraceViewsSection(tvSec);
   (async () => {
     // 2) YOUR library's broken-out components, each rendered live with GENERATED dummy data.
     let comps = [];

@@ -1178,7 +1178,7 @@ const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'applic
 // no-STORE the app shell (index.html/app.js/pendant.js/…) so an actively-developed client can't get
 // stuck on a stale cached copy (iOS Safari ignores no-cache for module scripts) — only the big vendored
 // libs (three.module.js) keep revalidate-caching. This ends the "still broken after you deployed" cycle.
-const serveFile = async (res, rel, type) => { try { const cc = rel === 'three.module.js' ? 'no-cache' : 'no-store, must-revalidate'; res.writeHead(200, { 'content-type': type, 'cache-control': cc, ...SEC }); res.end(await fs.promises.readFile(path.join(HERE, 'public', rel))); } catch { res.writeHead(404, SEC); res.end('not found'); } };
+const serveFile = async (res, rel, type) => { const cc = rel === 'three.module.js' ? 'no-cache' : 'no-store, must-revalidate'; let buf; try { buf = await fs.promises.readFile(path.join(HERE, 'public', rel)); } catch { res.writeHead(404, SEC); res.end('not found'); return; } res.writeHead(200, { 'content-type': type, 'cache-control': cc, ...SEC }); res.end(buf); }; // read BEFORE writeHead: a missing file must 404, never send 200-headers-then-throw (which hangs the socket)
 // The app-shell CSP grants script-src 'unsafe-eval' ONLY when lockdown is on (see FIELD_LOCKDOWN) — SES then
 // tames eval, so the relaxation is compensated. We add it to default-src (the script-src fallback) since the
 // shell sets no explicit script-src.
@@ -1392,6 +1392,10 @@ const handler = async (req, res) => {
     if (u.pathname === '/widget.js') return serveFile(res, 'widget.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/grain-ui.js') return serveFile(res, 'grain-ui.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/trace-viz-3d.js') return serveFile(res, 'trace-viz-3d.js', 'text/javascript; charset=utf-8'); // the reference Tier-2 WebGL trace viz (grain-ui imports it; it also seeds the forkable uicomp git object)
+    // the other 4 Tier-2 trace viz + their splash samples — the "trace views" gallery set. Allowlisted fixed
+    // basenames (no traversal) so the client can import each viz + fetch its splash card without a per-file route.
+    if (/^\/trace-viz-(flamegraph|timeline|provenance|sankey)\.js$/.test(u.pathname)) return serveFile(res, u.pathname.slice(1), 'text/javascript; charset=utf-8');
+    if (/^\/trace-viz-(3d|flamegraph|timeline|provenance|sankey)\.splash\.json$/.test(u.pathname)) return serveFile(res, u.pathname.slice(1), 'application/json; charset=utf-8');
     if (u.pathname === '/theme.js') return serveFile(res, 'theme.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/fork-model.js') return serveFile(res, 'fork-model.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/fork-widget.js') return serveFile(res, 'fork-widget.js', 'text/javascript; charset=utf-8'); // mounts a confined fork inline in a chat
