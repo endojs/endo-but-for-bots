@@ -11,6 +11,7 @@
 // SES process: caps run under @endo/init. Tailnet + loopback bind only.
 import '@endo/init';
 import http from 'node:http';
+import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -111,7 +112,8 @@ import { writeJsonAtomic, loadJson } from './write-json-atomic.mjs';
 import { addCandidate as addStory, listPublished as listPublishedStories, listCandidates as listStoryCandidates, publishStory, discardStory } from './stories.mjs';
 // THE PERSONAL/PLATFORM SEAM (Packing up for Dweb): personal config + state dirs resolve through
 // field-config so FIELD_PERSONAL_ROOT (the encrypted volume) moves them together. Defaults identical on the NUC.
-import { CONFIG_DIR, STATE_DIR, VOICE_STATE_DIR, DASH_STATE_DIR, FIELD_MODE, INSTANCE_NAME, configSummary, STT_URL, AGENT_LLM } from './field-config.mjs';
+import { CONFIG_DIR, STATE_DIR, VOICE_STATE_DIR, DASH_STATE_DIR, FIELD_MODE, INSTANCE_NAME, configSummary, STT_URL, AGENT_LLM, EVENT_MODE, LAN_IP, lanAddresses } from './field-config.mjs';
+import { ensureEventCert } from './event-mode.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOME = process.env.HOME || '/home/dan';
@@ -126,8 +128,12 @@ const localAddrs = () => { try { return new Set(Object.values(os.networkInterfac
 const BIND = (() => {
   if (process.env.BIND) return process.env.BIND.split(',').map(s => s.trim()).filter(Boolean); // explicit override, verbatim
   const candidates = (process.env.BIND_DEFAULT ? process.env.BIND_DEFAULT.split(',').map(s => s.trim()).filter(Boolean) : ['100.83.80.102', '127.0.0.1']);
+  // EVENT_MODE (P6): ALSO offer this host's LAN (RFC-1918) addresses so same-LAN phones reach the app at a
+  // venue with no tailscale. Still filtered against present addresses below (PORT-1 self-heal), still deduped,
+  // still NEVER 0.0.0.0/public. Off by default → candidates unchanged → byte-identical bind on the NUC.
+  if (EVENT_MODE) candidates.push(...lanAddresses());
   const here = localAddrs();
-  const present = candidates.filter(a => here.has(a));
+  const present = [...new Set(candidates.filter(a => here.has(a)))];
   return present.length ? present : ['127.0.0.1']; // self-heal: only bind addresses this host actually has
 })();
 // FIELD_LOCKDOWN couples the two halves of the confined-fork render path so they can NEVER drift apart:
@@ -138,10 +144,18 @@ const BIND = (() => {
 //     escape — proven in lockdown-survive.staging.test.cjs). 'unsafe-eval' is SAFE here precisely because SES
 //     then tames eval/Function; we only relax it when lockdown is actually on. OFF (default) = today's strict CSP.
 const FIELD_LOCKDOWN = process.env.FIELD_LOCKDOWN === '1';
-// Public-facing base for cap URLs. The browser mic (getUserMedia) requires a
-// SECURE CONTEXT, so the app is fronted by `tailscale serve` HTTPS on the tailnet
-// (https://archua.taildd002.ts.net) — NOT public. Cap links must use that origin.
-const BASE_URL = process.env.PUBLIC_BASE_URL || `http://100.83.80.102:${PORT}`;
+// EVENT_MODE TLS (P6): mint/load the self-signed cert UP FRONT (sync openssl) so the share-origin scheme and
+// the HTTP(S) listener always AGREE. `log` isn't defined yet at module top (TDZ), so use console.error here.
+// null when EVENT_MODE is off (→ plain http, byte-identical) or when generation failed (→ http fallback on the
+// same LAN address, so the service still runs; only the mic secure-context is lost off-localhost).
+const EVENT_TLS = EVENT_MODE ? ensureEventCert(lanAddresses(), (...a) => console.error('[voice-agent]', ...a)) : null;
+const EVENT_SCHEME = EVENT_TLS ? 'https' : 'http';
+// Public-facing base for cap URLs. The browser mic (getUserMedia) requires a SECURE CONTEXT — on the NUC that
+// is `tailscale serve` HTTPS (https://archua.taildd002.ts.net), NOT public. In EVENT_MODE there is no tailnet,
+// so cap links use the LAN origin (https when the cert generated, else http on the same LAN IP). Off by
+// default → the tailnet http default below, unchanged.
+const EVENT_BASE = EVENT_MODE && LAN_IP ? `${EVENT_SCHEME}://${LAN_IP}:${PORT}` : '';
+const BASE_URL = process.env.PUBLIC_BASE_URL || EVENT_BASE || `http://100.83.80.102:${PORT}`;
 // PUSH notifications are tapped on a PHONE via the public ntfy, so their deep-links must open OFF-tailnet. Use the
 // public web origin (agentc.chu.vmkqx.com) for notification `click` links, not the tailnet BASE_URL. Falls back to
 // BASE_URL if PUBLIC_WEB_URL is unset (e.g. in tests).
@@ -4104,7 +4118,9 @@ const main = async () => {
   }
 
   { const c = configSummary(); log(`instance: ${c.instance} | field mode: ${c.mode} | personal-root: ${c.personalRoot} | config: ${c.configDir} | vault: ${c.vault}`); }
-  for (const ip of BIND) { const s = http.createServer(handler); s.on('error', e => log('bind', ip, e.message)); s.listen(PORT, ip, () => log(`field agent on http://${ip}:${PORT}`)); }
+  // EVENT_MODE (P6): serve HTTPS with the self-signed cert (getUserMedia secure-context on a camp LAN). Off →
+  // EVENT_TLS is null → plain http.createServer, byte-identical to before. Never binds 0.0.0.0/public.
+  for (const ip of BIND) { const s = EVENT_TLS ? https.createServer(EVENT_TLS, handler) : http.createServer(handler); s.on('error', e => log('bind', ip, e.message)); s.listen(PORT, ip, () => log(`field agent on ${EVENT_SCHEME}://${ip}:${PORT}`)); }
   // cap-hygiene: don't print the all-powers root #cap link to the log on a normal boot. Show only a
   // fingerprint; the operator gets the full link by setting PRINT_ROOT_CAP=1 (first-run bootstrap only).
   if (process.env.PRINT_ROOT_CAP === '1') log(`ROOT CAP LINK (full bundle): ${BASE_URL}/#cap=${rootSwiss}`);

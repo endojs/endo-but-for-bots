@@ -139,8 +139,57 @@ export const {
   HOMEASSISTANT_URL, KAZPUTER_URL, VM_HOST, DIETICIAN_HOST,
 } = ENDPOINTS;
 
+// ── EVENT_MODE (P6 — LAN event mode for DWeb Camp / meshcore) ─────────────────────────────────────────
+// OPT-IN (env EVENT_MODE=1). OFF by default → byte-identical behavior on the archua NUC. When ON, the
+// server ALSO binds this host's LAN (RFC-1918) address so same-LAN phones reach the app at a venue with no
+// tailscale/internet, mints share/invite/#cap links at the LAN origin, and serves HTTPS with a self-signed
+// cert (getUserMedia needs a SECURE CONTEXT and there is no `tailscale serve` HTTPS at camp). This is LAN
+// ONLY — it NEVER binds 0.0.0.0 / a public interface (public-internet exposure stays an explicit per-instance
+// operator choice, per the standing rule). Composes with the mac-vat / RUN-ON-MAC story via the same env.
+export const EVENT_MODE = process.env.EVENT_MODE === '1';
+
+// RFC-1918 private LAN ranges ONLY (10/8, 172.16/12, 192.168/16). Excludes loopback, link-local (169.254),
+// and the CGNAT 100.64/10 block Tailscale uses — a camp LAN address is what we want, not the tailnet IP.
+const isPrivateLan = ip => {
+  if (typeof ip !== 'string') return false;
+  const p = ip.split('.').map(Number);
+  if (p.length !== 4 || p.some(n => Number.isNaN(n) || n < 0 || n > 255)) return false;
+  const [a, b] = p;
+  if (a === 10) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  return false;
+};
+
+// the private-range IPv4 addresses actually present on THIS host (from os.networkInterfaces()). Used both to
+// pick the LAN share-origin and to extend the bind list (still self-heal-filtered against present addresses).
+export const lanAddresses = () => {
+  try {
+    return Object.values(os.networkInterfaces()).flat().filter(Boolean)
+      .filter(i => (i.family === 'IPv4' || i.family === 4) && !i.internal && isPrivateLan(i.address))
+      .map(i => i.address);
+  } catch { return []; }
+};
+
+// the primary LAN IP for the share-origin (EVENT_LAN_IP override wins so the operator can pin it when a host
+// has several private addresses — e.g. a real Wi-Fi LAN alongside podman bridges). '' when none is derivable.
+export const LAN_IP = process.env.EVENT_LAN_IP || (lanAddresses()[0] || '');
+
+// self-signed cert for the EVENT_MODE mic secure-context, under CONFIG_DIR so it moves with the personal
+// volume (and lands in the mkdtemp sandbox during tests). Override the dir with EVENT_CERT_DIR.
+export const EVENT_CERT_DIR = process.env.EVENT_CERT_DIR || path.join(CONFIG_DIR, 'event-tls');
+export const EVENT_CERT_FILE = path.join(EVENT_CERT_DIR, 'cert.pem');
+export const EVENT_KEY_FILE = path.join(EVENT_CERT_DIR, 'key.pem');
+
+// the LAN share/invite origin in EVENT_MODE (https for the secure context). '' when not in event mode or no
+// LAN IP is derivable. server.mjs prefers this over the tailnet default, but derives the actual scheme from
+// whether the TLS cert really generated (falls back to http on the same LAN IP if openssl is unavailable).
+export const eventOrigin = (port, scheme = 'https') => (EVENT_MODE && LAN_IP ? `${scheme}://${LAN_IP}:${port}` : '');
+
 // a compact snapshot for logging at boot (no secrets — just where the personal seam points).
-export const configSummary = () => ({ instance: INSTANCE_NAME, mode: FIELD_MODE, personalRoot: PERSONAL_ROOT || '(legacy home layout)', configDir: CONFIG_DIR, vault: VAULT_DIR, stateDir: STATE_DIR });
+export const configSummary = () => ({ instance: INSTANCE_NAME, mode: FIELD_MODE, event: EVENT_MODE ? (LAN_IP || 'no-lan-ip') : false, personalRoot: PERSONAL_ROOT || '(legacy home layout)', configDir: CONFIG_DIR, vault: VAULT_DIR, stateDir: STATE_DIR });
 
 _harden(personalAt);
+_harden(lanAddresses);
+_harden(eventOrigin);
 _harden(configSummary);
