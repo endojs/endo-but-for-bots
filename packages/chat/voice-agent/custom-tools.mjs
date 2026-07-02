@@ -90,12 +90,15 @@ export const makeCustomTools = ({ fix } = {}) => {
     for (const [k, v] of Object.entries(files)) { if (++n > 40) break; const rel = String(k).replace(/^[/\\]+/, '').slice(0, 120); if (rel && !rel.includes('..')) out[rel] = String(v ?? '').slice(0, 40000); }
     return out[entry] ? out : null;
   };
-  const propose = ({ name, description, code, args, kind, bundle, files, entry, proposedBy, proposedByName, now }) => {
+  const propose = ({ name, description, code, args, kind, bundle, files, entry, proposedBy, proposedByName, owner, now }) => {
     const id = `tool-${crypto.randomBytes(5).toString('hex')}`;
     const ent = String(entry || 'tool.js');
     const cleaned = files ? cleanFiles(files, ent) : null;
     const k = (kind === 'class' || cleaned) ? 'class' : 'instance'; // multi-file ⇒ class
-    const rec = { id, name: safeName(name), description: clip(description, 300), args: (args && typeof args === 'object') ? args : {}, kind: k, proposedBy: String(proposedBy || ''), proposedByName: String(proposedByName || ''), status: 'pending', createdAt: now || '' };
+    // INC-2 (per-user isolation): every tool belongs to an OWNER (the presenting cap's non-secret per-user
+    // namespace key; root/user-0 = 'root'). list/get/call/pendingBy are scoped by it so one tenant can never
+    // see or CALL another tenant's admitted tools. Legacy (owner-less) records = user-0 → 'root' (below).
+    const rec = { id, owner: String(owner || 'root'), name: safeName(name), description: clip(description, 300), args: (args && typeof args === 'object') ? args : {}, kind: k, proposedBy: String(proposedBy || ''), proposedByName: String(proposedByName || ''), status: 'pending', createdAt: now || '' };
     if (cleaned) { rec.files = cleaned; rec.entry = ent; } // multi-file class
     else if (bundle) rec.bundle = String(bundle).slice(0, 400000); // imported real bundle
     else rec.code = String(code || '').slice(0, 40000); // single-file
@@ -117,9 +120,14 @@ export const makeCustomTools = ({ fix } = {}) => {
     if (bundle.source) return propose({ name: bundle.name, description: `[imported class] ${bundle.description || ''}`, code: bundle.source, args: bundle.args, kind: 'class', proposedBy, now }); // legacy source-record envelope
     return { ok: false, error: 'not a valid class bundle (needs {bundle} or {source})' };
   };
-  const pendingBy = agentId => load().filter(t => t.status === 'pending' && t.proposedBy === String(agentId)).map(t => ({ id: t.id, name: t.name, description: t.description }));
-  const get = idOrName => load().find(t => t.id === String(idOrName) || t.name === String(idOrName)) || null;
-  const listAll = () => load().map(t => ({ id: t.id, name: t.name, description: t.description, status: t.status, kind: t.kind || 'instance', proposedBy: t.proposedBy, proposedByName: t.proposedByName || '', code: t.code, files: t.files, entry: t.entry, hasBundle: !!t.bundle, review: t.review || null, reviseLog: t.reviseLog || null, healLog: t.healLog || null }));
+  // INC-2: `owner` scopes a query to one user's tools. legacy/owner-less records = user-0 = 'root'. An
+  // UNDEFINED owner means "all owners" (the root-gated server review UI + internal global ops); a DEFINED
+  // owner (the tenant-facing toolbox path) matches ONLY that namespace, so a foreign owner sees nothing.
+  const ownerOf = t => t.owner || 'root';
+  const inScope = (t, owner) => owner === undefined || ownerOf(t) === String(owner);
+  const pendingBy = (agentId, owner) => load().filter(t => t.status === 'pending' && t.proposedBy === String(agentId) && inScope(t, owner)).map(t => ({ id: t.id, name: t.name, description: t.description }));
+  const get = (idOrName, owner) => load().find(t => (t.id === String(idOrName) || t.name === String(idOrName)) && inScope(t, owner)) || null;
+  const listAll = owner => load().filter(t => inScope(t, owner)).map(t => ({ id: t.id, name: t.name, description: t.description, status: t.status, kind: t.kind || 'instance', owner: ownerOf(t), proposedBy: t.proposedBy, proposedByName: t.proposedByName || '', code: t.code, files: t.files, entry: t.entry, hasBundle: !!t.bundle, review: t.review || null, reviseLog: t.reviseLog || null, healLog: t.healLog || null }));
   // Persist the discipline-review panel's findings on a pending tool so the admission gate sees them.
   const setReview = (id, review) => { const ts = load(); const t = ts.find(x => x.id === String(id)); if (!t) return { ok: false, error: 'no such proposal' }; t.review = review; save(ts); return { ok: true }; };
   // Persist the review→revise dialogue (the developer's resolutions per round) so the human sees how the
@@ -137,7 +145,7 @@ export const makeCustomTools = ({ fix } = {}) => {
   const copyGrains = (fromId, toId) => { grainStore.copy(String(fromId), String(toId)); return { ok: true }; };
   // The component's live grain DATA {name: value} — read-only, for the Studio (shows data survives edits).
   const grainData = id => grainStore.dump(String(id));
-  const list = () => load().filter(t => t.status === 'admitted').map(t => ({ id: t.id, name: t.name, description: t.description, args: t.args, kind: t.kind || 'instance' }));
+  const list = owner => load().filter(t => t.status === 'admitted' && inScope(t, owner)).map(t => ({ id: t.id, name: t.name, description: t.description, args: t.args, kind: t.kind || 'instance' }));
   const admit = id => { const ts = load(); const t = ts.find(x => x.id === String(id)); if (!t) return { ok: false, error: 'no such proposal' }; t.status = 'admitted'; save(ts); instances.delete(t.id); built.delete(t.id); return { ok: true, id: t.id, name: t.name }; };
   const reject = id => { instances.delete(String(id)); built.delete(String(id)); save(load().filter(t => t.id !== String(id))); return { ok: true, id: String(id) }; };
 
@@ -151,8 +159,8 @@ export const makeCustomTools = ({ fix } = {}) => {
   // not an imported bundle), a THROW (at init or in the method) is handed to the fixer, which rewrites the
   // source; we swap it live (setSource drops the cached instance) and re-run — so this call RESOLVES with the
   // repaired value and the error never reaches the agent/user. Each patch is logged on the tool for review.
-  const call = async (idOrName, { method, args = {} } = {}) => {
-    let t = get(idOrName);
+  const call = async (idOrName, { method, args = {}, owner } = {}) => {
+    let t = get(idOrName, owner); // INC-2: a tenant can only call a tool in ITS OWN namespace (foreign → "no such tool", fail-closed)
     if (!t) return { ok: false, error: 'no such tool' };
     if (t.status !== 'admitted') return { ok: false, error: `tool "${t.name}" is ${t.status} — not yet admitted by the owner` };
     const runOnce = async () => {

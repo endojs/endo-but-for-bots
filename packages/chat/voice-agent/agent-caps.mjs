@@ -1466,10 +1466,10 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // Admitted library tools (custom-tools.mjs): agent-built, human-reviewed code tools. Each runs in a
     // fresh SES Compartment with no ambient authority (pure functions of `args`).
     listCustomTools: { reversible: false, args: {}, description: 'List the admitted library tools (agent-built, owner-reviewed) you can call — name + what each does.',
-      run: async () => ({ ok: true, tools: customToolsObj.list() }) },
+      run: async (a, agent, ctx = {}) => ({ ok: true, tools: customToolsObj.list(ctx.ownerKey) }) }, // INC-2: only THIS user's admitted tools
     callCustomTool: { reversible: false, args: { name: 'string — a tool name/id from listCustomTools', method: 'string — which method to call (stateful tools expose methods; omit for a single-function tool)', args: 'object — inputs for the method' },
       description: 'Call an admitted library tool. Stateful tools expose methods — pass `method`; a single-function tool takes just `args`. The tool keeps its state across calls. Returns {value}.',
-      run: async ({ name: tname, method, args } = {}) => customToolsObj.call(String(tname || ''), { method, args: (args && typeof args === 'object') ? args : {} }) },
+      run: async ({ name: tname, method, args } = {}, agent, ctx = {}) => customToolsObj.call(String(tname || ''), { method, args: (args && typeof args === 'object') ? args : {}, owner: ctx.ownerKey }) }, // INC-2: scoped to this user's namespace (foreign → "no such tool")
     pushPhone: { reversible: false, args: { title: 'string', message: 'string' }, description: 'Push a notification to your phone.',
       run: async ({ title, message }, agent, ctx) => { const link = chatLink(ctx); return aff.phone.push({ title, message: link ? `${String(message || '')}\n\n→ open chat: ${link}` : message, click: link }); } },
     scheduleWakeup: { reversible: false, args: { delayMs: 'number — ms from now (omit if using atIso)', atIso: 'string — ISO time (optional, instead of delayMs)', title: 'string', message: 'string' },
@@ -1653,7 +1653,10 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // Route the timer/notes verbs through THIS cap's binding (a granular share is scoped to one
     // timer / a vault subtree); the root/full cap has no binding → falls back to the full
     // aff.timers / aff.notes (unchanged).
-    ctx = { ...ctx, timers: (node.timersBinding && node.timersBinding()) || aff.timers, notes: (node.notesBinding && node.notesBinding()) || aff.notes, wtDir: (node.cwdBinding && node.cwdBinding()) || null, ownPowers: [...(node.powers || powers)] };
+    // INC-2: thread this node's per-user namespace key into the run ctx, so aff verbs whose run signature is
+    // (args, agentId, ctx) — callCustomTool, listCustomTools, the timers verbs, notify/pushFeed — scope their
+    // per-user store reads/writes to the presenting cap's owner (root/user-0 = 'root'; a tenant = its own key).
+    ctx = { ...ctx, timers: (node.timersBinding && node.timersBinding()) || aff.timers, notes: (node.notesBinding && node.notesBinding()) || aff.notes, wtDir: (node.cwdBinding && node.cwdBinding()) || null, ownPowers: [...(node.powers || powers)], ownerKey: node.ownerKey };
     // node-bound propose: tags every proposal with WHO created it, so "don't ask
     // again" rules are scoped to this agent (root, share, or specialist).
     const np = spec => propose({ ...spec, agent: node.id });
@@ -1719,7 +1722,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
           const dkey = crypto.randomBytes(3).toString('hex');
           const petName = String(nickname || '').trim() || genPetName(); // agent-proposed readable name, else a friendly pet name (NEVER an ugly id)
           const nick = nickId(petName); // url-safe id/label stem
-          const subNode = makeAgentNode({ powers: [...granted], labelOf: nick, haBinding: node.haBinding, agBinding: node.agBinding, id: `${nick}-${dkey}` });
+          const subNode = makeAgentNode({ powers: [...granted], labelOf: nick, haBinding: node.haBinding, agBinding: node.agBinding, id: `${nick}-${dkey}`, ownerKey: node.ownerKey }); // INC-2: a delegate acts in its DELEGATOR's namespace (tools it proposes land there, so the caller can admit + call them)
           const sub = subNode.toolbox(ctx); // inherit the originating chat so delegated pushes deep-link too
           const ac = new AbortController(); activeDelegate = ac;
           // Carry the ORIGINATING request into the delegate so its own record shows what led to it.
@@ -1732,7 +1735,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
             const r = await runDelegate({ prompt: lead + String(prompt || ''), toolbox: sub.toolbox, manifest: sub.manifest, grantedPowers: [...granted], signal: ac.signal });
             // If the delegate BUILT + proposed any tools, RETURN them to the caller as data (not
             // injected into scope). They're pending dan's review; the caller learns one was made.
-            const proposedTools = customToolsObj.pendingBy(subNode.id);
+            const proposedTools = customToolsObj.pendingBy(subNode.id, subNode.ownerKey); // INC-2: this delegate's pending tools, in the delegator's namespace
             return harden({ ...r, agentName: petName, ...(proposedTools.length ? { proposedTools } : {}) });
           } finally { if (activeDelegate === ac) activeDelegate = null; }
         },
@@ -1759,7 +1762,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
           const ring = regrantNames(node.bundle, ['vm', 'host', 'home', 'web', 'research', 'reference', 'youtube', 'customtools', 'feed']); // by-reference ∩ held-refs, META stripped
           if (!ring.includes('vm') && !ring.includes('host')) return { ok: false, error: 'forging a tool needs a VM — you do not hold the vm/host power to pass to the toolsmith.' };
           const fid = `forge-${newSwiss().slice(0, 8)}`;
-          const smith = makeAgentNode({ powers: ring, labelOf: `toolsmith-${fid}`, haBinding: node.haBinding, agBinding: node.agBinding, id: `toolsmith-${fid}` });
+          const smith = makeAgentNode({ powers: ring, labelOf: `toolsmith-${fid}`, haBinding: node.haBinding, agBinding: node.agBinding, id: `toolsmith-${fid}`, ownerKey: node.ownerKey }); // INC-2: forges INTO the caller's namespace (so the caller can admit + call the forged tool)
           const sub = smith.toolbox(ctx);
           const ac = new AbortController(); activeForge = ac;
           const lead = ctx.userText ? `The user's request that needs a NEW tool (context):\n"${String(ctx.userText).slice(0, 1200)}"\n\n` : '';
@@ -1770,7 +1773,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
             r = await run({ prompt, toolbox: sub.toolbox, manifest: sub.manifest, grantedPowers: ring, signal: ac.signal, maxSteps: 22 });
           } catch (e) { return { ok: false, error: `toolsmith failed: ${(e && e.message) || e}` }; }
           finally { if (activeForge === ac) activeForge = null; }
-          const forged = customToolsObj.pendingBy(smith.id); // the tool(s) it proposed — banked for future use
+          const forged = customToolsObj.pendingBy(smith.id, smith.ownerKey); // INC-2: the tool(s) it proposed, in the caller's namespace
           return harden({
             ok: forged.length > 0,
             forged: forged.map(t => ({ id: t.id, name: t.name, description: t.description })),
@@ -2134,7 +2137,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // instance. Mirrors createInvite's cap-hygiene: never speak the link (Shares panel only); revoke
     // by the render-safe id, never the secret token.
     toolbox.shareTool = harden({ run: async ({ tool, mode, access, methods, ratePerMin, quota, ttlMs, priceUsd } = {}) => {
-      const t = customToolsObj.list().find(x => x.name === String(tool || '') || x.id === String(tool || ''));
+      const t = customToolsObj.list(node.ownerKey).find(x => x.name === String(tool || '') || x.id === String(tool || ''));
       if (!t) return { ok: false, error: `no admitted tool "${tool}" — only admitted library tools can be shared (see listCustomTools)` };
       const rec = toolSharesObj.create({ toolId: t.id, toolName: t.name, mode, access, methods, ratePerMin, quota, ttlMs, priceUsd, sharer: node.id, now: new Date().toISOString() });
       const per = rec.mode === 'factory' ? 'import' : 'use';
@@ -2151,7 +2154,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // componentHistory / revertComponent — a component's SOURCE is a git-as-Endo object (version history,
     // fork, non-destructive revert). History is read-only; reverting the live shared component is the owner's call.
     toolbox.componentHistory = harden({ run: async ({ tool } = {}) => {
-      const t = customToolsObj.list().find(x => x.name === String(tool || '') || x.id === String(tool || ''));
+      const t = customToolsObj.list(node.ownerKey).find(x => x.name === String(tool || '') || x.id === String(tool || ''));
       if (!t) return { ok: false, error: `no admitted tool "${tool}"` };
       const versions = (await componentGitObj.history(t.id)).map(v => ({ version: String(v.version).slice(0, 12), summary: v.summary, at: v.at }));
       return { ok: true, tool: t.name, versions };
@@ -2160,7 +2163,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       description: 'List the VERSION history of a component (its source is a git-as-Endo object): each {version, summary, at}, newest first. Read-only.' });
     toolbox.revertComponent = harden({ run: async ({ tool, version } = {}) => {
       if (!node.isRoot) return { ok: false, error: 'reverting a shared component is the owner\'s call — ask the owner (requestAccess) or propose it.' };
-      const t = customToolsObj.list().find(x => x.name === String(tool || '') || x.id === String(tool || ''));
+      const t = customToolsObj.list(node.ownerKey).find(x => x.name === String(tool || '') || x.id === String(tool || ''));
       if (!t) return { ok: false, error: `no admitted tool "${tool}"` };
       const snap = await componentGitObj.readAt(t.id, String(version || '')); if (!snap) return { ok: false, error: 'unknown version (see componentHistory)' };
       const rv = await componentGitObj.revert(t.id, String(version || '')); customToolsObj.setSource(t.id, snap.files);
@@ -2169,7 +2172,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     manifest.push({ name: 'revertComponent', reversible: false, args: { tool: 'string — an admitted tool name/id', version: 'string — a version id from componentHistory' },
       description: 'Revert a component to an earlier VERSION of its source (non-destructive — a new version; history preserved; the live tool then runs it). Owner-only.' });
     toolbox.forkComponent = harden({ run: async ({ tool, name, version } = {}) => {
-      const src = customToolsObj.list().find(x => x.name === String(tool || '') || x.id === String(tool || ''));
+      const src = customToolsObj.list(node.ownerKey).find(x => x.name === String(tool || '') || x.id === String(tool || ''));
       if (!src) return { ok: false, error: `no admitted tool "${tool}"` };
       const newName = String(name || '').trim(); if (!newName) return { ok: false, error: 'give your fork a name' };
       const ref = String(version || 'HEAD');
@@ -2177,8 +2180,8 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       if (!files) return { ok: false, error: 'could not read the source version (see componentHistory)' };
       const keys = Object.keys(files);
       const p = (keys.length === 1 && keys[0] === 'tool.js')
-        ? customToolsObj.propose({ name: newName, description: `[fork of ${src.name}] ${src.description || ''}`, code: files['tool.js'], kind: 'instance', proposedBy: node.id, now: new Date().toISOString() })
-        : customToolsObj.propose({ name: newName, description: `[fork of ${src.name}] ${src.description || ''}`, files, entry: 'tool.js', kind: 'class', proposedBy: node.id, now: new Date().toISOString() });
+        ? customToolsObj.propose({ name: newName, description: `[fork of ${src.name}] ${src.description || ''}`, code: files['tool.js'], kind: 'instance', proposedBy: node.id, owner: node.ownerKey, now: new Date().toISOString() })
+        : customToolsObj.propose({ name: newName, description: `[fork of ${src.name}] ${src.description || ''}`, files, entry: 'tool.js', kind: 'class', proposedBy: node.id, owner: node.ownerKey, now: new Date().toISOString() });
       if (!p.ok) return p;
       try { await componentGitObj.fork(src.id, p.id, ref); } catch { try { await componentGitObj.commit(p.id, files, `fork of ${src.name}`); } catch { /* ignore */ } }
       customToolsObj.copyGrains(src.id, p.id);
@@ -2190,7 +2193,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // mount): read or edit ONE file of its source tree, not the whole module. A write commits a new version
     // AND updates the live tool. Owner-only for writes (it changes a shared component).
     toolbox.componentReadFile = harden({ run: async ({ tool, path: rel, version } = {}) => {
-      const t = customToolsObj.list().find(x => x.name === String(tool || '') || x.id === String(tool || ''));
+      const t = customToolsObj.list(node.ownerKey).find(x => x.name === String(tool || '') || x.id === String(tool || ''));
       if (!t) return { ok: false, error: `no admitted tool "${tool}"` };
       const snap = await componentGitObj.readAt(t.id, String(version || 'HEAD')); if (!snap) return { ok: false, error: 'unknown version' };
       if (rel) { const c = snap.files[String(rel)]; return c === undefined ? { ok: false, error: `no file "${rel}" (files: ${Object.keys(snap.files).join(', ')})` } : { ok: true, path: String(rel), content: c }; }
@@ -2200,7 +2203,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       description: 'Read a component\'s source through its FILE-OBJECT: a single file\'s content (path) or the file list (omit path), at any version. Read-only.' });
     toolbox.componentWriteFile = harden({ run: async ({ tool, path: rel, content, message } = {}) => {
       if (!node.isRoot) return { ok: false, error: 'editing a shared component\'s files is the owner\'s call.' };
-      const t = customToolsObj.list().find(x => x.name === String(tool || '') || x.id === String(tool || ''));
+      const t = customToolsObj.list(node.ownerKey).find(x => x.name === String(tool || '') || x.id === String(tool || ''));
       if (!t) return { ok: false, error: `no admitted tool "${tool}"` };
       if (!String(rel || '').trim()) return { ok: false, error: 'name the file path to write' };
       let r; try { r = await componentGitObj.writeFile(t.id, String(rel), String(content ?? ''), String(message || `edit ${rel}`)); } catch (e) { return { ok: false, error: `write failed: ${(e && e.message) || e}` }; }
@@ -2413,7 +2416,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     toolbox.proposeTool = harden({ run: async ({ name: tname, description, code, args, kind, files, entry } = {}) => {
       const multi = files && typeof files === 'object' && Object.keys(files).length;
       if (!multi && !String(code || '').trim()) return { ok: false, error: 'A tool IS a component. PREFER `files` — a file-tree {"tool.js":"export const make = async (powers) => {…}", "helper.js":"…"} (the entry exports make + may import siblings) — over a single `code` blob; the source becomes a VERSIONED git object (fork/revert in the Components tab). Persist DATA in powers.grains (durable, mergeable, subscribable cells that SURVIVE source edits/reverts — the propagator data model), not ad-hoc state. Confined: no fs/network/import.' };
-      const r = customToolsObj.propose({ name: tname, description, code, args, kind, files, entry, proposedBy: node.id, proposedByName: node.name, now: new Date().toISOString() });
+      const r = customToolsObj.propose({ name: tname, description, code, args, kind, files, entry, proposedBy: node.id, proposedByName: node.name, owner: node.ownerKey, now: new Date().toISOString() }); // INC-2: proposed INTO this user's namespace
       // A tool IS a component: version its SOURCE as a git-as-Endo object from the moment it's proposed
       // (not just on admit), so it's forkable/revertable from birth — matching the component API.
       if (r.ok !== false && r.id) { try { await componentGitObj.commit(r.id, multi ? files : { 'tool.js': String(code || '') }, `propose: ${r.name}`); } catch { /* git-versioning is best-effort here; admit re-commits */ } }
