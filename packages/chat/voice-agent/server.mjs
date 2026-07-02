@@ -86,7 +86,7 @@ import { makePurse } from './purse.mjs';
 import { makePurseStore, hashKey } from './purse-store.mjs';
 import { makeCreditIntents } from './credit-intents.mjs';
 import { makeMeteredLLM } from './meter.mjs';
-import { listTimers, cancelTimer } from '../capture/timers.mjs';
+import { listTimers, cancelTimer, deleteTimersForOwner } from '../capture/timers.mjs';
 import { loadStripeCfg, stripeConfigured, recordPending, checkoutForm, verifyWebhook, settleEvent } from './pay.mjs';
 import { gatorConfigured, recordDelegation, redeemDelegation, getSubscription, subscriptionStatus, autoTopup, normalizeGrant, grantParams } from './delegation-pay.mjs';
 import { budgetLine, costOf } from './costModel.mjs';
@@ -705,7 +705,7 @@ const fillSpecialist = process.env.SELF_HEAL === '0' ? undefined : async ({ name
 // makeFieldAgent runs before `blossom` exists, so the server populates `customView.register` below; the tool
 // reads it at call-time. This is the seam that lets a NORMAL chat agent (visible in the trace) be the studio.
 const customView = {};
-const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, specialistNudges, runSpecialistNudge, mintScopedCap, rescopeCap, specialistFor, foldedPersonaFor, getFoldDocs, setFoldDocs, agentConfig, saveAgentConfig, haResolveReadOnly, changelog, actOnStagedReview, publishClip, revokeClip, listClips } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL, fillSpecialist, customView });
+const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, specialistNudges, runSpecialistNudge, mintScopedCap, rescopeCap, specialistFor, foldedPersonaFor, getFoldDocs, setFoldDocs, agentConfig, saveAgentConfig, haResolveReadOnly, changelog, actOnStagedReview, publishClip, revokeClip, listClips, deleteOwnerData } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL, fillSpecialist, customView });
 liveCells = makeLiveCells({ nodeFor }); // browser-subscribable live grains (cap-gated)
 
 // ── STANDING SPECIALIST NUDGES tick ──────────────────────────────────────────────────────────────────────────
@@ -2352,6 +2352,63 @@ const handler = async (req, res) => {
       if (u.pathname === '/user/get') { const v = userStore.get(String(body.userCap || '')); return json(res, 200, v ? { ok: true, ...v } : { ok: false, error: 'unknown user-cap' }); }
       if (u.pathname === '/user/prefs') return json(res, 200, userStore.setPrefs(String(body.userCap || ''), body.prefs || {}));
       if (u.pathname === '/user/root') return json(res, 200, userStore.setRoot(String(body.userCap || ''), String(body.root || 'canonical')));
+      // ── DELETE-MY-DATA (INC-3 / P4): a user permanently deletes ALL data keyed to THEIR OWN presenting cap. ──
+      //    The owner is derived SERVER-SIDE from the presenting cap (traceOwnerKeyOf — never a client-supplied id),
+      //    so a tenant can only ever wipe its own namespace (fail-closed). Wipes: userStore record (self-authorizing
+      //    via the presented user-cap), the INC-2 per-owner stores (specialists+nudges, timers, feed, custom-tools),
+      //    the already-isolated per-user stores (chats, projects+home folders, forks, byo, purses), and REVOKES the
+      //    scoped cap(s) so nodeFor() stops resolving them. ROOT-SAFE: user-0/dan (personal mode) is NON-deletable
+      //    here. Requires an explicit { confirm: 'DELETE' } so a stray call can't wipe anything. Idempotent + no
+      //    swissnum in the response (only counts). CLIENT NOTE: the Settings "Delete my data" button (app.js — NOT
+      //    this pass) is a thin caller: POST { cap, userCap, confirm:'DELETE' } then clear localStorage; grep
+      //    "delete-my-data" / "INC-3" to find this route.
+      if (u.pathname === '/user/data/delete') {
+        const cap = String(body.cap || '');
+        const node = nodeFor(cap);
+        if (!node) return json(res, 403, { error: 'no capability — open this app with your link first' }); // cap-gate (also = idempotency: a second call on the now-revoked cap safely 403s)
+        const ownerKey = traceOwnerKeyOf(cap);
+        // ROOT SAFETY: the operator's own data (user-0 = dan, personal mode) is NEVER deletable via this route.
+        if (node.isRoot || ownerKey === 'root') return json(res, 403, { ok: false, error: 'the root/owner account is not deletable via this route' });
+        // Explicit confirmation gate — a destructive, irreversible wipe must be intentional (defense-in-depth;
+        // the client Settings button sends it after its own confirm dialog).
+        if (String(body.confirm) !== 'DELETE') return json(res, 400, { ok: false, requiresConfirm: true, error: 'destructive: resend with { confirm: "DELETE" } to permanently delete all your data' });
+        const summary = {};
+        // 1. user-store record — self-authorizing: the caller PRESENTS its own user-cap (designation by reference).
+        if (body.userCap) { try { summary.userRecord = userStore.delete(String(body.userCap)).existed; } catch { summary.userRecord = false; } }
+        // 2. custom-tools authored in this namespace (record + state + grains)
+        try { summary.customTools = customTools.deleteAllForOwner(ownerKey).removed; } catch { summary.customTools = 0; }
+        // 3. durable timers in this namespace
+        try { summary.timers = (await deleteTimersForOwner(ownerKey)).removed; } catch { summary.timers = 0; }
+        // 4. per-owner feed file (never the root FEED_FILE — guarded above) + per-cap notification dismissed-state
+        try { const f = feedFileFor(ownerKey); if (f !== FEED_FILE) { fs.rmSync(f, { force: true }); summary.feed = true; } } catch { summary.feed = false; }
+        try { fs.rmSync(notifStorePath(cap), { force: true }); } catch { /* best effort */ }
+        // 5. chats — read chatIds FIRST (to reclaim their purses), then delete the per-cap transcript file
+        let chatIds = [];
+        try { const chatsRaw = JSON.parse(fs.readFileSync(chatStorePath(cap), 'utf8')); chatIds = Array.isArray(chatsRaw && chatsRaw.chats) ? chatsRaw.chats.map(c => c && c.id).filter(Boolean) : []; } catch { /* no chats */ }
+        try { fs.rmSync(chatStorePath(cap), { force: true }); summary.chats = true; } catch { summary.chats = false; }
+        // 6. projects owned by this user + each project's HOME_BASE folder
+        try {
+          const removed = projects.deleteProjectsForOwner(ownerKey);
+          for (const p of removed) { try { fs.rmSync(path.join(HOME_BASE, p.homeSubkey), { recursive: true, force: true }); } catch { /* best effort */ } }
+          summary.projects = removed.length;
+        } catch { summary.projects = 0; }
+        // 7. forks owned by this user (fork-owner keying differs from ownerKey — use forkOwnerOf)
+        try { const fo = forkOwnerOf(cap); let n = 0; if (fo && fo !== 'root') for (const f of forks.list(fo)) { if (forks.remove(f.id, fo)) n += 1; } summary.forks = n; } catch { summary.forks = 0; }
+        // 8. BYO-inference provider record + its stored API key
+        try { byoStore.clear(cap); summary.byo = true; } catch { summary.byo = false; }
+        // 9. purses — the plain per-chat wallets keyed `${cap}:${sid}` (SHARED invite/namespace wallets are left
+        //    intact by design — they belong to other members too; deleting one would over-delete their credit).
+        try {
+          const sids = new Set(['anon', ...chatIds]);
+          for (const sid of sids) { const k = `${cap}:${sid}`; try { purseStore.remove(k); } catch { /* */ } chatPurses.delete(k); }
+          try { purseStore.flushNow(); } catch { /* */ } // durability: don't leave the removal on the 800ms debounce
+          summary.purses = sids.size;
+        } catch { summary.purses = 0; }
+        // 10. specialists (+ nudges/invite-links/nodes) AND revoke the scoped cap(s) so they stop resolving
+        try { const r = deleteOwnerData({ ownerKey, swiss: cap }); summary.specialists = r.specialists; summary.capsRevoked = r.scopedCaps; } catch { summary.specialists = 0; summary.capsRevoked = 0; }
+        log('user-data-delete: wiped a tenant namespace |', JSON.stringify(summary)); // no cap/owner-swiss in the log (cap-hygiene)
+        return json(res, 200, { ok: true, deleted: summary });
+      }
       return json(res, 404, { error: 'unknown /user route' });
     }
     if (req.method === 'POST' && u.pathname === '/cancel') {
