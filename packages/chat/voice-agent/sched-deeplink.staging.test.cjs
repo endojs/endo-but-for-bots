@@ -18,15 +18,39 @@
 //
 // Run: node sched-deeplink.staging.test.cjs   (exits non-zero on any failure)
 const fs = require('node:fs');
-const os = require('node:os');
+const path = require('node:path');
+const { startIsolatedServer, loadChromium, launchBrowser } = require('./test-harness.cjs');
 
-const BASE = 'http://127.0.0.1:8778';
-const SCHED_ID = 'sched-7dd77b8ee7cf'; // Weekly self-eval → eval-gated improvement (real, root-owned)
-const cap = fs.readFileSync(os.homedir() + '/.config/field-agent/root.swiss', 'utf8').trim();
+const SCHED_ID = 'sched-7dd77b8ee7cf'; // Weekly self-eval → eval-gated improvement
+const SIB_ID = 'sched-64b31253dfb8';   // the disabled sibling
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail++; console.error('  FAIL -', m); } };
 
 (async () => {
+  // ISOLATED server + its OWN projects store, seeded with a fixture matching the deep-link assertions.
+  // (This test used to drive the LIVE :8778 against dan's REAL scheduled-task store — reading production data.
+  // The UNIT under test is the #sched deep-link routing UI, so we seed an equivalent task set here.)
+  const srv = await startIsolatedServer();
+  const BASE = srv.base;
+  const cap = srv.cap;
+  const nowIso = () => new Date().toISOString();
+  const fixture = { updated: nowIso(), projects: { 'proj-sched-fixture': {
+    id: 'proj-sched-fixture', name: 'Scheduled tasks', owner: 'root', chatIds: [],
+    homeSubkey: 'project-proj-sched-fixture', createdAt: nowIso(), scheduledAgents: [
+      { id: SCHED_ID, name: 'Weekly self-eval → eval-gated improvement', prompt: 'review the week',
+        tools: ['roles', 'chatCorpus', 'selfImprove'], schedule: { kind: 'weekly', day: 1, at: '02:00' }, trigger: null,
+        model: 'anthropic:claude-sonnet-5', mode: 'implement', enabled: true, alwaysReport: true, originChat: null,
+        createdAt: nowIso(), lastRun: nowIso(), lastRunChatId: 'chat-schedrun-1', nextAt: null, runs: [
+          { at: nowIso(), chatId: 'chat-schedrun-1', ok: true, nProp: 1, summary: 'reviewed the week', spentUusd: 0 },
+          { at: nowIso(), chatId: 'chat-schedrun-2', ok: true, nProp: 0, summary: 'no-op run', spentUusd: 0 },
+        ] },
+      { id: SIB_ID, name: 'Nightly digest — Disabled 2026-07-01', prompt: 'digest',
+        tools: ['chatCorpus'], schedule: { kind: 'daily', at: '03:00' }, trigger: null,
+        model: 'default', mode: 'recommend', enabled: false, alwaysReport: false, originChat: null,
+        createdAt: nowIso(), lastRun: null, nextAt: null, runs: [] },
+    ] } } };
+  fs.writeFileSync(path.join(srv.dir, 'projects.json'), JSON.stringify(fixture, null, 2));
+
   // ── server-side gate (curl-level): the designator resolves only through a valid cap ──
   const bad = await fetch(`${BASE}/projects/list`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: 'not-a-cap' }) });
   ok(bad.status === 403, `/projects/list rejects an invalid cap (403) — the sched id alone grants nothing (got ${bad.status})`);
@@ -36,9 +60,9 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
   const agent = proj && proj.scheduledAgents.find(a => a.id === SCHED_ID);
   ok(agent && (agent.runs || []).length > 0, `the task has real run history (${agent && (agent.runs || []).length} runs)`);
 
-  let chromium = null; try { ({ chromium } = require('/usr/lib/node_modules/@playwright/cli/node_modules/playwright-core')); } catch {}
-  if (!chromium) { console.log('  SKIP - no chromium (browser half skipped)'); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0); }
-  const br = await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'], env: { ...process.env, LD_LIBRARY_PATH: '/var/lib/obsidian/oldlibs' } });
+  const chromium = loadChromium();
+  if (!chromium) { console.log('  SKIP - no chromium (browser half skipped)'); console.log(`\n${pass} passed, ${fail} failed`); srv.close(); process.exit(fail ? 1 : 0); }
+  const br = await launchBrowser(chromium);
   try {
     // ── 1. root cap + #sched=<real id> → the task's Detail, spotlighted, runs expanded ──
     {
@@ -128,7 +152,7 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail+
       ok(errs.length === 0, `no page errors (${errs.slice(0, 2).join(' | ')})`);
       await page.close();
     }
-  } finally { await br.close(); }
+  } finally { await br.close(); srv.close(); }
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('staging test error:', (e && e.stack) || e); process.exit(2); });

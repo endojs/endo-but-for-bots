@@ -1,16 +1,19 @@
 // self-improve-review: a STAGED self-improvement branch surfaces in the 🔔 inbox as an actionable approve/reject
 // notification, and acting on it routes server-side to the merge/discard handler (no off-app flush). Proves the
 // user's question — "staged branches present as notifications with inline decision UI I can act on right there" — YES.
-const fs = require('node:fs'); const os = require('node:os');
-const ASKS = os.homedir() + '/.local/state/field-dashboard/asks.json';
-const cap = fs.readFileSync(os.homedir() + '/.config/field-agent/root.swiss', 'utf8').trim();
+const fs = require('node:fs'); const path = require('node:path');
+const { startIsolatedServer, loadChromium, launchBrowser } = require('./test-harness.cjs');
 let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail++; console.error('  FAIL -', m); } };
-const backup = fs.existsSync(ASKS) ? fs.readFileSync(ASKS, 'utf8') : null;
-const restore = () => { try { if (backup === null) fs.unlinkSync(ASKS); else fs.writeFileSync(ASKS, backup); } catch {} };
 (async () => {
-  let chromium = null; try { ({ chromium } = require('/usr/lib/node_modules/@playwright/cli/node_modules/playwright-core')); } catch {}
+  const chromium = loadChromium();
   if (!chromium) { console.log('  SKIP - no chromium'); console.log(`\n${pass} passed, ${fail} failed (skipped)`); process.exit(0); }
-  // seed a self-improve review ask (the exact shape raiseStagedReview produces). Bogus branch + dirty live tree →
+  // ISOLATED server + its OWN asks store (never the live ~/.local/state/field-dashboard/asks.json — this test
+  // used to back up + overwrite the real file). Seed the sandbox asks.json (readAsks reads it fresh per call).
+  const srv = await startIsolatedServer();
+  const cap = srv.cap;
+  const ASKS = path.join(srv.dir, 'dash', 'asks.json');
+  fs.mkdirSync(path.dirname(ASKS), { recursive: true });
+  // seed a self-improve review ask (the exact shape raiseStagedReview produces). Bogus branch + isolated tree →
   // the real merge SAFELY refuses (no git mutation); we assert the UI + the decision ROUTING, not merge success.
   const seeded = { updated: new Date().toISOString(), asks: [{
     id: 'ask-e2e-selfimprove', title: '🌱 Self-improve ready to review: add a retry to tool errors',
@@ -20,13 +23,13 @@ const restore = () => { try { if (backup === null) fs.unlinkSync(ASKS); else fs.
     requestedBy: 'self-improve', status: 'open', createdAt: new Date().toISOString(),
   }] };
   fs.writeFileSync(ASKS, JSON.stringify(seeded, null, 2));
-  const br = await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox','--disable-gpu','--disable-dev-shm-usage'], env: { ...process.env, LD_LIBRARY_PATH: '/var/lib/obsidian/oldlibs' } });
+  const br = await launchBrowser(chromium);
   try {
     const page = await br.newPage(); const errs = []; page.on('pageerror', e => errs.push(e.message));
     let answerResp = null;
     page.on('response', async r => { if (r.url().endsWith('/asks/answer')) { try { answerResp = await r.json(); } catch {} } });
     await page.addInitScript(c => { try { localStorage.setItem('field-agent-cap', c); } catch {} }, cap);
-    await page.goto('http://127.0.0.1:8778/', { waitUntil: 'load' }); await page.waitForTimeout(3500);
+    await page.goto(`${srv.base}/`, { waitUntil: 'load' }); await page.waitForTimeout(3500);
     // open the 🔔 inbox
     await page.evaluate(() => { const b = document.getElementById('bell-btn'); if (b) b.click(); }); await page.waitForTimeout(900);
     const card = await page.evaluate(() => { const el = [...document.querySelectorAll('#att-list .ask')].find(a => /Self-improve ready to review/.test(a.textContent)); return el ? { has: true, approve: /✅\s*Approve/.test(el.textContent), reject: /❌\s*Reject/.test(el.textContent), submit: /Submit/.test(el.textContent) } : { has: false }; });
@@ -45,6 +48,6 @@ const restore = () => { try { if (backup === null) fs.unlinkSync(ASKS); else fs.
     ok(stillOpen === false, 'the review is resolved out of the inbox once acted on');
     ok(errs.length === 0, `no page errors (${errs.slice(0,2).join(' | ')})`);
     await page.close();
-  } finally { await br.close(); restore(); }
+  } finally { await br.close(); srv.close(); }
   console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
-})().catch(e => { console.error('staging test error:', e && e.stack || e); restore(); process.exit(2); });
+})().catch(e => { console.error('staging test error:', e && e.stack || e); process.exit(2); });
