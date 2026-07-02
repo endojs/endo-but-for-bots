@@ -4379,6 +4379,7 @@ const openComponentEditChat = (id, name, { kind = 'component' } = {}) => {
   ov.innerHTML = `<div class="qrcard" style="width:min(560px,93vw);max-height:84vh;display:flex;flex-direction:column;text-align:left;padding:0;overflow:hidden">
     <div style="padding:11px 14px;border-bottom:1px solid var(--edge);display:flex;align-items:center;gap:8px">
       <b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">🧩 ${esc(name)} <span class="pill">live edit</span> <span class="pill" data-ce-bl style="display:none;color:var(--bad)">⚑ 0</span></b>
+      <button class="mini" data-ce-bladd title="Note an issue for this component's agent — it lands in the backlog it works from">＋⚑</button>
       <button class="mini" data-ce-close>✕</button></div>
     <div id="ce-log" style="flex:1;overflow:auto;padding:12px 14px;display:flex;flex-direction:column;gap:8px;min-height:120px">
       <div data-ce-backlog style="display:none;border:1px solid var(--edge);border-radius:9px;padding:8px 10px;font-size:12px"></div>
@@ -4396,6 +4397,18 @@ const openComponentEditChat = (id, name, { kind = 'component' } = {}) => {
   const blAbort = new AbortController();
   const blPill = ov.querySelector('[data-ce-bl]'), blBox = ov.querySelector('[data-ce-backlog]');
   const ackPath = kind === 'fork' ? '/forks/backlog/ack' : '/components/backlog/ack';
+  const addPath = kind === 'fork' ? '/forks/backlog/add' : '/components/backlog/add';
+  // ＋⚑ — the owner files an issue straight into THIS component's backlog (the same list the agent works
+  //       from + the ✎ editor reads). The backlog:<id> cell PUSHES the new item, so the panel repaints.
+  const addBtn = ov.querySelector('[data-ce-bladd]');
+  if (addBtn) addBtn.onclick = async () => {
+    const title = (window.prompt(`Note an issue for "${name}" — a short description the agent will see in its backlog:`) || '').trim();
+    if (!title) return;
+    addBtn.disabled = true;
+    try { const r = await (await fetch(addPath, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: capFor, id, kind: 'issue', title }) })).json(); if (!r || r.ok === false) setStatus(`backlog: ${(r && r.error) || 'could not add'}`); }
+    catch (e) { setStatus('backlog: ' + e.message); }
+    addBtn.disabled = false;
+  };
   const paintBacklog = v => {
     const items = (v && v.open) || [];
     blPill.style.display = items.length ? '' : 'none'; blPill.textContent = `⚑ ${items.length}`;
