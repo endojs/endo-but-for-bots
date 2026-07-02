@@ -16,13 +16,15 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 
+import { writeJsonAtomic } from './write-json-atomic.mjs';
+
 const hashSrc = s => crypto.createHash('sha256').update(`forksrc:${String(s == null ? '' : s)}`).digest('hex').slice(0, 24);
 
 // makeDistTrust({ file, rootId }) — rootId is the implicit base authority (the operator's root owner id).
 export const makeDistTrust = ({ file, rootId = 'root' }) => {
   let data = { reviewers: {}, approvals: {} };
   try { const d = JSON.parse(fs.readFileSync(file, 'utf8')); data = { reviewers: d.reviewers || {}, approvals: d.approvals || {} }; } catch { /* fresh */ }
-  const save = () => { try { fs.writeFileSync(file, JSON.stringify(data, null, 2)); } catch { /* best-effort */ } };
+  const save = () => { try { writeJsonAtomic(file, data, { pretty: true }); } catch { /* best-effort */ } }; // INT-1: torn-write-safe
 
   // isReviewer: root is always a reviewer; anyone else needs an UNREVOKED grant chain back to root.
   const isReviewer = (id, seen = new Set()) => {

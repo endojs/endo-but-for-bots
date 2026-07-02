@@ -9,10 +9,12 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
+import { writeJsonAtomic } from './write-json-atomic.mjs';
+
 const file = () => process.env.IMPROVEMENT_BACKLOG || path.join(os.homedir(), '.local/state/field-agent/improvement-backlog.json');
 const now = () => new Date().toISOString();
 const load = () => { try { return JSON.parse(fs.readFileSync(file(), 'utf8')); } catch { return { items: [] }; } };
-const save = s => { try { fs.mkdirSync(path.dirname(file()), { recursive: true }); fs.writeFileSync(file(), `${JSON.stringify(s, null, 2)}\n`); } catch { /* best effort */ } return s; };
+const save = s => { try { writeJsonAtomic(file(), s, { pretty: true }); } catch { /* best effort */ } return s; }; // INT-1: torn-write-safe
 
 export const listBacklog = ({ status } = {}) => load().items.filter(i => !status || i.status === status).map(i => ({ id: i.id, goal: i.goal, status: i.status, priority: i.priority, attempts: i.attempts, by: i.by, lastOutcome: i.lastOutcome || null }));
 

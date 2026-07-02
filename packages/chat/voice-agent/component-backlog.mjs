@@ -22,7 +22,8 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import path from 'node:path';
+
+import { writeJsonAtomic } from './write-json-atomic.mjs';
 
 const KINDS = ['error', 'issue', 'request'];
 const STATUSES = ['open', 'ack', 'done'];
@@ -31,7 +32,7 @@ const clean = (s, n) => String(s == null ? '' : s).slice(0, n);
 export const makeComponentBacklog = ({ file, maxItems = 200 } = {}) => {
   let data = {}; // componentId → { createdAt, items: [item…] }
   try { data = JSON.parse(fs.readFileSync(file, 'utf8')) || {}; } catch { /* fresh */ }
-  const save = () => { try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(data)); } catch { /* best-effort */ } };
+  const save = () => { try { writeJsonAtomic(file, data); } catch { /* best-effort */ } }; // INT-1: torn-write-safe
 
   // ── the propagator seam: per-object subscribers, pushed a fresh snapshot on every mutation ──
   const listeners = new Map(); // componentId → Set<fn>

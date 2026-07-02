@@ -12,6 +12,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { writeJsonAtomic } from './write-json-atomic.mjs';
+
 const hash = t => crypto.createHash('sha256').update(`user:${t}`).digest('hex');
 const newSwiss = () => crypto.randomBytes(16).toString('hex');
 const CANONICAL_ROOT = 'canonical'; // the shared, canonical app root (a user's variant diverges from this)
@@ -20,7 +22,7 @@ export const makeUserStore = ({ file }) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   let data = { users: {} }; // hash(userCap) → { root, prefs, createdAt, lastSeen }
   try { const d = JSON.parse(fs.readFileSync(file, 'utf8')); if (d && d.users) data = d; } catch { /* fresh */ }
-  const save = () => { try { fs.writeFileSync(file, JSON.stringify(data, null, 2), { mode: 0o600 }); } catch { /* best effort */ } };
+  const save = () => { try { writeJsonAtomic(file, data, { pretty: true, mode: 0o600 }); } catch { /* best effort */ } }; // INT-1: torn-write-safe
   const recOf = userCap => { const h = hash(String(userCap || '')); return data.users[h] ? { h, rec: data.users[h] } : null; };
   const view = rec => ({ root: rec.root || CANONICAL_ROOT, prefs: rec.prefs || {} });
 

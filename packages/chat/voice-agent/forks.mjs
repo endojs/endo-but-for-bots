@@ -19,6 +19,8 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 
+import { writeJsonAtomic } from './write-json-atomic.mjs';
+
 const hash = t => crypto.createHash('sha256').update(`fshare:${t}`).digest('hex');
 const now = () => Date.now();
 const FORK_MAX_SRC = 64 * 1024; // a fork is UI code, not a payload
@@ -36,7 +38,7 @@ const cleanSource = src => {
 export const makeForks = ({ file, makePurse, purseStore }) => {
   let data = { forks: {}, shares: {} };
   try { const d = JSON.parse(fs.readFileSync(file, 'utf8')); data = { forks: d.forks || {}, shares: d.shares || {} }; } catch { /* fresh */ }
-  const save = () => { try { fs.writeFileSync(file, JSON.stringify(data, null, 2)); } catch { /* best-effort */ } };
+  const save = () => { try { writeJsonAtomic(file, data, { pretty: true }); } catch { /* best-effort */ } }; // INT-1: torn-write-safe
 
   const purseKeyFor = th => `fshare:${th}`;
   const purseOf = rec => { if (!rec || !rec.purseKey || !makePurse || !purseStore) return null; const s = purseStore.get(rec.purseKey); return makePurse(s ? s.balance : 0, { granted: s ? s.granted : 0, onChange: (b, g) => purseStore.set(rec.purseKey, b, g) }); };

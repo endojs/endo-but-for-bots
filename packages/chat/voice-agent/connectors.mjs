@@ -5,8 +5,9 @@
 // connector record, the transcript, or the DOM (the `op run` runtime-injection pattern from the
 // research). Connectors are grantable (the `connectors` power) + revocable (remove).
 import fs from 'node:fs';
-import path from 'node:path';
 import crypto from 'node:crypto';
+
+import { writeJsonAtomic } from './write-json-atomic.mjs';
 
 const HOME = process.env.HOME || '/home/dan';
 const STORE = process.env.CONNECTORS_STORE || `${HOME}/.config/field-agent/connectors.json`;
@@ -15,7 +16,7 @@ const STORE = process.env.CONNECTORS_STORE || `${HOME}/.config/field-agent/conne
 // stored here — only `secretName`, a reference into the named vault resolved at call time.
 export const makeConnectors = ({ getSecret, ssrfOk = null, fetchImpl = fetch } = {}) => {
   const load = () => { try { return JSON.parse(fs.readFileSync(STORE, 'utf8')).connectors || []; } catch { return []; } };
-  const save = cs => { try { fs.mkdirSync(path.dirname(STORE), { recursive: true }); fs.writeFileSync(STORE, JSON.stringify({ connectors: cs }, null, 2), { mode: 0o600 }); } catch { /* best effort */ } };
+  const save = cs => { try { writeJsonAtomic(STORE, { connectors: cs }, { pretty: true, mode: 0o600 }); } catch { /* best effort */ } }; // INT-1: torn-write-safe (holds connector secrets)
 
   const get = id => load().find(c => c.id === String(id)) || null;
   // list is safe to expose: it reveals what's connected + whether a key is present, NEVER the key.

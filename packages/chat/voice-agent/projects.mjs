@@ -10,12 +10,14 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
+import { writeJsonAtomic } from './write-json-atomic.mjs';
+
 const STORE = process.env.PROJECTS_STORE || path.join(os.homedir(), '.local/state/voice-agent/projects.json');
 const nowIso = () => new Date().toISOString();
 const id = (p = 'p') => `${p}-${crypto.randomBytes(6).toString('hex')}`;
 
 const load = () => { try { return JSON.parse(fs.readFileSync(STORE, 'utf8')); } catch { return { projects: {}, updated: nowIso() }; } };
-const save = s => { s.updated = nowIso(); fs.mkdirSync(path.dirname(STORE), { recursive: true }); fs.writeFileSync(STORE, `${JSON.stringify(s, null, 2)}\n`); return s; };
+const save = s => { s.updated = nowIso(); writeJsonAtomic(STORE, s, { pretty: true }); return s; }; // INT-1: torn-write-safe
 
 // The shared home-folder subkey for a Project. agent-caps' makeHome(subkey) roots a home at
 // HOME_BASE/<subkey>; binding every node in the project to THIS subkey = one shared folder.

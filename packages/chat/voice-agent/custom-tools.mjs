@@ -15,6 +15,7 @@ import crypto from 'node:crypto';
 import { bundleMakeBody, bundleFiles, instantiateBundle } from './tool-bundle.mjs';
 import { makeGrainStore } from './grain-store.mjs';
 import { makeSelfHealer } from './self-heal.mjs';
+import { writeJsonAtomic } from './write-json-atomic.mjs';
 
 const HOME = process.env.HOME || '/home/dan';
 const STORE = process.env.CUSTOM_TOOLS_STORE || `${HOME}/.config/field-agent/custom-tools.json`;
@@ -43,7 +44,7 @@ export const TOOL_AUTHORING_GUIDE = [
 // resolves with the fixed value instead of an error. See designs/self-healing-errors.md.
 export const makeCustomTools = ({ fix } = {}) => {
   const load = () => { try { return JSON.parse(fs.readFileSync(STORE, 'utf8')).tools || []; } catch { return []; } };
-  const save = ts => { try { fs.mkdirSync(path.dirname(STORE), { recursive: true }); fs.writeFileSync(STORE, JSON.stringify({ tools: ts }, null, 2), { mode: 0o600 }); } catch { /* best effort */ } };
+  const save = ts => { try { writeJsonAtomic(STORE, { tools: ts }, { pretty: true, mode: 0o600 }); } catch { /* best effort */ } }; // INT-1: torn-write-safe
   const safeName = n => String(n || 'tool').replace(/[^\w.-]/g, '_').slice(0, 60) || 'tool';
 
   // DURABLE per-tool state (a tool's memory across restarts) — a small disk-backed kv, namespaced by
@@ -51,7 +52,7 @@ export const makeCustomTools = ({ fix } = {}) => {
   const makeState = id => {
     const file = path.join(STATE_DIR, `${id}.json`);
     const rd = () => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return {}; } };
-    const wr = o => { try { fs.mkdirSync(STATE_DIR, { recursive: true }); fs.writeFileSync(file, JSON.stringify(o, null, 2), { mode: 0o600 }); } catch { /* best effort */ } };
+    const wr = o => { try { writeJsonAtomic(file, o, { pretty: true, mode: 0o600 }); } catch { /* best effort */ } }; // INT-1: torn-write-safe
     return harden({
       get: k => { const v = rd()[String(k)]; return v === undefined ? undefined : JSON.parse(JSON.stringify(v)); },
       set: (k, v) => { const o = rd(); o[String(k)] = v; wr(o); return v; },

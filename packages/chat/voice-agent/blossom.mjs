@@ -14,6 +14,8 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 
+import { writeJsonAtomic } from './write-json-atomic.mjs';
+
 const methodNames = methods => [...new Set((methods || []).map(m => (typeof m === 'string' ? m : m && m.name)).filter(Boolean))].sort();
 // sigOf — the interface signature: a stable hash of the leaf's KIND + its sorted method-set. THIS is the
 // "type" a renderer is keyed on. `kind` lets methodLESS navigator leaves (a contact, an HA entity, an agent)
@@ -26,7 +28,7 @@ export const sigOf = (methods, kind = '') => { const ms = methodNames(methods); 
 export const makeBlossom = ({ file, forks, authorRenderer, maxConcurrent = 2, maxTotal = 300 }) => {
   let data = { renderers: {}, count: 0 };
   try { const d = JSON.parse(fs.readFileSync(file, 'utf8')); data = { renderers: d.renderers || {}, count: Number(d.count) || 0 }; } catch { /* fresh */ }
-  const save = () => { try { fs.writeFileSync(file, JSON.stringify(data, null, 2)); } catch { /* best-effort */ } };
+  const save = () => { try { writeJsonAtomic(file, data, { pretty: true }); } catch { /* best-effort */ } }; // INT-1: torn-write-safe
   const inflight = new Set(); // per-signature lock (the de-dup that makes "eager" safe)
 
   const rendererFor = (methods, kind = '') => data.renderers[sigOf(methods, kind)] || null;
