@@ -422,7 +422,11 @@ const readMemoRuns = async () => {
     return runs.map(r => (r.versions ? r : { id: r.id, title: r.title, transcript: r.transcript, source: r.source, date: r.date, versions: [{ v: 0, label: 'original', env: {}, answer: r.answer || '', toolsUsed: r.toolsUsed || [], steps: r.steps || [], at: r.date }] }));
   } catch { return []; }
 };
-const writeMemoRuns = async runs => { await fs.promises.mkdir(path.dirname(MEMO_RUNS_FILE), { recursive: true }); await fs.promises.writeFile(MEMO_RUNS_FILE, JSON.stringify({ runs: runs.slice(0, 100) }, null, 2)); };
+// INT-4: voice memos are FIRST-CLASS user content — the old cap of 100 silently evicted the oldest ones.
+// Raised to 5000 (still bounded so a runaway can't grow the file without limit, but generous enough that a
+// user's memo history isn't quietly dropped). Same for seed-chats/voice-notes below.
+const MEMO_RUNS_MAX = Number(process.env.MEMO_RUNS_MAX) || 5000;
+const writeMemoRuns = async runs => { await fs.promises.mkdir(path.dirname(MEMO_RUNS_FILE), { recursive: true }); await fs.promises.writeFile(MEMO_RUNS_FILE, JSON.stringify({ runs: runs.slice(0, MEMO_RUNS_MAX) }, null, 2)); };
 // seed-chats: a voice note (or any external input) ingested as a FIRST-CLASS,
 // continuable chat. The client adopts these into its own chat list once (additively,
 // so it never clobbers unsynced local edits), after which they are normal chats —
@@ -444,7 +448,11 @@ const SCHEDULED_SEED_TTL_MS = 7 * 24 * 60 * 60 * 1000; // ⏰ scheduled-agent ru
 // readSeedChats GC's expired scheduled runs from the RETURNED view; since writeSeedChats's caller does a
 // read→unshift→write, the next scheduled run also prunes them from the file. Non-scheduled seeds are kept.
 const readSeedChats = async () => { try { const all = (JSON.parse(await fs.promises.readFile(SEED_CHATS_FILE, 'utf8')).chats) || []; const cutoff = Date.now() - SCHEDULED_SEED_TTL_MS; return all.filter(c => !(c && c.source === 'scheduled' && (c.ts || 0) < cutoff)); } catch { return []; } };
-const writeSeedChats = async chats => { await fs.promises.mkdir(path.dirname(SEED_CHATS_FILE), { recursive: true }); await fs.promises.writeFile(SEED_CHATS_FILE, JSON.stringify({ chats: chats.slice(0, 80) }, null, 2)); };
+// INT-4: seed-chats hold ingested VOICE NOTES (first-class, continuable) mixed with ephemeral scheduled
+// runs (TTL-GC'd in readSeedChats). The old cap of 80 dropped the oldest voice notes. Raised to 5000; the
+// scheduled-run TTL still trims the ephemeral ones so this bound only ever bites truly ancient user notes.
+const SEED_CHATS_MAX = Number(process.env.SEED_CHATS_MAX) || 5000;
+const writeSeedChats = async chats => { await fs.promises.mkdir(path.dirname(SEED_CHATS_FILE), { recursive: true }); await fs.promises.writeFile(SEED_CHATS_FILE, JSON.stringify({ chats: chats.slice(0, SEED_CHATS_MAX) }, null, 2)); };
 
 // ── operator-defined specialist ROLES (Settings → Specialists). Persisted here,
 //    merged over the built-in agent-roles catalog via setCustomRoles so a custom
