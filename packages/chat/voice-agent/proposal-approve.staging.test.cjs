@@ -10,7 +10,7 @@
 
 const { spawn } = require('node:child_process');
 const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path');
-const PORT = 8843; const BASE = `http://127.0.0.1:${PORT}`;
+const PORT = 20000 + (process.pid % 20000); const BASE = `http://127.0.0.1:${PORT}`; // T-TEST-2: PID-derived port (unique per node --test child); never a fixed 879x
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'propappr-'));
 let srv = null; let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail++; console.error('  FAIL -', m); } };

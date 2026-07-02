@@ -28,7 +28,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 // DEBIT the funded wallet — proving the metering + allowance-CONSERVATION spine end-to-end with
 // deterministic local inference (no paid-API round-trip). Production leaves this unset (P1-9).
 const TEST_RATE_OVERRIDES = JSON.stringify({ 'gemma-tinix': [1, 4] });
-const PORT = 8797;
+const PORT = 20000 + (process.pid % 20000); // T-TEST-2: PID-derived port (unique per node --test child); never a fixed 879x
 const BASE = `http://127.0.0.1:${PORT}`;
 const WALLET_SEED = 500_000;   // the owner's invite wallet, $0.50 — small so conservation is visible
 const ALLOWANCE = 300_000;     // the invite carries $0.30

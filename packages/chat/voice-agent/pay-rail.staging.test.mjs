@@ -30,7 +30,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOME = process.env.HOME || '/home/dan';
-const PORT = 8796;
+const PORT = 20000 + (process.pid % 20000); // T-TEST-2: PID-derived port (unique per node --test child); never a fixed 879x
 const BASE = `http://127.0.0.1:${PORT}`;
 const MAKE_GRANT = process.env.MAKE_GRANT || path.join(HOME, 'gator-pay/make-grant.mjs');
 // public RPC per supported chain (mirrors ~/gator-pay/chains.mjs; env overrides for flaky RPCs)
