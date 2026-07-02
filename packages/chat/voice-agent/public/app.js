@@ -186,6 +186,8 @@ const reloadChromeComps = async () => {
   // chrome-studio IS the Components-tab list — repaint it too (audit flagged this repaint set only covered
   // renderTx + welcome). refreshComponents re-aggregates the props + re-mounts chrome-studio (or falls back).
   try { if (typeof curTab !== 'undefined' && curTab === 'components' && typeof refreshComponents === 'function') refreshComponents(); } catch { /* Studio repaint is best-effort */ }
+  // the 🔔 inbox hosts chrome-notification-card + chrome-changelog — repaint it live after an edit/revert too.
+  try { if (typeof curTab !== 'undefined' && curTab === 'inbox' && typeof renderInbox === 'function') renderInbox(); } catch { /* inbox repaint is best-effort */ }
 };
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -2809,22 +2811,20 @@ const titleFrom = t => { const ch = chats.find(c => c.id === sessionId); if (ch 
 const syncLanding = () => document.body.classList.toggle('landing', curTab === 'talk' && !!cap && !activeTx.length);
 // The landing WELCOME panel is app chrome (chrome-welcome, a registry-backed confined component): the
 // tagline + tappable starter suggestions. Live-editable via its edit chat (no rebuild, no reload).
-// Fallback ladder: chrome-welcome → the tagline-hero island (the previous incarnation) → the static text.
+// Fallback ladder: chrome-welcome → the static tagline text (the tagline-hero island it superseded was
+// removed in ARCH-1 increment 3 / DEAD-3 — chrome-welcome fully covers it).
 const mountWelcome = () => {
   const el = $('composer-tagline'); if (!el) return;
   const prev = el.textContent;
-  const fallbackIsland = () => {
-    try { if (window.__fieldIslands && window.__fieldIslands.renderTaglineHero) { el.textContent = ''; window.__fieldIslands.renderTaglineHero(el); return; } } catch { /* fall through to static */ }
-    try { el.textContent = prev || 'What can Agent C do for you?'; } catch { /* keep whatever is there */ }
-  };
+  const fallbackStatic = () => { try { el.textContent = prev || 'What can Agent C do for you?'; } catch { /* keep whatever is there */ } };
   chromeReady.then(() => {
     el.textContent = ''; // clear the static text node so the confined render isn't doubled
     const okw = mountChrome('chrome-welcome', el, {
       // the ONE affordance the welcome panel holds: put a starter prompt into the composer (never send).
       onSuggest: s => { const t = $('text'); if (!t) return; t.value = String(s || ''); t.focus(); try { t.setSelectionRange(t.value.length, t.value.length); } catch { /* */ } },
     });
-    if (!okw) { el.textContent = prev; fallbackIsland(); }
-  }).catch(fallbackIsland);
+    if (!okw) fallbackStatic();
+  }).catch(fallbackStatic);
 };
 mountWelcome();
 
@@ -4204,6 +4204,7 @@ const subscribeInboxCells = () => {
 };
 const renderInbox = async () => {
   await loadAsks();
+  try { await chromeReady; } catch { /* chrome unavailable → the list falls back to island/imperative */ }
   const d = await loadFeed(); if (!d) return;
   capLinkReg.clear();
   const items = d.items || [];
@@ -4244,18 +4245,23 @@ const renderInbox = async () => {
   // so a swissnum never enters the DOM. (att-list keeps its imperative path — it interleaves asks + ntfy.)
   const recList = $('rec-list');
   if (!rec.length) { recList.innerHTML = '<div class="pill">no recent activity</div>'; recLinkResolvers = []; }
-  else if (window.__fieldIslands && window.__fieldIslands.renderNotifications) {
+  else {
     const prepared = rec.map(it => {
       const infos = (it.links || []).map(notifLinkInfo);
       return { item: { id: it.id, title: it.title, time: fmtAgo(it.date), body: it.body || '', agent: it.agent || '', avatar: it.avatar || '', status: it.status || '', links: infos.map(x => ({ label: x.label })), attention: false }, resolvers: infos.map(x => x.open) };
     });
     recLinkResolvers = prepared.map(p => p.resolvers);
-    window.__fieldIslands.renderNotifications(recList, { items: prepared.map(p => p.item), withDone: false }, {
-      onDone() {},
-      onOpenLink: (ii, li) => { const r = recLinkResolvers[ii] && recLinkResolvers[ii][li]; if (r) r(); },
-      onOpen: id => showNotifModal(notifById[id]),
-    });
-  } else recList.innerHTML = rec.map(i => notifCard(i, false)).join('');
+    const recItems = prepared.map(p => p.item);
+    const onOpenLink = (ii, li) => { const r = recLinkResolvers[ii] && recLinkResolvers[ii][li]; if (r) r(); };
+    const onOpen = id => showNotifModal(notifById[id]);
+    // ARCH-1: the recent-activity list is chrome (chrome-notification-card, confined + alt-click-editable).
+    // Fallback ladder: chrome → the NotificationCard island → imperative notifCard — never a blank list.
+    if (!mountChrome('chrome-notification-card', recList, { items: recItems, withDone: false, onDone() {}, onOpenLink, onOpen })) {
+      if (window.__fieldIslands && window.__fieldIslands.renderNotifications) {
+        window.__fieldIslands.renderNotifications(recList, { items: recItems, withDone: false }, { onDone() {}, onOpenLink, onOpen });
+      } else recList.innerHTML = rec.map(i => notifCard(i, false)).join('');
+    }
+  }
   $('att-count').textContent = (openAsks.length + att.length) ? String(openAsks.length + att.length) : '';
   setBellBadge(openAsks.length + att.length);
   document.querySelectorAll('#att-list [data-done]').forEach(b => { b.onclick = async () => { b.disabled = true; await fetch('/feed/dismiss', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.done }) }); renderInbox(); }; });
@@ -4296,8 +4302,10 @@ const renderChangelog = async () => {
     } catch (e) { alert(`Revert error: ${e.message}`); return; }
     renderChangelog();
   };
-  // FACTORED: render through the ChangelogList island (consistent + tested). Fall back to plain DOM only
-  // if the islands bundle isn't loaded.
+  // ARCH-1: the changelog is chrome (chrome-changelog, confined + alt-click-editable). Fallback ladder:
+  // chrome → the ChangelogList island → imperative DOM — never a blank list.
+  try { await chromeReady; } catch { /* chrome unavailable → island/imperative fallback */ }
+  if (mountChrome('chrome-changelog', list, { merges: rows, onRevert })) return;
   if (window.__fieldIslands && window.__fieldIslands.renderChangelogList) {
     window.__fieldIslands.renderChangelogList(list, { merges: rows }, { onRevert });
     return;

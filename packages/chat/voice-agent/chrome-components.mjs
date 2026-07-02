@@ -477,6 +477,76 @@ const CHAT_BAR_SOURCE = `// CHROME-CHAT-BAR (chrome-chat-bar) — the per-chat t
   return h('div', { class: 'kit-rowx' }, [h('span', { class: 'cb-title' }, title), parentChip, projChip, spacer, badge]);
 }`;
 
+// The 🔔 INBOX "Recent activity" LIST (ISL-3 · chrome-notification-card) — promoted from the app.js twin
+// (notifCard) + the message-of-record NotificationCard island (rec-list). PURE RENDER: the real link/cap
+// resolution + the modal open stay HOST callbacks (the props boundary). CAP-HYGIENIC BY CONSTRUCTION: each
+// link carries only a { label }; onOpenLink(itemIndex, linkIndex) has the host resolve + open the real
+// (out-of-DOM) href/cap — a swissnum never crosses into this component. The .notif/.ntitle/.ntime/.nbody/
+// .nmeta/.ndone/.nlink classes are load-bearing (live CSS + the delegated modal open both target them).
+const NOTIFICATION_SOURCE = `// CHROME-NOTIFICATION-CARD (chrome-notification-card) — the 🔔 inbox "Recent activity" list. PURE RENDER:
+// no cap, no DOM, no network. Links carry a LABEL ONLY (never a URL/swissnum); the host resolves + opens.
+// props (render-safe): { items:[{ id, title, time, body, agent, avatar, status, links:[{label}], attention }], withDone }
+//   props.onOpen(id)  props.onDone(id)  props.onOpenLink(itemIndex, linkIndex)   — host callbacks (the boundary)
+// RIFF FREELY: any (endowments, props) => vnode honoring this contract can re-lay-out the inbox list.
+(endowments, props) => {
+  const h = endowments.h;
+  const p = props || {};
+  const items = Array.isArray(p.items) ? p.items : [];
+  const withDone = !!p.withDone;
+  const onOpen = typeof p.onOpen === 'function' ? p.onOpen : null;
+  const onDone = typeof p.onDone === 'function' ? p.onDone : null;
+  const onOpenLink = typeof p.onOpenLink === 'function' ? p.onOpenLink : null;
+  if (!items.length) return h('div', { class: 'pill' }, 'no recent activity');
+  const card = (it, ii) => {
+    const links = Array.isArray(it.links) ? it.links : [];
+    const meta = [];
+    if (it.agent) meta.push(h('span', { key: 'ag' }, (it.avatar ? it.avatar + ' ' : '') + it.agent));
+    if (it.status) meta.push(h('span', { key: 'st' }, String(it.status)));
+    links.forEach((l, li) => meta.push(h('button', { class: 'nlink', key: 'l' + li,
+      onClick: e => { if (e && e.stopPropagation) e.stopPropagation(); if (onOpenLink) onOpenLink(ii, li); } }, (l && l.label) || 'open')));
+    const metaJoined = [];
+    meta.forEach((m, k) => { if (k) metaJoined.push(' · '); metaJoined.push(m); });
+    const onClick = onOpen ? (e) => { if (e && e.target && e.target.closest && e.target.closest('button,a')) return; onOpen(it.id); } : undefined;
+    return h('div', { class: 'notif card-open' + (it.attention ? ' att' : ''), key: it.id || ii, onClick }, [
+      h('div', { class: 'ntitle' }, [h('span', null, String(it.title || '')), h('span', { class: 'ntime' }, String(it.time || ''))]),
+      it.body ? h('div', { class: 'nbody' }, String(it.body)) : null,
+      h('div', { class: 'nmeta' }, [
+        h('span', null, metaJoined),
+        withDone && onDone ? h('button', { class: 'ndone', onClick: e => { if (e && e.stopPropagation) e.stopPropagation(); onDone(it.id); } }, 'Done') : null,
+      ]),
+    ]);
+  };
+  return h('div', null, items.map(card));
+}`;
+
+// The 🔧 CHANGELOG list (ISL-3 · chrome-changelog) — the self-applied (auto-merged) improvements log, promoted
+// from the app.js twin (renderChangelog's imperative rows) + the ChangelogList island. PURE RENDER: the real
+// /changelog/revert POST stays a HOST callback. Render-safe rows carry a SHORT sha only, never a commit/cap.
+// The .ncard/.chg-revert/.pill/.sub/.mini classes are load-bearing (live CSS + selectors).
+const CHANGELOG_SOURCE = `// CHROME-CHANGELOG (chrome-changelog) — the 🔧 self-applied-changes log, each row a git-revertable improvement.
+// PURE RENDER: no cap, no DOM, no network; the real revert is a HOST callback (props.onRevert).
+// props (render-safe): { merges:[{ id, goal, when, sha, rolledBack, revertedWhen }] }
+//   props.onRevert(id)   — host callback (runs the history-preserving git revert, host-gated with a confirm)
+// RIFF FREELY: any (endowments, props) => vnode honoring this contract can re-render the changelog.
+(endowments, props) => {
+  const h = endowments.h;
+  const p = props || {};
+  const merges = Array.isArray(p.merges) ? p.merges : [];
+  const onRevert = typeof p.onRevert === 'function' ? p.onRevert : null;
+  if (!merges.length) return h('div', { class: 'sub', style: 'font-size:12px;color:var(--mut)' }, 'no self-applied changes yet');
+  const row = (m, i) => h('div', { class: 'ncard', key: m.id || i, style: 'display:flex;gap:8px;align-items:flex-start' }, [
+    h('div', { style: 'flex:1;min-width:0' }, [
+      h('div', { style: 'font-size:13px' }, String(m.goal || '(improvement)')),
+      h('div', { class: 'sub', style: 'font-size:11px;color:var(--mut)' },
+        [String(m.when || ''), m.sha ? ' · ' + String(m.sha) : '', m.rolledBack && m.revertedWhen ? ' · reverted ' + String(m.revertedWhen) : ''].join('')),
+    ]),
+    m.rolledBack
+      ? h('span', { class: 'pill' }, '↩ reverted')
+      : h('button', { class: 'mini chg-revert', onClick: () => { if (onRevert) onRevert(m.id); } }, '↩ Revert'),
+  ]);
+  return h('div', null, merges.map(row));
+}`;
+
 // The registry: stable ids (they are ADDRESSES — edit chats, backlogs, and git lineages key off them).
 const CHROME = harden([
   { id: 'chrome-msg-toolbar', name: 'Message toolbar', source: MSG_TOOLBAR_SOURCE },
@@ -488,6 +558,8 @@ const CHROME = harden([
   { id: 'chrome-dev-task-card', name: 'Dev task card', source: DEV_TASK_CARD_SOURCE },
   { id: 'chrome-ask-card', name: 'Ask card', source: ASK_CARD_SOURCE },
   { id: 'chrome-chat-bar', name: 'Chat top bar', source: CHAT_BAR_SOURCE },
+  { id: 'chrome-notification-card', name: 'Notification list', source: NOTIFICATION_SOURCE },
+  { id: 'chrome-changelog', name: 'Changelog', source: CHANGELOG_SOURCE },
 ]);
 
 export const makeChromeComponents = ({ componentGit, componentBacklog }) => {

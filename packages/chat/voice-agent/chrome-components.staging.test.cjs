@@ -217,7 +217,7 @@ const jpost = (p, b) => fetch(`${BASE}${p}`, { method: 'POST', headers: { 'conte
     // trusted container refuses the tag.
     const guard = await page.evaluate(() => {
       const d = document.createElement('div'); d.setAttribute('data-trusted-path', ''); document.body.appendChild(d);
-      try { window.__fieldIslands.renderTaglineHero(d); } catch {}
+      try { window.__fieldIslands.renderChangelogList(d, { merges: [] }, { onRevert() {} }); } catch {}
       const got = d.getAttribute('data-component-id'); d.remove(); return got;
     });
     ok(guard === null, 'tagComponent REFUSES to give a component identity to anything inside [data-trusted-path]');
@@ -460,9 +460,10 @@ const jpost = (p, b) => fetch(`${BASE}${p}`, { method: 'POST', headers: { 'conte
     ok(st0.tagged === 'chrome-studio', `§15 renders through the real confined chrome-studio (tagged ${st0.tagged})`);
     ok(st0.sections.pending && st0.sections.pending.cards.length === 8 && st0.sections.pending.fold === null, `needs-review shows ALL 8 pending items and is NEVER folded (${st0.sections.pending && st0.sections.pending.cards.length} cards, fold=${st0.sections.pending && st0.sections.pending.fold})`);
     ok(st0.sections.admitted && st0.sections.admitted.cards.length === 6 && /show 3 more/.test(st0.sections.admitted.fold || ''), `the 9-item Admitted section folds to the top 6 + a "▸ show 3 more" toggle (${st0.sections.admitted && st0.sections.admitted.cards.length} shown, fold="${st0.sections.admitted && st0.sections.admitted.fold}")`);
-    // ARCH-1 increment 2 grew App chrome to 9 pieces, so it now crosses the 6-item fold threshold and folds
-    // to its top 6 + a "▸ show 3 more" toggle — exactly like the 9-item Admitted section (needs-review still never folds).
-    ok(st0.sections.chrome && st0.sections.chrome.cards.length === 6 && /show 3 more/.test(st0.sections.chrome.fold || ''), `the 9-item App-chrome section folds to the top 6 + a "▸ show 3 more" toggle (${st0.sections.chrome && st0.sections.chrome.cards.length} shown, fold="${st0.sections.chrome && st0.sections.chrome.fold}")`);
+    // ARCH-1 increment 2+ grew App chrome past the 6-item fold threshold, so it folds to its top 6 + a
+    // "▸ show N more" toggle (N grows with each promoted piece; increment 3 added notification-card + changelog)
+    // — exactly like the Admitted section (needs-review still never folds).
+    ok(st0.sections.chrome && st0.sections.chrome.cards.length === 6 && /show \d+ more/.test(st0.sections.chrome.fold || ''), `the App-chrome section folds to the top 6 + a "▸ show N more" toggle (${st0.sections.chrome && st0.sections.chrome.cards.length} shown, fold="${st0.sections.chrome && st0.sections.chrome.fold}")`);
     ok(st0.foldCount === 2 && !st0.foldDataAttrs.includes('pending'), `TWO fold toggles on the page (admitted + App-chrome), never on needs-review (${st0.foldDataAttrs.join(',')})`);
     ok(st0.sections.admitted && st0.sections.admitted.cards[0] === 'tool8', `byRecent floats the most-edited item (a8, 5 versions) to the TOP of Admitted (first card="${st0.sections.admitted && st0.sections.admitted.cards[0]}") — the recency proxy sorts`);
     // expand the tail
