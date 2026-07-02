@@ -10,7 +10,7 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 
-import { HOME, VAULT_DIR, personalAt } from './field-config.mjs';
+import { HOME, VAULT_DIR, personalAt, DIETICIAN_HOST } from './field-config.mjs';
 import { makeFsFolder } from '../dietician-app/fs-folder.mjs';
 import { makeDietStore } from '../dietician-app/store.mjs';
 import { makePipeline } from '../dietician-app/core.mjs';
@@ -24,7 +24,7 @@ const PERSON = process.env.DIET_PERSON || 'alexa';
 // so there is no direct field-config export; rebase it with personalAt the same way field-config does
 // (byte-identical default on the NUC; moves onto FIELD_PERSONAL_ROOT with the rest of the personal family).
 const INSTANCE_ROOT = process.env.DIET_ROOT_DIR || `${personalAt('state/dietician-app', `${HOME}/.local/state/dietician-app`)}/instances/${PERSON}`;
-const HOST = process.env.DIETICIAN_HOST || 'agent@10.89.0.8'; // used ONLY for the publish step (write HTML → git push)
+const HOST = DIETICIAN_HOST; // dietician persona — used ONLY for the publish step (write HTML → git push); from field-config ENDPOINTS (env: DIETICIAN_HOST)
 
 const store = makeDietStore(makeFsFolder(INSTANCE_ROOT), { person: PERSON });
 const judge = makeJudge({ complete: makeAnthropicComplete() });
