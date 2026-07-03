@@ -198,6 +198,15 @@ unchanged behaviour for genuine TypedArrays.
 
 The proposal does not provide a way to make integer-indexed
 assignment to a TypedArray *throw*.
+The fundamental reason is that genuine `TypedArray` instances are
+*Integer-Indexed Exotic Objects* (ECMA-262 section 10.4.2): their
+`[[DefineOwnProperty]]` and `[[Set]]` internal methods intercept
+integer-keyed property operations and route them through the backing
+buffer.
+The emulated wrapper is a plain ordinary object, not an integer-indexed
+exotic, so none of those exotic-object interception points are available
+to the shim; there is no way to intercept integer-indexed assignments on
+a plain object via the prototype chain.
 The emulated wrapper's response to `view[0] = 42` is therefore
 necessarily different from the genuine integer-indexed exotic's
 silent-swallow path; the wrapper is a plain ordinary object whose
@@ -281,6 +290,48 @@ non-frozen emulated freezable view; underlying buffer unchanged`).
 This is a known proposal-level constraint, not a shim shortcoming.
 The README's *Caveats* section is updated to mention both the
 non-frozen and frozen cases.
+
+#### Why not a `Proxy` wrapper?
+
+Making integer-indexed assignment *throw*, rather than create a
+wrapper-local own property, would require the wrapper to intercept
+`[[Set]]` for integer-keyed properties, which a plain ordinary object
+cannot do.
+A `Proxy` around the hidden genuine TypedArray could supply that
+interception: a `set` trap could reject integer-indexed keys with a
+`TypeError` while forwarding every other operation.
+This design deliberately does not take that route, for three reasons.
+
+- Freezability is the point of the emulation, and a `Proxy` puts it at
+  risk.
+  The wrapper's central guarantee is that `Object.freeze(view)`
+  succeeds, that `Object.isFrozen(view)` then returns `true` (see the
+  next section), and that SES `harden()` freezes the wrapper
+  transitively as an ordinary object.
+  `Object.freeze` on a `Proxy` runs through the `preventExtensions`,
+  `ownKeys`, `getOwnPropertyDescriptor`, and `defineProperty` traps,
+  each subject to the proxy invariants that tie a trap's result back to
+  the target's own extensibility and configurability.
+  Preserving the clean, unconditional freezability the plain-object
+  wrapper enjoys through a proxy membrane is materially harder and easy
+  to get subtly wrong; the plain object sidesteps the entire
+  proxy-invariant surface.
+- Integer-indexed read and write are the hot path for a TypedArray.
+  A `Proxy` routes every property operation through a trap and imposes
+  overhead on exactly the operations a TypedArray exists to make fast.
+- The gain is small and asymmetric.
+  A throwing write is a nicety, not a safety property.
+  The design already guarantees the immutability of the *underlying
+  buffer* (see above), which is the security-relevant invariant; the
+  residual discrepancy is only observable to code that reads back
+  through the wrapper's own integer-indexed property after writing to
+  it, and that surface never reaches the buffer.
+
+If a native engine implements the proposal, integer-indexed assignment
+throws for real through the integer-indexed exotic object's `[[Set]]`,
+and the shim steps aside via the stage-3 detect-then-skip gate.
+The shim's plain-object emulation is a stopgap whose guarantee is
+buffer immutability, not surface-level rejection of the write.
 
 ### `Object.isFrozen(view)` returns true after `Object.freeze(view)`
 

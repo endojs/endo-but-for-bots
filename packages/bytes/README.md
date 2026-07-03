@@ -73,6 +73,26 @@ is safe to share across vat boundaries.
 The view's `byteOffset` and `byteLength` are honored, so `subarray`
 windows copy only the addressed bytes.
 
+After loading the `@endo/immutable-arraybuffer` shim, you can wrap the
+result in a freezable `Uint8Array` view:
+
+```js
+import '@endo/immutable-arraybuffer/shim.js';
+import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+
+const source = new Uint8Array([1, 2, 3]);
+const iab = bytesToImmutable(source);
+const freezableView = new Uint8Array(iab);
+
+Object.freeze(freezableView);
+Object.isFrozen(freezableView); // true — the view is now frozen
+freezableView.at(0); // 1 — reads still delegate to the immutable buffer
+```
+
+The `new Uint8Array(iab)` call produces a freezable wrapper backed by the
+immutable `ArrayBuffer` rather than a mutable copy, provided the
+`@endo/immutable-arraybuffer` shim has been loaded first.
+
 ### `bytesFromImmutable(buffer) -> Uint8Array`
 
 Copies the contents of an immutable `ArrayBuffer` into a fresh,

@@ -26,7 +26,7 @@ and the following read-only accessor properties
 None of the operations above enable the creation of an immutable buffer, that is, a non-detached buffer whose contents cannot be changed, resized, or detached.
 
 Both a `DataView` object and a `TypedArray` object are views into a buffer backing store.
-For a `TypedArray` object, the contents of the backing store appear as indexed data properties of the `TypeArray` object that reflect the current contents of this backing store.
+For a `TypedArray` object, the contents of the backing store appear as indexed data properties of the `TypedArray` object that reflect the current contents of this backing store.
 Currently, because there is no way to prevent the contents of the backing store from being changed, `TypedArray`s cannot be frozen.
 
 Some JavaScript implementations, like Moddable XS, bring JavaScript to embedded systems, like device controllers, where ROM is much more plentiful and cheaper than RAM.
