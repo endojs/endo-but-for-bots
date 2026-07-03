@@ -5,6 +5,7 @@ fixtures
 tmp
 /packages/ses-integration-test/transform-tests/output
 /packages/test262-runner/prelude
+/packages/immutable-arraybuffer/benchmarks
 test262
 
 *.html

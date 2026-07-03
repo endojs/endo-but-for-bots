@@ -4,6 +4,11 @@ dist/
 api-docs/
 browser-test/
 
+# Standalone, dependency-free benchmark scripts (run directly by node/xst, not
+# part of any package's build or test graph). They use engine globals
+# (`print`) and hand-rolled loops that the shared config would flag.
+/packages/immutable-arraybuffer/benchmarks/
+
 *.json
 
 # see .gitignore
