@@ -7,9 +7,7 @@ import test from 'ava';
 
 const { getPrototypeOf, freeze, isFrozen } = Object;
 
-// ---------------------------------------------------------------------------
-// Basic construction
-// ---------------------------------------------------------------------------
+// Basic construction.
 
 test('shim: global Uint8Array on an immutable ArrayBuffer wraps as emulated freezable', t => {
   const ab = new ArrayBuffer(4);
@@ -42,9 +40,7 @@ test('shim: global Uint8Array on a regular ArrayBuffer forwards to the OriginalC
   t.is(view[0], 99);
 });
 
-// ---------------------------------------------------------------------------
-// `view.buffer` getter
-// ---------------------------------------------------------------------------
+// The `view.buffer` getter.
 
 test('shim: virtual buffer getter returns the real buffer for a genuine TypedArray', t => {
   const realAb = new ArrayBuffer(4);
@@ -59,9 +55,7 @@ test('shim: virtual buffer getter redirects to the immutable wrapper when presen
   t.true(view.buffer.immutable);
 });
 
-// ---------------------------------------------------------------------------
-// Mutators throw on emulated freezable views
-// ---------------------------------------------------------------------------
+// Mutators throw on emulated freezable views.
 
 test('shim: emulated freezable mutators complain', t => {
   const iab = new ArrayBuffer(4).sliceToImmutable();
@@ -74,9 +68,7 @@ test('shim: emulated freezable mutators complain', t => {
   t.throws(() => view.sort(), { instanceOf: TypeError });
 });
 
-// ---------------------------------------------------------------------------
-// Read-only delegations (`byteLength`, `at`, `length`, `byteOffset`)
-// ---------------------------------------------------------------------------
+// Read-only delegations (`byteLength`, `at`, `length`, `byteOffset`).
 
 test('shim: emulated freezable byteLength and at redirect via amplifyTypedArray', t => {
   const ab = new ArrayBuffer(8);
@@ -91,9 +83,7 @@ test('shim: emulated freezable byteLength and at redirect via amplifyTypedArray'
   t.is(view.at(7), 80);
 });
 
-// ---------------------------------------------------------------------------
-// `subarray` returns a view whose `buffer` is the immutable wrapper
-// ---------------------------------------------------------------------------
+// `subarray` returns a view whose `buffer` is the immutable wrapper.
 
 test('shim: emulated freezable subarray returns a wrapped view whose buffer is the immutable wrapper', t => {
   const ab = new ArrayBuffer(4);
@@ -120,9 +110,7 @@ test('shim: emulated freezable subarray returns a wrapped view whose buffer is t
   t.is(view.subarray(0, 2).subarray(0, 1).buffer, iab);
 });
 
-// ---------------------------------------------------------------------------
-// Symbol.iterator: for...of and spread work on emulated freezable wrappers
-// ---------------------------------------------------------------------------
+// Symbol.iterator: for...of and spread work on emulated freezable wrappers.
 
 test('shim: for...of loop works on an emulated freezable wrapper', t => {
   const ab = new ArrayBuffer(4);
@@ -166,9 +154,7 @@ test('shim: Symbol.iterator on %TypedArrayPrototype% matches the values wrapper 
   t.deepEqual(iterResult, [1, 2]);
 });
 
-// ---------------------------------------------------------------------------
-// detect-then-skip is idempotent under re-import
-// ---------------------------------------------------------------------------
+// detect-then-skip is idempotent under re-import.
 
 test('shim: detect-then-skip is idempotent under re-import', async t => {
   // The gate is keyed on `'sliceToImmutable' in ArrayBuffer.prototype`.
@@ -185,9 +171,7 @@ test('shim: detect-then-skip is idempotent under re-import', async t => {
   );
 });
 
-// ---------------------------------------------------------------------------
-// Indexed assignment semantics (proposal-level constraint)
-// ---------------------------------------------------------------------------
+// Indexed assignment semantics (proposal-level constraint).
 
 test('shim: indexed assignment on a non-frozen emulated freezable view creates a wrapper-local own property; the underlying immutable buffer is unchanged', t => {
   const ab = new ArrayBuffer(4);
@@ -235,10 +219,8 @@ test('shim: indexed assignment on a frozen emulated freezable view throws in str
   t.is(Uint8Array.prototype.at.call(view, 0), 0);
 });
 
-// ---------------------------------------------------------------------------
 // Object.freeze + Object.isFrozen (the proposal's TypedArray-can-be-frozen
-// guarantee)
-// ---------------------------------------------------------------------------
+// guarantee).
 
 test('shim: Object.freeze(view); Object.isFrozen(view) === true', t => {
   const iab = new ArrayBuffer(4).sliceToImmutable();
@@ -248,9 +230,7 @@ test('shim: Object.freeze(view); Object.isFrozen(view) === true', t => {
   t.true(isFrozen(view));
 });
 
-// ---------------------------------------------------------------------------
-// No intermediate prototype
-// ---------------------------------------------------------------------------
+// No intermediate prototype.
 
 test('shim: Object.getPrototypeOf(view) === Uint8Array.prototype on an emulated freezable view', t => {
   const iab = new ArrayBuffer(4).sliceToImmutable();
@@ -258,9 +238,7 @@ test('shim: Object.getPrototypeOf(view) === Uint8Array.prototype on an emulated 
   t.is(getPrototypeOf(view), Uint8Array.prototype);
 });
 
-// ---------------------------------------------------------------------------
-// Subclassing limitation (Out of scope per design)
-// ---------------------------------------------------------------------------
+// Subclassing limitation (out of scope per design).
 
 test('shim: subclassing an emulated freezable TypedArray is not supported; new MyArr(iab) instanceof MyArr === false', t => {
   // Per designs/freezable-typedarray.md § Out of scope: "Subclass support.
