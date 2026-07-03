@@ -111,13 +111,19 @@ test('objection 1: integer-indexed assignment throws on the repaired proxy (befo
     iab,
     Uint8Array.prototype,
   );
-  t.throws(() => {
-    view[0] = 99;
-  }, { instanceOf: TypeError });
+  t.throws(
+    () => {
+      view[0] = 99;
+    },
+    { instanceOf: TypeError },
+  );
   freeze(view);
-  t.throws(() => {
-    view[0] = 99;
-  }, { instanceOf: TypeError });
+  t.throws(
+    () => {
+      view[0] = 99;
+    },
+    { instanceOf: TypeError },
+  );
   // The underlying buffer's byte 0 is untouched throughout.
   t.is(view.at(0), 1);
 });

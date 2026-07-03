@@ -82,9 +82,12 @@ test('ses (proxy variant): the freezable Proxy wrapper hardens transitively like
   t.true(isFrozen(view));
   // Reads still work after hardening; indexed assignment still throws.
   t.is(view.at(0), 0);
-  t.throws(() => {
-    view[0] = 9;
-  }, { instanceOf: TypeError });
+  t.throws(
+    () => {
+      view[0] = 9;
+    },
+    { instanceOf: TypeError },
+  );
 });
 
 test('ses (proxy variant): the natural Proxy (target = genuine TypedArray) cannot be hardened', t => {

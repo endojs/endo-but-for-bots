@@ -57,13 +57,8 @@ const {
   // eslint-disable-next-line no-restricted-globals
 } = globalThis;
 
-const {
-  create,
-  defineProperty,
-  getPrototypeOf,
-  setPrototypeOf,
-  hasOwn,
-} = Object;
+const { create, defineProperty, getPrototypeOf, setPrototypeOf, hasOwn } =
+  Object;
 const { apply, construct, get: reflectGet, set: reflectSet } = Reflect;
 
 /**

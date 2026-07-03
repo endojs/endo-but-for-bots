@@ -50,8 +50,12 @@ test('objection 2: micro-benchmark of indexed reads (genuine vs plain-object vs 
 
   t.log(`indexed reads x${N} over len ${LEN}`);
   t.log(`  genuine TypedArray : ${g.ms.toFixed(1)} ms`);
-  t.log(`  plain-object wrapper: ${p.ms.toFixed(1)} ms (${(p.ms / g.ms).toFixed(1)}x genuine)`);
-  t.log(`  Proxy wrapper      : ${x.ms.toFixed(1)} ms (${(x.ms / g.ms).toFixed(1)}x genuine)`);
+  t.log(
+    `  plain-object wrapper: ${p.ms.toFixed(1)} ms (${(p.ms / g.ms).toFixed(1)}x genuine)`,
+  );
+  t.log(
+    `  Proxy wrapper      : ${x.ms.toFixed(1)} ms (${(x.ms / g.ms).toFixed(1)}x genuine)`,
+  );
 
   // Sanity / parity: the genuine TypedArray and the Proxy wrapper read the same
   // bytes through `view[i]`. The plain-object wrapper does NOT: its indexed
@@ -100,8 +104,12 @@ test('objection 2: micro-benchmark of indexed writes — the proxy pays to throw
 
   t.log(`indexed writes x${M} over len ${LEN}`);
   t.log(`  genuine (write-through): ${genuineMs.toFixed(1)} ms`);
-  t.log(`  plain (own-property)   : ${plainMs.toFixed(1)} ms (${(plainMs / genuineMs).toFixed(1)}x)`);
-  t.log(`  proxy (trap + throw)   : ${proxyMs.toFixed(1)} ms (${(proxyMs / genuineMs).toFixed(1)}x)`);
+  t.log(
+    `  plain (own-property)   : ${plainMs.toFixed(1)} ms (${(plainMs / genuineMs).toFixed(1)}x)`,
+  );
+  t.log(
+    `  proxy (trap + throw)   : ${proxyMs.toFixed(1)} ms (${(proxyMs / genuineMs).toFixed(1)}x)`,
+  );
 
   // Every proxy write threw.
   t.is(thrown, M);

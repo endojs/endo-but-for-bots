@@ -39,7 +39,8 @@ if (!fs.existsSync(preludePath)) {
 }
 
 const prelude = fs.readFileSync(preludePath, 'utf8');
-const readHarness = name => fs.readFileSync(path.join(harnessDir, name), 'utf8');
+const readHarness = name =>
+  fs.readFileSync(path.join(harnessDir, name), 'utf8');
 // assert.js + sta.js are the implicit test262 includes; every test relies on them.
 const baseHarness = `${readHarness('assert.js')}\n${readHarness('sta.js')}\n`;
 
@@ -49,10 +50,16 @@ const parseFrontmatter = source => {
   const flagsMatch = yaml.match(/flags:\s*\[([^\]]*)\]/);
   const includesMatch = yaml.match(/includes:\s*\[([^\]]*)\]/);
   const flags = flagsMatch
-    ? flagsMatch[1].split(',').map(s => s.trim()).filter(Boolean)
+    ? flagsMatch[1]
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
     : [];
   const includes = includesMatch
-    ? includesMatch[1].split(',').map(s => s.trim()).filter(Boolean)
+    ? includesMatch[1]
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
     : [];
   return { flags, includes };
 };
@@ -99,5 +106,7 @@ for (const f of testFiles) {
   if (!onlyStrict) runVariant(name, false, includes, source);
 }
 
-console.log(`\nRan ${passed + failed} tests\n${passed} passed\n${failed} failed`);
+console.log(
+  `\nRan ${passed + failed} tests\n${passed} passed\n${failed} failed`,
+);
 process.exit(failed === 0 ? 0 : 1);

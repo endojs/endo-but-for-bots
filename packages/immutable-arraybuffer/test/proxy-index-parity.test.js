@@ -70,9 +70,12 @@ test('parity: integer-indexed WRITE (non-frozen) — write-through vs own-proper
 
   // Proxy wrapper: the write throws; buffer untouched.
   const proxy = proxyView(immutableOf([10, 20, 30, 40]));
-  t.throws(() => {
-    proxy[0] = 42;
-  }, { instanceOf: TypeError });
+  t.throws(
+    () => {
+      proxy[0] = 42;
+    },
+    { instanceOf: TypeError },
+  );
   t.is(at0(proxy), 10);
 });
 
@@ -93,9 +96,12 @@ test('parity: freeze + integer-indexed WRITE — genuine unfreezable, plain swal
   const plain = new Uint8Array(immutableOf([10, 20, 30, 40]));
   freeze(plain);
   t.true(isFrozen(plain));
-  t.throws(() => {
-    plain[0] = 42;
-  }, { instanceOf: TypeError });
+  t.throws(
+    () => {
+      plain[0] = 42;
+    },
+    { instanceOf: TypeError },
+  );
   t.is(plain[0], undefined);
   t.is(at0(plain), 10);
 
@@ -105,9 +111,12 @@ test('parity: freeze + integer-indexed WRITE — genuine unfreezable, plain swal
   const proxy = proxyView(immutableOf([10, 20, 30, 40]));
   freeze(proxy);
   t.true(isFrozen(proxy));
-  t.throws(() => {
-    proxy[0] = 42;
-  }, { instanceOf: TypeError });
+  t.throws(
+    () => {
+      proxy[0] = 42;
+    },
+    { instanceOf: TypeError },
+  );
   t.is(at0(proxy), 10);
 });
 

@@ -35,9 +35,12 @@ test('objection 3: the three emulations diverge only in what an indexed WRITE do
     iab3,
     Uint8Array.prototype,
   );
-  t.throws(() => {
-    proxy[0] = 42;
-  }, { instanceOf: TypeError });
+  t.throws(
+    () => {
+      proxy[0] = 42;
+    },
+    { instanceOf: TypeError },
+  );
   t.is(proxy.at(0), 10); // buffer unchanged
 });
 
