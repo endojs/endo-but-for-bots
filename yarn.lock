@@ -1368,6 +1368,7 @@ __metadata:
   resolution: "@endo/test262-runner@workspace:packages/test262-runner"
   dependencies:
     "@endo/compartment-mapper": "workspace:^"
+    "@endo/immutable-arraybuffer": "workspace:^"
     eslint: "catalog:dev"
     ses: "workspace:^"
     test262-harness: "npm:^10.0.0"
