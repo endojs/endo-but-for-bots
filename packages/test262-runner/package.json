@@ -32,8 +32,8 @@
     "test262:xs": "test262-harness --host-type xs --host-path xst --test262-dir test262 --prelude prelude/xs.js 'test262/test/**/*.js' --features-include ses-xs-parity",
     "test262:node": "test262-harness --host-type node --host-path node --test262-dir test262  --prelude prelude/node.js 'test262/test/**/*.js' --features-include ses-xs-parity",
     "test262:iab": "yarn build && yarn test262:iab:xs && yarn test262:iab:node",
-    "test262:iab:xs": "test262-harness --host-type xs --host-path xst --test262-dir test262 --prelude prelude/iab.js 'test262/test/**/*.js' --features-include immutable-arraybuffer-parity",
-    "test262:iab:node": "test262-harness --host-type node --host-path node --test262-dir test262 --prelude prelude/iab.js 'test262/test/**/*.js' --features-include immutable-arraybuffer-parity"
+    "test262:iab:xs": "node scripts/run-iab-xs.js",
+    "test262:iab:node": "test262-harness --host-type node --host-path node --test262-dir test262 --prelude prelude/iab.js 'test262/test/staging/immutable-arraybuffer/**/*.js' --features-include immutable-arraybuffer-parity"
   },
   "dependencies": {
     "@endo/compartment-mapper": "workspace:^",
