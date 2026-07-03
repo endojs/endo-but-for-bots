@@ -1,5 +1,9 @@
 import test from 'ava';
 import '../index.js';
+import {
+  makeFreezableIndexRejectingProxy,
+  makeIndexRejectingProxy,
+} from '@endo/immutable-arraybuffer/proxy-lib.js';
 
 const { isFrozen, getPrototypeOf } = Object;
 
@@ -51,4 +55,43 @@ test('ses: emulated freezable view mutator methods still throw after lockdown', 
   t.throws(() => view.reverse(), { instanceOf: TypeError });
   t.throws(() => view.sort(), { instanceOf: TypeError });
   t.throws(() => view.copyWithin(0, 1), { instanceOf: TypeError });
+});
+
+// ---------------------------------------------------------------------------
+// Proxy-based emulation variant (alternative, for comparison) under SES.
+// Objection 1's SES half: does harden() freeze a Proxy wrapper transitively?
+// See packages/immutable-arraybuffer/designs/freezable-typedarray.md
+// ("Why not a Proxy wrapper?") and .../proxy-lib.js.
+// ---------------------------------------------------------------------------
+
+const proxyHidden = bytes => {
+  const iab = new ArrayBuffer(bytes.length).sliceToImmutable();
+  // A fresh immutable buffer starts zeroed; the exact bytes do not matter for
+  // these freeze/harden assertions.
+  return { iab, genuineTA: new Uint8Array(iab.slice(0)) };
+};
+
+test('ses (proxy variant): the freezable Proxy wrapper hardens transitively like a plain object', t => {
+  const { iab, genuineTA } = proxyHidden([1, 2, 3, 4]);
+  const view = makeFreezableIndexRejectingProxy(
+    genuineTA,
+    iab,
+    Uint8Array.prototype,
+  );
+  t.notThrows(() => harden(view));
+  t.true(isFrozen(view));
+  // Reads still work after hardening; indexed assignment still throws.
+  t.is(view.at(0), 0);
+  t.throws(() => {
+    view[0] = 9;
+  }, { instanceOf: TypeError });
+});
+
+test('ses (proxy variant): the natural Proxy (target = genuine TypedArray) cannot be hardened', t => {
+  const { iab, genuineTA } = proxyHidden([1, 2, 3, 4]);
+  const view = makeIndexRejectingProxy(genuineTA, iab);
+  // harden walks the object and Object.freezes it; freezing an integer-indexed
+  // exotic target throws ("Cannot redefine property: 0"), so harden throws too.
+  // This is objection 1: the natural proxy is not (harden-)freezable.
+  t.throws(() => harden(view));
 });

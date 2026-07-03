@@ -25,6 +25,9 @@
       "types": "./shim.types.d.ts",
       "default": "./shim.js"
     },
+    "./proxy-lib.js": {
+      "default": "./proxy-lib.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {

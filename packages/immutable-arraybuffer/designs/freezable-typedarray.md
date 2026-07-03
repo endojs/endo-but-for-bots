@@ -219,23 +219,36 @@ const ab = new ArrayBuffer(4);             // [0, 0, 0, 0]
 const iab = ab.sliceToImmutable();
 const view = new Uint8Array(iab);
 
-view[0];                                   // 0  (delegates to the hidden
-                                           //     genuine TypedArray's read
-                                           //     of the immutable buffer's
-                                           //     byte 0)
+view[0];                                   // undefined (!)  A plain object
+                                           //   has no integer-indexed slot,
+                                           //   and Uint8Array.prototype does
+                                           //   not read through to the buffer
+                                           //   for `view[i]`; only `view.at(i)`
+                                           //   delegates. See the empirical
+                                           //   correction below.
 view[0] = 42;                              // OrdinarySet on the plain
                                            //   wrapper; creates an own
                                            //   data property '0' => 42.
                                            //   The underlying immutable
                                            //   buffer is NOT touched.
-view[0];                                   // 42 (now reads the own
-                                           //     property, which shadows
-                                           //     the prototype's indexed
-                                           //     read delegate)
+view[0];                                   // 42 (now reads the own data
+                                           //     property just created)
 
 Uint8Array.prototype.at.call(view, 0);     // 0  (the buffer's actual
                                            //     byte 0 is unchanged)
 ```
+
+> **Empirical correction (2026-07, PR #472).** The first `view[0]` above
+> was originally documented as returning `0` ("delegates to the hidden
+> genuine TypedArray's read"). That is inaccurate: a plain ordinary object
+> has no integer-indexed exotic slot, and nothing on `Uint8Array.prototype`
+> reads `view[i]` through to the backing buffer, so a *fresh* emulated
+> freezable view returns `undefined` for `view[0]` until an own property is
+> written. Only `view.at(0)` (and the other non-indexed methods) read the
+> buffer byte. This integer-indexed *read* gap — not just the *write*
+> quirk — is a real divergence from a genuine TypedArray, pinned down by
+> `test/proxy-index-parity.test.js` and by the test262 parity suite
+> (`packages/test262-runner`, `--features-include immutable-arraybuffer-parity`).
 
 The own-property creation is a quirk of the plain-object wrapper, not
 a security concern: the immutable buffer's bytes are untouched, and
@@ -243,9 +256,8 @@ any code that observes the bytes via a non-indexed method (`at`,
 `slice`, `subarray`, the DataView accessors, byte enumeration through
 `for ... of`) sees the original buffer contents.
 The discrepancy is only visible to code that reads through the
-wrapper's integer-indexed surface after an integer-indexed write,
-and that surface is exactly the surface the proposal cannot prevent
-the write to.
+wrapper's integer-indexed surface, and that surface is exactly the
+surface the proposal cannot prevent the write to.
 
 #### Worked example (frozen wrapper)
 
@@ -281,6 +293,77 @@ non-frozen emulated freezable view; underlying buffer unchanged`).
 This is a known proposal-level constraint, not a shim shortcoming.
 The README's *Caveats* section is updated to mention both the
 non-frozen and frozen cases.
+
+#### Why not a `Proxy` wrapper? (with the alternative implemented for comparison)
+
+Making integer-indexed assignment *throw*, rather than create a
+wrapper-local own property, would require the wrapper to intercept
+`[[Set]]` for integer-keyed properties, which a plain ordinary object
+cannot do.
+A `Proxy` around the hidden genuine TypedArray can supply that
+interception: a `set` trap can reject integer-indexed keys with a
+`TypeError` while forwarding every other operation.
+The shipped emulation deliberately does not take that route; PR #472
+implements the `Proxy` route anyway, as an **alternative for comparison**
+(`src/proxy-lib.js`, published as `@endo/immutable-arraybuffer/proxy-lib.js`),
+so the three objections below are checked empirically rather than asserted.
+The Proxy variant is *not* a replacement of the shipped plain-object wrapper.
+
+- **Freezability is materially harder, and it bites in a precise place.**
+  A `Proxy` whose target *is* the genuine TypedArray (the "natural" shape,
+  `makeIndexRejectingProxy`) is **not freezable**: `Object.freeze(view)`
+  walks the target's own integer-indexed keys and asks
+  `[[DefineOwnProperty]]` to make index `"0"` non-configurable, which an
+  integer-indexed exotic refuses — a `TypeError: Cannot redefine property: 0`.
+  `harden()` fails for the same reason.
+  Freezability can be *recovered* by targeting the `Proxy` at a freeze-able
+  plain object and holding the genuine TypedArray in a closure (the
+  "repaired" shape, `makeFreezableIndexRejectingProxy`): then
+  `Object.freeze(view)` succeeds, `Object.isFrozen(view) === true`, and
+  `harden()` freezes it transitively — but at a cost. The plain target has
+  no `"0".."n-1"` keys, so `Reflect.ownKeys`,
+  `getOwnPropertyDescriptor`, and enumeration diverge from a genuine
+  TypedArray even though bracket reads still work. Making reflection match
+  too would re-introduce exactly the non-configurability invariant that made
+  the natural proxy unfreezable. Evidence:
+  `test/proxy-freezability.test.js` and the two `ses (proxy variant)` cases
+  in `packages/ses/test/immutable-arraybuffer.test.js`.
+
+- **Hot-path overhead is real and large.** A representative micro-benchmark
+  (`test/proxy-benchmark.test.js`) of integer-indexed reads shows the Proxy
+  wrapper at roughly **10–60× a genuine TypedArray** (and the plain-object
+  wrapper at ~2–5×, though its indexed reads return `undefined` — see below);
+  every method call also pays for a fresh `this`-rebinding closure, because a
+  `Proxy` carries no `[[TypedArrayName]]` internal slot and a native method
+  called with the proxy as `this` throws "incompatible receiver". Indexed
+  *writes* through the proxy cost ~**200×** a genuine write, since each one
+  constructs and throws a `TypeError`.
+
+- **The gain is small and asymmetric — but it is not nothing.** The Proxy
+  buys a *throwing* integer-indexed write instead of a wrapper-local own
+  property; buffer immutability already holds for the plain-object wrapper,
+  so the throw is a fail-loud nicety, not a new safety property
+  (`test/proxy-gain.test.js`). The Proxy also, as a side effect of
+  forwarding reads to the hidden genuine TypedArray, **closes the
+  integer-indexed read gap** the plain-object wrapper has (`view[i]` returns
+  the byte instead of `undefined`) and makes the failed write throw in both
+  strict and sloppy mode (the plain wrapper only throws under strict mode
+  once frozen). Whether that read-parity improvement is worth the freezability
+  fragility and the hot-path cost is the tradeoff this comparison surfaces.
+
+If a native engine implements the proposal, integer-indexed assignment
+throws for real through the integer-indexed exotic object's `[[Set]]`,
+and the shim steps aside via the stage-3 detect-then-skip gate.
+The shim's plain-object emulation is a stopgap whose guarantee is
+buffer immutability, not surface-level rejection of the write.
+
+The property-assignment **parity** between an emulated view and a genuine
+(non-emulated) TypedArray — what the assignment surface does (throw /
+silent-swallow / own-property creation / write-through) in the frozen and
+non-frozen cases, for the plain-object wrapper, the Proxy wrapper, and a
+genuine view — is pinned down on **both Node and XS** by the test262 suite
+under `packages/test262-runner/test262/test/staging/immutable-arraybuffer/`
+(`yarn workspace @endo/test262-runner test262:iab`).
 
 ### `Object.isFrozen(view)` returns true after `Object.freeze(view)`
 

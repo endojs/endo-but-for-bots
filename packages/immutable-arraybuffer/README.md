@@ -124,10 +124,11 @@ The emulated wrapper is a plain ordinary object, not a native integer-indexed ex
 An indexed assignment (`view[0] = 42`) therefore creates an own property on the wrapper rather than writing to the underlying buffer.
 The underlying buffer's bytes are never touched.
 
-On a non-frozen wrapper the own property shadows the prototype's read delegate; `view[0]` reads back `42` while `Uint8Array.prototype.at.call(view, 0)` still reads `0` (the underlying byte).
+Because the wrapper is a plain object with no integer-indexed slot, an indexed *read* also diverges from a genuine `TypedArray`: on a fresh wrapper `view[0]` is `undefined` (nothing on `Uint8Array.prototype` reads `view[i]` through to the buffer — only `view.at(i)` does), and after `view[0] = 42` the read returns `42` from the own property just created, while `Uint8Array.prototype.at.call(view, 0)` still reads `0` (the underlying byte).
 On a frozen wrapper the assignment throws `TypeError` in strict mode (ES module code is always strict), and the buffer is unchanged.
 
 This is a known constraint of the TC39 proposal: there is no way to intercept integer-indexed assignments on a plain object via the prototype chain.
+A `Proxy`-based alternative emulation that makes the assignment *throw* (and closes the indexed-read gap) is available for comparison as `@endo/immutable-arraybuffer/proxy-lib.js`; its freezability, overhead, and behavioral tradeoffs are documented in `designs/freezable-typedarray.md` ("Why not a `Proxy` wrapper?") and exercised by the `test/proxy-*.test.js` suites and the `@endo/test262-runner` `test262:iab` parity suite (Node + XS).
 
 ## Function expressions versus declarations
 

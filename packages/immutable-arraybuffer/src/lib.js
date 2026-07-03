@@ -598,8 +598,6 @@ const amplifyTypedArray = typedArray => {
  * maintainers.
  * See the README section "Function expressions versus declarations" for full
  * context (erights review comments 3439479281, 3439500526).
- *
- * @type {(this: object) => ArrayBuffer}
  */
 const taGetters = {
   get buffer() {
@@ -619,10 +617,10 @@ const taGetters = {
   },
 };
 
-const { get: virtualTypedArrayBufferGetter } = getOwnPropertyDescriptor(
-  taGetters,
-  'buffer',
-);
+const { get: virtualTypedArrayBufferGetter } =
+  /** @type {{ get: (this: object) => ArrayBuffer }} */ (
+    getOwnPropertyDescriptor(taGetters, 'buffer')
+  );
 
 /**
  * Factory for per-flavor pseudo-constructors. Each pseudo-constructor replaces
