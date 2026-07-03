@@ -7,6 +7,9 @@
   "references": [
     {
       "path": "../compartment-mapper/tsconfig.composite.json"
+    },
+    {
+      "path": "../immutable-arraybuffer/tsconfig.composite.json"
     }
   ]
 }
