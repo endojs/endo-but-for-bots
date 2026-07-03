@@ -211,7 +211,7 @@ export const makeIndexRejectingProxy = (genuineTypedArray, immutableBuffer) => {
  *
  * @param {AnyTypedArray} genuineTypedArray
  * @param {ArrayBuffer} immutableBuffer
- * @param {Function} flavorPrototype - e.g. `Uint8Array.prototype`.
+ * @param {object} flavorPrototype - e.g. `Uint8Array.prototype`.
  * @returns {object} a freeze-able Proxy that rejects integer-indexed assignment
  */
 export const makeFreezableIndexRejectingProxy = (
