@@ -39,6 +39,7 @@ import { inventoryGraphComponent } from './inventory-graph-component.js';
 import { whylipComponent } from './whylip-component.js';
 import { peersComponent } from './peers-component.js';
 import { flootComponent } from './floot-component.js';
+import { managementComponent } from './management-component.js';
 import {
   renderProfileBar,
   mountMentionNotifyArea,
@@ -223,6 +224,15 @@ const bodyComponent = (
 
   if (activeSpaceInfo && activeSpaceInfo.mode === 'peers') {
     return peersComponent($parent, rootPowers, profilePath, onProfileChange);
+  }
+
+  if (activeSpaceInfo && activeSpaceInfo.mode === 'management') {
+    return managementComponent(
+      $parent,
+      rootPowers,
+      profilePath,
+      onProfileChange,
+    );
   }
 
   if (activeSpaceInfo && activeSpaceInfo.mode === 'files') {
@@ -1659,7 +1669,7 @@ const bodyComponent = (
 
 /**
  * @typedef {object} ActiveSpaceInfo
- * @property {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot'} mode
+ * @property {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'management'} mode
  * @property {string} [channelPetName]
  * @property {string} [proposedName]
  * @property {string} [whylipSystemPrompt]

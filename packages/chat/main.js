@@ -43,6 +43,12 @@ import '@endo/space-floot/floot.css';
 // eslint-disable-next-line import/no-unresolved
 import '@endo/space-channel/channel.css';
 
+// The hosted-Endo management view (`@endo/space-endo-mgmt`) ships its
+// stylesheet via the `./mgmt.css` package export; the host bundles it here.
+// Vite-only — no test loads `main.js`.
+// eslint-disable-next-line import/no-unresolved
+import '@endo/space-endo-mgmt/mgmt.css';
+
 const RECONNECT_INTERVAL_MS = 5000;
 
 // Detect whether we are running inside the Familiar Electron shell.

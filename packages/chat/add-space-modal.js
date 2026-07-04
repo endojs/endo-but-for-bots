@@ -52,7 +52,7 @@ The scene runs in a sandboxed iframe with no network access.`;
  * @property {string} name - Display name for the space
  * @property {string} icon - Emoji or letter icon
  * @property {string[]} profilePath - Pet name path to the profile
- * @property {'mailbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot'} layout - Layout type
+ * @property {'mailbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'management'} layout - Layout type
  * @property {ColorScheme} [scheme] - Color scheme preference
  * @property {string} [channelPetName] - Pet name for the channel object (channel mode)
  * @property {string} [proposedName] - Display name for the channel creator
@@ -166,6 +166,12 @@ const SPACE_TYPE_CARDS = harden([
     icon: '💬',
     title: 'Floot Chat',
     desc: 'Chat with a Floot streaming agent and watch its reply arrive token by token',
+  },
+  {
+    mode: 'management',
+    icon: '🛠️',
+    title: 'Hosted Endo',
+    desc: 'Update and restart a self-hosted Endo daemon from the UI',
   },
 ]);
 
@@ -931,6 +937,30 @@ const FilesForm = ({ view, on }) =>
   );
 harden(FilesForm);
 
+/** @param {{ view: AddSpaceView, on: AddSpaceHandlers }} props */
+const ManagementForm = ({ view, on }) =>
+  h(
+    FormShell,
+    { title: 'Hosted Endo', on },
+    h(IconField, { view, on }),
+    h(
+      'div',
+      { class: 'field-hint' },
+      'Manage a self-hosted Endo daemon: view deploy status and trigger ',
+      'updates/restarts from the UI. Requires the daemon to be provisioned ',
+      'for hosted management.',
+    ),
+    h(SchemeSlot, null),
+    h(ErrorBlock, { error: view.error }),
+    h(Actions, {
+      isSubmitting: view.isSubmitting,
+      label: 'Create Space',
+      busyLabel: 'Creating...',
+      onCancel: on.close,
+    }),
+  );
+harden(ManagementForm);
+
 /**
  * The root view: dispatch on `view.mode` to the matching screen.
  *
@@ -958,6 +988,8 @@ const AddSpaceView = ({ view, on }) => {
       return h(FilesForm, { view, on });
     case 'floot':
       return h(FlootForm, { view, on });
+    case 'management':
+      return h(ManagementForm, { view, on });
     default:
       return h(ChooseMode, { view, on });
   }
@@ -1026,7 +1058,7 @@ export const createAddSpaceModal = ({
   };
 
   let visible = false;
-  /** @type {'choose' | 'new-agent' | 'existing' | 'new-channel' | 'connect-channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot'} */
+  /** @type {'choose' | 'new-agent' | 'existing' | 'new-channel' | 'connect-channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'management'} */
   let mode = 'choose';
   /** @type {string} */
   let whylipName = '';
@@ -1147,7 +1179,8 @@ export const createAddSpaceModal = ({
       mode === 'graph' ||
       mode === 'peers' ||
       mode === 'files' ||
-      mode === 'floot'
+      mode === 'floot' ||
+      mode === 'management'
     ) {
       const $slot = /** @type {HTMLElement | null} */ (
         $container.querySelector('#scheme-picker-slot')
@@ -1418,6 +1451,12 @@ export const createAddSpaceModal = ({
         useLetterIcon = false;
         error = null;
         render();
+      } else if (selectedMode === 'management') {
+        mode = 'management';
+        selectedIcon = '🛠️';
+        useLetterIcon = false;
+        error = null;
+        render();
       } else if (selectedMode === 'floot') {
         mode = 'floot';
         selectedIcon = '💬';
@@ -1466,6 +1505,8 @@ export const createAddSpaceModal = ({
         handlePeersSubmit();
       } else if (mode === 'files') {
         handleFilesSubmit();
+      } else if (mode === 'management') {
+        handleManagementSubmit();
       } else if (mode === 'floot') {
         handleFlootSubmit();
       }
@@ -2285,6 +2326,31 @@ export const createAddSpaceModal = ({
       onClose();
     } catch (err) {
       error = `Failed to create files space: ${/** @type {Error} */ (err).message}`;
+      isSubmitting = false;
+      render();
+    }
+  };
+
+  /**
+   * Handle hosted-Endo management form submission.
+   */
+  const handleManagementSubmit = async () => {
+    isSubmitting = true;
+    error = null;
+    render();
+
+    try {
+      await onSubmit({
+        name: 'hosted-endo',
+        icon: selectedIcon,
+        profilePath: [],
+        layout: 'management',
+        scheme: schemePicker ? schemePicker.getValue() : 'auto',
+      });
+      hide({ restoreScheme: false });
+      onClose();
+    } catch (err) {
+      error = `Failed to create management space: ${/** @type {Error} */ (err).message}`;
       isSubmitting = false;
       render();
     }
