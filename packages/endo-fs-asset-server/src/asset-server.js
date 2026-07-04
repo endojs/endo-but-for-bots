@@ -7,7 +7,7 @@
  *
  * `makeAssetServer({ backend, getRandomValues, ... })` binds an HTTP
  * server via the injected platform `backend` (e.g.
- * `makeNodeHttpBackend({ http })` from `@endo/platform/http/node`) and
+ * `makeNodeHttpBackend()` from `@endo/platform/http/node`) and
  * returns an `AssetServer` exo. Each `serve(filesystem)` call:
  *
  *   1. mints a fresh, unguessable capability path segment (the
@@ -173,8 +173,8 @@ const readFileBody = async function* readFileBody(fileNode, size) {
  *
  * @param {object} opts
  * @param {import('@endo/platform/http/server').HttpBackend} opts.backend
- *   the platform HTTP backend factory (e.g.
- *   `makeNodeHttpBackend({ http })` from `@endo/platform/http/node`).
+ *   the platform HTTP backend factory (e.g. `makeNodeHttpBackend()`
+ *   from `@endo/platform/http/node`).
  * @param {(bytes: Uint8Array) => Uint8Array} opts.getRandomValues
  *   fills a byte array with cryptographically strong random values
  *   (e.g. `globalThis.crypto.getRandomValues`). Used to mint

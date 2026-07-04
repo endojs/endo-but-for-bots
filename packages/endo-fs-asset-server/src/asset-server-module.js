@@ -49,8 +49,6 @@
  *   #     { path, url, revoke }.)
  */
 
-import http from 'node:http';
-
 import { makeNodeHttpBackend } from '@endo/platform/http/node';
 
 import { makeAssetServer } from './asset-server.js';
@@ -83,7 +81,7 @@ export const make = async (_powers, _context, opts = {}) => {
   const getRandomValues = bytes => globalThis.crypto.getRandomValues(bytes);
 
   // Wire the platform-agnostic asset server onto the Node HTTP backend.
-  const backend = makeNodeHttpBackend({ http });
+  const backend = makeNodeHttpBackend();
 
   return makeAssetServer({ backend, getRandomValues, port, host, publicBase });
 };
