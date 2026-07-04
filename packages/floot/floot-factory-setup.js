@@ -58,19 +58,45 @@ export const main = async agent => {
   // its profile are created top-level and `move`d under `floot/` afterward.
   const guestName = `${dir}-controller-handle`;
   const agentName = `profile-for-${guestName}`;
+  const controllerProfilePath = [dir, 'controller-profile'];
+  const pinName = `${dir}-controller`;
 
-  // Idempotent for ENDO_EXTRA: the daemon re-runs every setup on each start, but
-  // the factory is pinned (step 5) and revives itself, so re-provisioning is not
-  // only unnecessary — it would call provideHost(guestName) again after step 4
-  // moved that pet-name away, creating a DUPLICATE factory host and orphaning the
-  // real sessions. Bail out early if the controller already exists. This also lets
-  // restarts skip the ANTHROPIC_API_KEY requirement below (the key is stored in
-  // daemon state at first provision). Guard the directory existence first: `has`
-  // with a path THROWS ("Unknown pet name") when the `floot/` dir is absent (the
-  // first-run case), rather than returning false.
+  // Config needed by both the re-bind and first-provision paths. The provider
+  // secret is NOT needed to re-bind (it lives in floot/llm-provider from the
+  // first provision), so restarts don't require ANTHROPIC_API_KEY.
+  const systemPrompt =
+    process.env.FLOOT_SYSTEM_PROMPT || process.env.ENDO_FLOOT_SYSTEM_PROMPT || '';
+  const codePath = resolveCodePath();
+
+  // Re-bind path (ENDO_EXTRA re-runs every setup on each start). The factory is a
+  // pinned UNCONFINED caplet whose module lives in the release checkout, and old
+  // releases are pruned (newest few kept), so the pinned formula's module path
+  // eventually dangles ("Cannot find module .../releases/<old>/packages/floot/
+  // agent.js"). The factory itself is stateless across reincarnation — its
+  // session registry lives in the factory profile's petstore (floot-sessions)
+  // and each session's history in its own guest petstore — so we can safely
+  // remove and re-create just the `floot/controller` caplet against the CURRENT
+  // release on every start, reusing the existing profile/host/provider. Sessions
+  // are untouched. (We must NOT re-run provideHost: step 4 moved guestName away,
+  // so a second provideHost would mint a DUPLICATE host and orphan the sessions.)
+  // Guard the directory existence first: `has` with a path THROWS ("Unknown pet
+  // name") when the `floot/` dir is absent (the first-run case).
   if ((await E(agent).has(dir)) && (await E(agent).has(dir, 'controller'))) {
+    await E(agent).remove(dir, 'controller');
+    if (await E(agent).has('@pins', pinName)) {
+      await E(agent).remove('@pins', pinName);
+    }
+    await E(agent).makeUnconfined('@main', flootFactorySpecifier, {
+      powersName: controllerProfilePath,
+      resultName: controllerPath,
+      env: harden({
+        FLOOT_SYSTEM_PROMPT: systemPrompt,
+        FLOOT_CODE_PATH: codePath,
+      }),
+    });
+    await E(agent).copy(controllerPath, ['@pins', pinName]);
     console.log(
-      `Floot factory already provisioned at "${dir}/controller" — skipping.`,
+      `Floot factory re-bound to the current release at "${dir}/controller" (sessions preserved).`,
     );
     return;
   }
@@ -83,9 +109,6 @@ export const main = async agent => {
     process.env.FLOOT_AUTH_TOKEN ||
     process.env.ENDO_FLOOT_AUTH_TOKEN ||
     '';
-  const systemPrompt =
-    process.env.FLOOT_SYSTEM_PROMPT || process.env.ENDO_FLOOT_SYSTEM_PROMPT || '';
-  const codePath = resolveCodePath();
 
   if (provider === 'anthropic' && !authToken) {
     throw new Error(
