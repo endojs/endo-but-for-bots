@@ -54,6 +54,20 @@ export const main = async agent => {
   const guestName = `${dir}-controller-handle`;
   const agentName = `profile-for-${guestName}`;
 
+  // Idempotent for ENDO_EXTRA: the daemon re-runs every setup on each start, but
+  // the factory is pinned (step 5) and revives itself, so re-provisioning is not
+  // only unnecessary — it would call provideHost(guestName) again after step 4
+  // moved that pet-name away, creating a DUPLICATE factory host and orphaning the
+  // real sessions. Bail out early if the controller already exists. This also lets
+  // restarts skip the ANTHROPIC_API_KEY requirement below (the key is stored in
+  // daemon state at first provision).
+  if (await E(agent).has(dir, 'controller')) {
+    console.log(
+      `Floot factory already provisioned at "${dir}/controller" — skipping.`,
+    );
+    return;
+  }
+
   const provider = process.env.FLOOT_PROVIDER || 'anthropic';
   const model = process.env.FLOOT_MODEL || '';
   const authToken =
