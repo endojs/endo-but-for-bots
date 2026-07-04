@@ -47,7 +47,17 @@ export const makeMockPrivacyApi = async ({ apiKey }) => {
      * @param {unknown} body
      */
     const reply = (status, body) => {
-      response.writeHead(status, { 'Content-Type': 'application/json' });
+      // No keep-alive: on Node 24, sockets still pooled by undici's
+      // global agent when the server closes at test teardown reject
+      // internally with a shared ClientDestroyedError that SES's
+      // unhandled-rejection logging hardens, and undici's subsequent
+      // attempt to rewrite its message cascades into a TypeError
+      // unhandled rejection per pooled request. Closing each
+      // connection after its response leaves nothing pooled.
+      response.writeHead(status, {
+        'Content-Type': 'application/json',
+        Connection: 'close',
+      });
       response.end(JSON.stringify(body));
     };
     let requestBody = '';
@@ -135,6 +145,10 @@ export const makeMockPrivacyApi = async ({ apiKey }) => {
     },
     close: () =>
       new Promise(resolve => {
+        // Belt and braces with Connection: close above — sever any
+        // socket a client is still holding so close() cannot hang and
+        // no pooled connection outlives the test.
+        server.closeAllConnections();
         server.close(() => resolve(undefined));
       }),
   });
