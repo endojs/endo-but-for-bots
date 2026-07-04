@@ -337,20 +337,17 @@ export const makeAssetServer = async ({
   let stopped = false;
 
   /**
+   * Register `filesystem` under `token` and return its `{ path, url,
+   * revoke }` handle. Shared by `serve` (random token) and `serveAt`
+   * (caller-chosen token). Replaces any existing mount at `token`.
+   *
+   * @param {string} token  the first path segment the mount answers to.
    * @param {object} filesystem  endo-fs Filesystem cap (or eref).
    * @param {object} [serveOpts]
-   * @param {string | string[]} [serveOpts.subPath]  sub-path within
-   *   the Filesystem to serve as the mount root.
-   * @param {string} [serveOpts.index]  directory index file name;
-   *   defaults to `index.html`.
+   * @param {string | string[]} [serveOpts.subPath]
+   * @param {string} [serveOpts.index]
    */
-  const serve = (filesystem, serveOpts = {}) => {
-    if (stopped) {
-      throw makeError(X`asset-server has been stopped`);
-    }
-    if (filesystem === undefined || filesystem === null) {
-      throw makeError(X`serve requires a Filesystem cap`);
-    }
+  const registerMount = (token, filesystem, serveOpts = {}) => {
     const basePath = normalizeSegments(
       /** @type {string | string[]} */ (serveOpts.subPath ?? []),
     );
@@ -359,7 +356,6 @@ export const makeAssetServer = async ({
       throw makeError(X`serve index must be a non-empty string`);
     }
 
-    const token = mintToken();
     /** @type {AssetMount} */
     const mount = { filesystem, basePath, index, revoked: false };
     mounts.set(token, mount);
@@ -382,6 +378,55 @@ export const makeAssetServer = async ({
     return harden({ path, url, revoke });
   };
 
+  /**
+   * @param {object} filesystem  endo-fs Filesystem cap (or eref).
+   * @param {object} [serveOpts]
+   * @param {string | string[]} [serveOpts.subPath]  sub-path within
+   *   the Filesystem to serve as the mount root.
+   * @param {string} [serveOpts.index]  directory index file name;
+   *   defaults to `index.html`.
+   */
+  const serve = (filesystem, serveOpts = {}) => {
+    if (stopped) {
+      throw makeError(X`asset-server has been stopped`);
+    }
+    if (filesystem === undefined || filesystem === null) {
+      throw makeError(X`serve requires a Filesystem cap`);
+    }
+    return registerMount(mintToken(), filesystem, serveOpts);
+  };
+
+  /**
+   * Serve a Filesystem at a caller-chosen, STABLE path segment instead
+   * of a random token. Unlike `serve`, the resulting URL is
+   * predictable, so it survives being re-registered on every process
+   * start — the basis for a persistent static site whose config (not a
+   * minted token) is the source of truth. Because the path is chosen,
+   * treat it as public unless you pick an unguessable segment yourself.
+   *
+   * @param {string} pathSegment  a single non-empty, non-traversal path
+   *   segment (the mount token), e.g. `site`.
+   * @param {object} filesystem  endo-fs Filesystem cap (or eref).
+   * @param {object} [serveOpts]
+   * @param {string | string[]} [serveOpts.subPath]
+   * @param {string} [serveOpts.index]
+   */
+  const serveAt = (pathSegment, filesystem, serveOpts = {}) => {
+    if (stopped) {
+      throw makeError(X`asset-server has been stopped`);
+    }
+    if (filesystem === undefined || filesystem === null) {
+      throw makeError(X`serveAt requires a Filesystem cap`);
+    }
+    const segs = normalizeSegments(pathSegment);
+    if (segs.length !== 1) {
+      throw makeError(
+        X`serveAt requires a single non-empty, non-traversal path segment, got ${q(pathSegment)}`,
+      );
+    }
+    return registerMount(segs[0], filesystem, serveOpts);
+  };
+
   const getAddress = () => harden({ host, port: boundPort, origin });
 
   const stop = async () => {
@@ -398,10 +443,11 @@ export const makeAssetServer = async ({
 
   return makeExo('AssetServer', AssetServerInterface, {
     serve,
+    serveAt,
     getAddress,
     stop,
     help: () =>
-      `Static asset server at ${origin}. Call serve(filesystem) to mount a Filesystem under a fresh capability path; it returns { path, url, revoke }. The mount serves persistently until revoke.revoke().`,
+      `Static asset server at ${origin}. Call serve(filesystem) to mount a Filesystem under a fresh capability path, or serveAt(pathSegment, filesystem) for a stable, chosen path; both return { path, url, revoke }. Mounts serve persistently until revoke.revoke().`,
   });
 };
 harden(makeAssetServer);

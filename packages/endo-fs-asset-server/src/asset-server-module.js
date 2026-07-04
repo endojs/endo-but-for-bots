@@ -52,6 +52,8 @@
 import http from 'node:http';
 
 import { makeNodeHttpBackend } from '@endo/platform/http/node';
+import { makeNodeFilesystem } from '@endo/platform/fs/extended/node-fs.js';
+import { readOnly } from '@endo/platform/fs/extended/readonly.js';
 
 import { makeAssetServer } from './asset-server.js';
 
@@ -85,6 +87,30 @@ export const make = async (_powers, _context, opts = {}) => {
   // Wire the platform-agnostic asset server onto the Node HTTP backend.
   const backend = makeNodeHttpBackend({ http });
 
-  return makeAssetServer({ backend, getRandomValues, port, host, publicBase });
+  const server = await makeAssetServer({
+    backend,
+    getRandomValues,
+    port,
+    host,
+    publicBase,
+  });
+
+  // Optional persistent static mount. When ENDO_FS_ASSET_SERVER_STATIC_DIR is
+  // set, wrap that host directory as an in-process read-only Filesystem and
+  // serve it at a STABLE path (ENDO_FS_ASSET_SERVER_STATIC_PATH, default
+  // `site`). Because the mount is rebuilt from env on every process start, the
+  // URL survives daemon restarts and deploys without any persisted state — the
+  // config is the source of truth. The path is chosen (not a minted token), so
+  // it is public unless you set STATIC_PATH to an unguessable value.
+  const staticDir = env.ENDO_FS_ASSET_SERVER_STATIC_DIR;
+  if (staticDir) {
+    const staticPath = env.ENDO_FS_ASSET_SERVER_STATIC_PATH || 'site';
+    const staticIndex = env.ENDO_FS_ASSET_SERVER_STATIC_INDEX || 'index.html';
+    const fs = readOnly(makeNodeFilesystem({ rootPath: staticDir }));
+    const { url } = await server.serveAt(staticPath, fs, { index: staticIndex });
+    console.log(`asset-server: static mount ${staticDir} -> ${url}`);
+  }
+
+  return server;
 };
 harden(make);

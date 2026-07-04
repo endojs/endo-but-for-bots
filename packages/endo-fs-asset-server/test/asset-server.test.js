@@ -95,6 +95,33 @@ test('normalizeSegments rejects traversal', t => {
   t.throws(() => normalizeSegments('a/../b'), { message: /traversal/ });
 });
 
+test.serial('serveAt serves at a stable, chosen path', async t => {
+  const fs = await makeSiteFs();
+  const server = await startServer(t);
+
+  const { path, url } = await E(server).serveAt('site', fs);
+  t.is(path, '/site/');
+  t.true(url.endsWith('/site/'));
+
+  const res = await httpGet(`${url}style.css`);
+  t.is(res.status, 200);
+  t.is(res.text, 'body { color: red }');
+
+  // The index is served for the mount root.
+  const rootRes = await httpGet(url);
+  t.is(rootRes.status, 200);
+  t.is(rootRes.text, '<h1>home</h1>');
+
+  // Re-registering the same path replaces the mount (models a restart
+  // re-applying the same config), keeping the URL stable.
+  const again = await E(server).serveAt('site', fs);
+  t.is(again.path, '/site/');
+
+  // Rejects multi-segment or traversal path tokens.
+  await t.throwsAsync(() => E(server).serveAt('a/b', fs));
+  await t.throwsAsync(() => E(server).serveAt('..', fs));
+});
+
 test.serial('serves a file at a generated capability path', async t => {
   const fs = await makeSiteFs();
   const server = await startServer(t);

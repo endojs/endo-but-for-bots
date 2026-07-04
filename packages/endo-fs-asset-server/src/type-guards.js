@@ -53,6 +53,17 @@ export const AssetServerInterface = M.interface(
           revoke: M.remotable('AssetMount'),
         }),
       ),
+    // Serve at a caller-chosen, stable path segment instead of a minted
+    // token — the basis for a persistent static site.
+    serveAt: M.call(M.string(), M.eref(M.remotable('Filesystem')))
+      .optional(M.record())
+      .returns(
+        M.splitRecord({
+          path: M.string(),
+          url: M.string(),
+          revoke: M.remotable('AssetMount'),
+        }),
+      ),
     getAddress: M.call().returns(M.record()),
     stop: M.call().returns(M.promise()),
     help: M.call().optional(M.string()).returns(M.string()),

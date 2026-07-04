@@ -12,8 +12,14 @@
 //   ENDO_FS_ASSET_SERVER_PUBLIC_BASE  origin advertised in returned URLs,
 //                                     e.g. https://assets.example (Caddy proxies
 //                                     that origin to the loopback port).
+//   ENDO_FS_ASSET_SERVER_STATIC_DIR   optional host dir to serve persistently at
+//                                     a STABLE path on every start (survives
+//                                     restarts/deploys; the config is the source
+//                                     of truth, no minted token).
+//   ENDO_FS_ASSET_SERVER_STATIC_PATH  path segment for that mount (default site)
+//   ENDO_FS_ASSET_SERVER_STATIC_INDEX directory index file (default index.html)
 //
-// Once provisioned, mount a directory and serve it:
+// Once provisioned, you can also mount ad-hoc capability URLs:
 //   E(assetServer).serve(filesystemCap) -> { path, url, revoke }
 
 import { E } from '@endo/eventual-send';
@@ -42,6 +48,12 @@ export const main = async agent => {
       ENDO_FS_ASSET_SERVER_HOST: env.ENDO_FS_ASSET_SERVER_HOST || '127.0.0.1',
       ENDO_FS_ASSET_SERVER_PUBLIC_BASE:
         env.ENDO_FS_ASSET_SERVER_PUBLIC_BASE || '',
+      ENDO_FS_ASSET_SERVER_STATIC_DIR:
+        env.ENDO_FS_ASSET_SERVER_STATIC_DIR || '',
+      ENDO_FS_ASSET_SERVER_STATIC_PATH:
+        env.ENDO_FS_ASSET_SERVER_STATIC_PATH || '',
+      ENDO_FS_ASSET_SERVER_STATIC_INDEX:
+        env.ENDO_FS_ASSET_SERVER_STATIC_INDEX || '',
     },
   });
 
