@@ -2589,6 +2589,8 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/privacy-cards@workspace:packages/privacy-cards"
   dependencies:
+    "@endo/cancel": "workspace:^"
+    "@endo/daemon": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
