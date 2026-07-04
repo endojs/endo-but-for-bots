@@ -1,5 +1,5 @@
 // @ts-check
-/* global globalThis */
+/* global globalThis, Buffer */
 /**
  * Entry point for instantiating a static asset server as a formulated
  * Endo caplet via `host.makeUnconfined`.
@@ -30,6 +30,27 @@
  *                                     server sits behind a proxy,
  *                                     e.g. `https://assets.example`.
  *
+ *   ENDO_FS_ASSET_SERVER_STATIC_DIR   Optional. Host directory hosted
+ *                                     persistently (read-only) on every
+ *                                     start. Enables the durable mount
+ *                                     below.
+ *
+ *   ENDO_FS_ASSET_SERVER_STATIC_TOKEN_FILE
+ *                                     File the durable mount's
+ *                                     capability token is minted into
+ *                                     (0600) and re-read from, so the
+ *                                     same unguessable URL survives
+ *                                     restarts/deploys. Default channel
+ *                                     for STATIC_DIR.
+ *
+ *   ENDO_FS_ASSET_SERVER_STATIC_PATH  Optional. Pin the durable mount at
+ *                                     a chosen (public, guessable) path
+ *                                     instead of a capability token.
+ *
+ *   ENDO_FS_ASSET_SERVER_STATIC_INDEX Optional. Directory index file for
+ *                                     the durable mount (default
+ *                                     `index.html`).
+ *
  * End-to-end recipe:
  *
  *   # 1. Mount a host directory as a Filesystem cap.
@@ -50,12 +71,45 @@
  */
 
 import http from 'node:http';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import { makeNodeHttpBackend } from '@endo/platform/http/node';
 import { makeNodeFilesystem } from '@endo/platform/fs/extended/node-fs.js';
 import { readOnly } from '@endo/platform/fs/extended/readonly.js';
 
 import { makeAssetServer } from './asset-server.js';
+
+/**
+ * Load a persisted capability token from `tokenFile`, or mint a fresh
+ * one (192 bits, URL-safe base64) and persist it `0600` on first use.
+ * Because the token is stored outside any release checkout, the same
+ * unguessable capability path is re-used on every process start — the
+ * basis for a *durable* capability URL that survives daemon restarts
+ * and deploys, without weakening it to a guessable name.
+ *
+ * @param {string} tokenFile
+ * @param {(bytes: Uint8Array) => Uint8Array} getRandomValues
+ * @returns {string}
+ */
+const loadOrMintToken = (tokenFile, getRandomValues) => {
+  try {
+    const existing = readFileSync(tokenFile, 'utf8').trim();
+    if (existing !== '') {
+      return existing;
+    }
+  } catch (err) {
+    if (/** @type {NodeJS.ErrnoException} */ (err).code !== 'ENOENT') {
+      throw err;
+    }
+  }
+  const token = Buffer.from(getRandomValues(new Uint8Array(24))).toString(
+    'base64url',
+  );
+  mkdirSync(dirname(tokenFile), { recursive: true });
+  writeFileSync(tokenFile, `${token}\n`, { mode: 0o600 });
+  return token;
+};
 
 /**
  * @param {unknown} _powers  unused; the server needs no host powers
@@ -95,20 +149,41 @@ export const make = async (_powers, _context, opts = {}) => {
     publicBase,
   });
 
-  // Optional persistent static mount. When ENDO_FS_ASSET_SERVER_STATIC_DIR is
-  // set, wrap that host directory as an in-process read-only Filesystem and
-  // serve it at a STABLE path (ENDO_FS_ASSET_SERVER_STATIC_PATH, default
-  // `site`). Because the mount is rebuilt from env on every process start, the
-  // URL survives daemon restarts and deploys without any persisted state — the
-  // config is the source of truth. The path is chosen (not a minted token), so
-  // it is public unless you set STATIC_PATH to an unguessable value.
+  // Durable static mount. When ENDO_FS_ASSET_SERVER_STATIC_DIR is set, wrap that
+  // host directory as an in-process read-only Filesystem and serve it on every
+  // process start, so the directory is hosted persistently across daemon
+  // restarts and deploys. The mount's path is, by default, a *capability token*
+  // (the URL path is the authorization) that is minted once and persisted in
+  // ENDO_FS_ASSET_SERVER_STATIC_TOKEN_FILE, so the same unguessable URL comes
+  // back after every restart. Set ENDO_FS_ASSET_SERVER_STATIC_PATH instead to
+  // pin a chosen (public, guessable) path — an opt-in departure from the
+  // capability model.
   const staticDir = env.ENDO_FS_ASSET_SERVER_STATIC_DIR;
   if (staticDir) {
-    const staticPath = env.ENDO_FS_ASSET_SERVER_STATIC_PATH || 'site';
     const staticIndex = env.ENDO_FS_ASSET_SERVER_STATIC_INDEX || 'index.html';
+    const chosenPath = env.ENDO_FS_ASSET_SERVER_STATIC_PATH;
+    const tokenFile = env.ENDO_FS_ASSET_SERVER_STATIC_TOKEN_FILE;
+    let token;
+    let kind;
+    if (chosenPath) {
+      token = chosenPath;
+      kind = 'public path';
+    } else if (tokenFile) {
+      token = loadOrMintToken(tokenFile, getRandomValues);
+      kind = 'capability token';
+    } else {
+      throw new Error(
+        'asset-server-module: ENDO_FS_ASSET_SERVER_STATIC_DIR requires ENDO_FS_ASSET_SERVER_STATIC_TOKEN_FILE (durable capability URL) or ENDO_FS_ASSET_SERVER_STATIC_PATH (chosen public path)',
+      );
+    }
     const fs = readOnly(makeNodeFilesystem({ rootPath: staticDir }));
-    const { url } = await server.serveAt(staticPath, fs, { index: staticIndex });
-    console.log(`asset-server: static mount ${staticDir} -> ${url}`);
+    server.serveAt(token, fs, { index: staticIndex });
+    // Log where the URL lives, not the capability itself.
+    console.log(
+      `asset-server: hosting ${staticDir} at a ${kind}${
+        kind === 'capability token' ? ` (see ${tokenFile})` : ` /${token}/`
+      }`,
+    );
   }
 
   return server;
