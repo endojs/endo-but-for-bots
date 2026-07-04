@@ -64,6 +64,10 @@
     "./fs/extended/readonly.js": "./src/fs/extended/readonly.js",
     "./fs/extended/shared/helpers.js": "./src/fs/extended/shared/helpers.js",
     "./fs/extended/wrap-backend.js": "./src/fs/extended/wrap-backend.js",
+    "./http/server": "./src/http/server.js",
+    "./http/node": {
+      "node": "./src/http-node/server.js"
+    },
     "./proc": "./src/proc.js",
     "./exo-fs": "./src/exo-fs.js",
     "./package.json": "./package.json"
