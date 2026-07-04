@@ -3,6 +3,11 @@
 // endo run --UNCONFINED floot-factory-setup.js --powers @agent \
 //   -E ANTHROPIC_API_KEY=sk-...   (optionally -E FLOOT_DIR=floot)
 //
+// When run via ENDO_EXTRA on a daemon, only ENDO_-prefixed env vars survive the
+// daemon's env filter (packages/daemon/index.js `allowEnvPass`), so this script
+// also accepts ENDO_-prefixed equivalents: ENDO_FLOOT_AUTH_TOKEN,
+// ENDO_FLOOT_MODEL, ENDO_FLOOT_PROVIDER, ENDO_FLOOT_SYSTEM_PROMPT, ENDO_FLOOT_DIR.
+//
 // Provisions the Floot factory under a `floot/` inventory directory as the
 // well-known `floot/controller` — a single pinned caplet that owns every chat
 // session (each session is its own guest, hidden behind the factory). The LLM
@@ -47,7 +52,7 @@ export const main = async agent => {
   // Everything lives under a single `floot/` inventory directory rather than
   // polluting the top level. The factory is the well-known `floot/controller`,
   // which the chat space's picker auto-detects.
-  const dir = process.env.FLOOT_DIR || 'floot';
+  const dir = process.env.FLOOT_DIR || process.env.ENDO_FLOOT_DIR || 'floot';
   const controllerPath = [dir, 'controller'];
   // `provideHost` takes a single pet-name (not a path), so the factory host and
   // its profile are created top-level and `move`d under `floot/` afterward.
@@ -70,16 +75,21 @@ export const main = async agent => {
     return;
   }
 
-  const provider = process.env.FLOOT_PROVIDER || 'anthropic';
-  const model = process.env.FLOOT_MODEL || '';
+  const provider =
+    process.env.FLOOT_PROVIDER || process.env.ENDO_FLOOT_PROVIDER || 'anthropic';
+  const model = process.env.FLOOT_MODEL || process.env.ENDO_FLOOT_MODEL || '';
   const authToken =
-    process.env.ANTHROPIC_API_KEY || process.env.FLOOT_AUTH_TOKEN || '';
-  const systemPrompt = process.env.FLOOT_SYSTEM_PROMPT || '';
+    process.env.ANTHROPIC_API_KEY ||
+    process.env.FLOOT_AUTH_TOKEN ||
+    process.env.ENDO_FLOOT_AUTH_TOKEN ||
+    '';
+  const systemPrompt =
+    process.env.FLOOT_SYSTEM_PROMPT || process.env.ENDO_FLOOT_SYSTEM_PROMPT || '';
   const codePath = resolveCodePath();
 
   if (provider === 'anthropic' && !authToken) {
     throw new Error(
-      'ANTHROPIC_API_KEY (or FLOOT_AUTH_TOKEN) is required for the Anthropic provider.',
+      'ANTHROPIC_API_KEY (or FLOOT_AUTH_TOKEN / ENDO_FLOOT_AUTH_TOKEN) is required for the Anthropic provider.',
     );
   }
 
