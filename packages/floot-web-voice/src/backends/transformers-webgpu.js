@@ -321,6 +321,9 @@ const pumpStt = async (host, audioReader, writer, setOnClose) => {
   let totalSamples = 0;
   let samplesSinceLastPartial = 0;
   let aborted = false;
+  // Set once the final pass is imminent: it latches partial passes off so a
+  // stale partial can never land AFTER the final on the wire.
+  let ending = false;
   // Track the in-flight partial pass so we never overlap two transcriptions of
   // the same buffer (Moonshine on a phone GPU can't run them concurrently
   // anyway) and so the final pass can await it before running last.
@@ -374,7 +377,10 @@ const pumpStt = async (host, audioReader, writer, setOnClose) => {
     });
 
   const maybePartial = async () => {
-    if (aborted || inFlight) {
+    // Once ending, never start another partial pass — a late partial resolving
+    // after the final would clobber the final transcript (REPLACE semantics).
+    if (aborted || ending) return;
+    if (inFlight) {
       // A pass is already running; remember to run one more once it settles so
       // the latest audio is reflected, but never queue more than one.
       pendingPartial = true;
@@ -383,7 +389,7 @@ const pumpStt = async (host, audioReader, writer, setOnClose) => {
     inFlight = transcribePass(false);
     await inFlight;
     inFlight = null;
-    if (pendingPartial && !aborted) {
+    if (pendingPartial && !aborted && !ending) {
       pendingPartial = false;
       await maybePartial();
     }
@@ -417,9 +423,11 @@ const pumpStt = async (host, audioReader, writer, setOnClose) => {
       }
     }
     if (aborted) return;
+    // Latch off further partials, then wait for any in-flight partial to settle
+    // so the final pass is strictly last on the wire, and transcribe the whole
+    // buffer.
+    ending = true;
     writer.setPhase('transcribing');
-    // Wait for any in-flight partial to settle so the final pass is last on the
-    // wire, then transcribe the complete buffer.
     if (inFlight) await inFlight;
     await transcribePass(true);
     if (!aborted) writer.end();

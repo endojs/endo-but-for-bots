@@ -434,20 +434,37 @@ const pumpStt = async (bridge, audioReader, writer, setOnClose) => {
  * @param {ReturnType<typeof makeAudioOutChannel>['writer']} writer
  * @param {() => boolean} isClosed
  */
-const pumpTts = async (bridge, textReader, writer, isClosed) => {
+const pumpTts = async (bridge, textReader, writer, isClosed, setCancel) => {
   const chunker = makeChunker();
   /** @type {string[]} */
   const queue = [];
   let aborting = false;
+  // Worker request id of the sentence currently synthesizing, so a
+  // consumer-close can abort THAT in-flight request instead of letting it run
+  // to completion with no one to receive the audio.
+  /** @type {number | null} */
+  let currentId = null;
+
+  const cancel = reason => {
+    if (aborting) return;
+    aborting = true;
+    if (currentId !== null) bridge.abort(currentId);
+    if (reason !== undefined) writer.abort(reason);
+  };
+  // createTTS wires the channel's onClose to this so stopping playback (barge-in
+  // / replay interrupt) halts synthesis, not just pauses between sentences.
+  if (setCancel) setCancel(cancel);
 
   writer.setPhase('synthesizing');
 
   const drain = async () => {
     while (queue.length && !aborting && !isClosed()) {
       const sentence = queue.shift();
+      const req = bridge.request('tts', { sentence });
+      currentId = req.id;
       // eslint-disable-next-line no-await-in-loop
-      const { b64, sampleRate } = await bridge.request('tts', { sentence })
-        .done;
+      const { b64, sampleRate } = await req.done;
+      currentId = null;
       if (aborting || isClosed()) return;
       if (b64) writer.bytes(b64, sampleRate);
     }
@@ -465,17 +482,15 @@ const pumpTts = async (bridge, textReader, writer, isClosed) => {
       } else if (value.type === 'end') {
         break;
       } else if (value.type === 'abort') {
-        aborting = true;
-        writer.abort(value.reason);
+        cancel(value.reason);
         return;
       }
     }
     for (const s of chunker.finish()) queue.push(s);
     await drain();
-    writer.end();
+    if (!aborting) writer.end();
   } catch (err) {
-    aborting = true;
-    writer.abort(/** @type {Error} */ (err)?.message || String(err));
+    cancel(/** @type {Error} */ (err)?.message || String(err));
   }
 };
 
@@ -515,10 +530,17 @@ const createTTS = async () => {
 
   return makeExo('TtsServer', TtsServerInterface, {
     synthesize: textReader => {
-      // If the consumer stops pulling, onClose lets pumpTts stop synthesizing.
-      const channel = makeAudioOutChannel(null);
-      const { writer, reader, isClosed } = channel;
-      pumpTts(bridge, textReader, writer, isClosed).catch(() => {});
+      // onClose fires when the consumer stops pulling (barge-in / replay
+      // interrupt); wire it to the pump's cancel so we abort the in-flight
+      // sentence. pumpTts replaces cancelTurn synchronously via setCancel before
+      // this returns, so the hook can never fire into the no-op.
+      let cancelTurn = () => {};
+      const { writer, reader, isClosed } = makeAudioOutChannel(() =>
+        cancelTurn(),
+      );
+      pumpTts(bridge, textReader, writer, isClosed, cancel => {
+        cancelTurn = cancel;
+      }).catch(() => {});
       return reader;
     },
     help: () =>

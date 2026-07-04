@@ -50,7 +50,7 @@
 //   { kind:'ready', model:'stt'|'tts' }              — warm complete
 //   { kind:'stt-partial', id, text }                 — cumulative transcript
 //   { kind:'stt-final',   id, text }                 — final transcript
-//   { kind:'stt-error',   id, message }
+//   { kind:'stt-error',   id, seq, message }
 //   { kind:'tts-audio',   id, seq, pcm:Float32Array, sampleRate }
 //   { kind:'tts-done',    id, seq }                  — that sentence finished
 //   { kind:'tts-error',   id, seq, message }
@@ -221,7 +221,7 @@ self.onmessage = async event => {
         });
       } catch (err) {
         if (sttAborted.has(id)) return;
-        post({ kind: 'stt-error', id, message: messageOf(err) });
+        post({ kind: 'stt-error', id, seq: data.seq, message: messageOf(err) });
       }
       return;
     }

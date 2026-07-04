@@ -1,6 +1,5 @@
 // @ts-check
 /* eslint-env worker */
-/* global ortGlobal */
 // ─────────────────────────────────────────────────────────────────────────────
 // BACKEND B — onnx-piper-moonshine WEB WORKER
 // ─────────────────────────────────────────────────────────────────────────────
@@ -298,7 +297,12 @@ const runMoonshine = async (samples, isAborted) => {
       ...past,
     };
     if (decoderInputNames.includes('use_cache_branch')) {
-      feeds.use_cache_branch = new Tensor('bool', [useCache], [1]);
+      // ORT bool tensors take a Uint8Array (1/0), not a JS boolean array.
+      feeds.use_cache_branch = new Tensor(
+        'bool',
+        Uint8Array.from([useCache ? 1 : 0]),
+        [1],
+      );
     }
     // eslint-disable-next-line no-await-in-loop
     const out = await decoder.run(feeds);
@@ -464,7 +468,20 @@ globalThis.onmessage = async event => {
       return;
     }
     if (type === 'tts') {
+      // Cooperative abort: a sentence's ORT run is atomic, but if the consumer
+      // aborted this request before or during synthesis, drop the audio (reply
+      // empty) so the main thread never emits it.
+      if (aborted.has(id)) {
+        aborted.delete(id);
+        reply({ type: 'ok', b64: '', sampleRate: 0 });
+        return;
+      }
       const { pcm, sampleRate } = await runPiper(msg.sentence);
+      if (aborted.has(id)) {
+        aborted.delete(id);
+        reply({ type: 'ok', b64: '', sampleRate: 0 });
+        return;
+      }
       reply({ type: 'ok', b64: bytesToBase64(pcm), sampleRate });
       return;
     }
