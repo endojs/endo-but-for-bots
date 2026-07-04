@@ -8,8 +8,8 @@ The server is built on the platform-agnostic HTTP server interface
 package owns only the request *handler* (a pure `(request) => response`
 function), while all socket I/O and response streaming live behind an
 injected `backend`. The Node backend is
-[`@endo/platform/http/node`](../platform/src/http-node/server.js)
-(`makeNodeHttpBackend({ http })`); a non-Node embedder supplies its own
+[`@endo/platform/http/node`](../platform/src/http-node/index.js)
+(`makeNodeHttpBackend()`); a non-Node embedder supplies its own
 and the same handler runs unchanged.
 
 The server is instantiated as an **unconfined formula** so it can hold a
@@ -79,12 +79,11 @@ injected powers, so it can be unit-tested with fakes and reused outside a
 daemon:
 
 ```js
-import http from 'node:http';
 import { makeNodeHttpBackend } from '@endo/platform/http/node';
 import { makeAssetServer } from '@endo/endo-fs-asset-server';
 
 const server = await makeAssetServer({
-  backend: makeNodeHttpBackend({ http }),
+  backend: makeNodeHttpBackend(),
   getRandomValues: bytes => globalThis.crypto.getRandomValues(bytes),
   port: 0,
 });

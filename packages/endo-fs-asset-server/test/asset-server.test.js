@@ -15,7 +15,7 @@ import { makeNodeHttpBackend } from '@endo/platform/http/node';
 import { makeAssetServer } from '../src/asset-server.js';
 import { contentTypeForName, normalizeSegments } from '../src/index.js';
 
-const backend = makeNodeHttpBackend({ http });
+const backend = makeNodeHttpBackend();
 
 const utf8 = s => new TextEncoder().encode(s);
 
