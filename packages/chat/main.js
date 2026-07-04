@@ -48,6 +48,12 @@ import '@endo/space-workflow/workflow.css';
 // eslint-disable-next-line import/no-unresolved
 import '@endo/space-channel/channel.css';
 
+// The hosted-Endo management view (`@endo/space-endo-mgmt`) ships its
+// stylesheet via the `./mgmt.css` package export; the host bundles it here.
+// Vite-only — no test loads `main.js`.
+// eslint-disable-next-line import/no-unresolved
+import '@endo/space-endo-mgmt/mgmt.css';
+
 // Delays before each reconnect attempt, walked in order and then held at the
 // last. The first reattempt is immediate: the overwhelmingly common cause of a
 // dropped gateway connection is a daemon that restarted and is already

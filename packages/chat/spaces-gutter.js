@@ -29,6 +29,7 @@ const KNOWN_MODES = new Set([
   'floot',
   'workflow',
   'secrets',
+  'management',
 ]);
 
 /**
@@ -41,7 +42,7 @@ const KNOWN_MODES = new Set([
  * @property {string} name - display name (shown on hover)
  * @property {string} icon - emoji character
  * @property {string[]} profilePath - pet-name path to the agent
- * @property {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets'} mode - interaction mode
+ * @property {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets' | 'management'} mode - interaction mode
  * @property {ColorScheme} [scheme] - color scheme preference (default: 'auto')
  * @property {string} [channelPetName] - pet name of the channel object (for channel mode)
  * @property {string} [proposedName] - display name for the channel creator
@@ -534,7 +535,7 @@ harden(SpacesGutterView);
  * @param {HTMLElement} options.$modalContainer - Container for the add space modal
  * @param {ERef<EndoHost>} options.powers - Endo host powers
  * @param {string[]} options.currentProfilePath - Current profile path for initial selection
- * @param {(profilePath: string[], spaceInfo?: { mode: 'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets', channelPetName?: string, proposedName?: string, whylipSystemPrompt?: string, viewMode?: 'chat' | 'forum' | 'outliner' | 'microblog', channelOrder?: string[], bookmarks?: Array<{key: string, channelPetName: string, label: string}>, audioPath?: string[], ttsPath?: string[], workflowPath?: string[] }) => void} options.onNavigate - Navigate callback
+ * @param {(profilePath: string[], spaceInfo?: { mode: 'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets' | 'management', channelPetName?: string, proposedName?: string, whylipSystemPrompt?: string, viewMode?: 'chat' | 'forum' | 'outliner' | 'microblog', channelOrder?: string[], bookmarks?: Array<{key: string, channelPetName: string, label: string}>, audioPath?: string[], ttsPath?: string[], workflowPath?: string[] }) => void} options.onNavigate - Navigate callback
  * @returns {SpacesGutterAPI}
  */
 export const createSpacesGutter = ({
@@ -1038,7 +1039,7 @@ export const createSpacesGutter = ({
         name: data.name,
         icon: data.icon,
         profilePath: data.profilePath,
-        mode: /** @type {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets'} */ (
+        mode: /** @type {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets' | 'management'} */ (
           KNOWN_MODES.has(data.layout) ? data.layout : 'inbox'
         ),
         scheme: data.scheme || 'auto',
@@ -1174,7 +1175,7 @@ export const createSpacesGutter = ({
     if (!obj.profilePath.every(p => typeof p === 'string')) return null;
     // Mode is optional, default to 'inbox'
     const mode =
-      /** @type {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets'} */ (
+      /** @type {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets' | 'management'} */ (
         typeof obj.mode === 'string' && KNOWN_MODES.has(obj.mode)
           ? obj.mode
           : 'inbox'

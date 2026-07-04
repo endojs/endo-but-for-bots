@@ -46,6 +46,7 @@ import { peersComponent } from './peers-component.js';
 import { flootComponent } from './floot-component.js';
 import { workflowComponent } from './workflow-component.js';
 import { secretsComponent } from './secrets-component.js';
+import { managementComponent } from './management-component.js';
 import {
   renderAppHeader,
   renderProfileBar,
@@ -232,6 +233,15 @@ const bodyComponent = (
 
   if (activeSpaceInfo && activeSpaceInfo.mode === 'peers') {
     return peersComponent($parent, rootPowers, profilePath, onProfileChange);
+  }
+
+  if (activeSpaceInfo && activeSpaceInfo.mode === 'management') {
+    return managementComponent(
+      $parent,
+      rootPowers,
+      profilePath,
+      onProfileChange,
+    );
   }
 
   if (activeSpaceInfo && activeSpaceInfo.mode === 'files') {
@@ -1665,7 +1675,7 @@ const bodyComponent = (
 
 /**
  * @typedef {object} ActiveSpaceInfo
- * @property {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets'} mode
+ * @property {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets' | 'management'} mode
  * @property {string} [channelPetName]
  * @property {string} [proposedName]
  * @property {string} [whylipSystemPrompt]

@@ -68,7 +68,7 @@ test.afterEach(() => {
   testDocument.body.innerHTML = '';
 });
 
-test.serial('choose screen lists all eleven space types', async t => {
+test.serial('choose screen lists all twelve space types', async t => {
   const { $container } = await setup();
   const modes = [...$container.querySelectorAll('.space-type-card')].map(c =>
     c.getAttribute('data-mode'),
@@ -85,6 +85,7 @@ test.serial('choose screen lists all eleven space types', async t => {
     'floot',
     'workflow',
     'secrets',
+    'management',
   ]);
 });
 
@@ -102,7 +103,7 @@ test.serial(
 
     $container.querySelector('.add-space-back').click();
     await waitFor(() => !!$container.querySelector('.add-space-choose'));
-    t.is($container.querySelectorAll('.space-type-card').length, 11);
+    t.is($container.querySelectorAll('.space-type-card').length, 12);
   },
 );
 
