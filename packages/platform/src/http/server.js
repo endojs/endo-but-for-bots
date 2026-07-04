@@ -125,7 +125,7 @@ export const HttpServerInterface = M.interface('HttpServer', {
  *
  * @param {object} opts
  * @param {HttpBackend} opts.backend  the platform listening primitive
- *   factory (e.g. `makeNodeHttpBackend({ http })` from
+ *   factory (e.g. `makeNodeHttpBackend()` from
  *   `@endo/platform/http/node`).
  * @param {HttpHandler} opts.handler  the request handler.
  * @param {HttpAddress} [opts.address]  the address to bind. Defaults

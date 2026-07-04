@@ -9,14 +9,14 @@
  * contract: it decodes each `IncomingMessage` into an
  * {@link HttpRequest}, calls the injected `dispatch`, and writes the
  * returned {@link HttpResponse} back over the `ServerResponse` —
- * streaming an async-iterable body with backpressure. It is the only
- * module in this seam that imports `node:http`, so a non-Node embedder
- * substitutes its own backend and the server core stays portable.
- *
- * `node:http` is injected rather than imported at top level so the
- * backend is testable with a fake and so a bundler can tree-shake it
- * out of a browser build.
+ * streaming an async-iterable body with backpressure. Like the rest of
+ * the platform's Node layer (`fs-node/*`, `proc.js`), it imports its
+ * `node:*` built-ins directly; the `node` export condition and the
+ * `-node` directory keep it off non-Node platforms, which substitute
+ * their own backend behind the same {@link HttpBackend} seam.
  */
+
+import { createServer } from 'node:http';
 
 import harden from '@endo/harden';
 import { makeError, q, X } from '@endo/errors';
@@ -60,20 +60,11 @@ const headerPairs = req => {
 };
 
 /**
- * Build a Node HTTP {@link HttpBackend}.
+ * Build a Node HTTP {@link HttpBackend} over `node:http`.
  *
- * @param {object} opts
- * @param {import('node:http')} opts.http  a `node:http`-shaped module
- *   exposing `createServer`.
  * @returns {HttpBackend}
  */
-export const makeNodeHttpBackend = ({ http }) => {
-  if (!http || typeof http.createServer !== 'function') {
-    throw makeError(
-      X`makeNodeHttpBackend requires an http power with createServer`,
-    );
-  }
-
+export const makeNodeHttpBackend = () => {
   return ({ dispatch }) => {
     if (typeof dispatch !== 'function') {
       throw makeError(X`http backend requires a dispatch function`);
@@ -168,7 +159,7 @@ export const makeNodeHttpBackend = ({ http }) => {
       new Promise((resolve, reject) => {
         const host = address.host ?? '127.0.0.1';
         const port = address.port ?? 0;
-        const httpServer = http.createServer(onRequest);
+        const httpServer = createServer(onRequest);
         server = httpServer;
         const onError = /** @param {Error} err */ err => reject(err);
         httpServer.once('error', onError);
