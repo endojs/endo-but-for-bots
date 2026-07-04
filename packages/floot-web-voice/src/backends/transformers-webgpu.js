@@ -576,7 +576,7 @@ const createTTS = async () => {
       // stops pulling (e.g. replay interrupted) so we stop synthesizing audio
       // no one will receive. The hook calls the pump's own cancel (wired via
       // setCancel) so it aborts THIS turn id and marks the pump as aborting.
-      let cancelTurn = (/** @type {string=} */ _reason) => {
+      let cancelTurn = () => {
         // Until the pump wires its cancel, fall back to a bare worker abort.
         host.post({ kind: 'tts-abort', id });
       };
