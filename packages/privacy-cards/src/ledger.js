@@ -154,7 +154,13 @@ export const makeBudgetLedger = ({ restore, persist, now } = {}) => {
       consumed += card.reservedCents - card.refundedCents;
     }
     for (const subName of grant.subGrantNames) {
-      consumed += getGrant(subName).budgetCents;
+      const sub = getGrant(subName);
+      // Normally the escrowed budget bounds a sub-grant's exposure,
+      // but adoption during repair records reality even past the
+      // budget — so charge the parent whichever is larger, or an
+      // overdrawn sub-grant would let the parent under-count real
+      // exposure and issue against headroom that does not exist.
+      consumed += Math.max(sub.budgetCents, consumedCents(sub));
     }
     return consumed;
   };
@@ -201,7 +207,11 @@ export const makeBudgetLedger = ({ restore, persist, now } = {}) => {
      * @param {number} opts.budgetCents
      * @param {string | null} [opts.parentName]
      * @param {string[]} [opts.allowedTypes]
-     * @param {string} [opts.memoPrefix]
+     * @param {string} [opts.memoPrefix] defaults to `[${name}]`; the
+     * bracketed default cannot collide across grants, and any override
+     * must be a non-empty single-line string — repair() attributes
+     * stranded cards by this prefix, so an empty or forgeable prefix
+     * would let cards escape or corrupt budget accounting.
      * @param {{ amountCents: number, periodMs: number }} [opts.renewal]
      */
     createGrant: (
@@ -210,12 +220,17 @@ export const makeBudgetLedger = ({ restore, persist, now } = {}) => {
         budgetCents,
         parentName = null,
         allowedTypes = [],
-        memoPrefix = '',
+        memoPrefix = undefined,
         renewal = undefined,
       },
     ) => {
       assertName(name, 'grant name');
       assertCents(budgetCents, 'budgetCents');
+      if (memoPrefix === undefined) {
+        memoPrefix = `[${name}]`;
+      } else {
+        assertName(memoPrefix, 'memo prefix');
+      }
       if (state.grants[name]) {
         throw makeError(X`Grant ${q(name)} already exists`);
       }

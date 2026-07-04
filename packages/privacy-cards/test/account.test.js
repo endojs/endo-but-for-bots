@@ -10,6 +10,7 @@ import test from 'ava';
 import { makeAccount } from '../src/account.js';
 import { makePrivacyClient } from '../src/client.js';
 import { makeBudgetLedger } from '../src/ledger.js';
+import { nodeFetch } from '../src/node-fetch.js';
 import { makeMockPrivacyApi } from './mock-privacy-api.js';
 
 const API_KEY = 'test-key-do-not-leak';
@@ -36,6 +37,7 @@ const prepareCore = async t => {
   const client = makePrivacyClient({
     apiKey: API_KEY,
     baseUrl: api.baseUrl,
+    fetchFn: nodeFetch,
   });
   const { account, dispose } = makeAccount({
     client,
@@ -93,17 +95,18 @@ test('revocation stops renewal accrual', async t => {
 test('renewal is refused on sub-grants', async t => {
   const { account } = await prepareCore(t);
   const { issuer } = account.makeIssuer('bob', harden({ budgetCents: 1000 }));
-  // The guard on makeSubIssuer does not even admit a renewal option.
-  t.throws(() =>
-    issuer.makeSubIssuer(
-      'sub',
-      /** @type {any} */ (
-        harden({
-          budgetCents: 500,
-          renewal: { amountCents: 100, periodMs: WEEK_MS },
-        })
+  t.throws(
+    () =>
+      issuer.makeSubIssuer(
+        'sub',
+        /** @type {any} */ (
+          harden({
+            budgetCents: 500,
+            renewal: { amountCents: 100, periodMs: WEEK_MS },
+          })
+        ),
       ),
-    ),
+    { message: /only supported on root grants/ },
   );
 });
 
@@ -111,7 +114,11 @@ test('renewal requires a clock authority', async t => {
   const api = await makeMockPrivacyApi({ apiKey: API_KEY });
   t.teardown(() => api.close());
   const ledger = makeBudgetLedger(); // no now hook
-  const client = makePrivacyClient({ apiKey: API_KEY, baseUrl: api.baseUrl });
+  const client = makePrivacyClient({
+    apiKey: API_KEY,
+    baseUrl: api.baseUrl,
+    fetchFn: nodeFetch,
+  });
   const { account, dispose } = makeAccount({ client, ledger });
   t.teardown(dispose);
   t.throws(
@@ -125,6 +132,108 @@ test('renewal requires a clock authority', async t => {
       ),
     { message: /clock authority/ },
   );
+});
+
+test('a sub-grant cannot choose its memo prefix', async t => {
+  const { account } = await prepareCore(t);
+  const { issuer } = account.makeIssuer('agent', harden({ budgetCents: 1000 }));
+  // The prefix is how repair() attributes stranded cards; a delegatee
+  // who could pick one could shed budget accounting (empty prefix) or
+  // pin their stranded cards on a foreign grant.
+  t.throws(
+    () =>
+      issuer.makeSubIssuer(
+        'rogue',
+        /** @type {any} */ (harden({ budgetCents: 500, memoPrefix: '' })),
+      ),
+    { message: /cannot be overridden/ },
+  );
+});
+
+test('close reconciliation walks all transaction pages', async t => {
+  const { api, account } = await prepareCore(t);
+  const { issuer } = account.makeIssuer(
+    'shopper',
+    harden({ budgetCents: 10_000 }),
+  );
+  const card = await issuer.createCard(harden({ spendLimitCents: 6000 }));
+  // Five transactions at the mock's page size of two spread across
+  // three pages; an unwalked page would inflate the refund.
+  for (let i = 0; i < 5; i += 1) {
+    api.addTransaction(card.cardToken, {
+      amount: -1000,
+      result: 'APPROVED',
+      status: 'SETTLED',
+    });
+  }
+  t.is(await issuer.closeCard(card.cardToken), 1000);
+});
+
+test('pause and resume refuse closed cards', async t => {
+  const { account } = await prepareCore(t);
+  const { issuer } = account.makeIssuer(
+    'shopper',
+    harden({ budgetCents: 10_000 }),
+  );
+  const card = await issuer.createCard(harden({ spendLimitCents: 1000 }));
+  await issuer.closeCard(card.cardToken);
+  await t.throwsAsync(() => issuer.pauseCard(card.cardToken), {
+    message: /is closed/,
+  });
+  await t.throwsAsync(() => issuer.resumeCard(card.cardToken), {
+    message: /is closed/,
+  });
+});
+
+test('revoke reports cards it could not pause and still bricks the grant', async t => {
+  const { api, account } = await prepareCore(t);
+  const { issuer, control } = account.makeIssuer(
+    'shopper',
+    harden({ budgetCents: 10_000 }),
+  );
+  const good = await issuer.createCard(harden({ spendLimitCents: 1000 }));
+  const stuck = await issuer.createCard(harden({ spendLimitCents: 1000 }));
+  api.setPatchFailing(stuck.cardToken);
+
+  const { pausedCardTokens, failedCardTokens } = await control.revoke();
+  t.deepEqual(pausedCardTokens, [good.cardToken]);
+  t.deepEqual(failedCardTokens, [stuck.cardToken]);
+  t.is(api.cards.get(good.cardToken).state, 'PAUSED');
+  // The grant is bricked regardless of the API failure.
+  await t.throwsAsync(() => issuer.createCard(harden({ spendLimitCents: 1 })), {
+    message: /has been revoked/,
+  });
+});
+
+test('the spend monitor reports polling errors and recovers', async t => {
+  const { api, account } = await prepareCore(t);
+  const { issuer, control } = account.makeIssuer(
+    'shopper',
+    harden({ budgetCents: 10_000 }),
+  );
+  await issuer.createCard(harden({ spendLimitCents: 1000 }));
+  api.setTransactionsFailing(true);
+  control.startSpendMonitor(harden({ intervalMs: 10 }));
+
+  /** @type {any} */
+  let report = control.readSpendMonitor();
+  const deadline = Date.now() + 5000;
+  while (report.lastError === undefined && Date.now() < deadline) {
+    // eslint-disable-next-line no-await-in-loop
+    await realDelay(10);
+    report = control.readSpendMonitor();
+  }
+  t.regex(String(report.lastError), /transactions/);
+  t.true(report.active);
+
+  api.setTransactionsFailing(false);
+  while (report.lastError !== undefined && Date.now() < deadline) {
+    // eslint-disable-next-line no-await-in-loop
+    await realDelay(10);
+    report = control.readSpendMonitor();
+  }
+  t.is(report.lastError, undefined);
+  control.stopSpendMonitor();
 });
 
 test('the auditor facet observes but cannot mutate', async t => {
@@ -205,7 +314,11 @@ test('revoke stops the grant’s spend monitor', async t => {
 test('spend monitoring without a timer authority is refused', async t => {
   const api = await makeMockPrivacyApi({ apiKey: API_KEY });
   t.teardown(() => api.close());
-  const client = makePrivacyClient({ apiKey: API_KEY, baseUrl: api.baseUrl });
+  const client = makePrivacyClient({
+    apiKey: API_KEY,
+    baseUrl: api.baseUrl,
+    fetchFn: nodeFetch,
+  });
   const { account, dispose } = makeAccount({
     client,
     ledger: makeBudgetLedger(),
@@ -301,10 +414,33 @@ test('repair leaves revoked grants alone', async t => {
   t.deepEqual(report.adoptedCards, []);
 });
 
+test('a resume racing revocation cannot undo it', async t => {
+  const { api, account } = await prepareCore(t);
+  const { issuer, control } = account.makeIssuer(
+    'shopper',
+    harden({ budgetCents: 10_000 }),
+  );
+  const card = await issuer.createCard(harden({ spendLimitCents: 1000 }));
+  await issuer.pauseCard(card.cardToken);
+  // Revocation and the resume contend; the mutex serializes the
+  // resume behind the revocation, so it finds the grant bricked
+  // instead of landing its OPEN after the revocation's PAUSED.
+  const revoked = control.revoke();
+  await t.throwsAsync(() => issuer.resumeCard(card.cardToken), {
+    message: /has been revoked/,
+  });
+  await revoked;
+  t.is(api.cards.get(card.cardToken).state, 'PAUSED');
+});
+
 test('dispose stops all monitors', async t => {
   const api = await makeMockPrivacyApi({ apiKey: API_KEY });
   t.teardown(() => api.close());
-  const client = makePrivacyClient({ apiKey: API_KEY, baseUrl: api.baseUrl });
+  const client = makePrivacyClient({
+    apiKey: API_KEY,
+    baseUrl: api.baseUrl,
+    fetchFn: nodeFetch,
+  });
   const { account, dispose } = makeAccount({
     client,
     ledger: makeBudgetLedger(),

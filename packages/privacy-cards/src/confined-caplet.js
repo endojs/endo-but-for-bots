@@ -40,6 +40,8 @@ import { makeAccount } from './account.js';
 import { makePrivacyProtocol } from './client.js';
 import { makeBudgetLedger } from './ledger.js';
 
+/** @import { PrivacyJsonCaller } from './client.js' */
+
 /**
  * @param {any} powers a PrivacyHttp capability (see module comment)
  * @param {unknown} _context
@@ -51,7 +53,7 @@ export const make = (powers, _context) => {
     );
   }
 
-  /** @type {import('./client.js').PrivacyJsonCaller} */
+  /** @type {PrivacyJsonCaller} */
   const call = async (method, path, body) => {
     const response = await E(powers).fetch(path, {
       method,

@@ -1,4 +1,5 @@
 // @ts-check
+/* global setTimeout */
 
 // Establish a SES perimeter (provides the `harden` global).
 // eslint-disable-next-line import/order
@@ -297,6 +298,65 @@ test('the ledger survives a caplet restart via the state file', async t => {
     () => recovered.createCard(harden({ spendLimitCents: 1 })),
     { message: /exceeds the remaining budget/ },
   );
+});
+
+test('a corrupt state file refuses to start rather than resetting budgets', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'privacy-cards-'));
+  t.teardown(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const stateFile = path.join(directory, 'ledger.json');
+  fs.writeFileSync(stateFile, 'not json at all{');
+  const api = await makeMockPrivacyApi({ apiKey: API_KEY });
+  t.teardown(() => api.close());
+  // Swallowing the parse error here would silently reset every
+  // grant's budget on restart — the exact failure persistence exists
+  // to prevent — so the caplet must refuse to come up instead.
+  t.throws(
+    () =>
+      make(undefined, undefined, {
+        env: {
+          PRIVACY_API_KEY: API_KEY,
+          PRIVACY_API_BASE_URL: api.baseUrl,
+          PRIVACY_STATE_FILE: stateFile,
+        },
+      }),
+    { instanceOf: SyntaxError },
+  );
+});
+
+test('caplet cancellation stops spend monitors', async t => {
+  const api = await makeMockPrivacyApi({ apiKey: API_KEY });
+  t.teardown(() => api.close());
+  /** @type {(reason: Error) => void} */
+  let cancel = () => {};
+  const context = harden({
+    whenCancelled: () =>
+      new Promise((_resolve, reject) => {
+        cancel = reject;
+      }),
+  });
+  const account = make(undefined, context, {
+    env: {
+      PRIVACY_API_KEY: API_KEY,
+      PRIVACY_API_BASE_URL: api.baseUrl,
+    },
+  });
+  const { issuer, control } = account.makeIssuer(
+    'shopper',
+    harden({ budgetCents: 10_000 }),
+  );
+  await issuer.createCard(harden({ spendLimitCents: 1000 }));
+  control.startSpendMonitor(harden({ intervalMs: 10 }));
+  t.true(control.readSpendMonitor().active);
+
+  cancel(new Error('formula cancelled'));
+  const deadline = Date.now() + 5000;
+  while (control.readSpendMonitor().active && Date.now() < deadline) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => {
+      setTimeout(resolve, 10);
+    });
+  }
+  t.false(control.readSpendMonitor().active);
 });
 
 test('no facet method or help text exposes the API key', async t => {

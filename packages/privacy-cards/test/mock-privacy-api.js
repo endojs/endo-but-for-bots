@@ -6,6 +6,17 @@
 
 import http from 'node:http';
 
+/** @import { AddressInfo } from 'node:net' */
+
+/**
+ * @typedef {object} MockCardSpec
+ * @property {string} [memo]
+ * @property {number} [spend_limit]
+ * @property {string} [spend_limit_duration]
+ * @property {string} [state]
+ * @property {string} [type]
+ */
+
 /**
  * @param {object} opts
  * @param {string} opts.apiKey
@@ -15,11 +26,16 @@ export const makeMockPrivacyApi = async ({ apiKey }) => {
   const cards = new Map();
   /** @type {Map<string, any[]>} */
   const transactions = new Map();
+  // Small pages force the client's pagination walk to actually walk.
+  const TRANSACTIONS_PAGE_SIZE = 2;
   let nextCard = 1;
   let failNextCreate = false;
+  let transactionsFailing = false;
+  /** @type {Set<string>} */
+  const failingPatchTokens = new Set();
 
   /**
-   * @param {object} spec Privacy card-creation body shape.
+   * @param {MockCardSpec} spec Privacy card-creation body shape.
    */
   const recordCard = spec => {
     const token = `card-${nextCard}`;
@@ -31,11 +47,11 @@ export const makeMockPrivacyApi = async ({ apiKey }) => {
       exp_month: '06',
       exp_year: '2030',
       last_four: String(4000 + nextCard),
-      memo: /** @type {any} */ (spec).memo || '',
-      spend_limit: /** @type {any} */ (spec).spend_limit,
-      spend_limit_duration: /** @type {any} */ (spec).spend_limit_duration,
-      state: /** @type {any} */ (spec).state || 'OPEN',
-      type: /** @type {any} */ (spec).type,
+      memo: spec.memo || '',
+      spend_limit: spec.spend_limit,
+      spend_limit_duration: spec.spend_limit_duration,
+      state: spec.state || 'OPEN',
+      type: spec.type,
     };
     cards.set(token, card);
     return card;
@@ -100,14 +116,31 @@ export const makeMockPrivacyApi = async ({ apiKey }) => {
           reply(404, { message: 'card not found' });
           return;
         }
+        if (failingPatchTokens.has(token)) {
+          reply(500, { message: 'card update failed' });
+          return;
+        }
         Object.assign(card, JSON.parse(requestBody));
         reply(200, card);
       } else if (request.method === 'GET' && pathname === '/v1/transactions') {
+        if (transactionsFailing) {
+          reply(500, { message: 'transactions unavailable' });
+          return;
+        }
         const token = url.searchParams.get('card_token');
+        const page = Number(url.searchParams.get('page')) || 1;
+        const all = transactions.get(token || '') || [];
+        const totalPages = Math.max(
+          1,
+          Math.ceil(all.length / TRANSACTIONS_PAGE_SIZE),
+        );
         reply(200, {
-          data: transactions.get(token || '') || [],
-          page: 1,
-          total_pages: 1,
+          data: all.slice(
+            (page - 1) * TRANSACTIONS_PAGE_SIZE,
+            page * TRANSACTIONS_PAGE_SIZE,
+          ),
+          page,
+          total_pages: totalPages,
         });
       } else {
         reply(404, { message: 'no such endpoint' });
@@ -118,7 +151,7 @@ export const makeMockPrivacyApi = async ({ apiKey }) => {
   await new Promise(resolve => {
     server.listen(0, '127.0.0.1', () => resolve(undefined));
   });
-  const address = /** @type {import('net').AddressInfo} */ (server.address());
+  const address = /** @type {AddressInfo} */ (server.address());
 
   return harden({
     baseUrl: `http://127.0.0.1:${address.port}/v1`,
@@ -142,6 +175,29 @@ export const makeMockPrivacyApi = async ({ apiKey }) => {
     },
     failNextCreate: () => {
       failNextCreate = true;
+    },
+    /**
+     * Makes PATCHes to one card fail until cleared, for exercising
+     * partial-failure paths like revoke's failedCardTokens.
+     *
+     * @param {string} cardToken
+     * @param {boolean} [failing]
+     */
+    setPatchFailing: (cardToken, failing = true) => {
+      if (failing) {
+        failingPatchTokens.add(cardToken);
+      } else {
+        failingPatchTokens.delete(cardToken);
+      }
+    },
+    /**
+     * Makes GET /transactions fail until cleared, for exercising the
+     * spend monitor's lastError path.
+     *
+     * @param {boolean} failing
+     */
+    setTransactionsFailing: failing => {
+      transactionsFailing = failing;
     },
     close: () =>
       new Promise(resolve => {

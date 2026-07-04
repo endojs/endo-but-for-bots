@@ -265,12 +265,43 @@ test('adoptCard records exposure without a budget check', t => {
   t.is(ledger.closeCard('bob', 'card-x', 5000), 0);
 });
 
+test('an overdrawn sub-grant charges the parent its real exposure', t => {
+  const ledger = makeBudgetLedger();
+  ledger.createGrant('bob', { budgetCents: 100_000 });
+  ledger.createGrant('bob/helper', { budgetCents: 10_000, parentName: 'bob' });
+  t.is(ledger.remainingCents('bob'), 90_000);
+  // Repair adopts a stranded card past the helper's own budget: the
+  // helper is overdrawn, and the parent must count the real exposure,
+  // not just the 10k escrow.
+  ledger.adoptCard('bob/helper', 'card-x', 30_000);
+  t.is(ledger.remainingCents('bob/helper'), -20_000);
+  t.is(ledger.remainingCents('bob'), 70_000);
+  // Closing the adopted card at full spend keeps it accounted.
+  t.is(ledger.closeCard('bob/helper', 'card-x', 30_000), 0);
+  t.is(ledger.remainingCents('bob'), 70_000);
+});
+
 test('pendingIds lists stranded reservations', t => {
   const ledger = makeBudgetLedger();
   ledger.createGrant('bob', { budgetCents: 1000 });
   t.deepEqual(ledger.pendingIds('bob'), []);
   const pendingId = ledger.reservePending('bob', 500);
   t.deepEqual(ledger.pendingIds('bob'), [pendingId]);
+});
+
+test('memo prefixes default bracketed and reject unsafe overrides', t => {
+  const ledger = makeBudgetLedger();
+  ledger.createGrant('bob', { budgetCents: 1 });
+  t.is(ledger.grantInfo('bob').memoPrefix, '[bob]');
+  // Repair attributes stranded cards by prefix, so empty or multiline
+  // prefixes must be rejected at the ledger boundary.
+  t.throws(() => ledger.createGrant('e1', { budgetCents: 1, memoPrefix: '' }), {
+    message: /non-empty single-line/,
+  });
+  t.throws(
+    () => ledger.createGrant('e2', { budgetCents: 1, memoPrefix: 'a\nb' }),
+    { message: /non-empty single-line/ },
+  );
 });
 
 test('grant names must be unique and well-formed', t => {

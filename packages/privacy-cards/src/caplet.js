@@ -29,6 +29,7 @@ import path from 'node:path';
 import { makeAccount } from './account.js';
 import { PRODUCTION_BASE_URL, makePrivacyClient } from './client.js';
 import { makeBudgetLedger } from './ledger.js';
+import { nodeFetch } from './node-fetch.js';
 
 /**
  * Atomic-ish JSON persistence: write to a temp file, then rename.
@@ -78,7 +79,10 @@ export const make = (_powers, context, { env = {} } = {}) => {
   const baseUrl = env.PRIVACY_API_BASE_URL || PRODUCTION_BASE_URL;
   const stateFile = env.PRIVACY_STATE_FILE;
 
-  const client = makePrivacyClient({ apiKey, baseUrl });
+  // Plain node:http instead of the global fetch: Node 24's undici
+  // misbehaves under SES lockdown (see node-fetch.js), and this shell
+  // is Node-only by definition.
+  const client = makePrivacyClient({ apiKey, baseUrl, fetchFn: nodeFetch });
   const ledger = makeBudgetLedger({
     ...(stateFile ? makeFileHooks(stateFile) : {}),
     now: () => Date.now(),

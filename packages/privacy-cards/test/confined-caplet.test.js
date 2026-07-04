@@ -1,5 +1,4 @@
 // @ts-check
-/* global fetch */
 
 // Establish a SES perimeter (provides the `harden` global).
 // eslint-disable-next-line import/order
@@ -11,6 +10,7 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
 import { make } from '../src/confined-caplet.js';
+import { nodeFetch } from '../src/node-fetch.js';
 import { makeMockPrivacyApi } from './mock-privacy-api.js';
 
 const API_KEY = 'test-key-do-not-leak';
@@ -35,7 +35,7 @@ const makePrivacyHttpPower = baseUrl => {
        *   body?: string }} [options]
        */
       fetch: async (path, { method = 'GET', headers = {}, body } = {}) => {
-        const response = await fetch(`${base}${path}`, {
+        const response = await nodeFetch(`${base}${path}`, {
           method,
           headers: {
             ...headers,

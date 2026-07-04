@@ -189,8 +189,9 @@ testNeedsNodeWorker(
     );
 
     // Interface guards hold at the CapTP boundary.
-    await t.throwsAsync(() =>
-      E(issuer).createCard(harden({ spendLimitCents: 'lots' })),
+    await t.throwsAsync(
+      () => E(issuer).createCard(harden({ spendLimitCents: 'lots' })),
+      { message: /Must be a number/ },
     );
     // CapTP introspection sees the guarded methods, none of which can
     // yield the key.

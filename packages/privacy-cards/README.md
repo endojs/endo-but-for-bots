@@ -17,10 +17,12 @@ notes.
 
 ```sh
 endo make --UNCONFINED packages/privacy-cards/src/caplet.js \
-  --name privacy-account --powers @none
+  --name privacy-account --powers @none \
+  -E PRIVACY_API_KEY="$PRIVACY_API_KEY" \
+  -E PRIVACY_STATE_FILE="$HOME/.local/state/endo/privacy-ledger.json"
 ```
 
-with the following in the formula `env`:
+The `-E`/`--env` flags populate the formula `env`:
 
 - `PRIVACY_API_KEY` (required) — the account API key.
   It stays inside the caplet; no facet method returns it.

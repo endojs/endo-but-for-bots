@@ -41,13 +41,17 @@ const GrantOptionsShape = harden({
   budgetCents: M.number(),
 });
 
+// Sub-grants may narrow card types but NOT choose their memo prefix:
+// repair() attributes stranded cards by prefix, so a delegatee who
+// could pick one could shed budget accounting (empty prefix) or
+// misattribute their stranded cards to a foreign grant.
 const SubGrantOptionalsShape = harden({
   allowedTypes: M.arrayOf(CardTypeShape),
-  memoPrefix: M.string(),
 });
 
 const GrantOptionalsShape = harden({
   ...SubGrantOptionalsShape,
+  memoPrefix: M.string(),
   renewal: harden({ amountCents: M.number(), periodMs: M.number() }),
 });
 
@@ -208,17 +212,23 @@ export const makeAccount = ({ client, ledger, delay }) => {
     const info = () => ledger.grantInfo(grantName);
 
     /**
+     * Serialized through the mutex so a pause or resume cannot
+     * interleave with revoke() or closeCard(): an unserialized resume
+     * checked before a revocation could land its OPEN after the
+     * revocation's PAUSED, quietly undoing it.
+     *
      * @param {string} cardToken
      * @param {'OPEN' | 'PAUSED'} state
      */
-    const setOwnCardState = async (cardToken, state) => {
-      ledger.assertActive(grantName);
-      const card = ledger.getOwnCard(grantName, cardToken);
-      if (card.closed) {
-        throw makeError(X`Card ${q(cardToken)} is closed`);
-      }
-      await client.updateCard(cardToken, { state });
-    };
+    const setOwnCardState = (cardToken, state) =>
+      mutate(async () => {
+        ledger.assertActive(grantName);
+        const card = ledger.getOwnCard(grantName, cardToken);
+        if (card.closed) {
+          throw makeError(X`Card ${q(cardToken)} is closed`);
+        }
+        await client.updateCard(cardToken, { state });
+      });
 
     const audit = () => info();
 
@@ -322,8 +332,16 @@ export const makeAccount = ({ client, ledger, delay }) => {
             X`Renewal schedules are only supported on root grants`,
           );
         }
+        if ('memoPrefix' in options) {
+          // The prefix is how repair() attributes stranded cards; a
+          // delegatee who could choose it could shed their cards from
+          // budget accounting or pin them on a foreign grant.
+          throw makeError(
+            X`A sub-grant's memo prefix is fixed to its grant name and cannot be overridden`,
+          );
+        }
         const { allowedTypes: parentTypes } = info();
-        const { budgetCents, allowedTypes = parentTypes, memoPrefix } = options;
+        const { budgetCents, allowedTypes = parentTypes } = options;
         for (const type of allowedTypes) {
           if (!parentTypes.includes(type)) {
             throw makeError(
@@ -338,7 +356,6 @@ export const makeAccount = ({ client, ledger, delay }) => {
           budgetCents,
           parentName: grantName,
           allowedTypes,
-          memoPrefix: memoPrefix === undefined ? `[${fullName}]` : memoPrefix,
         });
         // eslint-disable-next-line no-use-before-define
         return provideIssuerKit(fullName);
@@ -382,9 +399,12 @@ export const makeAccount = ({ client, ledger, delay }) => {
             X`Spend monitoring requires a timer authority; none was granted to this account`,
           );
         }
-        assertCents(intervalMs, 'intervalMs');
-        if (intervalMs === 0) {
-          throw makeError(X`intervalMs must be positive`);
+        if (!Number.isSafeInteger(intervalMs) || intervalMs <= 0) {
+          throw makeError(
+            X`intervalMs must be a positive safe integer of milliseconds, got ${q(
+              intervalMs,
+            )}`,
+          );
         }
         ledger.assertActive(grantName);
         stopMonitor(grantName);

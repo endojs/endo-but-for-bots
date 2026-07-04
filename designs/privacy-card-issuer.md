@@ -92,12 +92,12 @@ Facts the design leans on (from
 - **Auth**: `Authorization: api-key <key>` header on every request.
   Production base `https://api.privacy.com/v1`; a full-featured
   sandbox lives at `https://sandbox.privacy.com/v1`.
-- **`POST /card`** creates a card with `type` (`SINGLE_USE`,
+- **`POST /cards`** creates a card with `type` (`SINGLE_USE`,
   `MERCHANT_LOCKED`, `UNLOCKED`, `DIGITAL_WALLET`), `spend_limit`
   (integer cents), `spend_limit_duration`, `memo`, and `state`.
   The response is a `FullCard` including `pan` and `cvv`.
   `UNLOCKED` and `DIGITAL_WALLET` require extra account privileges.
-- **`PATCH /card/{card_token}`** updates `state` (`OPEN`, `PAUSED`,
+- **`PATCH /cards/{card_token}`** updates `state` (`OPEN`, `PAUSED`,
   `CLOSED` — closing is irreversible) and `spend_limit`.
 - **`GET /transactions`** lists transactions, filterable by
   `card_token`, with `result` (`APPROVED` or a decline reason),
@@ -274,7 +274,7 @@ interface PrivacyAccount {
   listGrants(): GrantSummary[];
   repair(): Promise<RepairReport>;     // adopt stranded cards, clear pendings
   listFundingSources(): Promise<unknown[]>;
-  status(): Promise<boolean>;          // GET /status reachability probe
+  status(): Promise<true>;             // GET /status; throws when unreachable
   help(): string;
 }
 
@@ -422,6 +422,14 @@ only), exactly like existing caplet secrets
   checked against the grant's own ledger entry before any API call —
   a guessed or leaked foreign token is rejected without touching the
   network.
+- **Memo-prefix forgery**: `repair()` attributes stranded cards by
+  memo prefix, so the prefix is security-relevant.
+  Sub-grants therefore cannot choose theirs (fixed to
+  `[parent/subName]`), and the ledger rejects empty or multiline
+  prefixes outright; the bracketed defaults cannot collide.
+  An owner who sets custom overlapping root prefixes (e.g. `[a]` and
+  `[a] x`) can still confuse attribution among their *own* grants —
+  both ends of that mistake sit in the owner's trust domain.
 - **Type escalation**: `allowedTypes` defaults deny `UNLOCKED`
   (any-merchant) and `DIGITAL_WALLET`; a grant must opt in, and the
   account key must separately have the Privacy.com privilege.
@@ -511,6 +519,9 @@ only), exactly like existing caplet secrets
    name, making grants legible in the Privacy.com dashboard and
    enabling stranding repair, at the cost of leaking grant names to
    Privacy.com (acceptable: the owner names the grants).
+   Because repair keys on the prefix, it is not delegatee-choosable:
+   sub-grant prefixes are fixed, and the ledger validates overrides
+   (see Threat Notes).
 8. **Carryover accrual over resetting budgets** — renewal credits
    accumulate rather than expire, because a reset must decide what
    happens to escrow spanning the period boundary; accrual is lazy

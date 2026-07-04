@@ -9,12 +9,28 @@
 import { makeError, q, X } from '@endo/errors';
 
 /**
+ * The subset of the fetch contract the client relies on. The global
+ * `fetch` satisfies it structurally; the unconfined caplet injects a
+ * plain node:http implementation instead (see node-fetch.js).
+ *
+ * @typedef {(url: string, init?: {
+ *   method?: string,
+ *   headers?: Record<string, string>,
+ *   body?: string,
+ * }) => Promise<{
+ *   ok: boolean,
+ *   status: number,
+ *   json(): Promise<any>,
+ * }>} FetchLike
+ */
+
+/**
  * @typedef {object} PrivacyClientOptions
  * @property {string} apiKey Privacy.com API key (secret).
  * @property {string} [baseUrl] API base, default production
  * `https://api.privacy.com/v1`; use `https://sandbox.privacy.com/v1`
  * for the sandbox, or a local mock in tests.
- * @property {typeof fetch} [fetchFn] Injectable for tests.
+ * @property {FetchLike} [fetchFn] Injectable transport.
  */
 
 /**
