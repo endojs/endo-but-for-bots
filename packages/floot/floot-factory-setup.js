@@ -60,8 +60,10 @@ export const main = async agent => {
   // moved that pet-name away, creating a DUPLICATE factory host and orphaning the
   // real sessions. Bail out early if the controller already exists. This also lets
   // restarts skip the ANTHROPIC_API_KEY requirement below (the key is stored in
-  // daemon state at first provision).
-  if (await E(agent).has(dir, 'controller')) {
+  // daemon state at first provision). Guard the directory existence first: `has`
+  // with a path THROWS ("Unknown pet name") when the `floot/` dir is absent (the
+  // first-run case), rather than returning false.
+  if ((await E(agent).has(dir)) && (await E(agent).has(dir, 'controller'))) {
     console.log(
       `Floot factory already provisioned at "${dir}/controller" — skipping.`,
     );
