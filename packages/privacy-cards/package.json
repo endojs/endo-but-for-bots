@@ -1,0 +1,58 @@
+{
+  "name": "@endo/privacy-cards",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Privacy.com virtual cards as an Endo daemon caplet: budgeted, revocable card-issuer facets that never reveal the API key",
+  "keywords": [],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/privacy-cards"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/caplet.js",
+    "./caplet.js": "./src/caplet.js",
+    "./src/client.js": "./src/client.js",
+    "./src/ledger.js": "./src/ledger.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "test": "ava",
+    "test:c8": "c8 ${C8_OPTIONS:-} ava",
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "yarn lint:eslint --fix",
+    "lint:eslint": "eslint '**/*.js'",
+    "lint:types": "tsc"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.*"
+    ],
+    "timeout": "2m"
+  },
+  "dependencies": {
+    "@endo/errors": "workspace:^",
+    "@endo/exo": "workspace:^",
+    "@endo/patterns": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/eventual-send": "workspace:^",
+    "@endo/init": "workspace:^",
+    "ava": "catalog:dev",
+    "c8": "catalog:dev",
+    "eslint": "catalog:dev",
+    "typescript": "catalog:dev"
+  },
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/internal"
+    ]
+  }
+}
