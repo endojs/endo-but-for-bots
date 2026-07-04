@@ -87,7 +87,11 @@ export const float32ToPcmBase64 = samples => {
   const view = new DataView(bytes.buffer);
   for (let i = 0; i < n; i += 1) {
     const clamped = Math.max(-1, Math.min(1, samples[i]));
-    view.setInt16(i * 2, clamped < 0 ? clamped * 32_768 : clamped * 32_767, true);
+    view.setInt16(
+      i * 2,
+      clamped < 0 ? clamped * 32_768 : clamped * 32_767,
+      true,
+    );
   }
   // btoa over a binary string built in chunks to avoid blowing the call stack on
   // long utterances (a 24 kHz sentence is tens of thousands of samples).
@@ -354,7 +358,8 @@ const pumpStt = async (host, audioReader, writer, setOnClose) => {
   // Resolve a single transcription pass through the worker.
   const transcribePass = (final = false) =>
     new Promise(resolve => {
-      const mySeq = (seq += 1);
+      seq += 1;
+      const mySeq = seq;
       const off = host.onTurn(id, msg => {
         if (msg.seq !== undefined && msg.seq !== mySeq) return;
         if (msg.kind === 'stt-partial') {
@@ -499,7 +504,8 @@ const pumpTts = async (host, id, textReader, writer, isClosed, setCancel) => {
   // Synthesize one sentence via the worker and emit its audio bytes.
   const synthOne = sentence =>
     new Promise((resolve, reject) => {
-      const mySeq = (seq += 1);
+      seq += 1;
+      const mySeq = seq;
       const off = host.onTurn(id, msg => {
         if (msg.seq !== mySeq) return;
         if (msg.kind === 'tts-audio') {
@@ -578,16 +584,9 @@ const createTTS = async () => {
         cancelTurn(),
       );
       // pumpTts settles the writer on every path; guard the floating promise.
-      pumpTts(
-        host,
-        id,
-        textReader,
-        writer,
-        isClosed,
-        cancel => {
-          cancelTurn = cancel;
-        },
-      ).catch(() => {});
+      pumpTts(host, id, textReader, writer, isClosed, cancel => {
+        cancelTurn = cancel;
+      }).catch(() => {});
       return reader;
     },
     help: () =>

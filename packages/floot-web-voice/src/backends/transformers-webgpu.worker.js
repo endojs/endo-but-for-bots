@@ -165,12 +165,10 @@ const synthSentence = async text => {
 // ── Message dispatch ─────────────────────────────────────────────────────────
 
 const post = (msg, transfer) => {
-  // @ts-expect-error — DedicatedWorkerGlobalScope.postMessage in a worker.
-  self.postMessage(msg, transfer || []);
+  globalThis.postMessage(msg, transfer || []);
 };
 
-// @ts-expect-error — `self` is the worker global; `onmessage` is the entry.
-self.onmessage = async event => {
+globalThis.onmessage = async event => {
   const data = event?.data;
   if (!data || typeof data !== 'object') return;
   const { kind, id } = data;
@@ -251,11 +249,11 @@ self.onmessage = async event => {
 
     case 'tts-abort': {
       ttsAborted.add(id);
-      return;
+      break;
     }
 
     default:
-      // Unknown message kind — ignore (forward-compat with the main thread).
+    // Unknown message kind — ignore (forward-compat with the main thread).
   }
 };
 

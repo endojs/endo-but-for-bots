@@ -203,7 +203,8 @@ const decodeTokens = (ids, tokenizer) => {
   }
   let text = '';
   for (const id of ids) {
-    if (id === MOONSHINE_BOS_TOKEN_ID || id === MOONSHINE_EOS_TOKEN_ID) continue; // eslint-disable-line no-continue
+    if (id === MOONSHINE_BOS_TOKEN_ID || id === MOONSHINE_EOS_TOKEN_ID)
+      continue; // eslint-disable-line no-continue
     const tok = idToTok.get(id);
     if (tok === undefined) continue; // eslint-disable-line no-continue
     text += tok;
@@ -251,7 +252,8 @@ const runMoonshine = async (samples, isAborted) => {
   const maxTokens = Math.max(
     8,
     Math.ceil(
-      (samples.length / MOONSHINE_SAMPLE_RATE) * MOONSHINE_MAX_TOKENS_PER_SECOND,
+      (samples.length / MOONSHINE_SAMPLE_RATE) *
+        MOONSHINE_MAX_TOKENS_PER_SECOND,
     ),
   );
 
@@ -288,11 +290,10 @@ const runMoonshine = async (samples, isAborted) => {
       : generated.slice();
     /** @type {Record<string, any>} */
     const feeds = {
-      input_ids: new Tensor(
-        'int64',
-        BigInt64Array.from(inputIds.map(BigInt)),
-        [1, inputIds.length],
-      ),
+      input_ids: new Tensor('int64', BigInt64Array.from(inputIds.map(BigInt)), [
+        1,
+        inputIds.length,
+      ]),
       encoder_hidden_states: encoderHiddenStates,
       ...past,
     };
@@ -307,10 +308,10 @@ const runMoonshine = async (samples, isAborted) => {
     // eslint-disable-next-line no-await-in-loop
     const out = await decoder.run(feeds);
     const logits = out.logits;
-    const vocabSize = logits.dims[logits.dims.length - 1];
-    const data = logits.data;
+    const vocabSize = Number(logits.dims[logits.dims.length - 1]);
+    const data = /** @type {Float32Array} */ (logits.data);
     // argmax over the last position's logits row.
-    const offset = (logits.dims[1] - 1) * vocabSize;
+    const offset = (Number(logits.dims[1]) - 1) * vocabSize;
     let best = 0;
     let bestVal = -Infinity;
     for (let v = 0; v < vocabSize; v += 1) {
@@ -353,7 +354,9 @@ const loadTts = async cfg => {
   ]);
   const sampleRate = config?.audio?.sample_rate;
   if (typeof sampleRate !== 'number' || sampleRate <= 0) {
-    throw new Error(`piper voice config ${voiceUrl}.json missing audio.sample_rate`);
+    throw new Error(
+      `piper voice config ${voiceUrl}.json missing audio.sample_rate`,
+    );
   }
   const session = await makeSession(modelBytes);
   ttsPipeline = { session, config, sampleRate };
@@ -393,8 +396,10 @@ const runPiper = async sentence => {
 
   // 3) scales from the voice config (with Piper's documented defaults).
   const inf = config?.inference || {};
-  const noiseScale = typeof inf.noise_scale === 'number' ? inf.noise_scale : 0.667;
-  const lengthScale = typeof inf.length_scale === 'number' ? inf.length_scale : 1.0;
+  const noiseScale =
+    typeof inf.noise_scale === 'number' ? inf.noise_scale : 0.667;
+  const lengthScale =
+    typeof inf.length_scale === 'number' ? inf.length_scale : 1.0;
   const noiseW = typeof inf.noise_w === 'number' ? inf.noise_w : 0.8;
 
   const feeds = {
@@ -402,10 +407,16 @@ const runPiper = async sentence => {
       1,
       ids.length,
     ]),
-    input_lengths: new Tensor('int64', BigInt64Array.from([BigInt(ids.length)]), [
-      1,
-    ]),
-    scales: new Tensor('float32', Float32Array.from([noiseScale, lengthScale, noiseW]), [3]),
+    input_lengths: new Tensor(
+      'int64',
+      BigInt64Array.from([BigInt(ids.length)]),
+      [1],
+    ),
+    scales: new Tensor(
+      'float32',
+      Float32Array.from([noiseScale, lengthScale, noiseW]),
+      [3],
+    ),
   };
   const out = await session.run(feeds);
   // Single float output: [1, 1, T] or [1, T]. Flatten to mono Float32.

@@ -46,11 +46,11 @@ test('pcmBase64ToFloat round-trips floatToPcm16 within s16 quantization', t => {
 
 test('bytesToBase64 handles large buffers without stack overflow', t => {
   const big = new Uint8Array(200_000);
-  for (let i = 0; i < big.length; i += 1) big[i] = i & 0xff;
+  for (let i = 0; i < big.length; i += 1) big[i] = i % 256;
   const b64 = bytesToBase64(big);
   // Decode back via the PCM helper's atob path to confirm fidelity.
   const decoded = pcmBase64ToFloat(b64);
-  t.is(decoded.length, big.length >> 1);
+  t.is(decoded.length, Math.floor(big.length / 2));
 });
 
 test('makeChunker emits complete sentences and holds the tail', t => {

@@ -87,7 +87,7 @@ export const pcmBase64ToFloat = b64 => {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
-  const frames = bytes.length >> 1;
+  const frames = Math.floor(bytes.length / 2);
   const view = new DataView(bytes.buffer, bytes.byteOffset, frames * 2);
   const out = new Float32Array(frames);
   for (let i = 0; i < frames; i += 1) {
