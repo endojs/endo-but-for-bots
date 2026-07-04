@@ -1,14 +1,21 @@
 # @endo/endo-fs-asset-server
 
-Serve an [`@endo/endo-fs`](../endo-fs) `Filesystem` cap over HTTP from a
-static asset server.
+Serve an [`@endo/platform/fs/extended`](../platform) `Filesystem` cap
+over HTTP from a static asset server.
+
+The server is built on the platform-agnostic HTTP server interface
+[`@endo/platform/http/server`](../platform/src/http/server.js): this
+package owns only the request *handler* (a pure `(request) => response`
+function), while all socket I/O and response streaming live behind an
+injected `backend`. The Node backend is
+[`@endo/platform/http/node`](../platform/src/http-node/server.js)
+(`makeNodeHttpBackend({ http })`); a non-Node embedder supplies its own
+and the same handler runs unchanged.
 
 The server is instantiated as an **unconfined formula** so it can hold a
-real `node:http` listening socket.
-Its formula value is an `AssetServer` exo.
-Each `serve(filesystem)` call mints a fresh, unguessable **capability
-path**, registers the Filesystem under it, and returns
-`{ path, url, revoke }`.
+real listening socket. Its formula value is an `AssetServer` exo. Each
+`serve(filesystem)` call mints a fresh, unguessable **capability path**,
+registers the Filesystem under it, and returns `{ path, url, revoke }`.
 The mount serves **persistently until revoked** — the path keeps
 resolving across any number of requests until you call `revoke.revoke()`
 (or the server stops).
@@ -51,7 +58,8 @@ through `makeUnconfined`'s per-formula `env`:
 
 ```sh
 # 1. Mount a host directory as a read-only Filesystem cap.
-endo make --UNCONFINED packages/endo-fs/src/node-fs-module.js \
+endo make --UNCONFINED \
+  packages/platform/src/fs/extended/node-fs-module.js \
   --name site-fs --workerName @node \
   --env ENDO_FS_ROOT=/path/to/site --env ENDO_FS_READ_ONLY=1
 
@@ -66,15 +74,17 @@ endo make --UNCONFINED \
 
 ## Embedding the library directly
 
-`makeAssetServer` takes its `node:http` and randomness as injected
-powers, so it can be unit-tested with fakes and reused outside a daemon:
+`makeAssetServer` takes a platform HTTP `backend` and randomness as
+injected powers, so it can be unit-tested with fakes and reused outside a
+daemon:
 
 ```js
 import http from 'node:http';
+import { makeNodeHttpBackend } from '@endo/platform/http/node';
 import { makeAssetServer } from '@endo/endo-fs-asset-server';
 
 const server = await makeAssetServer({
-  http,
+  backend: makeNodeHttpBackend({ http }),
   getRandomValues: bytes => globalThis.crypto.getRandomValues(bytes),
   port: 0,
 });
@@ -106,7 +116,7 @@ const server = await makeAssetServer({
   would transit the network in the clear — only expose a non-loopback
   bind behind TLS-terminating infrastructure, and set
   `ENDO_FS_ASSET_SERVER_PUBLIC_BASE` to the public `https://` origin.
-- Wrap the Filesystem with `@endo/endo-fs`'s `readOnly` attenuator (or
+- Wrap the Filesystem with `@endo/platform/fs/extended`'s `readOnly` attenuator (or
   mount it with `ENDO_FS_READ_ONLY=1`) so the server cannot be tricked
   into mutating the backing store. A read-only mount also avoids the
   `Content-Length`-vs-body race that a file mutated between stat and

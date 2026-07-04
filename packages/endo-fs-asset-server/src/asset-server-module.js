@@ -33,7 +33,8 @@
  * End-to-end recipe:
  *
  *   # 1. Mount a host directory as a Filesystem cap.
- *   endo make --UNCONFINED packages/endo-fs/src/node-fs-module.js \
+ *   endo make --UNCONFINED \
+ *     packages/platform/src/fs/extended/node-fs-module.js \
  *     --name site-fs --workerName \@node \
  *     --env ENDO_FS_ROOT=/path/to/site --env ENDO_FS_READ_ONLY=1
  *
@@ -49,6 +50,8 @@
  */
 
 import http from 'node:http';
+
+import { makeNodeHttpBackend } from '@endo/platform/http/node';
 
 import { makeAssetServer } from './asset-server.js';
 
@@ -79,6 +82,9 @@ export const make = async (_powers, _context, opts = {}) => {
 
   const getRandomValues = bytes => globalThis.crypto.getRandomValues(bytes);
 
-  return makeAssetServer({ http, getRandomValues, port, host, publicBase });
+  // Wire the platform-agnostic asset server onto the Node HTTP backend.
+  const backend = makeNodeHttpBackend({ http });
+
+  return makeAssetServer({ backend, getRandomValues, port, host, publicBase });
 };
 harden(make);
