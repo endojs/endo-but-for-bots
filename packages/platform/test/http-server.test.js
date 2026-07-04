@@ -15,11 +15,11 @@ import test from 'ava';
 import { E } from '@endo/far';
 
 import { makeHttpServer } from '../src/http/server.js';
-import { makeNodeHttpBackend } from '../src/http-node/server.js';
+import { makeNodeHttpBackend } from '../src/http-node/index.js';
 
 const utf8 = s => new TextEncoder().encode(s);
 
-const backend = makeNodeHttpBackend({ http });
+const backend = makeNodeHttpBackend();
 
 // node:http GET client with keep-alive disabled, so closing the server in
 // teardown does not strand pooled sockets (see endo-fs-asset-server tests).
