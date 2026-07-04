@@ -1629,6 +1629,7 @@ __metadata:
     "@endo/ses-ava": "workspace:^"
     "@endo/space-channel": "workspace:^"
     "@endo/space-chat": "workspace:^"
+    "@endo/space-endo-mgmt": "workspace:^"
     "@endo/space-file-explorer": "workspace:^"
     "@endo/space-floot": "workspace:^"
     "@endo/space-inventory-graph": "workspace:^"
@@ -1895,6 +1896,22 @@ __metadata:
     "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/stream": "workspace:^"
+    eslint: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/endo-fs-asset-server@workspace:packages/endo-fs-asset-server":
+  version: 0.0.0-use.local
+  resolution: "@endo/endo-fs-asset-server@workspace:packages/endo-fs-asset-server"
+  dependencies:
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/platform": "workspace:^"
+    ava: "catalog:dev"
     eslint: "catalog:dev"
   languageName: unknown
   linkType: soft
@@ -3137,6 +3154,19 @@ __metadata:
     "@endo/far": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/spaces-util": "workspace:^"
+    eslint: "catalog:dev"
+    preact: "npm:^10.29.2"
+  languageName: unknown
+  linkType: soft
+
+"@endo/space-endo-mgmt@workspace:^, @endo/space-endo-mgmt@workspace:packages/space-endo-mgmt":
+  version: 0.0.0-use.local
+  resolution: "@endo/space-endo-mgmt@workspace:packages/space-endo-mgmt"
+  dependencies:
+    "@endo/exo": "workspace:^"
+    "@endo/far": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/patterns": "workspace:^"
     eslint: "catalog:dev"
     preact: "npm:^10.29.2"
   languageName: unknown

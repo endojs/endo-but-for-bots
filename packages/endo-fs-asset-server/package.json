@@ -1,0 +1,57 @@
+{
+  "name": "@endo/endo-fs-asset-server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Serve an @endo/endo-fs Filesystem cap over HTTP from a static asset server. Each `serve(filesystem)` call mounts the filesystem under a freshly generated, unguessable capability path and returns a revoker; the mount persists until revoked. The server is instantiated as an unconfined formula.",
+  "keywords": [],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/endo-fs-asset-server"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./src/asset-server.js": "./src/asset-server.js",
+    "./src/asset-server-module.js": "./src/asset-server-module.js",
+    "./src/type-guards.js": "./src/type-guards.js",
+    "./src/mime.js": "./src/mime.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "test": "ava --serial",
+    "lint": "yarn lint:eslint",
+    "lint-fix": "yarn lint:eslint --fix",
+    "lint:eslint": "eslint '**/*.js'"
+  },
+  "dependencies": {
+    "@endo/errors": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
+    "@endo/exo": "workspace:^",
+    "@endo/exo-stream": "workspace:^",
+    "@endo/init": "workspace:^",
+    "@endo/patterns": "workspace:^",
+    "@endo/platform": "workspace:^"
+  },
+  "devDependencies": {
+    "ava": "catalog:dev",
+    "eslint": "catalog:dev"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.js"
+    ],
+    "timeout": "120s"
+  },
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/internal"
+    ]
+  }
+}

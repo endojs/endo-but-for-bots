@@ -55,6 +55,10 @@
       "types": "./src/fs/extended/backend-types-index.d.ts"
     },
     "./fs/extended/*": "./src/fs/extended/*",
+    "./http/server": "./src/http/server.js",
+    "./http/node": {
+      "node": "./src/http-node/server.js"
+    },
     "./proc": "./src/proc.js",
     "./exo-fs": "./src/exo-fs.js",
     "./package.json": "./package.json"
