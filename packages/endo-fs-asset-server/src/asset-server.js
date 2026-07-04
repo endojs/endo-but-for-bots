@@ -1,10 +1,13 @@
 // @ts-check
 /* global btoa */
 /**
- * A static asset server for `@endo/endo-fs` `Filesystem` caps.
+ * A static asset server for `@endo/platform/fs/extended` `Filesystem`
+ * caps, built on the platform-agnostic HTTP server interface
+ * `@endo/platform/http/server`.
  *
- * `makeAssetServer({ http, getRandomValues, ... })` starts an HTTP
- * server (over the injected `node:http`-shaped `http` power) and
+ * `makeAssetServer({ backend, getRandomValues, ... })` binds an HTTP
+ * server via the injected platform `backend` (e.g.
+ * `makeNodeHttpBackend({ http })` from `@endo/platform/http/node`) and
  * returns an `AssetServer` exo. Each `serve(filesystem)` call:
  *
  *   1. mints a fresh, unguessable capability path segment (the
@@ -19,6 +22,12 @@
  * `revoke()` is called (or the server stops), so the same path keeps
  * resolving across any number of requests.
  *
+ * This module owns only the request *handler* — a pure
+ * `(request) => response` function over the platform HTTP value shapes.
+ * All socket I/O, request decoding, and response streaming (with
+ * backpressure) live in the injected backend, so the same handler runs
+ * under any platform that supplies one.
+ *
  * The endo-fs cap surface used here is the read slice of
  * `FilesystemInterface` / `DirectoryInterface` / `FileInterface` /
  * `OpenFileInterface`: `root()`, `lookup(name)`, `getAttrs()`,
@@ -31,9 +40,28 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { makeError, X, q } from '@endo/errors';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { makeHttpServer } from '@endo/platform/http/server';
 
 import { contentTypeForName } from './mime.js';
 import { AssetServerInterface, AssetMountInterface } from './type-guards.js';
+
+/** @import { HttpRequest, HttpResponse } from '@endo/platform/http/server' */
+
+const textEncoder = new TextEncoder();
+
+/**
+ * Build a small plain-text {@link HttpResponse}. Used for the 400 /
+ * 404 / 405 error paths.
+ *
+ * @param {number} status
+ * @param {string} text
+ * @returns {HttpResponse}
+ */
+const plainResponse = (status, text) => ({
+  status,
+  headers: [['Content-Type', 'text/plain; charset=utf-8']],
+  body: textEncoder.encode(text),
+});
 
 /**
  * Coerce a `string | string[]` path argument into a flat array of
@@ -98,19 +126,19 @@ const toBase64Url = bytes => {
  */
 
 /**
- * Drain the file at `fileNode` to the HTTP response and finalize it.
- * Opens the file read-only, streams its bytes in `iterateBytesReader`
- * frames, always closes the `OpenFile`, and then either `end()`s the
- * response or — if the bytes read do not match the advertised
- * `Content-Length` — `destroy()`s the socket. The caller must have
- * already committed the `200` headers (including `Content-Length:
- * size`) and must not touch `res` afterwards.
+ * An async iterable over a file's bytes, suitable as an
+ * {@link HttpResponse} body. Opens the file read-only, streams its
+ * bytes in `iterateBytesReader` frames, always closes the `OpenFile`,
+ * and — if the bytes read do not match the advertised `Content-Length`
+ * — throws at the end so the backend aborts the connection rather than
+ * sending a body that disagrees with the committed headers. A
+ * read-only mount avoids the mismatch entirely.
  *
  * @param {object} fileNode  endo-fs File cap (or eref).
  * @param {bigint} size  the size advertised as `Content-Length`.
- * @param {import('node:http').ServerResponse} res
+ * @returns {AsyncGenerator<Uint8Array>}
  */
-const streamFile = async (fileNode, size, res) => {
+const readFileBody = async function* readFileBody(fileNode, size) {
   // Accommodate backings that emit the whole payload in one base64
   // frame; without this the default 100 KB cap on `M.string()` would
   // reject anything bigger. Mirrors endo-fs-exec's drainBytesReader.
@@ -126,11 +154,7 @@ const streamFile = async (fileNode, size, res) => {
       stringLengthLimit,
     })) {
       written += BigInt(chunk.length);
-      if (!res.write(chunk)) {
-        // Respect backpressure: wait for the socket to drain before
-        // requesting the next frame.
-        await new Promise(resolve => res.once('drain', resolve));
-      }
+      yield chunk;
     }
   } finally {
     await E(openFile)
@@ -138,24 +162,19 @@ const streamFile = async (fileNode, size, res) => {
       .catch(() => undefined);
   }
   if (written !== size) {
-    // The file changed between the `getAttrs` stat and the read (only
-    // possible on a writable backing). The advertised `Content-Length`
-    // can no longer be honoured, so abort the socket — a half-open
-    // response is better than one that hangs the client waiting for
-    // bytes that will never arrive. Use a read-only mount to avoid
-    // this entirely.
-    res.destroy();
-    return;
+    throw makeError(
+      X`asset-server: file changed under read (${q(written)} != ${q(size)})`,
+    );
   }
-  res.end();
 };
 
 /**
- * Build a static asset server over an injected HTTP power.
+ * Build a static asset server over an injected platform HTTP backend.
  *
  * @param {object} opts
- * @param {import('node:http')} opts.http  a `node:http`-shaped module
- *   exposing `createServer`.
+ * @param {import('@endo/platform/http/server').HttpBackend} opts.backend
+ *   the platform HTTP backend factory (e.g.
+ *   `makeNodeHttpBackend({ http })` from `@endo/platform/http/node`).
  * @param {(bytes: Uint8Array) => Uint8Array} opts.getRandomValues
  *   fills a byte array with cryptographically strong random values
  *   (e.g. `globalThis.crypto.getRandomValues`). Used to mint
@@ -172,17 +191,15 @@ const streamFile = async (fileNode, size, res) => {
  * @returns {Promise<object>} an `AssetServer` exo.
  */
 export const makeAssetServer = async ({
-  http,
+  backend,
   getRandomValues,
   port = 0,
   host = '127.0.0.1',
   publicBase = undefined,
   tokenBytes = 24,
 }) => {
-  if (!http || typeof http.createServer !== 'function') {
-    throw makeError(
-      X`makeAssetServer requires an http power with createServer`,
-    );
+  if (typeof backend !== 'function') {
+    throw makeError(X`makeAssetServer requires a platform http backend`);
   }
   if (typeof getRandomValues !== 'function') {
     throw makeError(X`makeAssetServer requires a getRandomValues power`);
@@ -195,23 +212,32 @@ export const makeAssetServer = async ({
     toBase64Url(getRandomValues(new Uint8Array(tokenBytes)));
 
   /**
-   * @param {import('node:http').IncomingMessage} req
-   * @param {import('node:http').ServerResponse} res
+   * The platform HTTP request handler: resolve `/{token}/path` to a
+   * file in the mounted Filesystem and return its bytes as a streamed
+   * response body.
+   *
+   * @param {HttpRequest} request
+   * @returns {Promise<HttpResponse>}
    */
-  const handleRequest = async (req, res) => {
+  const handler = async request => {
     // Establish an async boundary up front so the first real `await`
     // below is not nested (satisfies @jessie.js/safe-await-separator).
     await null;
-    const method = req.method || 'GET';
+    const { method } = request;
     if (method !== 'GET' && method !== 'HEAD') {
-      res.writeHead(405, { Allow: 'GET, HEAD' });
-      res.end();
-      return;
+      return {
+        status: 405,
+        headers: [
+          ['Allow', 'GET, HEAD'],
+          ['Content-Type', 'text/plain; charset=utf-8'],
+        ],
+        body: textEncoder.encode('Method not allowed\n'),
+      };
     }
 
-    // `req.url` is a path+query string; resolve against a dummy origin
-    // to parse and decode the pathname uniformly.
-    const requestUrl = new URL(req.url || '/', 'http://placeholder');
+    // `request.url` is a path+query string; resolve against a dummy
+    // origin to parse and decode the pathname uniformly.
+    const requestUrl = new URL(request.url || '/', 'http://placeholder');
     /** @type {string[]} */
     let rawSegments;
     try {
@@ -219,17 +245,13 @@ export const makeAssetServer = async ({
         .split('/')
         .filter(seg => seg !== '');
     } catch {
-      res.writeHead(400);
-      res.end();
-      return;
+      return plainResponse(400, 'Bad request\n');
     }
 
     const token = rawSegments[0];
     const mount = token ? mounts.get(token) : undefined;
     if (!mount || mount.revoked) {
-      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('Not found\n');
-      return;
+      return plainResponse(404, 'Not found\n');
     }
 
     /** @type {string[]} */
@@ -238,15 +260,13 @@ export const makeAssetServer = async ({
       pathSegments = normalizeSegments(rawSegments.slice(1));
     } catch {
       // Traversal / NUL bytes in the request path.
-      res.writeHead(400);
-      res.end();
-      return;
+      return plainResponse(400, 'Bad request\n');
     }
 
-    // Resolve the request to a File cap, then read it. Any resolution
-    // failure (missing path, a directory with no index, or an index
-    // that is itself a directory) is a 404; we never commit a `200`
-    // until the resolved node is confirmed to be a readable file.
+    // Resolve the request to a File cap. Any resolution failure
+    // (missing path, a directory with no index, or an index that is
+    // itself a directory) is a 404; we never return a `200` until the
+    // resolved node is confirmed to be a readable file.
     let fileNode;
     let size;
     let fileName = pathSegments[pathSegments.length - 1] || mount.index;
@@ -272,68 +292,43 @@ export const makeAssetServer = async ({
       }
       if (!methods.includes('open')) {
         // The resolved node is still not a readable file (e.g. the
-        // index entry is itself a directory). Fall through to 404
-        // rather than committing a 200 we cannot fulfil.
+        // index entry is itself a directory). Fall through to 404.
         throw makeError(X`not a readable file`);
       }
       const attrs = await E(node).getAttrs();
       size = /** @type {bigint} */ (attrs.size);
       fileNode = node;
     } catch {
-      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('Not found\n');
-      return;
+      return plainResponse(404, 'Not found\n');
     }
 
-    res.writeHead(200, {
-      'Content-Type': contentTypeForName(fileName),
-      'Content-Length': String(size),
-      'Cache-Control': 'no-cache',
+    const headers = [
+      ['Content-Type', contentTypeForName(fileName)],
+      ['Content-Length', String(size)],
+      ['Cache-Control', 'no-cache'],
       // The capability lives in the URL path; never let a served page
       // forward it to another origin via the Referer header.
-      'Referrer-Policy': 'no-referrer',
+      ['Referrer-Policy', 'no-referrer'],
       // Served content may be untrusted; forbid MIME sniffing so the
       // declared Content-Type is authoritative.
-      'X-Content-Type-Options': 'nosniff',
-    });
+      ['X-Content-Type-Options', 'nosniff'],
+    ];
     if (method === 'HEAD' || size === 0n) {
-      res.end();
-      return;
+      return { status: 200, headers };
     }
-    // streamFile owns finalization: it end()s on success or destroy()s
-    // the socket if the file changed under it (short read).
-    await streamFile(fileNode, size, res);
+    return { status: 200, headers, body: readFileBody(fileNode, size) };
   };
 
-  const server = http.createServer((req, res) => {
-    handleRequest(req, res).catch(error => {
-      // Diagnostics to stderr only; never to stdout (library rule).
-      console.error(
-        'asset-server: request failed',
-        /** @type {Error} */ (error).message,
-      );
-      if (!res.headersSent) {
-        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('Internal error\n');
-      } else {
-        res.destroy();
-      }
-    });
+  const httpServer = makeHttpServer({
+    backend,
+    handler,
+    address: { host, port },
   });
-
-  await new Promise((resolve, reject) => {
-    const onError = /** @param {Error} err */ err => reject(err);
-    server.once('error', onError);
-    server.listen(port, host, () => {
-      server.removeListener('error', onError);
-      resolve(undefined);
-    });
-  });
-
-  const address = /** @type {import('node:net').AddressInfo} */ (
-    server.address()
+  await E(httpServer).start();
+  const bound = /** @type {{ host: string, port: number }} */ (
+    await E(httpServer).whenBound()
   );
-  const boundPort = address.port;
+  const boundPort = bound.port;
   const origin =
     publicBase !== undefined && publicBase !== ''
       ? publicBase.replace(/\/+$/, '')
@@ -398,7 +393,7 @@ export const makeAssetServer = async ({
       mount.revoked = true;
     }
     mounts.clear();
-    await new Promise(resolve => server.close(() => resolve(undefined)));
+    await E(httpServer).stop();
   };
 
   return makeExo('AssetServer', AssetServerInterface, {

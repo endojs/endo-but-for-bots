@@ -7,12 +7,15 @@ import '@endo/init/debug.js';
 import http from 'node:http';
 
 import test from 'ava';
-import { E } from '@endo/far';
+import { E } from '@endo/eventual-send';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 
-import { makeInMemoryFilesystem } from '@endo/endo-fs';
+import { makeInMemoryFilesystem } from '@endo/platform/fs/extended';
+import { makeNodeHttpBackend } from '@endo/platform/http/node';
 import { makeAssetServer } from '../src/asset-server.js';
 import { contentTypeForName, normalizeSegments } from '../src/index.js';
+
+const backend = makeNodeHttpBackend({ http });
 
 const utf8 = s => new TextEncoder().encode(s);
 
@@ -72,7 +75,7 @@ const makeSiteFs = async () => {
 };
 
 const startServer = async t => {
-  const server = await makeAssetServer({ http, getRandomValues });
+  const server = await makeAssetServer({ backend, getRandomValues });
   t.teardown(() => E(server).stop());
   return server;
 };
