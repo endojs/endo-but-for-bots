@@ -302,6 +302,10 @@ export const makeAssetServer = async ({
       return plainResponse(404, 'Not found\n');
     }
 
+    // Annotate as tuples: a bare array literal infers as `string[][]`,
+    // which is not assignable to the response's
+    // `ReadonlyArray<readonly [string, string]>` header shape.
+    /** @type {Array<[string, string]>} */
     const headers = [
       ['Content-Type', contentTypeForName(fileName)],
       ['Content-Length', String(size)],
