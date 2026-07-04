@@ -1708,14 +1708,13 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/endo-fs-asset-server@workspace:packages/endo-fs-asset-server"
   dependencies:
-    "@endo/endo-fs": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
     "@endo/exo-stream": "workspace:^"
-    "@endo/far": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/patterns": "workspace:^"
+    "@endo/platform": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
   languageName: unknown
