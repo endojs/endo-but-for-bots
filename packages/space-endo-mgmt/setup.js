@@ -7,12 +7,12 @@
 // the daemon's ENDO_EXTRA so it auto-provisions on start (see the endo-host
 // repo). Idempotent: it no-ops if the controller already exists.
 
-import { E } from '@endo/eventual-send';
+import { E } from '@endo/far';
 
 const capletSpecifier = new URL('caplet.js', import.meta.url).href;
 
 /**
- * @param {import('@endo/eventual-send').ERef<any>} agent
+ * @param {import('@endo/far').ERef<any>} agent
  */
 export const main = async agent => {
   // Re-bind on every start. `capletSpecifier` resolves relative to this file,
