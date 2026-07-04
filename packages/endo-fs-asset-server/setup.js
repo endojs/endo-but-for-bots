@@ -12,11 +12,15 @@
 //   ENDO_FS_ASSET_SERVER_PUBLIC_BASE  origin advertised in returned URLs,
 //                                     e.g. https://assets.example (Caddy proxies
 //                                     that origin to the loopback port).
-//   ENDO_FS_ASSET_SERVER_STATIC_DIR   optional host dir to serve persistently at
-//                                     a STABLE path on every start (survives
-//                                     restarts/deploys; the config is the source
-//                                     of truth, no minted token).
-//   ENDO_FS_ASSET_SERVER_STATIC_PATH  path segment for that mount (default site)
+//   ENDO_FS_ASSET_SERVER_STATIC_DIR   optional host dir hosted persistently
+//                                     (read-only) on every start, so it survives
+//                                     daemon restarts and deploys.
+//   ENDO_FS_ASSET_SERVER_STATIC_TOKEN_FILE
+//                                     file the durable mount's capability token
+//                                     is minted into and re-read from, so the
+//                                     same unguessable URL comes back each start.
+//   ENDO_FS_ASSET_SERVER_STATIC_PATH  opt-in: pin the mount at a chosen (public)
+//                                     path instead of a capability token.
 //   ENDO_FS_ASSET_SERVER_STATIC_INDEX directory index file (default index.html)
 //
 // Once provisioned, you can also mount ad-hoc capability URLs:
@@ -50,6 +54,8 @@ export const main = async agent => {
         env.ENDO_FS_ASSET_SERVER_PUBLIC_BASE || '',
       ENDO_FS_ASSET_SERVER_STATIC_DIR:
         env.ENDO_FS_ASSET_SERVER_STATIC_DIR || '',
+      ENDO_FS_ASSET_SERVER_STATIC_TOKEN_FILE:
+        env.ENDO_FS_ASSET_SERVER_STATIC_TOKEN_FILE || '',
       ENDO_FS_ASSET_SERVER_STATIC_PATH:
         env.ENDO_FS_ASSET_SERVER_STATIC_PATH || '',
       ENDO_FS_ASSET_SERVER_STATIC_INDEX:
