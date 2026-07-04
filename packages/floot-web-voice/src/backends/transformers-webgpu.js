@@ -443,7 +443,11 @@ const pumpStt = async (host, audioReader, writer, setOnClose) => {
   }
 };
 
-/** @type {() => Promise<STTServer>} */
+// Return type is `any`, not STTServer: makeExo yields a Guarded exo whose
+// method args are Passable, which does not structurally match the STTServer
+// reader types (the exo/E() generics friction). The VoiceBackend typedef still
+// documents the real STTServer contract.
+/** @type {() => Promise<any>} */
 const createSTT = async () => {
   const host = ensureWorker();
   // Warm the STT model now so the first utterance doesn't pay load latency.
@@ -562,7 +566,7 @@ const pumpTts = async (host, id, textReader, writer, isClosed, setCancel) => {
   }
 };
 
-/** @type {() => Promise<TTSServer>} */
+/** @type {() => Promise<any>} */
 const createTTS = async () => {
   const host = ensureWorker();
   // Warm the Kokoro model so the first sentence doesn't pay load latency.

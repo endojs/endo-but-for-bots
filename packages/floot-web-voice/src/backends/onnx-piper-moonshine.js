@@ -500,7 +500,11 @@ const pumpTts = async (bridge, textReader, writer, isClosed, setCancel) => {
 // synchronously, then the pump streams into it.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** @type {() => Promise<STTServer>} */
+// Return type is `any`, not STTServer: makeExo yields a Guarded exo whose
+// method args are Passable, which does not structurally match the STTServer
+// reader types (the exo/E() generics friction). The VoiceBackend typedef still
+// documents the real STTServer contract.
+/** @type {() => Promise<any>} */
 const createSTT = async () => {
   const bridge = makeWorkerBridge();
   await bridge.init();
@@ -522,7 +526,7 @@ const createSTT = async () => {
   });
 };
 
-/** @type {() => Promise<TTSServer>} */
+/** @type {() => Promise<any>} */
 const createTTS = async () => {
   const bridge = makeWorkerBridge();
   await bridge.init();
