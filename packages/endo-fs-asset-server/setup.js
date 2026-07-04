@@ -16,13 +16,13 @@
 // Once provisioned, mount a directory and serve it:
 //   E(assetServer).serve(filesystemCap) -> { path, url, revoke }
 
-import { E } from '@endo/far';
+import { E } from '@endo/eventual-send';
 
 const moduleSpecifier = new URL('src/asset-server-module.js', import.meta.url)
   .href;
 
 /**
- * @param {import('@endo/far').ERef<any>} agent
+ * @param {import('@endo/eventual-send').ERef<any>} agent
  */
 export const main = async agent => {
   // Re-bind on every start. `moduleSpecifier` resolves relative to this file,
