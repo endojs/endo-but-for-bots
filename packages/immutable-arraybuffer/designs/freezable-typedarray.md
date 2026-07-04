@@ -365,6 +365,94 @@ genuine view — is pinned down on **both Node and XS** by the test262 suite
 under `packages/test262-runner/test262/test/staging/immutable-arraybuffer/`
 (`yarn workspace @endo/test262-runner test262:iab`).
 
+#### A third proxy shape: inherit-from-genuine, copy-descriptors, self-untrap
+
+The two proxy shapes above force a choice: target the genuine
+TypedArray and lose freezability (the "natural" shape), or target a
+plain object and lose reflection fidelity (the "repaired" shape).
+gibson042 proposed a third shape (PR #602 review) that aims to escape
+that fork — freezable *and* reflection-faithful — and to make the
+hot-path cost transient rather than permanent. It applies **only** to
+a TypedArray backed by an emulated immutable buffer; genuine views are
+untouched. Three moves define it:
+
+1. **Target inherits from the genuine TypedArray.** The proxy target is
+   `Object.create(taOverEmulatedIab)` — an ordinary (non-exotic) object
+   whose `[[Prototype]]` is the hidden genuine TypedArray over the
+   emulated immutable buffer. Before any mutation the target has no own
+   keys, so integer-indexed reads fall through the prototype to the
+   genuine TypedArray and return the real byte (closing the read gap the
+   plain-object wrapper has), while the target itself stays a plain
+   ordinary object.
+2. **Copy descriptors before mutation.** Every mutation-adjacent trap
+   (`preventExtensions`, `defineProperty`, `set`, `setPrototypeOf`,
+   `getOwnPropertyDescriptor`) first runs an idempotent `copyDescriptors()`
+   that snapshots the genuine TypedArray's own property descriptors onto
+   the target via `Object.defineProperties`. After the copy the target
+   carries faithful own `"0".."n-1"` data descriptors, so `ownKeys`,
+   `getOwnPropertyDescriptor`, and enumeration match a genuine view — the
+   divergence the "repaired" shape could not avoid — and, because the
+   target is ordinary, `Object.freeze` can make those keys
+   non-configurable without hitting the integer-indexed-exotic refusal
+   that makes the natural proxy unfreezable.
+3. **Self-untrap once frozen.** When `preventExtensions` succeeds the
+   handler schedules a `maybeUntrap` check (a microtask, with a
+   synchronous `force` path from `isExtensible`/`ownKeys` so a
+   `SetIntegrityLevel` walk can trigger it mid-freeze); once the target
+   is observed frozen, every key of the handler is deleted. A proxy with
+   an empty handler is a straight pass-through, so after freeze the view
+   degrades to an ordinary frozen object with **no** residual trap
+   overhead — the proxy tax is paid only across the mutable window and
+   amortized away in the frozen steady state that `harden()`/`lockdown()`
+   produce.
+
+How it attacks the three objections:
+
+- **Freezability.** The target is ordinary, so `Object.freeze(view)` and
+  transitive `harden()` succeed; unlike the "repaired" shape the frozen
+  target also carries the copied integer-indexed descriptors, so it is
+  faithful, not just freezable.
+- **Reflection fidelity.** Pre-mutation reflection forwards to the
+  genuine TypedArray; post-`copyDescriptors` reflection reads the target's
+  copied descriptors. Either way it matches a genuine view, without
+  re-introducing the non-configurability invariant that unfroze the
+  natural proxy.
+- **Hot-path overhead.** Still present while the view is live and
+  unfrozen (this shape does not make an *unfrozen* proxy cheap), but the
+  frozen common case sheds the handler entirely and runs at
+  ordinary-object cost — a strictly better cost curve than the two shapes
+  above, which pay proxy overhead for the object's whole lifetime.
+
+This shape is a **candidate for empirical comparison, not yet
+implemented or measured here.** Before adopting it the following need to
+be checked against the same Node/XS harness the other shapes use:
+
+- **Trap correctness.** `CanonicalNumericIndexString` and
+  `IsValidIntegerIndex` must match the spec internal operations exactly,
+  and the write/define/delete traps must reproduce
+  `IntegerIndexedElementSet`/`[[DefineOwnProperty]]` semantics (including
+  receiver and inherited-key cases). The sketch in the review is
+  illustrative and has rough edges (e.g. the `delete` trap routes through
+  `defineProperty`), so it is a starting point, not a spec.
+- **Untrap timing.** The interleaving of the microtask/`force` untrap
+  with the synchronous `Object.freeze` → `SetIntegrityLevel` →
+  `Object.isFrozen` sequence must be validated so the handler is never
+  emptied at a point that lets a mutation slip through, and so `harden`'s
+  deep walk still sees a fully-trapped object until the target is
+  genuinely frozen.
+- **Pre-copy prototype leakage.** Reads before the first mutation forward
+  through the prototype to the genuine (mutable-buffer-backed) TypedArray
+  by design; confirm the freeze walk touches only the target's own keys
+  and never the inherited exotic slots, on XS as well as Node.
+- **Benchmarks.** Read/write hot-path cost pre-freeze (versus the two
+  existing shapes) and post-freeze (expected ≈ ordinary frozen object),
+  added as a third arm to `test/proxy-benchmark.test.js`.
+
+If those hold, this shape could dominate the "repaired" shape on fidelity
+and dominate both on frozen-steady-state cost, at the price of a
+materially more complex handler — which is exactly the fidelity /
+performance tradeoff this comparison exists to measure.
+
 ### `Object.isFrozen(view)` returns true after `Object.freeze(view)`
 
 The emulated wrapper has no integer-indexed exotic slots and no
@@ -1086,6 +1174,10 @@ post-#435 translation.
   Foundational commits: `721c68a3` (initial freezable-typedarray pony
   scaffolding), `e02ec0d0` (shim install body), `1ef6c174`
   (shim-level tests).
+- [gibson042's review on PR #602](https://github.com/endojs/endo-but-for-bots/pull/602#pullrequestreview-4629159096)
+  (2026-07-04): the proposal captured under *A third proxy shape* — a
+  proxy whose target inherits from the genuine TypedArray, copies
+  descriptors before mutation, and clears its handler once frozen.
 - [TC39 *Immutable ArrayBuffer* proposal](https://github.com/tc39/proposal-immutable-arraybuffer)
   (Stage 2.7 as of 2026-06): the proposal text that includes the
   "A `DataView` or `TypedArray` using an immutable buffer as its
