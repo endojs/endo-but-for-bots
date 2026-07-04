@@ -25,6 +25,14 @@ import { makeError, q, X } from '@endo/errors';
  */
 
 /**
+ * @typedef {object} RenewalRecord
+ * @property {number} amountCents accrues once per elapsed period
+ * @property {number} periodMs
+ * @property {number} anchorMs clock reading at grant creation
+ * @property {number} accruedPeriods periods already credited
+ */
+
+/**
  * @typedef {object} GrantRecord
  * @property {string} name
  * @property {string | null} parentName
@@ -35,6 +43,7 @@ import { makeError, q, X } from '@endo/errors';
  * @property {Record<string, number>} pending pendingId -> reserved cents
  * @property {Record<string, CardEntry>} cards cardToken -> entry
  * @property {string[]} subGrantNames
+ * @property {RenewalRecord} [renewal]
  */
 
 /**
@@ -48,6 +57,8 @@ import { makeError, q, X } from '@endo/errors';
  * @typedef {object} LedgerHooks
  * @property {() => LedgerState | undefined} [restore]
  * @property {(state: LedgerState) => void} [persist]
+ * @property {() => number} [now] clock authority (ms), required only
+ * for grants with a renewal schedule
  */
 
 /**
@@ -82,7 +93,7 @@ const assertName = (value, label) => {
 /**
  * @param {LedgerHooks} [hooks]
  */
-export const makeBudgetLedger = ({ restore, persist } = {}) => {
+export const makeBudgetLedger = ({ restore, persist, now } = {}) => {
   /** @type {LedgerState} */
   const state = (restore && restore()) || {
     version: 1,
@@ -97,6 +108,27 @@ export const makeBudgetLedger = ({ restore, persist } = {}) => {
   };
 
   /**
+   * Lazily credits any renewal periods that elapsed since the last
+   * look. Carryover semantics: unspent allowance accumulates. Accrual
+   * stops at revocation.
+   *
+   * @param {GrantRecord} grant
+   */
+  const accrue = grant => {
+    const { renewal } = grant;
+    if (!renewal || grant.revoked || !now) {
+      return;
+    }
+    const periods = Math.floor((now() - renewal.anchorMs) / renewal.periodMs);
+    if (periods > renewal.accruedPeriods) {
+      grant.budgetCents +=
+        (periods - renewal.accruedPeriods) * renewal.amountCents;
+      renewal.accruedPeriods = periods;
+      save();
+    }
+  };
+
+  /**
    * @param {string} name
    * @returns {GrantRecord}
    */
@@ -105,6 +137,7 @@ export const makeBudgetLedger = ({ restore, persist } = {}) => {
     if (!grant) {
       throw makeError(X`No such grant ${q(name)}`);
     }
+    accrue(grant);
     return grant;
   };
 
@@ -169,10 +202,17 @@ export const makeBudgetLedger = ({ restore, persist } = {}) => {
      * @param {string | null} [opts.parentName]
      * @param {string[]} [opts.allowedTypes]
      * @param {string} [opts.memoPrefix]
+     * @param {{ amountCents: number, periodMs: number }} [opts.renewal]
      */
     createGrant: (
       name,
-      { budgetCents, parentName = null, allowedTypes = [], memoPrefix = '' },
+      {
+        budgetCents,
+        parentName = null,
+        allowedTypes = [],
+        memoPrefix = '',
+        renewal = undefined,
+      },
     ) => {
       assertName(name, 'grant name');
       assertCents(budgetCents, 'budgetCents');
@@ -184,6 +224,43 @@ export const makeBudgetLedger = ({ restore, persist } = {}) => {
         // The child's whole budget is escrowed from the parent.
         assertAvailable(parentName, budgetCents, 'sub-grant budget');
       }
+      /** @type {RenewalRecord | undefined} */
+      let renewalRecord;
+      if (renewal !== undefined) {
+        if (parentName !== null) {
+          // A renewing sub-grant would accrue against the parent's
+          // escrow without a reservation-time budget check; only root
+          // grants may renew until that interaction has a design.
+          throw makeError(
+            X`Renewal schedules are only supported on root grants, not sub-grant ${q(
+              name,
+            )}`,
+          );
+        }
+        if (!now) {
+          throw makeError(
+            X`Renewal schedules require a clock authority (now hook)`,
+          );
+        }
+        assertCents(renewal.amountCents, 'renewal.amountCents');
+        if (
+          renewal.amountCents === 0 ||
+          !Number.isSafeInteger(renewal.periodMs) ||
+          renewal.periodMs <= 0
+        ) {
+          throw makeError(
+            X`Renewal requires positive amountCents and periodMs, got ${q(
+              renewal,
+            )}`,
+          );
+        }
+        renewalRecord = {
+          amountCents: renewal.amountCents,
+          periodMs: renewal.periodMs,
+          anchorMs: now(),
+          accruedPeriods: 0,
+        };
+      }
       state.grants[name] = {
         name,
         parentName,
@@ -194,6 +271,7 @@ export const makeBudgetLedger = ({ restore, persist } = {}) => {
         pending: {},
         cards: {},
         subGrantNames: [],
+        ...(renewalRecord === undefined ? {} : { renewal: renewalRecord }),
       };
       if (parentName !== null) {
         getGrant(parentName).subGrantNames.push(name);
@@ -258,6 +336,42 @@ export const makeBudgetLedger = ({ restore, persist } = {}) => {
     rollbackPending: (name, pendingId) => {
       const grant = getGrant(name);
       delete grant.pending[pendingId];
+      save();
+    },
+
+    /**
+     * Reservations that were persisted but never committed or rolled
+     * back — the residue of a crash between reserving and learning the
+     * card token. Repair inspects these.
+     *
+     * @param {string} name
+     */
+    pendingIds: name => harden(Object.keys(getGrant(name).pending)),
+
+    /**
+     * Adopts a card discovered at the Privacy API (by memo prefix) that
+     * the ledger has no entry for — a stranding repair, not a normal
+     * issuance. Deliberately skips the budget check: the card already
+     * exists, so the account's real exposure must be recorded even if
+     * that drives the grant's remaining budget negative and blocks
+     * further issuance.
+     *
+     * @param {string} name
+     * @param {string} cardToken
+     * @param {number} reservedCents the card's live spend limit
+     * @param {{ closed?: boolean }} [opts]
+     */
+    adoptCard: (name, cardToken, reservedCents, { closed = false } = {}) => {
+      assertCents(reservedCents, 'adopted spend limit');
+      const grant = getGrant(name);
+      if (grant.cards[cardToken]) {
+        throw makeError(X`Card ${q(cardToken)} is already recorded`);
+      }
+      grant.cards[cardToken] = {
+        reservedCents,
+        closed,
+        refundedCents: 0,
+      };
       save();
     },
 
@@ -373,6 +487,14 @@ export const makeBudgetLedger = ({ restore, persist } = {}) => {
         allowedTypes: [...grant.allowedTypes],
         memoPrefix: grant.memoPrefix,
         subGrantNames: [...grant.subGrantNames],
+        ...(grant.renewal === undefined
+          ? {}
+          : {
+              renewal: {
+                amountCents: grant.renewal.amountCents,
+                periodMs: grant.renewal.periodMs,
+              },
+            }),
         cards: Object.entries(grant.cards).map(([cardToken, card]) => ({
           cardToken,
           reservedCents: card.reservedCents,

@@ -180,6 +180,99 @@ test('cents validation rejects floats, negatives, and non-numbers', t => {
   }
 });
 
+test('renewal accrues whole elapsed periods only, and survives persistence', t => {
+  const clock = { nowMs: 0 };
+  /** @type {any} */
+  let persisted;
+  const ledger = makeBudgetLedger({
+    now: () => clock.nowMs,
+    persist: state => {
+      persisted = JSON.parse(JSON.stringify(state));
+    },
+  });
+  ledger.createGrant('bob', {
+    budgetCents: 1000,
+    renewal: { amountCents: 500, periodMs: 100 },
+  });
+  clock.nowMs = 99;
+  t.is(ledger.remainingCents('bob'), 1000);
+  clock.nowMs = 100;
+  t.is(ledger.remainingCents('bob'), 1500);
+  clock.nowMs = 350;
+  t.is(ledger.remainingCents('bob'), 2500);
+  // A revived ledger picks up where the accrual left off.
+  clock.nowMs = 450;
+  const revived = makeBudgetLedger({
+    now: () => clock.nowMs,
+    restore: () => persisted,
+  });
+  t.is(revived.remainingCents('bob'), 3000);
+});
+
+test('renewal rejects sub-grants, missing clocks, and bad schedules', t => {
+  const clock = { nowMs: 0 };
+  const ledger = makeBudgetLedger({ now: () => clock.nowMs });
+  ledger.createGrant('bob', { budgetCents: 1000 });
+  t.throws(
+    () =>
+      ledger.createGrant('bob/sub', {
+        budgetCents: 100,
+        parentName: 'bob',
+        renewal: { amountCents: 100, periodMs: 100 },
+      }),
+    { message: /only supported on root grants/ },
+  );
+  t.throws(
+    () =>
+      ledger.createGrant('bad', {
+        budgetCents: 100,
+        renewal: { amountCents: 0, periodMs: 100 },
+      }),
+    { message: /positive amountCents and periodMs/ },
+  );
+  t.throws(
+    () =>
+      ledger.createGrant('bad', {
+        budgetCents: 100,
+        renewal: { amountCents: 100, periodMs: 0 },
+      }),
+    { message: /positive amountCents and periodMs/ },
+  );
+  const clockless = makeBudgetLedger();
+  t.throws(
+    () =>
+      clockless.createGrant('bob', {
+        budgetCents: 100,
+        renewal: { amountCents: 100, periodMs: 100 },
+      }),
+    { message: /clock authority/ },
+  );
+});
+
+test('adoptCard records exposure without a budget check', t => {
+  const ledger = makeBudgetLedger();
+  ledger.createGrant('bob', { budgetCents: 1000 });
+  // Adoption may overdraw: the card exists, so reality wins.
+  ledger.adoptCard('bob', 'card-x', 5000);
+  t.is(ledger.remainingCents('bob'), -4000);
+  t.throws(() => ledger.reservePending('bob', 1), {
+    message: /exceeds the remaining budget/,
+  });
+  t.throws(() => ledger.adoptCard('bob', 'card-x', 5000), {
+    message: /already recorded/,
+  });
+  // Closing an adopted card refunds like any other.
+  t.is(ledger.closeCard('bob', 'card-x', 5000), 0);
+});
+
+test('pendingIds lists stranded reservations', t => {
+  const ledger = makeBudgetLedger();
+  ledger.createGrant('bob', { budgetCents: 1000 });
+  t.deepEqual(ledger.pendingIds('bob'), []);
+  const pendingId = ledger.reservePending('bob', 500);
+  t.deepEqual(ledger.pendingIds('bob'), [pendingId]);
+});
+
 test('grant names must be unique and well-formed', t => {
   const ledger = makeBudgetLedger();
   ledger.createGrant('bob', { budgetCents: 1 });

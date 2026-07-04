@@ -3,16 +3,38 @@
 | | |
 |---|---|
 | **Created** | 2026-07-04 |
+| **Updated** | 2026-07-04 |
 | **Author** | Aaron Davis (prompted) |
 | **Status** | In Progress |
 
 ## Status
 
-Phase 1 (account caplet, budget ledger, issuer facets, package-local
-tests against a mock Privacy API server) lands with this design as
-`packages/privacy-cards`.
-Phases 2+ (daemon integration test, transaction webhooks, renewing
-budgets, per-grant formula durability) are not started.
+Phases 1 through 4 are implemented in `packages/privacy-cards`, with
+the deviations and residue noted per phase under "Phased
+Implementation" below.
+
+- **Phase 1** — account caplet, budget ledger, issuer/control facets,
+  unit tests against a mock Privacy API server.
+- **Phase 2** — daemon integration tests (`test/daemon.test.js` forks
+  a real daemon, provisions the caplet via `makeUnconfined`, and
+  exercises the facets over CapTP), stranded-reservation repair
+  (`E(account).repair()` adopts unknown cards by memo prefix and
+  clears stale reservations), and the audit-only facet
+  (`E(control).makeAuditor()`).
+- **Phase 3** — renewing budgets via lazy carryover accrual against an
+  injected clock (`makeIssuer(..., { renewal: { amountCents,
+  periodMs } })`, root grants only), and polling spend telemetry
+  (`startSpendMonitor` / `readSpendMonitor` / `stopSpendMonitor` on
+  the control facet). Webhooks remain out of scope (inbound
+  connectivity).
+- **Phase 4** — the core is split into a portable, Node-free
+  `src/account.js` consumed by two entry points: `src/caplet.js`
+  (unconfined Node shell) and `src/confined-caplet.js`, which holds
+  **no key at all** and runs over a mediated HTTP capability in the
+  endoclaw-oauth shape. Durable per-grant references are delivered as
+  persistent *eval formulas* over `provideIssuer` — proven across a
+  daemon restart in the integration test — rather than waiting for
+  SturdyRefs.
 
 ## What is the Problem Being Solved?
 
@@ -197,26 +219,41 @@ After a daemon restart the account caplet reloads its ledger from its
 state file and `E(account).provideIssuer('bob')` re-yields the same
 grant's facets for re-granting (see Durability).
 
+### Story 7 — Renewing allowance (shipped in Phase 3)
+
+"Bob gets $200 *per month*."
+Implemented as **carryover accrual**: `makeIssuer('bob', {
+budgetCents: 20_000, renewal: { amountCents: 20_000, periodMs:
+MONTH_MS } })` credits the budget once per whole elapsed period,
+computed lazily against an injected clock on every ledger access — no
+timers, deterministic, and testable with a hand-cranked clock.
+Unused allowance accumulates (an allowance, not a use-it-or-lose-it
+quota); non-carryover semantics remain future work because a reset
+must decide what to do with escrow spanning the period boundary.
+Renewal is **root grants only**: a renewing sub-grant would accrue
+against the parent's escrow without a reservation-time check.
+Privacy.com's per-card `MONTHLY` duration is not a substitute — it
+renews per card, so N cards would leak N budgets monthly.
+
+### Story 8 — Near-real-time oversight (shipped in Phase 3, polling)
+
+Alice wants to watch the shopping agent spend, not just bound it.
+`E(control).startSpendMonitor({ intervalMs })` polls
+`GET /transactions` for the grant's open cards;
+`readSpendMonitor()` returns the latest per-card approved spend.
+Monitors stop on revocation, on caplet cancellation, and on demand.
+This is telemetry, not enforcement — the reservation model already
+bounds exposure — so polling lag is acceptable.
+**Webhooks remain out of scope**: they need a reachable HTTPS
+endpoint and add nothing to the safety argument.
+
 ### Stories considered and deferred
 
-- **Renewing (monthly) budgets** — "Bob gets $200 *per month*".
-  Deferred: renewal needs a clock authority and complicates
-  reconciliation (a card issued in March spends in April against which
-  month?).
-  Privacy.com's per-card `MONTHLY` duration is not a substitute — it
-  renews per card, so N cards leak N budgets monthly.
-  Phase 3.
-- **Real-time spend tracking via webhooks** — reacting to
-  authorizations as they happen rather than reserving up front.
-  Deferred: webhooks need a reachable HTTPS endpoint and change the
-  security model from *provably bounded* to *eventually noticed*.
-  The reservation model needs no inbound connectivity. Phase 3.
-- **Audit-only facet** for an accountant (read grants, no mutation).
-  Trivial later attenuation of the control facet. Phase 2.
 - **Merchant category / hostname policies** ("only groceries").
   Privacy.com does not expose category controls on card creation;
   merchant-locked cards are the available approximation. Revisit if
   the API grows controls.
+- **Non-carryover (resetting) budgets** — see Story 7.
 
 ## Capability Shape
 
@@ -227,10 +264,15 @@ interface PrivacyAccount {
     budgetCents: number;               // total across all cards, forever
     allowedTypes?: CardType[];         // default ['SINGLE_USE', 'MERCHANT_LOCKED']
     memoPrefix?: string;               // default `[${grantName}]`
+    renewal?: {                        // root grants only; carryover accrual
+      amountCents: number;
+      periodMs: number;
+    };
   }): { issuer: CardIssuer, control: IssuerControl };
   provideIssuer(grantName: string):    // idempotent; restart recovery
     { issuer: CardIssuer, control: IssuerControl };
   listGrants(): GrantSummary[];
+  repair(): Promise<RepairReport>;     // adopt stranded cards, clear pendings
   listFundingSources(): Promise<unknown[]>;
   status(): Promise<boolean>;          // GET /status reachability probe
   help(): string;
@@ -256,10 +298,15 @@ interface CardIssuer {
 
 // Caretaker facet — held by whoever granted the issuer.
 interface IssuerControl {
-  audit(): Promise<GrantAudit>;        // per-card limit / approved spend / state
-  reconcile(): Promise<GrantAudit>;    // refresh spend from GET /transactions
+  audit(): GrantAudit;                 // ledger snapshot
+  reconcile(): Promise<GrantAudit>;    // + live approved spend per card
+  makeAuditor(): GrantAuditor;         // read-only attenuation: audit +
+                                       // reconcile only (for an accountant)
   deposit(amountCents: number): void;  // only way a budget grows
-  revoke(): Promise<void>;             // pause all cards, brick issuer + subs
+  startSpendMonitor(opts: { intervalMs: number }): void;  // poll live spend
+  readSpendMonitor(): SpendReport;     // { active, polls, cards, lastError? }
+  stopSpendMonitor(): void;
+  revoke(): Promise<RevocationReport>; // pause all cards, brick issuer + subs
   help(): string;
 }
 ```
@@ -328,17 +375,36 @@ Two mitigations, one per concern:
 - **Ledger state**: every mutation is persisted as JSON to
   `env.PRIVACY_STATE_FILE` (write-to-temp + rename).
   `make()` reloads it on startup.
-  Reservations are recorded *before* the corresponding `POST /card`
+  Reservations are recorded *before* the corresponding `POST /cards`
   is attempted and finalized after, so a crash between the two strands
-  a reservation rather than losing a card (Phase 2 adds
-  `GET /cards`-based repair of strandings, keyed by memo prefix).
+  a reservation rather than losing a card.
+  `E(account).repair()` heals strandings: it lists cards at the API,
+  adopts any card whose memo carries a grant's tag but which the
+  ledger does not know (recording real exposure even past the budget —
+  reality wins, and an overdrawn grant simply cannot issue until
+  reconciled), then rolls back whatever pending reservations remain.
 - **Facet references**: sub-facets returned from methods are ephemeral
   CapTP objects.
   `provideIssuer(grantName)` re-derives a grant's facet pair from the
   ledger, so the host can re-grant after restart.
-  True durable per-grant references (each grant as its own formula, or
-  SturdyRefs per [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md))
-  are Phase 4.
+  Better: a **persistent eval formula** turns that recovery into a
+  durable per-grant reference using only existing daemon machinery —
+
+  ```
+  endo eval "E(account).provideIssuer('bob').then(kit => kit.issuer)" \
+    account:privacy-account --name bob-issuer
+  ```
+
+  The daemon persists the *formula*, not the live object; after a
+  restart, looking up `bob-issuer` re-evaluates it, which re-runs the
+  account caplet (reloading the ledger from `PRIVACY_STATE_FILE`) and
+  re-derives the same grant's issuer.
+  The integration test proves the chain: card issued before a daemon
+  restart, budget arithmetic intact after it, through the re-derived
+  facet.
+  SturdyRefs (per
+  [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md)) can later
+  replace this recipe with first-class handles.
 
 The API key itself lives in the formula record's `env` (host-visible
 only), exactly like existing caplet secrets
@@ -359,12 +425,21 @@ only), exactly like existing caplet secrets
 - **Type escalation**: `allowedTypes` defaults deny `UNLOCKED`
   (any-merchant) and `DIGITAL_WALLET`; a grant must opt in, and the
   account key must separately have the Privacy.com privilege.
-- **The caplet itself is unconfined** — it runs with full Node
-  authority in its worker, like all `make-unconfined` caplets.
-  The trust claim is about *guests* of the caplet, not about the
-  caplet's own confinement.
-  A confined (`make-archive`) variant is possible once a mediated
-  fetch capability exists ([endoclaw-network-fetch](endoclaw-network-fetch.md)).
+- **The unconfined caplet runs with full Node authority** in its
+  worker, like all `make-unconfined` caplets; its trust claim is about
+  *guests*, not about its own confinement.
+  The **confined variant** (`src/confined-caplet.js`) inverts this: it
+  imports no Node builtins and holds **no key at all** — its powers
+  are a mediated HTTP capability, already bound to the Privacy base
+  URL, that injects `Authorization` on the host's side of the
+  membrane ([endoclaw-oauth](endoclaw-oauth.md) idiom).
+  A fully compromised confined caplet could not name the key, because
+  no path from its capabilities reaches it.
+  Both entry points share the same Node-free core
+  (`src/account.js` + `src/client.js`'s transport-agnostic
+  `makePrivacyProtocol`); what remains for a production confined
+  deployment is `make-archive` packaging and standard storage/timer
+  capabilities for persistence and spend monitors.
 
 ## Dependencies
 
@@ -377,19 +452,32 @@ only), exactly like existing caplet secrets
 
 ## Phased Implementation
 
-1. **Package `packages/privacy-cards`** *(this change)* —
+1. **Package `packages/privacy-cards`** *(shipped)* —
    API client, budget ledger with reservation/reconcile/sub-grant
    semantics, unconfined caplet with `PrivacyAccount` / `CardIssuer` /
    `IssuerControl` facets, JSON state file, package-local AVA tests
    against a mock Privacy API HTTP server.
-2. **Hardening** — daemon integration test (fixture +
-   `testNeedsNodeWorker` in `packages/daemon/test/endo.test.js`),
-   stranded-reservation repair from `GET /cards` by memo prefix,
-   audit-only facet, CLI recipe docs.
-3. **Liveness** — transaction webhooks or polling for near-real-time
-   audit, renewing (monthly) budgets with a clock authority.
-4. **Durability & confinement** — per-grant formulas or SturdyRefs;
-   confined variant over a mediated fetch capability.
+2. **Hardening** *(shipped)* — daemon integration tests
+   (`test/daemon.test.js`; they live in this package with
+   `@endo/daemon` as a dev dependency rather than in the daemon's own
+   suite, keeping the daemon package free of a privacy-cards edge),
+   stranded-reservation repair from `GET /cards` by memo prefix
+   (`E(account).repair()`), audit-only facet
+   (`E(control).makeAuditor()`), provisioning recipes in the package
+   README.
+3. **Liveness** *(shipped, polling flavor)* — renewing budgets by lazy
+   carryover accrual against an injected clock (root grants only);
+   spend-monitor polling on the control facet.
+   Webhooks deliberately not pursued (inbound connectivity; no gain to
+   the safety argument).
+4. **Durability & confinement** *(shipped, recipe + seam)* — durable
+   per-grant references as persistent eval formulas over
+   `provideIssuer` (restart-tested); portable core split
+   (`account.js`) and a key-less confined entry point
+   (`confined-caplet.js`) over a mediated HTTP capability.
+   Remaining for a production confined deployment: `make-archive`
+   packaging, and storage/timer capabilities to restore persistence
+   and monitors inside confinement; SturdyRefs when they land.
 
 ## Design Decisions
 
@@ -421,17 +509,44 @@ only), exactly like existing caplet secrets
    scoped to grant-owned tokens.
 7. **Memo tagging** — every card's memo is prefixed with its grant
    name, making grants legible in the Privacy.com dashboard and
-   enabling Phase 2 stranding repair, at the cost of leaking grant
-   names to Privacy.com (acceptable: the owner names the grants).
+   enabling stranding repair, at the cost of leaking grant names to
+   Privacy.com (acceptable: the owner names the grants).
+8. **Carryover accrual over resetting budgets** — renewal credits
+   accumulate rather than expire, because a reset must decide what
+   happens to escrow spanning the period boundary; accrual is lazy
+   (computed on access from an injected clock) so it needs no timers
+   and is deterministic under test.
+9. **Repair adopts rather than rejects** — a stranded card found at
+   the API is recorded at its live spend limit even if that overdraws
+   the grant; recording less than real exposure would let the sum of
+   limits exceed the budget. Overdrawn grants cannot issue until
+   closed cards reclaim headroom or the owner deposits.
+10. **Durable grant references via eval formulas** — the daemon
+    already persists and re-derives eval formulas across restarts, so
+    `E(account).provideIssuer(name)` under an eval formula is a
+    durable reference today, without waiting for SturdyRefs.
+11. **Protocol/transport split** — `makePrivacyProtocol(call)` keeps
+    the endpoint surface pure; the unconfined client supplies a
+    key-injecting `call` over ambient fetch, the confined caplet a
+    `call` over a mediated fetch capability. One protocol, two trust
+    postures.
 
 ## Known Gaps and TODOs
 
-- [ ] Daemon integration test via `makeUnconfined` fixture (Phase 2).
-- [ ] Stranded-reservation repair on startup (Phase 2).
-- [ ] Audit-only facet (Phase 2).
-- [ ] Renewing budgets (Phase 3).
-- [ ] Webhook/polling spend telemetry (Phase 3).
-- [ ] Durable per-grant references (Phase 4).
+- [x] Daemon integration test via `makeUnconfined` (Phase 2).
+- [x] Stranded-reservation repair (`repair()`, Phase 2).
+- [x] Audit-only facet (Phase 2).
+- [x] Renewing budgets (carryover accrual, Phase 3).
+- [x] Polling spend telemetry (Phase 3).
+- [x] Durable per-grant references (eval-formula recipe, Phase 4).
+- [x] Confined entry point over a mediated fetch capability (Phase 4).
+- [ ] `make-archive` packaging of the confined variant, once a
+      standard mediated-fetch caplet ships to grant as its powers.
+- [ ] Storage and timer capabilities for the confined variant
+      (persistence and spend monitors inside confinement).
+- [ ] Non-carryover (resetting) renewal semantics.
+- [ ] Transaction webhooks, if inbound connectivity ever becomes
+      standard for daemon deployments.
 
 ## Prompt
 

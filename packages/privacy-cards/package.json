@@ -18,6 +18,8 @@
   "exports": {
     ".": "./src/caplet.js",
     "./caplet.js": "./src/caplet.js",
+    "./confined-caplet.js": "./src/confined-caplet.js",
+    "./src/account.js": "./src/account.js",
     "./src/client.js": "./src/client.js",
     "./src/ledger.js": "./src/ledger.js",
     "./package.json": "./package.json"
@@ -39,11 +41,13 @@
   },
   "dependencies": {
     "@endo/errors": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/patterns": "workspace:^"
   },
   "devDependencies": {
-    "@endo/eventual-send": "workspace:^",
+    "@endo/cancel": "workspace:^",
+    "@endo/daemon": "workspace:^",
     "@endo/init": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",

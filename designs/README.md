@@ -10,9 +10,13 @@ caplet while guests and agents hold budgeted `CardIssuer` facets that
 can create cards up to a fixed total across any number of cards, with
 a reservation/escrow ledger, recursive sub-issuers, caretaker
 `IssuerControl` revocation, and conservative refund-on-close
-reconciliation; Phase 1 shipped alongside the design as
-`packages/privacy-cards` with mock-API test coverage; slotted into M7
-beside endoclaw-oauth),
+reconciliation; Phases 1-4 shipped alongside the design as
+`packages/privacy-cards` with mock-API and forked-daemon test
+coverage — stranding repair, audit-only facet, renewing carryover
+budgets, polling spend monitors, restart-durable per-grant references
+via eval formulas over `provideIssuer`, and a key-less confined entry
+point over a mediated fetch capability; slotted into M7 beside
+endoclaw-oauth),
 [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) (added
 2026-06-23; design 2 of 2 in a competing pair addressing the
 maintainer's directive on PR #500 to land SturdyRefs in
@@ -823,7 +827,7 @@ automation.
 | daemon-weblet-application | Not Started | Readable trees, zip archives |
 | exo-zip-package | Proposed | `@endo/exo-zip` adapter: in-memory ZIP as `ReadableTree` exo; PR #128 reshape blocker |
 | endoclaw-oauth | Not Started | Credential capability — agent uses service without seeing token |
-| privacy-card-issuer | In Progress | Privacy.com virtual cards with cross-card budgets; Phase 1 (caplet + ledger + tests) shipped as `packages/privacy-cards` |
+| privacy-card-issuer | In Progress | Privacy.com virtual cards with cross-card budgets; Phases 1-4 shipped as `packages/privacy-cards` (caplet, ledger, repair, auditor, renewing budgets, spend monitor, daemon-restart-tested eval-formula grant refs, key-less confined entry point); residue: make-archive packaging, storage/timer caps for confinement |
 | endoclaw-proactive-messages | Not Started | Composes Timer + data caps + send() for briefings/reminders |
 | endoclaw-notifications | Not Started | `Notify` exo → Electron `Notification`; needs daemon↔Electron bridge |
 | endoclaw-webhooks | Not Started | Gateway webhook endpoints → agent inbox as messages |
@@ -1248,7 +1252,7 @@ have been remapped: 0 → 1, ½ → 2, 1 → 3, 2 → 4, 3 → 7, 4 → 9,
 | daemon-weblet-application | M | 4-5 days | 7 | Formula types, gateway serving (1.2x bump) |
 | exo-zip-package | S | 1-2 days | 7 | `@endo/exo-zip` adapter: in-memory ZIP as `ReadableTree` exo; PR #128 reshape blocker |
 | endoclaw-oauth | S-M | 3 days | 7 | Credential proxy exo, token injection (agent-side OAuth; distinct from gateway-oauth-bonding in M5) |
-| privacy-card-issuer | S-M | 3 days | 7 | Privacy.com caplet: reservation budget ledger, issuer/control caretaker facets; Phase 1 shipped with the design, ~2 days remain for Phases 2-4 hardening |
+| privacy-card-issuer | S-M | 3 days | 7 | Privacy.com caplet: reservation budget ledger, issuer/control caretaker facets; Phases 1-4 shipped with the design (remaining: make-archive packaging + storage/timer caps for the confined variant) |
 | endoclaw-proactive-messages | S | 1 day | 7 | Pattern doc: Timer + data caps + send() |
 | endoclaw-notifications | S | 1 day | 7 | Electron Notification API, rate-limited exo; needs daemon↔Electron bridge |
 | endoclaw-webhooks | S-M | 3 days | 7 | Gateway webhook routes → inbox messages |

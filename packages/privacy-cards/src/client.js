@@ -45,53 +45,21 @@ export const SANDBOX_BASE_URL = 'https://sandbox.privacy.com/v1';
 harden(SANDBOX_BASE_URL);
 
 /**
- * @param {PrivacyClientOptions} options
+ * A transport hook: performs one JSON call against the Privacy API.
+ * `makePrivacyClient` builds one from an API key and `fetch`; a
+ * confined caplet builds one from a mediated fetch *capability* that
+ * injects the credential outside the caplet (see confined-caplet.js).
+ *
+ * @typedef {(method: string, path: string, body?: object) =>
+ *   Promise<any>} PrivacyJsonCaller
  */
-export const makePrivacyClient = ({
-  apiKey,
-  baseUrl = PRODUCTION_BASE_URL,
-  fetchFn = globalThis.fetch,
-}) => {
-  if (typeof apiKey !== 'string' || apiKey === '') {
-    throw makeError(X`Privacy client requires a non-empty API key`);
-  }
-  const base = baseUrl.replace(/\/+$/, '');
 
-  /**
-   * @param {string} method
-   * @param {string} path Path under the base URL, starting with `/`.
-   * @param {object} [body]
-   * @returns {Promise<any>}
-   */
-  const call = async (method, path, body) => {
-    const response = await fetchFn(`${base}${path}`, {
-      method,
-      headers: {
-        Authorization: `api-key ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
-    if (!response.ok) {
-      let message = '';
-      try {
-        const errorBody = await response.json();
-        message = /** @type {{ message?: string }} */ (errorBody).message || '';
-      } catch {
-        // Non-JSON error body; status alone will have to do.
-      }
-      // Never leak the key, even if a hostile or buggy server echoes
-      // it back in its error message.
-      message = message.split(apiKey).join('[redacted]');
-      throw makeError(
-        X`Privacy API ${q(method)} ${q(path)} failed with status ${q(
-          response.status,
-        )}: ${q(message)}`,
-      );
-    }
-    return response.json();
-  };
-
+/**
+ * The Privacy.com v1 endpoint surface over an arbitrary transport.
+ *
+ * @param {PrivacyJsonCaller} call
+ */
+export const makePrivacyProtocol = call => {
   return harden({
     /** @returns {Promise<boolean>} */
     status: async () => {
@@ -151,6 +119,56 @@ export const makePrivacyClient = ({
       return transactions;
     },
   });
+};
+harden(makePrivacyProtocol);
+
+/**
+ * The protocol over the ambient transport: an API key and `fetch`.
+ * The key stays inside this closure; errors scrub it defensively.
+ *
+ * @param {PrivacyClientOptions} options
+ */
+export const makePrivacyClient = ({
+  apiKey,
+  baseUrl = PRODUCTION_BASE_URL,
+  fetchFn = globalThis.fetch,
+}) => {
+  if (typeof apiKey !== 'string' || apiKey === '') {
+    throw makeError(X`Privacy client requires a non-empty API key`);
+  }
+  const base = baseUrl.replace(/\/+$/, '');
+
+  /** @type {PrivacyJsonCaller} */
+  const call = async (method, path, body) => {
+    const response = await fetchFn(`${base}${path}`, {
+      method,
+      headers: {
+        Authorization: `api-key ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    if (!response.ok) {
+      let message = '';
+      try {
+        const errorBody = await response.json();
+        message = /** @type {{ message?: string }} */ (errorBody).message || '';
+      } catch {
+        // Non-JSON error body; status alone will have to do.
+      }
+      // Never leak the key, even if a hostile or buggy server echoes
+      // it back in its error message.
+      message = message.split(apiKey).join('[redacted]');
+      throw makeError(
+        X`Privacy API ${q(method)} ${q(path)} failed with status ${q(
+          response.status,
+        )}: ${q(message)}`,
+      );
+    }
+    return response.json();
+  };
+
+  return makePrivacyProtocol(call);
 };
 harden(makePrivacyClient);
 

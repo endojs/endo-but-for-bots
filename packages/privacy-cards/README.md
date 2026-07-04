@@ -38,6 +38,23 @@ const { issuer, control } = await E(account).makeIssuer('shopper', {
   budgetCents: 100_000,
 });
 // Send `issuer` to the agent; keep `control`.
+
+// Or a renewing allowance: $200 now and $200 more each month,
+// carrying over when unspent (root grants only).
+await E(account).makeIssuer('kid', {
+  budgetCents: 20_000,
+  renewal: { amountCents: 20_000, periodMs: 30 * 24 * 60 * 60 * 1000 },
+});
+```
+
+For a reference that survives daemon restarts, name an eval formula
+over the recovery method — the daemon persists the formula and
+re-derives the facet on demand:
+
+```sh
+endo eval "E(account).provideIssuer('shopper').then(kit => kit.issuer)" \
+  account:privacy-account --name shopper-issuer
+endo send agent @shopper-issuer
 ```
 
 ```js
@@ -61,8 +78,31 @@ const { issuer: sub } = await E(issuer).makeSubIssuer('vendor-a', {
 // Owner side, later:
 await E(control).audit(); // budget, remaining, per-card reservations
 await E(control).reconcile(); // + live approved spend per card
+const auditor = await E(control).makeAuditor(); // read-only facet for
+// an accountant: audit() and reconcile(), no mutation authority
+await E(control).startSpendMonitor({ intervalMs: 60_000 }); // poll
+await E(control).readSpendMonitor(); // latest per-card approved spend
+await E(control).deposit(50_000); // top the budget up
 await E(control).revoke(); // brick issuer + subs, pause open cards
+
+// After a crash or an interrupted create, reconcile the ledger with
+// reality: adopt cards found at the API by their grant memo tag, and
+// clear reservations that never became cards.
+await E(account).repair();
 ```
+
+## Confined variant
+
+`src/confined-caplet.js` is the same account with the opposite trust
+posture: it imports no Node builtins and holds **no API key** — its
+`powers` must be a mediated HTTP capability, bound to the Privacy base
+URL, that injects the `Authorization` header outside the caplet (the
+endoclaw-oauth idiom).
+A fully compromised confined caplet cannot exfiltrate the key because
+no path from its capabilities reaches it.
+Both entry points share the portable core in `src/account.js`; the
+confined one currently keeps its ledger in memory and disables spend
+monitors, pending standard storage and timer capabilities.
 
 ## How the budget holds
 

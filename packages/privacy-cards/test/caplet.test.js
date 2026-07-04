@@ -6,140 +6,20 @@ import '@endo/init/debug.js';
 
 import test from 'ava';
 import fs from 'node:fs';
-import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
 import { make } from '../src/caplet.js';
+import { makeMockPrivacyApi } from './mock-privacy-api.js';
 
 const API_KEY = 'test-key-do-not-leak';
-
-/**
- * Minimal in-memory stand-in for the Privacy.com v1 API, faithful to
- * the request/response shapes the caplet relies on.
- */
-const makeMockPrivacyApi = async () => {
-  /** @type {Map<string, any>} */
-  const cards = new Map();
-  /** @type {Map<string, any[]>} */
-  const transactions = new Map();
-  let nextCard = 1;
-  let failNextCreate = false;
-
-  const server = http.createServer((request, response) => {
-    /**
-     * @param {number} status
-     * @param {unknown} body
-     */
-    const reply = (status, body) => {
-      response.writeHead(status, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify(body));
-    };
-    let requestBody = '';
-    request.on('data', chunk => {
-      requestBody += chunk;
-    });
-    request.on('end', () => {
-      if (request.headers.authorization !== `api-key ${API_KEY}`) {
-        reply(401, { message: 'User has not been authenticated' });
-        return;
-      }
-      const url = new URL(
-        /** @type {string} */ (request.url),
-        'http://localhost',
-      );
-      const { pathname } = url;
-      if (request.method === 'GET' && pathname === '/v1/status') {
-        reply(200, { message: 'API is up' });
-      } else if (
-        request.method === 'GET' &&
-        pathname === '/v1/funding-sources'
-      ) {
-        reply(200, []);
-      } else if (request.method === 'GET' && pathname === '/v1/cards') {
-        reply(200, { data: [...cards.values()] });
-      } else if (request.method === 'POST' && pathname === '/v1/cards') {
-        if (failNextCreate) {
-          failNextCreate = false;
-          reply(500, { message: `internal error; key was ${API_KEY}` });
-          return;
-        }
-        const spec = JSON.parse(requestBody);
-        const token = `card-${nextCard}`;
-        nextCard += 1;
-        const card = {
-          token,
-          pan: `411111128914${String(4000 + nextCard)}`,
-          cvv: '776',
-          exp_month: '06',
-          exp_year: '2030',
-          last_four: String(4000 + nextCard),
-          memo: spec.memo || '',
-          spend_limit: spec.spend_limit,
-          spend_limit_duration: spec.spend_limit_duration,
-          state: spec.state || 'OPEN',
-          type: spec.type,
-        };
-        cards.set(token, card);
-        reply(200, card);
-      } else if (
-        request.method === 'PATCH' &&
-        pathname.startsWith('/v1/cards/')
-      ) {
-        const token = decodeURIComponent(pathname.slice('/v1/cards/'.length));
-        const card = cards.get(token);
-        if (!card) {
-          reply(404, { message: 'card not found' });
-          return;
-        }
-        Object.assign(card, JSON.parse(requestBody));
-        reply(200, card);
-      } else if (request.method === 'GET' && pathname === '/v1/transactions') {
-        const token = url.searchParams.get('card_token');
-        reply(200, {
-          data: transactions.get(token || '') || [],
-          page: 1,
-          total_pages: 1,
-        });
-      } else {
-        reply(404, { message: 'no such endpoint' });
-      }
-    });
-  });
-
-  await new Promise(resolve => {
-    server.listen(0, '127.0.0.1', () => resolve(undefined));
-  });
-  const address = /** @type {import('net').AddressInfo} */ (server.address());
-
-  return harden({
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
-    cards,
-    /**
-     * @param {string} cardToken
-     * @param {{ amount: number, result: string, status: string }} transaction
-     */
-    addTransaction: (cardToken, transaction) => {
-      const list = transactions.get(cardToken) || [];
-      list.push(transaction);
-      transactions.set(cardToken, list);
-    },
-    failNextCreate: () => {
-      failNextCreate = true;
-    },
-    close: () =>
-      new Promise(resolve => {
-        server.close(() => resolve(undefined));
-      }),
-  });
-};
 
 /**
  * @param {import('ava').ExecutionContext} t
  * @param {Record<string, string>} [extraEnv]
  */
 const prepareAccount = async (t, extraEnv = {}) => {
-  const api = await makeMockPrivacyApi();
+  const api = await makeMockPrivacyApi({ apiKey: API_KEY });
   t.teardown(() => api.close());
   const account = make(undefined, undefined, {
     env: {
