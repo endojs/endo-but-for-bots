@@ -61,3 +61,29 @@ export const AssetServerInterface = M.interface(
   },
   { sloppy: true },
 );
+
+/**
+ * The agent-facing facet of the asset server: everything in
+ * `AssetServerInterface` EXCEPT `stop()`. The server is a shared
+ * singleton (one per daemon, bound to a fixed loopback port that Caddy
+ * proxies), so handing `stop()` to arbitrary caller agents is a
+ * footgun — one guest stopping it tears the HTTP listener out from
+ * under every other user and can wedge the caplet (the daemon then
+ * reincarnates the formula into a new worker that collides on the still
+ * held port). `asset-server-module.js` returns this facet; the full
+ * `AssetServerInterface` (with `stop`) stays internal / for tests.
+ */
+export const AssetServerPublicInterface = M.interface(
+  'AssetServer',
+  {
+    serve: M.call(M.eref(M.remotable('Filesystem')))
+      .optional(M.record())
+      .returns(M.promise()),
+    serveAt: M.call(M.string(), M.eref(M.remotable('Filesystem')))
+      .optional(M.record())
+      .returns(M.promise()),
+    getAddress: M.call().returns(M.record()),
+    help: M.call().optional(M.string()).returns(M.string()),
+  },
+  { sloppy: true },
+);
