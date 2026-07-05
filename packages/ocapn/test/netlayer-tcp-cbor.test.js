@@ -4,9 +4,10 @@ import net from 'net';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
 import { test } from './_util.js';
-import { makeClient } from '../src/client/index.js';
+import { makeOcapn } from '../src/client/index.js';
 import { makeTcpNetLayer } from '../src/netlayers/tcp-test-only.js';
 import { encodeSwissnum } from '../src/client/util.js';
+import { cborCodec } from '../src/cbor/index.js';
 
 // Tag-24 wrapper bytes that prefix every CBOR-framed record on the
 // wire: 0xd8 (major type 6 with one follow-byte argument) and 0x18
@@ -19,6 +20,51 @@ const TAG_24_ARG = 0x18;
 // width or the inline length for short payloads).
 const MAJOR_2_BASE = 0x40;
 const MAJOR_3_BASE = 0x60;
+
+/**
+ * @template T
+ * @typedef {{ netlayer?: T }} NetlayerRef
+ */
+
+/**
+ * Wrap `makeTcpNetLayer` so its resolved netlayer is captured in
+ * `netlayerRef.netlayer`, since the single-network `makeOcapn` API does
+ * not otherwise expose the underlying network for the test to inspect.
+ * The explicit `'cbor'` framing exercises the CBOR-tag-24 wire format.
+ *
+ * @param {NetlayerRef<Awaited<ReturnType<typeof makeTcpNetLayer>>>} netlayerRef
+ * @param {string} specifiedDesignator
+ */
+const captureTcpNetLayer =
+  (netlayerRef, specifiedDesignator) => (handlers, logger) =>
+    makeTcpNetLayer({
+      handlers,
+      logger,
+      specifiedDesignator,
+      framing: 'cbor',
+    }).then(netlayer => {
+      netlayerRef.netlayer = netlayer;
+      return netlayer;
+    });
+
+/**
+ * As `captureTcpNetLayer`, but omits the `framing` option entirely so
+ * the netlayer falls back to its default. That default is `'cbor'`, so
+ * two peers built this way must interoperate without an explicit value.
+ *
+ * @param {NetlayerRef<Awaited<ReturnType<typeof makeTcpNetLayer>>>} netlayerRef
+ * @param {string} specifiedDesignator
+ */
+const captureTcpNetLayerDefaultFraming =
+  (netlayerRef, specifiedDesignator) => (handlers, logger) =>
+    makeTcpNetLayer({
+      handlers,
+      logger,
+      specifiedDesignator,
+    }).then(netlayer => {
+      netlayerRef.netlayer = netlayer;
+      return netlayer;
+    });
 
 /**
  * Establishes a TCP server that accepts a single inbound connection,
@@ -53,9 +99,12 @@ const makeSnifferServer = async () => {
     /** @type {Uint8Array[]} */
     const chunks = [];
     socket.on('data', data => {
-      chunks.push(
-        new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
-      );
+      // `socket.on('data', ...)` types `data` as `string | NonSharedBuffer`
+      // (a `setEncoding`-aware overload). The TCP-testing socket runs in
+      // raw binary mode, so `data` is always a `Buffer`; assert that here
+      // and adapt to the TypedArray surface the rest of the test uses.
+      const buf = /** @type {Buffer} */ (data);
+      chunks.push(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength));
     });
     socket.on('error', err => rejectBytes(err));
     socket.on('close', () => {
@@ -101,17 +150,20 @@ test('cbor framing wraps outgoing bytes with a tag-24 byte-string head', async t
   const sniffer = await makeSnifferServer();
   t.teardown(() => sniffer.close());
 
-  const client = makeClient({ debugLabel: 'cbor-sniff', debugMode: true });
+  /** @type {NetlayerRef<Awaited<ReturnType<typeof makeTcpNetLayer>>>} */
+  const netlayerRef = {};
+  const client = await makeOcapn({
+    codec: cborCodec,
+    network: captureTcpNetLayer(netlayerRef, 'sniff-A'),
+    debugLabel: 'cbor-sniff',
+    debugMode: true,
+  });
   t.teardown(() => client.shutdown());
 
-  const netlayer = await client.registerNetlayer((handlers, logger) =>
-    makeTcpNetLayer({
-      handlers,
-      logger,
-      specifiedDesignator: 'sniff-A',
-      framing: 'cbor',
-    }),
-  );
+  if (!netlayerRef.netlayer) {
+    throw Error('makeTcpNetLayer did not resolve a netlayer');
+  }
+  const netlayer = netlayerRef.netlayer;
 
   // Trigger an outbound handshake to the sniffer. The sniffer
   // half-closes its write side as soon as the first chunk arrives,
@@ -156,7 +208,7 @@ test('cbor framing wraps outgoing bytes with a tag-24 byte-string head', async t
   } else if (additional === 26) {
     headLength = 7;
     declaredPayloadLength =
-      bytes[3] * 0x1000000 + bytes[4] * 0x10000 + bytes[5] * 0x100 + bytes[6];
+      bytes[3] * 0x100_0000 + bytes[4] * 0x1_0000 + bytes[5] * 0x100 + bytes[6];
   } else {
     t.fail(
       `unexpected additional-info ${additional} in major-type-2 head; test does not cover the 8-byte-follow case`,
@@ -172,44 +224,41 @@ test('cbor framing wraps outgoing bytes with a tag-24 byte-string head', async t
 });
 
 test('cbor framing round-trip through the test-only TCP netlayer', async t => {
-  const swissnumTable = new Map();
-  swissnumTable.set(
+  const locator = new Map();
+  locator.set(
     'Echo',
     Far('echo', {
       echo: value => value,
     }),
   );
 
-  const clientA = makeClient({
+  /** @type {NetlayerRef<Awaited<ReturnType<typeof makeTcpNetLayer>>>} */
+  const netlayerRefA = {};
+  /** @type {NetlayerRef<Awaited<ReturnType<typeof makeTcpNetLayer>>>} */
+  const netlayerRefB = {};
+
+  const clientA = await makeOcapn({
+    codec: cborCodec,
+    network: captureTcpNetLayer(netlayerRefA, 'cbor-A'),
     debugLabel: 'cbor-A',
     debugMode: true,
   });
-  const clientB = makeClient({
+  const clientB = await makeOcapn({
+    codec: cborCodec,
+    network: captureTcpNetLayer(netlayerRefB, 'cbor-B'),
     debugLabel: 'cbor-B',
     debugMode: true,
-    swissnumTable,
+    locator,
   });
   t.teardown(() => {
     clientA.shutdown();
     clientB.shutdown();
   });
 
-  await clientA.registerNetlayer((handlers, logger) =>
-    makeTcpNetLayer({
-      handlers,
-      logger,
-      specifiedDesignator: 'cbor-A',
-      framing: 'cbor',
-    }),
-  );
-  const netlayerB = await clientB.registerNetlayer((handlers, logger) =>
-    makeTcpNetLayer({
-      handlers,
-      logger,
-      specifiedDesignator: 'cbor-B',
-      framing: 'cbor',
-    }),
-  );
+  if (!netlayerRefB.netlayer) {
+    throw Error('makeTcpNetLayer did not resolve a netlayer');
+  }
+  const netlayerB = netlayerRefB.netlayer;
 
   const session = await clientA.provideSession(netlayerB.location);
   const bootstrap = session.getBootstrap();
@@ -222,42 +271,41 @@ test('cbor framing is the default when no framing option is passed', async t => 
   // Mirror the round-trip but omit the `framing` option; the default
   // should be `'cbor'` so the two peers interoperate without an
   // explicit value.
-  const swissnumTable = new Map();
-  swissnumTable.set(
+  const locator = new Map();
+  locator.set(
     'Echo',
     Far('echo', {
       echo: value => value,
     }),
   );
 
-  const clientA = makeClient({
+  /** @type {NetlayerRef<Awaited<ReturnType<typeof makeTcpNetLayer>>>} */
+  const netlayerRefA = {};
+  /** @type {NetlayerRef<Awaited<ReturnType<typeof makeTcpNetLayer>>>} */
+  const netlayerRefB = {};
+
+  const clientA = await makeOcapn({
+    codec: cborCodec,
+    network: captureTcpNetLayerDefaultFraming(netlayerRefA, 'cbor-default-A'),
     debugLabel: 'cbor-default-A',
     debugMode: true,
   });
-  const clientB = makeClient({
+  const clientB = await makeOcapn({
+    codec: cborCodec,
+    network: captureTcpNetLayerDefaultFraming(netlayerRefB, 'cbor-default-B'),
     debugLabel: 'cbor-default-B',
     debugMode: true,
-    swissnumTable,
+    locator,
   });
   t.teardown(() => {
     clientA.shutdown();
     clientB.shutdown();
   });
 
-  await clientA.registerNetlayer((handlers, logger) =>
-    makeTcpNetLayer({
-      handlers,
-      logger,
-      specifiedDesignator: 'cbor-default-A',
-    }),
-  );
-  const netlayerB = await clientB.registerNetlayer((handlers, logger) =>
-    makeTcpNetLayer({
-      handlers,
-      logger,
-      specifiedDesignator: 'cbor-default-B',
-    }),
-  );
+  if (!netlayerRefB.netlayer) {
+    throw Error('makeTcpNetLayer did not resolve a netlayer');
+  }
+  const netlayerB = netlayerRefB.netlayer;
 
   const session = await clientA.provideSession(netlayerB.location);
   const bootstrap = session.getBootstrap();
