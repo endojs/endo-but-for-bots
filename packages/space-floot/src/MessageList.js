@@ -88,11 +88,30 @@ const ThinkingRow = () =>
     ),
   );
 
+// Raw debug block: the exact structured output for one message (assistant
+// content, or a tool call's name/args/result), as pretty JSON. Reuses the
+// tool-row styling so no new CSS is needed.
+const RawBlock = (/** @type {string} */ key, /** @type {unknown} */ msg) =>
+  h(
+    'div',
+    { key, class: 'floot-msg-row assistant' },
+    h(
+      'div',
+      { class: 'floot-tool' },
+      h(
+        'div',
+        { class: 'floot-tool-label' },
+        `${/** @type {any} */ (msg).role || 'raw'} (raw)`,
+      ),
+      h('pre', { class: 'floot-tool-pre' }, JSON.stringify(msg, null, 2)),
+    ),
+  );
+
 /**
- * @param {{ state: FlootState, controller: FlootController }} props
+ * @param {{ state: FlootState, controller: FlootController, debug?: boolean }} props
  * @returns {VNode}
  */
-export const MessageList = ({ state, controller }) => {
+export const MessageList = ({ state, controller, debug = false }) => {
   const { messages, streamingText, busy, loaded, voice } = state;
   const canReplay = Boolean(voice && voice.hasTts);
   const replayingText = voice && voice.replayingText;
@@ -117,6 +136,21 @@ export const MessageList = ({ state, controller }) => {
       { class: 'floot-messages' },
       h('div', { class: 'floot-empty-state' }, 'Say hello to Floot.'),
     );
+  }
+
+  // Debug view: show each message's raw structured output verbatim instead of
+  // the rendered transcript, plus the live raw stream. A pure re-projection of
+  // the same snapshot, so it updates as the turn streams.
+  if (debug) {
+    const rawRows = messages.map((msg, i) => RawBlock(`raw-${i}`, msg));
+    if (streamingText) {
+      rawRows.push(
+        RawBlock('raw-streaming', { role: 'assistant', text: streamingText }),
+      );
+    } else if (busy) {
+      rawRows.push(h(ThinkingRow, { key: 'thinking' }));
+    }
+    return h('div', { class: 'floot-messages' }, rawRows);
   }
 
   const rows = [];

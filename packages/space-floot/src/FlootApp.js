@@ -114,6 +114,10 @@ export const FlootApp = ({ controller }) => {
   const [modalOpen, setModalOpen] = useState(false);
   const [titleEditing, setTitleEditing] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
+  // Debug view: reveal each turn's raw structured output (assistant content,
+  // tool calls and results) as JSON. Local to this mount — a pure view toggle
+  // over the same snapshot, so it needs no controller/host plumbing.
+  const [debug, setDebug] = useState(false);
 
   const { sessions, activeSessionId, presets, models, usage, status } = state;
   const active = sessions.find(s => s.id === activeSessionId);
@@ -194,6 +198,17 @@ export const FlootApp = ({ controller }) => {
       'button',
       {
         type: 'button',
+        class: `floot-header-btn${debug ? ' on' : ''}`,
+        'aria-label': 'Toggle raw debug view',
+        title: 'Raw model output (debug)',
+        onClick: () => setDebug(d => !d),
+      },
+      '</>',
+    ),
+    h(
+      'button',
+      {
+        type: 'button',
         class: `floot-header-btn${state.settingsOpen ? ' on' : ''}`,
         'aria-label': 'Settings & transcription',
         onClick: () => controller.toggleSettings(),
@@ -229,7 +244,7 @@ export const FlootApp = ({ controller }) => {
       header,
       state.settingsOpen
         ? h(SettingsPanel, { state })
-        : h(MessageList, { state, controller }),
+        : h(MessageList, { state, controller, debug }),
       statusBar,
       h(ComposeBar, { state, controller }),
     ),
