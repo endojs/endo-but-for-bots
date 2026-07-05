@@ -93,7 +93,7 @@ test('the confined caplet issues budgeted cards with no key in reach', async t =
 });
 
 test('the confined caplet refuses to start without a powers capability', t => {
-  t.throws(() => make(undefined, undefined), {
+  t.throws(() => make(/** @type {any} */ (undefined), undefined), {
     message: /mediated HTTP capability/,
   });
 });

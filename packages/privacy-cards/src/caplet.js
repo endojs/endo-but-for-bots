@@ -11,7 +11,9 @@
 // with env: PRIVACY_API_KEY (required), PRIVACY_API_BASE_URL (optional;
 // defaults to production, point at https://sandbox.privacy.com/v1 for
 // the sandbox), PRIVACY_STATE_FILE (optional; JSON ledger persistence
-// across daemon restarts — without it the ledger is in-memory only).
+// across daemon restarts — without it the ledger is in-memory only),
+// PRIVACY_HTTP_TIMEOUT_MS (optional; per-request inactivity bound,
+// default 30000).
 //
 // This file is only the Node shell: it turns ambient Node authority
 // (fetch, the filesystem, the clock, timers) into the injected powers
@@ -30,6 +32,8 @@ import { makeAccount } from './account.js';
 import { PRODUCTION_BASE_URL, makePrivacyClient } from './client.js';
 import { makeBudgetLedger } from './ledger.js';
 import { nodeFetch } from './node-fetch.js';
+
+/** @import { FetchLike } from './client.js' */
 
 /**
  * Atomic-ish JSON persistence: write to a temp file, then rename.
@@ -82,7 +86,10 @@ export const make = (_powers, context, { env = {} } = {}) => {
   // Plain node:http instead of the global fetch: Node 24's undici
   // misbehaves under SES lockdown (see node-fetch.js), and this shell
   // is Node-only by definition.
-  const client = makePrivacyClient({ apiKey, baseUrl, fetchFn: nodeFetch });
+  const timeoutMs = Number(env.PRIVACY_HTTP_TIMEOUT_MS) || undefined;
+  /** @type {FetchLike} */
+  const fetchFn = (url, init) => nodeFetch(url, { ...init, timeoutMs });
+  const client = makePrivacyClient({ apiKey, baseUrl, fetchFn });
   const ledger = makeBudgetLedger({
     ...(stateFile ? makeFileHooks(stateFile) : {}),
     now: () => Date.now(),

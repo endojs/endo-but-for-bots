@@ -302,9 +302,12 @@ interface IssuerControl {
   reconcile(): Promise<GrantAudit>;    // + live approved spend per card
   makeAuditor(): GrantAuditor;         // read-only attenuation: audit +
                                        // reconcile only (for an accountant)
-  deposit(amountCents: number): void;  // only way a budget grows
+  deposit(amountCents: number): void;  // only facet-reachable budget
+                                       // growth (renewal accrual, set
+                                       // at makeIssuer, also grows it)
   startSpendMonitor(opts: { intervalMs: number }): void;  // poll live spend
-  readSpendMonitor(): SpendReport;     // { active, polls, cards, lastError? }
+  readSpendMonitor(): SpendReport;     // { active, intervalMs?, polls,
+                                       //   cards, lastError? }
   stopSpendMonitor(): void;
   revoke(): Promise<RevocationReport>; // pause all cards, brick issuer + subs
   help(): string;
@@ -418,6 +421,8 @@ only), exactly like existing caplet secrets
   Authorization header.
 - **Budget escalation**: `deposit` exists only on `IssuerControl`;
   `makeSubIssuer` can only *reserve from* (never add to) the parent.
+  Renewal accrual also grows a budget, but its schedule is fixed by
+  the owner at `makeIssuer` and unreachable from any facet.
 - **Cross-grant reach**: card operations take a `cardToken` but are
   checked against the grant's own ledger entry before any API call —
   a guessed or leaked foreign token is rejected without touching the

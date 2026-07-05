@@ -351,6 +351,12 @@ export const makeAccount = ({ client, ledger, delay }) => {
             );
           }
         }
+        if (subName.includes('/')) {
+          // '/' is the grant-tree path separator; allowing it in a
+          // segment would let 'a' + 'b/c' collide with 'a/b' + 'c',
+          // aliasing default memo prefixes across grants.
+          throw makeError(X`Sub-grant name ${q(subName)} must not contain '/'`);
+        }
         const fullName = `${grantName}/${subName}`;
         ledger.createGrant(fullName, {
           budgetCents,
@@ -521,6 +527,14 @@ export const makeAccount = ({ client, ledger, delay }) => {
 
   const account = makeExo('PrivacyAccount', PrivacyAccountInterface, {
     makeIssuer: (grantName, options) => {
+      if (grantName.includes('/')) {
+        // Reserved as the sub-grant path separator: a root named 'a/b'
+        // would derive the same default memo prefix as sub-grant 'b'
+        // of 'a', and repair() could misattribute stranded cards.
+        throw makeError(
+          X`Grant name ${q(grantName)} must not contain '/'; it is the sub-grant path separator`,
+        );
+      }
       const {
         budgetCents,
         allowedTypes = DEFAULT_ALLOWED_TYPES,
@@ -573,12 +587,22 @@ export const makeAccount = ({ client, ledger, delay }) => {
                 !claimed.has(apiCard.token) &&
                 memoMatchesPrefix(apiCard.memo || '', snapshot.memoPrefix)
               ) {
-                ledger.adoptCard(
-                  grantName,
-                  apiCard.token,
-                  apiCard.spend_limit,
-                  { closed: apiCard.state === 'CLOSED' },
-                );
+                ledger.adoptCard(grantName, apiCard.token, apiCard.spend_limit);
+                if (apiCard.state === 'CLOSED') {
+                  // A card already closed at the API has zero future
+                  // exposure; reconcile it like closeCard does, so its
+                  // unspent reservation is refunded rather than
+                  // stranded against the budget forever.
+                  // eslint-disable-next-line no-await-in-loop
+                  const transactions = await client.listCardTransactions(
+                    apiCard.token,
+                  );
+                  ledger.closeCard(
+                    grantName,
+                    apiCard.token,
+                    approvedSpendCents(transactions),
+                  );
+                }
                 claimed.add(apiCard.token);
                 adoptedCards.push(
                   harden({ grantName, cardToken: apiCard.token }),

@@ -19,9 +19,6 @@
     ".": "./src/caplet.js",
     "./caplet.js": "./src/caplet.js",
     "./confined-caplet.js": "./src/confined-caplet.js",
-    "./src/account.js": "./src/account.js",
-    "./src/client.js": "./src/client.js",
-    "./src/ledger.js": "./src/ledger.js",
     "./package.json": "./package.json"
   },
   "scripts": {

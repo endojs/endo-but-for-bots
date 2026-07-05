@@ -1,5 +1,4 @@
 // @ts-check
-/* global globalThis */
 
 // Minimal Privacy.com v1 API client.
 // The client closes over the API key; nothing it returns or throws ever
@@ -30,7 +29,8 @@ import { makeError, q, X } from '@endo/errors';
  * @property {string} [baseUrl] API base, default production
  * `https://api.privacy.com/v1`; use `https://sandbox.privacy.com/v1`
  * for the sandbox, or a local mock in tests.
- * @property {FetchLike} [fetchFn] Injectable transport.
+ * @property {FetchLike} fetchFn Transport, deliberately required: a
+ * credential-handling module should not reach for ambient `fetch`.
  */
 
 /**
@@ -128,8 +128,15 @@ export const makePrivacyProtocol = call => {
             cardToken,
           )}&page=${page}`,
         );
-        transactions.push(...(result.data || []));
-        totalPages = Number(result.total_pages) || 1;
+        // Tolerate a bare array like listCards does: silently reading
+        // `[]` here would under-report approved spend and over-refund.
+        if (Array.isArray(result)) {
+          transactions.push(...result);
+          totalPages = 1;
+        } else {
+          transactions.push(...(result.data || []));
+          totalPages = Number(result.total_pages) || 1;
+        }
         page += 1;
       } while (page <= totalPages);
       return transactions;
@@ -147,10 +154,13 @@ harden(makePrivacyProtocol);
 export const makePrivacyClient = ({
   apiKey,
   baseUrl = PRODUCTION_BASE_URL,
-  fetchFn = globalThis.fetch,
+  fetchFn,
 }) => {
   if (typeof apiKey !== 'string' || apiKey === '') {
     throw makeError(X`Privacy client requires a non-empty API key`);
+  }
+  if (typeof fetchFn !== 'function') {
+    throw makeError(X`Privacy client requires an explicit fetch transport`);
   }
   const base = baseUrl.replace(/\/+$/, '');
 
@@ -168,7 +178,11 @@ export const makePrivacyClient = ({
       let message = '';
       try {
         const errorBody = await response.json();
-        message = /** @type {{ message?: string }} */ (errorBody).message || '';
+        // Coerced: a server could return a non-string message, and the
+        // redaction below must not throw and drop the status context.
+        message = String(
+          /** @type {{ message?: unknown }} */ (errorBody)?.message ?? '',
+        );
       } catch {
         // Non-JSON error body; status alone will have to do.
       }

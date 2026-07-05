@@ -14,17 +14,28 @@
 import http from 'node:http';
 import https from 'node:https';
 
+// A server that accepts the connection but never responds would
+// otherwise leave the promise unsettled forever — and since budget
+// mutations serialize through the account mutex, one hung request
+// would deadlock every future mutation on the account.
+export const DEFAULT_TIMEOUT_MS = 30_000;
+harden(DEFAULT_TIMEOUT_MS);
+
 /**
  * Satisfies the client's `FetchLike` contract (see client.js), plus
- * `text()` for callers that relay raw bodies.
+ * `text()` for callers that relay raw bodies and a `timeoutMs`
+ * inactivity bound.
  *
  * @param {string} url
  * @param {{ method?: string, headers?: Record<string, string>,
- *   body?: string }} [init]
+ *   body?: string, timeoutMs?: number }} [init]
  * @returns {Promise<{ ok: boolean, status: number,
  *   json(): Promise<any>, text(): Promise<string> }>}
  */
-export const nodeFetch = (url, { method = 'GET', headers = {}, body } = {}) =>
+export const nodeFetch = (
+  url,
+  { method = 'GET', headers = {}, body, timeoutMs = DEFAULT_TIMEOUT_MS } = {},
+) =>
   new Promise((resolve, reject) => {
     const target = new URL(url);
     const transport = target.protocol === 'https:' ? https : http;
@@ -55,6 +66,11 @@ export const nodeFetch = (url, { method = 'GET', headers = {}, body } = {}) =>
       },
     );
     request.on('error', reject);
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(
+        new Error(`request timed out after ${timeoutMs}ms of inactivity`),
+      );
+    });
     if (body !== undefined) {
       request.write(body);
     }

@@ -376,7 +376,7 @@ test('repair adopts stranded cards by memo prefix and clears stale reservations'
   t.deepEqual(again.rolledBackPendings, []);
 });
 
-test('repair records already-closed stranded cards as closed', async t => {
+test('repair reconciles already-closed stranded cards instead of stranding their budget', async t => {
   const { api, account } = await prepareCore(t);
   const { issuer } = account.makeIssuer(
     'shopper',
@@ -388,13 +388,33 @@ test('repair records already-closed stranded cards as closed', async t => {
     state: 'CLOSED',
     type: 'SINGLE_USE',
   });
+  api.addTransaction(stranded.token, {
+    amount: -1500,
+    result: 'APPROVED',
+    status: 'SETTLED',
+  });
   await account.repair();
   const [entry] = issuer.listCards();
   t.is(entry.cardToken, stranded.token);
   t.true(entry.closed);
-  // Conservative: no refund is presumed for a card that already closed.
-  t.is(entry.refundedCents, 0);
-  t.is(issuer.remainingCents(), 6000);
+  // A closed card has zero future exposure: its unspent reservation is
+  // refunded through the same conservative reconciliation closeCard
+  // uses, rather than stranded against the budget forever.
+  t.is(entry.refundedCents, 2500);
+  t.is(issuer.remainingCents(), 8500);
+});
+
+test('grant names cannot contain the sub-grant path separator', async t => {
+  const { account } = await prepareCore(t);
+  // A root named 'a/b' would derive the same default memo prefix as
+  // sub-grant 'b' of 'a', letting repair() misattribute stranded cards.
+  t.throws(() => account.makeIssuer('a/b', harden({ budgetCents: 1000 })), {
+    message: /must not contain '\/'/,
+  });
+  const { issuer } = account.makeIssuer('a', harden({ budgetCents: 1000 }));
+  t.throws(() => issuer.makeSubIssuer('b/c', harden({ budgetCents: 100 })), {
+    message: /must not contain '\/'/,
+  });
 });
 
 test('repair leaves revoked grants alone', async t => {

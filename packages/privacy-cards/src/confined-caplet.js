@@ -43,7 +43,18 @@ import { makeBudgetLedger } from './ledger.js';
 /** @import { PrivacyJsonCaller } from './client.js' */
 
 /**
- * @param {any} powers a PrivacyHttp capability (see module comment)
+ * @typedef {object} PrivacyHttpPower
+ * @property {(path: string, options?: {
+ *   method?: string,
+ *   headers?: Record<string, string>,
+ *   body?: string,
+ * }) => Promise<any>} fetch resolves to a PrivacyHttpResponse
+ * remotable (see module comment); typed loosely because it arrives
+ * across a membrane and is only addressed with E().
+ */
+
+/**
+ * @param {PrivacyHttpPower} powers a PrivacyHttp capability
  * @param {unknown} _context
  */
 export const make = (powers, _context) => {

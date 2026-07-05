@@ -121,8 +121,13 @@ export const makeBudgetLedger = ({ restore, persist, now } = {}) => {
     }
     const periods = Math.floor((now() - renewal.anchorMs) / renewal.periodMs);
     if (periods > renewal.accruedPeriods) {
-      grant.budgetCents +=
-        (periods - renewal.accruedPeriods) * renewal.amountCents;
+      // Clamped: an extreme owner-set schedule left idle for ages must
+      // not push the budget past safe-integer arithmetic.
+      grant.budgetCents = Math.min(
+        Number.MAX_SAFE_INTEGER,
+        grant.budgetCents +
+          (periods - renewal.accruedPeriods) * renewal.amountCents,
+      );
       renewal.accruedPeriods = periods;
       save();
     }
@@ -369,14 +374,16 @@ export const makeBudgetLedger = ({ restore, persist, now } = {}) => {
      * issuance. Deliberately skips the budget check: the card already
      * exists, so the account's real exposure must be recorded even if
      * that drives the grant's remaining budget negative and blocks
-     * further issuance.
+     * further issuance. Adoption always records the card as open; a
+     * card already closed at the API should be adopted and then closed
+     * through `closeCard` with its reconciled spend, so its unspent
+     * reservation is refunded rather than stranded forever.
      *
      * @param {string} name
      * @param {string} cardToken
      * @param {number} reservedCents the card's live spend limit
-     * @param {{ closed?: boolean }} [opts]
      */
-    adoptCard: (name, cardToken, reservedCents, { closed = false } = {}) => {
+    adoptCard: (name, cardToken, reservedCents) => {
       assertCents(reservedCents, 'adopted spend limit');
       const grant = getGrant(name);
       if (grant.cards[cardToken]) {
@@ -384,7 +391,7 @@ export const makeBudgetLedger = ({ restore, persist, now } = {}) => {
       }
       grant.cards[cardToken] = {
         reservedCents,
-        closed,
+        closed: false,
         refundedCents: 0,
       };
       save();
