@@ -177,7 +177,7 @@ export const make = async (_powers, _context, opts = {}) => {
       );
     }
     const fs = readOnly(makeNodeFilesystem({ rootPath: staticDir }));
-    server.serveAt(token, fs, { index: staticIndex });
+    await server.serveAt(token, fs, { index: staticIndex });
     // Log where the URL lives, not the capability itself.
     console.log(
       `asset-server: hosting ${staticDir} at a ${kind}${

@@ -44,26 +44,17 @@ export const AssetMountInterface = M.interface('AssetMount', {
 export const AssetServerInterface = M.interface(
   'AssetServer',
   {
+    // Accepts a Filesystem, exo-git workspace, Mount, or Layer (coerced and
+    // validated before mounting). Async so validation can fail fast; resolves
+    // to `{ path, url, revoke }`.
     serve: M.call(M.eref(M.remotable('Filesystem')))
       .optional(M.record())
-      .returns(
-        M.splitRecord({
-          path: M.string(),
-          url: M.string(),
-          revoke: M.remotable('AssetMount'),
-        }),
-      ),
+      .returns(M.promise()),
     // Serve at a caller-chosen, stable path segment instead of a minted
     // token — the basis for a persistent static site.
     serveAt: M.call(M.string(), M.eref(M.remotable('Filesystem')))
       .optional(M.record())
-      .returns(
-        M.splitRecord({
-          path: M.string(),
-          url: M.string(),
-          revoke: M.remotable('AssetMount'),
-        }),
-      ),
+      .returns(M.promise()),
     getAddress: M.call().returns(M.record()),
     stop: M.call().returns(M.promise()),
     help: M.call().optional(M.string()).returns(M.string()),
