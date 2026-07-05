@@ -41,11 +41,62 @@ import { makeExo } from '@endo/exo';
 import { makeError, X, q } from '@endo/errors';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { makeHttpServer } from '@endo/platform/http/server';
+import { mountAsFilesystem } from '@endo/platform/fs/extended/from-mount.js';
 
 import { contentTypeForName } from './mime.js';
 import { AssetServerInterface, AssetMountInterface } from './type-guards.js';
 
 /** @import { HttpRequest, HttpResponse } from '@endo/platform/http/server' */
+
+/* eslint-disable no-underscore-dangle */
+
+/**
+ * Coerce an arbitrary endo-fs-ish capability to a `Filesystem` (one with
+ * `root()`). Callers — especially LLM sessions running confined `exec` code
+ * that cannot import conversion helpers — commonly hold a richer cap than a
+ * bare `Filesystem`: an `@endo/exo-git` workspace, its writable worktree
+ * `Mount`, or a `Layer`. Classify by method surface (mirrors
+ * space-file-explorer's `classifyCapability`) and project each to a
+ * `Filesystem` so `serve`/`serveAt` accept any of them directly. Anything
+ * already shaped like a `Filesystem` (or unclassifiable) is returned as-is.
+ *
+ * @param {any} cap  endo-fs cap (or eref): Filesystem | exo-git | Mount | Layer.
+ * @returns {Promise<any>} a `Filesystem` cap (or eref).
+ */
+export const coerceToFilesystem = async cap => {
+  await null;
+  let methods;
+  try {
+    methods = await E(cap).__getMethodNames__();
+  } catch {
+    // Not introspectable — assume it already is a Filesystem.
+    return cap;
+  }
+  const names = new Set(methods);
+  // Already a Filesystem.
+  if (names.has('root') && names.has('statfs')) {
+    return cap;
+  }
+  // An @endo/exo-git workspace: serve its live (incl. uncommitted) worktree.
+  if (names.has('worktree') && names.has('status') && names.has('commit')) {
+    return mountAsFilesystem(E(cap).worktree());
+  }
+  // A Layer: project to its composed read/write Filesystem view.
+  if (names.has('asFilesystem') && names.has('diff') && names.has('apply')) {
+    return E(cap).asFilesystem();
+  }
+  // A daemon Mount (has directory ops but no `root`): wrap via from-mount so
+  // its nodes expose the endo-fs File interface the handler walks.
+  if (
+    names.has('lookup') &&
+    (names.has('makeDirectory') || names.has('writeText') || names.has('list'))
+  ) {
+    return mountAsFilesystem(cap);
+  }
+  // Unknown shape — hand it back and let root()/lookup() fail naturally.
+  return cap;
+};
+harden(coerceToFilesystem);
 
 const textEncoder = new TextEncoder();
 
@@ -118,7 +169,8 @@ const toBase64Url = bytes => {
 
 /**
  * @typedef {object} AssetMount
- * @property {object} filesystem  endo-fs Filesystem cap (or eref).
+ * @property {object} filesystem  the coerced, validated endo-fs Filesystem
+ *   cap (or eref) — always exposes `root()` (see `resolveFilesystem`).
  * @property {string[]} basePath  sub-path within the Filesystem that
  *   the mount is rooted at.
  * @property {string} index  directory index file name.
@@ -212,6 +264,35 @@ export const makeAssetServer = async ({
     toBase64Url(getRandomValues(new Uint8Array(tokenBytes)));
 
   /**
+   * Coerce the supplied capability to a `Filesystem` and confirm it actually
+   * presents the read surface the handler walks (`root`). Fail-fast here — at
+   * `serve`/`serveAt` time — so a caller that hands over the wrong kind of
+   * object gets a clear error immediately instead of a mount that silently
+   * 404s every request. Accepts anything `coerceToFilesystem` understands
+   * (Filesystem | exo-git | Mount | Layer), so it is not overly exclusive.
+   *
+   * @param {any} cap
+   * @returns {Promise<any>} the coerced, validated `Filesystem` (or eref).
+   */
+  const resolveFilesystem = async cap => {
+    const filesystem = await coerceToFilesystem(cap);
+    let methods;
+    try {
+      methods = await E(filesystem).__getMethodNames__();
+    } catch (err) {
+      throw makeError(
+        X`serve requires a Filesystem-like capability (Filesystem, exo-git workspace, Mount, or Layer); could not introspect it: ${err}`,
+      );
+    }
+    if (!methods.includes('root')) {
+      throw makeError(
+        X`serve requires a Filesystem-like capability with root(); got one exposing ${q(methods)}. Pass a Filesystem, an @endo/exo-git workspace, its worktree() Mount, or a Layer.`,
+      );
+    }
+    return filesystem;
+  };
+
+  /**
    * The platform HTTP request handler: resolve `/{token}/path` to a
    * file in the mounted Filesystem and return its bytes as a streamed
    * response body.
@@ -272,8 +353,9 @@ export const makeAssetServer = async ({
     let fileName = pathSegments[pathSegments.length - 1] || mount.index;
     try {
       const segments = [...mount.basePath, ...pathSegments];
-      // Pipeline the walk: never await between segments so the whole
-      // root -> lookup -> lookup chain dispatches in one CapTP batch.
+      // `mount.filesystem` was coerced to a real Filesystem and validated at
+      // serve() time. Pipeline the walk: never await between segments so the
+      // whole root -> lookup -> lookup chain dispatches in one CapTP batch.
       let node = /** @type {any} */ (E(mount.filesystem).root());
       for (const seg of segments) {
         node = E(node).lookup(seg);
@@ -342,12 +424,12 @@ export const makeAssetServer = async ({
    * (caller-chosen token). Replaces any existing mount at `token`.
    *
    * @param {string} token  the first path segment the mount answers to.
-   * @param {object} filesystem  endo-fs Filesystem cap (or eref).
+   * @param {object} cap  Filesystem | exo-git | Mount | Layer cap (or eref).
    * @param {object} [serveOpts]
    * @param {string | string[]} [serveOpts.subPath]
    * @param {string} [serveOpts.index]
    */
-  const registerMount = (token, filesystem, serveOpts = {}) => {
+  const registerMount = async (token, cap, serveOpts = {}) => {
     const basePath = normalizeSegments(
       /** @type {string | string[]} */ (serveOpts.subPath ?? []),
     );
@@ -355,6 +437,10 @@ export const makeAssetServer = async ({
     if (typeof index !== 'string' || index === '') {
       throw makeError(X`serve index must be a non-empty string`);
     }
+
+    // Coerce + validate the capability up front so a bad object fails here,
+    // not as a mysterious 404 on every subsequent request.
+    const filesystem = await resolveFilesystem(cap);
 
     /** @type {AssetMount} */
     const mount = { filesystem, basePath, index, revoked: false };
@@ -379,14 +465,15 @@ export const makeAssetServer = async ({
   };
 
   /**
-   * @param {object} filesystem  endo-fs Filesystem cap (or eref).
+   * @param {object} filesystem  Filesystem | exo-git | Mount | Layer cap
+   *   (or eref). Coerced to a Filesystem and validated before mounting.
    * @param {object} [serveOpts]
    * @param {string | string[]} [serveOpts.subPath]  sub-path within
    *   the Filesystem to serve as the mount root.
    * @param {string} [serveOpts.index]  directory index file name;
    *   defaults to `index.html`.
    */
-  const serve = (filesystem, serveOpts = {}) => {
+  const serve = async (filesystem, serveOpts = {}) => {
     if (stopped) {
       throw makeError(X`asset-server has been stopped`);
     }
@@ -406,12 +493,13 @@ export const makeAssetServer = async ({
    *
    * @param {string} pathSegment  a single non-empty, non-traversal path
    *   segment (the mount token), e.g. `site`.
-   * @param {object} filesystem  endo-fs Filesystem cap (or eref).
+   * @param {object} filesystem  Filesystem | exo-git | Mount | Layer cap
+   *   (or eref). Coerced to a Filesystem and validated before mounting.
    * @param {object} [serveOpts]
    * @param {string | string[]} [serveOpts.subPath]
    * @param {string} [serveOpts.index]
    */
-  const serveAt = (pathSegment, filesystem, serveOpts = {}) => {
+  const serveAt = async (pathSegment, filesystem, serveOpts = {}) => {
     if (stopped) {
       throw makeError(X`asset-server has been stopped`);
     }

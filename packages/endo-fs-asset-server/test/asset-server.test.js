@@ -95,6 +95,21 @@ test('normalizeSegments rejects traversal', t => {
   t.throws(() => normalizeSegments('a/../b'), { message: /traversal/ });
 });
 
+test.serial('serve rejects a cap without a filesystem surface', async t => {
+  const fs = await makeSiteFs();
+  const server = await startServer(t);
+
+  // The revoke handle is a remotable but exposes no `root()` — serve must
+  // fail fast with a clear error, not register a mount that 404s later.
+  const { revoke } = await E(server).serve(fs);
+  await t.throwsAsync(() => E(server).serve(revoke), {
+    message: /root\(\)/,
+  });
+  await t.throwsAsync(() => E(server).serveAt('nope', revoke), {
+    message: /root\(\)/,
+  });
+});
+
 test.serial('serveAt serves at a stable, chosen path', async t => {
   const fs = await makeSiteFs();
   const server = await startServer(t);
