@@ -91,7 +91,7 @@ export const headLengthFor = length => {
   if (length <= 0xffff) {
     return 3;
   }
-  if (length <= 0xffffffff) {
+  if (length <= 0xffff_ffff) {
     return 5;
   }
   return 9;
@@ -148,7 +148,7 @@ export const encodeByteStringHead = length => {
     writeUintBE(buf, 1, length, 2);
     return buf;
   }
-  if (length <= 0xffffffff) {
+  if (length <= 0xffff_ffff) {
     const buf = new Uint8Array(5);
     buf[0] = INITIAL_U32;
     writeUintBE(buf, 1, length, 4);
@@ -282,12 +282,12 @@ export const decodeByteStringHead = buffer => {
     // makes a transposition error visually obvious at the call site.
     const hi = readUintBE(buffer, cursor, 4);
     const lo = readUintBE(buffer, cursor + 4, 4);
-    if (hi > 0x1fffff) {
+    if (hi > 0x1f_ffff) {
       throw Error(
         `CBOR byte-string head declares payload length above 2^53-1 (hi32=${hi}); refusing to allocate`,
       );
     }
-    length = hi * 0x100000000 + lo;
+    length = hi * 0x1_0000_0000 + lo;
     if (length > MAX_SAFE_PAYLOAD_LENGTH) {
       throw Error(
         `CBOR byte-string head declares payload length above 2^53-1 (${length}); refusing to allocate`,

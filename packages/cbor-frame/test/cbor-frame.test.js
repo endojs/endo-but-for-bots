@@ -43,9 +43,9 @@ test('headLengthFor matches CBOR boundaries', t => {
   t.is(headLengthFor(255), 2);
   t.is(headLengthFor(256), 3);
   t.is(headLengthFor(0xffff), 3);
-  t.is(headLengthFor(0x10000), 5);
-  t.is(headLengthFor(0xffffffff), 5);
-  t.is(headLengthFor(0x100000000), 9);
+  t.is(headLengthFor(0x1_0000), 5);
+  t.is(headLengthFor(0xffff_ffff), 5);
+  t.is(headLengthFor(0x1_0000_0000), 9);
 });
 
 test('encodeByteStringHead produces canonical shortest forms', t => {
@@ -61,16 +61,16 @@ test('encodeByteStringHead produces canonical shortest forms', t => {
   t.deepEqual(encodeByteStringHead(0xffff), new Uint8Array([0x59, 0xff, 0xff]));
   // 5-byte head: 0x5a + uint32 BE.
   t.deepEqual(
-    encodeByteStringHead(0x10000),
+    encodeByteStringHead(0x1_0000),
     new Uint8Array([0x5a, 0x00, 0x01, 0x00, 0x00]),
   );
   t.deepEqual(
-    encodeByteStringHead(0xffffffff),
+    encodeByteStringHead(0xffff_ffff),
     new Uint8Array([0x5a, 0xff, 0xff, 0xff, 0xff]),
   );
   // 9-byte head: 0x5b + uint64 BE.
   t.deepEqual(
-    encodeByteStringHead(0x100000000),
+    encodeByteStringHead(0x1_0000_0000),
     new Uint8Array([0x5b, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]),
   );
 });
@@ -82,7 +82,7 @@ test('encodeByteStringHead rejects non-integer and negative lengths', t => {
 });
 
 test('decodeByteStringHead round-trips canonical heads (tag-24-wrapped)', t => {
-  for (const len of [0, 1, 23, 24, 255, 256, 0xffff, 0x10000, 0xffffffff]) {
+  for (const len of [0, 1, 23, 24, 255, 256, 0xffff, 0x1_0000, 0xffff_ffff]) {
     const head = concat([TAG_24_PREFIX, encodeByteStringHead(len)]);
     const decoded = decodeByteStringHead(head);
     t.deepEqual(decoded, {
@@ -174,7 +174,7 @@ const delay = ms =>
 const roundTripLengths = async (t, opts) => {
   await null;
   // Cover each head-length boundary, including just-over each break.
-  const lengths = [0, 1, 23, 24, 25, 255, 256, 257, 0xffff, 0x10000];
+  const lengths = [0, 1, 23, 24, 25, 255, 256, 257, 0xffff, 0x1_0000];
   const messages = lengths.map(len => {
     const buf = new Uint8Array(len);
     // Fill with a pattern that exercises every byte position.
@@ -459,7 +459,7 @@ test('round-trip varying messages over a live pipe', async t => {
   }
   // Cross a head-width boundary inside one stream.
   payloads.push(new Uint8Array(300));
-  payloads.push(new Uint8Array(65540));
+  payloads.push(new Uint8Array(65_540));
 
   t.plan(payloads.length);
 
