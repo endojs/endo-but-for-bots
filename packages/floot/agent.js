@@ -43,8 +43,12 @@ import { runClaudeTurn } from './src/claude-turn.js';
 import { makeReplyChannel } from './src/stream.js';
 
 // Cap the tool-call loop so a misbehaving model can't spin forever before it
-// produces a spoken reply.
-const MAX_TOOL_ROUNDS = 8;
+// produces a spoken reply. This is a *safety* ceiling, not a work budget: real
+// agentic turns (vibe-coding a project, multi-file edits, exploring the daemon)
+// routinely need dozens of tool rounds, and a low cap made floot bail out
+// mid-task with the "tool-step limit" fallback. Default generously; override
+// with FLOOT_MAX_TOOL_ROUNDS for tighter (voice) or looser (coding) sessions.
+const DEFAULT_MAX_TOOL_ROUNDS = 48;
 
 const execFileAsync = promisify(execFile);
 
@@ -454,6 +458,7 @@ const provisionPresetObjects = async (
  * @param {Promise<object> | object | undefined} _context
  * @param {ProviderConstructorConfig | InjectedProviderConfig | ClaudeClientConfig} providerConfig
  * @param {string} [systemPrompt]
+ * @param {{ maxToolRounds?: number }} [options]
  * @returns {Promise<{
  *   converse: (
  *     input: string | object,
@@ -471,7 +476,14 @@ export const makeStreamingAgent = async (
   _context,
   providerConfig,
   systemPrompt,
+  options = {},
 ) => {
+  const maxToolRounds =
+    typeof options.maxToolRounds === 'number' &&
+    Number.isInteger(options.maxToolRounds) &&
+    options.maxToolRounds > 0
+      ? options.maxToolRounds
+      : DEFAULT_MAX_TOOL_ROUNDS;
   const claudeClient = /** @type {any} */ (providerConfig).claudeClient;
   /** @type {any} */
   const provider = claudeClient
@@ -681,7 +693,7 @@ export const makeStreamingAgent = async (
     let leafId = userNode.id;
     let finalContent = '';
     // Whether the model produced a plain (toolless) answer. If it never does
-    // within MAX_TOOL_ROUNDS, we send a fallback instead of an empty reply.
+    // within maxToolRounds, we send a fallback instead of an empty reply.
     let answered = false;
     // Token usage accumulates across this turn's rounds (each tool round is its
     // own provider call).
@@ -689,7 +701,7 @@ export const makeStreamingAgent = async (
     let turnOutput = 0;
     writer.setPhase('thinking');
 
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+    for (let round = 0; round < maxToolRounds; round += 1) {
       // The consumer (reply reader) may have stopped pulling between rounds —
       // its onClose aborts `signal`. Bail before spending another provider call.
       if (signal?.aborted) return;
@@ -809,7 +821,7 @@ export const makeStreamingAgent = async (
     }
 
     if (!answered) {
-      // The loop hit MAX_TOOL_ROUNDS while the model still wanted to call tools,
+      // The loop hit maxToolRounds while the model still wanted to call tools,
       // so it never produced a spoken answer. Persist and speak a fallback so the
       // turn ends on a well-formed assistant message instead of an empty reply
       // sitting atop a dangling tool_result.
@@ -820,7 +832,7 @@ export const makeStreamingAgent = async (
       ]);
       leafId = fallbackNode.id;
       console.error(
-        `[floot] turn hit MAX_TOOL_ROUNDS (${MAX_TOOL_ROUNDS}); sent fallback reply`,
+        `[floot] turn hit maxToolRounds (${maxToolRounds}); sent fallback reply`,
       );
     }
 
@@ -1037,6 +1049,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
   // sessions (see the `code-mount` preset object). Resolved by the setup script
   // and passed through env; empty when the daemon host has no source on disk.
   const codePath = env?.FLOOT_CODE_PATH || undefined;
+  // Optional override for the per-turn tool-call ceiling (see
+  // DEFAULT_MAX_TOOL_ROUNDS). Parsed once; invalid/absent values fall back to
+  // the default inside makeStreamingAgent.
+  const maxToolRounds = Number(env?.FLOOT_MAX_TOOL_ROUNDS) || undefined;
 
   // The factory runs with its own host powers, so it provisions session guests
   // directly — no introduced `host-agent` reference (that rehydrates as a
@@ -1256,6 +1272,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           undefined,
           agentConfig,
           sessionPrompt,
+          { maxToolRounds },
         );
         // Each session is addressable by mail: start following its inbox.
         agent.startInbox();
