@@ -1421,6 +1421,24 @@ harden(makeAdoptTool);
  * @param {import('@endo/eventual-send').ERef<object>} powers
  * @returns {FaeTool}
  */
+/**
+ * Strip a wrapping markdown code fence from a code string. Models frequently
+ * echo the fenced style used in tool descriptions and hand back
+ * ```` ```js\n…\n``` ```` as the `code` argument; the backticks are then a
+ * SyntaxError inside the Compartment, so a perfectly good multiline snippet
+ * "fails to run". Only strips when the ENTIRE trimmed string is one fenced
+ * block (optionally tagged with a language), leaving inline backticks in real
+ * code untouched.
+ *
+ * @param {string} code
+ * @returns {string}
+ */
+const stripCodeFence = code => {
+  const trimmed = code.trim();
+  const fenced = /^```[^\n`]*\n([\s\S]*?)\n?```$/.exec(trimmed);
+  return fenced ? fenced[1] : code;
+};
+
 export const makeExecTool = powers => {
   /** @type {ToolSchema} */
   const toolSchema = harden({
@@ -1468,13 +1486,28 @@ export const makeExecTool = powers => {
       if (!code) {
         throw new Error('code is required');
       }
+      // Tolerate a markdown-fenced snippet (a common model output) so multiline
+      // code isn't rejected for its wrapping backticks.
+      const source = stripCodeFence(code);
       // Wrap in an async IIFE so top-level await works
-      const wrappedSource = `(async (powers, E, harden, console) => {\n${code}\n})`;
+      const wrappedSource = `(async (powers, E, harden, console) => {\n${source}\n})`;
       const c = new Compartment({
         __options__: true,
         globals: { BigInt },
       });
-      const fn = c.evaluate(wrappedSource);
+      let fn;
+      try {
+        fn = c.evaluate(wrappedSource);
+      } catch (err) {
+        // A parse failure here is almost always malformed code from the model.
+        // Return the error as the tool result (rather than throwing) with a
+        // nudge to resend clean source, so the model can self-correct on the
+        // next round instead of the turn aborting.
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Could not parse the code (${message}). Send raw JavaScript in the "code" argument — no markdown fences — and check for syntax errors.`,
+        );
+      }
       const result = await fn(powers, E, harden, console);
       if (result === undefined) {
         return 'done (no return value)';
