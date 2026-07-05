@@ -51,6 +51,19 @@ const optGetStackString = /** @type {((err: Error) => string) | undefined} */ (
   globalRecord.getStackString
 );
 
+// Sanctioned SES unredaction API (gap-revealing prototype of endo #595). When
+// SES installs `globalThis.unredactError`, it renders the full unredacted
+// diagnostic form (message-template args + stack + cause chain + notes) to a
+// string directly — exactly the shape this module needs for
+// `TraceRecord.stack`. Preferring it lets the daemon stop driving the ses-ava
+// causal-console factory through a buffering logger (see `getUnredactedRendering`
+// below, which becomes dead once every supported SES ships `unredactError`).
+// Still feature-tested and still fully fallback-guarded, so a SES without the
+// sanctioned API keeps working via the legacy path.
+const optUnredactError = /** @type {((err: Error) => string) | undefined} */ (
+  globalRecord.unredactError
+);
+
 /**
  * Render one logger argument to a flat string. The causal console emits
  * a heterogeneous arg list (leading format string, then values); we
@@ -122,6 +135,19 @@ const getUnredactedRendering = err => {
  * @returns {string}
  */
 export const getUnredactedStackString = err => {
+  // Preference 0: the sanctioned SES `unredactError` (endo #595). When
+  // present it supersedes the ses-ava-symbol buffering path below, returning
+  // the same full rendering without the daemon reaching into SES internals.
+  if (optUnredactError !== undefined) {
+    try {
+      const rendered = optUnredactError(err);
+      if (typeof rendered === 'string' && rendered.length > 0) {
+        return rendered;
+      }
+    } catch (_e) {
+      // Fall through to the legacy ses-ava-symbol path.
+    }
+  }
   const rendered = getUnredactedRendering(err);
   if (rendered !== undefined && rendered.length > 0) {
     return rendered;
@@ -149,4 +175,4 @@ export const getUnredactedStackString = err => {
  * fallback.
  */
 export const hasUnredactedStackHook =
-  optMakeCausalConsoleFromLogger !== undefined;
+  optUnredactError !== undefined || optMakeCausalConsoleFromLogger !== undefined;
