@@ -74,11 +74,14 @@ import http from 'node:http';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+import { makeExo } from '@endo/exo';
+
 import { makeNodeHttpBackend } from '@endo/platform/http/node';
 import { makeNodeFilesystem } from '@endo/platform/fs/extended/node-fs.js';
 import { readOnly } from '@endo/platform/fs/extended/readonly.js';
 
 import { makeAssetServer } from './asset-server.js';
+import { AssetServerPublicInterface } from './type-guards.js';
 
 /**
  * Load a persisted capability token from `tokenFile`, or mint a fresh
@@ -186,6 +189,19 @@ export const make = async (_powers, _context, opts = {}) => {
     );
   }
 
-  return server;
+  // Hand callers an attenuated facet WITHOUT `stop()`. This is a shared
+  // singleton on a fixed loopback port; letting any guest stop it would tear
+  // the listener out from under everyone and can wedge the caplet (the daemon
+  // reincarnates the formula into a new worker that then collides on the still
+  // held port with EADDRINUSE). The durable static mount above is already wired
+  // via the full `server`; the facet only forwards the safe methods. `server`
+  // is a local exo in this worker, so forwarding is an in-process call.
+  return makeExo('AssetServer', AssetServerPublicInterface, {
+    serve: (filesystem, serveOpts) => server.serve(filesystem, serveOpts),
+    serveAt: (pathSegment, filesystem, serveOpts) =>
+      server.serveAt(pathSegment, filesystem, serveOpts),
+    getAddress: () => server.getAddress(),
+    help: () => server.help(),
+  });
 };
 harden(make);
