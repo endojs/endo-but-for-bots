@@ -217,7 +217,12 @@ export const make = (powers, context, contextWrapper = {}) => {
         } catch {
           // No kind() method — treat as a raw API key.
         }
-        const envVar = CREDENTIAL_ENV_VARS[kind];
+        // `Object.hasOwn` guard so a hostile `kind()` returning an inherited
+        // key (e.g. `"__proto__"`) can't resolve to a truthy prototype value
+        // and mis-route the secret under a coerced env key.
+        const envVar = Object.hasOwn(CREDENTIAL_ENV_VARS, kind)
+          ? CREDENTIAL_ENV_VARS[kind]
+          : undefined;
         if (!envVar) {
           throw makeError(
             X`Unknown credential kind ${q(kind)}; expected one of ${q(
@@ -254,7 +259,15 @@ export const make = (powers, context, contextWrapper = {}) => {
           backend,
         }),
       );
-      return harden({ slice, mountHandle, revoke: revokeCredential });
+      return harden({
+        slice,
+        mountHandle,
+        revoke: revokeCredential,
+        // Reclaim the workspace Mount pet name that `provideMount` registered
+        // at the host root, so a torn-down session leaves no live Mount
+        // formula behind. Scoped to this session's name by the powers cap.
+        removeMount: () => E(sessionPowers).removeMount(),
+      });
     } catch (error) {
       if (mountHandle) {
         try {
@@ -262,6 +275,13 @@ export const make = (powers, context, contextWrapper = {}) => {
         } catch {
           // best-effort
         }
+      }
+      // If `provideMount` had already registered the workspace Mount name
+      // before this failure, drop it so a failed provision leaks nothing.
+      try {
+        await E(sessionPowers).removeMount();
+      } catch {
+        // best-effort; the name may not have been registered yet
       }
       try {
         await revokeCredential();

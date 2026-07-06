@@ -72,10 +72,16 @@ const clientModuleSpecifier = new URL(
  *
  * @param {string} mountPoint - the session's host 9P mountpoint; the only
  *   path `provideMount` will accept.
+ * @param {string} mountName - the session's workspace Mount pet name; the only
+ *   name `provideMount` will register (and the one `removeMount` reclaims).
  * @param {boolean} hasCredentials
  * @returns {string}
  */
-const buildSessionPowersSource = (mountPoint, hasCredentials) => `makeExo(
+const buildSessionPowersSource = (
+  mountPoint,
+  mountName,
+  hasCredentials,
+) => `makeExo(
   'ClaudeSessionPowers',
   M.interface('ClaudeSessionPowers', {
     sandboxFactory: M.call().returns(M.any()),
@@ -83,6 +89,7 @@ const buildSessionPowersSource = (mountPoint, hasCredentials) => `makeExo(
     filesystem: M.call().returns(M.any()),
     credentials: M.call().returns(M.any()),
     provideMount: M.call(M.string(), M.string()).returns(M.promise()),
+    removeMount: M.call().returns(M.promise()),
     help: M.call().returns(M.string()),
   }),
   {
@@ -91,13 +98,24 @@ const buildSessionPowersSource = (mountPoint, hasCredentials) => `makeExo(
     filesystem: () => filesystem,
     credentials: () => ${hasCredentials ? 'credentials' : 'null'},
     provideMount: (path, name) => {
+      // Bound to *exactly* this session's mountpoint AND its workspace Mount
+      // pet name. Without the name bound, this accessor would be a
+      // host-namespace write gadget (provideMount registers 'name' at the
+      // host root), defeating the "no other host reach" attenuation.
       if (path !== ${JSON.stringify(mountPoint)}) {
         throw Error('claude-sandbox session powers: provideMount restricted to this session workspace mountpoint');
       }
+      if (name !== ${JSON.stringify(mountName)}) {
+        throw Error('claude-sandbox session powers: provideMount restricted to this session workspace Mount name');
+      }
       return E(agent).provideMount(path, name);
     },
+    // Scoped teardown: remove *only* this session's workspace Mount pet name
+    // (which provideMount registered at the host root) so it does not leak a
+    // live Mount formula after the client is torn down.
+    removeMount: () => E(agent).remove(${JSON.stringify(mountName)}),
     help: () =>
-      'Per-session claude-sandbox powers: sandboxFactory/fsMounter/filesystem/credentials accessors + provideMount bounded to this session mountpoint. No lookup.',
+      'Per-session claude-sandbox powers: sandboxFactory/fsMounter/filesystem/credentials accessors + provideMount/removeMount bounded to this session workspace. No lookup.',
   },
 )`;
 
@@ -170,7 +188,8 @@ const FORM_FIELDS = harden([
     name: 'network',
     label: 'Sandbox network profile',
     default: 'private',
-    example: 'none | private | host-loopback | host-lan | host-net',
+    example:
+      'none | private   (no host networking; private = internet, no host reach)',
   },
   {
     name: 'model',
@@ -193,13 +212,15 @@ const FORM_FIELDS = harden([
 
 const SANDBOX_WORKSPACE_PATH = '/workspace';
 
-const ALLOWED_NETWORKS = harden([
-  'none',
-  'private',
-  'host-loopback',
-  'host-lan',
-  'host-net',
-]);
+// No host networking. A session gets either `none` (fully isolated — Claude
+// can't reach the Anthropic API or package registries) or `private` (an
+// isolated network namespace with outbound internet via NAT, but no reach to
+// the host's loopback/LAN/services). `private` is the default: it lets Claude
+// call the API and install deps while keeping the container off the host's
+// network. The `host-loopback` / `host-lan` / `host-net` profiles are
+// deliberately not offered — bridging a sandboxed session onto the host
+// network is exactly what this package exists to avoid.
+const ALLOWED_NETWORKS = harden(['none', 'private']);
 
 /**
  * Slugify a pet name into a filesystem- and pet-name-safe token used
@@ -299,10 +320,13 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
    * `removeNames` are the *temporary* endowment names the caller minted (the
    * adopt path's `*-fscap`/`*-credcap`); the core removes them (with
    * `powersName`) after `makeUnconfined`. Each stays reachable for the client's
-   * lifetime via the powers→endowment and client→powers dependency edges
-   * (adopted caps additionally via the host's `thisDiesIfThatDies` import
-   * edge), so dropping the names leaves no residue. The form path passes no
-   * `removeNames` — its endowment names are the operator's own durable names.
+   * lifetime via the powers→endowment and client→powers dependency edges, so
+   * dropping the names leaves no host-petstore residue. (An adopted cap is
+   * *additionally* pinned by the host's `thisDiesIfThatDies` import edge, which
+   * is scoped to the **host's** lifetime, not the client's — a superset, so it
+   * over-retains rather than under-retains; there is no daemon un-import
+   * primitive to release it early.) The form path passes no `removeNames` — its
+   * endowment names are the operator's own durable names.
    *
    * `resultName` stores the client under that pet name — a host-side GC root.
    * Both create paths are host-rooted (mailbox delivery attaches the client by
@@ -385,7 +409,11 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       }
       await E(hostAgent).evaluate(
         '@main',
-        buildSessionPowersSource(hostMountPoint, Boolean(credentialsName)),
+        buildSessionPowersSource(
+          hostMountPoint,
+          workspacePetName,
+          Boolean(credentialsName),
+        ),
         harden(codeNames),
         harden(petNames),
         powersName,
@@ -420,8 +448,12 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       // Unname the per-session powers and any temporary endowment names. Each
       // formula's dependency edge (make-unconfined→powers, powers→endowment)
       // keeps it reachable for exactly the client's lifetime, so dropping the
-      // names leaves no host-petstore residue.
-      await Promise.all(toCleanup.map(n => E(hostAgent).remove(n)));
+      // names leaves no host-petstore residue. This runs *after* the client is
+      // created and stored, so cleanup is strictly best-effort: a failed
+      // `remove` must not turn a completed session into a reported failure
+      // (which would strand a live orphan behind an error reply) — hence
+      // `allSettled`, matching the catch path below.
+      await Promise.allSettled(toCleanup.map(n => E(hostAgent).remove(n)));
 
       return harden({
         client,
@@ -518,39 +550,51 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
   const SESSION_REQUEST_KIND = 'claude-sandbox-session';
 
   /**
-   * Recognise a peer session-request package: a `package` carrying a
-   * `filesystem` edge whose `strings[0]` is a JSON config marked
-   * `kind: 'claude-sandbox-session'` with a string `name`. The explicit marker
-   * keeps the loop from hijacking unrelated host packages. Returns the parsed
-   * config, or `null` if the message is not a session request.
+   * Classify a mailbox message. The `kind: 'claude-sandbox-session'` marker in
+   * `strings[0]` is the intent signal that keeps the loop from hijacking
+   * unrelated host packages. A message is one of:
+   *   - `{ kind: 'ignore' }`      — not a session request (unrelated traffic);
+   *     drop silently, do NOT dismiss (it isn't ours to consume).
+   *   - `{ kind: 'invalid', reason }` — *marked* as a session request but
+   *     malformed (missing `filesystem` edge or `name`); reply with the reason
+   *     and dismiss so the peer gets feedback and it doesn't replay forever.
+   *   - `{ kind: 'request', config }` — a well-formed session request.
    *
    * @param {any} msg
-   * @returns {Record<string, any> | null}
+   * @returns {{ kind: 'ignore' } | { kind: 'invalid', reason: string } | { kind: 'request', config: Record<string, any> }}
    */
-  const asSessionRequest = msg => {
-    if (
-      msg.type !== 'package' ||
-      !Array.isArray(msg.names) ||
-      !msg.names.includes('filesystem')
-    ) {
-      return null;
+  const classifyMessage = msg => {
+    if (msg.type !== 'package') {
+      return { kind: 'ignore' };
     }
     let config;
     try {
       config = JSON.parse(msg.strings?.[0] ?? '{}');
     } catch {
-      return null;
+      return { kind: 'ignore' };
     }
     if (
       !config ||
       typeof config !== 'object' ||
-      config.kind !== SESSION_REQUEST_KIND ||
-      typeof config.name !== 'string' ||
-      !config.name
+      config.kind !== SESSION_REQUEST_KIND
     ) {
-      return null;
+      return { kind: 'ignore' };
     }
-    return config;
+    // Marked as ours from here — malformed is a reportable user error, not a
+    // silent drop (which would strand the peer waiting for a reply forever).
+    if (!Array.isArray(msg.names) || !msg.names.includes('filesystem')) {
+      return {
+        kind: 'invalid',
+        reason: 'session-request package must carry a `filesystem` edge',
+      };
+    }
+    if (typeof config.name !== 'string' || !config.name) {
+      return {
+        kind: 'invalid',
+        reason: 'session-request config must include a non-empty string `name`',
+      };
+    }
+    return { kind: 'request', config };
   };
 
   const seenSessionRequests = new Set();
@@ -573,11 +617,23 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         break;
       }
       const msg = /** @type {InboxMessage & { names?: string[] }} */ (message);
-      const config = asSessionRequest(msg);
-      if (config !== null && !seenSessionRequests.has(msg.number)) {
+      const classified = classifyMessage(msg);
+      // Only act on a marked request we have not already consumed. Unrelated
+      // traffic (`ignore`) is left in the mailbox untouched — it isn't ours to
+      // dismiss.
+      if (classified.kind !== 'ignore' && !seenSessionRequests.has(msg.number)) {
         seenSessionRequests.add(msg.number);
         try {
-          await handleSessionRequest(hostAgent, msg, config);
+          if (classified.kind === 'invalid') {
+            await E(hostAgent).reply(
+              msg.number,
+              [`Error creating sandbox: ${classified.reason}`],
+              [],
+              [],
+            );
+          } else {
+            await handleSessionRequest(hostAgent, msg, classified.config);
+          }
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
@@ -597,8 +653,9 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
             // best-effort error reply
           }
         }
-        // Durable de-dup: drop the consumed request (success or handled error)
-        // so a restart's mailbox replay does not reprocess it.
+        // Durable de-dup: drop the consumed request (success, handled error, or
+        // marked-but-invalid) so a restart's mailbox replay does not reprocess
+        // it.
         try {
           await E(hostAgent).dismiss(msg.number);
         } catch {
@@ -717,6 +774,17 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
             // best-effort reply
           }
         }
+        // Durable de-dup: drop the consumed form reply (success or handled
+        // error) so a daemon restart's `followMessages` replay does not
+        // re-run the submission and mint a *fresh* client that overwrites the
+        // reincarnated one under the same pet name. `seenFormReplies` alone is
+        // in-memory and resets on restart — the dismissed queue is the durable
+        // source of truth, mirroring the session-request loop.
+        try {
+          await E(powers).dismiss(msg.number);
+        } catch {
+          // best-effort
+        }
       }
     }
   };
@@ -758,7 +826,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
           '  name        — pet name for the resulting ClaudeClient',
           '  filesystem  — pet name of an existing Filesystem capability',
           '  rootfs      — OCI image (oci:<ref> or bare ref) or host-bind/minimal',
-          '  network     — none | private | host-loopback | host-lan | host-net',
+          '  network     — none | private (default; no host networking)',
           '  model       — optional claude model id',
           '  credentials — optional ClaudeCredentials pet name',
           '  initialPrompt — optional first message',

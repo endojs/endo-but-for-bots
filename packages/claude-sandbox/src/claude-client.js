@@ -161,7 +161,7 @@ const defaultStderrIterable = proc =>
  * @property {{ unmount: () => Promise<void> }} [mountHandle] - Host-side
  *   9P mount handle for the workspace. Unmounted on `terminate()`.
  *   Omitted when the workspace was bound by some other means (tests).
- * @property {() => Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void> }>} [provision]
+ * @property {() => Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void>, removeMount?: () => Promise<void> }>} [provision]
  *   - Lazy workspace provisioner. When present, `slice` / `mountHandle`
  *   are ignored and the slice + mount are created on first use (the
  *   first `send()` or `initialPrompt`), memoized thereafter. This is
@@ -271,7 +271,7 @@ export const makeClaudeClient = ({
   // first use (lazy) and memoized. `provisioned` stays `undefined`
   // until a lazy provision starts, so `terminate()` before any use is
   // a no-op rather than spinning up a container just to tear it down.
-  /** @type {Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void> }> | undefined} */
+  /** @type {Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void>, removeMount?: () => Promise<void> }> | undefined} */
   let provisioned = provision
     ? undefined
     : Promise.resolve(
@@ -381,7 +381,16 @@ export const makeClaudeClient = ({
     currentReader = reader;
 
     const turn = turnChain.then(async () => {
-      if (closed || terminated) return;
+      if (closed || terminated) {
+        // The consumer closed the reader, or the session was terminated,
+        // before this queued turn ran. Finalize the reader with a terminal
+        // event so a consumer parked in `next()` is not left hanging. `push`
+        // is a no-op once the reader is already closed, so a plain consumer
+        // `return()` (interrupt) is unaffected; this only rescues the
+        // terminate-with-queued-turns case.
+        push({ type: 'abort', reason: 'session terminated before turn ran' });
+        return;
+      }
       try {
         proc = await spawnClaude(prompt, opts);
       } catch (error) {
@@ -395,6 +404,7 @@ export const makeClaudeClient = ({
         await E(proc)
           .kill()
           .catch(() => {});
+        push({ type: 'abort', reason: 'session terminated' });
         return;
       }
       inFlight = proc;
@@ -511,7 +521,7 @@ export const makeClaudeClient = ({
       if (provisioned === undefined) {
         return;
       }
-      /** @type {{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void> } | undefined} */
+      /** @type {{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void>, removeMount?: () => Promise<void> } | undefined} */
       let resolved;
       try {
         resolved = await provisioned;
@@ -529,6 +539,16 @@ export const makeClaudeClient = ({
           await E(resolved.mountHandle).unmount();
         } catch {
           // best-effort; the mount caplet also unmounts on teardown
+        }
+      }
+      // Reclaim the workspace Mount pet name so it does not linger as a live
+      // host-rooted formula after the session is gone (the per-session powers
+      // scopes this to exactly this session's mount name).
+      if (resolved.removeMount) {
+        try {
+          await resolved.removeMount();
+        } catch {
+          // best-effort; the name may already be gone
         }
       }
       if (resolved.revoke) {
