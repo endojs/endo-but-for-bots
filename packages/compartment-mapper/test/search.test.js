@@ -23,10 +23,8 @@ test('searchCompartmentDescriptor should find own package.json with read power',
     [sought]: new TextEncoder().encode('{}'),
   });
   const { read } = readPowers;
-  const { packageDescriptorLocation: found } = await searchCompartmentDescriptor(
-    read,
-    import.meta.url,
-  );
+  const { packageDescriptorLocation: found } =
+    await searchCompartmentDescriptor(read, import.meta.url);
   t.is(found, sought);
 });
 
@@ -35,10 +33,8 @@ test('searchCompartmentDescriptor should find own package.json with read powers 
   const readPowers = makeFakeReadPowers({
     [sought]: new TextEncoder().encode('{}'),
   });
-  const { packageDescriptorLocation: found } = await searchCompartmentDescriptor(
-    readPowers,
-    import.meta.url,
-  );
+  const { packageDescriptorLocation: found } =
+    await searchCompartmentDescriptor(readPowers, import.meta.url);
   t.is(found, sought);
 });
 
@@ -56,5 +52,7 @@ test('searchCompartmentDescriptor should fail to find package.json if nowhere to
   const readPowers = makeFakeReadPowers({
     [nothing]: new Uint8Array(),
   });
-  await t.throwsAsync(() => searchCompartmentDescriptor(readPowers, import.meta.url));
+  await t.throwsAsync(() =>
+    searchCompartmentDescriptor(readPowers, import.meta.url),
+  );
 });
