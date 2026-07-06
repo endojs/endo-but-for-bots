@@ -538,6 +538,140 @@ export type TimerFormula = {
   label: string;
 };
 
+/**
+ * The `interval-scheduler` formula records the agent the scheduler is bound to
+ * and the host-set limits. Interval entries themselves are persisted as one
+ * file per interval in the scheduler's own state directory (keyed by the
+ * formula number), following the pet-store persistence pattern, rather than as
+ * separate formulas — so the scheduler is the unit of GC. See
+ * journal `plan/designs/endo-but-for-bots/endoclaw-timer.md`.
+ */
+export type IntervalSchedulerFormula = {
+  type: 'interval-scheduler';
+  /** The agent this scheduler is bound to; a strong GC edge. */
+  agent: FormulaIdentifier;
+  /** Maximum number of active intervals. */
+  maxActive: number;
+  /** Minimum allowed period in ms. */
+  minPeriodMs: number;
+  /** Whether all intervals are paused. */
+  paused: boolean;
+};
+
+export type IntervalSchedulerDeferredTaskParams = {
+  intervalSchedulerId: FormulaIdentifier;
+};
+
+export type IntervalStatus = 'active' | 'paused' | 'cancelled';
+
+/** One persisted interval entry (one JSON file in the scheduler directory). */
+export type IntervalEntry = {
+  id: string;
+  label: string;
+  periodMs: number;
+  firstDelayMs: number;
+  tickTimeoutMs: number;
+  /** Absolute epoch ms of the next scheduled tick. */
+  nextTickAt: number;
+  /** Absolute epoch ms when the interval was created. */
+  createdAt: number;
+  /** Total ticks fired for this interval. */
+  tickCount: number;
+  status: IntervalStatus;
+};
+
+export type IntervalTickResponse = {
+  resolve: () => void;
+  reschedule: () => void;
+};
+
+export type IntervalTickMessage = {
+  type: 'interval-tick';
+  intervalId: string;
+  label: string;
+  periodMs: number;
+  /** 1-indexed count for this interval. */
+  tickNumber: number;
+  /** Intended fire time (epoch ms). */
+  scheduledAt: number;
+  /** Actual fire time (epoch ms). */
+  actualAt: number;
+  /** Ticks missed during downtime (0 normally). */
+  missedTicks: number;
+  tickResponse: IntervalTickResponse;
+};
+
+/**
+ * The subset of {@link FilePowers} the interval scheduler persists through.
+ * Narrowing to this surface lets tests supply a small in-memory fake and
+ * documents exactly what the scheduler touches on disk.
+ */
+export type IntervalSchedulerFilePowers = {
+  joinPath: FilePowers['joinPath'];
+  makePath: FilePowers['makePath'];
+  writeFileText: FilePowers['writeFileText'];
+  renamePath: FilePowers['renamePath'];
+  readDirectory: FilePowers['readDirectory'];
+  maybeReadFileText: FilePowers['maybeReadFileText'];
+};
+
+/**
+ * Powers injected into `makeIntervalScheduler`. `filePowers` and `makeId` come
+ * from the daemon; `setTimeout`/`clearTimeout`/`now` default to the ambient
+ * clock but are injectable so tests can drive a deterministic one.
+ */
+export type IntervalSchedulerPowers = {
+  filePowers: IntervalSchedulerFilePowers;
+  /** Directory for persisted interval entries; omit for in-memory only. */
+  persistDir?: string;
+  /** Generates a fresh short id for entries and temp files. */
+  makeId: () => Promise<string>;
+  /** Tick delivery sink. Phase 2 replaces this with daemon mail. */
+  onTick?: (message: IntervalTickMessage) => void;
+  maxActive?: number;
+  minPeriodMs?: number;
+  paused?: boolean;
+  setTimeout?: (callback: () => void, ms: number) => unknown;
+  clearTimeout?: (handle: unknown) => void;
+  now?: () => number;
+};
+
+export type IntervalHandle = {
+  label: () => string;
+  period: () => number;
+  setPeriod: (periodMs: number) => Promise<void>;
+  cancel: () => Promise<void>;
+  info: () => IntervalEntry;
+  help: () => string;
+};
+
+export type IntervalSchedulerFacet = {
+  makeInterval: (
+    label: string,
+    periodMs: number,
+    opts?: { firstDelayMs?: number; tickTimeoutMs?: number },
+  ) => Promise<IntervalHandle>;
+  list: () => Promise<IntervalEntry[]>;
+  help: () => string;
+};
+
+export type IntervalControlFacet = {
+  setMaxActive: (n: number) => void;
+  setMinPeriodMs: (ms: number) => void;
+  pause: () => void;
+  resume: () => void;
+  revoke: () => Promise<void>;
+  listAll: () => Promise<IntervalEntry[]>;
+  help: () => string;
+};
+
+export type IntervalSchedulerExo = {
+  scheduler: IntervalSchedulerFacet;
+  schedulerControl: IntervalControlFacet;
+  /** Disarms every timer; called from the formula's cancellation hook. */
+  disarmAll: () => void;
+};
+
 export type Formula =
   | ChannelFormula
   | EndoFormula
@@ -572,7 +706,8 @@ export type Formula =
   | DirectoryFormula
   | PeerFormula
   | InvitationFormula
-  | TimerFormula;
+  | TimerFormula
+  | IntervalSchedulerFormula;
 
 export type Builtins = {
   NONE: FormulaIdentifier;
@@ -1500,6 +1635,10 @@ export interface EndoHost extends EndoAgent {
     intervalMs: number,
     label?: string,
   ): Promise<unknown>;
+  makeIntervalScheduler(
+    petName: string,
+    options?: { maxActive?: number; minPeriodMs?: number },
+  ): Promise<unknown>;
   /** Locate a formula with connection hints. */
   locateWithHints(...petNamePath: string[]): Promise<string | undefined>;
   /** Adopt a value from a locator that includes connection hints. */
@@ -2287,6 +2426,12 @@ export interface DaemonCore {
     intervalMs: number,
     label: string,
     deferredTasks: DeferredTasks<{ timerId: FormulaIdentifier }>,
+  ) => FormulateResult<unknown>;
+
+  formulateIntervalScheduler: (
+    agentId: FormulaIdentifier,
+    options: { maxActive?: number; minPeriodMs?: number } | undefined,
+    deferredTasks: DeferredTasks<IntervalSchedulerDeferredTaskParams>,
   ) => FormulateResult<unknown>;
 
   formulateHost: (

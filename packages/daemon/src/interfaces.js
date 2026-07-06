@@ -12,6 +12,7 @@ import {
   getInfoMethodGuard,
 } from '@endo/platform/fs/lite';
 import {
+  NameShape,
   NamePathShape,
   NameOrPathShape,
   NamesOrPathsShape,
@@ -391,6 +392,10 @@ export const HostInterface = M.interface('EndoHost', {
   // Create a timer
   makeTimer: M.call(NameOrPathShape, M.number())
     .optional(M.string())
+    .returns(M.promise()),
+  // Create an interval scheduler (EndoClaw heartbeat facility)
+  makeIntervalScheduler: M.call(NameShape)
+    .optional(M.record())
     .returns(M.promise()),
   // Cancel a value
   cancel: M.call(NameOrPathShape).optional(M.error()).returns(M.promise()),

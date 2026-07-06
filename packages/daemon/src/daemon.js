@@ -85,6 +85,11 @@ import {
   readableTreeHelp,
 } from './help-text.js';
 import { getMountBacking, lineageOf, makeRevocableMount } from './mount.js';
+import {
+  makeIntervalScheduler,
+  DEFAULT_MAX_ACTIVE,
+  DEFAULT_MIN_PERIOD_MS,
+} from './interval-scheduler.js';
 
 // Sorted:
 import {
@@ -806,6 +811,11 @@ const makeDaemonCore = async (
           ['hostAgent', formula.hostAgent],
           ['hostHandle', formula.hostHandle],
         ];
+      case 'interval-scheduler':
+        // Strong edge: the scheduler (and all its persisted intervals) is
+        // collected when its owning agent is. Phase 2 adds the scheduler's
+        // own `handle` here once ticks are delivered by mail.
+        return [['agent', formula.agent]];
       default:
         return [];
     }
@@ -3982,6 +3992,53 @@ const makeDaemonCore = async (
           `Timer "${timerLabel || 'timer'}" firing every ${interval}ms. Ticks: ${tickCount}`,
       });
     },
+    'interval-scheduler': async (formula, context, _id, formulaNumber) => {
+      const {
+        agent: agentId,
+        maxActive,
+        minPeriodMs,
+        paused,
+      } = formula;
+      // One directory per scheduler instance (keyed by formula number),
+      // holding one JSON file per interval — mirroring the pet-store
+      // persistence pattern (endoclaw-timer design § Persistence).
+      const persistDir = filePowers.joinPath(
+        persistencePowers.statePath,
+        'interval-scheduler',
+        /** @type {string} */ (formulaNumber),
+        'intervals',
+      );
+      const { scheduler, schedulerControl, disarmAll } =
+        await makeIntervalScheduler({
+          filePowers,
+          persistDir,
+          // A short, unguessable id per interval entry.
+          makeId: async () => (await randomHex256()).slice(0, 16),
+          maxActive,
+          minPeriodMs,
+          paused,
+        });
+      // Die with the owning agent, and clear all timers on cancellation so
+      // no orphan interval keeps ticking after GC.
+      context.thisDiesIfThatDies(agentId);
+      context.onCancel(() => disarmAll());
+      // Phase 1 returns a single capability exposing both the agent-facing
+      // scheduler methods and the host-facing control methods. Phase 4 splits
+      // these into the `IntervalScheduler` / `IntervalControl` facet pair the
+      // host method returns.
+      return Far('IntervalScheduler', {
+        makeInterval: (label, periodMs, opts) =>
+          scheduler.makeInterval(label, periodMs, opts),
+        list: () => scheduler.list(),
+        help: () => scheduler.help(),
+        setMaxActive: n => schedulerControl.setMaxActive(n),
+        setMinPeriodMs: ms => schedulerControl.setMinPeriodMs(ms),
+        pause: () => schedulerControl.pause(),
+        resume: () => schedulerControl.resume(),
+        revoke: () => schedulerControl.revoke(),
+        listAll: () => schedulerControl.listAll(),
+      });
+    },
     channel: async (formula, context, id) => {
       const {
         handle: handleId,
@@ -4631,6 +4688,46 @@ const makeDaemonCore = async (
       });
 
       return formulate(timerNumber, formula);
+    });
+  };
+
+  /**
+   * Formulate an `interval-scheduler` bound to an agent, with host-set limits.
+   *
+   * @param {FormulaIdentifier} agentId - the agent the scheduler is bound to.
+   * @param {{ maxActive?: number, minPeriodMs?: number } | undefined} options
+   * @param {import('./types.js').DeferredTasks<import('./types.js').IntervalSchedulerDeferredTaskParams>} deferredTasks
+   */
+  const formulateIntervalScheduler = async (
+    agentId,
+    options,
+    deferredTasks,
+  ) => {
+    const {
+      maxActive = DEFAULT_MAX_ACTIVE,
+      minPeriodMs = DEFAULT_MIN_PERIOD_MS,
+    } = options ?? {};
+    return withFormulaGraphLock(async () => {
+      const intervalSchedulerNumber = /** @type {FormulaNumber} */ (
+        await randomHex256()
+      );
+      const intervalSchedulerId = formatId({
+        number: intervalSchedulerNumber,
+        node: localNodeNumber,
+      });
+
+      await deferredTasks.execute({ intervalSchedulerId });
+
+      /** @type {import('./types.js').IntervalSchedulerFormula} */
+      const formula = harden({
+        type: /** @type {const} */ ('interval-scheduler'),
+        agent: agentId,
+        maxActive,
+        minPeriodMs,
+        paused: false,
+      });
+
+      return formulate(intervalSchedulerNumber, formula);
     });
   };
 
@@ -6642,6 +6739,7 @@ const makeDaemonCore = async (
     getFormulaForId,
     formulateChannel,
     formulateTimer,
+    formulateIntervalScheduler,
     makeMailbox,
     makeDirectoryNode,
     localNodeNumber,

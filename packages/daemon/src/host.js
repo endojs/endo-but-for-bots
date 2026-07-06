@@ -189,6 +189,7 @@ harden(normalizeShellPolicy);
  * @param {DaemonCore['getPeerIdForNodeIdentifier']} args.getPeerIdForNodeIdentifier
  * @param {DaemonCore['formulateChannel']} args.formulateChannel
  * @param {DaemonCore['formulateTimer']} args.formulateTimer
+ * @param {DaemonCore['formulateIntervalScheduler']} args.formulateIntervalScheduler
  * @param {DaemonCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
  * @param {DaemonCore['getTypeForId']} args.getTypeForId
  * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
@@ -234,6 +235,7 @@ export const makeHostMaker = ({
   getPeerIdForNodeIdentifier,
   formulateChannel,
   formulateTimer,
+  formulateIntervalScheduler,
   getAllNetworkAddresses,
   getTypeForId,
   getFormulaForId,
@@ -1550,6 +1552,27 @@ export const makeHostMaker = ({
     };
 
     /**
+     * Create an interval scheduler bound to this agent and store it under the
+     * given pet name. The returned capability lets the agent create and manage
+     * periodic wakeup intervals (the EndoClaw heartbeat facility). Tick
+     * delivery as mail messages is a later phase of the endoclaw-timer design.
+     *
+     * @param {PetName} petName - Pet name to store the scheduler under.
+     * @param {{ maxActive?: number, minPeriodMs?: number }} [options] - Host
+     *   limits: maximum active intervals and minimum period.
+     */
+    const makeIntervalSchedulerCmd = async (petName, options) => {
+      assertPetName(petName);
+      /** @type {DeferredTasks<import('./types.js').IntervalSchedulerDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        petStore.storeIdentifier(petName, identifiers.intervalSchedulerId),
+      );
+      const { value } = await formulateIntervalScheduler(hostId, options, tasks);
+      return value;
+    };
+
+    /**
      * Create a new channel and store it under the given pet name.
      * @param {NameOrPath} petName - Pet name or path to store the channel under.
      * @param {string} channelProposedName - Display name for the channel creator.
@@ -2163,6 +2186,7 @@ export const makeHostMaker = ({
       deliver,
       makeChannel: makeChannelCmd,
       makeTimer: makeTimerCmd,
+      makeIntervalScheduler: makeIntervalSchedulerCmd,
       invite,
       accept,
       endow,
