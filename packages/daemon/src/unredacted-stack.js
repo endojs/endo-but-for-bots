@@ -175,4 +175,5 @@ export const getUnredactedStackString = err => {
  * fallback.
  */
 export const hasUnredactedStackHook =
-  optUnredactError !== undefined || optMakeCausalConsoleFromLogger !== undefined;
+  optUnredactError !== undefined ||
+  optMakeCausalConsoleFromLogger !== undefined;
