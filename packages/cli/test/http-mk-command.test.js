@@ -9,7 +9,7 @@ import url from 'url';
 import { execa, $ } from 'execa';
 
 const dirname = url.fileURLToPath(new URL('.', import.meta.url)).toString();
-const endoBin = path.join(dirname, '..', 'bin', 'endo');
+const endoBin = path.join(dirname, '..', 'bin', 'endo.cjs');
 
 // Isolated daemon context so this test file does not collide with
 // concurrent CLI tests (see formula-collection.test.js for the same
