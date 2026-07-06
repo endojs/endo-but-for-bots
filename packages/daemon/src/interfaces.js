@@ -374,6 +374,11 @@ export const HostInterface = M.interface('EndoHost', {
   )
     .optional(MakeCapletOptionsShape)
     .returns(M.promise()),
+  // Mint a paired HTTP controller + client under two pet names.
+  // Names are plain pet names (enforced by `assertPetName`), not paths.
+  makeHttpClient: M.call(M.string(), M.string(), M.arrayOf(M.string())).returns(
+    M.promise(),
+  ),
   // Create a channel
   makeChannel: M.call(NameOrPathShape, M.string()).returns(M.promise()),
   // Create a timer
