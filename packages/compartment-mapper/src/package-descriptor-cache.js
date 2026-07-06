@@ -117,7 +117,7 @@ export const makePackageDescriptorCache = maybeRead => {
    *   auxiliaries: Array<AuxiliaryDescriptor>,
    * }>}
    */
-  const walkUpwards = async startingDirectory => {
+  const walkToCompartmentRoot = async startingDirectory => {
     await null;
     /** @type {Array<{location: string, packageDescriptor: PackageDescriptor}>} */
     const auxiliariesDeepFirst = [];
@@ -191,7 +191,7 @@ export const makePackageDescriptorCache = maybeRead => {
   const findEnclosingCompartmentRoot = async path => {
     const startingDirectory = resolveLocation('./', path);
     const { compartmentDirectory, compartmentDescriptor, auxiliaries } =
-      await walkUpwards(startingDirectory);
+      await walkToCompartmentRoot(startingDirectory);
     return freeze({
       packageLocation: /** @type {FileUrlString} */ (compartmentDirectory),
       packageDescriptor: compartmentDescriptor,
@@ -206,7 +206,7 @@ export const makePackageDescriptorCache = maybeRead => {
   const collectLanguageOverrides = async path => {
     const startingDirectory = resolveLocation('./', path);
     const { compartmentDescriptor, auxiliaries } =
-      await walkUpwards(startingDirectory);
+      await walkToCompartmentRoot(startingDirectory);
     const layered = [
       compartmentDescriptor,
       ...auxiliaries.map(({ packageDescriptor }) => packageDescriptor),
