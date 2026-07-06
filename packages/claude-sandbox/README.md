@@ -53,7 +53,7 @@ Fields:
 | `name` | pet name for the resulting `ClaudeClient` |
 | `filesystem` | pet name of an existing `Filesystem` capability |
 | `rootfs` | OCI image (`oci:<ref>` or a bare ref), or `host-bind` / `minimal` |
-| `network` | `none` \| `private` \| `host-loopback` \| `host-lan` \| `host-net` |
+| `network` | `none` \| `private` (default) — no host networking; `private` gives outbound internet with no reach to the host |
 | `model` | optional Claude model id (passed as `--model`) |
 | `credentials` | optional `ClaudeCredentials` pet name |
 | `initialPrompt` | optional first message |
@@ -115,8 +115,8 @@ The factory materialises the key just before injecting it as
 
 Provisioning is split by machine role; everything nests under host
 directories (`claude-sandbox/`, `claude-credentials/`), each carrying a
-`readme` (`endo show claude-sandbox/readme`) that documents its objects and
-the security of sharing each.
+`readme.md` blob (`endo cat claude-sandbox/readme.md`) that documents its
+objects and the security of sharing each.
 
 ```sh
 # HOST (container machine): mints claude-sandbox/{sandbox-factory, fs-mounter,

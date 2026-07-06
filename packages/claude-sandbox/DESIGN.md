@@ -697,13 +697,19 @@ including tool subcommands, MCP server code, and hooks.
 
 The containment therefore lives at the **sandbox boundary**, not in the agent:
 
-- **Network egress is the primary control.** A secret that can be *read* but
-  not *sent* is contained. The `network` profile decides this:
-  `none` / `private` give the container no route to the internet, so a leaked
-  key cannot leave; `host-loopback` / `host-lan` / `host-net` progressively
-  open egress and **weaken this guarantee** — use them only with a credential
-  you are willing to expose to anything reachable on that network. Default to
-  `none` or `private` for untrusted workloads.
+- **No host networking; the `network` profile controls egress.** This package
+  offers only two profiles (the `@endo/sandbox` `host-loopback` / `host-lan` /
+  `host-net` profiles, which share the host's net namespace, are deliberately
+  **not** exposed — bridging a session onto the host network is what this
+  package exists to avoid):
+  - `none` — no network at all (Claude can't reach the Anthropic API or
+    package registries).
+  - `private` (**default**) — a private net namespace with NAT'd **outbound
+    internet**, but RFC 1918 (LAN) and loopback are blocklisted. So Claude can
+    call the API and `npm`/`pip`-install dependencies, while the container has
+    **no route to the host** or its LAN. A credential materialised inside a
+    `private` session can still be *sent* to the public internet, so pair it
+    with the short-lived, revocable secret below rather than a long-lived key.
 - **Short-lived, revocable secrets.** The credential cap mints a **per-session**
   secret (`issue(sessionId)` → `materialise()`) and supports `revoke(sessionId)`;
   the long-lived auth never leaves the **peer** (`setup-peer.js`), so the host

@@ -17,7 +17,8 @@
   "type": "module",
   "exports": {
     ".": "./factory.js",
-    "./setup.js": "./setup.js",
+    "./setup-host.js": "./setup-host.js",
+    "./setup-peer.js": "./setup-peer.js",
     "./factory.js": "./factory.js",
     "./credentials.js": "./credentials.js",
     "./package.json": "./package.json"

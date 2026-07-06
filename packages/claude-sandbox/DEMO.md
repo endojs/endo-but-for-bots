@@ -28,22 +28,29 @@ capability via a host-side 9P mount ("plan B" — see
 ## Build a Claude image
 
 The sandbox needs an OCI image with `node` **and** the `claude` CLI on `PATH`.
-Build one once and reference it from the form's `rootfs` field (or set
-`CLAUDE_SANDBOX_IMAGE` so the form is pre-filled):
-
-```dockerfile
-# Containerfile
-FROM docker.io/library/node:22-bookworm-slim
-RUN npm install -g @anthropic-ai/claude-code
-# Claude reads its credential from the environment; the session injects
-# ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN depending on the
-# credential's kind (see step 4).
-WORKDIR /workspace
-```
+This package ships a "just works" one at
+[`oci/Containerfile`](./oci/Containerfile): node + the Claude Code CLI plus a
+general programming toolchain (git, ripgrep, `build-essential`, python3/pip) so
+Claude can run coding tasks and install new dependencies inside the sandbox.
+Build and tag it once:
 
 ```bash
-podman build -t localhost/claude-code:latest -f Containerfile .
+podman build -t localhost/claude-code:latest \
+  -f packages/claude-sandbox/oci/Containerfile packages/claude-sandbox/oci
 ```
+
+Then make it the default so the form's `rootfs` is pre-filled and
+`createSession` needs no `rootfs`:
+
+```bash
+# on the container host, before/when provisioning (see step 3)
+export CLAUDE_SANDBOX_IMAGE=oci:localhost/claude-code:latest
+```
+
+Sessions run with `network: 'private'` by default — NAT'd outbound internet
+(so `npm`/`pip` installs and the Anthropic API work) with **no route to the
+host** or its LAN. The only other profile is `none` (no network at all); there
+is deliberately no host networking.
 
 ## 1. Start the daemon
 
@@ -83,8 +90,8 @@ directories so the root inventory stays clean:
   a `readme`. The long-lived key never leaves the peer.
 
 For a **single-machine** demo, run both on the same daemon. Each directory
-carries a `readme` describing its objects and the security of sharing each —
-read it with `endo show claude-sandbox/readme` (or list a directory with
+carries a `readme.md` describing its objects and the security of sharing each —
+read it with `endo cat claude-sandbox/readme.md` (or list a directory with
 `endo list claude-sandbox`).
 
 **Host setup — privileged / root daemon** (e.g. a `--privileged` container or
