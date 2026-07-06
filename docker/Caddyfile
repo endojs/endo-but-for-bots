@@ -1,0 +1,8 @@
+# Example Caddy reverse proxy for a self-hosted Endo daemon.
+#
+# Caddy obtains and renews a TLS certificate automatically for the named host
+# and forwards both HTTP and WebSocket traffic to the daemon's gateway. Replace
+# my-daemon.example.com with your domain.
+my-daemon.example.com {
+	reverse_proxy endo:8920
+}

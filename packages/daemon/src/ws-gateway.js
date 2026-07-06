@@ -17,6 +17,7 @@ import {
   messageToBytes,
   bytesToMessage,
 } from './connection.js';
+import { makeAddressChecker } from './cidr.js';
 
 const GatewayBootstrapInterface = M.interface('GatewayBootstrap', {
   fetch: M.call(M.string()).returns(M.promise()),
@@ -79,6 +80,19 @@ harden(makeRateLimiter);
  *   `diagnostics().traces().lookup(errorId)` misses and the error surfaces as a
  *   bare message with no stack or worker chip (the private-path CLI already
  *   passes the same hook).
+ * @param {boolean} [opts.allowRemote] - When true, accept WebSocket
+ *   connections from any client IP (the `ENDO_GATEWAY=remote` mode used for
+ *   self-hosted daemons behind a TLS-terminating reverse proxy). When false
+ *   (the default), only localhost connections are admitted; every other client
+ *   IP is closed with `"Only local connections allowed"`.
+ * @param {string} [opts.allowedCIDRs] - Comma-separated CIDR allowlist
+ *   (`ENDO_GATEWAY_ALLOWED_CIDRS`). Localhost is always admitted in addition to
+ *   any address inside the listed ranges. Ignored when `allowRemote` is true.
+ * @param {(req: import('node:http').IncomingMessage) => string} [opts.getRemoteAddress] -
+ *   Resolves the client IP the address checker sees for a connection. Defaults
+ *   to the raw TCP peer (`req.socket.remoteAddress`). Overridable so a caller
+ *   terminating TLS at a trusted reverse proxy can extract the forwarded client
+ *   address, and so tests can drive the admission decision deterministically.
  * @returns {{ started: Promise<string>, stopped: Promise<void> }}
  */
 export const startWsGateway = ({
@@ -87,8 +101,17 @@ export const startWsGateway = ({
   port,
   cancelled,
   marshalSaveError = undefined,
+  allowRemote = false,
+  allowedCIDRs = '',
+  getRemoteAddress = req => req.socket.remoteAddress || '',
 }) => {
   const fetchLimiter = makeRateLimiter(1000);
+  const addressAllowed = makeAddressChecker({ allowRemote, allowedCIDRs });
+  if (allowRemote) {
+    console.warn(
+      '[Gateway] Remote mode active. Ensure TLS termination (reverse proxy) is configured — bearer tokens are transmitted over the WebSocket connection.',
+    );
+  }
   const gatewayP = E(endoBootstrap).gateway();
 
   /** @type {Set<Promise<void>>} */
@@ -110,7 +133,19 @@ export const startWsGateway = ({
   const wss = new WebSocketServer({ server });
 
   wss.on('connection', (socket, req) => {
-    const remoteAddress = req.socket.remoteAddress || '';
+    const remoteAddress = getRemoteAddress(req);
+
+    // Admit only allowed client IPs. In the default (local) mode this rejects
+    // every non-localhost connection; `ENDO_GATEWAY=remote` or a matching
+    // `ENDO_GATEWAY_ALLOWED_CIDRS` entry opts an address in. The close reason is
+    // the contract documented in packages/daemon/README.md § Remote access.
+    if (!addressAllowed(remoteAddress)) {
+      console.warn(
+        `[Gateway] Rejected connection from ${remoteAddress}: not in allowed range`,
+      );
+      socket.close(1008, 'Only local connections allowed');
+      return;
+    }
 
     const { promise: closed, resolve: close, reject: abort } = makePromiseKit();
 
