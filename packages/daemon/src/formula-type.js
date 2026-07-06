@@ -14,6 +14,7 @@ const formulaTypes = new Set([
   'guest',
   'handle',
   'host',
+  'interval-scheduler',
   'invitation',
   'known-peers-store',
   'least-authority',
