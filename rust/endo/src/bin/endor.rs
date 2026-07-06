@@ -13,8 +13,8 @@
 //!   endor ping                  # liveness check
 //!
 //!   endor worker  [-e xs]       # supervised worker child
-//!   endor run     [-e xs] <archive.zip>
-//!                               # standalone archive runner
+//!   endor run     [-e xs] <archive.zip | dir/>
+//!                               # standalone archive/directory runner
 //!
 //! The manager is hosted in-process by `endor daemon` on a
 //! dedicated `std::thread`; there is no separate `manager`
@@ -78,13 +78,19 @@ fn main() -> ExitCode {
                         // Run from CAS root hash.
                         result_to_exit("endor", cmd_run_from_cas(&hash))
                     } else if let Some(ref p) = path {
-                        if no_cas {
+                        if p.is_dir() {
+                            // Form 2: unpacked directory — ingest the tree
+                            // into CAS and execute via CAS-backed loading.
+                            result_to_exit("endor", cmd_run_dir_with_cas(p))
+                        } else if no_cas {
                             xsnap_result_to_exit(xsnap::run_xs_archive(p))
                         } else {
                             result_to_exit("endor", cmd_run_with_cas(p))
                         }
                     } else {
-                        eprintln!("usage: endor run [-e xs] [--cas <hash>] [--no-cas] <archive.zip>");
+                        eprintln!(
+                            "usage: endor run [-e xs] [--cas <hash>] [--no-cas] <archive.zip|dir/>"
+                        );
                         ExitCode::from(2)
                     }
                 }
@@ -189,15 +195,20 @@ fn print_subcommand_help(sub: &str) {
             eprintln!("  -e, --engine <engine>  Engine to use (default: xs)");
         }
         "run" => {
-            eprintln!("Usage: endor run [-e xs] <archive.zip>");
+            eprintln!("Usage: endor run [-e xs] [--cas <hash>] [--no-cas] <archive.zip|dir/>");
             eprintln!();
             eprintln!("Run a compartment-map archive standalone.");
             eprintln!();
-            eprintln!("Executes the given .zip archive in an XS machine without a");
-            eprintln!("running daemon. Useful for testing and one-off execution.");
+            eprintln!("Executes the given input in an XS machine without a running");
+            eprintln!("daemon. Useful for testing and one-off execution. The input");
+            eprintln!("may be a .zip archive or an unpacked directory containing a");
+            eprintln!("compartment-map.json alongside its compartment sources; either");
+            eprintln!("is ingested into the CAS and executed via CAS-backed loading.");
             eprintln!();
             eprintln!("Options:");
             eprintln!("  -e, --engine <engine>  Engine to use (default: xs)");
+            eprintln!("  --cas <hash>           Run from a CAS root hash directly");
+            eprintln!("  --no-cas               Skip CAS integration (ZIP archive only)");
         }
         "gc" => {
             eprintln!("Usage: endor gc");
@@ -389,6 +400,23 @@ fn cmd_run_with_cas(archive_path: &std::path::Path) -> Result<(), EndoError> {
     let cursor = std::io::Cursor::new(&bytes);
 
     let ingested = endo::cas_archive::ingest_archive(&cas, cursor)
+        .map_err(|e| EndoError::Config(format!("CAS ingest: {e}")))?;
+
+    eprintln!("endor[run]: archive root {}", ingested.root_hash);
+
+    // Run the archive using the loaded archive (already in memory).
+    xsnap::run_xs_archive_loaded(&ingested.archive)
+        .map_err(|e| EndoError::Config(format!("run: {e}")))?;
+    Ok(())
+}
+
+fn cmd_run_dir_with_cas(dir_path: &std::path::Path) -> Result<(), EndoError> {
+    // Create a temporary CAS for standalone runs.
+    let cas_dir = std::env::temp_dir().join("endor-cas");
+    let cas = endo::cas::ContentStore::open(&cas_dir)
+        .map_err(|e| EndoError::Config(format!("CAS open: {e}")))?;
+
+    let ingested = endo::cas_archive::ingest_directory(&cas, dir_path)
         .map_err(|e| EndoError::Config(format!("CAS ingest: {e}")))?;
 
     eprintln!("endor[run]: archive root {}", ingested.root_hash);

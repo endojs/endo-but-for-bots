@@ -3,13 +3,13 @@
 | | |
 |---|---|
 | **Created** | 2026-04-17 |
-| **Updated** | 2026-04-17 |
+| **Updated** | 2026-07-06 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 
 ## Status
 
-Phases 1-2 implemented:
+Phases 1-3 implemented:
 
 - **Phase 1**: `ContentStore` is available standalone via
   `endo::cas::ContentStore::open()` (implemented in
@@ -21,9 +21,19 @@ Phases 1-2 implemented:
   `endor run --cas <hash>` re-runs from CAS. `--no-cas` preserves
   legacy behavior. `run_xs_archive_loaded` added to xsnap for
   executing pre-loaded archives.
+- **Phase 3**: `rust/endo/src/cas_archive.rs` — `ingest_directory`
+  walks an unpacked archive directory and feeds it through the same
+  tree-building path as `ingest_archive` (factored into a shared
+  `ingest_files` helper), so a directory and its zipped equivalent
+  ingest to an identical root hash and load via the same
+  `load_archive_from_cas` path. `endor run <dir/>` detects a
+  directory argument, ingests it into the CAS, prints the root hash,
+  and executes via CAS-backed loading. Tree manifests are now serialized
+  canonically (`TreeManifest.entries` is a `BTreeMap`) so content hashes
+  are deterministic across processes — a prerequisite for the
+  `endor run … → endor run --cas <hash>` round-trip to be reproducible.
 
-Remaining: Phase 3 (directory input), Phase 4-5 (entry-point with
-compartment mapper).
+Remaining: Phase 4-5 (entry-point with compartment mapper).
 
 ## What is the Problem Being Solved?
 

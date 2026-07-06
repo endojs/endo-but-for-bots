@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -45,9 +45,17 @@ impl ContentType {
 // ---------------------------------------------------------------------------
 
 /// A tree manifest in the CAS — maps names to child entries.
+///
+/// Backed by a `BTreeMap` so serialization is canonical (keys in sorted
+/// order): the same set of entries always produces byte-identical JSON,
+/// and therefore a stable content hash. This is what lets a directory and
+/// its zipped equivalent ingest to the same root hash, and what makes the
+/// `endor run … → endor run --cas <hash>` round-trip reproducible across
+/// processes. A `HashMap` here would serialize in randomized order and
+/// break content-addressing.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TreeManifest {
-    pub entries: HashMap<String, TreeEntry>,
+    pub entries: BTreeMap<String, TreeEntry>,
 }
 
 /// A single entry in a CAS tree.
@@ -399,7 +407,7 @@ mod tests {
         let blob_hash = cas.store(b"content", "blob").unwrap();
         let tree = TreeManifest {
             entries: {
-                let mut m = HashMap::new();
+                let mut m = BTreeMap::new();
                 m.insert("b.js".to_string(), TreeEntry {
                     entry_type: "blob".to_string(),
                     hash: blob_hash.clone(),
@@ -429,7 +437,7 @@ mod tests {
         let blob_hash = cas.store(src, "blob").unwrap();
         let tree = TreeManifest {
             entries: {
-                let mut m = HashMap::new();
+                let mut m = BTreeMap::new();
                 m.insert("index.js".to_string(), TreeEntry {
                     entry_type: "blob".to_string(),
                     hash: blob_hash,
@@ -456,7 +464,7 @@ mod tests {
 
         let lib_tree = TreeManifest {
             entries: {
-                let mut m = HashMap::new();
+                let mut m = BTreeMap::new();
                 m.insert("util.js".to_string(), TreeEntry {
                     entry_type: "blob".to_string(),
                     hash: util_hash,
@@ -470,7 +478,7 @@ mod tests {
 
         let root_tree = TreeManifest {
             entries: {
-                let mut m = HashMap::new();
+                let mut m = BTreeMap::new();
                 m.insert("lib".to_string(), TreeEntry {
                     entry_type: "tree".to_string(),
                     hash: lib_hash,
@@ -492,7 +500,7 @@ mod tests {
         let cas = ContentStore::open(tmp.path()).unwrap();
 
         let tree = TreeManifest {
-            entries: HashMap::new(),
+            entries: BTreeMap::new(),
         };
         let tree_json = serde_json::to_vec(&tree).unwrap();
         let root_hash = cas.store_tree(&tree_json).unwrap();
@@ -543,7 +551,7 @@ mod tests {
         let blob_hash = cas.store(b"tree child", "blob").unwrap();
         let tree = TreeManifest {
             entries: {
-                let mut m = HashMap::new();
+                let mut m = BTreeMap::new();
                 m.insert("child.js".to_string(), TreeEntry {
                     entry_type: "blob".to_string(),
                     hash: blob_hash.clone(),
@@ -577,7 +585,7 @@ mod tests {
 
         let tree1 = TreeManifest {
             entries: {
-                let mut m = HashMap::new();
+                let mut m = BTreeMap::new();
                 m.insert("shared.js".to_string(), TreeEntry {
                     entry_type: "blob".to_string(),
                     hash: shared_blob.clone(),
@@ -588,7 +596,7 @@ mod tests {
         };
         let tree2 = TreeManifest {
             entries: {
-                let mut m = HashMap::new();
+                let mut m = BTreeMap::new();
                 m.insert("also-shared.js".to_string(), TreeEntry {
                     entry_type: "blob".to_string(),
                     hash: shared_blob.clone(),
