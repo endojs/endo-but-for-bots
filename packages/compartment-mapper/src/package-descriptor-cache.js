@@ -168,8 +168,9 @@ export const makePackageDescriptorCache = maybeRead => {
       // When no descriptor has been encountered yet (the entry sits in a
       // directory with no `package.json` of its own, such as a bare module
       // dropped under `node_modules`), keep climbing past the boundary so
-      // behavior matches the existing `search`, which adopts the nearest
-      // enclosing named package regardless of `node_modules` boundaries.
+      // behavior matches the existing `searchCompartmentDescriptor`, which
+      // adopts the nearest enclosing named package regardless of
+      // `node_modules` boundaries.
       const atNodeModulesBoundary =
         parent.endsWith('/node_modules/') && auxiliariesDeepFirst.length > 0;
       if (parent === directory || atNodeModulesBoundary) {

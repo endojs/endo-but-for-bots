@@ -246,12 +246,12 @@ export type MakeMapParsersOptions = {
 };
 
 /**
- * Options for `search()`
+ * Options for `searchCompartmentDescriptor()`
  */
 export type SearchOptions = LogOptions;
 
 /**
- * Object fulfilled from `search()`
+ * Object fulfilled from `searchCompartmentDescriptor()`
  */
 export interface SearchResult {
   packageLocation: string;
