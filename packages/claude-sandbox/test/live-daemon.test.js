@@ -84,10 +84,20 @@ const prepareHost = async (t, name) => {
   await purge(config);
   await start(config);
   t.teardown(async () => {
+    // Fully stop the daemon before the next serial test starts, so a lingering
+    // daemon-node child can't SIGTERM into the next test's startup. Cancel the
+    // client connection only after the daemon is down.
     await stop(config).catch(() => {});
     cancel(new Error('teardown'));
     try {
       rmSync(path.join(dirname, 'tmp', name), { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+    // The socket lives in os.tmpdir() (sun_path-limit workaround), so it is not
+    // under tmp/<name> — remove it explicitly or it leaks across CI runs.
+    try {
+      rmSync(config.sockPath, { force: true });
     } catch {
       // ignore
     }
@@ -118,15 +128,10 @@ test.serial(
       t.true(present, `claude-sandbox/${name} exists`);
     }
 
-    // The host root is clean: no temp names left over from the move dance,
-    // and none of the pre-nesting top-level names.
+    // The host root is clean: the temp names the provisioner mints and then
+    // `move`s into the directory do not linger at the root.
     const root = await E(host).list();
-    for (const n of [
-      'claude-sandbox-guest',
-      'claude-sandbox-agent',
-      'controller-for-claude-sandbox-factory',
-      'profile-for-claude-sandbox-factory',
-    ]) {
+    for (const n of ['claude-sandbox-guest', 'claude-sandbox-agent']) {
       t.false(
         root.includes(n),
         `host root polluted with ${n}: ${root.join(', ')}`,

@@ -58,6 +58,7 @@ const makeMockHost = ({
   const provideMountCalls = [];
   const sliceFactoryCalls = [];
   let unmounted = false;
+  let removeMountCount = 0;
   const fake = makeFakeSlice();
 
   const fsCap = filesystem === undefined ? { kind: 'fake-fs' } : filesystem;
@@ -102,6 +103,9 @@ const makeMockHost = ({
       provideMountCalls.push({ path, petName, cap });
       return cap;
     },
+    async removeMount() {
+      removeMountCount += 1;
+    },
   };
 
   return {
@@ -112,6 +116,7 @@ const makeMockHost = ({
     sliceFactoryCalls,
     isUnmounted: () => unmounted,
     isDisposed: () => fake.isDisposed(),
+    removeMountCount: () => removeMountCount,
   };
 };
 
@@ -248,6 +253,8 @@ test('terminate() after provisioning disposes the slice and unmounts', async t =
   await client.terminate();
   t.true(host.isDisposed());
   t.true(host.isUnmounted());
+  // The workspace Mount pet name is reclaimed on teardown (no host-root leak).
+  t.is(host.removeMountCount(), 1);
   const status = await client.status();
   t.true(status.terminated);
 });

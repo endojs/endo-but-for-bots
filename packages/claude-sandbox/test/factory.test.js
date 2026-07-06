@@ -27,6 +27,7 @@ import { make } from '../src/claude-sandbox-factory.js';
 const makeMockPowers = () => {
   const formCalls = [];
   const replies = [];
+  const dismissed = [];
   const pendingMessages = [];
   let nextWaiter = null;
   let formMessageNumber = 0;
@@ -87,12 +88,16 @@ const makeMockPowers = () => {
     async reply(number, body) {
       replies.push({ number, body });
     },
+    async dismiss(number) {
+      dismissed.push(number);
+    },
   };
 
   return {
     powers,
     formCalls,
     replies,
+    dismissed,
     iterateMessages: () => messageIterator,
     setHostAgent(hostAgent) {
       powers.hostAgent = hostAgent;
@@ -118,15 +123,27 @@ const makeMockHostAgent = ({ filesystems = {}, evaluateThrows } = {}) => {
   const adoptCalls = [];
   const replyCalls = [];
   const dismissCalls = [];
+  // Track the pet names the "daemon" would resolve, so `reply` can reject a
+  // name that was never actually stored — mirroring the real daemon, which
+  // throws "Unknown pet name" (mail.js). Without this the mock would green-light
+  // a factory bug that replies with a name `makeUnconfined` never created.
+  const storedNames = new Set();
+  const nameKey = petName =>
+    Array.isArray(petName) ? petName.join('/') : petName;
   const hostAgent = {
     // The form path validates that the operator's pet names exist (then endows
     // them by name); `filesystems` doubles as the existence map.
     async has(name) {
       return name in filesystems;
     },
-    // The peer-package path adopts the caps from the host mailbox.
+    // The peer-package path adopts the caps from the host mailbox. The daemon
+    // requires a non-empty edge name and a valid pet-name path.
     async adopt(number, edge, petName) {
+      if (typeof edge !== 'string' || edge.length === 0) {
+        throw new Error(`adopt: invalid edge name ${JSON.stringify(edge)}`);
+      }
       adoptCalls.push({ number, edge, petName });
+      storedNames.add(nameKey(petName));
     },
     async evaluate(workerName, source, codeNames, petNames, resultName) {
       evaluateCalls.push({
@@ -137,16 +154,33 @@ const makeMockHostAgent = ({ filesystems = {}, evaluateThrows } = {}) => {
         resultName,
       });
       if (evaluateThrows) throw new Error(evaluateThrows);
+      if (resultName !== undefined) storedNames.add(nameKey(resultName));
       return harden({ kind: 'fake-powers', name: resultName });
     },
     async makeUnconfined(powersName, specifier, opts) {
       unconfinedCalls.push({ powersName, specifier, opts });
+      if (opts.resultName !== undefined)
+        storedNames.add(nameKey(opts.resultName));
       return harden({ kind: 'fake-client', name: opts.resultName });
     },
     async remove(name) {
       removeCalls.push(name);
+      storedNames.delete(nameKey(name));
     },
     async reply(number, strings, edgeNames, petNames) {
+      // Mirror the daemon's Mail.reply validation so an interface-shape mistake
+      // fails here rather than only against a real daemon.
+      if (petNames.length !== edgeNames.length) {
+        throw new Error('reply: one pet name per edge name');
+      }
+      if (Number(strings.length) < Number(petNames.length)) {
+        throw new Error('reply: one string before every delivered value');
+      }
+      for (const pn of petNames) {
+        if (!storedNames.has(nameKey(pn))) {
+          throw new Error(`reply: Unknown pet name ${nameKey(pn)}`);
+        }
+      }
       replyCalls.push({ number, strings, edgeNames, petNames });
     },
     async dismiss(number) {
@@ -374,6 +408,28 @@ test('submission with an unknown network profile is rejected', async t => {
   t.is(host.unconfinedCalls.length, 0);
 });
 
+test('submission naming absent credentials replies with an error', async t => {
+  const mock = makeMockPowers();
+  // Filesystem exists, credentials pet name does not.
+  const host = makeMockHostAgent({
+    filesystems: { 'my-fs': { kind: 'fake-fs' } },
+  });
+
+  make(mock.powers, undefined, wireDeps(mock, host));
+
+  await waitFor(() => mock.formCalls.length > 0);
+  mock.simulateSubmission({
+    name: 'x',
+    filesystem: 'my-fs',
+    credentials: 'no-such-creds',
+    network: 'private',
+  });
+
+  await waitFor(() => mock.replies.length > 0);
+  t.regex(mock.replies[0].body.join('\n'), /Unknown credentials/);
+  t.is(host.unconfinedCalls.length, 0);
+});
+
 test('duplicate form replies are ignored (replay guard)', async t => {
   const mock = makeMockPowers();
   const host = makeMockHostAgent({
@@ -389,6 +445,9 @@ test('duplicate form replies are ignored (replay guard)', async t => {
   mock.simulateSubmission(payload, { number: 99, replyTo: 'form-1' });
   await new Promise(r => setTimeout(r, 100));
   t.is(host.unconfinedCalls.length, 1);
+  // The consumed form reply is dismissed, so a daemon restart's replay does not
+  // re-create/overwrite the reincarnated session (durable, not just in-memory).
+  t.deepEqual(mock.dismissed, [99]);
 });
 
 // --- Peer session-request package path (handleSessionRequest / loop) ---
@@ -512,4 +571,103 @@ test('a session-request that fails formulation replies an error, cleans up, and 
   t.deepEqual(host.dismissCalls, [12]);
   // The adopted temp name was cleaned up despite the failure (no orphan).
   t.true(host.removeCalls.includes(host.adoptCalls[0].petName));
+});
+
+test('a duplicate session-request number is processed once (mailbox replay guard)', async t => {
+  const mock = makeMockPowers();
+  const host = makeMockHostAgent();
+  const stream = makeHostMessageStream();
+  make(mock.powers, undefined, {
+    ...wireDeps(mock, host),
+    iterateHostMessages: stream.iterateHostMessages,
+  });
+
+  // The SAME message number redelivered (as a restart's `followMessages`
+  // replay would) must not double-adopt / double-formulate the session.
+  const pkg = sessionRequestPackage(20, {
+    kind: 'claude-sandbox-session',
+    name: 'dup-1',
+    network: 'private',
+  });
+  stream.push(pkg);
+  await waitFor(() => host.replyCalls.length > 0);
+  stream.push(pkg);
+  // Give the loop a chance to (not) reprocess.
+  await new Promise(r => setTimeout(r, 50));
+
+  t.is(host.adoptCalls.length, 1, 'adopted exactly once');
+  t.is(host.unconfinedCalls.length, 1, 'formulated exactly once');
+  t.is(host.replyCalls.length, 1, 'replied exactly once');
+  t.deepEqual(host.dismissCalls, [20]);
+});
+
+test('concurrent session-request packages each get a distinct session, no residue', async t => {
+  const mock = makeMockPowers();
+  const host = makeMockHostAgent();
+  const stream = makeHostMessageStream();
+  make(mock.powers, undefined, {
+    ...wireDeps(mock, host),
+    iterateHostMessages: stream.iterateHostMessages,
+  });
+
+  // Two requests back-to-back exercise the shared sessionCounter/tempCounter
+  // and the interleaved evaluate→makeUnconfined→remove name dance.
+  stream.push(
+    sessionRequestPackage(30, {
+      kind: 'claude-sandbox-session',
+      name: 'conc-a',
+      network: 'private',
+    }),
+  );
+  stream.push(
+    sessionRequestPackage(31, {
+      kind: 'claude-sandbox-session',
+      name: 'conc-b',
+      network: 'private',
+    }),
+  );
+  await waitFor(() => host.replyCalls.length >= 2);
+
+  t.is(host.unconfinedCalls.length, 2);
+  const names = host.unconfinedCalls.map(c => c.opts.resultName);
+  t.regex(names[0], /^session-conc-a-/);
+  t.regex(names[1], /^session-conc-b-/);
+  t.not(names[0], names[1], 'distinct session names');
+  // Distinct per-session powers + adopt temp names (no counter collision).
+  const powers = host.evaluateCalls.map(c => c.resultName);
+  t.not(powers[0], powers[1]);
+  const fscaps = host.adoptCalls.map(c => c.petName);
+  t.not(fscaps[0], fscaps[1]);
+  // Both requests dismissed; every temp powers/adopt name was removed (only
+  // the two client names should survive).
+  t.deepEqual(host.dismissCalls.slice().sort(), [30, 31]);
+  for (const n of [...powers, ...fscaps]) {
+    t.true(host.removeCalls.includes(n), `removed ${n}`);
+  }
+});
+
+test('a marked-but-malformed session request is answered with an error and dismissed', async t => {
+  const mock = makeMockPowers();
+  const host = makeMockHostAgent();
+  const stream = makeHostMessageStream();
+  make(mock.powers, undefined, {
+    ...wireDeps(mock, host),
+    iterateHostMessages: stream.iterateHostMessages,
+  });
+
+  // Marked as ours, but no `filesystem` edge — must NOT be silently ignored
+  // (which would strand the peer), but replied-to and dismissed.
+  stream.push(
+    sessionRequestPackage(
+      40,
+      { kind: 'claude-sandbox-session', name: 'bad-1', network: 'private' },
+      [],
+    ),
+  );
+  await waitFor(() => host.replyCalls.length > 0);
+
+  t.is(host.adoptCalls.length, 0, 'nothing adopted');
+  t.is(host.unconfinedCalls.length, 0, 'nothing formulated');
+  t.regex(host.replyCalls[0].strings.join('\n'), /filesystem. edge/);
+  t.deepEqual(host.dismissCalls, [40]);
 });
