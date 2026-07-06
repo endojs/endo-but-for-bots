@@ -225,10 +225,19 @@ test('startup recovery re-arms intervals and delivers a coalesced catch-up tick 
   };
   await purge(config);
 
-  // ── First incarnation: create the scheduler + interval, observe tick 1. ──
+  // First incarnation: create the scheduler + interval, observe tick 1.
   await start(config);
   const first = makeCancelKit();
   first.cancelled.catch(() => {});
+  // Register the first incarnation for teardown up front, so a throw before the
+  // manual stop below cannot leak a live daemon (afterEach.always stops it and
+  // cancels this client). The manual stop/cancel before the restart is still
+  // required for the test's own sequencing; this is only the safety net.
+  t.context.push({
+    config,
+    cancel: first.cancel,
+    cancelled: first.cancelled,
+  });
   const client1 = await makeEndoClient(
     'client',
     config.sockPath,
@@ -260,11 +269,11 @@ test('startup recovery re-arms intervals and delivers a coalesced catch-up tick 
   first.cancel(Error('restart'));
   await stop(config);
 
-  // ── Downtime. The gap exceeds the 1s period, so at least one tick is
-  // missed and the recovery math coalesces it into a single catch-up. ──
+  // Downtime. The gap exceeds the 1s period, so at least one tick is missed
+  // and the recovery math coalesces it into a single catch-up.
   await delay(2000);
 
-  // ── Second incarnation (restart) against the SAME state directory. ──
+  // Second incarnation (restart) against the SAME state directory.
   await start(config);
   const second = makeCancelKit();
   second.cancelled.catch(() => {});

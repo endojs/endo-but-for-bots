@@ -1411,7 +1411,10 @@ const makeDaemonCore = async (
     // collected as orphaned is not resurrected, and per-scheduler-isolated so
     // one incarnation failure is logged without aborting startup or the other
     // schedulers. `provide` caches by id, so this is idempotent with any later
-    // lookup.
+    // lookup. Recovering a scheduler whose interval is overdue transitively
+    // incarnates that scheduler's owning agent (and its worker) to deliver the
+    // catch-up tick — work previously deferred until first lookup — so a daemon
+    // with many due schedulers does correspondingly more at boot.
     await Promise.all(
       entries.map(async ({ id, formula }) => {
         if (formula.type !== 'interval-scheduler') {
