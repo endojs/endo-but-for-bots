@@ -1,0 +1,29 @@
+# Example Compose deployment for a self-hosted Endo daemon.
+#
+# `docker compose up -d` builds the image and runs the daemon with its state on
+# a named volume that survives container recreation. Control the daemon with the
+# CLI inside the container:
+#
+#   docker compose exec endo endo <command>
+#
+# Remote access: the daemon starts no network service by default, so no host
+# port is published. Authenticated remote HTTP/WebSocket access is not yet
+# available (see README.md, "Remote access"). Do not proxy the raw control
+# socket to a network interface: reaching the socket grants full unauthenticated
+# control of the daemon.
+
+services:
+  endo:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: endojs/daemon:latest
+    volumes:
+      - endo-state:/data/endo
+    restart: unless-stopped
+    # The daemon runs as PID 1 and forks worker subprocesses; run it under an
+    # init so orphaned descendants are reaped rather than left as zombies.
+    init: true
+
+volumes:
+  endo-state:
