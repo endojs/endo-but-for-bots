@@ -1,0 +1,127 @@
+name: Docker
+
+# Validate the docker/ self-hosting setup and exercise the daemon from OUTSIDE
+# the container.
+#
+# Triggers on PRs that touch the docker/ tree, the daemon (whose
+# foreground/CIDR/gateway behaviour the container exercises), or this workflow
+# itself; and on pushes to the long-lived branches `master` and `llm` so a
+# regression is caught at merge time.
+#
+# The job is intentionally small: validate the compose manifest, build the
+# image, and smoke-test that the container answers on the gateway port from the
+# runner's network namespace (i.e. from outside the container). The full daemon
+# test suite already runs in `ci.yml`; this workflow's job is to prove the
+# container assembles, starts the foreground daemon as PID 1, binds the gateway,
+# and admits an authenticated remote client — not to re-test the daemon.
+
+on:
+  push:
+    branches: [master, llm]
+  pull_request:
+    paths:
+      - 'docker/**'
+      - '.dockerignore'
+      - 'packages/daemon/**'
+      - '.github/workflows/docker.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-smoke:
+    name: build-and-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Validate docker-compose.yml
+        # `docker compose config` parses the manifest and renders the resolved
+        # configuration. A non-zero exit means the YAML is invalid or references
+        # unknown keys.
+        working-directory: docker
+        run: docker compose config
+
+      - name: Build image
+        # Build context is the repository root because the two-stage Dockerfile
+        # copies the whole workspace and runs `yarn install` + the Familiar
+        # bundle pipeline itself. `.dockerignore` keeps node_modules and .git
+        # out of the context.
+        run: docker build -f docker/Dockerfile -t endo-selfhost:ci .
+
+      - name: Smoke-test the container from outside
+        # Start the container in the background, wait for the gateway to bind,
+        # then exercise it from the runner — which is outside the container's
+        # network namespace, so this is the same path a real client takes.
+        #
+        # The container publishes 8920 on the host loopback via `-p 8920:8920`;
+        # the runner's `curl` reaches the daemon over the bridge, whose source
+        # address is non-loopback. The image defaults to `ENDO_GATEWAY=remote`,
+        # so the gateway's CIDR admission gate accepts the bridged WebSocket
+        # client (it would otherwise be closed with 1008 "Only local connections
+        # allowed").
+        run: |
+          set -eu
+          docker run --rm -d \
+            --name endo-smoke \
+            -p 8920:8920 \
+            endo-selfhost:ci
+          # Always tear down, even on failure, and dump container logs so a
+          # smoke-test failure is diagnosable from the workflow log alone.
+          trap 'docker logs endo-smoke || true; docker rm -f endo-smoke || true' EXIT
+
+          # Wait up to 90s for the gateway to answer (the daemon self-initializes
+          # its state directory and mints the root agent on first launch).
+          for _ in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8920/ > /tmp/body 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          # Assert the body matches the default gateway response. This proves the
+          # entrypoint started node, the daemon bound the configured address, and
+          # the HTTP server answered a request from outside the container.
+          if ! grep -Fxq 'Endo Gateway' /tmp/body; then
+            echo "Unexpected gateway response:" >&2
+            cat /tmp/body >&2 || true
+            exit 1
+          fi
+          echo "HTTP gateway responded as expected."
+
+          # Exercise the WebSocket upgrade path from outside the container. A 101
+          # Switching Protocols response confirms the WebSocketServer is attached
+          # to the same HTTP server and that the remote-mode CIDR gate admitted
+          # the bridged (non-loopback) client. `curl` cannot speak WebSocket
+          # frames, so the connection hangs after the 101; bound it with -m 5 so
+          # the step always returns.
+          ws_status=$(curl -sS -m 5 -o /tmp/ws_body -w '%{http_code}' \
+            -H 'Connection: Upgrade' \
+            -H 'Upgrade: websocket' \
+            -H 'Sec-WebSocket-Version: 13' \
+            -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+            http://127.0.0.1:8920/ || true)
+          if [ "${ws_status}" != "101" ]; then
+            echo "WebSocket upgrade failed: HTTP ${ws_status}" >&2
+            cat /tmp/ws_body >&2 || true
+            exit 1
+          fi
+          echo "WebSocket upgrade succeeded."
+
+          # Verify the container is still running, which catches a crash of the
+          # foreground daemon (PID 1) triggered by the outside requests: a
+          # crashed daemon means an exited container.
+          state=$(docker inspect -f '{{.State.Status}}' endo-smoke)
+          if [ "${state}" != "running" ]; then
+            echo "Container is not running after smoke test: ${state}" >&2
+            exit 1
+          fi
+          echo "Container still running after smoke test."
