@@ -1398,6 +1398,41 @@ const makeDaemonCore = async (
     await withFormulaGraphLock(async () => {
       formulaGraph.sweepUnreachable();
     });
+
+    // endoclaw-timer Phase 3 — Startup Recovery.
+    // Eagerly incarnate every surviving `interval-scheduler` formula so its
+    // recovery runs at daemon start rather than lying dormant until an agent
+    // happens to look it up. Incarnating an `interval-scheduler` re-reads its
+    // persisted interval entries, re-arms the active ones, and delivers a
+    // single coalesced catch-up `interval-tick` for any ticks missed during
+    // downtime (design § Startup Recovery). Without this eager pass, scheduled
+    // work would be silently dropped across a restart whenever nothing looked
+    // the scheduler up. Done after the unreachable sweep so a scheduler
+    // collected as orphaned is not resurrected, and per-scheduler-isolated so
+    // one incarnation failure is logged without aborting startup or the other
+    // schedulers. `provide` caches by id, so this is idempotent with any later
+    // lookup.
+    await Promise.all(
+      entries.map(async ({ id, formula }) => {
+        if (formula.type !== 'interval-scheduler') {
+          return;
+        }
+        if (!formulaForId.has(id)) {
+          // Collected by the sweep above as unreachable; nothing to recover.
+          return;
+        }
+        try {
+          // The type hint is elided: `provide` ignores it at runtime and the
+          // `interval-scheduler` value type is not in its narrowing union.
+          await provide(id);
+        } catch (error) {
+          console.warn(
+            `[interval-scheduler] startup recovery failed to incarnate ${id}:`,
+            error,
+          );
+        }
+      }),
+    );
   };
 
   /** @type {import('./types.js').GcHooks} */
