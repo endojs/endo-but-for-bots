@@ -246,12 +246,12 @@ export type MakeMapParsersOptions = {
 };
 
 /**
- * Options for `search()`
+ * Options for `searchCompartmentDescriptor()`
  */
 export type SearchOptions = LogOptions;
 
 /**
- * Object fulfilled from `search()`
+ * Object fulfilled from `searchCompartmentDescriptor()`
  */
 export interface SearchResult {
   packageLocation: string;
@@ -342,4 +342,17 @@ export type ParserGeneratorConfig = {
   languageForModuleSpecifier: LanguageForModuleSpecifier;
   parserForLanguage: ParserForLanguage;
   transforms: Record<string, ModuleTransform | SyncModuleTransform>;
+};
+
+/**
+ * Classification of a single `package.json` descriptor, memoized per
+ * directory by `makePackageDescriptorCache`.
+ */
+export type ClassifiedDescriptor = {
+  packageDescriptor: PackageDescriptor;
+  /**
+   * True when the descriptor has a non-empty `name` field and therefore
+   * defines a compartment. False for an auxiliary descriptor.
+   */
+  isCompartmentDefining: boolean;
 };

@@ -18,6 +18,11 @@ import {
 } from './policy.js';
 import { ATTENUATORS_COMPARTMENT } from './policy-format.js';
 import { unpackReadPowers } from './powers.js';
+import { parseLocatedJson } from './json.js';
+import {
+  layerLanguageForExtension,
+  selectLanguageForExtension,
+} from './language-for-extension-by-prefix.js';
 /**
  * @import {
  *   ImportHook,
@@ -96,6 +101,135 @@ const noop = () => {};
  */
 const resolveLocation = (rel, abs) =>
   /** @type {FileUrlString} */ (new URL(rel, abs).toString());
+
+const decoder = new TextDecoder();
+
+/**
+ * Per-compartment memo of directory URL to its parsed {@link PackageDescriptor}
+ * (or `undefined` when no `package.json` exists at that exact directory), used
+ * by the auxiliary language-for-extension walk. Keyed by the compartment
+ * descriptor so the memo neither leaks into the serialized compartment map nor
+ * survives the compartment it belongs to.
+ *
+ * @type {WeakMap<object, Map<string, import('./types.js').PackageDescriptor | undefined>>}
+ */
+const auxiliaryDescriptorMemos = new WeakMap();
+
+/**
+ * Walks upward from a module's directory to (but not including) the compartment
+ * root, reading any intermediate `package.json` files. Auxiliary descriptors
+ * (those without a `name`) found on the path scope language-for-extension
+ * overrides — typically `{"type": "module"}` or `{"type": "commonjs"}` — to
+ * their subtree. The discovered prefixes are layered shallow-to-deep onto the
+ * compartment's base `parsers` map and recorded on
+ * `compartmentDescriptor.languageForExtensionByPrefix`; the effective map for
+ * the module (its deepest matching prefix) is returned.
+ *
+ * Returns `undefined` when no auxiliary descriptor lies between the module and
+ * the compartment root, so the caller leaves the compartment's base parser map
+ * untouched — preserving behavior for packages without auxiliary descriptors.
+ *
+ * This is the lazy, per-module half of the auxiliary `package.json` design;
+ * the static graph builder cannot enumerate package subtrees, so the override
+ * lookup happens here, where each loaded module's location is known and the
+ * trampoline lets the same generator serve the sync and async import hooks.
+ * See `../designs/compartment-mapper-auxiliary-package-json.md`.
+ *
+ * @param {object} args
+ * @param {FileUrlString} args.moduleLocation - absolute URL of the module being loaded
+ * @param {FileUrlString} args.packageLocation - absolute URL of the compartment root
+ * @param {import('./types.js').CompartmentDescriptor} args.compartmentDescriptor
+ * @param {object} operators
+ * @param {(location: FileUrlString) => any} operators.maybeRead
+ * @returns {Generator<any, import('./types.js').LanguageForExtension | undefined, any>}
+ */
+function* resolveAuxiliaryLanguageForExtension(
+  { moduleLocation, packageLocation, compartmentDescriptor },
+  { maybeRead },
+) {
+  const base = compartmentDescriptor.parsers;
+  // No base parser map (e.g. attenuators compartment) means nothing to layer.
+  if (base === undefined) {
+    return undefined;
+  }
+  // Only modules genuinely inside the compartment subtree can have an
+  // enclosing auxiliary descriptor.
+  if (
+    !moduleLocation.startsWith(packageLocation) ||
+    moduleLocation.length <= packageLocation.length
+  ) {
+    return undefined;
+  }
+
+  let memo = auxiliaryDescriptorMemos.get(compartmentDescriptor);
+  if (memo === undefined) {
+    memo = new Map();
+    auxiliaryDescriptorMemos.set(compartmentDescriptor, memo);
+  }
+
+  // Collect auxiliary descriptors on the path, deepest first.
+  /** @type {Array<{ directory: string, descriptor: import('./types.js').PackageDescriptor }>} */
+  const auxiliariesDeepFirst = [];
+  let directory = resolveLocation('./', moduleLocation);
+  while (
+    directory !== packageLocation &&
+    directory.startsWith(packageLocation) &&
+    directory.length > packageLocation.length
+  ) {
+    let descriptor = memo.get(directory);
+    if (!memo.has(directory)) {
+      const descriptorLocation = resolveLocation('package.json', directory);
+      // eslint-disable-next-line no-await-in-loop
+      const bytes = yield maybeRead(descriptorLocation);
+      descriptor =
+        bytes === undefined
+          ? undefined
+          : parseLocatedJson(decoder.decode(bytes), descriptorLocation);
+      memo.set(directory, descriptor);
+    }
+    if (descriptor !== undefined) {
+      const { name } = descriptor;
+      const isCompartmentDefining = typeof name === 'string' && name !== '';
+      if (!isCompartmentDefining) {
+        auxiliariesDeepFirst.push({ directory, descriptor });
+      }
+    }
+    directory = resolveLocation('../', directory);
+  }
+
+  if (auxiliariesDeepFirst.length === 0) {
+    return undefined;
+  }
+
+  // Layer shallow-to-deep, recording one cumulative entry per prefix.
+  const auxiliariesShallowFirst = auxiliariesDeepFirst.reverse();
+  const languageForExtensionByPrefix =
+    compartmentDescriptor.languageForExtensionByPrefix ||
+    (compartmentDescriptor.languageForExtensionByPrefix = []);
+  let cumulative = base;
+  for (const {
+    directory: auxiliaryDirectory,
+    descriptor,
+  } of auxiliariesShallowFirst) {
+    cumulative = layerLanguageForExtension(cumulative, descriptor);
+    const prefix = auxiliaryDirectory.slice(packageLocation.length);
+    if (!languageForExtensionByPrefix.some(entry => entry.prefix === prefix)) {
+      languageForExtensionByPrefix.push(
+        freeze({ prefix, languageForExtension: cumulative }),
+      );
+      languageForExtensionByPrefix.sort(
+        (a, b) => a.prefix.length - b.prefix.length,
+      );
+    }
+  }
+
+  const relativeModulePath = moduleLocation.slice(packageLocation.length);
+  return selectLanguageForExtension(
+    base,
+    languageForExtensionByPrefix,
+    relativeModulePath,
+  );
+}
 
 // this is annoying
 function getImportsFromRecord(record) {
@@ -427,6 +561,16 @@ function* chooseModuleDescriptor(
     if (moduleBytes !== undefined) {
       /** @type {string | undefined} */
       let sourceMap;
+      // Resolve any auxiliary `package.json` language-for-extension overrides
+      // scoped to a subtree between this module and the compartment root, so a
+      // `{"type": "module"}` (or `"commonjs"`) auxiliary flips `.js` parsing
+      // within its directory. `undefined` leaves the compartment's base parser
+      // map in force. See
+      // `../designs/compartment-mapper-auxiliary-package-json.md`.
+      const languageForExtension = yield* resolveAuxiliaryLanguageForExtension(
+        { moduleLocation, packageLocation, compartmentDescriptor },
+        { maybeRead },
+      );
       // must be narrowed
       const envelope = /** @type {ParseResult} */ (
         yield parse(
@@ -443,6 +587,7 @@ function* chooseModuleDescriptor(
                 sourceMap = JSON.stringify(nextSourceMapObject);
               }),
             compartmentDescriptor,
+            languageForExtension,
           },
         )
       );

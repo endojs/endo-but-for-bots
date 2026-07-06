@@ -111,7 +111,7 @@ const maybeReadDescriptorDefault = async (
  * @param {SearchOptions} [options]
  * @returns {Promise<SearchResult>}
  */
-export const search = async (
+export const searchCompartmentDescriptor = async (
   readPowers,
   moduleLocation,
   { log = noop } = {},

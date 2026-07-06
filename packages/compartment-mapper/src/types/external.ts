@@ -266,7 +266,96 @@ type MapNodeModulesOptionsOmitPolicy = Partial<{
    * the compartment map.
    */
   additionalLocations: Array<AdditionalLocation>;
+  /**
+   * `mapNodeModules` resolves auxiliary `package.json` files (descriptors
+   * without a `name`) as language-for-extension overrides on the enclosing
+   * named compartment, rather than treating them as compartment roots. It
+   * constructs a `PackageDescriptorCache` on demand for this, so the
+   * behavior is the default.
+   *
+   * Supply a cache here only to share a single descriptor cache (and its
+   * read memoization) across multiple `mapNodeModules` calls. When omitted,
+   * a fresh cache is constructed for the call.
+   *
+   * In every case, an entry whose enclosing package has no named ancestor
+   * (the walk reaches a `node_modules` boundary or the filesystem root
+   * without finding a `name`) still triggers the diagnostic introduced in
+   * `endojs/endo-but-for-bots#70`.
+   *
+   * See `../../designs/compartment-mapper-auxiliary-package-json.md` for the
+   * design this option implements.
+   */
+  packageDescriptorCache: PackageDescriptorCache;
 }>;
+
+/**
+ * Per-call cache of `package.json` descriptors that classifies each
+ * descriptor as either compartment-defining (has a non-empty `name`) or
+ * auxiliary (no `name`).
+ *
+ * Two questions answered against a single upward walk:
+ *
+ *  1. {@link PackageDescriptorCache.findEnclosingCompartmentRoot} returns
+ *     the nearest ancestor directory whose `package.json` defines a
+ *     compartment.
+ *  2. {@link PackageDescriptorCache.collectLanguageOverrides} returns the
+ *     ordered list of descriptors from the compartment root down to the
+ *     file's parent for layered language-for-extension lookup.
+ *
+ * Construct one via `makePackageDescriptorCache(maybeRead)`.
+ */
+export interface PackageDescriptorCache {
+  /**
+   * Walks upward from the directory containing `path`, skipping past
+   * auxiliary descriptors transparently. Throws when no named ancestor
+   * exists.
+   */
+  findEnclosingCompartmentRoot(
+    path: string,
+  ): Promise<CompartmentRootDescriptor>;
+  /**
+   * Returns the layered descriptor list for the file at `path`, shallowest
+   * first. The first element is the compartment root's descriptor;
+   * subsequent elements are auxiliary descriptors whose directory
+   * prefixes `path`.
+   */
+  collectLanguageOverrides(
+    path: string,
+  ): Promise<ReadonlyArray<PackageDescriptor>>;
+  /**
+   * Memoized read of a single `package.json` at `packageLocation`. Returns
+   * `undefined` when none exists at that exact directory.
+   */
+  readDescriptor(
+    packageLocation: string,
+  ): Promise<PackageDescriptor | undefined>;
+}
+
+/**
+ * Result of {@link PackageDescriptorCache.findEnclosingCompartmentRoot}.
+ */
+export interface CompartmentRootDescriptor {
+  /** Directory of the compartment-defining `package.json`. */
+  packageLocation: FileUrlString;
+  /** Always has a non-empty `name`. */
+  packageDescriptor: PackageDescriptor;
+  /**
+   * In path order from the compartment root down. Empty when the file's
+   * nearest enclosing `package.json` is the compartment root itself.
+   */
+  auxiliaryDescriptors: ReadonlyArray<AuxiliaryDescriptor>;
+}
+
+/**
+ * Auxiliary `package.json` descriptor (one without a `name`), located in
+ * a subdirectory of a compartment-defining ancestor.
+ */
+export interface AuxiliaryDescriptor {
+  /** Directory containing the auxiliary `package.json`. */
+  location: FileUrlString;
+  /** Has no `name` (or an empty `name`). */
+  packageDescriptor: PackageDescriptor;
+}
 
 /**
  * An additional package location to include in the compartment map graph.
@@ -781,6 +870,13 @@ type ParseArguments = [
     sourceMapUrl: string | undefined;
     readPowers: ReadFn | ReadPowers | undefined;
     compartmentDescriptor: CompartmentDescriptor | undefined;
+    /**
+     * Per-module language-for-extension override, supplied by the import hook
+     * when the module sits inside an auxiliary `package.json` subtree. Takes
+     * precedence over the compartment's base parser map. See
+     * `../../designs/compartment-mapper-auxiliary-package-json.md`.
+     */
+    languageForExtension: LanguageForExtension | undefined;
   }> &
     ArchiveOnlyOption,
 ];

@@ -4,6 +4,12 @@ dist/
 api-docs/
 browser-test/
 
+# Node.js parity fixture: TypeScript modules whose module system comes from the
+# enclosing package.json `type` scope. They live outside node_modules so Node.js
+# can load them (Node refuses to load TypeScript under node_modules), which also
+# takes them out of the default node_modules ignore that covers other fixtures.
+packages/compartment-mapper/test/fixtures-auxiliary-typescript-node-parity/
+
 *.json
 
 # see .gitignore
