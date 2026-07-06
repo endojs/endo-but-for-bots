@@ -621,7 +621,10 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       // Only act on a marked request we have not already consumed. Unrelated
       // traffic (`ignore`) is left in the mailbox untouched — it isn't ours to
       // dismiss.
-      if (classified.kind !== 'ignore' && !seenSessionRequests.has(msg.number)) {
+      if (
+        classified.kind !== 'ignore' &&
+        !seenSessionRequests.has(msg.number)
+      ) {
         seenSessionRequests.add(msg.number);
         try {
           if (classified.kind === 'invalid') {
