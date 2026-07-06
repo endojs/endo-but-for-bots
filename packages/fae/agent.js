@@ -30,6 +30,7 @@ import {
   makeReadChannelTool,
 } from './src/tool-makers.js';
 import { extractToolCallsFromContent } from './src/extract-tool-calls.js';
+import { registerCapabilityTools } from './src/capability-tools.js';
 
 /** Same pattern as isSpecialName in packages/daemon/src/pet-name.js */
 const specialNamePattern = /^[A-Z][A-Z0-9-]{0,127}$/;
@@ -234,6 +235,27 @@ export const spawnWorkerLoop = async (
   localTools.set('messageHistory', makeMessageHistoryTool(powers));
   localTools.set('exec', makeExecTool(powers));
   localTools.set('readChannel', makeReadChannelTool(powers));
+
+  // Dynamic capability discovery (daemon-agent-tools Phase 4): register the
+  // filesystem / shell / git tools this guest's *granted* capabilities afford,
+  // looked up by their canonical pet names (`fs`, `shell`, `git`). A capability
+  // that was not granted contributes no tools, so the guest advertises exactly
+  // the coding authority it holds. Failures here must not sink the worker — a
+  // guest with no coding capabilities is the common case.
+  try {
+    const registered = await registerCapabilityTools(powers, localTools);
+    if (registered.length > 0) {
+      console.log(
+        `[fae] Registered capability tools: ${registered.join(', ')}`,
+      );
+    }
+  } catch (error) {
+    console.error(
+      `[fae] Capability tool discovery failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
 
   /**
    * Process tool calls from the LLM response.

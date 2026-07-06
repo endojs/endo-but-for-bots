@@ -171,3 +171,27 @@ export declare function makeMountFsTools(
   fs: ERef<Filesystem>,
   opts?: MountFsToolsOptions,
 ): ToolRecord[];
+
+export interface CapabilityToolOptions {
+  /** Pet name of the `Dir` / mount capability. Defaults to `'fs'`. */
+  fsName?: string;
+  /** Pet name of the `Shell` capability. Defaults to `'shell'`. */
+  shellName?: string;
+  /** Pet name of the `Git` capability. Defaults to `'git'`. */
+  gitName?: string;
+  /**
+   * When `true`, the filesystem tools omit the write (edit) slice. Defaults to
+   * `false`.
+   */
+  readOnly?: boolean;
+  /**
+   * Maximum number of UTF-8 characters the filesystem read tool returns before
+   * truncation. Defaults to 50,000; `0` disables the limit.
+   */
+  maxChars?: number;
+}
+
+export declare function discoverCapabilityTools(
+  powers: ERef<any>,
+  options?: CapabilityToolOptions,
+): Promise<ToolRecord[]>;

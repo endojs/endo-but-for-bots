@@ -45,6 +45,10 @@
       "types": "./shell-tool.d.ts",
       "default": "./src/shell-tool.js"
     },
+    "./discover.js": {
+      "types": "./discover.d.ts",
+      "default": "./src/discover.js"
+    },
     "./mount-fs.js": {
       "types": "./mount-fs.d.ts",
       "default": "./src/mount-fs.js"
@@ -68,6 +72,10 @@
     "./src/shell-tool.js": {
       "types": "./src/shell-tool.d.ts",
       "default": "./src/shell-tool.js"
+    },
+    "./src/discover.js": {
+      "types": "./src/discover.d.ts",
+      "default": "./src/discover.js"
     },
     "./src/mount-fs.js": {
       "types": "./src/mount-fs.d.ts",

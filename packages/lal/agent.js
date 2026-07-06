@@ -8,6 +8,8 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makeLocalTree } from '@endo/platform/fs/node';
 
 import { makePiAgent } from '@endo/agentry/harness';
+import { discoverCapabilityTools } from '@endo/agent-tools/discover.js';
+import { toPiAgentTool } from '@endo/agent-tools/pi';
 
 import { systemPrompt } from './prompts/system.js';
 import { tools } from './tools/index.js';
@@ -95,6 +97,30 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
     toAgentTool(name, summary, executeTool),
   );
 
+  // Dynamic capability discovery (daemon-agent-tools Phase 4): register the
+  // filesystem / shell / git tools this guest's *granted* capabilities afford,
+  // looked up by their canonical pet names (`fs`, `shell`, `git`) and bridged
+  // into pi-agent-core `AgentTool`s. A capability that was not granted
+  // contributes no tools, so the worker advertises exactly the coding authority
+  // it holds. A name already served by a static tool wins, so discovery only
+  // ever adds. Discovery failure must not sink the worker.
+  const staticToolNames = new Set(agentTools.map(t => t.name));
+  try {
+    const capabilityRecords = await discoverCapabilityTools(powers);
+    for (const record of capabilityRecords) {
+      if (!staticToolNames.has(record.name)) {
+        agentTools.push(toPiAgentTool(record));
+        staticToolNames.add(record.name);
+      }
+    }
+  } catch (error) {
+    console.error(
+      `[lal] Capability tool discovery failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+
   const resolvedModel = await resolveModel(model);
   const isOllama = resolvedModel.name?.startsWith('ollama/');
 
@@ -173,6 +199,18 @@ export const make = (guestPowers, _context) => {
           example: 'sk-ant-... for Anthropic',
           secret: true,
         },
+        {
+          name: 'projectPath',
+          label: 'Project directory (optional, required for coding capabilities)',
+          default: '',
+          example: '/home/user/project',
+        },
+        {
+          name: 'capabilities',
+          label: 'Coding capabilities (comma-separated: fs, shell, git)',
+          default: '',
+          example: 'fs,shell,git',
+        },
       ]),
     );
 
@@ -199,6 +237,97 @@ export const make = (guestPowers, _context) => {
         await E(guest).storeIdentifier('primer', primerTreeId);
         console.log('[lal] Primer provisioned for guest');
       }
+    };
+
+    // Default confinement for a form-granted Shell: an allowlist of common
+    // build / VCS / inspection commands, a one-minute wall clock, and a 1 MiB
+    // output cap. Arguments are always passed argv-style (never a shell
+    // string), so the allowlist is the enforceable boundary. Widening it is a
+    // deliberate authority decision (daemon-agent-tools Design Decision 4).
+    const defaultShellPolicy = harden({
+      allowedCommands: [
+        'node',
+        'npm',
+        'npx',
+        'yarn',
+        'git',
+        'make',
+        'python',
+        'python3',
+        'pip',
+        'grep',
+        'find',
+        'sed',
+        'awk',
+        'cat',
+        'ls',
+      ],
+      timeoutMs: 60_000,
+      maxOutputBytes: 1_048_576,
+    });
+
+    /**
+     * Grant the coding capabilities the form requested into the sub-guest's
+     * namespace under the canonical discovery names (`fs`, `shell`, `git`), so
+     * the guest's startup tool discovery (daemon-agent-tools Phase 4) registers
+     * exactly the tools it now affords. A single writable mount over the
+     * project directory backs all three; each grant is idempotent so a restart
+     * re-uses the existing caps rather than re-minting.
+     *
+     * @param {any} guest
+     * @param {string} agentName
+     * @param {string[]} requestedCaps - Subset of `['fs', 'shell', 'git']`.
+     * @param {string} projectPath - Absolute path to the project directory.
+     */
+    const provisionCapabilities = async (
+      guest,
+      agentName,
+      requestedCaps,
+      projectPath,
+    ) => {
+      if (requestedCaps.length === 0) {
+        return;
+      }
+      if (!projectPath) {
+        throw new Error(
+          'A project directory is required to grant coding capabilities.',
+        );
+      }
+
+      // One writable mount over the project directory, shared by fs / git /
+      // shell. Minted under a scoped name in the host namespace, then
+      // referenced into the guest by identifier.
+      const mountName = `${agentName}-project-mount`;
+      const mount = (await E(agent).has(mountName))
+        ? await E(agent).lookup(mountName)
+        : await E(agent).provideMount(projectPath, mountName);
+
+      if (requestedCaps.includes('fs') && !(await E(guest).has('fs'))) {
+        const mountId = await E(agent).identify(mountName);
+        await E(guest).storeIdentifier('fs', mountId);
+      }
+
+      if (requestedCaps.includes('git') && !(await E(guest).has('git'))) {
+        const gitName = `${agentName}-git`;
+        if (!(await E(agent).has(gitName))) {
+          await E(agent).provideGit(mount, gitName);
+        }
+        const gitId = await E(agent).identify(gitName);
+        await E(guest).storeIdentifier('git', gitId);
+      }
+
+      if (requestedCaps.includes('shell') && !(await E(guest).has('shell'))) {
+        const shellName = `${agentName}-shell`;
+        if (!(await E(agent).has(shellName))) {
+          await E(agent).provideShell(mount, shellName, defaultShellPolicy);
+        }
+        const shellId = await E(agent).identify(shellName);
+        await E(guest).storeIdentifier('shell', shellId);
+      }
+
+      console.log(
+        `[lal] Provisioned capabilities [${requestedCaps.join(', ')}] for "${agentName}"`,
+      );
     };
 
     // Pre-scan existing messages to find our latest form messageId so that
@@ -236,11 +365,16 @@ export const make = (guestPowers, _context) => {
         try {
           // Resolve the submitted values from the value message.
           const config =
-            /** @type {{ name: string, host: string, model: string, authToken: string }} */ (
+            /** @type {{ name: string, host: string, model: string, authToken: string, projectPath?: string, capabilities?: string }} */ (
               await E(powers).lookupById(msg.valueId)
             );
 
           const { name } = config;
+          const projectPath = (config.projectPath || '').trim();
+          const requestedCaps = (config.capabilities || '')
+            .split(',')
+            .map(s => s.trim().toLowerCase())
+            .filter(Boolean);
 
           if (activeWorkers.has(name)) {
             // A worker is already running for this name.
@@ -267,6 +401,24 @@ export const make = (guestPowers, _context) => {
 
             // Ensure the sub-guest has the primer directory.
             await provisionPrimer(guest);
+
+            // Grant any requested coding capabilities into the guest so its
+            // startup tool discovery registers the corresponding tools.
+            const unknownCaps = requestedCaps.filter(
+              c => !['fs', 'shell', 'git'].includes(c),
+            );
+            if (unknownCaps.length > 0) {
+              throw new Error(
+                `Unknown capabilities: ${unknownCaps.join(', ')}. ` +
+                  `Supported: fs, shell, git.`,
+              );
+            }
+            await provisionCapabilities(
+              guest,
+              name,
+              requestedCaps,
+              projectPath,
+            );
 
             // Spawn a worker loop for this guest.
             const workerP = spawnWorkerLoop(guest, null, {
