@@ -115,7 +115,11 @@ test('readOnly drops the fs edit tool', async t => {
     { readOnly: true },
   );
   t.false(names(records).includes('mountWriteText'));
-  t.deepEqual(names(records).sort(), ['mountList', 'mountReadText', 'mountStat']);
+  t.deepEqual(names(records).sort(), [
+    'mountList',
+    'mountReadText',
+    'mountStat',
+  ]);
 });
 
 test('all capabilities granted registers the union', async t => {

@@ -201,7 +201,8 @@ export const make = (guestPowers, _context) => {
         },
         {
           name: 'projectPath',
-          label: 'Project directory (optional, required for coding capabilities)',
+          label:
+            'Project directory (optional, required for coding capabilities)',
           default: '',
           example: '/home/user/project',
         },

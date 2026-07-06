@@ -14,10 +14,7 @@ import '@endo/init/debug.js';
 import test from 'ava';
 import { Far } from '@endo/pass-style';
 
-import {
-  toFaeTool,
-  registerCapabilityTools,
-} from '../src/capability-tools.js';
+import { toFaeTool, registerCapabilityTools } from '../src/capability-tools.js';
 
 const makeStubShell = () =>
   Far('StubShell', {
@@ -96,10 +93,7 @@ test('registerCapabilityTools adds only the granted capability tools', async t =
 test('registerCapabilityTools adds nothing when no capabilities granted', async t => {
   /** @type {Map<string, any>} */
   const localTools = new Map();
-  const registered = await registerCapabilityTools(
-    makePowers({}),
-    localTools,
-  );
+  const registered = await registerCapabilityTools(makePowers({}), localTools);
   t.deepEqual(registered, []);
   t.is(localTools.size, 0);
 });
