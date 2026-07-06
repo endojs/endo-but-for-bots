@@ -1,0 +1,12 @@
+# Keep the Docker build context small. The builder stage runs `yarn install`
+# itself, so installed dependencies and build outputs are excluded.
+**/node_modules
+.git
+.yarn/cache
+.yarn/install-state.gz
+**/dist
+**/bundles
+**/.nyc_output
+**/coverage
+**/tmp
+**/*.log

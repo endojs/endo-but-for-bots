@@ -178,12 +178,20 @@ const main = async () => {
   );
   const gatewayHost = addrUrl.hostname;
   const gatewayPort = addrUrl.port !== '' ? Number(addrUrl.port) : 8920;
+  // Remote access is opt-in: binding to 0.0.0.0 alone still rejects
+  // non-localhost clients. `ENDO_GATEWAY=remote` admits any reachable IP;
+  // `ENDO_GATEWAY_ALLOWED_CIDRS` admits specific ranges in addition to
+  // localhost. See packages/daemon/README.md § Remote access.
+  const allowRemote = process.env.ENDO_GATEWAY === 'remote';
+  const allowedCIDRs = process.env.ENDO_GATEWAY_ALLOWED_CIDRS || '';
   const wsGateway = startWsGateway({
     endoBootstrap,
     host: gatewayHost,
     port: gatewayPort,
     cancelled,
     marshalSaveError,
+    allowRemote,
+    allowedCIDRs,
   });
 
   const services = [privatePathService, wsGateway];

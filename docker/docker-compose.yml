@@ -1,0 +1,45 @@
+# Example Compose deployment for a self-hosted Endo daemon.
+#
+# The daemon speaks plain HTTP/WebSocket on 8920. TLS is terminated by the Caddy
+# reverse proxy in front of it (bearer tokens travel over the WebSocket, so a
+# self-hosted daemon must be reached over HTTPS — see the [Gateway] startup
+# warning). Drop the caddy service if TLS is handled by a cloud load balancer.
+
+services:
+  endo:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: endojs/daemon:latest
+    # Bind the gateway to the host loopback only; Caddy reaches it over the
+    # compose network. Publish 8920 to 0.0.0.0 instead if you terminate TLS
+    # elsewhere.
+    expose:
+      - "8920"
+    volumes:
+      - endo-state:/data
+    environment:
+      # Accept authenticated remote connections. This is the image default; it
+      # is spelled out here as the deliberate opt-in a self-hosted deployment
+      # makes. Set ENDO_GATEWAY_ALLOWED_CIDRS instead to scope access to
+      # specific IP ranges (localhost is always allowed).
+      - ENDO_GATEWAY=remote
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - endo
+    restart: unless-stopped
+
+volumes:
+  endo-state:
+  caddy-data:
+  caddy-config:
