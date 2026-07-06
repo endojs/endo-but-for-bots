@@ -12,7 +12,10 @@
  *
  * The ESM banner injects a `createRequire` so any CJS-only deps
  * that esbuild cannot statically convert (e.g. `node-fetch`) keep
- * working through `require()`.
+ * working through `require()`, plus `__filename`/`__dirname`, which
+ * esbuild leaves undefined in ESM output but CJS-only deps still
+ * reference (e.g. `bindings`, which better-sqlite3 uses to locate its
+ * native `.node` addon).
  */
 
 import '@endo/init';
@@ -31,9 +34,18 @@ const shared = {
   target: 'node22',
   format: 'esm',
   // Re-introduce a synchronous `require` for any transitive CJS dep
-  // that esbuild cannot statically convert into an ESM import.
+  // that esbuild cannot statically convert into an ESM import, plus the
+  // CJS `__filename`/`__dirname` globals (undefined in esbuild's ESM
+  // output) that such deps reference at runtime.
   banner: {
-    js: 'import { createRequire as __bundleCreateRequire } from "module"; const require = __bundleCreateRequire(import.meta.url);',
+    js: [
+      'import { createRequire as __bundleCreateRequire } from "module";',
+      'import { fileURLToPath as __bundleFileURLToPath } from "url";',
+      'import { dirname as __bundleDirname } from "path";',
+      'const require = __bundleCreateRequire(import.meta.url);',
+      'const __filename = __bundleFileURLToPath(import.meta.url);',
+      'const __dirname = __bundleDirname(__filename);',
+    ].join(' '),
   },
   // Node built-ins are external by default with platform: 'node'.
   // Mark optional native deps as external to avoid build failures.
