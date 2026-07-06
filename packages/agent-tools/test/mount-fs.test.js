@@ -6,7 +6,7 @@ import '@endo/init/debug.js';
 
 /** @import { ExecutionContext } from 'ava' */
 /** @import { ERef } from '@endo/eventual-send' */
-/** @import { Filesystem } from '@endo/platform/fs/extended' */
+/** @import { Filesystem } from '@endo/platform/fs/extended.js' */
 
 import test from 'ava';
 import os from 'os';
@@ -20,7 +20,7 @@ import {
   makeNodeFilesystem,
   readOnly,
   chroot,
-} from '@endo/platform/fs/extended';
+} from '@endo/platform/fs/extended.js';
 
 import { makeMountReadTool } from '../src/mount-fs.js';
 import { toPiAgentTool } from '../src/pi.js';

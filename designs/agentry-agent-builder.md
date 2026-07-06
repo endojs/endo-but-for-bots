@@ -322,7 +322,7 @@ primary), and #517 ships it as two concrete presets exported from
 `@endo/agentry/execute`, each a thin specialization of `defineAgent`:
 
 ```ts
-import { makeCodeModeAgent, makeCodeModeGitLoopAgent } from '@endo/agentry/execute';
+import { makeCodeModeAgent, makeCodeModeGitLoopAgent } from '@endo/agentry/execute.js';
 
 // makeCodeModeAgent: an agent whose sole tool is execute(js), evaluated in a
 // Compartment endowed with the configured lexical powers.

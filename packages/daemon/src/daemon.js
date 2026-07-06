@@ -17,7 +17,7 @@ import { bytesToText } from '@endo/bytes/to-string.js';
 import {
   checkinTree as platformCheckinTree,
   snapshotTreeMethods,
-} from '@endo/platform/fs/lite';
+} from '@endo/platform/fs/lite.js';
 import { toSafeNumber } from '@endo/platform/fs/extended/shared/helpers.js';
 import { makeNativeGitBackend } from '@endo/git';
 import {
@@ -117,7 +117,7 @@ import { getUnredactedStackString } from './unredacted-stack.js';
  * `fetch` result can be treated as having them present — unlike the shared
  * `ReadableBlob` type, where they are optional for stores that lack range I/O.
  *
- * @typedef {import('@endo/platform/fs/lite/types').ReadableBlob & {
+ * @typedef {import('@endo/platform/fs/lite/types.js').ReadableBlob & {
  *   size: () => Promise<bigint>,
  *   readRange: (offset: number, length: number) => Promise<Uint8Array>,
  * }} RangeReadableBlob

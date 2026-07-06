@@ -14,7 +14,7 @@ import test from 'ava';
 import { Far } from '@endo/pass-style';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
-import { renderConfined, unmount, h } from '@endo/preact-container/renderer';
+import { renderConfined, unmount, h } from '@endo/preact-container/renderer.js';
 
 import { createDOM, tick } from '../helpers/dom-setup.js';
 import { FileExplorerApp } from '../../src/preact/FileExplorerApp.js';

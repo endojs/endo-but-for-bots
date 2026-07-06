@@ -5,9 +5,9 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
-import { makeLocalTree } from '@endo/platform/fs/node';
+import { makeLocalTree } from '@endo/platform/fs/node.js';
 
-import { makePiAgent } from '@endo/agentry/harness';
+import { makePiAgent } from '@endo/agentry/harness.js';
 
 import { systemPrompt } from './prompts/system.js';
 import { tools } from './tools/index.js';

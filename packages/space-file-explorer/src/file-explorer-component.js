@@ -1,7 +1,7 @@
 // @ts-check
 
 import harden from '@endo/harden';
-import { h, renderConfined, unmount } from '@endo/preact-container/renderer';
+import { h, renderConfined, unmount } from '@endo/preact-container/renderer.js';
 
 import { FileExplorerApp } from './preact/FileExplorerApp.js';
 

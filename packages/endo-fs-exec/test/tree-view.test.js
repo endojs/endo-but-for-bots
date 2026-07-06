@@ -7,7 +7,7 @@ import test from 'ava';
 import { E } from '@endo/eventual-send';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 
-import { makeInMemoryFilesystem } from '@endo/platform/fs/extended';
+import { makeInMemoryFilesystem } from '@endo/platform/fs/extended.js';
 import { makeTreeView } from '../src/tree-view.js';
 
 const utf8 = s => new TextEncoder().encode(s);

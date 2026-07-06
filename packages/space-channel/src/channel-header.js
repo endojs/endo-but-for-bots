@@ -12,7 +12,7 @@ import {
   formatDuration,
 } from '@endo/spaces-util/heat-engine.js';
 import { Fragment, h } from 'preact';
-import { renderConfined } from '@endo/preact-container/renderer';
+import { renderConfined } from '@endo/preact-container/renderer.js';
 
 import { createHeatSimulation } from './heat-simulation.js';
 

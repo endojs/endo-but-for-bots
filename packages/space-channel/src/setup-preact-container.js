@@ -39,7 +39,7 @@
 export {
   confineComponent,
   isConfinedComponent,
-} from '@endo/preact-container/compartment';
+} from '@endo/preact-container/compartment.js';
 
 export {
   renderConfined,
@@ -47,7 +47,7 @@ export {
   h,
   Fragment,
   createElement,
-} from '@endo/preact-container/renderer';
+} from '@endo/preact-container/renderer.js';
 
 // `createContext` lets a controller inject a capability (e.g. a clipboard
 // writer) into deep confined leaves without prop-threading. Context propagates

@@ -8,7 +8,7 @@
 import harden from '@endo/harden';
 
 import { h } from 'preact';
-import { renderConfined } from '@endo/preact-container/renderer';
+import { renderConfined } from '@endo/preact-container/renderer.js';
 
 import { petNamePathAutocomplete } from './petname-path-autocomplete.js';
 

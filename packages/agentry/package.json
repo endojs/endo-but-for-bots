@@ -21,19 +21,19 @@
       "types": "./src/index.js",
       "default": "./src/index.js"
     },
-    "./harness": {
+    "./harness.js": {
       "types": "./src/harness/index.js",
       "default": "./src/harness/index.js"
     },
-    "./define-agent": {
+    "./define-agent.js": {
       "types": "./src/define-agent.js",
       "default": "./src/define-agent.js"
     },
-    "./execute": {
+    "./execute.js": {
       "types": "./src/execute/index.js",
       "default": "./src/execute/index.js"
     },
-    "./eval": {
+    "./eval.js": {
       "types": "./src/eval/index.js",
       "default": "./src/eval/index.js"
     },

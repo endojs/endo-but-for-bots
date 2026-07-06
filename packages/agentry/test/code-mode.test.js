@@ -13,7 +13,7 @@ import {
   fauxAssistantMessage,
   fauxToolCall,
 } from '@earendil-works/pi-ai';
-import { makeNodeFilesystem } from '@endo/platform/fs/extended';
+import { makeNodeFilesystem } from '@endo/platform/fs/extended.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 import { makeGit } from '@endo/exo-git';

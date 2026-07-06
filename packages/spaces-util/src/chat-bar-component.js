@@ -9,7 +9,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { Fragment, h } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import { renderConfined, unmount } from '@endo/preact-container/renderer';
+import { renderConfined, unmount } from '@endo/preact-container/renderer.js';
 
 import { sendFormComponent } from './send-form.js';
 import { commandSelectorComponent } from './command-selector.js';

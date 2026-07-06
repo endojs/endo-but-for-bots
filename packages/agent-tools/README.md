@@ -111,7 +111,7 @@ first slice.
 `@endo/platform/fs/extended` `Filesystem` capability:
 
 ```js
-import { readOnly } from '@endo/platform/fs/extended';
+import { readOnly } from '@endo/platform/fs/extended.js';
 import { makeMountReadTool } from '@endo/agent-tools/mount-fs.js';
 
 const readTool = makeMountReadTool(readOnly(projectFs));

@@ -11,7 +11,7 @@ import { passStyleOf } from '@endo/pass-style';
 
 import { h } from 'preact';
 import { useState } from 'preact/hooks';
-import { renderConfined, unmount } from '@endo/preact-container/renderer';
+import { renderConfined, unmount } from '@endo/preact-container/renderer.js';
 
 import { valueToVnodes } from './value-vnodes.js';
 import { MarkdownFragment } from './markdown-vnodes.js';

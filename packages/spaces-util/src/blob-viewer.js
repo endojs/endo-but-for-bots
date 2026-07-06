@@ -8,7 +8,7 @@
 import { E } from '@endo/eventual-send';
 import { createMonacoEditor, detectTheme } from '@endo/monaco-wrapper';
 import { h } from 'preact';
-import { renderConfined, unmount } from '@endo/preact-container/renderer';
+import { renderConfined, unmount } from '@endo/preact-container/renderer.js';
 import { MarkdownFragment } from './markdown-vnodes.js';
 import { inferLanguage } from './language-detect.js';
 import { isMarkdown } from './markdown-preview.js';

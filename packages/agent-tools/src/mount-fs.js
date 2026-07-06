@@ -2,11 +2,11 @@
 /// <reference types="ses"/>
 
 /** @import { ERef } from '@endo/eventual-send' */
-/** @import { File, Filesystem } from '@endo/platform/fs/extended' */
+/** @import { File, Filesystem } from '@endo/platform/fs/extended.js' */
 /** @import { ToolRecord } from './types.js' */
 
 import { E } from '@endo/eventual-send';
-import { walk, collectBytes } from '@endo/platform/fs/extended';
+import { walk, collectBytes } from '@endo/platform/fs/extended.js';
 
 import { makeTool } from './tool.js';
 

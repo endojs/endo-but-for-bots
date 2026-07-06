@@ -3,7 +3,7 @@
 import '@endo/init/debug.js';
 
 import test from 'ava';
-import { h, renderConfined } from '@endo/preact-container/renderer';
+import { h, renderConfined } from '@endo/preact-container/renderer.js';
 import { markdownToVnodes } from '@endo/spaces-util/markdown-vnodes.js';
 import { createDOM, waitFor } from '../helpers/dom-setup.js';
 

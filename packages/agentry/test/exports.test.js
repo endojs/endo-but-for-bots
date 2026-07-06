@@ -8,11 +8,11 @@ test('agentry subpaths resolve through package exports', async t => {
       // eslint-disable-next-line import/no-unresolved
       import('@endo/agentry'),
       // eslint-disable-next-line import/no-unresolved
-      import('@endo/agentry/harness'),
+      import('@endo/agentry/harness.js'),
       // eslint-disable-next-line import/no-unresolved
-      import('@endo/agentry/execute'),
+      import('@endo/agentry/execute.js'),
       // eslint-disable-next-line import/no-unresolved
-      import('@endo/agentry/eval'),
+      import('@endo/agentry/eval.js'),
     ]);
   t.is(typeof rootModule.defineAgent, 'function');
   t.is(typeof harnessModule.makePiAgent, 'function');

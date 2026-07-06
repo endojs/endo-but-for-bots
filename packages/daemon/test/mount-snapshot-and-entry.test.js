@@ -10,7 +10,7 @@ import path from 'path';
 import fs from 'fs';
 import { E } from '@endo/eventual-send';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
-import { checkinTree } from '@endo/platform/fs/lite';
+import { checkinTree } from '@endo/platform/fs/lite.js';
 
 import { makeFilePowers } from '../src/daemon-node-powers.js';
 import { makeMount } from '../src/mount.js';

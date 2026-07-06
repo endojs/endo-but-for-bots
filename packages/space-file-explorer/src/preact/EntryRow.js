@@ -3,7 +3,7 @@ import { h } from 'preact';
 import { useState } from 'preact/hooks';
 
 /** @import { DirEntry } from './types.js' */
-/** @import { SafeDataTransfer } from '@endo/preact-container/renderer' */
+/** @import { SafeDataTransfer } from '@endo/preact-container/renderer.js' */
 
 /**
  * One browser row: a file / directory / git-workspace / unknown-cap entry,

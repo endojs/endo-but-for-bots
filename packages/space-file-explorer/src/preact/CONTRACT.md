@@ -157,7 +157,7 @@ against — keep its public surface exactly `FileExplorerStore`.
 import '@endo/init/debug.js';
 import test from 'ava';
 import { createDOM } from '../helpers/dom-setup.js';
-import { renderConfined, unmount } from '@endo/preact-container/renderer';
+import { renderConfined, unmount } from '@endo/preact-container/renderer.js';
 import { h } from 'preact';
 // import the component under test
 ```

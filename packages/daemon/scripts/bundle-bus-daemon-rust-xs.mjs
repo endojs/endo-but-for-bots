@@ -31,9 +31,9 @@ const EXCLUDED_PACKAGES = new Set([
   '@endo/import-bundle',
   '@endo/init',
   '@endo/lockdown',
-  '@endo/platform/proc',
-  '@endo/platform/fs/node',
-  '@endo/platform/exo-fs',
+  '@endo/platform/proc.js',
+  '@endo/platform/fs/node.js',
+  '@endo/platform/exo-fs.js',
   '@endo/relay-server',
   '@endo/where',
   // better-sqlite3 ships native bindings that won't load under

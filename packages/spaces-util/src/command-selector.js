@@ -4,7 +4,7 @@ import harden from '@endo/harden';
 
 import { Fragment, h } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import { renderConfined } from '@endo/preact-container/renderer';
+import { renderConfined } from '@endo/preact-container/renderer.js';
 import { filterCommands } from './command-registry.js';
 
 // Command selector, migrated from imperative `innerHTML`/`createElement` DOM to

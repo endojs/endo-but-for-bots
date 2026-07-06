@@ -2,7 +2,7 @@
 /* global globalThis */
 import '@endo/init/debug.js';
 import test from 'ava';
-import { renderConfined, unmount } from '@endo/preact-container/renderer';
+import { renderConfined, unmount } from '@endo/preact-container/renderer.js';
 import { h } from 'preact';
 import { createDOM, tick } from '../helpers/dom-setup.js';
 import { StatusBar } from '../../src/preact/StatusBar.js';

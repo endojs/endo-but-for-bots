@@ -11,7 +11,11 @@ import os from 'os';
 import { E } from '@endo/eventual-send';
 import { makeCancelKit } from '@endo/cancel';
 
-import { waitForExit, waitForMessage, waitForSpawn } from '@endo/platform/proc';
+import {
+  waitForExit,
+  waitForMessage,
+  waitForSpawn,
+} from '@endo/platform/proc.js';
 
 import {
   whereEndoState,

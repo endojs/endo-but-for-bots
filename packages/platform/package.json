@@ -21,19 +21,19 @@
   },
   "type": "module",
   "exports": {
-    "./fs": {
+    "./fs.js": {
       "node": "./src/fs-node/index.js"
     },
-    "./fs/lite": "./src/fs/index.js",
-    "./fs/lite/types": "./src/fs/types.js",
-    "./fs/node": "./src/fs-node/index.js",
-    "./fs/extended": {
+    "./fs/lite.js": "./src/fs/index.js",
+    "./fs/lite/types.js": "./src/fs/types.js",
+    "./fs/node.js": "./src/fs-node/index.js",
+    "./fs/extended.js": {
       "types": "./src/fs/extended/types.d.ts",
       "default": "./src/fs/extended/index.js"
     },
     "./fs/extended/*": "./src/fs/extended/*",
-    "./proc": "./src/proc.js",
-    "./exo-fs": "./src/exo-fs.js",
+    "./proc.js": "./src/proc.js",
+    "./exo-fs.js": "./src/exo-fs.js",
     "./package.json": "./package.json"
   },
   "scripts": {

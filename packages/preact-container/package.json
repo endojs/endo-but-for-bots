@@ -24,11 +24,11 @@
   },
   "type": "module",
   "exports": {
-    "./renderer": {
+    "./renderer.js": {
       "types": "./src/renderer.d.ts",
       "default": "./src/renderer.js"
     },
-    "./compartment": {
+    "./compartment.js": {
       "types": "./src/compartment.d.ts",
       "default": "./src/compartment.js"
     },

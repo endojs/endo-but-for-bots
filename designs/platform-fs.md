@@ -131,17 +131,17 @@ packages/platform/
 }
 ```
 
-- `import { ... } from '@endo/platform/fs'` resolves via the `"node"`
+- `import { ... } from '@endo/platform/fs.js'` resolves via the `"node"`
   condition.  A bundler targeting `"browser"` would get a different
   implementation (or an error, until one exists).  A Go or Rust host
   would provide its own adapter under `"endo-go"` or `"endo-rust"`.
 
-- `import { ... } from '@endo/platform/fs/lite'` always resolves to
+- `import { ... } from '@endo/platform/fs/lite.js'` always resolves to
   the platform-agnostic subset: types, interfaces, `makeSnapshotTree`,
   `makeSnapshotBlob`, `checkinTree`, `checkoutTree`.  This module never
   imports `node:fs` or any platform module.
 
-- `import { ... } from '@endo/platform/fs/node'` is an explicit request
+- `import { ... } from '@endo/platform/fs/node.js'` is an explicit request
   for the Node.js adapter, bypassing condition resolution.
 
 `@endo/platform/fs/node` re-exports everything from `@endo/platform/fs/lite`
@@ -538,7 +538,7 @@ Creates a `ReadableTree` Exo from a local directory.  Extracted from
 to a remote daemon.
 
 ```js
-import { ReadableTreeInterface } from '@endo/platform/fs/lite';
+import { ReadableTreeInterface } from '@endo/platform/fs/lite.js';
 
 /**
  * @param {string} dirPath
@@ -562,7 +562,7 @@ Creates a `ReadableBlob` Exo from a local file.  Streams file content
 as base64 via `@endo/stream-node`.
 
 ```js
-import { ReadableBlobInterface } from '@endo/platform/fs/lite';
+import { ReadableBlobInterface } from '@endo/platform/fs/lite.js';
 
 export const makeLocalBlob = (filePath) => {
   return makeExo('LocalBlob', ReadableBlobInterface, {
@@ -582,7 +582,7 @@ Creates a `TreeWriter` Exo that writes to a local directory.  Extracted
 from `cli/checkout.js:writeTree`.
 
 ```js
-import { TreeWriterInterface } from '@endo/platform/fs/lite';
+import { TreeWriterInterface } from '@endo/platform/fs/lite.js';
 
 export const makeTreeWriter = (dirPath) => {
   return makeExo('TreeWriter', TreeWriterInterface, {
@@ -622,7 +622,7 @@ import {
   makeSnapshotBlob,
   makeSnapshotTree,
   checkinTree,
-} from '@endo/platform/fs/lite';
+} from '@endo/platform/fs/lite.js';
 
 // In the maker table:
 'readable-blob': ({ content }) => makeSnapshotBlob(snapshotStore, content),
@@ -634,7 +634,7 @@ const { sha256 } = await checkinTree(remoteTree, snapshotStore);
 
 ```js
 // daemon-node-powers.js
-import { makeSnapshotSha256Store } from '@endo/platform/fs/node';
+import { makeSnapshotSha256Store } from '@endo/platform/fs/node.js';
 
 export const makeDaemonicPersistencePowers = (...) => {
   const snapshotStore = makeSnapshotSha256Store(storeDir, filePowers);
@@ -646,7 +646,7 @@ export const makeDaemonicPersistencePowers = (...) => {
 
 ```js
 // cli/src/commands/checkin.js
-import { makeLocalTree } from '@endo/platform/fs/node';
+import { makeLocalTree } from '@endo/platform/fs/node.js';
 
 const localTree = makeLocalTree(resolvedPath, { onFile: () => progress.files++ });
 await E(agent).storeTree(localTree, petName);
@@ -654,8 +654,8 @@ await E(agent).storeTree(localTree, petName);
 
 ```js
 // cli/src/commands/checkout.js
-import { checkoutTree } from '@endo/platform/fs/lite';
-import { makeTreeWriter } from '@endo/platform/fs/node';
+import { checkoutTree } from '@endo/platform/fs/lite.js';
+import { makeTreeWriter } from '@endo/platform/fs/node.js';
 
 const tree = await E(agent).lookup(treeName);
 const writer = makeTreeWriter(resolvedPath);

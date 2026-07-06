@@ -12,7 +12,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { E } from '@endo/eventual-send';
-import { walk, collectBytes } from '@endo/platform/fs/extended';
+import { walk, collectBytes } from '@endo/platform/fs/extended.js';
 import { makeNativeGitBackend } from '@endo/git';
 import { makeGit } from '@endo/exo-git';
 import { makeMount, lineageOf } from '@endo/daemon/src/mount.js';
