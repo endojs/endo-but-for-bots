@@ -89,6 +89,7 @@ export const defineUnredactError = loggedErrorHandler => {
     // The causal console's `error` method drives the unredaction: it takes the
     // hidden message-log-args, appends the privileged stack string, then walks
     // the cause chain and the note annotations, emitting each as a logger call.
+    // eslint-disable-next-line @endo/no-polymorphic-call
     causalConsole.error(err);
     return arrayJoin(lines, '\n');
   };
