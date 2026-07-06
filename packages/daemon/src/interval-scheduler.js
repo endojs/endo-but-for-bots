@@ -123,6 +123,7 @@ export const makeIntervalScheduler = async powers => {
     persistDir,
     makeId,
     onTick,
+    onIntervalCancel,
     maxActive: initialMaxActive = DEFAULT_MAX_ACTIVE,
     minPeriodMs: initialMinPeriodMs = DEFAULT_MIN_PERIOD_MS,
     paused: initialPaused = false,
@@ -332,25 +333,28 @@ export const makeIntervalScheduler = async powers => {
     if (onTick !== undefined) {
       // onTick may be synchronous (the unit tests) or asynchronous (the daemon
       // mail delivery); in either case a failure to deliver a tick must not
-      // throw into the timer callback, so both sync throws and async rejections
-      // are logged and swallowed.
+      // throw into the timer callback. Keep the `try` tight around the sink
+      // call itself so a SYNCHRONOUS throw is attributed as a callback error,
+      // and attach the async handler OUTSIDE it so an ASYNCHRONOUS rejection is
+      // attributed distinctly as a delivery error rather than mislabeled.
+      let delivered;
       try {
-        const delivered = /** @type {unknown} */ (onTick(message));
-        if (
-          delivered != null &&
-          typeof (/** @type {any} */ (delivered).then) === 'function'
-        ) {
-          /** @type {Promise<unknown>} */ (delivered).then(undefined, error =>
-            console.error(
-              `[interval-scheduler] onTick delivery error for ${entry.label}:`,
-              error,
-            ),
-          );
-        }
+        delivered = /** @type {unknown} */ (onTick(message));
       } catch (error) {
         console.error(
           `[interval-scheduler] onTick callback error for ${entry.label}:`,
           error,
+        );
+      }
+      if (
+        delivered != null &&
+        typeof (/** @type {any} */ (delivered).then) === 'function'
+      ) {
+        /** @type {Promise<unknown>} */ (delivered).then(undefined, error =>
+          console.error(
+            `[interval-scheduler] onTick delivery error for ${entry.label}:`,
+            error,
+          ),
         );
       }
     }
@@ -545,6 +549,16 @@ export const makeIntervalScheduler = async powers => {
         }
         disarmInterval(entry.id);
         entry.status = 'cancelled';
+        // Release any tick-response the caller (the daemon) issued for this
+        // interval's last outstanding tick. A per-interval cancel has no
+        // successor tick to supersede that response, so without this hook it
+        // lingers pinned in the daemon's registry until the whole scheduler is
+        // collected — a slow leak on a long-lived scheduler with create/cancel
+        // churn. The scheduler-wide `stop()`/`revoke()` teardown covers the
+        // all-at-once case; this covers the one-interval case.
+        if (onIntervalCancel !== undefined) {
+          onIntervalCancel(entry.id);
+        }
         await persist(entry);
       },
       info: () => harden({ ...entry }),

@@ -807,6 +807,15 @@ export type IntervalSchedulerPowers = {
    * throw or a rejection so a delivery failure never breaks the timer.
    */
   onTick?: (message: IntervalTickMessage) => void | Promise<void>;
+  /**
+   * Invoked when a single interval is cancelled while the scheduler stays
+   * alive, so the caller can release that interval's last outstanding
+   * tick-response (no successor tick will supersede it). In the daemon this
+   * disposes the interval's live tick-response registry entry and unpins its
+   * formula (Phase 2). The scheduler-wide teardown (`stop()`/`revoke()`) covers
+   * cancelling every interval at once.
+   */
+  onIntervalCancel?: (intervalId: string) => void;
   maxActive?: number;
   minPeriodMs?: number;
   paused?: boolean;

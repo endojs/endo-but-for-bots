@@ -2743,9 +2743,13 @@ const makeDaemonCore = async (
       // metadata are registered as values; `tickResponseId` is registered as a
       // value (its locator string), NOT as an id edge, so the inbox message
       // does not hold a strong GC reference to the tick-response — a superseded
-      // or timed-out tick-response must stay collectible and become inert (see
-      // the `interval-tick` case in `extractDeps`, which likewise omits the
-      // edge, and the design's outstanding-TickResponse inertness rule).
+      // or timed-out tick-response must stay collectible and become inert.
+      // `interval-tick` formulas flow through the generic `message` case in
+      // `extractDeps`, which emits edges only for from/to/ids/promise/resolver/
+      // value and so never emits a `tickResponseId` edge; a future dedicated
+      // case there must preserve that omission or it would silently pin the
+      // tick-response and break the design's outstanding-TickResponse inertness
+      // rule.
       const {
         intervalId,
         label,
@@ -4112,6 +4116,10 @@ const makeDaemonCore = async (
           minPeriodMs,
           paused,
           onTick: deliverIntervalTickMessage,
+          // Release a per-interval cancel's outstanding tick-response, which no
+          // successor tick will supersede (the scheduler-wide onCancel below
+          // covers the all-at-once teardown).
+          onIntervalCancel: disposeTickResponse,
         },
       );
       // Die with the owning agent, and permanently stop all timers on

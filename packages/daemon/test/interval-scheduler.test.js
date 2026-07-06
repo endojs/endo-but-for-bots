@@ -264,6 +264,50 @@ test('cancel disarms and marks the interval cancelled', async t => {
   t.is(ticks.length, 0);
 });
 
+test('cancel notifies onIntervalCancel so a per-interval response is released', async t => {
+  const { filePowers } = makeFakeFilePowers();
+  const clock = makeFakeClock();
+  /** @type {import('../src/types.js').IntervalTickMessage[]} */
+  const ticks = [];
+  /** @type {string[]} */
+  const cancelled = [];
+  const { scheduler } = await makeIntervalScheduler({
+    filePowers,
+    persistDir: '/state/oncancel',
+    makeId,
+    onTick: message => {
+      ticks.push(message);
+    },
+    onIntervalCancel: intervalId => {
+      cancelled.push(intervalId);
+    },
+    minPeriodMs: 1000,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    now: clock.now,
+  });
+
+  const interval = await scheduler.makeInterval('gone', 10_000, {
+    firstDelayMs: 0,
+  });
+  const intervalId = interval.info().id;
+  // Fire the first tick so an outstanding tick-response exists to release.
+  await clock.advance(0);
+  t.is(ticks.length, 1);
+  t.deepEqual(cancelled, [], 'no cancel notification before cancel');
+
+  await interval.cancel();
+  t.deepEqual(
+    cancelled,
+    [intervalId],
+    'cancel notifies onIntervalCancel with the interval id',
+  );
+
+  // A redundant cancel is a no-op and does not re-notify.
+  await interval.cancel();
+  t.deepEqual(cancelled, [intervalId], 'a redundant cancel does not re-notify');
+});
+
 test('pause suppresses ticks; resume re-arms', async t => {
   const { filePowers } = makeFakeFilePowers();
   const clock = makeFakeClock();
