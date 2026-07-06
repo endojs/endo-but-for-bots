@@ -3916,12 +3916,7 @@ const makeDaemonCore = async (
       });
     },
     'interval-scheduler': async (formula, context, _id, formulaNumber) => {
-      const {
-        agent: agentId,
-        maxActive,
-        minPeriodMs,
-        paused,
-      } = formula;
+      const { agent: agentId, maxActive, minPeriodMs, paused } = formula;
       // One directory per scheduler instance (keyed by formula number),
       // holding one JSON file per interval — mirroring the pet-store
       // persistence pattern (endoclaw-timer design § Persistence).
@@ -3931,8 +3926,8 @@ const makeDaemonCore = async (
         /** @type {string} */ (formulaNumber),
         'intervals',
       );
-      const { scheduler, schedulerControl, disarmAll } =
-        await makeIntervalScheduler({
+      const { scheduler, schedulerControl, stop } = await makeIntervalScheduler(
+        {
           filePowers,
           persistDir,
           // A short, unguessable id per interval entry.
@@ -3940,11 +3935,14 @@ const makeDaemonCore = async (
           maxActive,
           minPeriodMs,
           paused,
-        });
-      // Die with the owning agent, and clear all timers on cancellation so
-      // no orphan interval keeps ticking after GC.
+        },
+      );
+      // Die with the owning agent, and permanently stop all timers on
+      // cancellation so no orphan interval keeps ticking after GC — `stop`
+      // sets the terminal revoked flag so a late tickResponse.resolve() cannot
+      // resurrect an armed timer (a bare disarm sweep would not).
       context.thisDiesIfThatDies(agentId);
-      context.onCancel(() => disarmAll());
+      context.onCancel(() => stop());
       // Phase 1 returns a single capability exposing both the agent-facing
       // scheduler methods and the host-facing control methods. Phase 4 splits
       // these into the `IntervalScheduler` / `IntervalControl` facet pair the
