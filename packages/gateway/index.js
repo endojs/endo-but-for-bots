@@ -26,6 +26,7 @@ import {
   bindAddressFromEnv,
 } from './src/config.js';
 import { makeAppsNameHub } from './src/vhost.js';
+import { makeOcapnWebSocketEndpoint } from './src/ocapn-ws.js';
 
 export {
   DEFAULT_BIND_ADDRESS,
@@ -38,7 +39,15 @@ export {
 
 export { normalizeVirtualHostName, makeAppsNameHub } from './src/vhost.js';
 
-/** @import { GatewayConfig, BindAddress, GatewayPowers, Gateway } from './types.d.ts' */
+export {
+  OCAPN_CANONICAL_PATH,
+  OCAPN_COMPAT_PATH,
+  matchOcapnPath,
+  adaptWebSocket,
+  makeOcapnWebSocketEndpoint,
+} from './src/ocapn-ws.js';
+
+/** @import { GatewayConfig, BindAddress, GatewayPowers, Gateway, OcapnWebSocketEndpoint } from './types.d.ts' */
 
 const GatewayInterface = M.interface('Gateway', {
   start: M.call().returns(M.promise()),
@@ -73,6 +82,22 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
   /** @type {BindAddress} */
   const resolvedBind = parseBindAddress(mergedConfig.bindAddress);
   const apps = makeAppsNameHub();
+
+  // Feature 8: the OCapN-over-WebSocket endpoint. Built when the
+  // feature is enabled; the netlayer sink is the injected
+  // `powers.ocapn.onConnection` seam (absent until the daemon
+  // integration wires `@endo/ocapn-noise` and the `@apps` NameHub).
+  // The future HTTP-listener phase routes matched `/ocapn*` upgrades
+  // through this endpoint; an embedder that wants the endpoint now
+  // receives it via `powers.ocapn.register`.
+  const ocapnPowers = powers.ocapn ?? {};
+  /** @type {OcapnWebSocketEndpoint | undefined} */
+  const ocapnEndpoint = mergedConfig.enableFeatures.ocapnWebSocket
+    ? makeOcapnWebSocketEndpoint({ onConnection: ocapnPowers.onConnection })
+    : undefined;
+  if (ocapnEndpoint !== undefined && ocapnPowers.register !== undefined) {
+    ocapnPowers.register(ocapnEndpoint);
+  }
 
   const exo = makeExo(
     'Gateway',

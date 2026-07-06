@@ -39,6 +39,16 @@ Implemented in this slice:
 - In-memory `AppsNameHub` exo with `bind`, `unbind`, `list`,
   `lookup`.
 - Per-feature configuration toggles validated at `make` time.
+- Feature 8: the OCapN-over-WebSocket endpoint (`src/ocapn-ws.js`).
+  `makeOcapnWebSocketEndpoint` recognizes the canonical
+  `/ocapn-cbor-np` path and the bare `/ocapn` compatibility alias
+  (`matchPath`), adapts a matched WebSocket upgrade into an
+  `@endo/stream` byte-stream, and hands the framed connection to
+  the injected netlayer sink (`accept`). The gateway is a frame
+  relay: it never inspects or decrypts the OCapN payload. The sink
+  is a **powers-injected seam** (`powers.ocapn.onConnection`), so
+  the endpoint is unit-tested with a fake WebSocket and a fake sink
+  rather than a live `@endo/ocapn-noise` network.
 
 Deferred to follow-on PRs:
 
@@ -48,9 +58,11 @@ Deferred to follow-on PRs:
 - Feature 5 (Familiar-bundled fallback).
 - Feature 6 (public CapTP relay).
 - Feature 7 (admin daemon).
-- Feature 8 (`/ocapn-cbor-np` WebSocket; the network surface lands
-  once `@endo/ocapn-noise` exposes the netlayer the gateway
-  embeds).
+- Feature 8 daemon wiring: binding the `powers.ocapn.onConnection`
+  seam to the daemon's `@endo/ocapn-noise` netlayer and the `@apps`
+  NameHub, and driving `accept` from a live HTTP upgrade listener,
+  is deferred to the daemon `@apps` integration. This slice lands
+  the endpoint's routing and frame-relay logic package-locally.
 - Feature 9 (HTTPS-terminating-proxy `X-Forwarded-*` parser).
 - Feature 10 (OS packaging: rpm / deb / PKGBUILD / Dockerfile).
 
@@ -136,8 +148,12 @@ and their defaults.
 See `designs/gateway-package.md` § Capability Surface for the full
 inventory. The phase-1 skeleton exposes:
 
-- `Gateway`: `start`, `stop`, `getBindAddress`, `getApps`.
-- `AppsNameHub`: `bind`, `unbind`, `list`, `lookup`.
+- `Gateway`: `start`, `stop`, `getBindAddress`, `getApps`,
+  `getConfig`.
+- `AppsNameHub`: `bind`, `unbind`, `list`, `lookup`, `has`.
+- `OcapnWebSocketEndpoint` (Feature 8, an in-process frame-relay
+  seam, not a CapTP exo): `matchPath`, `accept`, plus `paths`. The
+  embedder receives it via `powers.ocapn.register`.
 
 ## Tests
 
@@ -145,6 +161,7 @@ inventory. The phase-1 skeleton exposes:
 yarn test                          # full ava run
 npx ava test/config.test.js        # config-shape unit tests
 npx ava test/vhost.test.js         # virtual-host NameHub tests
+npx ava test/ocapn-ws.test.js      # OCapN WebSocket endpoint tests
 ```
 
 ## Design

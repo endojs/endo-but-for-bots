@@ -12,6 +12,14 @@ import {
   defaultFeatureToggles,
 } from '../index.js';
 
+/**
+ * @import {
+ *   OcapnConnectionMeta,
+ *   OcapnWebSocketEndpoint,
+ *   WebSocketLike,
+ * } from '../types.d.ts'
+ */
+
 test('makeGateway returns a hardened exo', t => {
   const gateway = makeGateway();
   t.true(Object.isFrozen(gateway));
@@ -123,4 +131,81 @@ test('Gateway getConfig returns the merged, hardened config', async t => {
   t.false(cfg.enableFeatures.gitHttp);
   t.true(Object.isFrozen(cfg));
   t.true(Object.isFrozen(cfg.enableFeatures));
+});
+
+// Feature 8: the OCapN-over-WebSocket endpoint seam.
+
+/**
+ * A minimal `WebSocket`-shaped double the OCapN endpoint can adapt.
+ * Not hardened: a real WebSocket is a mutable host object.
+ */
+const makeFakeWebSocket = () => {
+  /** @type {Uint8Array[]} */
+  const sent = [];
+  /** @type {WebSocketLike} */
+  const ws = {
+    binaryType: 'nodebuffer',
+    onmessage: null,
+    onclose: null,
+    onerror: null,
+    send: bytes => sent.push(bytes),
+    close: () => {},
+  };
+  return {
+    ws,
+    sent,
+    /** @param {unknown} data */
+    emitMessage: data => ws.onmessage?.({ data }),
+  };
+};
+
+test('makeGateway hands the OCapN endpoint to powers.ocapn.register', t => {
+  /** @type {OcapnWebSocketEndpoint | undefined} */
+  let endpoint;
+  makeGateway({ powers: { ocapn: { register: e => (endpoint = e) } } });
+  t.truthy(endpoint);
+  t.is(endpoint?.canonicalPath, '/ocapn-cbor-np');
+  t.deepEqual([...(endpoint?.paths ?? [])], ['/ocapn-cbor-np', '/ocapn']);
+});
+
+test('makeGateway skips the OCapN endpoint when the feature is off', t => {
+  let registered = false;
+  makeGateway({
+    config: {
+      enableFeatures: { ...defaultFeatureToggles, ocapnWebSocket: false },
+    },
+    powers: { ocapn: { register: () => (registered = true) } },
+  });
+  t.false(registered);
+});
+
+test('makeGateway wires the injected sink to the endpoint', t => {
+  /** @type {OcapnConnectionMeta[]} */
+  const metas = [];
+  /** @type {OcapnWebSocketEndpoint | undefined} */
+  let endpoint;
+  makeGateway({
+    powers: {
+      ocapn: {
+        onConnection: (_conn, meta) => metas.push(meta),
+        register: e => (endpoint = e),
+      },
+    },
+  });
+  const fake = makeFakeWebSocket();
+  endpoint?.accept('/ocapn', fake.ws);
+  t.is(metas.length, 1);
+  t.true(metas[0].viaAlias);
+});
+
+test('an OCapN upgrade with no sink wired fails loudly', t => {
+  // The default feature toggles enable ocapnWebSocket; a gateway made
+  // without a sink must reject a connection rather than drop it.
+  /** @type {OcapnWebSocketEndpoint | undefined} */
+  let endpoint;
+  makeGateway({ powers: { ocapn: { register: e => (endpoint = e) } } });
+  const fake = makeFakeWebSocket();
+  t.throws(() => endpoint?.accept('/ocapn-cbor-np', fake.ws), {
+    message: /no connection sink is wired/,
+  });
 });
