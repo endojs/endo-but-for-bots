@@ -68,7 +68,7 @@ export const discoverCapabilityTools = async (powers, options = {}) => {
 
   const mount = await tryLookup(powers, fsName);
   if (mount !== undefined) {
-    const filesystem = mountAsFilesystem(mount);
+    const filesystem = mountAsFilesystem(/** @type {any} */ (mount));
     const fsOpts =
       maxChars !== undefined ? { readOnly, maxChars } : { readOnly };
     records.push(...makeMountFsTools(filesystem, fsOpts));
