@@ -33,7 +33,11 @@ RUN yarn workspace @endo/familiar step:bundle
 # copy it without depending on the pnpm store layout. The bundled daemon loads
 # it through `bindings("better_sqlite3.node")`, which searches build/Release
 # relative to the bundle's module root — so the runtime stage drops it there.
-RUN node -e "const fs=require('fs'),path=require('path');let d=path.dirname(require.resolve('better-sqlite3'));while(d!=='/'){const c=path.join(d,'build','Release','better_sqlite3.node');if(fs.existsSync(c)){fs.copyFileSync(c,'/build/better_sqlite3.node');console.log('staged addon from',c);process.exit(0)}d=path.dirname(d)}throw new Error('better_sqlite3.node not found — did yarn install fetch the prebuilt addon?')"
+#
+# better-sqlite3 is a dependency of @endo/daemon, not of the workspace root, and
+# the pnpm linker keeps each workspace's deps under that workspace — so resolve
+# it from packages/daemon rather than from /build, where it is not visible.
+RUN node -e "const fs=require('fs'),path=require('path');let d=path.dirname(require.resolve('better-sqlite3',{paths:['/build/packages/daemon']}));while(d!=='/'){const c=path.join(d,'build','Release','better_sqlite3.node');if(fs.existsSync(c)){fs.copyFileSync(c,'/build/better_sqlite3.node');console.log('staged addon from',c);process.exit(0)}d=path.dirname(d)}throw new Error('better_sqlite3.node not found — did yarn install fetch the prebuilt addon?')"
 
 # ---------------------------------------------------------------------------
 # Stage 2 — runtime
