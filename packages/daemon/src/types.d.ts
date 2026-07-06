@@ -668,8 +668,12 @@ export type IntervalControlFacet = {
 export type IntervalSchedulerExo = {
   scheduler: IntervalSchedulerFacet;
   schedulerControl: IntervalControlFacet;
-  /** Disarms every timer; called from the formula's cancellation hook. */
-  disarmAll: () => void;
+  /**
+   * Permanently stops the scheduler: disarms every timer and sets the terminal
+   * revoked flag so no timer can be re-armed. Called from the formula's
+   * cancellation hook so a late tickResponse cannot resurrect an interval.
+   */
+  stop: () => void;
 };
 
 export type Formula =

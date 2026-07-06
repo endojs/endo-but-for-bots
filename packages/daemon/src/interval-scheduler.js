@@ -90,7 +90,17 @@ const readAllEntries = async (filePowers, dir) => {
         filePowers.joinPath(dir, file),
       );
       if (raw !== undefined) {
-        entries.push(JSON.parse(raw));
+        // A single corrupt/partially-written entry file must not brick the
+        // whole scheduler's recovery — skip it and keep going (crash-safe
+        // persistence). Recovery re-validates the parsed shape as well.
+        try {
+          entries.push(JSON.parse(raw));
+        } catch (error) {
+          console.warn(
+            `[interval-scheduler] skipping unparseable interval entry ${file}:`,
+            error,
+          );
+        }
       }
     }
   }
@@ -114,14 +124,42 @@ export const makeIntervalScheduler = async powers => {
     maxActive: initialMaxActive = DEFAULT_MAX_ACTIVE,
     minPeriodMs: initialMinPeriodMs = DEFAULT_MIN_PERIOD_MS,
     paused: initialPaused = false,
-    setTimeout: setTimer = /** @type {(cb: () => void, ms: number) => unknown} */ (
-      setTimeout
-    ),
+    setTimeout:
+      setTimer = /** @type {(cb: () => void, ms: number) => unknown} */ (
+        setTimeout
+      ),
     clearTimeout: clearTimer = /** @type {(handle: unknown) => void} */ (
       clearTimeout
     ),
     now = () => Date.now(),
   } = powers;
+
+  // Validate the host-supplied initial limits through the same bounds the
+  // control setters enforce, so a scheduler cannot be constructed in a state
+  // the setters would reject (e.g. `maxActive: 0`, which would make the
+  // `activeCount >= maxActive` check in makeInterval always throw and brick
+  // the scheduler). Defaults apply only on `undefined`, so an explicit
+  // out-of-range value reaches here.
+  if (
+    typeof initialMaxActive !== 'number' ||
+    !isFinite(initialMaxActive) ||
+    initialMaxActive < 1 ||
+    initialMaxActive > MAX_ACTIVE_CEILING
+  ) {
+    throw RangeError(
+      `interval-scheduler: maxActive must be between 1 and ${MAX_ACTIVE_CEILING}`,
+    );
+  }
+  if (
+    typeof initialMinPeriodMs !== 'number' ||
+    !isFinite(initialMinPeriodMs) ||
+    initialMinPeriodMs < ABSOLUTE_MIN_PERIOD_MS ||
+    initialMinPeriodMs > MAX_PERIOD_MS
+  ) {
+    throw RangeError(
+      `interval-scheduler: minPeriodMs must be between ${ABSOLUTE_MIN_PERIOD_MS} and ${MAX_PERIOD_MS}`,
+    );
+  }
 
   // ── Mutable state ───────────────────────────────────────────────
   let maxActive = initialMaxActive;
@@ -137,8 +175,6 @@ export const makeIntervalScheduler = async powers => {
   const tickDeadlines = new Map();
   /** @type {Map<string, number>} Per-tick reschedule counters keyed by `${id}:${tickCount}`. */
   const rescheduleCounts = new Map();
-  /** @type {Map<string, boolean>} Tracks whether a tick response has been consumed. */
-  const tickResponseConsumed = new Map();
 
   const intervalsDir = persistDir;
 
@@ -232,21 +268,36 @@ export const makeIntervalScheduler = async powers => {
 
     // One-shot TickResponse capability. Phase 2 replaces this plain record
     // with a daemon-formulated TickResponse exo delivered by mail.
+    //
+    // `responded` is a per-DELIVERY latch shared by resolve(), reschedule(),
+    // and the tick-deadline auto-resolve below: whichever fires first consumes
+    // the tick and every later call on this response — including a late call
+    // after the deadline already auto-resolved — is inert. A reschedule()
+    // re-delivers under the same tickKey but as a fresh response with its own
+    // latch, so the retry loop still works, while a stale already-consumed
+    // response can never re-enter and force a duplicate tick. Because the latch
+    // lives with the delivery, no cross-tick bookkeeping map is needed (and
+    // none grows without bound over a heartbeat's lifetime).
+    let responded = false;
+    const consume = () => {
+      if (responded) {
+        return false;
+      }
+      responded = true;
+      return true;
+    };
     const tickResponse = harden({
       resolve() {
-        if (tickResponseConsumed.get(tickKey)) {
-          return;
+        if (consume()) {
+          onTickResolved(entry);
         }
-        tickResponseConsumed.set(tickKey, true);
-        onTickResolved(entry);
       },
       reschedule() {
-        if (tickResponseConsumed.get(tickKey)) {
-          return;
+        if (consume()) {
+          const count = (rescheduleCounts.get(tickKey) || 0) + 1;
+          rescheduleCounts.set(tickKey, count);
+          onTickRescheduled(entry, count);
         }
-        const count = (rescheduleCounts.get(tickKey) || 0) + 1;
-        rescheduleCounts.set(tickKey, count);
-        onTickRescheduled(entry, count);
       },
     });
 
@@ -262,10 +313,10 @@ export const makeIntervalScheduler = async powers => {
       tickResponse,
     });
 
-    // Arm the tick-deadline timeout (auto-resolve on no response).
+    // Arm the tick-deadline timeout (auto-resolve on no response). It consumes
+    // the same latch, so a late response on a timed-out tick is inert.
     const deadlineHandle = setTimer(() => {
-      if (!tickResponseConsumed.get(tickKey)) {
-        tickResponseConsumed.set(tickKey, true);
+      if (consume()) {
         console.warn(
           `Interval ${entry.label} tick ${entry.tickCount} timed out after ${entry.tickTimeoutMs}ms`,
         );
@@ -319,10 +370,19 @@ export const makeIntervalScheduler = async powers => {
   };
 
   onTickRescheduled = (entry, rescheduleCount) => {
+    const tickKey = `${entry.id}:${entry.tickCount}`;
     const deadlineHandle = tickDeadlines.get(entry.id);
     if (deadlineHandle !== undefined) {
       clearTimer(deadlineHandle);
       tickDeadlines.delete(entry.id);
+    }
+    // Do not re-arm a retry for an interval that is no longer live (paused,
+    // cancelled, or revoked). Its timers were already disarmed by
+    // pause()/cancel()/revoke()/stop(); arming a new one here would leak an
+    // orphan timer that those paths can no longer clear.
+    if (entry.status !== 'active' || paused || revoked) {
+      rescheduleCounts.delete(tickKey);
+      return;
     }
     const baseBackoff = Math.min(1000, entry.periodMs / 10);
     const backoffDelay = Math.min(
@@ -330,15 +390,30 @@ export const makeIntervalScheduler = async powers => {
       entry.tickTimeoutMs,
     );
     const retryAt = now() + backoffDelay;
-    // The deadline is measured from the original scheduled time.
+    // The deadline is measured from the ORIGINAL scheduled time and must stay
+    // fixed across retries. onIntervalTick advanced nextTickAt by one period
+    // when it delivered this tick, so `nextTickAt - periodMs` is the original
+    // scheduled time here; we restore nextTickAt below before re-delivering so
+    // this identity — and thus the deadline — holds on every retry.
     const deadline = entry.nextTickAt - entry.periodMs + entry.tickTimeoutMs;
     if (retryAt >= deadline) {
       onTickResolved(entry);
       return;
     }
     // Re-arm — reuse onIntervalTick, which re-delivers with the same
-    // tickNumber (we decrement so the increment nets out).
+    // tickNumber and re-advances nextTickAt by one period. Restore BOTH the
+    // tick count and nextTickAt so the retry nets out: the tick number is
+    // unchanged and the schedule does not drift one period forward per retry
+    // (which would also let the deadline recede faster than retryAt grows,
+    // defeating the give-up bound and rescheduling forever).
     entry.tickCount -= 1;
+    entry.nextTickAt -= entry.periodMs;
+    // Clear any prior armed handle before overwriting the slot, so a stale
+    // timer cannot survive as an orphan.
+    const priorHandle = activeTimeouts.get(entry.id);
+    if (priorHandle !== undefined) {
+      clearTimer(priorHandle);
+    }
     const handle = setTimer(() => {
       onIntervalTick(entry.id).catch(error =>
         console.error(
@@ -359,6 +434,27 @@ export const makeIntervalScheduler = async powers => {
     const diskEntries = await readAllEntries(filePowers, intervalsDir);
     const currentTime = now();
     for (const entry of diskEntries) {
+      // Trust nothing off disk: a malformed entry (corruption or schema drift)
+      // with a non-positive/non-finite periodMs would make the missed-tick
+      // math below divide by zero → Infinity/NaN → a busy re-firing timer.
+      // Skip such entries rather than arm a runaway interval.
+      if (
+        typeof entry !== 'object' ||
+        entry === null ||
+        typeof entry.id !== 'string' ||
+        typeof entry.periodMs !== 'number' ||
+        !isFinite(entry.periodMs) ||
+        entry.periodMs <= 0 ||
+        typeof entry.nextTickAt !== 'number' ||
+        !isFinite(entry.nextTickAt)
+      ) {
+        console.warn(
+          '[interval-scheduler] skipping malformed persisted entry:',
+          entry,
+        );
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       entries.set(entry.id, entry);
       // Only active entries are (re-)armed; when paused, entries remain active
       // on disk but stay unarmed until resume().
@@ -459,6 +555,32 @@ export const makeIntervalScheduler = async powers => {
         );
       }
       const { firstDelayMs = 0, tickTimeoutMs = periodMs / 2 } = opts;
+      // Validate the timing options the same way periodMs is validated: an
+      // unbounded firstDelayMs above the setTimeout ceiling (~24.8 days) would
+      // be clamped by the host timer and fire almost immediately instead of
+      // after the intended delay, and a non-positive/non-finite tickTimeoutMs
+      // would arm the tick-deadline at ~0ms and auto-resolve before any
+      // consumer could respond.
+      if (
+        typeof firstDelayMs !== 'number' ||
+        !isFinite(firstDelayMs) ||
+        firstDelayMs < 0 ||
+        firstDelayMs > MAX_PERIOD_MS
+      ) {
+        throw RangeError(
+          `makeInterval: firstDelayMs must be a finite number between 0 and ${MAX_PERIOD_MS}`,
+        );
+      }
+      if (
+        typeof tickTimeoutMs !== 'number' ||
+        !isFinite(tickTimeoutMs) ||
+        tickTimeoutMs <= 0 ||
+        tickTimeoutMs > MAX_PERIOD_MS
+      ) {
+        throw RangeError(
+          `makeInterval: tickTimeoutMs must be a finite positive number not exceeding ${MAX_PERIOD_MS}`,
+        );
+      }
       const createdAt = now();
       const id = await makeId();
       /** @type {IntervalEntry} */
@@ -599,6 +721,17 @@ export const makeIntervalScheduler = async powers => {
 
   await recover();
 
-  return harden({ scheduler, schedulerControl, disarmAll });
+  // Permanent, in-memory teardown for the daemon's cancellation hook. Unlike
+  // the bare `disarmAll` (a one-shot sweep), `stop` sets the terminal `revoked`
+  // flag so that armInterval's guard blocks any re-arm — otherwise an agent
+  // still holding a delivered tickResponse could call resolve() after the
+  // formula is cancelled/GC'd and resurrect a live recurring timer. It does not
+  // persist (the formula is being collected), unlike the host-facing revoke().
+  const stop = () => {
+    revoked = true;
+    disarmAll();
+  };
+
+  return harden({ scheduler, schedulerControl, stop });
 };
 harden(makeIntervalScheduler);

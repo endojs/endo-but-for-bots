@@ -295,7 +295,7 @@ test('startup recovery re-arms active intervals and coalesces missed ticks', asy
   });
   await first.scheduler.makeInterval('heartbeat', 10_000);
   await clock.advance(0); // fire + resolve the immediate tick
-  first.disarmAll();
+  first.stop();
 
   // Jump forward well past several periods of downtime.
   await clock.advance(35_000);
@@ -319,8 +319,250 @@ test('startup recovery re-arms active intervals and coalesces missed ticks', asy
   t.is(recovered[0].label, 'heartbeat');
 
   // A single coalesced catch-up tick is delivered for the missed periods.
+  // nextTickAt was 1_010_000 at shutdown; recovery at 1_035_000 missed exactly
+  // floor((1_035_000 - 1_010_000) / 10_000) = 2 periods.
   t.is(ticks.length, 1);
-  t.true(ticks[0].missedTicks >= 1, 'missed ticks are reported');
+  t.is(ticks[0].missedTicks, 2, 'exact coalesced missed-tick count');
+
+  // Recovery re-arms the schedule: the next real tick fires one period after
+  // the catch-up boundary (1_040_000), proving the interval keeps ticking.
+  await clock.advance(5000);
+  t.is(ticks.length, 2, 'a subsequent tick fires after recovery re-arm');
+  t.is(ticks[1].missedTicks, 0);
+});
+
+test('reschedule redelivers the same tick, holds the deadline fixed, and gives up without drift', async t => {
+  const { filePowers } = makeFakeFilePowers();
+  const clock = makeFakeClock();
+  /** @type {import('../src/types.js').IntervalTickMessage[]} */
+  const ticks = [];
+  const { scheduler } = await makeIntervalScheduler({
+    filePowers,
+    persistDir: '/state/reschedule',
+    makeId,
+    onTick: message => ticks.push(message),
+    minPeriodMs: 1000,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    now: clock.now,
+  });
+
+  // period 10_000 → tickTimeoutMs default 5000, baseBackoff min(1000, 1000)=1000.
+  await scheduler.makeInterval('retry', 10_000);
+  await clock.advance(0);
+  t.is(ticks.length, 1);
+  t.is(ticks[0].tickNumber, 1);
+  const originalScheduledAt = ticks[0].scheduledAt;
+
+  // reschedule #1 (backoff 1000ms): the SAME tick number is redelivered.
+  ticks[0].tickResponse.reschedule();
+  await clock.advance(1000);
+  t.is(ticks.length, 2);
+  t.is(ticks[1].tickNumber, 1, 'reschedule redelivers the same tick number');
+  t.is(
+    ticks[1].scheduledAt,
+    originalScheduledAt,
+    'scheduled time does not drift across a reschedule',
+  );
+
+  // A second reschedule() on the FIRST (already-consumed) response is a no-op:
+  // one-shot responses cannot orphan a second retry timer.
+  ticks[0].tickResponse.reschedule();
+  await clock.advance(0);
+  t.is(ticks.length, 2, 'a stale response cannot trigger another retry');
+
+  // reschedule #2 (backoff 2000ms) then #3, which exceeds the fixed deadline
+  // (originalScheduledAt + tickTimeoutMs) and gives up → the tick resolves and
+  // the schedule advances to the next period boundary rather than looping.
+  ticks[1].tickResponse.reschedule();
+  await clock.advance(2000);
+  t.is(ticks.length, 3);
+  t.is(ticks[2].tickNumber, 1);
+  ticks[2].tickResponse.reschedule(); // retryAt now >= deadline → give up
+
+  // The next delivery is a fresh tick (number 2) exactly one period after the
+  // original — no forward drift accumulated from the three retries.
+  await clock.advance(10_000);
+  t.is(ticks.length, 4);
+  t.is(ticks[3].tickNumber, 2, 'a bounded retry budget resumes normal ticking');
+  t.is(
+    ticks[3].scheduledAt,
+    originalScheduledAt + 10_000,
+    'exactly one period elapsed despite the retries (no drift)',
+  );
+});
+
+test('a tick with no response auto-resolves at its deadline and the schedule continues', async t => {
+  const { filePowers } = makeFakeFilePowers();
+  const clock = makeFakeClock();
+  /** @type {import('../src/types.js').IntervalTickMessage[]} */
+  const ticks = [];
+  const { scheduler } = await makeIntervalScheduler({
+    filePowers,
+    persistDir: '/state/deadline',
+    makeId,
+    // Never respond — exercise the tick-timeout auto-resolve path.
+    onTick: message => ticks.push(message),
+    minPeriodMs: 1000,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    now: clock.now,
+  });
+
+  await scheduler.makeInterval('unanswered', 10_000); // tickTimeoutMs = 5000
+  await clock.advance(0);
+  t.is(ticks.length, 1);
+
+  // Before the deadline, no further tick.
+  await clock.advance(4999);
+  t.is(ticks.length, 1);
+
+  // At the 5000ms deadline the tick auto-resolves; one period later the next
+  // tick arms and fires — the interval is not wedged by an unanswered tick.
+  await clock.advance(1); // deadline fires (auto-resolve)
+  await clock.advance(10_000);
+  t.is(ticks.length, 2, 'the next tick fires after the deadline auto-resolve');
+  t.is(ticks[1].tickNumber, 2);
+
+  // A stale response on the already-timed-out tick 1 — via resolve() OR
+  // reschedule() — is inert: the deadline auto-resolve consumed that response's
+  // one-shot latch, so a stashed response cannot re-enter and force a duplicate
+  // tick keyed to the current tick number.
+  const beforeStale = ticks.length;
+  ticks[0].tickResponse.reschedule();
+  ticks[0].tickResponse.resolve();
+  await clock.advance(0);
+  t.is(
+    ticks.length,
+    beforeStale,
+    'a stale timed-out response cannot inject a tick',
+  );
+});
+
+test('stop() is permanent: a late tickResponse cannot resurrect a cancelled scheduler', async t => {
+  const { filePowers } = makeFakeFilePowers();
+  const clock = makeFakeClock();
+  /** @type {import('../src/types.js').IntervalTickMessage[]} */
+  const ticks = [];
+  const { scheduler, stop } = await makeIntervalScheduler({
+    filePowers,
+    persistDir: '/state/stop',
+    makeId,
+    onTick: message => ticks.push(message),
+    minPeriodMs: 1000,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    now: clock.now,
+  });
+
+  await scheduler.makeInterval('beat', 10_000);
+  await clock.advance(0);
+  t.is(ticks.length, 1);
+
+  // The daemon cancels the formula (GC). stop() disarms and revokes.
+  stop();
+
+  // An agent still holding the delivered tickResponse resolves it after
+  // cancellation — this must NOT re-arm a live timer.
+  ticks[0].tickResponse.resolve();
+  await clock.advance(60_000);
+  t.is(ticks.length, 1, 'no ticks fire after stop(), even on a late resolve()');
+});
+
+test('initial limits and interval options are validated', async t => {
+  const { filePowers } = makeFakeFilePowers();
+  const clock = makeFakeClock();
+  const base = {
+    filePowers,
+    persistDir: '/state/validate',
+    makeId,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    now: clock.now,
+  };
+
+  // A maxActive of 0 would otherwise brick the scheduler (0 >= 0 always true).
+  await t.throwsAsync(
+    () => makeIntervalScheduler({ ...base, maxActive: 0 }),
+    { message: /maxActive must be between/ },
+    'maxActive below 1 is rejected at construction',
+  );
+  await t.throwsAsync(
+    () => makeIntervalScheduler({ ...base, minPeriodMs: 500 }),
+    { message: /minPeriodMs must be between/ },
+    'minPeriodMs below the absolute floor is rejected at construction',
+  );
+
+  const { scheduler } = await makeIntervalScheduler({
+    ...base,
+    minPeriodMs: 1000,
+  });
+  await t.throwsAsync(
+    () => scheduler.makeInterval('bad-delay', 10_000, { firstDelayMs: -1 }),
+    { message: /firstDelayMs must be/ },
+  );
+  await t.throwsAsync(
+    () => scheduler.makeInterval('bad-timeout', 10_000, { tickTimeoutMs: 0 }),
+    { message: /tickTimeoutMs must be/ },
+  );
+});
+
+test('control setters enforce the ceiling and floor', async t => {
+  const { filePowers } = makeFakeFilePowers();
+  const clock = makeFakeClock();
+  const { schedulerControl } = await makeIntervalScheduler({
+    filePowers,
+    persistDir: '/state/setters',
+    makeId,
+    minPeriodMs: 1000,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    now: clock.now,
+  });
+
+  t.throws(() => schedulerControl.setMaxActive(MAX_ACTIVE_CEILING + 1), {
+    message: /between 1 and/,
+  });
+  t.throws(() => schedulerControl.setMaxActive(0), {
+    message: /between 1 and/,
+  });
+  t.throws(() => schedulerControl.setMinPeriodMs(500), { message: /between/ });
+});
+
+test('a corrupt persisted entry is skipped, not fatal, during recovery', async t => {
+  const persistDir = '/state/corrupt';
+  const { filePowers, files } = makeFakeFilePowers();
+  const clock = makeFakeClock();
+
+  const first = await makeIntervalScheduler({
+    filePowers,
+    persistDir,
+    makeId,
+    minPeriodMs: 1000,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    now: clock.now,
+  });
+  await first.scheduler.makeInterval('good', 10_000);
+  first.stop();
+
+  // Simulate a truncated/corrupt entry file alongside the valid one.
+  files.set(`${persistDir}/corrupt.json`, '{ this is not valid json');
+
+  // Recovery must not throw; it skips the corrupt file and recovers the good
+  // interval (crash-safe persistence).
+  const second = await makeIntervalScheduler({
+    filePowers,
+    persistDir,
+    minPeriodMs: 1000,
+    makeId,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    now: clock.now,
+  });
+  const recovered = await second.scheduler.list();
+  t.is(recovered.length, 1, 'the valid interval survives a corrupt sibling');
+  t.is(recovered[0].label, 'good');
 });
 
 test('exported constants match the design defaults', t => {

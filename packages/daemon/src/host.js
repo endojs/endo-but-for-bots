@@ -1568,7 +1568,11 @@ export const makeHostMaker = ({
       tasks.push(identifiers =>
         petStore.storeIdentifier(petName, identifiers.intervalSchedulerId),
       );
-      const { value } = await formulateIntervalScheduler(hostId, options, tasks);
+      const { value } = await formulateIntervalScheduler(
+        hostId,
+        options,
+        tasks,
+      );
       return value;
     };
 
