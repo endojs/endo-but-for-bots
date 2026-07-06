@@ -39,6 +39,7 @@ const ALL_FORMULA_TYPES = [
   'readable-tree',
   'resolver',
   'scratch-mount',
+  'tick-response',
   'timer',
   'worker',
 ];

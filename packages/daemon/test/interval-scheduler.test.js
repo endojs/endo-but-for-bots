@@ -1,6 +1,7 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 
+import { passStyleOf } from '@endo/pass-style';
 import {
   makeIntervalScheduler,
   DEFAULT_MIN_PERIOD_MS,
@@ -133,7 +134,9 @@ test('makeInterval creates, persists, lists, and fires ticks', async t => {
     filePowers,
     persistDir: '/state/intervals',
     makeId,
-    onTick: message => ticks.push(message),
+    onTick: message => {
+      ticks.push(message);
+    },
     minPeriodMs: 1000,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
@@ -163,6 +166,40 @@ test('makeInterval creates, persists, lists, and fires ticks', async t => {
   await clock.advance(10_000);
   t.is(ticks.length, 2);
   t.is(ticks[1].tickNumber, 2);
+});
+
+test('each tick delivers a TickResponse guarded exo', async t => {
+  const { filePowers } = makeFakeFilePowers();
+  const clock = makeFakeClock();
+  /** @type {import('../src/types.js').IntervalTickMessage[]} */
+  const ticks = [];
+  const { scheduler } = await makeIntervalScheduler({
+    filePowers,
+    persistDir: '/state/exo',
+    makeId,
+    onTick: message => {
+      ticks.push(message);
+    },
+    minPeriodMs: 1000,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    now: clock.now,
+  });
+
+  await scheduler.makeInterval('heartbeat', 10_000);
+  await clock.advance(0);
+  t.is(ticks.length, 1);
+
+  const { tickResponse } = ticks[0];
+  // A proper exo, not a bare record: it is a remotable with guarded methods,
+  // so unguarded / unknown method calls are rejected rather than silently
+  // accepted. (Regression guard for the Phase-2 `M.interface()` requirement —
+  // a plain `harden({ ... })` record would report passStyle 'copyRecord'.)
+  t.is(passStyleOf(/** @type {any} */ (tickResponse)), 'remotable');
+  t.throws(() => /** @type {any} */ (tickResponse).frobnicate(), {
+    message: /frobnicate/,
+  });
+  t.is(tickResponse.resolve(), undefined);
 });
 
 test('makeInterval enforces minPeriodMs and maxActive', async t => {
@@ -204,7 +241,9 @@ test('cancel disarms and marks the interval cancelled', async t => {
     filePowers,
     persistDir: '/state/cancel',
     makeId,
-    onTick: message => ticks.push(message),
+    onTick: message => {
+      ticks.push(message);
+    },
     minPeriodMs: 1000,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
@@ -234,7 +273,9 @@ test('pause suppresses ticks; resume re-arms', async t => {
     filePowers,
     persistDir: '/state/pause',
     makeId,
-    onTick: message => ticks.push(message),
+    onTick: message => {
+      ticks.push(message);
+    },
     minPeriodMs: 1000,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
@@ -307,7 +348,9 @@ test('startup recovery re-arms active intervals and coalesces missed ticks', asy
     filePowers,
     persistDir,
     makeId,
-    onTick: message => ticks.push(message),
+    onTick: message => {
+      ticks.push(message);
+    },
     minPeriodMs: 1000,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
@@ -340,7 +383,9 @@ test('reschedule redelivers the same tick, holds the deadline fixed, and gives u
     filePowers,
     persistDir: '/state/reschedule',
     makeId,
-    onTick: message => ticks.push(message),
+    onTick: message => {
+      ticks.push(message);
+    },
     minPeriodMs: 1000,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
@@ -402,7 +447,9 @@ test('a tick with no response auto-resolves at its deadline and the schedule con
     persistDir: '/state/deadline',
     makeId,
     // Never respond — exercise the tick-timeout auto-resolve path.
-    onTick: message => ticks.push(message),
+    onTick: message => {
+      ticks.push(message);
+    },
     minPeriodMs: 1000,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
@@ -448,7 +495,9 @@ test('stop() is permanent: a late tickResponse cannot resurrect a cancelled sche
     filePowers,
     persistDir: '/state/stop',
     makeId,
-    onTick: message => ticks.push(message),
+    onTick: message => {
+      ticks.push(message);
+    },
     minPeriodMs: 1000,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,

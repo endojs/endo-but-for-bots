@@ -36,6 +36,7 @@ const formulaTypes = new Set([
   'readable-tree',
   'resolver',
   'scratch-mount',
+  'tick-response',
   'timer',
   'worker',
 ]);

@@ -591,7 +591,13 @@ type MailHubFormula = {
 
 type MessageFormula = {
   type: 'message';
-  messageType: 'request' | 'package' | 'definition' | 'form' | 'value';
+  messageType:
+    | 'request'
+    | 'package'
+    | 'definition'
+    | 'form'
+    | 'value'
+    | 'interval-tick';
   messageId: FormulaNumber;
   replyTo?: FormulaNumber;
   from: FormulaIdentifier;
@@ -608,6 +614,15 @@ type MessageFormula = {
   slots?: Record<string, { label: string; pattern?: unknown }>;
   fields?: FormField[];
   valueId?: FormulaIdentifier;
+  // interval-tick fields (endoclaw-timer Phase 2)
+  intervalId?: string;
+  label?: string;
+  periodMs?: number;
+  tickNumber?: number;
+  scheduledAt?: number;
+  actualAt?: number;
+  missedTicks?: number;
+  tickResponseId?: FormulaIdentifier;
 };
 
 // Pending is represented by the absence of a status entry in the promise store.
@@ -686,6 +701,12 @@ export type IntervalSchedulerFormula = {
   type: 'interval-scheduler';
   /** The agent this scheduler is bound to; a strong GC edge. */
   agent: FormulaIdentifier;
+  /**
+   * The handle the scheduler delivers tick messages from; a strong GC edge so
+   * the scheduler's mail identity outlives GC of any single tick. Added in
+   * Phase 2 (tick delivery as mail messages).
+   */
+  handle: FormulaIdentifier;
   /** Maximum number of active intervals. */
   maxActive: number;
   /** Minimum allowed period in ms. */
@@ -696,6 +717,23 @@ export type IntervalSchedulerFormula = {
 
 export type IntervalSchedulerDeferredTaskParams = {
   intervalSchedulerId: FormulaIdentifier;
+  handleId: FormulaIdentifier;
+};
+
+/**
+ * A one-shot `tick-response` capability delivered with an `interval-tick`
+ * message (endoclaw-timer Phase 2). The formula carries no data: the live
+ * `resolve()`/`reschedule()` behavior is held in the daemon's in-memory
+ * registry keyed by this formula's identifier and registered by the owning
+ * scheduler at delivery time. After a daemon restart the registry is empty, so
+ * a persisted tick-response incarnates as an inert no-op — matching the design's
+ * rule that outstanding TickResponse capabilities become inert across restarts,
+ * timeouts, and revocation.
+ */
+export type TickResponseFormula = {
+  type: 'tick-response';
+  /** The interval-scheduler that issued this tick; a strong GC edge. */
+  scheduler: FormulaIdentifier;
 };
 
 export type IntervalStatus = 'active' | 'paused' | 'cancelled';
@@ -762,8 +800,13 @@ export type IntervalSchedulerPowers = {
   persistDir?: string;
   /** Generates a fresh short id for entries and temp files. */
   makeId: () => Promise<string>;
-  /** Tick delivery sink. Phase 2 replaces this with daemon mail. */
-  onTick?: (message: IntervalTickMessage) => void;
+  /**
+   * Tick delivery sink. In the daemon this posts each tick as an
+   * `interval-tick` mail message (Phase 2); the unit tests pass a synchronous
+   * collector. May be sync or async — the scheduler logs and swallows either a
+   * throw or a rejection so a delivery failure never breaks the timer.
+   */
+  onTick?: (message: IntervalTickMessage) => void | Promise<void>;
   maxActive?: number;
   minPeriodMs?: number;
   paused?: boolean;
@@ -846,7 +889,8 @@ export type Formula =
   | PeerFormula
   | InvitationFormula
   | TimerFormula
-  | IntervalSchedulerFormula;
+  | IntervalSchedulerFormula
+  | TickResponseFormula;
 
 export type Builtins = {
   NONE: FormulaIdentifier;
@@ -913,7 +957,36 @@ export type ValueMessage = MessageBase & {
   valueId: FormulaIdentifier;
 };
 
-export type Message = Request | Package | DefineRequest | Form | ValueMessage;
+/**
+ * A heartbeat tick delivered by an `interval-scheduler` to its agent's inbox
+ * (endoclaw-timer design § Tick Delivery as a Message). It carries the tick
+ * metadata plus `tickResponseId`, a reference to the one-shot `tick-response`
+ * capability the agent invokes to `resolve()` or `reschedule()` the tick.
+ */
+export type IntervalTickEnvelopeMessage = MessageBase & {
+  type: 'interval-tick';
+  intervalId: string;
+  label: string;
+  periodMs: number;
+  /** 1-indexed count for this interval. */
+  tickNumber: number;
+  /** Intended fire time (epoch ms). */
+  scheduledAt: number;
+  /** Actual fire time (epoch ms). */
+  actualAt: number;
+  /** Ticks missed during downtime (0 normally). */
+  missedTicks: number;
+  /** Reference to the one-shot TickResponse capability for this tick. */
+  tickResponseId: FormulaIdentifier;
+};
+
+export type Message =
+  | Request
+  | Package
+  | DefineRequest
+  | Form
+  | ValueMessage
+  | IntervalTickEnvelopeMessage;
 
 export type EnvelopedMessage = Message & {
   to: FormulaIdentifier;

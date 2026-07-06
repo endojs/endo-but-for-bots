@@ -118,6 +118,16 @@ export const DismisserInterface = M.interface('EndoDismisser', {
   dismiss: M.call().returns(M.promise()),
 });
 
+// The one-shot capability delivered with each `interval-tick` message
+// (endoclaw-timer design § Interface Guards). The agent calls `resolve()`
+// when the tick is done or `reschedule()` to retry it after a backoff; every
+// call after the first — including one on a tick that already timed out — is a
+// no-op, so both guards return undefined regardless of outcome.
+export const TickResponseInterface = M.interface('EndoTickResponse', {
+  resolve: M.call().returns(M.undefined()),
+  reschedule: M.call().returns(M.undefined()),
+});
+
 // CRITICAL: HandleInterface must use defaultGuards: 'passable' to preserve
 // envelope object identity when passed through E() calls. Explicit guards
 // like M.remotable('Envelope') cause envelope identity loss and "mail fraud"

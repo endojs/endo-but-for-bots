@@ -102,6 +102,8 @@ import {
   BlobInterface,
   ReadableTreeInterface,
   EndoInterface,
+  HandleInterface,
+  TickResponseInterface,
 } from './interfaces.js';
 import { makeTraceAggregator } from './trace-aggregator.js';
 import { getUnredactedStackString } from './unredacted-stack.js';
@@ -807,10 +809,19 @@ const makeDaemonCore = async (
           ['hostHandle', formula.hostHandle],
         ];
       case 'interval-scheduler':
-        // Strong edge: the scheduler (and all its persisted intervals) is
-        // collected when its owning agent is. Phase 2 adds the scheduler's
-        // own `handle` here once ticks are delivered by mail.
-        return [['agent', formula.agent]];
+        // Strong edges: the scheduler (and all its persisted intervals) is
+        // collected when its owning agent is, and it keeps its own `handle`
+        // (the mail `from` identity for delivered ticks) alive as long as it
+        // lives.
+        return [
+          ['agent', formula.agent],
+          ['handle', formula.handle],
+        ];
+      case 'tick-response':
+        // Strong edge: a live tick-response is only meaningful while its
+        // issuing scheduler is alive. The response carries no other data — its
+        // behavior lives in the scheduler's in-memory registry.
+        return [['scheduler', formula.scheduler]];
       default:
         return [];
     }
@@ -1149,6 +1160,25 @@ const makeDaemonCore = async (
   const agentIdForHandle = new WeakMap();
   /** @type {Map<FormulaIdentifier, GitCredentialMaterial>} */
   const gitCredentialMaterialForId = new Map();
+
+  // Live `tick-response` behaviors, keyed by the tick-response formula id, held
+  // by the interval scheduler that issued each tick (endoclaw-timer Phase 2).
+  // The `tick-response` maker forwards `resolve()`/`reschedule()` to the entry
+  // here; a persisted tick-response with no live entry (e.g. after a daemon
+  // restart, or once its tick has terminally responded/timed out and the
+  // scheduler unregistered it) incarnates as an inert no-op.
+  /** @type {Map<FormulaIdentifier, import('./types.js').IntervalTickResponse>} */
+  const liveTickResponses = new Map();
+
+  // The mail `handle` exo of each live interval-scheduler, keyed by the
+  // scheduler's formula id (endoclaw-timer Phase 2). An interval-scheduler
+  // incarnates as a `{ scheduler, schedulerControl }` facet-pair record (Phase
+  // 4) that carries no methods, so its bound `handle` formula cannot resolve
+  // the scheduler's mail identity by calling `.handle()` on the incarnation
+  // (as an agent's handle formula does on its mailbox). It resolves it from
+  // here instead, populated as a side effect of incarnating the scheduler.
+  /** @type {Map<FormulaIdentifier, unknown>} */
+  const schedulerHandleForId = new Map();
 
   /**
    * @param {FormulaIdentifier} id
@@ -3303,8 +3333,20 @@ const makeDaemonCore = async (
       return agent;
     },
     handle: async ({ agent: agentId }, _context, id) => {
-      const agent = await provide(agentId, 'agent');
-      const handle = agent.handle();
+      // Incarnate the handle's owner so it registers its mail handle. An agent
+      // incarnates as a mailbox exposing a `handle()` method; an interval-
+      // scheduler incarnates as a methodless `{ scheduler, schedulerControl }`
+      // facet-pair record (endoclaw-timer Phase 4) that instead registers its
+      // handle in `schedulerHandleForId` as a side effect of incarnation
+      // (Phase 2), so resolve that when the incarnation has no `.handle()`.
+      const owner = /** @type {any} */ (await provide(agentId, 'agent'));
+      const handle =
+        typeof owner.handle === 'function'
+          ? owner.handle()
+          : schedulerHandleForId.get(agentId);
+      if (handle === undefined) {
+        throw new Error(`No mail handle registered for ${q(agentId)}`);
+      }
       agentIdForHandle.set(handle, agentId);
       return handle;
     },
@@ -3915,8 +3957,19 @@ const makeDaemonCore = async (
           `Timer "${timerLabel || 'timer'}" firing every ${interval}ms. Ticks: ${tickCount}`,
       });
     },
-    'interval-scheduler': async (formula, context, _id, formulaNumber) => {
-      const { agent: agentId, maxActive, minPeriodMs, paused } = formula;
+    'interval-scheduler': async (
+      formula,
+      context,
+      schedulerId,
+      formulaNumber,
+    ) => {
+      const {
+        agent: agentId,
+        handle: schedulerHandleId,
+        maxActive,
+        minPeriodMs,
+        paused,
+      } = formula;
       // One directory per scheduler instance (keyed by formula number),
       // holding one JSON file per interval — mirroring the pet-store
       // persistence pattern (endoclaw-timer design § Persistence).
@@ -3926,6 +3979,91 @@ const makeDaemonCore = async (
         /** @type {string} */ (formulaNumber),
         'intervals',
       );
+
+      // The scheduler's own mail identity. Tick messages are delivered from
+      // this handle so the agent sees each `interval-tick` as coming from its
+      // scheduler rather than from itself. The scheduler is send-only (it never
+      // receives mail through post/receive — ticks are delivered directly into
+      // the agent's inbox), so the mailbox handshake methods reject.
+      const schedulerHandle = makeExo('Handle', HandleInterface, {
+        receive: () => {
+          throw new Error('interval scheduler does not receive mail');
+        },
+        open: () => {
+          throw new Error('interval scheduler does not send mail via post');
+        },
+        receiveEdit: () => {
+          throw new Error('interval scheduler does not receive mail');
+        },
+        openEdit: () => {
+          throw new Error('interval scheduler does not send mail via post');
+        },
+      });
+      agentIdForHandle.set(schedulerHandle, schedulerId);
+      // Register the scheduler's mail handle so its bound `handle` formula can
+      // resolve it (the incarnation is a methodless facet-pair record, so the
+      // handle cannot be read off `.handle()` the way an agent's is).
+      schedulerHandleForId.set(schedulerId, schedulerHandle);
+
+      // The agent's own handle is the tick's `to`. Read it off the agent
+      // formula rather than incarnating the agent eagerly.
+      const agentFormula = /** @type {any} */ (await getFormulaForId(agentId));
+      const agentHandleId = /** @type {FormulaIdentifier} */ (
+        agentFormula.handle ?? agentId
+      );
+
+      // At most one live tick-response per interval at a time (a tick never
+      // overlaps its successor — the design guarantees each tick resolves or
+      // times out before the next fires). Delivering a new tick supersedes the
+      // prior one's response, which becomes inert (unregistered → the
+      // tick-response maker forwards to nothing).
+      /** @type {Map<string, FormulaIdentifier>} */
+      const liveTickResponseForInterval = new Map();
+
+      /** @param {string} intervalId */
+      const disposeTickResponse = intervalId => {
+        const priorId = liveTickResponseForInterval.get(intervalId);
+        if (priorId !== undefined) {
+          liveTickResponses.delete(priorId);
+          liveTickResponseForInterval.delete(intervalId);
+          unpinTransient(priorId).catch(() => {});
+        }
+      };
+
+      /**
+       * Deliver one tick as an `interval-tick` mail message carrying a fresh
+       * `tick-response` capability. Replaces the Phase-1 `onTick` no-op.
+       *
+       * @param {import('./types.js').IntervalTickMessage} message
+       */
+      const deliverIntervalTickMessage = async message => {
+        // Supersede any prior response for this interval before issuing a new
+        // one, then register the new tick's live behavior.
+        disposeTickResponse(message.intervalId);
+        // eslint-disable-next-line no-use-before-define
+        const tickResponseId = await formulateTickResponse(schedulerId);
+        liveTickResponses.set(tickResponseId, message.tickResponse);
+        liveTickResponseForInterval.set(message.intervalId, tickResponseId);
+
+        const messageId = /** @type {FormulaNumber} */ (await randomHex256());
+        const envelope = harden({
+          type: /** @type {const} */ ('interval-tick'),
+          messageId,
+          from: schedulerHandleId,
+          to: agentHandleId,
+          intervalId: message.intervalId,
+          label: message.label,
+          periodMs: message.periodMs,
+          tickNumber: message.tickNumber,
+          scheduledAt: message.scheduledAt,
+          actualAt: message.actualAt,
+          missedTicks: message.missedTicks,
+          tickResponseId,
+        });
+        const agent = await provide(agentId, 'agent');
+        await E(/** @type {any} */ (agent)).deliver(envelope);
+      };
+
       const { scheduler, schedulerControl, stop } = await makeIntervalScheduler(
         {
           filePowers,
@@ -3935,14 +4073,22 @@ const makeDaemonCore = async (
           maxActive,
           minPeriodMs,
           paused,
+          onTick: deliverIntervalTickMessage,
         },
       );
       // Die with the owning agent, and permanently stop all timers on
       // cancellation so no orphan interval keeps ticking after GC — `stop`
       // sets the terminal revoked flag so a late tickResponse.resolve() cannot
-      // resurrect an armed timer (a bare disarm sweep would not).
+      // resurrect an armed timer (a bare disarm sweep would not). Also release
+      // every outstanding tick-response so none lingers past collection.
       context.thisDiesIfThatDies(agentId);
-      context.onCancel(() => stop());
+      context.onCancel(() => {
+        stop();
+        for (const intervalId of [...liveTickResponseForInterval.keys()]) {
+          disposeTickResponse(intervalId);
+        }
+        schedulerHandleForId.delete(schedulerId);
+      });
       // Phase 4 (endoclaw-timer § Maker Function): the incarnated value is the
       // `{ scheduler, schedulerControl }` facet pair. `scheduler` is the
       // agent-facing facet (makeInterval / list / help); `schedulerControl` is
@@ -3952,8 +4098,34 @@ const makeDaemonCore = async (
       // while retaining `schedulerControl`; the `endo interval` CLI reaches the
       // control facet to pause/resume and the scheduler facet to list. `stop` is
       // the daemon-internal teardown latched by `context.onCancel` above and is
-      // deliberately not exposed to holders of the capability.
+      // deliberately not exposed to holders of the capability. The scheduler's
+      // own mail handle (the `from` identity of delivered ticks, endoclaw-timer
+      // Phase 2) is not a member of this record — a facet-pair record carries
+      // no methods and must stay a pure CopyRecord of Remotables so it can cross
+      // CapTP; the bound `handle` formula resolves it from `schedulerHandleForId`
+      // instead (registered above as a side effect of this incarnation).
       return harden({ scheduler, schedulerControl });
+    },
+    'tick-response': (_formula, _context, id) => {
+      // Forward to the live behavior the issuing scheduler registered for this
+      // tick. Looked up per call (not captured) so a superseded, timed-out, or
+      // post-restart tick-response — one with no live entry — is an inert
+      // no-op, matching the design's rule that outstanding TickResponse
+      // capabilities become inert.
+      return makeExo('EndoTickResponse', TickResponseInterface, {
+        resolve() {
+          const live = liveTickResponses.get(id);
+          if (live !== undefined) {
+            live.resolve();
+          }
+        },
+        reschedule() {
+          const live = liveTickResponses.get(id);
+          if (live !== undefined) {
+            live.reschedule();
+          }
+        },
+      });
     },
     channel: async (formula, context, id) => {
       const {
@@ -4587,18 +4759,56 @@ const makeDaemonCore = async (
         node: localNodeNumber,
       });
 
-      await deferredTasks.execute({ intervalSchedulerId });
+      // The scheduler's own mail handle (the `from` identity of delivered
+      // ticks). Written without incarnation to break the scheduler↔handle
+      // incarnation cycle; it resolves later via the scheduler's `handle()`
+      // method (endoclaw-timer Phase 2).
+      const handleNumber = /** @type {FormulaNumber} */ (await randomHex256());
+      const handleId = await formulateNumberedHandle(
+        handleNumber,
+        intervalSchedulerId,
+      );
+
+      await deferredTasks.execute({ intervalSchedulerId, handleId });
 
       /** @type {import('./types.js').IntervalSchedulerFormula} */
       const formula = harden({
         type: /** @type {const} */ ('interval-scheduler'),
         agent: agentId,
+        handle: handleId,
         maxActive,
         minPeriodMs,
         paused: false,
       });
 
       return formulate(intervalSchedulerNumber, formula);
+    });
+  };
+
+  /**
+   * Formulate a one-shot `tick-response` capability for a single interval tick
+   * (endoclaw-timer Phase 2). The formula carries no behavior of its own — the
+   * issuing scheduler registers the live `resolve()`/`reschedule()` behavior in
+   * the `liveTickResponses` registry under the returned id. Transiently pinned
+   * so it survives until the agent provides it; the scheduler unpins it once
+   * the tick is superseded or the scheduler is collected.
+   *
+   * @param {FormulaIdentifier} schedulerId - the issuing interval-scheduler.
+   * @returns {Promise<FormulaIdentifier>}
+   */
+  const formulateTickResponse = async schedulerId => {
+    return withFormulaGraphLock(async () => {
+      const tickResponseNumber = /** @type {FormulaNumber} */ (
+        await randomHex256()
+      );
+      /** @type {import('./types.js').TickResponseFormula} */
+      const formula = harden({
+        type: /** @type {const} */ ('tick-response'),
+        scheduler: schedulerId,
+      });
+      const { id } = await formulate(tickResponseNumber, formula);
+      pinTransient(id);
+      return /** @type {FormulaIdentifier} */ (id);
     });
   };
 

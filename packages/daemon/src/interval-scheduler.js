@@ -25,6 +25,8 @@
  */
 
 import { Far } from '@endo/pass-style';
+import { makeExo } from '@endo/exo';
+import { TickResponseInterface } from './interfaces.js';
 
 /** @import { IntervalEntry, IntervalSchedulerPowers, IntervalSchedulerExo } from './types.js' */
 
@@ -266,8 +268,10 @@ export const makeIntervalScheduler = async powers => {
   const deliverTick = (entry, actualAt, missedTicks = 0) => {
     const tickKey = `${entry.id}:${entry.tickCount}`;
 
-    // One-shot TickResponse capability. Phase 2 replaces this plain record
-    // with a daemon-formulated TickResponse exo delivered by mail.
+    // One-shot TickResponse capability. In the daemon, this exo is the live
+    // behavior a per-tick `tick-response` formula forwards to when the agent
+    // invokes the capability carried on the delivered mail message; in the
+    // unit tests it is called directly off the tick message.
     //
     // `responded` is a per-DELIVERY latch shared by resolve(), reschedule(),
     // and the tick-deadline auto-resolve below: whichever fires first consumes
@@ -286,7 +290,7 @@ export const makeIntervalScheduler = async powers => {
       responded = true;
       return true;
     };
-    const tickResponse = harden({
+    const tickResponse = makeExo('EndoTickResponse', TickResponseInterface, {
       resolve() {
         if (consume()) {
           onTickResolved(entry);
@@ -326,8 +330,23 @@ export const makeIntervalScheduler = async powers => {
     tickDeadlines.set(entry.id, deadlineHandle);
 
     if (onTick !== undefined) {
+      // onTick may be synchronous (the unit tests) or asynchronous (the daemon
+      // mail delivery); in either case a failure to deliver a tick must not
+      // throw into the timer callback, so both sync throws and async rejections
+      // are logged and swallowed.
       try {
-        onTick(message);
+        const delivered = /** @type {unknown} */ (onTick(message));
+        if (
+          delivered != null &&
+          typeof (/** @type {any} */ (delivered).then) === 'function'
+        ) {
+          /** @type {Promise<unknown>} */ (delivered).then(undefined, error =>
+            console.error(
+              `[interval-scheduler] onTick delivery error for ${entry.label}:`,
+              error,
+            ),
+          );
+        }
       } catch (error) {
         console.error(
           `[interval-scheduler] onTick callback error for ${entry.label}:`,

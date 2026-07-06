@@ -171,6 +171,12 @@ export const makeMailboxMaker = ({
         const promiseLocator = await externalizeForMessage(message.promiseId);
         return harden({ ...base, promiseId: promiseLocator });
       }
+      if (message.tickResponseId) {
+        const tickResponseLocator = await externalizeForMessage(
+          message.tickResponseId,
+        );
+        return harden({ ...base, tickResponseId: tickResponseLocator });
+      }
       return harden(base);
     };
 
@@ -357,6 +363,25 @@ export const makeMailboxMaker = ({
         });
       }
 
+      if (type === 'interval-tick') {
+        const tick =
+          /** @type {import('./types.js').IntervalTickEnvelopeMessage} */ (
+            /** @type {unknown} */ (envelope)
+          );
+        return harden({
+          type: 'message',
+          ...envelopeRecord,
+          intervalId: tick.intervalId,
+          label: tick.label,
+          periodMs: tick.periodMs,
+          tickNumber: tick.tickNumber,
+          scheduledAt: tick.scheduledAt,
+          actualAt: tick.actualAt,
+          missedTicks: tick.missedTicks,
+          tickResponseId: tick.tickResponseId,
+        });
+      }
+
       throw new Error('Unknown message type');
     };
 
@@ -425,6 +450,17 @@ export const makeMailboxMaker = ({
         if (typeof envelope.valueId !== 'string') {
           throw new Error('Invalid value valueId');
         }
+        return;
+      }
+      if (envelope.type === 'interval-tick') {
+        const tick = /** @type {any} */ (envelope);
+        if (typeof tick.intervalId !== 'string') {
+          throw new Error('Invalid interval-tick intervalId');
+        }
+        if (typeof tick.tickResponseId !== 'string') {
+          throw new Error('Invalid interval-tick tickResponseId');
+        }
+        assertValidId(tick.tickResponseId);
         return;
       }
       throw new Error('Unknown message type');
@@ -586,6 +622,41 @@ export const makeMailboxMaker = ({
           valueId: formula.valueId,
           messageId: formula.messageId,
           replyTo: formula.replyTo,
+          number: messageNumber,
+          date: formula.date,
+          done,
+          dismissed: dismissal.promise,
+          dismisser,
+        });
+      }
+
+      if (formula.messageType === 'interval-tick') {
+        if (
+          formula.intervalId === undefined ||
+          formula.label === undefined ||
+          formula.periodMs === undefined ||
+          formula.tickNumber === undefined ||
+          formula.scheduledAt === undefined ||
+          formula.actualAt === undefined ||
+          formula.missedTicks === undefined ||
+          formula.tickResponseId === undefined
+        ) {
+          throw new Error('Interval-tick message formula is incomplete');
+        }
+        return harden({
+          type: formula.messageType,
+          from: formula.from,
+          to: formula.to,
+          intervalId: formula.intervalId,
+          label: formula.label,
+          periodMs: formula.periodMs,
+          tickNumber: formula.tickNumber,
+          scheduledAt: formula.scheduledAt,
+          actualAt: formula.actualAt,
+          missedTicks: formula.missedTicks,
+          tickResponseId: formula.tickResponseId,
+          messageId: formula.messageId,
+          ...(formula.replyTo !== undefined && { replyTo: formula.replyTo }),
           number: messageNumber,
           date: formula.date,
           done,
