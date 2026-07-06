@@ -2,16 +2,17 @@
 
 # Endo daemon self-hosting image.
 #
-# Builds the daemon, its bundled worker, and the CLI from the monorepo and
-# runs the daemon in the foreground with its state persisted to a mounted
-# volume. This is the headless counterpart to the desktop shell: a container
-# you can deploy on a VPS so the daemon is available 24/7.
+# Builds the daemon, its worker, and the CLI from the monorepo source and runs
+# the daemon in the foreground with its state persisted to a mounted volume.
+# This is the headless counterpart to the desktop shell: a container you can
+# deploy on a VPS so the daemon is available 24/7.
 #
-# Scope note: the daemon presently accepts control over a UNIX domain socket
-# only. Authenticated remote (non-localhost) HTTP/WebSocket access described in
-# the daemon-docker-selfhost design depends on the gateway-bearer-token-auth
-# design, which is not yet implemented in this repository. See docker/README.md
-# for the current remote-access story and the deliberate omission.
+# Scope note: the daemon starts no network service by default; the only
+# always-on control surface is a UNIX domain socket. Authenticated remote
+# (non-localhost) HTTP/WebSocket access described in the daemon-docker-selfhost
+# design depends on the gateway-bearer-token-auth design, which is not yet
+# implemented in this repository. See README.md for the current remote-access
+# story and the deliberate omission.
 
 FROM node:22-bookworm-slim
 
@@ -31,6 +32,11 @@ COPY . .
 # install. The daemon and worker execute directly from source (type: module);
 # there is no compile step.
 RUN yarn install --immutable
+
+# The `endo` CLI bin is linked into the workspace node_modules/.bin; put it on
+# PATH so `docker exec <ctr> endo ...` (and `docker compose exec endo endo ...`)
+# resolve it.
+ENV PATH="/opt/endo/node_modules/.bin:${PATH}"
 
 # State (formula store, keypairs, cache) persists here across restarts.
 VOLUME /data/endo

@@ -1,6 +1,6 @@
 # Self-hosting the Endo daemon with Docker
 
-This directory packages the Endo daemon, its bundled worker, and the CLI into a
+This directory packages the Endo daemon, its worker, and the CLI into a
 container image so the daemon can run headless and always-on, the way you would
 deploy it on a rented server rather than a desktop.
 
@@ -35,8 +35,9 @@ Or by hand:
 # Build from the repository root (the build context is the whole workspace).
 docker build -f docker/Dockerfile -t endojs/daemon:latest .
 
-# Run with a named volume for persistent state.
-docker run -d --name endo -v endo-state:/data/endo endojs/daemon:latest
+# Run with a named volume for persistent state. --init reaps the worker
+# subprocesses the daemon forks (Compose sets this via `init: true`).
+docker run -d --init --name endo -v endo-state:/data/endo endojs/daemon:latest
 
 # Drive the daemon.
 docker exec endo endo <command>
@@ -44,7 +45,7 @@ docker exec endo endo <command>
 
 ## State persistence
 
-The daemon writes to three trees, rooted under `ENDO_STATE` (default
+The daemon writes two persistent trees, rooted under `ENDO_STATE` (default
 `/data/endo`, declared as a volume):
 
 | Path                | Contents                                            |
@@ -74,17 +75,23 @@ different machine, over HTTP/WebSocket, gated by a bearer token, with TLS
 terminated by a reverse proxy.
 
 **That path is not yet available.** It depends on the `gateway-bearer-token-auth`
-design, which is not implemented in this repository: there is no HTTP/WebSocket
-gateway, no `GatewayBootstrap.fetch(token)` authentication gate, and no
-`ENDO_GATEWAY=remote` mode in the daemon today. The daemon accepts control over
-a UNIX domain socket only.
+design, which is not implemented in this repository: there is no
+bearer-token-authenticated remote gateway, no `GatewayBootstrap.fetch(token)`
+authentication gate, and no `ENDO_GATEWAY=remote` mode in the daemon today. The
+daemon starts no network service by default; the only always-on control surface
+is the UNIX domain socket. (The daemon can serve an on-demand, unauthenticated
+web weblet over HTTP/WebSocket, but none is started by default, and it is not an
+authenticated remote gateway.)
 
 This image therefore ships **local control only** and deliberately does **not**
 publish a network port. Reaching the control socket is equivalent to full
-control of the daemon, so it must not be exposed to a network interface without
-the authentication layer in front of it. Bridging the raw socket to TCP (for
-example with `socat`) would hand unauthenticated remote control to anyone who
-can reach the port; do not do this.
+control of the daemon, so it must not be exposed where an untrusted party can
+reach it. Two exposure paths to avoid: bridging the raw socket to TCP (for
+example with `socat`) hands unauthenticated remote control to anyone who can
+reach the port; and bind-mounting `ENDO_RUNTIME` (or the socket's directory) to
+a host path grants the same control to any local user who can read that path.
+Keep the socket inside the container. Do not spawn an unauthenticated web weblet
+on a published port either.
 
 When `gateway-bearer-token-auth` lands, this image gains a published gateway
 port, an `ENDO_GATEWAY=remote` toggle, and a documented reverse-proxy + TLS

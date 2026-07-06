@@ -6,9 +6,9 @@
 #
 #   docker compose exec endo endo <command>
 #
-# Remote access: the daemon currently listens on a UNIX domain socket only, so
-# no host port is published. Authenticated remote HTTP/WebSocket access is not
-# yet available (see README.md, "Remote access"). Do not proxy the raw control
+# Remote access: the daemon starts no network service by default, so no host
+# port is published. Authenticated remote HTTP/WebSocket access is not yet
+# available (see README.md, "Remote access"). Do not proxy the raw control
 # socket to a network interface: reaching the socket grants full unauthenticated
 # control of the daemon.
 
@@ -21,6 +21,9 @@ services:
     volumes:
       - endo-state:/data/endo
     restart: unless-stopped
+    # The daemon runs as PID 1 and forks worker subprocesses; run it under an
+    # init so orphaned descendants are reaped rather than left as zombies.
+    init: true
 
 volumes:
   endo-state:
