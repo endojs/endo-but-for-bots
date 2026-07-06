@@ -2738,6 +2738,44 @@ const makeDaemonCore = async (
       registerName('@slots', undefined, slots);
       registerName(MESSAGE_PROMISE_NAME, promiseId, undefined);
       registerName(MESSAGE_RESOLVER_NAME, resolverId, undefined);
+    } else if (messageType === 'interval-tick') {
+      // A heartbeat tick delivered as mail (endoclaw-timer Phase 2). The tick
+      // metadata are registered as values; `tickResponseId` is registered as a
+      // value (its locator string), NOT as an id edge, so the inbox message
+      // does not hold a strong GC reference to the tick-response — a superseded
+      // or timed-out tick-response must stay collectible and become inert (see
+      // the `interval-tick` case in `extractDeps`, which likewise omits the
+      // edge, and the design's outstanding-TickResponse inertness rule).
+      const {
+        intervalId,
+        label,
+        periodMs,
+        tickNumber,
+        scheduledAt,
+        actualAt,
+        missedTicks,
+        tickResponseId,
+      } = formula;
+      if (
+        intervalId === undefined ||
+        label === undefined ||
+        periodMs === undefined ||
+        tickNumber === undefined ||
+        scheduledAt === undefined ||
+        actualAt === undefined ||
+        missedTicks === undefined ||
+        tickResponseId === undefined
+      ) {
+        throw new Error('Interval-tick message formula is incomplete');
+      }
+      registerName('@intervalId', undefined, intervalId);
+      registerName('@label', undefined, label);
+      registerName('@periodMs', undefined, periodMs);
+      registerName('@tickNumber', undefined, tickNumber);
+      registerName('@scheduledAt', undefined, scheduledAt);
+      registerName('@actualAt', undefined, actualAt);
+      registerName('@missedTicks', undefined, missedTicks);
+      registerName('@tickResponse', undefined, tickResponseId);
     } else {
       throw new Error(`Unknown message type ${q(messageType)}`);
     }

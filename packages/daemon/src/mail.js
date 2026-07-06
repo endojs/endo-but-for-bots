@@ -454,8 +454,32 @@ export const makeMailboxMaker = ({
       }
       if (envelope.type === 'interval-tick') {
         const tick = /** @type {any} */ (envelope);
+        // Validate every field the persisted message-formula reconstruction
+        // (`makeMessageFormula` / `makeStampedMessage`) requires: a delivery
+        // accepted here that is missing any of these persists a formula that
+        // throws 'Interval-tick message formula is incomplete' on restart
+        // replay, which would brick the whole mailbox. Keep delivery-time
+        // validation symmetric with replay-time reconstruction.
         if (typeof tick.intervalId !== 'string') {
           throw new Error('Invalid interval-tick intervalId');
+        }
+        if (typeof tick.label !== 'string') {
+          throw new Error('Invalid interval-tick label');
+        }
+        if (typeof tick.periodMs !== 'number') {
+          throw new Error('Invalid interval-tick periodMs');
+        }
+        if (typeof tick.tickNumber !== 'number') {
+          throw new Error('Invalid interval-tick tickNumber');
+        }
+        if (typeof tick.scheduledAt !== 'number') {
+          throw new Error('Invalid interval-tick scheduledAt');
+        }
+        if (typeof tick.actualAt !== 'number') {
+          throw new Error('Invalid interval-tick actualAt');
+        }
+        if (typeof tick.missedTicks !== 'number') {
+          throw new Error('Invalid interval-tick missedTicks');
         }
         if (typeof tick.tickResponseId !== 'string') {
           throw new Error('Invalid interval-tick tickResponseId');

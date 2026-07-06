@@ -134,6 +134,28 @@ test('interval scheduler delivers ticks as mail and resolve advances the schedul
     'tick carries a tick-response capability reference',
   );
 
+  // The tick's persisted message formula must also incarnate through the
+  // daemon's `message` maker (makeMessageHub) — a parallel message-type
+  // enumeration the followMessages/makeStampedMessage path does not exercise.
+  // Looking the message up as a mail sub-hub drives that incarnation; without
+  // the interval-tick branch in makeMessageHub it rejects with 'Unknown message
+  // type', leaving every persisted tick's controller self-cancelled.
+  const tick1Hub = await E(host).lookup(['@mail', String(tick1.number)]);
+  const tick1Names = await E(tick1Hub).list();
+  t.true(
+    tick1Names.includes('@type'),
+    'tick message formula incarnates as a mail hub',
+  );
+  t.true(
+    tick1Names.includes('@tickResponse'),
+    'the incarnated tick message exposes its tick-response reference',
+  );
+  t.is(
+    await E(tick1Hub).lookup('@label'),
+    'heartbeat',
+    'the incarnated tick message carries the tick metadata',
+  );
+
   // Resolve the tick through the delivered capability; the schedule advances
   // and the next tick is delivered as another mail message.
   const tickResponse1 = await E(host).lookupByLocator(tick1.tickResponseId);
