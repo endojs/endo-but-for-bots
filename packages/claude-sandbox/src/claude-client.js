@@ -35,6 +35,7 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
+import { mapReader } from '@endo/stream';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 
 import { makeBufferedReader } from './buffered-channel.js';
@@ -52,33 +53,17 @@ const ClaudeClientInterface = M.interface('ClaudeClient', {
 });
 
 /**
- * Parse a stream of UTF-8 byte chunks as newline-delimited JSON,
- * yielding one parsed object per non-empty line. This is the
- * `claude -p --output-format stream-json` wire shape.
- *
- * Exported for unit testing — it is the pure core of `send()`'s
- * stdout handling, independent of the slice / CapTP plumbing.
+ * Split a stream of UTF-8 byte chunks into trimmed, non-empty text lines.
+ * This is the stateful **byte-framing** half of the stream-json wire — one
+ * chunk may carry zero, one, or many lines, and a line may span chunks — so
+ * it cannot be a 1-to-1 map; the parse half (below) is.
  *
  * @param {AsyncIterable<Uint8Array>} bytesIterable
- * @returns {AsyncGenerator<any, void, void>}
+ * @returns {AsyncGenerator<string, void, void>}
  */
-export async function* parseStreamJsonLines(bytesIterable) {
+async function* splitLines(bytesIterable) {
   const decoder = new TextDecoder();
   let buf = '';
-
-  /** @param {string} line */
-  const parseLine = line => {
-    try {
-      return JSON.parse(line);
-    } catch (e) {
-      throw makeError(
-        X`ClaudeClient: malformed stream-json line ${q(line.slice(0, 120))}: ${q(
-          /** @type {Error} */ (e).message,
-        )}`,
-      );
-    }
-  };
-
   for await (const chunk of bytesIterable) {
     buf += decoder.decode(chunk, { stream: true });
     let nl = buf.indexOf('\n');
@@ -86,19 +71,53 @@ export async function* parseStreamJsonLines(bytesIterable) {
       const line = buf.slice(0, nl).trim();
       buf = buf.slice(nl + 1);
       if (line.length > 0) {
-        yield parseLine(line);
+        yield line;
       }
       nl = buf.indexOf('\n');
     }
   }
-  // Flush any trailing partial multi-byte sequence and final line
-  // that didn't end in a newline.
+  // Flush any trailing partial multi-byte sequence and final line that
+  // didn't end in a newline.
   buf += decoder.decode();
   const last = buf.trim();
   if (last.length > 0) {
-    yield parseLine(last);
+    yield last;
   }
 }
+
+/**
+ * Parse one stream-json line into an event, wrapping a JSON error with the
+ * offending line for a usable diagnostic.
+ *
+ * @param {string} line
+ * @returns {any}
+ */
+const parseStreamJsonLine = line => {
+  try {
+    return JSON.parse(line);
+  } catch (e) {
+    throw makeError(
+      X`ClaudeClient: malformed stream-json line ${q(line.slice(0, 120))}: ${q(
+        /** @type {Error} */ (e).message,
+      )}`,
+    );
+  }
+};
+
+/**
+ * Parse a stream of UTF-8 byte chunks as newline-delimited JSON, yielding one
+ * parsed object per non-empty line — the `claude -p --output-format
+ * stream-json` wire shape. Byte-framing (`splitLines`) is the 1-to-many half;
+ * the JSON parse is a 1-to-1 `@endo/stream` `mapReader` layered over it.
+ *
+ * Exported for unit testing — it is the pure core of `send()`'s stdout
+ * handling, independent of the slice / CapTP plumbing.
+ *
+ * @param {AsyncIterable<Uint8Array>} bytesIterable
+ * @returns {AsyncIterable<any>}
+ */
+export const parseStreamJsonLines = bytesIterable =>
+  mapReader(splitLines(bytesIterable), parseStreamJsonLine);
 harden(parseStreamJsonLines);
 
 /**

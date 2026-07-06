@@ -46,7 +46,8 @@
     "@endo/far": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/patterns": "workspace:^",
-    "@endo/sandbox": "workspace:^"
+    "@endo/sandbox": "workspace:^",
+    "@endo/stream": "workspace:^"
   },
   "devDependencies": {
     "@endo/cli": "workspace:^",
