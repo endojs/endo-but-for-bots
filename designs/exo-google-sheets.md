@@ -406,8 +406,8 @@ service through a credential it cannot see.
    `@endo/agent-tools` consumers if wanted.
 5. **Push notifications (M, deferred).** Drive `files.watch` channel
    management behind the existing `follow` contract, delivered through
-   [endoclaw-webhooks](endoclaw-webhooks.md). To be filed as a follow-up
-   design once webhooks land.
+   [endoclaw-webhooks](endoclaw-webhooks.md). Designed in the follow-up:
+   [google-sheet-pubsub](google-sheet-pubsub.md).
 
 Phases 1 and 2 land together as one `feat(exo-google-sheets)` PR and do not
 block on any unimplemented dependency; the OAuth exo is stubbed as a bare
