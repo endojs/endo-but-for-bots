@@ -28,13 +28,11 @@ import { makeGitTool } from '../src/git-tool.js';
  * a real on-disk repository: the records `invoke` correctly, the named→positional
  * marshal reaches the capability, and the capability's results flow back.
  *
- * The capability-heavy methods are deliberately NOT part of the tool slice and
- * are driven through the raw `Git` cap instead: `add` (its
- * `M.arrayOf(M.remotable())` arg awaits the handle-table / capref registry),
- * `status` (its non-empty rows mint remotable nodes), and `filesystemAt` (it
- * returns a live `Filesystem` remotable) all await the capref/result
- * serialization of a later PR. The in-slice, JSON-safe methods (`commit`, `log`,
- * the branch operations) go through the tool records.
+ * The capability-heavy methods that still return live remotables are
+ * deliberately NOT part of the tool slice and are driven through the raw `Git`
+ * cap instead: `filesystemAt` returns a live `Filesystem` remotable and awaits
+ * result serialization of a later PR. The in-slice, JSON-safe methods (`add`,
+ * `status`, `commit`, `log`, the branch operations) go through the tool records.
  */
 
 const execFileAsync = promisify(execFile);
@@ -106,22 +104,20 @@ const byNameOf = tools => name => {
 };
 
 test('makeGitTool drives a real Git cap: stage → status → commit → log → filesystemAt', async t => {
-  const { repoRoot, mount, git } = await provisionGit(t);
+  const { repoRoot, git } = await provisionGit(t);
   const byName = byNameOf(makeGitTool(git));
 
-  // Write and stage a file. `add` is not in the tool slice, so stage through
-  // the raw cap; the rest of the flow is driven through the tool records.
+  // Write and stage a file through the path-based `add` tool.
   await fs.promises.writeFile(
     path.join(repoRoot, 'greeting.txt'),
     'hello tools',
   );
-  const entry = await E(mount).entry(['greeting.txt']);
-  await E(git).add([entry]);
+  await byName('add').invoke({ paths: ['greeting.txt'] });
 
-  // `status` is not part of the tool slice (its non-empty rows mint
-  // remotable nodes that await the capref/result serialization of a later
-  // PR), so read status through the raw cap; it reports the staged file.
-  const staged = await E(git).status();
+  // `status` (tool) reports only JSON-safe row fields for the staged file.
+  const staged = /** @type {Array<{ path: string }>} */ (
+    await byName('status').invoke({})
+  );
   t.true(
     staged.some(row => row.path === 'greeting.txt'),
     'status should report the staged file',
@@ -134,8 +130,10 @@ test('makeGitTool drives a real Git cap: stage → status → commit → log →
   t.regex(commit.oid, /^[0-9a-f]{7,64}$/);
   t.is(commit.summary, 'add greeting');
 
-  // Status (raw cap) is clean once the file is committed.
-  const afterStatus = await E(git).status();
+  // Status (tool) is clean once the file is committed.
+  const afterStatus = /** @type {Array<{ path: string }>} */ (
+    await byName('status').invoke({})
+  );
   t.false(
     afterStatus.some(row => row.path === 'greeting.txt'),
     'the committed file should no longer be dirty',
@@ -153,10 +151,15 @@ test('makeGitTool drives a real Git cap: stage → status → commit → log →
   // through the raw cap; walk the read-only `@endo/platform/fs/extended` Filesystem over the
   // committed tree to read the committed file content back.
   const fsView = await E(git).filesystemAt('HEAD');
-  const root = await E(/** @type {any} */ (fsView)).root();
-  const file = /** @type {any} */ (await walk(root, ['greeting.txt']));
-  const opened = await E(file).open({ read: true });
-  const bytes = await collectBytes(await E(opened).read(0n));
+  const root = await E(/** @type {{ root: () => unknown }} */ (fsView)).root();
+  const file = /** @type {{ open: (opts: object) => unknown }} */ (
+    await walk(/** @type {object} */ (root), ['greeting.txt'])
+  );
+  const opened = /** @type {{ read: (offset: bigint) => unknown }} */ (
+    await E(file).open({ read: true })
+  );
+  const reader = /** @type {object} */ (await E(opened).read(0n));
+  const bytes = await collectBytes(reader);
   t.is(new TextDecoder().decode(bytes), 'hello tools');
 });
 
@@ -201,16 +204,16 @@ test('the runtime guard rejects a bad arg before reaching the live cap', async t
   await t.throwsAsync(() => byName('commit').invoke({ bogus: 'x' }));
 });
 
-test('the deferred add/restore methods are absent from the slice', t => {
+test('the path-based add tool is present and restore remains deferred', t => {
   // The cap is only touched at invoke time, so an empty object suffices to
   // inspect the record names.
   const tools = makeGitTool(
     /** @type {import('../src/types.js').GitToolCapability} */ (harden({})),
   );
   const names = new Set(tools.map(tool => tool.name));
-  // `add`/`restore` take `M.arrayOf(M.remotable())` and stay out of the slice
-  // until the capref registry lands; this pins the contract that justifies the
-  // raw-cap staging above.
-  t.false(names.has('add'));
+  // `add` is exposed as a path-based staging tool. `restore` still takes
+  // capability-bearing entries and can discard work, so it stays out of this
+  // curated slice.
+  t.true(names.has('add'));
   t.false(names.has('restore'));
 });

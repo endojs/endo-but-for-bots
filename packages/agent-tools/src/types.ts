@@ -4,23 +4,50 @@ import type { EndoGit } from '@endo/exo-git';
 import type { Pattern } from '@endo/patterns';
 
 /**
- * The read- and branch-navigation slice of `EndoGit` the git tool catalog
- * exposes to an LLM.
+ * JSON-safe projection of an `EndoGit.status()` row. The underlying row carries
+ * entry/node capabilities; the tool result deliberately omits them.
+ */
+export interface GitStatusToolEntry {
+  path: string;
+  index:
+    | 'clean'
+    | 'added'
+    | 'modified'
+    | 'deleted'
+    | 'renamed'
+    | 'copied'
+    | 'conflicted';
+  worktree:
+    | 'clean'
+    | 'modified'
+    | 'deleted'
+    | 'untracked'
+    | 'ignored'
+    | 'conflicted';
+  renamedFrom?: string;
+}
+
+/**
+ * The SWE-task slice of `EndoGit` the git tool catalog exposes to an LLM.
  *
  * Deliberately omits the destructive and history-rewriting methods of `EndoGit`
  * — `merge`, `rebase`, `restore`, `deleteBranch`, `renameBranch`, the `stash*`
- * family, and the working-tree/detach mutators (`add`, `switch`, `detach`,
+ * family, and the working-tree/detach mutators (`switch`, `detach`,
  * `worktree`). Those carry authority a tool surface handed to a model should not
  * advertise: they can discard uncommitted work or rewrite shared history.
- * `commit`, `createBranch`, and `switchBranch` are included as the additive,
- * non-destructive write surface. Widening this `Pick` is a deliberate authority
- * decision, not a convenience — add a method only when the tool surface is meant
- * to grant it.
+ * `status` is projected to JSON-safe fields by the tool maker. `add` is exposed
+ * as a path-based staging tool that resolves those paths through `status()` rows
+ * before it calls the underlying capability-bearing method. `commit`,
+ * `createBranch`, and `switchBranch` remain the additive, non-destructive write
+ * surface. Widening this `Pick` is a deliberate authority decision, not a
+ * convenience — add a method only when the tool surface is meant to grant it.
  */
 export type GitToolCapability = Pick<
   EndoGit,
   | 'log'
   | 'diff'
+  | 'status'
+  | 'add'
   | 'show'
   | 'commit'
   | 'branches'
@@ -85,3 +112,7 @@ export declare function makeMountReadTool(
   fs: ERef<Filesystem>,
   opts?: MountReadToolOptions,
 ): ToolRecord;
+
+export declare function makeMountWriteTool(fs: ERef<Filesystem>): ToolRecord;
+
+export declare function makeMountListTool(fs: ERef<Filesystem>): ToolRecord;

@@ -6,3 +6,9 @@ export declare const makeMountReadTool: (
   fs: ERef<Filesystem>,
   opts?: MountReadToolOptions,
 ) => ToolRecord;
+
+export declare const makeMountWriteTool: (
+  fs: ERef<Filesystem>,
+) => ToolRecord;
+
+export declare const makeMountListTool: (fs: ERef<Filesystem>) => ToolRecord;

@@ -22,7 +22,11 @@ import {
   chroot,
 } from '@endo/platform/fs/extended';
 
-import { makeMountReadTool } from '../src/mount-fs.js';
+import {
+  makeMountListTool,
+  makeMountReadTool,
+  makeMountWriteTool,
+} from '../src/mount-fs.js';
 import { toPiAgentTool } from '../src/pi.js';
 
 /**
@@ -304,6 +308,159 @@ test('bridges through toPiAgentTool and reads a file end to end', async t => {
   const result = await agentTool.execute('call-1', { path: 'a.txt' });
   t.deepEqual(result.content, [{ type: 'text', text: 'bridged content' }]);
   t.is(result.details, 'bridged content');
+});
+
+test('writes a text file inside the filesystem', async t => {
+  const rootPath = makeTempRoot(t);
+  const filesystem = makeNodeFilesystem({ rootPath });
+
+  const tool = makeMountWriteTool(filesystem);
+  await null;
+  t.is(
+    await tool.invoke({ path: 'new.txt', content: 'hello write' }),
+    undefined,
+  );
+  t.is(fs.readFileSync(path.join(rootPath, 'new.txt'), 'utf-8'), 'hello write');
+});
+
+test('writes an empty file and overwrites shorter content with truncation', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.writeFileSync(path.join(rootPath, 'note.txt'), 'original content');
+  const filesystem = makeNodeFilesystem({ rootPath });
+
+  const tool = makeMountWriteTool(filesystem);
+  await tool.invoke({ path: 'note.txt', content: 'new' });
+  t.is(fs.readFileSync(path.join(rootPath, 'note.txt'), 'utf-8'), 'new');
+
+  await tool.invoke({ path: 'empty.txt', content: '' });
+  t.is(fs.readFileSync(path.join(rootPath, 'empty.txt'), 'utf-8'), '');
+});
+
+test('writes through a chroot subtree view as the new root', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.mkdirSync(path.join(rootPath, 'sub'));
+  const filesystem = chroot(makeNodeFilesystem({ rootPath }), ['sub']);
+
+  const tool = makeMountWriteTool(filesystem);
+  await null;
+  await tool.invoke({ path: 'inside.txt', content: 'subtree' });
+  t.is(
+    fs.readFileSync(path.join(rootPath, 'sub', 'inside.txt'), 'utf-8'),
+    'subtree',
+  );
+  t.false(fs.existsSync(path.join(rootPath, 'inside.txt')));
+});
+
+test('write rejects extra arguments before any filesystem send', async t => {
+  let touched = false;
+  const filesystem = Far('UntouchedWriteFilesystem', {
+    root() {
+      touched = true;
+      throw new Error('filesystem should not be touched');
+    },
+  });
+  const tool = makeMountWriteTool(
+    /** @type {ERef<Filesystem>} */ (/** @type {unknown} */ (filesystem)),
+  );
+
+  const err = await t.throwsAsync(() =>
+    tool.invoke({ path: 'a.txt', content: 'x', extra: true }),
+  );
+  t.true(
+    err !== undefined && err.message.includes('extra'),
+    `error message should name the offending key; got: ${err?.message}`,
+  );
+  t.false(touched);
+});
+
+test('write rejects a missing path or non-string content before any send', async t => {
+  let touched = false;
+  const filesystem = Far('UntouchedInvalidWriteFilesystem', {
+    root() {
+      touched = true;
+      throw new Error('filesystem should not be touched');
+    },
+  });
+  const tool = makeMountWriteTool(
+    /** @type {ERef<Filesystem>} */ (/** @type {unknown} */ (filesystem)),
+  );
+
+  await t.throwsAsync(() => tool.invoke({ content: 'x' }), {
+    message: /non-empty string path/,
+  });
+  await t.throwsAsync(() => tool.invoke({ path: 'a.txt', content: 1 }), {
+    message: /string content/,
+  });
+  t.false(touched);
+});
+
+test('write remains bounded by read-only filesystem authority', async t => {
+  const rootPath = makeTempRoot(t);
+  const filesystem = readOnly(makeNodeFilesystem({ rootPath }));
+  const tool = makeMountWriteTool(filesystem);
+
+  await null;
+  await t.throwsAsync(
+    () => tool.invoke({ path: 'a.txt', content: 'blocked' }),
+    {
+      message: /EACCES/,
+    },
+  );
+  t.false(fs.existsSync(path.join(rootPath, 'a.txt')));
+});
+
+test('lists child names and kinds without exposing node capabilities', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.writeFileSync(path.join(rootPath, 'a.txt'), 'a');
+  fs.mkdirSync(path.join(rootPath, 'sub'));
+  fs.writeFileSync(path.join(rootPath, 'sub', 'b.txt'), 'b');
+  const filesystem = makeNodeFilesystem({ rootPath });
+
+  const tool = makeMountListTool(filesystem);
+  const rows = /** @type {{ name: string, kind: string }[]} */ (
+    await tool.invoke({ path: '.' })
+  );
+  const sorted = [...rows].sort((a, b) => a.name.localeCompare(b.name));
+  t.deepEqual(sorted, [
+    { name: 'a.txt', kind: 'file' },
+    { name: 'sub', kind: 'directory' },
+  ]);
+  t.false(Object.hasOwn(/** @type {object} */ (sorted[0]), 'qid'));
+});
+
+test('lists through a chroot subtree view as the new root', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.mkdirSync(path.join(rootPath, 'sub'));
+  fs.writeFileSync(path.join(rootPath, 'sub', 'c.txt'), 'c');
+  fs.writeFileSync(path.join(rootPath, 'top.txt'), 'top');
+  const filesystem = chroot(makeNodeFilesystem({ rootPath }), ['sub']);
+
+  const tool = makeMountListTool(filesystem);
+  await null;
+  t.deepEqual(await tool.invoke({ path: '.' }), [
+    { name: 'c.txt', kind: 'file' },
+  ]);
+});
+
+test('list rejects extra or missing path arguments before any filesystem send', async t => {
+  let touched = false;
+  const filesystem = Far('UntouchedListFilesystem', {
+    root() {
+      touched = true;
+      throw new Error('filesystem should not be touched');
+    },
+  });
+  const tool = makeMountListTool(
+    /** @type {ERef<Filesystem>} */ (/** @type {unknown} */ (filesystem)),
+  );
+
+  await t.throwsAsync(() => tool.invoke({ path: '.', extra: true }), {
+    message: /extra/,
+  });
+  await t.throwsAsync(() => tool.invoke({}), {
+    message: /non-empty string path/,
+  });
+  t.false(touched);
 });
 
 test('fails closed after the Filesystem is revoked, with no ambient fallback', async t => {

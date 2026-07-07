@@ -1,1 +1,5 @@
-export { makeMountReadTool } from './src/mount-fs.js';
+export {
+  makeMountListTool,
+  makeMountReadTool,
+  makeMountWriteTool,
+} from './src/mount-fs.js';

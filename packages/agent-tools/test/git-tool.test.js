@@ -10,11 +10,14 @@ import { Far } from '@endo/pass-style';
 import { makeGitTool } from '../src/git-tool.js';
 
 /** @import { ERef } from '@endo/eventual-send' */
+/** @import { GitStatusEntry } from '@endo/exo-git' */
 /** @import { GitToolCapability } from '../src/types.js' */
 
 const SLICE = [
   'log',
   'diff',
+  'status',
+  'add',
   'show',
   'commit',
   'branches',
@@ -27,9 +30,10 @@ const SLICE = [
  * Stub Git capability that records the method name and positional args.
  *
  * @param {unknown[][]} calls An array each call appends its `[name, ...args]` to.
+ * @param {GitStatusEntry[]} [statusRows]
  * @returns {ERef<GitToolCapability>}
  */
-const makeStubGit = calls => {
+const makeStubGit = (calls, statusRows = []) => {
   /** @type {GitToolCapability} */
   const stubGit = {
     log: async (...a) => {
@@ -39,6 +43,13 @@ const makeStubGit = calls => {
     diff: async (...a) => {
       calls.push(['diff', ...a]);
       return '';
+    },
+    status: async (...a) => {
+      calls.push(['status', ...a]);
+      return harden(statusRows);
+    },
+    add: async (...a) => {
+      calls.push(['add', ...a]);
     },
     show: async (...a) => {
       calls.push(['show', ...a]);
@@ -83,10 +94,10 @@ test('makeGitTool builds one record per non-remotable-slice method', t => {
 test('makeGitTool omits cap-heavy methods', t => {
   const tools = makeGitTool(makeStubGit([]));
   const names = new Set(tools.map(tool => tool.name));
-  t.false(names.has('status'));
-  t.false(names.has('add'));
   t.false(names.has('restore'));
   t.false(names.has('filesystemAt'));
+  t.false(names.has('merge'));
+  t.false(names.has('rebase'));
 });
 
 test('invoke marshals named args to positional and calls the capability', async t => {
@@ -151,6 +162,8 @@ test('the schemas advertise real, declarative property names', t => {
   t.deepEqual(propsOf('show'), ['ref']);
   t.deepEqual(propsOf('createBranch'), ['name', 'options']);
   t.deepEqual(propsOf('switchBranch'), ['branch']);
+  t.deepEqual(propsOf('status'), []);
+  t.deepEqual(propsOf('add'), ['paths']);
   t.deepEqual(propsOf('log'), ['options']);
   t.deepEqual(propsOf('diff'), ['options']);
 });
@@ -175,6 +188,103 @@ test('invoke resolves named args by their real property names', async t => {
     ['switchBranch', 'feature'],
     ['log', { maxCount: 3 }],
   ]);
+});
+
+test('status returns only JSON-safe row fields', async t => {
+  const entry = Far('Entry', {});
+  const node = Far('Node', {});
+  const tools = makeGitTool(
+    makeStubGit(
+      [],
+      [
+        harden({
+          entry,
+          node,
+          path: 'src/a.js',
+          index: 'modified',
+          worktree: 'clean',
+        }),
+        harden({
+          entry,
+          path: 'src/b.js',
+          index: 'renamed',
+          worktree: 'modified',
+          renamedFrom: 'src/old-b.js',
+        }),
+      ],
+    ),
+  );
+  const status = tools.find(tool => tool.name === 'status');
+  if (!status) throw new Error('no status tool');
+
+  const rows = /** @type {Array<Record<string, unknown>>} */ (
+    await status.invoke({})
+  );
+  t.deepEqual(rows, [
+    { path: 'src/a.js', index: 'modified', worktree: 'clean' },
+    {
+      path: 'src/b.js',
+      index: 'renamed',
+      worktree: 'modified',
+      renamedFrom: 'src/old-b.js',
+    },
+  ]);
+  t.false(Object.hasOwn(/** @type {object} */ (rows[0]), 'entry'));
+  t.false(Object.hasOwn(/** @type {object} */ (rows[0]), 'node'));
+});
+
+test('add resolves repo-relative paths through status rows before staging', async t => {
+  const calls = [];
+  const entryA = Far('EntryA', {});
+  const entryB = Far('EntryB', {});
+  const tools = makeGitTool(
+    makeStubGit(calls, [
+      harden({
+        entry: entryA,
+        path: 'a.txt',
+        index: 'modified',
+        worktree: 'modified',
+      }),
+      harden({
+        entry: entryB,
+        path: 'sub/b.txt',
+        index: 'clean',
+        worktree: 'untracked',
+      }),
+    ]),
+  );
+  const add = tools.find(tool => tool.name === 'add');
+  if (!add) throw new Error('no add tool');
+
+  await add.invoke({ paths: ['sub/b.txt', 'a.txt'] });
+
+  t.is(calls.length, 2);
+  t.deepEqual(calls[0], ['status']);
+  t.is(calls[1][0], 'add');
+  t.deepEqual(calls[1][1], [entryB, entryA]);
+});
+
+test('add rejects paths not present in status before staging', async t => {
+  const calls = [];
+  const tools = makeGitTool(
+    makeStubGit(calls, [
+      harden({
+        entry: Far('Entry', {}),
+        path: 'a.txt',
+        index: 'modified',
+        worktree: 'modified',
+      }),
+    ]),
+  );
+  const add = tools.find(tool => tool.name === 'add');
+  if (!add) throw new Error('no add tool');
+
+  const err = await t.throwsAsync(() => add.invoke({ paths: ['missing.txt'] }));
+  t.true(
+    err !== undefined && err.message.includes('missing.txt'),
+    `error should name the unresolved path; got: ${err?.message}`,
+  );
+  t.deepEqual(calls, [['status']]);
 });
 
 test('invoke rejects a wrong property name and a missing required one', async t => {

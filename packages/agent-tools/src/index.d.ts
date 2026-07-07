@@ -1,3 +1,7 @@
 export { makeTool } from './tool.js';
 export { makeGitTool } from './git-tool.js';
-export { makeMountReadTool } from './mount-fs.js';
+export {
+  makeMountListTool,
+  makeMountReadTool,
+  makeMountWriteTool,
+} from './mount-fs.js';

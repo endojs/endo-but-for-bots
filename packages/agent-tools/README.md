@@ -13,7 +13,9 @@ arguments before dispatching to a capability.
 import {
   makeTool,
   makeGitTool,
+  makeMountListTool,
   makeMountReadTool,
+  makeMountWriteTool,
 } from '@endo/agent-tools';
 ```
 
@@ -26,7 +28,11 @@ Subpath exports are also available:
 ```js
 import { makeTool } from '@endo/agent-tools/tool.js';
 import { makeGitTool } from '@endo/agent-tools/git-tool.js';
-import { makeMountReadTool } from '@endo/agent-tools/mount-fs.js';
+import {
+  makeMountListTool,
+  makeMountReadTool,
+  makeMountWriteTool,
+} from '@endo/agent-tools/mount-fs.js';
 ```
 
 ## Tool Records
@@ -50,7 +56,8 @@ definitions.
 ## Named Arguments
 
 `makeTool` accepts optional positional guards, but callers pass a JSON object.
-The positional arguments are encoded as `arg0`, `arg1`, and so on:
+The schema's `parameters.properties` insertion order defines how those named
+properties map back to positional arguments:
 
 ```js
 const tool = makeTool({
@@ -59,24 +66,19 @@ const tool = makeTool({
   parameters: harden({
     type: 'object',
     properties: {
-      arg0: { type: 'string', description: 'The commit message.' },
+      message: { type: 'string', description: 'The commit message.' },
     },
-    required: ['arg0'],
+    required: ['message'],
     additionalProperties: false,
   }),
   argGuards: harden([M.string()]),
-  execute: async ({ arg0 }) => E(git).commit(arg0),
+  execute: async ({ message }) => E(git).commit(message),
 });
 
-await tool.invoke({ arg0: 'Update docs' });
+await tool.invoke({ message: 'Update docs' });
 ```
 
-This is the current MCP-facing wire shape: MCP tool calls use named JSON
-object properties, so the adapter gives positional APIs stable `argN` names.
-A future adapter can expose separate variants that accept `{ args: [...] }` or
-another positional shape when the caller supports it.
-
-When guards are present, `invoke` rejects unknown `argN` keys, rejects missing
+When guards are present, `invoke` rejects unknown argument keys, rejects missing
 required arguments declared by the schema, copy-hardens incoming parsed JSON
 objects, and validates supplied positional arguments with `mustMatch` before
 calling `execute`.
@@ -94,6 +96,8 @@ The current slice exposes:
 
 - `log`
 - `diff`
+- `status`
+- `add`
 - `show`
 - `commit`
 - `branches`
@@ -101,13 +105,24 @@ The current slice exposes:
 - `switchBranch`
 - `currentBranch`
 
-Methods that require remotable arguments or can return live capabilities, such
-as `status`, `add`, `restore`, and `filesystemAt`, are not included in this
-first slice.
+`status` returns only JSON-safe row fields: `path`, `index`, `worktree`, and
+`renamedFrom` when present. It deliberately omits the capability-bearing
+`entry` and `node` fields from the underlying `Git.status()` result.
 
-## Filesystem Tool
+`add` accepts repo-relative path strings. The tool resolves those paths by
+filtering the same `Git.status()` rows and then calls the underlying
+capability-bearing `Git.add(entries)` method with the matched entries. This
+keeps the staging tool bounded by the granted `Git` capability and avoids
+requiring a separate filesystem grant, at the cost of only staging paths that
+`status()` reports.
 
-`makeMountReadTool(fs)` builds one read-only `mountReadText` tool over an
+Methods that require remotable arguments or can return live capabilities
+directly, such as `restore` and `filesystemAt`, are not included in this slice.
+History-rewriting workflows such as `merge` and `rebase` are also deferred.
+
+## Filesystem Tools
+
+`makeMountReadTool(fs)` builds a read-only `mountReadText` tool over an
 `@endo/platform/fs/extended` `Filesystem` capability:
 
 ```js
@@ -115,14 +130,21 @@ import { readOnly } from '@endo/platform/fs/extended';
 import { makeMountReadTool } from '@endo/agent-tools/mount-fs.js';
 
 const readTool = makeMountReadTool(readOnly(projectFs));
-const content = await readTool.execute({ path: 'README.md' });
+const content = await readTool.invoke({ path: 'README.md' });
 ```
 
 The tool reads UTF-8 text by walking the filesystem tree, opening the final
 file, and reading a bounded byte range. The supplied `Filesystem` capability
 enforces containment, symlink handling, attenuation, subtree scoping, and
-revocation. The tool retains the same 50k character text cap as the existing
-file reader.
+revocation. The tool retains a 50k character text cap by default.
+
+`makeMountWriteTool(fs)` builds a `mountWriteText` tool that writes UTF-8 text
+to a mount-relative file path, creating the file when absent and truncating
+prior contents on overwrite.
+
+`makeMountListTool(fs)` builds a `mountList` tool that lists a mount-relative
+directory path and returns only child `name` and `kind` fields. The result does
+not expose directory cursor or node capabilities.
 
 ## Schema Conformance
 
