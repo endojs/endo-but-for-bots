@@ -1,7 +1,7 @@
 ---
 title: distributed-confinement
 group: Documents
-category: Concepts
+category: Annex
 ---
 
 # Distributed Confinement
@@ -9,13 +9,15 @@ category: Concepts
 > **About this page.** This is a modernized rendering of Mark S. Miller and
 > Melora Svoboda's note *"Distributed Capability Confinement"* (an observation of
 > Norm Hardy's), originally published on
-> [erights.org](https://erights.org/elib/capability/dist-confine.html). The
-> argument and its structure are Miller and Svoboda's; the prose here is a fresh
-> exposition rather than a copy, and the code, protocol names, and diagrams have
-> been updated to Hardened JavaScript and OCapN. Every such substitution is
+> [erights.org](https://web.archive.org/web/2024/https://erights.org/elib/capability/dist-confine.html "https://erights.org/elib/capability/dist-confine.html").
+> The argument and its structure are Miller and Svoboda's; the prose here is a
+> fresh exposition rather than a copy, and the code, protocol names, and diagrams
+> have been updated to Hardened JavaScript and OCapN. Every such substitution is
 > called out inline and collected under [Translation notes](#translation-notes).
 > Miller placed the original text in the public domain; see
-> [Attribution and provenance](#attribution-and-provenance).
+> [Attribution and provenance](#attribution-and-provenance). This page follows the
+> flagging and naming conventions of the fork's `designs/thesis-translation.md`,
+> in the lighter single-paper shape that design reserves for standalone notes.
 
 ## Introduction
 
@@ -97,10 +99,12 @@ all. So, taken in isolation, a machine on an open network cannot be fully
 confined, nor even capability-confined: it holds the raw bits of its remote
 capabilities and can copy them at will.
 
-This is the setting for OCapN — the Object Capability Network protocol Endo uses
-to carry capabilities between vats. *(Substitution: the original note's "Pluribus
-network protocol" and "the comm system" → OCapN; see [Translation
-notes](#translation-notes).)*
+This is the setting for **Pluribus (whose living descendant is OCapN)** — the
+Object Capability Network protocol Endo uses to carry capabilities between vats.
+The original note calls it "the Pluribus network protocol" and "the comm system";
+following the naming discipline of `designs/thesis-translation.md`, this page
+keeps Miller's term beside the modern name on first mention and uses **OCapN**
+thereafter. *(See [Translation notes](#translation-notes).)*
 
 ## Having versus knowing
 
@@ -203,18 +207,24 @@ flagged change; the underlying argument is unchanged.
 | Section **"Inward vs. Outward Bit Confinement"** | *omitted* | In the source this heading contains only an author's placeholder note (`<need an explicit discussion of the differences>`); there is no content to translate, and inventing Miller's intended text would be unfaithful. It is dropped rather than fabricated. |
 | erights.org intra-site links (`factory.html`, `deputy.html`, …) | dropped | Dead relative links into the E website; the relevant ideas live in Endo's own docs, linked above. |
 
-Judgment calls made in the absence of a landed convention (the
-`design-endo-thesis-translation` decision had not yet landed when this page was
-written): categorizing the page under a new **Concepts** category in the docs
-navigation, and choosing Mermaid (the repo's enabled `typedoc-plugin-mermaid`)
-for the redrawn figure. Adjust to match the convention if it differs.
+These choices now match the fork's landed translation convention,
+`designs/thesis-translation.md`: the page carries category **Annex** (below Guides
+and Reference in the site navigation, where that design places the research
+edition), names the protocol "Pluribus (whose living descendant is OCapN)" on
+first mention, and redraws the source figure as a Mermaid diagram
+(`typedoc-plugin-mermaid`, already enabled) rather than reproducing a figure image
+whose copyright status is separate from the text. As a standalone note rather than
+a dissertation chapter, it uses the single-paper `docs/<slug>.md` shape that design
+reserves for such papers, not the `docs/thesis/` directory or `/thesis/` redirect.
 
 ## Attribution and provenance
 
 - **Authors of the original:** Mark S. Miller and Melora Svoboda, writing up an
   observation of **Norm Hardy's**.
 - **Source:** *Distributed Capability Confinement*,
-  <https://erights.org/elib/capability/dist-confine.html> (fetched via the
+  [erights.org/elib/capability/dist-confine.html](https://web.archive.org/web/2024/https://erights.org/elib/capability/dist-confine.html "https://erights.org/elib/capability/dist-confine.html")
+  (erights.org is intermittently unreachable, so the canonical URL is linked
+  through archive.org with the original in the link title; fetched via the
   erights.github.io mirror on 2026-07-07; source SHA-256
   `6d7ed3c3e85b66159f9eacc59b3220fe59631174dc12dc7f3c33c635575718ac`).
 - **License of the original text:** the source page states, "Unless stated
