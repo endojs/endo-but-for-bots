@@ -45,6 +45,16 @@ conflict-side selection; its bounded-read section now names the
 ReadableBlob `fetch`/`rangeRead`/`rangeReadText` contract as the
 filesystem/blob realization of sed-like reads and leaves rendered Git
 outputs plus remote exo propagation as follow-ups),
+[endoclaw-oauth](endoclaw-oauth.md) (revised 2026-07-07 per review of
+PR #612 to serve as the credential foundation for domain connectors
+(exo-google-sheets and Gmail/Calendar siblings): first-mint flow
+settled (authorization-code with PKCE against a loopback redirect by
+default, device-code as a per-provider alternative, the choice
+invisible to consumers), token record split from facets so one consent
+backs several base URLs and grants, `setScopes` removed in favor of
+mint-time consent plus enforceable `setAllowedPaths`/`setReadOnly`,
+structured auth-layer errors distinguished from pass-through provider
+errors, and an explicit connector contract),
 [exo-google-sheets](exo-google-sheets.md) (added 2026-07-06; Google
 Sheets connector: `@endo/exo-google-sheets` presents one spreadsheet
 (optionally one tab) as passable `Spreadsheet` / `SpreadsheetWriter` /
@@ -291,7 +301,7 @@ LLM-agent stack).*
 | [endoclaw-network-fetch](endoclaw-network-fetch.md) | 2026-03-03 | 2026-07-13 | Superseded by [endo-fetch](endo-fetch.md) |
 | [endo-fetch](endo-fetch.md) | 2026-07-13 | 2026-07-13 | Not Started |
 | [endoclaw-notifications](endoclaw-notifications.md) | 2026-03-03 | 2026-03-03 | Not Started |
-| [endoclaw-oauth](endoclaw-oauth.md) | 2026-03-03 | 2026-03-03 | Not Started |
+| [endoclaw-oauth](endoclaw-oauth.md) | 2026-03-03 | 2026-07-07 | Not Started |
 | [endoclaw-proactive-messages](endoclaw-proactive-messages.md) | 2026-03-03 | 2026-03-03 | Not Started |
 | [endoclaw-skill-registry](endoclaw-skill-registry.md) | 2026-03-03 | 2026-03-03 | Not Started |
 | [endoclaw-timer](endoclaw-timer.md) | 2026-03-03 | 2026-07-10 | Superseded by [endo-reminder](endo-reminder.md) |
@@ -1327,7 +1337,7 @@ have been remapped: 0 → 1, ½ → 2, 1 → 3, 2 → 4, 3 → 7, 4 → 9,
 | cli-edit-verb | S-M | 3 days | 7 | `endo edit` with hashline parser, anchor validator, splice; CLI-side, no daemon surface change |
 | daemon-weblet-application | M | 4-5 days | 7 | Formula types, gateway serving (1.2x bump) |
 | exo-zip-package | S | 1-2 days | 7 | `@endo/exo-unzip` (`unzip(bytes) -> ReadableTree`) and `@endo/exo-zip` (`zip(tree) -> bytes`); PR #128 reshape blocker |
-| endoclaw-oauth | S-M | 3 days | 7 | Credential proxy exo, token injection (agent-side OAuth; distinct from gateway-oauth-bonding in M5) |
+| endoclaw-oauth | M | 4-5 days | 7 | Credential proxy exo, token injection, PKCE-loopback + device-code mint flows, shared token record (agent-side OAuth; distinct from gateway-oauth-bonding in M5; foundation for exo-google-sheets and siblings) |
 | exo-google-sheets | M | 4-5 days | 7 | `@endo/google-sheets` plain client (fetch power injected) + `@endo/exo-google-sheets` facets; daemon-integration phase gated on endoclaw-oauth impl |
 | endoclaw-proactive-messages | S | 1 day | 7 | Pattern doc: Timer + data caps + send() |
 | endoclaw-notifications | S | 1 day | 7 | Electron Notification API, rate-limited exo; needs daemon↔Electron bridge |
