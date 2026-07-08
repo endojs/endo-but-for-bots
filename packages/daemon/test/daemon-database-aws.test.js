@@ -180,25 +180,21 @@ test('aws engine passes the database specification', async t => {
 });
 
 const sqliteTest = sqliteDatabaseConstructor === undefined ? test.skip : test;
-sqliteTest(
-  'sqlite engine passes the same specification (parity)',
-  async t => {
-    const { makeDaemonDatabase } = await import('../src/daemon-database.js');
-    const statePath = await fs.promises.mkdtemp(
-      path.join(os.tmpdir(), 'endo-daemon-db-parity-'),
-    );
-    const db = makeDaemonDatabase(
-      /** @type {any} */ ({ statePath }),
-      { Database: sqliteDatabaseConstructor },
-    );
-    try {
-      exerciseDatabase(t, db);
-    } finally {
-      db.close();
-      await fs.promises.rm(statePath, { recursive: true, force: true });
-    }
-  },
-);
+sqliteTest('sqlite engine passes the same specification (parity)', async t => {
+  const { makeDaemonDatabase } = await import('../src/daemon-database.js');
+  const statePath = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'endo-daemon-db-parity-'),
+  );
+  const db = makeDaemonDatabase(/** @type {any} */ ({ statePath }), {
+    Database: sqliteDatabaseConstructor,
+  });
+  try {
+    exerciseDatabase(t, db);
+  } finally {
+    db.close();
+    await fs.promises.rm(statePath, { recursive: true, force: true });
+  }
+});
 
 test('write-behind flush persists everything a rebooted engine needs', async t => {
   const table = makeTableEmulator();
