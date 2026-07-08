@@ -1,6 +1,8 @@
 // @ts-check
 /// <reference types="ses"/>
 
+/** @import { DaemonMountEntry, DaemonMountFile } from '../src/types.js' */
+
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { Buffer } from 'node:buffer';
@@ -553,7 +555,7 @@ test('Git scaffold methods all surface a clear "not yet implemented"', async t =
     /** @type {unknown} */ (Far('FakeEntry', { segments: () => ['foo.txt'] }))
   );
   await t.throwsAsync(E(git).add([fakeEntry]), {
-    message: /not a DaemonMountEntry/,
+    message: /not an EndoMountEntry/,
   });
 });
 
@@ -1966,14 +1968,10 @@ test('Git.status reports merge conflicts with mount entries', async t => {
   }
   t.is(row.index, 'conflicted');
   t.is(row.worktree, 'conflicted');
-  const entry = /** @type {import('../src/types.js').EndoMountEntry} */ (
-    row.entry
-  );
+  const entry = /** @type {DaemonMountEntry} */ (row.entry);
   t.deepEqual(await E(entry).segments(), ['conflict.txt']);
   // The conflicted entry is a file, so its live node exposes `text()`.
-  const node = /** @type {import('../src/types.js').DaemonMountFile} */ (
-    row.node
-  );
+  const node = /** @type {DaemonMountFile} */ (row.node);
   t.regex(await E(node).text(), /<<<<<<< HEAD/);
 });
 
@@ -2004,15 +2002,11 @@ test('Git.status wraps backend rows into GitStatusEntry with mount entries', asy
   t.is(row.worktree, 'untracked');
   // The entry is a DaemonMountEntry minted on the bound mount.  Its
   // segments reflect the repo-relative path split by `/`.
-  const entry = /** @type {import('../src/types.js').EndoMountEntry} */ (
-    row.entry
-  );
+  const entry = /** @type {DaemonMountEntry} */ (row.entry);
   t.deepEqual(await E(entry).segments(), ['src', 'new.js']);
-  t.true(await E(mount).has(row.entry));
+  t.true(await E(mount).has(entry));
   // `src/new.js` resolves to a DaemonMountFile.
-  const node = /** @type {import('../src/types.js').DaemonMountFile} */ (
-    row.node
-  );
+  const node = /** @type {DaemonMountFile} */ (row.node);
   t.is(await E(node).text(), 'export default 1');
 });
 

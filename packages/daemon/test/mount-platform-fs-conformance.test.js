@@ -236,10 +236,10 @@ test('DaemonMount diverges from PlatformDirectoryInterface by named extensions o
   // change that grows the divergence is forced to update both this
   // list and the design document.
   const { mount } = makeConfiguredMount(t);
-  const methods = (
-    // eslint-disable-next-line no-underscore-dangle
-    await E(/** @type {any} */ (mount)).__getMethodNames__()
-  ).filter(name => !name.startsWith('__'));
+  const methods = // eslint-disable-next-line no-underscore-dangle
+    (await E(/** @type {any} */ (mount)).__getMethodNames__()).filter(
+      name => !name.startsWith('__'),
+    );
   const platform = new Set(PLATFORM_DIRECTORY_METHODS);
   const actualExtensions = methods.filter(name => !platform.has(name)).sort();
   t.deepEqual(
@@ -256,10 +256,10 @@ test('DaemonMountFile diverges from PlatformFileInterface by named extensions on
   const { mount, rootPath } = makeConfiguredMount(t);
   fs.writeFileSync(path.join(rootPath, 'a.txt'), 'x');
   const file = asMountFile(await E(mount).lookup('a.txt'));
-  const methods = (
-    // eslint-disable-next-line no-underscore-dangle
-    await E(/** @type {any} */ (file)).__getMethodNames__()
-  ).filter(name => !name.startsWith('__'));
+  const methods = // eslint-disable-next-line no-underscore-dangle
+    (await E(/** @type {any} */ (file)).__getMethodNames__()).filter(
+      name => !name.startsWith('__'),
+    );
   const platform = new Set(PLATFORM_FILE_METHODS);
   const actualExtensions = methods.filter(name => !platform.has(name)).sort();
   t.deepEqual(
