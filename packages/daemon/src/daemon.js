@@ -2606,6 +2606,8 @@ const makeDaemonCore = async (
       throw new Error('Message formula is incomplete');
     }
     assertFormulaNumber(messageId);
+    assertValidId(from);
+    assertValidId(to);
     if (replyTo !== undefined) {
       assertFormulaNumber(replyTo);
     }

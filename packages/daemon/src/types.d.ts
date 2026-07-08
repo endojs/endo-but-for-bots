@@ -228,7 +228,7 @@ export type GuestFormula = {
   networks: FormulaIdentifier;
 };
 
-type LeastAuthorityFormula = {
+export type LeastAuthorityFormula = {
   type: 'least-authority';
 };
 
@@ -401,7 +401,7 @@ export type HandleFormula = {
   agent: FormulaIdentifier;
 };
 
-type KnownPeersStoreFormula = {
+export type KnownPeersStoreFormula = {
   type: 'known-peers-store';
 };
 

@@ -1761,7 +1761,7 @@ export const makeNativeGitBackend = ({ repoRoot }) => {
       return self;
     };
 
-    self = makeExo('GitTree', GitTreeInterface, {
+    self = makeExo('GitTree', /** @type {any} */ (GitTreeInterface), {
       /**
        * Returns a `PassableBytesReader` over the
        * `git archive --format=tar` stream. Each call starts a fresh

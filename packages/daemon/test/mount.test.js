@@ -20,6 +20,8 @@ import { makeFilePowers } from '../src/daemon-node-powers.js';
 import { makeMount } from '../src/mount.js';
 import { makeMemoryStore } from './_mount-test-helpers.js';
 
+/** @import { DaemonMount, DaemonMountFile, DaemonReadableBlobView, DaemonReadableTreeView, EndoMountStat } from '../src/types.js' */
+
 /**
  * Coverage-driven integration tests for `src/mount.js`.
  *
@@ -33,6 +35,32 @@ import { makeMemoryStore } from './_mount-test-helpers.js';
  */
 
 const filePowers = makeFilePowers({ fs, path });
+
+/**
+ * @param {unknown} value
+ * @returns {DaemonMountFile}
+ */
+const asMountFile = value => /** @type {DaemonMountFile} */ (value);
+
+/**
+ * @param {unknown} value
+ * @returns {DaemonReadableBlobView}
+ */
+const asReadableBlobView = value =>
+  /** @type {DaemonReadableBlobView} */ (value);
+
+/**
+ * @param {unknown} value
+ * @returns {DaemonReadableTreeView}
+ */
+const asReadableTreeView = value =>
+  /** @type {DaemonReadableTreeView} */ (value);
+
+/**
+ * @param {unknown} value
+ * @returns {DaemonMount}
+ */
+const asMount = value => /** @type {DaemonMount} */ (value);
 
 /**
  * @param {import('ava').ExecutionContext} t
@@ -157,7 +185,7 @@ test('maybeLookup returns a usable file handle for an existing file', async t =>
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['present.txt'], 'hello');
-  const file = await E(mount).maybeLookup(['present.txt']);
+  const file = asMountFile(await E(mount).maybeLookup(['present.txt']));
   t.not(file, undefined);
   t.is(await E(file).text(), 'hello');
 });
@@ -200,7 +228,7 @@ test('readOnly() blob view exposes getInfo/fetch over the LIVE file (not a snaps
     return new TextDecoder().decode(out);
   };
 
-  const file = await E(mount).lookup('f.txt');
+  const file = asMountFile(await E(mount).lookup('f.txt'));
   const view = await E(file).readOnly();
 
   const info1 = await E(view).getInfo();
@@ -219,7 +247,7 @@ test('readOnly() blob view exposes getInfo/fetch over the LIVE file (not a snaps
 
   // But the face itself cannot be written to (no write methods).
   // eslint-disable-next-line no-underscore-dangle
-  const viewMethods = await E(view).__getMethodNames__();
+  const viewMethods = await E(/** @type {any} */ (view)).__getMethodNames__();
   t.false(viewMethods.includes('writeText'));
 });
 
@@ -227,7 +255,7 @@ test('DaemonMountFile.fetch rejects a negative or out-of-range window with EINVA
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['f.txt'], 'hello');
-  const file = await E(mount).lookup('f.txt');
+  const file = asMountFile(await E(mount).lookup('f.txt'));
   // The mount-file fetch validates the bigint→Number boundary via
   // toSafeNumber, so a negative or over-MAX_SAFE_INTEGER window throws EINVAL
   // rather than reaching readFileRange with a bad position.
@@ -262,7 +290,7 @@ test('maybeLookup accepts a MountEntry path argument', async t => {
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['present.txt'], 'hello');
   const entry = await E(mount).entry(['present.txt']);
-  const file = await E(mount).maybeLookup(entry);
+  const file = asMountFile(await E(mount).maybeLookup(entry));
   t.not(file, undefined);
   t.is(await E(file).text(), 'hello');
   // A fresh entry for an absent path still yields undefined.
@@ -281,7 +309,9 @@ test('stat returns a populated record for an existing file', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['present.txt'], 'hello');
-  const result = await E(mount).stat(['present.txt']);
+  const result = /** @type {EndoMountStat} */ (
+    await E(mount).stat(['present.txt'])
+  );
   // Aligned with the extended `Stat` shape: size + mtime/atime as bigint
   // (mtime/atime in nanoseconds). See fs-interface-consolidation § stat.
   t.is(result.kind, 'file');
@@ -548,7 +578,7 @@ test('subView confines `..` to the sub-root (cannot reach siblings or mount root
   // Contrast: a plain lookup sub-handle shares the mount confinement root,
   // so it DOES reach the sibling via `..` — which is exactly why subView
   // (a real confinement shift) is needed for attenuation.
-  const handle = await E(mount).lookup('sub');
+  const handle = asMount(await E(mount).lookup('sub'));
   t.true(
     await E(handle).has('..', 'secret.txt'),
     'lookup sub-handle shares the mount root by design',
@@ -600,7 +630,7 @@ test('lookup of a present file returns a DaemonMountFile with text/json', async 
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   fs.writeFileSync(path.join(rootPath, 'value.json'), '{"a":1}');
-  const file = await E(mount).lookup('value.json');
+  const file = asMountFile(await E(mount).lookup('value.json'));
   t.is(await E(file).text(), '{"a":1}');
   t.deepEqual(await E(file).json(), { a: 1 });
 });
@@ -609,7 +639,7 @@ test('DaemonMountFile.append extends the file content', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['log.txt'], 'one\n');
-  const file = await E(mount).lookup('log.txt');
+  const file = asMountFile(await E(mount).lookup('log.txt'));
   await E(file).append('two\n');
   t.is(fs.readFileSync(path.join(rootPath, 'log.txt'), 'utf8'), 'one\ntwo\n');
 });
@@ -618,7 +648,7 @@ test('DaemonMountFile.writeText replaces the file content', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['v.txt'], 'old');
-  const file = await E(mount).lookup('v.txt');
+  const file = asMountFile(await E(mount).lookup('v.txt'));
   await E(file).writeText('new');
   t.is(fs.readFileSync(path.join(rootPath, 'v.txt'), 'utf8'), 'new');
 });
@@ -627,7 +657,7 @@ test('DaemonMountFile.stat returns a record for a present file', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['s.txt'], 'x');
-  const file = await E(mount).lookup('s.txt');
+  const file = asMountFile(await E(mount).lookup('s.txt'));
   const st = await E(file).stat();
   // Pin the realigned bigint/ns `Stat` shape (this PR's whole point), not just
   // truthiness: a regression to the old `{ sizeBytes: number, modifiedMs }`
@@ -642,7 +672,7 @@ test('DaemonMountFile.snapshot throws when no snapshotFile was wired in', async 
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['s.txt'], 'x');
-  const file = await E(mount).lookup('s.txt');
+  const file = asMountFile(await E(mount).lookup('s.txt'));
   await t.throwsAsync(() => E(file).snapshot(), {
     message: /snapshot.* not available/,
   });
@@ -652,7 +682,7 @@ test('DaemonMountFile from a read-only mount rejects writeText / append', async 
   const rootPath = makeTempRoot(t);
   fs.writeFileSync(path.join(rootPath, 'r.txt'), 'x');
   const mount = makeMount({ rootPath, readOnly: true, filePowers });
-  const file = await E(mount).lookup('r.txt');
+  const file = asMountFile(await E(mount).lookup('r.txt'));
   await t.throwsAsync(() => E(file).writeText('new'), { message: /read-only/ });
   await t.throwsAsync(() => E(file).append('more'), { message: /read-only/ });
 });
@@ -901,7 +931,7 @@ test('snapshot() returns a usable snapshot when snapshotTree is wired', async t 
     snapshotTree,
   });
   await E(mount).writeText(['x.txt'], 'snap');
-  const snap = await E(mount).snapshot();
+  const snap = asReadableTreeView(await E(mount).snapshot());
   const names = await E(snap).list();
   t.true(names.includes('x.txt'));
 });
@@ -916,7 +946,7 @@ test('lookup with ".." segments clamps at the confinement root', async t => {
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   // From the root, '..' should clamp to the root (not escape to the
   // host filesystem); then 'top.txt' resolves to the existing file.
-  const file = await E(mount).lookup(['..', '..', 'top.txt']);
+  const file = asMountFile(await E(mount).lookup(['..', '..', 'top.txt']));
   t.is(await E(file).text(), 'top-content');
 });
 
@@ -943,8 +973,8 @@ test('DaemonMountFile.snapshot returns a usable file snapshot when wired', async
     snapshotFile,
   });
   await E(mount).writeText(['s.txt'], 'snapshot-me');
-  const file = await E(mount).lookup('s.txt');
-  const blob = await E(file).snapshot();
+  const file = asMountFile(await E(mount).lookup('s.txt'));
+  const blob = asReadableBlobView(await E(file).snapshot());
   t.is(await E(blob).text(), 'snapshot-me');
 });
 
@@ -960,7 +990,7 @@ test('DaemonMountFile.writeBytes is reachable through the read-only-rejection br
   const rootPath = makeTempRoot(t);
   fs.writeFileSync(path.join(rootPath, 'r.bin'), '');
   const mount = makeMount({ rootPath, readOnly: true, filePowers });
-  const file = await E(mount).lookup('r.bin');
+  const file = asMountFile(await E(mount).lookup('r.bin'));
   async function* iter() {
     yield new Uint8Array([1]);
   }
@@ -977,9 +1007,9 @@ test('readOnly() narrows to a ReadableTree view that recursively narrows file lo
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['a.txt'], 'hi');
   const view = await E(mount).readOnly();
-  const file = await E(view).lookup('a.txt');
+  const file = asReadableBlobView(await E(view).lookup('a.txt'));
   // eslint-disable-next-line no-underscore-dangle
-  const methods = await E(file).__getMethodNames__();
+  const methods = await E(/** @type {any} */ (file)).__getMethodNames__();
   // The view-of-a-file is a ReadableBlob, not a DaemonMountFile.
   t.true(methods.includes('streamBase64'));
   t.true(methods.includes('text'));
