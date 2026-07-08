@@ -22,9 +22,13 @@ distinguish Miller's 2006 text from the 2026 translation layer.
 
 This is a design, not the translation. A sequence of builder jobs
 implements it in phases; the first phase is specified to the level a
-builder can start from. **Publication is gated on the author's explicit
-permission** (see § Provenance, attribution, and licensing): the thesis
-grants verbatim copying and cited quotation, not derivative works.
+builder can start from. **Publication was gated on the author's explicit
+permission; that permission has now been granted** (Mark S. Miller,
+[endojs/endo-but-for-bots#632](https://github.com/endojs/endo-but-for-bots/issues/632),
+2026-07-08) on the sole condition that every adaptation keep making clear
+it is *derived from* the original but *is not* the original — a condition
+this design's fidelity contract already meets. See § Provenance,
+attribution, and licensing.
 
 ## What is the problem being solved?
 
@@ -285,19 +289,24 @@ The dissertation's title page states, exactly:
 > quote excerpts from this documented provided the original source is
 > properly cited.
 
-Consequences, surfaced for maintainer and author decision rather than
-assumed:
+Consequences, now resolved by the author's grant of permission:
 
-- The grant covers **verbatim copies** and **cited excerpts**. A
-  modernized translation that substitutes code examples and protocol
-  vocabulary is a **derivative work**, which the grant does not cover.
-  **Explicit permission from Mark S. Miller is warranted before any
-  phase publishes.** He is an active maintainer-authority on this
-  repository (GitHub `erights`), so the ask is practical: present this
-  design (the fidelity contract, the flagging mechanics, the attribution
-  page) on the design PR and record his disposition there. His approval
-  on the record is the publication gate; a courtesy heads-up is not
-  enough, and no license is to be assumed or invented on his behalf.
+- The title-page grant covers **verbatim copies** and **cited
+  excerpts**. A modernized translation that substitutes code examples
+  and protocol vocabulary is a **derivative work**, which that
+  title-page grant does not cover. **This has since been resolved by an
+  explicit, wider grant from the author:** Mark S. Miller granted the
+  Endo project (`@kriscendobot`) standing permission to reuse and
+  adapt/derive-from any of his public texts — his thesis among them — on
+  the sole condition that any adaptation **continue to make clear that
+  it is *derived from* the original but *is not* the original**
+  ([endojs/endo-but-for-bots#632](https://github.com/endojs/endo-but-for-bots/issues/632),
+  2026-07-08). The fidelity contract, the flagging mechanics, and the
+  attribution page below already satisfy that condition, so the
+  publication gate this design named is met; a phase PR no longer waits
+  on the permission question, only on the remaining open questions. If a
+  future case makes even the *derived-from* framing awkward, the design
+  asks the author rather than assuming a wider grant.
 - Attribution: the landing page carries the full citation (Miller,
   *Robust Composition: Towards a Unified Approach to Access Control and
   Concurrency Control*, PhD dissertation, Johns Hopkins University,
@@ -347,8 +356,10 @@ Deliverables:
    the generated landing page; Prettier passes (`ci-docs.yml` is the CI
    surface).
 
-The PR ships as **draft** and stays draft until the author-permission
-open question resolves; the PR body links the permission request.
+The phase-1 PR ships as **draft**. The author-permission open question
+that formerly held it draft is now resolved (§ Provenance; #632); it
+stays draft only until the remaining open questions (ferry intent, URL
+shape, category) are settled and the docs build is verified.
 
 Later phases (2 through 5) are separate builder jobs following the same
 shape: extract the phase's chapters from the PDF, normalize, translate
@@ -396,11 +407,15 @@ No blocking dependency on any in-flight design.
 
 ## Open questions
 
-1. **Author permission (publication gate).** Does Mark S. Miller
-   (erights) approve this derivative translation under the fidelity
-   contract above, and in what form does he want the permission recorded
-   (a statement on the design PR, a LICENSE note in `docs/thesis/`,
-   both)? Until answered, every phase PR stays draft.
+1. **Author permission (publication gate). — RESOLVED.** Mark S. Miller
+   (erights) granted the Endo project standing permission to reuse and
+   adapt/derive-from any of his public texts, his thesis among them, on
+   the sole condition that every adaptation keep making clear it is
+   *derived from* the original but *is not* the original
+   ([endojs/endo-but-for-bots#632](https://github.com/endojs/endo-but-for-bots/issues/632),
+   2026-07-08). The fidelity contract above already satisfies that
+   condition, so this gate is met and no longer holds a phase PR draft.
+   Record kept in § Provenance, attribution, and licensing.
 2. **Upstream ferry.** docs.endojs.org serves upstream `endojs/endo`;
    when phases land on this fork, does the maintainer intend to ferry
    `docs/thesis/` upstream (boatman, separately authorized), or should
