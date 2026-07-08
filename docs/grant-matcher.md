@@ -425,11 +425,13 @@ modernizing code, protocol names, and links.
   <https://erights.org/elib/equality/grant-matcher/index.html> (mirrored at
   <http://www.caplet.com/security/taxonomy/grant-match/grant-matcher.html>).
 
-> **Licensing is unresolved and is a maintainer decision.** Miller's articles on
-> erights.org are his copyrighted work; no license for reproduction or derivative
-> translation is assumed here. Before this page is published to docs.endojs.org,
-> a maintainer must confirm permission to republish this translated adaptation
-> (or reduce it to a shorter summary-with-citation if permission is not
-> obtained). This draft is provided so that the editorial and technical
-> translation can be reviewed; **it should not be merged or published until the
-> attribution/permission question is settled.**
+> **Permission granted, on one condition.** Mark S. Miller granted the Endo
+> project standing permission to reuse and adapt/derive-from any of his public
+> texts — which include his articles on erights.org — on the sole condition that
+> any adaptation **continue to make clear that it is *derived from* the original
+> but *is not* the original**
+> ([endojs/endo-but-for-bots#632](https://github.com/endojs/endo-but-for-bots/issues/632),
+> 2026-07-08). This page honors that condition: it is framed throughout as a
+> translation, quotes Miller's words as attributed block quotes, and cites the
+> original on erights.org above and in this section. The original on erights.org
+> remains the authoritative text; this edition is the derivative translation.
