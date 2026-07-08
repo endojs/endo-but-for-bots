@@ -20,7 +20,7 @@ import { assertGitCredentialForUrl } from './git-credential.js';
  *   GitRemoteController,
  *   GitRemoteKit,
  *   GitRemotePolicy,
- * } from './git-remote-types.js'
+ * } from './types.js'
  */
 
 const DEFAULT_POLICY = harden(

@@ -26,6 +26,29 @@ import type {
 } from './src/types.js';
 
 export type {
+  EndoGit,
+  GitCommit,
+  GitCreateBranchOptions,
+  GitDeleteBranchOptions,
+  GitDiffOptions,
+  GitDirection,
+  GitIndexStatus,
+  GitLogOptions,
+  GitMergeOptions,
+  GitRebaseInput,
+  GitRef,
+  GitRemoteAuditEvent,
+  GitRemoteOperationFailureAuditEvent,
+  GitRemoteOperationSuccessAuditEvent,
+  GitRemotePolicy,
+  GitRemotePolicyAuditEvent,
+  GitRestoreOptions,
+  GitStashPushOptions,
+  GitStatusEntry,
+  GitWorktreeStatus,
+} from '@endo/exo-git';
+
+export type {
   Config,
   DefineRequest,
   EndoAgent,

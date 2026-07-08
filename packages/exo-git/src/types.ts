@@ -1,8 +1,8 @@
-// Typedef host for `@endo/git`. Mirrors the git-related typedefs
+// Typedef host for `@endo/exo-git`. Mirrors the git-related typedefs
 // that previously lived in `@endo/daemon/src/types.d.ts`. Daemon-only
 // surface types (`EndoMount`, `EndoMountEntry`, `EndoMountFile`,
 // `ReadableTreeView`) are represented as `unknown` here to keep
-// `@endo/git` free of a circular dependency on the daemon
+// `@endo/exo-git` free of a circular dependency on the daemon
 // package. The full-fidelity types continue to live in the daemon's
 // `types.d.ts`; daemon-side consumers see them through that file.
 
@@ -90,8 +90,100 @@ export type GitStashPushOptions = {
   includeUntracked?: boolean;
 };
 
+export type GitDirection = 'fetch' | 'push';
+
+export type GitRemotePolicy = {
+  /**
+   * Host-controlled remote endpoint URL. Guests cannot mutate this
+   * field at call time; only `GitRemoteController.revoke()` or future
+   * controller methods adjust the binding.
+   */
+  url: string;
+  allowedDirections: GitDirection[];
+  fetchRefspecs: string[];
+  pushRefspecs: string[];
+  allowedBranches?: string[];
+  allowForcePush?: boolean;
+  allowTags?: boolean;
+  allowDelete?: boolean;
+  allowLocalFileTransport?: boolean;
+};
+
+export type GitRemoteAuditEventBase = {
+  sequence: number;
+};
+
+export type GitRemotePolicyAuditEvent = GitRemoteAuditEventBase & {
+  type: 'create' | 'revoke' | 'policy';
+  policy: GitRemotePolicy & { name: string };
+  revoked: boolean;
+  method?: string;
+};
+
+export type GitRemoteOperationSuccessAuditEvent = GitRemoteAuditEventBase & {
+  type: 'fetch' | 'pull' | 'push';
+  outcome: 'ok';
+  updatedRefs?: unknown;
+  integration?: 'up-to-date' | 'fast-forward' | 'merge' | 'rebase';
+  head?: unknown;
+};
+
+export type GitRemoteOperationFailureAuditEvent = GitRemoteAuditEventBase & {
+  type: 'fetch' | 'pull' | 'push';
+  outcome: 'error';
+  message: string;
+  /**
+   * Records that the pull's local integration step mutated HEAD before a
+   * later policy, credential, or revoke event forced the operation to throw.
+   */
+  appliedLocally?: boolean;
+};
+
+export type GitRemoteAuditEvent =
+  | GitRemotePolicyAuditEvent
+  | GitRemoteOperationSuccessAuditEvent
+  | GitRemoteOperationFailureAuditEvent;
+
+export type GitRemoteSnapshot = GitRemotePolicy & { name: string };
+
+export type GitRemote = {
+  inspect: () => Promise<GitRemoteSnapshot>;
+  fetch: (options?: { prune?: boolean; tags?: boolean }) => Promise<any>;
+  pull: (options?: {
+    branch?: unknown;
+    strategy?: 'merge' | 'rebase' | 'ff-only';
+    prune?: boolean;
+    tags?: boolean;
+  }) => Promise<any>;
+  push: (options?: {
+    refspecs?: string[];
+    source?: string;
+    destination?: string;
+    force?: boolean;
+    setUpstream?: boolean;
+  }) => Promise<any>;
+};
+
+export type GitRemoteController = {
+  inspect: () => Promise<GitRemoteSnapshot & { revoked: boolean }>;
+  audit: () => Promise<any>;
+  setAllowedDirections: (directions: GitDirection[]) => Promise<void>;
+  setFetchRefspecs: (refspecs: string[]) => Promise<void>;
+  setPushRefspecs: (refspecs: string[]) => Promise<void>;
+  setAllowedBranches: (branches: string[]) => Promise<void>;
+  setAllowForcePush: (flag: boolean) => Promise<void>;
+  setAllowTags: (flag: boolean) => Promise<void>;
+  setAllowDelete: (flag: boolean) => Promise<void>;
+  revoke: () => Promise<void>;
+};
+
+export type GitRemoteKit = {
+  remote: GitRemote;
+  controller: GitRemoteController;
+};
+
 // Daemon-only surface types referenced by git's JSDoc. Aliased to
-// `unknown` here so `@endo/git` stays free of a circular
+// `unknown` here so `@endo/exo-git` stays free of a circular
 // dependency on `@endo/daemon`; the full-fidelity definitions live in
 // `@endo/daemon/src/types.d.ts` and downstream consumers see them
 // through that file.
@@ -108,7 +200,7 @@ export type ReadableTreeView = unknown;
  * package.
  */
 export type EndoGit = {
-  worktree: () => Promise<EndoMount>;
+  worktree: () => Promise<EndoMount | ReadableTreeView>;
   status: () => Promise<GitStatusEntry[]>;
   diff: (options?: GitDiffOptions) => Promise<string>;
   log: (options?: GitLogOptions) => Promise<GitCommit[]>;
