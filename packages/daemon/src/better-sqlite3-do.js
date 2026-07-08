@@ -9,7 +9,7 @@
 // SQLite storage (`ctx.storage.sql`), the third backend for
 // `daemon-database.js` after Node's native `better-sqlite3` and the
 // XS-on-Rust shim (`better-sqlite3-xs.js`). Design:
-// CLOUDFLARE-STORAGE.md.
+// designs/endo-daemon-cloudflare-storage.md.
 //
 // The surface this module emulates is the same strict subset of
 // better-sqlite3 that `better-sqlite3-xs.js` emulates — exactly the

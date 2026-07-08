@@ -2,7 +2,7 @@
 /* global globalThis */
 
 // Cloudflare storage platform for the Endo daemon. Design:
-// CLOUDFLARE-STORAGE.md.
+// designs/endo-daemon-cloudflare-storage.md.
 //
 // This module is a derivative of daemon-node-powers.js the same way
 // daemon-go-powers.js is: it shares the daemon's own storage modules —
@@ -470,7 +470,7 @@ export const makeCloudflareCryptoPowers = ({
 /**
  * Endo workers require an execution design (isolate-per-worker
  * Durable Objects or dynamically dispatched Workers), not a storage
- * design; see CLOUDFLARE-STORAGE.md's runtime analysis.
+ * design; see designs/endo-daemon-cloudflare-storage.md's runtime analysis.
  *
  * @returns {DaemonicControlPowers}
  */
@@ -480,7 +480,7 @@ export const makeStubControlPowers = () =>
       throw Error(
         `Endo workers are not yet supported on the Cloudflare platform (worker ${q(
           workerId,
-        )}); see @endo/daemon CLOUDFLARE-STORAGE.md`,
+        )}); see @endo/daemon designs/endo-daemon-cloudflare-storage.md`,
       );
     },
   });

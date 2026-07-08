@@ -1,13 +1,30 @@
 # Cloudflare storage platform for the Endo daemon
 
-Status: DESIGN, with a runnable toy scaffold on this branch.
+| | |
+|---|---|
+| **Created** | 2026-07-08 |
+| **Author** | kriskowal (prompted) |
+| **Status** | Proposed |
+
+## Status
+
+The design ships with a runnable toy scaffold on this branch:
+`packages/daemon/src/better-sqlite3-do.js`,
+`packages/daemon/src/daemon-cloudflare-powers.js`,
+`packages/daemon/test/cloudflare-mock-bindings.js`, and
+`packages/daemon/test/cloudflare-powers.test.js` (6 tests green against
+in-memory mock bindings; the daemon's own `daemon-database.js`,
+`pet-store.js`, and `daemon-persistence-powers.js` run unmodified over
+the new adapters). Phases 1–4 (§ 7) are not started.
+
 Scope: the daemon's **storage** powers on Cloudflare primitives. The
 Workers/Durable-Object *execution* story (worker spawning, sockets, CapTP
 ingress) is surfaced but deliberately out of scope.
 
 This document is a peer of the AWS storage-platform design
-(`design-endo-daemon-aws-storage`); both implement the same pre-existing
-daemon storage seams and stay symmetric where the platforms allow.
+([endo-daemon-aws-storage](endo-daemon-aws-storage.md)); both implement
+the same pre-existing daemon storage seams and stay symmetric where the
+platforms allow.
 
 ## 1. The storage interface as it actually is
 
@@ -310,3 +327,37 @@ the divergence is stated here and in the sibling doc rather than
 papered over. The content stores should converge: R2 is S3-compatible,
 so key layout (`<statePath>/store-sha256/<hex>`, temp spool prefix)
 and the ranged-read seam match S3's.
+
+## Prompt
+
+> Analogous to the AWS storage-platform design
+> (`design-endo-daemon-aws-storage`): design a new **CloudFlare
+> platform** for **Endo daemon storage** — a peer of the node/web/endo
+> modules in `@endo/daemon`, paralleling those modules. Study the
+> low-level storage interface FIRST (read the real pet-store /
+> content-addressed store / reader powers and the node implementation).
+> Map onto CloudFlare primitives, choosing the best fit and justifying
+> each against the low-level interface: D1 (serverless SQLite) as the
+> nearest analog to the daemon's sqlite3 store — evaluate it first for
+> the structured/mutable store; R2 (S3-compatible object storage) for
+> the content-addressed blob store; KV / Durable Objects where they fit
+> better — DO for stateful per-daemon coordination + strongly-consistent
+> transactional storage; KV for small eventually-consistent values.
+> Parallel the node/web/endo module shape; keep the daemon core
+> untouched (platform adapter behind the existing powers/interface).
+> CloudFlare's platform is Workers (V8 isolates, not Node) + Durable
+> Objects — scope this design to the storage platform primarily, but
+> surface the runtime implications. Cover: transactional semantics vs
+> the sqlite transactions the daemon relies on; the ocap/reader model
+> (content-addressed streams onto R2 get/put + range reads);
+> config/powers injection (no ambient CloudFlare auth; bindings injected
+> as powers; account-agnostic). Deliverables: a design doc, a scaffold +
+> runnable toy/tests against CloudFlare primitives or local emulators
+> (state which), and follow-on build job(s). The sibling AWS platform is
+> designed in parallel — both implement the SAME pre-existing daemon
+> storage interface; stay consistent.
+>
+> (Garden job `design-endo-daemon-cloudflare-storage`, 2026-07-08,
+> mid-flight maintainer redirect: target `endojs/endo-but-for-bots`
+> branch `llm`, read `daemon-database-node.js` first as the pattern to
+> parallel.)

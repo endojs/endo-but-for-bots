@@ -2,7 +2,7 @@
 
 // In-memory stand-ins for the Cloudflare bindings that the Cloudflare
 // daemon platform accepts, mirroring the binding API subsets the
-// adapters use (see CLOUDFLARE-STORAGE.md): a mock Durable Object
+// adapters use (see designs/endo-daemon-cloudflare-storage.md): a mock Durable Object
 // SQLite storage handle backed by node's built-in SQLite (real SQL
 // semantics from the same engine family the production target runs,
 // with no native build step), and a Map-backed mock R2 bucket with
