@@ -66,6 +66,17 @@ const keepStdEnv = new Set([
   'TMPDIR',
   'TZ',
   'USER',
+  // Dynamic-loader and TLS-trust variables. The daemon re-spawns itself and
+  // forks workers that load native addons (better-sqlite3, node-datachannel)
+  // and, for unconfined caplets, foreign binaries (e.g. moonshine's manylinux
+  // wheels via nix-ld). Those need the ambient loader search path / nix-ld
+  // config and CA bundle to survive the env filter, or they fail to resolve
+  // their shared libraries at runtime. Only present when the host sets them.
+  'LD_LIBRARY_PATH',
+  'NIX_LD',
+  'NIX_LD_LIBRARY_PATH',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
 ]);
 
 /**
