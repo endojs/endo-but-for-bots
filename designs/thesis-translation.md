@@ -229,12 +229,18 @@ it:
   `/thesis/<n>` URLs would require rendering outside TypeDoc and are
   not proposed; the redirect gives the memorable entry point and
   TypeDoc keeps navigation, search, and theme.
-- **Figures.** The dissertation's figures (several contributed by
-  Ka-Ping Yee) are redrawn as mermaid diagrams where they are graphs or
-  sequences, which both matches the site tooling and avoids reproducing
-  figure images whose copyright status is separate from the text. Where
-  a figure resists mermaid, the chapter describes it and links the PDF
-  page.
+- **Figures.** The dissertation's figures are redrawn as mermaid diagrams
+  where they are graphs or sequences, which matches the site tooling and
+  keeps the diagram layer repository-authored. The author approved this as
+  an experiment and expects some figures may read better as the originals;
+  because his grant now covers his own diagrams as well as his text
+  (§ Provenance), reproducing Miller's original figure is a permitted
+  fallback where a mermaid redraw disappoints — there is no separate figure
+  copyright issue for his own diagrams. Figures attributed to others
+  (several were contributed by Ka-Ping Yee) are *otherwise attributed* and
+  fall outside that grant, so those are redrawn or described, never
+  reproduced. Where a figure resists mermaid and cannot be reproduced, the
+  chapter describes it and links the PDF page.
 - **CI.** Chapter PRs are docs-only and ride `ci-docs.yml` (Prettier
   plus a TypeDoc build), which exists precisely for this shape of
   change.
@@ -301,6 +307,11 @@ Consequences, now resolved by the author's grant of permission:
   the sole condition that any adaptation **continue to make clear that
   it is *derived from* the original but *is not* the original**
   ([endojs/endo-but-for-bots#632](https://github.com/endojs/endo-but-for-bots/issues/632),
+  2026-07-08). The author subsequently extended that grant to **diagrams**
+  as well as text — all diagrams appearing in his public texts that are
+  **not otherwise attributed** — clarifying that there is no separate
+  figure copyright issue for his own figures
+  ([endojs/endo-but-for-bots#631 review](https://github.com/endojs/endo-but-for-bots/pull/631#pullrequestreview-4650647188),
   2026-07-08). The fidelity contract, the flagging mechanics, and the
   attribution page below already satisfy that condition, so the
   publication gate this design named is met; a phase PR no longer waits
@@ -319,10 +330,12 @@ Consequences, now resolved by the author's grant of permission:
   under the repository's Apache-2.0 license, stated as such on the
   landing page so the two copyright regimes are legible.
 - The acknowledgements note the dissertation borrows from co-authored
-  papers; permission from Miller covers his dissertation text, and the
-  translation introduces no additional third-party text. Ka-Ping Yee's
-  contributed figures are handled by redrawing (§ Docs structure),
-  which keeps even the diagram layer repository-authored.
+  papers; permission from Miller covers his dissertation text and his own
+  diagrams (the grant above), and the translation introduces no additional
+  third-party text. Ka-Ping Yee's contributed figures are *otherwise
+  attributed*, so they fall outside Miller's diagram grant and are handled
+  by redrawing or description (§ Docs structure), never reproduction,
+  keeping that part of the diagram layer repository-authored.
 
 ## Builder-ready plan for phase 1
 
@@ -399,8 +412,11 @@ No blocking dependency on any in-flight design.
 7. **TypeDoc-native integration with a `/thesis/` redirect**, rather
    than a parallel static site: keeps navigation, search, theme, and the
    existing docs CI; the redirect honors the requested address.
-8. **Mermaid redraws instead of reproduced figure images**, keeping the
-   diagram layer repository-authored and tool-native.
+8. **Mermaid redraws as the first figure experiment**, tool-native and
+   repository-authored, with reproducing Miller's original figures as an
+   author-permitted fallback where the redraw disappoints (§ Docs
+   structure, Figures). Third-party figures (Ka-Ping Yee's) stay outside
+   that fallback and are redrawn or described.
 9. **Publication gated on recorded author permission.** Considered and
    rejected: relying on the verbatim-copy grant. Reason: a translation
    is not a verbatim copy.
