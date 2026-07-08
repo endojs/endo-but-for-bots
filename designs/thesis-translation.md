@@ -236,11 +236,25 @@ it:
   because his grant now covers his own diagrams as well as his text
   (§ Provenance), reproducing Miller's original figure is a permitted
   fallback where a mermaid redraw disappoints — there is no separate figure
-  copyright issue for his own diagrams. Figures attributed to others
-  (several were contributed by Ka-Ping Yee) are *otherwise attributed* and
-  fall outside that grant, so those are redrawn or described, never
-  reproduced. Where a figure resists mermaid and cannot be reproduced, the
-  chapter describes it and links the PDF page.
+  copyright issue for his own diagrams. The dissertation's acknowledgements
+  credit **Ka-Ping Yee** with four figures — Figures 14.2 (p. 107), 14.3
+  (p. 108), 16.1 (p. 118), and 17.1 (p. 124), drawn "with input from the
+  e-lang community" — while Figure 9.3 (the membrane) is Marc Stiegler's
+  example, not Yee's. For the Yee figures the rule is **quality first, not
+  permission-avoidance**: the mermaid redraw is still tried first, but where
+  a redraw would be clearly worse the design does *not* settle for the
+  degraded version to sidestep asking. The author has offered to grant
+  permission for Yee's figures that appear in public texts he co-authored
+  (his own IANAL caveat noted), and where any doubt remains the plan is to
+  ask Ka-Ping Yee ("Ping") directly rather than iterate on something clearly
+  worse
+  ([endojs/endo-but-for-bots#631 review](https://github.com/endojs/endo-but-for-bots/pull/631#pullrequestreview-4650709899),
+  2026-07-08). So a Yee figure is redrawn when the redraw is at least as
+  good, and reproduced from the original — once permission is confirmed
+  (the author's offered grant, or Ping's direct assent) — when it is not.
+  Where a figure resists mermaid and reproduction is not yet cleared, the
+  chapter describes it and links the PDF page as an interim measure, not a
+  permanent downgrade.
 - **CI.** Chapter PRs are docs-only and ride `ci-docs.yml` (Prettier
   plus a TypeDoc build), which exists precisely for this shape of
   change.
@@ -332,10 +346,19 @@ Consequences, now resolved by the author's grant of permission:
 - The acknowledgements note the dissertation borrows from co-authored
   papers; permission from Miller covers his dissertation text and his own
   diagrams (the grant above), and the translation introduces no additional
-  third-party text. Ka-Ping Yee's contributed figures are *otherwise
-  attributed*, so they fall outside Miller's diagram grant and are handled
-  by redrawing or description (§ Docs structure), never reproduction,
-  keeping that part of the diagram layer repository-authored.
+  third-party text. Ka-Ping Yee's four contributed figures (14.2, 14.3,
+  16.1, 17.1) are *otherwise attributed* and so fall outside Miller's own
+  diagram grant, but they are **not** therefore forced to a lower-quality
+  redraw. Reviewing this design, the author held that reducing figure
+  quality out of reluctance to seek permission is the wrong trade: he
+  believes he can grant permission for Yee's figures appearing in public
+  texts he co-authored (IANAL), and where any doubt remains the resolution
+  is to ask Ka-Ping Yee directly rather than accept a clearly-worse redraw
+  ([endojs/endo-but-for-bots#631 review](https://github.com/endojs/endo-but-for-bots/pull/631#pullrequestreview-4650709899),
+  2026-07-08). The handling therefore mirrors § Docs structure, Figures:
+  redraw first, reproduce the original under confirmed permission where the
+  redraw is clearly worse, and describe-with-PDF-link only as an interim
+  measure until permission is settled.
 
 ## Builder-ready plan for phase 1
 
@@ -415,8 +438,13 @@ No blocking dependency on any in-flight design.
 8. **Mermaid redraws as the first figure experiment**, tool-native and
    repository-authored, with reproducing Miller's original figures as an
    author-permitted fallback where the redraw disappoints (§ Docs
-   structure, Figures). Third-party figures (Ka-Ping Yee's) stay outside
-   that fallback and are redrawn or described.
+   structure, Figures). Ka-Ping Yee's four figures (14.2, 14.3, 16.1,
+   17.1) get the same quality-first treatment: redraw first, and where a
+   redraw would be clearly worse, seek permission (the author's offered
+   grant, or ask Ka-Ping Yee directly) and reproduce rather than ship a
+   degraded figure. Considered and rejected: redrawing-or-describing Yee's
+   figures unconditionally to sidestep asking — the author explicitly
+   rejected trading quality to avoid seeking permission.
 9. **Publication gated on recorded author permission.** Considered and
    rejected: relying on the verbatim-copy grant. Reason: a translation
    is not a verbatim copy.
@@ -454,6 +482,19 @@ No blocking dependency on any in-flight design.
    edition" versus "…, annotated translation" versus Miller's plain
    title with a subtitle on the landing page only. Cosmetic, but it is
    the first line readers and search engines see.
+7. **Ka-Ping Yee figure permission. — SCOPED, DEFERRED TO PHASE 4.** The
+   design now answers the author's "which diagrams?" question: the Yee
+   figures are Figures 14.2, 14.3, 16.1, and 17.1 (named in the thesis
+   acknowledgements). The author has offered to grant permission for Yee
+   figures in
+   texts he co-authored and, failing that, to ask Ka-Ping Yee directly
+   ([review 4650709899](https://github.com/endojs/endo-but-for-bots/pull/631#pullrequestreview-4650709899)).
+   Confirmation is only needed for the specific figures where a mermaid
+   redraw proves clearly worse, and all four live in the concurrency
+   chapters (14, 16, 17), which land in phase 4 — so this does not block
+   phase 1. The phase-4 builder either confirms the redraw is adequate or
+   requests permission (the author's grant, or Ping's assent) before
+   reproducing the original.
 
 ## Prompt
 
