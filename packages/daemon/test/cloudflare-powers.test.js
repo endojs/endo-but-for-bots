@@ -128,10 +128,7 @@ test('pet stores persist through the shim and reload from storage', async t => {
   await petStore.storeIdentifier(asPetName('carol'), carolId);
   t.true(petStore.has(asPetName('alice')));
   t.is(petStore.identifyLocal(asPetName('alice')), aliceId);
-  t.deepEqual(
-    [...petStore.list()],
-    ['alice', 'ally', 'carol'].map(asPetName),
-  );
+  t.deepEqual([...petStore.list()], ['alice', 'ally', 'carol'].map(asPetName));
   t.deepEqual(
     [...petStore.reverseIdentify(aliceId)].sort(),
     ['alice', 'ally'].map(asPetName),
@@ -254,10 +251,7 @@ test('persistence powers: nonce and keypair are created once and persist', async
   t.is(third.rootNonce, first.rootNonce);
   const keypair2 = await revived.provideRootKeypair();
   t.false(keypair2.isNewlyCreated);
-  t.deepEqual(
-    [...keypair2.keypair.publicKey],
-    [...keypair1.keypair.publicKey],
-  );
+  t.deepEqual([...keypair2.keypair.publicKey], [...keypair1.keypair.publicKey]);
 
   // The reloaded private key signs identically to the original.
   const message = textEncoder.encode('attest');
@@ -311,10 +305,7 @@ test('content store on R2 is content-addressed and streams back', async t => {
     throw Error('content fetch record must expose size and readRange');
   }
   t.is(await size(), BigInt(bytes.length));
-  t.deepEqual(
-    textDecoder.decode(await readRange(2, 5)),
-    content.slice(2, 7),
-  );
+  t.deepEqual(textDecoder.decode(await readRange(2, 5)), content.slice(2, 7));
 
   t.true(await contentStore.has(sha256));
   t.false(await contentStore.has('0'.repeat(64)));
@@ -367,8 +358,7 @@ test('assembled cloudflare powers boot storage end to end', async t => {
   // Control powers are an explanatory stub pending the runtime design.
   /** @type {Promise<never>} */
   const never = new Promise(() => {});
-  await t.throwsAsync(
-    () => powers.control.makeWorker('w1', {}, never, never),
-    { message: /not yet supported on the Cloudflare platform/ },
-  );
+  await t.throwsAsync(() => powers.control.makeWorker('w1', {}, never, never), {
+    message: /not yet supported on the Cloudflare platform/,
+  });
 });
