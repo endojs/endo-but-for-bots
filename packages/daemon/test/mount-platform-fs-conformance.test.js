@@ -28,13 +28,13 @@ import { makeMount } from '../src/mount.js';
 import { makeMemoryStore } from './_mount-test-helpers.js';
 
 /**
- * Conformance test asserting that `EndoMount` is a daemon-local
+ * Conformance test asserting that `DaemonMount` is a daemon-local
  * specialization of the `Directory` contract from
- * `@endo/platform/fs`, and that `EndoMountFile` is a specialization
+ * `@endo/platform/fs`, and that `DaemonMountFile` is a specialization
  * of the `File` contract.
  *
  * The test does not bring up a full daemon; it constructs an
- * `EndoMount` directly via `makeMount` against a real temp directory.
+ * `DaemonMount` directly via `makeMount` against a real temp directory.
  * The conformance assertions are:
  *
  * 1. Every method on `PlatformDirectoryInterface` /
@@ -42,9 +42,9 @@ import { makeMemoryStore } from './_mount-test-helpers.js';
  *    method-names set.
  * 2. Calling each method through `E()` with shapes that the platform
  *    guard would accept produces no `M.interface` violation.
- * 3. `EndoMount.readOnly()` returns an Exo whose `__getMethodNames__`
+ * 3. `DaemonMount.readOnly()` returns an Exo whose `__getMethodNames__`
  *    is exactly the `ReadableTreeInterface` method set; similarly
- *    `EndoMountFile.readOnly()` returns the `ReadableBlobInterface`
+ *    `DaemonMountFile.readOnly()` returns the `ReadableBlobInterface`
  *    set.
  *
  * Drift in either direction (a daemon method whose shape changes
@@ -136,7 +136,7 @@ const PLATFORM_READABLE_BLOB_METHODS = [
 ];
 
 /**
- * Construct an `EndoMount` with an in-memory snapshot pipeline.
+ * Construct an `DaemonMount` with an in-memory snapshot pipeline.
  *
  * @param {import('ava').ExecutionContext} t
  */
@@ -161,14 +161,14 @@ const makeConfiguredMount = t => {
   return { mount, rootPath };
 };
 
-test('EndoMount exposes every method on PlatformDirectoryInterface', async t => {
+test('DaemonMount exposes every method on PlatformDirectoryInterface', async t => {
   const { mount } = makeConfiguredMount(t);
   // eslint-disable-next-line no-underscore-dangle
   const methods = await E(mount).__getMethodNames__();
   for (const name of PLATFORM_DIRECTORY_METHODS) {
     t.true(
       methods.includes(name),
-      `EndoMount missing platform Directory method ${name}`,
+      `DaemonMount missing platform Directory method ${name}`,
     );
   }
 });
@@ -205,7 +205,7 @@ const ENDOMOUNT_EXTENSIONS = [
  */
 const ENDOMOUNTFILE_EXTENSIONS = ['stat', 'getInfo', 'fetch'];
 
-test('EndoMount diverges from PlatformDirectoryInterface by named extensions only', async t => {
+test('DaemonMount diverges from PlatformDirectoryInterface by named extensions only', async t => {
   // The divergence is deliberate and named: callers who hold a plain
   // `Directory` capability cannot reach `readText` or `writeText`;
   // those are mount-specific shortcuts that exist because the daemon
@@ -223,12 +223,12 @@ test('EndoMount diverges from PlatformDirectoryInterface by named extensions onl
   t.deepEqual(
     actualExtensions,
     [...ENDOMOUNT_EXTENSIONS].sort(),
-    'EndoMount extensions beyond Directory must match the named set',
+    'DaemonMount extensions beyond Directory must match the named set',
   );
 });
 
-test('EndoMountFile diverges from PlatformFileInterface by named extensions only', async t => {
-  // Same shape as the EndoMount divergence: `stat` is mount-specific.
+test('DaemonMountFile diverges from PlatformFileInterface by named extensions only', async t => {
+  // Same shape as the DaemonMount divergence: `stat` is mount-specific.
   // A `File` consumer that demotes to the platform contract loses it.
   // (`help` is now part of the platform File contract, not an extension.)
   const { mount, rootPath } = makeConfiguredMount(t);
@@ -243,11 +243,11 @@ test('EndoMountFile diverges from PlatformFileInterface by named extensions only
   t.deepEqual(
     actualExtensions,
     [...ENDOMOUNTFILE_EXTENSIONS].sort(),
-    'EndoMountFile extensions beyond File must match the named set',
+    'DaemonMountFile extensions beyond File must match the named set',
   );
 });
 
-test('EndoMount.makeDirectory returns a sub-mount (Directory.makeDirectory shape)', async t => {
+test('DaemonMount.makeDirectory returns a sub-mount (Directory.makeDirectory shape)', async t => {
   const { mount } = makeConfiguredMount(t);
   const sub = await E(mount).makeDirectory(['sub']);
   // The return value must be a Directory-shaped capability — a mount.
@@ -272,7 +272,7 @@ test('EndoMount.makeDirectory returns a sub-mount (Directory.makeDirectory shape
   );
 });
 
-test('EndoMount.entry accepts slash-joined string selectors', async t => {
+test('DaemonMount.entry accepts slash-joined string selectors', async t => {
   const { mount } = makeConfiguredMount(t);
   const entry = await E(mount).entry('a/b/../c.txt');
   t.deepEqual(await E(entry).segments(), ['a', 'c.txt']);
@@ -282,7 +282,7 @@ test('EndoMount.entry accepts slash-joined string selectors', async t => {
   t.is(await E(mount).readText(['a', 'c.txt']), 'via-entry');
 });
 
-test('EndoMount.write accepts a ReadableBlob and materializes bytes', async t => {
+test('DaemonMount.write accepts a ReadableBlob and materializes bytes', async t => {
   const { mount, rootPath } = makeConfiguredMount(t);
   // A PassableBytesReader (the new-protocol blob shape).  mount.write
   // detects the blob via __getMethodNames__.includes('streamBase64')
@@ -298,7 +298,7 @@ test('EndoMount.write accepts a ReadableBlob and materializes bytes', async t =>
   t.is(actual, 'hello blob');
 });
 
-test('EndoMount.write accepts a ReadableTree and materializes recursively', async t => {
+test('DaemonMount.write accepts a ReadableTree and materializes recursively', async t => {
   const { mount, rootPath } = makeConfiguredMount(t);
   // A blob factory reused for each leaf.  Each leaf is a
   // PassableBytesReader; mount.write consumes via iterateBytesReader.
@@ -357,7 +357,7 @@ test('EndoMount.write accepts a ReadableTree and materializes recursively', asyn
   );
 });
 
-test('EndoMount.write rejects traversal-like ReadableTree child names', async t => {
+test('DaemonMount.write rejects traversal-like ReadableTree child names', async t => {
   const { mount } = makeConfiguredMount(t);
   const blob = bytesReaderFromIterator([new TextEncoder().encode('leaf')]);
 
@@ -382,7 +382,7 @@ test('EndoMount.write rejects traversal-like ReadableTree child names', async t 
   }
 });
 
-test('EndoMount.copy within-mount copies a file', async t => {
+test('DaemonMount.copy within-mount copies a file', async t => {
   const { mount } = makeConfiguredMount(t);
   await E(mount).writeText(['src.txt'], 'src-content');
   await E(mount).copy(['src.txt'], ['dst.txt']);
@@ -391,7 +391,7 @@ test('EndoMount.copy within-mount copies a file', async t => {
   t.is(await E(mount).readText(['src.txt']), 'src-content');
 });
 
-test('EndoMount.copy within-mount copies a directory recursively', async t => {
+test('DaemonMount.copy within-mount copies a directory recursively', async t => {
   const { mount } = makeConfiguredMount(t);
   await E(mount).makeDirectory(['src', 'inner']);
   await E(mount).writeText(['src', 'leaf.txt'], 'a');
@@ -401,7 +401,7 @@ test('EndoMount.copy within-mount copies a directory recursively', async t => {
   t.is(await E(mount).readText(['dst', 'inner', 'deep.txt']), 'b');
 });
 
-test('EndoMount.readOnly() returns a structural ReadableTree view', async t => {
+test('DaemonMount.readOnly() returns a structural ReadableTree view', async t => {
   const { mount } = makeConfiguredMount(t);
   await E(mount).writeText(['file.txt'], 'data');
   const view = await E(mount).readOnly();
@@ -417,7 +417,7 @@ test('EndoMount.readOnly() returns a structural ReadableTree view', async t => {
   t.deepEqual(await E(view).list(), ['file.txt']);
 });
 
-test('EndoMount.readOnly().lookup recursively returns structural views', async t => {
+test('DaemonMount.readOnly().lookup recursively returns structural views', async t => {
   const { mount } = makeConfiguredMount(t);
   await E(mount).makeDirectory(['sub']);
   await E(mount).writeText(['sub', 'leaf.txt'], 'leaf-data');
@@ -439,7 +439,7 @@ test('EndoMount.readOnly().lookup recursively returns structural views', async t
   t.is(await E(leafView).text(), 'leaf-data');
 });
 
-test('EndoMountFile exposes every method on PlatformFileInterface', async t => {
+test('DaemonMountFile exposes every method on PlatformFileInterface', async t => {
   const { mount } = makeConfiguredMount(t);
   await E(mount).writeText(['file.txt'], 'data');
   const file = await E(mount).lookup('file.txt');
@@ -448,12 +448,12 @@ test('EndoMountFile exposes every method on PlatformFileInterface', async t => {
   for (const name of PLATFORM_FILE_METHODS) {
     t.true(
       methods.includes(name),
-      `EndoMountFile missing platform File method ${name}`,
+      `DaemonMountFile missing platform File method ${name}`,
     );
   }
 });
 
-test('EndoMountFile.readOnly() returns a structural ReadableBlob view', async t => {
+test('DaemonMountFile.readOnly() returns a structural ReadableBlob view', async t => {
   const { mount } = makeConfiguredMount(t);
   await E(mount).writeText(['file.txt'], 'rb-data');
   const file = await E(mount).lookup('file.txt');
@@ -477,7 +477,7 @@ test('EndoMountFile.readOnly() returns a structural ReadableBlob view', async t 
   );
 });
 
-test('EndoMountFile json and streamBase64 re-check confinement on use', async t => {
+test('DaemonMountFile json and streamBase64 re-check confinement on use', async t => {
   const { mount, rootPath } = makeConfiguredMount(t);
   const outsideRoot = makeTempRoot(t);
   const outsideFile = path.join(outsideRoot, 'outside.json');
@@ -501,7 +501,7 @@ test('EndoMountFile json and streamBase64 re-check confinement on use', async t 
   });
 });
 
-test('EndoMount.snapshot returns a SnapshotTree-shaped capability', async t => {
+test('DaemonMount.snapshot returns a SnapshotTree-shaped capability', async t => {
   const { mount } = makeConfiguredMount(t);
   await E(mount).writeText(['s.txt'], 'snap');
   const snapshot = await E(mount).snapshot();
@@ -522,7 +522,7 @@ test('EndoMount.snapshot returns a SnapshotTree-shaped capability', async t => {
 // --- XS file-powers / Node file-powers contract conformance ---
 
 test('XS file powers expose every method the Node file powers expose', t => {
-  // makeMount and the EndoMount methods are written against the
+  // makeMount and the DaemonMount methods are written against the
   // FilePowers contract; whichever supervisor backs the daemon (Node or
   // XS) must supply the same surface. A method present on the Node
   // powers but absent on the XS powers is dead under the XS supervisor —
@@ -541,7 +541,7 @@ test('XS file powers expose every method the Node file powers expose', t => {
   );
 });
 
-test('XS file powers expose the EndoMount call sites that regressed', t => {
+test('XS file powers expose the DaemonMount call sites that regressed', t => {
   // Pin the specific methods the mount/file stat() and append() paths
   // reach, so a future refactor of makeXsFilePowers that drops one of
   // them fails here rather than only at daemon runtime under XS.

@@ -1,7 +1,7 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { FilePowers } from './types.js' */
+/** @import { DaemonMount, FilePowers } from './types.js' */
 
 /**
  * @typedef {{ add: string, type: 'file' | 'directory' } | { remove: string }} MountNameChange
@@ -409,7 +409,7 @@ harden(resolvePhysicalPath);
  * Create a mount exo for a filesystem directory.
  *
  * @param {MountContext} ctx
- * @returns {object}
+ * @returns {DaemonMount}
  */
 const makeMountExo = ctx => {
   const {
@@ -576,7 +576,7 @@ const makeMountExo = ctx => {
 
   const help = makeHelp(mountHelp);
 
-  const exo = makeExo('EndoMount', MountInterface, {
+  const exo = makeExo('DaemonMount', MountInterface, {
     help,
 
     async has(...args) {
@@ -846,7 +846,7 @@ const makeMountExo = ctx => {
 
     readOnly() {
       // Structural narrowing: return a ReadableTree view, not an
-      // EndoMount.  Mount-specific extensions (`entry`, `stat`,
+      // DaemonMount.  Mount-specific extensions (`entry`, `stat`,
       // `displayPath`, `readText`, `makeFile`) are removed from the
       // read-only surface; callers that need them keep a reference
       // to the un-attenuated mount.
@@ -857,7 +857,7 @@ const makeMountExo = ctx => {
             readOnly: true,
             description: `Read-only view of ${description}`,
           });
-      return makeReadableTreeView(readOnlyMount);
+      return makeDaemonReadableTreeView(readOnlyMount);
     },
 
     async snapshot() {
@@ -978,7 +978,7 @@ const makeMountExo = ctx => {
     exo,
     harden({ rootId, currentDir, confinementRoot, readOnly }),
   );
-  return exo;
+  return /** @type {DaemonMount} */ (/** @type {unknown} */ (exo));
 };
 harden(makeMountExo);
 
@@ -988,11 +988,11 @@ harden(makeMountExo);
  * extensions are not present on this Exo; the read-only surface is
  * deliberately the platform contract, not the daemon's superset.
  *
- * @param {object} readOnlyMount - An EndoMount whose `readOnly` flag is true.
+ * @param {object} readOnlyMount - A DaemonMount whose `readOnly` flag is true.
  * @returns {object}
  */
-const makeReadableTreeView = readOnlyMount => {
-  const view = makeExo('EndoMountReadableTree', ReadableTreeInterface, {
+const makeDaemonReadableTreeView = readOnlyMount => {
+  const view = makeExo('DaemonMountReadableTree', ReadableTreeInterface, {
     async has(...pathSegments) {
       return E(readOnlyMount).has(...pathSegments);
     },
@@ -1002,20 +1002,20 @@ const makeReadableTreeView = readOnlyMount => {
     async lookup(pathArg) {
       const result = await E(readOnlyMount).lookup(pathArg);
       // The underlying mount returns either a sub-mount (an
-      // EndoMount) or a mount file.  Either way it is already
+      // DaemonMount) or a mount file.  Either way it is already
       // read-only because the parent mount is; we wrap it in the
       // structural view so descendants surface the platform shape
       // too.
       // eslint-disable-next-line no-underscore-dangle
       const methods = await E(result).__getMethodNames__();
       if (methods.includes('list')) {
-        return makeReadableTreeView(result);
+        return makeDaemonReadableTreeView(result);
       }
-      return makeReadableBlobView(result);
+      return makeDaemonReadableBlobView(result);
     },
     help(method) {
       return method === undefined
-        ? 'EndoMountReadableTree: read-only ReadableTree view over a mount.'
+        ? 'DaemonMountReadableTree: read-only ReadableTree view over a mount.'
         : `No documentation for method ${q(method)}.`;
     },
   });
@@ -1025,12 +1025,12 @@ const makeReadableTreeView = readOnlyMount => {
   }
   return view;
 };
-harden(makeReadableTreeView);
+harden(makeDaemonReadableTreeView);
 
 /**
  * Create a mount-scoped logical entry descriptor.  Entries are values
  * with no observational authority and no handle-minting authority of
- * their own — those operations live on `EndoMount` and accept the
+ * their own — those operations live on `DaemonMount` and accept the
  * entry as the path-bearing argument.
  *
  * @param {MountContext & { entrySegments: string[] }} ctx
@@ -1041,7 +1041,7 @@ const makeMountEntryExo = ctx => {
 
   const help = makeHelp({});
 
-  return makeExo('EndoMountEntry', MountEntryInterface, {
+  return makeExo('DaemonMountEntry', MountEntryInterface, {
     help,
     segments() {
       return harden([...entrySegments]);
@@ -1100,7 +1100,7 @@ const makeMountFileExo = (
 
   const help = makeHelp(mountFileHelp);
 
-  return makeExo('EndoMountFile', MountFileInterface, {
+  return makeExo('DaemonMountFile', MountFileInterface, {
     help,
 
     async text() {
@@ -1231,7 +1231,7 @@ const makeMountFileExo = (
 
     readOnly() {
       // Structural narrowing: return a ReadableBlob view, not an
-      // EndoMountFile.  Mount-specific surface (`stat`, `snapshot`)
+      // DaemonMountFile.  Mount-specific surface (`stat`, `snapshot`)
       // is removed; callers that need it keep a reference to the
       // un-attenuated mount file.
       const readOnlyFile = makeMountFileExo(
@@ -1241,7 +1241,7 @@ const makeMountFileExo = (
         confinementRoot,
         snapshotFile,
       );
-      return makeReadableBlobView(readOnlyFile);
+      return makeDaemonReadableBlobView(readOnlyFile);
     },
   });
 };
@@ -1254,11 +1254,11 @@ harden(makeMountFileExo);
  * live file — it delegates to the underlying file, so content changes are
  * observed; it just cannot be written through.
  *
- * @param {object} readOnlyFile - An EndoMountFile whose `readOnly` is true.
+ * @param {object} readOnlyFile - A DaemonMountFile whose `readOnly` is true.
  * @returns {object}
  */
-const makeReadableBlobView = readOnlyFile => {
-  return makeExo('EndoMountReadableBlob', ReadableBlobRangeInterface, {
+const makeDaemonReadableBlobView = readOnlyFile => {
+  return makeExo('DaemonMountReadableBlob', ReadableBlobRangeInterface, {
     /** @param {import('@endo/eventual-send').ERef<any>} synPromise */
     async streamBase64(synPromise) {
       return E(readOnlyFile).streamBase64(synPromise);
@@ -1281,12 +1281,12 @@ const makeReadableBlobView = readOnlyFile => {
     },
     help(method) {
       return method === undefined
-        ? 'EndoMountReadableBlob: read-only ReadableBlob view over a live mount file (text, json, streamBase64, getInfo, fetch).'
+        ? 'DaemonMountReadableBlob: read-only ReadableBlob view over a live mount file (text, json, streamBase64, getInfo, fetch).'
         : `No documentation for method ${q(method)}.`;
     },
   });
 };
-harden(makeReadableBlobView);
+harden(makeDaemonReadableBlobView);
 
 /**
  * Create a mount exo backed by a filesystem directory.
@@ -1297,7 +1297,7 @@ harden(makeReadableBlobView);
  * @param {FilePowers} opts.filePowers
  * @param {(tree: object) => Promise<object>} [opts.snapshotTree]
  * @param {(path: string) => Promise<object>} [opts.snapshotFile]
- * @returns {object}
+ * @returns {DaemonMount}
  */
 export const makeMount = ({
   rootPath,

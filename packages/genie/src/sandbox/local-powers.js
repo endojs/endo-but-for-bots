@@ -333,7 +333,7 @@ const makeLocalMountCap = (hostPath, capToHostPath, topLevelCaps, options) => {
 
     // Lookup-or-undefined: the `ReadableNameHub` primitive. Resolve `pathArg`
     // and return its cap, or `undefined` when the path is absent or escapes the
-    // mount root. Mirrors the daemon `EndoMount.maybeLookup` and
+    // mount root. Mirrors the daemon `DaemonMount.maybeLookup` and
     // `maybeReadText`'s broad catch — any resolution failure yields
     // `undefined` rather than throwing.
     /** @param {string | string[]} pathArg */
@@ -354,7 +354,7 @@ const makeLocalMountCap = (hostPath, capToHostPath, topLevelCaps, options) => {
 
     /**
      * Best-effort read that returns `undefined` on miss rather than
-     * throwing, mirroring `EndoMountInterface.maybeReadText`.  The
+     * throwing, mirroring `DaemonMountInterface.maybeReadText`.  The
      * genie tools do not drive this yet but adding it now keeps the
      * surface matched to the daemon-side counterpart so a future
      * consumer cannot regress with a "no method maybeReadText" error

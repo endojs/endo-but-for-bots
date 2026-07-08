@@ -717,7 +717,7 @@ Returns EndoReadable for files, ReadableTree for subdirectories.
 Example: lookup("index.html") → EndoReadable
 Example: lookup(["assets", "style.css"]) → EndoReadable
 
-# EndoMount - Live mutable access to a filesystem directory.
+# DaemonMount - Live mutable access to a filesystem directory.
 
 All paths are confined to the mount root. Symlinks that escape
 the root are invisible. Use readOnly() for an attenuated view.
@@ -729,7 +729,7 @@ Get documentation for this interface or a specific method.
 ## has(...pathSegments | entry) -> Promise<boolean>
 
 Check if a path exists within the mount.
-Either pass path segments (has("dir", "file.txt")) or a single EndoMountEntry.
+Either pass path segments (has("dir", "file.txt")) or a single DaemonMountEntry.
 
 ## list(...pathSegments) -> Promise<string[]>
 
@@ -738,11 +738,11 @@ Each argument is one path segment: list("subdir").
 Call with no arguments to list the root.
 Entries with symlinks escaping the mount root are excluded.
 
-## lookup(path) -> Promise<EndoMount | EndoMountFile>
+## lookup(path) -> Promise<DaemonMount | DaemonMountFile>
 
 Resolve a path within the mount.
 path: string | string[] — Name or path segments.
-Returns EndoMount for directories, EndoMountFile for files.
+Returns DaemonMount for directories, DaemonMountFile for files.
 
 ## readText(path) -> Promise<string>
 
@@ -773,10 +773,10 @@ Rename an entry within the mount.
 from: string | string[] — Source name or path segments.
 to: string | string[] — Destination name or path segments.
 
-## makeDirectory(path) -> Promise<EndoMount>
+## makeDirectory(path) -> Promise<DaemonMount>
 
 Create a directory (and missing parents) at the given path; returns a sub-mount.
-path: string | string[] | EndoMountEntry — Name, path segments, or mount entry.
+path: string | string[] | DaemonMountEntry — Name, path segments, or mount entry.
 
 ## followNameChanges(...pathSegments) -> AsyncIterator
 
@@ -790,26 +790,26 @@ Releases the underlying OS watcher when the iterator is dropped.
 ## makeFile(path, content?) -> Promise<void>
 
 Create a file at the given path, with optional initial text content.
-path: string | string[] | EndoMountEntry — Name, path segments, or mount entry.
+path: string | string[] | DaemonMountEntry — Name, path segments, or mount entry.
 content: string (optional) — Initial text content. An existing file is truncated when content is provided. For binary content, use `write(path, readableBlob)`.
 
 ## write(path, value) -> Promise<void>
 
 Materialize a ReadableBlob or ReadableTree at the given path.
-path: string | string[] | EndoMountEntry — Name, path segments, or mount entry.
+path: string | string[] | DaemonMountEntry — Name, path segments, or mount entry.
 value: ReadableBlob | ReadableTree — Source remotable; blobs are written as bytes, trees recurse.
 
 ## copy(from, to) -> Promise<void>
 
 Copy a node within the mount.
-from: string | string[] | EndoMountEntry — Source name, path segments, or mount entry.
-to: string | string[] | EndoMountEntry — Destination name, path segments, or mount entry.
+from: string | string[] | DaemonMountEntry — Source name, path segments, or mount entry.
+to: string | string[] | DaemonMountEntry — Destination name, path segments, or mount entry.
 Both endpoints are confinement-checked.
 
 ## stat(path) -> Promise<EndoMountStat | undefined>
 
 Query metadata for a path within the mount.
-path: string | string[] | EndoMountEntry — Name, path segments, or mount entry.
+path: string | string[] | DaemonMountEntry — Name, path segments, or mount entry.
 Returns undefined when the path is missing or escapes the mount.
 
 ## readOnly() -> ReadableTree
@@ -821,7 +821,7 @@ Mount-specific extensions (entry, stat, readText, makeFile) are not on the view.
 
 Capture current state as an immutable readable-tree.
 
-# EndoMountFile - A file within a mounted directory.
+# DaemonMountFile - A file within a mounted directory.
 
 A live, host-backed file. Read it with text() / json() / streamBase64(),
 inspect and range-read it with getInfo() / fetch(), write it with

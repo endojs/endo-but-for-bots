@@ -554,10 +554,10 @@ export const BlobInterface = M.interface('EndoBlob', {
 });
 
 const PathSegmentsShape = M.arrayOf(M.string());
-const MountEntryShape = M.remotable('EndoMountEntry');
+const MountEntryShape = M.remotable('DaemonMountEntry');
 const PathArgShape = M.or(M.string(), PathSegmentsShape, MountEntryShape);
 
-// `EndoMount` extends `Directory` from `@endo/platform/fs`.  Method
+// `DaemonMount` extends `Directory` from `@endo/platform/fs`.  Method
 // shapes that overlap with `PlatformDirectoryInterface` carry the
 // same `M.call(...)` arguments (path segments arrays plus an
 // `M.remotable()` value for `write`) and return shapes; the
@@ -566,7 +566,7 @@ const PathArgShape = M.or(M.string(), PathSegmentsShape, MountEntryShape);
 // additions, not redefinitions.  `has` widens `rest()` to `M.any()`
 // because the daemon supports the single-entry-value overload that
 // the platform contract does not name.
-export const MountInterface = M.interface('EndoMount', {
+export const MountInterface = M.interface('DaemonMount', {
   // ReadableTree-compatible surface.  `has` accepts either variadic
   // path segments or a single entry value; the impl validates the
   // shape because rest-with-M.or pattern guards do not narrow
@@ -594,7 +594,7 @@ export const MountInterface = M.interface('EndoMount', {
   subView: M.call(PathArgShape).returns(M.promise()),
   // Directory-shape write/copy (literal shapes from
   // PlatformDirectoryInterface for the path-segment form; entry-form
-  // overloads accept an `EndoMountEntry` as the path argument).
+  // overloads accept a `DaemonMountEntry` as the path argument).
   write: M.call(PathArgShape, M.remotable()).returns(M.promise()),
   copy: M.call(PathArgShape, PathArgShape).returns(M.promise()),
   // Mount-scoped descriptor minting (no I/O).
@@ -614,7 +614,7 @@ export const MountInterface = M.interface('EndoMount', {
   remove: M.call(PathArgShape).returns(M.promise()),
   move: M.call(PathArgShape, PathArgShape).returns(M.promise()),
   // Attenuation — returns a structural ReadableTree view, not an
-  // EndoMount.  Callers that need mount-specific extensions on a
+  // DaemonMount.  Callers that need mount-specific extensions on a
   // read-only handle keep a reference to the un-attenuated mount.
   readOnly: M.call().returns(M.remotable('ReadableTree')),
   // Snapshot
@@ -623,7 +623,7 @@ export const MountInterface = M.interface('EndoMount', {
   help: M.call().optional(M.string()).returns(M.string()),
 });
 
-// `EndoMountFile` extends `File` from `@endo/platform/fs`.  The
+// `DaemonMountFile` extends `File` from `@endo/platform/fs`.  The
 // overlapping methods (`streamBase64`, `text`, `json`, `writeText`,
 // `writeBytes`, `append`, `snapshot`) carry the same shapes as
 // `PlatformFileInterface`; `stat`, `help`, and the `rangeReadMethodGuards`
@@ -631,7 +631,7 @@ export const MountInterface = M.interface('EndoMount', {
 // expose the rich `BlobRef` range-I/O surface over the *live* file.
 // `readOnly` narrows to a structural ReadableBlob view that carries the same
 // rich surface.
-export const MountFileInterface = M.interface('EndoMountFile', {
+export const MountFileInterface = M.interface('DaemonMountFile', {
   // Whole-value read surface (help / streamBase64 / text / json) shared with
   // every other readable blob, plus the rich `rangeReadMethodGuards`
   // (getInfo / fetch) over the live file, plus the mount-file write surface.
@@ -650,7 +650,7 @@ export const MountFileInterface = M.interface('EndoMountFile', {
 // import line.
 export { PlatformDirectoryInterface, PlatformFileInterface };
 
-export const MountEntryInterface = M.interface('EndoMountEntry', {
+export const MountEntryInterface = M.interface('DaemonMountEntry', {
   segments: M.call().returns(PathSegmentsShape),
   displayPath: M.call().returns(M.string()),
   child: M.call(M.string()).returns(MountEntryShape),

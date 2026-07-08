@@ -111,3 +111,10 @@ export interface OpenFileOptions {
   truncate?: boolean;
   append?: boolean;
 }
+
+export type EndoMountStat = {
+  kind: 'file' | 'directory' | 'symlink';
+  size: bigint;
+  mtime: bigint;
+  atime: bigint;
+};

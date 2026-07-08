@@ -5201,7 +5201,7 @@ test('mount readOnly() attenuation', async t => {
   const roTree = await E(mount).readOnly();
 
   // The structural narrowing returns a ReadableTree view, not an
-  // EndoMount.  Reading through the platform surface (has, list,
+  // DaemonMount.  Reading through the platform surface (has, list,
   // lookup) still works.
   const entries = await E(roTree).list();
   t.deepEqual(entries, ['file.txt']);
@@ -5289,10 +5289,10 @@ test('scratch mount persists across restart', async t => {
   }
 });
 
-// --- followNameChanges on EndoMount ---
+// --- followNameChanges on DaemonMount ---
 
 /**
- * Drain an EndoMount followNameChanges iterator until either a
+ * Drain a DaemonMount followNameChanges iterator until either a
  * matching record arrives or the deadline elapses.  Returns the
  * first record whose predicate matches, or `undefined` on timeout.
  *

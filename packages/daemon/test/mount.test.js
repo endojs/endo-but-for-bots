@@ -23,8 +23,8 @@ import { makeMemoryStore } from './_mount-test-helpers.js';
 /**
  * Coverage-driven integration tests for `src/mount.js`.
  *
- * These tests exercise reachable branches on the public `EndoMount`,
- * `EndoMountEntry`, and `EndoMountFile` surfaces that the existing
+ * These tests exercise reachable branches on the public `DaemonMount`,
+ * `DaemonMountEntry`, and `DaemonMountFile` surfaces that the existing
  * mount-platform-fs-conformance and mount-snapshot-and-entry tests
  * do not reach: input validation, confinement error paths, write
  * variants, read-only rejection paths, and the optional `snapshot`
@@ -223,7 +223,7 @@ test('readOnly() blob view exposes getInfo/fetch over the LIVE file (not a snaps
   t.false(viewMethods.includes('writeText'));
 });
 
-test('EndoMountFile.fetch rejects a negative or out-of-range window with EINVAL', async t => {
+test('DaemonMountFile.fetch rejects a negative or out-of-range window with EINVAL', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['f.txt'], 'hello');
@@ -379,7 +379,7 @@ test('writeText through an entry from a different mount root is rejected on prov
 test('writeText rejects a foreign (non-entry) object as path argument (documented gap)', async t => {
   // The "unrecognized object" branch in segmentsFromPathArg is gated
   // by the writeText M.interface guard (which accepts string,
-  // arrayOf string, or an EndoMountEntry remotable). A bare hardened
+  // arrayOf string, or a DaemonMountEntry remotable). A bare hardened
   // record cannot pass the guard, so the inner WeakMap-miss branch
   // is unreachable from the public API. The provenance branch
   // (different-rootId) is the reachable failure mode and is covered
@@ -594,9 +594,9 @@ test('snapshot() throws when no snapshotTree was wired in', async t => {
   });
 });
 
-// --- EndoMountFile surface ---
+// --- DaemonMountFile surface ---
 
-test('lookup of a present file returns an EndoMountFile with text/json', async t => {
+test('lookup of a present file returns a DaemonMountFile with text/json', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   fs.writeFileSync(path.join(rootPath, 'value.json'), '{"a":1}');
@@ -605,7 +605,7 @@ test('lookup of a present file returns an EndoMountFile with text/json', async t
   t.deepEqual(await E(file).json(), { a: 1 });
 });
 
-test('EndoMountFile.append extends the file content', async t => {
+test('DaemonMountFile.append extends the file content', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['log.txt'], 'one\n');
@@ -614,7 +614,7 @@ test('EndoMountFile.append extends the file content', async t => {
   t.is(fs.readFileSync(path.join(rootPath, 'log.txt'), 'utf8'), 'one\ntwo\n');
 });
 
-test('EndoMountFile.writeText replaces the file content', async t => {
+test('DaemonMountFile.writeText replaces the file content', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['v.txt'], 'old');
@@ -623,7 +623,7 @@ test('EndoMountFile.writeText replaces the file content', async t => {
   t.is(fs.readFileSync(path.join(rootPath, 'v.txt'), 'utf8'), 'new');
 });
 
-test('EndoMountFile.stat returns a record for a present file', async t => {
+test('DaemonMountFile.stat returns a record for a present file', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['s.txt'], 'x');
@@ -638,7 +638,7 @@ test('EndoMountFile.stat returns a record for a present file', async t => {
   t.is(typeof st.atime, 'bigint');
 });
 
-test('EndoMountFile.snapshot throws when no snapshotFile was wired in', async t => {
+test('DaemonMountFile.snapshot throws when no snapshotFile was wired in', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['s.txt'], 'x');
@@ -648,7 +648,7 @@ test('EndoMountFile.snapshot throws when no snapshotFile was wired in', async t 
   });
 });
 
-test('EndoMountFile from a read-only mount rejects writeText / append', async t => {
+test('DaemonMountFile from a read-only mount rejects writeText / append', async t => {
   const rootPath = makeTempRoot(t);
   fs.writeFileSync(path.join(rootPath, 'r.txt'), 'x');
   const mount = makeMount({ rootPath, readOnly: true, filePowers });
@@ -908,7 +908,7 @@ test('snapshot() returns a usable snapshot when snapshotTree is wired', async t 
 
 // --- ReadableTree view recursion ---
 
-// --- Additional resolveSegments / EndoMountFile paths ---
+// --- Additional resolveSegments / DaemonMountFile paths ---
 
 test('lookup with ".." segments clamps at the confinement root', async t => {
   const rootPath = makeTempRoot(t);
@@ -929,7 +929,7 @@ test('list with "." returns the root listing unchanged', async t => {
   t.deepEqual([...names].sort(), ['a.txt', 'b.txt']);
 });
 
-test('EndoMountFile.snapshot returns a usable file snapshot when wired', async t => {
+test('DaemonMountFile.snapshot returns a usable file snapshot when wired', async t => {
   const rootPath = makeTempRoot(t);
   const store = makeMemoryStore();
   const snapshotFile = async filePath => {
@@ -948,7 +948,7 @@ test('EndoMountFile.snapshot returns a usable file snapshot when wired', async t
   t.is(await E(blob).text(), 'snapshot-me');
 });
 
-test('EndoMountFile.writeBytes is reachable through the read-only-rejection branch', async t => {
+test('DaemonMountFile.writeBytes is reachable through the read-only-rejection branch', async t => {
   // The writeBytes body (mount.js ~736) is reachable through the
   // read-only-rejection assertWritable() call before any byte ever
   // moves; that's the entry point most callers hit incorrectly. A
@@ -980,7 +980,7 @@ test('readOnly() narrows to a ReadableTree view that recursively narrows file lo
   const file = await E(view).lookup('a.txt');
   // eslint-disable-next-line no-underscore-dangle
   const methods = await E(file).__getMethodNames__();
-  // The view-of-a-file is a ReadableBlob, not an EndoMountFile.
+  // The view-of-a-file is a ReadableBlob, not a DaemonMountFile.
   t.true(methods.includes('streamBase64'));
   t.true(methods.includes('text'));
   t.false(methods.includes('writeText'), 'attenuated, not full file');

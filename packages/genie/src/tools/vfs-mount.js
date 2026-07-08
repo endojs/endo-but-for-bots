@@ -38,7 +38,7 @@
  *     ever actually need mtime semantics.  See `TODO/25` for the
  *     follow-up to add a real `MountInterface.stat`.
  *
- *   - **Byte-range reads**: `EndoMountFile.streamBase64` is whole-file
+ *   - **Byte-range reads**: `DaemonMountFile.streamBase64` is whole-file
  *     only, so `createReadStream({ start, end })` reads the whole file
  *     via `readText` and slices the resulting bytes.  This is fine for
  *     the genie's current consumers (`readFile` capped at 100 MiB) but
@@ -101,7 +101,7 @@ import harden from '@endo/harden';
  * Synthesise a {@link VFSStat.type} from a remote object's interface.
  *
  * `Mount.lookup` returns either a sub-Mount (directory) or a
- * `EndoMountFile` (regular file).  We discriminate by feature-testing
+ * `DaemonMountFile` (regular file).  We discriminate by feature-testing
  * `text` (file-only) and `list` (directory-only).
  *
  * Symlinks are not currently distinguishable through the `Mount`

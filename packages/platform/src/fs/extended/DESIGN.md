@@ -808,7 +808,7 @@ protocol, apply via `rsync(1)`, apply by `BlobRef` transfer
 only) are out-of-scope optimisations callers can supply.
 
 `readOnly()` returns a `Filesystem` view of the layer with every
-mutating verb rejected. Mirrors `EndoMount.readOnly()`. This is an
+mutating verb rejected. Mirrors `DaemonMount.readOnly()`. This is an
 **authority attenuator**, not a state freeze: the layer's producer
 still holds the unattenuated `layerFs` cap and can mutate through
 it, and those mutations are visible through the returned view. To

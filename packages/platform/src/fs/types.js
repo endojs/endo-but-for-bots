@@ -105,9 +105,20 @@
  */
 
 /**
+ * Metadata for a mounted filesystem path. The timestamps are nanoseconds since
+ * epoch.
+ *
+ * @typedef {object} EndoMountStat
+ * @property {'file' | 'directory' | 'symlink'} kind
+ * @property {bigint} size
+ * @property {bigint} mtime
+ * @property {bigint} atime
+ */
+
+/**
  * A File presents a mutable byte-content interface that also satisfies
  * the ReadableBlob read surface.  Concrete implementations supply
- * confinement and provenance (e.g. EndoMountFile constrains writes to
+ * confinement and provenance (e.g. DaemonMountFile constrains writes to
  * a mount root).
  *
  * @typedef {object} File

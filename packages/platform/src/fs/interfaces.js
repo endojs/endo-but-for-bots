@@ -9,7 +9,7 @@ const HelpMethod = M.call().optional(M.string()).returns(M.string());
 
 // Shared path-argument shapes. The reconciled vocabulary standardizes on
 // `string | string[]` (a single name or a path of segments). Surfaces that
-// accept more (e.g. the daemon `EndoMount`, which also takes a `MountEntry`
+// accept more (e.g. the daemon `DaemonMount`, which also takes a `MountEntry`
 // cap) widen these in their own guards rather than here — see
 // designs/fs-interface-consolidation.md § "The load-bearing constraint".
 const NamePathShape = M.arrayOf(M.string());
@@ -41,7 +41,7 @@ export const readableTreeMethodGuards = harden({
 // `readableNameHubMethodGuards` is the read surface of a *mutable* name hub /
 // directory: the readable-tree read methods plus `maybeLookup`
 // (lookup-or-undefined). It is the portable contract that the daemon's
-// `EndoDirectory` / `EndoGuest` / `EndoHost` / `EndoMount` and genie's
+// `EndoDirectory` / `EndoGuest` / `EndoHost` / `DaemonMount` and genie's
 // `LocalMount` all satisfy by method name (the daemon's full registry hub adds
 // locator/identifier methods on top, which stay daemon-side). Lives here, not
 // in `@endo/daemon`, so non-daemon hosts (genie, a browser/Go/Rust client) can
@@ -55,7 +55,7 @@ export const readableNameHubMethodGuards = harden({
 // `directoryFileMethodGuards` is the live read/write surface a directory or
 // mount adds on top of the read contract: directory creation plus text I/O.
 // Shared by `EndoDirectory` / `EndoGuest` / `EndoHost` and genie's `LocalMount`
-// (all on `NameOrPathShape`); `EndoMount` widens these to its entry-accepting
+// (all on `NameOrPathShape`); `DaemonMount` widens these to its entry-accepting
 // shape in its own guard.
 export const directoryFileMethodGuards = harden({
   makeDirectory: M.call(NameOrPathShape).returns(M.promise()),

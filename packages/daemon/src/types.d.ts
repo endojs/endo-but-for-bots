@@ -5,6 +5,7 @@ import type { CapTPOptions } from '@endo/captp';
 import type { Reader, Writer, Stream } from '@endo/stream';
 import type { PassableBytesReader, StreamNode } from '@endo/exo-stream';
 import type { EndoGit } from '@endo/exo-git';
+import type { EndoMountStat } from '@endo/platform/fs/extended';
 
 export type {
   EndoGit,
@@ -28,6 +29,7 @@ export type {
   GitStatusEntry,
   GitWorktreeStatus,
 } from '@endo/exo-git';
+export type { EndoMountStat } from '@endo/platform/fs/extended';
 
 // Branded string types for pet names and special names
 declare const PetNameBrand: unique symbol;
@@ -983,24 +985,10 @@ export interface EndoReadableTree {
   help(method?: string): string;
 }
 
-/**
- * File metadata, aligned with the extended `Stat` shape from
- * `@endo/platform/fs/extended` (size: bigint, mtime/atime: bigint nanoseconds
- * since epoch). `kind` is additive — the mount stats a *path*, which may be a
- * file or directory, where the extended engine relies on the cap type. See
- * designs/fs-interface-consolidation.md.
- */
-export type EndoMountStat = {
-  kind: 'file' | 'directory' | 'symlink';
-  size: bigint;
-  mtime: bigint;
-  atime: bigint;
-};
-
-export interface EndoMountEntry {
+export interface DaemonMountEntry {
   segments(): string[];
   displayPath(): string;
-  child(name: string): EndoMountEntry;
+  child(name: string): DaemonMountEntry;
   help(method?: string): string;
 }
 
@@ -1015,11 +1003,11 @@ export type BlobInfo = {
 };
 
 /**
- * Structural `ReadableBlob` view exposed by `EndoMountFile.readOnly()`.
+ * Structural `ReadableBlob` view exposed by `DaemonMountFile.readOnly()`.
  * Mirrors the rich `ReadableBlob` (range I/O) from `@endo/platform/fs`: a
  * write-disabled face over a live file.
  */
-export interface ReadableBlobView {
+export interface DaemonReadableBlobView {
   streamBase64(
     synPromise: ERef<StreamNode<Passable, Passable>>,
   ): Promise<StreamNode<string, undefined>>;
@@ -1031,14 +1019,16 @@ export interface ReadableBlobView {
 }
 
 /**
- * Structural `ReadableTree` view exposed by `EndoMount.readOnly()`.
+ * Structural `ReadableTree` view exposed by `DaemonMount.readOnly()`.
  * Mirrors `ReadableTree` from `@endo/platform/fs`; `lookup` recursively
- * returns either another `ReadableTreeView` or a `ReadableBlobView`.
+ * returns either another `DaemonReadableTreeView` or a `DaemonReadableBlobView`.
  */
-export interface ReadableTreeView {
+export interface DaemonReadableTreeView {
   has(...pathSegments: string[]): Promise<boolean>;
   list(...pathSegments: string[]): Promise<string[]>;
-  lookup(path: string | string[]): Promise<ReadableTreeView | ReadableBlobView>;
+  lookup(
+    path: string | string[],
+  ): Promise<DaemonReadableTreeView | DaemonReadableBlobView>;
   help(method?: string): string;
 }
 
@@ -1051,12 +1041,12 @@ export interface EndoGitTree {
 }
 
 /**
- * `EndoMountFile` is a daemon-local specialization of the platform
+ * `DaemonMountFile` is a daemon-local specialization of the platform
  * `File` contract.  Mount-specific surface (`stat`, `snapshot`,
  * `writeText` / `append` / `writeBytes` that throw on read-only) is
  * additive; `readOnly()` narrows to a structural `ReadableBlob` view.
  */
-export interface EndoMountFile {
+export interface DaemonMountFile {
   text(): Promise<string>;
   streamBase64(
     synPromise: ERef<StreamNode<Passable, Passable>>,
@@ -1069,12 +1059,12 @@ export interface EndoMountFile {
   writeBytes(readableRef: ERef<PassableBytesReader>): Promise<void>;
   stat(): Promise<EndoMountStat>;
   snapshot(): Promise<FarRef<EndoReadable>>;
-  readOnly(): ReadableBlobView;
+  readOnly(): DaemonReadableBlobView;
   help(method?: string): string;
 }
 
 /**
- * `EndoMount` is a daemon-local specialization of the platform
+ * `DaemonMount` is a daemon-local specialization of the platform
  * `Directory` contract.  Overlapping methods (`has`, `list`, `lookup`,
  * `write`, `remove`, `move`, `copy`, `makeDirectory`, `snapshot`) match
  * the platform shapes; mount-specific extensions (`entry`, `stat`,
@@ -1082,21 +1072,21 @@ export interface EndoMountFile {
  * are additive; `readOnly()` narrows to a structural `ReadableTree`
  * view.
  */
-export interface EndoMount {
+export interface DaemonMount {
   has(...pathSegments: string[]): Promise<boolean>;
-  has(entry: EndoMountEntry): Promise<boolean>;
+  has(entry: DaemonMountEntry): Promise<boolean>;
   list(...pathSegments: string[]): Promise<string[]>;
   lookup(
-    path: string | string[] | EndoMountEntry,
-  ): Promise<EndoMount | EndoMountFile>;
+    path: string | string[] | DaemonMountEntry,
+  ): Promise<DaemonMount | DaemonMountFile>;
   /**
    * The `ReadableNameHub` lookup-or-undefined primitive: resolve `path`
    * and return its handle, or `undefined` when the path is absent or
    * escapes confinement.
    */
   maybeLookup(
-    path: string | string[] | EndoMountEntry,
-  ): Promise<EndoMount | EndoMountFile | undefined>;
+    path: string | string[] | DaemonMountEntry,
+  ): Promise<DaemonMount | DaemonMountFile | undefined>;
   /**
    * Part of the name-hub contract, but a live change feed requires a
    * filesystem watcher behind the mount (filesystem-watchers.md), which is
@@ -1108,38 +1098,40 @@ export interface EndoMount {
    * the target directory, so `..` cannot escape it. The transient,
    * in-session counterpart to `provideSubMount`.
    */
-  subView(path: string | string[] | EndoMountEntry): Promise<EndoMount>;
+  subView(path: string | string[] | DaemonMountEntry): Promise<DaemonMount>;
   write(
-    path: string | string[] | EndoMountEntry,
+    path: string | string[] | DaemonMountEntry,
     value: unknown,
   ): Promise<void>;
   copy(
-    from: string | string[] | EndoMountEntry,
-    to: string | string[] | EndoMountEntry,
+    from: string | string[] | DaemonMountEntry,
+    to: string | string[] | DaemonMountEntry,
   ): Promise<void>;
-  entry(path: string | string[]): EndoMountEntry;
+  entry(path: string | string[]): DaemonMountEntry;
   stat(
-    path: string | string[] | EndoMountEntry,
+    path: string | string[] | DaemonMountEntry,
   ): Promise<EndoMountStat | undefined>;
-  readText(path: string | string[] | EndoMountEntry): Promise<string>;
+  readText(path: string | string[] | DaemonMountEntry): Promise<string>;
   maybeReadText(
-    path: string | string[] | EndoMountEntry,
+    path: string | string[] | DaemonMountEntry,
   ): Promise<string | undefined>;
   writeText(
-    path: string | string[] | EndoMountEntry,
+    path: string | string[] | DaemonMountEntry,
     content: string,
   ): Promise<void>;
-  makeDirectory(path: string | string[] | EndoMountEntry): Promise<EndoMount>;
+  makeDirectory(
+    path: string | string[] | DaemonMountEntry,
+  ): Promise<DaemonMount>;
   makeFile(
-    path: string | string[] | EndoMountEntry,
+    path: string | string[] | DaemonMountEntry,
     content?: string,
   ): Promise<void>;
-  remove(path: string | string[] | EndoMountEntry): Promise<void>;
+  remove(path: string | string[] | DaemonMountEntry): Promise<void>;
   move(
-    from: string | string[] | EndoMountEntry,
-    to: string | string[] | EndoMountEntry,
+    from: string | string[] | DaemonMountEntry,
+    to: string | string[] | DaemonMountEntry,
   ): Promise<void>;
-  readOnly(): ReadableTreeView;
+  readOnly(): DaemonReadableTreeView;
   snapshot(): Promise<unknown>;
   help(method?: string): string;
 }
@@ -1279,9 +1271,12 @@ export interface EndoHost extends EndoAgent {
     path: string,
     petName: string | string[],
     opts?: { readOnly?: boolean },
-  ): Promise<EndoMount>;
-  provideScratchMount(petName: string | string[]): Promise<EndoMount>;
-  provideGit(mountCap: EndoMount, petName: string | string[]): Promise<EndoGit>;
+  ): Promise<DaemonMount>;
+  provideScratchMount(petName: string | string[]): Promise<DaemonMount>;
+  provideGit(
+    mountCap: DaemonMount,
+    petName: string | string[],
+  ): Promise<EndoGit>;
   /**
    * Mint a `GitRemote` capability bound to `gitCap`, persist its
    * formula, and bind it to `petName`.  The remote enforces the
@@ -2071,7 +2066,7 @@ type FormulateNumberedHostParams = {
 
 export type FormulaValueTypes = {
   directory: EndoDirectory;
-  mount: EndoMount;
+  mount: DaemonMount;
   network: EndoNetwork;
   peer: EndoGateway;
   'pet-store': PetStore;
@@ -2269,12 +2264,12 @@ export interface DaemonCore {
     mountPath: string,
     readOnly: boolean,
     deferredTasks: DeferredTasks<MountDeferredTaskParams>,
-  ) => FormulateResult<EndoMount>;
+  ) => FormulateResult<DaemonMount>;
 
   formulateScratchMount: (
     readOnly: boolean,
     deferredTasks: DeferredTasks<ScratchMountDeferredTaskParams>,
-  ) => FormulateResult<EndoMount>;
+  ) => FormulateResult<DaemonMount>;
 
   formulateGit: (
     mountId: FormulaIdentifier,

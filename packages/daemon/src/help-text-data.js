@@ -220,14 +220,14 @@ export const helpTextEntries = harden([
     },
   ],
   [
-    'EndoMount',
+    'DaemonMount',
     {
-      '': 'EndoMount - Live mutable access to a filesystem directory.\n\nAll paths are confined to the mount root. Symlinks that escape\nthe root are invisible. Use readOnly() for an attenuated view.',
+      '': 'DaemonMount - Live mutable access to a filesystem directory.\n\nAll paths are confined to the mount root. Symlinks that escape\nthe root are invisible. Use readOnly() for an attenuated view.',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.',
-      has: 'has(...pathSegments | entry) -> Promise<boolean>\nCheck if a path exists within the mount.\nEither pass path segments (has("dir", "file.txt")) or a single EndoMountEntry.',
+      has: 'has(...pathSegments | entry) -> Promise<boolean>\nCheck if a path exists within the mount.\nEither pass path segments (has("dir", "file.txt")) or a single DaemonMountEntry.',
       list: 'list(...pathSegments) -> Promise<string[]>\nList directory entries at the given path.\nEach argument is one path segment: list("subdir").\nCall with no arguments to list the root.\nEntries with symlinks escaping the mount root are excluded.',
       lookup:
-        'lookup(path) -> Promise<EndoMount | EndoMountFile>\nResolve a path within the mount.\npath: string | string[] — Name or path segments.\nReturns EndoMount for directories, EndoMountFile for files.',
+        'lookup(path) -> Promise<DaemonMount | DaemonMountFile>\nResolve a path within the mount.\npath: string | string[] — Name or path segments.\nReturns DaemonMount for directories, DaemonMountFile for files.',
       readText:
         'readText(path) -> Promise<string>\nRead a file as UTF-8 text.\npath: string | string[] — Name or path segments.\nThrows if the file does not exist.',
       maybeReadText:
@@ -238,15 +238,15 @@ export const helpTextEntries = harden([
         'remove(path) -> Promise<void>\nRemove a file or empty directory.\npath: string | string[] — Name or path segments.',
       move: 'move(from, to) -> Promise<void>\nRename an entry within the mount.\nfrom: string | string[] — Source name or path segments.\nto: string | string[] — Destination name or path segments.',
       makeDirectory:
-        'makeDirectory(path) -> Promise<EndoMount>\nCreate a directory (and missing parents) at the given path; returns a sub-mount.\npath: string | string[] | EndoMountEntry — Name, path segments, or mount entry.',
+        'makeDirectory(path) -> Promise<DaemonMount>\nCreate a directory (and missing parents) at the given path; returns a sub-mount.\npath: string | string[] | DaemonMountEntry — Name, path segments, or mount entry.',
       followNameChanges:
         "followNameChanges(...pathSegments) -> AsyncIterator\nSubscribe to entry-name changes within the named subdirectory.\nFirst yields existing entries in alphabetical order as\n{ add: name, type: 'file' | 'directory' } records, then yields\n{ add, type } and { remove } diffs as entries appear or disappear.\nShallow (immediate children only) and confinement-filtered.\nReleases the underlying OS watcher when the iterator is dropped.",
       makeFile:
-        'makeFile(path, content?) -> Promise<void>\nCreate a file at the given path, with optional initial text content.\npath: string | string[] | EndoMountEntry — Name, path segments, or mount entry.\ncontent: string (optional) — Initial text content. An existing file is truncated when content is provided. For binary content, use `write(path, readableBlob)`.',
+        'makeFile(path, content?) -> Promise<void>\nCreate a file at the given path, with optional initial text content.\npath: string | string[] | DaemonMountEntry — Name, path segments, or mount entry.\ncontent: string (optional) — Initial text content. An existing file is truncated when content is provided. For binary content, use `write(path, readableBlob)`.',
       write:
-        'write(path, value) -> Promise<void>\nMaterialize a ReadableBlob or ReadableTree at the given path.\npath: string | string[] | EndoMountEntry — Name, path segments, or mount entry.\nvalue: ReadableBlob | ReadableTree — Source remotable; blobs are written as bytes, trees recurse.',
-      copy: 'copy(from, to) -> Promise<void>\nCopy a node within the mount.\nfrom: string | string[] | EndoMountEntry — Source name, path segments, or mount entry.\nto: string | string[] | EndoMountEntry — Destination name, path segments, or mount entry.\nBoth endpoints are confinement-checked.',
-      stat: 'stat(path) -> Promise<EndoMountStat | undefined>\nQuery metadata for a path within the mount.\npath: string | string[] | EndoMountEntry — Name, path segments, or mount entry.\nReturns undefined when the path is missing or escapes the mount.',
+        'write(path, value) -> Promise<void>\nMaterialize a ReadableBlob or ReadableTree at the given path.\npath: string | string[] | DaemonMountEntry — Name, path segments, or mount entry.\nvalue: ReadableBlob | ReadableTree — Source remotable; blobs are written as bytes, trees recurse.',
+      copy: 'copy(from, to) -> Promise<void>\nCopy a node within the mount.\nfrom: string | string[] | DaemonMountEntry — Source name, path segments, or mount entry.\nto: string | string[] | DaemonMountEntry — Destination name, path segments, or mount entry.\nBoth endpoints are confinement-checked.',
+      stat: 'stat(path) -> Promise<EndoMountStat | undefined>\nQuery metadata for a path within the mount.\npath: string | string[] | DaemonMountEntry — Name, path segments, or mount entry.\nReturns undefined when the path is missing or escapes the mount.',
       readOnly:
         'readOnly() -> ReadableTree\nReturns a structural ReadableTree view (has, list, lookup) of this mount.\nMount-specific extensions (entry, stat, readText, makeFile) are not on the view.',
       snapshot:
@@ -254,9 +254,9 @@ export const helpTextEntries = harden([
     },
   ],
   [
-    'EndoMountFile',
+    'DaemonMountFile',
     {
-      '': 'EndoMountFile - A file within a mounted directory.\n\nA live, host-backed file. Read it with text() / json() / streamBase64(),\ninspect and range-read it with getInfo() / fetch(), write it with\nwriteText() / append() / writeBytes(), or snapshot() it into the content\nstore. stat() returns the bigint-nanosecond metadata record.',
+      '': 'DaemonMountFile - A file within a mounted directory.\n\nA live, host-backed file. Read it with text() / json() / streamBase64(),\ninspect and range-read it with getInfo() / fetch(), write it with\nwriteText() / append() / writeBytes(), or snapshot() it into the content\nstore. stat() returns the bigint-nanosecond metadata record.',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.',
       getInfo:
         'getInfo() -> Promise<{ algorithm, hash, size }>\nThe content-addressed identity of the file\'s current bytes in one\nround-trip: algorithm ("sha256"), hash (base64), and size (bigint).\nRecomputed each call, since the live file may change.',

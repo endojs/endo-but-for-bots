@@ -84,7 +84,7 @@ export const LayerInterface = M.interface('Layer', {
   // layer with every mutating verb rejected. NOT a snapshot —
   // the underlying `layerFs` cap (held by the layer's producer)
   // can still mutate, and those mutations are visible through
-  // the returned view. Mirrors `EndoMount.readOnly()`.
+  // the returned view. Mirrors `DaemonMount.readOnly()`.
   readOnly: M.call().returns(M.eref(M.remotable('Filesystem'))),
   help: M.call().optional(M.string()).returns(M.string()),
 });

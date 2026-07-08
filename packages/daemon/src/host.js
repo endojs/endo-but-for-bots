@@ -920,7 +920,7 @@ export const makeHostMaker = ({
      * blob/file; anything with `list` is a subtree. Both Mount and
      * ReadableTree surfaces participate.
      *
-     * Why not just `E(dst).write([], src)`? `EndoMount.write()` performs
+     * Why not just `E(dst).write([], src)`? `DaemonMount.write()` performs
      * the same discovery shape internally, so the walker reads as
      * duplication.  It is kept here as a per-leaf seam: stageTree
      * callers (sandbox provisioning, fae/lal tool surfaces) want a

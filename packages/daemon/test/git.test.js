@@ -223,7 +223,7 @@ test('Git.readOnly() worktree and status nodes carry no write authority', async 
 
   // Each status row's `node` is minted through the read-only worktree,
   // so it likewise rejects mutation.  Before the fix the node was a
-  // writable EndoMountFile and this write would succeed.
+  // writable DaemonMountFile and this write would succeed.
   const rows = await E(readOnlyGit).status();
   const trackedRow = rows.find(row => row.path === 'tracked.txt');
   t.truthy(trackedRow, 'status should report the tracked file');
@@ -547,13 +547,13 @@ test('Git scaffold methods all surface a clear "not yet implemented"', async t =
   // dispatching.  ("not yet implemented" reaches the backend's own
   // methods that the public exo dispatches to directly, like status.)
   // The fake intentionally lacks `displayPath` / `child`; cast through
-  // the EndoMountEntry shape so the boundary type is satisfied at
+  // the DaemonMountEntry shape so the boundary type is satisfied at
   // call-site even though the runtime guard is what fires.
-  const fakeEntry = /** @type {import('../src/types.js').EndoMountEntry} */ (
+  const fakeEntry = /** @type {import('../src/types.js').DaemonMountEntry} */ (
     /** @type {unknown} */ (Far('FakeEntry', { segments: () => ['foo.txt'] }))
   );
   await t.throwsAsync(E(git).add([fakeEntry]), {
-    message: /not an EndoMountEntry/,
+    message: /not a DaemonMountEntry/,
   });
 });
 
@@ -1692,7 +1692,7 @@ test('NativeGitBackend.rebase continues a conflicted rebase without an interacti
   );
 });
 
-test('Git stash methods preserve path authority through EndoMountEntry', async t => {
+test('Git stash methods preserve path authority through DaemonMountEntry', async t => {
   const repoRoot = await provisionGitWorktree(t);
   await fs.promises.writeFile(path.join(repoRoot, 'tracked.txt'), 'before\n');
   await execFileAsync('git', ['add', 'tracked.txt'], { cwd: repoRoot });
@@ -1733,7 +1733,7 @@ test('Git stash methods preserve path authority through EndoMountEntry', async t
   t.deepEqual(await E(git).stashList(), []);
 });
 
-test('Git.diff routes EndoMountEntry inputs through the lineage gate', async t => {
+test('Git.diff routes DaemonMountEntry inputs through the lineage gate', async t => {
   const repoRoot = await provisionGitWorktree(t);
   await fs.promises.writeFile(path.join(repoRoot, 'tracked.txt'), 'v1');
   await execFileAsync('git', ['add', 'tracked.txt'], { cwd: repoRoot });
@@ -1810,7 +1810,7 @@ test('NativeGitBackend.restore --staged unstages an added file', async t => {
   t.is(entries[0].worktree, 'untracked');
 });
 
-test('Git.add wraps EndoMountEntry inputs and refuses cross-mount entries', async t => {
+test('Git.add wraps DaemonMountEntry inputs and refuses cross-mount entries', async t => {
   const repoRoot = await provisionGitWorktree(t);
   await fs.promises.writeFile(path.join(repoRoot, 'sample.txt'), 'sample');
   const filePowers = makeFilePowers({ fs, path });
@@ -1971,7 +1971,7 @@ test('Git.status reports merge conflicts with mount entries', async t => {
   );
   t.deepEqual(await E(entry).segments(), ['conflict.txt']);
   // The conflicted entry is a file, so its live node exposes `text()`.
-  const node = /** @type {import('../src/types.js').EndoMountFile} */ (
+  const node = /** @type {import('../src/types.js').DaemonMountFile} */ (
     row.node
   );
   t.regex(await E(node).text(), /<<<<<<< HEAD/);
@@ -1986,7 +1986,7 @@ test('Git.status wraps backend rows into GitStatusEntry with mount entries', asy
   );
 
   // Construct the public Git exo over a real mount so status() can mint
-  // EndoMountEntry values.  This is the only test in this file that
+  // DaemonMountEntry values.  This is the only test in this file that
   // exercises the exo + backend wired together.
   const filePowers = makeFilePowers({ fs, path });
   const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
@@ -2002,15 +2002,15 @@ test('Git.status wraps backend rows into GitStatusEntry with mount entries', asy
   t.is(row.path, 'src/new.js');
   t.is(row.index, 'clean');
   t.is(row.worktree, 'untracked');
-  // The entry is an EndoMountEntry minted on the bound mount.  Its
+  // The entry is a DaemonMountEntry minted on the bound mount.  Its
   // segments reflect the repo-relative path split by `/`.
   const entry = /** @type {import('../src/types.js').EndoMountEntry} */ (
     row.entry
   );
   t.deepEqual(await E(entry).segments(), ['src', 'new.js']);
   t.true(await E(mount).has(row.entry));
-  // `src/new.js` resolves to an EndoMountFile.
-  const node = /** @type {import('../src/types.js').EndoMountFile} */ (
+  // `src/new.js` resolves to a DaemonMountFile.
+  const node = /** @type {import('../src/types.js').DaemonMountFile} */ (
     row.node
   );
   t.is(await E(node).text(), 'export default 1');
@@ -2677,7 +2677,7 @@ test('Git.stashPush accepts repo-relative paths in lieu of mount entries', async
   await fs.promises.writeFile(path.join(repoRoot, 'a.txt'), 'changed-a\n');
   await fs.promises.writeFile(path.join(repoRoot, 'b.txt'), 'changed-b\n');
 
-  // `paths` (string[]) bypasses the EndoMountEntry lineage resolution
+  // `paths` (string[]) bypasses the DaemonMountEntry lineage resolution
   // and lands at the backend directly.  Only `a.txt` is stashed; `b.txt`
   // must stay dirty.
   await E(git).stashPush({ message: 'subset', paths: ['a.txt'] });

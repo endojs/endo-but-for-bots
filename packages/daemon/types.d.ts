@@ -1,6 +1,11 @@
 import type { CapTPOptions } from '@endo/captp';
 import type {
   Config,
+  DaemonMount,
+  DaemonMountEntry,
+  DaemonMountFile,
+  DaemonReadableBlobView,
+  DaemonReadableTreeView,
   DefineRequest,
   EndoAgent,
   EndoBootstrap,
@@ -17,6 +22,7 @@ import type {
   Package,
   PetName,
   Request,
+  EndoMountStat,
   RetentionPath,
   RetentionPathDelta,
   RetentionPathSegment,
@@ -50,6 +56,11 @@ export type {
 
 export type {
   Config,
+  DaemonMount,
+  DaemonMountEntry,
+  DaemonMountFile,
+  DaemonReadableBlobView,
+  DaemonReadableTreeView,
   DefineRequest,
   EndoAgent,
   EndoDiagnostics,
@@ -69,6 +80,7 @@ export type {
   SpecialName,
   NamePath,
   NameOrPath,
+  EndoMountStat,
   StampedMessage,
   ValueMessage,
 };

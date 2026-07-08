@@ -295,7 +295,7 @@ The refactor naturally splits into phases that can land independently:
    Mirror `provideMount`'s formula lifecycle (disk-before-graph etc.
    per `@endo/daemon/AGENTS.md`).
 3. **`MountInterface`-compat wrapper.**
-   Thin shim that satisfies the `EndoMount` interface guard by
+   Thin shim that satisfies the `DaemonMount` interface guard by
    delegating to a `Filesystem`.
    Lets existing Mount consumers migrate without code changes.
 4. **`ScratchMount` analogue.**

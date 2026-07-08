@@ -5,7 +5,7 @@
  * `mountAsFilesystem` tests (F5).
  *
  * Uses a hand-rolled in-memory mock `Mount` (matching the
- * `@endo/daemon` `EndoMount` / `EndoMountFile` shape) rather than
+ * `@endo/daemon` `DaemonMount` / `DaemonMountFile` shape) rather than
  * spinning up a real daemon. Exercises the adapter's read/write
  * round-trip, list, lookup, mkdir, unlink, rename, snapshot.
  */
@@ -81,11 +81,11 @@ const makeMockMount = () => {
   const segmentsOf = path => (typeof path === 'string' ? [path] : path);
 
   const makeFileFar = node =>
-    Far('EndoMountFile', {
+    Far('DaemonMountFile', {
       async text() {
         return fromUtf8(node.content);
       },
-      // Mirrors the real `EndoMountFile.streamBase64(synPromise)`: an
+      // Mirrors the real `DaemonMountFile.streamBase64(synPromise)`: an
       // `@endo/exo-stream` reader pump over the whole content, base64
       // encoded. The `synPromise` argument drives the flow-control chain.
       streamBase64(synPromise) {
@@ -102,7 +102,7 @@ const makeMockMount = () => {
         node.content = utf8(text);
       },
       async writeBytes(readableRef) {
-        // The real `EndoMountFile.writeBytes` is guarded `M.remotable()`
+        // The real `DaemonMountFile.writeBytes` is guarded `M.remotable()`
         // and a raw `Uint8Array` cannot cross CapTP — reject it here so
         // a regression that passes raw bytes fails the test instead of
         // silently passing same-vat (the divergence that hid this bug).
@@ -129,13 +129,13 @@ const makeMockMount = () => {
         return this;
       },
       help() {
-        return 'mock EndoMountFile';
+        return 'mock DaemonMountFile';
       },
     });
 
   const makeMountFar = base => {
     /** @type {any} */
-    const m = Far('EndoMount', {
+    const m = Far('DaemonMount', {
       async has(...path) {
         return lookupNode(base, path) !== null;
       },
@@ -178,14 +178,14 @@ const makeMockMount = () => {
         }
         parentNode.children.set(name, { kind: 'file', content: utf8(text) });
       },
-      // Mirrors the real `EndoMount.write(path, ReadableBlob)`: the
+      // Mirrors the real `DaemonMount.write(path, ReadableBlob)`: the
       // value is a *remotable* reader reference (never raw bytes, which
       // are not passable over CapTP), drained via its `streamBase64`
       // method and base64-decoded.
       async write(path, value) {
         const segs = segmentsOf(path);
         const name = segs[segs.length - 1];
-        // The real `EndoMount.write` calls `filePowers.makePath(parent)`,
+        // The real `DaemonMount.write` calls `filePowers.makePath(parent)`,
         // so missing intermediate directories are created on demand. The
         // mock mirrors that mkdir-p behavior (it previously threw ENOTDIR,
         // diverging from production and leaving the creates-parents path
@@ -259,7 +259,7 @@ const makeMockMount = () => {
         return m;
       },
       help() {
-        return 'mock EndoMount';
+        return 'mock DaemonMount';
       },
     });
     return m;
@@ -359,7 +359,7 @@ test('backend folds a Mount escape (EACCES) into not-found, not an error', async
   // (undefined), the same as a genuine miss — otherwise a cap holder could
   // distinguish "escapes to an existing host path" from "does not exist" and
   // use it as an out-of-sandbox existence oracle.
-  const escapingMount = Far('EndoMount', {
+  const escapingMount = Far('DaemonMount', {
     async lookup() {
       throw new Error('EACCES: path escapes mount root: "/escape"');
     },
