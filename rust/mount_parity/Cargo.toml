@@ -1,0 +1,14 @@
+[package]
+name = "mount_parity"
+version = "0.1.0"
+edition = "2021"
+description = "Rust-side runner for the cross-language EndoMount glob/grep parity case tables"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+
+[dev-dependencies]
+tempfile = "3"
