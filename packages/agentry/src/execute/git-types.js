@@ -35,6 +35,7 @@ export const gitCodeModeTypeDeclarations = harden({
   restore: (entries: EndoMountEntry[], options?: GitRestoreOptions) => Promise<void>;
   commit: (message: string, options?: GitCommitOptions) => Promise<GitCommit>;
   reword: (ref: GitRef | string, message: string) => Promise<GitCommit>;
+  cherryPick: (ref: GitRef | string, options?: GitCherryPickOptions) => Promise<string>;
   currentBranch: () => Promise<GitRef | undefined>;
   branches: () => Promise<GitRef[]>;
   createBranch: (name: string, options?: GitCreateBranchOptions) => Promise<GitRef>;
@@ -57,6 +58,9 @@ export const gitCodeModeTypeDeclarations = harden({
 };
 type EndoMount = unknown;
 type EndoMountEntry = unknown;
+type GitCherryPickOptions = {
+    noCommit?: boolean;
+};
 type GitCommit = {
     oid: string;
     summary: string;
@@ -92,8 +96,13 @@ type GitMergeOptions = {
     noFastForward?: boolean;
 };
 type GitRebaseInput = {
-    mode?: 'start' | 'continue' | 'abort' | 'skip';
-    upstream?: string;
+    mode: 'start';
+    upstream: string;
+    autosquash?: boolean;
+} | {
+    mode: 'continue' | 'abort' | 'skip';
+    upstream?: never;
+    autosquash?: never;
 };
 type GitRef = {
     name: string;

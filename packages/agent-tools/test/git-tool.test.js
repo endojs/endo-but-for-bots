@@ -18,6 +18,8 @@ const SLICE = [
   'show',
   'commit',
   'reword',
+  'cherryPick',
+  'rebase',
   'branches',
   'createBranch',
   'switchBranch',
@@ -52,6 +54,14 @@ const makeStubGit = calls => {
     reword: async (...a) => {
       calls.push(['reword', ...a]);
       return { oid: 'x', summary: a[1] };
+    },
+    cherryPick: async (...a) => {
+      calls.push(['cherryPick', ...a]);
+      return '';
+    },
+    rebase: async (...a) => {
+      calls.push(['rebase', ...a]);
+      return '';
     },
     branches: async (...a) => {
       calls.push(['branches', ...a]);
@@ -111,6 +121,14 @@ test('invoke marshals named args to positional and calls the capability', async 
     options: harden({ amend: true }),
   });
   await byName('reword').invoke({ ref: 'HEAD~1', message: 'new subject' });
+  await byName('cherryPick').invoke({ ref: 'side' });
+  await byName('cherryPick').invoke({
+    ref: 'side',
+    options: harden({ noCommit: true }),
+  });
+  await byName('rebase').invoke({
+    input: harden({ mode: 'start', upstream: 'main', autosquash: true }),
+  });
   await byName('createBranch').invoke({ name: 'feature' });
   await byName('createBranch').invoke({ name: 'feature', options: harden({}) });
   await byName('log').invoke({});
@@ -119,6 +137,9 @@ test('invoke marshals named args to positional and calls the capability', async 
     ['commit', 'a message'],
     ['commit', 'amended message', { amend: true }],
     ['reword', 'HEAD~1', 'new subject'],
+    ['cherryPick', 'side'],
+    ['cherryPick', 'side', { noCommit: true }],
+    ['rebase', { mode: 'start', upstream: 'main', autosquash: true }],
     ['createBranch', 'feature'],
     ['createBranch', 'feature', {}],
     ['log'],
@@ -161,6 +182,8 @@ test('the schemas advertise real, declarative property names', t => {
 
   t.deepEqual(propsOf('commit'), ['message', 'options']);
   t.deepEqual(propsOf('reword'), ['ref', 'message']);
+  t.deepEqual(propsOf('cherryPick'), ['ref', 'options']);
+  t.deepEqual(propsOf('rebase'), ['input']);
   t.deepEqual(propsOf('show'), ['ref']);
   t.deepEqual(propsOf('createBranch'), ['name', 'options']);
   t.deepEqual(propsOf('switchBranch'), ['branch']);
@@ -180,14 +203,44 @@ test('invoke resolves named args by their real property names', async t => {
   await null;
 
   await byName('show').invoke({ ref: 'HEAD' });
+  await byName('cherryPick').invoke({ ref: { name: 'HEAD', kind: 'commit' } });
   await byName('switchBranch').invoke({ branch: 'feature' });
   await byName('log').invoke({ options: harden({ maxCount: 3 }) });
 
   t.deepEqual(calls, [
     ['show', 'HEAD'],
+    ['cherryPick', { name: 'HEAD', kind: 'commit' }],
     ['switchBranch', 'feature'],
     ['log', { maxCount: 3 }],
   ]);
+});
+
+test('rebase JSON tool only exposes start mode with autosquash', async t => {
+  const tools = makeGitTool(makeStubGit([]));
+  const rebase = tools.find(tool => tool.name === 'rebase');
+  if (!rebase) throw new Error('no rebase tool');
+
+  await null;
+
+  await t.notThrowsAsync(() =>
+    rebase.invoke({ input: { mode: 'start', upstream: 'main' } }),
+  );
+  await t.notThrowsAsync(() =>
+    rebase.invoke({
+      input: { mode: 'start', upstream: 'main', autosquash: true },
+    }),
+  );
+  await Promise.all(
+    ['continue', 'abort', 'skip'].map(async mode => {
+      const err = await t.throwsAsync(() =>
+        rebase.invoke({ input: { mode, autosquash: true } }),
+      );
+      t.true(
+        err !== undefined && err.message.includes('rebase input'),
+        `error should name rebase input for ${mode}; got: ${err?.message}`,
+      );
+    }),
+  );
 });
 
 test('invoke rejects a wrong property name and a missing required one', async t => {

@@ -11,6 +11,7 @@ import { E } from '@endo/eventual-send';
 import {
   getInterfaceGuardPayload,
   getMethodGuardPayload,
+  M,
 } from '@endo/patterns';
 import { GitInterface } from '@endo/exo-git';
 
@@ -66,6 +67,47 @@ const COMMIT_OPTIONS_PROP = harden({
   required: [],
   additionalProperties: false,
 });
+
+const CHERRY_PICK_OPTIONS_PROP = harden({
+  type: 'object',
+  properties: {
+    noCommit: {
+      type: 'boolean',
+      description:
+        'Apply the patch to the index and worktree without committing.',
+    },
+  },
+  required: [],
+  additionalProperties: false,
+});
+
+const REBASE_START_INPUT_PROP = harden({
+  type: 'object',
+  properties: {
+    mode: { const: 'start' },
+    upstream: {
+      type: 'string',
+      description: 'The upstream ref to replay the current branch onto.',
+    },
+    autosquash: {
+      type: 'boolean',
+      description: 'Fold fixup!/squash! commits during the replay.',
+    },
+  },
+  required: ['mode', 'upstream'],
+  additionalProperties: false,
+});
+
+const REBASE_START_INPUT_SHAPE = M.splitRecord(
+  {
+    mode: 'start',
+    upstream: M.string(),
+  },
+  {
+    autosquash: M.boolean(),
+  },
+  {},
+);
 
 /**
  * This package intentionally exposes only a curated JSON-safe `EndoGit` slice
@@ -127,6 +169,29 @@ const gitToolSchemas = harden({
       additionalProperties: false,
     },
   },
+  cherryPick: {
+    description: 'Replay an existing commit onto the current branch.',
+    parameters: {
+      type: 'object',
+      properties: {
+        ref: REF_PROP,
+        options: CHERRY_PICK_OPTIONS_PROP,
+      },
+      required: ['ref'],
+      additionalProperties: false,
+    },
+  },
+  rebase: {
+    description: 'Replay the current branch onto an upstream ref.',
+    parameters: {
+      type: 'object',
+      properties: {
+        input: REBASE_START_INPUT_PROP,
+      },
+      required: ['input'],
+      additionalProperties: false,
+    },
+  },
   branches: {
     description: 'List the repository branches.',
     parameters: NO_ARGS,
@@ -169,6 +234,13 @@ const gitToolMethods = harden(
 );
 
 /**
+ * @type {Partial<Record<keyof GitToolCapability, Pattern[]>>}
+ */
+const gitToolArgGuards = harden({
+  rebase: harden([REBASE_START_INPUT_SHAPE]),
+});
+
+/**
  * Positional arg guards for a method, required first and then optional.
  * `getMethodGuardPayload` unwraps the `M.callWhen` await-arg wrappers.
  *
@@ -197,7 +269,7 @@ const positionalArgGuards = method => {
 export const makeGitTool = gitCap => {
   const records = gitToolMethods.map(method => {
     const schema = gitToolSchemas[method];
-    const argGuards = positionalArgGuards(method);
+    const argGuards = gitToolArgGuards[method] || positionalArgGuards(method);
     // The schema's declared property order is the positional argument order,
     // matching the convention `makeTool` applies to the named-args record.
     const paramNames = Object.keys(

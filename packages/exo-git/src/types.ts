@@ -65,6 +65,10 @@ export type GitCommitOptions = {
   amend?: boolean;
 };
 
+export type GitCherryPickOptions = {
+  noCommit?: boolean;
+};
+
 export type GitCreateBranchOptions = {
   startPoint?: string;
   switchAfterCreate?: boolean;
@@ -79,10 +83,17 @@ export type GitMergeOptions = {
   noFastForward?: boolean;
 };
 
-export type GitRebaseInput = {
-  mode?: 'start' | 'continue' | 'abort' | 'skip';
-  upstream?: string;
-};
+export type GitRebaseInput =
+  | {
+      mode: 'start';
+      upstream: string;
+      autosquash?: boolean;
+    }
+  | {
+      mode: 'continue' | 'abort' | 'skip';
+      upstream?: never;
+      autosquash?: never;
+    };
 
 export type GitStashPushOptions = {
   message?: string;
@@ -239,6 +250,10 @@ export type EndoGit = {
   ) => Promise<void>;
   commit: (message: string, options?: GitCommitOptions) => Promise<GitCommit>;
   reword: (ref: GitRef | string, message: string) => Promise<GitCommit>;
+  cherryPick: (
+    ref: GitRef | string,
+    options?: GitCherryPickOptions,
+  ) => Promise<string>;
   currentBranch: () => Promise<GitRef | undefined>;
   branches: () => Promise<GitRef[]>;
   createBranch: (

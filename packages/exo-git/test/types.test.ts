@@ -3,6 +3,7 @@ import type {
   EndoGit,
   EndoMount,
   EndoMountEntry,
+  GitCherryPickOptions,
   GitCommit,
   GitCommitOptions,
   GitCreateBranchOptions,
@@ -43,6 +44,10 @@ type ExpectedEndoGit = {
   ) => Promise<void>;
   commit: (message: string, options?: GitCommitOptions) => Promise<GitCommit>;
   reword: (ref: GitRef | string, message: string) => Promise<GitCommit>;
+  cherryPick: (
+    ref: GitRef | string,
+    options?: GitCherryPickOptions,
+  ) => Promise<string>;
   currentBranch: () => Promise<GitRef | undefined>;
   branches: () => Promise<GitRef[]>;
   createBranch: (

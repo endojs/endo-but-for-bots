@@ -9,14 +9,15 @@ import type { Pattern } from '@endo/patterns';
  * exposes to an LLM.
  *
  * Deliberately omits the destructive and history-rewriting methods of `EndoGit`
- * — `merge`, `rebase`, `restore`, `deleteBranch`, `renameBranch`, the `stash*`
+ * — `merge`, `restore`, `deleteBranch`, `renameBranch`, the `stash*`
  * family, and the working-tree/detach mutators (`switch`, `detach`). Those carry
  * authority a tool surface handed to a model should not advertise: they can
  * discard uncommitted work or rewrite shared history. `commit`, `reword`,
- * `createBranch`, and `switchBranch` are included as the narrow write surface
- * the local git tool intentionally grants. Widening this `Pick` is a deliberate
- * authority decision, not a convenience — add a method only when the tool
- * surface is meant to grant it.
+ * `cherryPick`, the `mode: "start"` case of `rebase`, `createBranch`, and
+ * `switchBranch` are included as the narrow write surface the local git tool
+ * intentionally grants. Widening this `Pick` is a deliberate authority
+ * decision, not a convenience — add a method only when the tool surface is
+ * meant to grant it.
  *
  * This slice holds only the JSON-transparent methods whose hand-authored tool
  * schemas map one-to-one onto their `GitInterface` guards (the divergence gate
@@ -33,6 +34,8 @@ export type GitToolCapability = Pick<
   | 'show'
   | 'commit'
   | 'reword'
+  | 'cherryPick'
+  | 'rebase'
   | 'branches'
   | 'createBranch'
   | 'switchBranch'
