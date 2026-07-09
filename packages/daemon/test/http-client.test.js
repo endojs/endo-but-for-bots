@@ -248,7 +248,7 @@ test.serial(
     await t.throwsAsync(
       E(client).request({ url: `${disallowed.origin}/blocked` }),
       {
-        message: /not in the allowlist/,
+        message: /not in the allowed-origin list/,
       },
     );
   },

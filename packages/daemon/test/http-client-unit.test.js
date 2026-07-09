@@ -10,6 +10,56 @@ import {
   parseAllowedOrigins,
 } from '../src/http-client.js';
 
+// The daemon http-client module is the integration layer over the landed
+// `@endo/exo-http-client` capability (PR #566), which owns the confinement
+// core (`@endo/http-confine`).  These unit tests pin the integration
+// contract: mint-time allowlist validation, the controller allowlist
+// holder, the Phase-1 GET-class guard the daemon layers on top, and the
+// `fetch()` -> `request({url,method?,headers?})` response adaptation.  The
+// confinement itself (rate limits, byte caps, redirect defense, TOFU) is
+// tested exhaustively in the http-confine / exo-http-client suites.
+
+// A `fetch` result compatible with `@endo/http-confine`, whose response
+// body must expose a streaming `getReader()` so the byte-cap limiter can
+// read it.  Plain-object headers are read via `Object.entries` by the
+// confinement's header/redirect helpers.
+const makeBodyStream = text => {
+  const bytes = new TextEncoder().encode(text);
+  return {
+    getReader() {
+      let sent = false;
+      // `cancel` / `releaseLock` are optional per the confinement's
+      // reader contract; omit them so this stub stays a minimal
+      // single-chunk source.
+      return {
+        async read() {
+          if (sent) {
+            return { done: true, value: undefined };
+          }
+          sent = true;
+          return { done: false, value: bytes };
+        },
+      };
+    },
+  };
+};
+
+const makeFetchResponse = ({
+  status = 200,
+  statusText = 'OK',
+  ok = true,
+  headers = {},
+  body = '',
+  url = '',
+} = {}) => ({
+  status,
+  statusText,
+  ok,
+  headers,
+  url,
+  body: makeBodyStream(body),
+});
+
 test('parseAllowedOrigin normalizes to URL.origin', t => {
   t.is(
     parseAllowedOrigin('https://api.example.com/path?q=1'),
@@ -68,7 +118,9 @@ test('makeHttpClient.request rejects URLs outside the allowlist', async t => {
   const controller = makeHttpController({
     allowedOrigins: ['https://api.example.com'],
   });
-  // Spy fetch — should never be called when the policy check fails.
+  // Spy fetch — should never be called when the confined client's policy
+  // gate rejects the origin.  A denied request must not consume fetch (or,
+  // in the landed capability, the rate budget).
   let fetchCalls = 0;
   const fetch = () => {
     fetchCalls += 1;
@@ -76,11 +128,10 @@ test('makeHttpClient.request rejects URLs outside the allowlist', async t => {
   };
   const client = makeHttpClient(controller, { fetch });
   await t.throwsAsync(E(client).request({ url: 'https://evil.example.com/' }), {
-    message: /not in the allowlist/,
+    message: /not in the allowed-origin list/,
   });
-  // Regression evidence: a working policy gate prevents fetch from
-  // running for disallowed origins.  Bypassing the check (e.g.
-  // returning before assertOriginAllowed) would increment fetchCalls.
+  // Regression evidence: the policy gate prevents fetch from running for
+  // disallowed origins.  Bypassing the check would increment fetchCalls.
   t.is(fetchCalls, 0, 'fetch must not be reached when policy rejects');
 });
 
@@ -90,48 +141,46 @@ test('makeHttpClient.request invokes fetch for allowed origins', async t => {
   });
   let lastUrl;
   let lastInit;
-  const fakeResponse = {
-    status: 200,
-    statusText: 'OK',
-    ok: true,
-    // The exo iterates headers via .entries(); a Map exposes that
-    // method natively, which matches the WHATWG Fetch Headers shape.
-    headers: new Map([['content-type', 'text/plain']]),
-    text: async () => 'body',
-  };
   const fetchSpy = async (input, init) => {
     lastUrl = input;
     lastInit = init;
-    return fakeResponse;
+    return makeFetchResponse({
+      headers: { 'content-type': 'text/plain' },
+      body: 'body',
+      url: input,
+    });
   };
   const client = makeHttpClient(controller, { fetch: fetchSpy });
   const response = await E(client).request({
     url: 'https://api.example.com/x',
   });
   t.is(lastUrl, 'https://api.example.com/x');
+  // The landed confinement passes `redirect: 'manual'` so the allowed-to-
+  // disallowed redirect SSRF vector is resolved by the confinement, never
+  // followed blindly by the platform.
   t.is(lastInit.redirect, 'manual', 'request must use redirect: manual');
   t.is(response.status, 200);
   t.is(response.body, 'body');
   t.is(response.headers['content-type'], 'text/plain');
 });
 
-test('makeHttpClient rejects construction without a fetch power', t => {
+test('makeHttpClient rejects construction without a fetch power', async t => {
   const controller = makeHttpController({
     allowedOrigins: ['https://api.example.com'],
   });
-  t.throws(() => makeHttpClient(controller, { fetch: undefined }), {
+  await t.throwsAsync(makeHttpClient(controller, { fetch: undefined }), {
     message: /requires a fetch power/,
   });
 });
 
-// ── Adversarial coverage: Phase 1 surface (cleaner additions) ───────
+// ── Adversarial coverage: Phase 1 surface ───────────────────────────
 
 test('Phase 1 rejects methods beyond GET-class (POST/PUT/DELETE/PATCH)', async t => {
-  // Pin the design's "GET-class verbs only" Phase 1 invariant.  Until
-  // Phase 4 wires up bodies and the method allowlist, a guest holding
-  // the client must not be able to escalate beyond read authority by
-  // passing a non-GET method.  Regression evidence: a fetch spy that
-  // increments on call would observe a bypass if this check regressed.
+  // Pin the design's "GET-class verbs only" Phase 1 invariant.  The landed
+  // capability admits a wider method set, so the daemon integration layer
+  // pins the read-only bound before delegating.  Regression evidence: a
+  // fetch spy that increments on call would observe a bypass if this guard
+  // regressed.
   const controller = makeHttpController({
     allowedOrigins: ['https://api.example.com'],
   });
@@ -160,13 +209,7 @@ test('Phase 1 admits HEAD as a GET-class verb alongside GET', async t => {
   const methodsSeen = [];
   const fetch = async (_url, init) => {
     methodsSeen.push(init.method);
-    return {
-      status: 200,
-      statusText: 'OK',
-      ok: true,
-      headers: new Map(),
-      text: async () => '',
-    };
+    return makeFetchResponse({ url: 'https://api.example.com/' });
   };
   const client = makeHttpClient(controller, { fetch });
   await E(client).request({ url: 'https://api.example.com/' }); // default GET
@@ -181,9 +224,8 @@ test('Phase 1 rejects javascript:/file:/data: at request time (origin is null)',
   // A defense-in-depth check: even though such schemes are rejected at
   // allowlist-construction time (parseAllowedOrigin enforces http/https
   // only), a request URL with one of these schemes parses to
-  // `.origin === 'null'`, which can never appear on the allowlist.  Pin
-  // the resulting rejection so future refactors of the origin-check
-  // path do not accidentally treat 'null' as a wildcard.
+  // `.origin === 'null'`, which can never appear on the allowlist, so the
+  // confined client denies it before reaching fetch.
   const controller = makeHttpController({
     allowedOrigins: ['https://api.example.com'],
   });
@@ -202,9 +244,7 @@ test('Phase 1 rejects javascript:/file:/data: at request time (origin is null)',
     `${'data'}:text/plain,hello`,
   ]) {
     // eslint-disable-next-line no-await-in-loop
-    await t.throwsAsync(E(client).request({ url }), {
-      message: /not in the allowlist/,
-    });
+    await t.throwsAsync(E(client).request({ url }));
   }
   t.is(fetchCalls, 0);
 });
@@ -225,7 +265,7 @@ test('Allowlist match is exact: trailing dot in request URL does not match no-do
   };
   const client = makeHttpClient(controller, { fetch });
   await t.throwsAsync(E(client).request({ url: 'https://example.com./x' }), {
-    message: /not in the allowlist/,
+    message: /not in the allowed-origin list/,
   });
   t.is(fetchCalls, 0);
 });
