@@ -244,6 +244,63 @@ export const assertHeadersSafe = headers => {
 freeze(assertHeadersSafe);
 
 /**
+ * Snapshot response headers into an inert, plain lower-cased record.
+ *
+ * A live `Headers` from the platform `fetch` (undici on Node) carries lazy
+ * internal slots — notably `Symbol(headers map sorted)`, which undici assigns
+ * on first iteration/sort. If SES `harden()` freezes the live `Headers` before
+ * that slot is materialised, the next read throws
+ * `Cannot assign to read only property 'Symbol(headers map sorted)'`. Copying
+ * the entries into a plain object here means only inert data ever reaches the
+ * hardened confined-response graph (and thus the CapTP boundary), regardless of
+ * the undici version. See endojs/endo-but-for-bots#286.
+ *
+ * @param {Headers | Record<string, string> | Iterable<[string, string]>} [headers]
+ * @returns {Record<string, string>}
+ */
+const responseHeadersToRecord = headers => {
+  /** @type {Record<string, string>} */
+  const record = {};
+  // Use `defineProperty`, not assignment, so header names that collide with
+  // prototype members (`__proto__`, `constructor`) land as own data properties
+  // rather than mutating the prototype or throwing on frozen SES intrinsics.
+  const setHeader = (name, value) => {
+    Object.defineProperty(record, String(name).toLowerCase(), {
+      value: String(value),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  };
+  if (!headers) {
+    return record;
+  }
+  if (
+    typeof (/** @type {Iterable<[string, string]>} */ (headers)[
+      Symbol.iterator
+    ]) === 'function'
+  ) {
+    for (const [name, value] of /** @type {Iterable<[string, string]>} */ (
+      headers
+    )) {
+      setHeader(name, value);
+    }
+    return record;
+  }
+  if (typeof (/** @type {Headers} */ (headers).forEach) === 'function') {
+    /** @type {Headers} */ (headers).forEach((value, name) => {
+      setHeader(name, value);
+    });
+    return record;
+  }
+  for (const [name, value] of Object.entries(headers)) {
+    setHeader(name, value);
+  }
+  return record;
+};
+freeze(responseHeadersToRecord);
+
+/**
  * @param {{ maxPerMinute: number, now: () => number }} opts
  */
 export const makeRateLimiter = ({ maxPerMinute, now }) => {
@@ -564,8 +621,20 @@ export const makeHttpConfinement = (policy, { fetch, now }) => {
       });
       const bytes = await limited.stream;
       assertNotRevoked();
+      // Return an inert snapshot of the response, never the live web-platform
+      // `Response`/`Headers`. Hardening a live undici `Headers` and then reading
+      // it trips `Cannot assign to read only property 'Symbol(headers map
+      // sorted)'` on Node 22, which surfaces as a CapTP error-decode failure in
+      // the consuming client (endojs/endo-but-for-bots#286).
+      const inertResponse = {
+        status: Number(response.status || 0),
+        statusText: String(response.statusText || ''),
+        ok: Boolean(response.ok),
+        url: String(response.url || ''),
+        headers: responseHeadersToRecord(response.headers),
+      };
       return freeze({
-        response,
+        response: inertResponse,
         bytes,
         truncated: limited.truncated(),
         maxResponseBytes,
