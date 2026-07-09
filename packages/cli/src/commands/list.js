@@ -4,7 +4,7 @@ import { inspect } from 'util';
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { withEndoHost } from '../context.js';
-import { parsePetNamePath } from '../pet-name.js';
+import { parsePetNamePath, mountPathSegments } from '../pet-name.js';
 
 /** @import { ERef } from '@endo/eventual-send' */
 
@@ -141,6 +141,7 @@ const typeForPetName = async (agent, petName) => {
 
 export const list = async ({
   directory,
+  path = [],
   follow,
   json,
   verbose,
@@ -152,6 +153,23 @@ export const list = async ({
     if (directory !== undefined) {
       const directoryPath = parsePetNamePath(directory);
       agent = E(agent).lookup(directoryPath);
+    }
+    // Mount-scoped listing: with trailing in-mount path segments, `directory`
+    // named a mount and `path` is a directory *within* its confined tree. List
+    // it through the mount's own `list`, whose entries are filesystem names
+    // (not capability-graph pet names), so the type/grouped/follow/verbose
+    // machinery below — which resolves pet-name locators — does not apply.
+    const mountPath = mountPathSegments(path);
+    if (mountPath.length > 0) {
+      const entries = await E(agent).list(...mountPath);
+      if (json) {
+        console.log(JSON.stringify(entries));
+      } else {
+        for (const entry of entries) {
+          console.log(entry);
+        }
+      }
+      return;
     }
     if (follow) {
       const topic = await E(agent).followNameChanges();

@@ -379,9 +379,12 @@ export const main = async rawArgs => {
     });
 
   program
-    .command('list [directory]')
+    .command('list [directory] [path...]')
     .alias('ls')
-    .description('show names known to the current or specified directory')
+    .description(
+      'show names known to the current or specified directory, or entries ' +
+        'within a mount when an in-mount path is given',
+    )
     .option('-f,--follow', 'Follow updates')
     .option('-j,--json', 'JSON format output')
     .option('-v,--verbose', 'Provide more detailed output')
@@ -393,10 +396,10 @@ export const main = async rawArgs => {
       '-t,--type <formulaType>',
       'Show only names whose formula type matches (e.g. handle, eval, readable-blob)',
     )
-    .action(async (directory, cmd) => {
+    .action(async (directory, path, cmd) => {
       const { follow, json, verbose, grouped, type } = cmd.opts();
       const { list } = await import('./commands/list.js');
-      return list({ directory, follow, json, verbose, grouped, type });
+      return list({ directory, path, follow, json, verbose, grouped, type });
     });
 
   program
@@ -527,13 +530,15 @@ export const main = async rawArgs => {
     });
 
   program
-    .command('cat <name>')
-    .description('dumps a blob')
+    .command('cat <name> [path...]')
+    .description(
+      'dumps a blob, or a file within a mount when an in-mount path is given',
+    )
     .option(...commonOptions.as)
-    .action(async (name, cmd) => {
+    .action(async (name, path, cmd) => {
       const { as: agentNames } = cmd.opts();
       const { cat } = await import('./commands/cat.js');
-      return cat({ name, agentNames });
+      return cat({ name, path, agentNames });
     });
 
   program
@@ -613,6 +618,16 @@ export const main = async rawArgs => {
       }
       const { mount: mountCmd } = await import('./commands/mount.js');
       return mountCmd({ sourcePath, name, agentNames, readOnly });
+    });
+
+  program
+    .command('write <mountName> <path...>')
+    .description('writes standard input to a file within a mount')
+    .option(...commonOptions.as)
+    .action(async (mountName, path, cmd) => {
+      const { as: agentNames } = cmd.opts();
+      const { write } = await import('./commands/write.js');
+      return write({ name: mountName, path, agentNames });
     });
 
   program
@@ -978,6 +993,7 @@ export const main = async rawArgs => {
         'checkin',
         'checkout',
         'mount',
+        'write',
         'mktmp',
         'locate',
         'paths',
