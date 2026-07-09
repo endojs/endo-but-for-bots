@@ -31,9 +31,12 @@ import {
   makeDefaultGitScenarioSpecs,
   renderEvalMatrixMarkdownTable,
   runEvalMatrix,
+  runGitScenario,
   resolveEvalModelFromEnv,
 } from '../src/eval/index.js';
 import { readText } from './_eval-fixture.js';
+import { makeStackSurgeryScenario } from '../src/eval/scenarios/stack-surgery/index.js';
+import { provisionStackSurgeryRepo } from './eval/_stack-surgery-repo.js';
 
 const env =
   /** @type {{ process?: { env?: Record<string, string | undefined> } }} */ (
@@ -193,6 +196,32 @@ const summarizeEvent = event => {
   }
 };
 
+/**
+ * @param {object} args
+ * @param {any} args.model
+ * @param {any} args.scenario
+ * @param {any} [args.result]
+ * @param {unknown} [args.error]
+ */
+const appendScenarioResult = ({ model, scenario, result, error }) => {
+  const errorValue = error instanceof Error ? error.message : error;
+  appendArtifact('results.jsonl', {
+    scenario: scenario.name,
+    model: model.id,
+    referenceSourcePath: scenario.referenceSourcePath,
+    referenceSourceExport: scenario.referenceSourceExport,
+    status:
+      error === undefined
+        ? result.outcome.pass
+          ? 'passed'
+          : 'failed'
+        : 'error',
+    ...(error === undefined
+      ? { outcome: result.outcome, metrics: result.metrics }
+      : { error: safeText(errorValue) }),
+  });
+};
+
 liveTest(
   'a live model runs every git eval scenario across every condition',
   async t => {
@@ -238,3 +267,44 @@ liveTest(
     );
   },
 );
+
+liveTest('a live model performs stack surgery (outcome assertion)', async t => {
+  // `live` is defined here (otherwise this test was skipped at registration).
+  const { model, getApiKey } = /** @type {NonNullable<typeof live>} */ (live);
+  const repo = await provisionStackSurgeryRepo(t);
+  const scenario = makeStackSurgeryScenario();
+  const onEvent =
+    artifactDir === undefined
+      ? undefined
+      : event =>
+          appendArtifact('events.jsonl', {
+            scenario: scenario.name,
+            model: model.id,
+            ...summarizeEvent(event),
+          });
+
+  let result;
+  try {
+    result = await runGitScenario({
+      model,
+      workspace: repo.workspace,
+      git: repo.git,
+      scenario,
+      readText,
+      getApiKey,
+      onEvent,
+    });
+  } catch (error) {
+    appendScenarioResult({ model, scenario, error });
+    throw error;
+  }
+  appendScenarioResult({ model, scenario, result });
+  t.true(
+    result.outcome.pass,
+    `live run did not reach target end-state in ${repo.repoRoot}; checks: ${JSON.stringify(
+      result.outcome.checks,
+      null,
+      2,
+    )}`,
+  );
+});
