@@ -750,6 +750,20 @@ Resolve a path within the mount.
 path: string | string[] — Name or path segments.
 Returns EndoMount for directories, EndoMountFile for files.
 
+## glob(pattern) -> Promise<string[]>
+
+Recursively enumerate paths matching a glob pattern, relative to this mount face.
+pattern: string — Slash-separated segments. The only metacharacters are `*` and `**`.
+`*` matches zero or more characters within one segment (never `/`, and it does match
+leading-dot names); `**` as a whole segment matches zero or more directory levels.
+Every other character, including `?`, `[`, `]`, `{`, `}`, and `+`, is a literal.
+Denied names (such as .ssh, .aws, .env) never appear, even when named literally.
+Entries whose symlinks escape the mount root are excluded. Results include
+directories as well as files, are sorted by UTF-16 code unit, and are capped at
+10,000 with silent truncation.
+Example: glob("**/*.js") → all JavaScript files at any depth.
+Example: glob("src/*") → the immediate children of src.
+
 ## readText(path) -> Promise<string>
 
 Read a file as UTF-8 text.

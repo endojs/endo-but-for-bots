@@ -1111,14 +1111,25 @@ export interface EndoMountFile {
  * `Directory` contract.  Overlapping methods (`has`, `list`, `lookup`,
  * `write`, `remove`, `move`, `copy`, `makeDirectory`, `snapshot`) match
  * the platform shapes; mount-specific extensions (`entry`, `stat`,
- * `displayPath`, `readText`, `maybeReadText`, `writeText`, `makeFile`)
- * are additive; `readOnly()` narrows to a structural `ReadableTree`
+ * `displayPath`, `readText`, `maybeReadText`, `writeText`, `makeFile`,
+ * `glob`) are additive; `readOnly()` narrows to a structural `ReadableTree`
  * view.
  */
 export interface EndoMount {
   has(...pathSegments: string[]): Promise<boolean>;
   has(entry: EndoMountEntry): Promise<boolean>;
   list(...pathSegments: string[]): Promise<string[]>;
+  /**
+   * Recursively enumerate mount-face-relative paths matching a glob
+   * `pattern`. The only metacharacters are `*` (zero or more characters
+   * within one segment, never `/`, matching leading-dot names) and `**` (a
+   * whole segment matching zero or more directory levels); every other
+   * character is a literal. Denied segments never appear in results, entries
+   * that escape confinement are excluded, results include directories, and
+   * the list is sorted by UTF-16 code unit and capped at 10,000 with silent
+   * truncation.
+   */
+  glob(pattern: string): Promise<string[]>;
   lookup(
     path: string | string[] | EndoMountEntry,
   ): Promise<EndoMount | EndoMountFile>;
