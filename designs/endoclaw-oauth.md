@@ -54,8 +54,17 @@ against this layer:
 Three layers, from durable credential to granted facet:
 
 ```ts
+// Host-side entry point: run the first-mint flow ONCE and return the caretaker
+// over the resulting stored credential. This is the top-level operation Phase 2
+// builds (§ First Mint); it is distinct from OAuthTokenControl.mint below, which
+// grants cheap facets from an ALREADY-stored token. Never granted to guests.
+mintOAuthToken(profile: OAuthProviderProfile): Promise<OAuthTokenControl>;
+
 // Host-side caretaker over ONE stored credential. Never granted to guests.
 interface OAuthTokenControl {
+  // Grant a facet from the already-stored token (a cheap attenuation, not a new
+  // consent flow). Named `mint` for the facet layer; the credential itself is
+  // first-minted by mintOAuthToken above.
   mint(opts: {
     baseUrl: string,             // for example 'https://sheets.googleapis.com'
     allowedPaths?: string[],     // default: no restriction within the base URL
@@ -70,29 +79,41 @@ interface OAuthTokenControl {
 
 // Per-facet caretaker, paired with each granted OAuth exo.
 interface OAuthControl {
-  setAllowedPaths(patterns: string[]): void;
-  setReadOnly(flag: boolean): void;  // restricts to GET and HEAD
-  refresh(): Promise<void>;          // delegates to the shared token record
-  revoke(): void;                    // severs THIS facet; the token survives
-  help(): string;
+  setAllowedPaths(allowedPaths: string[]): void;  // same noun as mint's option
+  setReadOnly(flag: boolean): void;  // restricts to GET and HEAD (see caveat below)
+  refresh(): Promise<void>;          // pure delegation to the shared token record
+  revoke(): Promise<void>;           // severs THIS facet; the token survives.
+                                     // Async for uniform await-discipline with
+                                     // OAuthTokenControl.revoke, though the sever
+                                     // is local and resolves immediately.
+  help(): string;                    // must not name or hint the mint flow
 }
 
 // The agent-facing (or connector-facing) capability.
 interface OAuth {
-  fetch(path: string, options?: FetchOptions): Promise<Response>;
+  fetch(path: string, options?: FetchOptions): Promise<FetchResponse>;
   baseUrl(): string;
-  scopes(): string[];                // introspection; scopes are not settable
-  help(): string;
+  scopes(): string[];                // the token's CONSENT scopes, not this
+                                     // facet's effective authority (which
+                                     // allowedPaths/readOnly narrow); introspection
+                                     // only, scopes are not settable
+  help(): string;                    // must not name or hint the mint flow
 }
 
 type FetchOptions = {
   method?: string;
   headers?: Record<string, string>;
-  body?: string;
+  body?: string;                     // text bodies only; a bytes body is the
+                                     // upload-side twin of the deferred bytes()
+                                     // gap (§ The Connector Contract)
 };
 
-type Response = {
+// A fetch-subset, deliberately NOT the global WHATWG Response (it omits
+// arrayBuffer/blob, and its json() returns unknown). Named FetchResponse so the
+// subset does not masquerade as the standard type.
+type FetchResponse = {
   status: number;
+  ok: boolean;                       // status in [200, 300); the idiomatic check
   headers: Record<string, string>;
   text(): Promise<string>;
   json(): Promise<unknown>;
@@ -111,14 +132,30 @@ Changes from the 2026-03-03 sketch:
   One credential backs many facets (§ Token, Facets, and Refresh).
 - **Path-pattern semantics are pinned.** A pattern is an exact path or
   a prefix ending in `*`. Matching runs against the normalized path
-  only (query string excluded), after percent-decoding and dot-segment
-  removal, so `..` segments cannot escape a prefix. Paths must begin
-  with `/`; absolute URLs are rejected, so a facet can never reach past
-  its `baseUrl` (the underlying `HttpClient` origin allowlist is the
-  backstop).
+  only (query string excluded), after percent-decoding the unreserved
+  set and dot-segment removal, so `..` segments cannot escape a prefix.
+  Encoded separators (`%2F`, `%5C`) are **not** decoded into segment
+  separators; they stay percent-encoded through matching and
+  forwarding, so a prefix cannot be smuggled past. The request is
+  issued with **exactly the normalized path that was matched**, never
+  the raw caller string, so the exo's allowlist view and the provider's
+  routing view cannot diverge (the parser-differential bypass). Paths
+  must begin with `/`; absolute URLs are rejected, so a facet can never
+  reach past its `baseUrl` (the underlying `HttpClient` origin allowlist
+  is the backstop).
 - **Header hygiene.** Caller-supplied `Authorization`, `Cookie`, and
   `Proxy-Authorization` headers are rejected; the exo owns the
-  credential header.
+  credential header. Method-override headers (`X-HTTP-Method-Override`,
+  `X-HTTP-Method`, `X-Method-Override`) are rejected too, so a
+  `readOnly` facet cannot tunnel a write through a GET.
+- **Redirects do not replay the credential.** The underlying
+  `HttpClient` does **not** transparently follow provider `3xx`
+  responses for a credentialed request: a redirect is returned to the
+  caller as-is rather than followed with the `Authorization` header
+  re-attached. Auto-following would send the token to a target
+  `setAllowedPaths` never checked (path enforcement runs on the original
+  request only), so following is the connector's explicit act on a fresh
+  `fetch`, re-validated against `allowedPaths`.
 - **Auth-layer errors are structured.** Denials and credential failures
   are thrown locally with copyable `code` properties (`'path-denied'`,
   `'method-denied'`, `'header-denied'`, `'auth-revoked'`,
@@ -130,13 +167,20 @@ Changes from the 2026-03-03 sketch:
 ## First Mint
 
 **The host runs the flow; the agent and every connector are absent from
-it.** The result of a mint is a stored token record and its
-`OAuthTokenControl`; everything a consumer ever sees is minted after
-the flow completes. Nothing on `OAuth`, `OAuthControl`, or
-`OAuthTokenControl` names or reveals which flow produced the token.
-That invariant is what lets [exo-google-sheets](exo-google-sheets.md)
-Resolved Question 5 defer here: a connector composes over an
-already-minted `OAuth` exo and cannot care.
+it.** The top-level `mintOAuthToken(profile)` operation (§ Capability
+Shape) runs the flow once and returns the caretaker over the resulting
+stored credential; everything a consumer ever sees is a facet
+`OAuthTokenControl.mint` grants after the flow completes. The word
+"mint" therefore names two operations at two layers: **first-mint**
+(`mintOAuthToken`, which creates the token record and its
+`OAuthTokenControl`) and **facet grant** (`OAuthTokenControl.mint`,
+which attenuates an already-stored token). Phase 2 builds the former;
+Phase 3 builds the latter. Nothing on `OAuth`, `OAuthControl`, or
+`OAuthTokenControl` (including their `help()` and `scopes()` surfaces)
+names or reveals which flow produced the token. That invariant is what
+lets [exo-google-sheets](exo-google-sheets.md) Resolved Question 5 defer
+here: a connector composes over an already-minted `OAuth` exo and cannot
+care.
 
 **The default flow is authorization-code with PKCE (RFC 7636) against a
 loopback redirect** (RFC 8252 § 7.3), opened in the user's system
@@ -144,7 +188,9 @@ browser, never an embedded webview (RFC 8252 § 8.12; Google blocks
 embedded user-agents outright). This matches the decision already made
 for LLM-provider subscriptions in
 [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md):
-the redirect URI is a Familiar pane in the Electron build, or a local
+the redirect URI is a Familiar pane in the Electron build (the Familiar
+is Endo's Electron desktop app; the pane hosts the provider's consent
+page and captures the loopback redirect in-process), or a local
 HTTP listener bound to `127.0.0.1` in the daemon-only build (per
 [gateway-bearer-token-auth](gateway-bearer-token-auth.md)). The two
 designs share this mint plumbing; they differ only in what consumes the
@@ -175,7 +221,7 @@ type OAuthProviderProfile = {
 };
 ```
 
-The mint sequence, driven through the daemon's existing structured-ask
+The mint sequence is driven through the daemon's existing structured-ask
 channel ([daemon-form-request](daemon-form-request.md)) when an agent
 is the requester, or the CLI/Chat UI when the human is:
 
@@ -251,14 +297,17 @@ rather than re-derive it:
 
 1. **A fetch-shaped power.** The connector's plain client (for example
    `@endo/google-sheets`) takes an injected `(path, options) =>
-   Promise<Response>`. The host composes the connector stack in the
-   same vat as the `OAuth` exo, closing over its `fetch`; no CapTP hop
-   per request. The `OAuth` exo remains a passable capability for the
-   direct-grant case (`E(gmail).fetch(...)`).
+   Promise<FetchResponse>`. The host composes the connector stack in the
+   same vat (the isolated execution context that runs the exo) as the
+   `OAuth` exo, closing over its `fetch`; no CapTP (the object-capability
+   RPC transport) hop per request. The `OAuth` exo remains a passable
+   capability for the direct-grant case (`E(gmail).fetch(...)`).
 2. **The credential is invisible, in both directions.** No method
    returns or forwards the token, and the flow that minted it is not
-   observable. A connector built on a redirect-minted token is
-   indistinguishable from one built on a device-code-minted token.
+   observable, including through the `help()` and `scopes()` surfaces,
+   which name neither the flow nor the credential. A connector built on a
+   redirect-minted token is indistinguishable from one built on a
+   device-code-minted token.
 3. **Errors are separable.** Auth-layer denials arrive as structured
    local errors with `code` properties; provider responses pass through
    untouched, so the connector owns the mapping of its service's error
@@ -280,10 +329,13 @@ rather than re-derive it:
    bucket) and in `HttpClient` (`setMaxRequestsPerMinute`); this layer
    adds none.
 
-Gap noted, deferred until a connector needs it: `Response` exposes
-`text()` and `json()` only. A connector moving binary media (Drive file
-download, Gmail raw attachments outside JSON) will want `bytes()`;
-adding it is additive and breaks nothing.
+Gap noted, deferred until a connector needs it, on both directions of
+binary media: `FetchResponse` exposes `text()` and `json()` only, and
+`FetchOptions.body` is `string` only. A connector moving binary media
+(Drive file download, Gmail raw attachments outside JSON) will want a
+`bytes()` accessor on the response, and a bytes/stream upload body will
+want the matching input shape; adding both is additive and breaks
+nothing.
 
 ## Endo Idiom
 
@@ -299,7 +351,13 @@ the agent to specific API endpoints. An agent with Gmail read access
 cannot call the Calendar API on the same credential.
 
 **Read-only mode.** `setReadOnly(true)` restricts to GET and HEAD. The
-agent can read emails but not send them.
+agent can read emails but not send them. This is a *method* restriction,
+so it is exact only where the provider maps reads to GET/HEAD and writes
+to other verbs. Some Google reads are POST (Sheets
+`values:batchGetByDataFilter`, Gmail `messages:batchGet`), so a read-only
+grant on those APIs pairs `setReadOnly` with `setAllowedPaths` pinned to
+the read endpoints rather than leaning on the verb alone; method-override
+headers are rejected (§ Capability Shape) so the verb cannot be spoofed.
 
 **Caretaker revocation.** Facet revocation cuts one grant instantly;
 token revocation cuts the credential itself, at the provider.
@@ -391,9 +449,10 @@ uses without holding.
    registration for v1 (no shared quota, no verification gate on the
    project) and revisit a first-party id when the Familiar wants a
    zero-setup experience.
-3. Resolved in the body: first-mint flow (§ First Mint, Design
-   Decisions 1-2), scope control (Design Decision 4), multi-host
-   credentials (Design Decision 3).
+
+Resolved in the body (formerly open): first-mint flow (§ First Mint,
+Design Decisions 1-2), scope control (Design Decision 4), multi-host
+credentials (Design Decision 3).
 
 ## Prompt
 

@@ -47,7 +47,7 @@ filesystem/blob realization of sed-like reads and leaves rendered Git
 outputs plus remote exo propagation as follow-ups),
 [endoclaw-oauth](endoclaw-oauth.md) (revised 2026-07-07 per review of
 PR #612 to serve as the credential foundation for domain connectors
-(exo-google-sheets and Gmail/Calendar siblings): first-mint flow
+(exo-google-sheets and Gmail and Calendar siblings): first-mint flow
 settled (authorization-code with PKCE against a loopback redirect by
 default, device-code as a per-provider alternative, the choice
 invisible to consumers), token record split from facets so one consent
