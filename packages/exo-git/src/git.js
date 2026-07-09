@@ -15,6 +15,7 @@ import { GitInterface } from './interfaces.js';
 /**
  * @import {
  *   EndoGit,
+ *   GitCherryPickOptions,
  *   GitCommit,
  *   GitCommitOptions,
  *   GitCreateBranchOptions,
@@ -149,6 +150,7 @@ harden(getGitBackend);
  * @property {(paths: string[], opts?: GitRestoreOptions) => Promise<void>} restore
  * @property {(message: string, opts?: GitCommitOptions) => Promise<GitCommit>} commit
  * @property {(ref: string, message: string) => Promise<GitCommit>} reword
+ * @property {(ref: string, opts?: GitCherryPickOptions) => Promise<string>} cherryPick
  * @property {() => Promise<GitRef | undefined>} currentBranch
  * @property {() => Promise<GitRef[]>} branches
  * @property {(name: string, opts?: GitCreateBranchOptions) => Promise<GitRef>} createBranch
@@ -476,6 +478,11 @@ export const makeGit = (
       return backend.reword(refName(ref), message);
     },
 
+    async cherryPick(ref, options = {}) {
+      assertWritable('cherryPick');
+      return backend.cherryPick(refName(ref), options);
+    },
+
     async currentBranch() {
       return backend.currentBranch();
     },
@@ -602,7 +609,8 @@ export const makeGit = (
     },
   };
 
-  const exo = makeExo('Git', GitInterface, gitMethods);
+  // eslint-disable-next-line jsdoc/reject-any-type -- GitInterface's guard-derived type is wider than the public rebase union.
+  const exo = makeExo('Git', /** @type {any} */ (GitInterface), gitMethods);
 
   const typed = /** @type {EndoGit} */ (/** @type {unknown} */ (exo));
   gitReadOnly.set(typed, readOnly);
@@ -638,6 +646,7 @@ export const makeNotYetImplementedBackend = () => {
     restore: async () => fail('restore'),
     commit: async () => fail('commit'),
     reword: async () => fail('reword'),
+    cherryPick: async () => fail('cherryPick'),
     currentBranch: async () => fail('currentBranch'),
     branches: async () => fail('branches'),
     createBranch: async () => fail('createBranch'),
