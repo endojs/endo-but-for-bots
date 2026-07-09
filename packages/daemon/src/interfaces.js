@@ -596,6 +596,12 @@ export const MountInterface = M.interface('EndoMount', {
   // remotables consistently across CapTP.
   has: M.call().rest(M.any()).returns(M.promise()),
   list: M.call().rest(PathSegmentsShape).returns(M.promise()),
+  // Recursively enumerate paths matching a glob pattern (only `*` and `**`
+  // are metacharacters). Denied segments never appear; results are
+  // mount-face-relative, include directories, and are sorted by UTF-16 code
+  // unit. Capped at GLOB_MAX_RESULTS with silent truncation. See
+  // designs/mount-extensions-reconstruction.md § "PR B — glob".
+  glob: M.call(M.string()).returns(M.promise()),
   lookup: M.call(PathArgShape).returns(M.promise()),
   // `maybeLookup` is the `ReadableNameHub` primitive (lookup-or-undefined).
   // Widened from the shared `NameOrPathShape` contract to `PathArgShape` so the
