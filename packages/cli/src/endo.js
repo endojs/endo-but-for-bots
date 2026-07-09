@@ -965,7 +965,7 @@ export const main = async rawArgs => {
 
   interval
     .command('pause <name>')
-    .description('pause all of a scheduler\'s intervals')
+    .description("pause all of a scheduler's intervals")
     .action(async name => {
       const { intervalPause } = await import('./commands/interval.js');
       return intervalPause({ name });
@@ -973,7 +973,7 @@ export const main = async rawArgs => {
 
   interval
     .command('resume <name>')
-    .description('resume all of a scheduler\'s intervals')
+    .description("resume all of a scheduler's intervals")
     .action(async name => {
       const { intervalResume } = await import('./commands/interval.js');
       return intervalResume({ name });
