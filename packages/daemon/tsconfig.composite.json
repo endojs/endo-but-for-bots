@@ -33,6 +33,9 @@
       "path": "../exo-git/tsconfig.composite.json"
     },
     {
+      "path": "../exo-http-client/tsconfig.composite.json"
+    },
+    {
       "path": "../exo-shell/tsconfig.composite.json"
     },
     {
