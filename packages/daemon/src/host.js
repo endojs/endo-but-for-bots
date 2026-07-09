@@ -308,6 +308,7 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['checkinTree']} args.checkinTree
  * @param {DaemonCore['formulateMount']} args.formulateMount
  * @param {DaemonCore['formulateScratchMount']} args.formulateScratchMount
+ * @param {DaemonCore['formulateSubMount']} args.formulateSubMount
  * @param {DaemonCore['formulateGit']} args.formulateGit
  * @param {DaemonCore['formulateShell']} args.formulateShell
  * @param {DaemonCore['formulateHttpClient']} args.formulateHttpClient
@@ -359,6 +360,7 @@ export const makeHostMaker = ({
   checkinTree,
   formulateMount,
   formulateScratchMount,
+  formulateSubMount,
   formulateGit,
   formulateShell,
   formulateHttpClient,
@@ -648,6 +650,58 @@ export const makeHostMaker = ({
         readOnly,
         tasks,
         deniedSegments,
+      );
+      return value;
+    };
+
+    /**
+     * Mint a sub-mount rooted at a subdirectory of an existing mount.
+     *
+     * The child mount gets its own confinement root, so a sub-mount at
+     * `/project/src` cannot reach `/project/.env` via `..`.  The
+     * `subpath` is clamped at the parent root by `formulateSubMount`, so
+     * it can never escape the parent; the parent mount is recorded in
+     * the child formula for dependency tracking.
+     *
+     * Sub-mount creation is a host method (not a `Mount` exo method)
+     * because it mints a new formula: creating a formula in the JS heap
+     * without atomically naming it in a pet store is vulnerable to a GC
+     * race.  The deferred task names the child under `newName` in the
+     * same critical section that formulates it.
+     *
+     * @param {NameOrPath} mountName - Pet name of the parent mount.
+     * @param {string[]} subpath - Segments beneath the parent root.
+     * @param {NameOrPath} newName - Pet name for the new sub-mount.
+     * @param {object} [options]
+     * @param {boolean} [options.readOnly]
+     */
+    const provideSubMount = async (
+      mountName,
+      subpath,
+      newName,
+      options = {},
+    ) => {
+      const { readOnly = false } = options;
+      const parentNamePath = namePathFrom(mountName);
+      const mountId = await E(directory).identify(...parentNamePath);
+      if (mountId === undefined) {
+        throw makeError(
+          X`provideSubMount: unknown parent mount ${q(mountName)}`,
+        );
+      }
+      const { namePath } = petNamePathFrom(newName);
+
+      /** @type {DeferredTasks<MountDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        E(directory).storeIdentifier(namePath, identifiers.mountId),
+      );
+
+      const { value } = await formulateSubMount(
+        /** @type {FormulaIdentifier} */ (mountId),
+        harden([...subpath]),
+        readOnly,
+        tasks,
       );
       return value;
     };
@@ -2426,6 +2480,7 @@ export const makeHostMaker = ({
       storeTree,
       provideMount,
       provideScratchMount,
+      provideSubMount,
       provideGit,
       provideShell,
       provideHttpClient,

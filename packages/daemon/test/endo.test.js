@@ -5679,6 +5679,104 @@ test('mount dot-dot navigation clamped at root', async t => {
   t.deepEqual(entries, ['inside.txt']);
 });
 
+test('provideSubMount read-only attenuation confines writes', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'submount-ro');
+  await createMountFixture(mountPath, {
+    'src/main.js': 'export default 1;\n',
+  });
+
+  // Parent mount is read-WRITE; the sub-mount asks for read-only, so
+  // attenuation is an independent per-formula property, not inherited.
+  await E(host).provideMount(mountPath, 'submount-ro-parent');
+  await E(host).provideSubMount(
+    'submount-ro-parent',
+    ['src'],
+    'submount-ro-child',
+    { readOnly: true },
+  );
+  const child = await E(host).lookup(['submount-ro-child']);
+
+  // Reading through the sub-mount works and is rooted at src/.
+  t.deepEqual(await E(child).list(), ['main.js']);
+  t.true(await E(child).has('main.js'));
+  const file = await E(child).lookup('main.js');
+  t.is(await E(file).text(), 'export default 1;\n');
+
+  // Every mutation is rejected.
+  await t.throwsAsync(E(child).writeText(['added.js'], 'nope'), {
+    message: /read-only/,
+  });
+  await t.throwsAsync(E(child).remove(['main.js']), {
+    message: /read-only/,
+  });
+  await t.throwsAsync(E(child).makeDirectory(['nested']), {
+    message: /read-only/,
+  });
+
+  // Cross-reference: the backing directory is untouched on disk.
+  const actual = await fs.promises.readdir(path.join(mountPath, 'src'));
+  t.deepEqual(actual, ['main.js']);
+});
+
+test('provideSubMount isolates the child from parent siblings', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'submount-iso');
+  // The canonical isolation case from the design: a sub-mount at
+  // `/project/src` must not be able to reach `/project/.env` via `..`.
+  await createMountFixture(mountPath, {
+    'src/main.js': 'export default 1;\n',
+    '.env': 'SECRET=xyz\n',
+  });
+
+  await E(host).provideMount(mountPath, 'submount-iso-parent');
+  await E(host).provideSubMount(
+    'submount-iso-parent',
+    ['src'],
+    'submount-iso-child',
+  );
+
+  const parent = await E(host).lookup(['submount-iso-parent']);
+  const child = await E(host).lookup(['submount-iso-child']);
+
+  // The parent can see the secret; the child, rooted at src/, cannot.
+  t.true(await E(parent).has('.env'));
+  t.deepEqual(await E(child).list(), ['main.js']);
+  t.false(await E(child).has('.env'));
+
+  // `..` from the child root is clamped at src/, so the sibling secret
+  // stays invisible both to has() and to list().
+  t.false(await E(child).has('..', '.env'));
+  t.deepEqual(await E(child).list('..'), ['main.js']);
+});
+
+test('provideSubMount clamps a .. subpath at the parent root', async t => {
+  const { host, config } = await prepareHost(t);
+
+  // Nest the parent mount one level deep so there is a real directory
+  // above it to try to escape into.
+  const rootPath = path.join(config.statePath, '..', 'submount-clamp');
+  await createMountFixture(rootPath, {
+    'topsecret.txt': 'do not leak\n',
+    'proj/app.js': 'run();\n',
+  });
+
+  // Mount only the nested `proj` directory as the parent.
+  await E(host).provideMount(path.join(rootPath, 'proj'), 'clamp-parent');
+
+  // A `..` subpath would lexically point at `submount-clamp` (which holds
+  // topsecret.txt), but formulateSubMount clamps it at the parent root,
+  // so the child is rooted back at `proj` and cannot reach the secret.
+  await E(host).provideSubMount('clamp-parent', ['..'], 'clamp-child');
+  const child = await E(host).lookup(['clamp-child']);
+
+  t.true(await E(child).has('app.js'));
+  t.false(await E(child).has('topsecret.txt'));
+  t.deepEqual(await E(child).list(), ['app.js']);
+});
+
 test('scratch mount - create and use', async t => {
   const { host, config } = await prepareHost(t);
 

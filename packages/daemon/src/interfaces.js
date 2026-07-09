@@ -333,6 +333,14 @@ export const HostInterface = M.interface('EndoHost', {
       ),
     )
     .returns(M.promise()),
+  // Mint a sub-mount rooted at a subdirectory of an existing mount
+  provideSubMount: M.call(
+    NameOrPathShape,
+    M.arrayOf(M.string()),
+    NameOrPathShape,
+  )
+    .optional(M.splitRecord({}, { readOnly: M.boolean() }))
+    .returns(M.promise()),
   // Derive a local Git capability from an authorized mount.  The optional
   // `identity` pins the formula-owned, guest-immutable commit author/committer;
   // omitted, commits default to `Endo <endo@invalid.local>`.

@@ -288,6 +288,12 @@ export type MountFormula = {
   // Restricted-segment set replacing the mount's default; present only when
   // overridden at creation, so a default mount keeps its historical shape.
   deniedSegments?: string[];
+  /**
+   * Parent mount formula, present only for sub-mounts minted by
+   * `provideSubMount`.  Recorded for dependency tracking so the parent
+   * mount stays reachable (and is cancelled together with) the child.
+   */
+  parent?: FormulaIdentifier;
 };
 
 export type ScratchMountFormula = {
@@ -1538,6 +1544,20 @@ export interface EndoHost extends EndoAgent {
     petName: string | string[],
     opts?: { readOnly?: boolean; deniedSegments?: string[] },
   ): Promise<EndoMount>;
+  /**
+   * Mint a sub-mount rooted at a subdirectory of an existing mount and
+   * store it under `newName`.  The child gets its own confinement root,
+   * so a sub-mount at `/project/src` cannot reach `/project/.env` via
+   * `..`; the `subpath` itself is clamped at the parent root, so it can
+   * never escape the parent.  The parent is recorded in the child
+   * formula for dependency tracking.
+   */
+  provideSubMount(
+    mountName: string | string[],
+    subpath: string[],
+    newName: string | string[],
+    opts?: { readOnly?: boolean },
+  ): Promise<EndoMount>;
   provideGit(
     mountCap: EndoMount,
     petName: string | string[],
@@ -2608,6 +2628,13 @@ export interface DaemonCore {
     readOnly: boolean,
     deferredTasks: DeferredTasks<ScratchMountDeferredTaskParams>,
     deniedSegments?: string[],
+  ) => FormulateResult<EndoMount>;
+
+  formulateSubMount: (
+    parentMountId: FormulaIdentifier,
+    subpath: string[],
+    readOnly: boolean,
+    deferredTasks: DeferredTasks<MountDeferredTaskParams>,
   ) => FormulateResult<EndoMount>;
 
   formulateGit: (
