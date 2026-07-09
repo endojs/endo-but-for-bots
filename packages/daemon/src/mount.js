@@ -10,6 +10,7 @@
 import { E } from '@endo/eventual-send';
 import { q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
+import { makePromiseKit } from '@endo/promise-kit';
 import { encodeBase64 } from '@endo/base64';
 import { mapReader } from '@endo/stream';
 import {
@@ -33,6 +34,11 @@ import {
 
 const mountEntryRecords = new WeakMap();
 const mountRecords = new WeakMap();
+
+// Unique wake token an open `followNameChanges` stream races against its
+// mount's revocation signal; a symbol so it is discriminable from every
+// possible watcher iterator result.
+const revokedSentinel = Symbol('mount-revoked');
 
 /**
  * Wrap a byte range as a `PassableBytesReader` (what `fetch` returns). An empty
@@ -488,8 +494,11 @@ harden(resolvePhysicalPath);
  * @property {(path: string) => Promise<object>} [snapshotFile]
  * @property {Set<string>} [deniedSegments] Lowercased restricted-segment set
  *   shared across every derived face; undefined means no denial.
- * @property {{ revoked: boolean }} [revocation] Mutable liveness record shared
- *   across every derived face; undefined means the mount is never revocable.
+ * @property {{ revoked: boolean, whenRevoked: Promise<undefined> }} [revocation]
+ *   Mutable liveness record shared across every derived face; undefined means
+ *   the mount is never revocable. `whenRevoked` settles when `revoke()` runs,
+ *   so an open stream can wake promptly rather than waiting on the next
+ *   coincidental filesystem event.
  */
 
 /**
@@ -973,35 +982,66 @@ const makeMountExo = ctx => {
             }
           }
 
-          for await (const event of watcher.events) {
-            // A revoke mid-stream fails the change stream rather than
-            // continuing to leak the directory's evolution.
-            assertLive();
-            if (isDenied(event.name)) {
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-            const childPath = filePowers.joinPath(target, event.name);
-            // eslint-disable-next-line no-await-in-loop
-            const present = await filePowers.exists(childPath);
-            // eslint-disable-next-line no-await-in-loop
-            const confined =
-              present &&
+          // Race each event pull against the revocation signal so a revoke
+          // that lands while the stream is parked awaiting the next filesystem
+          // event wakes it immediately, rather than stranding the stream until
+          // the directory next happens to change (or forever, if it never
+          // does). A plain (non-revocable) mount has no signal and just
+          // iterates the watcher directly.
+          const eventIterator = watcher.events[Symbol.asyncIterator]();
+          /** @type {Promise<typeof revokedSentinel> | undefined} */
+          const revokedSignal =
+            revocation !== undefined
+              ? revocation.whenRevoked.then(() => revokedSentinel)
+              : undefined;
+          try {
+            for (;;) {
+              // A revoke mid-stream fails the change stream rather than
+              // continuing to leak the directory's evolution.
+              assertLive();
               // eslint-disable-next-line no-await-in-loop
-              (await isConfinedPath(childPath, confinementRoot, filePowers));
-            if (confined && !known.has(event.name)) {
+              const next = await (revokedSignal
+                ? Promise.race([eventIterator.next(), revokedSignal])
+                : eventIterator.next());
+              if (next === revokedSentinel) {
+                // The signal woke us; the re-check trips the revoked gate and
+                // throws. The `break` is unreachable in practice (the signal
+                // only fires on revoke) but keeps the loop from spinning and
+                // narrows `next` to an iterator result below.
+                assertLive();
+                break;
+              }
+              if (next.done) {
+                break;
+              }
+              const event = next.value;
+              if (isDenied(event.name)) {
+                // eslint-disable-next-line no-continue
+                continue;
+              }
+              const childPath = filePowers.joinPath(target, event.name);
               // eslint-disable-next-line no-await-in-loop
-              const isDir = await filePowers.isDirectory(childPath);
-              const type = isDir ? 'directory' : 'file';
-              known.set(event.name, type);
-              yield harden({ add: event.name, type });
-            } else if (!confined && known.has(event.name)) {
-              known.delete(event.name);
-              yield harden({ remove: event.name });
+              const present = await filePowers.exists(childPath);
+              const confined =
+                present &&
+                // eslint-disable-next-line no-await-in-loop
+                (await isConfinedPath(childPath, confinementRoot, filePowers));
+              if (confined && !known.has(event.name)) {
+                // eslint-disable-next-line no-await-in-loop
+                const isDir = await filePowers.isDirectory(childPath);
+                const type = isDir ? 'directory' : 'file';
+                known.set(event.name, type);
+                yield harden({ add: event.name, type });
+              } else if (!confined && known.has(event.name)) {
+                known.delete(event.name);
+                yield harden({ remove: event.name });
+              }
+              // Otherwise the event was a same-name in-place mutation
+              // (file contents changed, or a quick remove/re-add that
+              // the debounce window collapsed); name-set is unchanged.
             }
-            // Otherwise the event was a same-name in-place mutation
-            // (file contents changed, or a quick remove/re-add that
-            // the debounce window collapsed); name-set is unchanged.
+          } finally {
+            await eventIterator.return?.();
           }
         } finally {
           watcher.cancel();
@@ -1262,8 +1302,9 @@ harden(makeMountEntryExo);
  * @param {FilePowers} filePowers
  * @param {string} confinementRoot
  * @param {(path: string) => Promise<object>} [snapshotFile]
- * @param {{ revoked: boolean }} [revocation] Liveness record shared with the
- *   minting mount; a flip trips this file handle too.
+ * @param {{ revoked: boolean, whenRevoked: Promise<undefined> }} [revocation]
+ *   Liveness record shared with the minting mount; a flip trips this file
+ *   handle too.
  * @returns {object}
  */
 const makeMountFileExo = (
@@ -1499,9 +1540,9 @@ harden(makeReadableBlobView);
  * @param {Iterable<string>} [opts.deniedSegments] Restricted-segment set that
  *   REPLACES `defaultDeniedSegments` (an empty iterable disables denial);
  *   undefined selects the default.
- * @param {{ revoked: boolean }} [opts.revocation] Liveness record shared across
- *   every derived face; `makeRevocableMount` supplies it. Undefined means the
- *   mount is never revocable.
+ * @param {{ revoked: boolean, whenRevoked: Promise<undefined> }} [opts.revocation]
+ *   Liveness record shared across every derived face; `makeRevocableMount`
+ *   supplies it. Undefined means the mount is never revocable.
  * @returns {object}
  */
 export const makeMount = ({
@@ -1550,11 +1591,19 @@ harden(makeMount);
  * @returns {{ mount: object, control: object }}
  */
 export const makeRevocableMount = opts => {
-  const revocation = { revoked: false };
+  // `whenRevoked` settles the instant `revoke()` runs, so an open
+  // `followNameChanges` stream parked on the next filesystem event wakes and
+  // fails promptly instead of hanging until the directory happens to change.
+  const { promise: whenRevoked, resolve: signalRevoked } =
+    /** @type {import('@endo/promise-kit').PromiseKit<undefined>} */ (
+      makePromiseKit()
+    );
+  const revocation = { revoked: false, whenRevoked };
   const mount = makeMount({ ...opts, revocation });
   const control = makeExo('EndoMountControl', MountControlInterface, {
     revoke() {
       revocation.revoked = true;
+      signalRevoked(undefined);
     },
     help(method) {
       return method === undefined

@@ -340,9 +340,9 @@ test('revocation: an open followNameChanges stream fails after revoke', async t 
   t.is(first.add, 'alpha.txt');
 
   E(control).revoke();
-  // Provoke a filesystem event; the generator re-checks liveness at the top
-  // of each event iteration and fails the stream.
-  fs.writeFileSync(path.join(rootPath, 'beta.txt'), 'b');
+  // Revocation wakes the parked stream directly: the generator races each
+  // event pull against the revocation signal, so the open stream fails
+  // promptly on revoke without waiting for the directory to change.
   await t.throwsAsync(() => reader.next(), {
     message: /Mount has been revoked/,
   });
