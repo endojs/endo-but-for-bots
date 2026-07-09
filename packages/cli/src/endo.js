@@ -948,6 +948,37 @@ export const main = async rawArgs => {
       await ping();
     });
 
+  // The interval scheduler (EndoClaw heartbeat) management surface. `<name>`
+  // is the pet name a scheduler was stored under by
+  // `host.makeIntervalScheduler`; see endoclaw-timer design § Phase 4.
+  const interval = program
+    .command('interval')
+    .description('inspect and control an agent interval scheduler (heartbeat)');
+
+  interval
+    .command('list <name>')
+    .description("list a scheduler's intervals")
+    .action(async name => {
+      const { intervalList } = await import('./commands/interval.js');
+      return intervalList({ name });
+    });
+
+  interval
+    .command('pause <name>')
+    .description('pause all of a scheduler\'s intervals')
+    .action(async name => {
+      const { intervalPause } = await import('./commands/interval.js');
+      return intervalPause({ name });
+    });
+
+  interval
+    .command('resume <name>')
+    .description('resume all of a scheduler\'s intervals')
+    .action(async name => {
+      const { intervalResume } = await import('./commands/interval.js');
+      return intervalResume({ name });
+    });
+
   // Group commands by topic in the help screen.
   installGroupedHelp(
     program,
@@ -1017,6 +1048,11 @@ export const main = async rawArgs => {
     {
       title: 'Agents',
       commands: ['mkhost', 'mkguest', 'invite', 'accept'],
+    },
+
+    {
+      title: 'Scheduling',
+      commands: ['interval'],
     },
 
     {

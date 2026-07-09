@@ -1317,9 +1317,14 @@ export const makeHostMaker = ({
 
     /**
      * Create an interval scheduler bound to this agent and store it under the
-     * given pet name. The returned capability lets the agent create and manage
-     * periodic wakeup intervals (the EndoClaw heartbeat facility). Tick
-     * delivery as mail messages is a later phase of the endoclaw-timer design.
+     * given pet name (the EndoClaw heartbeat facility). Resolves to the
+     * `{ scheduler, schedulerControl }` facet pair (endoclaw-timer § Maker
+     * Function): `scheduler` is granted to the agent to create and manage
+     * periodic wakeup intervals, while `schedulerControl` is the host-retained
+     * IntervalControl facet (pause / resume / revoke / setMaxActive /
+     * setMinPeriodMs / listAll). The stored pet name resolves to the same pair,
+     * which the `endo interval list|pause|resume` CLI drives. Tick delivery as
+     * mail messages is a later phase of the endoclaw-timer design.
      *
      * @param {PetName} petName - Pet name to store the scheduler under.
      * @param {{ maxActive?: number, minPeriodMs?: number }} [options] - Host
@@ -1337,7 +1342,12 @@ export const makeHostMaker = ({
         options,
         tasks,
       );
-      return value;
+      // The incarnated value is the `{ scheduler, schedulerControl }` facet
+      // pair the `interval-scheduler` maker returns (daemon.js); `formulate`
+      // widens it to `unknown`.
+      return /** @type {{ scheduler: import('./types.js').IntervalSchedulerFacet, schedulerControl: import('./types.js').IntervalControlFacet }} */ (
+        value
+      );
     };
 
     /**

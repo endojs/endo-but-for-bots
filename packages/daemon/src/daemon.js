@@ -3943,22 +3943,17 @@ const makeDaemonCore = async (
       // resurrect an armed timer (a bare disarm sweep would not).
       context.thisDiesIfThatDies(agentId);
       context.onCancel(() => stop());
-      // Phase 1 returns a single capability exposing both the agent-facing
-      // scheduler methods and the host-facing control methods. Phase 4 splits
-      // these into the `IntervalScheduler` / `IntervalControl` facet pair the
-      // host method returns.
-      return Far('IntervalScheduler', {
-        makeInterval: (label, periodMs, opts) =>
-          scheduler.makeInterval(label, periodMs, opts),
-        list: () => scheduler.list(),
-        help: () => scheduler.help(),
-        setMaxActive: n => schedulerControl.setMaxActive(n),
-        setMinPeriodMs: ms => schedulerControl.setMinPeriodMs(ms),
-        pause: () => schedulerControl.pause(),
-        resume: () => schedulerControl.resume(),
-        revoke: () => schedulerControl.revoke(),
-        listAll: () => schedulerControl.listAll(),
-      });
+      // Phase 4 (endoclaw-timer § Maker Function): the incarnated value is the
+      // `{ scheduler, schedulerControl }` facet pair. `scheduler` is the
+      // agent-facing facet (makeInterval / list / help); `schedulerControl` is
+      // the host-facing IntervalControl facet (pause / resume / revoke /
+      // setMaxActive / setMinPeriodMs / listAll). The host `makeIntervalScheduler`
+      // method returns this record so the host can grant `scheduler` to the agent
+      // while retaining `schedulerControl`; the `endo interval` CLI reaches the
+      // control facet to pause/resume and the scheduler facet to list. `stop` is
+      // the daemon-internal teardown latched by `context.onCancel` above and is
+      // deliberately not exposed to holders of the capability.
+      return harden({ scheduler, schedulerControl });
     },
     channel: async (formula, context, id) => {
       const {

@@ -620,6 +620,96 @@ test('anonymous spawn and evaluate', async t => {
   t.is(ten, 10);
 });
 
+// endoclaw-timer Phase 4 (Host Integration): the host `makeIntervalScheduler`
+// method resolves to the `{ scheduler, schedulerControl }` facet pair and
+// stores it under the given pet name. These tests exercise the pair end to end
+// through a live daemon: create via the host, drive the agent-facing
+// `scheduler` facet (makeInterval / list) and the host-facing
+// `schedulerControl` (IntervalControl) facet (pause / resume / listAll /
+// revoke), and confirm the stored pet name resolves to the same pair. Periods
+// are set an hour out so no tick fires during the test.
+const HOUR_MS = 60 * 60 * 1000;
+
+test('makeIntervalScheduler returns a scheduler/control facet pair', async t => {
+  const { host } = await prepareHost(t);
+
+  const pair = await E(host).makeIntervalScheduler('sched', {
+    minPeriodMs: 1000,
+    maxActive: 3,
+  });
+  t.is(typeof pair, 'object', 'the host method resolves to a facet-pair record');
+  t.truthy(pair.scheduler, 'the record carries the agent-facing scheduler facet');
+  t.truthy(
+    pair.schedulerControl,
+    'the record carries the host-facing control facet',
+  );
+
+  // The stored pet name resolves to the same facet pair.
+  const looked = await E(host).lookup('sched');
+  t.truthy(looked.scheduler);
+  t.truthy(looked.schedulerControl);
+
+  const interval = await E(pair.scheduler).makeInterval('heartbeat', HOUR_MS, {
+    firstDelayMs: HOUR_MS,
+  });
+  t.is(await E(interval).label(), 'heartbeat');
+  t.is(await E(interval).period(), HOUR_MS);
+
+  const entries = await E(pair.scheduler).list();
+  t.is(entries.length, 1, 'the created interval appears in list()');
+  t.is(entries[0].label, 'heartbeat');
+  t.is(entries[0].status, 'active');
+
+  // The host-facing control facet audits the same entries via listAll().
+  const allEntries = await E(pair.schedulerControl).listAll();
+  t.is(allEntries.length, 1);
+});
+
+test('IntervalControl pause / resume / revoke drive the scheduler', async t => {
+  const { host } = await prepareHost(t);
+
+  const { scheduler, schedulerControl } = await E(host).makeIntervalScheduler(
+    'sched',
+    { minPeriodMs: 1000, maxActive: 2 },
+  );
+  await E(scheduler).makeInterval('heartbeat', HOUR_MS, {
+    firstDelayMs: HOUR_MS,
+  });
+
+  // pause() and resume() are host-side controls; the entry stays active on
+  // disk (pause suppresses arming, it does not cancel — design § Pause).
+  await E(schedulerControl).pause();
+  let entries = await E(schedulerControl).listAll();
+  t.is(entries[0].status, 'active', 'pause leaves the entry active on disk');
+  await E(schedulerControl).resume();
+
+  // maxActive is host-controlled and enforced at makeInterval.
+  await E(scheduler).makeInterval('second', HOUR_MS, { firstDelayMs: HOUR_MS });
+  await t.throwsAsync(
+    E(scheduler).makeInterval('third', HOUR_MS, { firstDelayMs: HOUR_MS }),
+    { message: /active interval limit reached/ },
+    'the third interval trips the host maxActive=2 limit',
+  );
+
+  // revoke() is permanent: the agent-facing facet is dead afterwards.
+  await E(schedulerControl).revoke();
+  await t.throwsAsync(
+    E(scheduler).list(),
+    { message: /revoked/ },
+    'list() throws once the scheduler is revoked',
+  );
+  await t.throwsAsync(
+    E(scheduler).makeInterval('late', HOUR_MS, { firstDelayMs: HOUR_MS }),
+    { message: /revoked/ },
+    'makeInterval() throws once the scheduler is revoked',
+  );
+  entries = await E(schedulerControl).listAll();
+  t.true(
+    entries.every(entry => entry.status === 'cancelled'),
+    'revoke() cancels every entry',
+  );
+});
+
 test('evaluate allows mixed-case code names', async t => {
   const { host } = await prepareHost(t);
 
