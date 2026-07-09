@@ -4579,7 +4579,10 @@ const makeDaemonCore = async (
         if (await filePowers.exists(fullPath)) {
           const realParent = await filePowers.realPath(parentPath);
           const realFull = await filePowers.realPath(fullPath);
-          if (realFull !== realParent && !realFull.startsWith(`${realParent}/`)) {
+          if (
+            realFull !== realParent &&
+            !realFull.startsWith(`${realParent}/`)
+          ) {
             throw makeError(
               X`Sub-mount subpath ${q(subpath)} escapes parent mount root`,
             );
