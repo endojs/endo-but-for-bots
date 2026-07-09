@@ -836,6 +836,194 @@ const makeMountExo = ctx => {
     return entry;
   };
 
+  /**
+   * Enumerate the mount-face-relative paths matching a glob `pattern`, sorted by
+   * UTF-16 code unit and capped at `GLOB_MAX_RESULTS`. Shared by the `glob`
+   * method (which returns this list) and `grep` (which selects the files it
+   * searches through it), so both inherit identical confinement, deny
+   * filtering, and ordering. Denied names are never enumerated into a result,
+   * even when matched literally, and entries that escape confinement (symlinks
+   * out of the mount root) are silently excluded, mirroring `list()`.
+   *
+   * @param {string} pattern
+   * @returns {Promise<string[]>}
+   */
+  const globFacePaths = async pattern => {
+    await null;
+    // `glob` walks the tree rather than resolving a single path, so it gates
+    // liveness here directly; a revoked mount throws before any enumeration.
+    assertLive();
+    const patternSegments = parseGlobPattern(pattern);
+
+    /** @type {Set<string>} */
+    const results = new Set();
+
+    /**
+     * `(dir, remaining-suffix)` pairs already walked. A pair yields the same
+     * results every time it is reached — `dir`'s host path fixes `prefix`,
+     * and `remaining` is always a suffix of `patternSegments`, so
+     * `remaining.length` names which suffix — hence re-walking one is pure
+     * redundant work. Memoizing bounds the whole walk to O(nodes · segments),
+     * collapsing the super-linear re-traversal that stacked or interleaved
+     * `**` segments (two adjacent globstars, or globstars split by a literal
+     * segment) would otherwise drive from every position — a caller-controlled
+     * blow-up the `GLOB_MAX_RESULTS` cap does not bound (it caps the returned
+     * array, not the traversal).
+     *
+     * @type {Set<string>}
+     */
+    const visited = new Set();
+
+    /**
+     * Match the remaining pattern segments against the tree rooted at `dir`
+     * (an absolute host path), accumulating mount-face-relative `/`-joined
+     * paths in `results`. Denied names are never enumerated into a result,
+     * even when matched literally, and entries that escape confinement
+     * (symlinks out of the mount root) are silently excluded, mirroring
+     * `list()`.
+     *
+     * `ancestorsReal` carries the symlink-free physical paths of `dir` and
+     * every directory on the descent path above it. A `**` descent that would
+     * re-enter one of them (a symlink cycle such as `self -> .` inside the
+     * confined root, which `isConfinedPath`/`isDirectory` both follow and so
+     * cannot exclude) is skipped, so the walk terminates on cyclic trees
+     * instead of spinning `self/self/self/…` until `PATH_MAX`.
+     *
+     * @param {string[]} remaining
+     * @param {string} dir
+     * @param {string[]} prefix
+     * @param {Set<string>} ancestorsReal
+     * @returns {Promise<void>}
+     */
+    const walk = async (remaining, dir, prefix, ancestorsReal) => {
+      // Skip a `(dir, remaining-suffix)` pair already walked (see `visited`).
+      const visitKey = `${remaining.length}\0${dir}`;
+      if (visited.has(visitKey)) {
+        return;
+      }
+      visited.add(visitKey);
+      if (remaining.length === 0) {
+        // The mount face's own root (empty prefix) is never itself a result.
+        if (prefix.length > 0) {
+          results.add(prefix.join('/'));
+        }
+        return;
+      }
+      // Enumerate this directory once. A read failure (e.g. a directory
+      // removed mid-walk) drops this branch rather than aborting the glob.
+      let names;
+      try {
+        names = await filePowers.readDirectory(dir);
+      } catch {
+        return;
+      }
+      const [head, ...rest] = remaining;
+      if (head === '**') {
+        // `**` matches zero or more path segments. Zero segments consumed:
+        // continue matching `rest` at the current directory (this is what
+        // lets `docs/**/*.md` still match `docs/*.md`). One or more segments
+        // consumed: descend into each confined child directory with `**`
+        // still in play. A trailing `**` (empty `rest`) additionally matches
+        // file descendants directly, since `**` matches a whole sequence of
+        // segments ending in a file, not just directories.
+        await walk(rest, dir, prefix, ancestorsReal);
+        // Walk order does not affect the result: `results` is a Set and the
+        // final `sort()` below governs output order, so no per-directory sort
+        // is needed here.
+        for (const name of names) {
+          if (isDenied(name)) {
+            // eslint-disable-next-line no-continue
+            continue;
+          }
+          const childPath = filePowers.joinPath(dir, name);
+          // eslint-disable-next-line no-await-in-loop
+          const confined = await isConfinedPath(
+            childPath,
+            confinementRoot,
+            filePowers,
+          );
+          if (!confined) {
+            // eslint-disable-next-line no-continue
+            continue;
+          }
+          // eslint-disable-next-line no-await-in-loop
+          if (await filePowers.isDirectory(childPath)) {
+            // eslint-disable-next-line no-await-in-loop
+            const childReal = await maybeRealPath(childPath, filePowers);
+            if (childReal !== undefined && !ancestorsReal.has(childReal)) {
+              const descentAncestors = new Set([...ancestorsReal, childReal]);
+              // eslint-disable-next-line no-await-in-loop
+              await walk(
+                remaining,
+                childPath,
+                [...prefix, name],
+                descentAncestors,
+              );
+            } else if (rest.length === 0) {
+              // A cyclic (or unresolvable) directory under a trailing `**` is
+              // still a valid entry: recorded once, never re-entered.
+              results.add([...prefix, name].join('/'));
+            }
+          } else if (rest.length === 0) {
+            results.add([...prefix, name].join('/'));
+          }
+        }
+        return;
+      }
+      const matches = compileGlobSegment(head);
+      // As above, the final `sort()` governs output order; walking in
+      // directory order here is sufficient.
+      for (const name of names) {
+        if (isDenied(name) || !matches(name)) {
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        const childPath = filePowers.joinPath(dir, name);
+        // eslint-disable-next-line no-await-in-loop
+        const confined = await isConfinedPath(
+          childPath,
+          confinementRoot,
+          filePowers,
+        );
+        if (!confined) {
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        if (rest.length === 0) {
+          results.add([...prefix, name].join('/'));
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        // A non-final segment must descend, so it matches directories only.
+        // eslint-disable-next-line no-await-in-loop
+        if (await filePowers.isDirectory(childPath)) {
+          // eslint-disable-next-line no-await-in-loop
+          const childReal = await maybeRealPath(childPath, filePowers);
+          // A literal descent consumes a segment, so it cannot recurse
+          // without bound; still extend the ancestor set so a later `**`
+          // sees this directory's physical identity and detects a cycle.
+          const nextAncestors =
+            childReal === undefined
+              ? ancestorsReal
+              : new Set([...ancestorsReal, childReal]);
+          // eslint-disable-next-line no-await-in-loop
+          await walk(rest, childPath, [...prefix, name], nextAncestors);
+        }
+      }
+    };
+
+    const rootReal = await maybeRealPath(currentDir, filePowers);
+    const initialAncestors = new Set(rootReal === undefined ? [] : [rootReal]);
+    await walk(patternSegments, currentDir, [], initialAncestors);
+
+    // Sort by UTF-16 code unit (Array.prototype.sort's default string order)
+    // as the final step, then cap. Sorting before truncating makes the
+    // dropped set deterministic across platforms: a Rust runner mirrors the
+    // sort, not the walk order.
+    const sorted = [...results].sort();
+    return sorted.slice(0, GLOB_MAX_RESULTS);
+  };
+
   const help = makeHelp(mountHelp);
 
   const exo = makeExo('EndoMount', MountInterface, {
@@ -881,181 +1069,69 @@ const makeMountExo = ctx => {
     },
 
     async glob(pattern) {
+      return harden(await globFacePaths(pattern));
+    },
+
+    async grep(pattern, options = {}) {
       await null;
-      // `glob` walks the tree rather than resolving a single path, so it gates
-      // liveness here directly; a revoked mount throws before any enumeration.
+      // `grep` walks the tree via `glob`, so it gates liveness here directly; a
+      // revoked mount throws before any file is read.
       assertLive();
-      const patternSegments = parseGlobPattern(pattern);
+      const { glob: globPattern = '**/*', maxResults = 1000 } = options;
+      // ECMAScript RegExp source with no flags. Both platforms execute this
+      // same `mount.js` (V8 under Node, XS under the Rust supervisor), so the
+      // engine dialect is ECMA-262 on both sides.
+      const regex = new RegExp(pattern);
+      // File selection goes through `glob`, inheriting confinement, deny
+      // filtering, and UTF-16 ordering; `glob` yields directories too, which
+      // are skipped below.
+      const paths = await globFacePaths(globPattern);
 
-      /** @type {Set<string>} */
-      const results = new Set();
-
-      /**
-       * `(dir, remaining-suffix)` pairs already walked. A pair yields the same
-       * results every time it is reached — `dir`'s host path fixes `prefix`,
-       * and `remaining` is always a suffix of `patternSegments`, so
-       * `remaining.length` names which suffix — hence re-walking one is pure
-       * redundant work. Memoizing bounds the whole walk to O(nodes · segments),
-       * collapsing the super-linear re-traversal that stacked or interleaved
-       * `**` segments (two adjacent globstars, or globstars split by a literal
-       * segment) would otherwise drive from every position — a caller-controlled
-       * blow-up the `GLOB_MAX_RESULTS` cap does not bound (it caps the returned
-       * array, not the traversal).
-       *
-       * @type {Set<string>}
-       */
-      const visited = new Set();
-
-      /**
-       * Match the remaining pattern segments against the tree rooted at `dir`
-       * (an absolute host path), accumulating mount-face-relative `/`-joined
-       * paths in `results`. Denied names are never enumerated into a result,
-       * even when matched literally, and entries that escape confinement
-       * (symlinks out of the mount root) are silently excluded, mirroring
-       * `list()`.
-       *
-       * `ancestorsReal` carries the symlink-free physical paths of `dir` and
-       * every directory on the descent path above it. A `**` descent that would
-       * re-enter one of them (a symlink cycle such as `self -> .` inside the
-       * confined root, which `isConfinedPath`/`isDirectory` both follow and so
-       * cannot exclude) is skipped, so the walk terminates on cyclic trees
-       * instead of spinning `self/self/self/…` until `PATH_MAX`.
-       *
-       * @param {string[]} remaining
-       * @param {string} dir
-       * @param {string[]} prefix
-       * @param {Set<string>} ancestorsReal
-       * @returns {Promise<void>}
-       */
-      const walk = async (remaining, dir, prefix, ancestorsReal) => {
-        // Skip a `(dir, remaining-suffix)` pair already walked (see `visited`).
-        const visitKey = `${remaining.length}\0${dir}`;
-        if (visited.has(visitKey)) {
-          return;
+      /** @type {Array<{ file: string, line: number, text: string }>} */
+      const matches = [];
+      for (const file of paths) {
+        if (matches.length >= maxResults) {
+          break;
         }
-        visited.add(visitKey);
-        if (remaining.length === 0) {
-          // The mount face's own root (empty prefix) is never itself a result.
-          if (prefix.length > 0) {
-            results.add(prefix.join('/'));
-          }
-          return;
+        const filePath = filePowers.joinPath(currentDir, ...file.split('/'));
+        // eslint-disable-next-line no-await-in-loop
+        if (await filePowers.isDirectory(filePath)) {
+          // eslint-disable-next-line no-continue
+          continue;
         }
-        // Enumerate this directory once. A read failure (e.g. a directory
-        // removed mid-walk) drops this branch rather than aborting the glob.
-        let names;
+        let content;
         try {
-          names = await filePowers.readDirectory(dir);
+          // eslint-disable-next-line no-await-in-loop
+          content = await filePowers.readFileText(filePath);
         } catch {
-          return;
+          // A file whose text read fails (a binary file XS refuses to decode,
+          // a permission error, or a path that vanished mid-scan) is skipped
+          // silently rather than aborting the grep.
+          // eslint-disable-next-line no-continue
+          continue;
         }
-        const [head, ...rest] = remaining;
-        if (head === '**') {
-          // `**` matches zero or more path segments. Zero segments consumed:
-          // continue matching `rest` at the current directory (this is what
-          // lets `docs/**/*.md` still match `docs/*.md`). One or more segments
-          // consumed: descend into each confined child directory with `**`
-          // still in play. A trailing `**` (empty `rest`) additionally matches
-          // file descendants directly, since `**` matches a whole sequence of
-          // segments ending in a file, not just directories.
-          await walk(rest, dir, prefix, ancestorsReal);
-          // Walk order does not affect the result: `results` is a Set and the
-          // final `sort()` below governs output order, so no per-directory sort
-          // is needed here.
-          for (const name of names) {
-            if (isDenied(name)) {
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-            const childPath = filePowers.joinPath(dir, name);
-            // eslint-disable-next-line no-await-in-loop
-            const confined = await isConfinedPath(
-              childPath,
-              confinementRoot,
-              filePowers,
+        // Split on `\n`; a trailing `\r` is stripped from each line so a CRLF
+        // file yields the same match text a LF file would (CRLF
+        // normalization, a documented divergence from #127). Line numbers are
+        // 1-based.
+        const lines = content.split('\n');
+        for (let i = 0; i < lines.length; i += 1) {
+          if (matches.length >= maxResults) {
+            break;
+          }
+          const text = lines[i].replace(/\r$/, '');
+          if (regex.test(text)) {
+            matches.push(
+              harden({
+                file,
+                line: i + 1,
+                text,
+              }),
             );
-            if (!confined) {
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-            // eslint-disable-next-line no-await-in-loop
-            if (await filePowers.isDirectory(childPath)) {
-              // eslint-disable-next-line no-await-in-loop
-              const childReal = await maybeRealPath(childPath, filePowers);
-              if (childReal !== undefined && !ancestorsReal.has(childReal)) {
-                const descentAncestors = new Set([...ancestorsReal, childReal]);
-                // eslint-disable-next-line no-await-in-loop
-                await walk(
-                  remaining,
-                  childPath,
-                  [...prefix, name],
-                  descentAncestors,
-                );
-              } else if (rest.length === 0) {
-                // A cyclic (or unresolvable) directory under a trailing `**` is
-                // still a valid entry: recorded once, never re-entered.
-                results.add([...prefix, name].join('/'));
-              }
-            } else if (rest.length === 0) {
-              results.add([...prefix, name].join('/'));
-            }
-          }
-          return;
-        }
-        const matches = compileGlobSegment(head);
-        // As above, the final `sort()` governs output order; walking in
-        // directory order here is sufficient.
-        for (const name of names) {
-          if (isDenied(name) || !matches(name)) {
-            // eslint-disable-next-line no-continue
-            continue;
-          }
-          const childPath = filePowers.joinPath(dir, name);
-          // eslint-disable-next-line no-await-in-loop
-          const confined = await isConfinedPath(
-            childPath,
-            confinementRoot,
-            filePowers,
-          );
-          if (!confined) {
-            // eslint-disable-next-line no-continue
-            continue;
-          }
-          if (rest.length === 0) {
-            results.add([...prefix, name].join('/'));
-            // eslint-disable-next-line no-continue
-            continue;
-          }
-          // A non-final segment must descend, so it matches directories only.
-          // eslint-disable-next-line no-await-in-loop
-          if (await filePowers.isDirectory(childPath)) {
-            // eslint-disable-next-line no-await-in-loop
-            const childReal = await maybeRealPath(childPath, filePowers);
-            // A literal descent consumes a segment, so it cannot recurse
-            // without bound; still extend the ancestor set so a later `**`
-            // sees this directory's physical identity and detects a cycle.
-            const nextAncestors =
-              childReal === undefined
-                ? ancestorsReal
-                : new Set([...ancestorsReal, childReal]);
-            // eslint-disable-next-line no-await-in-loop
-            await walk(rest, childPath, [...prefix, name], nextAncestors);
           }
         }
-      };
-
-      const rootReal = await maybeRealPath(currentDir, filePowers);
-      const initialAncestors = new Set(
-        rootReal === undefined ? [] : [rootReal],
-      );
-      await walk(patternSegments, currentDir, [], initialAncestors);
-
-      // Sort by UTF-16 code unit (Array.prototype.sort's default string order)
-      // as the final step, then cap. Sorting before truncating makes the
-      // dropped set deterministic across platforms: a Rust runner mirrors the
-      // sort, not the walk order.
-      const sorted = [...results].sort();
-      return harden(sorted.slice(0, GLOB_MAX_RESULTS));
+      }
+      return harden(matches);
     },
 
     async lookup(pathArg) {

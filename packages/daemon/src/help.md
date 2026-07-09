@@ -765,6 +765,20 @@ directories as well as files, are sorted by UTF-16 code unit, and are capped at
 Example: glob("**/*.js") → all JavaScript files at any depth.
 Example: glob("src/*") → the immediate children of src.
 
+## grep(pattern, options?) -> Promise<Array<{ file, line, text }>>
+
+Search file contents for a regular expression across the mount face.
+pattern: string — An ECMAScript RegExp source, evaluated as new RegExp(pattern) with no flags.
+options.glob: string — Which files to search (default "**/*"); selection goes through glob(),
+so denied names, escaping symlinks, and directories never contribute matches, and at most
+glob's first 10,000 paths (its own result cap) are searched.
+options.maxResults: number — Cap on the number of match records (default 1000).
+Each matching line yields one { file, line, text } record: file is the mount-face-relative
+path, line is 1-based, and text is the whole line with any trailing carriage return stripped
+(CRLF normalization). Files whose text cannot be read are skipped silently.
+Example: grep("TODO", { glob: "src/**/*.js" }) → every TODO line under src.
+Example: grep("^export", { glob: "**/*.js", maxResults: 50 }) → up to 50 exported-symbol lines.
+
 ## readText(path) -> Promise<string>
 
 Read a file as UTF-8 text.

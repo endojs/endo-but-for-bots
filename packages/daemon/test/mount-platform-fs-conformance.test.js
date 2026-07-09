@@ -197,6 +197,9 @@ const ENDOMOUNT_EXTENSIONS = [
   // Recursive glob search over the confined tree — a daemon-local extension
   // beyond the lite `Directory` vocabulary.
   'glob',
+  // Content search over the files `glob` selects — a daemon-local extension
+  // beyond the lite `Directory` vocabulary.
+  'grep',
   // Declared as part of the name-hub contract but throws ENOSYS until a
   // filesystem watcher is wired (filesystem-watchers.md) — see § C1.
   'followNameChanges',

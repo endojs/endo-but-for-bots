@@ -602,6 +602,14 @@ export const MountInterface = M.interface('EndoMount', {
   // unit. Capped at GLOB_MAX_RESULTS with silent truncation. See
   // designs/mount-extensions-reconstruction.md § "PR B — glob".
   glob: M.call(M.string()).returns(M.promise()),
+  // Search file contents for an ECMAScript RegExp source (no flags), selecting
+  // files through `glob(options.glob)` and returning `{ file, line, text }`
+  // records with 1-based line numbers and CRLF-normalized text. Directories
+  // and unreadable files are skipped; `options.maxResults` caps the match
+  // count. See designs/mount-extensions-reconstruction.md § "PR C — grep".
+  grep: M.call(M.string())
+    .optional(M.splitRecord({}, { glob: M.string(), maxResults: M.number() }))
+    .returns(M.promise()),
   lookup: M.call(PathArgShape).returns(M.promise()),
   // `maybeLookup` is the `ReadableNameHub` primitive (lookup-or-undefined).
   // Widened from the shared `NameOrPathShape` contract to `PathArgShape` so the

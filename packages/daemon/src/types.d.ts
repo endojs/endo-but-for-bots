@@ -1112,7 +1112,7 @@ export interface EndoMountFile {
  * `write`, `remove`, `move`, `copy`, `makeDirectory`, `snapshot`) match
  * the platform shapes; mount-specific extensions (`entry`, `stat`,
  * `displayPath`, `readText`, `maybeReadText`, `writeText`, `makeFile`,
- * `glob`) are additive; `readOnly()` narrows to a structural `ReadableTree`
+ * `glob`, `grep`) are additive; `readOnly()` narrows to a structural `ReadableTree`
  * view.
  */
 export interface EndoMount {
@@ -1131,6 +1131,21 @@ export interface EndoMount {
    * truncation.
    */
   glob(pattern: string): Promise<string[]>;
+  /**
+   * Search file contents for `pattern`, an ECMAScript regular-expression
+   * source evaluated as `new RegExp(pattern)` with no flags. Files are
+   * selected through `glob(options.glob)` (default `'**\/*'`), inheriting its
+   * confinement, deny filtering, and ordering (and its 10,000-path result cap,
+   * so at most the first 10,000 globbed paths are searched); directories and
+   * files whose text read fails are skipped silently. Content splits on `\n` with a
+   * trailing `\r` stripped from the matched line text (CRLF normalization),
+   * line numbers are 1-based, and each matching line yields one record.
+   * `options.maxResults` (default 1000) caps the number of records returned.
+   */
+  grep(
+    pattern: string,
+    options?: { glob?: string; maxResults?: number },
+  ): Promise<Array<{ file: string; line: number; text: string }>>;
   lookup(
     path: string | string[] | EndoMountEntry,
   ): Promise<EndoMount | EndoMountFile>;
