@@ -1642,7 +1642,10 @@ export interface EndoHost extends EndoAgent {
   makeIntervalScheduler(
     petName: string,
     options?: { maxActive?: number; minPeriodMs?: number },
-  ): Promise<unknown>;
+  ): Promise<{
+    scheduler: IntervalSchedulerFacet;
+    schedulerControl: IntervalControlFacet;
+  }>;
   /** Locate a formula with connection hints. */
   locateWithHints(...petNamePath: string[]): Promise<string | undefined>;
   /** Adopt a value from a locator that includes connection hints. */
