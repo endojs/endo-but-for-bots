@@ -50,11 +50,12 @@ export type GitToolCapability = Pick<
  * with `EndoMountEntry` / node remotables and `add()` takes an array of
  * `EndoMountEntry` remotables — so their tool wire (JSON-safe rows out, path
  * strings in) diverges from the raw `GitInterface` guard by design. `add` is the
- * additive staging half of the commit loop; it stages but never discards.
+ * additive staging half of the commit loop; `checkoutConflict` selects and
+ * stages one side of existing unmerged entries.
  */
 export type GitMountToolCapability = Pick<
   EndoGit,
-  'status' | 'add' | 'worktree'
+  'status' | 'add' | 'checkoutConflict' | 'worktree'
 >;
 
 export interface ToolSpec {

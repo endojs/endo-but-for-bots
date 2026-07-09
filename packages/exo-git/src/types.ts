@@ -61,6 +61,8 @@ export type GitRestoreOptions = {
   staged?: boolean;
 };
 
+export type GitConflictSide = 'ours' | 'theirs';
+
 export type GitCommitOptions = {
   amend?: boolean;
 };
@@ -247,6 +249,10 @@ export type EndoGit = {
   restore: (
     entries: EndoMountEntry[],
     options?: GitRestoreOptions,
+  ) => Promise<void>;
+  checkoutConflict: (
+    entries: EndoMountEntry[],
+    side: GitConflictSide,
   ) => Promise<void>;
   commit: (message: string, options?: GitCommitOptions) => Promise<GitCommit>;
   reword: (ref: GitRef | string, message: string) => Promise<GitCommit>;

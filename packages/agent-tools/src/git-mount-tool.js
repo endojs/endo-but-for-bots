@@ -7,7 +7,7 @@
 
 /**
  * The one worktree-mount method this bridge needs: `entry(segments)` mints the
- * `EndoMountEntry` remotable `Git.add` consumes. `@endo/exo-git` aliases
+ * `EndoMountEntry` remotable Git mutation methods consume. `@endo/exo-git` aliases
  * `EndoMount` to `unknown` to stay free of a circular `@endo/daemon` type
  * dependency (the full-fidelity `EndoMount` interface lives in `@endo/daemon`),
  * so we name the single method we reach through the mount locally rather than
@@ -23,11 +23,11 @@ import { M } from '@endo/patterns';
 import { makeTool } from './tool.js';
 
 /**
- * The git tools in this module bridge the two `EndoGit` methods whose native
+ * The git tools in this module bridge the `EndoGit` methods whose native
  * signatures traffic in live capabilities — `status()` returns rows bearing
- * `EndoMountEntry` / node remotables, and `add()` takes an array of
- * `EndoMountEntry` remotables — so they cannot sit in the JSON-transparent,
- * one-to-one guard-mapped slice `makeGitTool` exposes. Each tool here holds the
+ * `EndoMountEntry` / node remotables, while `add()` and `checkoutConflict()`
+ * take arrays of `EndoMountEntry` remotables. They cannot sit in the
+ * JSON-transparent, one-to-one guard-mapped slice `makeGitTool` exposes. Each tool here holds the
  * mount/git capability pair (the mount reached through `Git.worktree()`) and
  * converts at the boundary: path strings in, JSON-safe records out. The
  * capability, never a path string, remains the confinement boundary — a `../`
@@ -67,6 +67,21 @@ const addParameters = harden({
   additionalProperties: false,
 });
 
+const checkoutConflictParameters = harden({
+  type: 'object',
+  properties: {
+    paths: addParameters.properties.paths,
+    side: {
+      enum: ['ours', 'theirs'],
+      description:
+        'The unmerged index side to select for every path. "ours" selects ' +
+        'the current branch side; "theirs" selects the incoming side.',
+    },
+  },
+  required: ['paths', 'side'],
+  additionalProperties: false,
+});
+
 /**
  * Split a mount-relative path string into entry segments, dropping empty and
  * `.` components so `a/b`, `a//b`, and `a/b/` resolve identically. A `..`
@@ -82,10 +97,42 @@ const pathToSegments = path =>
   path.split('/').filter(segment => segment !== '' && segment !== '.');
 
 /**
- * Build the mount-bridged git tool records — `status` and `add` — for a live
- * `Git` capability. These complement `makeGitTool`'s JSON-transparent slice to
- * complete the daemon-agent-tools Phase 3 surface (status/diff/log/add/commit);
- * `diff`, `log`, and `commit` come from `makeGitTool`.
+ * @param {string} verb
+ * @param {string[]} paths
+ * @returns {string[][]}
+ */
+const pathsToSegments = (verb, paths) => {
+  if (paths.length === 0) {
+    throw new Error(`${verb} requires a non-empty array of paths`);
+  }
+  return paths.map(path => {
+    if (path === '') {
+      throw new Error(`${verb} paths must be non-empty strings`);
+    }
+    const segments = pathToSegments(path);
+    if (segments.length === 0) {
+      throw new Error(
+        `${verb} paths must address a file, not the worktree root`,
+      );
+    }
+    return segments;
+  });
+};
+
+/**
+ * @param {ERef<GitMountToolCapability>} gitCap
+ * @param {string[][]} segmentsByPath
+ * @returns {Promise<EndoMountEntry[]>}
+ */
+const entriesForSegments = async (gitCap, segmentsByPath) => {
+  const mount = /** @type {WorktreeMount} */ (await E(gitCap).worktree());
+  return Promise.all(segmentsByPath.map(segments => E(mount).entry(segments)));
+};
+
+/**
+ * Build the mount-bridged git tool records — `status`, `add`, and
+ * `checkoutConflict` — for a live `Git` capability. These complement
+ * `makeGitTool`'s JSON-transparent slice.
  *
  * @param {ERef<GitMountToolCapability>} gitCap A live `Git` capability. The
  *   worktree mount is reached through `E(gitCap).worktree()`; a writable Git
@@ -131,9 +178,6 @@ export const makeGitMountTools = gitCap => {
     argGuards: harden([M.arrayOf(M.string())]),
     execute: async args => {
       const { paths } = /** @type {{ paths: string[] }} */ (args);
-      if (paths.length === 0) {
-        throw new Error('add requires a non-empty array of paths');
-      }
       // Normalize every path up front and reject any that addresses no file.
       // Beyond the empty string, a path built only from dropped components
       // (`.`, `/`, `//`, `./`) collapses to zero segments, which would resolve
@@ -141,31 +185,37 @@ export const makeGitMountTools = gitCap => {
       // rejected by the backend only with an opaque low-level error. Reject it
       // here, at the tool, with a clear message. A leading `..` is deliberately
       // NOT rejected here: the mount contains it (clamped at the root).
-      const segmentsByPath = paths.map(path => {
-        if (path === '') {
-          throw new Error('add paths must be non-empty strings');
-        }
-        const segments = pathToSegments(path);
-        if (segments.length === 0) {
-          throw new Error(
-            'add paths must address a file, not the worktree root',
-          );
-        }
-        return segments;
-      });
+      const segmentsByPath = pathsToSegments('add', paths);
       // Resolve each path to an `EndoMountEntry` minted by this Git's own
       // worktree mount, so `Git.add`'s lineage check accepts it. `callWhen`
       // does not deeply await array elements, so the entries must be settled
       // remotables — not promises — before the call.
-      const mount = /** @type {WorktreeMount} */ (await E(gitCap).worktree());
-      const entries = await Promise.all(
-        segmentsByPath.map(segments => E(mount).entry(segments)),
-      );
+      const entries = await entriesForSegments(gitCap, segmentsByPath);
       await E(gitCap).add(harden(entries));
       return `Staged ${paths.length} path${paths.length === 1 ? '' : 's'}.`;
     },
   });
 
-  return harden([statusTool, addTool]);
+  const checkoutConflictTool = makeTool({
+    name: 'checkoutConflict',
+    description:
+      'Resolve conflicted paths by selecting the current branch side ' +
+      '("ours") or incoming side ("theirs"), then stage the resolution.',
+    parameters: checkoutConflictParameters,
+    argGuards: harden([M.arrayOf(M.string()), M.or('ours', 'theirs')]),
+    execute: async args => {
+      const { paths, side } =
+        /** @type {{ paths: string[], side: 'ours' | 'theirs' }} */ (args);
+      const segmentsByPath = pathsToSegments('checkoutConflict', paths);
+      const entries = await entriesForSegments(gitCap, segmentsByPath);
+      await E(gitCap).checkoutConflict(harden(entries), side);
+      return (
+        `Selected ${side} for ${paths.length} conflicted ` +
+        `path${paths.length === 1 ? '' : 's'}.`
+      );
+    },
+  });
+
+  return harden([statusTool, addTool, checkoutConflictTool]);
 };
 harden(makeGitMountTools);

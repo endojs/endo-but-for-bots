@@ -18,6 +18,7 @@ import { GitInterface } from './interfaces.js';
  *   GitCherryPickOptions,
  *   GitCommit,
  *   GitCommitOptions,
+ *   GitConflictSide,
  *   GitCreateBranchOptions,
  *   GitDeleteBranchOptions,
  *   GitDiffOptions,
@@ -135,6 +136,7 @@ harden(getGitBackend);
  * @property {(ref: string) => Promise<GitRef>} revParse
  * @property {(paths: string[]) => Promise<void>} add
  * @property {(paths: string[], opts?: GitRestoreOptions) => Promise<void>} restore
+ * @property {(paths: string[], side: GitConflictSide) => Promise<void>} checkoutConflict
  * @property {(message: string, opts?: GitCommitOptions) => Promise<GitCommit>} commit
  * @property {(ref: string, message: string) => Promise<GitCommit>} reword
  * @property {(ref: string, opts?: GitCherryPickOptions) => Promise<string>} cherryPick
@@ -435,6 +437,12 @@ export const makeGit = ({ mount, backend, readOnly = false, lineageOf }) => {
       return backend.restore(paths, options);
     },
 
+    async checkoutConflict(entries, side) {
+      assertWritable('checkoutConflict');
+      const paths = await entriesToRepoPaths(entries);
+      return backend.checkoutConflict(paths, side);
+    },
+
     async commit(message, options = {}) {
       assertWritable('commit');
       return backend.commit(message, options);
@@ -607,6 +615,7 @@ export const makeNotYetImplementedBackend = () => {
     revParse: async () => fail('revParse'),
     add: async () => fail('add'),
     restore: async () => fail('restore'),
+    checkoutConflict: async () => fail('checkoutConflict'),
     commit: async () => fail('commit'),
     reword: async () => fail('reword'),
     cherryPick: async () => fail('cherryPick'),
