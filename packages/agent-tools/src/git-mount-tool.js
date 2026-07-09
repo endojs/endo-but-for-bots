@@ -26,9 +26,11 @@ import { makeTool } from './tool.js';
  * The git tools in this module bridge the `EndoGit` methods whose native
  * signatures traffic in live capabilities — `status()` returns rows bearing
  * `EndoMountEntry` / node remotables, while `add()` and `checkoutConflict()`
- * take arrays of `EndoMountEntry` remotables. They cannot sit in the
- * JSON-transparent, one-to-one guard-mapped slice `makeGitTool` exposes. Each tool here holds the
- * mount/git capability pair (the mount reached through `Git.worktree()`) and
+ * take arrays of `EndoMountEntry` remotables.
+ * They cannot sit in the JSON-transparent, one-to-one guard-mapped slice
+ * `makeGitTool` exposes.
+ * Each tool here holds the mount/git capability pair (the mount reached
+ * through `Git.worktree()`) and
  * converts at the boundary: path strings in, JSON-safe records out. The
  * capability, never a path string, remains the confinement boundary — a `../`
  * segment is contained by the mount (clamped at the worktree root), not by a
@@ -131,7 +133,8 @@ const entriesForSegments = async (gitCap, segmentsByPath) => {
 
 /**
  * Build the mount-bridged git tool records — `status`, `add`, and
- * `checkoutConflict` — for a live `Git` capability. These complement
+ * `checkoutConflict` — for a live `Git` capability.
+ * These complement
  * `makeGitTool`'s JSON-transparent slice.
  *
  * @param {ERef<GitMountToolCapability>} gitCap A live `Git` capability. The

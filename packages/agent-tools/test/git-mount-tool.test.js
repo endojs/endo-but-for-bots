@@ -31,9 +31,10 @@ const makeStubMount = () =>
   });
 
 /**
- * Stub Git capability that bridges through a stub mount. The mutating methods
- * record the repo-relative path each supplied entry resolves to, so a test can
- * assert the path→entry marshalling reached the cap intact.
+ * Stub Git capability that bridges through a stub mount.
+ * The mutating methods record the repo-relative path each supplied entry
+ * resolves to, so a test can assert the path→entry marshalling reached the cap
+ * intact.
  *
  * @param {{ statusRows?: unknown[], addCalls?: unknown[][], checkoutConflictCalls?: unknown[][] }} [opts]
  * @returns {ERef<GitMountToolCapability>}

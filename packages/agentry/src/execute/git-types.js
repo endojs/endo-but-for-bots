@@ -33,6 +33,7 @@ export const gitCodeModeTypeDeclarations = harden({
   revParse: (ref: GitRef | string) => Promise<GitRef>;
   add: (entries: EndoMountEntry[]) => Promise<void>;
   restore: (entries: EndoMountEntry[], options?: GitRestoreOptions) => Promise<void>;
+  checkoutConflict: (entries: EndoMountEntry[], side: GitConflictSide) => Promise<void>;
   commit: (message: string, options?: GitCommitOptions) => Promise<GitCommit>;
   reword: (ref: GitRef | string, message: string) => Promise<GitCommit>;
   cherryPick: (ref: GitRef | string, options?: GitCherryPickOptions) => Promise<string>;
@@ -70,6 +71,7 @@ type GitCommit = {
 type GitCommitOptions = {
     amend?: boolean;
 };
+type GitConflictSide = 'ours' | 'theirs';
 type GitCreateBranchOptions = {
     startPoint?: string;
     switchAfterCreate?: boolean;

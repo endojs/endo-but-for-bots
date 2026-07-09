@@ -2016,14 +2016,16 @@ test('NativeGitBackend.rebase rejects autosquash outside start mode', async t =>
   const repoRoot = await provisionGitWorktree(t);
   const backend = makeNativeGitBackend({ repoRoot });
 
-  for (const mode of ['continue', 'abort', 'skip']) {
-    await t.throwsAsync(
-      () => backend.rebase(/** @type {any} */ ({ mode, autosquash: true })),
-      {
-        message: /autosquash is only valid for mode start/,
-      },
-    );
-  }
+  await Promise.all(
+    ['continue', 'abort', 'skip'].map(mode =>
+      t.throwsAsync(
+        () => backend.rebase(/** @type {any} */ ({ mode, autosquash: true })),
+        {
+          message: /autosquash is only valid for mode start/,
+        },
+      ),
+    ),
+  );
 });
 
 test('NativeGitBackend.rebase continues a conflicted rebase without an interactive editor', async t => {
