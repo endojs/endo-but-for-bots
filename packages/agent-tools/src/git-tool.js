@@ -55,6 +55,18 @@ const REF_PROP = harden({
     'structured ref record.',
 });
 
+const COMMIT_OPTIONS_PROP = harden({
+  type: 'object',
+  properties: {
+    amend: {
+      type: 'boolean',
+      description: 'Amend HEAD instead of creating a new commit.',
+    },
+  },
+  required: [],
+  additionalProperties: false,
+});
+
 /**
  * This package intentionally exposes only a curated JSON-safe `EndoGit` slice
  * for now. Methods that remotely accept capabilities or can return
@@ -97,8 +109,21 @@ const gitToolSchemas = harden({
       type: 'object',
       properties: {
         message: { type: 'string', description: 'The commit message.' },
+        options: COMMIT_OPTIONS_PROP,
       },
       required: ['message'],
+      additionalProperties: false,
+    },
+  },
+  reword: {
+    description: 'Replace a commit message while keeping its patch unchanged.',
+    parameters: {
+      type: 'object',
+      properties: {
+        ref: REF_PROP,
+        message: { type: 'string', description: 'The replacement message.' },
+      },
+      required: ['ref', 'message'],
       additionalProperties: false,
     },
   },

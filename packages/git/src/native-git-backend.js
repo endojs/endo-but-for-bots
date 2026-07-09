@@ -39,6 +39,7 @@ const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
  * } from '@endo/exo-git/src/git.js'
  * @import {
  *   GitCommit,
+ *   GitCommitOptions,
  *   GitCreateBranchOptions,
  *   GitDeleteBranchOptions,
  *   GitMergeOptions,
@@ -1733,6 +1734,30 @@ export const makeNativeGitBackend = ({ repoRoot }) => {
   };
 
   /**
+   * @param {string} ref
+   * @returns {Promise<GitCommit>}
+   */
+  const readCommitRecord = async ref => {
+    const raw = await runGitRaw([
+      'log',
+      '-1',
+      '--pretty=format:%H%x09%s%x09%an%x09%ct',
+      '--end-of-options',
+      ref,
+    ]);
+    const out = raw.trim();
+    const [oid, summary, author, committedAtStr] = out.split('\t');
+    return harden({
+      oid,
+      summary,
+      author,
+      committedAt: committedAtStr
+        ? Number.parseInt(committedAtStr, 10)
+        : undefined,
+    });
+  };
+
+  /**
    * @param {string} blobOid
    * @returns {unknown}
    */
@@ -2177,30 +2202,103 @@ export const makeNativeGitBackend = ({ repoRoot }) => {
      * Returns a `GitCommit` record reflecting the new HEAD.
      *
      * @param {string} message
+     * @param {GitCommitOptions} [opts]
      * @returns {Promise<GitCommit>}
      */
-    commit: async message => {
+    commit: async (message, opts = {}) => {
       requireNonEmptyString(message, 'commit message');
       await assertNoExecutableRepoConfig();
       // -m embeds the message inline; --allow-empty-message is left off
       // so the daemon does not silently accept blank messages.
-      await runGit(['commit', '-m', message]);
+      const args = ['commit'];
+      if (opts.amend !== undefined && typeof opts.amend !== 'boolean') {
+        throw new Error('commit.amend must be a boolean');
+      }
+      if (opts.amend) {
+        args.push('--amend');
+      }
+      args.push('-m', message);
+      await runGit(args);
       // Read back the new HEAD's record so the caller learns the oid.
-      const rawHead = await runGitRaw([
-        'log',
-        '-1',
-        '--pretty=format:%H%x09%s%x09%an%x09%ct',
+      return readCommitRecord('HEAD');
+    },
+
+    /**
+     * Replace one commit's message without invoking an editor.  The target
+     * commit is recreated with the same tree and parents, then any descendants
+     * on the current HEAD are replayed onto the replacement commit.
+     *
+     * @param {string} ref
+     * @param {string} message
+     * @returns {Promise<GitCommit>}
+     */
+    reword: async (ref, message) => {
+      const target = requireRevision(ref, 'reword.ref');
+      requireNonEmptyString(message, 'reword message');
+      await assertNoExecutableRepoConfig();
+
+      const targetOid = (
+        await runGitRaw([
+          'rev-parse',
+          '--verify',
+          '--end-of-options',
+          `${target}^{commit}`,
+        ])
+      ).trim();
+      const headOid = (
+        await runGitRaw([
+          'rev-parse',
+          '--verify',
+          '--end-of-options',
+          'HEAD^{commit}',
+        ])
+      ).trim();
+
+      if (targetOid === headOid) {
+        await runGit(['commit', '--amend', '-m', message]);
+        return readCommitRecord('HEAD');
+      }
+
+      try {
+        await runGitRaw(['merge-base', '--is-ancestor', targetOid, headOid]);
+      } catch {
+        throw new Error('reword.ref must name HEAD or an ancestor of HEAD');
+      }
+
+      const treeOid = (
+        await runGitRaw([
+          'rev-parse',
+          '--verify',
+          '--end-of-options',
+          `${targetOid}^{tree}`,
+        ])
+      ).trim();
+      const parentsText = (
+        await runGitRaw(['show', '-s', '--format=%P', targetOid])
+      ).trim();
+      const authorText = await runGitRaw([
+        'show',
+        '-s',
+        '--format=%an%x00%ae%x00%aI',
+        targetOid,
       ]);
-      const out = rawHead.trim();
-      const [oid, summary, author, committedAtStr] = out.split('\t');
-      return harden({
-        oid,
-        summary,
-        author,
-        committedAt: committedAtStr
-          ? Number.parseInt(committedAtStr, 10)
-          : undefined,
-      });
+      const [authorName, authorEmail, authorDate] = authorText
+        .replace(/\n$/u, '')
+        .split('\0');
+      const args = ['commit-tree', treeOid];
+      for (const parent of parentsText === '' ? [] : parentsText.split(' ')) {
+        args.push('-p', parent);
+      }
+      args.push('-m', message);
+      const replacementOid = (
+        await runGitRaw(args, {
+          GIT_AUTHOR_NAME: authorName,
+          GIT_AUTHOR_EMAIL: authorEmail,
+          GIT_AUTHOR_DATE: authorDate,
+        })
+      ).trim();
+      await runGit(['rebase', '--onto', replacementOid, targetOid, 'HEAD']);
+      return readCommitRecord(replacementOid);
     },
 
     /**

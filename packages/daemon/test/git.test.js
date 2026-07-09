@@ -108,7 +108,7 @@ test('Git exo advertises the full GitInterface', async t => {
   }
 
   // Mutation
-  for (const name of ['add', 'restore', 'commit']) {
+  for (const name of ['add', 'restore', 'commit', 'reword']) {
     t.true(methods.includes(name), `Git should advertise ${name}`);
   }
 
@@ -182,6 +182,15 @@ test('Git.readOnly() attenuates mutating operations but preserves reads', async 
     message: /read-only Git capability/,
   });
   await t.throwsAsync(E(readOnlyGit).commit('should fail'), {
+    message: /read-only Git capability/,
+  });
+  await t.throwsAsync(
+    E(readOnlyGit).commit('should also fail', { amend: true }),
+    {
+      message: /read-only Git capability/,
+    },
+  );
+  await t.throwsAsync(E(readOnlyGit).reword('HEAD', 'should fail'), {
     message: /read-only Git capability/,
   });
   await t.throwsAsync(E(readOnlyGit).switchBranch('main'), {
@@ -509,6 +518,76 @@ test('Git.readOnly allows immutable tree reads', async t => {
   t.is(await E(blob).text(), 'audit\n');
 });
 
+test('Git.commit can amend HEAD through the native backend', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({ repoRoot });
+  const git = makeGit({ mount, backend, lineageOf });
+
+  await fs.promises.writeFile(path.join(repoRoot, 'amend.txt'), 'one\n');
+  const entry = await E(mount).entry(['amend.txt']);
+  await E(git).add([entry]);
+  const first = await E(git).commit('first subject');
+
+  await fs.promises.writeFile(path.join(repoRoot, 'amend.txt'), 'two\n');
+  await E(git).add([entry]);
+  const amended = await E(git).commit('amended subject', { amend: true });
+
+  t.not(amended.oid, first.oid);
+  t.is(amended.summary, 'amended subject');
+  const log = await E(git).log({ maxCount: 3 });
+  t.deepEqual(
+    log.map(commit => commit.summary),
+    ['amended subject', 'init commit'],
+  );
+});
+
+test('Git.reword replaces one ancestor message without an editor', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  await execFileAsync('git', ['config', '--local', 'core.editor', 'false'], {
+    cwd: repoRoot,
+  });
+  await execFileAsync(
+    'git',
+    ['config', '--local', 'sequence.editor', 'false'],
+    {
+      cwd: repoRoot,
+    },
+  );
+
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({ repoRoot });
+  const git = makeGit({ mount, backend, lineageOf });
+
+  await fs.promises.writeFile(path.join(repoRoot, 'first.txt'), 'first\n');
+  const firstEntry = await E(mount).entry(['first.txt']);
+  await E(git).add([firstEntry]);
+  const first = await E(git).commit('first subject');
+
+  await fs.promises.writeFile(path.join(repoRoot, 'second.txt'), 'second\n');
+  const secondEntry = await E(mount).entry(['second.txt']);
+  await E(git).add([secondEntry]);
+  await E(git).commit('second subject');
+
+  const reworded = await E(git).reword(first.oid, 'replacement subject');
+  t.not(reworded.oid, first.oid);
+  t.is(reworded.summary, 'replacement subject');
+
+  const log = await E(git).log({ maxCount: 3 });
+  t.deepEqual(
+    log.map(commit => commit.summary),
+    ['second subject', 'replacement subject', 'init commit'],
+  );
+  const { stdout } = await execFileAsync(
+    'git',
+    ['show', `${reworded.oid}:first.txt`],
+    { cwd: repoRoot },
+  );
+  t.is(stdout, 'first\n');
+});
+
 test('Git scaffold methods all surface a clear "not yet implemented"', async t => {
   const mount = await provisionMount(t);
   const backend = makeNotYetImplementedBackend();
@@ -520,6 +599,9 @@ test('Git scaffold methods all surface a clear "not yet implemented"', async t =
   await t.throwsAsync(E(git).status(), { message: /not yet implemented/ });
   await t.throwsAsync(E(git).log({}), { message: /not yet implemented/ });
   await t.throwsAsync(E(git).commit('msg'), {
+    message: /not yet implemented/,
+  });
+  await t.throwsAsync(E(git).reword('HEAD', 'msg'), {
     message: /not yet implemented/,
   });
   await t.throwsAsync(E(git).branches(), { message: /not yet implemented/ });

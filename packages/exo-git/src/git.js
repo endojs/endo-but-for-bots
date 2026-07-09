@@ -16,6 +16,7 @@ import { GitInterface } from './interfaces.js';
  * @import {
  *   EndoGit,
  *   GitCommit,
+ *   GitCommitOptions,
  *   GitCreateBranchOptions,
  *   GitDeleteBranchOptions,
  *   GitDiffOptions,
@@ -133,7 +134,8 @@ harden(getGitBackend);
  * @property {(ref: string) => Promise<GitRef>} revParse
  * @property {(paths: string[]) => Promise<void>} add
  * @property {(paths: string[], opts?: GitRestoreOptions) => Promise<void>} restore
- * @property {(message: string) => Promise<GitCommit>} commit
+ * @property {(message: string, opts?: GitCommitOptions) => Promise<GitCommit>} commit
+ * @property {(ref: string, message: string) => Promise<GitCommit>} reword
  * @property {() => Promise<GitRef | undefined>} currentBranch
  * @property {() => Promise<GitRef[]>} branches
  * @property {(name: string, opts?: GitCreateBranchOptions) => Promise<GitRef>} createBranch
@@ -431,9 +433,14 @@ export const makeGit = ({ mount, backend, readOnly = false, lineageOf }) => {
       return backend.restore(paths, options);
     },
 
-    async commit(message) {
+    async commit(message, options = {}) {
       assertWritable('commit');
-      return backend.commit(message);
+      return backend.commit(message, options);
+    },
+
+    async reword(ref, message) {
+      assertWritable('reword');
+      return backend.reword(refName(ref), message);
     },
 
     async currentBranch() {
@@ -593,6 +600,7 @@ export const makeNotYetImplementedBackend = () => {
     add: async () => fail('add'),
     restore: async () => fail('restore'),
     commit: async () => fail('commit'),
+    reword: async () => fail('reword'),
     currentBranch: async () => fail('currentBranch'),
     branches: async () => fail('branches'),
     createBranch: async () => fail('createBranch'),

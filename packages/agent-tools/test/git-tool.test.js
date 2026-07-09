@@ -17,6 +17,7 @@ const SLICE = [
   'diff',
   'show',
   'commit',
+  'reword',
   'branches',
   'createBranch',
   'switchBranch',
@@ -47,6 +48,10 @@ const makeStubGit = calls => {
     commit: async (...a) => {
       calls.push(['commit', ...a]);
       return { oid: 'x', summary: a[0] };
+    },
+    reword: async (...a) => {
+      calls.push(['reword', ...a]);
+      return { oid: 'x', summary: a[1] };
     },
     branches: async (...a) => {
       calls.push(['branches', ...a]);
@@ -101,12 +106,19 @@ test('invoke marshals named args to positional and calls the capability', async 
   await null;
 
   await byName('commit').invoke({ message: 'a message' });
+  await byName('commit').invoke({
+    message: 'amended message',
+    options: harden({ amend: true }),
+  });
+  await byName('reword').invoke({ ref: 'HEAD~1', message: 'new subject' });
   await byName('createBranch').invoke({ name: 'feature' });
   await byName('createBranch').invoke({ name: 'feature', options: harden({}) });
   await byName('log').invoke({});
 
   t.deepEqual(calls, [
     ['commit', 'a message'],
+    ['commit', 'amended message', { amend: true }],
+    ['reword', 'HEAD~1', 'new subject'],
     ['createBranch', 'feature'],
     ['createBranch', 'feature', {}],
     ['log'],
@@ -147,7 +159,8 @@ test('the schemas advertise real, declarative property names', t => {
     }
   }
 
-  t.deepEqual(propsOf('commit'), ['message']);
+  t.deepEqual(propsOf('commit'), ['message', 'options']);
+  t.deepEqual(propsOf('reword'), ['ref', 'message']);
   t.deepEqual(propsOf('show'), ['ref']);
   t.deepEqual(propsOf('createBranch'), ['name', 'options']);
   t.deepEqual(propsOf('switchBranch'), ['branch']);

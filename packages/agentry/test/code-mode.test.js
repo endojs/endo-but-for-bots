@@ -230,7 +230,9 @@ test('a typed global injects its generated declaration into the prompt', t => {
   t.true(systemPrompt.includes('declare const git: EndoGit;'));
   t.true(systemPrompt.includes('type EndoGit = {'));
   t.true(
-    systemPrompt.includes('commit: (message: string) => Promise<GitCommit>;'),
+    systemPrompt.includes(
+      'commit: (message: string, options?: GitCommitOptions) => Promise<GitCommit>;',
+    ),
   );
   // workspace: guard-derived, reaching the Directory surface transitively.
   t.true(systemPrompt.includes('declare const workspace: Filesystem;'));
