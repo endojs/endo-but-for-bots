@@ -642,6 +642,16 @@ export const MountInterface = M.interface('EndoMount', {
   readText: M.call(PathArgShape).returns(M.promise()),
   maybeReadText: M.call(PathArgShape).returns(M.promise()),
   writeText: M.call(PathArgShape, M.string()).returns(M.promise()),
+  // Structured data I/O layered on the text surface. `readJson` is a confined
+  // text read plus `JSON.parse` (throws on a missing file or invalid JSON);
+  // `maybeReadJson` returns `undefined` for a missing file but still throws on
+  // present-but-invalid JSON; `writeJson` serializes with a two-space indent
+  // plus trailing newline, throwing on non-serializable input rather than
+  // writing `"undefined"`. See designs/mount-extensions-reconstruction.md
+  // § "PR D — JSON file read and write".
+  readJson: M.call(PathArgShape).returns(M.promise()),
+  maybeReadJson: M.call(PathArgShape).returns(M.promise()),
+  writeJson: M.call(PathArgShape, M.any()).returns(M.promise()),
   // Path-form constructors.  `makeDirectory` returns a sub-mount
   // (matches `Directory.makeDirectory(path): Promise<Directory>`);
   // `makeFile` is the constructive sibling for parallel use.

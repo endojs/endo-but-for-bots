@@ -236,6 +236,12 @@ export const helpTextEntries = harden([
         'maybeReadText(path) -> Promise<string | undefined>\nRead a file as UTF-8 text, returning undefined if missing.\npath: string | string[] — Name or path segments.',
       writeText:
         'writeText(path, content) -> Promise<void>\nWrite UTF-8 text to a file at the given path.\npath: string | string[] — Name or path segments.\ncontent: string — Text content to write.\nCreates parent directories as needed. Throws if read-only.',
+      readJson:
+        'readJson(path) -> Promise<unknown>\nRead a file as UTF-8 text and JSON.parse it.\npath: string | string[] — Name or path segments.\nThrows if the file is missing or its content is not valid JSON.',
+      maybeReadJson:
+        'maybeReadJson(path) -> Promise<unknown | undefined>\nLike readJson, but returns undefined when the file is missing.\npath: string | string[] — Name or path segments.\nA present file with invalid JSON still throws (the parse runs outside the read guard).',
+      writeJson:
+        'writeJson(path, value) -> Promise<void>\nSerialize value as JSON (2-space indent, trailing newline) and write it to a file.\npath: string | string[] — Name or path segments.\nvalue: unknown — Any JSON-serializable value.\nCreates parent directories as needed. Throws if read-only, or if value is not\nJSON-serializable (JSON.stringify would yield undefined) rather than writing "undefined".',
       remove:
         'remove(path) -> Promise<void>\nRemove a file or empty directory.\npath: string | string[] — Name or path segments.',
       move: 'move(from, to) -> Promise<void>\nRename an entry within the mount.\nfrom: string | string[] — Source name or path segments.\nto: string | string[] — Destination name or path segments.',

@@ -1282,6 +1282,55 @@ const makeMountExo = ctx => {
       await filePowers.writeFileText(target, content);
     },
 
+    async readJson(pathArg) {
+      await null;
+      // A confined text read plus `JSON.parse`: throws when the file is
+      // missing (the read fails) or its content is not valid JSON (the parse
+      // fails). Mirrors `readText`'s confinement gate exactly, adding the
+      // parse on top.
+      const target = resolvePathArg(pathArg);
+      await assertConfined(target, confinementRoot, filePowers);
+      const text = await filePowers.readFileText(target);
+      return harden(JSON.parse(text));
+    },
+
+    async maybeReadJson(pathArg) {
+      await null;
+      // Mirrors `maybeReadText`'s failure envelope exactly for the *read*: a
+      // missing file (or a path escaping confinement) yields `undefined`. The
+      // `JSON.parse` sits OUTSIDE the read's catch, so a file that is present
+      // but holds invalid JSON still throws rather than masquerading as absent.
+      const target = resolvePathArg(pathArg);
+      let text;
+      try {
+        await assertConfined(target, confinementRoot, filePowers);
+        text = await filePowers.readFileText(target);
+      } catch {
+        return undefined;
+      }
+      return harden(JSON.parse(text));
+    },
+
+    async writeJson(pathArg, value) {
+      await null;
+      assertWritable();
+      const target = resolvePathArg(pathArg);
+      await assertConfinedOrAncestor(target, confinementRoot, filePowers);
+      // Two-space indent plus a trailing newline (POSIX-text friendly, a
+      // documented divergence from #127). `JSON.stringify` returns `undefined`
+      // for non-serializable input (e.g. `undefined` itself, a function, or a
+      // bare symbol); throw rather than writing the literal string
+      // `"undefined"`. The guard runs before any directory is created so an
+      // invalid value leaves no filesystem trace.
+      const serialized = JSON.stringify(value, null, 2);
+      if (serialized === undefined) {
+        throw new Error('writeJson value is not JSON-serializable');
+      }
+      const parent = filePowers.joinPath(target, '..');
+      await filePowers.makePath(parent);
+      await filePowers.writeFileText(target, `${serialized}\n`);
+    },
+
     async remove(pathArg) {
       await null;
       assertWritable();

@@ -1189,6 +1189,29 @@ export interface EndoMount {
     path: string | string[] | EndoMountEntry,
     content: string,
   ): Promise<void>;
+  /**
+   * Read a file as UTF-8 text and `JSON.parse` it. Throws when the file is
+   * missing (the read fails) or its content is not valid JSON (the parse
+   * fails).
+   */
+  readJson(path: string | string[] | EndoMountEntry): Promise<unknown>;
+  /**
+   * Like `readJson`, but returns `undefined` when the read fails (a missing
+   * file, or a path escaping confinement), mirroring `maybeReadText`'s failure
+   * envelope. A file that is present but holds invalid JSON still throws — the
+   * parse sits outside the read's catch.
+   */
+  maybeReadJson(path: string | string[] | EndoMountEntry): Promise<unknown>;
+  /**
+   * Serialize `value` as `JSON.stringify(value, null, 2)` plus a trailing
+   * newline and write it to `path`, creating parent directories as needed.
+   * Throws when `JSON.stringify` returns `undefined` (non-serializable input)
+   * rather than writing the string `"undefined"`. Throws if read-only.
+   */
+  writeJson(
+    path: string | string[] | EndoMountEntry,
+    value: unknown,
+  ): Promise<void>;
   makeDirectory(path: string | string[] | EndoMountEntry): Promise<EndoMount>;
   makeFile(
     path: string | string[] | EndoMountEntry,

@@ -797,6 +797,26 @@ path: string | string[] — Name or path segments.
 content: string — Text content to write.
 Creates parent directories as needed. Throws if read-only.
 
+## readJson(path) -> Promise<unknown>
+
+Read a file as UTF-8 text and JSON.parse it.
+path: string | string[] — Name or path segments.
+Throws if the file is missing or its content is not valid JSON.
+
+## maybeReadJson(path) -> Promise<unknown | undefined>
+
+Like readJson, but returns undefined when the file is missing.
+path: string | string[] — Name or path segments.
+A present file with invalid JSON still throws (the parse runs outside the read guard).
+
+## writeJson(path, value) -> Promise<void>
+
+Serialize value as JSON (2-space indent, trailing newline) and write it to a file.
+path: string | string[] — Name or path segments.
+value: unknown — Any JSON-serializable value.
+Creates parent directories as needed. Throws if read-only, or if value is not
+JSON-serializable (JSON.stringify would yield undefined) rather than writing "undefined".
+
 ## remove(path) -> Promise<void>
 
 Remove a file or empty directory.
