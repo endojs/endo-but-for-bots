@@ -276,9 +276,9 @@ const responseHeadersToRecord = headers => {
     return record;
   }
   if (
-    typeof (/** @type {Iterable<[string, string]>} */ (headers)[
-      Symbol.iterator
-    ]) === 'function'
+    typeof (
+      /** @type {Iterable<[string, string]>} */ (headers)[Symbol.iterator]
+    ) === 'function'
   ) {
     for (const [name, value] of /** @type {Iterable<[string, string]>} */ (
       headers
