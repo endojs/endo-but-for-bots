@@ -8,13 +8,21 @@ import harden from '@endo/harden';
  */
 
 /**
- * Advisory options a caller may pass to tune a watcher.  Every field is
- * a *hint*: an implementation is free to honor or ignore it (the XS
- * fallback, for instance, ignores all of them because it has no
- * `fs.watch` equivalent).  Callers must not depend on any particular
- * value being observed.
+ * Options a caller may pass to a watcher.  The `cancelled` token is a
+ * real cancellation channel the adapter honors; every other field is a
+ * *hint* an implementation is free to honor or ignore (the XS fallback,
+ * for instance, ignores the tuning hints because it has no `fs.watch`
+ * equivalent).  Callers must not depend on any particular hint value
+ * being observed.
  *
  * @typedef {object} WatchDirectoryOptions
+ * @property {Promise<void>} [cancelled] Per-call cancellation token:
+ *   settle (or reject) it to close the OS watcher handle and terminate
+ *   `events`; idempotent with the iterator's own `return()`.  Defaults
+ *   to a forever-pending promise when omitted, leaving the iterator's
+ *   `return()` as the sole cancellation surface.  This is a per-call
+ *   field — the factory-level defaults ignore it, since one shared token
+ *   cannot address distinct watchers.
  * @property {number} [debounceMs] Per-filename debounce/coalesce window
  *   in milliseconds.  The node-fs adapter honors it; other backends may
  *   ignore it.  Defaults to 50 ms when unset or not a finite,
@@ -34,21 +42,24 @@ import harden from '@endo/harden';
  * is free to ignore.
  *
  * Cancellation idiom (note for the focused reviewer): the watcher is
- * cancelled by settling the `cancelled` promise the caller passes in,
- * rather than by a `cancel()` function returned to the caller.  We
- * establish "accept a `cancelled` promise" as the general idiom.  The
- * one exception is the returned `events` async iterator, which is
- * *also* cancellable the way async iterators always are — through its
- * `return()` (the `for await … of` cleanup path).  Both surfaces
- * resolve to the same idempotent close, so a caller may cancel by
- * settling `cancelled`, by dropping the iterator, or both.
+ * cancelled by settling the `cancelled` promise the caller passes in
+ * the options bag, rather than by a `cancel()` function returned to the
+ * caller.  We establish "accept a `cancelled` promise" as the general
+ * idiom.  `cancelled` defaults to a forever-pending promise when the
+ * field is omitted, so the option is optional and a caller that never
+ * cancels through it simply drops the iterator instead.  That returned
+ * `events` async iterator is the other cancellation surface, cancellable
+ * the way async iterators always are — through its `return()` (the
+ * `for await … of` cleanup path).  Both surfaces resolve to the same
+ * idempotent close, so a caller may cancel by settling `cancelled`, by
+ * dropping the iterator, or both.
  *
  * On platforms or filesystems where `fs.watch` is unavailable, the
  * implementation logs to `console.error` and returns an `events`
  * stream that terminates immediately so callers see end-of-stream
  * rather than hang.
  *
- * @typedef {(path: string, cancelled: Promise<void>, options?: WatchDirectoryOptions) => AsyncIterable<DirectoryWatchEvent>} WatchDirectory
+ * @typedef {(path: string, options?: WatchDirectoryOptions) => AsyncIterable<DirectoryWatchEvent>} WatchDirectory
  */
 
 /**
@@ -83,14 +94,17 @@ export const makeWatchDirectory = (fs, factoryOptions = {}) => {
   const defaultDebounceMs = coerceDebounceMs(factoryOptions.debounceMs, 50);
   /**
    * @param {string} dirPath
-   * @param {Promise<void>} cancelled - settle to close the OS watcher
-   *   handle and terminate `events`; idempotent with the iterator's
-   *   own `return()`.
-   * @param {WatchDirectoryOptions} [options] - advisory per-call tuning;
-   *   overrides the factory defaults.
+   * @param {WatchDirectoryOptions} [options] - per-call options.  Its
+   *   `cancelled` token (defaulting to a forever-pending promise) closes
+   *   the OS watcher handle and terminates `events` when it settles;
+   *   `debounceMs` is advisory per-call tuning that overrides the factory
+   *   default.
    * @returns {AsyncIterable<DirectoryWatchEvent>}
    */
-  const watchDirectory = (dirPath, cancelled, options = {}) => {
+  const watchDirectory = (dirPath, options = {}) => {
+    // Absent a `cancelled` token, a forever-pending promise stands in so
+    // the only cancellation surface is the iterator's own `return()`.
+    const { cancelled = new Promise(() => {}) } = options;
     /** @type {Array<DirectoryWatchEvent>} */
     const buffered = [];
     /** @type {Array<(value: IteratorResult<DirectoryWatchEvent>) => void>} */

@@ -1,5 +1,5 @@
 // @ts-check
-/* global Buffer, process */
+/* global Buffer, process, setTimeout */
 
 import { createHash } from 'node:crypto';
 import { lstat, rm } from 'node:fs/promises';

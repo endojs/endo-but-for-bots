@@ -1,6 +1,4 @@
 // @ts-nocheck
-/* global setTimeout, Buffer */
-
 /**
  * Unit tests for the node-fs `makeWatchDirectory` adapter.
  *
@@ -23,9 +21,10 @@ import { makeWatchDirectory } from '../src/fs-node/watch-directory.js';
 
 /**
  * Cancellation kit mirroring how a consumer settles the `cancelled`
- * promise `watchDirectory` accepts.  Returns `{ events, cancel }` so
- * the tests read the way the old returned-`cancel` API did while
- * exercising the new accept-a-`cancelled`-promise idiom.
+ * promise `watchDirectory` accepts (now a field of the options bag).
+ * Returns `{ events, cancel }` so the tests read the way the old
+ * returned-`cancel` API did while exercising the
+ * accept-a-`cancelled`-promise idiom.
  *
  * @param {ReturnType<typeof makeWatchDirectory>} watchDirectory
  * @param {string} dirPath
@@ -35,7 +34,7 @@ const watch = (watchDirectory, dirPath) => {
   const cancelled = new Promise(resolve => {
     cancel = resolve;
   });
-  const events = watchDirectory(dirPath, cancelled);
+  const events = watchDirectory(dirPath, { cancelled });
   return { events, cancel };
 };
 
@@ -230,6 +229,31 @@ test('watchDirectory iterator.return() closes the watcher', async t => {
   t.true(after.done, 'next() after return() reports done');
 });
 
+test('watchDirectory defaults cancelled to a forever-pending promise when omitted', async t => {
+  // Omitting the `cancelled` field leaves the iterator's own `return()`
+  // as the sole cancellation surface: the watcher still delivers events
+  // and still closes on `return()`, it simply cannot be cancelled
+  // through a `cancelled` promise.
+  const directory = await makeTemporaryDirectory(t, 'no-cancelled');
+  const watchDirectory = makeWatchDirectory(fs);
+  const events = watchDirectory(directory);
+
+  await new Promise(resolve => setTimeout(resolve, 50));
+  await fs.promises.writeFile(path.join(directory, 'solo.txt'), 'hi');
+
+  const event = await collect(
+    events,
+    candidate => candidate.name === 'solo.txt',
+  );
+  t.truthy(event, 'event delivered without a cancelled option');
+  t.is(event.name, 'solo.txt');
+
+  // The iterator's return() still closes the watcher.
+  const iterator = events[Symbol.asyncIterator]();
+  const returned = await iterator.return();
+  t.true(returned.done, 'return() closes the watcher with no cancelled option');
+});
+
 test('watchDirectory returns an immediately-closed stream when fs.watch throws', async t => {
   // Pass a path that does not exist; Node's fs.watch synchronously
   // throws ENOENT.  The production code emits a `console.error`
@@ -401,7 +425,7 @@ test('watchDirectory honors a per-call debounceMs override (advisory) and still 
   const cancelled = new Promise(resolve => {
     cancel = resolve;
   });
-  const events = watchDirectory(directory, cancelled, { debounceMs: 10 });
+  const events = watchDirectory(directory, { cancelled, debounceMs: 10 });
   t.teardown(() => cancel());
 
   await new Promise(resolve => setTimeout(resolve, 50));
@@ -425,7 +449,8 @@ test('watchDirectory ignores a non-numeric debounceMs and falls back to the defa
   });
   // A nonsensical hint is advisory: it is ignored (not thrown), and the
   // default 50 ms window applies.
-  const events = watchDirectory(directory, cancelled, {
+  const events = watchDirectory(directory, {
+    cancelled,
     debounceMs: 'soon',
   });
   t.teardown(() => cancel());

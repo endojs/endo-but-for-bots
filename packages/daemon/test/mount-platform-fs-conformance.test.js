@@ -662,9 +662,12 @@ test('XS watchDirectory degrades to an immediately-closed stream without crashin
   // return a non-iterable, followNameChanges would crash under XS and
   // this test fails first.
   const xsPowers = makeXsFilePowers();
-  // The stub ignores `cancelled`; a never-settling promise stands in for
-  // "the consumer has not cancelled".
-  const events = xsPowers.watchDirectory('/some/dir', new Promise(() => {}));
+  // The stub ignores the options bag (`cancelled`, `debounceMs`); a
+  // never-settling `cancelled` stands in for "the consumer has not
+  // cancelled".
+  const events = xsPowers.watchDirectory('/some/dir', {
+    cancelled: new Promise(() => {}),
+  });
   const iterator = /** @type {AsyncIterator<any>} */ (
     events[Symbol.asyncIterator]()
   );

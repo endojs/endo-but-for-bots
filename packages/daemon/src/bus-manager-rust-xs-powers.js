@@ -437,12 +437,13 @@ export const makeXsFilePowers = () => {
    * present so the XS powers satisfy the same `FilePowers` contract
    * as the Node powers (enforced by mount-platform-fs-conformance).
    *
-   * The advisory `_options` (e.g. `debounceMs`) is ignored: with no
-   * events to debounce, there is nothing for it to tune.
+   * The `_options` bag (its `cancelled` token and advisory `debounceMs`)
+   * is ignored: with no events to debounce and a stream that closes
+   * immediately, there is nothing for either to tune or cancel.
    *
    * @type {FilePowers['watchDirectory']}
    */
-  const watchDirectory = (_dirPath, _cancelled, _options) => {
+  const watchDirectory = (_dirPath, _options) => {
     // Increasing the fidelity of this fallback — delivering real
     // directory-change events rather than an empty snapshot — is blocked at
     // the host boundary: the Rust XS powers reach the filesystem through

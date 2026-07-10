@@ -6,6 +6,7 @@
 
 import { E } from '@endo/eventual-send';
 import { q } from '@endo/errors';
+import { makeCancelKit } from '@endo/cancel';
 import { makeExo } from '@endo/exo';
 import { makePromiseKit } from '@endo/promise-kit';
 import { encodeBase64 } from '@endo/base64';
@@ -531,8 +532,8 @@ harden(resolvePhysicalPath);
  *   the mount is never revocable. `whenRevoked` settles when `revoke()` runs,
  *   so an open stream can wake promptly rather than waiting on the next
  *   coincidental filesystem event.
- * @property {Promise<void>} [cancelled] Settles when the mount formula is
- *   cancelled and closes every watcher opened by this mount or a derived face.
+ * @property {import('@endo/cancel').Cancelled} [cancelled] A cancellation
+ *   token folded into every watcher opened by this mount or a derived face.
  * @property {{ debounceMs?: number }} [watchDirectoryOptions] Advisory tuning
  *   passed to `FilePowers.watchDirectory`.
  */
@@ -1104,19 +1105,12 @@ const makeMountExo = ctx => {
       assertLive();
       await assertConfined(target, confinementRoot, filePowers);
 
-      const { promise: streamCancelled, resolve: cancelStream } =
-        /** @type {import('@endo/promise-kit').PromiseKit<void>} */ (
-          makePromiseKit()
-        );
-      const cancelled =
-        mountCancelled === undefined
-          ? streamCancelled
-          : Promise.race([streamCancelled, mountCancelled]);
-      const events = filePowers.watchDirectory(
-        target,
+      const { cancelled, cancel: cancelStream } =
+        makeCancelKit(mountCancelled);
+      const events = filePowers.watchDirectory(target, {
         cancelled,
-        watchDirectoryOptions,
-      );
+        ...watchDirectoryOptions,
+      });
       try {
         /** @type {Map<string, 'file' | 'directory'>} */
         const known = new Map();
@@ -1201,7 +1195,7 @@ const makeMountExo = ctx => {
           await eventIterator.return?.();
         }
       } finally {
-        cancelStream(undefined);
+        cancelStream();
       }
     };
     return readerFromIterator(generate());
@@ -1811,8 +1805,8 @@ harden(makeReadableBlobView);
  * @param {{ revoked: boolean, whenRevoked: Promise<undefined> }} [opts.revocation]
  *   Liveness record shared across every derived face; `makeRevocableMount`
  *   supplies it. Undefined means the mount is never revocable.
- * @param {Promise<void>} [opts.cancelled] The mount formula's cancellation
- *   signal, propagated to every `followNameChanges` watcher.
+ * @param {import('@endo/cancel').Cancelled} [opts.cancelled] The mount
+ *   formula's cancellation token, folded into every watcher.
  * @param {{ debounceMs?: number }} [opts.watchDirectoryOptions] Advisory
  *   `watchDirectory` tuning passed through by `followNameChanges`.
  * @returns {EndoMount}
