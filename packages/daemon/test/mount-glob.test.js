@@ -11,10 +11,15 @@ import path from 'path';
 import { E } from '@endo/eventual-send';
 
 import { makeFilePowers } from '../src/daemon-node-powers.js';
-import { makeMount, GLOB_MAX_RESULTS } from '../src/mount.js';
+import {
+  makeMount,
+  GLOB_MAX_RESULTS,
+  defaultDeniedSegments,
+} from '../src/mount.js';
 import { buildMountFixture } from './_mount-fixture.js';
 
 const globCasesUrl = new URL('./mount-glob-cases.json', import.meta.url);
+const globContractUrl = new URL('./mount-glob-contract.json', import.meta.url);
 
 const filePowers = makeFilePowers({ fs, path });
 
@@ -25,6 +30,32 @@ const filePowers = makeFilePowers({ fs, path });
  * parity break.
  */
 const { cases } = JSON.parse(fs.readFileSync(globCasesUrl, 'utf8'));
+
+/**
+ * The shared, cross-language contract of glob's normative constants and
+ * semantics. Binding it to `mount.js`'s exports here keeps the data a Rust/XS
+ * port consumes from drifting away from the Node reference it must match.
+ */
+const contract = JSON.parse(fs.readFileSync(globContractUrl, 'utf8'));
+
+test('the shared glob contract matches mount.js constants (no code/data drift)', t => {
+  // The full deny set and its case-fold rule are shared data so a port cannot
+  // under-deny and still pass the table; assert the artifact and the code agree.
+  t.deepEqual(
+    [...contract.deny.segments].sort(),
+    [...defaultDeniedSegments].sort(),
+    'contract deny.segments equals mount.js defaultDeniedSegments',
+  );
+  t.is(contract.deny.caseInsensitive, true);
+  // The result cap is shared data so a port cannot pick a different (or absent)
+  // limit and still pass the truncation expectation.
+  t.is(contract.limits.GLOB_MAX_RESULTS, GLOB_MAX_RESULTS);
+  t.is(contract.limits.truncation, 'post-sort');
+  t.is(contract.sort.order, 'utf-16-code-unit');
+  t.is(contract.matcher.questionMarkIsLiteral, true);
+  t.is(contract.matcher.braceExpansion, false);
+  t.is(contract.symlink.cycle, 'record-once');
+});
 
 test('glob variant case table over the shared fixture (Rust/Node parity contract)', async t => {
   const { root, created } = buildMountFixture(t);
@@ -106,6 +137,14 @@ test('glob with an overridden empty deny set admits the credential names', async
   });
   t.deepEqual([...(await E(mount).glob('.ssh/*'))], ['.ssh/id_rsa']);
   t.deepEqual([...(await E(mount).glob('.env'))], ['.env']);
+  // The names the expanded case table pins to `[]` are physically present:
+  // with denial disabled they surface, so those `[]` expectations are
+  // load-bearing on the deny filter, not on the names being absent.
+  t.deepEqual([...(await E(mount).glob('.azure/*'))], ['.azure/token']);
+  t.deepEqual([...(await E(mount).glob('.npmrc'))], ['.npmrc']);
+  // The case-fold probe (`.SSH`, uppercase) surfaces too — proving the default
+  // denial of it depends on the case-insensitive rule, not on absence.
+  t.deepEqual([...(await E(mount).glob('.SSH'))], ['.SSH']);
 });
 
 test('glob caps results at GLOB_MAX_RESULTS with deterministic truncation', async t => {

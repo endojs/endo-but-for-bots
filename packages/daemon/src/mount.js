@@ -959,7 +959,10 @@ const makeMountExo = ctx => {
           // file descendants directly, since `**` matches a whole sequence of
           // segments ending in a file, not just directories.
           await walk(rest, dir, prefix, ancestorsReal);
-          for (const name of names.sort()) {
+          // Walk order does not affect the result: `results` is a Set and the
+          // final `sort()` below governs output order, so no per-directory sort
+          // is needed here.
+          for (const name of names) {
             if (isDenied(name)) {
               // eslint-disable-next-line no-continue
               continue;
@@ -1000,7 +1003,9 @@ const makeMountExo = ctx => {
           return;
         }
         const matches = compileGlobSegment(head);
-        for (const name of names.sort()) {
+        // As above, the final `sort()` governs output order; walking in
+        // directory order here is sufficient.
+        for (const name of names) {
           if (isDenied(name) || !matches(name)) {
             // eslint-disable-next-line no-continue
             continue;

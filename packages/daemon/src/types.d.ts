@@ -1123,7 +1123,8 @@ export interface EndoMount {
    * Recursively enumerate mount-face-relative paths matching a glob
    * `pattern`. The only metacharacters are `*` (zero or more characters
    * within one segment, never `/`, matching leading-dot names) and `**` (a
-   * whole segment matching zero or more directory levels); every other
+   * whole segment matching zero or more directory levels; a trailing `**`
+   * additionally matches file descendants, not only directories); every other
    * character is a literal. Denied segments never appear in results, entries
    * that escape confinement are excluded, results include directories, and
    * the list is sorted by UTF-16 code unit and capped at 10,000 with silent

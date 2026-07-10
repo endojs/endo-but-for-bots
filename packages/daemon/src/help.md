@@ -755,7 +755,8 @@ Returns EndoMount for directories, EndoMountFile for files.
 Recursively enumerate paths matching a glob pattern, relative to this mount face.
 pattern: string — Slash-separated segments. The only metacharacters are `*` and `**`.
 `*` matches zero or more characters within one segment (never `/`, and it does match
-leading-dot names); `**` as a whole segment matches zero or more directory levels.
+leading-dot names); `**` as a whole segment matches zero or more directory levels,
+and a trailing `**` additionally matches file descendants, not only directories.
 Every other character, including `?`, `[`, `]`, `{`, `}`, and `+`, is a literal.
 Denied names (such as .ssh, .aws, .env) never appear, even when named literally.
 Entries whose symlinks escape the mount root are excluded. Results include

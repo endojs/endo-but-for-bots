@@ -1,5 +1,5 @@
 {
-  "description": "Glob variant coverage matrix over the shared mount fixture (mount-fixture-manifest.json), the cross-language contract for EndoMount.glob(pattern). Each case is { name, pattern, expect } where `expect` is the exact result of glob(pattern) — mount-face-relative, /-joined, sorted by UTF-16 code unit. `requiresSymlink: true` marks a case whose meaning depends on the optional escaping symlink; a runner on a platform that could not create it skips such a case. The Node runner is mount-glob.test.js; a Rust/XS-side runner consumes this same JSON to assert identical results.",
+  "description": "Glob variant coverage matrix over the shared mount fixture (mount-fixture-manifest.json), the cross-language contract for EndoMount.glob(pattern). Each case is { name, pattern, expect } where `expect` is the exact result of glob(pattern) — mount-face-relative, /-joined, sorted by UTF-16 code unit. `requiresSymlink: true` marks a case whose meaning depends on the optional escaping symlink; a runner on a platform that could not create it skips such a case. The normative rules these cases assume (the full deny set and its case-fold, GLOB_MAX_RESULTS, the UTF-16 sort, the literal metacharacters) are pinned in mount-glob-contract.json. The Node runner is mount-glob.test.js; a Rust/XS-side runner consumes this same JSON to assert identical results.",
   "cases": [
     { "name": "literal segment (file)", "pattern": "README.md", "expect": ["README.md"] },
     { "name": "literal nested path", "pattern": "src/index.js", "expect": ["src/index.js"] },
@@ -9,6 +9,24 @@
     { "name": "denied name as a directory", "pattern": ".ssh", "expect": [] },
     { "name": "denied name traversed", "pattern": ".ssh/id_rsa", "expect": [] },
     { "name": "denied dotfile", "pattern": ".env", "expect": [] },
+
+    { "name": "denied .azure", "pattern": ".azure", "expect": [] },
+    { "name": "denied .gcloud", "pattern": ".gcloud", "expect": [] },
+    { "name": "denied .config", "pattern": ".config", "expect": [] },
+    { "name": "denied .gnupg", "pattern": ".gnupg", "expect": [] },
+    { "name": "denied .password-store", "pattern": ".password-store", "expect": [] },
+    { "name": "denied .docker", "pattern": ".docker", "expect": [] },
+    { "name": "denied .kube", "pattern": ".kube", "expect": [] },
+    { "name": "denied .terraform", "pattern": ".terraform", "expect": [] },
+    { "name": "denied .npmrc", "pattern": ".npmrc", "expect": [] },
+    { "name": "denied .env.local", "pattern": ".env.local", "expect": [] },
+    { "name": "denied .env.production", "pattern": ".env.production", "expect": [] },
+    { "name": "denied name traversed (.gnupg)", "pattern": ".gnupg/secring", "expect": [] },
+    { "name": "denied name traversed (.docker)", "pattern": ".docker/config.json", "expect": [] },
+    { "name": "denied name star-listed (.kube)", "pattern": ".kube/*", "expect": [] },
+    { "name": "deny is case-insensitive (uppercase .SSH)", "pattern": ".SSH", "expect": [] },
+    { "name": "deny is case-insensitive traversed (.SSH/id_rsa)", "pattern": ".SSH/id_rsa", "expect": [] },
+    { "name": "deny is case-insensitive star-listed (.SSH/*)", "pattern": ".SSH/*", "expect": [] },
 
     {
       "name": "single star at root includes dirs and dotfiles, excludes denied",
@@ -23,6 +41,9 @@
         "empty",
         "notes.txt",
         "package.json",
+        "probes",
+        "sort-📄",
+        "sort-",
         "src"
       ]
     },
@@ -62,6 +83,16 @@
         "empty",
         "notes.txt",
         "package.json",
+        "probes",
+        "probes/a",
+        "probes/ab",
+        "probes/afoob",
+        "probes/b",
+        "probes/q?",
+        "probes/qX",
+        "probes/{a,b}",
+        "sort-📄",
+        "sort-",
         "src",
         "src/README.md",
         "src/index.js",
@@ -90,6 +121,16 @@
         "empty",
         "notes.txt",
         "package.json",
+        "probes",
+        "probes/a",
+        "probes/ab",
+        "probes/afoob",
+        "probes/b",
+        "probes/q?",
+        "probes/qX",
+        "probes/{a,b}",
+        "sort-📄",
+        "sort-",
         "src",
         "src/README.md",
         "src/index.js",
@@ -147,6 +188,23 @@
     { "name": "brackets are literal", "pattern": "[bracket]/b.txt", "expect": ["[bracket]/b.txt"] },
     { "name": "star inside a bracket-named directory", "pattern": "[bracket]/*", "expect": ["[bracket]/b.txt"] },
 
+    { "name": "question mark is a literal, not a single-char wildcard", "pattern": "probes/q?", "expect": ["probes/q?"] },
+    { "name": "embedded ** collapses to a within-segment * (a**b)", "pattern": "probes/a**b", "expect": ["probes/ab", "probes/afoob"] },
+    { "name": "braces and comma are literal, no brace expansion", "pattern": "probes/{a,b}", "expect": ["probes/{a,b}"] },
+    {
+      "name": "star lists names carrying literal metacharacters",
+      "pattern": "probes/*",
+      "expect": [
+        "probes/a",
+        "probes/ab",
+        "probes/afoob",
+        "probes/b",
+        "probes/q?",
+        "probes/qX",
+        "probes/{a,b}"
+      ]
+    },
+
     { "name": "dot-star matches dotfiles, excludes denied", "pattern": ".*", "expect": [".gitignore"] },
 
     { "name": "a directory is a valid result", "pattern": "src", "expect": ["src"] },
@@ -157,6 +215,11 @@
       "name": "uppercase sorts before lowercase (UTF-16 order)",
       "pattern": "docs/*",
       "expect": ["docs/B.md", "docs/a.md", "docs/img.png"]
+    },
+    {
+      "name": "astral name sorts before high-BMP name by UTF-16 code unit, not code point",
+      "pattern": "sort-*",
+      "expect": ["sort-📄", "sort-"]
     },
 
     { "name": "empty segments are dropped", "pattern": "src//nested", "expect": ["src/nested"] },
