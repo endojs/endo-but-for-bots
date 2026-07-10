@@ -1,11 +1,18 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
+import { makePromiseKit } from '@endo/promise-kit';
 
 import {
   makeIntervalScheduler,
   DEFAULT_MIN_PERIOD_MS,
   MAX_ACTIVE_CEILING,
 } from '../src/interval-scheduler.js';
+
+// A Promise<never> that never rejects — for intervals a test never cancels.
+// makeInterval now requires a `cancelled` argument (the daemon-standard
+// cancellation pattern), so tests that do not exercise cancellation pass this.
+/** @type {import('@endo/promise-kit').PromiseKit<never>} */
+const { promise: neverCancelled } = makePromiseKit();
 
 /**
  * An in-memory stand-in for the daemon's `filePowers`, exposing just the
@@ -140,7 +147,11 @@ test('makeInterval creates, persists, lists, and fires ticks', async t => {
     now: clock.now,
   });
 
-  const interval = await scheduler.makeInterval('heartbeat', 10_000);
+  const interval = await scheduler.makeInterval(
+    'heartbeat',
+    10_000,
+    neverCancelled,
+  );
   t.is(interval.label(), 'heartbeat');
   t.is(interval.period(), 10_000);
 
@@ -179,23 +190,29 @@ test('makeInterval enforces minPeriodMs and maxActive', async t => {
     now: clock.now,
   });
 
-  await t.throwsAsync(() => scheduler.makeInterval('too-fast', 1000), {
-    message: /below the minimum/,
-  });
+  await t.throwsAsync(
+    () => scheduler.makeInterval('too-fast', 1000, neverCancelled),
+    {
+      message: /below the minimum/,
+    },
+  );
 
-  await scheduler.makeInterval('a', 5000);
-  await scheduler.makeInterval('b', 5000);
-  await t.throwsAsync(() => scheduler.makeInterval('c', 5000), {
-    message: /active interval limit reached/,
-  });
+  await scheduler.makeInterval('a', 5000, neverCancelled);
+  await scheduler.makeInterval('b', 5000, neverCancelled);
+  await t.throwsAsync(
+    () => scheduler.makeInterval('c', 5000, neverCancelled),
+    {
+      message: /active interval limit reached/,
+    },
+  );
 
   // Raising the limit via control allows another.
   schedulerControl.setMaxActive(3);
-  const c = await scheduler.makeInterval('c', 5000);
+  const c = await scheduler.makeInterval('c', 5000, neverCancelled);
   t.is(c.label(), 'c');
 });
 
-test('cancel disarms and marks the interval cancelled', async t => {
+test('rejecting cancelled disarms and marks the interval cancelled', async t => {
   const { filePowers } = makeFakeFilePowers();
   const clock = makeFakeClock();
   /** @type {import('../src/types.js').IntervalTickMessage[]} */
@@ -211,10 +228,20 @@ test('cancel disarms and marks the interval cancelled', async t => {
     now: clock.now,
   });
 
-  const interval = await scheduler.makeInterval('gone', 10_000, {
+  // The caller retains cancellation authority via a Promise<never> whose
+  // rejection tears the interval down (daemon-standard cancelled pattern),
+  // rather than an imperative cancel() method on the handle.
+  /** @type {import('@endo/promise-kit').PromiseKit<never>} */
+  const { promise: cancelled, reject: cancel } = makePromiseKit();
+  cancelled.catch(() => {}); // avoid unhandled-rejection noise in the test
+  const interval = await scheduler.makeInterval('gone', 10_000, cancelled, {
     firstDelayMs: 10_000,
   });
-  await interval.cancel();
+  t.is(interval.info().status, 'active');
+
+  cancel(harden(Error('cancelled by test')));
+  // Let the cancelled.catch teardown microtask run.
+  await null;
   t.is(interval.info().status, 'cancelled');
 
   const listed = await scheduler.list();
@@ -241,7 +268,9 @@ test('pause suppresses ticks; resume re-arms', async t => {
     now: clock.now,
   });
 
-  await scheduler.makeInterval('beat', 10_000, { firstDelayMs: 10_000 });
+  await scheduler.makeInterval('beat', 10_000, neverCancelled, {
+    firstDelayMs: 10_000,
+  });
   schedulerControl.pause();
   await clock.advance(30_000);
   t.is(ticks.length, 0, 'no ticks while paused');
@@ -264,12 +293,15 @@ test('revoke is permanent and blocks further use', async t => {
     now: clock.now,
   });
 
-  await scheduler.makeInterval('a', 5000);
+  await scheduler.makeInterval('a', 5000, neverCancelled);
   await schedulerControl.revoke();
 
-  await t.throwsAsync(() => scheduler.makeInterval('b', 5000), {
-    message: /revoked/,
-  });
+  await t.throwsAsync(
+    () => scheduler.makeInterval('b', 5000, neverCancelled),
+    {
+      message: /revoked/,
+    },
+  );
   await t.throwsAsync(() => scheduler.list(), { message: /revoked/ });
 
   const all = await schedulerControl.listAll();
@@ -293,7 +325,7 @@ test('startup recovery re-arms active intervals and coalesces missed ticks', asy
     clearTimeout: clock.clearTimeout,
     now: clock.now,
   });
-  await first.scheduler.makeInterval('heartbeat', 10_000);
+  await first.scheduler.makeInterval('heartbeat', 10_000, neverCancelled);
   await clock.advance(0); // fire + resolve the immediate tick
   first.stop();
 
@@ -348,7 +380,7 @@ test('reschedule redelivers the same tick, holds the deadline fixed, and gives u
   });
 
   // period 10_000 → tickTimeoutMs default 5000, baseBackoff min(1000, 1000)=1000.
-  await scheduler.makeInterval('retry', 10_000);
+  await scheduler.makeInterval('retry', 10_000, neverCancelled);
   await clock.advance(0);
   t.is(ticks.length, 1);
   t.is(ticks[0].tickNumber, 1);
@@ -409,7 +441,7 @@ test('a tick with no response auto-resolves at its deadline and the schedule con
     now: clock.now,
   });
 
-  await scheduler.makeInterval('unanswered', 10_000); // tickTimeoutMs = 5000
+  await scheduler.makeInterval('unanswered', 10_000, neverCancelled); // tickTimeoutMs = 5000
   await clock.advance(0);
   t.is(ticks.length, 1);
 
@@ -455,7 +487,7 @@ test('stop() is permanent: a late tickResponse cannot resurrect a cancelled sche
     now: clock.now,
   });
 
-  await scheduler.makeInterval('beat', 10_000);
+  await scheduler.makeInterval('beat', 10_000, neverCancelled);
   await clock.advance(0);
   t.is(ticks.length, 1);
 
@@ -498,11 +530,17 @@ test('initial limits and interval options are validated', async t => {
     minPeriodMs: 1000,
   });
   await t.throwsAsync(
-    () => scheduler.makeInterval('bad-delay', 10_000, { firstDelayMs: -1 }),
+    () =>
+      scheduler.makeInterval('bad-delay', 10_000, neverCancelled, {
+        firstDelayMs: -1,
+      }),
     { message: /firstDelayMs must be/ },
   );
   await t.throwsAsync(
-    () => scheduler.makeInterval('bad-timeout', 10_000, { tickTimeoutMs: 0 }),
+    () =>
+      scheduler.makeInterval('bad-timeout', 10_000, neverCancelled, {
+        tickTimeoutMs: 0,
+      }),
     { message: /tickTimeoutMs must be/ },
   );
 });
@@ -543,7 +581,7 @@ test('a corrupt persisted entry is skipped, not fatal, during recovery', async t
     clearTimeout: clock.clearTimeout,
     now: clock.now,
   });
-  await first.scheduler.makeInterval('good', 10_000);
+  await first.scheduler.makeInterval('good', 10_000, neverCancelled);
   first.stop();
 
   // Simulate a truncated/corrupt entry file alongside the valid one.

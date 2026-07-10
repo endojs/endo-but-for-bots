@@ -640,7 +640,6 @@ export type IntervalHandle = {
   label: () => string;
   period: () => number;
   setPeriod: (periodMs: number) => Promise<void>;
-  cancel: () => Promise<void>;
   info: () => IntervalEntry;
   help: () => string;
 };
@@ -649,6 +648,7 @@ export type IntervalSchedulerFacet = {
   makeInterval: (
     label: string,
     periodMs: number,
+    cancelled: Promise<never>,
     opts?: { firstDelayMs?: number; tickTimeoutMs?: number },
   ) => Promise<IntervalHandle>;
   list: () => Promise<IntervalEntry[]>;

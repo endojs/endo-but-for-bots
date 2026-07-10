@@ -234,6 +234,30 @@ export const makeIntervalScheduler = async powers => {
   };
 
   /**
+   * Idempotently tear down a single interval: disarm its timers, mark it
+   * cancelled, and persist the terminal status so startup recovery does not
+   * re-arm it. This is what a caller's `cancelled` `Promise<never>` triggers
+   * (the daemon-standard cancellation-argument pattern), replacing the former
+   * imperative `Interval.cancel()` method — cancellation authority now lives
+   * with whoever holds the `cancelled` promise rather than with the handle.
+   *
+   * @param {IntervalEntry} entry
+   */
+  const cancelInterval = entry => {
+    if (entry.status === 'cancelled') {
+      return;
+    }
+    disarmInterval(entry.id);
+    entry.status = 'cancelled';
+    persist(entry).catch(error =>
+      console.error(
+        `[interval-scheduler] failed to persist cancellation for ${entry.label}:`,
+        error,
+      ),
+    );
+  };
+
+  /**
    * Arm (or re-arm) a timer for the given entry.
    *
    * @param {IntervalEntry} entry
@@ -520,14 +544,6 @@ export const makeIntervalScheduler = async powers => {
           armInterval(entry);
         }
       },
-      async cancel() {
-        if (entry.status === 'cancelled') {
-          return;
-        }
-        disarmInterval(entry.id);
-        entry.status = 'cancelled';
-        await persist(entry);
-      },
       info: () => harden({ ...entry }),
       help: () =>
         `Interval "${entry.label}" (${entry.periodMs}ms period, status: ${entry.status})`,
@@ -538,13 +554,23 @@ export const makeIntervalScheduler = async powers => {
     /**
      * @param {string} label
      * @param {number} periodMs
+     * @param {Promise<never>} cancelled - Rejects to cancel this interval
+     *   (disarm, mark cancelled, persist). The daemon-standard cancellation
+     *   pattern: the caller retains cancellation authority by holding the
+     *   promise's reject, rather than an imperative `cancel()` method on the
+     *   returned handle.
      * @param {{ firstDelayMs?: number, tickTimeoutMs?: number }} [opts]
      */
-    async makeInterval(label, periodMs, opts = {}) {
+    async makeInterval(label, periodMs, cancelled, opts = {}) {
       assertNotRevoked('makeInterval');
       assertValidPeriod(periodMs, 'makeInterval');
       if (typeof label !== 'string' || label.length === 0) {
         throw TypeError('makeInterval: label must be a non-empty string');
+      }
+      if (cancelled === undefined || typeof cancelled.then !== 'function') {
+        throw TypeError(
+          'makeInterval: cancelled must be a promise (Promise<never>)',
+        );
       }
       const activeCount = [...entries.values()].filter(
         e => e.status === 'active',
@@ -601,6 +627,10 @@ export const makeIntervalScheduler = async powers => {
       }
       await persist(entry);
       armInterval(entry);
+      // Cancellation-argument pattern: when the caller's promise rejects, tear
+      // this interval down. `cancelInterval` is idempotent, so a late rejection
+      // after the scheduler was already revoked/stopped is inert.
+      cancelled.catch(() => cancelInterval(entry));
       return makeIntervalHandle(entry);
     },
 
@@ -617,8 +647,9 @@ export const makeIntervalScheduler = async powers => {
       [
         'IntervalScheduler — create and manage periodic wakeup intervals.',
         '',
-        '  makeInterval(label, periodMs, opts?) → Interval',
+        '  makeInterval(label, periodMs, cancelled, opts?) → Interval',
         '    Create a new interval that fires every periodMs milliseconds.',
+        '    cancelled          — Promise<never>; reject it to cancel the interval',
         '    opts.firstDelayMs  — delay before first tick (default 0)',
         '    opts.tickTimeoutMs — deadline per tick (default periodMs/2)',
         '',
