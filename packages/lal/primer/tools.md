@@ -56,6 +56,27 @@
 - `writeText(petNameOrPath, fileName, content)` — Write text
   content to a capability (WritableTree, etc.)
 
+## Mount Search
+
+- `mountGlob(pattern, maxResults?)` — find files by name under a
+  mount. Pattern metacharacters: `*` (within one path segment,
+  matches dot-files) and `**` (a whole segment, any depth);
+  everything else is literal, so `?`, `[`, `{` need no escaping.
+  Returns sorted mount-relative paths and a `truncated` flag. Use
+  it to discover structure before reading files.
+- `mountGrep(pattern, filesGlob?, maxResults?)` — search file
+  contents under a mount. `pattern` is a JavaScript regular
+  expression (no flags); `filesGlob` narrows which files are
+  searched (default every file). Returns `{ file, line, text }`
+  matches and a `truncated` flag.
+
+Compose them: `mountGlob` finds files by *name*; `mountGrep` finds
+*content* within files selected by name. Prefer one `mountGrep`
+with a `filesGlob` over `mountGlob` followed by many reads; when
+`truncated` is true, narrow the pattern or the glob rather than
+paging. Both respect the mount's confinement and denied names
+(`.ssh`, `.env`, …): denied paths simply never appear.
+
 ## Code Evaluation
 
 - `define(source, slots)` — Propose code with named slots for the

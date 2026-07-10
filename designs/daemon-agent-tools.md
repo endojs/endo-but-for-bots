@@ -100,7 +100,7 @@ What this document owns is the remainder:
 | Git (local) | `Git` exo over a repository path string | `Git` over `EndoMount` via `provideGit(mountCap, petName)` ([daemon-git-capability](daemon-git-capability.md)) | capability landed (#364); tools landed (`makeGitTool`); mount-bridged `status` / `add` landed (#616) |
 | Git (remote) | deliberately omitted ("network access is a separate capability") | `GitRemote` = `Git` + bounded HTTPS transport + non-extractable credential ([daemon-git-remotes](daemon-git-remotes.md)) | capability landed (#365, #368); `makeGitRemoteTool` remaining |
 | Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3) | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); `provideHttpClient` daemon wiring and `makeHttpTool` remaining |
-| Search | `grep` / `glob` on `Dir` | interim: `Filesystem` walks plus the Shell group's allowlisted `grep`; a capability-backed search substrate is an open question | not started |
+| Search | `grep` / `glob` on `Dir` | capability-backed: `EndoMount.glob` / `.grep` over the normative `@endo/platform/fs/search` engine, surfaced as `makeMountGlobTool` / `makeMountGrepTool` ([platform-search-pushdown](platform-search-pushdown.md)) | `mountGlob` / `mountGrep` tools landed; consolidation onto the extended `Filesystem` (and code-mode declarations) is the named follow-up |
 
 Three properties of the reconciled map, each a correction to the sketch:
 
@@ -603,13 +603,16 @@ is the `stack-surgery` scenario in `designs/agentry-git-eval-scenarios.md`
    [endo-posix-sandbox](endo-posix-sandbox.md) converges. The
    alternative (wait for slices) couples the M3 pillar to sandbox
    phase work that is not otherwise on its critical path.
-2. **Search substrate.** Does an allowlisted `grep` through the Shell
-   group suffice for M3, or does a capability-backed search (a
-   `Filesystem`-level `glob` / content search, adjacent to genie's
-   host-path FTS5 memory tools) deserve its own design? The interim
-   answer here is Shell-based; a real agent transcript showing the
-   interim failing would promote the follow-up, to be filed as its own
-   design if promoted.
+2. **Search substrate.** ~~Does an allowlisted `grep` through the Shell
+   group suffice for M3, or does a capability-backed search deserve its
+   own design?~~ **Resolved** ([platform-search-pushdown](platform-search-pushdown.md)):
+   a capability-backed search substrate, not allowlisted shell `grep`.
+   The normative glob/grep engine lives in `@endo/platform/fs/search`,
+   is revealed on `EndoMount` as `glob` / `grep`, and is surfaced to
+   agents as the `mountGlob` / `mountGrep` tools. Consolidating the
+   extended `Filesystem` and genie's inline glob onto the one engine
+   (and the code-mode declarations that consolidation unlocks) is the
+   named follow-up.
 3. **Streaming / interactive processes.** Which consumer first needs a
    long-running process (a dev server, a REPL, a watch task) rather
    than bounded `exec`? That consumer decides when the exo-stream
