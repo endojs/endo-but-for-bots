@@ -75,6 +75,17 @@ export const MAX_SAFE_PAYLOAD_LENGTH = Number.MAX_SAFE_INTEGER;
 harden(MAX_SAFE_PAYLOAD_LENGTH);
 
 /**
+ * Default ceiling a reader or writer applies to a framed message length
+ * when the caller supplies no `maxMessageLength`. Matches the sibling
+ * `@endo/netstring` reader/writer default so the two framings share a
+ * sane finite bound rather than admitting the full `MAX_SAFE_PAYLOAD_LENGTH`
+ * head range; a caller parsing untrusted input should still set an
+ * explicit, tighter `maxMessageLength` for its transport.
+ */
+export const DEFAULT_MAX_MESSAGE_LENGTH = 999_999_999;
+harden(DEFAULT_MAX_MESSAGE_LENGTH);
+
+/**
  * Return the length in bytes of the shortest canonical (RFC 8949 § 4.2)
  * byte-string head for a payload of the given length.
  *

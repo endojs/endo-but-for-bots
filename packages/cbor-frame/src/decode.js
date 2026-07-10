@@ -3,7 +3,7 @@
 import harden from '@endo/harden';
 import { concatBytes } from '@endo/bytes/concat.js';
 
-import { decodeByteStringHead, MAX_SAFE_PAYLOAD_LENGTH } from './head.js';
+import { decodeByteStringHead, DEFAULT_MAX_MESSAGE_LENGTH } from './head.js';
 
 /**
  * @param {Iterable<Uint8Array> | AsyncIterable<Uint8Array>} input
@@ -13,7 +13,7 @@ import { decodeByteStringHead, MAX_SAFE_PAYLOAD_LENGTH } from './head.js';
  */
 async function* makeCborFrameIterator(
   input,
-  { name = '<unknown>', maxMessageLength = MAX_SAFE_PAYLOAD_LENGTH } = {},
+  { name = '<unknown>', maxMessageLength = DEFAULT_MAX_MESSAGE_LENGTH } = {},
 ) {
   // Byte offset of data consumed so far in the input stream.
   let offset = 0;

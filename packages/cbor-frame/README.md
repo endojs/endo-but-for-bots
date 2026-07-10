@@ -65,9 +65,15 @@ Each frame is:
   length bytes (big-endian).
 
 The tag-24 wrapper is mandatory.
-At a fixed two-byte per-frame cost it makes the wire format
-self-describing to any generic CBOR-aware analyzer, which can drop
-into the payload and continue parsing.
+At a fixed two-byte per-frame cost it makes each frame's *boundary*
+self-describing: a generic CBOR-aware analyzer reads the tag-24
+byte-string head and can therefore locate each frame and its length
+without knowing this framing.
+The payload itself is opaque: tag 24 is used here only as a framing
+marker, not as a promise that the payload is a well-formed encoded
+CBOR data item (it often is not — for example a Syrup-encoded OCapN
+message), so an analyzer must not assume it can descend into the
+payload and continue parsing.
 The reader rejects any initial byte other than the tag-24 prefix, any
 major type other than 2 inside the wrapper, any tag other than 24,
 and any indefinite-length form.

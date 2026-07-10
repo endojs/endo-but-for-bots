@@ -7,7 +7,7 @@ import { concatBytes } from '@endo/bytes/concat.js';
 import {
   encodeByteStringHead,
   TAG_24_PREFIX,
-  MAX_SAFE_PAYLOAD_LENGTH,
+  DEFAULT_MAX_MESSAGE_LENGTH,
 } from './head.js';
 
 /**
@@ -17,8 +17,10 @@ import {
  * Each frame is the CBOR tag-24 prefix (Encoded CBOR data item; major
  * type 6, argument 24) followed by the CBOR byte-string head (major
  * type 2) per RFC 8949 and then the payload bytes. The tag-24 wrapper
- * is mandatory: it makes the wire format self-describing to a generic
- * CBOR-aware analyzer at a fixed two-byte per-frame cost.
+ * is mandatory: at a fixed two-byte per-frame cost it makes each
+ * frame's boundary self-describing to a generic CBOR-aware analyzer.
+ * Tag 24 is used here only as a framing marker; the payload bytes are
+ * opaque and need not themselves be valid CBOR.
  *
  * This transform can be zero-copy, if the output stream supports
  * consecutive writes without waiting. In that case the by default off
@@ -39,7 +41,7 @@ export const makeCborFrameWriter = (
   {
     chunked = false,
     name = '<unknown>',
-    maxMessageLength = MAX_SAFE_PAYLOAD_LENGTH,
+    maxMessageLength = DEFAULT_MAX_MESSAGE_LENGTH,
   } = {},
 ) => {
   return harden({
