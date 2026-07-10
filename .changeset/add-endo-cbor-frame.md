@@ -1,5 +1,5 @@
 ---
-'@endo/cbor-frame': minor
+'@endo/cbor-frame': major
 ---
 
 Add `@endo/cbor-frame` package providing length-prefixed byte-string framing
