@@ -3188,6 +3188,8 @@ const makeDaemonCore = async (
         snapshotTree: snapshotMountTree,
         snapshotFile: snapshotMountFile,
         deniedSegments,
+        // Cancelling the mount formula closes any live name watchers.
+        cancelled: context.cancelled,
       });
       // Tie revocation to the mount formula's lifetime: when the formula is
       // cancelled, the caretaker trips the shared liveness flag and every
@@ -3217,6 +3219,8 @@ const makeDaemonCore = async (
         snapshotTree: snapshotMountTree,
         snapshotFile: snapshotMountFile,
         deniedSegments,
+        // Cancelling the mount formula closes any live name watchers.
+        cancelled: context.cancelled,
       });
       context.onCancel(() => {
         /** @type {{ revoke: () => void }} */ (control).revoke();

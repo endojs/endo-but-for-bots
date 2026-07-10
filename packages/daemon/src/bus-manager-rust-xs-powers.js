@@ -437,9 +437,20 @@ export const makeXsFilePowers = () => {
    * present so the XS powers satisfy the same `FilePowers` contract
    * as the Node powers (enforced by mount-platform-fs-conformance).
    *
+   * The advisory `_options` (e.g. `debounceMs`) is ignored: with no
+   * events to debounce, there is nothing for it to tune.
+   *
    * @type {FilePowers['watchDirectory']}
    */
-  const watchDirectory = _dirPath => {
+  const watchDirectory = (_dirPath, _cancelled, _options) => {
+    // Increasing the fidelity of this fallback — delivering real
+    // directory-change events rather than an empty snapshot — is blocked at
+    // the host boundary: the Rust XS powers reach the filesystem through
+    // cap-std, which exposes no capability-safe filesystem-watch primitive.
+    // To make progress we would need either to get such a watch feature added
+    // upstream to cap-std or to start (and maintain) a fork of cap-std that
+    // adds it. Until one of those lands, the immediately-closing stream below
+    // is the most faithful behavior the XS supervisor can offer.
     /** @type {AsyncIterable<{ kind: 'add' | 'remove' | 'replace', name: string }>} */
     const events = harden({
       [Symbol.asyncIterator]() {
@@ -449,10 +460,7 @@ export const makeXsFilePowers = () => {
         });
       },
     });
-    return harden({
-      events,
-      cancel: () => {},
-    });
+    return events;
   };
 
   return harden({

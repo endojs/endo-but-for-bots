@@ -1,5 +1,5 @@
 // @ts-check
-/* global Buffer, clearTimeout, process, setTimeout */
+/* global Buffer, process */
 
 import { createHash } from 'node:crypto';
 import { lstat, rm } from 'node:fs/promises';
@@ -12,6 +12,7 @@ import { makeError, q, X } from '@endo/errors';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makePipe } from '@endo/stream';
 import { makeNodeReader, makeNodeWriter } from '@endo/stream-node';
+import { makeWatchDirectory } from '@endo/platform/fs/node/watch-directory';
 import { makeNetstringCapTP } from './connection.js';
 import { makePetStoreMaker } from './pet-store.js';
 import { servePrivatePath } from './serve-private-path.js';
@@ -131,6 +132,7 @@ export const gunzip = async bytes => {
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /** @import { CapTpConnectionRegistrar, Config, CryptoPowers, DaemonWorkerFacet, DaemonicPersistencePowers, DaemonicPowers, EndoReadable, FilePowers, Formula, FormulaNumber, NetworkPowers, SocketPowers, WorkerDaemonFacet } from './types.js' */
 /** @import { DaemonDatabase } from './manager-database.js' */
+/** @import { WatchDirectory } from '@endo/platform/fs/node/watch-directory' */
 
 /**
  * @param {object} modules
@@ -656,203 +658,8 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
     }
   };
 
-  /**
-   * Watch a directory for entry-name changes (children added or
-   * removed).  Wraps `fs.watch` and translates its raw events into a
-   * snapshot-agnostic add/remove/replace stream over the watched
-   * directory's immediate children.  The consumer reconciles each
-   * `event.name` against its own bookkeeping (the snapshot it took
-   * before subscribing) to decide whether an entry is genuinely new,
-   * gone, or replaced.
-   *
-   * Events are coalesced over a short debounce window (50 ms) so the
-   * editor save dance of "write temp + rename" delivers one event per
-   * filename rather than a remove/add pair.
-   *
-   * The returned `events` async-iterable terminates only when
-   * `cancel()` is called (consumer dropping the iterator or the
-   * surrounding subscription closing).  `cancel()` is idempotent.
-   *
-   * @param {string} dirPath
-   * @returns {{
-   *   events: AsyncIterable<{ kind: 'add' | 'remove' | 'replace', name: string }>;
-   *   cancel: () => void;
-   * }}
-   */
-  const watchDirectory = dirPath => {
-    /** @type {Array<{ kind: 'add' | 'remove' | 'replace', name: string }>} */
-    const buffered = [];
-    /** @type {Array<(value: IteratorResult<{ kind: 'add' | 'remove' | 'replace', name: string }>) => void>} */
-    const waiters = [];
-    let closed = false;
-    /** @type {Map<string, ReturnType<typeof setTimeout>>} */
-    const pending = new Map();
-    const debounceMs = 50;
-
-    const deliver = event => {
-      if (closed) {
-        return;
-      }
-      const waiter = waiters.shift();
-      if (waiter !== undefined) {
-        waiter({ value: event, done: false });
-      } else {
-        buffered.push(event);
-      }
-    };
-
-    const close = () => {
-      if (closed) {
-        return;
-      }
-      closed = true;
-      for (const timer of pending.values()) {
-        clearTimeout(timer);
-      }
-      pending.clear();
-      try {
-        watcher.close();
-      } catch {
-        // ignore
-      }
-      while (waiters.length > 0) {
-        const waiter = /** @type {(typeof waiters)[number]} */ (
-          waiters.shift()
-        );
-        waiter({ value: undefined, done: true });
-      }
-    };
-
-    /**
-     * Schedule (or reset) a debounced reconciliation for `name`.  The
-     * `kind` we report is a best-effort guess based on what `stat`
-     * sees when the timer fires; the consumer is the source of truth
-     * for whether `name` is currently in its snapshot set.
-     *
-     * @param {string} name
-     */
-    const schedule = name => {
-      const existing = pending.get(name);
-      if (existing !== undefined) {
-        clearTimeout(existing);
-      }
-      const timer = setTimeout(() => {
-        pending.delete(name);
-        // Probe disk to classify, but the consumer reconciles
-        // against its own snapshot set, so the `kind` field is only
-        // a hint.  Use 'replace' as a neutral term that the
-        // consumer will resolve to add / remove / no-op.
-        deliver(harden({ kind: 'replace', name }));
-      }, debounceMs);
-      pending.set(name, timer);
-    };
-
-    let watcher;
-    try {
-      watcher = fs.watch(dirPath, { persistent: false });
-    } catch (error) {
-      // Surface watcher-creation failures by returning a cancelled
-      // stream that immediately terminates.
-      const code = /** @type {NodeJS.ErrnoException} */ (error).code;
-      console.error(
-        `watchDirectory(${dirPath}): fs.watch unavailable (${code}); stream will close immediately`,
-      );
-      /** @type {AsyncIterable<{ kind: 'add' | 'remove' | 'replace', name: string }>} */
-      const emptyEvents = harden({
-        [Symbol.asyncIterator]() {
-          return harden({
-            /** @returns {Promise<IteratorResult<{ kind: 'add' | 'remove' | 'replace', name: string }>>} */
-            next: async () =>
-              harden(
-                /** @type {IteratorResult<{ kind: 'add' | 'remove' | 'replace', name: string }>} */ ({
-                  value: undefined,
-                  done: true,
-                }),
-              ),
-            return: async () =>
-              harden(
-                /** @type {IteratorResult<{ kind: 'add' | 'remove' | 'replace', name: string }>} */ ({
-                  value: undefined,
-                  done: true,
-                }),
-              ),
-          });
-        },
-      });
-      return harden({
-        events: emptyEvents,
-        cancel: () => {},
-      });
-    }
-
-    watcher.on('change', (eventType, filename) => {
-      // `filename` may be null on some platforms; ignore the event
-      // when we cannot tell which child changed.
-      if (filename === null || filename === undefined) {
-        return;
-      }
-      const name =
-        typeof filename === 'string' ? filename : filename.toString();
-      if (eventType === 'rename') {
-        schedule(name);
-      }
-      // 'change' events refer to file-content mutations, not name
-      // changes; the followNameChanges contract intentionally drops
-      // them.
-    });
-
-    watcher.on('error', error => {
-      console.error(`watchDirectory(${dirPath}): ${error.message}`);
-      close();
-    });
-
-    /** @type {AsyncIterable<{ kind: 'add' | 'remove' | 'replace', name: string }>} */
-    const events = harden({
-      [Symbol.asyncIterator]() {
-        return harden({
-          /** @returns {Promise<IteratorResult<{ kind: 'add' | 'remove' | 'replace', name: string }>>} */
-          next: async () => {
-            await null;
-            if (buffered.length > 0) {
-              const value = /** @type {(typeof buffered)[number]} */ (
-                buffered.shift()
-              );
-              return harden(
-                /** @type {IteratorResult<{ kind: 'add' | 'remove' | 'replace', name: string }>} */ ({
-                  value,
-                  done: false,
-                }),
-              );
-            }
-            if (closed) {
-              return harden(
-                /** @type {IteratorResult<{ kind: 'add' | 'remove' | 'replace', name: string }>} */ ({
-                  value: undefined,
-                  done: true,
-                }),
-              );
-            }
-            return /** @type {Promise<IteratorResult<{ kind: 'add' | 'remove' | 'replace', name: string }>>} */ (
-              new Promise(resolve => {
-                waiters.push(resolve);
-              })
-            );
-          },
-          return: async () => {
-            close();
-            return harden(
-              /** @type {IteratorResult<{ kind: 'add' | 'remove' | 'replace', name: string }>} */ ({
-                value: undefined,
-                done: true,
-              }),
-            );
-          },
-        });
-      },
-    });
-
-    return harden({ events, cancel: close });
-  };
+  /** @type {WatchDirectory} */
+  const watchDirectory = makeWatchDirectory(fs);
 
   return harden({
     makeFileReader,

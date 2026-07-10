@@ -17,6 +17,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { checkinTree } from '@endo/platform/fs/lite';
 
 import { makeFilePowers } from '../src/manager-node-powers.js';
+import { makeXsFilePowers } from '../src/bus-manager-rust-xs-powers.js';
 import { makeMount } from '../src/mount.js';
 import { makeMemoryStore } from './_mount-test-helpers.js';
 
