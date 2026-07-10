@@ -28,6 +28,7 @@ const ajv = new Ajv({ strict: false });
  * @param {Array<{ file: string, line: number, text: string }>} config.grepResult
  */
 const makeFakeMount = ({ globResult, grepResult }) => {
+  /** @type {{ glob: unknown[], grep: Array<{ pattern: unknown, paths: unknown, options: unknown }> }} */
   const calls = { glob: [], grep: [] };
   const mount = Far('FakeMount', {
     glob: async pattern => {
@@ -117,8 +118,10 @@ test('mountGrep honors filesGlob and reports truncation when more matches exist'
     ],
   });
   const tool = makeMountGrepTool(mount);
-  const result = await tool.invoke(
-    harden({ pattern: '.', filesGlob: '*.txt', maxResults: 2 }),
+  const result = /** @type {{ matches: unknown[], truncated: boolean }} */ (
+    await tool.invoke(
+      harden({ pattern: '.', filesGlob: '*.txt', maxResults: 2 }),
+    )
   );
   t.deepEqual(calls.glob, ['*.txt']);
   t.is(result.truncated, true);
@@ -158,7 +161,9 @@ test('the search tools use only the mount capability they are handed (no ambient
     },
   });
   const grepTool = makeMountGrepTool(mount);
-  const result = await grepTool.invoke(harden({ pattern: 'hit' }));
+  const result = /** @type {{ matches: unknown[] }} */ (
+    await grepTool.invoke(harden({ pattern: 'hit' }))
+  );
   t.deepEqual(result.matches, [{ file: 'only.js', line: 1, text: 'hit' }]);
-  await E(mount).glob('noop'); // touch E to keep the import meaningful
+  await E(mount).glob(); // touch E to keep the import meaningful
 });
