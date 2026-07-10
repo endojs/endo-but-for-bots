@@ -27,6 +27,7 @@
     "test:integration:sandbox-slice": "bash test/integration.sh -E GENIE_MODEL=ollama/llama3.2 -E GENIE_TEST=test/scenarios/sandbox-slice.sh",
     "test:integration:dev-repl-sandbox": "ava test/dev-repl-sandbox.test.js --timeout=120s",
     "repl": "node dev-repl.js --workspace workspace_dev",
+    "rpc": "node rpc.js",
     "lint": "yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix",
     "lint:eslint": "eslint '**/*.js'"

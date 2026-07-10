@@ -348,6 +348,76 @@ See [§ Rootfs form-field shapes](#rootfs-form-field-shapes) above for
 the full operator-facing description of the same compatibility matrix
 on the daemon path.
 
+## Stdio JSONL RPC bridge
+
+`rpc.js` is the spawnable, language-agnostic counterpart of the dev REPL.
+Instead of a readline prompt it presents the stdio RPC surface from
+[`designs/endopi-stdio-rpc-bridge.md`](../../designs/endopi-stdio-rpc-bridge.md):
+an embedding host (an IDE plug-in, a CI runner, a Familiar pane) spawns
+the process, writes one JSON command per line to stdin, and reads one JSON
+event per line from stdout.
+Diagnostics go to stderr, so stdout carries only protocol records.
+
+```sh
+node packages/genie/rpc.js [-m provider/modelId] [-w /workspace/path]
+```
+
+The framing follows Pi's rule exactly: records are separated by `\n` and
+nothing else.
+A strict decoder is used rather than Node's `readline`, which also splits
+on `\r`, `U+2028`, and `U+2029`; a host in another language must not, so
+neither does the bridge.
+
+Commands the bridge accepts (the optional `id` is echoed on every event a
+command produces, for correlation):
+
+```json
+{"id": "1", "type": "prompt", "message": "Hello"}
+{"type": "steer", "message": "Stop and do this instead"}
+{"type": "abort"}
+{"type": "list_models"}
+{"type": "set_model", "provider": "anthropic", "model": "claude-sonnet-4-6"}
+{"type": "get_status"}
+```
+
+Events the bridge emits during a round:
+
+```json
+{"type": "message_start", "message": {…}, "id": "1"}
+{"type": "message_update", "delta": "…partial text…", "id": "1"}
+{"type": "endo:thinking", "delta": "…reasoning…", "id": "1"}
+{"type": "tool_execution_start", "toolCallId": "…", "toolName": "bash", "args": {…}, "id": "1"}
+{"type": "tool_execution_end", "toolCallId": "…", "result": {…}, "isError": false, "id": "1"}
+{"type": "message_end", "message": {…}, "id": "1"}
+{"type": "agent_end", "id": "1"}
+```
+
+The streaming events mirror the daemon agent's own event stream.
+`endo:`-namespaced events carry Endo-only affordances the base Pi surface
+does not define, per the design's posture on namespacing.
+
+The session is single-flight: a `prompt` received while a round is still
+running is rejected, and mid-round control arrives as separate `steer` and
+`abort` commands.
+Concurrent sessions over one process (a channel id per record) are the
+design's later multiplexing phase.
+
+The reusable pieces are exported from the package for hosts that embed the
+bridge directly rather than spawning `rpc.js`:
+`makeJsonlDecoder` and `encodeRecord` (framing), `translateAgentEvent`
+(event mapping), `makeGenieRpcSession` (a session over a `PiAgent`),
+`makeRpcBridge` (the dispatcher), and `serveRpc` (the stream wiring).
+
+```mermaid
+flowchart LR
+  host[Embedding host] -->|JSON commands| decoder[makeJsonlDecoder]
+  decoder --> bridge[makeRpcBridge]
+  bridge --> session[makeGenieRpcSession]
+  session --> agent[PiAgent]
+  agent -->|agent events| bridge
+  bridge -->|JSON events| host
+```
+
 ## Features
 
 ### Core Components
