@@ -67,6 +67,14 @@ test.serial('endo ls/cat/write traverse a mount confined tree', async t => {
       'ls of an in-mount subdirectory lists its entries',
     );
 
+    // `--json` emits the in-mount entry array as JSON (a distinct code path).
+    const lsSrcJson = await execa`endo ls proj src --json`;
+    t.deepEqual(
+      JSON.parse(lsSrcJson.stdout),
+      ['index.js', 'utils.js'],
+      'ls --json of an in-mount subdirectory emits the entry array as JSON',
+    );
+
     // A `/`-joined single argument is split into segments.
     const lsSrcJoined = await execa`endo cat proj src/index.js`;
     t.is(
@@ -89,6 +97,24 @@ test.serial('endo ls/cat/write traverse a mount confined tree', async t => {
     t.is(onDisk, 'take notes\n', 'write lands the file on the backing disk');
     const catNotes = await execa`endo cat proj docs/notes.txt`;
     t.is(catNotes.stdout, 'take notes', 'the written file reads back via cat');
+
+    // Non-UTF-8 stdin is refused rather than silently corrupted (binary
+    // `--blob` mount writes are deferred), and leaves no file on disk.
+    const binaryError = await t.throwsAsync(
+      execa({
+        input: new Uint8Array([0xff, 0xfe, 0x00]),
+      })`endo write proj bin.dat`,
+    );
+    t.regex(
+      binaryError.stderr,
+      /utf-8/i,
+      'write of non-UTF-8 input is refused',
+    );
+    await t.throwsAsync(
+      fs.stat(path.join(source, 'bin.dat')),
+      undefined,
+      'the refused binary write left no file on disk',
+    );
   } finally {
     await execa`endo purge -f`;
     await fs.rm(source, { recursive: true, force: true });

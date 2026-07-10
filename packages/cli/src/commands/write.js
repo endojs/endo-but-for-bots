@@ -47,7 +47,17 @@ export const write = async ({ name, path, agentNames }) =>
     }
     const reader = makeNodeReader(process.stdin);
     const bytes = await asyncConcat(reader);
-    const text = bytesToText(bytes);
+    let text;
+    try {
+      // Strict decode: refuse rather than silently substitute U+FFFD, so binary
+      // input fails loudly instead of landing a corrupted text file. Binary
+      // (`--blob`) mount writes are deferred (see designs/daemon-mount.md § Phase 6).
+      text = bytesToText(bytes, { fatal: true });
+    } catch {
+      // Usage error should be reported without a trace.
+      // eslint-disable-next-line no-throw-literal
+      throw `write input is not valid UTF-8 text; binary (--blob) mount writes are not yet supported`;
+    }
     const mount = await E(agent).lookup(parsePetNamePath(name));
     await E(mount).writeText(segments, text);
   });
