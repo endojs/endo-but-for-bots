@@ -2769,6 +2769,8 @@ __metadata:
     "@earendil-works/pi-ai": "npm:^0.87.1"
     "@endo/agent-tools": "workspace:^"
     "@endo/agentry": "workspace:^"
+    "@endo/base64": "workspace:^"
+    "@endo/bytes": "workspace:^"
     "@endo/cli": "workspace:^"
     "@endo/daemon": "workspace:^"
     "@endo/errors": "workspace:^"
