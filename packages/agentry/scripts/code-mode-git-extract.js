@@ -33,7 +33,12 @@ import {
 const GIT_TYPES_TS_URL = new URL('../../exo-git/src/types.ts', import.meta.url);
 const GIT_ROOT_TYPE = 'EndoGit';
 
-export const GIT_HISTORY_MEMBERS = harden(['commit', 'reword']);
+export const GIT_HISTORY_MEMBERS = harden([
+  'commit',
+  'reword',
+  'cherryPick',
+  'rebase',
+]);
 harden(GIT_HISTORY_MEMBERS);
 
 /**

@@ -43,7 +43,6 @@ export const gitCodeModeTypeDeclarations = harden({
   detach: (ref: GitRef | string) => Promise<void>;
   switch: (ref: GitRef | string) => Promise<void>;
   merge: (ref: GitRef | string, options?: GitMergeOptions) => Promise<string>;
-  rebase: (input: GitRebaseInput) => Promise<string>;
   stashPush: (options?: GitStashPushOptions) => Promise<string>;
   stashList: () => Promise<string[]>;
   stashShow: (index?: number) => Promise<string>;
@@ -56,6 +55,9 @@ export const gitCodeModeTypeDeclarations = harden({
 };
 type EndoMount = unknown;
 type EndoMountEntry = unknown;
+type GitCherryPickOptions = {
+    noCommit?: boolean;
+};
 type GitCommit = {
     oid: string;
     summary: string;
@@ -88,8 +90,13 @@ type GitMergeOptions = {
     noFastForward?: boolean;
 };
 type GitRebaseInput = {
-    mode?: 'start' | 'continue' | 'abort' | 'skip';
-    upstream?: string;
+    mode: 'start';
+    upstream: string;
+    autosquash?: boolean;
+} | {
+    mode: 'continue' | 'abort' | 'skip';
+    upstream?: never;
+    autosquash?: never;
 };
 type GitRef = {
     name: string;
@@ -121,6 +128,11 @@ type ReadableTreeView = unknown;`,
     aux: `type EndoGitHistory = {
   commit: (message: string, options?: GitCommitOptions) => Promise<GitCommit>;
   reword: (ref: GitRef | string, message: string) => Promise<GitCommit>;
+  cherryPick: (ref: GitRef | string, options?: GitCherryPickOptions) => Promise<string>;
+  rebase: (input: GitRebaseInput) => Promise<string>;
+};
+type GitCherryPickOptions = {
+    noCommit?: boolean;
 };
 type GitCommit = {
     oid: string;
@@ -130,6 +142,15 @@ type GitCommit = {
 };
 type GitCommitOptions = {
     amend?: boolean;
+};
+type GitRebaseInput = {
+    mode: 'start';
+    upstream: string;
+    autosquash?: boolean;
+} | {
+    mode: 'continue' | 'abort' | 'skip';
+    upstream?: never;
+    autosquash?: never;
 };
 type GitRef = {
     name: string;
