@@ -34,6 +34,7 @@ import harden from '@endo/harden';
 /** @import { Tool } from '../tools/common.js' */
 /** @import { SearchBackend } from '../tools/memory.js' */
 /** @import { ChatEvent } from '../agent/index.js' */
+/** @import { OAuthStore } from '../agent/oauth.js' */
 /** @import { Api, Model } from '@earendil-works/pi-ai' */
 
 import { makePiAgent, runAgentRound } from '../agent/index.js';
@@ -174,6 +175,10 @@ const estimateFileTokens = async (memoryGet, path) => {
  *   threads a Model object through this seam).
  *   Defaults to the main chat model.  A reasoning model is
  *   recommended.
+ * @property {OAuthStore} [oauthStore] - Subscription-OAuth credential
+ *   store, threaded into the reflector agent so it authenticates the
+ *   same way the main chat agent does when the model is an OAuth
+ *   subscription provider.
  * @property {number} [reflectionThreshold] - Token count threshold
  *   for observations.md that triggers reflection.  Default 40 000.
  * @property {Tool} memoryGet - The memoryGet tool instance.
@@ -231,6 +236,7 @@ const estimateFileTokens = async (memoryGet, path) => {
 const makeReflector = options => {
   const {
     model,
+    oauthStore,
     reflectionThreshold = DEFAULT_REFLECTION_THRESHOLD,
     memoryGet,
     memorySet,
@@ -372,6 +378,7 @@ const makeReflector = options => {
     try {
       reflectorAgent = await makeAgent({
         model,
+        oauthStore,
         workspaceDir,
         currentTime: new Date().toISOString(),
         listTools,

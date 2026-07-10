@@ -2,6 +2,7 @@
 
 /** @import { Agent as PiAgent } from '@earendil-works/pi-agent-core' */
 /** @import { Api, Model } from '@earendil-works/pi-ai' */
+/** @import { OAuthStore } from '../agent/oauth.js' */
 /** @import { Observer } from '../observer/index.js' */
 /** @import { Reflector } from '../reflector/index.js' */
 /** @import { GenieTools } from '../tools/registry.js' */
@@ -53,6 +54,11 @@ import { makeReflector } from '../reflector/index.js';
  *   - The pack re-uses `tools.listTools` / `tools.execTool` for the
  *     main/heartbeat agents and `tools.memoryTools` / `tools.searchBackend`
  *     for the observer / reflector.
+ * @property {OAuthStore} [oauthStore]
+ *   - Subscription-OAuth credential store, threaded into every sub-agent so
+ *     that a Claude Pro/Max, ChatGPT Codex, or GitHub Copilot model
+ *     authenticates the main, heartbeat, observer, and reflector calls alike.
+ *     Omit to use environment API keys only.
  * @property {GenieAgentsConfig} [config]
  * @property {typeof makePiAgent} [makeAgent]
  *   - Factory override used to construct the `piAgent` / `heartbeatAgent`.
@@ -105,6 +111,7 @@ export const makeGenieAgents = async ({
   workspaceDir,
   sliceWorkspacePath,
   tools,
+  oauthStore,
   config = {},
   makeAgent = makePiAgent,
   makeObserverAgent = makeObserver,
@@ -134,6 +141,7 @@ export const makeGenieAgents = async ({
     workspaceDir,
     ...sliceArg,
     model,
+    oauthStore,
     listTools,
     execTool,
   });
@@ -145,6 +153,7 @@ export const makeGenieAgents = async ({
         workspaceDir,
         ...sliceArg,
         model: heartbeatModel,
+        oauthStore,
         listTools,
         execTool,
       })
@@ -157,6 +166,7 @@ export const makeGenieAgents = async ({
   if (memoryTools) {
     observer = makeObserverAgent({
       model: observerModel,
+      oauthStore,
       memoryGet: memoryTools.memoryGet,
       memorySet: memoryTools.memorySet,
       searchBackend,
@@ -164,6 +174,7 @@ export const makeGenieAgents = async ({
     });
     reflector = makeReflectorAgent({
       model: reflectorModel,
+      oauthStore,
       memoryGet: memoryTools.memoryGet,
       memorySet: memoryTools.memorySet,
       memorySearch: memoryTools.memorySearch,

@@ -18,6 +18,16 @@ export {
 export { makeToolGate } from './agent/tool-gate.js';
 
 export {
+  isOAuthProvider,
+  listOAuthProviderIds,
+  makeMemoryOAuthStore,
+  loginOAuthProvider,
+  resolveOAuthApiKey,
+  makeApiKeyResolver,
+  applyOAuthModelModifications,
+} from './agent/oauth.js';
+
+export {
   runHeartbeat,
   HeartbeatStatus,
   makeHeartbeatEvent,

@@ -24,6 +24,9 @@ import { getModel, getProviders } from '@earendil-works/pi-ai';
 
 import buildSystemPrompt from '../system/index.js';
 import { estimateTokens } from '../utils/tokens.js';
+import { applyOAuthModelModifications, makeApiKeyResolver } from './oauth.js';
+
+/** @import { OAuthStore } from './oauth.js' */
 
 /**
  * @param {never} nope
@@ -326,6 +329,14 @@ function toAgentTool(spec, execTool) {
  * @param {string} [options.systemPrompt] - Complete system prompt override;
  *   when provided the prompt-building options (hostname, currentTime, etc.)
  *   are ignored.
+ * @param {OAuthStore} [options.oauthStore]
+ *   - Credential store for subscription-OAuth providers (Anthropic Claude
+ *     Pro/Max, OpenAI Codex, GitHub Copilot).  When provided, a model whose
+ *     provider has stored credentials authenticates with the OAuth access
+ *     token (refreshed on expiry); key-based providers fall back to their
+ *     environment API key.  Omit to use environment API keys only.  Ignored
+ *     for the local ollama masquerade, which authenticates with its own
+ *     sentinel key.
  * @returns {Promise<PiAgent>}
  */
 export async function makePiAgent(options = {}) {
@@ -345,6 +356,7 @@ export async function makePiAgent(options = {}) {
     strictPolicy = false,
     securityNotes = '',
     systemPrompt: systemPromptOpt,
+    oauthStore,
   } = options;
 
   // Use the caller-supplied prompt when provided; otherwise build one from
@@ -367,16 +379,33 @@ export async function makePiAgent(options = {}) {
 
   // Resolve the pi-ai Model object — either from a pre-constructed object
   // or by looking up the model string in the pi-ai registry.
-  const resolvedModel =
+  let resolvedModel =
     typeof model === 'object' ? model : await resolveModel(model);
+
+  // When using an Ollama model, supply a getApiKey callback so that
+  // pi-agent-core receives the key without us mutating OPENAI_API_KEY.
+  const isOllama = resolvedModel.name?.startsWith('ollama/');
+
+  // For a subscription-OAuth provider, apply any credential-derived model
+  // rewrites (e.g. GitHub Copilot's per-account base URL) before use.
+  if (!isOllama && oauthStore) {
+    resolvedModel = await applyOAuthModelModifications({
+      model: resolvedModel,
+      store: oauthStore,
+    });
+  }
 
   // Get tool list and convert to AgentTool format.
   const finalToolList = Array.from(listTools());
   const agentTools = finalToolList.map(spec => toAgentTool(spec, execTool));
 
-  // When using an Ollama model, supply a getApiKey callback so that
-  // pi-agent-core receives the key without us mutating OPENAI_API_KEY.
-  const isOllama = resolvedModel.name?.startsWith('ollama/');
+  // pi-agent-core asks `getApiKey(provider)` for a credential before each
+  // request.  Ollama uses its own sentinel key; every other provider resolves
+  // an OAuth subscription token (when `oauthStore` holds one) or an
+  // environment API key.
+  const getApiKey = isOllama
+    ? async _provider => getOllamaApiKey()
+    : makeApiKeyResolver({ oauthStore });
 
   const piAgent = new PiAgent({
     initialState: {
@@ -395,7 +424,7 @@ export async function makePiAgent(options = {}) {
           m.role === 'toolResult',
       ),
     toolExecution: 'sequential',
-    ...(isOllama ? { getApiKey: async _provider => getOllamaApiKey() } : {}),
+    getApiKey,
   });
 
   return piAgent;

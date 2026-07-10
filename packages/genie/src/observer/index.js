@@ -34,6 +34,7 @@ import { clearTimeout, setTimeout } from 'node:timers';
 /** @import { Tool } from '../tools/common.js' */
 /** @import { SearchBackend } from '../tools/memory.js' */
 /** @import { ChatEvent } from '../agent/index.js' */
+/** @import { OAuthStore } from '../agent/oauth.js' */
 /** @import { Agent as PiAgent } from '@earendil-works/pi-agent-core' */
 /** @import { Api, Model } from '@earendil-works/pi-ai' */
 
@@ -222,6 +223,10 @@ harden(estimateUnobservedTokens);
  *   constructed `Model<…>` object (the dev-repl's faux-script path
  *   threads a Model object through this seam).
  *   Defaults to the main chat model.
+ * @property {OAuthStore} [oauthStore] - Subscription-OAuth credential
+ *   store, threaded into the observer agent so it authenticates the
+ *   same way the main chat agent does when the model is an OAuth
+ *   subscription provider.
  * @property {number} [tokenThreshold] - Token count threshold that
  *   triggers observation.  Default 30 000.
  * @property {number} [idleDelayMs] - Idle delay in ms before
@@ -290,6 +295,7 @@ harden(estimateUnobservedTokens);
 const makeObserver = options => {
   const {
     model,
+    oauthStore,
     tokenThreshold = DEFAULT_TOKEN_THRESHOLD,
     idleDelayMs = DEFAULT_IDLE_DELAY_MS,
     memoryGet,
@@ -502,6 +508,7 @@ const makeObserver = options => {
     try {
       observerAgent = await makeAgent({
         model,
+        oauthStore,
         workspaceDir,
         currentTime: new Date().toISOString(),
         listTools,

@@ -256,6 +256,27 @@ memory/                    # Directory for indexed memory
 - [x] Initialize repository
 ```
 
+## Provider authentication
+
+Genie drives LLM providers through `@earendil-works/pi-ai`, which ships OAuth scaffolding for the three subscription providers a user can log in to with an account they already pay for: Anthropic (Claude Pro/Max), OpenAI Codex (ChatGPT Plus/Pro), and GitHub Copilot.
+`makePiAgent` resolves a credential for each request in this order:
+
+1. The local ollama masquerade authenticates with its own sentinel key.
+2. When an `oauthStore` is supplied and the model's provider has stored OAuth credentials, the request uses the OAuth access token, refreshed and re-persisted on expiry.
+   pi-ai attaches the provider-specific request shape itself: its Anthropic provider detects an OAuth token and adds the Claude Code identity headers, Copilot uses bearer auth, and so on.
+3. Otherwise a key-based provider falls back to its environment API key (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and the like).
+
+The OAuth wiring lives in `src/agent/oauth.js`.
+`loginOAuthProvider` runs a provider's login flow (authorization-code with PKCE, or device code) and persists the credentials.
+`makeApiKeyResolver` builds the `getApiKey` callback described above.
+`applyOAuthModelModifications` applies a provider's credential-derived model rewrites (the GitHub Copilot per-account base URL).
+
+The credential store is an injected capability (the `OAuthStore` interface), not a concrete implementation.
+The daemon is expected to back it with an encrypted, formula-graph-resident exo; `makeMemoryOAuthStore` is the in-process reference used by tests and the dev-repl.
+`makeGenieAgents` threads one store into every sub-agent (main, heartbeat, observer, reflector) so a subscription model authenticates them all.
+
+Three follow-ups are deferred to the design's *Open questions* rather than resolved here: the encrypted at-rest store shape, the interactive `/login` command UX (mapping the flow callbacks onto readline in the dev-repl and daemon mail in the guest), and the Lal-vs-Genie provider-registry consolidation (whether these providers live under `@endo/genie`, `@endo/lal`, or a shared `@endo/ai` package).
+
 ## Future Enhancements
 
 1. **Full Text Search** - use sqlite fts5
