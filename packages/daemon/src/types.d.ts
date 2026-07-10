@@ -1201,7 +1201,9 @@ export interface EndoMount {
    * envelope. A file that is present but holds invalid JSON still throws — the
    * parse sits outside the read's catch.
    */
-  maybeReadJson(path: string | string[] | EndoMountEntry): Promise<unknown>;
+  maybeReadJson(
+    path: string | string[] | EndoMountEntry,
+  ): Promise<unknown | undefined>;
   /**
    * Serialize `value` as `JSON.stringify(value, null, 2)` plus a trailing
    * newline and write it to `path`, creating parent directories as needed.
