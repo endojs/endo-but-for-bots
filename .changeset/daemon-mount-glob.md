@@ -25,7 +25,10 @@ never re-entered, so `**` terminates on cyclic trees rather than walking
 directories as well as files, and are sorted lexicographically by UTF-16 code
 unit as a final step, then capped at `GLOB_MAX_RESULTS` (10,000) with silent
 truncation — the streaming search variants are the durable answer to unbounded
-result sets.
+result sets. The `**` walk itself is bounded: consecutive `**` segments coalesce
+(`a/**/**/b` ≡ `a/**/b`) and a per-`(directory, remaining-pattern)` memo keeps
+the traversal `O(nodes × segments)`, so a caller-supplied pattern such as
+`**/**/**/**` cannot drive super-linear directory reads over a deep tree.
 
 This change also lands the shared, cross-language test fixture: a declarative
 `test/mount-fixture-manifest.json`, a Node fixture builder

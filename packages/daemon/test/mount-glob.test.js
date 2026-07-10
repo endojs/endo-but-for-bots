@@ -183,3 +183,45 @@ test('glob(**) terminates on an in-confinement symlink cycle', async t => {
   const result = await E(mount).glob('**');
   t.deepEqual([...result], ['self', 'sub', 'sub/f.txt', 'sub/up']);
 });
+
+test('glob bounds stacked `**` walks (no super-linear re-traversal)', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mount-glob-globstar-'));
+  t.teardown(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  // A branching, moderately deep tree. Without a bound on the `**` walk,
+  // stacking `**` segments re-walks every subtree from every position
+  // (O(nodes · depth^(k-1)) in the number of `**`), so a handful of `**` on a
+  // tree this size drives millions of directory reads and freezes the daemon's
+  // (synchronous) event loop on a single caller-supplied pattern — the same
+  // class of caller-controlled blow-up the linear matcher removed from segment
+  // matching. The `parseGlobPattern` `**`-coalesce and the per-`(dir,
+  // remaining)` walk memo bound it; ava's per-test timeout is the backstop that
+  // reddens a regression back to the unbounded walk.
+  const BRANCH = 2;
+  const DEPTH = 7;
+  const build = (dir, depth) => {
+    fs.writeFileSync(path.join(dir, 'leaf.txt'), '');
+    if (depth === 0) {
+      return;
+    }
+    for (let i = 0; i < BRANCH; i += 1) {
+      const child = path.join(dir, `d${i}`);
+      fs.mkdirSync(child);
+      build(child, depth - 1);
+    }
+  };
+  build(root, DEPTH);
+
+  const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
+  const baseline = [...(await E(mount).glob('**'))];
+  t.true(baseline.length > DEPTH, 'the fixture tree is non-trivial');
+  // Each stacked form is semantically identical to a single `**` (zero-or-more
+  // segments, repeated, is still zero-or-more), so it must return the same set
+  // — and, load-bearingly, return promptly rather than blowing up.
+  await null;
+  for (const pattern of ['**/**', '**/**/**', '**/**/**/**/**/**']) {
+    // eslint-disable-next-line no-await-in-loop
+    const result = [...(await E(mount).glob(pattern))];
+    t.deepEqual(result, baseline, `${pattern} is bounded and ≡ "**"`);
+  }
+});

@@ -579,10 +579,20 @@ harden(compileGlobSegment);
  * @returns {string[]}
  */
 const parseGlobPattern = pattern => {
-  const segments = pattern.split('/').filter(segment => segment !== '');
-  if (segments.length === 0) {
+  const rawSegments = pattern.split('/').filter(segment => segment !== '');
+  if (rawSegments.length === 0) {
     throw new Error('glob pattern must have at least one non-empty segment');
   }
+  // Collapse runs of consecutive `**` to a single `**`. `a/**/**/b` matches
+  // exactly what `a/**/b` matches — zero-or-more segments, repeated, is still
+  // zero-or-more — so the coalesce is semantics-preserving, and it removes the
+  // redundant re-traversal that a purely stacked `**/**/**/…` would otherwise
+  // drive from every tree position (a caller-controlled super-linear blow-up).
+  // The per-`(dir, remaining)` memo in `glob`'s walk bounds the interleaved
+  // case (`**/x/**`); this coalesce handles the pure-stacked case at parse time.
+  const segments = rawSegments.filter(
+    (segment, index) => !(segment === '**' && rawSegments[index - 1] === '**'),
+  );
   return segments;
 };
 harden(parseGlobPattern);
@@ -881,6 +891,22 @@ const makeMountExo = ctx => {
       const results = new Set();
 
       /**
+       * `(dir, remaining-suffix)` pairs already walked. A pair yields the same
+       * results every time it is reached — `dir`'s host path fixes `prefix`,
+       * and `remaining` is always a suffix of `patternSegments`, so
+       * `remaining.length` names which suffix — hence re-walking one is pure
+       * redundant work. Memoizing bounds the whole walk to O(nodes · segments),
+       * collapsing the super-linear re-traversal that stacked or interleaved
+       * `**` segments (two adjacent globstars, or globstars split by a literal
+       * segment) would otherwise drive from every position — a caller-controlled
+       * blow-up the `GLOB_MAX_RESULTS` cap does not bound (it caps the returned
+       * array, not the traversal).
+       *
+       * @type {Set<string>}
+       */
+      const visited = new Set();
+
+      /**
        * Match the remaining pattern segments against the tree rooted at `dir`
        * (an absolute host path), accumulating mount-face-relative `/`-joined
        * paths in `results`. Denied names are never enumerated into a result,
@@ -902,6 +928,12 @@ const makeMountExo = ctx => {
        * @returns {Promise<void>}
        */
       const walk = async (remaining, dir, prefix, ancestorsReal) => {
+        // Skip a `(dir, remaining-suffix)` pair already walked (see `visited`).
+        const visitKey = `${remaining.length}\0${dir}`;
+        if (visited.has(visitKey)) {
+          return;
+        }
+        visited.add(visitKey);
         if (remaining.length === 0) {
           // The mount face's own root (empty prefix) is never itself a result.
           if (prefix.length > 0) {
