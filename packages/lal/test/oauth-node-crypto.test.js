@@ -97,3 +97,11 @@ test('sha256 of a known input has the expected digest', t => {
   // bytesToText is exercised indirectly to keep the import load-bearing.
   t.is(typeof bytesToText, 'function');
 });
+
+test('AES-256-GCM rejects a sealed blob too short to hold an IV and tag', t => {
+  const cipher = makeAesGcmCipher(key32);
+  // Fewer than IV(12) + tag(16) = 28 bytes cannot be a valid sealed blob.
+  t.throws(() => cipher.decrypt(new Uint8Array(10)), {
+    message: /too short/u,
+  });
+});

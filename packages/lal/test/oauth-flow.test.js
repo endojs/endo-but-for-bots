@@ -169,3 +169,98 @@ test('isExpired respects expiry and skew, and treats no-expiry as valid', t => {
   t.true(isExpired(expiring, { now: () => 900, skewMs: 200 }));
   t.false(isExpired(harden({ accessToken: 'a' }), { now: () => 10 ** 12 }));
 });
+
+const exchangeWith = (fetch, now) =>
+  exchangeAuthorizationCode(
+    {
+      tokenEndpoint: 'https://auth.example.com/token',
+      clientId: 'c',
+      redirectUri: 'http://127.0.0.1/cb',
+      code: 'x',
+      codeVerifier: 'v',
+    },
+    { fetch, now },
+  );
+
+test('exchangeAuthorizationCode throws on a non-JSON body', async t => {
+  const { fetch } = makeFakeFetch({ status: 200, body: 'not json at all' });
+  await t.throwsAsync(() => exchangeWith(fetch), {
+    message: /non-JSON body/u,
+  });
+});
+
+test('exchangeAuthorizationCode throws when the JSON body is not an object', async t => {
+  const { fetch } = makeFakeFetch({ status: 200, body: 'null' });
+  await t.throwsAsync(() => exchangeWith(fetch), {
+    message: /not a JSON object/u,
+  });
+});
+
+test('exchangeAuthorizationCode coerces a string expires_in', async t => {
+  const { fetch } = makeFakeFetch({
+    body: JSON.stringify({ access_token: 'a', expires_in: '3600' }),
+  });
+  const credentials = await exchangeWith(fetch, () => 1000);
+  t.is(credentials.expiresAt, 1000 + 3600 * 1000);
+});
+
+test('exchangeAuthorizationCode ignores a non-finite, overflowing, or negative expires_in', async t => {
+  await Promise.all(
+    [1e308, -1, 'not-a-number', ''].map(async bad => {
+      const { fetch } = makeFakeFetch({
+        body: JSON.stringify({ access_token: 'a', expires_in: bad }),
+      });
+      const credentials = await exchangeWith(fetch, () => 1000);
+      t.is(
+        credentials.expiresAt,
+        undefined,
+        `expires_in ${bad} should be ignored`,
+      );
+      // With no known expiry the credential is treated as non-expiring.
+      t.false(isExpired(credentials, { now: () => 10 ** 15 }));
+    }),
+  );
+});
+
+test('exchangeAuthorizationCode drops an empty-string refresh_token', async t => {
+  const { fetch } = makeFakeFetch({
+    body: JSON.stringify({ access_token: 'a', refresh_token: '' }),
+  });
+  const credentials = await exchangeWith(fetch);
+  t.is(credentials.refreshToken, undefined);
+});
+
+test('refreshAccessToken keeps the old token when the response omits or empties it', async t => {
+  await Promise.all(
+    [
+      JSON.stringify({ access_token: 'new' }),
+      JSON.stringify({ access_token: 'new', refresh_token: '' }),
+    ].map(async body => {
+      const { fetch } = makeFakeFetch({ body });
+      const credentials = await refreshAccessToken(
+        {
+          tokenEndpoint: 'https://auth.example.com/token',
+          clientId: 'c',
+          refreshToken: 'old-refresh',
+        },
+        { fetch },
+      );
+      t.is(credentials.refreshToken, 'old-refresh');
+    }),
+  );
+});
+
+test('refreshAccessToken adopts a rotated refresh_token from the response', async t => {
+  const { fetch } = makeFakeFetch({
+    body: JSON.stringify({ access_token: 'new', refresh_token: 'rotated' }),
+  });
+  const credentials = await refreshAccessToken(
+    {
+      tokenEndpoint: 'https://auth.example.com/token',
+      clientId: 'c',
+      refreshToken: 'old-refresh',
+    },
+    { fetch },
+  );
+  t.is(credentials.refreshToken, 'rotated');
+});

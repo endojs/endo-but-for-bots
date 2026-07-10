@@ -64,11 +64,15 @@ harden(buildAuthorizationUrl);
 /**
  * Normalize a raw OAuth token endpoint payload into `OAuthCredentials`.
  *
- * @param {Record<string, unknown>} payload
+ * @param {unknown} rawPayload
  * @param {number} obtainedAt
  * @returns {OAuthCredentials}
  */
-const normalizeTokenResponse = (payload, obtainedAt) => {
+const normalizeTokenResponse = (rawPayload, obtainedAt) => {
+  if (rawPayload === null || typeof rawPayload !== 'object') {
+    throw new Error('OAuth token endpoint response was not a JSON object.');
+  }
+  const payload = /** @type {Record<string, unknown>} */ (rawPayload);
   const accessToken = payload.access_token;
   if (typeof accessToken !== 'string' || accessToken === '') {
     throw new Error(
@@ -80,14 +84,38 @@ const normalizeTokenResponse = (payload, obtainedAt) => {
   if (typeof payload.token_type === 'string') {
     credentials.tokenType = payload.token_type;
   }
-  if (typeof payload.refresh_token === 'string') {
+  // An empty-string refresh token is treated as absent so `refreshAccessToken`
+  // carries the caller's existing token forward rather than overwriting it with
+  // a useless empty one.
+  if (
+    typeof payload.refresh_token === 'string' &&
+    payload.refresh_token !== ''
+  ) {
     credentials.refreshToken = payload.refresh_token;
   }
   if (typeof payload.scope === 'string') {
     credentials.scope = payload.scope;
   }
-  if (typeof payload.expires_in === 'number') {
-    credentials.expiresAt = obtainedAt + payload.expires_in * 1000;
+  // `expires_in` is seconds-to-expiry. Accept a number or a numeric string
+  // (some providers send it as a string) and require a finite, non-negative
+  // value: a non-numeric, negative, or non-finite `expires_in` would otherwise
+  // produce an `expiresAt` that never triggers a refresh (Infinity) or triggers
+  // one immediately (negative), so such values are ignored (treated as
+  // non-expiring) rather than trusted.
+  const { expires_in: rawExpiresIn } = payload;
+  const expiresInSeconds =
+    typeof rawExpiresIn === 'number'
+      ? rawExpiresIn
+      : typeof rawExpiresIn === 'string' && rawExpiresIn !== ''
+        ? Number(rawExpiresIn)
+        : NaN;
+  if (Number.isFinite(expiresInSeconds) && expiresInSeconds >= 0) {
+    const expiresAt = obtainedAt + expiresInSeconds * 1000;
+    // Guard the product too: a huge but finite `expires_in` (e.g. 1e308) can
+    // overflow to Infinity, which `isExpired` would read as never-expiring.
+    if (Number.isFinite(expiresAt)) {
+      credentials.expiresAt = expiresAt;
+    }
   }
   return harden(credentials);
 };
@@ -121,9 +149,10 @@ const postToTokenEndpoint = async (tokenEndpoint, body, fetch, now) => {
   try {
     payload = JSON.parse(text);
   } catch (cause) {
-    throw new Error('OAuth token endpoint returned a non-JSON body.', {
-      cause,
-    });
+    throw new Error(
+      `OAuth token endpoint ${tokenEndpoint} returned a non-JSON body.`,
+      { cause },
+    );
   }
   return normalizeTokenResponse(payload, obtainedAt);
 };
