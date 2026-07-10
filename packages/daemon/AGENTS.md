@@ -91,6 +91,18 @@ Daemon-managed scratch directory via
 Same interface as Mount but the filesystem path is managed by the
 daemon rather than supplied by the user.
 
+### SubMount
+
+A persistent `mount` formula rooted at a subdirectory of an existing
+mount, minted by `provideSubMount(mountName, subpath, newName, opts)`.
+Same Mount interface; the child gets its own confinement root (a
+sub-mount at `/project/src` cannot reach `/project/.env` via `..`) and
+records its parent in the formula, so it is cancelled together with the
+parent. Read-only attenuation is monotonic: a sub-mount of a read-only
+parent is read-only regardless of `opts.readOnly`. Sub-mount creation is
+a host method (not a `Mount` exo method) so the child is named atomically
+with formulation, avoiding a GC race.
+
 ## Gateway
 
 The gateway (`src/daemon.js` line ~851) rejects requests for non-local node IDs with `"Gateway can only provide local values"`. After a daemon restart, the node number changes, so any client holding a stale formula ID from a previous session will hit this error.
