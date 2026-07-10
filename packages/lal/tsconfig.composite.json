@@ -12,6 +12,12 @@
       "path": "../agentry/tsconfig.composite.json"
     },
     {
+      "path": "../base64/tsconfig.composite.json"
+    },
+    {
+      "path": "../bytes/tsconfig.composite.json"
+    },
+    {
       "path": "../daemon/tsconfig.composite.json"
     },
     {
