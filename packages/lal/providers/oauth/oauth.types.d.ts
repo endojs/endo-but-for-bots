@@ -1,7 +1,8 @@
 // Shared type definitions for the Lal subscription-OAuth path (the
 // authorization-code-with-PKCE flow and the per-provider encrypted
 // auth-storage exo). Implementation modules pull these in with a
-// top-of-file `/** @import { ... } from './types.js' */`.
+// top-of-file `/** @import { ... } from './oauth.types.js' */` (the `.js`
+// specifier resolves to this `.d.ts` under TypeScript module resolution).
 
 /**
  * OAuth 2.0 credentials for one provider account, normalized from a token

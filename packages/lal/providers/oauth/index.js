@@ -51,6 +51,12 @@ export const makeOAuthClient = (
      * Begin an authorization: generate a PKCE pair and state, and compose the
      * consent URL. The caller must retain `codeVerifier` and `state` to
      * complete the flow.
+     *
+     * Security obligation: `state` is the CSRF defense (RFC 6749 §10.12). The
+     * caller MUST compare the `state` returned on the redirect against the one
+     * issued here and abort on any mismatch before calling
+     * `completeAuthorization`; this client issues `state` but cannot see the
+     * redirect and so cannot verify it for you.
      */
     beginAuthorization() {
       const { codeVerifier, codeChallenge, codeChallengeMethod } =

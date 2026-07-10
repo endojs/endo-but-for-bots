@@ -101,3 +101,27 @@ test('the store interface guard rejects a non-string access token', t => {
     store.store('anthropic', 'acct-1', harden({ accessToken: 123 })),
   );
 });
+
+test('a NUL in the provider or account id is rejected, not silently ambiguous', t => {
+  const store = makeOAuthAuthStore({ cipher: makeAesGcmCipher(KEY) });
+  t.throws(() => store.store('prov\u0000ider', 'acct', sampleCredentials), {
+    message: /NUL/u,
+  });
+  t.throws(() => store.store('provider', 'acct\u0000id', sampleCredentials), {
+    message: /NUL/u,
+  });
+  // Otherwise ('a\0b','c') and ('a','b\0c') would collide on one composite key.
+  t.throws(() => store.get('a\u0000b', 'c'), { message: /NUL/u });
+});
+
+test('re-storing a provider/account replaces the blob without duplicating the account', t => {
+  const store = makeOAuthAuthStore({ cipher: makeAesGcmCipher(KEY) });
+  store.store('anthropic', 'acct-1', sampleCredentials);
+  const rotated = harden({
+    ...sampleCredentials,
+    accessToken: 'rotated-token',
+  });
+  store.store('anthropic', 'acct-1', rotated);
+  t.deepEqual(store.get('anthropic', 'acct-1'), rotated);
+  t.deepEqual(store.listAccounts('anthropic'), ['acct-1']);
+});
