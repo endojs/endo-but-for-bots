@@ -2285,6 +2285,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mount_parity"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "n0-error"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
