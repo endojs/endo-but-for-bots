@@ -19,6 +19,7 @@ import {
   assertChildName,
   computeOpenMode,
   toSafeNumber,
+  maybeRealPath,
 } from '../src/fs/extended/shared/helpers.js';
 import { makeLockTable } from '../src/fs/extended/shared/lock-table.js';
 import { makeMemoryCas } from '../src/fs/extended/cas.js';
@@ -164,6 +165,61 @@ test('toSafeNumber: non-bigint/non-number rejects with type message', t => {
   });
   t.throws(() => toSafeNumber(null, 'offset'), {
     message: /EINVAL.*offset.*bigint or number/,
+  });
+});
+
+// ---------- maybeRealPath ----------
+
+test('maybeRealPath: resolves to the physical path on success', async t => {
+  const filePowers = { realPath: async p => `${p}/real` };
+  t.is(await maybeRealPath('/a', filePowers), '/a/real');
+});
+
+test('maybeRealPath: promotes unresolvable fs codes to undefined (.code)', async t => {
+  for (const code of ['ENOENT', 'ELOOP', 'ENOTDIR', 'EACCES', 'EPERM']) {
+    const filePowers = {
+      realPath: async () => {
+        const error = new Error(`boom`);
+        error.code = code;
+        throw error;
+      },
+    };
+    // eslint-disable-next-line no-await-in-loop
+    t.is(await maybeRealPath('/x', filePowers), undefined, code);
+  }
+});
+
+test('maybeRealPath: promotes unresolvable fs codes to undefined (message)', async t => {
+  // The rust/xs backing throws a plain Error whose message carries the token.
+  const filePowers = {
+    realPath: async () => {
+      throw new Error('Error: ENOENT: no such file');
+    },
+  };
+  t.is(await maybeRealPath('/x', filePowers), undefined);
+});
+
+test('maybeRealPath: rethrows an unexpected error (wrong class propagates)', async t => {
+  const filePowers = {
+    realPath: async () => {
+      const error = new Error('too many open files');
+      error.code = 'EMFILE';
+      throw error;
+    },
+  };
+  await t.throwsAsync(() => maybeRealPath('/x', filePowers), {
+    message: /too many open files/,
+  });
+});
+
+test('maybeRealPath: rethrows a programmer error with no fs code', async t => {
+  const filePowers = {
+    realPath: async () => {
+      throw new TypeError('not a function');
+    },
+  };
+  await t.throwsAsync(() => maybeRealPath('/x', filePowers), {
+    instanceOf: TypeError,
   });
 });
 

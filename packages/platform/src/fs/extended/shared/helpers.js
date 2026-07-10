@@ -178,6 +178,68 @@ export const toSafeNumber = (value, name) => {
 harden(toSafeNumber);
 
 /**
+ * Filesystem error codes that mean "this candidate path cannot be resolved
+ * to a physical path right now" — the path (or a component of it) is gone,
+ * dangling, not a directory, cycles through symlinks, or is unreadable. These
+ * are the only classes `maybeRealPath` promotes to `undefined`; every other
+ * error (a programmer error, a resource exhaustion such as `EMFILE`, …) is a
+ * real fault and propagates so a `**` walk cannot silently produce a wrong,
+ * truncated result set.
+ */
+const UNRESOLVABLE_PATH_CODES = harden([
+  'ENOENT', // removed mid-walk, or a broken/dangling symlink
+  'ELOOP', // symlink cycle — too many levels
+  'ENOTDIR', // a path component is not a directory
+  'EACCES', // traversal denied
+  'EPERM', // traversal not permitted
+]);
+
+/**
+ * True when `error` is a filesystem fault that means the path simply cannot be
+ * resolved right now (see {@link UNRESOLVABLE_PATH_CODES}), as opposed to an
+ * unexpected fault that must propagate. The node `FilePowers` sets a structured
+ * `.code`; the rust/xs backing throws a plain `Error` whose message carries the
+ * errno token, so both shapes are checked.
+ *
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+const isUnresolvablePathError = error => {
+  const code = /** @type {{ code?: unknown }} */ (error).code;
+  if (typeof code === 'string' && UNRESOLVABLE_PATH_CODES.includes(code)) {
+    return true;
+  }
+  const message = /** @type {{ message?: unknown }} */ (error).message;
+  return (
+    typeof message === 'string' &&
+    UNRESOLVABLE_PATH_CODES.some(c => message.includes(c))
+  );
+};
+
+/**
+ * Resolve `candidatePath` to its symlink-free physical path, or `undefined`
+ * when it cannot be resolved because the path was removed mid-walk, is a
+ * broken symlink, cycles, or is unreadable. A `**` descent uses this to detect
+ * symlink cycles by physical identity without aborting the whole walk on a
+ * transient, expected filesystem error; any *unexpected* error propagates.
+ *
+ * @param {string} candidatePath
+ * @param {{ realPath: (path: string) => Promise<string> }} filePowers
+ * @returns {Promise<string | undefined>}
+ */
+export const maybeRealPath = async (candidatePath, filePowers) => {
+  try {
+    return await filePowers.realPath(candidatePath);
+  } catch (error) {
+    if (isUnresolvablePathError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+};
+harden(maybeRealPath);
+
+/**
  * Mint a fresh process-unique brand ID for a primitive Filesystem.
  * The brand is a passable `bigint` that survives CapTP marshalling,
  * so a Filesystem cap passed across CapTP and re-composed locally

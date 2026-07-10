@@ -17,7 +17,10 @@ import {
   ReadableBlobRangeInterface,
   ReadableTreeInterface,
 } from '@endo/platform/fs/lite';
-import { toSafeNumber } from '@endo/platform/fs/extended/shared/helpers.js';
+import {
+  maybeRealPath,
+  toSafeNumber,
+} from '@endo/platform/fs/extended/shared/helpers.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
@@ -437,25 +440,6 @@ const isConfinedPath = async (candidatePath, confinementRoot, filePowers) => {
   }
 };
 harden(isConfinedPath);
-
-/**
- * Resolve `candidatePath` to its symlink-free physical path, or `undefined`
- * when it cannot be resolved (removed mid-walk, broken symlink). `glob`'s `**`
- * descent uses this to detect symlink cycles by physical identity without
- * aborting the whole walk on a transient error.
- *
- * @param {string} candidatePath
- * @param {FilePowers} filePowers
- * @returns {Promise<string | undefined>}
- */
-const maybeRealPath = async (candidatePath, filePowers) => {
-  try {
-    return await filePowers.realPath(candidatePath);
-  } catch {
-    return undefined;
-  }
-};
-harden(maybeRealPath);
 
 /**
  * Resolve a path to its symlink-free physical form even when the path

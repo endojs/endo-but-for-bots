@@ -4259,14 +4259,15 @@ const makeDaemonCore = async (
           }),
         });
 
-        // The `deniedSegments` field is included only when overridden, so a
-        // default mount keeps its historical formula shape and identity.
+        // A default mount leaves `deniedSegments` undefined; `JSON.stringify`
+        // drops an undefined-valued key when the formula is persisted, so the
+        // historical formula shape and identity are preserved without ceremony.
         /** @type {import('./types.js').MountFormula} */
         const formula = harden({
           type: 'mount',
           path: mountPath,
           readOnly,
-          ...(deniedSegments !== undefined ? { deniedSegments } : {}),
+          deniedSegments,
         });
 
         return formulate(formulaNumber, formula);
@@ -4294,11 +4295,13 @@ const makeDaemonCore = async (
           }),
         });
 
+        // As in `formulateMount`, an undefined `deniedSegments` is dropped by
+        // `JSON.stringify` on persist, so the default formula shape is unchanged.
         /** @type {import('./types.js').ScratchMountFormula} */
         const formula = harden({
           type: 'scratch-mount',
           readOnly,
-          ...(deniedSegments !== undefined ? { deniedSegments } : {}),
+          deniedSegments,
         });
 
         return formulate(formulaNumber, formula);
