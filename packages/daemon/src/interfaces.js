@@ -596,6 +596,9 @@ export const MountInterface = M.interface('EndoMount', {
   // remotables consistently across CapTP.
   has: M.call().rest(M.any()).returns(M.promise()),
   list: M.call().rest(PathSegmentsShape).returns(M.promise()),
+  // Recursive glob search, delegated to the platform engine. Daemon-local
+  // extension beyond the ReadableTree surface.
+  glob: M.call(M.string()).returns(M.promise()),
   lookup: M.call(PathArgShape).returns(M.promise()),
   // `maybeLookup` is the `ReadableNameHub` primitive (lookup-or-undefined).
   // Widened from the shared `NameOrPathShape` contract to `PathArgShape` so the
