@@ -1,19 +1,46 @@
 // @ts-nocheck
-import test from '@endo/ses-ava/prepare-endo.js';
+/* global setTimeout, Buffer */
 
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
+/**
+ * Unit tests for the node-fs `makeWatchDirectory` adapter.
+ *
+ * This is the directory-name-change primitive extracted from
+ * `@endo/daemon`'s `makeFilePowers` (endojs/endo-but-for-bots #277
+ * follow-up).  The daemon now delegates `FilePowers.watchDirectory`
+ * to this adapter; the equivalent end-to-end coverage of
+ * `EndoMount.followNameChanges` stays as daemon integration tests
+ * (`packages/daemon/test/mount.test.js` and `endo.test.js`).
+ */
 
-import { makeFilePowers } from '../src/manager-node-powers.js';
+import '@endo/init/debug.js';
+
+import test from 'ava';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+
+import { makeWatchDirectory } from '../src/fs-node/watch-directory.js';
+
+/**
+ * Cancellation kit mirroring how a consumer settles the `cancelled`
+ * promise `watchDirectory` accepts.  Returns `{ events, cancel }` so
+ * the tests read the way the old returned-`cancel` API did while
+ * exercising the new accept-a-`cancelled`-promise idiom.
+ *
+ * @param {ReturnType<typeof makeWatchDirectory>} watchDirectory
+ * @param {string} dirPath
+ */
+const watch = (watchDirectory, dirPath) => {
+  let cancel;
+  const cancelled = new Promise(resolve => {
+    cancel = resolve;
+  });
+  const events = watchDirectory(dirPath, cancelled);
+  return { events, cancel };
+};
 
 /**
  * Allocate a fresh temporary directory that is removed at test teardown.
- *
- * Unit tests run in-process, so c8 captures every branch hit.  The
- * companion integration tests in endo.test.js drive the same code
- * through a forked daemon, where some intra-process branches reach
- * c8 unreliably.
  *
  * @param {import('ava').ExecutionContext} t
  * @param {string} label
@@ -57,8 +84,8 @@ const collect = async (events, predicate, timeoutMs = 2000) => {
 
 test('watchDirectory yields a rename event after a debounce window', async t => {
   const directory = await makeTemporaryDirectory(t, 'rename');
-  const powers = makeFilePowers({ fs, path });
-  const { events, cancel } = powers.watchDirectory(directory);
+  const watchDirectory = makeWatchDirectory(fs);
+  const { events, cancel } = watch(watchDirectory, directory);
   t.teardown(() => cancel());
 
   // Race the watcher startup.
@@ -94,8 +121,8 @@ test('watchDirectory buffers events arriving before the consumer awaits next()',
   };
   const stubFs = { ...fs, watch: () => stubWatcher };
 
-  const powers = makeFilePowers({ fs: stubFs, path });
-  const { events, cancel } = powers.watchDirectory(directory);
+  const watchDirectory = makeWatchDirectory(stubFs);
+  const { events, cancel } = watch(watchDirectory, directory);
   t.teardown(() => cancel());
 
   // Synchronously fire two rename events.  Both schedule debounced
@@ -120,8 +147,8 @@ test('watchDirectory buffers events arriving before the consumer awaits next()',
 
 test('watchDirectory coalesces a quick rewrite of the same name', async t => {
   const directory = await makeTemporaryDirectory(t, 'coalesce');
-  const powers = makeFilePowers({ fs, path });
-  const { events, cancel } = powers.watchDirectory(directory);
+  const watchDirectory = makeWatchDirectory(fs);
+  const { events, cancel } = watch(watchDirectory, directory);
   t.teardown(() => cancel());
 
   await new Promise(resolve => setTimeout(resolve, 50));
@@ -141,8 +168,8 @@ test('watchDirectory coalesces a quick rewrite of the same name', async t => {
 
 test('watchDirectory cancel is idempotent', async t => {
   const directory = await makeTemporaryDirectory(t, 'idempotent');
-  const powers = makeFilePowers({ fs, path });
-  const { cancel } = powers.watchDirectory(directory);
+  const watchDirectory = makeWatchDirectory(fs);
+  const { cancel } = watch(watchDirectory, directory);
 
   cancel();
   cancel();
@@ -152,8 +179,8 @@ test('watchDirectory cancel is idempotent', async t => {
 
 test('watchDirectory terminates the events stream after cancel()', async t => {
   const directory = await makeTemporaryDirectory(t, 'terminate');
-  const powers = makeFilePowers({ fs, path });
-  const { events, cancel } = powers.watchDirectory(directory);
+  const watchDirectory = makeWatchDirectory(fs);
+  const { events, cancel } = watch(watchDirectory, directory);
 
   cancel();
 
@@ -169,8 +196,8 @@ test('watchDirectory terminates the events stream after cancel()', async t => {
 
 test('watchDirectory unblocks pending next() callers on cancel()', async t => {
   const directory = await makeTemporaryDirectory(t, 'pending');
-  const powers = makeFilePowers({ fs, path });
-  const { events, cancel } = powers.watchDirectory(directory);
+  const watchDirectory = makeWatchDirectory(fs);
+  const { events, cancel } = watch(watchDirectory, directory);
 
   const iterator = events[Symbol.asyncIterator]();
   // Park two next() calls.  Both should resolve to { done: true }
@@ -190,8 +217,8 @@ test('watchDirectory unblocks pending next() callers on cancel()', async t => {
 
 test('watchDirectory iterator.return() closes the watcher', async t => {
   const directory = await makeTemporaryDirectory(t, 'return');
-  const powers = makeFilePowers({ fs, path });
-  const { events } = powers.watchDirectory(directory);
+  const watchDirectory = makeWatchDirectory(fs);
+  const { events } = watch(watchDirectory, directory);
 
   const iterator = events[Symbol.asyncIterator]();
   const returned = await iterator.return();
@@ -212,9 +239,9 @@ test('watchDirectory returns an immediately-closed stream when fs.watch throws',
     os.tmpdir(),
     `watch-directory-ghost-${Date.now()}-xyz`,
   );
-  const powers = makeFilePowers({ fs, path });
+  const watchDirectory = makeWatchDirectory(fs);
 
-  const result = powers.watchDirectory(ghost);
+  const result = watch(watchDirectory, ghost);
 
   // The events stream terminates immediately.
   const iterator = result.events[Symbol.asyncIterator]();
@@ -255,8 +282,8 @@ test('watchDirectory ignores fs.watch events without a filename', async t => {
     watch: () => stubWatcher,
   };
 
-  const powers = makeFilePowers({ fs: stubFs, path });
-  const { events, cancel } = powers.watchDirectory(directory);
+  const watchDirectory = makeWatchDirectory(stubFs);
+  const { events, cancel } = watch(watchDirectory, directory);
   t.teardown(() => cancel());
 
   // Fire two events the watcher must ignore.
@@ -304,8 +331,8 @@ test('watchDirectory cancel clears pending debounced timers', async t => {
   };
   const stubFs = { ...fs, watch: () => stubWatcher };
 
-  const powers = makeFilePowers({ fs: stubFs, path });
-  const { events, cancel } = powers.watchDirectory(directory);
+  const watchDirectory = makeWatchDirectory(stubFs);
+  const { events, cancel } = watch(watchDirectory, directory);
 
   // Schedule a debounced reconciliation, then cancel immediately
   // (well within the 50 ms debounce window).
@@ -337,10 +364,79 @@ test('watchDirectory tolerates watcher.close() throwing', async t => {
   };
   const stubFs = { ...fs, watch: () => stubWatcher };
 
-  const powers = makeFilePowers({ fs: stubFs, path });
-  const { cancel } = powers.watchDirectory(directory);
+  const watchDirectory = makeWatchDirectory(stubFs);
+  const { cancel } = watch(watchDirectory, directory);
 
   // cancel() must not throw even when the underlying watcher does.
   cancel();
   t.pass('cancel() swallows watcher.close() errors');
+});
+
+test('watchDirectory accepts a factory-level debounceMs and still delivers events', async t => {
+  const directory = await makeTemporaryDirectory(t, 'factory-debounce');
+  // Configure the debounce window at the factory (adapter) layer.
+  const watchDirectory = makeWatchDirectory(fs, { debounceMs: 10 });
+  const { events, cancel } = watch(watchDirectory, directory);
+  t.teardown(() => cancel());
+
+  await new Promise(resolve => setTimeout(resolve, 50));
+  await fs.promises.writeFile(path.join(directory, 'cfg.txt'), 'hi');
+
+  const event = await collect(
+    events,
+    candidate => candidate.name === 'cfg.txt',
+  );
+  t.truthy(event, 'event delivered under a configured factory debounce');
+  t.is(event.name, 'cfg.txt');
+});
+
+test('watchDirectory honors a per-call debounceMs override (advisory) and still delivers', async t => {
+  const directory = await makeTemporaryDirectory(t, 'percall-debounce');
+  // The factory default is an impractically long window; the per-call
+  // override is short.  If the per-call hint were ignored, the event
+  // could not arrive within the `collect` timeout, so a passing test
+  // proves the per-call `debounceMs` wins over the factory default.
+  const watchDirectory = makeWatchDirectory(fs, { debounceMs: 60_000 });
+  let cancel;
+  const cancelled = new Promise(resolve => {
+    cancel = resolve;
+  });
+  const events = watchDirectory(directory, cancelled, { debounceMs: 10 });
+  t.teardown(() => cancel());
+
+  await new Promise(resolve => setTimeout(resolve, 50));
+  await fs.promises.writeFile(path.join(directory, 'ovr.txt'), 'hi');
+
+  const event = await collect(
+    events,
+    candidate => candidate.name === 'ovr.txt',
+    3000,
+  );
+  t.truthy(event, 'per-call short debounce delivered despite the long default');
+  t.is(event.name, 'ovr.txt');
+});
+
+test('watchDirectory ignores a non-numeric debounceMs and falls back to the default', async t => {
+  const directory = await makeTemporaryDirectory(t, 'bad-debounce');
+  const watchDirectory = makeWatchDirectory(fs);
+  let cancel;
+  const cancelled = new Promise(resolve => {
+    cancel = resolve;
+  });
+  // A nonsensical hint is advisory: it is ignored (not thrown), and the
+  // default 50 ms window applies.
+  const events = watchDirectory(directory, cancelled, {
+    debounceMs: 'soon',
+  });
+  t.teardown(() => cancel());
+
+  await new Promise(resolve => setTimeout(resolve, 50));
+  await fs.promises.writeFile(path.join(directory, 'bad.txt'), 'hi');
+
+  const event = await collect(
+    events,
+    candidate => candidate.name === 'bad.txt',
+  );
+  t.truthy(event, 'event still delivered under the fallback window');
+  t.is(event.name, 'bad.txt');
 });
