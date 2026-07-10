@@ -381,6 +381,41 @@ test('makePiAgent installs a getApiKey that resolves an OAuth subscription token
   t.is(await piAgent.getApiKey?.('faux-agent'), 'agent-token');
 });
 
+test('makePiAgent applies a provider model rewrite through the resolved model', async t => {
+  // Pins the `!isOllama && oauthStore` seam in makePiAgent that feeds the
+  // resolved model back through applyOAuthModelModifications (the GitHub
+  // Copilot per-account base-URL rewrite is the real-world case).  A faux
+  // `modifyModels` records its invocations, so deleting the seam reddens this.
+  const modifyCalls = [];
+  registerFauxOAuthProvider(t, {
+    id: 'faux-agent-modify',
+    modifyModels: (models, creds) => {
+      modifyCalls.push(creds.access);
+      return models.map(m => ({
+        ...m,
+        baseUrl: `https://acct/${creds.access}`,
+      }));
+    },
+  });
+  const store = makeMemoryOAuthStore({
+    'faux-agent-modify': {
+      access: 'acct-token',
+      refresh: 'r',
+      expires: Date.now() + HOUR,
+    },
+  });
+  const piAgent = await makePiAgent({
+    model: fauxModel('faux-agent-modify'),
+    oauthStore: store,
+  });
+  t.deepEqual(
+    modifyCalls,
+    ['acct-token'],
+    'makePiAgent must apply the provider model rewrite exactly once',
+  );
+  t.is(typeof piAgent.getApiKey, 'function');
+});
+
 test('makePiAgent keeps the ollama sentinel key for the local masquerade', async t => {
   const store = makeMemoryOAuthStore();
   const piAgent = await makePiAgent({

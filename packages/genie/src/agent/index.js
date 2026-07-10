@@ -387,7 +387,7 @@ export async function makePiAgent(options = {}) {
   const isOllama = resolvedModel.name?.startsWith('ollama/');
 
   // For a subscription-OAuth provider, apply any credential-derived model
-  // rewrites (e.g. GitHub Copilot's per-account base URL) before use.
+  // rewrites (for example GitHub Copilot's per-account base URL) before use.
   if (!isOllama && oauthStore) {
     resolvedModel = await applyOAuthModelModifications({
       model: resolvedModel,
