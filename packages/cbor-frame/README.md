@@ -76,9 +76,15 @@ message), so an analyzer must not assume it can descend into the
 payload and continue parsing.
 The reader rejects any initial byte other than the tag-24 prefix, any
 major type other than 2 inside the wrapper, any tag other than 24,
-and any indefinite-length form.
+any reserved additional-info value (28-30), and any indefinite-length
+form.
 This is intentional: a stricter reader catches misframed input earlier
 and gives a clearer error than a permissive one.
+The reader does, however, accept a non-canonical (overlong) length
+encoding, so a given payload length has more than one valid wire head.
+That is harmless for pure framing but means the wire bytes must not be
+treated as a canonical digest of the message; canonicalize before
+hashing or comparing raw frame bytes.
 
 ## Streams
 

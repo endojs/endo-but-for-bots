@@ -68,7 +68,12 @@ export const makeCborFrameWriter = (
 
         /** @type {Promise<IteratorResult<undefined, undefined>>[]} */
         const partsWritten = [];
-        partsWritten.push(output.next(TAG_24_PREFIX));
+        // Hand the output stream a fresh copy, never the shared
+        // `TAG_24_PREFIX` singleton: `harden` cannot freeze a typed
+        // array's indexed elements, so passing the singleton by
+        // reference to an arbitrary `output` would let a downstream
+        // stream mutate the prefix every writer in the realm shares.
+        partsWritten.push(output.next(TAG_24_PREFIX.slice()));
         partsWritten.push(output.next(head));
         for (const chunk of messageChunks) {
           partsWritten.push(output.next(chunk));

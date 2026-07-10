@@ -123,6 +123,20 @@ test('decodeByteStringHead rejects indefinite-length byte string', t => {
   });
 });
 
+test('decodeByteStringHead rejects reserved additional-info 28-30', t => {
+  // RFC 8949 § 3: additional-info values 28, 29 and 30 are reserved and
+  // carry no defined argument. Inside tag 24 the byte-string initial
+  // bytes are 0x40 + arg: 0x5c, 0x5d, 0x5e.
+  for (const initial of [0x5c, 0x5d, 0x5e]) {
+    t.throws(
+      () => decodeByteStringHead(new Uint8Array([0xd8, 0x18, initial])),
+      {
+        message: /reserved additional-info/,
+      },
+    );
+  }
+});
+
 test('decodeByteStringHead rejects tag other than 24', t => {
   // 0xd8 names "tag with one follow byte"; 0x19 is not 24.
   t.throws(() => decodeByteStringHead(new Uint8Array([0xd8, 0x19, 0x40])), {
