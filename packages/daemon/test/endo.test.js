@@ -5777,6 +5777,75 @@ test('provideSubMount clamps a .. subpath at the parent root', async t => {
   t.deepEqual(await E(child).list(), ['app.js']);
 });
 
+test('provideSubMount cannot widen a read-only parent to read-write', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'submount-monotonic');
+  await createMountFixture(mountPath, {
+    'src/main.js': 'export default 1;\n',
+  });
+
+  // Parent mount is READ-ONLY.  A sub-mount that omits (or sets false)
+  // `readOnly` must NOT regain write authority the parent was attenuated
+  // out of: attenuation is monotonic, so a read-only parent yields a
+  // read-only child regardless of the requested flag.  (Design
+  // daemon-mount.md § Read-only attenuation: a read-only mount "cannot be
+  // upgraded to read-write through any API path".)
+  await E(host).provideMount(mountPath, 'monotonic-parent', {
+    readOnly: true,
+  });
+  await E(host).provideSubMount(
+    'monotonic-parent',
+    ['src'],
+    'monotonic-child',
+    { readOnly: false },
+  );
+  const child = await E(host).lookup(['monotonic-child']);
+
+  // Reading still works and is rooted at src/.
+  t.deepEqual(await E(child).list(), ['main.js']);
+
+  // Writes are rejected even though the child asked for read-write: the
+  // clamp forced the child read-only because the parent is read-only.
+  await t.throwsAsync(E(child).writeText(['added.js'], 'nope'), {
+    message: /read-only/,
+  });
+  await t.throwsAsync(E(child).remove(['main.js']), {
+    message: /read-only/,
+  });
+
+  // Cross-reference: the backing directory is untouched on disk.
+  const actual = await fs.promises.readdir(path.join(mountPath, 'src'));
+  t.deepEqual(actual, ['main.js']);
+});
+
+test('provideSubMount rejects a symlinked subpath that escapes the parent', async t => {
+  const { host, config } = await prepareHost(t);
+
+  // Lay down a secret OUTSIDE the parent mount, then a symlink inside the
+  // parent that points at it.  The lexical `..` clamp cannot catch this
+  // (the subpath has no `..`); the realpath containment check must.
+  const rootPath = path.join(config.statePath, '..', 'submount-symlink');
+  await createMountFixture(rootPath, {
+    'outside/secret.txt': 'do not leak\n',
+    'proj/app.js': 'run();\n',
+  });
+  await fs.promises.symlink(
+    path.join(rootPath, 'outside'),
+    path.join(rootPath, 'proj', 'escape'),
+    'dir',
+  );
+
+  await E(host).provideMount(path.join(rootPath, 'proj'), 'symlink-parent');
+
+  // A sub-mount rooted at the symlink would resolve (via realpath) to
+  // `outside/`, escaping the parent — formulateSubMount must throw.
+  await t.throwsAsync(
+    E(host).provideSubMount('symlink-parent', ['escape'], 'symlink-child'),
+    { message: /escapes parent mount root/ },
+  );
+});
+
 test('scratch mount - create and use', async t => {
   const { host, config } = await prepareHost(t);
 

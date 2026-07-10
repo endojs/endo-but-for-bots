@@ -663,6 +663,11 @@ export const makeHostMaker = ({
      * it can never escape the parent; the parent mount is recorded in
      * the child formula for dependency tracking.
      *
+     * Read-only attenuation is monotonic: a sub-mount of a read-only
+     * parent is read-only regardless of `options.readOnly`, so read-only
+     * access cannot be escaped by re-mounting a subtree.  A read-write
+     * parent may still be narrowed to a read-only child.
+     *
      * Sub-mount creation is a host method (not a `Mount` exo method)
      * because it mints a new formula: creating a formula in the JS heap
      * without atomically naming it in a pet store is vulnerable to a GC

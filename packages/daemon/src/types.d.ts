@@ -291,7 +291,8 @@ export type MountFormula = {
   /**
    * Parent mount formula, present only for sub-mounts minted by
    * `provideSubMount`.  Recorded for dependency tracking so the parent
-   * mount stays reachable (and is cancelled together with) the child.
+   * mount stays reachable while the child references it, and the child is
+   * cancelled together with the parent.
    */
   parent?: FormulaIdentifier;
 };
@@ -1551,6 +1552,11 @@ export interface EndoHost extends EndoAgent {
    * `..`; the `subpath` itself is clamped at the parent root, so it can
    * never escape the parent.  The parent is recorded in the child
    * formula for dependency tracking.
+   *
+   * Read-only attenuation is monotonic: a sub-mount of a read-only parent
+   * is read-only even when `opts.readOnly` is `false` or omitted, so
+   * read-only access can never be widened by re-mounting a subtree.  A
+   * read-write parent may still be narrowed to a read-only child.
    */
   provideSubMount(
     mountName: string | string[],

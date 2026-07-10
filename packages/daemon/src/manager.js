@@ -4561,6 +4561,22 @@ const makeDaemonCore = async (
         // that is not a top-level `mount` / `scratch-mount` formula, so a
         // sub-mount can only be rooted beneath a daemon-minted mount.
         const parentPath = getMountHostPath(parentMountId);
+        // Attenuation is monotonic: a sub-mount may only narrow the
+        // authority it is derived from, never widen it.  If the parent
+        // mount is read-only, the child is read-only regardless of the
+        // requested flag, so read-only access cannot be escaped by
+        // re-mounting a subtree (design daemon-mount.md § Read-only
+        // attenuation: a read-only mount "cannot be upgraded to
+        // read-write through any API path").  `getMountHostPath` has
+        // already proven the parent is a `mount` / `scratch-mount`
+        // formula, both of which carry `readOnly`.
+        const parentFormula = formulaForId.get(parentMountId);
+        const parentReadOnly =
+          parentFormula !== undefined &&
+          (parentFormula.type === 'mount' ||
+            parentFormula.type === 'scratch-mount') &&
+          parentFormula.readOnly;
+        const effectiveReadOnly = readOnly || parentReadOnly;
         // `resolveSegments` clamps `..` at the parent root, so the child
         // root can never traverse above the parent — a sub-mount at
         // `/project/src` given `['..', '.env']` stays within `/project`,
@@ -4604,7 +4620,7 @@ const makeDaemonCore = async (
         const formula = harden({
           type: 'mount',
           path: fullPath,
-          readOnly,
+          readOnly: effectiveReadOnly,
           parent: parentMountId,
         });
 
