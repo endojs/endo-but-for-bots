@@ -97,3 +97,38 @@ test('registerCapabilityTools adds nothing when no capabilities granted', async 
   t.deepEqual(registered, []);
   t.is(localTools.size, 0);
 });
+
+test('registerCapabilityTools does not clobber a static tool of the same name', async t => {
+  // A guest with a `shell` capability yields a discovered tool named `exec`,
+  // which collides with Fae's built-in JavaScript `exec`. The static built-in
+  // must win — discovery only ever adds — matching Lal's collision precedence.
+  /** @type {Map<string, any>} */
+  const localTools = new Map();
+  const builtinExec = Far('BuiltinExec', {
+    schema: () => ({ function: { name: 'exec', description: 'builtin' } }),
+  });
+  localTools.set('exec', builtinExec);
+  const registered = await registerCapabilityTools(
+    makePowers({ shell: makeStubShell() }),
+    localTools,
+  );
+  // `exec` was already present, so discovery skips it; only `inspect` is added.
+  t.deepEqual(registered.sort(), ['inspect']);
+  t.is(localTools.get('exec'), builtinExec); // the built-in survives untouched
+  t.true(localTools.has('inspect'));
+});
+
+test('toFaeTool.execute coerces a void result to text', async t => {
+  // A tool that resolves to nothing (e.g. git `createBranch`) must still hand
+  // the model a string, not `undefined` (JSON.stringify(undefined) === undefined).
+  const record = harden({
+    name: 'noop',
+    description: '',
+    parameters: {},
+    inputSchema: {},
+    invoke: async () => undefined,
+  });
+  const result = await toFaeTool(record).execute({});
+  t.is(typeof result, 'string');
+  t.is(result, 'ok');
+});

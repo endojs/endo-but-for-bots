@@ -203,7 +203,8 @@ export const spawnWorkerLoop = async (
 
   const rootNodeIdP = getOrCreateRoot();
 
-  // Built-in tools: petname ops + mail (no filesystem tools for guest)
+  // Built-in tools: petname ops + mail. Any coding tools the guest's granted
+  // capabilities afford are added below by capability discovery (Phase 4).
   /** @type {Map<string, object>} */
   const localTools = new Map();
   localTools.set('list', makeListPetnamesTool(powers));

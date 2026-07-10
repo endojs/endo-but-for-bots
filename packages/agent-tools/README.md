@@ -19,11 +19,17 @@ import {
   makeMountStatTool,
   makeMountEditTool,
   makeMountFsTools,
+  makeShellTool,
+  discoverCapabilityTools,
 } from '@endo/agent-tools';
 ```
 
 ```ts
-import type { ToolRecord, ToolSpec } from '@endo/agent-tools';
+import type {
+  ToolRecord,
+  ToolSpec,
+  CapabilityToolOptions,
+} from '@endo/agent-tools';
 ```
 
 Subpath exports are also available:
@@ -33,6 +39,8 @@ import { makeTool } from '@endo/agent-tools/tool.js';
 import { makeGitTool } from '@endo/agent-tools/git-tool.js';
 import { makeGitMountTools } from '@endo/agent-tools/git-mount-tool.js';
 import { makeMountReadTool } from '@endo/agent-tools/mount-fs.js';
+import { makeShellTool } from '@endo/agent-tools/shell-tool.js';
+import { discoverCapabilityTools } from '@endo/agent-tools/discover.js';
 ```
 
 ## Tool Records

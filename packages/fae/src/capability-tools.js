@@ -30,7 +30,14 @@ export const toFaeTool = record =>
       }),
     execute: async (/** @type {Record<string, unknown>} */ args) => {
       const result = await record.invoke(args);
-      return typeof result === 'string' ? result : JSON.stringify(result);
+      if (typeof result === 'string') {
+        return result;
+      }
+      // A void/undefined result (e.g. a git `createBranch` that resolves to
+      // nothing) must still reach the model as text: `JSON.stringify(undefined)`
+      // is `undefined`, not a string, so coerce it to an explicit token.
+      const rendered = JSON.stringify(result);
+      return rendered === undefined ? 'ok' : rendered;
     },
     help: () => record.description,
   });
@@ -43,6 +50,12 @@ harden(toFaeTool);
  * granted contributes nothing, so the same agent runs with or without coding
  * tools (daemon-agent-tools Phase 4).
  *
+ * A discovered tool whose name is already served by a statically-registered
+ * built-in is skipped: the static tool wins, so discovery only ever *adds*
+ * (a `shell` capability's `exec` record must not clobber Fae's built-in
+ * JavaScript `exec`). This matches Lal's `spawnWorkerLoop` collision
+ * precedence (daemon-agent-tools Phase 4).
+ *
  * @param {import('@endo/eventual-send').ERef<any>} powers - The agent's guest
  *   namespace, supporting `lookup([petName])`.
  * @param {Map<string, FaeTool | object>} localTools - Mutated in place.
@@ -54,8 +67,11 @@ export const registerCapabilityTools = async (powers, localTools, options) => {
   /** @type {string[]} */
   const registered = [];
   for (const record of records) {
-    localTools.set(record.name, toFaeTool(record));
-    registered.push(record.name);
+    // A static built-in of the same name wins; discovery only adds.
+    if (!localTools.has(record.name)) {
+      localTools.set(record.name, toFaeTool(record));
+      registered.push(record.name);
+    }
   }
   return registered;
 };

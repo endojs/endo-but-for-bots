@@ -51,9 +51,7 @@ import { discoverCapabilityTools } from '@endo/agent-tools/discover.js';
 const dirname = url.fileURLToPath(new URL('..', import.meta.url)).toString();
 const { raw } = String;
 
-// ---------------------------------------------------------------------------
 // Daemon lifecycle helpers (adapted from fae/test/channel-mention.test.js)
-// ---------------------------------------------------------------------------
 
 let configPathId = 0;
 
@@ -116,9 +114,7 @@ const prepareHost = async t => {
   return ctx;
 };
 
-// ---------------------------------------------------------------------------
 // Test lifecycle
-// ---------------------------------------------------------------------------
 
 test.beforeEach((/** @type {import('ava').ExecutionContext<any[]>} */ t) => {
   t.context = [];
@@ -140,9 +136,7 @@ test.afterEach.always(
   },
 );
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /**
  * Poll an async predicate until it returns truthy or the deadline elapses.
@@ -185,9 +179,7 @@ const listHostMessages = async host => {
   return /** @type {any[]} */ (messages);
 };
 
-// ---------------------------------------------------------------------------
 // Test
-// ---------------------------------------------------------------------------
 
 test.serial(
   'form provisioning grants fs/git/shell and guest discovery registers the tools',
