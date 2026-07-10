@@ -144,7 +144,7 @@ existing `readDirectory`/`readFileText` powers *is* the implementation.
 | Platform | glob | grep | How far down |
 |---|---|---|---|
 | Node (V8) | Normative JS engine. Node's `fs.promises.glob` (22+) was considered and rejected: the repo's engine floor is `node >=16`, and its POSIX-ish dialect (`?`, `[]` active, dot-hiding) mismatches ours (`*`/`**` only, everything else literal), so it could serve only as a candidate enumerator behind an authoritative re-filter — no win over the JS walk, which is syscall-bound. | Normative JS engine; `RegExp` is already native V8. A subprocess `rg` fast path via `@endo/platform/proc` (`systemCapture` + `whichProg`) is named but deferred: it reintroduces ambient authority and a third regex dialect. | The JS engine over `node:fs` powers is the floor and the implementation. |
-| XS under the Rust supervisor | **The pushdown case that pays.** A `hostGlob` host function in `rust/endo/xsnap/src/powers/fs.rs` (cap-std `Dir` walk + a hand-rolled matcher — the dialect is two metacharacters, so an exact native match is small and auditable), surfaced as `filePowers.search.globPaths` in `bus-daemon-rust-xs-powers.js`. The PR #654 `rust/mount_parity` crate already mirrors the matcher, walker, UTF-16 ordering, and deny set in Rust against the shared case tables; the follow-up promotes that test-only mirror into the live host function. Wins: the walk stops crossing the XS↔Rust boundary once per directory, and no XS JS executes per entry. | Case-by-case at the *pattern* level: a `hostGrepFiles` (Rust `regex` crate) serves patterns inside a conservative syntactic subset (literals, character classes, anchors, alternation, bounded quantifiers — the subset the parity case tables already restrict to); `provideSearch` inspects the pattern (`isConservativeRegex(source)`, exported by `fs/search`) and falls back to the JS engine on XS for anything outside it, because Rust `regex` is not ECMA-262 (no backreferences or lookaround, different corner semantics). Content reads stay on the Rust side; only match records cross. | Glob fully native; grep native for the conservative subset, normative JS otherwise. A named follow-up layer (not in this stack), gated on the case-table parity runner (PR #654). |
+| XS under the Rust supervisor | **The pushdown case that pays.** A `hostGlob` host function in `rust/endo/xsnap/src/powers/fs.rs` (cap-std `Dir` walk + a hand-rolled matcher — the dialect is two metacharacters, so an exact native match is small and auditable), surfaced as `filePowers.search.globPaths` in `bus-daemon-rust-xs-powers.js`. The PR #654 `rust/mount_parity` crate already mirrors the matcher, walker, UTF-16 ordering, and deny set in Rust against the shared case tables; the follow-up promotes that test-only mirror into the live host function. Wins: the walk stops crossing the XS↔Rust boundary once per directory, and no XS JS executes per entry. | Case-by-case at the *pattern* level: a `hostGrepFiles` (Rust `regex` crate) serves patterns inside a conservative syntactic subset (literals, character classes, anchors, alternation, bounded quantifiers — the subset the parity case tables already restrict to); `provideSearch` inspects the pattern (`isConservativeRegex(source)`, exported by `fs/search`) and falls back to the JS engine on XS for anything outside it, because Rust `regex` is not ECMA-262 (no backreferences or lookaround, different corner semantics). Content reads stay on the Rust side; only match records cross. | Glob fully native; grep native for the conservative subset, normative JS otherwise. A named follow-up layer (not in this stack), gated on the case-table parity runner (PR #654) **and on the conservative-regex-subset design (a dedicated `@endo/regexp`-style project, PR #675 review) that `isConservativeRegex` takes a dependency on** — see Resolved decisions below. |
 | Go host (`daemon-go.js`) | Node-fs-backed powers today → JS engine. | Same. | Nothing extra until a Go-native powers set exists. |
 | Browser (reserved `"browser"` condition) | JS engine over whatever read powers the host grants. | Same. | The powers-parameterized engine is the browser story; no native facility exists. |
 | Extended capability FS / genie | The engine's powers contract is satisfiable by an `FsBackend` adapter, so `@endo/platform/fs/extended` and genie's `listDirectory` glob can consolidate onto the one normative engine. | Same. | Named follow-up (to be filed); genie's inline glob-to-regex is the duplication this retires. |
@@ -152,8 +152,12 @@ existing `readDirectory`/`readFileText` powers *is* the implementation.
 ### The Array surface (committed shape)
 
 - `glob(pattern, options?) -> Promise<string[]>` — externally unchanged from
-  PR #653; internally a collector over `globPaths` capped at
-  `GLOB_MAX_RESULTS`.
+  PR #653; internally a collector over `globPaths`. On reaching
+  `GLOB_MAX_RESULTS` it **throws by default**; a caller opts into a capped,
+  non-throwing result with `options.truncate`. Throwing is the unsurprising
+  default (a silently short list misleads); truncation is a deliberate
+  opt-in, and the streaming surface is the durable answer for large result
+  sets.
 - `grep(pattern, paths?, options?) -> Promise<Array<{ file, line, text }>>`
   — **revised from PR #655**, which is `grep(pattern, { glob, maxResults })`:
   - `paths` is `string[] | Promise<string[]>`. The method guard moves from
@@ -262,8 +266,11 @@ This fills the empty **Search** group of
     list through its context, so the tool handler performs the composition —
     `E(mount).grep(pattern, E(mount).glob(filesGlob))` — demonstrating the
     pipeline seam while the *capabilities* stay decoupled.
-  - `truncated` follows the Shell tool's flag-not-error precedent; the
-    descriptions tell the model results are capped and how to narrow.
+  - `truncated` follows the Shell tool's flag-not-error precedent: the tool
+    handler passes `options.truncate` down to the capability, so the agent
+    surface gets a capped result plus a flag rather than the capability's
+    default throw. The descriptions tell the model results are capped and how
+    to narrow.
 - **Code mode**: `declare const` entries for both tools in
   `packages/agentry/src/execute/fs-types.js` via the existing
   `formatGlobalDeclarations` pipeline.
@@ -350,23 +357,33 @@ The per-layer gauntlet runs P, B′, C′, D, T bottom-up.
 - **Parity**: the case tables remain the Rust/Node contract; the PR #654
   runner consumes the same JSON against the future native implementations.
 
-## Open Questions
+## Resolved decisions (maintainer review, PR #675)
 
-- Should `paths` be required on `grep` rather than defaulting to the whole
-  tree? The default keeps the common agent call one argument; requiring it
-  would make the glob→grep composition universal and the read cost explicit.
-  This design defaults it; cheap to tighten before the stack un-drafts.
-- Where do the fixture manifest and case tables canonically live once the
-  engine owns the semantics — `packages/platform/test/` (proposed here, with
-  the daemon re-consuming them) or duplicated? Duplication invites drift;
-  cross-package test imports are unidiomatic. The builder should pick the
-  least-bad wiring and note it.
-- `batchSize` default 64 and ceiling 1,024 — right constants? Any small
-  values preserve the design; tune during the streaming layer.
-- Is the conservative-regex subset worth specifying now as a grammar, or
-  should `isConservativeRegex` stay an implementation-defined allowlist
-  until the Rust `hostGrepFiles` follow-up forces precision?
-- Resolved (this design): the earlier open question of whether `glob()`
-  should throw at `GLOB_MAX_RESULTS` — it truncates; the streaming layer is
-  the durable answer, and the *tools* surface the truncation as a flag the
-  primer teaches agents to react to.
+The open questions this design carried are resolved by the maintainer's
+review; recorded here as decisions:
+
+- **`grep` `paths` defaults to the whole tree** (not required). The common
+  agent call stays one argument; glob→grep composition remains available but
+  optional. This confirms the shape this design already committed.
+- **Fixtures live at `packages/platform/test/`.** Once the engine owns the
+  semantics, the fixture manifest and glob/grep case tables become
+  platform-level test assets there; the daemon re-consumes them rather than
+  duplicating. No cross-package duplication.
+- **`batchSize` default 64, ceiling 1,024 stand.** Fine defaults; revisit
+  after a benchmark rather than tuning speculatively now.
+- **`glob()` throws at `GLOB_MAX_RESULTS` by default; truncation is opt-in.**
+  Throwing is the sensible, unsurprising default; a caller opts into a capped
+  result with `options.truncate`. The streaming surface is the durable answer
+  for large result sets, and the *agent tools* opt into truncation so their
+  surface keeps the flag-not-error shape (`truncated`). This **reverses** this
+  design's earlier "it truncates" resolution.
+- **The conservative-regex subset gets its own design, and this pushdown
+  takes a dependency on it.** `isConservativeRegex` cannot stay an
+  implementation-defined allowlist: confidence in it requires tackling the
+  Rust implementation, and the Rust and JS engines must reach **parity**.
+  That is a project on its own — a ReDoS-mitigating regex subset in the
+  spirit of RE2, potentially `@endo/regexp` — to be **dispatched to a
+  designer**; the native `hostGrepFiles` pushdown (grep's conservative
+  subset) is gated on its result. Until it lands, the normative JS engine
+  remains the floor and the sole grep implementation; the native subset does
+  not ship without the parity design.
