@@ -26,6 +26,15 @@ import harden from '@endo/harden';
 /**
  * Attach the correlating command `id` to a wire event when one is set.
  *
+ * The synthesized events below (`error` / `endo:ack` / `models` / `status`)
+ * harden their result: they are pure JSON built from validated scalars. The
+ * translated passthrough events (`message_start` / `message_end` /
+ * `tool_execution_*`) deliberately do NOT, because they embed payloads owned
+ * by `pi-agent-core` (`event.message` / `event.args` / `event.result`) that
+ * the agent may still hold and mutate; deep-freezing them through `harden`
+ * could freeze live agent state. They are serialized to JSON immediately by
+ * the serve layer, so the mutable window never escapes the process.
+ *
  * @template {object} T
  * @param {T} event
  * @param {string} [id]
@@ -92,7 +101,7 @@ harden(translateAgentEvent);
  * @returns {RpcEvent}
  */
 export const makeErrorEvent = (message, id) =>
-  withId({ type: 'error', message }, id);
+  harden(withId({ type: 'error', message }, id));
 harden(makeErrorEvent);
 
 /**
@@ -101,7 +110,7 @@ harden(makeErrorEvent);
  * @returns {RpcEvent}
  */
 export const makeAckEvent = (command, id) =>
-  withId({ type: 'endo:ack', command }, id);
+  harden(withId({ type: 'endo:ack', command }, id));
 harden(makeAckEvent);
 
 /**
@@ -110,9 +119,11 @@ harden(makeAckEvent);
  * @returns {RpcEvent}
  */
 export const makeModelsEvent = (listing, id) =>
-  withId(
-    { type: 'models', providers: listing.providers, models: listing.models },
-    id,
+  harden(
+    withId(
+      { type: 'models', providers: listing.providers, models: listing.models },
+      id,
+    ),
   );
 harden(makeModelsEvent);
 
@@ -122,5 +133,7 @@ harden(makeModelsEvent);
  * @returns {RpcEvent}
  */
 export const makeStatusEvent = (status, id) =>
-  withId({ type: 'status', model: status.model, busy: status.busy }, id);
+  harden(
+    withId({ type: 'status', model: status.model, busy: status.busy }, id),
+  );
 harden(makeStatusEvent);

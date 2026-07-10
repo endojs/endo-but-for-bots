@@ -257,6 +257,21 @@ test('set_model — rejects a missing provider or model', async t => {
   t.is(h.written[0].id, 'sm');
 });
 
+test('set_model — is rejected while a round is in flight', async t => {
+  const h = makeHarness();
+  await h.bridge.handleLine('{"id":"1","type":"prompt","message":"hi"}');
+  await flush();
+  await h.bridge.handleLine(
+    '{"id":"2","type":"set_model","provider":"anthropic","model":"claude"}',
+  );
+  // The mid-round switch is refused; the agent's model is left untouched.
+  t.deepEqual(h.calls.setModel, []);
+  t.is(h.written.length, 1);
+  t.is(h.written[0].type, 'error');
+  t.is(h.written[0].id, '2');
+  t.regex(h.written[0].message, /busy/);
+});
+
 test('handleLine — invalid JSON yields an error event', async t => {
   const h = makeHarness();
   await h.bridge.handleLine('not json');
@@ -277,6 +292,14 @@ test('handleLine — a record without a string type is rejected', async t => {
   t.is(h.written[0].type, 'error');
   t.is(h.written[0].id, '9');
   t.regex(h.written[0].message, /must have a string "type"/);
+});
+
+test('handleLine — a non-string id is rejected before dispatch', async t => {
+  const h = makeHarness();
+  await h.bridge.handleLine('{"id":42,"type":"prompt","message":"hi"}');
+  t.deepEqual(h.calls.prompt, []);
+  t.is(h.written[0].type, 'error');
+  t.regex(h.written[0].message, /"id" must be a string/);
 });
 
 test('handleLine — an unknown command type is rejected', async t => {

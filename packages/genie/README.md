@@ -387,7 +387,7 @@ Events the bridge emits during a round:
 {"type": "message_update", "delta": "…partial text…", "id": "1"}
 {"type": "endo:thinking", "delta": "…reasoning…", "id": "1"}
 {"type": "tool_execution_start", "toolCallId": "…", "toolName": "bash", "args": {…}, "id": "1"}
-{"type": "tool_execution_end", "toolCallId": "…", "result": {…}, "isError": false, "id": "1"}
+{"type": "tool_execution_end", "toolCallId": "…", "toolName": "bash", "result": {…}, "isError": false, "id": "1"}
 {"type": "message_end", "message": {…}, "id": "1"}
 {"type": "agent_end", "id": "1"}
 ```
@@ -395,6 +395,10 @@ Events the bridge emits during a round:
 The streaming events mirror the daemon agent's own event stream.
 `endo:`-namespaced events carry Endo-only affordances the base Pi surface
 does not define, per the design's posture on namespacing.
+The `tool_execution_*` events appear only for a tool-bearing session; the
+spawnable `rpc.js` currently serves a tool-free agent (wiring genie's tool
+suite is a follow-on), so a round it drives emits no tool events, though the
+protocol layer relays them whenever the session has tools.
 
 The session is single-flight: a `prompt` received while a round is still
 running is rejected, and mid-round control arrives as separate `steer` and

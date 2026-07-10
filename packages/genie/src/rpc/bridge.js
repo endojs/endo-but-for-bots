@@ -149,6 +149,19 @@ export const makeRpcBridge = ({ session, write, log = () => {} }) => {
           );
           return;
         }
+        if (busy) {
+          // Single-flight: switching the model mid-round would re-point the
+          // live agent's model under an in-flight prompt, so the round's next
+          // provider turn would run against a swapped model. The design's
+          // mid-session switching happens between rounds; reject until idle.
+          write(
+            makeErrorEvent(
+              'agent is busy; abort the current round before set_model',
+              id,
+            ),
+          );
+          return;
+        }
         try {
           await session.setModel({
             provider: command.provider,
@@ -192,6 +205,15 @@ export const makeRpcBridge = ({ session, write, log = () => {} }) => {
       Array.isArray(command)
     ) {
       write(makeErrorEvent('each record must be a JSON object'));
+      return;
+    }
+    // `id` is echoed verbatim on every correlated event. A non-string `id`
+    // would be reflected unchecked (breaking the correlation contract and the
+    // typed `string | undefined` currentId), so reject it before dispatch.
+    if (command.id !== undefined && typeof command.id !== 'string') {
+      write(
+        makeErrorEvent('each record\'s "id" must be a string when present'),
+      );
       return;
     }
     if (typeof command.type !== 'string') {
