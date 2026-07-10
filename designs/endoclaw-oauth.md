@@ -443,12 +443,21 @@ uses without holding.
    be filed).
 2. **Who registers the OAuth client?** Every provider requires a
    registered client id (and for Google installed apps, a
-   non-confidential client secret). Options: each host registers its
-   own (a documented setup step, provider-profile form); or Endo ships
-   a first-party client id in the Familiar. Recommend per-host
-   registration for v1 (no shared quota, no verification gate on the
-   project) and revisit a first-party id when the Familiar wants a
-   zero-setup experience.
+   non-confidential client secret). Registration is itself a
+   capability, not a Daemon primitive: an Agent can be endowed with an
+   **OAuth client registrar** that is powerless beyond its `HttpClient`
+   dependency — it can register (or reuse) a client with a provider and
+   do nothing else. The Daemon does not supply this capability by
+   default; a particular deployment of the daemon supplies it in
+   concert — a gateway such as minion.town, or the Familiar app — and
+   the implementation varies with the environment (a hosted gateway may
+   register a client per tenant against its own provider account; a
+   local Familiar may walk the operator through a one-time console
+   registration and capture the id). Consumers never see it: like the
+   mint flow (Design Decision 2), client registration is a
+   deployment-time concern attenuated to a single HTTP dependency. Open:
+   the registrar facet's exact shape and its per-environment
+   implementations (gateway vs. Familiar) are a follow-up design.
 
 Resolved in the body (formerly open): first-mint flow (§ First Mint,
 Design Decisions 1-2), scope control (Design Decision 4), multi-host
