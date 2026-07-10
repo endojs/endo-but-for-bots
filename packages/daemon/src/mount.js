@@ -439,6 +439,25 @@ const isConfinedPath = async (candidatePath, confinementRoot, filePowers) => {
 harden(isConfinedPath);
 
 /**
+ * Resolve `candidatePath` to its symlink-free physical path, or `undefined`
+ * when it cannot be resolved (removed mid-walk, broken symlink). `glob`'s `**`
+ * descent uses this to detect symlink cycles by physical identity without
+ * aborting the whole walk on a transient error.
+ *
+ * @param {string} candidatePath
+ * @param {FilePowers} filePowers
+ * @returns {Promise<string | undefined>}
+ */
+const maybeRealPath = async (candidatePath, filePowers) => {
+  try {
+    return await filePowers.realPath(candidatePath);
+  } catch {
+    return undefined;
+  }
+};
+harden(maybeRealPath);
+
+/**
  * Resolve a path to its symlink-free physical form even when the path
  * does not yet exist.  `realPath` only resolves an existing path, so this
  * walks up to the deepest existing ancestor, resolves *that*, and
@@ -494,7 +513,7 @@ harden(resolvePhysicalPath);
 export const GLOB_MAX_RESULTS = 10_000;
 
 /**
- * Compile one glob pattern segment into an anchored matcher over a single
+ * Compile one glob pattern segment into a matcher over a single
  * directory-entry name. `*` matches zero or more characters within the one
  * segment and never a `/`; a run of consecutive `*` (the way a segment that is
  * not exactly `**` degrades embedded `**` to `*` semantics) collapses to the
@@ -502,16 +521,52 @@ export const GLOB_MAX_RESULTS = 10_000;
  * `+` — is a literal. `*` deliberately matches leading-dot names, a documented
  * divergence from POSIX glob.
  *
+ * Matching is a linear greedy scan with a single star-backtrack, never a
+ * backtracking `RegExp`. The earlier `literal[^/]*literal[^/]*…` regex was a
+ * catastrophic-backtracking (ReDoS) hazard: because the pattern is caller
+ * controlled, an input such as `a*a*a*a*a*a*a*a*a*a*a` matched against one
+ * `NAME_MAX`-length entry blocked the daemon's (synchronous) event loop for
+ * minutes on a single `glob()` call. The two-pointer matcher below is O(n·m)
+ * worst case with no exponential blow-up, and — carrying no engine-specific
+ * regex semantics — is trivially reproducible by the Rust/XS parity runner.
+ *
  * @param {string} segment
  * @returns {(name: string) => boolean}
  */
 const compileGlobSegment = segment => {
-  const body = segment
-    .split('*')
-    .map(literal => literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    .join('[^/]*');
-  const re = new RegExp(`^${body}$`);
-  return name => re.test(name);
+  const segLen = segment.length;
+  return name => {
+    const nameLen = name.length;
+    let n = 0; // next unmatched index into `name`
+    let s = 0; // next unmatched index into `segment`
+    let starAt = -1; // segment index just past the most recent `*`, or -1
+    let matchFrom = 0; // how far that `*` has been allowed to consume `name`
+    while (n < nameLen) {
+      if (s < segLen && segment[s] === '*') {
+        // Record the wildcard (consuming nothing yet) and try to match the
+        // remainder greedily; backtrack here only if that fails.
+        starAt = s;
+        matchFrom = n;
+        s += 1;
+      } else if (s < segLen && segment[s] === name[n] && name[n] !== '/') {
+        s += 1;
+        n += 1;
+      } else if (starAt !== -1 && name[matchFrom] !== '/') {
+        // Let the most recent `*` consume one more character of `name`. `*`
+        // never spans a `/`, matching the documented single-segment semantics.
+        s = starAt + 1;
+        matchFrom += 1;
+        n = matchFrom;
+      } else {
+        return false;
+      }
+    }
+    // Any unmatched trailing pattern must be all `*` (each matching empty).
+    while (s < segLen && segment[s] === '*') {
+      s += 1;
+    }
+    return s === segLen;
+  };
 };
 harden(compileGlobSegment);
 
@@ -833,12 +888,20 @@ const makeMountExo = ctx => {
        * (symlinks out of the mount root) are silently excluded, mirroring
        * `list()`.
        *
+       * `ancestorsReal` carries the symlink-free physical paths of `dir` and
+       * every directory on the descent path above it. A `**` descent that would
+       * re-enter one of them (a symlink cycle such as `self -> .` inside the
+       * confined root, which `isConfinedPath`/`isDirectory` both follow and so
+       * cannot exclude) is skipped, so the walk terminates on cyclic trees
+       * instead of spinning `self/self/self/…` until `PATH_MAX`.
+       *
        * @param {string[]} remaining
        * @param {string} dir
        * @param {string[]} prefix
+       * @param {Set<string>} ancestorsReal
        * @returns {Promise<void>}
        */
-      const walk = async (remaining, dir, prefix) => {
+      const walk = async (remaining, dir, prefix, ancestorsReal) => {
         if (remaining.length === 0) {
           // The mount face's own root (empty prefix) is never itself a result.
           if (prefix.length > 0) {
@@ -863,7 +926,7 @@ const makeMountExo = ctx => {
           // still in play. A trailing `**` (empty `rest`) additionally matches
           // file descendants directly, since `**` matches a whole sequence of
           // segments ending in a file, not just directories.
-          await walk(rest, dir, prefix);
+          await walk(rest, dir, prefix, ancestorsReal);
           for (const name of names.sort()) {
             if (isDenied(name)) {
               // eslint-disable-next-line no-continue
@@ -883,7 +946,21 @@ const makeMountExo = ctx => {
             // eslint-disable-next-line no-await-in-loop
             if (await filePowers.isDirectory(childPath)) {
               // eslint-disable-next-line no-await-in-loop
-              await walk(remaining, childPath, [...prefix, name]);
+              const childReal = await maybeRealPath(childPath, filePowers);
+              if (childReal !== undefined && !ancestorsReal.has(childReal)) {
+                const descentAncestors = new Set([...ancestorsReal, childReal]);
+                // eslint-disable-next-line no-await-in-loop
+                await walk(
+                  remaining,
+                  childPath,
+                  [...prefix, name],
+                  descentAncestors,
+                );
+              } else if (rest.length === 0) {
+                // A cyclic (or unresolvable) directory under a trailing `**` is
+                // still a valid entry: recorded once, never re-entered.
+                results.add([...prefix, name].join('/'));
+              }
             } else if (rest.length === 0) {
               results.add([...prefix, name].join('/'));
             }
@@ -916,12 +993,23 @@ const makeMountExo = ctx => {
           // eslint-disable-next-line no-await-in-loop
           if (await filePowers.isDirectory(childPath)) {
             // eslint-disable-next-line no-await-in-loop
-            await walk(rest, childPath, [...prefix, name]);
+            const childReal = await maybeRealPath(childPath, filePowers);
+            // A literal descent consumes a segment, so it cannot recurse
+            // without bound; still extend the ancestor set so a later `**`
+            // sees this directory's physical identity and detects a cycle.
+            const nextAncestors =
+              childReal === undefined
+                ? ancestorsReal
+                : new Set([...ancestorsReal, childReal]);
+            // eslint-disable-next-line no-await-in-loop
+            await walk(rest, childPath, [...prefix, name], nextAncestors);
           }
         }
       };
 
-      await walk(patternSegments, currentDir, []);
+      const rootReal = await maybeRealPath(currentDir, filePowers);
+      const initialAncestors = new Set(rootReal === undefined ? [] : [rootReal]);
+      await walk(patternSegments, currentDir, [], initialAncestors);
 
       // Sort by UTF-16 code unit (Array.prototype.sort's default string order)
       // as the final step, then cap. Sorting before truncating makes the

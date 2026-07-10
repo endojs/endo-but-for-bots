@@ -17,7 +17,11 @@ character, including `?`, `[`, `]`, `{`, `}`, and `+`, is a literal.
 
 Denied segments never appear in results, even when named literally (`.ssh/*`
 returns `[]` rather than throwing); entries whose symlinks escape the mount root
-are silently excluded. Results are mount-face-relative `/`-joined paths, include
+are silently excluded. A directory symlink that stays inside the root but points
+at an ancestor (a cycle, such as `self -> .`) is enumerated once as an entry and
+never re-entered, so `**` terminates on cyclic trees rather than walking
+`self/self/self/…` to the platform path limit. Results are mount-face-relative
+`/`-joined paths, include
 directories as well as files, and are sorted lexicographically by UTF-16 code
 unit as a final step, then capped at `GLOB_MAX_RESULTS` (10,000) with silent
 truncation — the streaming search variants are the durable answer to unbounded

@@ -136,3 +136,50 @@ test('glob caps results at GLOB_MAX_RESULTS with deterministic truncation', asyn
     'entries beyond the cap are absent',
   );
 });
+
+test('glob matches an adversarial adjacent-star pattern in bounded time (no ReDoS)', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mount-glob-redos-'));
+  t.teardown(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  // A near-NAME_MAX entry whose long run of a single character maximizes
+  // backtracking for a `literal*literal*…` pattern. The pattern is
+  // caller-controlled, so this is reachable from a single `glob()` call.
+  fs.writeFileSync(path.join(root, `${'a'.repeat(200)}X`), '');
+  fs.writeFileSync(path.join(root, 'match-me'), '');
+
+  const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
+  // 40 literal `a` segments joined by `*` — the classic catastrophic-
+  // backtracking shape. The former RegExp matcher blocked the (synchronous)
+  // event loop for minutes on the adversarial entry above; the linear matcher
+  // returns promptly. ava's per-test timeout is the backstop that reddens a
+  // regression back to the RegExp.
+  const pattern = Array.from({ length: 40 }, () => 'a').join('*');
+  // The entry ends in `X`, so the trailing literal `a` cannot match: the point
+  // is that the call returns at all rather than hanging.
+  t.deepEqual([...(await E(mount).glob(pattern))], []);
+  // The matcher is still correct for a pattern that does match.
+  t.deepEqual([...(await E(mount).glob('m*e'))], ['match-me']);
+});
+
+test('glob(**) terminates on an in-confinement symlink cycle', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mount-glob-cycle-'));
+  t.teardown(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'sub'));
+  fs.writeFileSync(path.join(root, 'sub', 'f.txt'), '');
+  try {
+    fs.symlinkSync('.', path.join(root, 'self')); // resolves to the root
+    fs.symlinkSync('..', path.join(root, 'sub', 'up')); // resolves to an ancestor
+  } catch {
+    t.pass('platform cannot create symlinks; the cycle case is unobservable');
+    return;
+  }
+
+  const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
+  // Both symlinks resolve, via `realPath`, to a directory already on the
+  // descent path, so `isConfinedPath`/`isDirectory` (which follow symlinks)
+  // cannot exclude them. Without the ancestor-cycle guard the `**` walk
+  // recurses `self/self/self/…` and `sub/up/sub/up/…` until PATH_MAX. The
+  // guard records each cyclic symlink once as an entry and never re-enters it.
+  const result = await E(mount).glob('**');
+  t.deepEqual([...result], ['self', 'sub', 'sub/f.txt', 'sub/up']);
+});
