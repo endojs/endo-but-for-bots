@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-03-03 |
-| **Updated** | 2026-07-07 |
+| **Updated** | 2026-07-10 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Not Started |
 | **Parent** | [endoclaw](endoclaw.md) |
@@ -24,7 +24,13 @@ consume an already-minted `OAuth` exo as an injected fetch power and
 narrow it with typed, attenuable facets. The 2026-07-07 revision settles
 the first-mint flow, restructures the token/facet layering so one
 credential can back several facets, and pins the surface connectors may
-rely on (§ The Connector Contract), per review of #612.
+rely on (§ The Connector Contract), per review of #612. The 2026-07-10
+revision adds holder-driven recursive **partition**: any facet holder
+can mint a monotonically-narrowed child `OAuth`/`OAuthControl` pair and
+delegate it, composed with the existing caretaker controls
+(§ Partition and Delegation), per review of #621. The composite is the
+named [caretaker-attenuation](caretaker-attenuation.md) pattern; this
+design is its first full instance.
 
 ## What is the Problem Being Solved?
 
@@ -82,8 +88,10 @@ interface OAuthControl {
   setAllowedPaths(allowedPaths: string[]): void;  // same noun as mint's option
   setReadOnly(flag: boolean): void;  // restricts to GET and HEAD (see caveat below)
   refresh(): Promise<void>;          // pure delegation to the shared token record
-  revoke(): Promise<void>;           // severs THIS facet; the token survives.
-                                     // Async for uniform await-discipline with
+  revoke(): Promise<void>;           // severs THIS facet and, transitively, every
+                                     // facet partitioned from it; the token and
+                                     // sibling facets survive. Async for uniform
+                                     // await-discipline with
                                      // OAuthTokenControl.revoke, though the sever
                                      // is local and resolves immediately.
   help(): string;                    // must not name or hint the mint flow
@@ -97,6 +105,14 @@ interface OAuth {
                                      // facet's effective authority (which
                                      // allowedPaths/readOnly narrow); introspection
                                      // only, scopes are not settable
+  partition(opts: {                  // holder-minted child pair; recursive.
+    allowedPaths?: string[],         // the child's OWN layer; effective authority
+                                     // is the per-request conjunction with every
+                                     // ancestor's live layer (§ Partition and
+                                     // Delegation), so this can never widen
+    readOnly?: boolean,              // ORed with ancestors: false here cannot
+                                     // clear an ancestor's true
+  }): { oauth: OAuth, control: OAuthControl };
   help(): string;                    // must not name or hint the mint flow
 }
 
@@ -163,6 +179,9 @@ Changes from the 2026-03-03 sketch:
   pass through with status and body untouched, so a connector can map
   its service's error payloads (quota, permission) without this layer
   rewriting them.
+- **`partition` is added (2026-07-10).** Any `OAuth` holder mints
+  narrowed child `OAuth`/`OAuthControl` pairs, recursively, without the
+  parent's controller in the loop (§ Partition and Delegation).
 
 ## First Mint
 
@@ -284,10 +303,94 @@ token dead and surfaces `'auth-revoked'` on every facet until the host
 re-mints.
 
 Revocation is two distinct acts. `OAuthControl.revoke()` severs one
-facet and leaves the token and its sibling facets intact (a caretaker
-cutting one grant). `OAuthTokenControl.revoke()` revokes the token with
-the provider (RFC 7009 § 2, where a revocation endpoint exists),
-deletes the stored record, and severs every facet.
+facet, and with it everything partitioned from that facet
+(§ Partition and Delegation), leaving the token and the facet's
+siblings intact (a caretaker cutting one grant). `OAuthTokenControl.revoke()`
+revokes the token with the provider (RFC 7009 § 2, where a revocation
+endpoint exists), deletes the stored record, and severs every facet.
+
+## Partition and Delegation
+
+This section instantiates the
+[caretaker-attenuation](caretaker-attenuation.md) pattern: the
+caretaker split above (every grant is an `OAuth`/`OAuthControl` pair)
+composed with holder-driven recursive attenuation. Any holder of an
+`OAuth` facet can **partition** it: mint a child `OAuth`/`OAuthControl`
+pair narrowed from its own, hand the child `oauth` to a delegate, and
+keep the child `control`. The partitioner thereby becomes the caretaker
+of its delegate, with no round-trip to the host, the token caretaker,
+or the parent's own controller. Partition is recursive; the result is a
+delegation tree rooted at the token record.
+
+```mermaid
+graph TD
+  T[(token record)] -.- TC[OAuthTokenControl]
+  TC -- "mint (baseUrl)" --> A
+  A["OAuth A (root facet)"] -. paired .- CA[OAuthControl A]
+  A -- "partition (one spreadsheet's paths)" --> B
+  B[OAuth B] -. paired .- CB["OAuthControl B (held by A's holder)"]
+  B -- "partition (readOnly)" --> C
+  C[OAuth C] -. paired .- CC["OAuthControl C (held by B's holder)"]
+```
+
+**Monotonicity invariant.** A child's effective authority is always a
+subset of its parent's *current* effective authority: narrowed from
+parent to child, never widened. The invariant is dynamic, not
+mint-time-only: when an ancestor's caretaker later calls
+`setAllowedPaths` or `setReadOnly`, or revokes, every descendant
+shrinks with it. A live child never out-lives or out-scopes a shrinking
+parent.
+
+**Enforcement is per-request conjunction along the ancestor chain, not
+a snapshot intersection at partition time.** Each facet (root or child)
+carries its own live constraint layer (`allowedPaths`, `readOnly`), and
+a request through a child is checked against the child's layer AND
+every ancestor's layer AND the token record, at request time:
+
+- `allowedPaths` intersect by conjunction: the request path must match
+  every layer in the chain that declares a path restriction.
+- `readOnly` ORs across the chain: any ancestor's `true` binds the
+  whole subtree; a child's `setReadOnly(false)` clears only its own
+  layer.
+- `baseUrl` and `scopes()` are inherited unchanged from the root facet.
+  A new base URL comes only from `OAuthTokenControl.mint` (a sibling
+  facet), never from partition.
+
+A snapshot intersection computed at partition time would go stale the
+moment an ancestor's caretaker narrows; conjunction makes the invariant
+unconditional. It also means `partition` performs **no subset
+validation**: a child declaring paths outside its parent's live set is
+legal, and that surplus is simply inert (denied by the ancestor layer,
+including a parent layer that shrank after the child was minted).
+Denial errors carry the same uniform codes as the root facet's
+(`'path-denied'`, `'method-denied'`, `'facet-revoked'`) and do not
+disclose which ancestor's layer denied.
+
+**Child controls are layer-local.** A child `OAuthControl`'s
+`setAllowedPaths`/`setReadOnly` adjust only the child's own layer;
+`refresh()` delegates to the shared token record like any facet's;
+`revoke()` severs the child and, structurally, its whole subtree
+(descendants' requests pass through the revoked layer and fail with
+`'facet-revoked'`). No control anywhere in the tree can widen anything;
+widening remains an incremental-authorization re-mint at the root
+(Design Decision 4).
+
+**Durability and cost.** A child facet is an `oauth` formula like any
+other, referencing its **parent facet's** formula id (root facets
+reference the token record), so the tree persists across daemon
+restarts and each node is independently petnameable and revocable.
+References run child-to-parent only; no parent-to-child index is
+required for enforcement. Enforcement cost is O(depth) string matching
+per request, and delegation chains are expected shallow; an
+implementation may cache a flattened conjunction keyed to
+ancestor-epoch counters as a pure optimization, never as semantics.
+
+**Why first-class.** A holder can always delegate opaquely by wrapping
+`fetch` in its own exo; partition does not create a new power, it makes
+the inevitable one legible: the child is a durable formula the host can
+inspect, it composes correctly with refresh, the two revocations, and
+structured errors, and the delegator gets a real caretaker over its
+delegate instead of an ad-hoc wrapper with none.
 
 ## The Connector Contract
 
@@ -328,6 +431,13 @@ rather than re-derive it:
    below. Rate limiting lives in the connector (domain-aware token
    bucket) and in `HttpClient` (`setMaxRequestsPerMinute`); this layer
    adds none.
+7. **Delegation is first-class where the exo is held.** A consumer
+   holding the `OAuth` exo itself (the direct-grant case) partitions
+   monotonically-narrowed child pairs for its own delegates without any
+   host round-trip (§ Partition and Delegation). A connector composed
+   over a closed-over fetch power (item 1) does not see `partition` and
+   layers its own attenuation instead (item 6); a connector that wants
+   to hand out per-resource sub-credentials asks to hold the exo.
 
 Gap noted, deferred until a connector needs it, on both directions of
 binary media: `FetchResponse` exposes `text()` and `json()` only, and
@@ -359,8 +469,17 @@ grant on those APIs pairs `setReadOnly` with `setAllowedPaths` pinned to
 the read endpoints rather than leaning on the verb alone; method-override
 headers are rejected (§ Capability Shape) so the verb cannot be spoofed.
 
-**Caretaker revocation.** Facet revocation cuts one grant instantly;
-token revocation cuts the credential itself, at the provider.
+**Caretaker revocation.** Facet revocation cuts one grant instantly,
+and with it everything partitioned from that grant; token revocation
+cuts the credential itself, at the provider.
+
+**Partition and delegate.** An agent holding a Gmail facet carves a
+child for a summarizer sub-agent:
+`E(gmail).partition({ allowedPaths: ['/gmail/v1/users/me/messages*'], readOnly: true })`,
+hands the child `oauth` down, keeps the child `control`, and revokes it
+when the sub-task ends. If the host meanwhile narrows or revokes the
+agent's own facet, the sub-agent's child shrinks or dies with it
+([caretaker-attenuation](caretaker-attenuation.md)).
 
 ## Use Cases
 
@@ -374,6 +493,7 @@ token revocation cuts the credential itself, at the provider.
 
 | Design | Relationship |
 |--------|-------------|
+| [caretaker-attenuation](caretaker-attenuation.md) | **Pattern.** The named composite this design instantiates: caretaker control facets composed with holder-driven recursive partition under monotone narrowing. |
 | [endoclaw-network-fetch](endoclaw-network-fetch.md) | **Depends on.** The origin-allowlist `HttpClient` under every facet. |
 | [daemon-form-request](daemon-form-request.md) | **Depends on (implemented).** The structured-ask channel through which an agent requests a grant and the host approves a mint. |
 | [gateway-bearer-token-auth](gateway-bearer-token-auth.md) | **Precedent.** The daemon-only build's loopback redirect listener. |
@@ -397,8 +517,9 @@ uses without holding.
    both flows are small over `fetch`.
 3. **Facets (S-M).** `OAuthTokenControl.mint`, `OAuth`/`OAuthControl`
    with path normalization and matching, method and header enforcement,
-   structured errors, single-flight refresh, the two revocations.
-   Tested against a stub provider; no network.
+   structured errors, single-flight refresh, the two revocations, and
+   `partition` with per-request ancestor-chain conjunction and
+   subtree-wise sever. Tested against a stub provider; no network.
 4. **Daemon integration (S).** Pet-name grants, the form-request mint
    path, CLI and Chat UI entry points, incremental re-consent.
 
@@ -427,7 +548,22 @@ uses without holding.
    loop.
 7. **Two revocations.** Facet revocation (local caretaker) and token
    revocation (RFC 7009 § 2 plus store deletion) are distinct acts on
-   distinct controls.
+   distinct controls. Facet revocation is subtree-wise: it severs the
+   facet and everything partitioned from it.
+8. **Any facet holder may partition, without the parent's controller in
+   the loop.** `OAuth.partition` mints a narrowed child
+   `OAuth`/`OAuthControl` pair; the partitioner keeps the child control
+   and becomes the caretaker of its delegate. A holder can always
+   delegate opaquely by proxying `fetch`; first-class partition makes
+   that inevitable delegation durable, inspectable, and correctly
+   composed with refresh, revocation, and errors
+   ([caretaker-attenuation](caretaker-attenuation.md)).
+9. **Monotonicity is enforced by per-request conjunction along the
+   ancestor chain, never by a partition-time snapshot intersection.**
+   Paths conjoin, `readOnly` ORs, `baseUrl`/`scopes` inherit; a child's
+   effective authority is a subset of its parent's *live* authority
+   even as ancestors narrow or revoke, and no control facet anywhere in
+   the tree can widen.
 
 ## Open Questions
 
@@ -458,6 +594,21 @@ uses without holding.
    deployment-time concern attenuated to a single HTTP dependency. Open:
    the registrar facet's exact shape and its per-environment
    implementations (gateway vs. Familiar) are a follow-up design.
+3. **Should a grantor be able to mint a facet without `partition`?** A
+   `delegable: false` option on `mint`/`partition` cannot prevent
+   delegation (a holder proxies `fetch` regardless); it would only
+   remove the legible, durable path and push delegation into opaque
+   wrappers. Is that legibility knob worth the surface, for hosts that
+   want the delegation tree to be the *only* convenient path and treat
+   opaque proxying as an audit smell?
+4. **What is the GC policy for revoked subtrees?** Facet formulas
+   reference child-to-parent, so severing is structural and lazy
+   (descendants fail on next use through the revoked layer). Are the
+   descendant formula records of a revoked facet deleted eagerly at
+   revocation (requiring a parent-to-child index or a store scan),
+   tombstoned and swept later, or left to the daemon's general formula
+   GC once nothing pins them? Lazy-plus-sweep is the presumptive
+   answer; the store's existing GC posture should decide.
 
 Resolved in the body (formerly open): first-mint flow (§ First Mint,
 Design Decisions 1-2), scope control (Design Decision 4), multi-host
@@ -479,3 +630,16 @@ to review of endojs/endo-but-for-bots#612:
 > surface (setAllowedPaths, setReadOnly, token refresh, revocation) is
 > sufficient as the credential layer the Sheets connector narrows on
 > top of, and note any gaps the connector designs currently assume.
+
+The 2026-07-10 revision responds to kriskowal's review of
+endojs/endo-but-for-bots#621:
+
+> This design presumes a capability and a controller facet. This is
+> useful because the controller can adjust the attenuation dynamically.
+> However, it's also useful for the holder of a capability to partition
+> that capability recursively. It is a little complex but possible to
+> do both at the same time. That is, allow a capability to partition
+> and delegate. It is even possible to produce a child capability and
+> controller facet, provided that the capabilities are narrowed from
+> parent to child, never expanding. Please do another round of design
+> with this in mind.
