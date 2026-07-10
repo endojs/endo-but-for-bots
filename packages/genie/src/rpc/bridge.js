@@ -50,6 +50,14 @@ export const makeRpcBridge = ({ session, write, log = () => {} }) => {
   let busy = false;
   /** @type {string | undefined} */
   let currentId;
+  // A unique marker for the in-flight prompt round, set when a `prompt` is
+  // accepted and cleared when the round terminates (via `agent_end` or its
+  // own rejection). The fire-and-forget prompt's late rejection compares
+  // against it so a round that has already been superseded — aborted, then
+  // followed by a new `prompt` — cannot clobber the newer round's `busy` /
+  // `currentId` state or emit a spurious `error` for an already-ended round.
+  /** @type {object | undefined} */
+  let activeRound;
 
   const unsubscribe = session.subscribe(event => {
     const wire = translateAgentEvent(event, currentId);
@@ -59,6 +67,7 @@ export const makeRpcBridge = ({ session, write, log = () => {} }) => {
     if (event.type === 'agent_end') {
       busy = false;
       currentId = undefined;
+      activeRound = undefined;
     }
   });
 
@@ -86,16 +95,25 @@ export const makeRpcBridge = ({ session, write, log = () => {} }) => {
         }
         busy = true;
         currentId = id;
+        const round = {};
+        activeRound = round;
         const message = command.message;
         // Fire the round without awaiting completion so that steer/abort
         // commands on subsequent input lines can interleave. Round
         // completion is observed via the `agent_end` event above; only a
-        // synchronous/asynchronous prompt failure is handled here.
+        // synchronous/asynchronous prompt failure is handled here — and only
+        // when this is still the active round, so a superseded round's late
+        // rejection neither clobbers a newer round's state nor reports an
+        // error for a round that already ended.
         Promise.resolve()
           .then(() => session.prompt(message))
           .catch(err => {
+            if (activeRound !== round) {
+              return;
+            }
             busy = false;
             currentId = undefined;
+            activeRound = undefined;
             write(makeErrorEvent(describeError(err), id));
           });
         return;

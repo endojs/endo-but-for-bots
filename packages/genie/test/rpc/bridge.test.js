@@ -171,6 +171,8 @@ test('prompt — internal book-keeping events are not relayed', async t => {
     message: {},
     assistantMessageEvent: { type: 'other' },
   });
+  // A message_update with no inner assistant event is also dropped.
+  h.emit({ type: 'message_update', message: {} });
 
   t.deepEqual(h.written, []);
 });
@@ -313,4 +315,82 @@ test('prompt — a rejected round clears busy and reports the error', async t =>
   // Busy was cleared, so a follow-up prompt is accepted.
   await bridge.handleLine('{"id":"2","type":"get_status"}');
   t.is(written[1].busy, false);
+});
+
+test("prompt — a superseded round's late failure does not clobber the active round", async t => {
+  const h = makeHarness();
+  let call = 0;
+  /** @type {(err: Error) => void} */
+  let failFirst = () => {};
+  h.session.prompt = message => {
+    call += 1;
+    if (call === 1) {
+      // The first round stays in flight until we reject it below.
+      return new Promise((_resolve, reject) => {
+        failFirst = reject;
+      });
+    }
+    return Promise.resolve();
+  };
+
+  // Round A starts and is left pending.
+  await h.bridge.handleLine('{"id":"A","type":"prompt","message":"a"}');
+  await flush();
+  // A ends (as an abort would drive it): agent_end clears busy so a new
+  // round is admissible.
+  h.emit({ type: 'agent_end', messages: [] });
+  // Round B starts and becomes the active round.
+  await h.bridge.handleLine('{"id":"B","type":"prompt","message":"b"}');
+  await flush();
+  // A's prompt now rejects, late. Its catch must be inert.
+  failFirst(new Error('aborted'));
+  await flush();
+
+  // No spurious error is emitted for the superseded round A.
+  t.false(h.written.some(e => e.type === 'error'));
+  // B is still the active round: its streamed events carry B's id, not the
+  // `undefined` a clobbered `currentId` would produce.
+  h.emit({
+    type: 'message_update',
+    message: {},
+    assistantMessageEvent: { type: 'text_delta', delta: 'x' },
+  });
+  const update = h.written.find(e => e.type === 'message_update');
+  t.is(update && update.id, 'B');
+});
+
+test('prompt — a non-string message is rejected', async t => {
+  const h = makeHarness();
+  await h.bridge.handleLine('{"id":"p","type":"prompt","message":5}');
+  t.deepEqual(h.calls.prompt, []);
+  t.is(h.written[0].type, 'error');
+  t.is(h.written[0].id, 'p');
+  t.regex(h.written[0].message, /prompt requires a string "message"/);
+});
+
+test('steer — a non-string message is rejected', async t => {
+  const h = makeHarness();
+  await h.bridge.handleLine('{"id":"st","type":"steer","message":5}');
+  t.deepEqual(h.calls.steer, []);
+  t.is(h.written[0].type, 'error');
+  t.is(h.written[0].id, 'st');
+  t.regex(h.written[0].message, /steer requires a string "message"/);
+});
+
+test('handleLine — an unknown command type is logged to the diagnostic sink', async t => {
+  const fake = makeFakeSession();
+  /** @type {string[]} */
+  const logs = [];
+  /** @type {object[]} */
+  const written = [];
+  const bridge = makeRpcBridge({
+    session: fake.session,
+    write: event => written.push(event),
+    log: message => logs.push(message),
+  });
+  await bridge.handleLine('{"type":"boop"}');
+  t.true(
+    logs.some(message => /ignoring unknown command type: boop/.test(message)),
+  );
+  t.is(written[0].type, 'error');
 });

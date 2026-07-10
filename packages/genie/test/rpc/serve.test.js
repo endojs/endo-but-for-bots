@@ -135,3 +135,62 @@ test('serveRpc — surfaces a trailing unterminated line at end of input', async
   t.is(records[0].id, 'z');
   t.is(records[0].type, 'status');
 });
+
+test('serveRpc — an unencodable record yields a fallback error, not a throw', async t => {
+  const sink = makeSink();
+  /** @type {((event: unknown) => void) | undefined} */
+  let listener;
+  const session = {
+    subscribe: l => {
+      listener = l;
+      return () => {
+        listener = undefined;
+      };
+    },
+    prompt: async () => {
+      // A BigInt in the relayed message cannot be JSON-encoded; the writer
+      // must fall back to an error record rather than throwing and tearing
+      // down the whole stream.
+      listener?.({ type: 'message_end', message: { size: 1n } });
+      listener?.({ type: 'agent_end', messages: [] });
+    },
+    abort: () => {},
+    steer: () => {},
+    describeModel: () => 'test/model',
+    listModels: () => ({ providers: [], models: [] }),
+    setModel: async () => {},
+  };
+
+  await serveRpc({
+    input: streamOf(['{"id":"1","type":"prompt","message":"hi"}\n']),
+    output: sink.stream,
+    session,
+  });
+
+  const records = sink.records();
+  const failure = records.find(r => r.type === 'error');
+  t.truthy(failure);
+  t.regex(failure.message, /failed to encode message_end event/);
+  // The following agent_end still encodes and is delivered.
+  t.true(records.some(r => r.type === 'agent_end'));
+});
+
+test('serveRpc — diagnostics go to errorOutput, not the protocol stream', async t => {
+  const out = makeSink();
+  const err = makeSink();
+
+  await serveRpc({
+    input: streamOf(['{"type":"boop"}\n']),
+    output: out.stream,
+    errorOutput: err.stream,
+    session: makeFakeSession(),
+  });
+
+  // The unknown-command diagnostic lands on errorOutput...
+  t.true(err.writes.join('').includes('ignoring unknown command type: boop'));
+  // ...while the protocol stream on output carries only the error record.
+  const records = out.records();
+  t.is(records.length, 1);
+  t.is(records[0].type, 'error');
+  t.regex(records[0].message, /unknown command type: boop/);
+});
