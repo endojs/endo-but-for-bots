@@ -51,7 +51,8 @@ export const PROVIDERS = harden([
   {
     id: 'anthropic',
     name: 'Anthropic',
-    description: 'Claude models. Paste an API key (subscription sign-in later).',
+    description:
+      'Claude models. Paste an API key (subscription sign-in later).',
     authShape: 'apiKey',
     baseUrl: 'https://api.anthropic.com/v1',
     hostEditable: false,

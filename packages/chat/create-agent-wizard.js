@@ -61,16 +61,56 @@ const HARNESSES = harden([
 // phase. `@fs` is the first that will gain a working control (it composes the
 // shippable mount flow); the rest surface the architectural direction.
 const ENDOWMENT_ROWS = harden([
-  { key: '@main', label: '@main worker', note: 'Runs on @main today; explicit per-tool worker choice arrives with the unified harness.' },
-  { key: '@fs', label: '@fs (filesystem)', note: 'A scratch/snapshot mount or an existing mount-cap. Couples with @main for a posix sandbox.' },
-  { key: '@node', label: 'Process execution (@node)', note: 'Sandboxed child-process capability; opt-in only inside an @fs + @main sandbox.' },
-  { key: 'network', label: 'Network', note: 'A denial-pattern-attenuated fetch endowment with per-origin allow/deny.' },
-  { key: 'git', label: 'Git operations', note: 'Composed with @fs and optionally network; ASKPASS credential injection.' },
-  { key: 'env', label: 'Environment variables', note: 'A per-key attenuation map; the agent sees only the keys you grant.' },
-  { key: 'credentials', label: 'Credential store', note: 'Share a subset of your provider credentials with a delegate agent.' },
-  { key: 'userio', label: 'User I/O', note: 'Electron notifications / the Familiar tray for surfaces beyond the reply chain.' },
-  { key: 'timer', label: 'Timer', note: "The daemon's timer formula, rate-limited by denial patterns." },
-  { key: 'delegates', label: 'Delegates', note: 'The right to create further agents (recursive attenuation).' },
+  {
+    key: '@main',
+    label: '@main worker',
+    note: 'Runs on @main today; explicit per-tool worker choice arrives with the unified harness.',
+  },
+  {
+    key: '@fs',
+    label: '@fs (filesystem)',
+    note: 'A scratch/snapshot mount or an existing mount-cap. Couples with @main for a posix sandbox.',
+  },
+  {
+    key: '@node',
+    label: 'Process execution (@node)',
+    note: 'Sandboxed child-process capability; opt-in only inside an @fs + @main sandbox.',
+  },
+  {
+    key: 'network',
+    label: 'Network',
+    note: 'A denial-pattern-attenuated fetch endowment with per-origin allow/deny.',
+  },
+  {
+    key: 'git',
+    label: 'Git operations',
+    note: 'Composed with @fs and optionally network; ASKPASS credential injection.',
+  },
+  {
+    key: 'env',
+    label: 'Environment variables',
+    note: 'A per-key attenuation map; the agent sees only the keys you grant.',
+  },
+  {
+    key: 'credentials',
+    label: 'Credential store',
+    note: 'Share a subset of your provider credentials with a delegate agent.',
+  },
+  {
+    key: 'userio',
+    label: 'User I/O',
+    note: 'Electron notifications / the Familiar tray for surfaces beyond the reply chain.',
+  },
+  {
+    key: 'timer',
+    label: 'Timer',
+    note: "The daemon's timer formula, rate-limited by denial patterns.",
+  },
+  {
+    key: 'delegates',
+    label: 'Delegates',
+    note: 'The right to create further agents (recursive attenuation).',
+  },
 ]);
 
 /**
@@ -83,9 +123,10 @@ const ENDOWMENT_ROWS = harden([
  * @param {Record<string, string>} values - { name, host, model, authToken }
  */
 const submitToManagerForm = async (powers, harness, values) => {
-  const messages = /** @type {Array<{ type: string, number: bigint, from: string }>} */ (
-    await E(powers).listMessages()
-  );
+  const messages =
+    /** @type {Array<{ type: string, number: bigint, from: string }>} */ (
+      await E(powers).listMessages()
+    );
   const forms = messages.filter(m => m.type === 'form');
   if (forms.length === 0) {
     throw new Error(
@@ -212,7 +253,11 @@ const AgentWizardView = ({ powers, detected, onClose, onCreated }) => {
     h('div', { class: 'wizard-pane-title' }, '1. Harness'),
     h(
       'div',
-      { class: 'wizard-radio-group', role: 'radiogroup', 'aria-label': 'Harness' },
+      {
+        class: 'wizard-radio-group',
+        role: 'radiogroup',
+        'aria-label': 'Harness',
+      },
       HARNESSES.map(x =>
         h(
           'label',
@@ -258,7 +303,11 @@ const AgentWizardView = ({ powers, detected, onClose, onCreated }) => {
     h('div', { class: 'wizard-pane-title' }, '2. Inference source'),
     h(
       'div',
-      { class: 'wizard-radio-group', role: 'radiogroup', 'aria-label': 'Provider' },
+      {
+        class: 'wizard-radio-group',
+        role: 'radiogroup',
+        'aria-label': 'Provider',
+      },
       PROVIDERS.map(p =>
         h(
           'label',
@@ -377,20 +426,17 @@ const AgentWizardView = ({ powers, detected, onClose, onCreated }) => {
       'div',
       { class: 'wizard-field' },
       h('label', { for: 'wizard-model' }, 'Model'),
-      h(
-        'input',
-        {
-          type: 'text',
-          id: 'wizard-model',
-          class: 'wizard-input',
-          list: 'wizard-model-list',
-          placeholder: 'model id',
-          value: model,
-          autocomplete: 'off',
-          onInput: (/** @type {{ target: { value: string } }} */ e) =>
-            setModel(e.target.value),
-        },
-      ),
+      h('input', {
+        type: 'text',
+        id: 'wizard-model',
+        class: 'wizard-input',
+        list: 'wizard-model-list',
+        placeholder: 'model id',
+        value: model,
+        autocomplete: 'off',
+        onInput: (/** @type {{ target: { value: string } }} */ e) =>
+          setModel(e.target.value),
+      }),
       h(
         'datalist',
         { id: 'wizard-model-list' },

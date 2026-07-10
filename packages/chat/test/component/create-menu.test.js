@@ -189,10 +189,7 @@ test('passable value shows a documented placeholder, not a form', async t => {
   fireClick($menu.querySelectorAll('.create-menu-item')[2]);
   await waitFor(() => !!$modal.querySelector('.create-modal-placeholder'));
 
-  t.is(
-    $modal.querySelector('.create-modal-badge').textContent,
-    'Coming soon',
-  );
+  t.is($modal.querySelector('.create-modal-badge').textContent, 'Coming soon');
   t.is($modal.querySelectorAll('.create-modal-input').length, 0);
 });
 
@@ -228,16 +225,16 @@ test('new-agent wizard renders three panes and submits to an outstanding form', 
   t.is($modal.querySelectorAll('.wizard-radio-row').length, 3);
   // Advance to pane 2 (inference source).
   fireClick($modal.querySelector('.create-modal-submit')); // Next
-  await waitFor(
-    () => $modal.querySelector('.wizard-pane-title').textContent.includes('2.'),
+  await waitFor(() =>
+    $modal.querySelector('.wizard-pane-title').textContent.includes('2.'),
   );
   // Default provider is Anthropic (apiKey) — paste a key and a model.
   fireInput($modal.querySelector('#wizard-apikey'), 'sk-test');
   fireInput($modal.querySelector('#wizard-model'), 'claude-sonnet-4-6');
   await tick();
   fireClick($modal.querySelector('.create-modal-submit')); // Next
-  await waitFor(
-    () => $modal.querySelector('.wizard-pane-title').textContent.includes('3.'),
+  await waitFor(() =>
+    $modal.querySelector('.wizard-pane-title').textContent.includes('3.'),
   );
   // Pane 3: endowment checklist (documentation-only) + agent pet name.
   t.true($modal.querySelectorAll('.wizard-endowment-row').length >= 9);
@@ -272,15 +269,15 @@ test('wizard surfaces a clear error when no provisioning form is outstanding', a
   await waitFor(() => !!$modal.querySelector('.wizard-modal'));
 
   fireClick($modal.querySelector('.create-modal-submit')); // to pane 2
-  await waitFor(
-    () => $modal.querySelector('.wizard-pane-title').textContent.includes('2.'),
+  await waitFor(() =>
+    $modal.querySelector('.wizard-pane-title').textContent.includes('2.'),
   );
   fireInput($modal.querySelector('#wizard-apikey'), 'sk-test');
   fireInput($modal.querySelector('#wizard-model'), 'claude-sonnet-4-6');
   await tick();
   fireClick($modal.querySelector('.create-modal-submit')); // to pane 3
-  await waitFor(
-    () => $modal.querySelector('.wizard-pane-title').textContent.includes('3.'),
+  await waitFor(() =>
+    $modal.querySelector('.wizard-pane-title').textContent.includes('3.'),
   );
   fireInput($modal.querySelector('#wizard-petname'), 'assistant');
   await tick();
