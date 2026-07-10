@@ -19,6 +19,8 @@
   "exports": {
     "./model-detect.js": "./model-detect.js",
     "./providers/index.js": "./providers/index.js",
+    "./providers/oauth/index.js": "./providers/oauth/index.js",
+    "./providers/oauth/node-crypto.js": "./providers/oauth/node-crypto.js",
     "./tools/mock-powers.js": "./tools/mock-powers.js",
     "./package.json": "./package.json"
   },
@@ -39,6 +41,8 @@
     "@earendil-works/pi-agent-core": "^0.79.0",
     "@earendil-works/pi-ai": "^0.79.0",
     "@endo/agentry": "workspace:^",
+    "@endo/base64": "workspace:^",
+    "@endo/bytes": "workspace:^",
     "@endo/daemon": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
