@@ -2,6 +2,7 @@
 
 import harden from '@endo/harden';
 import { makePromiseKit } from '@endo/promise-kit';
+import { concatBytes } from '@endo/bytes/concat.js';
 
 import {
   encodeByteStringHead,
@@ -98,19 +99,7 @@ export const makeCborFrameWriter = (
 
         return ack.promise;
       } else {
-        const buffer = new Uint8Array(
-          TAG_24_PREFIX.length + head.length + messageLength,
-        );
-        let i = 0;
-        buffer.set(TAG_24_PREFIX, i);
-        i += TAG_24_PREFIX.length;
-        buffer.set(head, i);
-        i += head.length;
-        for (const chunk of messageChunks) {
-          buffer.set(chunk, i);
-          i += chunk.length;
-        }
-
+        const buffer = concatBytes([TAG_24_PREFIX, head, ...messageChunks]);
         return output.next(buffer);
       }
     },

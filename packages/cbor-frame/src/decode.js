@@ -1,25 +1,9 @@
 // @ts-check
 
 import harden from '@endo/harden';
+import { concatBytes } from '@endo/bytes/concat.js';
 
 import { decodeByteStringHead, MAX_SAFE_PAYLOAD_LENGTH } from './head.js';
-
-/**
- * Concatenate a list of byte chunks into a single Uint8Array.
- *
- * @param {Uint8Array[]} chunks
- * @param {number} total
- * @returns {Uint8Array}
- */
-const concat = (chunks, total) => {
-  const out = new Uint8Array(total);
-  let cursor = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, cursor);
-    cursor += chunk.length;
-  }
-  return out;
-};
 
 /**
  * @param {Iterable<Uint8Array> | AsyncIterable<Uint8Array>} input
@@ -42,22 +26,12 @@ async function* makeCborFrameIterator(
   /** @type {Uint8Array[]} */
   let pending = [];
   let pendingLength = 0;
-
-  /**
-   * Materialize the pending list into a single contiguous view.
-   * Returns the empty array view when nothing is pending.
-   *
-   * @returns {Uint8Array}
-   */
-  const materialize = () => {
-    if (pendingLength === 0) {
-      return new Uint8Array(0);
-    }
-    if (pending.length === 1) {
-      return pending[0];
-    }
-    return concat(pending, pendingLength);
-  };
+  // The decoded head of the frame currently being assembled, cached across
+  // chunk arrivals. Holding it here means an incomplete payload never
+  // re-decodes (or re-copies) the carry just to re-read a head that cannot
+  // have changed; reset to undefined after each completed frame.
+  /** @type {import('./head.js').HeadDecode | undefined} */
+  let head;
 
   for await (const chunk of input) {
     if (chunk.length !== 0) {
@@ -72,39 +46,43 @@ async function* makeCborFrameIterator(
       if (pendingLength === 0) {
         break;
       }
-      let view = materialize();
-      let decoded;
-      try {
-        decoded = decodeByteStringHead(view);
-      } catch (e) {
-        throw Error(
-          `${/** @type {Error} */ (e).message} at offset ${frameStart} of ${name}`,
-        );
+      if (head === undefined) {
+        // Probe for a head. A head is at most 11 bytes (2 tag-24 + 1 initial +
+        // 8 follow), and after every completed frame the carry is collapsed to
+        // a single chunk, so this either takes the single-chunk no-copy path or
+        // copies only the few bytes of a head that straddles a chunk boundary.
+        const probe = pending.length === 1 ? pending[0] : concatBytes(pending);
+        try {
+          head = decodeByteStringHead(probe);
+        } catch (e) {
+          throw Error(
+            `${/** @type {Error} */ (e).message} at offset ${frameStart} of ${name}`,
+            { cause: e },
+          );
+        }
+        if (head === undefined) {
+          // Head not yet complete; wait for more input.
+          break;
+        }
+        if (head.length > maxMessageLength) {
+          throw Error(
+            `CBOR message too big (length ${head.length}, max ${maxMessageLength}) at offset ${frameStart} of ${name}`,
+          );
+        }
       }
-      if (decoded === undefined) {
-        // Head not yet complete; wait for more input.
-        break;
-      }
-      if (decoded.length > maxMessageLength) {
-        throw Error(
-          `CBOR message too big (length ${decoded.length}, max ${maxMessageLength}) at offset ${frameStart} of ${name}`,
-        );
-      }
-      const frameLength = decoded.headLength + decoded.length;
+      const frameLength = head.headLength + head.length;
       if (pendingLength < frameLength) {
-        // Payload not yet complete; wait for more input.
+        // Payload not yet complete; wait for more input. No copy: the head is
+        // cached, so nothing re-materializes while the payload accumulates.
         break;
       }
-      // Re-materialize if the chunk we sampled was not the only chunk.
+      // The frame is complete; materialize the carry exactly once.
       if (pending.length !== 1) {
-        view = materialize();
-        pending = [view];
+        pending = [concatBytes(pending)];
       }
-      const payload = view.subarray(
-        decoded.headLength,
-        decoded.headLength + decoded.length,
-      );
-      // Replace the carry with the suffix of the current view.
+      const view = pending[0];
+      const payload = view.subarray(head.headLength, frameLength);
+      // Replace the carry with the suffix following the current frame.
       const suffix = view.subarray(frameLength);
       if (suffix.length === 0) {
         pending = [];
@@ -115,6 +93,7 @@ async function* makeCborFrameIterator(
       }
       offset += frameLength;
       frameStart = offset;
+      head = undefined;
       yield payload;
       progressed = true;
     }

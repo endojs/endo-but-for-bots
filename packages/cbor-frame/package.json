@@ -42,6 +42,7 @@
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava"
   },
   "dependencies": {
+    "@endo/bytes": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/promise-kit": "workspace:^",

@@ -5,6 +5,7 @@ import '@endo/init/debug.js';
 
 import test from 'ava';
 import { makePipe, mapReader } from '@endo/stream';
+import { concatBytes } from '@endo/bytes/concat.js';
 import { makeCborFrameReader } from '../src/decode.js';
 import { makeCborFrameWriter } from '../src/encode.js';
 import {
@@ -16,17 +17,6 @@ import {
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-
-const concat = chunks => {
-  const total = chunks.reduce((a, c) => a + c.length, 0);
-  const out = new Uint8Array(total);
-  let cursor = 0;
-  for (const c of chunks) {
-    out.set(c, cursor);
-    cursor += c.length;
-  }
-  return out;
-};
 
 const drain = async source => {
   const array = [];
@@ -83,7 +73,7 @@ test('encodeByteStringHead rejects non-integer and negative lengths', t => {
 
 test('decodeByteStringHead round-trips canonical heads (tag-24-wrapped)', t => {
   for (const len of [0, 1, 23, 24, 255, 256, 0xffff, 0x1_0000, 0xffff_ffff]) {
-    const head = concat([TAG_24_PREFIX, encodeByteStringHead(len)]);
+    const head = concatBytes([TAG_24_PREFIX, encodeByteStringHead(len)]);
     const decoded = decodeByteStringHead(head);
     t.deepEqual(decoded, {
       length: len,
@@ -215,7 +205,7 @@ test('round-trip short text messages (canonical inline head)', async t => {
   // mandatory tag-24 prefix (0xd8 0x18) plus the byte-string head
   // (0x40 + length, for these short payloads) plus the payload bytes,
   // with no separator.
-  const all = concat(array);
+  const all = concatBytes(array);
   t.deepEqual(Array.from(all), [
     0xd8,
     0x18,
@@ -247,7 +237,7 @@ test('tag-24 wire bytes match the design specimen', async t => {
   await writer.next(encoder.encode('A'));
   await writer.return();
 
-  const all = concat(array);
+  const all = concatBytes(array);
   t.deepEqual(
     Array.from(all),
     [0xd8, 0x18, 0x45, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0xd8, 0x18, 0x41, 0x41],
@@ -310,6 +300,31 @@ test('read multiple frames divided over chunk boundaries', t =>
     ],
     [encoder.encode('hello'), encoder.encode('world'), encoder.encode('A')],
   ));
+
+test('head cache resets between frames across a straddled residual head', t => {
+  // Frame 1 is a 30-byte payload (a 2-byte extended head) delivered one byte
+  // at a time; its final byte shares a chunk with the first two bytes of the
+  // next frame's head. Frame 2's head therefore straddles the residual suffix
+  // left by frame 1, exercising the multi-chunk head probe, and its fresh
+  // decode locks the head-cache reset between frames.
+  const payload1 = Array.from({ length: 30 }, (_v, i) => (i * 7 + 3) % 256);
+  const chunks = [
+    [0xd8],
+    [0x18],
+    [0x58],
+    [30],
+    ...payload1.slice(0, 29).map(b => [b]),
+    // The last payload byte arrives with the start of frame 2's tag-24 head.
+    [payload1[29], 0xd8, 0x18],
+    // The rest of frame 2's head (byte-string head 0x42, "hi") arrives next,
+    // so the probe must concatenate the residual suffix with this chunk.
+    [0x42, 0x68, 0x69],
+  ];
+  return readChunkedFrames(t, chunks, [
+    new Uint8Array(payload1),
+    encoder.encode('hi'),
+  ]);
+});
 
 test('error wording includes name and offset', async t => {
   // Tag-24 prefix plus a head declaring 5 payload bytes, but only one
