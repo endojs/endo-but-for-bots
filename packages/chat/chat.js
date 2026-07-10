@@ -33,6 +33,7 @@ import { createShareModal } from '@endo/space-channel/share-modal.js';
 import { outlinerComponent } from './outliner-component.js';
 import { inboxComponent } from './inbox-component.js';
 import { inventoryComponent } from './inventory-component.js';
+import { createInventoryCreateMenu } from './create-menu.js';
 import { channelListComponent } from './channel-list.js';
 import { createSpacesGutter } from './spaces-gutter.js';
 import { inventoryGraphComponent } from './inventory-graph-component.js';
@@ -57,6 +58,14 @@ const template = `
       <button type="button" class="inventory-toggle" id="show-special-toggle"
         aria-pressed="false" title="Show special names">@</button>
     </div>
+  </div>
+  <div class="inventory-create-row">
+    <button type="button" id="inventory-create-button" class="inventory-create-button"
+      aria-haspopup="menu" aria-expanded="false" title="Create inventory item">
+      <span class="inventory-create-glyph">+</span>
+      <span class="inventory-create-text">Create&hellip;</span>
+    </button>
+    <div id="inventory-create-menu"></div>
   </div>
   <div class="pet-list"></div>
   <div id="profile-bar"></div>
@@ -101,6 +110,8 @@ const template = `
   </div>
   <div id="chat-modeline"></div>
 </div>
+
+<div id="inventory-create-modal-container"></div>
 
 <div id="eval-form-backdrop"></div>
 <div id="eval-form-container"></div>
@@ -246,6 +257,9 @@ const bodyComponent = (
 
   /** @type {{ dispose: () => void } | null} */
   let valueRef = null;
+
+  /** @type {{ dispose: () => void } | null} */
+  let createMenuRef = null;
 
   $parent.innerHTML = template;
 
@@ -424,6 +438,28 @@ const bodyComponent = (
         { enterProfile: enterHost },
       );
       valueRef = { dispose: disposeValue };
+
+      // Wire the inventory `+` create menu (design: chat-inventory-create-menu).
+      // The button lives in the static template at the top of the inventory
+      // panel; the controller owns the pop-over menu and the per-type create
+      // modals, dispatching against the active profile's powers.
+      const $createButton = /** @type {HTMLButtonElement | null} */ (
+        $parent.querySelector('#inventory-create-button')
+      );
+      const $createMenu = /** @type {HTMLElement | null} */ (
+        $parent.querySelector('#inventory-create-menu')
+      );
+      const $createModalContainer = /** @type {HTMLElement | null} */ (
+        $parent.querySelector('#inventory-create-modal-container')
+      );
+      if ($createButton && $createMenu && $createModalContainer) {
+        createMenuRef = createInventoryCreateMenu({
+          $button: $createButton,
+          $menuContainer: $createMenu,
+          $modalContainer: $createModalContainer,
+          getPowers: () => /** @type {ERef<EndoHost>} */ (resolvedPowers),
+        });
+      }
 
       const getConversationPetName = () => {
         if (!activeConversation) return null;
@@ -1646,6 +1682,10 @@ const bodyComponent = (
     if (valueRef) {
       valueRef.dispose();
       valueRef = null;
+    }
+    if (createMenuRef) {
+      createMenuRef.dispose();
+      createMenuRef = null;
     }
   };
 };
