@@ -637,8 +637,15 @@ test('makeIntervalScheduler returns a scheduler/control facet pair', async t => 
     minPeriodMs: 1000,
     maxActive: 3,
   });
-  t.is(typeof pair, 'object', 'the host method resolves to a facet-pair record');
-  t.truthy(pair.scheduler, 'the record carries the agent-facing scheduler facet');
+  t.is(
+    typeof pair,
+    'object',
+    'the host method resolves to a facet-pair record',
+  );
+  t.truthy(
+    pair.scheduler,
+    'the record carries the agent-facing scheduler facet',
+  );
   t.truthy(
     pair.schedulerControl,
     'the record carries the host-facing control facet',
