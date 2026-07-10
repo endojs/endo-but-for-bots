@@ -1008,7 +1008,9 @@ const makeMountExo = ctx => {
       };
 
       const rootReal = await maybeRealPath(currentDir, filePowers);
-      const initialAncestors = new Set(rootReal === undefined ? [] : [rootReal]);
+      const initialAncestors = new Set(
+        rootReal === undefined ? [] : [rootReal],
+      );
       await walk(patternSegments, currentDir, [], initialAncestors);
 
       // Sort by UTF-16 code unit (Array.prototype.sort's default string order)
