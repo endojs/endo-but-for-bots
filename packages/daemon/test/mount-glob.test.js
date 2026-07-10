@@ -143,8 +143,20 @@ test('glob with an overridden empty deny set admits the credential names', async
   t.deepEqual([...(await E(mount).glob('.azure/*'))], ['.azure/token']);
   t.deepEqual([...(await E(mount).glob('.npmrc'))], ['.npmrc']);
   // The case-fold probe (`.SSH`, uppercase) surfaces too — proving the default
-  // denial of it depends on the case-insensitive rule, not on absence.
-  t.deepEqual([...(await E(mount).glob('.SSH'))], ['.SSH']);
+  // denial of it depends on the case-insensitive rule, not on absence. On a
+  // case-insensitive filesystem (macOS/Windows default), `.SSH` and `.ssh`
+  // collide into a single directory entry (kept under the name created first,
+  // `.ssh`), so the uppercase probe cannot exist as a distinct name; it is only
+  // meaningful where the filesystem preserves case, so gate the assertion on
+  // the fixture actually having materialized `.SSH` as its own entry.
+  const caseSensitiveFs = fs.readdirSync(root).includes('.SSH');
+  if (caseSensitiveFs) {
+    t.deepEqual([...(await E(mount).glob('.SSH'))], ['.SSH']);
+  } else {
+    t.pass(
+      'case-insensitive filesystem: .SSH case-fold probe is not a distinct entry',
+    );
+  }
 });
 
 test('glob caps results at GLOB_MAX_RESULTS with deterministic truncation', async t => {
