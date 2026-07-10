@@ -7,7 +7,8 @@
 // good dose of https://github.com/capnproto/capnproto/blob/master/c++/src/capnp/rpc.capnp
 
 import harden from '@endo/harden';
-import { Remotable, Far, makeMarshal, QCLASS } from '@endo/marshal';
+import { makeMarshal, QCLASS } from '@endo/marshal';
+import { Remotable, Far } from '@endo/pass-style';
 import { E, HandledPromise } from '@endo/eventual-send';
 import { isPromise, makePromiseKit } from '@endo/promise-kit';
 
@@ -16,6 +17,13 @@ import { makeTrap } from './trap.js';
 
 import { makeFinalizingMap } from './finalize.js';
 
+/**
+ * @deprecated Import `E` from `@endo/eventual-send` directly. `@endo/captp`
+ * plain-re-exports it (endojs/endo-but-for-bots#543): importing it through
+ * `@endo/captp` rather than from the package that originally exports it is
+ * discouraged, and this re-export is slated for removal in a future major
+ * version.
+ */
 export { E };
 
 const WELL_KNOWN_SLOT_PROPERTIES = harden(['answerID', 'questionID', 'target']);

@@ -4,7 +4,7 @@ import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
 import hardenIsNoop from '@endo/harden/is-noop.js';
-import { Far } from '@endo/marshal';
+import { Far } from '@endo/pass-style';
 import { E, makeLoopback } from '../src/loopback.js';
 
 test('exportHook', async t => {

@@ -2,7 +2,7 @@
 
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
-import { Far } from '@endo/marshal';
+import { Far } from '@endo/pass-style';
 import {
   test,
   makeTestClientPair,

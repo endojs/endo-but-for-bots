@@ -1,5 +1,5 @@
 import harden from '@endo/harden';
-import { Far } from '@endo/marshal';
+import { Far } from '@endo/pass-style';
 import { E, makeCapTP } from './captp.js';
 import { nearTrapImpl } from './trap.js';
 import { makeFinalizingMap } from './finalize.js';

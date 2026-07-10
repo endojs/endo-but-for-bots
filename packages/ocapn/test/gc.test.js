@@ -2,7 +2,7 @@
 /* global setTimeout */
 
 import { E } from '@endo/eventual-send';
-import { Far } from '@endo/marshal';
+import { Far } from '@endo/pass-style';
 import { test, makeTestClientPair, getOcapnDebug } from './_util.js';
 import { encodeSwissnum } from '../src/client/util.js';
 import { makeSlot } from '../src/captp/pairwise.js';

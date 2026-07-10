@@ -1,7 +1,7 @@
 // @ts-check
 
 import { E } from '@endo/eventual-send';
-import { Far } from '@endo/marshal';
+import { Far } from '@endo/pass-style';
 import { test } from './_util.js';
 import { makeOcapn } from '../src/client/index.js';
 import { makeWebSocketNetLayer } from '../src/netlayers/websocket.js';

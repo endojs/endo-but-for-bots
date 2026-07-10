@@ -3,7 +3,7 @@
 
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
-import { Far, makeTagged } from '@endo/marshal';
+import { Far, makeTagged } from '@endo/pass-style';
 import { isPromise } from '@endo/promise-kit';
 import {
   test,

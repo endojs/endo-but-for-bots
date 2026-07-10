@@ -2,7 +2,8 @@
 /* global process */
 
 import { makeCapTP } from '@endo/captp';
-import { isPassable, passableAsJustin } from '@endo/marshal';
+import { passableAsJustin } from '@endo/marshal';
+import { isPassable } from '@endo/pass-style';
 import { makePromiseKit } from '@endo/promise-kit';
 import { mapWriter, mapReader } from '@endo/stream';
 import { makeNetstringReader, makeNetstringWriter } from '@endo/netstring';

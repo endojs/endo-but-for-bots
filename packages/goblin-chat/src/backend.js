@@ -27,7 +27,7 @@
  */
 
 import { E } from '@endo/eventual-send';
-import { Far } from '@endo/marshal';
+import { Far } from '@endo/pass-style';
 
 /**
  * Sealer / unsealer / sealed? triplet. The sealed handles are plain Far

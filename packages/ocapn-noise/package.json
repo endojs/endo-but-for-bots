@@ -65,6 +65,7 @@
     "@endo/init": "workspace:^",
     "@endo/lockdown": "workspace:^",
     "@endo/marshal": "workspace:^",
+    "@endo/pass-style": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@types/ws": "^8.18.1",
     "ava": "catalog:dev",

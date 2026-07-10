@@ -2,7 +2,7 @@
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
-import { Far } from '@endo/marshal';
+import { Far } from '@endo/pass-style';
 import { E, makeLoopback } from '../src/loopback.js';
 
 test('try loopback captp', async t => {
