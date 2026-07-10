@@ -611,7 +611,11 @@ export const makeGit = (
     },
   };
 
-  // eslint-disable-next-line jsdoc/reject-any-type -- GitInterface's guard-derived type is wider than the public rebase union.
+  // Cast: literal patterns infer broad `Key` types, while `GitRebaseInput`
+  // preserves the discriminated union for callers.
+  // The runtime guard remains in place and rejects invalid mode-specific
+  // fields.
+  // eslint-disable-next-line jsdoc/reject-any-type
   const exo = makeExo('Git', /** @type {any} */ (GitInterface), gitMethods);
 
   const typed = /** @type {EndoGit} */ (/** @type {unknown} */ (exo));

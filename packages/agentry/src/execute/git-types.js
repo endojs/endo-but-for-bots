@@ -55,9 +55,6 @@ export const gitCodeModeTypeDeclarations = harden({
 };
 type EndoMount = unknown;
 type EndoMountEntry = unknown;
-type GitCherryPickOptions = {
-    noCommit?: boolean;
-};
 type GitCommit = {
     oid: string;
     summary: string;
@@ -88,15 +85,6 @@ type GitLogOptions = {
 type GitMergeOptions = {
     fastForwardOnly?: boolean;
     noFastForward?: boolean;
-};
-type GitRebaseInput = {
-    mode: 'start';
-    upstream: string;
-    autosquash?: boolean;
-} | {
-    mode: 'continue' | 'abort' | 'skip';
-    upstream?: never;
-    autosquash?: never;
 };
 type GitRef = {
     name: string;
