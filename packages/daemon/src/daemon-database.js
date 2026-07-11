@@ -7,7 +7,12 @@ import { q } from '@endo/errors';
 
 /**
  * @typedef {object} DaemonDatabase
- * @property {import('better-sqlite3').Database} db - The underlying SQLite database handle.
+ * @property {import('better-sqlite3').Database} [db] - The underlying
+ *   engine handle, engine-private: the SQLite engines expose their
+ *   `better-sqlite3` (or rusqlite-shim) database here, but no consumer
+ *   outside this module reads it, and engines with no such handle (the
+ *   DynamoDB engine in `daemon-database-aws.js`) omit it. Optional so
+ *   the field belongs to the engine, not the shared interface.
  * @property {() => void} close
  * @property {(formulaNumber: string, nodeNumber: string, formula: Formula) => void} writeFormula
  * @property {(formulaNumber: string) => boolean} hasFormula

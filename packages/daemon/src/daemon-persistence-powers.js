@@ -32,6 +32,13 @@ import { toHex, fromHex } from './hex.js';
  * @param {FilePowers} filePowers
  * @param {CryptoPowers} cryptoPowers
  * @param {Config} config
+ * @param {object} [options]
+ * @param {() => import('@endo/platform/fs/lite/types').ContentStore} [options.makeContentStore]
+ *   An injected maker of the raw content-addressed store, wrapped here
+ *   with `makeSnapshotStore`.  Defaults to the filesystem store the
+ *   Node, XS, and Go flavours share.  The AWS flavour injects the
+ *   S3-backed store (`content-store-s3.js`) so no parallel
+ *   persistence-powers module is needed.
  * @returns {DaemonicPersistencePowers}
  */
 export const makeDaemonicPersistencePowers = (
@@ -39,6 +46,7 @@ export const makeDaemonicPersistencePowers = (
   filePowers,
   cryptoPowers,
   config,
+  { makeContentStore: makeInjectedContentStore } = {},
 ) => {
   const {
     readFormula,
@@ -117,8 +125,10 @@ export const makeDaemonicPersistencePowers = (
   };
 
   // Content store uses the filesystem for streaming binary data.
-  // Large blobs do not belong in SQLite.
-  const makeContentStore = () => {
+  // Large blobs do not belong in SQLite.  This raw `ContentStore` is
+  // the default; the AWS flavour injects the S3-backed store instead
+  // (see `options.makeContentStore`).
+  const makeFilesystemContentStore = () => {
     const { statePath } = config;
     const storageDirectoryPath = filePowers.joinPath(statePath, 'store-sha256');
 
@@ -197,8 +207,16 @@ export const makeDaemonicPersistencePowers = (
       },
     });
 
-    return makeSnapshotStore(rawStore);
+    return rawStore;
   };
+
+  // The raw content store is injectable (default: the filesystem store
+  // above); a flavour substitutes its own `ContentStore` backend, and
+  // the result is wrapped here with `makeSnapshotStore` so every
+  // flavour presents the same `SnapshotStore` at `daemon.js`.
+  const makeRawContentStore =
+    makeInjectedContentStore ?? makeFilesystemContentStore;
+  const makeContentStore = () => makeSnapshotStore(makeRawContentStore());
 
   // Wrap synchronous database operations as async so that
   // implementations using async I/O are not constrained.
