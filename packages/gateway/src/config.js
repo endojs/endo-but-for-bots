@@ -60,6 +60,19 @@ export const defaultFeatureToggles = harden({
   adminDaemon: true,
   /** Feature 8: `/ocapn-cbor-np` WebSocket subprotocol. */
   ocapnWebSocket: true,
+  /**
+   * Phase 11a: bind a Node HTTP listener at `start()` so the
+   * gateway is a runnable service. Off by default during the
+   * phased rollout: pre-Phase-11 embedders (the daemon's existing
+   * `web-server-node.js` path, unit tests of handler exos in
+   * isolation) keep their network surface; embedders that opt in
+   * (the future `@endo/gateway-daemon` wrapper, the Familiar
+   * shell, the integration test in this PR) set the toggle and
+   * supply a `wsUpgrade` adapter. The toggle will flip on by
+   * default in a follow-on PR once every in-tree embedder
+   * migrates.
+   */
+  httpListener: false,
 });
 
 /**

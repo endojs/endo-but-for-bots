@@ -43,6 +43,8 @@
     "./src/familiar-publish.js": "./src/familiar-publish.js",
     "./src/node-familiar-publish-powers.js": "./src/node-familiar-publish-powers.js",
     "./src/x-forwarded.js": "./src/x-forwarded.js",
+    "./src/http-listener.js": "./src/http-listener.js",
+    "./src/node-ws-upgrade.js": "./src/node-ws-upgrade.js",
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -66,10 +68,12 @@
     "@endo/hex": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/promise-kit": "workspace:^",
-    "@endo/stream": "workspace:^"
+    "@endo/stream": "workspace:^",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@endo/init": "workspace:^",
+    "@types/ws": "^8.18.1",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",

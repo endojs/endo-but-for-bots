@@ -44,6 +44,8 @@ export interface FeatureToggles {
   adminDaemon: boolean;
   /** Feature 8: `/ocapn-cbor-np` WebSocket subprotocol. */
   ocapnWebSocket: boolean;
+  /** Phase 11a: bind a Node HTTP listener at `start()`. */
+  httpListener: boolean;
 }
 
 export interface GatewayConfig {
@@ -950,6 +952,16 @@ export interface GatewayPowers {
    * passes one already-formatted message per call.
    */
   logWarning?: (message: string) => void;
+  /**
+   * Phase 11a: the embedder-supplied WebSocket upgrade adapter the
+   * HTTP listener delegates `upgrade` events to. Required when
+   * `enableFeatures.ocapnWebSocket` and `enableFeatures.httpListener`
+   * are both on; the listener's own construction check enforces
+   * this. The Node-side adapter (`makeNodeWsUpgrade`) lives at
+   * `./src/node-ws-upgrade.js`; embedders running under a non-Node
+   * host supply their own.
+   */
+  wsUpgrade?: WsUpgradeAdapter;
 }
 
 // ---------------------------------------------------------------------
@@ -1236,4 +1248,88 @@ export interface GitHttpHandler {
    * error path maps to a `GitHttpResponse` with a status code.
    */
   handleRequest(request: GitHttpRequest): Promise<GitHttpResponse>;
+}
+
+// ---------------------------------------------------------------------
+// http-listener.js
+// ---------------------------------------------------------------------
+
+/**
+ * The shape `HttpListener.whenBound()` resolves with after the OS
+ * has assigned a port (relevant for the `:0` case) and the
+ * listener is accepting connections.
+ */
+export interface HttpListenerBoundAddress {
+  /** The actual host the listener bound (`0.0.0.0`, `::`, `127.0.0.1`, ...). */
+  host: string;
+  /** The actual OS-assigned port (or the configured port when nonzero). */
+  port: number;
+  /** Node's `AddressInfo.family` value. */
+  family: string;
+}
+
+/**
+ * The per-upgrade context the embedder-supplied `wsUpgrade`
+ * adapter receives. The adapter is responsible for performing the
+ * WebSocket handshake against `socket` and returning a stream pair
+ * the `OcapnWebSocketHandler` consumes. Returning `undefined`
+ * indicates the adapter declined (handshake failure, policy
+ * reject); the adapter is responsible for closing the socket in
+ * that case.
+ */
+export interface WsUpgradeContext {
+  /** The original HTTP upgrade request. */
+  request: import('node:http').IncomingMessage;
+  /** The raw TCP socket the WebSocket protocol takes over. */
+  socket: import('node:net').Socket;
+  /** Any bytes already buffered past the request headers. */
+  head: Buffer;
+  /** The Feature-9 X-Forwarded parse output for diagnostics. */
+  forwarded: ForwardedRequest;
+}
+
+/**
+ * Embedder-supplied adapter that converts a raw `(request, socket,
+ * head)` upgrade event into a byte-stream pair the
+ * `OcapnWebSocketHandler` consumes. The Node-side adapter using
+ * the `ws` package lives at `./node-ws-upgrade.js`.
+ */
+export type WsUpgradeAdapter = (context: WsUpgradeContext) => Promise<
+  | {
+      reader: import('@endo/stream').Reader<Uint8Array>;
+      writer: import('@endo/stream').Writer<Uint8Array>;
+    }
+  | undefined
+>;
+
+/**
+ * The portable HTTP listener exo. Binds the gateway's network
+ * surface, routes per request, and integrates with the WS upgrade
+ * adapter. The exo's methods are `async` to fit the rest of the
+ * gateway's CapTP-facing surface.
+ */
+export interface HttpListener {
+  /**
+   * Bind the configured `BindAddress`. Idempotent: a second
+   * `start()` awaits the same bind. Rejects with the bind error
+   * (`EADDRINUSE`, `EACCES`, ...) on failure.
+   */
+  start(): Promise<void>;
+  /**
+   * Close the listener, refusing new connections and awaiting
+   * in-flight requests to drain. Idempotent.
+   */
+  stop(): Promise<void>;
+  /**
+   * Resolves with the bound `AddressInfo` shape once the OS has
+   * assigned a port. Throws when called before `start()`. The
+   * Familiar publisher reads this so its file carries the
+   * OS-assigned port for the `:0` case.
+   */
+  whenBound(): Promise<HttpListenerBoundAddress>;
+  /**
+   * Synchronous accessor. Returns the bound `AddressInfo` shape
+   * after `whenBound` has resolved; `undefined` before bind.
+   */
+  getBoundAddress(): HttpListenerBoundAddress | undefined;
 }

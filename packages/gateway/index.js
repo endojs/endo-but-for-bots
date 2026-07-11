@@ -32,6 +32,7 @@ import { makeGatewayAdmin } from './src/admin.js';
 import { makeResourceLedger } from './src/resource-ledger.js';
 import { makeOcapnWebSocketHandler } from './src/ocapn-ws.js';
 import { makeGitHttpHandler } from './src/git-http.js';
+import { makeHttpListener } from './src/http-listener.js';
 import {
   isLoopbackBindAddress,
   renderNoTrustedProxyWarning,
@@ -103,6 +104,13 @@ export {
   parseForwardedRequest,
 } from './src/x-forwarded.js';
 
+export { makeHttpListener, makeWsWriter } from './src/http-listener.js';
+
+export {
+  makeNodeWsUpgrade,
+  streamPairFromWebSocket,
+} from './src/node-ws-upgrade.js';
+
 export {
   DEFAULT_RELAY_POLICY,
   RELAY_POLICIES,
@@ -128,7 +136,8 @@ export { makeFamiliarPublisher } from './src/familiar-publish.js';
 
 export { makeNodeFamiliarPublishPowers } from './src/node-familiar-publish-powers.js';
 
-/** @import {
+/**
+ * @import {
  *   GatewayConfig,
  *   FeatureToggles,
  *   BindAddress,
@@ -151,7 +160,10 @@ export { makeNodeFamiliarPublishPowers } from './src/node-familiar-publish-power
  *   Gateway,
  *   FamiliarPublisher,
  *   ForwardedRequest,
- * } from './src/types.d.ts' */
+ *   HttpListener,
+ *   WsUpgradeAdapter,
+ * } from './src/types.d.ts'
+ */
 
 const GatewayInterface = M.interface('Gateway', {
   start: M.call().returns(M.promise()),
@@ -235,6 +247,18 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
   let ocapnHandler;
   /** @type {GitHttpHandler | undefined} */
   let gitHttpHandler;
+
+  // Phase 11a HTTP listener. Bound at `start()` and torn down at
+  // `stop()`. The listener consumes whichever handlers the
+  // feature toggles produced (gitHttpHandler, ocapnHandler) and
+  // routes by URL path. `httpListener` is `undefined` when the
+  // embedder explicitly disables it via
+  // `enableFeatures.httpListener = false`; that path is for unit
+  // tests that exercise the handler exos in isolation. The
+  // toggle is on by default so production embedders get a
+  // runnable service without per-call wiring.
+  /** @type {HttpListener | undefined} */
+  let httpListener;
 
   // Feature 1 (Phase 8) ledger selection. The two options are
   // mutually exclusive: pass `resourceLedger` for an externally-
@@ -404,13 +428,6 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
         if (powers.appsFormulaStore !== undefined) {
           await /** @type {FormulaBackedAppsNameHub} */ (apps).whenReady();
         }
-        // The phase-1 skeleton has no network surface; later
-        // phases attach the HTTP listener, the WebSocket server,
-        // the sock bootstrap listener, and the OCapN relay here.
-        // Phase 2 lands the semantic core of the bootstrap (the
-        // GatewayBootstrap exo, the nonce registry, the
-        // registration table); the actual sock listener is a
-        // follow-on PR.
         //
         // Feature 9 (HTTPS-proxy compat): emit the design-pinned
         // startup warning when the gateway is bound to a non-
@@ -437,26 +454,57 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
           }
         }
 
+        // Phase 11a (HTTP listener): bind the listener when the
+        // embedder did not opt out via `enableFeatures.httpListener
+        // = false`. The listener consumes whichever handlers the
+        // earlier-phase wiring produced; the `wsUpgrade` adapter is
+        // required when `ocapnHandler` is wired (the listener's
+        // own construction check enforces this). Embedders that
+        // run the gateway under a non-Node host supply their own
+        // `wsUpgrade` adapter; the package's `makeNodeWsUpgrade`
+        // covers the Node case.
+        if (mergedConfig.enableFeatures.httpListener) {
+          httpListener = makeHttpListener({
+            bindAddress: resolvedBind,
+            apps,
+            gitHttpHandler,
+            ocapnHandler,
+            wsUpgrade: powers.wsUpgrade,
+            trustedProxyCidrs: mergedConfig.trustedProxyCidrs,
+            maxProxyHops: mergedConfig.maxProxyHops,
+            logWarning: powers.logWarning,
+          });
+          await httpListener.start();
+        }
+
         // Feature 5 (Familiar-bundled): publish the *resolved*
         // bind address to the Familiar's local file so its
-        // `localhttp://` protocol handler can proxy to it. Today
-        // the skeleton's resolved address equals the configured
-        // address; once a future phase attaches the HTTP
-        // listener, the OS-assigned port (configured `:0`)
-        // resolves to a real port before this line runs and the
-        // published value carries the real port. The publish call
-        // happens after the apps hydration await so a
-        // configuration drift (broken apps store) does not leave
-        // a phantom port file behind. Fail-closed: a publisher
-        // exception propagates through `start`; the caller treats
-        // it as a startup error.
+        // `localhttp://` protocol handler can proxy to it. With
+        // the Phase-11a listener bound above, the OS-assigned port
+        // for the `:0` case is already resolved; we read it from
+        // `whenBound()` so the published value carries the real
+        // port. When the httpListener toggle is off (test path,
+        // embedder owns the network surface), we fall back to the
+        // configured address. The publish call happens after the
+        // apps hydration await and the listener bind so a
+        // configuration drift (broken apps store, EADDRINUSE) does
+        // not leave a phantom port file behind. Fail-closed: a
+        // publisher exception propagates through `start`; the
+        // caller treats it as a startup error.
         if (mergedConfig.enableFeatures.familiarBundled) {
           // The construction-time check above ensures
           // `familiarPublish` is defined here when the toggle is
           // on; the local re-check satisfies TypeScript without a
           // separate non-null assertion.
           if (powers.familiarPublish !== undefined) {
-            await powers.familiarPublish.publish(renderBindAddress());
+            let publishAddress = renderBindAddress();
+            if (httpListener !== undefined) {
+              const bound = await httpListener.whenBound();
+              publishAddress = `${
+                resolvedBind.kind === 'ipv6' ? `[${bound.host}]` : bound.host
+              }:${bound.port}`;
+            }
+            await powers.familiarPublish.publish(publishAddress);
           }
         }
         lifecycle = 'started';
@@ -466,23 +514,31 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
           lifecycle = 'stopped';
           return;
         }
+        // Phase 11a: tear the HTTP listener down before the
+        // Familiar publisher cleanup so a restarted Familiar reads
+        // a missing file (the design's contract: no listener, no
+        // published port) rather than a stale port pointing at a
+        // listener that has just closed.
+        if (httpListener !== undefined) {
+          await httpListener.stop();
+          httpListener = undefined;
+        }
         // Feature 5 (Familiar-bundled): remove the published file
         // so a restarted Familiar does not read a stale port. The
         // publisher tolerates an externally-removed file
         // (`ENOENT` is benign in the Node adapter), so a manual
         // cleanup between runs does not crash the gateway here.
-        // The cleanup runs before the lifecycle transitions to
-        // `stopped` so a follow-on phase that closes listeners
-        // here can interleave its teardown without re-entering
-        // the cleanup path.
+        // The cleanup runs after the listener's stop so the
+        // sequence is "stop accepting traffic, then drop the
+        // discovery file"; a restart-in-progress Familiar that
+        // races a publish on top of a stale file is the operator's
+        // problem, not the gateway's.
         if (
           mergedConfig.enableFeatures.familiarBundled &&
           powers.familiarPublish !== undefined
         ) {
           await powers.familiarPublish.cleanup();
         }
-        // Later phases close listeners and pending connections
-        // here.
         lifecycle = 'stopped';
       },
       async getBindAddress() {
