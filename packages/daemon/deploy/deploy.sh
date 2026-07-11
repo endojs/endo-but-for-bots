@@ -52,9 +52,13 @@ phase_fetch() {
 }
 
 phase_build() {
-  log "building $IMAGE (this compiles better-sqlite3 if no prebuild; minutes)"
+  log "building $IMAGE (compiles better-sqlite3/node-datachannel if no prebuild)"
   cd "$SRC"
-  docker build -f packages/daemon/deploy/Dockerfile -t "$IMAGE" .
+  # BuildKit (built into dockerd) is required: the legacy builder + containerd
+  # image store does a full-tree diff walk on EVERY step commit, which is
+  # pathologically slow atop the ~900 MB install layer. BuildKit exports layers
+  # once, in parallel, and skips that per-step walk.
+  DOCKER_BUILDKIT=1 docker build -f packages/daemon/deploy/Dockerfile -t "$IMAGE" .
   log "built $IMAGE"
 }
 

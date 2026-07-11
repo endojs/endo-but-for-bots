@@ -40,12 +40,14 @@ RUN corepack yarn install --immutable
 
 # Daemon data (state, cache, run dir, control socket, and the written OCapN
 # location) live here. Mount a volume to persist the daemon's identity across
-# container restarts; unmounted, each boot is a fresh ephemeral daemon.
+# container restarts; unmounted, each boot is a fresh ephemeral daemon. The
+# entrypoint `mkdir -p`s the data dir at runtime, so there is no image-layer
+# `RUN mkdir` (an extra layer atop the ~900 MB install layer is expensive to
+# commit and buys nothing — VOLUME already creates the mountpoint).
 ENV ENDO_DATA_DIR=/data \
     OCAPN_WS_LISTEN=0.0.0.0:8930 \
     OCAPN_LOCATION_OUT=/data/ocapn-daemon-location.json \
     ENDO_ADDR=127.0.0.1:8920
-RUN mkdir -p /data
 VOLUME ["/data"]
 
 # The daemon's OCapN-Noise WebSocket listener.

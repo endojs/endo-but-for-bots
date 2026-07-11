@@ -41,6 +41,10 @@ const locationOut =
   process.env.OCAPN_LOCATION_OUT ||
   path.join(dataDir, 'ocapn-daemon-location.json');
 
+// Ensure the data dir exists (the image ships no `RUN mkdir`; a mounted volume
+// creates it, but an unmounted run or a custom ENDO_DATA_DIR may not).
+fs.mkdirSync(dataDir, { recursive: true });
+
 // This module lives inside the daemon package, so its OCapN network module is
 // resolved by file URL exactly as the multiplayer suite resolves it.
 const ocapnModuleUrl = new URL(
