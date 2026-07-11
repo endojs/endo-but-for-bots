@@ -19,7 +19,10 @@ test('agentry subpaths resolve through package exports', async t => {
   t.is(typeof executeModule.makeCodeModeAgent, 'function');
   t.is(typeof evalModule.runGitScenario, 'function');
   t.is(typeof evalModule.makeRunMetricsRecorder, 'function');
-  t.is(typeof evalModule.makeStageAndCommitScenario, 'function');
-  t.is(typeof evalModule.assertGitCommitOutcome, 'function');
   t.is(typeof evalModule.resolveEvalModelFromEnv, 'function');
+  t.is(evalModule.conflictRebasePrompt, undefined);
+  t.is(evalModule.makeConflictRebaseScenario, undefined);
+  t.is(evalModule.assertGitConflictRebaseOutcome, undefined);
+  t.is(evalModule.makeStageAndCommitScenario, undefined);
+  t.is(evalModule.assertGitCommitOutcome, undefined);
 });

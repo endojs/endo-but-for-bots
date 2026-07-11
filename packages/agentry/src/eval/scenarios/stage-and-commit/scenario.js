@@ -1,7 +1,8 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { GitCommitTarget, GitScenario } from '../../types.js' */
+/** @import { GitScenario } from '../../types.js' */
+/** @import { GitCommitTarget } from './types.js' */
 
 import { assertGitCommitOutcome } from './outcome.js';
 

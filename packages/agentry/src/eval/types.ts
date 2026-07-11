@@ -29,42 +29,6 @@ export interface OutcomeReport {
 }
 
 /**
- * The end-state a stage-and-commit scenario is scored against.
- */
-export interface GitCommitTarget {
-  /** Repository-relative path the scenario commits. */
-  path: string;
-  /** The exact UTF-8 content the committed file must carry at HEAD. */
-  content: string;
-  /** The exact commit message HEAD must carry. */
-  message: string;
-}
-
-/**
- * The end-state a conflict-rebase scenario is scored against.
- */
-export interface GitConflictRebaseTarget {
-  /** Branch the scenario starts on and must leave checked out. */
-  featureBranch: string;
-  /** Branch the feature branch is rebased onto. */
-  integrationBranch: string;
-  /** The pre-run integration branch tip. */
-  integrationOid: string;
-  /** Feature commit summaries, oldest first, expected after replay. */
-  replayedSummaries: string[];
-  /** Feature commit oids before the rebase, oldest first. */
-  originalFeatureOids: string[];
-  /** Expected per-replayed-commit patches, oldest first. */
-  expectedPatches: string[];
-  /** Exact post-rebase feature tip tree. */
-  featureTreeOid: string;
-  /** Exact app.txt content after resolving the conflict. */
-  appText: string;
-  /** Notes that must be present at HEAD. */
-  notes: Array<{ path: string; content: string }>;
-}
-
-/**
  * A git code-mode eval scenario: a self-contained, model-agnostic description
  * of one task plus its outcome assertion. The same scenario is driven by a
  * scripted faux model (the no-LLM assertion-path test) and by a live model (a
@@ -121,7 +85,7 @@ export interface RunMetrics {
   wallTimeMs: number;
 }
 
-export interface RunGitScenarioOptions {
+export interface RunGitScenarioOptions<Expected = unknown> {
   /** The model under eval (faux or live). */
   model: Model<string>;
   /**
@@ -132,7 +96,7 @@ export interface RunGitScenarioOptions {
    * A live read/write `@endo/exo-git` Git capability over the same repository.
    */
   git: unknown;
-  scenario: GitScenario;
+  scenario: GitScenario<Expected>;
   /**
    * Read a committed File's content as UTF-8; passed through to the scenario's
    * outcome assertion.

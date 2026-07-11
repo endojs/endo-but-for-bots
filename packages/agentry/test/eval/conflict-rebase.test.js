@@ -18,10 +18,8 @@ import {
 } from '@earendil-works/pi-ai';
 import fc from 'fast-check';
 
-import {
-  makeConflictRebaseScenario,
-  runGitScenario,
-} from '../../src/eval/index.js';
+import { makeConflictRebaseScenario } from '../../src/eval/scenarios/conflict-rebase/index.js';
+import { runGitScenario } from '../../src/eval/index.js';
 import {
   assertGitConflictRebaseOutcome,
   summariesMatch,

@@ -28,12 +28,9 @@ import path from 'node:path';
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import {
-  makeConflictRebaseScenario,
-  makeStageAndCommitScenario,
-  runGitScenario,
-  resolveEvalModelFromEnv,
-} from '../src/eval/index.js';
+import { runGitScenario, resolveEvalModelFromEnv } from '../src/eval/index.js';
+import { makeConflictRebaseScenario } from '../src/eval/scenarios/conflict-rebase/index.js';
+import { makeStageAndCommitScenario } from '../src/eval/scenarios/stage-and-commit/index.js';
 import { readText } from './_eval-fixture.js';
 import { provisionConflictRebaseRepo } from './eval/_conflict-rebase-repo.js';
 import { provisionStageAndCommitRepo } from './eval/_stage-and-commit-repo.js';

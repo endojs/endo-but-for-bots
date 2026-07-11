@@ -60,8 +60,8 @@ so each eval gets its own folder.
 
 Shared harness (this directory's root):
 
-- `index.js` — the `@endo/agentry/eval` export surface: re-exports the shared
-  harness and each eval's public symbols (the per-folder barrels).
+- `index.js` — the `@endo/agentry/eval` export surface: re-exports only the
+  shared harness.
 - `run.js` — `runGitScenario({ model, workspace, git, scenario, readText, ... })`:
   builds the real code-mode git-loop agent, runs the scenario prompt, and scores
   by outcome assertion while returning diagnostic run metrics. An optional
@@ -73,31 +73,33 @@ Shared harness (this directory's root):
 - `env-model.js` — `resolveEvalModelFromEnv(env)`: build a live model +
   `getApiKey` from the `ENDO_LLM_*` / `LAL_*` environment variables, or
   `undefined` when no credentials are present.
-- `types.js` — `GitScenario`, `ReadText`: the contract every scenario
-  implements.
+- `types.js` — shared contracts such as `GitScenario`, `ReadText`, outcome
+  reports, and runner options.
 - `outcome-kit.js` — the shared outcome primitives: `check()`, the `OutcomeReport`
   shape, and the small shared readers (`readTrackedFileAt` reads a tracked file
   at a ref through `filesystemAt`; `branchLog` resolves a branch's commit list).
   Per-eval scorers build on these so each stays short. Cap-based and portable;
   the byte reader is injected.
 
-Per-eval content (one folder under `scenarios/`):
+Per-eval content is internal to this package (one folder under `scenarios/`):
 
-- `scenarios/conflict-rebase/` - the conflict-rebase eval: `scenario.js`
+- `scenarios/conflict-rebase/` — the conflict-rebase eval: `scenario.js`
   asks the agent to rebase a feature branch onto `integration`, resolve the
   `app.txt` conflict with the requested combined wording, and preserve both
   notes; `outcome.js` verifies the branch topology, replayed summaries and
   fresh oids, caller-supplied post-resolution patches, exact final tree and file
   content, clean status, and completed rebase state.
-  It exports `conflictRebasePrompt`, the model-facing task text,
-  `makeConflictRebaseScenario(target)`, which binds that task to a declared
-  target end state, and `assertGitConflictRebaseOutcome(args)`, the reusable
-  scorer for that target.
+  `types.ts` keeps the conflict-rebase target shape beside its scenario and
+  scorer.
+  Its folder-local barrel connects the implementation to the package's tests
+  and live-eval registry; these scenario-specific symbols are not part of the
+  `@endo/agentry/eval` public API.
 - `scenarios/stage-and-commit/` — the minimal-success eval: `scenario.js`
   (`makeStageAndCommitScenario(...)`, stage an untracked file and commit it with
   a given message), `outcome.js` (`assertGitCommitOutcome(...)`, the scorer that
   reads HEAD's commit message, the file tracked at HEAD and its content, and the
-  working-tree status), and `index.js` (the two-line barrel re-exporting both).
+  working-tree status), `types.ts` (the local target shape), and `index.js` (the
+  folder-local barrel).
 
 A scenario's no-LLM assertion-path test and its per-eval repository fixture live
 together under `test/eval/` (see "Running" below), mirroring this source layout.

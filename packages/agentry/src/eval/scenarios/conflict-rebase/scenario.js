@@ -1,7 +1,8 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { GitConflictRebaseTarget, GitScenario } from '../../types.js' */
+/** @import { GitScenario } from '../../types.js' */
+/** @import { GitConflictRebaseTarget } from './types.js' */
 
 import { assertGitConflictRebaseOutcome } from './outcome.js';
 
