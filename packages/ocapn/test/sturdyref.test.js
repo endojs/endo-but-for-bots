@@ -36,24 +36,46 @@ testWithErrorUnwrapping('SturdyRef is a first-class pass-style', async t => {
   clientB.shutdown();
 });
 
-testWithErrorUnwrapping("SturdyRef doesn't expose secret/location", async t => {
-  const { client: clientA, location: locationB } = await makeTestClient({
-    debugLabel: 'A',
-  });
-  const { client: clientB } = await makeTestClient({ debugLabel: 'B' });
+testWithErrorUnwrapping(
+  'SturdyRef exposes its location but never its secret',
+  async t => {
+    const { client: clientA, location: locationB } = await makeTestClient({
+      debugLabel: 'A',
+    });
+    const { client: clientB } = await makeTestClient({ debugLabel: 'B' });
 
-  const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
+    const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
 
-  t.false('location' in sturdyRef, 'no location property');
-  t.false('secret' in sturdyRef, 'no secret property');
-  t.false('swissNum' in sturdyRef, 'no swissNum property');
+    // The raw SturdyRef is the trusted/wire tier: its location is a
+    // readable property by design (the confined-guest surface, where
+    // location must be hidden, is the daemon boundary in a later cut).
+    t.true('location' in sturdyRef, 'location is a readable property');
+    t.deepEqual(sturdyRef.location, locationB, 'location deeply equals');
 
-  const stringified = String(sturdyRef);
-  t.is(stringified, '[object SturdyRef]', 'stringification shows tag name');
+    // The secret (swiss number) is never readable — assert over own
+    // properties and the whole prototype chain.
+    t.false('secret' in sturdyRef, 'no secret property');
+    t.false('swissNum' in sturdyRef, 'no swissNum property');
+    t.deepEqual(Reflect.ownKeys(sturdyRef), [], 'no own properties');
+    let protoChainSecret = false;
+    for (
+      let p = Object.getPrototypeOf(sturdyRef);
+      p !== null;
+      p = Object.getPrototypeOf(p)
+    ) {
+      if (Reflect.ownKeys(p).some(k => k === 'secret' || k === 'swissNum')) {
+        protoChainSecret = true;
+      }
+    }
+    t.false(protoChainSecret, 'no secret anywhere on the prototype chain');
 
-  clientA.shutdown();
-  clientB.shutdown();
-});
+    const stringified = String(sturdyRef);
+    t.is(stringified, '[object SturdyRef]', 'stringification shows tag name');
+
+    clientA.shutdown();
+    clientB.shutdown();
+  },
+);
 
 testWithErrorUnwrapping(
   'isSturdyRef correctly identifies SturdyRefs',

@@ -238,16 +238,39 @@ export type CopyTagged<
 > = PassStyled<'tagged', Tag> & { payload: Payload };
 
 /**
- * A SturdyRef is an opaque, pass-by-copy token that addresses a capability
- * by an off-band locator. Unlike a CopyTagged it carries no payload: its
- * locator is held in a module-private WeakMap inside `@endo/pass-style`, so
- * the locator (and the secret it contains) cannot leak through pass-style
- * introspection. `passStyleOf` returns `'sturdyref'`. Mint one with
- * `makeSturdyRef` and recover its locator with `getStudyRefLocator`.
+ * The parsed OCapN locator a SturdyRef addresses: a peer designator, a
+ * transport/network, and optional hints. `@endo/pass-style` only knows this
+ * parsed shape (a deep-frozen `copyRecord`); the on-wire serialization of the
+ * locator is owned by `@endo/ocapn`. This is a structural narrowing of
+ * `@endo/ocapn`'s `OcapnLocation`, re-declared here so non-OCapN marshaling
+ * layers can name the type without taking a runtime dependency on
+ * `@endo/ocapn`.
+ */
+export type SturdyRefLocation = {
+  type?: string;
+  designator: string;
+  transport?: string;
+  network?: string;
+  hints: false | Record<string, any>;
+};
+
+/**
+ * A SturdyRef is a first-class, pass-by-copy `@endo/pass-style` category that
+ * addresses a capability. `passStyleOf` returns `'sturdyref'`. It carries a
+ * readable `location` (the parsed OCapN locator) and an optional advisory
+ * `type` hint; the secret (swiss number) it needs to re-acquire the live
+ * capability is **never** a property — it is held off-band by the CapTP
+ * session manager (`@endo/ocapn`) keyed by the SturdyRef's identity.
+ *
+ * `@endo/pass-style` defines this shape and recognises/validates it, but does
+ * **not** construct sturdyrefs: construction is the CapTP session manager's
+ * role. There is therefore no maker exported here.
  */
 export type SturdyRef = {
   [PASS_STYLE]: 'sturdyref';
   [Symbol.toStringTag]: 'SturdyRef';
+  readonly location: SturdyRefLocation;
+  readonly type?: string;
 };
 
 /**

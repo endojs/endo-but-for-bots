@@ -35,7 +35,6 @@ export {
 } from './src/passStyleOf.js';
 
 export { makeTagged } from './src/makeTagged.js';
-export { makeSturdyRef, getStudyRefLocator } from './src/sturdyref.js';
 export {
   Remotable,
   Far,

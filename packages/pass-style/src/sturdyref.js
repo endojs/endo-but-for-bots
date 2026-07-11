@@ -1,118 +1,148 @@
 import harden from '@endo/harden';
-import { Fail } from '@endo/errors';
+import { Fail, q } from '@endo/errors';
 import {
   PASS_STYLE,
   confirmTagRecord,
   confirmPassStyle,
+  isPrimitive,
+  getTag,
 } from './passStyle-helpers.js';
 
 /**
+ * @import {Rejector} from '@endo/errors/rejector.js';
  * @import {PassStyleHelper} from './internal-types.js';
- * @import {SturdyRef} from './types.js';
+ * @import {PassStyle} from './types.js';
  */
 
 const { ownKeys } = Reflect;
-const {
-  create,
-  prototype: objectPrototype,
-  getOwnPropertyDescriptors,
-} = Object;
+const { isArray } = Array;
+const { getPrototypeOf, getOwnPropertyDescriptors } = Object;
 
-const STURDYREF_TAG = 'sturdyref';
 const STURDYREF_TO_STRING_TAG = 'SturdyRef';
 
 /**
- * The canonical off-band map from a SturdyRef to the locator it addresses.
+ * A SturdyRef reveals its addressing information through a get-only,
+ * non-enumerable accessor on its tag-record prototype. Placing `location`
+ * (and the optional `type` hint) on the prototype as an accessor — rather
+ * than as an own data property on the instance — lets `assertRestValid`
+ * insist the instance carries no own properties, so the trusted prototype
+ * getter is the only source of the value. A forger cannot shadow it with an
+ * own data property carrying attacker-chosen data.
  *
- * A SturdyRef's tagged record is deliberately opaque: it carries no
- * payload, so the only way to recover its locator is through this
- * module-private map, and the only way to populate the map is
- * `makeSturdyRef`. A `'sturdyref'`-tagged record that this module did not
- * mint therefore has no entry, and `passStyleOf` rejects it.
- *
- * Holding the locator off-band (rather than as a tagged payload) keeps the
- * locator secret out of reach of pass-style introspection. The secret is
- * the long-lived authority that grants access to the addressed capability,
- * so it must not leak through a passable surface. This map previously
- * lived in `@endo/ocapn` (as `sturdyRefDetails`); it moves here so that
- * `@endo/pass-style` owns the single "is this a SturdyRef, and what does
- * it locate?" lookup that every marshaling layer and the daemon consult.
- *
- * @type {WeakMap<SturdyRef, any>}
+ * @param {PropertyDescriptor | undefined} desc
+ * @param {string} name
+ * @param {Rejector} reject
+ * @returns {boolean}
  */
-const sturdyRefLocators = new WeakMap();
+const confirmAccessorDescriptor = (desc, name, reject) =>
+  (desc !== undefined ||
+    (reject && reject`sturdyref ${q(name)} accessor expected`)) &&
+  (typeof desc?.get === 'function' ||
+    (reject && reject`sturdyref ${q(name)} must be a get accessor`)) &&
+  (desc?.set === undefined ||
+    (reject && reject`sturdyref ${q(name)} must not have a setter`)) &&
+  (!desc?.enumerable ||
+    (reject && reject`sturdyref ${q(name)} must not be enumerable`));
 
 /**
+ * Structural check that `location` is a passable, parsed OCapN locator:
+ * a `copyRecord` naming a peer (a string `designator`, a string
+ * `transport` and/or `network`, and `hints` that are either `false` or a
+ * `copyRecord`). `@endo/pass-style` only knows the parsed shape; the on-wire
+ * serialization of the locator is owned by `@endo/ocapn`.
+ *
+ * @param {any} location
+ * @param {(val: any) => PassStyle} passStyleOfRecur
+ * @param {Rejector} reject
+ * @returns {boolean}
+ */
+const confirmPassableLocation = (location, passStyleOfRecur, reject) =>
+  (passStyleOfRecur(location) === 'copyRecord' ||
+    (reject &&
+      reject`A sturdyref location must be a copyRecord: ${location}`)) &&
+  (typeof location.designator === 'string' ||
+    (reject &&
+      reject`A sturdyref location needs a string designator: ${location}`)) &&
+  (typeof location.transport === 'string' ||
+    typeof location.network === 'string' ||
+    (reject &&
+      reject`A sturdyref location needs a string transport or network: ${location}`)) &&
+  (location.hints === false ||
+    passStyleOfRecur(location.hints) === 'copyRecord' ||
+    (reject &&
+      reject`A sturdyref location hints must be false or a copyRecord: ${location}`));
+
+/**
+ * `@endo/pass-style` defines the **shape** of the `'sturdyref'` category and
+ * recognises/validates it, but it does **not** construct sturdyrefs.
+ * Construction (minting an instance that satisfies this shape and binding it
+ * to its closely-held `(location, swissNum)` tuple) is the role of the CapTP
+ * session manager (`@endo/ocapn`). This helper therefore only recognises and
+ * validates; there is no maker here and no module-private locator map.
+ *
+ * A valid SturdyRef is an object with no own properties whose prototype is a
+ * tag record carrying `[PASS_STYLE]: 'sturdyref'`, `[Symbol.toStringTag]:
+ * 'SturdyRef'`, a get-only non-enumerable `location` accessor returning a
+ * deep-frozen parsed `OcapnLocation` `copyRecord`, and an optional get-only
+ * non-enumerable string `type` hint accessor. The secret (swiss number) is
+ * never a property, on the instance or its prototype.
+ *
  * @type {PassStyleHelper}
  */
 export const SturdyRefHelper = harden({
   styleName: 'sturdyref',
 
   confirmCanBeValid: (candidate, reject) =>
-    (sturdyRefLocators.has(candidate) ||
+    (!isPrimitive(candidate) ||
       (reject &&
-        reject`A sturdyref record must be minted by makeSturdyRef: ${candidate}`)) &&
+        reject`A sturdyref must be a non-primitive object: ${candidate}`)) &&
+    (!isArray(candidate) ||
+      (reject && reject`An array cannot be a sturdyref: ${candidate}`)) &&
     confirmPassStyle(candidate, candidate[PASS_STYLE], 'sturdyref', reject),
 
-  assertRestValid: candidate => {
-    confirmTagRecord(candidate, 'sturdyref', Fail);
+  assertRestValid: (candidate, passStyleOfRecur) => {
+    // The instance itself carries no own properties: all structure lives on
+    // its tag-record prototype, so the trusted `location`/`type` accessors
+    // are the only source of those values.
+    const ownDescs = getOwnPropertyDescriptors(candidate);
+    ownKeys(ownDescs).length === 0 ||
+      Fail`A sturdyref must have no own properties: ${q(ownKeys(ownDescs))}`;
+
+    const proto = getPrototypeOf(candidate);
+    confirmTagRecord(proto, 'sturdyref', Fail);
+    getTag(proto) === STURDYREF_TO_STRING_TAG ||
+      Fail`A sturdyref tag must be ${q(STURDYREF_TO_STRING_TAG)}: ${candidate}`;
 
     // Typecasts needed due to https://github.com/microsoft/TypeScript/issues/1863
     const passStyleKey = /** @type {unknown} */ (PASS_STYLE);
     const tagKey = /** @type {unknown} */ (Symbol.toStringTag);
     const {
       // confirmTagRecord already verified the PASS_STYLE and
-      // Symbol.toStringTag own data properties.
+      // Symbol.toStringTag own data properties on the prototype.
       [/** @type {string} */ (passStyleKey)]: _passStyleDesc,
-      [/** @type {string} */ (tagKey)]: _labelDesc,
+      [/** @type {string} */ (tagKey)]: _tagDesc,
+      location: locationDesc,
+      type: typeDesc,
       ...restDescs
-    } = getOwnPropertyDescriptors(candidate);
-    // A SturdyRef is opaque: it has no payload and no other own properties.
+    } = getOwnPropertyDescriptors(proto);
+
     ownKeys(restDescs).length === 0 ||
-      Fail`Unexpected properties on sturdyref record ${ownKeys(restDescs)}`;
+      Fail`Unexpected properties on sturdyref prototype ${q(
+        ownKeys(restDescs),
+      )}`;
+
+    // `location` is a mandatory, non-enumerable, get-only accessor whose
+    // value is a passable parsed locator.
+    confirmAccessorDescriptor(locationDesc, 'location', Fail);
+    confirmPassableLocation(candidate.location, passStyleOfRecur, Fail);
+
+    // `type` is an optional, non-enumerable, get-only accessor. When
+    // present its value must be a string; it is an advisory hint excluded
+    // from a SturdyRef's identity.
+    if (typeDesc !== undefined) {
+      confirmAccessorDescriptor(typeDesc, 'type', Fail);
+      typeof candidate.type === 'string' ||
+        Fail`A sturdyref type hint must be a string: ${candidate}`;
+    }
   },
 });
-
-/**
- * Mint a SturdyRef: an opaque, hardened, pass-by-copy tagged record whose
- * `passStyleOf` is `'sturdyref'`. The `locator` is the off-band addressing
- * information the bearer can present to re-acquire the live capability; it
- * is held in a module-private WeakMap, never on the record itself, so
- * pass-style introspection cannot leak it.
- *
- * @template L
- * @param {L} locator
- * @returns {SturdyRef}
- */
-export const makeSturdyRef = locator => {
-  const sturdyRef = /** @type {SturdyRef} */ (
-    harden(
-      create(objectPrototype, {
-        [PASS_STYLE]: { value: STURDYREF_TAG },
-        [Symbol.toStringTag]: { value: STURDYREF_TO_STRING_TAG },
-      }),
-    )
-  );
-  sturdyRefLocators.set(sturdyRef, harden(locator));
-  return sturdyRef;
-};
-harden(makeSturdyRef);
-
-/**
- * Reveal the off-band locator that a SturdyRef addresses. Throws if
- * `sturdyRef` was not minted by `makeSturdyRef`.
- *
- * Spelling note: the name `getStudyRefLocator` (with "Study", missing the
- * second "r" of "Sturdy") is the name the sturdy-refs design and its
- * acceptance criteria specify. It is kept verbatim so the cross-package
- * contract spelling matches the specification.
- *
- * @param {SturdyRef} sturdyRef
- * @returns {any}
- */
-export const getStudyRefLocator = sturdyRef => {
-  sturdyRefLocators.has(sturdyRef) ||
-    Fail`Not a SturdyRef minted by makeSturdyRef: ${sturdyRef}`;
-  return sturdyRefLocators.get(sturdyRef);
-};
-harden(getStudyRefLocator);

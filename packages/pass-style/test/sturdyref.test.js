@@ -3,61 +3,128 @@ import test from '@endo/ses-ava/test.js';
 import harden from '@endo/harden';
 
 import { passStyleOf, isPassable } from '../src/passStyleOf.js';
-import { makeSturdyRef, getStudyRefLocator } from '../src/sturdyref.js';
 import { makeTagged } from '../src/makeTagged.js';
 import { PASS_STYLE } from '../src/passStyle-helpers.js';
 
 const { create, prototype: objectPrototype, isFrozen } = Object;
 
-test('passStyleOf returns sturdyref for a minted SturdyRef', t => {
-  const locator = harden({ transport: 'ocapn-tcp', secret: 'swiss-num' });
-  const sturdyRef = makeSturdyRef(locator);
+/**
+ * A minimal stand-in for what the CapTP session manager (`@endo/ocapn`)
+ * constructs. `@endo/pass-style` deliberately exports **no** maker — it only
+ * defines and validates the `'sturdyref'` shape — so these tests build the
+ * shape directly to exercise the recogniser. The shape is: an instance with
+ * no own properties whose tag-record prototype carries `[PASS_STYLE]`,
+ * `[Symbol.toStringTag]`, a get-only `location` accessor, and an optional
+ * get-only `type` accessor. The secret is never a property.
+ *
+ * @param {object} location
+ * @param {string} [type]
+ */
+const makeShapedSturdyRef = (location, type = undefined) => {
+  const frozenLocation = harden(location);
+  const descriptors = {
+    [PASS_STYLE]: { value: 'sturdyref', enumerable: false },
+    [Symbol.toStringTag]: { value: 'SturdyRef', enumerable: false },
+    location: { get: () => frozenLocation, enumerable: false },
+  };
+  if (type !== undefined) {
+    descriptors.type = { get: () => type, enumerable: false };
+  }
+  const proto = harden(create(objectPrototype, descriptors));
+  return harden(create(proto));
+};
+
+const someLocation = harden({
+  type: 'ocapn-peer',
+  designator: 'peerB',
+  transport: 'tcp-testing-only',
+  network: 'tcp-testing-only',
+  hints: false,
+});
+
+test('passStyleOf returns sturdyref for a shaped SturdyRef', t => {
+  const sturdyRef = makeShapedSturdyRef(someLocation);
   t.is(passStyleOf(sturdyRef), 'sturdyref');
   t.true(isPassable(sturdyRef));
 });
 
-test('a minted SturdyRef is opaque and hardened', t => {
-  const locator = harden({ location: { peer: 'B' }, secret: 'shh' });
-  const sturdyRef = makeSturdyRef(locator);
+test('a SturdyRef is hardened and stringifies via its tag', t => {
+  const sturdyRef = makeShapedSturdyRef(someLocation);
   t.true(isFrozen(sturdyRef), 'a SturdyRef is hardened');
   t.is(sturdyRef[Symbol.toStringTag], 'SturdyRef', 'tag is SturdyRef');
   t.is(String(sturdyRef), '[object SturdyRef]', 'stringifies via its tag');
-  // The locator and its secret never appear as own properties: the only
-  // way to recover them is the off-band getStudyRefLocator.
-  t.false('payload' in sturdyRef, 'no payload property');
-  t.is(/** @type {any} */ (sturdyRef).payload, undefined, 'no payload value');
-  t.false('location' in sturdyRef, 'no location property');
-  t.false('secret' in sturdyRef, 'no secret property');
 });
 
-test('getStudyRefLocator round-trips the off-band locator', t => {
-  const locator = harden({ location: { peer: 'B' }, secret: 'swiss-num' });
-  const sturdyRef = makeSturdyRef(locator);
-  t.is(getStudyRefLocator(sturdyRef), locator, 'returns the same locator');
-  t.deepEqual(getStudyRefLocator(sturdyRef), {
-    location: { peer: 'B' },
-    secret: 'swiss-num',
+test('location is a readable, deep-frozen locator; the secret is never a property', t => {
+  const sturdyRef = makeShapedSturdyRef(someLocation);
+  // The raw SturdyRef is the trusted/wire tier: its location is readable
+  // by design.
+  t.deepEqual(sturdyRef.location, someLocation, 'location is readable');
+  t.true(isFrozen(sturdyRef.location), 'the returned location is deep-frozen');
+  // The secret (swiss number) is never reachable — assert over own
+  // properties and the whole prototype chain.
+  for (const key of ['secret', 'swissNum', 'swissnum', 'payload']) {
+    t.false(key in sturdyRef, `no ${key} anywhere on the SturdyRef`);
+  }
+  t.deepEqual(
+    Reflect.ownKeys(sturdyRef),
+    [],
+    'a SturdyRef has no own properties',
+  );
+});
+
+test('the optional type hint is a string when present, absent otherwise', t => {
+  const withType = makeShapedSturdyRef(someLocation, 'some-type');
+  t.is(withType.type, 'some-type', 'type hint is readable');
+  t.is(passStyleOf(withType), 'sturdyref');
+
+  const withoutType = makeShapedSturdyRef(someLocation);
+  t.is(withoutType.type, undefined, 'no type hint by default');
+  t.false('type' in withoutType, 'no type accessor when no hint given');
+});
+
+test('assertValid rejects a non-string type hint', t => {
+  const badType = makeShapedSturdyRef(someLocation, /** @type {any} */ (42));
+  t.throws(() => passStyleOf(badType), {
+    message: /type hint must be a string/,
+  });
+  t.false(isPassable(badType));
+});
+
+test('assertValid rejects a location that is not a valid OcapnLocation', t => {
+  const noDesignator = makeShapedSturdyRef(
+    /** @type {any} */ ({ hints: false }),
+  );
+  t.throws(() => passStyleOf(noDesignator), {
+    message: /designator/,
+  });
+
+  const notARecord = makeShapedSturdyRef(/** @type {any} */ ([]));
+  t.throws(() => passStyleOf(notARecord), {
+    message: /location must be a copyRecord/,
   });
 });
 
-test('makeSturdyRef hardens an unhardened locator', t => {
-  const sturdyRef = makeSturdyRef({ secret: 'late-harden' });
-  t.true(isFrozen(getStudyRefLocator(sturdyRef)), 'locator is hardened');
+test('a SturdyRef embeds in copyRecords and copyArrays', t => {
+  const sturdyRef = makeShapedSturdyRef(someLocation);
+  const record = harden({ ref: sturdyRef, note: 'hi' });
+  t.is(passStyleOf(record), 'copyRecord');
+  const array = harden([sturdyRef, sturdyRef]);
+  t.is(passStyleOf(array), 'copyArray');
 });
 
-test('passStyleOf rejects a sturdyref-tagged record not minted by makeSturdyRef', t => {
-  // A forged record carrying [PASS_STYLE] = 'sturdyref' but never minted
-  // (so absent from the off-band WeakMap) must be rejected.
+test('an instance carrying an own location data property is rejected', t => {
+  // A forger cannot shadow the trusted prototype getter with an own data
+  // property: the instance must carry no own properties.
+  const sturdyRef = makeShapedSturdyRef(someLocation);
   const forged = harden(
-    create(objectPrototype, {
-      [PASS_STYLE]: { value: 'sturdyref' },
-      [Symbol.toStringTag]: { value: 'SturdyRef' },
+    create(Object.getPrototypeOf(sturdyRef), {
+      location: { value: harden({ evil: true }), enumerable: false },
     }),
   );
   t.throws(() => passStyleOf(forged), {
-    message: /minted by makeSturdyRef/,
+    message: /no own properties/,
   });
-  t.false(isPassable(forged), 'a forged SturdyRef is not passable');
 });
 
 test('a makeTagged value with the sturdyref tag is not a SturdyRef', t => {
@@ -65,24 +132,24 @@ test('a makeTagged value with the sturdyref tag is not a SturdyRef', t => {
   // string is 'sturdyref' it is not a first-class SturdyRef.
   const decoy = makeTagged('sturdyref', undefined);
   t.is(passStyleOf(decoy), 'tagged');
-  t.throws(() => getStudyRefLocator(/** @type {any} */ (decoy)), {
-    message: /Not a SturdyRef minted by makeSturdyRef/,
-  });
 });
 
-test('getStudyRefLocator throws for non-SturdyRef inputs', t => {
-  t.throws(() => getStudyRefLocator(/** @type {any} */ (harden({}))), {
-    message: /Not a SturdyRef minted by makeSturdyRef/,
-  });
-  t.throws(() => getStudyRefLocator(/** @type {any} */ ('string')), {
-    message: /Not a SturdyRef minted by makeSturdyRef/,
-  });
+test('a bare sturdyref-tagged record with no location accessor is rejected', t => {
+  // Carrying [PASS_STYLE] = 'sturdyref' on the instance (rather than a
+  // proper tag-record prototype with a location accessor) is not enough.
+  const forged = harden(
+    create(objectPrototype, {
+      [PASS_STYLE]: { value: 'sturdyref', enumerable: false },
+      [Symbol.toStringTag]: { value: 'SturdyRef', enumerable: false },
+    }),
+  );
+  t.throws(() => passStyleOf(forged));
+  t.false(isPassable(forged));
 });
 
-test('distinct SturdyRefs keep distinct locators', t => {
-  const a = makeSturdyRef(harden({ secret: 'a' }));
-  const b = makeSturdyRef(harden({ secret: 'b' }));
+test('distinct SturdyRefs are distinct even with equal locations', t => {
+  const a = makeShapedSturdyRef(someLocation);
+  const b = makeShapedSturdyRef(someLocation);
   t.not(a, b);
-  t.is(getStudyRefLocator(a).secret, 'a');
-  t.is(getStudyRefLocator(b).secret, 'b');
+  t.deepEqual(a.location, b.location);
 });

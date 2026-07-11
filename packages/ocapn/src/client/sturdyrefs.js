@@ -8,21 +8,22 @@
 
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
-import {
-  makeSturdyRef as makePassStyleSturdyRef,
-  getStudyRefLocator,
-  passStyleOf,
-} from '@endo/pass-style';
+import { PASS_STYLE, passStyleOf } from '@endo/pass-style';
 import { encodeSwissnum, swissnumFromBytes } from './util.js';
+
+const { create, prototype: objectPrototype } = Object;
 
 /**
  * @typedef {PassStyleSturdyRef} SturdyRef
  * A `SturdyRef` addresses a capability by `(location, secret)`. It is a
  * first-class `@endo/pass-style` value: `passStyleOf` returns
- * `'sturdyref'`. The `(location, secret)` pair is held off-band by
- * `@endo/pass-style` (keyed on the SturdyRef in a module-private WeakMap),
- * so the SturdyRef itself never exposes the secret. It does not cross the
- * wire in this JavaScript form: on the wire OCapN uses the
+ * `'sturdyref'`. Its `location` is a **readable** property (the raw
+ * SturdyRef is the trusted/wire tier and carries a readable locator by
+ * design); the `secret` (swiss number) it needs to re-acquire the live
+ * capability is **never** a property. The CapTP session manager (this
+ * module) holds the closely-held `(location, secret)` tuple off-band,
+ * keyed by the SturdyRef's identity in `sturdyRefDetails`. It does not
+ * cross the wire in this JavaScript form: on the wire OCapN uses the
  * `'ocapn-sturdyref'` spec tag.
  *
  * The `secret` may be a printable ASCII string (the friendly form for
@@ -33,10 +34,58 @@ import { encodeSwissnum, swissnumFromBytes } from './util.js';
  * @typedef {object} SturdyRefDetails
  * @property {OcapnLocation} location
  * @property {string | Uint8Array} secret
+ * @property {string} [type]
  */
 
 /**
- * True when `value` is a SturdyRef minted through `@endo/pass-style`.
+ * The closely-held, module-private map from a constructed SturdyRef to its
+ * off-band `(location, secret)` tuple (plus the optional advisory `type`
+ * hint). This is the CapTP session manager's own state: `@endo/pass-style`
+ * defines the `'sturdyref'` shape but constructs nothing and holds no
+ * locator map. The secret lives only here — never as a property on the
+ * SturdyRef — so it cannot leak through pass-style introspection. Keyed by
+ * SturdyRef identity, per-instance; a SturdyRef this session manager did not
+ * construct simply has no entry, so it cannot be enlivened here (which is by
+ * design: pass-style identity is scoped to one OCapN instance).
+ *
+ * @type {WeakMap<SturdyRef, SturdyRefDetails>}
+ */
+const sturdyRefDetails = new WeakMap();
+
+/**
+ * Construct a SturdyRef instance satisfying `@endo/pass-style`'s
+ * `'sturdyref'` shape: an object with no own properties whose tag-record
+ * prototype carries `[PASS_STYLE]`, `[Symbol.toStringTag]`, a get-only
+ * `location` accessor returning the deep-frozen locator, and — when a hint
+ * is supplied — a get-only `type` accessor. The secret is never placed on
+ * the object; it is kept in `sturdyRefDetails` off-band.
+ *
+ * @param {OcapnLocation} location
+ * @param {string} [type]
+ * @returns {SturdyRef}
+ */
+const makeSturdyRefInstance = (location, type) => {
+  const frozenLocation = harden(location);
+  /** @type {PropertyDescriptorMap} */
+  const descriptors = {
+    [PASS_STYLE]: { value: 'sturdyref', enumerable: false },
+    [Symbol.toStringTag]: { value: 'SturdyRef', enumerable: false },
+    location: { get: () => frozenLocation, enumerable: false },
+  };
+  if (type !== undefined) {
+    const hint = type;
+    descriptors.type = { get: () => hint, enumerable: false };
+  }
+  const proto = harden(create(objectPrototype, descriptors));
+  return /** @type {SturdyRef} */ (harden(create(proto)));
+};
+
+/**
+ * True when `value` is a SturdyRef: a first-class `@endo/pass-style` value
+ * whose `passStyleOf` is `'sturdyref'`. Recognition is structural (no
+ * mint-gating): a value the session manager did not construct but that
+ * satisfies the shape is still a SturdyRef, though it has no off-band
+ * details here and so cannot be enlivened by this instance.
  *
  * @param {any} value
  * @returns {boolean}
@@ -52,16 +101,15 @@ harden(isSturdyRef);
 
 /**
  * Reveal a SturdyRef's off-band `(location, secret)` details, or
- * `undefined` when `sturdyRef` is not a SturdyRef. The details now live in
- * `@endo/pass-style`'s off-band locator map; this reads through to it.
+ * `undefined` when `sturdyRef` is not a SturdyRef this session manager
+ * constructed. This is the closely-held reveal side; it is the only path
+ * that yields the secret.
  *
  * @param {SturdyRef} sturdyRef
  * @returns {SturdyRefDetails | undefined}
  */
 export const getSturdyRefDetails = sturdyRef =>
-  isSturdyRef(sturdyRef)
-    ? /** @type {SturdyRefDetails} */ (getStudyRefLocator(sturdyRef))
-    : undefined;
+  isSturdyRef(sturdyRef) ? sturdyRefDetails.get(sturdyRef) : undefined;
 harden(getSturdyRefDetails);
 
 /**
@@ -142,11 +190,13 @@ export const enlivenSturdyRef = (
     return cached;
   }
 
-  // getStudyRefLocator throws if `sturdyRef` was not minted as a SturdyRef,
-  // which is the correct failure for an invalid input here.
-  const details = /** @type {SturdyRefDetails} */ (
-    getStudyRefLocator(sturdyRef)
-  );
+  // The off-band details live in this session manager's closely-held map;
+  // a SturdyRef with no entry (not constructed here) cannot be enlivened by
+  // this instance, which is by design.
+  const details = sturdyRefDetails.get(sturdyRef);
+  if (details === undefined) {
+    throw Error('ocapn: cannot enliven a sturdyref not minted by this instance');
+  }
 
   const enlivened = resolveSturdyRef(
     details,
@@ -164,7 +214,7 @@ harden(enlivenSturdyRef);
 
 /**
  * @typedef {object} SturdyRefTracker
- * @property {(location: OcapnLocation, secret: string | Uint8Array) => SturdyRef} makeSturdyRef
+ * @property {(location: OcapnLocation, secret: string | Uint8Array, type?: string) => SturdyRef} makeSturdyRef
  * @property {(secretBytes: ArrayBufferLike) => Promise<any | undefined>} lookup
  *   Async look up a locally-held capability by the on-wire secret
  *   bytes. Calls through to the injected locator with either the
@@ -179,10 +229,15 @@ harden(enlivenSturdyRef);
 export const makeSturdyRefTracker = locator => {
   const textDecoder = new TextDecoder('ascii', { fatal: true });
   return harden({
-    makeSturdyRef: (location, secret) =>
-      // The `(location, secret)` pair is the off-band locator; pass-style
-      // owns the WeakMap that keeps it out of the SturdyRef's surface.
-      makePassStyleSturdyRef(harden({ location, secret })),
+    makeSturdyRef: (location, secret, type = undefined) => {
+      // Construct an instance satisfying the pass-style `'sturdyref'` shape
+      // (a readable `location`, optional advisory `type` hint), and keep the
+      // `(location, secret)` tuple off-band in this session manager's map so
+      // the secret is never a property on the SturdyRef.
+      const sturdyRef = makeSturdyRefInstance(location, type);
+      sturdyRefDetails.set(sturdyRef, harden({ location, secret, type }));
+      return sturdyRef;
+    },
     lookup: async secretBytes => {
       const view =
         secretBytes instanceof Uint8Array
