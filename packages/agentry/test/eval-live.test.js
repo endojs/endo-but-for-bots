@@ -25,11 +25,13 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import {
+  makeConflictRebaseScenario,
   makeStageAndCommitScenario,
   runGitScenario,
   resolveEvalModelFromEnv,
 } from '../src/eval/index.js';
 import { readText } from './_eval-fixture.js';
+import { provisionConflictRebaseRepo } from './eval/_conflict-rebase-repo.js';
 import { provisionStageAndCommitRepo } from './eval/_stage-and-commit-repo.js';
 
 /**
@@ -58,6 +60,11 @@ const evalRows = [
       });
     },
     makeScenario: () => makeStageAndCommitScenario(),
+  },
+  {
+    title: 'a live model resolves a conflict rebase (outcome assertion)',
+    provisionRepo: t => provisionConflictRebaseRepo(t),
+    makeScenario: repo => makeConflictRebaseScenario(repo),
   },
 ];
 

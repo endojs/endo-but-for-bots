@@ -12,6 +12,9 @@ export { makeRunMetricsRecorder } from './metrics.js';
 
 // Per-eval public symbols, re-exported from each eval's folder.
 export {
+  conflictRebasePrompt,
+  makeConflictRebaseScenario,
+  assertGitConflictRebaseOutcome,
   makeStageAndCommitScenario,
   assertGitCommitOutcome,
-} from './scenarios/stage-and-commit/index.js';
+} from './scenarios/index.js';
