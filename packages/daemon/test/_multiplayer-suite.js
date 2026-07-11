@@ -41,6 +41,27 @@ const dirname = url.fileURLToPath(new URL('..', import.meta.url)).toString();
 const MAX_CONFIG_DIR_LENGTH = 80;
 let configPathId = 0;
 
+/**
+ * Per-network `tmp/` namespace segment. The multiplayer suite registers
+ * identical test titles under every entry file (the tcp, ocapn, and
+ * ocapn-ws `invite-retention*.test.js` files all call
+ * `runMultiplayerSuite`), and AVA runs each file in its own worker
+ * process where `configPathId` restarts at 0 — so without a per-network
+ * segment every file resolves to the *same* `tmp/<title>#<id>` state
+ * dirs and, run concurrently (i.e. not under `--serial`), they race on
+ * `purge`, one file wiping another's live daemon state. `netsKey` is not
+ * enough to separate them (both ocapn specs share `netsKey: 'ocapn'`);
+ * `expectedHintProtocol` is unique per transport, so it is the stable
+ * discriminator that keys each file to its own subtree.
+ *
+ * @param {NetworkSpec} network
+ */
+const getNetworkNamespace = network =>
+  network.expectedHintProtocol
+    .replace(/[^a-zA-Z0-9-]/g, '-')
+    .toLowerCase()
+    .slice(0, MAX_CONFIG_DIR_LENGTH);
+
 const getConfigDirectoryName = (testTitle, configNumber) => {
   const cleanTitle = testTitle
     .replace(/[^a-zA-Z0-9-]/g, '-')
@@ -142,7 +163,11 @@ export const runMultiplayerSuite = ({ test, network }) => {
     const { reject: cancel, promise: cancelled } = makePromiseKit();
     cancelled.catch(() => {});
     const config = {
-      ...makeConfig('tmp', getConfigDirectoryName(t.title, t.context.length)),
+      ...makeConfig(
+        'tmp',
+        getNetworkNamespace(network),
+        getConfigDirectoryName(t.title, t.context.length),
+      ),
       gcEnabled,
     };
     await purge(config);
