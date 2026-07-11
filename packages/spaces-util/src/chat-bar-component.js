@@ -20,6 +20,7 @@ import { createBlobViewer } from './blob-viewer.js';
 import { createDebuggerPanel } from './debugger-panel.js';
 import { createEndowModal } from './endow-modal.js';
 import { createInlineCommandForm } from './inline-command-form.js';
+import { makeVoiceInput } from './voice-input.js';
 import { createCommandExecutor } from './command-executor.js';
 import { watchErrorTrace } from './error-trace.js';
 import {
@@ -492,6 +493,18 @@ export const chatBarComponent = (
    * @returns {ModelineHint}
    */
   const modEnterHint = label => ({ keys: [modKey, 'Enter'], text: label });
+
+  // Initialize voice input (Web Speech API). `voiceInput` is null on
+  // browsers without SpeechRecognition (Firefox, non-browser); we
+  // capture the handle so the chat bar's dispose chain can tear the
+  // recognizer down on unmount.
+  const $buttonWrapper = /** @type {HTMLElement} */ (
+    $parent.querySelector('#chat-button-wrapper')
+  );
+  const voiceInput = makeVoiceInput({
+    $container: $buttonWrapper,
+    $input,
+  });
 
   /**
    * Update the modeline content based on the current mode.
@@ -2275,6 +2288,9 @@ export const chatBarComponent = (
       unmount($commandHeaderMount);
       unmount($commandFooterMount);
       unmount($commandErrorMount);
+      if (voiceInput) {
+        voiceInput.destroy();
+      }
       sendForm.dispose();
     },
   });
