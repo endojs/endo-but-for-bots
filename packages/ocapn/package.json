@@ -50,6 +50,7 @@
   },
   "dependencies": {
     "@endo/ascii": "workspace:^",
+    "@endo/base64": "workspace:^",
     "@endo/bytes": "workspace:^",
     "@endo/cbor": "workspace:^",
     "@endo/eventual-send": "workspace:^",
