@@ -19,6 +19,7 @@
  *
  * @typedef {import('./src/client/types.js').SwissNum} SwissNum
  * @typedef {import('./src/codecs/components.js').OcapnLocation} OcapnLocation
+ * @typedef {import('./src/client/sturdyref-uri.js').ParsedSturdyRefUri} ParsedSturdyRefUri
  */
 
 export { makeOcapn } from './src/client/index.js';
@@ -27,3 +28,7 @@ export {
   swissnumFromBytes,
   swissnumToBytes,
 } from './src/client/util.js';
+export {
+  parseSturdyRefUri,
+  formatSturdyRefUri,
+} from './src/client/sturdyref-uri.js';

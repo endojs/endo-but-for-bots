@@ -6,6 +6,7 @@ import { passStyleOf } from '@endo/pass-style';
 import { test, testWithErrorUnwrapping, makeTestClient } from './_util.js';
 import { isSturdyRef, getSturdyRefLocator } from '../src/client/sturdyrefs.js';
 import { ocapnPassStyleOf } from '../src/codecs/ocapn-pass-style.js';
+import { formatSturdyRefUri } from '../index.js';
 
 testWithErrorUnwrapping('SturdyRef is a first-class pass-style', async t => {
   const { client: clientA, location: locationB } = await makeTestClient({
@@ -128,6 +129,149 @@ testWithErrorUnwrapping(
 
     clientA.shutdown();
     clientB.shutdown();
+  },
+);
+
+testWithErrorUnwrapping(
+  'client.reveal answers for a SturdyRef this client minted',
+  async t => {
+    const { client: clientA, location: locationB } = await makeTestClient({
+      debugLabel: 'A',
+    });
+
+    const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
+
+    const details = clientA.reveal(sturdyRef);
+    t.truthy(details, 'reveal returns details for a minted ref');
+    if (details) {
+      t.deepEqual(details.location, locationB, 'revealed location matches');
+      t.is(details.secret, 'test-object', 'revealed secret matches');
+    }
+
+    // A non-SturdyRef reveals nothing.
+    t.is(
+      clientA.reveal(/** @type {any} */ ({})),
+      undefined,
+      'reveal returns undefined for a non-SturdyRef',
+    );
+
+    clientA.shutdown();
+  },
+);
+
+testWithErrorUnwrapping(
+  'client.reveal is scoped to the minting instance — foreign-instance mints reveal undefined',
+  async t => {
+    const { client: clientA, location: locationB } = await makeTestClient({
+      debugLabel: 'A',
+    });
+    const { client: clientB } = await makeTestClient({ debugLabel: 'B' });
+
+    const sturdyRef = clientA.makeSturdyRef(locationB, 'secret-swiss');
+
+    // The minting session manager reveals its own ref…
+    t.truthy(clientA.reveal(sturdyRef), 'the minting client reveals its ref');
+    // …but a sibling instance in the same realm does NOT, even though
+    // both share the realm-wide details map. This is the confinement
+    // property: reveal answers only for what THIS session manager minted
+    // or materialized from the wire (design cut 2, foreign-instance
+    // mints → undefined).
+    t.is(
+      clientB.reveal(sturdyRef),
+      undefined,
+      'a foreign instance reveals nothing for another instance mint',
+    );
+
+    clientA.shutdown();
+    clientB.shutdown();
+  },
+);
+
+testWithErrorUnwrapping(
+  'reveal is closely-held: absent from the SturdyRef surface, and no toString URI leak',
+  async t => {
+    const { client: clientA, location: locationB } = await makeTestClient({
+      debugLabel: 'A',
+    });
+
+    const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
+
+    // `reveal` lives on the client (closely-held), never as a property
+    // of the SturdyRef or anywhere on its prototype chain.
+    t.false('reveal' in sturdyRef, 'reveal is not a property of the ref');
+
+    // No-location for the URI form: a SturdyRef never stringifies to its
+    // `ocapn://…` URI. Stringification yields only the opaque tag.
+    t.is(String(sturdyRef), '[object SturdyRef]', 'String() shows the tag');
+    t.is(`${sturdyRef}`, '[object SturdyRef]', 'template shows the tag');
+    t.false(
+      String(sturdyRef).includes('ocapn://'),
+      'no ocapn:// URI in the string form',
+    );
+
+    // Sweep every value reachable from the ref's own keys and whole
+    // prototype chain (invoking getters): none is an `ocapn://` URI and
+    // none carries the swiss-num secret bytes.
+    const secretBytes = new TextEncoder().encode('test-object');
+    /**
+     * @param {Uint8Array} hay
+     * @param {Uint8Array} needle
+     * @returns {boolean}
+     */
+    const bytesContain = (hay, needle) => {
+      for (let i = 0; i + needle.length <= hay.length; i += 1) {
+        let match = true;
+        for (let j = 0; j < needle.length; j += 1) {
+          if (hay[i + j] !== needle[j]) {
+            match = false;
+            break;
+          }
+        }
+        if (match) return true;
+      }
+      return false;
+    };
+    for (
+      let o = sturdyRef;
+      o !== null && o !== undefined;
+      o = Object.getPrototypeOf(o)
+    ) {
+      for (const key of Reflect.ownKeys(o)) {
+        const desc = Object.getOwnPropertyDescriptor(o, key);
+        let value;
+        if (desc && 'value' in desc) {
+          value = desc.value;
+        } else if (desc && typeof desc.get === 'function') {
+          value = desc.get.call(sturdyRef);
+        }
+        if (typeof value === 'string') {
+          t.false(value.includes('ocapn://'), `no URI under ${String(key)}`);
+          t.false(
+            bytesContain(new TextEncoder().encode(value), secretBytes),
+            `no secret under ${String(key)}`,
+          );
+        }
+      }
+    }
+
+    // The URI is genuinely obtainable, but ONLY through the two
+    // closely-held operations together — `reveal` for the secret and the
+    // separate module-level `formatSturdyRefUri` — never from the ref
+    // alone. This proves the confinement is non-vacuous.
+    const details = clientA.reveal(sturdyRef);
+    t.truthy(details);
+    if (details) {
+      const uri = formatSturdyRefUri({
+        location: details.location,
+        swissNum: new TextEncoder().encode(
+          /** @type {string} */ (details.secret),
+        ),
+      });
+      t.true(uri.startsWith('ocapn://'), 'reveal + codec can emit the URI');
+      t.true(uri.includes('/s/'), 'the emitted URI carries a swiss-num');
+    }
+
+    clientA.shutdown();
   },
 );
 

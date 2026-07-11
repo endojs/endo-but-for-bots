@@ -33,7 +33,7 @@
 
 import { randomBytes } from 'node:crypto';
 
-import { makeOcapn } from '@endo/ocapn';
+import { makeOcapn, formatSturdyRefUri } from '@endo/ocapn';
 import { makeWebSocketNetLayer } from '@endo/ocapn/netlayer/ws';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
@@ -63,59 +63,35 @@ const makeFreshSwissString = () =>
   encodeBase64Url(Uint8Array.from(randomBytes(SWISSNUM_BYTE_LENGTH)));
 
 /**
- * Build the `/s/<…>` segment of an OCapN sturdyref URI from a swissnum
- * string. Per the OCapN draft spec the path segment is
- * `base64url(swiss-bytes)` where `swiss-bytes` is the on-the-wire
- * bytestring representation of the swissnum. Endo represents that
- * bytestring as the ASCII bytes of the registered swissnum string —
- * see the `decodeSwissnum`/`encodeSwissnum` pair in
- * `@endo/ocapn/src/client/util.js` — so we re-encode those ASCII bytes
- * here.
+ * Convert a printable-ASCII swissnum string to the raw swiss-num bytes
+ * the OCapN URI codec base64url-encodes. Endo models this friendly
+ * swissnum as the ASCII bytes of the string (the `encodeSwissnum` /
+ * `decodeSwissnum` pair in `@endo/ocapn`), so each character's code
+ * point is one byte.
  *
  * @param {string} swissStr
- * @returns {string}
+ * @returns {Uint8Array}
  */
-const swissStringToUriSegment = swissStr => {
+const swissStringToBytes = swissStr => {
   const bytes = new Uint8Array(swissStr.length);
   for (let i = 0; i < swissStr.length; i += 1) {
     bytes[i] = swissStr.charCodeAt(i);
   }
-  return encodeBase64Url(bytes);
-};
-
-/**
- * Render a hints map onto an OCapN URI's query string. Keys are sorted
- * for byte-stable output — we don't care about hint ordering on the
- * wire, but a stable URI is friendlier to log/snapshot diffs and to
- * humans comparing two URIs by eye.
- *
- * @param {OcapnLocation['hints']} hints
- * @returns {string}
- */
-const formatHintsQuery = hints => {
-  if (!hints || typeof hints !== 'object') return '';
-  const keys = Object.keys(hints).sort();
-  if (keys.length === 0) return '';
-  const params = new URLSearchParams();
-  for (const key of keys) {
-    params.append(key, String(hints[key]));
-  }
-  return `?${params.toString()}`;
+  return bytes;
 };
 
 /**
  * Format the user-facing sturdyref URI for a hosted chatroom from its
- * peer location and swissnum.
+ * peer location and swissnum. The URI grammar now lives in `@endo/ocapn`
+ * (`formatSturdyRefUri`), promoted out of goblin-chat; this wrapper just
+ * bridges the local string-swissnum representation to the codec's bytes.
  *
  * @param {OcapnLocation} location
  * @param {string} swissStr
  * @returns {string}
  */
-const formatLocator = (location, swissStr) => {
-  const { designator, transport, hints } = location;
-  const segment = swissStringToUriSegment(swissStr);
-  return `ocapn://${designator}.${transport}/s/${segment}${formatHintsQuery(hints)}`;
-};
+const formatLocator = (location, swissStr) =>
+  formatSturdyRefUri({ location, swissNum: swissStringToBytes(swissStr) });
 
 /**
  * Wrap a `LogSink` into the `Logger` shape that `makeOcapn` /

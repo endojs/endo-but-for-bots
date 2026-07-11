@@ -736,6 +736,20 @@ export const makeOcapn = async ({
       return sturdyRefTracker.makeSturdyRef(location, secret);
     },
     /**
+     * Closely-held reveal: return the off-band `(location, secret[,
+     * type])` details of a `SturdyRef` this client minted or
+     * materialized from the wire, or `undefined` for a forged
+     * look-alike or a SturdyRef minted by a foreign instance. This is
+     * the only operation that yields the secret, so it is held by the
+     * client (never a property on the SturdyRef itself).
+     *
+     * @param {SturdyRef} sturdyRef
+     * @returns {import('./sturdyrefs.js').SturdyRefLocator | undefined}
+     */
+    reveal(sturdyRef) {
+      return sturdyRefTracker.reveal(sturdyRef);
+    },
+    /**
      * Resolve a `SturdyRef` to a live capability. Local SturdyRefs flow
      * through the injected locator; remote SturdyRefs fetch from the
      * peer's bootstrap.

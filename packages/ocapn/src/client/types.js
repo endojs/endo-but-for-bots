@@ -5,7 +5,7 @@
  * @import { OcapnKeyPair, OcapnPublicKey } from '../cryptography.js'
  * @import { GrantTracker } from './grant-tracker.js'
  * @import { SturdyRef } from '@endo/pass-style'
- * @import { SturdyRefTracker } from './sturdyrefs.js'
+ * @import { SturdyRefTracker, SturdyRefLocator } from './sturdyrefs.js'
  * @import { Ocapn } from './ocapn.js'
  */
 
@@ -254,6 +254,12 @@
  *   form for locators keyed by name) or raw bytes for arbitrary-byte
  *   sturdyrefs (e.g. the 24-byte randoms Spritely Goblins mints).
  *   Peers resolve the secret against their own `NonceLocator`.
+ * @property {(sturdyRef: SturdyRef) => SturdyRefLocator | undefined} reveal
+ *   Closely-held reveal: return the off-band `(location, secret[,
+ *   type])` locator of a SturdyRef this client minted or materialized
+ *   from the wire, or `undefined` for a forged look-alike or a
+ *   foreign-instance mint. The only operation that yields the secret,
+ *   so it lives on the client and never as a property of the SturdyRef.
  * @property {(sturdyRef: SturdyRef) => Promise<any>} enlivenSturdyRef
  *   Resolve a SturdyRef to a live capability: local SturdyRefs go
  *   through the injected locator; remote SturdyRefs fetch from the

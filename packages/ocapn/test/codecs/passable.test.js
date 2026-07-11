@@ -216,13 +216,22 @@ const table = [
     name: 'sturdyRef',
     makeValue: testKit =>
       testKit.sturdyRefTracker.makeSturdyRef(exporterLocation, '123'),
-    customAssert: (t, actual) => {
+    customAssert: (t, actual, _expected, _descriptor, testKit) => {
       const details = getSturdyRefLocator(actual);
       if (!details) {
         throw Error('SturdyRef has no details');
       }
       t.deepEqual(details.location, exporterLocation);
       t.is(details.secret, '123');
+      // Cut 2: `reveal` answers for a wire-materialized SturdyRef. The
+      // read path calls `referenceKit.makeSturdyRef` → this tracker, so
+      // the tracker owns `actual` and reveals it (scoped to this
+      // instance, unlike the module-level `getSturdyRefLocator`).
+      t.is(
+        testKit.sturdyRefTracker.reveal(actual),
+        details,
+        'reveal answers for a wire-arrived ref',
+      );
     },
   },
   {
