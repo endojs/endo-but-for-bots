@@ -17,17 +17,17 @@ untouched; this adds an independent second endpoint.
 ## What proves what
 
 The captured transcript
-([`transcripts/minion-ocapn-daemon-bootstrap.log`](transcripts/minion-ocapn-daemon-bootstrap.log))
+([`transcripts/minion-ocapn-daemon-bootstrap.txt`](transcripts/minion-ocapn-daemon-bootstrap.txt))
 is a real run of `ocapn-bootstrap-client.mjs` reaching the deployed daemon's
 `EndoOcapnBootstrap` at swissnum **`endo-bootstrap`** over
 **`wss://minion.town/ocapn-daemon`**:
 
 ```
 [peer] enlivened 'endo-bootstrap' (EndoOcapnBootstrap); invoking...
-[peer] getNodeId() = 5e304bc1d35a104544a961675b8f452577b5c94070aa13a13089edf87aa4c5bc
-[peer] getAgentBinding().agentPublicKey = 5e304bc1…
+[peer] getNodeId() = a6cd6e01283acd9a0ed7fd7377b377075fe5cc37569d341fb654d456e27ba377
+[peer] getAgentBinding().agentPublicKey = a6cd6e01…
 [peer] getGreeter() -> EndoGreeter present
-RESULT {"ok":true,"swissnum":"endo-bootstrap","nodeId":"5e304bc1…","hasGreeter":true}
+RESULT {"ok":true,"swissnum":"endo-bootstrap","nodeId":"a6cd6e01…","hasGreeter":true}
 ```
 
 That exercises the whole path: **Caddy TLS on 443** → the container's published
