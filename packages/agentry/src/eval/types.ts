@@ -1,4 +1,4 @@
-import type { StreamFn } from '@earendil-works/pi-agent-core';
+import type { AgentEvent, StreamFn } from '@earendil-works/pi-agent-core';
 import type { Model, Usage } from '@earendil-works/pi-ai';
 
 /**
@@ -142,6 +142,8 @@ export interface RunGitScenarioOptions {
   getApiKey?: import('../harness/credentials.js').GetApiKey;
   thinkingLevel?: import('../harness/model.js').ThinkingLevel;
   streamFn?: StreamFn;
+  /** Optional listener for sanitized or otherwise caller-owned event capture. */
+  onEvent?: (event: AgentEvent) => void | Promise<void>;
 }
 
 export interface RunGitScenarioResult {
