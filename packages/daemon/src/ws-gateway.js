@@ -132,6 +132,11 @@ export const startWsGateway = ({
       console.warn(
         `[Gateway] Rejected connection from ${remoteAddress}: address not permitted (set ENDO_GATEWAY_REMOTE=true or ENDO_GATEWAY_ALLOWED_CIDRS to admit remote clients)`,
       );
+      // The socket is an EventEmitter; an 'error' emitted with no listener
+      // (for example a reset from the rejected peer mid-close) would throw and
+      // crash the daemon. Attach a listener before closing the rejected
+      // connection. The admitted path installs its own handler below.
+      socket.on('error', () => {});
       socket.close();
       return;
     }
