@@ -66,6 +66,7 @@
  * @typedef {{
  *   name: string;
  *   version: string;
+ *   packageJson: PackageJson;
  *   treeRef: unknown;
  *   integrity: string;
  *   workspace?: boolean;
@@ -447,6 +448,7 @@ export const makeRegistryResolver = packageSource => {
         packagesByKey[key] = harden({
           name: edge.name,
           version: packageJson.version,
+          packageJson,
           treeRef: workspaceRecord.treeRef || key,
           integrity: `workspace:${edge.name}@${packageJson.version}`,
           workspace: true,
@@ -542,6 +544,7 @@ export const makeRegistryResolver = packageSource => {
         packagesByKey[registryKey(edge.name, selected.version)] = harden({
           name: edge.name,
           version: selected.version,
+          packageJson: selected.packageJson,
           treeRef: selected.treeRef,
           integrity: selected.integrity,
         });

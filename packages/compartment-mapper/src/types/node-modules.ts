@@ -9,6 +9,7 @@ import type {
   LanguageForExtension,
 } from './compartment-map-schema.js';
 import type {
+  DependencyLocationHookOption,
   FileUrlString,
   LogOptions,
   PackageDependenciesHook,
@@ -86,6 +87,7 @@ export type PackageDependenciesHookOption = {
 export type GraphPackageOptions = LogOptions &
   PolicyOption &
   PackageDependenciesHookOption &
+  DependencyLocationHookOption &
   CommonDependencyDescriptorsOptions;
 
 /**
@@ -93,7 +95,8 @@ export type GraphPackageOptions = LogOptions &
  */
 export type GraphPackagesOptions = LogOptions &
   PolicyOption &
-  PackageDependenciesHookOption;
+  PackageDependenciesHookOption &
+  DependencyLocationHookOption;
 
 /**
  * Options for `gatherDependency()`
@@ -106,6 +109,7 @@ export type GatherDependencyOptions = {
   optional?: boolean | undefined;
 } & LogOptions &
   PackageDependenciesHookOption &
+  DependencyLocationHookOption &
   PolicyOption &
   CommonDependencyDescriptorsOptions;
 

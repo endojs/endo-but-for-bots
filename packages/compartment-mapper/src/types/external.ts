@@ -30,7 +30,8 @@ import type {
 } from './compartment-map-schema.js';
 import type { PackageDescriptor } from './node-modules.js';
 import type { SomePolicy } from './policy-schema.js';
-import type { HashFn, ReadFn, ReadPowers } from './powers.js';
+import type { MaybeReadDescriptorFn } from './internal.js';
+import type { CanonicalFn, HashFn, ReadFn, ReadPowers } from './powers.js';
 import type { LiteralUnion } from './typescript.js';
 
 export type { CanonicalName, PackageDescriptor };
@@ -94,6 +95,24 @@ export type PackageDependenciesHook = (params: {
   dependencies: Readonly<Set<CanonicalName>>;
   log: LogFn;
 }) => Partial<{ dependencies: Set<CanonicalName> }> | void;
+
+export type DependencyLocationHook = (params: {
+  packageLocation: FileUrlString;
+  dependencyName: string;
+  readDescriptor: MaybeReadDescriptorFn;
+  canonical: CanonicalFn;
+  log: LogFn;
+}) =>
+  | Promise<
+      | { packageLocation: FileUrlString; packageDescriptor: PackageDescriptor }
+      | undefined
+    >
+  | { packageLocation: FileUrlString; packageDescriptor: PackageDescriptor }
+  | undefined;
+
+export type DependencyLocationHookOption = {
+  dependencyLocationHook?: DependencyLocationHook | undefined;
+};
 
 /**
  * The `moduleSource` property value for {@link ModuleSourceHook}
@@ -305,7 +324,8 @@ export type MapNodeModulesHookOptions = {
 export type CompartmentMapForNodeModulesOptions = Omit<
   MapNodeModulesOptions,
   'conditions' | 'tags'
->;
+> &
+  DependencyLocationHookOption;
 
 /**
  * Options for `captureFromMap()`
