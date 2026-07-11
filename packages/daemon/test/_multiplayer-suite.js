@@ -669,3 +669,18 @@ export const ocapnNetwork = harden({
   modulePath: 'src/networks/ocapn.js',
   netsKey: 'ocapn',
 });
+
+/**
+ * `ocapnWsNetwork` installs the same OCapN-Noise module, but stores its
+ * listen address under `ws-listen-addr` — which switches the module
+ * from its default TCP listener to a WebSocket listener. The same
+ * Noise+CBOR session layer runs; only the byte-stream transport
+ * underneath differs (`ocapn+noise+ws` instead of `ocapn+noise+tcp`).
+ */
+/** @type {NetworkSpec} */
+export const ocapnWsNetwork = harden({
+  listenAddrName: 'ws-listen-addr',
+  listenAddr: '127.0.0.1:0',
+  modulePath: 'src/networks/ocapn.js',
+  netsKey: 'ocapn',
+});
