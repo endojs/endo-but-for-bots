@@ -17,10 +17,17 @@ target
 rust/**/target
 
 # Never bake credentials or local secrets into an image layer (COPY . . copies
-# the whole workspace).
+# the whole workspace). Match at the context root AND every nested directory —
+# a bare `*.pem` excludes only a root-level file, so a monorepo
+# `packages/*/server.key` or `packages/*/.env` would otherwise slip through.
 .env
 .env.*
+**/.env
+**/.env.*
 *.pem
 *.key
 *.p12
+**/*.pem
+**/*.key
+**/*.p12
 **/.npmrc
