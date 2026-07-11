@@ -5725,10 +5725,13 @@ test('provideSubMount isolates the child from parent siblings', async t => {
 
   const mountPath = path.join(config.statePath, '..', 'submount-iso');
   // The canonical isolation case from the design: a sub-mount at
-  // `/project/src` must not be able to reach `/project/.env` via `..`.
+  // `/project/src` must not be able to reach `/project/secret.txt` via `..`.
+  // (The sibling is a plain filename, not `.env`, so this exercises the `..`
+  // confinement clamp rather than the independent denied-segment guardrail
+  // that would reject `.env` on every mount before the clamp is reached.)
   await createMountFixture(mountPath, {
     'src/main.js': 'export default 1;\n',
-    '.env': 'SECRET=xyz\n',
+    'secret.txt': 'SECRET=xyz\n',
   });
 
   await E(host).provideMount(mountPath, 'submount-iso-parent');
@@ -5742,13 +5745,13 @@ test('provideSubMount isolates the child from parent siblings', async t => {
   const child = await E(host).lookup(['submount-iso-child']);
 
   // The parent can see the secret; the child, rooted at src/, cannot.
-  t.true(await E(parent).has('.env'));
+  t.true(await E(parent).has('secret.txt'));
   t.deepEqual(await E(child).list(), ['main.js']);
-  t.false(await E(child).has('.env'));
+  t.false(await E(child).has('secret.txt'));
 
   // `..` from the child root is clamped at src/, so the sibling secret
   // stays invisible both to has() and to list().
-  t.false(await E(child).has('..', '.env'));
+  t.false(await E(child).has('..', 'secret.txt'));
   t.deepEqual(await E(child).list('..'), ['main.js']);
 });
 
