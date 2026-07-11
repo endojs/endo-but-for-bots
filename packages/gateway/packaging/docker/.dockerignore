@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+**/.git
+**/.github
+**/dist
+**/build
+**/coverage
+**/.nyc_output
+**/.cache
+**/tmp
+**/temp
+**/.DS_Store
+**/*.log

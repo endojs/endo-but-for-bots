@@ -1,0 +1,55 @@
+#!/bin/sh
+# postinst script for endo-gateway.
+#
+# Creates the endo:endo system account on first install, ensures the
+# managed directories exist with the right ownership, and enables the
+# systemd unit. The unit itself starts on the next boot or via
+# `systemctl start endo-gateway`; this script does not start it,
+# matching dh_installsystemd --no-start in debian/rules.
+
+set -e
+
+case "$1" in
+    configure)
+        # 1. System group.
+        if ! getent group endo >/dev/null; then
+            addgroup --system endo
+        fi
+
+        # 2. System user. --no-create-home because /var/lib/endo-gateway
+        #    is provisioned below; the user's NFSHomeDirectory just
+        #    points at it.
+        if ! getent passwd endo >/dev/null; then
+            adduser --system \
+                --ingroup endo \
+                --home /var/lib/endo-gateway \
+                --no-create-home \
+                --shell /usr/sbin/nologin \
+                --gecos "Endo Gateway service account" \
+                endo
+        fi
+
+        # 3. Managed directories. systemd's RuntimeDirectory /
+        #    StateDirectory / CacheDirectory / LogsDirectory directives
+        #    in the unit re-create the runtime / state / cache / log
+        #    paths on every start, but we pre-create them so an
+        #    administrator can land /etc/endo-gateway/config.toml before
+        #    the first start without a chicken-and-egg sequence.
+        install -d -o endo -g endo -m 0750 /var/lib/endo-gateway
+        install -d -o endo -g endo -m 0750 /var/log/endo-gateway
+        install -d -o endo -g endo -m 0750 /var/cache/endo-gateway
+        install -d -o root -g root -m 0755 /etc/endo-gateway
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

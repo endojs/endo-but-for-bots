@@ -1,0 +1,86 @@
+# Arch .install hook for endo-gateway.
+#
+# pacman runs these functions at the named lifecycle points. The
+# functions are sourced into a shell whose cwd is unspecified; reference
+# everything by absolute path.
+
+post_install() {
+    # 1. System group.
+    if ! getent group endo >/dev/null; then
+        groupadd --system endo
+    fi
+
+    # 2. System user.
+    if ! getent passwd endo >/dev/null; then
+        useradd \
+            --system \
+            --gid endo \
+            --home-dir /var/lib/endo-gateway \
+            --no-create-home \
+            --shell /usr/bin/nologin \
+            --comment "Endo Gateway service account" \
+            endo
+    fi
+
+    # 3. Managed directories.
+    install -d -o endo -g endo -m 0750 /var/lib/endo-gateway
+    install -d -o endo -g endo -m 0750 /var/log/endo-gateway
+    install -d -o endo -g endo -m 0750 /var/cache/endo-gateway
+
+    # 4. Rewrite the unit's EnvironmentFile path from the
+    #    Debian-conventional /etc/default/endo-gateway to Arch's
+    #    /etc/conf.d/endo-gateway. The unit ships with the Debian path
+    #    because Debian and Fedora share that convention; Arch is the
+    #    outlier.
+    sed -i \
+        -e 's,EnvironmentFile=-/etc/default/endo-gateway,EnvironmentFile=-/etc/conf.d/endo-gateway,' \
+        /usr/lib/systemd/system/endo-gateway.service
+
+    cat <<'EOM'
+==>
+==> Endo Gateway installed. To enable on boot and start now:
+==>     systemctl enable --now endo-gateway
+==>
+==> Operator overrides live in /etc/conf.d/endo-gateway.
+==> Runtime documentation: /usr/share/doc/endo-gateway/system-service.md
+==>
+EOM
+}
+
+post_upgrade() {
+    # Re-apply the EnvironmentFile rewrite in case pacman reinstalled
+    # the unit from the package's pristine copy.
+    sed -i \
+        -e 's,EnvironmentFile=-/etc/default/endo-gateway,EnvironmentFile=-/etc/conf.d/endo-gateway,' \
+        /usr/lib/systemd/system/endo-gateway.service
+
+    # Reload systemd so the unit picks up any change.
+    systemctl daemon-reload || true
+}
+
+pre_remove() {
+    # Stop and disable the unit. The unit's WantedBy=multi-user.target
+    # alias is removed by `disable`.
+    systemctl stop endo-gateway.service || true
+    systemctl disable endo-gateway.service || true
+}
+
+post_remove() {
+    # The system user and the state directory survive `pacman -R`;
+    # pacman convention is that user data persists across removal.
+    # An operator that wants a clean uninstall removes them by hand:
+    cat <<'EOM'
+==>
+==> The Endo Gateway has been removed but its state directory
+==> (/var/lib/endo-gateway), log directory (/var/log/endo-gateway),
+==> cache directory (/var/cache/endo-gateway), config directory
+==> (/etc/endo-gateway), and the "endo" system account are intact.
+==>
+==> To delete them:
+==>     rm -rf /var/lib/endo-gateway /var/log/endo-gateway
+==>     rm -rf /var/cache/endo-gateway /etc/endo-gateway
+==>     userdel endo
+==>     groupdel endo
+==>
+EOM
+}
