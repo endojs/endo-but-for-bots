@@ -36,7 +36,10 @@ const dec = b => new TextDecoder().decode(b);
 // crossed-hellos.test.js compares `new Uint8Array(sessionId)` directly, which
 // is vacuously empty on both sides — a test-quality gap. See DEMO-REPORT.md.)
 const hex = ab => {
-  const u = ab.byteLength && new Uint8Array(ab).length === 0 ? new Uint8Array(ab.slice(0)) : new Uint8Array(ab);
+  const u =
+    ab.byteLength && new Uint8Array(ab).length === 0
+      ? new Uint8Array(ab.slice(0))
+      : new Uint8Array(ab);
   return [...u].map(b => b.toString(16).padStart(2, '0')).join('');
 };
 
@@ -57,7 +60,7 @@ const dialingTransport = () =>
     ? makeWebSocketTransport({ WebSocket: ws.WebSocket })
     : makeTcpTransport({ host: '127.0.0.1', port: 0, framing: 'netstring' });
 
-const makeNet = async (transport) => {
+const makeNet = async transport => {
   const network = makeOcapnNoiseNetwork({ codec: cborCodec });
   const keys = network.generateSigningKeys();
   const keyId = network.addSigningKeys(keys);
@@ -81,7 +84,9 @@ console.error(`\n=== (A) reverse peer authentication over ${scheme} ===`);
   const locS = S.network.locationFor(S.keyId);
   console.error(`  dialer keyId  = ${C.keyId}`);
   console.error(`  listener keyId= ${S.keyId}`);
-  console.error(`  dialer knows only listener location: ${JSON.stringify(locS.hints)}`);
+  console.error(
+    `  dialer knows only listener location: ${JSON.stringify(locS.hints)}`,
+  );
   console.error(`  listener was told NOTHING about the dialer's address.`);
 
   const [sessC, sessS] = await Promise.all([
@@ -100,14 +105,23 @@ console.error(`\n=== (A) reverse peer authentication over ${scheme} ===`);
     'listener authenticated dialer (remote designator == dialer keyId)  <-- reverse',
     sessS.remoteLocation.designator === C.keyId,
   );
-  check('both ends agree on one sessionId', hex(sessC.sessionId) === hex(sessS.sessionId));
-  check('exactly one side is the initiator', sessC.isInitiator !== sessS.isInitiator);
+  check(
+    'both ends agree on one sessionId',
+    hex(sessC.sessionId) === hex(sessS.sessionId),
+  );
+  check(
+    'exactly one side is the initiator',
+    sessC.isInitiator !== sessS.isInitiator,
+  );
   check('dialer is the initiator', sessC.isInitiator === true);
 
   // Prove the mutually-authenticated channel actually carries data.
   await sessC.writer.next(enc('hello-from-dialer'));
   const got = await sessS.reader.next(undefined);
-  check(`listener received dialer's message ('${dec(got.value)}')`, dec(got.value) === 'hello-from-dialer');
+  check(
+    `listener received dialer's message ('${dec(got.value)}')`,
+    dec(got.value) === 'hello-from-dialer',
+  );
 
   S.network.shutdown();
   C.network.shutdown();
@@ -134,20 +148,34 @@ console.error(`\n=== (B) crossed hellos over ${scheme} ===`);
   const sidA = hex(sessA.sessionId);
   const sidB = hex(sessB.sessionId);
   check('sessionId is a non-empty 32-byte value', sidA.length === 64);
-  check('A and B converge on the SAME sessionId', sidA === sidB && sidA.length === 64);
+  check(
+    'A and B converge on the SAME sessionId',
+    sidA === sidB && sidA.length === 64,
+  );
   console.error(`    sessionId=${sidA.slice(0, 32)}…`);
-  check('exactly one side won as initiator', sessA.isInitiator !== sessB.isInitiator);
-  console.error(`    A.isInitiator=${sessA.isInitiator}  B.isInitiator=${sessB.isInitiator}`);
+  check(
+    'exactly one side won as initiator',
+    sessA.isInitiator !== sessB.isInitiator,
+  );
+  console.error(
+    `    A.isInitiator=${sessA.isInitiator}  B.isInitiator=${sessB.isInitiator}`,
+  );
   check('A authenticated B', sessA.remoteLocation.designator === B.keyId);
   check('B authenticated A', sessB.remoteLocation.designator === A.keyId);
 
   // The single surviving channel must carry traffic both directions.
   await sessA.writer.next(enc('ping-from-A'));
   const atB = await sessB.reader.next(undefined);
-  check(`B received A's ping ('${dec(atB.value)}')`, dec(atB.value) === 'ping-from-A');
+  check(
+    `B received A's ping ('${dec(atB.value)}')`,
+    dec(atB.value) === 'ping-from-A',
+  );
   await sessB.writer.next(enc('pong-from-B'));
   const atA = await sessA.reader.next(undefined);
-  check(`A received B's pong ('${dec(atA.value)}')`, dec(atA.value) === 'pong-from-B');
+  check(
+    `A received B's pong ('${dec(atA.value)}')`,
+    dec(atA.value) === 'pong-from-B',
+  );
 
   A.network.shutdown();
   B.network.shutdown();
@@ -155,7 +183,9 @@ console.error(`\n=== (B) crossed hellos over ${scheme} ===`);
 
 console.error('');
 if (failures === 0) {
-  console.log(`RESULT: PASS (${scheme}) — reverse peer auth and crossed hellos validated`);
+  console.log(
+    `RESULT: PASS (${scheme}) — reverse peer auth and crossed hellos validated`,
+  );
   process.exit(0);
 } else {
   console.log(`RESULT: FAIL (${scheme}) — ${failures} check(s) failed`);

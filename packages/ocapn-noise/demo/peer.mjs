@@ -22,7 +22,11 @@ export { E, Far };
  *   locator?: Map<string, any>,
  * }} options
  */
-export const makeNoisePeer = async ({ name, transport, locator = new Map() }) => {
+export const makeNoisePeer = async ({
+  name,
+  transport,
+  locator = new Map(),
+}) => {
   const network = makeOcapnNoiseNetwork({ codec: cborCodec });
   const signingKeys = network.generateSigningKeys();
   const keyId = network.addSigningKeys(signingKeys);

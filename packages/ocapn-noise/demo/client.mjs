@@ -18,7 +18,9 @@ const scheme = process.argv[2];
 const inFile = process.argv[3];
 const who = process.argv[4] || 'Alice';
 if (!['ws', 'tcp'].includes(scheme) || !inFile) {
-  console.error('usage: node demo/client.mjs <ws|tcp> <location-in-file> [who]');
+  console.error(
+    'usage: node demo/client.mjs <ws|tcp> <location-in-file> [who]',
+  );
   process.exit(2);
 }
 
