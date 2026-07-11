@@ -117,11 +117,13 @@ const main = async () => {
         `expected an ${expectedProtocol} hint, got ${JSON.stringify(hints)}`,
       );
     }
-    log(`A: ✓ hints advertise ${expectedProtocol} — pairing will route via @nets/ocapn`);
+    log(
+      `A: ✓ hints advertise ${expectedProtocol} — pairing will route via @nets/ocapn`,
+    );
 
     log('B: accept(<locator>, "alice") — completing the pairing');
     await E(hostB).accept(invitationLocator, 'alice');
-    log('B: ✓ accepted; both daemons now hold each other\'s peer info');
+    log("B: ✓ accepted; both daemons now hold each other's peer info");
 
     // ── capability round-trip ───────────────────────────────────────
     log('A: publish Far("Adder", { add }) as pet name "adder"');
@@ -133,7 +135,7 @@ const main = async () => {
       ['adder'],
     );
     const adderLocator = await E(hostA).locate('adder');
-    log('B: adopt A\'s adder by locator and invoke E(adder).add(2, 3)');
+    log("B: adopt A's adder by locator and invoke E(adder).add(2, 3)");
     await E(hostB).storeLocator(['adder'], adderLocator);
     const sum = await E(hostB).evaluate(
       '@main',
