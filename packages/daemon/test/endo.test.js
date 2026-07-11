@@ -630,6 +630,12 @@ test('anonymous spawn and evaluate', async t => {
 // are set an hour out so no tick fires during the test.
 const HOUR_MS = 60 * 60 * 1000;
 
+// makeInterval takes a `cancelled` Promise<never> (the daemon-standard
+// cancellation-argument pattern). These tests drive cancellation through the
+// host-facing control facet (revoke), not the promise, so they pass a cancelled
+// that never rejects.
+const { cancelled: neverCancelled } = makeCancelKit();
+
 test('makeIntervalScheduler returns a scheduler/control facet pair', async t => {
   const { host } = await prepareHost(t);
 
@@ -656,9 +662,12 @@ test('makeIntervalScheduler returns a scheduler/control facet pair', async t => 
   t.truthy(looked.scheduler);
   t.truthy(looked.schedulerControl);
 
-  const interval = await E(pair.scheduler).makeInterval('heartbeat', HOUR_MS, {
-    firstDelayMs: HOUR_MS,
-  });
+  const interval = await E(pair.scheduler).makeInterval(
+    'heartbeat',
+    HOUR_MS,
+    neverCancelled,
+    { firstDelayMs: HOUR_MS },
+  );
   t.is(await E(interval).label(), 'heartbeat');
   t.is(await E(interval).period(), HOUR_MS);
 
@@ -679,7 +688,7 @@ test('IntervalControl pause / resume / revoke drive the scheduler', async t => {
     'sched',
     { minPeriodMs: 1000, maxActive: 2 },
   );
-  await E(scheduler).makeInterval('heartbeat', HOUR_MS, {
+  await E(scheduler).makeInterval('heartbeat', HOUR_MS, neverCancelled, {
     firstDelayMs: HOUR_MS,
   });
 
@@ -691,9 +700,13 @@ test('IntervalControl pause / resume / revoke drive the scheduler', async t => {
   await E(schedulerControl).resume();
 
   // maxActive is host-controlled and enforced at makeInterval.
-  await E(scheduler).makeInterval('second', HOUR_MS, { firstDelayMs: HOUR_MS });
+  await E(scheduler).makeInterval('second', HOUR_MS, neverCancelled, {
+    firstDelayMs: HOUR_MS,
+  });
   await t.throwsAsync(
-    E(scheduler).makeInterval('third', HOUR_MS, { firstDelayMs: HOUR_MS }),
+    E(scheduler).makeInterval('third', HOUR_MS, neverCancelled, {
+      firstDelayMs: HOUR_MS,
+    }),
     { message: /active interval limit reached/ },
     'the third interval trips the host maxActive=2 limit',
   );
@@ -706,7 +719,9 @@ test('IntervalControl pause / resume / revoke drive the scheduler', async t => {
     'list() throws once the scheduler is revoked',
   );
   await t.throwsAsync(
-    E(scheduler).makeInterval('late', HOUR_MS, { firstDelayMs: HOUR_MS }),
+    E(scheduler).makeInterval('late', HOUR_MS, neverCancelled, {
+      firstDelayMs: HOUR_MS,
+    }),
     { message: /revoked/ },
     'makeInterval() throws once the scheduler is revoked',
   );
