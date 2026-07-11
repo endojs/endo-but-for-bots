@@ -28,6 +28,7 @@ import {
 } from './pet-name.js';
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { directoryHelp, readableNameHubHelp, makeHelp } from './help-text.js';
+import { isSturdyRef, resolveSturdyRefToId } from './sturdyref-resolution.js';
 
 import { DirectoryInterface, ReadableNameHubInterface } from './interfaces.js';
 
@@ -145,6 +146,12 @@ export const makeDirectoryMaker = ({
   ) => {
     /** @type {EndoDirectory['lookup']} */
     const lookup = petNamePath => {
+      if (isSturdyRef(petNamePath)) {
+        // The SturdyRef resolves to a formula identifier at the facet
+        // boundary; the swiss number never crosses into a worker.
+        const id = resolveSturdyRefToId(petNamePath);
+        return /** @type {Promise<unknown>} */ (provide(id));
+      }
       const namePath = namePathFrom(petNamePath);
       const [headName, ...tailNames] = namePath;
 
@@ -165,6 +172,10 @@ export const makeDirectoryMaker = ({
 
     /** @type {EndoDirectory['maybeLookup']} */
     const maybeLookup = petNamePath => {
+      if (isSturdyRef(petNamePath)) {
+        const id = resolveSturdyRefToId(petNamePath);
+        return provide(id);
+      }
       const namePath = namePathFrom(petNamePath);
       const [headName, ...tailNames] = namePath;
 
@@ -223,6 +234,9 @@ export const makeDirectoryMaker = ({
 
     /** @type {EndoDirectory['identify']} */
     const identify = async (...petNamePath) => {
+      if (petNamePath.length === 1 && isSturdyRef(petNamePath[0])) {
+        return resolveSturdyRefToId(petNamePath[0]);
+      }
       assertNames(petNamePath);
       if (petNamePath.length === 1) {
         const petName = petNamePath[0];
@@ -236,7 +250,11 @@ export const makeDirectoryMaker = ({
 
     /** @type {EndoDirectory['locate']} */
     const locate = async (...petNamePath) => {
-      assertNames(petNamePath);
+      // `identify` handles a single-SturdyRef call; only assert names for
+      // the pet-name-path form.
+      if (!(petNamePath.length === 1 && isSturdyRef(petNamePath[0]))) {
+        assertNames(petNamePath);
+      }
       const id = await identify(...petNamePath);
       if (id === undefined) {
         return undefined;
@@ -280,6 +298,10 @@ export const makeDirectoryMaker = ({
 
     /** @type {EndoDirectory['list']} */
     const list = async (...petNamePath) => {
+      if (petNamePath.length === 1 && isSturdyRef(petNamePath[0])) {
+        const hub = /** @type {NameHub} */ (await lookup(petNamePath[0]));
+        return E(hub).list();
+      }
       assertNames(petNamePath);
       if (petNamePath.length === 0) {
         return controller.list();
@@ -307,6 +329,12 @@ export const makeDirectoryMaker = ({
 
     /** @type {EndoDirectory['listIdentifiers']} */
     const listIdentifiers = async (...petNamePath) => {
+      if (petNamePath.length === 1 && isSturdyRef(petNamePath[0])) {
+        // Resolve the SturdyRef to a directory hub and delegate, so the
+        // per-name identify runs in the resolved hub's namespace.
+        const hub = /** @type {NameHub} */ (await lookup(petNamePath[0]));
+        return E(hub).listIdentifiers();
+      }
       assertNames(petNamePath);
       const names = await list(...petNamePath);
       const identities = new Set();
@@ -323,6 +351,10 @@ export const makeDirectoryMaker = ({
 
     /** @type {EndoDirectory['listLocators']} */
     const listLocators = async (...petNamePath) => {
+      if (petNamePath.length === 1 && isSturdyRef(petNamePath[0])) {
+        const hub = /** @type {NameHub} */ (await lookup(petNamePath[0]));
+        return E(hub).listLocators();
+      }
       assertNames(petNamePath);
       if (petNamePath.length === 0) {
         const names = await controller.list();

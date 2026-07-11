@@ -32,6 +32,7 @@ import { parseId } from './formula-identifier.js';
 import { idFromLocator, internalizeLocator } from './locator.js';
 import { toHex, fromHex } from './hex.js';
 import { makePetSitter } from './pet-sitter.js';
+import { isSturdyRef, resolveSturdyRefToId } from './sturdyref-resolution.js';
 
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { makeFormulaRecord } from './formula-record.js';
@@ -1448,6 +1449,11 @@ export const makeHostMaker = ({
 
       /** @type {(FormulaIdentifier | NamePath)[]} */
       const endowmentFormulaIdsOrPaths = petNamePaths.map(petNameOrPath => {
+        if (isSturdyRef(petNameOrPath)) {
+          // A SturdyRef slot resolves to a formula identifier at the
+          // facet boundary; the swiss number never reaches the worker.
+          return resolveSturdyRefToId(petNameOrPath);
+        }
         const petNamePath = namePathFrom(petNameOrPath);
         if (petNamePath.length === 1) {
           const id = petStore.identifyLocal(petNamePath[0]);
