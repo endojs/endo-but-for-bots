@@ -1,0 +1,19 @@
+# OCapN-Noise-WS demo endpoint — folded INTO the existing
+# `minion.town, www.minion.town { ... }` site block in
+# /etc/caddy/conf.d/minion-town.caddy (Caddy rejects a second site block for
+# the same address, so this is a `handle`, not a standalone site file).
+#
+# wss://minion.town/ocapn -> the loopback WebSocket listener of
+# endo-ocapn-daemon.service (127.0.0.1:8930). UNGATED on purpose:
+# OCapN-over-Noise self-authenticates (Noise IK mutual auth + the
+# agent-binding signature exchange), so the browser login gate does not apply
+# to this netlayer. Caddy routes handle blocks by matcher specificity, so this
+# sits ahead of the default gated `handle {}`. reverse_proxy transparently
+# proxies the WebSocket upgrade.
+#
+# Apply discipline: ALWAYS `caddy validate --config /etc/caddy/Caddyfile`
+# before `systemctl reload caddy`; rollback = restore the .bak-ocapn backup
+# and reload.
+handle /ocapn* {
+	reverse_proxy 127.0.0.1:8930
+}

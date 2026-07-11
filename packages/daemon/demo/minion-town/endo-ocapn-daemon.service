@@ -1,0 +1,16 @@
+[Unit]
+Description=Endo OCapN-Noise-WS demo daemon (loopback 127.0.0.1:8930)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/endo/packages/daemon
+Environment=DEMO_HOST=127.0.0.1
+Environment=DEMO_PORT=8930
+ExecStart=/usr/local/bin/node demo/ocapn-ws-server.mjs /opt/endo/ocapn-demo-location.json
+Restart=on-failure
+RestartSec=2
+User=root
+
+[Install]
+WantedBy=multi-user.target
