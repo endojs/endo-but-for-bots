@@ -318,12 +318,23 @@ export const makeDescCodecs = referenceKit => {
     syrupReader => {
       const node = OcapnPeerCodec.read(syrupReader);
       const swissNum = syrupReader.readBytestring();
-      const textDecoder = new TextDecoder('ascii', { fatal: true });
       const secretBytes =
         swissNum instanceof Uint8Array
           ? swissNum
           : new Uint8Array(/** @type {ArrayBuffer} */ (swissNum.slice()));
-      const secret = textDecoder.decode(secretBytes);
+      // Materialize a friendly string secret only when the swiss-num is
+      // strictly printable-ASCII (every byte <= 0x7f), symmetric with the
+      // write path's `encodeSwissnum`, which validates the same alphabet.
+      // Otherwise keep the raw bytes so a non-ASCII swiss-num (e.g. a
+      // Spritely Goblins 24-byte random) round-trips read-to-write
+      // unchanged. Note `new TextDecoder('ascii')` is the WHATWG
+      // windows-1252 decoder, which never throws and would silently
+      // corrupt bytes > 0x7f into a lossy string, so the ASCII decision is
+      // made explicitly over the bytes rather than by a fatal decode.
+      const isAscii = secretBytes.every(byte => byte <= 0x7f);
+      const secret = isAscii
+        ? new TextDecoder('ascii').decode(secretBytes)
+        : secretBytes;
       const value = referenceKit.makeSturdyRef(node, secret);
       return value;
     },
