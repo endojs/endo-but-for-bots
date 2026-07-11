@@ -23,33 +23,22 @@ one PR at a time, so the gateway is extracted into its own package.
 
 ## Status
 
-This is the **phase-5 slice**, building on phase 4's
-`OcapnWebSocketHandler` (Feature 8), phase 3's admin daemon
-(Feature 7) with its bootstrap-vs-admin sock split, phase 2's
-sock bootstrap registrar (Feature 4), and the phase-1 skeleton's
-package shape. Phase 3 split the admin facet onto a separate local
-sock (`admin.sock`) so that registration authority (any local user
-daemon with the bootstrap sock) and admin authority (only the OS
-account that owns the admin sock) live on independent capability
-paths; the admin facet remains reachable in-process via
-`gateway.getAdmin()`, is **never** exposed on the public HTTP / WS
-surface, and is **never** reached through the bootstrap sock.
-Phase 4 adds Feature 8 (the `OcapnWebSocketHandler` semantic core
-for `/ocapn-cbor-np` WebSocket termination); the handler looks up
-the intended-responder public key in the bootstrap's registration
-table and hands the byte stream off to the registered daemon's
-`handleOcapnSession`. Phase 5 adds the data model and admission
-surface for Feature 6 (public CapTP relay): per-registration
-`relayPolicy` (`'closed'` by default, `'open'` opt-in) plus a
-caller-public-key allowlist. The handler consults the policy
-before handing off; closed-policy relays drop inbound sessions
-whose dialer is not in the allowlist. The handler accepts an
-optional `extractDialerPublicKey` adapter so a future Noise variant
-(or a pre-handshake protocol extension) that carries a cleartext
-caller-identity hint plugs in without reworking the handler; under
-today's Noise IK wire shape (which encrypts the initiator's static
-on the wire) the gateway defaults the adapter to `undefined` and
-closed-policy relays fail closed.
+This is the **phase-7 slice**, building on phase 6's
+`GitHttpHandler` (Feature 3), phase 5's relay-policy admission
+(Feature 6 data model), phase 4's `OcapnWebSocketHandler`
+(Feature 8), phase 3's admin daemon (Feature 7) with its
+bootstrap-vs-admin sock split, phase 2's sock bootstrap
+registrar (Feature 4), and the phase-1 skeleton's package
+shape. Phase 7 promotes Feature 2's `AppsNameHub` from
+in-memory-only to optionally formula-backed. When the embedder
+supplies an `AppsFormulaStore` power, the gateway hydrates its
+view from the store at construction, writes bindings through on
+every `bind` / `unbind`, and rolls back the in-memory map if the
+store throws so the two stay in sync. When no store is supplied,
+the gateway keeps the phase-1 in-memory shape. The
+`WebletFormula` typedef (`type: 'weblet'`, `contentRoot`,
+optional `mimeTypes`, `ssrHandler`, `virtualHosts`) lands
+alongside as the daemon-side formula shape the binding maps to.
 
 Implemented:
 
@@ -61,6 +50,20 @@ Implemented:
   convention; defaults to `0.0.0.0:3469`.
 - In-memory `AppsNameHub` exo with `bind`, `unbind`, `list`,
   `lookup` (phase 1, Feature 2).
+- Formula-backed `AppsNameHub` variant (phase 7, Feature 2) wired
+  through an embedder-supplied `powers.appsFormulaStore` shape
+  (`listBindings`, `writeBinding`, `deleteBinding`). The hub
+  hydrates from the store at construction, writes through on
+  bind / unbind, rolls back the in-memory map if the store
+  throws, and exposes a `whenReady()` method that resolves when
+  the initial hydration completes. The `WebletFormula` typedef
+  (`contentRoot`, optional `mimeTypes`, `ssrHandler`,
+  `virtualHosts`) ships alongside as the daemon-side formula shape
+  Feature 2's bindings reference. `Gateway.start()` awaits
+  `whenReady` when a formula store is supplied so a broken store
+  surfaces as a clean startup error rather than a silent
+  degrade-to-in-memory; this matches the fail-closed posture
+  Phase 5 took for relay policy.
 - Per-feature configuration toggles validated at `make` time.
 - `GatewayBootstrap` exo with `challenge`, `register`,
   `registerRelay`, `getBindAddress`, `getApps`;
@@ -128,7 +131,12 @@ Deferred to follow-on PRs:
   itself lands with Chat-hosting. Until then,
   `getResourceBalances` returns an empty list when no ledger is
   supplied.
-- Feature 3 (Git over HTTP).
+- Feature 2 follow-on: the daemon-side `AppsFormulaStore` adapter
+  that wraps the daemon's formula graph. The gateway-side hub
+  consults the adapter through an opaque interface; the adapter
+  itself, plus the weblet content-tree resolution path
+  (Host-header → weblet formula → readable-tree → CAS), lands in
+  a follow-on PR alongside the HTTP listener.
 - Feature 4 follow-on: the actual sock listener and
   CapTP-over-netstring server that serves the bootstrap exo to
   incoming connections.

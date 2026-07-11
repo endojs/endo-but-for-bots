@@ -2,6 +2,8 @@
 
 import '@endo/init/debug.js';
 
+import { setImmediate as setImmediateNode } from 'node:timers/promises';
+
 import test from 'ava';
 
 import { E } from '@endo/far';
@@ -239,6 +241,161 @@ test('bootstrap.getBindAddress reflects the gateway bind', async t => {
   const g = gateway({ config: { bindAddress: '[::1]:4242' } });
   const bootstrap = await E(g).getBootstrap();
   t.is(await E(bootstrap).getBindAddress(), '[::1]:4242');
+});
+
+// -- Phase 7 additions: formula-backed apps NameHub (Feature 2) --------
+
+/**
+ * A minimal in-memory `AppsFormulaStore` fake the gateway-side
+ * wiring tests inject. Mirrors the apps-formula test's
+ * `makeFakeStore` but kept local so the two test files don't
+ * couple.
+ *
+ * @param {object} [opts]
+ * @param {ReadonlyArray<{name: string, webletFormulaId: string}>} [opts.seed]
+ */
+const makeAppsStoreFake = (opts = {}) => {
+  const persisted = new Map(
+    (opts.seed ?? []).map(({ name, webletFormulaId }) => [
+      name,
+      webletFormulaId,
+    ]),
+  );
+  return harden({
+    async listBindings() {
+      return harden(
+        [...persisted].map(([name, webletFormulaId]) =>
+          harden({ name, webletFormulaId }),
+        ),
+      );
+    },
+    /**
+     * @param {string} name
+     * @param {string} webletFormulaId
+     */
+    async writeBinding(name, webletFormulaId) {
+      persisted.set(name, webletFormulaId);
+    },
+    /** @param {string} name */
+    async deleteBinding(name) {
+      persisted.delete(name);
+    },
+  });
+};
+
+test('Gateway uses the in-memory apps hub when appsFormulaStore is omitted', async t => {
+  // Phase-1 carry-forward: when no formula store is supplied, the
+  // in-memory hub keeps phase-1 behavior. Regression: a refactor
+  // that always wires the formula-backed hub would tie the gateway
+  // to a daemon-side store the embedder may not have.
+  const g = gateway();
+  const apps = await E(g).getApps();
+  // The in-memory hub does not expose whenReady; reaching for it
+  // throws because the exo interface does not include it.
+  await t.throwsAsync(() => E(/** @type {any} */ (apps)).whenReady(), {
+    message: /method.*whenReady/,
+  });
+});
+
+test('Gateway uses the formula-backed apps hub when appsFormulaStore is supplied', async t => {
+  // Regression: if a refactor stops consulting
+  // `powers.appsFormulaStore` in makeGateway, the gateway silently
+  // reverts to in-memory and a binding installed on one process
+  // does not survive restart.
+  const fake = makeAppsStoreFake({
+    seed: [{ name: 'chat.example.com', webletFormulaId: 'weblet-chat' }],
+  });
+  const g = gateway({
+    powers: { ...defaultPowers(), appsFormulaStore: fake },
+  });
+  const apps = await E(g).getApps();
+  // Hydration round-trip: the seed becomes a lookup-able binding.
+  t.is(await E(apps).lookup('chat.example.com'), 'weblet-chat');
+});
+
+test('Gateway.start awaits formula-backed hub hydration', async t => {
+  // Regression: if a refactor drops the start-time await, a broken
+  // formula store does not surface until the first bind/lookup,
+  // contradicting the fail-closed posture from
+  // designs/gateway-package.md § Feature 2.
+  /** @type {(value: unknown) => void} */
+  let listResolve = () => {};
+  /** @type {Promise<unknown>} */
+  const listPromise = new Promise(resolve => {
+    listResolve = resolve;
+  });
+  /** @type {any} */
+  const slowStore = harden({
+    async listBindings() {
+      return listPromise;
+    },
+    async writeBinding() {
+      // unused in this test; deliberately a no-op
+    },
+    async deleteBinding() {
+      // unused in this test; deliberately a no-op
+    },
+  });
+  const g = gateway({
+    powers: { ...defaultPowers(), appsFormulaStore: slowStore },
+  });
+  // Capture the start promise; it should not resolve until the
+  // store's listBindings resolves.
+  const startP = E(g).start();
+  // The microtask queue settles; startP is still pending.
+  await setImmediateNode();
+  let settled = false;
+  void startP.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  await setImmediateNode();
+  t.false(settled);
+  // Now resolve the store; start should complete.
+  listResolve([]);
+  await startP;
+});
+
+test('Gateway.start surfaces formula-backed hub hydration failures', async t => {
+  /** @type {any} */
+  const brokenStore = harden({
+    async listBindings() {
+      throw new Error('store offline');
+    },
+    async writeBinding() {
+      // unused in this test; deliberately a no-op
+    },
+    async deleteBinding() {
+      // unused in this test; deliberately a no-op
+    },
+  });
+  const g = gateway({
+    powers: { ...defaultPowers(), appsFormulaStore: brokenStore },
+  });
+  await t.throwsAsync(() => E(g).start(), { message: 'store offline' });
+});
+
+test('Gateway formula-backed bindings persist through the supplied store', async t => {
+  // A bind on the gateway-exposed hub writes through to the store;
+  // a second gateway constructed against the same store rehydrates
+  // the binding. This is the cross-restart round-trip that motivates
+  // Feature 2.
+  const fake = makeAppsStoreFake();
+  const g1 = gateway({
+    powers: { ...defaultPowers(), appsFormulaStore: fake },
+  });
+  const apps1 = await E(g1).getApps();
+  await E(apps1).bind('chat.example.com', 'weblet-id-abc');
+  // Simulated restart: a fresh gateway sharing the same store.
+  const g2 = gateway({
+    powers: { ...defaultPowers(), appsFormulaStore: fake },
+  });
+  const apps2 = await E(g2).getApps();
+  t.is(await E(apps2).lookup('chat.example.com'), 'weblet-id-abc');
 });
 
 test('bootstrap-mediated register and publishWeblet round-trip end to end', async t => {
