@@ -6,7 +6,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 pkg="$(cd "$here/.." && pwd)"
 out="$here/transcripts"
 mkdir -p "$out"
-cd "$pkg"
+cd "$pkg" || exit 1
 export TMPDIR="${TMPDIR:-/tmp}"
 
 pass=0 fail=0
