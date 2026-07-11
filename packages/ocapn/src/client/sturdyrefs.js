@@ -152,6 +152,16 @@ harden(enlivenSturdyRef);
 /**
  * @typedef {object} SturdyRefTracker
  * @property {(location: OcapnLocation, secret: string | Uint8Array, type?: string) => SturdyRef} makeSturdyRef
+ * @property {(sturdyRef: SturdyRef) => SturdyRefLocator | undefined} reveal
+ *   Reveal the off-band `(location, secret[, type])` locator of a
+ *   SturdyRef **this tracker** constructed — one it minted or
+ *   materialized from the wire — or `undefined` for anything else (a
+ *   forged look-alike, or a SturdyRef minted by a foreign instance).
+ *   Unlike the module-level {@link getSturdyRefLocator}, recognition is
+ *   scoped to this session manager, so `reveal` never answers for a
+ *   sibling instance's mints even when both share this realm's
+ *   `@endo/sturdyref` shim locator map. This is the closely-held reveal
+ *   side; it is the only path that yields the secret.
  * @property {(secretBytes: ArrayBufferLike) => Promise<any | undefined>} lookup
  *   Async look up a locally-held capability by the on-wire secret
  *   bytes. Calls through to the injected locator with either the
@@ -165,14 +175,27 @@ harden(enlivenSturdyRef);
  */
 export const makeSturdyRefTracker = localLocator => {
   const textDecoder = new TextDecoder('ascii', { fatal: true });
+  // The set of SturdyRefs THIS tracker constructed (minted locally or
+  // materialized from the wire). Scopes `reveal` to this session
+  // manager so a sibling instance's mints — which share the realm-wide
+  // `@endo/sturdyref` shim locator map — are not revealed here.
+  // Per-instance ownership, not a second copy of the locator, so the
+  // shim's realm-global retention is unaffected.
+  /** @type {WeakSet<SturdyRef>} */
+  const ownRefs = new WeakSet();
   return harden({
     makeSturdyRef: (location, secret, type = undefined) => {
       // Mint an opaque SturdyRef through the realm-global shim and retain its
       // `(location, secret, type)` locator off-band, keyed by the SturdyRef's
       // identity. The secret is never a property on the SturdyRef, and the
-      // locator is reachable only through the closely-held namespace.
-      return fromLocation(harden({ location, secret, type }));
+      // locator is reachable only through the closely-held namespace. Record
+      // it as own so `reveal` is scoped to this session manager.
+      const sturdyRef = fromLocation(harden({ location, secret, type }));
+      ownRefs.add(sturdyRef);
+      return sturdyRef;
     },
+    reveal: sturdyRef =>
+      ownRefs.has(sturdyRef) ? getSturdyRefLocator(sturdyRef) : undefined,
     lookup: async secretBytes => {
       const view =
         secretBytes instanceof Uint8Array
