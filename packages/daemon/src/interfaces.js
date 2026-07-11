@@ -14,6 +14,7 @@ import {
   getInfoMethodGuard,
 } from '@endo/platform/fs/lite';
 import {
+  NameShape,
   NamePathShape,
   NameOrPathShape,
   NamesOrPathsShape,
@@ -24,6 +25,38 @@ import {
 // Pet-name and pet-path shapes are canonical in `./type-guards.js`
 // (re-exported as `@endo/daemon/type-guards.js` for consumers like
 // `@endo/lal`).  See that module for the contract.
+
+// A SturdyRef is the first-class `'sturdyref'` pass-style category
+// (packages/pass-style). `M.kind('sturdyref')` admits any properly
+// constructed SturdyRef and rejects every other passable. A SturdyRef
+// may appear anywhere a pet-name-path may on the **read** side of the
+// daemon's agent surface (lookup / identify / locate / list /
+// listIdentifiers / listLocators / evaluate slots); the facet resolves
+// it to a formula identifier via the daemon's closely-held resolution
+// capability before the existing pet-name-path code path runs. See
+// designs/sturdy-refs-ocapn-enlivenment.md § "Daemon: SturdyRef as
+// pet-name-path substitute" (cut 3) and § "Migration / staged adoption".
+// `M.sturdyRef()` in `@endo/patterns` is a deferred follow-up (blocked on
+// the `@endo/marshal` rank-order for sturdyref); `M.kind('sturdyref')` is
+// the structural recognizer used here in its place.
+const SturdyRefShape = M.kind('sturdyref');
+
+// The read-side sum: a single pet-name, a pet-name-path, or a SturdyRef.
+const NameOrPathOrSturdyRefShape = M.or(NameOrPathShape, SturdyRefShape);
+
+// The rest-arg equivalent for `.rest(NamePathShape)` methods, whose
+// collected rest array is matched as a whole. Each segment may be a
+// string (a pet-name) and the whole-path SturdyRef form is admitted as
+// a single-element rest carrying one SturdyRef, mirroring how a
+// SturdyRef stands in for an entire pet-name-path.
+const NamePathOrSturdyRefRestShape = M.or(
+  NamePathShape,
+  M.arrayOf(M.or(NameShape, SturdyRefShape)),
+);
+
+// Each entry of a slots / petNamePaths array may itself be a SturdyRef
+// in place of a pet-name-path (evaluate, makeUnconfined).
+const NamesOrPathsOrSturdyRefsShape = M.arrayOf(NameOrPathOrSturdyRefShape);
 
 // Edge names for message edges (same pattern as Name)
 const EdgeNameShape = M.string();
@@ -58,7 +91,9 @@ const EvaluateMethodGuard = M.call(
   M.or(NameOrPathShape, M.undefined()),
   M.string(),
   M.arrayOf(M.string()),
-  NamesOrPathsShape,
+  // Each slot's petNamePath may be a SturdyRef (cut 3 read-side
+  // widening). The result name (optional, below) stays a pet-name.
+  NamesOrPathsOrSturdyRefsShape,
 )
   .optional(NameOrPathShape)
   .returns(M.promise());
@@ -98,12 +133,24 @@ export const ReadableNameHubInterface = M.interface('ReadableNameHub', {
 // reader).
 export const nameHubMethodGuards = harden({
   ...readableNameHubMethodGuards,
-  identify: M.call().rest(NamePathShape).returns(M.promise()),
-  locate: M.call().rest(NamePathShape).returns(M.promise()),
+  // Read-side widening (cut 3): a SturdyRef may stand in for the
+  // pet-name-path argument of the daemon's read methods. These override
+  // the corresponding entries from `readableNameHubMethodGuards` (whose
+  // pet-name-only shape stays the portable, non-daemon contract). Write
+  // and reverse methods are intentionally NOT widened.
+  lookup: M.call(NameOrPathOrSturdyRefShape).returns(M.promise()),
+  maybeLookup: M.call(NameOrPathOrSturdyRefShape).returns(M.any()),
+  list: M.call().rest(NamePathOrSturdyRefRestShape).returns(M.promise()),
+  identify: M.call().rest(NamePathOrSturdyRefRestShape).returns(M.promise()),
+  locate: M.call().rest(NamePathOrSturdyRefRestShape).returns(M.promise()),
   reverseLocate: M.call(LocatorShape).returns(M.promise()),
   followLocatorNameChanges: M.call(LocatorShape).returns(M.remotable()),
-  listIdentifiers: M.call().rest(NamePathShape).returns(M.promise()),
-  listLocators: M.call().rest(NamePathShape).returns(M.promise()),
+  listIdentifiers: M.call()
+    .rest(NamePathOrSturdyRefRestShape)
+    .returns(M.promise()),
+  listLocators: M.call()
+    .rest(NamePathOrSturdyRefRestShape)
+    .returns(M.promise()),
   followNameChanges: M.call().returns(M.remotable()),
   reverseLookup: M.call(M.any()).returns(M.promise()),
   storeIdentifier: M.call(NameOrPathShape, IdShape).returns(M.promise()),
