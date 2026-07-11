@@ -12,6 +12,7 @@ import {
 } from './pet-name.js';
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { idFromLocator } from './locator.js';
+import { isSturdyRef, resolveSturdyRefToId } from './sturdyref-resolution.js';
 
 /** @import { Context, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 import { GuestInterface } from './interfaces.js';
@@ -238,6 +239,11 @@ export const makeGuestMaker = ({
 
       /** @type {(FormulaIdentifier | NamePath)[]} */
       const endowmentFormulaIdsOrPaths = petNamesOrPaths.map(petNameOrPath => {
+        if (isSturdyRef(petNameOrPath)) {
+          // A SturdyRef slot resolves to a formula identifier at the
+          // facet boundary; the swiss number never reaches the worker.
+          return resolveSturdyRefToId(petNameOrPath);
+        }
         const petNamePath = namePathFrom(petNameOrPath);
         if (petNamePath.length === 1) {
           const id = specialStore.identifyLocal(petNamePath[0]);
