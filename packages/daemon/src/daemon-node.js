@@ -23,6 +23,7 @@ import {
   makeCryptoPowers,
 } from './daemon-node-powers.js';
 import { startWsGateway } from './ws-gateway.js';
+import { makeAddressChecker } from './cidr.js';
 
 const fsp = { access: fs.promises.access };
 
@@ -178,12 +179,26 @@ const main = async () => {
   );
   const gatewayHost = addrUrl.hostname;
   const gatewayPort = addrUrl.port !== '' ? Number(addrUrl.port) : 8920;
+  // Remote-access policy for the gateway. A self-hosted container binds
+  // ENDO_ADDR to 0.0.0.0 to publish the port, but the gateway still admits
+  // only localhost unless the operator opts in with ENDO_GATEWAY_REMOTE=true
+  // (admit every address) or ENDO_GATEWAY_ALLOWED_CIDRS (admit localhost plus a
+  // comma-separated CIDR allowlist). Bearer-token authentication is enforced
+  // independently inside the gateway regardless of this address gate.
+  const allowRemote =
+    process.env.ENDO_GATEWAY_REMOTE === 'true' ||
+    process.env.ENDO_GATEWAY_REMOTE === '1';
+  const gatewayAddressChecker = makeAddressChecker({
+    allowRemote,
+    allowedCIDRs: process.env.ENDO_GATEWAY_ALLOWED_CIDRS || '',
+  });
   const wsGateway = startWsGateway({
     endoBootstrap,
     host: gatewayHost,
     port: gatewayPort,
     cancelled,
     marshalSaveError,
+    addressChecker: gatewayAddressChecker,
   });
 
   const services = [privatePathService, wsGateway];

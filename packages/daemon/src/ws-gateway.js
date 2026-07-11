@@ -17,6 +17,9 @@ import {
   messageToBytes,
   bytesToMessage,
 } from './connection.js';
+import { makeAddressChecker } from './cidr.js';
+
+/** @import { AddressChecker } from './types.js' */
 
 const GatewayBootstrapInterface = M.interface('GatewayBootstrap', {
   fetch: M.call(M.string()).returns(M.promise()),
@@ -79,6 +82,13 @@ harden(makeRateLimiter);
  *   `diagnostics().traces().lookup(errorId)` misses and the error surfaces as a
  *   bare message with no stack or worker chip (the private-path CLI already
  *   passes the same hook).
+ * @param {AddressChecker} [opts.addressChecker] - Predicate that decides which
+ *   remote addresses may open a gateway connection. The default admits only
+ *   localhost, so binding the gateway to a public interface (for a self-hosted
+ *   container) still rejects remote clients until the operator opts in. The
+ *   daemon builds this from `ENDO_GATEWAY_REMOTE` and `ENDO_GATEWAY_ALLOWED_CIDRS`.
+ *   This is an address-level gate that runs before any CapTP; the bearer-token
+ *   `fetch(token)` check below is the second, independent gate.
  * @returns {{ started: Promise<string>, stopped: Promise<void> }}
  */
 export const startWsGateway = ({
@@ -87,6 +97,7 @@ export const startWsGateway = ({
   port,
   cancelled,
   marshalSaveError = undefined,
+  addressChecker = makeAddressChecker(),
 }) => {
   const fetchLimiter = makeRateLimiter(1000);
   const gatewayP = E(endoBootstrap).gateway();
@@ -111,6 +122,19 @@ export const startWsGateway = ({
 
   wss.on('connection', (socket, req) => {
     const remoteAddress = req.socket.remoteAddress || '';
+
+    // Address-level gate. A remote self-hosted daemon binds to a public
+    // interface, so localhost binding is no longer the only barrier; reject
+    // connections from addresses the operator has not admitted before any
+    // CapTP traffic flows. Bearer-token authentication in fetch() below is the
+    // second, independent gate.
+    if (!addressChecker(remoteAddress)) {
+      console.warn(
+        `[Gateway] Rejected connection from ${remoteAddress}: address not permitted (set ENDO_GATEWAY_REMOTE=true or ENDO_GATEWAY_ALLOWED_CIDRS to admit remote clients)`,
+      );
+      socket.close();
+      return;
+    }
 
     const { promise: closed, resolve: close, reject: abort } = makePromiseKit();
 
