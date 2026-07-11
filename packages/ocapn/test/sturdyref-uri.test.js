@@ -99,7 +99,10 @@ test('hints round-trip through the URI query string', t => {
   const uri = formatSturdyRefUri({ location, swissNum: swissBytes });
   const parsed = parseSturdyRefUri(uri);
   t.deepEqual(parsed.location.hints, location.hints, 'hints survive verbatim');
-  t.deepEqual(swissnumToBytes(/** @type {any} */ (parsed.swissNum)), swissBytes);
+  t.deepEqual(
+    swissnumToBytes(/** @type {any} */ (parsed.swissNum)),
+    swissBytes,
+  );
 });
 
 test('hint keys are sorted for byte-stable output', t => {
