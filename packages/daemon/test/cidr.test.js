@@ -118,6 +118,9 @@ test('makeAddressChecker default allows only localhost', t => {
   t.true(check('::ffff:127.0.0.1'));
   t.false(check('10.0.0.1'));
   t.false(check('192.168.1.1'));
+  // An absent peer address arrives as '' (the gateway feeds the checker
+  // `req.socket.remoteAddress || ''`); the default must fail closed.
+  t.false(check(''));
 });
 
 test('makeAddressChecker allowRemote allows everything', t => {
@@ -126,6 +129,7 @@ test('makeAddressChecker allowRemote allows everything', t => {
   t.true(check('10.0.0.1'));
   t.true(check('203.0.113.5'));
   t.true(check('::1'));
+  t.true(check(''));
 });
 
 test('makeAddressChecker with CIDRs allows localhost plus listed ranges', t => {
