@@ -1680,8 +1680,19 @@ __metadata:
     ses: "workspace:^"
     typescript: "catalog:dev"
     ws: "npm:^8.13.0"
+  peerDependencies:
+    "@aws-sdk/client-dynamodb": ^3.0.0
+    "@aws-sdk/client-s3": ^3.0.0
+    "@aws-sdk/lib-storage": ^3.0.0
   dependenciesMeta:
     "@number0/iroh":
+      optional: true
+  peerDependenciesMeta:
+    "@aws-sdk/client-dynamodb":
+      optional: true
+    "@aws-sdk/client-s3":
+      optional: true
+    "@aws-sdk/lib-storage":
       optional: true
   languageName: unknown
   linkType: soft
