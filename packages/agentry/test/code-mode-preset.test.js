@@ -96,6 +96,7 @@ test('makeCompartmentExecute observes detached eventual-send rejections', async 
       E(rejector).fail();
       return 'completed';
     })()`,
+    globals: [],
   });
   await delay(0);
 
@@ -114,6 +115,7 @@ test('makeCompartmentExecute preserves tracked E static operations', async t => 
       resolved: await E.resolve(42),
       when: await E.when(Promise.resolve(41), value => value + 1),
     }))()`,
+    globals: [],
   });
 
   t.deepEqual(result, { property: 40, resolved: 42, when: 42 });
