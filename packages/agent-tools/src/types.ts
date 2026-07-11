@@ -9,7 +9,7 @@ import type { Pattern } from '@endo/patterns';
  * the default git tool catalog exposes to an LLM.
  *
  * Deliberately omits the destructive and history-rewriting methods of `EndoGit`
- * — `merge`, `rebase`, `restore`, `deleteBranch`, `renameBranch`, the `stash*`
+ * — `merge`, `restore`, `deleteBranch`, `renameBranch`, the `stash*`
  * family, the working-tree/detach mutators (`switch`, `detach`), and history
  * rewrites (`commit` with `amend`, `reword`, `cherryPick`, `rebase`).
  * Those carry authority a tool
