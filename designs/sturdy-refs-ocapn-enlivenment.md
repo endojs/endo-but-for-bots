@@ -788,7 +788,8 @@ Confinement (binding; see *Distributed confinement*):
 
 ## Open questions
 
-Two items remain genuinely open.
+One item remains genuinely open; the token-representation item below is
+resolved.
 The abandoned paired-design mechanism (retention table, `retain` / `release`
 syscall, proactive per-turn export drop, `FinalizationRegistry`) is withdrawn,
 and this design does **not** substitute new mechanism in its place.
@@ -805,17 +806,23 @@ and this design does **not** substitute new mechanism in its place.
   daemon forgets the swiss number to revoke a sturdyref, and partitions or
   terminates the holding process to revoke a live value.
 
-- **Representation of the guest-scoped opaque token.**
-  The *Distributed confinement* section commits to the two-tier split (the
-  location-bearing SturdyRef for trusted holders and the wire; a fresh,
-  unlinkable, opaque token per grant for confined guests) and to the three
-  binding invariants, but not to the token's concrete shape: its own
-  pass-style category, a daemon-minted remotable, or a payload-free
-  per-instance identity like the pre-#521 shim.
-  Whatever shape is chosen must pass the confinement tests in the test plan
-  verbatim; the choice affects how `M.sturdyRef()`-guarded facet methods admit
-  the guest tier (a sum pattern, or one category with a location-less guest
-  form).
+- **Resolved: representation of the guest-scoped opaque token.**
+  Settled by [sturdy-refs-agent-surface](sturdy-refs-agent-surface.md)
+  (PR #695, 2026-07-11): the token is a **daemon-minted, method-less
+  remotable** (interface label `SturdyRefToken`), minted fresh per grant
+  and bound off-band in a module-private `WeakMap` mirroring PR #541's
+  `sturdyRefToId`; guarded facet methods admit the guest tier via a **sum
+  pattern** (`M.or(M.kind('sturdyref'), M.remotable('SturdyRefToken'))`),
+  not a location-less guest form of the `'sturdyref'` category, and only
+  on value-producing methods (never `identify` / `locate`).
+  The deciding requirement is identity across the daemon-worker CapTP
+  boundary: resolution and unforgeability need the daemon to recover the
+  very object it minted, which remotables get from the session's slot
+  tables for free, while a pass-by-copy shape (the pre-#521 shim) loses
+  identity at the first crossing and a new pass-style category would
+  repeat #521's cross-cutting cost for a value that carries nothing.
+  That design demonstrates the shape passes the confinement tests in the
+  test plan verbatim.
 
 ## Dependencies
 
@@ -824,6 +831,7 @@ and this design does **not** substitute new mechanism in its place.
 | [daemon-locator-reference](daemon-locator-reference.md) | Source of the locator format and the `internalize`/`externalize` flow this design reuses. |
 | [daemon-locator-terminology](daemon-locator-terminology.md) | Source of the *Peer Key* / *Formula Address* terminology in flight. |
 | #521 | `feat(pass-style): first-class 'sturdyref' pass-style; ocapn defers to it` — the in-flight implementation of the shared base problem (item 1), which established the inert-data-box correction this design adopts. |
+| [sturdy-refs-agent-surface](sturdy-refs-agent-surface.md) (PR #695) | Child design: the agent provide/accept surface (Lal, Fae, Genie, `@endo/agent-tools`); settles this design's guest-token open question. |
 
 ## Prompt
 
