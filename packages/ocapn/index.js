@@ -19,6 +19,7 @@
  *
  * @typedef {import('./src/client/types.js').SwissNum} SwissNum
  * @typedef {import('./src/codecs/components.js').OcapnLocation} OcapnLocation
+ * @typedef {import('./src/client/sturdyref-uri.js').ParsedSturdyRefUri} ParsedSturdyRefUri
  */
 
 export { makeOcapn } from './src/client/index.js';
@@ -27,7 +28,6 @@ export {
   swissnumFromBytes,
   swissnumToBytes,
 } from './src/client/util.js';
-
 // Protocol building blocks for consumers that route frames without reifying
 // their references as local objects or promises.
 export {
@@ -41,3 +41,7 @@ export {
 export { makePassableCodecs } from './src/codecs/passable.js';
 export { getSelectorName, makeSelector } from './src/selector.js';
 export { makeSturdyRef } from './src/client/sturdyrefs.js';
+export {
+  parseSturdyRefUri,
+  formatSturdyRefUri,
+} from './src/client/sturdyref-uri.js';
