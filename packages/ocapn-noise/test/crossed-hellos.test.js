@@ -48,11 +48,16 @@ test('crossed hellos: both peers end on the same session with a stable session i
 
   // The session id is derived from the two ed25519 identities, so it
   // must be identical on both sides regardless of which handshake won.
-  t.deepEqual(
-    new Uint8Array(sessionA.sessionId),
-    new Uint8Array(sessionB.sessionId),
-    'A and B compute matching session ids',
-  );
+  //
+  // `sessionId` is an *immutable* ArrayBuffer; `new Uint8Array(immutable)`
+  // reads it as length 0, so comparing the views directly would be vacuous
+  // (two empty arrays always deepEqual). Copy via `.slice(0)` to a normal
+  // ArrayBuffer first, and assert non-emptiness so a regression to an empty
+  // id cannot pass silently.
+  const sessionIdA = new Uint8Array(sessionA.sessionId.slice(0));
+  const sessionIdB = new Uint8Array(sessionB.sessionId.slice(0));
+  t.is(sessionIdA.length, 32, 'session id is a non-empty 32-byte value');
+  t.deepEqual(sessionIdA, sessionIdB, 'A and B compute matching session ids');
   t.is(sessionA.remoteLocation.designator, keyB);
   t.is(sessionB.remoteLocation.designator, keyA);
 
