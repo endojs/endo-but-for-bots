@@ -36,7 +36,13 @@ COPY . .
 # `enableScripts: false` globally; only the `built: true` packages
 # (better-sqlite3, node-datachannel) compile. `--immutable` asserts the
 # committed yarn.lock is authoritative, so the install is reproducible.
-RUN corepack yarn install --immutable
+#
+# The yarn global cache (~900 MB of package zips) is mounted as a BuildKit cache
+# rather than written into the image layer: it is not needed at runtime (the
+# pnpm nodeLinker materializes node_modules), it would nearly double the image,
+# and persisting it across builds makes the fetch step near-instant on rebuilds.
+RUN --mount=type=cache,target=/root/.yarn/berry/cache \
+    corepack yarn install --immutable
 
 # Daemon data (state, cache, run dir, control socket, and the written OCapN
 # location) live here. Mount a volume to persist the daemon's identity across
