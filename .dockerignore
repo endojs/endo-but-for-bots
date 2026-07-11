@@ -1,0 +1,17 @@
+# Keep the daemon self-hosting build context lean (docker/Dockerfile).
+# The image runs `yarn install` itself, so pre-existing install artifacts and
+# build output only bloat the context and can leak host-specific state.
+node_modules
+**/node_modules
+.yarn/cache
+.yarn/install-state.gz
+.yarn/unplugged
+.yarn/build-state.yml
+.pnp.*
+api-docs
+**/dist
+**/tmp
+**/*.log
+.git
+target
+rust/**/target
