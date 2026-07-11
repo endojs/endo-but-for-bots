@@ -45,6 +45,13 @@ const locationOut =
 // creates it, but an unmounted run or a custom ENDO_DATA_DIR may not).
 fs.mkdirSync(dataDir, { recursive: true });
 
+// Remove any location file left by a prior boot on this persisted volume
+// before we advertise a fresh one. Each install mints a new session
+// designator, so the old file is stale the instant this process starts; a
+// reader (the deploy script's `location` phase) must not mistake it for the
+// current daemon's location.
+fs.rmSync(locationOut, { force: true });
+
 // This module lives inside the daemon package, so its OCapN network module is
 // resolved by file URL exactly as the multiplayer suite resolves it.
 const ocapnModuleUrl = new URL(
@@ -71,13 +78,30 @@ const host = E(bootstrap).host();
 
 // Gate the WS transport on `ws-listen-addr` and install the OCapN-Noise
 // network module as `@nets/ocapn`, mirroring `prepareHostWithGcAndNetwork`.
-log(`installing @nets/ocapn with ws-listen-addr=${wsListen}`);
-await E(host).storeValue(wsListen, 'ws-listen-addr');
-const service = await E(host).makeUnconfined('@main', ocapnModuleUrl, {
-  powersName: '@agent',
-  resultName: 'network-service-ocapn',
-});
-await E(host).move(['network-service-ocapn'], ['@nets', 'ocapn']);
+//
+// Idempotent on restart. The container runs `--restart unless-stopped` on a
+// persisted `/data` volume, so a host reboot re-boots this script against a
+// pet store that ALREADY holds `@nets/ocapn` (and `ws-listen-addr`) from the
+// prior boot. Re-running `storeValue` + `makeUnconfined` + `move` against that
+// state hangs on the pet-store name collisions (the reap-and-requeue symptom
+// that stalled this deploy). So look the service up first: instantiating the
+// persisted `@nets/ocapn` formula re-runs the network module's `make()`, which
+// re-reads `ws-listen-addr` and re-binds the WS listener (with a fresh session
+// designator, as every install mints one). Only a truly fresh volume falls
+// through to the from-scratch install.
+let service;
+try {
+  service = await E(host).lookup(['@nets', 'ocapn']);
+  log('@nets/ocapn already installed (persisted volume); reusing + re-binding');
+} catch {
+  log(`installing @nets/ocapn with ws-listen-addr=${wsListen}`);
+  await E(host).storeValue(wsListen, 'ws-listen-addr');
+  service = await E(host).makeUnconfined('@main', ocapnModuleUrl, {
+    powersName: '@agent',
+    resultName: 'network-service-ocapn',
+  });
+  await E(host).move(['network-service-ocapn'], ['@nets', 'ocapn']);
+}
 
 // Extract the daemon's advertised OCapN-Noise-WS address and unpack its `loc`
 // (the location the peer needs: designator + `ws:url` hint). `makeUnconfined`
