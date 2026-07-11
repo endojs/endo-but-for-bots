@@ -26,6 +26,79 @@ const textEncoder = new TextEncoder();
 
 const { PassableCodec } = makeCodecTestKit();
 
+// A Spritely Goblins-style 24-byte random swiss-num: deliberately
+// non-ASCII (bytes > 127 present) so it exercises the bytes-preserving
+// wire read (cut 1). Fixed rather than random so the wire snapshot is
+// stable across runs.
+const goblinsSecretBytes = new Uint8Array([
+  0x9f, 0x1c, 0xa3, 0x00, 0xff, 0x80, 0x42, 0x7e, 0xb5, 0xd4, 0x01, 0xc8, 0x91,
+  0x6a, 0xfe, 0x33, 0x88, 0xa1, 0x0f, 0xcc, 0x77, 0xe2, 0x5b, 0x90,
+]);
+
+// Collect the values reachable from an object's own properties and its
+// entire prototype chain, invoking getters, for a confinement byte-sweep.
+const reachableValues = obj => {
+  const values = [];
+  for (
+    let o = obj;
+    o !== null && o !== undefined;
+    o = Object.getPrototypeOf(o)
+  ) {
+    for (const key of Reflect.ownKeys(o)) {
+      const desc = Object.getOwnPropertyDescriptor(o, key);
+      if (desc && 'value' in desc) {
+        values.push(desc.value);
+      } else if (desc && typeof desc.get === 'function') {
+        try {
+          values.push(desc.get.call(obj));
+        } catch {
+          // A getter that throws exposes nothing; skip it.
+        }
+      }
+    }
+  }
+  return values;
+};
+
+// View a reachable value as bytes, if it can carry the secret at all.
+const asBytes = v => {
+  if (v instanceof Uint8Array) {
+    return v;
+  }
+  if (v instanceof ArrayBuffer) {
+    return new Uint8Array(v);
+  }
+  if (typeof v === 'string') {
+    return textEncoder.encode(v);
+  }
+  return undefined;
+};
+
+// Does `hayBytes` contain `needle` as a contiguous subsequence?
+/**
+ * @param {Uint8Array} hayBytes
+ * @param {Uint8Array} needle
+ * @returns {boolean}
+ */
+const bytesContain = (hayBytes, needle) => {
+  if (needle.length === 0) {
+    return true;
+  }
+  for (let i = 0; i + needle.length <= hayBytes.length; i += 1) {
+    let match = true;
+    for (let j = 0; j < needle.length; j += 1) {
+      if (hayBytes[i + j] !== needle[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      return true;
+    }
+  }
+  return false;
+};
+
 // The PassableCodec covers References (Targets and Promises), but these tests do not,
 // as it would entrain the entire client (especially for third-party references). They are tested
 // in the client tests.
@@ -164,6 +237,50 @@ const table = [
       }
       t.deepEqual(details.location, exporterLocation);
       t.is(details.secret, '123');
+    },
+  },
+  {
+    // Cut 1: a non-ASCII 24-byte swiss-num survives read-to-write as
+    // bytes rather than throwing at the (formerly fatal) ASCII decode,
+    // symmetric with the write path and `sturdyRefTracker.lookup`.
+    name: 'sturdyRef with non-ASCII byte secret',
+    makeValue: testKit =>
+      testKit.sturdyRefTracker.makeSturdyRef(
+        exporterLocation,
+        goblinsSecretBytes,
+      ),
+    customAssert: (t, actual) => {
+      const details = getSturdyRefLocator(actual);
+      if (!details) {
+        throw Error('SturdyRef has no details');
+      }
+      t.deepEqual(details.location, exporterLocation);
+      // Round-trip: the secret stays raw bytes and is byte-for-byte the
+      // 24-byte random, not a lossy ASCII coercion.
+      t.true(details.secret instanceof Uint8Array, 'secret stays bytes');
+      t.deepEqual(
+        [...(/** @type {Uint8Array} */ (details.secret))],
+        [...goblinsSecretBytes],
+        'non-ASCII secret round-trips unchanged',
+      );
+      // Confinement (load-bearing): the secret bytes are not reachable
+      // from the materialized SturdyRef's own properties or its whole
+      // prototype chain — opaque-and-unforgeable preserved.
+      t.deepEqual(Reflect.ownKeys(actual), [], 'no own properties');
+      let sweptAny = false;
+      for (const v of reachableValues(actual)) {
+        const bytes = asBytes(v);
+        if (bytes) {
+          sweptAny = true;
+          t.false(
+            bytesContain(bytes, goblinsSecretBytes),
+            'secret bytes unreachable on the materialized SturdyRef',
+          );
+        }
+      }
+      // The location getter yields a byte-bearing value, so the sweep is
+      // non-vacuous.
+      t.true(sweptAny, 'confinement sweep examined at least one value');
     },
   },
   // Tagged objects containing references
