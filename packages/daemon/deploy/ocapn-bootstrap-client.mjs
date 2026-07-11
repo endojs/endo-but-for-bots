@@ -57,7 +57,9 @@ const client = await makeOcapn({
 
 const sturdyRef = client.makeSturdyRef(location, swissnum);
 const bootstrap = await client.enlivenSturdyRef(sturdyRef);
-console.error(`[peer] enlivened '${swissnum}' (EndoOcapnBootstrap); invoking...`);
+console.error(
+  `[peer] enlivened '${swissnum}' (EndoOcapnBootstrap); invoking...`,
+);
 
 const nodeId = await E(bootstrap).getNodeId();
 const help = await E(bootstrap).help();
@@ -70,7 +72,9 @@ console.error(
 // getGreeter() returns the EndoGreeter that runs the peer `hello` handshake —
 // reaching it proves the bootstrap hands back the live peer-protocol entry.
 const greeter = await E(bootstrap).getGreeter();
-console.error(`[peer] getGreeter() -> ${greeter ? 'EndoGreeter present' : 'MISSING'}`);
+console.error(
+  `[peer] getGreeter() -> ${greeter ? 'EndoGreeter present' : 'MISSING'}`,
+);
 
 console.log(
   `RESULT ${JSON.stringify({

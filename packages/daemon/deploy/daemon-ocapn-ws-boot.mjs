@@ -54,10 +54,8 @@ fs.rmSync(locationOut, { force: true });
 
 // This module lives inside the daemon package, so its OCapN network module is
 // resolved by file URL exactly as the multiplayer suite resolves it.
-const ocapnModuleUrl = new URL(
-  '../src/networks/ocapn.js',
-  import.meta.url,
-).href;
+const ocapnModuleUrl = new URL('../src/networks/ocapn.js', import.meta.url)
+  .href;
 
 const log = (...args) => console.error('[boot]', ...args);
 
