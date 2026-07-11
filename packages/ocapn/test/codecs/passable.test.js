@@ -259,7 +259,7 @@ const table = [
       // 24-byte random, not a lossy ASCII coercion.
       t.true(details.secret instanceof Uint8Array, 'secret stays bytes');
       t.deepEqual(
-        [...(/** @type {Uint8Array} */ (details.secret))],
+        [.../** @type {Uint8Array} */ (details.secret)],
         [...goblinsSecretBytes],
         'non-ASCII secret round-trips unchanged',
       );
