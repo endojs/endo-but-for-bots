@@ -26,12 +26,17 @@ services:
       - '8920:8920'
     volumes:
       - endo-state:/data/endo
+    # Remote access is opt-in. As shipped, `docker compose up -d` binds and
+    # publishes the port but the gateway still admits only localhost, so a
+    # published-but-unconfigured daemon rejects the forwarded traffic (it
+    # arrives from the Docker bridge network, not 127.0.0.1) rather than
+    # exposing itself. To admit remote callers, uncomment exactly one of the
+    # options below; prefer the CIDR allowlist over the blanket flag when the
+    # set of callers is known (see README.md "Recommended posture"), and
+    # publish only behind a TLS-terminating reverse proxy.
     environment:
-      # A published port is only reachable once the address gate admits the
-      # caller. Connections forwarded from the host arrive from the Docker
-      # bridge network, not 127.0.0.1, so the localhost-only default rejects
-      # them. Admit remote callers (bearer-token auth still applies):
-      - ENDO_GATEWAY_REMOTE=true
+      # Admit every remote address (bearer-token auth still applies):
+      # - ENDO_GATEWAY_REMOTE=true
       # Or, instead of admitting every address, restrict to known networks:
       # - ENDO_GATEWAY_ALLOWED_CIDRS=10.0.0.0/8,192.168.0.0/16
     restart: unless-stopped
