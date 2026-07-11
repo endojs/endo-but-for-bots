@@ -1632,7 +1632,9 @@ __metadata:
     "@endo/eventual-send": "workspace:^"
     "@endo/far": "workspace:^"
     "@endo/harden": "workspace:^"
+    "@endo/lockdown": "workspace:^"
     "@endo/pass-style": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
   languageName: unknown
