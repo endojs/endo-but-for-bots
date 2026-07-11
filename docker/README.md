@@ -36,7 +36,7 @@ With Compose:
 ```sh
 cd docker
 docker compose up -d
-docker compose exec endo endo who   # example: talk to the daemon
+docker compose exec endo endo list   # example: talk to the daemon
 ```
 
 Or by hand:
@@ -75,7 +75,7 @@ Mount either a named volume (survives container recreation) or a host bind mount
 
 ## Environment
 
-| Variable                     | Default              | Purpose                                             |
+| Variable                     | Default (this image) | Purpose                                             |
 | ---------------------------- | -------------------- | --------------------------------------------------- |
 | `ENDO_STATE`                 | `/data/endo`         | persisted state root                                |
 | `ENDO_RUNTIME`               | `/run/endo`          | ephemeral runtime dir                               |
@@ -83,6 +83,13 @@ Mount either a named volume (survives container recreation) or a host bind mount
 | `ENDO_ADDR`                  | `0.0.0.0:8920`       | WebSocket gateway bind `host:port`                  |
 | `ENDO_GATEWAY_REMOTE`        | unset (localhost only) | when `true`/`1`, the gateway admits any remote address (bearer-token auth still applies) |
 | `ENDO_GATEWAY_ALLOWED_CIDRS` | unset                | comma-separated CIDR allowlist; localhost is always admitted |
+
+The defaults above are what this image sets, not the daemon's own defaults. In
+particular the image binds `ENDO_ADDR=0.0.0.0:8920` (via the Dockerfile) to
+publish the port; the daemon on its own defaults to `127.0.0.1:8920`. Binding to
+`0.0.0.0` only publishes the port, it does not admit remote callers: the address
+gate still rejects them until you set `ENDO_GATEWAY_REMOTE` or
+`ENDO_GATEWAY_ALLOWED_CIDRS`.
 
 `ENDO_STATE`, `ENDO_RUNTIME`, and `ENDO_SOCK` are honored by both the entrypoint
 and the CLI. `ENDO_ADDR`, `ENDO_GATEWAY_REMOTE`, and `ENDO_GATEWAY_ALLOWED_CIDRS`
@@ -125,9 +132,16 @@ supplies the agent token to authenticate.
 ### Recommended posture
 
 - Publish the port only behind a TLS-terminating reverse proxy.
-- Prefer `ENDO_GATEWAY_ALLOWED_CIDRS` scoped to the proxy or your management
-  network over the blanket `ENDO_GATEWAY_REMOTE=true` when the set of callers is
-  known.
+- Prefer `ENDO_GATEWAY_ALLOWED_CIDRS` scoped to your management network over the
+  blanket `ENDO_GATEWAY_REMOTE=true` when the set of callers is known.
+- Understand what the address gate sees behind a proxy. It keys on the immediate
+  TCP peer address, not a forwarded client address (it deliberately does not
+  trust `X-Forwarded-For`, which a client can spoof). When a reverse proxy
+  terminates the connection, every request reaches the gateway from the proxy's
+  own address, so the address gate can only distinguish the proxy, not the end
+  clients behind it: allowlisting the proxy admits everything the proxy forwards,
+  and the bearer token becomes the sole per-client gate at that point. Scope the
+  CIDR allowlist to callers that connect to the gateway directly.
 - Keep the UNIX control socket inside the container. It is unauthenticated and
   equivalent to root over the daemon.
 

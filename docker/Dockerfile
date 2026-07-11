@@ -30,9 +30,11 @@ WORKDIR /opt/endo
 # bundle-based slim image is a follow-up once a daemon bundle pipeline exists.
 COPY . .
 
-# enableScripts is false in .yarnrc.yml, so no package build scripts run during
-# install. The daemon and worker execute directly from source (type: module);
-# there is no compile step.
+# enableScripts is false in .yarnrc.yml, so package build scripts are suppressed
+# except for the native dependencies the root package.json opts back in via
+# dependenciesMeta.*.built (for example better-sqlite3, which the daemon's Node
+# store uses). Those fetch or compile their addon during install; the rest of
+# the workspace runs directly from source (type: module) with no compile step.
 RUN yarn install --immutable
 
 # The `endo` CLI bin is linked into the workspace node_modules/.bin; put it on

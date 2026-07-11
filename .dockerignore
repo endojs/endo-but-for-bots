@@ -15,3 +15,12 @@ api-docs
 .git
 target
 rust/**/target
+
+# Never bake credentials or local secrets into an image layer (COPY . . copies
+# the whole workspace).
+.env
+.env.*
+*.pem
+*.key
+*.p12
+**/.npmrc
