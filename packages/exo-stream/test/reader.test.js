@@ -46,6 +46,14 @@ test('passable reader round-trip', async t => {
   }
 });
 
+test('reader rejects an invalid synchronization node without an unhandled producer rejection', async t => {
+  const readerRef = readerFromIterator([1]);
+
+  await t.throwsAsync(() => readerRef.stream(Promise.resolve(undefined)), {
+    message: /invalid node/,
+  });
+});
+
 test('empty passable reader', async t => {
   async function* emptyIterator() {
     // yields nothing
