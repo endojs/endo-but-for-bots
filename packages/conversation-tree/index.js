@@ -7,6 +7,23 @@ import harden from '@endo/harden';
 
 export { makeMemoryBackend } from './src/memory-backend.js';
 export { makeEndoPetstoreBackend } from './src/endopetstore-backend.js';
+export {
+  SESSION_FORMAT_VERSION,
+  ENTRY_TYPE_HEADER,
+  ENTRY_TYPE_MESSAGE,
+  ENTRY_TYPE_COMPACTION,
+  ENTRY_TYPE_BRANCH_SUMMARY,
+  ENTRY_TYPE_CUSTOM,
+  sessionFilePath,
+  serializeHeader,
+  serializeNode,
+  serializeTreeToJsonl,
+  truncateToLastCompleteLine,
+  parseSessionEntries,
+  entryToNode,
+  loadTreeFromJsonl,
+  makeJsonlSessionWriter,
+} from './src/jsonl.js';
 
 let nextSuffix = 0;
 
