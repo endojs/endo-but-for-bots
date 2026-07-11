@@ -73,15 +73,16 @@ const host = E(bootstrap).host();
 // network module as `@nets/ocapn`, mirroring `prepareHostWithGcAndNetwork`.
 log(`installing @nets/ocapn with ws-listen-addr=${wsListen}`);
 await E(host).storeValue(wsListen, 'ws-listen-addr');
-await E(host).makeUnconfined('@main', ocapnModuleUrl, {
+const service = await E(host).makeUnconfined('@main', ocapnModuleUrl, {
   powersName: '@agent',
   resultName: 'network-service-ocapn',
 });
 await E(host).move(['network-service-ocapn'], ['@nets', 'ocapn']);
 
 // Extract the daemon's advertised OCapN-Noise-WS address and unpack its `loc`
-// (the location the peer needs: designator + `ws:url` hint).
-const service = await E(host).lookup('@nets', 'ocapn');
+// (the location the peer needs: designator + `ws:url` hint). `makeUnconfined`
+// returns the installed `OcapnNoiseService` directly, so we call `addresses()`
+// on it rather than re-looking it up (`host.lookup` takes a single path array).
 const addresses = /** @type {string[]} */ (await E(service).addresses());
 const wsAddress = addresses.find(a => a.startsWith('ocapn+noise+ws:'));
 if (!wsAddress) {

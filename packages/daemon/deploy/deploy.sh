@@ -29,16 +29,24 @@ CADDY_FILE=/etc/caddy/conf.d/minion-town.caddy
 log() { echo "[deploy $(date -u +%H:%M:%S)] $*"; }
 
 phase_install() {
+  export DEBIAN_FRONTEND=noninteractive
+  # docker.io is the runtime; docker-buildx supplies BuildKit, which phase_build
+  # requires (the legacy builder is pathologically slow atop the big install
+  # layer — see phase_build). Both are Ubuntu-packaged; the host stays clean.
   if command -v docker >/dev/null 2>&1; then
     log "docker present: $(docker --version)"
   else
     log "installing docker.io"
-    export DEBIAN_FRONTEND=noninteractive
     apt-get update -y
     apt-get install -y --no-install-recommends docker.io
   fi
+  if ! docker buildx version >/dev/null 2>&1; then
+    log "installing docker-buildx (BuildKit)"
+    apt-get update -y
+    apt-get install -y --no-install-recommends docker-buildx
+  fi
   systemctl enable --now docker
-  docker info >/dev/null && log "docker daemon up"
+  docker info >/dev/null && log "docker daemon up; buildx $(docker buildx version | awk '{print $2}')"
 }
 
 phase_fetch() {
