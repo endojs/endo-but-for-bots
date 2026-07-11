@@ -113,19 +113,29 @@ const gitRunner = repoRoot => args =>
   execFileAsync('git', args, { cwd: repoRoot });
 
 /**
+ * @param {string} featureBranch
  * @param {string} upstream
  * @param {string} resolvedText
  * @returns {string}
  */
-const conflictRebaseSource = (upstream, resolvedText) => `\
+const conflictRebaseSource = (featureBranch, upstream, resolvedText) => `\
 (async () => {
+  const current = await E(git).currentBranch();
+  if (current?.name !== ${JSON.stringify(featureBranch)}) {
+    throw new Error('not on the feature branch');
+  }
   try {
     await E(git).rebase({ mode: 'start', upstream: ${JSON.stringify(upstream)} });
+    // Rebase succeeded without stopping for a conflict.
   } catch (err) {
     const rows = await E(git).status();
-    if (!rows.some(row => row.path === 'app.txt')) {
+    const conflict = rows.find(
+      row => row.path === 'app.txt' && row.worktree === 'conflicted',
+    );
+    if (conflict === undefined) {
       throw err;
     }
+    // Rebase left app.txt conflicted; resolve that entry before continuing.
   }
   const root = await E(workspace).root();
   await E(root).write('app.txt', ${JSON.stringify(resolvedText)});
@@ -150,7 +160,11 @@ test('outcome assertion passes when scripted run resolves and continues the reba
   const scenario = makeScenarioFor(repo);
   const model = executeOnceModel(
     t,
-    conflictRebaseSource(repo.integrationBranch, appResolvedText),
+    conflictRebaseSource(
+      repo.featureBranch,
+      repo.integrationBranch,
+      appResolvedText,
+    ),
   );
 
   const { outcome } = await runGitScenario({
@@ -219,7 +233,11 @@ test('outcome assertion rejects an integration branch moved after a correct reba
   const scenario = makeScenarioFor(repo);
   const model = executeOnceModel(
     t,
-    conflictRebaseSource(repo.integrationBranch, appResolvedText),
+    conflictRebaseSource(
+      repo.featureBranch,
+      repo.integrationBranch,
+      appResolvedText,
+    ),
   );
 
   const completed = await runGitScenario({
@@ -259,7 +277,11 @@ test('outcome assertion reports a deleted integration branch as a failed check',
   const scenario = makeScenarioFor(repo);
   const model = executeOnceModel(
     t,
-    conflictRebaseSource(repo.integrationBranch, appResolvedText),
+    conflictRebaseSource(
+      repo.featureBranch,
+      repo.integrationBranch,
+      appResolvedText,
+    ),
   );
 
   await runGitScenario({
@@ -329,7 +351,11 @@ test('outcome assertion fails when app.txt keeps the wrong resolution', async t 
   const scenario = makeScenarioFor(repo);
   const model = executeOnceModel(
     t,
-    conflictRebaseSource(repo.integrationBranch, appIntegrationText),
+    conflictRebaseSource(
+      repo.featureBranch,
+      repo.integrationBranch,
+      appIntegrationText,
+    ),
   );
 
   const { outcome } = await runGitScenario({
