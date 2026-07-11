@@ -199,12 +199,9 @@ test('makeInterval enforces minPeriodMs and maxActive', async t => {
 
   await scheduler.makeInterval('a', 5000, neverCancelled);
   await scheduler.makeInterval('b', 5000, neverCancelled);
-  await t.throwsAsync(
-    () => scheduler.makeInterval('c', 5000, neverCancelled),
-    {
-      message: /active interval limit reached/,
-    },
-  );
+  await t.throwsAsync(() => scheduler.makeInterval('c', 5000, neverCancelled), {
+    message: /active interval limit reached/,
+  });
 
   // Raising the limit via control allows another.
   schedulerControl.setMaxActive(3);
@@ -296,12 +293,9 @@ test('revoke is permanent and blocks further use', async t => {
   await scheduler.makeInterval('a', 5000, neverCancelled);
   await schedulerControl.revoke();
 
-  await t.throwsAsync(
-    () => scheduler.makeInterval('b', 5000, neverCancelled),
-    {
-      message: /revoked/,
-    },
-  );
+  await t.throwsAsync(() => scheduler.makeInterval('b', 5000, neverCancelled), {
+    message: /revoked/,
+  });
   await t.throwsAsync(() => scheduler.list(), { message: /revoked/ });
 
   const all = await schedulerControl.listAll();
