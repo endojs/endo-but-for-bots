@@ -2961,6 +2961,7 @@ __metadata:
   resolution: "@endo/ocapn@workspace:packages/ocapn"
   dependencies:
     "@endo/ascii": "workspace:^"
+    "@endo/base64": "workspace:^"
     "@endo/bytes": "workspace:^"
     "@endo/cbor": "workspace:^"
     "@endo/chacha12": "workspace:^"
