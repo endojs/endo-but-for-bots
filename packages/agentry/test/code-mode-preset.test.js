@@ -3,6 +3,8 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
+import process from 'node:process';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import {
   makeCompartmentExecute,
@@ -71,6 +73,52 @@ test('makeCompartmentExecute rejects a resultName when no storeResult is configu
       message: /no storeResult callback is configured/,
     },
   );
+});
+
+test('makeCompartmentExecute observes detached eventual-send rejections', async t => {
+  const rejector = Far('Rejector', {
+    async fail() {
+      throw new Error('capability boom');
+    },
+  });
+  const execute = makeCompartmentExecute({
+    endowments: { E, rejector },
+  });
+  let unhandled = 0;
+  const onUnhandled = () => {
+    unhandled += 1;
+  };
+  process.on('unhandledRejection', onUnhandled);
+  t.teardown(() => process.off('unhandledRejection', onUnhandled));
+
+  const result = await execute({
+    source: `(async () => {
+      E(rejector).fail();
+      return 'completed';
+    })()`,
+    globals: [],
+  });
+  await delay(0);
+
+  t.is(result, 'completed');
+  t.is(unhandled, 0);
+});
+
+test('makeCompartmentExecute preserves tracked E static operations', async t => {
+  const execute = makeCompartmentExecute({
+    endowments: { E, target: harden({ value: 40 }) },
+  });
+
+  const result = await execute({
+    source: `(async () => ({
+      property: await E.get(target).value,
+      resolved: await E.resolve(42),
+      when: await E.when(Promise.resolve(41), value => value + 1),
+    }))()`,
+    globals: [],
+  });
+
+  t.deepEqual(result, { property: 40, resolved: 42, when: 42 });
 });
 
 test('normalizeGlobals rejects a non-identifier global name', t => {

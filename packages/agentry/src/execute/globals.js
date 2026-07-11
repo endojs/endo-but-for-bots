@@ -167,6 +167,11 @@ Use E(capability).method(...) for remotable capabilities. Top-level await is not
 })()
 \`\`\`
 
+Every ordinary E(...) or E.get(...) request returns a promise. Await it or
+return it from the execute expression. Use E.sendOnly(...) only when you
+intentionally want fire-and-forget behavior; do not leave an ordinary
+eventual-send promise detached.
+
 Return the desired value as the source completion value. Use resultName only when the user asks you to store the result for later.
 
 Available powers:
