@@ -600,10 +600,9 @@ export const makeDaemonDatabaseAws = async ({
 
   return harden({
     // The SQLite engines expose their engine handle as `db`; this
-    // engine has none.  No consumer outside `daemon-database.js`
-    // touches `.db` (see the design's phase-2 note on making the field
-    // engine-private).
-    db: /** @type {any} */ (undefined),
+    // engine has none, so it omits the now-optional field (phase 2
+    // made `DaemonDatabase.db` engine-private/optional).  No consumer
+    // outside `daemon-database.js` reads it.
     close,
     flushed,
     hasFormula,
