@@ -1,0 +1,19 @@
+demo: transport = ocapn+noise+tcp
+demo: booting daemon A (inviter) ...
+demo: booting daemon B (acceptor) ...
+demo: A: invite("bob") — creating a durable invitation
+demo: A: invitation locator =
+demo:    endo://a0b9e21e67ea7de72fc787ee0fa174565fc008fbdf3b7072b12537ccb2964207?id=c8386185efc3e07d4054d5bd6aa6df933ba1da2304cf2f3b781230886a64f905&type=invitation&from=7f63d6113242b039d5e601e07d2f98af5527230af926074158e2ed4e2b2be8d1&fromNode=fa0210b2f175dcf8ab6e8900a33f1d9b267b3010f441de9c1d164467a3912883&at=ocapn%2Bnoise%2Btcp%3A%2F%2F127.0.0.1%3A44347%2F%3Fnode%3Da0b9e21e67ea7de72fc787ee0fa174565fc008fbdf3b7072b12537ccb2964207%26loc%3D%257B%2522type%2522%253A%2522ocapn-peer%2522%252C%2522network%2522%253A%2522np%2522%252C%2522transport%2522%253A%2522np%2522%252C%2522designator%2522%253A%25226fda09748d95d02159f62d48194b8c9b5e852450f1ca9dca8430b0808889d598%2522%252C%2522hints%2522%253A%257B%2522tcp%253Ahost%2522%253A%2522127.0.0.1%2522%252C%2522tcp%253Aport%2522%253A%252244347%2522%257D%257D
+demo: A: invitation advertises 1 connection hint(s):
+demo:    ocapn+noise+tcp://127.0.0.1:44347/?node=a0b9e21e67ea7de72fc787ee0fa174565fc008fbdf3b7072b12537ccb2964207&loc=%7B%22type%22%3A%22ocapn-peer%22%2C%22network%22%3A%22np%22%2C%22transport%22%3A%22np%22%2C%22designator%22%3A%226fda09748d95d02159f62d48194b8c9b5e852450f1ca9dca8430b0808889d598%22%2C%22hints%22%3A%7B%22tcp%3Ahost%22%3A%22127.0.0.1%22%2C%22tcp%3Aport%22%3A%2244347%22%7D%7D
+demo: A: ✓ hints advertise ocapn+noise+tcp — pairing will route via @nets/ocapn
+demo: B: accept(<locator>, "alice") — completing the pairing
+demo: B: ✓ accepted; both daemons now hold each other's peer info
+demo: A: publish Far("Adder", { add }) as pet name "adder"
+demo: B: adopt A's adder by locator and invoke E(adder).add(2, 3)
+demo: B: ← remote result = 5
+demo: B: ✓ capability round-trip computed 2 + 3 = 5 over the Noise session
+demo: A: publish Far("Echoer", { echo }) as pet name "echoer"
+demo: B: send a fresh Far token through E(echoer).echo and check identity
+demo: B: ✓ Far reference identity preserved across the netlayer
+demo: DEMO PASSED

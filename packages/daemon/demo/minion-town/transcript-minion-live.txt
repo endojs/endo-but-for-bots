@@ -1,0 +1,18 @@
+=== [1/3] fetch daemon location from minion.town via SSM ===
+{
+  "type": "ocapn-peer",
+  "network": "np",
+  "transport": "np",
+  "designator": "810b996c1a52092ac852a687a64f6ebcd77526cf3339d8ff8f4cd8e915bca426",
+  "hints": {
+    "ws:url": "ws://127.0.0.1:8930"
+  }
+}
+=== [2/3] client dials wss://minion.town/ocapn (ws:url hint rewritten to the public endpoint) ===
+[client] rewrote ws:url hint -> wss://minion.town/ocapn
+[client] dialing {"type":"ocapn-peer","network":"np","transport":"np","designator":"810b996c1a52092ac852a687a64f6ebcd77526cf3339d8ff8f4cd8e915bca426","hints":{"ws:url":"wss://minion.town/ocapn"}}
+[client] enlivened 'greeter'; invoking...
+[client] getNodeId() = 810b996c1a52092ac852a687a64f6ebcd77526cf3339d8ff8f4cd8e915bca426
+[client] hello(the local peer) = Hello, the local peer! — greetings over OCapN-Noise-WS from the minion.town host.
+RESULT {"ok":true,"swissnum":"greeter","nodeId":"810b996c1a52092ac852a687a64f6ebcd77526cf3339d8ff8f4cd8e915bca426","reply":"Hello, the local peer! — greetings over OCapN-Noise-WS from the minion.town host."}
+=== [3/3] done ===
