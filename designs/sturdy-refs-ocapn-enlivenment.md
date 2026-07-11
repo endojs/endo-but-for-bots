@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-06-23 |
-| **Updated** | 2026-06-26 |
+| **Updated** | 2026-07-11 |
 | **Author** | endolinbot (prompted) |
 | **Status** | Not Started |
 
@@ -51,6 +51,8 @@ The work has three legs that are solved together:
 3. **Any daemon agent method that accepts a pet-name-path also accepts a
    SturdyRef**, so a confined guest or subagent that should never see a locator
    can still refer to a formula without a pet name.
+   For a *confined* guest this works through a guest-scoped opaque token, not
+   the location-bearing SturdyRef itself (see *Distributed confinement*).
 
 There is no retention machinery in this design.
 A SturdyRef is data; enlivenment happens on demand against the closely-held
@@ -91,9 +93,13 @@ that have to be solved together:
 3. **Any daemon agent method that accepts a pet-name-path also accepts a
    SturdyRef.**
    This is the second-stage payoff.
-   A confined guest or subagent that should never see a locator (the long-lived
-   authority granting access to the capability) can still refer to a formula by
-   holding an opaque SturdyRef.
+   A confined guest or subagent that should never see a locator can still refer
+   to a formula by holding an opaque, guest-scoped token that the daemon (the
+   trusted mediator) resolves at its facet boundary.
+   Note the raw SturdyRef of this design is **location-bearing** (its `location`
+   is a readable property, per the pass-style shape below), so the raw SturdyRef
+   itself is *not* what a confined guest holds; see *Distributed confinement*
+   for the binding invariants and the guest-facing token.
    No host pet name need be allocated.
 
 The retention question the directive also raised (how the user retains agency to
@@ -496,6 +502,13 @@ The internal flow at the facet boundary is:
 4. From here the facet's existing pet-name-path code path applies, with the
    SturdyRef having been resolved to a formula identifier.
 
+For a **confined** guest the same flow applies with the guest-scoped opaque
+token in place of the SturdyRef: the facet resolves the token through the
+mediator's token binding instead of reading a `location` off the value (see
+*Distributed confinement*).
+Which facets face confined guests and therefore admit the guest tier is decided
+per-facet when cut 4 lands.
+
 The reverse methods (`reverseIdentify`, `reverseLocate`, `reverseLookup`) do
 **not** gain SturdyRef forms.
 A pet name is a one-way affordance from the user's namespace; a SturdyRef has no
@@ -564,6 +577,69 @@ imports is a daemon-local presence the daemon proxies to the remote target.
 Cross-peer GC stays the daemon's concern, handled by the existing `formulaGraph`
 cross-peer machinery; it is never exposed as a worker-held remote slot.
 
+### Distributed confinement (binding invariants)
+
+Per the maintainer's standing directive (2026-07-11, after the *Distributed
+Confinement* article), a **confined** guest that holds or passes a sturdy
+reference must not be able to **identify** or **locate** the value it names.
+These invariants are binding on every cut of this design: an artifact that
+widens sturdyref reach but leaks identity or location is a regression, not
+progress.
+
+A raw SturdyRef of this design cannot satisfy them by itself: its `location` is
+a readable property (the maintainer's directive is that the category *names a
+locator*), so a raw SturdyRef in a confined guest's hands *is* a location leak.
+The two tiers are therefore distinct:
+
+- **The location-bearing SturdyRef** (the pass-style category above) is the
+  trusted-tier and wire-tier artifact: what the daemon, the OCapN layer, and
+  mutually trusting peers hold and exchange.
+  Its `location` is readable; its swiss number is off-band.
+- **The guest-scoped opaque token** is what crosses into a confined guest.
+  It is opaque and non-dereferenceable: it exposes **no location** (no
+  `location` property, no locator-derived data) and **no secret**; the only
+  thing it grants is that the trusted mediator — the daemon, holding the
+  closely-held OCapN network capability — will resolve it on the guest's
+  behalf (enliven it, or accept it where a pet-name-path is accepted).
+  The closely-held capability that can reveal location is never handed to the
+  guest.
+
+The binding invariants, stated as the tests must state them:
+
+1. **No location.** Nothing a confined guest holds or can reach lets it read a
+   peer locator, a designator, a transport/network name, or hints. Enlivenment
+   of a remote target is a daemon-side act (see *Local-only at the boundary*);
+   the guest imports a daemon-local presence and learns nothing about where the
+   target lives.
+2. **No identification.** A confined guest cannot recover a stable identity
+   from a token, cannot test whether two tokens denote the same object, and
+   cannot use tokens as correlation or deanonymization handles.
+   Consequently tokens are **fresh per grant**: two grants of the same object
+   (to different guests, or to the same guest at different times) yield tokens
+   that are **unlinkable** by the guests holding them — distinct identities,
+   no guest-computable equality, no shared readable payload.
+   (This is why the guest tier cannot simply be a SturdyRef with the `location`
+   accessor removed: structural equality on the underlying locator is itself an
+   identification channel.)
+3. **Opaque and unforgeable.** A token grants exactly mediated resolution and
+   nothing more: no ambient authority, and no side channel back to identity or
+   location. A guest cannot mint a token that the mediator resolves.
+
+The optional advisory `type` hint deserves a note under invariant 2: on the
+guest tier the hint is disclosed only at the granter's choice, and a granter
+that wants full unlinkability between two grants of the same object omits it
+(a shared hint string is a weak correlation channel; an omitted one is none).
+
+The mediator-side mapping from a guest-scoped token to the closely-held
+`(location, swissNum)` tuple is daemon state, revoked the same way a sturdyref
+is revoked: the daemon **forgets** the binding, and the token can never again
+be resolved (see *Revocation*).
+This design commits to the two-tier split and the three invariants; the
+concrete representation of the guest-scoped token (its own pass-style category,
+a daemon-minted remotable, or another shape) is scoped as an open question
+below — whatever shape is chosen must pass the confinement tests in the test
+plan verbatim.
+
 ### Migration / staged adoption
 
 The change lands in four cuts.
@@ -602,10 +678,11 @@ The box retains nothing on its own; if the underlying formula is no longer live
 #### Worker holds a SturdyRef *and* calls a daemon method that resolves it
 
 This is the central design payoff.
-The worker passes the SturdyRef as an argument; the facet recognises
-`passStyleOf === 'sturdyref'`, resolves to a formula identifier via the
-closely-held capability, and dispatches.
-No swiss number ever crosses into the worker.
+The worker passes the SturdyRef (or, for a confined guest, its guest-scoped
+token) as an argument; the facet recognises it, resolves to a formula
+identifier via the closely-held capability, and dispatches.
+No swiss number ever crosses into the worker, and no location ever crosses
+into a confined guest.
 
 #### Daemon restarts
 
@@ -657,8 +734,26 @@ Daemon facets:
 - `E(host).locate(sturdyRef)` returns a locator equal to the SturdyRef's original
   locator (round-trip invariant).
 - `E(host).makeUnconfined(spec, { petNamePaths: [sturdyRef] })` threads through.
-- A confined guest that received a SturdyRef can pass it back to the host as an
-  argument; the host facet resolves it; the guest never sees the swiss number.
+- A confined guest that received a guest-scoped token can pass it back to the
+  host as an argument; the host facet resolves it; the guest never sees the
+  swiss number or the location.
+
+Confinement (binding; see *Distributed confinement*):
+
+- **Cannot read a locator.** A confined guest granted a reference receives no
+  value from which a peer locator, designator, transport/network, or hint is
+  readable — asserted over everything reachable from the token (own
+  properties, prototype chain, and error messages from misuse).
+- **Cannot correlate two tokens.** Two grants of the same underlying object
+  (to two guests, or to one guest twice) yield tokens with distinct
+  identities, unequal under every guest-available comparison (`===`,
+  structural equality of readable data, pattern matching), so a guest cannot
+  test that they denote the same object.
+- **Mediated resolution still works.** Each of those unlinkable tokens,
+  passed back to the trusted mediator, resolves to the same underlying value
+  (the mediator, not the guest, is where convergence is observable).
+- **Unforgeable.** A guest-fabricated token (structurally identical shape) is
+  rejected by the mediator.
 
 ## Acceptance criteria
 
@@ -685,10 +780,15 @@ Daemon facets:
 - No `FinalizationRegistry`, no `retain` / `release` `endor` syscall, and no
   daemon-side ephemeral retention table is introduced; the SES `lockdown`
   posture is unchanged.
+- **Distributed confinement holds**: a confined guest never receives the
+  location-bearing SturdyRef; what it holds is opaque (no location, no
+  secret), non-dereferenceable except through the trusted mediator, unlinkable
+  across grants, and unforgeable — with the confinement tests in the test plan
+  passing verbatim.
 
 ## Open questions
 
-One item remains genuinely open.
+Two items remain genuinely open.
 The abandoned paired-design mechanism (retention table, `retain` / `release`
 syscall, proactive per-turn export drop, `FinalizationRegistry`) is withdrawn,
 and this design does **not** substitute new mechanism in its place.
@@ -704,6 +804,18 @@ and this design does **not** substitute new mechanism in its place.
   This is distinct from revocation, which is decided (see *Revocation*): the
   daemon forgets the swiss number to revoke a sturdyref, and partitions or
   terminates the holding process to revoke a live value.
+
+- **Representation of the guest-scoped opaque token.**
+  The *Distributed confinement* section commits to the two-tier split (the
+  location-bearing SturdyRef for trusted holders and the wire; a fresh,
+  unlinkable, opaque token per grant for confined guests) and to the three
+  binding invariants, but not to the token's concrete shape: its own
+  pass-style category, a daemon-minted remotable, or a payload-free
+  per-instance identity like the pre-#521 shim.
+  Whatever shape is chosen must pass the confinement tests in the test plan
+  verbatim; the choice affects how `M.sturdyRef()`-guarded facet methods admit
+  the guest tier (a sum pattern, or one category with a location-less guest
+  form).
 
 ## Dependencies
 
