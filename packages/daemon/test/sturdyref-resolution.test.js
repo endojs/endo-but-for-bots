@@ -134,7 +134,11 @@ test('confinement: the off-band id binding is not a readable property (no-secret
     t.true(protoKeys.includes(key), `expected key ${String(key)} present`);
   }
   for (const key of protoKeys) {
-    t.not(sturdyRef[key], localId, `property ${String(key)} must not leak the id`);
+    t.not(
+      sturdyRef[key],
+      localId,
+      `property ${String(key)} must not leak the id`,
+    );
   }
 });
 
