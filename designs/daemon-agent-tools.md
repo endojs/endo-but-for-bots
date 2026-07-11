@@ -384,6 +384,13 @@ tools (#616, Phase 3.5), and the push tier (#705, Phase 3) have landed on
 `llm`; the remaining builder work is the network tool wiring (Phase 3.6),
 the sandbox shell engine (Phase 2c), and the Phase 4 worked loop.
 
+The loop-level, cross-design sequencing of the git-capability stack is
+canonical in [daemon-git-next-steps](daemon-git-next-steps.md) § Phased
+Build Plan (accepted 2026-07-11): its Phases 1 and 3 dispatch this
+document's Phases 3 and 4, and its Phase 4 dispatches this document's
+Phases 5–6. This section stays normative for each tool-layer
+deliverable's shape.
+
 ### Phase 0: Substrate (landed — record only)
 
 - [x] `EndoMount` completion — descriptors, snapshot, `provideHostPath`

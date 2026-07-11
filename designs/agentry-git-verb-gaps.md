@@ -3,8 +3,22 @@
 | | |
 |---|---|
 | **Created** | 2026-07-08 |
+| **Updated** | 2026-07-11 |
 | **Author** | 0xpatrickdev (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
+
+## Status
+
+Two of the five verbs landed via #644: `commit({ amend })` and
+`reword(ref, message)` across the exo, guard, backend, code-mode, and elevated
+JSON (`makeGitHistoryTool`) surfaces, gated on the `allowHistoryRewrite`
+attenuation axis ([daemon-git-capability](daemon-git-capability.md) Design
+Decision 11). The remaining verbs — `cherryPick`, `rebase({ autosquash })` for
+`mode: 'start'`, and `checkoutConflict(entries, side)` — plus the `EndoGit`
+contract-test extension are sequenced as Phase 4 of
+[daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan
+(accepted 2026-07-11; parallel-eligible with the loop lane), with tool
+exposure per [daemon-agent-tools](daemon-agent-tools.md) § Phases 5–6.
 
 ## What is the Problem Being Solved?
 
