@@ -125,7 +125,11 @@ EOF
     /handle \/ocapn\* \{/ && !done { print ins; done=1 }
     { print }
   ' "$CADDY_FILE" >"$tmp"
-  mv "$tmp" "$CADDY_FILE"
+  cat "$tmp" >"$CADDY_FILE"
+  rm -f "$tmp"
+  # The caddy service runs as an unprivileged user and must be able to read the
+  # imported file; a bare `mv` from a 600 mktemp would break the reload.
+  chmod 644 "$CADDY_FILE"
   log "validating caddy config"
   caddy validate --config /etc/caddy/Caddyfile
   systemctl reload caddy
