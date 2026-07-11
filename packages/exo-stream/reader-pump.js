@@ -74,6 +74,15 @@ export const makeReaderPump = (iterable, options = {}) => {
           // After buffer values, wait for sync before each pull
           if (i >= buffer) {
             const synNode = await synPromise;
+            if (
+              synNode === null ||
+              (typeof synNode !== 'object' && typeof synNode !== 'function') ||
+              !('promise' in synNode)
+            ) {
+              throw new TypeError(
+                'Reader synchronization chain yielded an invalid node',
+              );
+            }
             if (synNode.promise === null) {
               // Initiator signaled close - call iterator.return() for cleanup
               let returnValue = synNode.value;
@@ -113,7 +122,12 @@ export const makeReaderPump = (iterable, options = {}) => {
           await iterator.return();
         }
         // Abort: resolve tail with rejection
-        ackResolve(Promise.reject(err));
+        const rejection = Promise.reject(err);
+        // The initiator may abandon the acknowledgement chain after an
+        // invalid or failed stream request. Mark the rejection observed here,
+        // while preserving it for any consumer that does await the chain.
+        rejection.catch(() => undefined);
+        ackResolve(rejection);
       }
     })();
 

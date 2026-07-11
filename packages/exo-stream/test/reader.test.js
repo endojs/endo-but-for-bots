@@ -46,6 +46,18 @@ test('passable reader round-trip', async t => {
   }
 });
 
+test('reader rejects an invalid synchronization node without an unhandled producer rejection', async t => {
+  const readerRef = readerFromIterator([1]);
+  const invalidNode =
+    /** @type {import('@endo/eventual-send').ERef<StreamNode>} */ (
+      /** @type {unknown} */ (Promise.resolve(undefined))
+    );
+
+  await t.throwsAsync(() => readerRef.stream(invalidNode), {
+    message: /invalid node/,
+  });
+});
+
 test('empty passable reader', async t => {
   async function* emptyIterator() {
     // yields nothing
