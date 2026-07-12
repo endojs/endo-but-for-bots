@@ -4682,24 +4682,27 @@ test('provideGit rejects a malformed commit identity at the host boundary', asyn
 
   // These identities all satisfy the interface guard (both fields are strings)
   // yet must be rejected by the host's `normalizeGitIdentity`, so the failure
-  // surfaces at `provideGit` rather than late on the first commit.
+  // surfaces at `provideGit` rather than late on the first commit.  The field
+  // name is redacted to `(a string)` as the error crosses the daemon marshal
+  // boundary (the `X` template does not `q()` the label, matching the sibling
+  // credential validators), so the assertions match the rejection reason.
   await t.throwsAsync(
     E(host).provideGit(mount, 'git-identity-empty', {
       identity: { authorName: '', authorEmail: 'ada@example.test' },
     }),
-    { message: /authorName must be a non-empty string/ },
+    { message: /must be a non-empty string/ },
   );
   await t.throwsAsync(
     E(host).provideGit(mount, 'git-identity-blank', {
       identity: { authorName: 'Ada Agent', authorEmail: '   ' },
     }),
-    { message: /authorEmail must not be blank/ },
+    { message: /must not be blank/ },
   );
   await t.throwsAsync(
     E(host).provideGit(mount, 'git-identity-control', {
       identity: { authorName: 'Ada\nAgent', authorEmail: 'ada@example.test' },
     }),
-    { message: /authorName must not contain control characters/ },
+    { message: /must not contain control characters/ },
   );
 });
 
