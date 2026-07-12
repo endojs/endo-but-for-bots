@@ -58,6 +58,10 @@ import { makeHostMaker } from './host.js';
 import { makeEncryptedFileSecretBackend } from './secret-backend.js';
 import { makeSecretManager } from './secret-manager.js';
 import { provideHostToolPowers } from './host-tool-powers.js';
+import {
+  makeSturdyRefStore,
+  makeSturdyRefExporter,
+} from './sturdyref-store.js';
 import { makeRemoteControlProvider } from './remote-control.js';
 import {
   assertName,
@@ -129,6 +133,9 @@ import { makeTraceAggregator } from './trace-aggregator.js';
 import { getUnredactedStackString } from './unredacted-stack.js';
 
 /** @import { Passable } from '@endo/pass-style' */
+/** @import { OcapnLocation } from '@endo/ocapn' */
+/** @import { SturdyRefExporter } from './sturdyref-store.js' */
+/** @import { SturdyRefStore } from './types.js' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
@@ -643,6 +650,12 @@ const makeDaemonCore = async (
 
   const { id: knownPeersId } = await preformulate('peers', {
     type: 'known-peers-store',
+  });
+  // The daemon's swiss-num store: the durable, daemon-private table backing
+  // SturdyRef EXPORT (design cut 3). Its formula number keys the store's rows
+  // in daemon state, so mints survive restart.
+  const { id: sturdyRefStoreId } = await preformulate('sturdyrefs', {
+    type: 'sturdyref-store',
   });
   const { id: leastAuthorityId } = await preformulate('least-authority', {
     type: 'least-authority',
@@ -1204,6 +1217,9 @@ const makeDaemonCore = async (
   });
 
   formulaGraph.addRoot(knownPeersId);
+  // The swiss-num store is a daemon singleton reached only from daemon core;
+  // root it so it is never collected (like known-peers-store above).
+  formulaGraph.addRoot(sturdyRefStoreId);
   formulaGraph.addRoot(leastAuthorityId);
   formulaGraph.addRoot(mainWorkerId);
   formulaGraph.addRoot(endoFormulaId);
@@ -4520,6 +4536,13 @@ const makeDaemonCore = async (
         assertValidNumber,
       );
     },
+    'sturdyref-store': (_formula, _context, _id, formulaNumber) =>
+      makeSturdyRefStore({
+        getState: persistencePowers.getState,
+        setState: persistencePowers.setState,
+        stateKey: `sturdyref-store/${formulaNumber}`,
+        makeSha256: cryptoPowers.makeSha256,
+      }),
     'pet-inspector': ({ petStore: petStoreId }) =>
       // Behold, unavoidable forward-reference:
       // eslint-disable-next-line no-use-before-define
@@ -8203,10 +8226,54 @@ const makeDaemonCore = async (
     return getMountHostPath(scratchMountId);
   };
 
+  // The daemon's SturdyRef exporter (design cut 3, "daemon as C"): mints,
+  // serves, lists, and revokes wire-tier SturdyRefs over the swiss-num store,
+  // held closely by daemon core and reached only through the host facet. The
+  // self peer-locator is a placeholder here; cut 4 (the `ocapn` singleton)
+  // replaces it with the daemon's real self-location.
+  const sturdyRefSelfLocation = /** @type {OcapnLocation} */ (
+    harden({
+      type: 'ocapn-peer',
+      designator: localNodeNumber,
+      transport: 'ocapn',
+      hints: false,
+    })
+  );
+  /** @type {SturdyRefExporter | undefined} */
+  let sturdyRefExporterMemo;
+  const getSturdyRefExporter = async () => {
+    if (sturdyRefExporterMemo === undefined) {
+      const store = /** @type {SturdyRefStore} */ (
+        await provide(sturdyRefStoreId)
+      );
+      sturdyRefExporterMemo = makeSturdyRefExporter({
+        store,
+        randomHex256,
+        selfLocation: sturdyRefSelfLocation,
+        provide,
+      });
+    }
+    return sturdyRefExporterMemo;
+  };
+  /**
+   * @param {FormulaIdentifier} formulaIdentifier
+   * @param {string} [type]
+   */
+  const mintSturdyRefGrant = async (formulaIdentifier, type) =>
+    (await getSturdyRefExporter()).mintGrant(formulaIdentifier, type);
+  const getSturdyRefGrants = async () =>
+    (await getSturdyRefExporter()).listGrants();
+  /** @param {string} grantHandle */
+  const deleteSturdyRefGrant = async grantHandle =>
+    (await getSturdyRefExporter()).revokeGrant(grantHandle);
+
   const makeHost = makeHostMaker({
     gitClone,
     provide,
     provideStoreController,
+    mintSturdyRefGrant,
+    getSturdyRefGrants,
+    deleteSturdyRefGrant,
     cancelValue,
     formulateWorker,
     formulateHost,

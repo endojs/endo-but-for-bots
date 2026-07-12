@@ -23,6 +23,13 @@
  */
 
 export { makeOcapn } from './src/client/index.js';
+// The SturdyRef session-manager tracker: minting a wire-tier SturdyRef
+// (with its `(location, swissNum)` details held off-band so the codec can
+// serialize it) and revealing those details. Promoted onto the public
+// surface for the daemon's own OCapN client, which mints and serves
+// SturdyRefs without standing up a full networked `makeOcapn` session
+// (see designs/sturdy-refs-cross-peer-bridge.md § "Mint and export").
+export { makeSturdyRefTracker } from './src/client/sturdyrefs.js';
 export {
   decodeSwissnum,
   swissnumFromBytes,

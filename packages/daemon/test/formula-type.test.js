@@ -39,6 +39,7 @@ const ALL_FORMULA_TYPES = [
   'registry',
   'resolver',
   'scratch-mount',
+  'sturdyref-store',
   'timer',
   'worker',
 ];
