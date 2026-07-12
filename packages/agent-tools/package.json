@@ -123,6 +123,7 @@
     "@earendil-works/pi-ai": "^0.79.0",
     "@endo/daemon": "workspace:^",
     "@endo/git": "workspace:^",
+    "@endo/host-spawner": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "ajv": "^8.17.1",

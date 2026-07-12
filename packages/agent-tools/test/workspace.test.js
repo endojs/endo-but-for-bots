@@ -20,6 +20,8 @@ import {
  * behavior is proved end to end in `git-worked-loop.test.js`.
  *
  * @param {string} label
+ * @returns {any} an inert stand-in for any workspace grant; typed `any` so a
+ *   single `Far` remotable satisfies every distinct capability parameter.
  */
 const grant = label => Far(label, {});
 

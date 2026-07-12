@@ -62,7 +62,11 @@ const realSpawner = async (argv, opts = {}) => {
   const [command, ...args] = argv;
   const child = spawn(command, args, {
     cwd: opts.cwd,
-    env: opts.env,
+    // Node's coverage plumbing mutates the child's `env` object (it adds
+    // `NODE_V8_COVERAGE` when the parent runs under c8), so hand `spawn` a
+    // fresh extensible copy rather than the hardened `opts.env`, which is
+    // non-extensible. With no env supplied, inherit the ambient environment.
+    env: opts.env ? { ...opts.env } : undefined,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const wait = new Promise((resolve, reject) => {
@@ -212,7 +216,7 @@ test('the version-controlled-filesystem loop closes end to end through provision
 
   await vcs('add').invoke({ paths: ['README.md', 'AGENT.md'] });
 
-  const staged = /** @type {{ path: string }[]} */ (
+  const staged = /** @type {{ path: string, index?: string }[]} */ (
     await vcs('status').invoke({})
   );
   t.true(
