@@ -334,6 +334,10 @@ tcpTest(
         'the rejection never names the swiss-num',
       );
     } finally {
+      // Tear down both peers' netlayers (listening servers + live sessions) so
+      // the test process can exit; leaking B's armed netlayer here is what made
+      // ava report "Failed to exit while running test/ocapn.test.js".
+      identityB.shutdown();
       clientC.shutdown();
     }
   },
