@@ -170,23 +170,30 @@ export const makeOcapnIdentity = async ({
   const publicKeyBytes = bytesFromImmutable(keyPair.publicKey.bytes);
   const designator = base32Encode(publicKeyBytes);
 
+  // The daemon's base self peer-locator, derived from the keypair alone with no
+  // dialable hints. This is what an UNARMED daemon advertises: an identity
+  // without a wire endpoint (the provisional cut-4 default).
   /** @type {OcapnLocation} */
-  const selfLocation = harden({
+  const keypairSelfLocation = harden({
     type: 'ocapn-peer',
     designator,
     transport,
     hints: false,
   });
 
-  // The daemon's OCapN client EXPORT surface (the cut-3 exporter), now built
-  // over the real self-location so a self-minted SturdyRef reveals and enlivens
-  // against the daemon's own identity rather than a placeholder.
-  const exporter = makeSturdyRefExporter({
+  // The daemon's OCapN client EXPORT surface (the cut-3 exporter), built over
+  // the self peer-locator so a self-minted SturdyRef reveals and enlivens
+  // against the daemon's own identity rather than a placeholder. Built first
+  // over the keypair self-location so its store-backed `locator` is available to
+  // the client below; rebuilt over the armed netlayer's dialable location once
+  // the client stands one up (see the arming block).
+  let exporter = makeSturdyRefExporter({
     store,
     randomHex256,
-    selfLocation,
+    selfLocation: keypairSelfLocation,
     provide,
   });
+  let selfLocation = keypairSelfLocation;
 
   // The daemon's OCapN CLIENT (the dial+serve surface, cut 5): built only when
   // a netlayer is armed. Its `locator` is the swiss-num store's read side, so
@@ -197,12 +204,41 @@ export const makeOcapnIdentity = async ({
   /** @type {any} */
   let client;
   if (makeNetwork !== undefined) {
+    // Wrap the caller's netlayer factory to capture the netlayer `makeOcapn`
+    // stands up, so we can read its dialable location (design cut 6, daemon-side
+    // arming). `makeOcapn` invokes the factory once with `(handlers, logger)`.
+    /** @type {any} */
+    let armedNetlayer;
+    /** @type {any} */
+    const capturingNetwork = (handlers, logger) =>
+      Promise.resolve(makeNetwork(handlers, logger)).then(netlayer => {
+        armedNetlayer = netlayer;
+        return netlayer;
+      });
     client = await makeOcapn({
       codec: syrupCodec,
-      network: makeNetwork,
+      network: capturingNetwork,
       locator: exporter.locator,
       debugLabel: `daemon-ocapn:${designator}`,
     });
+    if (armedNetlayer !== undefined) {
+      // Adopt the armed netlayer's dialable location (its real designator and
+      // host/port hints) as the daemon's self peer-locator, so a foreign peer
+      // dialing a SturdyRef this daemon minted or exported as a URI reaches this
+      // daemon (design cut 6, the daemon as C over a real session). The keypair
+      // self-location carries `hints: false` and names no wire endpoint, so a
+      // mint stamped with it is not dialable; the armed netlayer's location is.
+      // The exporter's tracker is empty at construction (no mints yet), so
+      // rebuilding it over the dialable location loses nothing, and the client's
+      // store-backed serve path is unaffected (same store, same `provide`).
+      selfLocation = harden({ ...armedNetlayer.location });
+      exporter = makeSturdyRefExporter({
+        store,
+        randomHex256,
+        selfLocation,
+        provide,
+      });
+    }
   }
 
   /**
@@ -276,6 +312,17 @@ export const makeOcapnIdentity = async ({
     getSelfLocation: () => selfLocation,
     exporter,
     isArmed: client !== undefined,
+    /**
+     * Tear down the daemon's OCapN client and its armed netlayer, closing every
+     * live session and the listening socket. A no-op when unarmed. Exposed so a
+     * host (or a test standing up armed identities) can release the netlayer;
+     * without it an armed identity leaks a listening server.
+     */
+    shutdown: () => {
+      if (client !== undefined) {
+        client.shutdown();
+      }
+    },
     reveal,
     enliven,
     provideSession,
