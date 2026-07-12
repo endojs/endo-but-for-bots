@@ -242,6 +242,54 @@ const withGitEnvOverrides = (envVars, overrides = /** @type {T} */ ({})) => ({
 harden(withGitEnvOverrides);
 
 /**
+ * True when `value` carries an ASCII control character (C0 range or DEL).  Git
+ * strips such characters from a commit ident, so they must be rejected before
+ * they silently corrupt the author/committer line.
+ *
+ * @param {string} value
+ * @returns {boolean}
+ */
+const hasControlCharacter = value => {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+};
+harden(hasControlCharacter);
+
+/**
+ * Validate one commit-identity field (`authorName` / `authorEmail`).  Git's
+ * commit-ident sanitizer strips control characters and surrounding whitespace
+ * and then refuses an ident that reduces to empty (`fatal: empty ident name …
+ * not allowed`), so a whitespace-only or control-character value would abort
+ * every mutating invocation late rather than at construction.  Rejecting such
+ * values here keeps the identity option strictly additive: a supplied identity
+ * either fails fast at construction or is safe to commit with.
+ *
+ * @param {unknown} value
+ * @param {string} field
+ * @returns {string}
+ */
+const requireGitIdentityField = (value, field) => {
+  if (typeof value !== 'string' || value === '') {
+    throw new Error(`git identity ${field} must be a non-empty string`);
+  }
+  if (hasControlCharacter(value)) {
+    throw new Error(
+      `git identity ${field} must not contain control characters`,
+    );
+  }
+  if (value.trim() === '') {
+    throw new Error(`git identity ${field} must not be blank`);
+  }
+  return value;
+};
+harden(requireGitIdentityField);
+
+/**
  * Validate a formula-owned commit-identity policy and project it onto the
  * git author/committer environment variables.  The identity is captured at
  * backend construction (owned by the `Git` formula, never reachable by the
@@ -255,8 +303,11 @@ harden(withGitEnvOverrides);
  * only the committer as this identity), so per-call overrides take precedence
  * over these at the seam.
  *
- * Returns an empty object when no identity is supplied, so the backend falls
- * back to the default identity and the option is strictly additive.
+ * Each field is rejected unless it is a non-empty string that carries no
+ * control characters and is not blank after trimming, so a malformed identity
+ * fails here rather than aborting the first commit.  Returns an empty object
+ * when no identity is supplied, so the backend falls back to the default
+ * identity and the option is strictly additive.
  *
  * @param {unknown} identity
  * @returns {Record<string, string>}
@@ -273,17 +324,13 @@ const commitIdentityEnvOverrides = identity => {
   const { authorName, authorEmail } = /** @type {Record<string, unknown>} */ (
     identity
   );
-  if (typeof authorName !== 'string' || authorName === '') {
-    throw new Error('git identity authorName must be a non-empty string');
-  }
-  if (typeof authorEmail !== 'string' || authorEmail === '') {
-    throw new Error('git identity authorEmail must be a non-empty string');
-  }
+  const name = requireGitIdentityField(authorName, 'authorName');
+  const email = requireGitIdentityField(authorEmail, 'authorEmail');
   return harden({
-    GIT_AUTHOR_NAME: authorName,
-    GIT_AUTHOR_EMAIL: authorEmail,
-    GIT_COMMITTER_NAME: authorName,
-    GIT_COMMITTER_EMAIL: authorEmail,
+    GIT_AUTHOR_NAME: name,
+    GIT_AUTHOR_EMAIL: email,
+    GIT_COMMITTER_NAME: name,
+    GIT_COMMITTER_EMAIL: email,
   });
 };
 harden(commitIdentityEnvOverrides);

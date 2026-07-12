@@ -4667,6 +4667,38 @@ testNeedsNodeWorker(
   },
 );
 
+test('provideGit rejects a malformed commit identity at the host boundary', async t => {
+  const { host, config } = await prepareHost(t);
+  const repoPath = path.join(config.statePath, '..', 'git-identity-reject-repo');
+  await createGitFixture(repoPath);
+  const mount = await E(host).provideMount(
+    repoPath,
+    'git-identity-reject-worktree',
+  );
+
+  // These identities all satisfy the interface guard (both fields are strings)
+  // yet must be rejected by the host's `normalizeGitIdentity`, so the failure
+  // surfaces at `provideGit` rather than late on the first commit.
+  await t.throwsAsync(
+    E(host).provideGit(mount, 'git-identity-empty', {
+      identity: { authorName: '', authorEmail: 'ada@example.test' },
+    }),
+    { message: /authorName must be a non-empty string/ },
+  );
+  await t.throwsAsync(
+    E(host).provideGit(mount, 'git-identity-blank', {
+      identity: { authorName: 'Ada Agent', authorEmail: '   ' },
+    }),
+    { message: /authorEmail must not be blank/ },
+  );
+  await t.throwsAsync(
+    E(host).provideGit(mount, 'git-identity-control', {
+      identity: { authorName: 'Ada\nAgent', authorEmail: 'ada@example.test' },
+    }),
+    { message: /authorName must not contain control characters/ },
+  );
+});
+
 test('provideGit tree exposes immutable commit contents', async t => {
   const { host, config } = await prepareHost(t);
 

@@ -519,6 +519,33 @@ export const makeHostMaker = ({
     };
 
     /**
+     * Validate one commit-identity field.  Beyond the credential-string rules
+     * (non-empty, no NUL), git's commit-ident sanitizer strips control
+     * characters and surrounding whitespace and then refuses an ident that
+     * reduces to empty, so a control-character or blank value would abort every
+     * commit late rather than fail here.  Rejecting them at construction keeps
+     * the identity option strictly additive, and mirrors the backend-side
+     * `commitIdentityEnvOverrides` check so the two boundaries agree.
+     *
+     * @param {unknown} value
+     * @param {string} fieldName
+     * @returns {string}
+     */
+    const requireGitIdentityField = (value, fieldName) => {
+      const string = requireGitCredentialString(value, fieldName);
+      for (let i = 0; i < string.length; i += 1) {
+        const code = string.charCodeAt(i);
+        if (code <= 0x1f || code === 0x7f) {
+          throw makeError(X`${fieldName} must not contain control characters`);
+        }
+      }
+      if (string.trim() === '') {
+        throw makeError(X`${fieldName} must not be blank`);
+      }
+      return string;
+    };
+
+    /**
      * Validate a caller-supplied commit-identity policy for `provideGit` /
      * `provideGitClone` and normalize it into the formula-owned shape the
      * `git` formula persists.  The identity is captured at construction and is
@@ -543,11 +570,11 @@ export const makeHostMaker = ({
           identity
         );
       return harden({
-        authorName: requireGitCredentialString(
+        authorName: requireGitIdentityField(
           authorName,
           `${label}: identity.authorName`,
         ),
-        authorEmail: requireGitCredentialString(
+        authorEmail: requireGitIdentityField(
           authorEmail,
           `${label}: identity.authorEmail`,
         ),

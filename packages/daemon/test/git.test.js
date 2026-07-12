@@ -685,6 +685,65 @@ test('makeNativeGitBackend rejects a malformed commit identity', async t => {
   );
 });
 
+test('commitIdentityEnvOverrides rejects blank and control-character identities', t => {
+  const { commitIdentityEnvOverrides } = internalHelpers;
+
+  // A whitespace-only field passes a bare non-empty check but git reduces it to
+  // an empty ident and aborts every commit, so it must be rejected here to keep
+  // the option strictly additive.
+  t.throws(
+    () =>
+      commitIdentityEnvOverrides(
+        /** @type {any} */ ({
+          authorName: '   ',
+          authorEmail: 'ada@example.test',
+        }),
+      ),
+    { message: /authorName must not be blank/ },
+  );
+
+  // Control characters (newline, carriage return, NUL) corrupt or truncate the
+  // author/committer line; reject them rather than let git silently mangle them.
+  for (const bad of ['Ada\nAgent', 'Ada\rAgent', 'Ada\0Agent']) {
+    t.throws(
+      () =>
+        commitIdentityEnvOverrides(
+          /** @type {any} */ ({
+            authorName: bad,
+            authorEmail: 'ada@example.test',
+          }),
+        ),
+      { message: /authorName must not contain control characters/ },
+    );
+  }
+  t.throws(
+    () =>
+      commitIdentityEnvOverrides(
+        /** @type {any} */ ({
+          authorName: 'Ada Agent',
+          authorEmail: 'ada@\texample.test',
+        }),
+      ),
+    { message: /authorEmail must not contain control characters/ },
+  );
+
+  // A well-formed identity projects onto all four author/committer env vars,
+  // and an absent identity yields no overrides (the additive default).
+  t.deepEqual(
+    commitIdentityEnvOverrides({
+      authorName: 'Ada Agent',
+      authorEmail: 'ada@example.test',
+    }),
+    {
+      GIT_AUTHOR_NAME: 'Ada Agent',
+      GIT_AUTHOR_EMAIL: 'ada@example.test',
+      GIT_COMMITTER_NAME: 'Ada Agent',
+      GIT_COMMITTER_EMAIL: 'ada@example.test',
+    },
+  );
+  t.deepEqual(commitIdentityEnvOverrides(undefined), {});
+});
+
 test('Git.commit amend refreshes identity after rewriting the root commit', async t => {
   const repoRoot = await provisionGitWorktree(t);
   const filePowers = makeFilePowers({ fs, path });
