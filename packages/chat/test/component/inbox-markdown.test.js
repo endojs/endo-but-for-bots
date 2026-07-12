@@ -284,3 +284,90 @@ test.serial(
     });
   },
 );
+
+test.serial(
+  'per-message render-mode toggle switches between markdown, raw, and preformatted',
+  async t => {
+    const { $parent, $end } = createInboxDOM();
+    const dismissedKit = makePromiseKit();
+
+    // A body whose markdown rendering (a <strong>) is visibly distinct from its
+    // literal text (surviving asterisks), so we can tell the modes apart.
+    const message = {
+      type: 'package',
+      number: 3n,
+      date: new Date().toISOString(),
+      from: 'endo://localhost/host-handle-id?type=handle',
+      to: 'endo://localhost/guest-handle-id?type=handle',
+      dismissed: dismissedKit.promise,
+      strings: ['Here is **bold** text'],
+      names: [],
+      ids: [],
+    };
+
+    const { powers } = makePackagePowers({
+      selfId: 'guest-handle-id',
+      message,
+    });
+
+    globalThis.requestAnimationFrame = fn => {
+      fn(0);
+      return 0;
+    };
+
+    inboxComponent($parent, $end, powers, { showValue: () => {} });
+    await waitFor(() => $parent.querySelector('strong'));
+
+    // Markdown mode (default): **bold** renders as a real <strong>.
+    t.truthy($parent.querySelector('strong'), 'default mode renders markdown');
+
+    // The three-button toggle is present, with the markdown button active.
+    const buttons = () => [
+      ...$parent.querySelectorAll('.render-mode-toggle .render-mode-btn'),
+    ];
+    t.deepEqual(
+      buttons().map(b => b.textContent),
+      ['md', 'raw', 'pre'],
+      'toggle offers md/raw/pre',
+    );
+    const buttonFor = label => buttons().find(b => b.textContent === label);
+    t.true(
+      buttonFor('md').classList.contains('active'),
+      'markdown button starts active',
+    );
+
+    // Raw mode: no markdown parsing, so the asterisks survive and there is no
+    // <strong>. The active class follows the click.
+    buttonFor('raw').click();
+    await waitFor(() => !$parent.querySelector('strong'));
+    t.falsy(
+      $parent.querySelector('strong'),
+      'raw mode does not parse markdown',
+    );
+    t.true(
+      $parent.textContent.includes('**bold**'),
+      'raw mode shows literal asterisks',
+    );
+    t.true(
+      buttonFor('raw').classList.contains('active'),
+      'raw button is active after click',
+    );
+    t.false(buttonFor('md').classList.contains('active'));
+
+    // Preformatted mode: wrapped in a monospace <pre class="md-preformatted">.
+    buttonFor('pre').click();
+    await waitFor(() => $parent.querySelector('pre.md-preformatted'));
+    const $pre = $parent.querySelector('pre.md-preformatted');
+    t.truthy($pre, 'preformatted mode wraps the body in pre.md-preformatted');
+    t.true($pre.textContent.includes('**bold**'));
+
+    // Back to markdown: the <strong> returns and the fenced text is gone.
+    buttonFor('md').click();
+    await waitFor(() => $parent.querySelector('strong'));
+    t.truthy(
+      $parent.querySelector('strong'),
+      'switching back to markdown re-parses the body',
+    );
+    t.falsy($parent.querySelector('pre.md-preformatted'));
+  },
+);
