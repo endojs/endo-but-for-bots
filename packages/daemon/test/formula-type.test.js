@@ -38,6 +38,7 @@ const ALL_FORMULA_TYPES = [
   'readable-tree',
   'resolver',
   'scratch-mount',
+  'sturdyref-store',
   'timer',
   'worker',
 ];
