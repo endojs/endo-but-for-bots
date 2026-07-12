@@ -6923,9 +6923,10 @@ const makeDaemonCore = async (
    */
   const makeOcapnSturdyRef = async (ocapnPeerId, encodedSwissNum, context) => {
     context.thisDiesIfThatDies(ocapnPeerId);
-    const peer = /** @type {{ enliven: (s: string | Uint8Array) => Promise<unknown> }} */ (
-      await provide(ocapnPeerId)
-    );
+    const peer =
+      /** @type {{ enliven: (s: string | Uint8Array) => Promise<unknown> }} */ (
+        await provide(ocapnPeerId)
+      );
     return peer.enliven(decodeSwissNumFromFormula(encodedSwissNum));
   };
 
