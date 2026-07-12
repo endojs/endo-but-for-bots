@@ -47,6 +47,9 @@ docker build -f docker/Dockerfile -t endojs/daemon:latest .
 
 # Run with a named volume for persistent state. --init reaps the worker
 # subprocesses the daemon forks (Compose sets this via `init: true`).
+# ENDO_GATEWAY_REMOTE=true admits every remote address (the bearer token is
+# still required). For a real deployment, prefer ENDO_GATEWAY_ALLOWED_CIDRS
+# scoped to your management network behind a TLS proxy; see "Remote access".
 docker run -d --init --name endo \
   -v endo-state:/data/endo \
   -p 8920:8920 \
@@ -87,7 +90,7 @@ Mount either a named volume (survives container recreation) or a host bind mount
 The defaults above are what this image sets, not the daemon's own defaults. In
 particular the image binds `ENDO_ADDR=0.0.0.0:8920` (via the Dockerfile) to
 publish the port; the daemon on its own defaults to `127.0.0.1:8920`. Binding to
-`0.0.0.0` only publishes the port, it does not admit remote callers: the address
+`0.0.0.0` only publishes the port; it does not admit remote callers. The address
 gate still rejects them until you set `ENDO_GATEWAY_REMOTE` or
 `ENDO_GATEWAY_ALLOWED_CIDRS`.
 
@@ -142,7 +145,7 @@ supplies the agent token to authenticate.
   clients behind it: allowlisting the proxy admits everything the proxy forwards,
   and the bearer token becomes the sole per-client gate at that point. Scope the
   CIDR allowlist to callers that connect to the gateway directly.
-- Keep the UNIX control socket inside the container. It is unauthenticated and
+- Keep the UNIX domain socket inside the container. It is unauthenticated and
   equivalent to root over the daemon.
 
 ## Known follow-ups
