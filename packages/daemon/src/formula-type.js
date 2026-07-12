@@ -37,6 +37,7 @@ const formulaTypes = new Set([
   'resolver',
   'scratch-mount',
   'shell',
+  'sturdyref-store',
   'timer',
   'worker',
 ]);

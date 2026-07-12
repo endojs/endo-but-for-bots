@@ -284,6 +284,18 @@ export const GuestInterface = M.interface('EndoGuest', {
   evaluate: EvaluateMethodGuard,
 });
 
+// The daemon's SturdyRef EXPORT facet (design cut 3, "daemon as C"), vended
+// host-only by `EndoHost.sturdyRefs`. `provideSturdyRef` returns a grant
+// handle (a hex string) — the marshalable management reference — while the
+// raw wire-tier SturdyRef stays daemon-side for the OCapN wire codec.
+export const SturdyRefsInterface = M.interface('EndoSturdyRefs', {
+  provideSturdyRef: M.call(NameOrPathShape)
+    .optional(M.string())
+    .returns(M.promise()),
+  listSturdyRefGrants: M.call().returns(M.promise()),
+  revokeSturdyRefGrant: M.call(M.string()).returns(M.promise()),
+});
+
 export const HostInterface = M.interface('EndoHost', {
   // Name hub — the shared read (incl. `help`) + registry/locator/mutation
   // surface, plus the directory file-I/O surface.
@@ -483,6 +495,12 @@ export const HostInterface = M.interface('EndoHost', {
   followPeerChanges: M.call().returns(M.promise()),
   // Locate a formula with connection hints.
   locateWithHints: M.call().rest(NamePathShape).returns(M.promise()),
+  // The SturdyRef EXPORT facet (design cut 3). Host-tier only: this accessor
+  // is deliberately absent from GuestInterface, so a confined guest can never
+  // reach the minting surface or the daemon-private swiss-num store — the
+  // guard-level tier gate. A dedicated sub-facet (SturdyRefsInterface) rather
+  // than inlined methods because this interface is at its method-guard cap.
+  sturdyRefs: M.call().returns(M.promise()),
   // Adopt a value from a locator with connection hints
   adoptFromLocator: M.call(LocatorShape, NameOrPathShape).returns(M.promise()),
   // Create an invitation

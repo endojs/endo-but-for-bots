@@ -3085,6 +3085,86 @@ test('getFormula normalizes unknown-identifier-on-local-node error', async t => 
   });
 });
 
+// SturdyRef EXPORT (design cut 3, "daemon as C"): the host mints durable,
+// revocable grants over the daemon's swiss-num store, lists them without
+// leaking secrets, and revokes by forgetting. The raw wire-tier SturdyRef
+// stays daemon-side (its dialable form awaits the real self-location of cut
+// 4); the marshalable grant handle is what the host client sees.
+test('host mints, lists, and revokes SturdyRef grants', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).storeValue('hello sturdy', 'thing');
+  const id = await E(host).identify('thing');
+
+  const sturdyRefs = await E(host).sturdyRefs();
+  const grantHandle = await E(sturdyRefs).provideSturdyRef(['thing']);
+  t.is(typeof grantHandle, 'string');
+  t.is(grantHandle.length, 64, 'a grant handle is a SHA-256 hex digest');
+
+  const grants = await E(sturdyRefs).listSturdyRefGrants();
+  t.is(grants.length, 1);
+  t.is(grants[0].grantHandle, grantHandle);
+  t.is(grants[0].formulaIdentifier, id);
+  t.is(typeof grants[0].mintedAt, 'number');
+
+  // Two mints of one value yield distinct grants that name the same formula:
+  // independently revocable, converging on one value.
+  const secondHandle = await E(sturdyRefs).provideSturdyRef(['thing']);
+  t.not(secondHandle, grantHandle, 'each mint draws a fresh swiss-num');
+  const two = await E(sturdyRefs).listSturdyRefGrants();
+  t.is(two.length, 2);
+  t.deepEqual(new Set(two.map(g => g.formulaIdentifier)), new Set([id]));
+
+  // Revoke by handle (revocation by forgetting): the other grant survives.
+  t.is(await E(sturdyRefs).revokeSturdyRefGrant(grantHandle), true);
+  const afterRevoke = await E(sturdyRefs).listSturdyRefGrants();
+  t.is(afterRevoke.length, 1);
+  t.is(afterRevoke[0].grantHandle, secondHandle);
+  // Revoking an already-forgotten handle is a no-op.
+  t.is(await E(sturdyRefs).revokeSturdyRefGrant(grantHandle), false);
+});
+
+test('SturdyRef grants survive daemon restart and still serve', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+  let grantHandle;
+  let id;
+  {
+    const { host } = await makeHost(config, cancelled);
+    await E(host).storeValue('durable value', 'thing');
+    id = await E(host).identify('thing');
+    const sturdyRefs = await E(host).sturdyRefs();
+    grantHandle = await E(sturdyRefs).provideSturdyRef(['thing'], 'note');
+  }
+
+  await restart(config);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+    const sturdyRefs = await E(host).sturdyRefs();
+    const grants = await E(sturdyRefs).listSturdyRefGrants();
+    t.is(grants.length, 1, 'the swiss-num row survived restart');
+    t.is(grants[0].grantHandle, grantHandle);
+    t.is(grants[0].formulaIdentifier, id);
+    t.is(grants[0].type, 'note');
+    // The exported value is still resolvable after restart (still serves).
+    t.is(await E(host).lookup(['thing']), 'durable value');
+  }
+});
+
+test('a confined guest cannot reach the SturdyRef export facet', async t => {
+  const { host } = await prepareHost(t);
+  const guest = E(host).provideGuest('guest');
+  // The guest's own facet has no `sturdyRefs` method: minting is host-tier,
+  // so the guard-level tier gate rejects the call.
+  await t.throwsAsync(() => E(guest).sturdyRefs(), {
+    message: /target has no method "sturdyRefs"/u,
+  });
+  // Nor does the guest's view of its host expose it.
+  const guestsHost = E(guest).lookup(['@host']);
+  await t.throwsAsync(() => E(guestsHost).sturdyRefs(), {
+    message: /target has no method "sturdyRefs"/u,
+  });
+});
+
 test('read unknown node id', async t => {
   const { host } = await prepareHost(t);
 

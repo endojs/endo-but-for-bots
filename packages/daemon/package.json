@@ -76,6 +76,7 @@
     "@endo/init": "workspace:^",
     "@endo/marshal": "workspace:^",
     "@endo/netstring": "workspace:^",
+    "@endo/ocapn": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/platform": "workspace:^",

@@ -503,6 +503,10 @@ export type KnownPeersStoreFormula = {
 };
 
 export type PetStoreFormula = {
+type SturdyRefStoreFormula = {
+  type: 'sturdyref-store';
+};
+
   type: 'pet-store';
 };
 
@@ -626,6 +630,7 @@ export type Formula =
   | HandleFormula
   | PetInspectorFormula
   | KnownPeersStoreFormula
+  | SturdyRefStoreFormula
   | PetStoreFormula
   | MailboxStoreFormula
   | MailHubFormula
@@ -878,6 +883,53 @@ export type KnownPeersStore = Omit<
   has(nodeNumber: NodeNumber): boolean;
   identifyLocal(nodeNumber: NodeNumber): string | undefined;
   storeIdentifier(nodeNumber: NodeNumber, id: string): Promise<void>;
+};
+
+/**
+ * A secret-free description of one minted SturdyRef grant, returned by
+ * `listSturdyRefGrants`. The `grantHandle` (the SHA-256 hash of the
+ * swiss-num) names the grant without conferring it; the swiss-num itself
+ * never appears here.
+ */
+export type SturdyRefGrant = {
+  grantHandle: string;
+  formulaIdentifier: FormulaIdentifier;
+  mintedAt: number;
+  type?: string;
+};
+
+/**
+ * The daemon's swiss-num store (formula type `sturdyref-store`): the durable,
+ * daemon-private table backing a daemon's SturdyRef EXPORT. Rows map a
+ * swiss-num to a local formula identifier plus mint metadata (mint date, the
+ * grant handle, an optional advisory `type` hint), and persist through the
+ * daemon's key/value state so a minted SturdyRef survives daemon restart.
+ * Reachable only from daemon core and host-tier facets; never a worker or
+ * guest. See designs/sturdy-refs-cross-peer-bridge.md § "Mint and export".
+ */
+export type SturdyRefStore = {
+  /**
+   * Bind a fresh swiss-num to a local formula identifier (mint a grant) and
+   * return the grant handle (the SHA-256 hash of the swiss-num).
+   */
+  mint(
+    swissNum: string,
+    formulaIdentifier: FormulaIdentifier,
+    mintedAt: number,
+    type?: string,
+  ): string;
+  /**
+   * The store read side backing the OCapN `locator`: the formula identifier a
+   * swiss-num resolves to, or `undefined` when no (or a revoked) row matches.
+   */
+  getBySwissNum(swissNum: string): FormulaIdentifier | undefined;
+  /** Every current grant as a secret-free {@link SturdyRefGrant} record. */
+  list(): SturdyRefGrant[];
+  /**
+   * Revoke every row whose grant handle matches (revocation by forgetting).
+   * Returns whether anything was removed.
+   */
+  revokeByHandle(grantHandle: string): boolean;
 };
 
 /**
@@ -1358,6 +1410,37 @@ export interface EndoGuest extends EndoAgent {
 
 export type FarEndoGuest = FarRef<EndoGuest>;
 
+/**
+ * The daemon's SturdyRef EXPORT facet (design cut 3, "daemon as C"), vended
+ * host-only by `EndoHost.sturdyRefs`. Minting binds a fresh 256-bit swiss-num
+ * to a local value in the daemon's `sturdyref-store` and constructs the
+ * wire-tier SturdyRef through the daemon's OCapN client (held daemon-side for
+ * the wire codec); the store read side backs the client's bootstrap `fetch`.
+ * See designs/sturdy-refs-cross-peer-bridge.md § "Mint and export".
+ */
+export interface EndoSturdyRefs {
+  /**
+   * Mint a durable, revocable grant EXPORTING the value at `petNamePath`
+   * backed by a fresh swiss-num, and return its grant handle (the SHA-256
+   * hash of the swiss-num). Each call draws a fresh swiss-num, so two grants
+   * for one value are independently revocable and converge on the value only
+   * at enlivenment. The raw wire-tier SturdyRef stays daemon-side (its
+   * dialable out-of-band form awaits the real self-location of cut 4); the
+   * handle is the marshalable reference a host uses to list and revoke.
+   */
+  provideSturdyRef(
+    petNamePath: string | string[],
+    type?: string,
+  ): Promise<string>;
+  /** List this daemon's minted grants, without ever revealing a swiss-num. */
+  listSturdyRefGrants(): Promise<SturdyRefGrant[]>;
+  /**
+   * Revoke a grant by its handle: forgetting the row makes every future fetch
+   * of that swiss-num miss. Returns whether a grant was removed.
+   */
+  revokeSturdyRefGrant(grantHandle: string): Promise<boolean>;
+}
+
 export interface EndoHost extends EndoAgent {
   form(
     recipientNameOrPath: string | string[],
@@ -1580,6 +1663,14 @@ export interface EndoHost extends EndoAgent {
   addPeerInfo(peerInfo: PeerInfo): Promise<void>;
   listKnownPeers(): Promise<PeerInfo[]>;
   followPeerChanges(): AsyncGenerator<PetStoreNameChange, undefined, undefined>;
+  /**
+   * The daemon's SturdyRef EXPORT surface (design cut 3, "daemon as C"):
+   * mint, list, and revoke wire-tier SturdyRef grants. Vended as a dedicated
+   * remotable rather than inlined here because the host interface guard is at
+   * its method cap; being reachable only through the host facet is itself the
+   * tier gate that keeps minting host-only (a confined guest never gets it).
+   */
+  sturdyRefs(): Promise<EndoSturdyRefs>;
   makeChannel(
     petName: string | string[],
     proposedName: string,
@@ -2089,6 +2180,18 @@ export type DaemonicPersistencePowers = {
   deleteFormula: (formulaNumber: FormulaNumber) => Promise<void>;
   listFormulas: () => Promise<Array<{ number: string; node: string }>>;
   listFormulaNumbersByNode: (nodeNumber: string) => string[];
+  /**
+   * Read a value from the daemon-private key/value state table, or
+   * `undefined` when the key is absent. Backs small, mutable, daemon-core
+   * singletons (for example the SturdyRef swiss-num store, whose rows are a
+   * JSON blob keyed by the store's formula number). Not for confined values.
+   */
+  getState: (key: string) => string | undefined;
+  /**
+   * Write (insert or replace) a value into the daemon-private key/value
+   * state table.
+   */
+  setState: (key: string, value: string) => void;
   writeAgentKey: (
     publicKey: string,
     privateKey: string,
