@@ -41,6 +41,10 @@
       "types": "./git-mount-tool.d.ts",
       "default": "./src/git-mount-tool.js"
     },
+    "./git-remote-tool.js": {
+      "types": "./git-remote-tool.d.ts",
+      "default": "./src/git-remote-tool.js"
+    },
     "./shell-tool.js": {
       "types": "./shell-tool.d.ts",
       "default": "./src/shell-tool.js"
@@ -64,6 +68,10 @@
     "./src/git-mount-tool.js": {
       "types": "./src/git-mount-tool.d.ts",
       "default": "./src/git-mount-tool.js"
+    },
+    "./src/git-remote-tool.js": {
+      "types": "./src/git-remote-tool.d.ts",
+      "default": "./src/git-remote-tool.js"
     },
     "./src/shell-tool.js": {
       "types": "./src/shell-tool.d.ts",
