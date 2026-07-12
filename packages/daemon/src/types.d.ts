@@ -274,6 +274,14 @@ export type GitFormula = {
    * Absence retains the backward-compatible default denial.
    */
   allowHistoryRewrite?: boolean;
+  /**
+   * Formula-owned commit-identity policy captured at `provideGit` /
+   * `provideGitClone` construction and threaded into the native backend's
+   * author/committer environment.  Guest-immutable, and it survives
+   * deincarnation and restart.  Absence retains the backend default
+   * `Endo <endo@invalid.local>`.
+   */
+  identity?: { authorName: string; authorEmail: string };
 };
 
 /**
@@ -1325,7 +1333,14 @@ export interface EndoHost extends EndoAgent {
   provideGit(
     mountCap: EndoMount,
     petName: string | string[],
-    options?: { allowHistoryRewrite?: boolean },
+    options?: {
+      allowHistoryRewrite?: boolean;
+      /**
+       * Formula-owned, guest-immutable commit author/committer identity.
+       * Omitted, commits default to `Endo <endo@invalid.local>`.
+       */
+      identity?: { authorName: string; authorEmail: string };
+    },
   ): Promise<EndoGit>;
   /**
    * Derive an allowlisted, argv-only command-execution `Shell` from a
@@ -1381,6 +1396,12 @@ export interface EndoHost extends EndoAgent {
       credential?: unknown;
       allowLocalFileTransport?: boolean;
     };
+    /**
+     * Formula-owned, guest-immutable commit author/committer identity for the
+     * cloned repository's `Git` cap.  Omitted, commits default to
+     * `Endo <endo@invalid.local>`.
+     */
+    identity?: { authorName: string; authorEmail: string };
   }): Promise<{ git: EndoGit; remote: GitRemote }>;
   /**
    * Mint a bearer-token `GitCredential` capability scoped to
@@ -2354,6 +2375,7 @@ export interface DaemonCore {
   formulateGit: (
     mountId: FormulaIdentifier,
     allowHistoryRewrite: boolean,
+    identity: { authorName: string; authorEmail: string } | undefined,
     deferredTasks: DeferredTasks<GitDeferredTaskParams>,
   ) => FormulateResult<EndoGit>;
 

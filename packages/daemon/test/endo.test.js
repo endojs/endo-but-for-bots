@@ -4607,6 +4607,66 @@ testNeedsNodeWorker(
   },
 );
 
+testNeedsNodeWorker(
+  'provideGit persists the commit identity in its formula',
+  async t => {
+    const { host, config } = await prepareHost(t);
+    const repoPath = path.join(config.statePath, '..', 'git-identity-repo');
+    await createGitFixture(repoPath);
+
+    const mount = await E(host).provideMount(repoPath, 'git-identity-worktree');
+    const gitCap = await E(host).provideGit(mount, 'git-identity', {
+      identity: { authorName: 'Ada Agent', authorEmail: 'ada@example.test' },
+    });
+
+    await fs.promises.writeFile(
+      path.join(repoPath, 'identity.txt'),
+      'identity\n',
+    );
+    const firstEntry = await E(mount).entry(['identity.txt']);
+    await E(gitCap).add([firstEntry]);
+    const first = await E(gitCap).commit('identity subject');
+    const firstShow = await git(repoPath, [
+      'show',
+      '-s',
+      '--format=%an%x00%ae%x00%cn%x00%ce',
+      first.oid,
+    ]);
+    t.is(
+      firstShow.stdout.replace(/\n$/u, ''),
+      ['Ada Agent', 'ada@example.test', 'Ada Agent', 'ada@example.test'].join(
+        '\0',
+      ),
+      'the formula identity attributes the initial commit',
+    );
+
+    // The identity is formula-owned, so it survives deincarnation: cancel the
+    // cap and reincarnate it from the persisted formula, then commit again.
+    await E(host).cancel('git-identity');
+    const reincarnated = await E(host).lookup('git-identity');
+    await fs.promises.writeFile(
+      path.join(repoPath, 'identity.txt'),
+      'identity again\n',
+    );
+    const secondEntry = await E(mount).entry(['identity.txt']);
+    await E(reincarnated).add([secondEntry]);
+    const second = await E(reincarnated).commit('identity subject two');
+    const secondShow = await git(repoPath, [
+      'show',
+      '-s',
+      '--format=%an%x00%ae%x00%cn%x00%ce',
+      second.oid,
+    ]);
+    t.is(
+      secondShow.stdout.replace(/\n$/u, ''),
+      ['Ada Agent', 'ada@example.test', 'Ada Agent', 'ada@example.test'].join(
+        '\0',
+      ),
+      'the identity survives deincarnation and reincarnation',
+    );
+  },
+);
+
 test('provideGit tree exposes immutable commit contents', async t => {
   const { host, config } = await prepareHost(t);
 

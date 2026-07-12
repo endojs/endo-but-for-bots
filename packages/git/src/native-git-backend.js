@@ -242,6 +242,53 @@ const withGitEnvOverrides = (envVars, overrides = /** @type {T} */ ({})) => ({
 harden(withGitEnvOverrides);
 
 /**
+ * Validate a formula-owned commit-identity policy and project it onto the
+ * git author/committer environment variables.  The identity is captured at
+ * backend construction (owned by the `Git` formula, never reachable by the
+ * guest) and threaded into every mutating invocation through the
+ * `withGitEnvOverrides` seam, overriding `makeGitEnv`'s default
+ * `Endo <endo@invalid.local>`.
+ *
+ * Both the author and committer fields are pinned so a fresh commit is wholly
+ * attributed to the policy identity.  `reword` still overrides `GIT_AUTHOR_*`
+ * per invocation to preserve a rewritten commit's original author (leaving
+ * only the committer as this identity), so per-call overrides take precedence
+ * over these at the seam.
+ *
+ * Returns an empty object when no identity is supplied, so the backend falls
+ * back to the default identity and the option is strictly additive.
+ *
+ * @param {unknown} identity
+ * @returns {Record<string, string>}
+ */
+const commitIdentityEnvOverrides = identity => {
+  if (identity === undefined) {
+    return harden({});
+  }
+  if (typeof identity !== 'object' || identity === null) {
+    throw new Error(
+      'git identity must be an object with authorName and authorEmail',
+    );
+  }
+  const { authorName, authorEmail } = /** @type {Record<string, unknown>} */ (
+    identity
+  );
+  if (typeof authorName !== 'string' || authorName === '') {
+    throw new Error('git identity authorName must be a non-empty string');
+  }
+  if (typeof authorEmail !== 'string' || authorEmail === '') {
+    throw new Error('git identity authorEmail must be a non-empty string');
+  }
+  return harden({
+    GIT_AUTHOR_NAME: authorName,
+    GIT_AUTHOR_EMAIL: authorEmail,
+    GIT_COMMITTER_NAME: authorName,
+    GIT_COMMITTER_EMAIL: authorEmail,
+  });
+};
+harden(commitIdentityEnvOverrides);
+
+/**
  * Add command-line protocol policy for explicit URL remote operations.
  * The URL itself still comes from GitRemote policy; these flags ensure
  * the protocol selected for that URL is the only protocol git may use
@@ -991,9 +1038,15 @@ const worktreeCodeToStatus = (code, indexCode) => {
  * @param {object} args
  * @param {string} args.repoRoot  The host-private worktree root the
  *   git formula instantiator pulled from the mount's backing.
+ * @param {{ authorName: string, authorEmail: string }} [args.identity]
+ *   Formula-owned commit-identity policy captured at construction.  When
+ *   supplied, every mutating invocation attributes its author and committer
+ *   to this identity; when omitted, commits fall back to the default
+ *   `Endo <endo@invalid.local>`.  The guest never reaches this value.
  * @returns {GitBackend}
  */
-export const makeNativeGitBackend = ({ repoRoot }) => {
+export const makeNativeGitBackend = ({ repoRoot, identity }) => {
+  const identityEnvOverrides = commitIdentityEnvOverrides(identity);
   /** @type {Promise<void> | undefined} */
   let rootVerification;
   /** @type {Promise<void> | undefined} */
@@ -1181,7 +1234,10 @@ export const makeNativeGitBackend = ({ repoRoot }) => {
         [...GIT_BASE_ARGS, ...args],
         {
           cwd: repoRoot,
-          env: withGitEnvOverrides(makeGitEnv(repoRoot), envOverrides),
+          env: withGitEnvOverrides(makeGitEnv(repoRoot), {
+            ...identityEnvOverrides,
+            ...envOverrides,
+          }),
           timeout: GIT_TIMEOUT_MS,
           maxBuffer: GIT_MAX_BUFFER,
           signal,
@@ -1328,7 +1384,10 @@ export const makeNativeGitBackend = ({ repoRoot }) => {
         [...GIT_BASE_ARGS, ...args],
         {
           cwd: repoRoot,
-          env: withGitEnvOverrides(makeGitEnv(repoRoot), envOverrides),
+          env: withGitEnvOverrides(makeGitEnv(repoRoot), {
+            ...identityEnvOverrides,
+            ...envOverrides,
+          }),
           timeout: GIT_TIMEOUT_MS,
           maxBuffer: GIT_MAX_BUFFER,
           signal,
@@ -2791,6 +2850,7 @@ export const internalHelpers = harden({
   GIT_MAX_BUFFER,
   TOOL_OUTPUT_LIMIT,
   makeGitEnv,
+  commitIdentityEnvOverrides,
   truncateOutput,
   requireNonEmptyString,
   requireAskpassLine,

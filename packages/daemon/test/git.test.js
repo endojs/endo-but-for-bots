@@ -552,6 +552,139 @@ test('Git.commit can amend HEAD through the native backend', async t => {
   );
 });
 
+test('Git.commit attributes a formula-owned identity to author and committer', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({
+    repoRoot,
+    identity: { authorName: 'Ada Agent', authorEmail: 'ada@example.test' },
+  });
+  const git = makeGit({ mount, backend, lineageOf });
+
+  await fs.promises.writeFile(path.join(repoRoot, 'identity.txt'), 'one\n');
+  const entry = await E(mount).entry(['identity.txt']);
+  await E(git).add([entry]);
+  const commit = await E(git).commit('identity subject');
+
+  const { stdout } = await execFileAsync(
+    'git',
+    ['show', '-s', '--format=%an%x00%ae%x00%cn%x00%ce', commit.oid],
+    { cwd: repoRoot },
+  );
+  t.is(
+    stdout.replace(/\n$/u, ''),
+    ['Ada Agent', 'ada@example.test', 'Ada Agent', 'ada@example.test'].join(
+      '\0',
+    ),
+    'the formula identity attributes both author and committer',
+  );
+});
+
+test('Git.commit defaults to the Endo identity when none is supplied', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({ repoRoot });
+  const git = makeGit({ mount, backend, lineageOf });
+
+  await fs.promises.writeFile(path.join(repoRoot, 'default.txt'), 'one\n');
+  const entry = await E(mount).entry(['default.txt']);
+  await E(git).add([entry]);
+  const commit = await E(git).commit('default subject');
+
+  const { stdout } = await execFileAsync(
+    'git',
+    ['show', '-s', '--format=%an%x00%ae%x00%cn%x00%ce', commit.oid],
+    { cwd: repoRoot },
+  );
+  t.is(
+    stdout.replace(/\n$/u, ''),
+    ['Endo', 'endo@invalid.local', 'Endo', 'endo@invalid.local'].join('\0'),
+    'omitting the identity retains the hardcoded backend default',
+  );
+});
+
+test('Git.reword preserves the original author while attributing the committer to the identity', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({
+    repoRoot,
+    identity: { authorName: 'Ada Agent', authorEmail: 'ada@example.test' },
+  });
+  const git = makeGit(
+    { mount, backend, lineageOf },
+    { allowHistoryRewrite: true },
+  );
+
+  // Author the target commit as neither the backend default nor the formula
+  // identity, so the readback distinguishes author-preservation from
+  // re-attribution.
+  await execFileAsync(
+    'git',
+    ['commit', '--allow-empty', '-m', 'raw author subject'],
+    {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'Raw Author',
+        GIT_AUTHOR_EMAIL: 'raw@example.test',
+        GIT_COMMITTER_NAME: 'Raw Author',
+        GIT_COMMITTER_EMAIL: 'raw@example.test',
+      },
+    },
+  );
+  const { stdout: headOid } = await execFileAsync(
+    'git',
+    ['rev-parse', 'HEAD'],
+    {
+      cwd: repoRoot,
+    },
+  );
+
+  const reworded = await E(git).reword(headOid.trim(), 'reworded subject');
+  const { stdout } = await execFileAsync(
+    'git',
+    ['show', '-s', '--format=%an%x00%ae%x00%cn%x00%ce', reworded.oid],
+    { cwd: repoRoot },
+  );
+  const [authorName, authorEmail, committerName, committerEmail] = stdout
+    .replace(/\n$/u, '')
+    .split('\0');
+  t.is(authorName, 'Raw Author', 'reword preserves the original commit author');
+  t.is(authorEmail, 'raw@example.test');
+  t.is(
+    committerName,
+    'Ada Agent',
+    'the committer is re-attributed to the formula identity',
+  );
+  t.is(committerEmail, 'ada@example.test');
+});
+
+test('makeNativeGitBackend rejects a malformed commit identity', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  t.throws(
+    () =>
+      makeNativeGitBackend({
+        repoRoot,
+        identity: /** @type {any} */ ({ authorName: 'Ada Agent' }),
+      }),
+    { message: /authorEmail must be a non-empty string/ },
+  );
+  t.throws(
+    () =>
+      makeNativeGitBackend({
+        repoRoot,
+        identity: /** @type {any} */ ({
+          authorName: '',
+          authorEmail: 'ada@example.test',
+        }),
+      }),
+    { message: /authorName must be a non-empty string/ },
+  );
+});
+
 test('Git.commit amend refreshes identity after rewriting the root commit', async t => {
   const repoRoot = await provisionGitWorktree(t);
   const filePowers = makeFilePowers({ fs, path });

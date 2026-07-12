@@ -518,6 +518,42 @@ export const makeHostMaker = ({
       return value;
     };
 
+    /**
+     * Validate a caller-supplied commit-identity policy for `provideGit` /
+     * `provideGitClone` and normalize it into the formula-owned shape the
+     * `git` formula persists.  The identity is captured at construction and is
+     * never reachable by the guest; omitting it retains the backend's default
+     * `Endo <endo@invalid.local>` attribution, so the option is additive.
+     *
+     * @param {unknown} identity
+     * @param {string} label
+     * @returns {{ authorName: string, authorEmail: string } | undefined}
+     */
+    const normalizeGitIdentity = (identity, label) => {
+      if (identity === undefined) {
+        return undefined;
+      }
+      if (typeof identity !== 'object' || identity === null) {
+        throw makeError(
+          X`${label}: identity must be an object with authorName and authorEmail`,
+        );
+      }
+      const { authorName, authorEmail } =
+        /** @type {{ authorName?: unknown, authorEmail?: unknown }} */ (
+          identity
+        );
+      return harden({
+        authorName: requireGitCredentialString(
+          authorName,
+          `${label}: identity.authorName`,
+        ),
+        authorEmail: requireGitCredentialString(
+          authorEmail,
+          `${label}: identity.authorEmail`,
+        ),
+      });
+    };
+
     /** @type {EndoHost['provideGit']} */
     const provideGit = async (mountCap, petName, options = {}) => {
       const { namePath } = petNamePathFrom(petName);
@@ -535,7 +571,13 @@ export const makeHostMaker = ({
       );
 
       const { allowHistoryRewrite = false } = options;
-      const { value } = await formulateGit(mountId, allowHistoryRewrite, tasks);
+      const identity = normalizeGitIdentity(options.identity, 'provideGit');
+      const { value } = await formulateGit(
+        mountId,
+        allowHistoryRewrite,
+        identity,
+        tasks,
+      );
       return /** @type {EndoGit} */ (value);
     };
 
@@ -741,6 +783,7 @@ export const makeHostMaker = ({
         throw makeError(X`provideGitClone: endpoint must be an object`);
       }
       const { destMount, endpoint: endpointOptions } = opts;
+      const identity = normalizeGitIdentity(opts.identity, 'provideGitClone');
       const destMountId = getIdForRef(destMount);
       if (destMountId === undefined) {
         throw makeError(
@@ -805,7 +848,12 @@ export const makeHostMaker = ({
         makeGit: async () => {
           /** @type {DeferredTasks<GitDeferredTaskParams>} */
           const tasks = makeDeferredTasks();
-          const { value, id } = await formulateGit(destMountId, false, tasks);
+          const { value, id } = await formulateGit(
+            destMountId,
+            false,
+            identity,
+            tasks,
+          );
           clonedGitId = id;
           return value;
         },
