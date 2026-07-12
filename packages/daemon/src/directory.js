@@ -23,7 +23,10 @@ import {
 } from './pet-name.js';
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { directoryHelp, makeHelp } from './help-text.js';
-import { isSturdyRef, resolveSturdyRefToId } from './sturdyref-resolution.js';
+import {
+  isSturdyRef,
+  resolveSturdyRefToIdWith,
+} from './sturdyref-resolution.js';
 
 import { DirectoryInterface } from './interfaces.js';
 
@@ -40,6 +43,11 @@ import { DirectoryInterface } from './interfaces.js';
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['pinTransient']} args.pinTransient
  * @param {DaemonCore['unpinTransient']} args.unpinTransient
+ * @param {(sturdyRef: unknown) => Promise<FormulaIdentifier | undefined>} [args.internalizeForeignSturdyRef]
+ *   The daemon's foreign-SturdyRef internalizer (design cut 5): resolves a
+ *   SturdyRef this daemon did not mint through the closely-held OCapN
+ *   capability. Omitted for a facet with no OCapN capability in reach, where
+ *   the seam degrades to the local-only #541 behavior.
  */
 export const makeDirectoryMaker = ({
   provide,
@@ -51,6 +59,7 @@ export const makeDirectoryMaker = ({
   formulateReadableBlob,
   pinTransient,
   unpinTransient,
+  internalizeForeignSturdyRef,
 }) => {
   /** @type {MakeDirectoryNode} */
   const makeDirectoryNode = (
@@ -64,9 +73,14 @@ export const makeDirectoryMaker = ({
     const lookup = petNamePath => {
       if (isSturdyRef(petNamePath)) {
         // The SturdyRef resolves to a formula identifier at the facet
-        // boundary; the swiss number never crosses into a worker.
-        const id = resolveSturdyRefToId(petNamePath);
-        return /** @type {Promise<unknown>} */ (provide(id));
+        // boundary; the swiss number never crosses into a worker. A foreign
+        // SturdyRef internalizes through the OCapN capability (cut 5).
+        return /** @type {Promise<unknown>} */ (
+          resolveSturdyRefToIdWith(
+            petNamePath,
+            internalizeForeignSturdyRef,
+          ).then(id => provide(id))
+        );
       }
       const namePath = namePathFrom(petNamePath);
       const [headName, ...tailNames] = namePath;
@@ -89,8 +103,10 @@ export const makeDirectoryMaker = ({
     /** @type {EndoDirectory['maybeLookup']} */
     const maybeLookup = petNamePath => {
       if (isSturdyRef(petNamePath)) {
-        const id = resolveSturdyRefToId(petNamePath);
-        return provide(id);
+        return resolveSturdyRefToIdWith(
+          petNamePath,
+          internalizeForeignSturdyRef,
+        ).then(id => provide(id));
       }
       const namePath = namePathFrom(petNamePath);
       const [headName, ...tailNames] = namePath;
@@ -151,7 +167,10 @@ export const makeDirectoryMaker = ({
     /** @type {EndoDirectory['identify']} */
     const identify = async (...petNamePath) => {
       if (petNamePath.length === 1 && isSturdyRef(petNamePath[0])) {
-        return resolveSturdyRefToId(petNamePath[0]);
+        return resolveSturdyRefToIdWith(
+          petNamePath[0],
+          internalizeForeignSturdyRef,
+        );
       }
       assertNames(petNamePath);
       if (petNamePath.length === 1) {
