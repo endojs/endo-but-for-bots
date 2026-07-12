@@ -200,6 +200,10 @@ const ENDOMOUNT_EXTENSIONS = [
   // (a glob result) is an independent argument, so glob and grep compose
   // without grep owning glob.
   'grep',
+  // grep-over-glob convenience combinator: grep(grepPattern, await
+  // glob(globPattern)). A daemon-mount extension composing the two decoupled
+  // faces; not part of the platform-fs ReadableTree contract.
+  'glorp',
   // Declared as part of the name-hub contract but throws ENOSYS until a
   // filesystem watcher is wired (filesystem-watchers.md) — see § C1.
   'followNameChanges',
