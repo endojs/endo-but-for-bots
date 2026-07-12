@@ -65,13 +65,13 @@ bodies; follow a link to read a design's narrative.
 | [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) | 2026-04-14 | 2026-07-05 | **Complete** |
 | [daemon-endor-architecture](daemon-endor-architecture.md) | 2026-04-16 | 2026-07-05 | **Active** |
 | [daemon-form-request](daemon-form-request.md) | 2026-02-25 | 2026-03-02 | **Complete** |
-| [daemon-git-capability](daemon-git-capability.md) | 2026-05-18 | 2026-06-29 | Proposed |
-| [daemon-git-next-steps](daemon-git-next-steps.md) | 2026-05-27 | 2026-06-29 | Proposed |
+| [daemon-git-capability](daemon-git-capability.md) | 2026-05-18 | 2026-07-12 | Proposed |
+| [daemon-git-next-steps](daemon-git-next-steps.md) | 2026-05-27 | 2026-07-12 | Proposed |
 | [daemon-git-remotes](daemon-git-remotes.md) | 2026-05-18 | 2026-06-29 | Proposed |
 | [daemon-guest-eval-simplification](daemon-guest-eval-simplification.md) | 2026-03-21 | 2026-05-04 | **Complete** |
 | [daemon-locator-terminology](daemon-locator-terminology.md) | 2026-02-24 | 2026-02-24 | Not Started |
 | [daemon-make-archive](daemon-make-archive.md) | 2026-04-23 | 2026-04-24 | In Progress |
-| [daemon-message-streaming](daemon-message-streaming.md) | 2026-03-26 | 2026-07-05 | In Progress (PR #287) |
+| [daemon-message-streaming](daemon-message-streaming.md) | 2026-03-26 | 2026-07-12 | In Progress (PR #287) |
 | [daemon-mount](daemon-mount.md) | 2026-03-20 | 2026-05-27 | In Progress |
 | [daemon-mount-capabilities](daemon-mount-capabilities.md) | 2026-05-18 | 2026-05-27 | **Complete** |
 | [daemon-os-sandbox-plugin](daemon-os-sandbox-plugin.md) | 2026-02-15 | 2026-03-19 | Superseded |
@@ -126,14 +126,14 @@ bodies; follow a link to read a design's narrative.
 | [familiar-gateway-migration](familiar-gateway-migration.md) | 2026-02-14 | 2026-02-26 | **Complete** |
 | [familiar-localhttp-protocol](familiar-localhttp-protocol.md) | 2026-02-24 | 2026-02-25 | In Progress |
 | [familiar-unified-weblet-server](familiar-unified-weblet-server.md) | 2026-02-14 | 2026-05-06 | In Progress |
-| [filesystem-watchers](filesystem-watchers.md) | 2026-05-07 | 2026-05-07 | Not Started |
+| [filesystem-watchers](filesystem-watchers.md) | 2026-05-07 | 2026-07-09 | **Complete** |
 | [forge-gap-analysis](forge-gap-analysis.md) | 2026-05-20 | 2026-05-20 | **Reference** |
 | [formula-inspector](formula-inspector.md) | 2026-02-14 | 2026-06-13 | In Progress |
 | [fs-interface-consolidation](fs-interface-consolidation.md) | 2026-06-18 | 2026-06-29 | In Progress |
 | [fs-interface-reconciliation](fs-interface-reconciliation.md) | 2026-06-18 | 2026-06-29 | In Progress |
 | [gateway-bearer-token-auth](gateway-bearer-token-auth.md) | 2026-03-02 | 2026-03-06 | **Complete** |
-| [hardened-text-codecs-shim](hardened-text-codecs-shim.md) | 2026-05-04 | 2026-05-04 | Not Started |
-| [hardened-url-shim](hardened-url-shim.md) | 2026-05-04 | 2026-05-04 | Not Started |
+| [hardened-text-codecs-shim](hardened-text-codecs-shim.md) | 2026-05-04 | 2026-07-12 | Not Started |
+| [hardened-url-shim](hardened-url-shim.md) | 2026-05-04 | 2026-07-12 | Not Started |
 | [hex-package](hex-package.md) | 2026-04-23 | 2026-05-18 | **Complete** |
 | [inventory-cancel-and-liveness](inventory-cancel-and-liveness.md) | 2026-02-14 | 2026-03-13 | Not Started |
 | [inventory-drag-and-drop](inventory-drag-and-drop.md) | 2026-02-14 | 2026-02-24 | Not Started |
