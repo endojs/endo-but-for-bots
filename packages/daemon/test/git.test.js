@@ -742,6 +742,21 @@ test('commitIdentityEnvOverrides rejects blank and control-character identities'
     },
   );
   t.deepEqual(commitIdentityEnvOverrides(undefined), {});
+
+  // Surrounding whitespace is not blank: git trims the ident and accepts it, so
+  // a padded-but-non-blank field is preserved verbatim rather than rejected.
+  t.deepEqual(
+    commitIdentityEnvOverrides({
+      authorName: ' Ada Agent ',
+      authorEmail: ' ada@example.test ',
+    }),
+    {
+      GIT_AUTHOR_NAME: ' Ada Agent ',
+      GIT_AUTHOR_EMAIL: ' ada@example.test ',
+      GIT_COMMITTER_NAME: ' Ada Agent ',
+      GIT_COMMITTER_EMAIL: ' ada@example.test ',
+    },
+  );
 });
 
 test('Git.commit amend refreshes identity after rewriting the root commit', async t => {
