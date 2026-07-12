@@ -510,6 +510,51 @@ export type OcapnFormula = {
   type: 'ocapn';
 };
 
+/**
+ * The foreign-SturdyRef dedup index (design cut 5): maps a foreign
+ * `(location, swissNum)` grant to the `ocapn-sturdyref` formula already
+ * formulated for it, and a foreign peer identity to its `ocapn-peer`. A daemon
+ * singleton, reached only from daemon core.
+ */
+type KnownSturdyRefsStoreFormula = {
+  type: 'known-sturdyrefs-store';
+};
+
+/**
+ * A live OCapN session to a foreign peer (design cut 5). Formulated lazily,
+ * one per foreign peer identity (the Locators draft's same-peer rule); its
+ * value is the session via the daemon's OCapN client `provideSession`. On
+ * session end it cancels its own context so dependent `ocapn-sturdyref`
+ * presences drop and the next use re-dials — exactly as `peer` does for the
+ * `EndoGateway` stack.
+ */
+type OcapnPeerFormula = {
+  type: 'ocapn-peer';
+  /** The foreign peer's OCapN location (designator, transport, hints). */
+  location: import('@endo/ocapn').OcapnLocation;
+};
+
+/**
+ * A foreign SturdyRef internalized as a local formula (design cut 5). Depends
+ * on its `ocapn-peer`; its value is the enlivened presence
+ * (`bootstrap.fetch(swissNum)` over the peer's session). The formula body
+ * holds the swiss-num (daemon-private state, the same trust domain as the
+ * swiss-num store's rows), encoded for JSON persistence. The local formula
+ * identifier denotes the durable designation "the object the peer at
+ * `location` serves for `swissNum`", re-enlivened on demand.
+ */
+type OcapnSturdyRefFormula = {
+  type: 'ocapn-sturdyref';
+  /** The `ocapn-peer` formula this SturdyRef enlivens over. */
+  ocapnPeer: FormulaIdentifier;
+  /**
+   * The swiss-num, JSON-encoded: `{ string }` for an ASCII secret,
+   * `{ bytesHex }` for a raw-byte secret (a foreign implementation's random),
+   * so the exact secret round-trips into the fetch unchanged.
+   */
+  swissNum: { string: string } | { bytesHex: string };
+};
+
 export type PetStoreFormula = {
   type: 'pet-store';
 };
@@ -636,6 +681,9 @@ export type Formula =
   | KnownPeersStoreFormula
   | SturdyRefStoreFormula
   | OcapnFormula
+  | KnownSturdyRefsStoreFormula
+  | OcapnPeerFormula
+  | OcapnSturdyRefFormula
   | PetStoreFormula
   | MailboxStoreFormula
   | MailHubFormula
@@ -954,6 +1002,60 @@ export type OcapnIdentity = {
   getSelfLocation(): import('@endo/ocapn').OcapnLocation;
   /** The SturdyRef EXPORT surface, built over the real self-location. */
   exporter: import('./sturdyref-store.js').SturdyRefExporter;
+  /** Whether a netlayer is armed, so the dial+serve client exists (cut 5). */
+  isArmed: boolean;
+  /**
+   * The closely-held reveal (cut 5): the off-band `(location, swissNum)` of a
+   * SturdyRef this daemon minted or materialized (self-mint, wire arrival, or
+   * `ocapn://` URI), or `undefined` for a forged look-alike / foreign-instance
+   * mint.
+   */
+  reveal(
+    sturdyRef: unknown,
+  ):
+    | { location: import('@endo/ocapn').OcapnLocation; secret: string | Uint8Array }
+    | undefined;
+  /** Dial a foreign peer and fetch by swiss-num (cut 5); rejects when unarmed. */
+  enliven(
+    location: import('@endo/ocapn').OcapnLocation,
+    swissNum: string | Uint8Array,
+  ): Promise<unknown>;
+  /** Provide (or reuse) the live session to a foreign peer (cut 5). */
+  provideSession(location: import('@endo/ocapn').OcapnLocation): Promise<unknown>;
+  /** Materialize a foreign SturdyRef from an out-of-band `ocapn://` URI (cut 5). */
+  materializeFromUri(uri: string): import('@endo/pass-style').SturdyRef;
+  /** Format an `ocapn://` sturdyref URI for a revealable SturdyRef (cut 5). */
+  formatUri(sturdyRef: import('@endo/pass-style').SturdyRef): string;
+};
+
+/**
+ * The foreign-SturdyRef dedup index (formula type `known-sturdyrefs-store`,
+ * design cut 5): maps a foreign `(locationId, sha256(swissNum))` grant to the
+ * `ocapn-sturdyref` formula formulated for it, and a `locationId` to its
+ * `ocapn-peer`, so repeated internalizations of the same foreign object
+ * converge on one formula identifier. Never holds a swiss-num; daemon-private.
+ */
+export type KnownSturdyRefsStore = {
+  /** The `ocapn-sturdyref` id for a foreign grant, or `undefined`. */
+  getSturdyRef(
+    locationId: string,
+    swissNum: string | Uint8Array,
+  ): FormulaIdentifier | undefined;
+  /** Record the `ocapn-sturdyref` id for a foreign grant. */
+  setSturdyRef(
+    locationId: string,
+    swissNum: string | Uint8Array,
+    formulaIdentifier: FormulaIdentifier,
+  ): void;
+  /** The `ocapn-peer` id for a foreign peer identity, or `undefined`. */
+  getPeer(locationId: string): FormulaIdentifier | undefined;
+  /** Record the `ocapn-peer` id for a foreign peer identity. */
+  setPeer(locationId: string, formulaIdentifier: FormulaIdentifier): void;
+  /**
+   * Forget every index entry pointing at a formula identifier (both peer and
+   * sturdyref keyspaces). Returns whether anything was removed.
+   */
+  forget(formulaIdentifier: FormulaIdentifier): boolean;
 };
 
 /**
@@ -1463,6 +1565,18 @@ export interface EndoSturdyRefs {
    * of that swiss-num miss. Returns whether a grant was removed.
    */
   revokeSturdyRefGrant(grantHandle: string): Promise<boolean>;
+  /**
+   * Accept a foreign SturdyRef carried out-of-band as an `ocapn://` URI and
+   * internalize it (design cut 5, "daemon as B"): resolve it through the
+   * closely-held OCapN capability to a local `ocapn-sturdyref` formula
+   * identifier that re-enlivens on demand, optionally binding it under
+   * `petName`. Returns the formula identifier. The URI is secret-bearing, so
+   * this is a host-only surface; a confined guest never reaches it.
+   */
+  acceptSturdyRefUri(
+    uri: string,
+    petName?: string | string[],
+  ): Promise<FormulaIdentifier>;
 }
 
 export interface EndoHost extends EndoAgent {

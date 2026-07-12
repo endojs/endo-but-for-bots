@@ -294,6 +294,12 @@ export const SturdyRefsInterface = M.interface('EndoSturdyRefs', {
     .returns(M.promise()),
   listSturdyRefGrants: M.call().returns(M.promise()),
   revokeSturdyRefGrant: M.call(M.string()).returns(M.promise()),
+  // Accept a foreign SturdyRef carried out-of-band as an `ocapn://` URI and
+  // internalize it (design cut 5, "daemon as B"), optionally binding it under
+  // a pet name. The URI argument is secret-bearing, so this facet is host-only.
+  acceptSturdyRefUri: M.call(M.string())
+    .optional(NameOrPathShape)
+    .returns(M.promise()),
 });
 
 export const HostInterface = M.interface('EndoHost', {

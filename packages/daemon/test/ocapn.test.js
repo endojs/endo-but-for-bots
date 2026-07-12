@@ -1,13 +1,48 @@
 // @ts-nocheck
+/* global process */
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { E } from '@endo/eventual-send';
+import { Far } from '@endo/far';
 import { passStyleOf } from '@endo/pass-style';
 import { makeCryptography } from '@endo/ocapn/cryptography';
 import { syrupCodec } from '@endo/ocapn/syrup';
+import { makeOcapn, formatSturdyRefUri } from '@endo/ocapn';
+import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 import { makeSturdyRefStore } from '../src/sturdyref-store.js';
 import { makeOcapnIdentity, UNARMED_OCAPN_TRANSPORT } from '../src/ocapn.js';
+
+// Whether this environment permits binding a localhost TCP listener; the
+// armed cross-peer tests need a real `tcp-test-only` netlayer and skip when it
+// does not (mirrors the OCapN package's own net-permission gate).
+const netListenAllowed = (() => {
+  const script = `
+    const net = require('net');
+    const server = net.createServer();
+    server.once('error', () => process.exit(1));
+    server.listen(0, '127.0.0.1', () => server.close(() => process.exit(0)));
+  `;
+  return spawnSync(process.execPath, ['-e', script], { stdio: 'ignore' }).status === 0;
+})();
+const tcpTest = netListenAllowed ? test : test.skip;
+
+// A `tcp-test-only` netlayer factory shaped for `makeOcapn`/`makeOcapnIdentity`
+// (`(handlers, logger) => Promise<netlayer>`), capturing the netlayer so the
+// test can read its dialable location.
+const makeCapturingNetworkFactory = designator => {
+  const ref = {};
+  const factory = (handlers, logger) =>
+    makeTcpNetLayer({ handlers, logger, specifiedDesignator: designator }).then(
+      netlayer => {
+        ref.netlayer = netlayer;
+        return netlayer;
+      },
+    );
+  return { factory, ref };
+};
 
 // A daemon-shaped SHA-256 digester and a fresh-256-bit source, matching the
 // daemon's cryptoPowers surface (makeSha256 / randomHex256).
@@ -86,7 +121,7 @@ const makeFixture = ({ state = makeFakeState(), transport } = {}) => {
   return { state, store, values, provide, transport };
 };
 
-const makeIdentity = async fixture =>
+const makeIdentity = async (fixture, makeNetwork) =>
   makeOcapnIdentity({
     getState: fixture.state.getState,
     setState: fixture.state.setState,
@@ -95,6 +130,7 @@ const makeIdentity = async fixture =>
     store: fixture.store,
     provide: fixture.provide,
     transport: fixture.transport,
+    makeNetwork,
   });
 
 test('self-location round-trips a keypair-derived designator and the transport', async t => {
@@ -163,3 +199,122 @@ test('the identity is distinct-by-default: independent daemons differ', async t 
     'a fresh keypair per daemon, never a shared or node-key-derived designator',
   );
 });
+
+// --- Cut 5: the client (dial+serve) surface -----------------------------
+
+test('an unarmed identity cannot dial: enliven and provideSession reject secret-free', async t => {
+  const identity = await makeIdentity(makeFixture());
+  t.false(identity.isArmed, 'no netlayer armed');
+  await t.throwsAsync(() => identity.enliven(identity.getSelfLocation(), 'sw'), {
+    message: /no netlayer armed/,
+  });
+  await t.throwsAsync(() => identity.provideSession(identity.getSelfLocation()), {
+    message: /no netlayer armed/,
+  });
+});
+
+test('formatUri emits a parseable ocapn:// sturdyref URI for a self-mint (out-of-band export)', async t => {
+  const fixture = makeFixture({ transport: 'tcp-testing-only' });
+  const identity = await makeIdentity(fixture);
+  const { sturdyRef } = await identity.exporter.mintGrant('0:node-a');
+
+  const uri = identity.formatUri(sturdyRef);
+  t.true(uri.startsWith('ocapn://'), 'an ocapn:// URI');
+  t.true(uri.includes('/s/'), 'carries a non-empty swiss-num path segment');
+  // The daemon can re-accept its own exported URI (materialize + reveal), and
+  // the recovered swiss-num bytes ASCII-decode back to the hex string the
+  // exporter's locator keys on — so a peer could fetch it.
+  const materialized = identity.materializeFromUri(uri);
+  t.is(passStyleOf(materialized), 'sturdyref');
+  const recovered = identity.reveal(materialized);
+  t.deepEqual(recovered.location, identity.getSelfLocation());
+  // reveal normalizes a materialized secret to a Uint8Array; it ASCII-decodes
+  // back to the hex swiss-num string the exporter's locator keys on.
+  const asString = new TextDecoder('ascii').decode(recovered.secret);
+  t.is(asString, identity.reveal(sturdyRef).secret, 'ASCII-decodes to the hex swiss-num');
+});
+
+test('materializeFromUri round-trips a foreign byte-secret sturdyref URI (the accept path)', async t => {
+  const fixture = makeFixture({ transport: 'tcp-testing-only' });
+  const identity = await makeIdentity(fixture);
+
+  const foreignLocation = harden({
+    type: 'ocapn-peer',
+    designator: 'peerc-designator',
+    transport: 'tcp-testing-only',
+    hints: false,
+  });
+  // A Spritely-style 24-byte non-ASCII random secret (cut 1's byte case).
+  const secret = new Uint8Array(24);
+  for (let i = 0; i < 24; i += 1) secret[i] = (i * 37 + 200) % 256;
+  const uri = formatSturdyRefUri({ location: foreignLocation, swissNum: secret });
+
+  const materialized = identity.materializeFromUri(uri);
+  t.is(passStyleOf(materialized), 'sturdyref');
+  const recovered = identity.reveal(materialized);
+  t.deepEqual(recovered.location, foreignLocation, 'the foreign location round-trips');
+  // reveal normalizes the materialized secret to a Uint8Array of the exact bytes.
+  t.deepEqual(
+    new Uint8Array(recovered.secret),
+    secret,
+    'the byte swiss-num round-trips verbatim',
+  );
+});
+
+test('materializeFromUri rejects a plain peer URI (no swiss-num)', async t => {
+  const fixture = makeFixture({ transport: 'tcp-testing-only' });
+  const identity = await makeIdentity(fixture);
+  const peerUri = formatSturdyRefUri({ location: identity.getSelfLocation() });
+  t.throws(() => identity.materializeFromUri(peerUri), {
+    message: /not a sturdyref URI/,
+  });
+});
+
+tcpTest(
+  'armed cross-peer enliven: daemon-as-B dials a foreign peer and fetches over tcp-test-only',
+  async t => {
+    // The foreign peer C: a plain OCapN client serving one exported value by
+    // swiss-num over a real tcp-test-only netlayer.
+    const exported = Far('Exported', { ping: () => 'pong' });
+    const tableC = new Map([['swiss-C', exported]]);
+    const netC = makeCapturingNetworkFactory('C');
+    const clientC = await makeOcapn({
+      codec: syrupCodec,
+      locator: tableC,
+      debugLabel: 'C',
+      network: netC.factory,
+    });
+    const locationC = netC.ref.netlayer.location;
+
+    // Daemon-as-B: an ARMED OCapN identity.
+    const fixtureB = makeFixture({ transport: 'tcp-testing-only' });
+    const netB = makeCapturingNetworkFactory('B');
+    const identityB = await makeIdentity(fixtureB, netB.factory);
+    t.true(identityB.isArmed, 'B has a netlayer armed');
+
+    try {
+      // B dials C directly and fetches the exported value — exactly the path
+      // an `ocapn-sturdyref` formula's value drives (cross-peer enliven only
+      // via the mediator; B makes the connection, not a guest).
+      const value = await identityB.enliven(locationC, 'swiss-C');
+      t.false(passStyleOf(value) === 'sturdyref', 'enliven yields a presence');
+      t.is(await E(value).ping(), 'pong', 'the fetched value works');
+
+      // A session to C is now live and reusable.
+      const session = await identityB.provideSession(locationC);
+      t.truthy(session, 'provideSession returns a session');
+
+      // A failed fetch (a swiss-num C never minted / a revoked grant) rejects
+      // WITHOUT naming the secret.
+      const error = await t.throwsAsync(() =>
+        identityB.enliven(locationC, 'super-secret-missing'),
+      );
+      t.false(
+        String(error).includes('super-secret-missing'),
+        'the rejection never names the swiss-num',
+      );
+    } finally {
+      clientC.shutdown();
+    }
+  },
+);
