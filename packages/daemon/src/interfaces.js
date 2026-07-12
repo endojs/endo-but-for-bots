@@ -613,6 +613,18 @@ export const MountInterface = M.interface('EndoMount', {
       M.splitRecord({}, { maxResults: M.number() }),
     )
     .returns(M.array()),
+  // glorp — the grep-over-glob convenience combinator. Equivalent to
+  // `grep(grepPattern, await glob(globPattern), options)`: glob is the
+  // independent producer of the `paths` array, grep consumes it, and glorp is
+  // the thin wiring between the two decoupled faces. Both arguments are plain
+  // strings (no eventual `paths` to await here — glorp does the globbing
+  // itself), so this is a `M.call` returning the same match-array promise as
+  // grep. `options` carries `maxResults`, forwarded to the grep leg. The
+  // streaming counterpart belongs to the separate streamGlob/streamGrep design
+  // (#647) and is out of scope. See designs/platform-search-pushdown.md.
+  glorp: M.call(M.string(), M.string())
+    .optional(M.splitRecord({}, { maxResults: M.number() }))
+    .returns(M.promise()),
   lookup: M.call(PathArgShape).returns(M.promise()),
   // `maybeLookup` is the `ReadableNameHub` primitive (lookup-or-undefined).
   // Widened from the shared `NameOrPathShape` contract to `PathArgShape` so the

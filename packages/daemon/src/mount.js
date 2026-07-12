@@ -847,6 +847,26 @@ const makeMountExo = ctx => {
       return harden(matches.slice(0, maxResults));
     },
 
+    // glorp — grep a pattern across exactly the files a glob matches. The
+    // grep-over-glob convenience combinator, equivalent to
+    // `grep(grepPattern, await glob(globPattern), options)`. glob is the
+    // independent producer of the path array, grep consumes it, and glorp is
+    // the thin wiring between them: it composes the two *public* faces
+    // (`this.self.glob` then `this.self.grep`) rather than threading glob into
+    // the grep engine, so glob and grep stay decoupled underneath. Because it
+    // re-enters through the public methods, each leg gets the same revocation
+    // gate, deny filtering, and confinement it would if the caller had chained
+    // them by hand — a `subView`'s glorp is scoped to its sub-root exactly as
+    // its glob and grep are. This is the Array case; the streaming counterpart
+    // belongs to the separate streamGlob/streamGrep design (#647).
+    async glorp(globPattern, grepPattern, options = {}) {
+      await null;
+      assertLive();
+      const self = this.self; // eslint-disable-line no-invalid-this
+      const paths = await self.glob(globPattern);
+      return self.grep(grepPattern, paths, options);
+    },
+
     async lookup(pathArg) {
       await null;
       const segments = segmentsFromPathArg(pathArg);
