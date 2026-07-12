@@ -31,3 +31,24 @@ rust/**/target
 **/*.key
 **/*.p12
 **/.npmrc
+
+# SSH keys and cloud/service credential stores a developer's workspace checkout
+# can plausibly contain. TLS-key globs above do not cover these by name.
+.ssh
+**/.ssh
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+**/id_rsa
+**/id_dsa
+**/id_ecdsa
+**/id_ed25519
+.netrc
+**/.netrc
+.aws
+**/.aws
+.gcloud
+**/.gcloud
+.git-credentials
+**/.git-credentials
