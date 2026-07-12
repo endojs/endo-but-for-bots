@@ -81,20 +81,20 @@ agents that do not block their tool-loop.
 
 ### Tool name
 
-`followStream` (camelCase, matching the existing tool naming in
-`packages/lal/agent.js` and `packages/fae/src/tool-makers.js`).
-A complementary `cancelStream` tool releases an active subscription.
-`peekStream` is reserved for a future read-without-cancel surfacing of
+`monitor` (per the maintainer's naming call on the PR review; see the
+resolved tool-name decision under "Open questions" below).
+The name mirrors Claude Code's `Monitor` tool, whose mental model this
+design deliberately transfers to the agent (see "Comparison to
+Monitor").
+A complementary `cancelMonitor` tool releases an active subscription.
+`peekMonitor` is reserved for a future read-without-cancel surfacing of
 a frame buffer, but is out of scope for the MVP.
-
-(See "Open questions" below for two alternative names that were
-considered.)
 
 ### Inputs
 
 ```jsonc
 {
-  "name": "followStream",
+  "name": "monitor",
   "description": "Subscribe to a passable async-iterator capability ...",
   "parameters": {
     "type": "object",
@@ -136,29 +136,29 @@ considered.)
 }
 ```
 
-The result of a successful `followStream` call is a small record:
+The result of a successful `monitor` call is a small record:
 
 ```js
 {
-  handle: 'stream-7',         // opaque, monotonic per worker
+  handle: 'monitor-7',         // opaque, monotonic per worker
   capability: 'my-counter',   // echo of the resolved input
   method: 'followMessages',
 }
 ```
 
-The handle is used by `cancelStream` and identifies which subscription
+The handle is used by `cancelMonitor` and identifies which subscription
 a notification belongs to.
 
-### `cancelStream`
+### `cancelMonitor`
 
 ```jsonc
 {
-  "name": "cancelStream",
+  "name": "cancelMonitor",
   "description": "Stop following a stream and release the iterator (calls iter.return()).",
   "parameters": {
     "type": "object",
     "properties": {
-      "handle": {"type": "string", "description": "The handle returned by followStream."}
+      "handle": {"type": "string", "description": "The handle returned by monitor."}
     },
     "required": ["handle"]
   }
@@ -166,7 +166,7 @@ a notification belongs to.
 ```
 
 Cancellation is idempotent.
-A `cancelStream` against an unknown handle returns
+A `cancelMonitor` against an unknown handle returns
 `{ already: 'closed' }` rather than throwing, so the LLM does not have
 to know the precise close-state of every stream it ever opened.
 
@@ -177,10 +177,10 @@ or `system`-role message (depending on which tool harness convention
 the model expects), structured as:
 
 ```
-<stream-notification handle="stream-7" label="my-counter">
+<monitor-notification handle="monitor-7" label="my-counter">
 [depth:N seq:42 ts:2026-05-12T17:04:33Z]
 {Justin-rendered passable}
-</stream-notification>
+</monitor-notification>
 ```
 
 When `maxFramesPerNotification > 1`, multiple frames are concatenated
@@ -188,23 +188,23 @@ inside one notification block, each on its own line, with a shared
 prefix:
 
 ```
-<stream-notification handle="stream-7" label="my-counter" frames="3">
+<monitor-notification handle="monitor-7" label="my-counter" frames="3">
 [seq:42 ts:2026-05-12T17:04:33Z] { type: 'add', name: 'counter-7' }
 [seq:43 ts:2026-05-12T17:04:33Z] { type: 'add', name: 'counter-8' }
 [seq:44 ts:2026-05-12T17:04:34Z] { type: 'remove', name: 'counter-3' }
-</stream-notification>
+</monitor-notification>
 ```
 
 Two terminal notification kinds close the stream:
 
 ```
-<stream-notification handle="stream-7" terminal="done">
+<monitor-notification handle="monitor-7" terminal="done">
 Stream completed cleanly after 244 frames.
-</stream-notification>
+</monitor-notification>
 
-<stream-notification handle="stream-7" terminal="error">
+<monitor-notification handle="monitor-7" terminal="error">
 Error{message: "lost connection to remote daemon"}
-</stream-notification>
+</monitor-notification>
 ```
 
 The XML-ish framing is chosen for two reasons.
@@ -212,7 +212,7 @@ First, it parallels the `<tool_call>` extraction already in
 `packages/lal/agent.js` (`extractToolCallsFromContent`), so the same
 stripping logic applies on round-trip.
 Second, modern LLMs reliably treat opening tags they did not author
-as data, not as instruction; the `<stream-notification>` wrapper
+as data, not as instruction; the `<monitor-notification>` wrapper
 prevents prompt injection from a hostile producer (a remote sender
 who emits `</tool_call>` cannot escape the surrounding tag because the
 content is rendered through `passableAsJustin`, which JSON-quotes
@@ -223,22 +223,22 @@ strings).
 ```
 agent                                follow harness               iterator producer
   │                                         │                              │
-  ├─ tool: followStream(my-iter) ─────────► │                              │
+  ├─ tool: monitor(my-iter) ──────────────► │                              │
   │                                         ├─ E(cap).followMessages() ──► │
-  │ ◄────────── handle="stream-7" ──────────┤                              │
+  │ ◄───────── handle="monitor-7" ──────────┤                              │
   │                                         │ ◄─── { value, done:false } ──┤
   │                                         │ (buffer / coalesce)          │
-  │ ◄ <stream-notification>... </> (queued) ┤                              │
+  │ ◄ <monitor-notification>... </> (queued)┤                              │
   ├─ tool: someOtherWork() ───────────────► │                              │
   │ ◄──────── result + queued frames ───────┤                              │
-  ├─ tool: cancelStream("stream-7") ──────► │                              │
+  ├─ tool: cancelMonitor("monitor-7") ────► │                              │
   │                                         ├─ iter.return() ─────────────►│
   │ ◄────── { handle, status: "closed" } ───┤                              │
 ```
 
 Steady state:
 
-1. The agent calls `followStream(petName)`.
+1. The agent calls `monitor(petName)`.
 2. The agent's worker resolves the pet name to a remote
    capability and calls the configured method (`followMessages` by
    default), wrapping the returned iterator-ref with
@@ -254,7 +254,7 @@ Steady state:
    coalesces frames per the per-stream
    `maxFramesPerNotification`, renders each batch with
    `passableAsJustin`, and prepends the resulting
-   `<stream-notification>` blocks to the next user-role turn the
+   `<monitor-notification>` blocks to the next user-role turn the
    LLM sees.
 5. When the iterator yields `{ done: true }`, the harness emits a
    terminal notification with `terminal="done"` and removes the
@@ -262,7 +262,7 @@ Steady state:
    When the iterator throws, the harness emits a terminal
    notification with `terminal="error"` and the
    `passableAsJustin`-rendered error.
-6. `cancelStream(handle)` calls `iter.return()` and, on success,
+6. `cancelMonitor(handle)` calls `iter.return()` and, on success,
    removes the subscription.
    No terminal notification is emitted for an agent-initiated
    cancellation; the caller already knows.
@@ -319,14 +319,14 @@ or `util.inspect`.
 Justin output for a single frame is truncated at 4 KiB by default
 (per stream, configurable via `maxFrameChars`).
 The truncation marker is placed inside the
-`<stream-notification>` wrapper:
+`<monitor-notification>` wrapper:
 
 ```
-<stream-notification handle="stream-7" truncated="true">
+<monitor-notification handle="monitor-7" truncated="true">
 [seq:42] { large: { many: [...
 ... 12 KiB of Justin elided (frame seq 42 was 16 KiB) ...
 ] } }
-</stream-notification>
+</monitor-notification>
 ```
 
 This matches Claude Code's existing `Bash` and `Read` output
@@ -351,15 +351,15 @@ The harness maintains a per-handle frame queue with these defaults:
   is incremented.
 - **Coalesced surfacing.** When the agent's tool loop polls the
   queue, all queued frames for a stream surface in a single
-  `<stream-notification>` block per the
+  `<monitor-notification>` block per the
   `maxFramesPerNotification` limit; if the queue holds more than
   the limit allows, multiple notifications are emitted in order.
 - **Drop annotation.** If `droppedSinceLastDrain > 0`, the first
   notification of the next drain prepends a sentinel:
   ```
-  <stream-notification handle="stream-7" dropped="14">
+  <monitor-notification handle="monitor-7" dropped="14">
   ... 14 older frames were dropped because the buffer overflowed.
-  </stream-notification>
+  </monitor-notification>
   ```
 
 ### Why ring-drop-oldest is the default
@@ -390,8 +390,8 @@ questions" because it bears on user-visible behaviour.
 
 | Trigger                        | Surfaces as                                                                   |
 |--------------------------------|-------------------------------------------------------------------------------|
-| Iterator throws                | `<stream-notification terminal="error">` with the Justin-rendered error.      |
-| Iterator yields `done: true`   | `<stream-notification terminal="done">` with the final frame count.           |
+| Iterator throws                | `<monitor-notification terminal="error">` with the Justin-rendered error.      |
+| Iterator yields `done: true`   | `<monitor-notification terminal="done">` with the final frame count.           |
 | Network drop on remote stream  | Underlying CapTP rejection bubbles through to `terminal="error"`.             |
 | Slow agent attention           | Ring-drop oldest; `dropped="N"` annotation on next surfaced notification.     |
 | `petNameOrPath` does not exist | Synchronous tool-call rejection (no handle issued).                           |
@@ -410,8 +410,8 @@ can decide whether to retry with a different name.
 
 `packages/lal/agent.js` registers tools as flat entries in the `tools`
 array (line 28) and dispatches via `executeTool` switch (line 1004).
-This design adds two new cases to that switch (`followStream`,
-`cancelStream`) and one new piece of per-worker state inside
+This design adds two new cases to that switch (`monitor`,
+`cancelMonitor`) and one new piece of per-worker state inside
 `spawnWorkerLoop` alongside the existing `nodeCache`,
 `activeLeafNode`, etc.:
 
@@ -438,7 +438,7 @@ condition for whether to keep looping:
 ```
 
 `drainFramesIntoNextTurn` formats one or more
-`<stream-notification>` blocks and pushes them as a single `user`-role
+`<monitor-notification>` blocks and pushes them as a single `user`-role
 message into `leafNode.messages`, mimicking the way `formatInboundMessage`
 introduces inbox messages today.
 
@@ -469,17 +469,17 @@ The MVP lands the implementation per-agent and defers consolidation.
 
 ## Comparison to Monitor
 
-| Dimension              | Monitor (Claude Code)                       | followStream (this design)                          |
+| Dimension              | Monitor (Claude Code)                       | monitor (this design)                          |
 |------------------------|---------------------------------------------|-----------------------------------------------------|
 | What it watches        | A child process's stdout                    | A passable async iterator over CapTP                |
 | Frame format           | One stdout *line* per notification          | One *passable value* per notification               |
 | Rendering              | Raw text                                    | `passableAsJustin` rendering                        |
 | Identity               | Process pid                                 | Per-worker opaque handle                            |
 | Authority              | Inherits the agent harness's process rights | Authority is in the capability the petname resolves to |
-| Cancellation           | Kill child; harness teardown                | `cancelStream(handle)` calls `iter.return()`        |
+| Cancellation           | Kill child; harness teardown                | `cancelMonitor(handle)` calls `iter.return()`        |
 | Buffering              | Harness-internal, line-based                | Per-handle frame queue with ring-drop-oldest        |
 | Coalescing             | Implicit (chunks of stdout)                 | Explicit `maxFramesPerNotification`                 |
-| Side-channel surfacing | `<task-notification>` between tool calls    | `<stream-notification>` between tool calls          |
+| Side-channel surfacing | `<task-notification>` between tool calls    | `<monitor-notification>` between tool calls          |
 | Termination signal     | Process exit                                | Iterator `done: true` or thrown error               |
 
 The mental model the LLM forms for Monitor transfers directly: "I
@@ -493,13 +493,13 @@ familiar.
 
 ### Phase 1 (MVP)
 
-- `followStream(petNameOrPath, [method], [label],
+- `monitor(petNameOrPath, [method], [label],
   [maxFramesPerNotification])` returning a `handle`.
-- `cancelStream(handle)`.
+- `cancelMonitor(handle)`.
 - Per-worker subscription registry and frame queue with
   ring-drop-oldest.
 - Drain hook in the agent loop that surfaces queued frames as
-  `<stream-notification>` user-role messages.
+  `<monitor-notification>` user-role messages.
 - Justin rendering with the 4 KiB per-frame truncation policy.
 - Terminal notifications for `done` and `error`.
 - Cleanup on worker exit.
@@ -509,7 +509,7 @@ familiar.
 - `filter` parameter accepting a serialised `M.*` pattern that the
   harness applies to each frame before queueing.
 - `frameBudget` parameter for auto-cancel after N frames.
-- A `peekStream(handle)` tool that returns the current queued frames
+- A `peekMonitor(handle)` tool that returns the current queued frames
   without consuming them, for explicit polling.
 - Cross-conversation persistence: a subscription opened in transcript
   T1 can be inherited by transcript T2 if the same agent reincarnates,
@@ -539,18 +539,27 @@ familiar.
 
 ## Open questions
 
-1. **Tool-name pick.** Three candidates were considered:
-   - **`followStream`** (recommended) — verb form matches the daemon's
-     own `follow*` family of methods and reads naturally as
-     "subscribe to a stream until I cancel."
+1. **Tool-name pick — RESOLVED: `monitor`.** The maintainer's call on
+   the PR review is to name the tool `monitor`, and the design adopts
+   it throughout (companions `cancelMonitor` and the reserved
+   `peekMonitor`). The name leans directly on Claude Code's `Monitor`
+   tool, whose mental model this design mirrors, so an LLM that knows
+   Monitor discovers it immediately.
+
+   The candidates originally weighed here, for the record:
+   - `followStream` — verb form matched the daemon's own `follow*`
+     family of methods and read as "subscribe to a stream until I
+     cancel," but did not carry the Monitor mental model in its name.
    - `subscribeStream` — clearer to readers who do not know
      `followMessages`/`followNameChanges`, but stutters with the verb
      phrase the agent already says ("subscribe to the stream
      subscription").
-   - `monitorCapability` — most discoverable for an LLM that knows
-     Monitor; but "capability" is too broad (the tool only accepts
+   - `monitorCapability` — discoverable for an LLM that knows Monitor,
+     but "capability" is too broad (the tool only accepts
      iterator-returning methods) and the verb-noun word order is
-     inconsistent with the rest of the lal/fae tool set.
+     inconsistent with the rest of the lal/fae tool set. The chosen
+     bare `monitor` keeps the Monitor association without those
+     drawbacks.
 
 2. **Buffer discipline default.** The MVP picks **drop-oldest with a
    counter** (rationale above).
@@ -573,7 +582,7 @@ familiar.
    `@endo/exo-stream`?
 
 4. **Stream handle representation.** Three options:
-   - **Opaque per-worker token** (recommended; e.g. `"stream-7"`):
+   - **Opaque per-worker token** (recommended; e.g. `"monitor-7"`):
      simple, no daemon round-trip, no formula identifier leaked.
    - Pet name: would let the agent `lookup(handle)` later, but
      conflates a transient subscription with a persistent name and
@@ -595,7 +604,7 @@ familiar.
 
 6. **Cross-worker delivery.** If an agent is sharded across multiple
    worker loops (the manager pattern in `packages/lal/agent.js` and
-   `packages/fae/agent.js`), should `followStream` opened in worker
+   `packages/fae/agent.js`), should `monitor` opened in worker
    A be visible to worker B?
    The MVP says no (subscription registry is per-worker), but a
    future "agent monitor inbox" could surface them centrally.
@@ -626,7 +635,7 @@ familiar.
   composition).
 - [`daemon-agent-tools.md`](daemon-agent-tools.md) — the umbrella
   design for agent tool surfaces (`fs`, `shell`, `git`); this
-  proposal adds a `followStream` tool to the same surface.
+  proposal adds a `monitor` tool to the same surface.
 - [`chat-slot-slash-commands.md`](chat-slot-slash-commands.md) —
   another design that surfaces ephemeral, agent-driven values
   through the same pet-store boundary, illustrating the existing
