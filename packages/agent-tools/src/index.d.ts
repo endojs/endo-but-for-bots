@@ -8,4 +8,9 @@ export {
   makeMountEditTool,
   makeMountFsTools,
 } from './mount-fs.js';
+export {
+  makeMountGlobTool,
+  makeMountGrepTool,
+  makeMountSearchTools,
+} from './mount-search.js';
 export { makeShellTool } from './shell-tool.js';

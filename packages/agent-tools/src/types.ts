@@ -52,6 +52,24 @@ export type GitMountToolCapability = Pick<
   'status' | 'add' | 'worktree'
 >;
 
+/**
+ * The search slice of `EndoMount` behind `makeMountSearchTools`: `glob` and
+ * `grep`. Structurally typed here rather than `Pick<EndoMount>` to avoid a
+ * circular `@endo/daemon` dependency (the daemon depends on `@endo/agent-tools`,
+ * not the reverse), exactly as `git-mount-tool.js` types its worktree slice
+ * locally. `grep` takes an already-decoupled `paths` argument — a `string[]` or
+ * a `Promise<string[]>` (the mount's exo awaits it under an `M.await` guard) —
+ * so the tool composes glob into grep without the capabilities coupling.
+ */
+export type MountSearchToolCapability = {
+  glob: (pattern: string) => Promise<string[]>;
+  grep: (
+    pattern: string,
+    paths?: string[] | Promise<string[]>,
+    options?: { maxResults?: number },
+  ) => Promise<Array<{ file: string; line: number; text: string }>>;
+};
+
 export interface ToolSpec {
   /** Tool name advertised to callers. */
   name: string;
@@ -170,4 +188,16 @@ export declare function makeMountEditTool(fs: ERef<Filesystem>): ToolRecord;
 export declare function makeMountFsTools(
   fs: ERef<Filesystem>,
   opts?: MountFsToolsOptions,
+): ToolRecord[];
+
+export declare function makeMountGlobTool(
+  mount: ERef<MountSearchToolCapability>,
+): ToolRecord;
+
+export declare function makeMountGrepTool(
+  mount: ERef<MountSearchToolCapability>,
+): ToolRecord;
+
+export declare function makeMountSearchTools(
+  mount: ERef<MountSearchToolCapability>,
 ): ToolRecord[];
