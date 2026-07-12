@@ -82,12 +82,13 @@ Recorded here once so the phases can cite it tersely:
 - **Historical read landed.** `Git.filesystemAt(ref)` over `@endo/platform/fs/extended`'s `wrapBackend` ([endo-fs-from-git](endo-fs-from-git.md), In Progress: Phases 1–3 plus a Phase-4 slice).
 - **Repository bootstrap landed.** `EndoHost.provideGitClone` + the `@endo/exo-git` cloner seam + the native clone helper (#538); see [daemon-git-remotes](daemon-git-remotes.md) § Repository Bootstrap and `clone`.
 - **Agent tool layer partially landed.** `@endo/agent-tools` core + `makeGitTool` (#523/#524), file tools (#614), `Shell` capability + tool (#615), mount-bridged git `status`/`add` (#616), and the elevated `makeGitHistoryTool` (#644), per [daemon-agent-tools](daemon-agent-tools.md) § Implementation Plan.
-  (Numbering caveat for builders: code comments around #616 say "Phase 3"; the canonical numbering in [daemon-agent-tools](daemon-agent-tools.md) calls that slice **Phase 3.5** — the push tier below is the real Phase 3.)
+  (Numbering caveat for builders: code comments around #616 say "Phase 3"; the canonical numbering in [daemon-agent-tools](daemon-agent-tools.md) calls that slice **Phase 3.5**, and reserves *its own* Phase 3 for the push tier — which the whole-stack plan below indexes as **Phase 1**. The two numbering spaces are disentangled under § Phased Build Plan.)
 
 ## Phased Build Plan
 
 This section is the **canonical, dependency-ordered build plan for the git-capability stack** (reconciled and accepted 2026-07-11; the stack's design statuses flipped from Proposed to In Progress together).
 Each phase is a dispatchable builder job; the owning design carries the normative shapes.
+The phase numbers here (1–6) are this plan's own index and are distinct from each owning design's internal phase numbering: a row's `§ Phase N` citation refers to that owning design's number, not to this table's. (For instance, this plan's Phase 1 is [daemon-agent-tools](daemon-agent-tools.md)'s own § Phase 3, and this plan's Phase 6 is [daemon-git-capability](daemon-git-capability.md)'s own § Phase 7.)
 
 | Phase | Owning design | Deliverable | Builds on |
 |-------|---------------|-------------|-----------|
