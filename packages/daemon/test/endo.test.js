@@ -3165,6 +3165,46 @@ test('a confined guest cannot reach the SturdyRef export facet', async t => {
   });
 });
 
+// The `ocapn` singleton (design cut 4) holds the daemon's OCapN identity and,
+// once cut 5 arms a netlayer, its dial authority. It is closely held: a
+// daemon-core preformulated formula with no pet name and no facet accessor, so
+// no worker or guest can name it, reach it, or reach a netlayer handle through
+// it (the no-location confinement invariant). This is the endowment sweep the
+// cut's test plan requires.
+test('the ocapn capability and netlayer handles never cross a facet boundary', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).storeValue('confined value', 'thing');
+
+  // The identity has no pet name: nothing a worker or guest is handed as its
+  // namespace can name it, so `identify` misses and it is absent from `list`.
+  t.is(await E(host).identify('ocapn'), undefined);
+  const names = await E(host).list();
+  t.false(names.includes('ocapn'));
+
+  // A confined guest reaches neither the identity nor a netlayer: there is no
+  // accessor method on the guest facet nor on its view of its host.
+  const guest = E(host).provideGuest('guest');
+  await t.throwsAsync(() => E(guest).sturdyRefs(), {
+    message: /target has no method "sturdyRefs"/u,
+  });
+  const guestsHost = E(guest).lookup(['@host']);
+  t.is(await E(guestsHost).identify('ocapn'), undefined);
+
+  // Even the host, which CAN mint, never receives the raw OCapN capability or
+  // a netlayer: minting hands back only an opaque grant handle, and the
+  // location-bearing SturdyRef (designator, transport, secret) stays
+  // daemon-side. What crosses the boundary is a bare SHA-256 hex digest.
+  const sturdyRefs = await E(host).sturdyRefs();
+  const grantHandle = await E(sturdyRefs).provideSturdyRef(['thing']);
+  t.is(typeof grantHandle, 'string');
+  t.regex(grantHandle, /^[0-9a-f]{64}$/u);
+  const grants = await E(sturdyRefs).listSturdyRefGrants();
+  const grantFields = new Set(Object.keys(grants[0]));
+  for (const leak of ['location', 'designator', 'transport', 'secret']) {
+    t.false(grantFields.has(leak), `grant listing must not carry ${leak}`);
+  }
+});
+
 test('read unknown node id', async t => {
   const { host } = await prepareHost(t);
 
