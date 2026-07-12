@@ -322,6 +322,18 @@ export const makeOcapnIdentity = async ({
         typeof secret === 'string' ? bytesFromText(secret) : secret;
       return formatSturdyRefUri({ location, swissNum });
     },
+    /**
+     * Tear down the daemon's OCapN client and its armed netlayer, closing the
+     * listening server and every live peer connection. A no-op for an unarmed
+     * identity (no client, so nothing to close). The daemon calls this when the
+     * `ocapn` formula's context is cancelled; a test that arms a real netlayer
+     * calls it to release the TCP listener so the process can exit.
+     */
+    shutdown: () => {
+      if (client !== undefined) {
+        client.shutdown();
+      }
+    },
   });
 };
 harden(makeOcapnIdentity);
