@@ -313,10 +313,11 @@ export const makeOcapnIdentity = async ({
     exporter,
     isArmed: client !== undefined,
     /**
-     * Tear down the daemon's OCapN client and its armed netlayer, closing every
-     * live session and the listening socket. A no-op when unarmed. Exposed so a
-     * host (or a test standing up armed identities) can release the netlayer;
-     * without it an armed identity leaks a listening server.
+     * Tear down the daemon's OCapN client and its armed netlayer, closing the
+     * listening server and every live peer connection. A no-op for an unarmed
+     * identity (no client, so nothing to close). The daemon calls this when the
+     * `ocapn` formula's context is cancelled; a test that arms a real netlayer
+     * calls it to release the TCP listener so the process can exit.
      */
     shutdown: () => {
       if (client !== undefined) {
@@ -368,18 +369,6 @@ export const makeOcapnIdentity = async ({
       const swissNum =
         typeof secret === 'string' ? bytesFromText(secret) : secret;
       return formatSturdyRefUri({ location, swissNum });
-    },
-    /**
-     * Tear down the daemon's OCapN client and its armed netlayer, closing the
-     * listening server and every live peer connection. A no-op for an unarmed
-     * identity (no client, so nothing to close). The daemon calls this when the
-     * `ocapn` formula's context is cancelled; a test that arms a real netlayer
-     * calls it to release the TCP listener so the process can exit.
-     */
-    shutdown: () => {
-      if (client !== undefined) {
-        client.shutdown();
-      }
     },
   });
 };
