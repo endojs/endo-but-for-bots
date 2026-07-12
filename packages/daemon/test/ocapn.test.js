@@ -25,7 +25,10 @@ const netListenAllowed = (() => {
     server.once('error', () => process.exit(1));
     server.listen(0, '127.0.0.1', () => server.close(() => process.exit(0)));
   `;
-  return spawnSync(process.execPath, ['-e', script], { stdio: 'ignore' }).status === 0;
+  return (
+    spawnSync(process.execPath, ['-e', script], { stdio: 'ignore' }).status ===
+    0
+  );
 })();
 const tcpTest = netListenAllowed ? test : test.skip;
 
@@ -205,12 +208,18 @@ test('the identity is distinct-by-default: independent daemons differ', async t 
 test('an unarmed identity cannot dial: enliven and provideSession reject secret-free', async t => {
   const identity = await makeIdentity(makeFixture());
   t.false(identity.isArmed, 'no netlayer armed');
-  await t.throwsAsync(() => identity.enliven(identity.getSelfLocation(), 'sw'), {
-    message: /no netlayer armed/,
-  });
-  await t.throwsAsync(() => identity.provideSession(identity.getSelfLocation()), {
-    message: /no netlayer armed/,
-  });
+  await t.throwsAsync(
+    () => identity.enliven(identity.getSelfLocation(), 'sw'),
+    {
+      message: /no netlayer armed/,
+    },
+  );
+  await t.throwsAsync(
+    () => identity.provideSession(identity.getSelfLocation()),
+    {
+      message: /no netlayer armed/,
+    },
+  );
 });
 
 test('formatUri emits a parseable ocapn:// sturdyref URI for a self-mint (out-of-band export)', async t => {
@@ -231,7 +240,11 @@ test('formatUri emits a parseable ocapn:// sturdyref URI for a self-mint (out-of
   // reveal normalizes a materialized secret to a Uint8Array; it ASCII-decodes
   // back to the hex swiss-num string the exporter's locator keys on.
   const asString = new TextDecoder('ascii').decode(recovered.secret);
-  t.is(asString, identity.reveal(sturdyRef).secret, 'ASCII-decodes to the hex swiss-num');
+  t.is(
+    asString,
+    identity.reveal(sturdyRef).secret,
+    'ASCII-decodes to the hex swiss-num',
+  );
 });
 
 test('materializeFromUri round-trips a foreign byte-secret sturdyref URI (the accept path)', async t => {
@@ -247,12 +260,19 @@ test('materializeFromUri round-trips a foreign byte-secret sturdyref URI (the ac
   // A Spritely-style 24-byte non-ASCII random secret (cut 1's byte case).
   const secret = new Uint8Array(24);
   for (let i = 0; i < 24; i += 1) secret[i] = (i * 37 + 200) % 256;
-  const uri = formatSturdyRefUri({ location: foreignLocation, swissNum: secret });
+  const uri = formatSturdyRefUri({
+    location: foreignLocation,
+    swissNum: secret,
+  });
 
   const materialized = identity.materializeFromUri(uri);
   t.is(passStyleOf(materialized), 'sturdyref');
   const recovered = identity.reveal(materialized);
-  t.deepEqual(recovered.location, foreignLocation, 'the foreign location round-trips');
+  t.deepEqual(
+    recovered.location,
+    foreignLocation,
+    'the foreign location round-trips',
+  );
   // reveal normalizes the materialized secret to a Uint8Array of the exact bytes.
   t.deepEqual(
     new Uint8Array(recovered.secret),

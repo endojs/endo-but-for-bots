@@ -28,7 +28,12 @@ const stateKey = 'known-sturdyrefs-store/0';
 
 test('a foreign grant round-trips to its formula id (dedup)', t => {
   const { getState, setState } = makeFakeState();
-  const store = makeKnownSturdyRefsStore({ getState, setState, stateKey, makeSha256 });
+  const store = makeKnownSturdyRefsStore({
+    getState,
+    setState,
+    stateKey,
+    makeSha256,
+  });
 
   const locationId = 'ocapn://peerC.tcp-testing-only';
   const swissNum = 'deadbeef';
@@ -44,7 +49,12 @@ test('a foreign grant round-trips to its formula id (dedup)', t => {
 
 test('distinct swiss-nums at one peer are distinct grants', t => {
   const { getState, setState } = makeFakeState();
-  const store = makeKnownSturdyRefsStore({ getState, setState, stateKey, makeSha256 });
+  const store = makeKnownSturdyRefsStore({
+    getState,
+    setState,
+    stateKey,
+    makeSha256,
+  });
   const locationId = 'ocapn://peerC.tcp-testing-only';
 
   store.setSturdyRef(locationId, 'one', 'id-1:node');
@@ -55,7 +65,12 @@ test('distinct swiss-nums at one peer are distinct grants', t => {
 
 test('a raw-byte swiss-num dedups with itself and differs from a distinct byte secret', t => {
   const { getState, setState } = makeFakeState();
-  const store = makeKnownSturdyRefsStore({ getState, setState, stateKey, makeSha256 });
+  const store = makeKnownSturdyRefsStore({
+    getState,
+    setState,
+    stateKey,
+    makeSha256,
+  });
   const locationId = 'ocapn://peerC.tcp-testing-only';
 
   // A Spritely-style 24-byte non-ASCII random secret (the case cut 1's
@@ -74,7 +89,12 @@ test('a raw-byte swiss-num dedups with itself and differs from a distinct byte s
 
 test('the peer keyspace is disjoint from the sturdyref keyspace', t => {
   const { getState, setState } = makeFakeState();
-  const store = makeKnownSturdyRefsStore({ getState, setState, stateKey, makeSha256 });
+  const store = makeKnownSturdyRefsStore({
+    getState,
+    setState,
+    stateKey,
+    makeSha256,
+  });
   const locationId = 'ocapn://peerC.tcp-testing-only';
 
   store.setPeer(locationId, 'peer-id:node');
@@ -85,19 +105,34 @@ test('the peer keyspace is disjoint from the sturdyref keyspace', t => {
 
 test('entries survive a restart (re-open the same state)', t => {
   const { getState, setState } = makeFakeState();
-  const first = makeKnownSturdyRefsStore({ getState, setState, stateKey, makeSha256 });
+  const first = makeKnownSturdyRefsStore({
+    getState,
+    setState,
+    stateKey,
+    makeSha256,
+  });
   first.setSturdyRef('ocapn://peerC.t', 'sn', 'sr-id:node');
   first.setPeer('ocapn://peerC.t', 'peer-id:node');
 
   // A fresh store over the same persisted state = the daemon after restart.
-  const second = makeKnownSturdyRefsStore({ getState, setState, stateKey, makeSha256 });
+  const second = makeKnownSturdyRefsStore({
+    getState,
+    setState,
+    stateKey,
+    makeSha256,
+  });
   t.is(second.getSturdyRef('ocapn://peerC.t', 'sn'), 'sr-id:node');
   t.is(second.getPeer('ocapn://peerC.t'), 'peer-id:node');
 });
 
 test('forget removes every entry pointing at a formula id', t => {
   const { getState, setState } = makeFakeState();
-  const store = makeKnownSturdyRefsStore({ getState, setState, stateKey, makeSha256 });
+  const store = makeKnownSturdyRefsStore({
+    getState,
+    setState,
+    stateKey,
+    makeSha256,
+  });
   const locationId = 'ocapn://peerC.t';
 
   store.setPeer(locationId, 'peer-id:node');

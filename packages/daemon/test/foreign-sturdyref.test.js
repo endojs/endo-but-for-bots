@@ -139,7 +139,10 @@ test('the rejection and the reveal details never name the swiss-num', async t =>
   // Confinement / secret-free discipline: an error surfaced by internalization
   // must not smear the swiss-num into a message that may ride up into logs.
   const { internalize } = makeRig({
-    revealDetails: () => ({ location: selfLocation, secret: 'super-secret-swiss' }),
+    revealDetails: () => ({
+      location: selfLocation,
+      secret: 'super-secret-swiss',
+    }),
   });
   const error = await t.throwsAsync(() => internalize(harden({})));
   t.false(
