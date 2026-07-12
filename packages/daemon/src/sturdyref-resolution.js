@@ -76,7 +76,21 @@ export const mintSturdyRef = id => {
 harden(mintSturdyRef);
 
 /**
- * Resolve a SturdyRef to a local formula identifier at the facet boundary.
+ * The rejection for a SturdyRef this daemon cannot resolve by any tier: not a
+ * local #541 mint, not revealable by the OCapN capability (a self-mint or a
+ * wire/URI-materialized foreign ref), so either a forged look-alike or a mint
+ * from an instance this daemon never talked to. Secret-free by construction.
+ *
+ * @returns {Error}
+ */
+const unresolvableError = () =>
+  makeError(
+    X`SturdyRef is not resolvable by this daemon: it was not minted here, this daemon's OCapN capability cannot reveal it (so it was not materialized from a peer session or an ocapn:// URI either), or it is a forged look-alike with no local binding`,
+  );
+
+/**
+ * Resolve a SturdyRef to a local formula identifier at the facet boundary,
+ * LOCAL TIER ONLY (PR #541's closely-held off-band binding).
  *
  * Resolution is the daemon reading its **closely-held** off-band binding —
  * never the SturdyRef's readable `location`, and never a swiss number (a
@@ -86,13 +100,11 @@ harden(mintSturdyRef);
  * has no binding and is rejected: the capability is unforgeable.
  *
  * A SturdyRef minted by another authority — an OCapN peer's CapTP session
- * manager — likewise has no local binding. Enlivening or resolving such a
- * SturdyRef requires the closely-held OCapN network capability
- * (`getSturdyRefLocator` / `enlivenSturdyRef` in `@endo/ocapn`) bridged to
- * the daemon's `internalizeLocator` flow; that bridge is a tracked
- * follow-up (design § "Enlivenment is on demand" and the #539 dependency).
- * Until it lands, a non-locally-minted SturdyRef rejects cleanly rather than
- * mis-resolving.
+ * manager — has no local binding and rejects here. The foreign tier
+ * (`resolveSturdyRefToIdWith`, cut 5) resolves such a SturdyRef through the
+ * closely-held OCapN capability; this function is the synchronous local-only
+ * predecessor kept for callers (and the module test) that never touch the
+ * foreign path.
  *
  * @param {unknown} sturdyRef - a value for which `isSturdyRef` is true.
  * @returns {FormulaIdentifier}
@@ -103,10 +115,51 @@ export const resolveSturdyRefToId = sturdyRef => {
   }
   const id = sturdyRefToId.get(/** @type {object} */ (sturdyRef));
   if (id === undefined) {
-    throw makeError(
-      X`SturdyRef is not resolvable by this daemon: it was not minted here (remote SturdyRef resolution via the closely-held OCapN network capability is not yet implemented), or it is a forged look-alike with no local binding`,
-    );
+    throw unresolvableError();
   }
   return id;
 };
 harden(resolveSturdyRefToId);
+
+/**
+ * Resolve a SturdyRef to a local formula identifier at the facet boundary,
+ * LOCAL TIER then FOREIGN FALLBACK (design cut 5, the facet-seam fallback
+ * replacing #541's rejection).
+ *
+ * The local off-band binding is tried first, exactly as
+ * {@link resolveSturdyRefToId}. On a miss, the injected `internalizeForeign`
+ * fallback — the daemon's foreign-SturdyRef internalizer, closely held — gets
+ * a chance to resolve the SturdyRef through the OCapN capability (a self-mint
+ * that arrived back over the wire, or a foreign peer's SturdyRef materialized
+ * from a session or an `ocapn://` URI). Only when neither tier answers does
+ * this reject as forged — the unforgeability guarantee is unchanged, now
+ * spanning both tiers.
+ *
+ * The fallback is optional so a facet with no OCapN capability in reach (or a
+ * daemon with no netlayer armed) degrades to exactly the local-only behavior.
+ *
+ * @param {unknown} sturdyRef - a value for which `isSturdyRef` is true.
+ * @param {((sturdyRef: unknown) => Promise<FormulaIdentifier | undefined>)} [internalizeForeign]
+ * @returns {Promise<FormulaIdentifier>}
+ */
+export const resolveSturdyRefToIdWith = async (
+  sturdyRef,
+  internalizeForeign,
+) => {
+  await null;
+  if (!isSturdyRef(sturdyRef)) {
+    throw makeError(X`Not a SturdyRef: ${sturdyRef}`);
+  }
+  const id = sturdyRefToId.get(/** @type {object} */ (sturdyRef));
+  if (id !== undefined) {
+    return id;
+  }
+  if (internalizeForeign !== undefined) {
+    const foreignId = await internalizeForeign(sturdyRef);
+    if (foreignId !== undefined) {
+      return foreignId;
+    }
+  }
+  throw unresolvableError();
+};
+harden(resolveSturdyRefToIdWith);

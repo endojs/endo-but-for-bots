@@ -34,6 +34,12 @@ export {
   decodeSwissnum,
   swissnumFromBytes,
   swissnumToBytes,
+  // The canonical, secret-independent id of a peer location (an `ocapn://…`
+  // string). Promoted onto the public surface for the daemon's foreign-
+  // SturdyRef dedup index (design cut 5): two internalizations of the same
+  // `(location, swissNum)` must key on the same location id to converge on one
+  // formula identifier.
+  locationToLocationId,
 } from './src/client/util.js';
 // Protocol building blocks for consumers that route frames without reifying
 // their references as local objects or promises.

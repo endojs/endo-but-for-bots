@@ -39,8 +39,10 @@
 /** @import { OcapnLocation } from '@endo/ocapn' */
 
 import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
+import { bytesFromText } from '@endo/bytes/from-string.js';
 import { makeCryptography } from '@endo/ocapn/cryptography';
 import { syrupCodec } from '@endo/ocapn/syrup';
+import { makeOcapn, parseSturdyRefUri, formatSturdyRefUri } from '@endo/ocapn';
 import { makeSturdyRefExporter } from './sturdyref-store.js';
 
 /**
@@ -128,6 +130,13 @@ const base32Encode = bytes => {
  * @param {string} [powers.transport] - the transport the self peer-locator
  *   advertises; defaults to the unarmed marker (no live netlayer). Tests pass
  *   a real netlayer transport (`tcp-testing-only`).
+ * @param {any} [powers.makeNetwork] - the
+ *   netlayer factory the daemon's OCapN client dials and serves through (cut
+ *   5). When omitted the daemon is UNARMED: it holds an identity and can mint,
+ *   but `provideSession`/`enliven` reject, so foreign internalization has no
+ *   dial path (the provisional cut-4 default; production arming is the
+ *   maintainer's cut-5 open question). Tests inject a `tcp-test-only`
+ *   netlayer factory to prove the real dial+fetch path.
  * @returns {Promise<OcapnIdentity>}
  */
 export const makeOcapnIdentity = async ({
@@ -138,6 +147,7 @@ export const makeOcapnIdentity = async ({
   store,
   provide,
   transport = UNARMED_OCAPN_TRANSPORT,
+  makeNetwork = undefined,
 }) => {
   // Load-or-generate the daemon's distinct OCapN private key. A fresh key,
   // never the `endo://` node key: distinct-by-default (design open question,
@@ -178,9 +188,140 @@ export const makeOcapnIdentity = async ({
     provide,
   });
 
+  // The daemon's OCapN CLIENT (the dial+serve surface, cut 5): built only when
+  // a netlayer is armed. Its `locator` is the swiss-num store's read side, so
+  // the SAME store that `provideSturdyRef` writes to also serves a foreign
+  // peer's `bootstrap.fetch` over a real session (the daemon as C), while the
+  // client's `provideSession`/`enlivenSturdyRef` give the daemon-as-B dial
+  // path foreign internalization needs. An unarmed daemon has no client.
+  /** @type {any} */
+  let client;
+  if (makeNetwork !== undefined) {
+    client = await makeOcapn({
+      codec: syrupCodec,
+      network: makeNetwork,
+      locator: exporter.locator,
+      debugLabel: `daemon-ocapn:${designator}`,
+    });
+  }
+
+  /**
+   * The closely-held reveal spanning both trackers: the exporter's (self-mints
+   * and URI-materialized foreign refs) and, when armed, the client's session
+   * manager (refs materialized from a live peer session). Answers `undefined`
+   * for a forged look-alike or a mint from an instance this daemon never
+   * talked to — the seam turns that into its rejection.
+   *
+   * @param {unknown} sturdyRef
+   */
+  const reveal = sturdyRef => {
+    const details =
+      exporter.reveal(/** @type {any} */ (sturdyRef)) ??
+      (client === undefined
+        ? undefined
+        : client.reveal(/** @type {any} */ (sturdyRef)));
+    if (details === undefined) {
+      return undefined;
+    }
+    // Normalize the swiss-num to `string | Uint8Array`. A wire- or
+    // URI-materialized SturdyRef holds its secret as an immutable-bytes
+    // `SwissNum` (the OCapN branded type); downstream dedup hashing, formula
+    // encoding, and re-fetch all speak plain `string | Uint8Array`, so convert
+    // once here rather than teaching every consumer the branded shape.
+    const { location, secret } = details;
+    const normalized =
+      typeof secret === 'string' || secret instanceof Uint8Array
+        ? secret
+        : bytesFromImmutable(secret);
+    return harden({ location, secret: normalized });
+  };
+
+  /**
+   * Dial a foreign peer and fetch by swiss-num — the value an `ocapn-sturdyref`
+   * formula enlivens to (cut 5). Materialize-then-enliven reuses the client's
+   * tested `(location, secret)` encoding and per-SturdyRef memo; a fresh
+   * materialization each call is fine, the memo keys on value convergence.
+   * Rejects secret-free when unarmed.
+   *
+   * @param {OcapnLocation} location
+   * @param {string | Uint8Array} swissNum
+   * @returns {Promise<unknown>}
+   */
+  const enliven = async (location, swissNum) => {
+    if (client === undefined) {
+      throw Error(
+        'ocapn: no netlayer armed; this daemon cannot dial a foreign peer',
+      );
+    }
+    const foreignRef = client.makeSturdyRef(location, swissNum);
+    return client.enlivenSturdyRef(foreignRef);
+  };
+
+  /**
+   * Provide (or reuse) the live session to a foreign peer — the value an
+   * `ocapn-peer` formula holds (cut 5). Rejects secret-free when unarmed.
+   *
+   * @param {OcapnLocation} location
+   */
+  const provideSession = async location => {
+    if (client === undefined) {
+      throw Error(
+        'ocapn: no netlayer armed; this daemon cannot dial a foreign peer',
+      );
+    }
+    return client.provideSession(location);
+  };
+
   return harden({
     getSelfLocation: () => selfLocation,
     exporter,
+    isArmed: client !== undefined,
+    reveal,
+    enliven,
+    provideSession,
+    /**
+     * Materialize a foreign SturdyRef from an out-of-band `ocapn://` URI
+     * (design cut 5, `acceptSturdyRefUri`). Parses the URI, materializes the
+     * `(location, swissNum)` through the exporter's tracker so `reveal`
+     * answers, and returns the SturdyRef the seam then internalizes. The URI
+     * string is secret-bearing; it is consumed here and never logged.
+     *
+     * @param {string} uri
+     * @returns {import('@endo/pass-style').SturdyRef}
+     */
+    materializeFromUri: uri => {
+      const { location, swissNum, kind } = parseSturdyRefUri(uri);
+      if (kind !== 'sturdyref' || swissNum === undefined) {
+        throw Error('ocapn: URI is a plain peer locator, not a sturdyref URI');
+      }
+      // The URI codec yields the swiss-num as an immutable-bytes `SwissNum`;
+      // materialize (and the whole seam) speaks plain bytes.
+      return exporter.materialize(location, bytesFromImmutable(swissNum));
+    },
+    /**
+     * Format an `ocapn://` sturdyref URI for a self-minted SturdyRef (design
+     * cut 5, the deliberate out-of-band export side). Reveals the SturdyRef's
+     * off-band `(location, swissNum)` and renders it; rejects a SturdyRef this
+     * daemon cannot reveal.
+     *
+     * @param {import('@endo/pass-style').SturdyRef} sturdyRef
+     * @returns {string}
+     */
+    formatUri: sturdyRef => {
+      const details = reveal(sturdyRef);
+      if (details === undefined) {
+        throw Error('ocapn: cannot format a URI for an unrevealable sturdyref');
+      }
+      // The URI carries the swiss-num as base64url bytes. A daemon self-mint's
+      // secret is an ASCII hex string; encode its bytes so a peer parsing the
+      // URI recovers those bytes and — via ASCII decode in the tracker's
+      // `lookup` — the same hex string the exporter's locator keys on. A raw
+      // byte secret (a foreign implementation's) rides through verbatim.
+      const { location, secret } = details;
+      const swissNum =
+        typeof secret === 'string' ? bytesFromText(secret) : secret;
+      return formatSturdyRefUri({ location, swissNum });
+    },
   });
 };
 harden(makeOcapnIdentity);
