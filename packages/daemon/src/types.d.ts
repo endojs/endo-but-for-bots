@@ -506,6 +506,10 @@ type SturdyRefStoreFormula = {
   type: 'sturdyref-store';
 };
 
+export type OcapnFormula = {
+  type: 'ocapn';
+};
+
 export type PetStoreFormula = {
   type: 'pet-store';
 };
@@ -631,6 +635,7 @@ export type Formula =
   | PetInspectorFormula
   | KnownPeersStoreFormula
   | SturdyRefStoreFormula
+  | OcapnFormula
   | PetStoreFormula
   | MailboxStoreFormula
   | MailHubFormula
@@ -930,6 +935,25 @@ export type SturdyRefStore = {
    * Returns whether anything was removed.
    */
   revokeByHandle(grantHandle: string): boolean;
+};
+
+/**
+ * The daemon's OCapN identity (formula type `ocapn`, design cut 4): a distinct
+ * Ed25519 keypair generated at formulation and persisted so the identity is
+ * stable across restarts, the self peer-locator derived from it, and the
+ * daemon's OCapN client EXPORT surface (the cut-3 exporter) built over that
+ * real self-location. Closely held: the `ocapn` formula is a daemon singleton
+ * reached only from daemon core, never vended through a host or guest facet, so
+ * no worker or guest can reach the OCapN capability or a netlayer handle (the
+ * no-location confinement invariant). See
+ * designs/sturdy-refs-cross-peer-bridge.md § "The daemon's OCapN identity and
+ * self-location".
+ */
+export type OcapnIdentity = {
+  /** The daemon's self peer-locator, baked into every wire-tier mint. */
+  getSelfLocation(): import('@endo/ocapn').OcapnLocation;
+  /** The SturdyRef EXPORT surface, built over the real self-location. */
+  exporter: import('./sturdyref-store.js').SturdyRefExporter;
 };
 
 /**

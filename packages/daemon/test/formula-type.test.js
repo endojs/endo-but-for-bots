@@ -30,6 +30,7 @@ const ALL_FORMULA_TYPES = [
   'marshal',
   'message',
   'mount',
+  'ocapn',
   'peer',
   'pet-inspector',
   'pet-store',
