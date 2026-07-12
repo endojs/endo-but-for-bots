@@ -4669,7 +4669,11 @@ testNeedsNodeWorker(
 
 test('provideGit rejects a malformed commit identity at the host boundary', async t => {
   const { host, config } = await prepareHost(t);
-  const repoPath = path.join(config.statePath, '..', 'git-identity-reject-repo');
+  const repoPath = path.join(
+    config.statePath,
+    '..',
+    'git-identity-reject-repo',
+  );
   await createGitFixture(repoPath);
   const mount = await E(host).provideMount(
     repoPath,
