@@ -49,12 +49,20 @@ testWithErrorUnwrapping(
       const presence = await E(bootstrapA).fetch(encodeSwissnum('Obj'));
 
       // The live introduction still works — the same object is reachable.
-      t.is(await E(presence).getNumber(), 42, 'the live-imported reference works');
+      t.is(
+        await E(presence).getNumber(),
+        42,
+        'the live-imported reference works',
+      );
 
       const grantTracker = bKit.debug.grantTracker;
       const live = grantTracker.getGrantDetails(presence);
       assert(live, 'B recorded a grant for the live-imported presence');
-      t.is(live.type, 'handoff', 'a live import is recorded as a handoff grant');
+      t.is(
+        live.type,
+        'handoff',
+        'a live import is recorded as a handoff grant',
+      );
 
       // The SturdyRef follows: the exporter mints and passes a SturdyRef for the
       // SAME object. Recording the sturdy-ref grant on the same remotable is the
@@ -85,7 +93,12 @@ testWithErrorUnwrapping(
       const freshPresence = Far('Fresh', {});
       grantTracker.recordImport(
         freshPresence,
-        makeGrantDetails(live.location, live.slot, 'sturdy-ref', swissNum('s2')),
+        makeGrantDetails(
+          live.location,
+          live.slot,
+          'sturdy-ref',
+          swissNum('s2'),
+        ),
       );
       t.throws(
         () =>
