@@ -2,6 +2,7 @@ export type * from './src/types.js';
 export { makeTool } from './src/tool.js';
 export { makeGitHistoryTool, makeGitTool } from './src/git-tool.js';
 export { makeGitMountTools } from './src/git-mount-tool.js';
+export { makeGitRemoteTool } from './src/git-remote-tool.js';
 export {
   makeMountReadTool,
   makeMountListTool,
