@@ -3182,13 +3182,17 @@ test('the ocapn capability and netlayer handles never cross a facet boundary', a
   t.false(names.includes('ocapn'));
 
   // A confined guest reaches neither the identity nor a netlayer: there is no
-  // accessor method on the guest facet nor on its view of its host.
+  // accessor method on the guest facet nor on its view of its host. The
+  // guest's `@host` resolves to a bare Handle (open/receive only), so even
+  // `identify` — the mildest namespace probe — is absent, not merely a miss.
   const guest = E(host).provideGuest('guest');
   await t.throwsAsync(() => E(guest).sturdyRefs(), {
     message: /target has no method "sturdyRefs"/u,
   });
   const guestsHost = E(guest).lookup(['@host']);
-  t.is(await E(guestsHost).identify('ocapn'), undefined);
+  await t.throwsAsync(() => E(guestsHost).identify('ocapn'), {
+    message: /target has no method "identify"/u,
+  });
 
   // Even the host, which CAN mint, never receives the raw OCapN capability or
   // a netlayer: minting hands back only an opaque grant handle, and the
