@@ -3245,15 +3245,27 @@ test('host accepts a foreign SturdyRef URI, internalizes it, dedups, and locates
   t.notThrows(() => parseId(id), 'a well-formed local formula identifier');
   const { node } = parseId(id);
   const selfInfo = await E(host).getPeerInfo();
-  t.is(node, selfInfo.node, 'the identifier denotes a LOCAL formula (no foreign node)');
+  t.is(
+    node,
+    selfInfo.node,
+    'the identifier denotes a LOCAL formula (no foreign node)',
+  );
 
   // The name-write bound it: identify recovers the same identifier.
-  t.is(await E(host).identify('foreign'), id, 'name-write bound the identifier');
+  t.is(
+    await E(host).identify('foreign'),
+    id,
+    'name-write bound the identifier',
+  );
 
   // Dedup: accepting the SAME foreign (location, swissNum) again converges on
   // the SAME formula identifier — a stable identifier across internalizations.
   const again = await E(sturdyRefs).acceptSturdyRefUri(uri);
-  t.is(again, id, 'dedup: repeated internalizations yield one stable identifier');
+  t.is(
+    again,
+    id,
+    'dedup: repeated internalizations yield one stable identifier',
+  );
 
   // A different foreign swiss-num at the same peer is a distinct grant.
   const { uri: uri2 } = makeForeignSturdyRefUri(200);
@@ -3299,7 +3311,10 @@ test('a confined guest cannot reach the foreign-SturdyRef accept surface, and en
   const secretHex = Array.from(secret)
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
-  t.false(String(error).includes(secretHex), 'the rejection never names the swiss-num');
+  t.false(
+    String(error).includes(secretHex),
+    'the rejection never names the swiss-num',
+  );
 });
 
 test('read unknown node id', async t => {

@@ -1010,10 +1010,11 @@ export type OcapnIdentity = {
    * `ocapn://` URI), or `undefined` for a forged look-alike / foreign-instance
    * mint.
    */
-  reveal(
-    sturdyRef: unknown,
-  ):
-    | { location: import('@endo/ocapn').OcapnLocation; secret: string | Uint8Array }
+  reveal(sturdyRef: unknown):
+    | {
+        location: import('@endo/ocapn').OcapnLocation;
+        secret: string | Uint8Array;
+      }
     | undefined;
   /** Dial a foreign peer and fetch by swiss-num (cut 5); rejects when unarmed. */
   enliven(
@@ -1021,7 +1022,9 @@ export type OcapnIdentity = {
     swissNum: string | Uint8Array,
   ): Promise<unknown>;
   /** Provide (or reuse) the live session to a foreign peer (cut 5). */
-  provideSession(location: import('@endo/ocapn').OcapnLocation): Promise<unknown>;
+  provideSession(
+    location: import('@endo/ocapn').OcapnLocation,
+  ): Promise<unknown>;
   /** Materialize a foreign SturdyRef from an out-of-band `ocapn://` URI (cut 5). */
   materializeFromUri(uri: string): import('@endo/pass-style').SturdyRef;
   /** Format an `ocapn://` sturdyref URI for a revealable SturdyRef (cut 5). */
