@@ -45,6 +45,16 @@ test('parseCIDR rejects invalid input', t => {
   t.is(parseCIDR('10.0.0.0/33'), undefined);
   t.is(parseCIDR(''), undefined);
   t.is(parseCIDR('10.0.0.256/8'), undefined);
+  // A trailing slash leaves an empty prefix; `Number('')` is 0, so without a
+  // digit check this would parse as a /0 that matches every address.
+  t.is(parseCIDR('10.0.0.0/'), undefined);
+  t.is(parseCIDR('::/'), undefined);
+  // An empty octet (`Number('')` is 0) must not coerce into a valid address.
+  t.is(parseCIDR('1..2.3'), undefined);
+  // Hex and exponential forms are not decimal addresses even though Number()
+  // accepts them.
+  t.is(parseCIDR('0x0a.0.0.1'), undefined);
+  t.is(parseCIDR('10.0.0.0/0x8'), undefined);
 });
 
 // --- addressMatchesCIDR ---
@@ -118,6 +128,9 @@ test('makeAddressChecker default allows only localhost', t => {
   t.true(check('::ffff:127.0.0.1'));
   t.false(check('10.0.0.1'));
   t.false(check('192.168.1.1'));
+  // An absent peer address arrives as '' (the gateway feeds the checker
+  // `req.socket.remoteAddress || ''`); the default must fail closed.
+  t.false(check(''));
 });
 
 test('makeAddressChecker allowRemote allows everything', t => {
@@ -126,6 +139,7 @@ test('makeAddressChecker allowRemote allows everything', t => {
   t.true(check('10.0.0.1'));
   t.true(check('203.0.113.5'));
   t.true(check('::1'));
+  t.true(check(''));
 });
 
 test('makeAddressChecker with CIDRs allows localhost plus listed ranges', t => {
@@ -157,4 +171,13 @@ test('makeAddressChecker with empty CIDRs string acts as localhost-only', t => {
   const check = makeAddressChecker({ allowedCIDRs: '' });
   t.true(check('127.0.0.1'));
   t.false(check('10.0.0.1'));
+});
+
+test('makeAddressChecker fails closed on a truncated CIDR entry', t => {
+  // A trailing-slash typo leaves an empty prefix. It must be dropped like any
+  // other malformed entry, not silently widened into an allow-all /0 rule.
+  const check = makeAddressChecker({ allowedCIDRs: '10.0.0.0/' });
+  t.false(check('203.0.113.5'));
+  t.false(check('8.8.8.8'));
+  t.true(check('127.0.0.1'));
 });

@@ -1,0 +1,68 @@
+# Example Compose deployment for a self-hosted Endo daemon.
+#
+# `docker compose up -d` builds the image and runs the daemon with its state on
+# a named volume that survives container recreation. Control the daemon with the
+# CLI inside the container:
+#
+#   docker compose exec endo endo <command>
+#
+# Remote access: the daemon publishes its WebSocket gateway on port 8920. The
+# gateway authenticates every client by bearer token, and by default admits
+# only localhost. To reach the published port from another host, set
+# ENDO_GATEWAY_REMOTE=true (admit any address, rely on bearer-token auth) or
+# ENDO_GATEWAY_ALLOWED_CIDRS to an allowlist. Terminate TLS at a reverse proxy
+# in front (the optional `caddy` service below). Do NOT proxy the raw control
+# socket to a network interface: reaching the socket grants full unauthenticated
+# control of the daemon.
+
+services:
+  endo:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: endojs/daemon:latest
+    ports:
+      # host:container. The gateway binds 0.0.0.0:8920 inside the container.
+      - '8920:8920'
+    volumes:
+      - endo-state:/data/endo
+    # Remote access is opt-in. As shipped, `docker compose up -d` binds and
+    # publishes the port but the gateway still admits only localhost, so a
+    # published-but-unconfigured daemon rejects the forwarded traffic (it
+    # arrives from the Docker bridge network, not 127.0.0.1) rather than
+    # exposing itself. To admit remote callers, uncomment exactly one of the
+    # options below; prefer the CIDR allowlist over the blanket flag when the
+    # set of callers is known (see README.md "Recommended posture"), and
+    # publish only behind a TLS-terminating reverse proxy.
+    environment:
+      # Admit every remote address (bearer-token auth still applies):
+      # - ENDO_GATEWAY_REMOTE=true
+      # Or, instead of admitting every address, restrict to known networks:
+      # - ENDO_GATEWAY_ALLOWED_CIDRS=10.0.0.0/8,192.168.0.0/16
+    restart: unless-stopped
+    # The daemon runs as PID 1 and forks worker subprocesses; run it under an
+    # init so orphaned descendants are reaped rather than left as zombies.
+    init: true
+
+  # Optional: terminate TLS in front of the daemon. Point Caddy at your domain
+  # and it obtains and renews a certificate automatically, forwarding decrypted
+  # traffic to the endo gateway. Uncomment and provide a Caddyfile such as:
+  #
+  #   my-daemon.example.com {
+  #     reverse_proxy endo:8920
+  #   }
+  #
+  # caddy:
+  #   image: caddy:2
+  #   ports:
+  #     - '443:443'
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile
+  #     - caddy-data:/data
+  #   depends_on:
+  #     - endo
+  #   restart: unless-stopped
+
+volumes:
+  endo-state:
+  # caddy-data:

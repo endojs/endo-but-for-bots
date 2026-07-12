@@ -41,7 +41,7 @@ ENDO_ADDR=127.0.0.1:9000 endo start
 
 By default the gateway only accepts WebSocket connections from localhost
 (`127.0.0.1`, `::1`, `::ffff:127.0.0.1`).  Connections from any other
-client IP are closed with `"Only local connections allowed"`.
+client IP are rejected and closed before any CapTP traffic flows.
 
 To accept connections from non-localhost clients (for example, over a VPN or
 LAN), you must both **bind to a reachable interface** via `ENDO_ADDR` and
@@ -49,11 +49,12 @@ LAN), you must both **bind to a reachable interface** via `ENDO_ADDR` and
 
 #### Allow all remote connections
 
-Set `ENDO_GATEWAY=remote` to disable the client-IP check entirely.
-Every address that can reach the gateway port will be allowed through.
+Set `ENDO_GATEWAY_REMOTE=true` (or `1`) to disable the client-IP check
+entirely.  Every address that can reach the gateway port will be allowed
+through.
 
 ```sh
-ENDO_ADDR=0.0.0.0:8920 ENDO_GATEWAY=remote endo start
+ENDO_ADDR=0.0.0.0:8920 ENDO_GATEWAY_REMOTE=true endo start
 ```
 
 #### Allow specific IP ranges (CIDR allowlist)
