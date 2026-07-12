@@ -52,10 +52,8 @@ import { makeGuestMaker } from './guest.js';
 import { makeChannelMaker } from './channel.js';
 import { makeHostMaker } from './host.js';
 import { provideHostToolPowers } from './host-tool-powers.js';
-import {
-  makeSturdyRefStore,
-  makeSturdyRefExporter,
-} from './sturdyref-store.js';
+import { makeSturdyRefStore } from './sturdyref-store.js';
+import { makeOcapnIdentity } from './ocapn.js';
 import { makeRemoteControlProvider } from './remote-control.js';
 import {
   assertName,
@@ -125,9 +123,7 @@ import { makeTraceAggregator } from './trace-aggregator.js';
 import { getUnredactedStackString } from './unredacted-stack.js';
 
 /** @import { Passable } from '@endo/pass-style' */
-/** @import { OcapnLocation } from '@endo/ocapn' */
-/** @import { SturdyRefExporter } from './sturdyref-store.js' */
-/** @import { SturdyRefStore } from './types.js' */
+/** @import { OcapnIdentity, SturdyRefStore } from './types.js' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
@@ -626,6 +622,12 @@ const makeDaemonCore = async (
   // in daemon state, so mints survive restart.
   const { id: sturdyRefStoreId } = await preformulate('sturdyrefs', {
     type: 'sturdyref-store',
+  });
+  // The daemon's OCapN identity (design cut 4): a distinct keypair (its formula
+  // number keys the persisted private key) and the self peer-locator baked into
+  // wire-tier SturdyRef mints. Closely held: reached only from daemon core.
+  const { id: ocapnId } = await preformulate('ocapn', {
+    type: 'ocapn',
   });
   const { id: leastAuthorityId } = await preformulate('least-authority', {
     type: 'least-authority',
@@ -1165,6 +1167,9 @@ const makeDaemonCore = async (
   // The swiss-num store is a daemon singleton reached only from daemon core;
   // root it so it is never collected (like known-peers-store above).
   formulaGraph.addRoot(sturdyRefStoreId);
+  // The OCapN identity is a daemon singleton reached only from daemon core;
+  // root it so its keypair-backed identity is never collected.
+  formulaGraph.addRoot(ocapnId);
   formulaGraph.addRoot(leastAuthorityId);
   formulaGraph.addRoot(mainWorkerId);
   formulaGraph.addRoot(endoFormulaId);
@@ -4195,6 +4200,15 @@ const makeDaemonCore = async (
         stateKey: `sturdyref-store/${formulaNumber}`,
         makeSha256: cryptoPowers.makeSha256,
       }),
+    ocapn: async (_formula, _context, _id, formulaNumber) =>
+      makeOcapnIdentity({
+        getState: persistencePowers.getState,
+        setState: persistencePowers.setState,
+        stateKey: `ocapn/${formulaNumber}`,
+        randomHex256,
+        store: /** @type {SturdyRefStore} */ (await provide(sturdyRefStoreId)),
+        provide,
+      }),
     'pet-inspector': ({ petStore: petStoreId }) =>
       // Behold, unavoidable forward-reference:
       // eslint-disable-next-line no-use-before-define
@@ -7213,33 +7227,18 @@ const makeDaemonCore = async (
 
   // The daemon's SturdyRef exporter (design cut 3, "daemon as C"): mints,
   // serves, lists, and revokes wire-tier SturdyRefs over the swiss-num store,
-  // held closely by daemon core and reached only through the host facet. The
-  // self peer-locator is a placeholder here; cut 4 (the `ocapn` singleton)
-  // replaces it with the daemon's real self-location.
-  const sturdyRefSelfLocation = /** @type {OcapnLocation} */ (
-    harden({
-      type: 'ocapn-peer',
-      designator: localNodeNumber,
-      transport: 'ocapn',
-      hints: false,
-    })
-  );
-  /** @type {SturdyRefExporter | undefined} */
-  let sturdyRefExporterMemo;
-  const getSturdyRefExporter = async () => {
-    if (sturdyRefExporterMemo === undefined) {
-      const store = /** @type {SturdyRefStore} */ (
-        await provide(sturdyRefStoreId)
-      );
-      sturdyRefExporterMemo = makeSturdyRefExporter({
-        store,
-        randomHex256,
-        selfLocation: sturdyRefSelfLocation,
-        provide,
-      });
+  // held closely by daemon core and reached only through the host facet. It
+  // now lives inside the `ocapn` identity singleton (cut 4), built over the
+  // daemon's real self peer-locator rather than cut 3's placeholder.
+  /** @type {OcapnIdentity | undefined} */
+  let ocapnIdentityMemo;
+  const getOcapnIdentity = async () => {
+    if (ocapnIdentityMemo === undefined) {
+      ocapnIdentityMemo = /** @type {OcapnIdentity} */ (await provide(ocapnId));
     }
-    return sturdyRefExporterMemo;
+    return ocapnIdentityMemo;
   };
+  const getSturdyRefExporter = async () => (await getOcapnIdentity()).exporter;
   /**
    * @param {FormulaIdentifier} formulaIdentifier
    * @param {string} [type]
