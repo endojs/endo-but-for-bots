@@ -125,7 +125,7 @@ const TransportsInterface = M.interface('Transports', {
   has: M.call(M.string()).returns(M.promise()),        // scheme
 
   // Outgoing sessions
-  connect: M.call(M.any())                             // Locator | string
+  connect: M.call(M.any())                             // Locator: ed25519 public key + connection hint
     .optional(M.record())                              // { hints? }
     .returns(M.promise()),                             // → Session
 
@@ -174,6 +174,19 @@ daemon's underlying network primitives.
 The wrapper is the host-side proxy in the in-guest-backend +
 host-side-proxy pattern: the agent holds the facade, the daemon
 holds the actual netlayer instances and routes between them.
+
+Each underlying transport is a **single shared instance per
+scheme**, not one instance per agent.
+Every agent that uses a given transport shares that transport
+instance, which listens on **one per-transport port** (not a
+per-agent port) and is responsible for **relaying each incoming
+session to the owning agent by the peer's Ed25519 public key**.
+Routing is on Ed25519 identity throughout: every transport must be
+able to demultiplex sessions by public key.
+The per-agent `Transports` exo is therefore a scoped *view* over
+shared, identity-routed transport instances — it isolates
+discovery, revocation, accounting, and identity per agent while
+the physical socket, port, and connection coalescing stay shared.
 
 ### Layer cake
 
@@ -248,6 +261,15 @@ sockets and listeners.
 Underlying netlayer formulas have no incoming reference from the
 proxy; they are pinned by the daemon's `@endo` formula and
 collected only at daemon shutdown.
+
+When a shared transport *instance* is itself collected — its
+formula garbage-collected and the instance consequently
+cancelled/disincarnated — it must **close all of its sessions**,
+so that every presence and promise carried over those sessions is
+partitioned/rejected.
+This is the one revocation invariant this design owes the wider
+session-partitioning story (see *Cross-peer revocation
+propagation* under Out of Scope, Future Work).
 
 #### Daemon restart
 
@@ -345,80 +367,113 @@ on top of (not in lieu of) the per-daemon netlayer.
   the netlayer that the proxy fronts.
 - `packages/ocapn-noise-network/` (new, per `ocapn-noise-network`
   design) — provides the `np` netlayer the proxy dispatches to.
-- `packages/cli/` — `endo transports` verb (parallel to
-  `endo nets`).
+- `packages/cli/` — per-agent
+  `endo agent <name> transports {list,add,revoke}` verbs
+  (see *Design Decisions* #9); `endo nets` is retired alongside
+  `@nets` (#10).
 
-## Open Questions
+## Design Decisions
 
-1. **Should `Transports` be a formula or an exo with daemon
-   internals?**
-   A formula gets durability and named-pet-store presence for
-   free, but every method call crosses a formula boundary.
-   An exo with daemon internals is faster but needs explicit
-   restart handling.
-   The `Mount` precedent (formula) suggests the former.
+The questions raised during design review are resolved as follows
+(the resolutions are directives from the review, not open choices).
 
-2. **Where does the listening-port allocator live?**
-   If 100 agents each `listen({ port: 0 })`, the daemon hands
-   out 100 ephemeral ports from a single host pool.
-   Should the host hold a per-agent quota, or is the OS-level
-   ephemeral pool sufficient?
+1. **`Transports` is a formula.**
+   It gets durability and named-pet-store presence for free at the
+   cost of a formula boundary per method call, matching the `Mount`
+   precedent.
+   Restart handling is the deferred-task-params path in
+   *Daemon restart*; there is no exo-with-daemon-internals variant.
 
-3. **How does `@transports` interact with the gateway's bearer
-   token auth?**
-   `gateway-bearer-token-auth` mints session keys at the
-   gateway boundary.
-   When a remote agent connects via Noise, it presents an
-   Ed25519 identity, not a bearer token.
-   Do we map between them, or are gateway and `Transports`
-   distinct ingress paths?
+2. **The listen port is per-transport, not per-agent.**
+   A transport *instance* is shared by all peers that use it and
+   listens on **one** port; the physical transport relays each
+   incoming session to the owning agent by the peer's Ed25519
+   public key (see *Layer cake*).
+   There is therefore no 100-agents-100-ports pool to allocate and
+   no per-agent port quota: `listen({ port: 0 })` binds (or reuses)
+   the single per-transport port, and demultiplexing to agents is
+   by identity, not by port.
 
-4. **Should `connect()` accept a `Locator` exo (handle) or a
-   serialized locator string?**
-   Both are useful: exos are GC-friendly, strings are
-   composable into config.
-   Probably accept either, with a runtime branch.
+3. **We route on Ed25519 identity; gateway and `Transports` are
+   flush.**
+   The two are not distinct ingress paths.
+   The gateway's bearer-token boundary
+   (`gateway-bearer-token-auth`) and the Noise ingress both resolve
+   to an Ed25519 identity, and routing keys on that identity in
+   both cases; the bearer token maps onto the same identity the
+   transport routes on rather than standing up a parallel scheme.
 
-5. **How are transport hints validated against `outboundPolicy`?**
-   A locator carries connection hints (`tcp:host=...`).
-   The proxy must enforce `outboundPolicy` before dispatching.
-   What is the policy DSL?
-   A simple suffix-match allowlist is the minimum; CIDR support
-   would be useful.
+4. **`connect()` accepts a public key and a connection hint from
+   the locator.**
+   The locator supplies the peer's Ed25519 public key (the routing
+   target) together with a connection hint (`tcp:host=...`, relay
+   address, etc.).
+   `connect` takes the locator — exo or serialized string — and
+   reads the public key and hint out of it; the public key, not the
+   hint, is authoritative for routing.
 
-6. **What is the failure mode when an agent's allowed scheme is
-   not registered in the daemon?**
-   The agent calls `connect(npLocator)` but the daemon has no
-   `np` netlayer.
-   Throw, or silently fall back?
-   Throwing is the cap-discipline answer.
+5. **`outboundPolicy` is a concrete matcher.**
+   The proxy enforces `outboundPolicy` against the locator's
+   connection hint before dispatching.
+   A minimal policy is a suffix-match allowlist, with CIDR support
+   for IP hints:
 
-7. **Should a `Transports` proxy expose the underlying netlayer
-   versions / capabilities to the agent?**
-   E.g., "this daemon's `np` netlayer supports IK pattern but
-   not XX".
-   Useful for diagnostics; risks leaking host configuration.
-   `help()` returning a static string is the minimum.
+   ```js
+   const outboundPolicy = {
+     // allow if the hint host matches any suffix…
+     allowHostSuffixes: ['.internal.example', 'localhost'],
+     // …or falls in any CIDR block
+     allowCidrs: ['10.0.0.0/8', 'fd00::/8'],
+     // schemes this agent may dial at all
+     allowSchemes: ['np', 'tcp+syrups'],
+     // default when nothing matches
+     otherwise: 'deny', // 'deny' | 'allow'
+   };
+   ```
 
-8. **How does the proxy interact with `daemon-mount`'s confinement
-   boundary?**
-   A mount is an agent-held filesystem cap; a transport is an
-   agent-held network cap.
-   Should they share a common revocation/audit surface, or
-   stay independent?
-   Probably independent for now; revisit when the capability-bus
-   design lands.
+   `connect(locator)` extracts the hint (`{ scheme, host, port }`),
+   checks `allowSchemes`, then requires a match in
+   `allowHostSuffixes` or `allowCidrs`; a miss throws under
+   `otherwise: 'deny'`.
+   The routing target (the Ed25519 key) is not policy-checked here —
+   `outboundPolicy` gates *where on the wire* the agent may dial,
+   not *whom* it may address.
 
-9. **What CLI surface does the user see?**
-   `endo transports list`, `endo transports add`, `endo
-   transports revoke <handle>`?
-   Or fold into `endo agent <name> transports ...`?
+6. **An unregistered scheme throws.**
+   If the agent calls `connect(npLocator)` and the daemon has no
+   `np` netlayer, `connect` rejects.
+   Silent fallback is rejected as a cap-discipline violation.
 
-10. **Do we keep `@nets` as a host-only special name?**
-    The host (the root agent) might still benefit from a
-    directory-shaped view of registered netlayers.
-    Or is `@transports.list()` plus a daemon-internal API
-    sufficient even for the host?
+7. **The proxy does not expose underlying netlayer versions or
+   capabilities to the agent.**
+   Leaking host configuration outweighs the diagnostic value.
+   `help()` returns a static string; there is no
+   netlayer-capability introspection surface.
+
+8. **Transports and `daemon-mount` stay independent for now.**
+   A transport and a mount are both agent-held caps, but they do
+   not share a revocation/audit surface in this design.
+   A common surface is revisited when the capability-bus /
+   capability-bank design lands (see *Capability bank
+   integration*).
+
+9. **The CLI is per-agent, and subagents can be created with
+   delegated transports.**
+   Per-agent suffices: fold the verbs into
+   `endo agent <name> transports {list,add,revoke <handle>}`
+   rather than a top-level `endo transports`.
+   It must be possible to create a subagent with **delegated**
+   transports — a parent agent grants a subset of its transports
+   (schemes, outbound policy, listen policy) to a child at
+   formulation time, so delegation is a first-class CLI and API
+   operation, not just host-minted provisioning.
+
+10. **Retire `@nets`.**
+    `@nets` is not kept as a host-only special name.
+    The host reaches netlayers through `@transports.list()` plus
+    the daemon-internal registry API; there is no surviving
+    directory-shaped `@nets` view for any agent, host included.
+    The migration path (above) ends in full removal.
 
 ## Out of Scope, Future Work
 
@@ -426,29 +481,52 @@ on top of (not in lieu of) the per-daemon netlayer.
   The `endor` Rust daemon will need its own `@transports`
   implementation; the cap surface should be portable but the
   implementation is per-runtime.
+  Concretely, `endor` should be able to benefit from transports
+  implemented in Node.js workers, and this design should be
+  integrated well enough to make that path available **for parity
+  testing** — the JS-worker transport is the reference the Rust
+  runtime is checked against, not a throwaway.
 
 - **Alternative transports (QUIC, WebTransport, Tor).**
-  Each is its own design.
+  Each is its own design and is left as an exercise for the
+  future; we do intend to support some of these.
   The `@transports` envelope must accept any scheme the
   netlayer registry supports.
 
 - **Cross-peer revocation propagation.**
-  When daemon Y revokes agent B, agent A on daemon X may still
-  hold a `Session` handle.
-  Today, the session simply fails on next message.
-  A future design may add a revocation notification channel.
+  This is orthogonal to this change.
+  The daemon supports multiple levels of revocation, and OCapN
+  (and other CapTPs) are responsible for ensuring that session
+  termination both revokes all pending promises over the session
+  and partitions presences.
+  Partitioning presences is not yet visible, and there are designs
+  in flight to address that; this change need not carry the
+  concern — **except** for one invariant that *is* in scope: when a
+  transport's formula is collected and its instance is consequently
+  cancelled/disincarnated, it must **close all of its sessions**,
+  so that every presence and promise carried over them is
+  partitioned/rejected.
+  (When daemon Y revokes agent B, agent A on daemon X may still
+  hold a `Session` handle; today that session simply fails on next
+  message, and a future design may add a revocation notification
+  channel.)
 
 - **Fine-grained per-locator policy.**
-  Today the `outboundPolicy` is a single allowlist.
-  A future design may add per-target rate limits, audit
-  logging, or budget enforcement.
+  Today the `outboundPolicy` is a single allowlist (per *Design
+  Decisions* #5).
+  Per-target rate limits, audit logging, and budget enforcement
+  are deferred to a **follow-up design that we plan to post upon
+  completion of this change**.
 
 - **Capability bank integration.**
-  When `daemon-capability-bank` (M5) lands, `@transports`
-  becomes one of the capabilities the bank manages, alongside
-  `@mount`, `@timer`, etc.
-  This design does not pre-empt that integration; the
-  `Transports` exo is shaped to fit a future bank surface.
+  The capability bank is an abstract requirement: it does not
+  impose requirements on this proposal other than that it should
+  exist.
+  When `daemon-capability-bank` (M5) lands, `@transports` becomes
+  one of the capabilities the bank manages, alongside `@mount`,
+  `@timer`, etc.
+  This design does not pre-empt that integration; the `Transports`
+  exo is shaped to fit a future bank surface.
 
 ## Test Plan
 
@@ -504,9 +582,11 @@ Shape only:
   formulate-on-first-resolve when an agent's pet store has
   `@nets` but no `@transports`.
 
-- The CLI gains `endo transports` verbs; `endo nets` is
-  deprecated and emits a warning pointing at `endo
-  transports`.
+- The CLI gains per-agent
+  `endo agent <name> transports` verbs (Design Decisions #9);
+  `endo nets` is deprecated through the migration window (emitting
+  a warning that points at the new verbs) and then **retired**
+  together with `@nets` (#10).
 
 ## Upgrade Considerations
 
