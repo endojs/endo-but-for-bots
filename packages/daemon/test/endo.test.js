@@ -15,6 +15,7 @@ import { execFile } from 'child_process';
 import { promisify as nodePromisify } from 'util';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
+import { formatSturdyRefUri } from '@endo/ocapn';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeCancelKit } from '@endo/cancel';
@@ -3207,6 +3208,98 @@ test('the ocapn capability and netlayer handles never cross a facet boundary', a
   for (const leak of ['location', 'designator', 'transport', 'secret']) {
     t.false(grantFields.has(leak), `grant listing must not carry ${leak}`);
   }
+});
+
+// Foreign-SturdyRef internalization (design cut 5, "daemon as B"): a foreign
+// SturdyRef carried out-of-band as an `ocapn://` URI internalizes at the facet
+// seam to a LOCAL `ocapn-sturdyref` formula identifier that re-enlivens on
+// demand. These exercise the durable half — accept, dedup, identify, name-write,
+// locate — which needs no live dial (formulation is lazy); the live dial+fetch
+// half is proven over a real `tcp-test-only` netlayer in
+// test/ocapn.test.js ("armed cross-peer enliven"), since the daemon threads no
+// netlayer yet (cut-4's provisional unarmed default; arming is the maintainer's
+// open question, tracked for cut 6).
+const makeForeignSturdyRefUri = swissByte => {
+  const foreignLocation = harden({
+    type: 'ocapn-peer',
+    designator: 'peerc7fq2example4designator5only6zzz',
+    transport: 'tcp-testing-only',
+    hints: false,
+  });
+  const secret = new Uint8Array(24);
+  for (let i = 0; i < 24; i += 1) secret[i] = (i * 37 + swissByte) % 256;
+  return {
+    foreignLocation,
+    secret,
+    uri: formatSturdyRefUri({ location: foreignLocation, swissNum: secret }),
+  };
+};
+
+test('host accepts a foreign SturdyRef URI, internalizes it, dedups, and locates it without leaking the foreign locator', async t => {
+  const { host } = await prepareHost(t);
+  const sturdyRefs = await E(host).sturdyRefs();
+  const { uri, foreignLocation } = makeForeignSturdyRefUri(11);
+
+  // Accept + name-write: the URI resolves to a LOCAL formula identifier.
+  const id = await E(sturdyRefs).acceptSturdyRefUri(uri, 'foreign');
+  t.notThrows(() => parseId(id), 'a well-formed local formula identifier');
+  const { node } = parseId(id);
+  const selfInfo = await E(host).getPeerInfo();
+  t.is(node, selfInfo.node, 'the identifier denotes a LOCAL formula (no foreign node)');
+
+  // The name-write bound it: identify recovers the same identifier.
+  t.is(await E(host).identify('foreign'), id, 'name-write bound the identifier');
+
+  // Dedup: accepting the SAME foreign (location, swissNum) again converges on
+  // the SAME formula identifier — a stable identifier across internalizations.
+  const again = await E(sturdyRefs).acceptSturdyRefUri(uri);
+  t.is(again, id, 'dedup: repeated internalizations yield one stable identifier');
+
+  // A different foreign swiss-num at the same peer is a distinct grant.
+  const { uri: uri2 } = makeForeignSturdyRefUri(200);
+  const id2 = await E(sturdyRefs).acceptSturdyRefUri(uri2);
+  t.not(id2, id, 'a distinct foreign grant internalizes to a distinct formula');
+
+  // Confinement (no-location): `locate` returns the ordinary endo:// locator
+  // at the granularity "this daemon holds it" — it names the LOCAL formula and
+  // its ocapn-sturdyref type, never the foreign peer designator or the secret.
+  const locator = await E(host).locate('foreign');
+  t.regex(locator, /type=ocapn-sturdyref/u, 'located as an ocapn-sturdyref');
+  t.false(
+    locator.includes(foreignLocation.designator),
+    'the foreign peer designator never appears in the locator',
+  );
+  t.false(locator.includes('tcp-testing-only'), 'no foreign transport leak');
+});
+
+test('a confined guest cannot reach the foreign-SturdyRef accept surface, and enliven is daemon-side only', async t => {
+  const { host } = await prepareHost(t);
+  const { uri } = makeForeignSturdyRefUri(42);
+  const sturdyRefs = await E(host).sturdyRefs();
+  await E(sturdyRefs).acceptSturdyRefUri(uri, 'foreign');
+
+  // Confinement (no-location): `acceptSturdyRefUri` lives on the host-only
+  // `sturdyRefs` facet. A confined guest has no `sturdyRefs` method at all, so
+  // it can never accept a secret-bearing URI nor reach the dial capability.
+  const guest = E(host).provideGuest('guest');
+  await t.throwsAsync(() => E(guest).sturdyRefs(), {
+    message: /target has no method "sturdyRefs"/u,
+  });
+  const guestsHost = E(guest).lookup(['@host']);
+  await t.throwsAsync(() => E(guestsHost).sturdyRefs(), {
+    message: /target has no method "sturdyRefs"/u,
+  });
+
+  // Enliven happens ONLY daemon-side, via the closely-held OCapN capability.
+  // With no netlayer armed the daemon cannot dial, so provisioning the value
+  // rejects — proving the seam reaches the mediator's dial path (a guest never
+  // does) — and the rejection is secret-free (never the swiss-num).
+  const error = await t.throwsAsync(() => E(host).lookup('foreign'));
+  const { secret } = makeForeignSturdyRefUri(42);
+  const secretHex = Array.from(secret)
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+  t.false(String(error).includes(secretHex), 'the rejection never names the swiss-num');
 });
 
 test('read unknown node id', async t => {
