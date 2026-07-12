@@ -1005,6 +1005,11 @@ export type OcapnIdentity = {
   /** Whether a netlayer is armed, so the dial+serve client exists (cut 5). */
   isArmed: boolean;
   /**
+   * Tear down the dial+serve client and its armed netlayer (cut 6). A no-op when
+   * unarmed. Without it an armed identity leaks its listening socket.
+   */
+  shutdown(): void;
+  /**
    * The closely-held reveal (cut 5): the off-band `(location, swissNum)` of a
    * SturdyRef this daemon minted or materialized (self-mint, wire arrival, or
    * `ocapn://` URI), or `undefined` for a forged look-alike / foreign-instance
