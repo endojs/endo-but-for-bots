@@ -611,6 +611,18 @@ export const MountInterface = M.interface('EndoMount', {
       ),
     )
     .returns(M.promise()),
+  // Fused glob+grep composition. Both patterns are required positionals so the
+  // operation can be pushed down to native code as a single call.
+  glorp: M.call(M.string(), M.string())
+    .optional(
+      M.splitRecord(
+        {},
+        {
+          maxResults: M.number(),
+        },
+      ),
+    )
+    .returns(M.promise()),
   // Attenuation — returns a structural ReadableTree view, not an
   // EndoMount.  Callers that need mount-specific extensions on a
   // read-only handle keep a reference to the un-attenuated mount.

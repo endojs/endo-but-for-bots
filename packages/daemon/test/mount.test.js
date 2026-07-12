@@ -1014,6 +1014,28 @@ test('mount glob and grep find confined non-denied files', async t => {
   ]);
 });
 
+test('mount glorp fuses glob and grep, honoring the glob filter', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.mkdirSync(path.join(rootPath, 'src'), { recursive: true });
+  fs.mkdirSync(path.join(rootPath, '.aws'), { recursive: true });
+  fs.writeFileSync(path.join(rootPath, 'src', 'index.js'), 'const hit = 1;\n');
+  fs.writeFileSync(path.join(rootPath, 'src', 'readme.md'), 'hit docs\n');
+  fs.writeFileSync(path.join(rootPath, '.aws', 'credentials'), 'hit secret\n');
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+
+  // The glob pattern narrows the file set before the grep runs; the denied
+  // `.aws` tree is excluded exactly as it is for `glob`/`grep`.
+  t.deepEqual(await E(mount).glorp('**/*.js', 'hit'), [
+    { file: 'src/index.js', line: 1, text: 'const hit = 1;' },
+  ]);
+  // Widening the glob to everything matches both non-denied files, and is
+  // equivalent to `grep(pattern, { glob })`.
+  t.deepEqual(await E(mount).glorp('**/*', 'hit', { maxResults: 10 }), [
+    { file: 'src/index.js', line: 1, text: 'const hit = 1;' },
+    { file: 'src/readme.md', line: 1, text: 'hit docs' },
+  ]);
+});
+
 test('mount control revokes existing mount, subview, and file handles', async t => {
   const rootPath = makeTempRoot(t);
   fs.mkdirSync(path.join(rootPath, 'src'), { recursive: true });

@@ -1080,6 +1080,23 @@ const makeMountExo = ctx => {
       return harden(matches);
     },
 
+    async glorp(glob, grep, options = {}) {
+      assertLive();
+      await null;
+      // `glorp` is the fused composition of `glob` and `grep`: enumerate the
+      // files matching `glob`, then search each for `grep`, returning the same
+      // `{ file, line, text }` match records as `grep`. Both patterns are
+      // required positionals (rather than `grep`'s optional `options.glob`), so
+      // the whole operation is expressible as a single call whose two patterns
+      // can be pushed down to a native filesystem that fuses the enumerate and
+      // scan into one pass — no glob result set round-trips back through JS.
+      // The reference implementation here composes the existing surface; a
+      // native powers layer may override `glorp` with a single fused call.
+      const { maxResults = 1000 } = options;
+      // eslint-disable-next-line no-invalid-this
+      return this.self.grep(grep, { glob, maxResults });
+    },
+
     readOnly() {
       assertLive();
       // Structural narrowing: return a ReadableTree view, not an

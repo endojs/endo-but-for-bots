@@ -1313,6 +1313,11 @@ export interface EndoMount {
     pattern: string,
     options?: { glob?: string; maxResults?: number },
   ): Promise<Array<{ file: string; line: number; text: string }>>;
+  glorp(
+    glob: string,
+    grep: string,
+    options?: { maxResults?: number },
+  ): Promise<Array<{ file: string; line: number; text: string }>>;
   readOnly(): ReadableTreeView;
   subDir(path: string): Promise<EndoMount>;
   snapshot(): Promise<unknown>;

@@ -789,6 +789,10 @@ Return mount-relative paths matching a glob pattern. Supports * and **.
 
 Search text files under the mount. options.glob filters paths and options.maxResults bounds matches.
 
+## glorp(glob, grep, options?) -> Promise<Array<{ file, line, text }>>
+
+Fused glob+grep: search the files matching the glob pattern for the grep pattern. Both patterns are required, so the composition can be pushed down to native code. options.maxResults bounds matches.
+
 ## readOnly() -> ReadableTree
 
 Returns a structural ReadableTree view (has, list, lookup) of this mount.

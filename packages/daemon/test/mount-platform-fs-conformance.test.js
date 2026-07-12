@@ -182,7 +182,8 @@ test('EndoMount exposes every method on PlatformDirectoryInterface', async t => 
  * whether the vocabulary should grow to include it. `maybeLookup` is the
  * `ReadableNameHub` lookup-or-undefined primitive (C1), not part of the lite
  * `Directory` vocabulary. (`help` is now part of the platform contract, so it
- * is not an extension.) `readJson` / `writeJson`, `glob`, and `grep` are mount
+ * is not an extension.) `readJson` / `writeJson`, `glob`, `grep`, and the
+ * fused `glorp` (glob+grep, pushable to native code) are mount
  * conveniences over confined file I/O. `removeDirectory` / `removeTree` split
  * the older Mount-specific removal semantics, and `subDir` is the daemon mount
  * scoped string-path convenience over `subView`.
@@ -197,6 +198,7 @@ const ENDOMOUNT_EXTENSIONS = [
   'writeJson',
   'glob',
   'grep',
+  'glorp',
   'makeFile',
   'removeDirectory',
   'removeTree',

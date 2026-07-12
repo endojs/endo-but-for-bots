@@ -247,6 +247,8 @@ export const helpTextEntries = harden([
       stat: 'stat(path) -> Promise<EndoMountStat | undefined>\nQuery metadata for a path within the mount.\npath: string | string[] | EndoMountEntry — Name, path segments, or mount entry.\nReturns undefined when the path is missing or escapes the mount.',
       glob: 'glob(pattern) -> Promise<string[]>\nReturn mount-relative paths matching a glob pattern. Supports * and **.',
       grep: 'grep(pattern, options?) -> Promise<Array<{ file, line, text }>>\nSearch text files under the mount. options.glob filters paths and options.maxResults bounds matches.',
+      glorp:
+        'glorp(glob, grep, options?) -> Promise<Array<{ file, line, text }>>\nFused glob+grep: search the files matching the glob pattern for the grep pattern. Both patterns are required, so the composition can be pushed down to native code. options.maxResults bounds matches.',
       readOnly:
         'readOnly() -> ReadableTree\nReturns a structural ReadableTree view (has, list, lookup) of this mount.\nMount-specific extensions (entry, stat, readText, makeFile) are not on the view.',
       snapshot:
