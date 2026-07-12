@@ -37,6 +37,12 @@ const parseIPv4 = addr => {
   /** @type {number[]} */
   const octets = [];
   for (const part of parts) {
+    // Require decimal digits before Number(): `Number('')` is 0 and
+    // `Number('0x0a')` is 10, so a bare Number() would accept an empty octet
+    // (`1..2.3`) or a hex/exponential form as a valid address. This checker
+    // gates remote access, so it must reject malformed input rather than coerce
+    // it into an address that happens to parse.
+    if (!/^[0-9]+$/.test(part)) return undefined;
     const n = Number(part);
     if (!Number.isInteger(n) || n < 0 || n > 255) return undefined;
     octets.push(n);
@@ -132,6 +138,11 @@ export const parseCIDR = cidr => {
 
   const addrPart = cidr.slice(0, slashIdx);
   const prefixStr = cidr.slice(slashIdx + 1);
+  // Require prefix digits before Number(): `Number('')` is 0, so a trailing
+  // slash (`10.0.0.0/`, a plausible allowlist typo) would otherwise parse as a
+  // `/0` that matches every address, silently turning a truncated entry into an
+  // allow-all rule. Fail closed on a missing or non-decimal prefix instead.
+  if (!/^[0-9]+$/.test(prefixStr)) return undefined;
   const prefixLen = Number(prefixStr);
   if (!Number.isInteger(prefixLen) || prefixLen < 0) return undefined;
 
