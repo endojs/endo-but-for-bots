@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-18 |
-| **Updated** | 2026-05-29 |
+| **Updated** | 2026-07-12 |
 | **Author** | 0xPatrick (prompted) |
 | **Status** | Proposed (Phases 1-5 landed via #365; fd-pipe askpass landed via #368) |
 
@@ -510,6 +510,7 @@ For the MVP there are two legitimate product flows:
 The second flow is product-relevant when an agent starts from only a remote repository, but it should remain host-mediated.
 It should not become guest authority to clone arbitrary remotes into arbitrary host paths.
 The exact bootstrap API is a follow-up design point because it must combine mount creation, endpoint policy, and sealed credential authority before a local `Git` exists.
+That follow-up now has its record: [daemon-git-clone](daemon-git-clone.md) documents the shipped `provideGitClone` composition (#538) and the paired formula-owned commit-identity boundary (PR #706).
 
 ## Security Model
 
@@ -803,7 +804,7 @@ Each gets a one-line follow-up deliverable.
   Deliverable: a one-page note in `designs/` confirming or revising the HTTPS-only Phase 1.
 - **Bootstrap / clone API.**
   A `provideGitClone({...})` host flow that composes mount creation + endpoint policy + sealed credential authority before a local `Git` exists is a real follow-up requirement (early-draft Open Question #6).
-  Design lives in its own `designs/daemon-git-clone.md` follow-up; the spike's deliverable is the design doc, scheduled for Phase 6 after HTTPS fetch/push are exercised in real workflows.
+  Design lives in its own follow-up, now written: [daemon-git-clone](daemon-git-clone.md) records the shipped host-mediated composition (#538) and the commit-identity boundary (PR #706).
 - **Telemetry to distinguish CapTP control-plane time from remote transport data-plane time.**
   During Phase 2, add structured timing fields to `GitFetchResult` and `GitPushResult` (initial shape: `{ captpMs: number; transportMs: number }` augmenting the existing result types) and iterate based on what debug sessions actually need.
   The shape may change after the spike; the principle (timing is observable) is decision 12.

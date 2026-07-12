@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-27 |
-| **Updated** | 2026-06-03 |
+| **Updated** | 2026-07-12 |
 | **Author** | 0xPatrick (prompted) |
 | **Status** | Proposed |
 
@@ -84,12 +84,13 @@ Each is a dispatchable work item or a pointer to the design that owns it.
   Depends on the agent tool adapters (#416, above).
   See [daemon-git-remotes](daemon-git-remotes.md) § Agent MVP Profile for the default remote profile the example runs under.
 
-- [ ] **Repository bootstrap (`provideGitClone`) and the commit-author / identity boundary → a future `daemon-git-clone.md`.**
+- [ ] **Repository bootstrap (`provideGitClone`) and the commit-author / identity boundary → [daemon-git-clone](daemon-git-clone.md).**
   Today the loop starts only from a worktree the operator pre-mounted; `GitRemote` is intentionally bound to an existing local `Git`, so cloning has no home on it.
-  `provideGitClone(...)` — named in [daemon-git-remotes](daemon-git-remotes.md) § Repository Bootstrap and `clone` — composes mount creation + endpoint policy + sealed credential authority + clone-into-the-new-mount before a local `Git` exists, returning the resulting `EndoMount` + `Git`.
+  `provideGitClone(...)` — named in [daemon-git-remotes](daemon-git-remotes.md) § Repository Bootstrap and `clone` — composes a writable destination mount + endpoint policy + sealed credential authority + clone-into-the-mount before a local `Git` exists, returning the resulting `Git` plus an `origin`-pre-bound `GitRemote`.
   Paired with it is the **commit-author / identity boundary**: the agent's commits must be attributed from a policy it does not control, which wants a capability shape rather than per-dispatch out-of-band knowledge.
   Together these close the "you give me a URL, the agent runs, and its commits are attributed correctly" gap.
-  The bootstrap design (and the identity boundary as a section or sibling) lives in its own `daemon-git-clone.md`; depends on the `GitRemote` composition being stable.
+  Both now have their record: the bootstrap seam shipped host-mediated via #538, the identity boundary is in flight as PR #706, and [daemon-git-clone](daemon-git-clone.md) is the canonical home for the composition, its deviations from the original sketch, and the remaining open questions.
+  The item stays open until the identity boundary lands.
 
 - [ ] **Reconcile `tree(ref)` and `filesystemAt(ref)` into one canonical vocabulary — a focused edit to [daemon-git-capability](daemon-git-capability.md).**
   `tree(ref)` (returning `ReadableTree`) is specified in [daemon-git-capability](daemon-git-capability.md) § Git-Tree Backend and Design Decision 3; `filesystemAt(ref)` (returning an `@endo/endo-fs` `Filesystem`) is specified in [endo-fs-from-git](endo-fs-from-git.md).
@@ -125,6 +126,7 @@ They are named so a builder dispatch does not mistake them for gaps in the miles
 | [daemon-git-capability](daemon-git-capability.md) | Versioning + historical-read layers (`Git`, `tree(ref)`, `readOnly()`, bulk data plane, Phase 7 structured shapes). The `tree(ref)`/`filesystemAt(ref)` reconciliation is a focused edit here. |
 | [endo-fs-from-git](endo-fs-from-git.md) | Historical-read foundation: `Git.filesystemAt(ref)` returning an `@endo/endo-fs` `Filesystem` over the git object database. The reconciliation item merges its vocabulary with `tree(ref)`. |
 | [daemon-git-remotes](daemon-git-remotes.md) | Network + credential layer (`GitRemote`, credential injection, `provideGitClone` bootstrap, audit). |
+| [daemon-git-clone](daemon-git-clone.md) | Repository-bootstrap record: the shipped `provideGitClone` composition (#538) and the formula-owned commit-identity boundary (PR #706). |
 | [endo-gateway-mcp](endo-gateway-mcp.md) | Defines `@endo/agent-tools` and the `extra` seam (`makeAgentTools(powers, { extra })`) that the agent tool adapters (#416) plug into. |
 | [daemon-agent-tools](daemon-agent-tools.md) | Conceptual parent of the agent-tool capability model — names which capabilities (`Dir` / `Shell` / `Git`, now mount-derived) surface as agent tools. |
 | [daemon-capability-bank](daemon-capability-bank.md) | Future home for durable credential authority (Beyond the Loop). |
