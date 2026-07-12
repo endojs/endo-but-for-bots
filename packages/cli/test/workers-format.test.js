@@ -16,9 +16,7 @@ test('text: single worker with no tenants uses singular-aware count', t => {
 
 test('text: worker with one tenant is singular', t => {
   t.is(
-    formatWorkers([
-      { name: 'w0', tenants: [{ name: 'agent', type: 'eval' }] },
-    ]),
+    formatWorkers([{ name: 'w0', tenants: [{ name: 'agent', type: 'eval' }] }]),
     ['w0 (1 tenant)', '  agent [eval]'].join('\n'),
   );
 });
@@ -46,9 +44,7 @@ test('text: multiple workers and tenants, indented under each worker', t => {
 });
 
 test('json: pretty-prints the listing verbatim', t => {
-  const listing = [
-    { name: 'w0', tenants: [{ name: 'agent', type: 'eval' }] },
-  ];
+  const listing = [{ name: 'w0', tenants: [{ name: 'agent', type: 'eval' }] }];
   t.is(
     formatWorkers(listing, { json: true }),
     JSON.stringify(listing, null, 2),
