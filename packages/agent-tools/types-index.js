@@ -10,3 +10,8 @@ export {
   makeMountFsTools,
 } from './src/mount-fs.js';
 export { makeShellTool } from './src/shell-tool.js';
+export {
+  makeWorkspaceTools,
+  provisionWorkspaceTools,
+  provisionHistoryTools,
+} from './src/workspace.js';

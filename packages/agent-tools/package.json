@@ -53,6 +53,10 @@
       "types": "./mount-fs.d.ts",
       "default": "./src/mount-fs.js"
     },
+    "./workspace.js": {
+      "types": "./workspace.d.ts",
+      "default": "./src/workspace.js"
+    },
     "./src/index.js": {
       "types": "./src/index.d.ts",
       "default": "./src/index.js"
@@ -80,6 +84,10 @@
     "./src/mount-fs.js": {
       "types": "./src/mount-fs.d.ts",
       "default": "./src/mount-fs.js"
+    },
+    "./src/workspace.js": {
+      "types": "./src/workspace.d.ts",
+      "default": "./src/workspace.js"
     },
     "./types-index.js": {
       "types": "./types-index.d.ts",
