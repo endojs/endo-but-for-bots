@@ -4,6 +4,7 @@ import os from 'os';
 import { E } from '@endo/far';
 
 import { withEndoHost } from '../context.js';
+import { formatWorkers } from './workers-format.js';
 
 /**
  * List workers and their tenanted capabilities.
@@ -16,33 +17,19 @@ export const workers = async ({ json }) =>
     const entries = await E(host).listWithTypes();
     const workerEntries = entries.filter(e => e.type === 'worker');
 
-    if (workerEntries.length === 0) {
-      if (!json) {
-        console.error('No workers found.');
-      } else {
-        console.log('[]');
-      }
-      return;
-    }
-
     /** @type {Array<{ name: string, tenants: Array<{ name: string, type: string }> }>} */
-    const result = [];
+    const listing = [];
 
     for (const { name } of workerEntries) {
       // eslint-disable-next-line no-await-in-loop
       const tenants = await E(host).listWorkerTenants(name);
-      result.push({ name, tenants });
+      listing.push({ name, tenants });
     }
 
-    if (json) {
-      console.log(JSON.stringify(result, null, 2));
-    } else {
-      for (const { name, tenants } of result) {
-        const count = tenants.length;
-        console.log(`${name} (${count} tenant${count !== 1 ? 's' : ''})`);
-        for (const tenant of tenants) {
-          console.log(`  ${tenant.name} [${tenant.type}]`);
-        }
-      }
+    if (!json && listing.length === 0) {
+      console.error('No workers found.');
+      return;
     }
+
+    console.log(formatWorkers(listing, { json }));
   });
