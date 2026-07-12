@@ -227,7 +227,9 @@ export const makeGitRemoteTool = remoteCap => {
         ) {
           positional.pop();
         }
-        const remoteMethod = /** @type {keyof GitRemoteToolDispatch} */ (method);
+        const remoteMethod = /** @type {keyof GitRemoteToolDispatch} */ (
+          method
+        );
         const remote = /** @type {GitRemoteToolDispatch} */ (E(remoteCap));
         return remote[remoteMethod](...positional);
       },
