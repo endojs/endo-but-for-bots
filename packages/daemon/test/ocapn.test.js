@@ -339,6 +339,9 @@ tcpTest(
       // ava report "Failed to exit while running test/ocapn.test.js".
       identityB.shutdown();
       clientC.shutdown();
+      // Release B's armed netlayer too, so the test process exits cleanly
+      // (cut 6 gave the identity a `shutdown`).
+      identityB.shutdown();
     }
   },
 );
