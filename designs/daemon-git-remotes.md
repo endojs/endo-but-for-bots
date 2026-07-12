@@ -543,7 +543,7 @@ It should not become guest authority to clone arbitrary remotes into arbitrary h
 
 **Landed (2026-07-11 reconciliation note).**
 The second flow shipped host-mediated via #538 as `EndoHost.provideGitClone(opts)`: the host method validates the endpoint, a writable destination mount, and the credential, then drives the `makeGitCloner` seam in `@endo/exo-git` (`packages/exo-git/src/git-cloner.js`) over the native clone helper in `@endo/git`, returning the derived capabilities once the clone lands in the mount.
-The once-planned separate `daemon-git-clone.md` is therefore no longer needed for the clone half; the residual bootstrap gap is the **commit-identity boundary**, pinned and sequenced as Phase 2 of [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan (§ Commit-identity boundary there carries the shape: formula-owned `{ authorName, authorEmail }` construction options on `provideGit` / `provideGitClone`, guest-immutable).
+The once-planned separate `daemon-git-clone.md` is therefore no longer needed for the clone half; the residual bootstrap gap is the **commit-identity boundary**, pinned and sequenced as Phase 2 of [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan (§ Commit-identity boundary there carries the shape: formula-owned `{ identity: { authorName, authorEmail } }` construction option on `provideGit` / `provideGitClone`, guest-immutable).
 
 ## Security Model
 
