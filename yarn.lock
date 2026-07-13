@@ -2170,6 +2170,7 @@ __metadata:
   dependencies:
     "@earendil-works/pi-agent-core": "npm:^0.80.3"
     "@earendil-works/pi-ai": "npm:^0.80.3"
+    "@endo/agentry": "workspace:^"
     "@endo/cli": "workspace:^"
     "@endo/daemon": "workspace:^"
     "@endo/errors": "workspace:^"
