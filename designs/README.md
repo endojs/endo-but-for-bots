@@ -328,7 +328,7 @@ LLM-agent stack).*
 | [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [ocapn-noise-network](ocapn-noise-network.md) | 2026-02-14 | 2026-05-18 | **Complete** |
 | [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md) | 2026-05-14 | 2026-05-19 | Proposed |
-| [ocapn-persistence](ocapn-persistence.md) | 2026-07-13 | 2026-07-13 | Proposed |
+| [ocapn-persistence](ocapn-persistence.md) | 2026-07-13 | 2026-07-13 | In Progress (Phases 1-4 shipped as `@endo/portrait`) |
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [ocapn-tcp-syrups-framing](ocapn-tcp-syrups-framing.md) | 2026-04-23 | 2026-05-06 | Not Started |
 | [syrups](syrups.md) | 2026-05-04 | 2026-05-06 | Deprecated |
@@ -468,7 +468,7 @@ flowchart TD
         orev[ocapn-noise-cryptographic-review]
         onoise[ocapn-noise-network<br/><i>COMPLETE</i>]
         oreconn[ocapn-noise-session-reconnect]
-        opersist[ocapn-persistence<br/><i>PROPOSED</i>]
+        opersist[ocapn-persistence<br/><i>IN PROGRESS</i>]
         onet --> otcp --> onoise
         orev --> onoise
         dnet --> onoise
@@ -728,7 +728,7 @@ finalized.
 | ocapn-noise-cryptographic-review | Not Started | External review coordination |
 | daemon-agent-network-identity | Not Started | Per-agent keypairs for network identity |
 | ~~ocapn-noise-network~~ | **Complete** | Noise IK netlayer for OCapN landed via PR #137 (merged 2026-05-08), consolidating the stacked PRs #111 (CBOR codec) + #112 (Noise IK netlayer) + #113 (transport tests) |
-| ocapn-persistence | Proposed | Goblins-style (Aurie) persistence layer `@endo/portrait`: persistence envs, persistent exo classes with versioned upgrade, portrait-graph heap over pluggable stores, durable sturdyref locator bindings; no wire changes; goblin-chat host-room is the proving adopter |
+| ocapn-persistence | In Progress | Goblins-style (Aurie) persistence layer `@endo/portrait`: persistence envs, persistent exo classes with versioned upgrade, portrait-graph heap over pluggable stores, durable sturdyref locator bindings; no wire changes. Phases 1-4 shipped (`packages/portrait`, 24 tests); remaining: goblin-chat host-room adoption, ocapn dispatch embargo hook, sleepy/multi-heap stretch, XS profile (blocked on daemon-xs-worker-snapshot land) |
 
 **Exit criterion:** Two Endo daemons can connect securely over
 OCapN-Noise. Locator format supports node identification via agent

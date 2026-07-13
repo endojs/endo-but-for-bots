@@ -5,7 +5,54 @@
 | **Created** | 2026-07-13 |
 | **Updated** | 2026-07-13 |
 | **Author** | Aaron Kumavis (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
+
+## Status
+
+Phases 1–4 are implemented as `@endo/portrait` at `packages/portrait`
+(same-day as the design; 24 passing tests, package lint/types clean):
+
+- **Phase 1 (complete):** `makePersistenceEnv` /
+  `persistenceEnvCompose` (`src/env.js`), `definePersistentExoClass`
+  and `definePersistentExoClassKit` (`src/class.js`) over
+  `defineExoClass` with a write-observing accessor state record —
+  `init` runs once ever, restore fills hollow instances so cyclic
+  graphs rebuild with identity preserved — smallcaps-marshal portrait
+  codec with `n:<slot>[.<facet>]` and broken-promise designators
+  (`src/codec.js`, `src/heap.js`), stepwise class upgrades, roots
+  versioning/upgrade, orphan-sweeping `takeSnapshot`, and the
+  library-env exemplar `@endo/portrait/cell.js`.
+- **Phase 2 (complete):** `src/ocapn.js` — `makeOcapnSpecials`
+  (sturdyrefs in state portray as `(location, secret)` data,
+  re-minted on restore; live remote presences are a capture error),
+  `makeHeapLocator` (backs `makeOcapn`'s locator with persisted
+  swissnum→slot bindings), `provideSturdyRefBinding` (awaits flush
+  before releasing the ref — P2). `@endo/ocapn` now exports
+  `isSturdyRef`/`getSturdyRefDetails` from its main entry.
+  Integration test kills and restores a host over real ocapn TCP
+  sessions. Adoption of goblin-chat's host-room remains open.
+- **Phase 3 (complete):** delta flushes of the dirty set at microtask
+  commit points (P1: synchronous capture, atomic ordered writes),
+  `heap.turn(fn)` copy-on-write rollback with nesting, async-body
+  rejection with rollback. The full P2 outbound-message embargo
+  still awaits an ocapn dispatch hook.
+- **Phase 4 (complete):** `src/stores/sqlite.js` over an injected
+  better-sqlite3-compatible handle (O(dirty) delta upserts);
+  `stateShape` `mustMatch` at init/portrait/restore boundaries.
+- **Phase 5 (partial):** the memory store is generational with
+  `graphAtGeneration` time travel. Deferred with reasons: durable
+  gift table (ocapn gift keys embed ephemeral session ids — pointless
+  until [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md)-style
+  session resumption), sleepy instances (restore is eager; needs
+  store-backed lazy wake), multi-heap `'far'` designators.
+- **Phase 6 (blocked in this checkout):** the `c/moddable` submodule
+  is uninitialized (`cargo check -p xsnap` fails in its build
+  script), and the worker bundle generator
+  (`bundle-bus-worker-xs.mjs`) referenced by
+  `rust/endo/xsnap`'s `include_str!` artifacts exists neither in the
+  tree nor in git history — the XS worker runtime is not reproducible
+  from a clean checkout until that in-flight work (see
+  [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md)) lands.
 
 ## What is the Problem Being Solved?
 
