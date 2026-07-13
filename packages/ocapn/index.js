@@ -22,6 +22,7 @@
  */
 
 export { makeOcapn } from './src/client/index.js';
+export { isSturdyRef, getSturdyRefDetails } from './src/client/sturdyrefs.js';
 export {
   decodeSwissnum,
   swissnumFromBytes,

@@ -54,6 +54,14 @@
     "@endo/patterns": "workspace:^",
     "@endo/promise-kit": "workspace:^"
   },
+  "peerDependencies": {
+    "@endo/ocapn": "workspace:^"
+  },
+  "peerDependenciesMeta": {
+    "@endo/ocapn": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@endo/eventual-send": "workspace:^",
     "@endo/init": "workspace:^",

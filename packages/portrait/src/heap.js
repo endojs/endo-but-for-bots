@@ -255,19 +255,22 @@ export const makePersistentHeap = async options => {
     const done = new Set();
     const queue = [...seeds];
     captureMode = mode;
-    while (queue.length > 0) {
-      const cell = /** @type {Cell} */ (queue.shift());
-      if (done.has(cell)) {
-        // eslint-disable-next-line no-continue
-        continue;
+    try {
+      while (queue.length > 0) {
+        const cell = /** @type {Cell} */ (queue.shift());
+        if (done.has(cell)) {
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        done.add(cell);
+        captureQueue = [];
+        portraits[String(cell.slot)] = serializeCell(cell);
+        queue.push(...captureQueue);
       }
-      done.add(cell);
-      captureQueue = [];
-      portraits[String(cell.slot)] = serializeCell(cell);
-      queue.push(...captureQueue);
+    } finally {
+      captureQueue = undefined;
+      captureMode = undefined;
     }
-    captureQueue = undefined;
-    captureMode = undefined;
     return { portraits, visited: done };
   };
 
@@ -339,11 +342,21 @@ export const makePersistentHeap = async options => {
     if (seeds.length === 0 && !haveBindings) {
       return undefined;
     }
-    const { portraits } = capturePortraits(seeds, 'delta');
-    return harden({
-      portraits,
-      ...(haveBindings ? { bindings: snapshotBindings() } : {}),
-    });
+    try {
+      const { portraits } = capturePortraits(seeds, 'delta');
+      return harden({
+        portraits,
+        ...(haveBindings ? { bindings: snapshotBindings() } : {}),
+      });
+    } catch (err) {
+      // Capture failed (e.g. unserializable state): put the dirt
+      // back so a later flush retries after the caller repairs state.
+      for (const cell of seeds) {
+        dirty.add(cell);
+      }
+      bindingsDirty = bindingsDirty || haveBindings;
+      throw err;
+    }
   };
 
   // #endregion
