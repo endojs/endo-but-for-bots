@@ -195,7 +195,9 @@ export const enlivenSturdyRef = (
   // this instance, which is by design.
   const details = sturdyRefDetails.get(sturdyRef);
   if (details === undefined) {
-    throw Error('ocapn: cannot enliven a sturdyref not minted by this instance');
+    throw Error(
+      'ocapn: cannot enliven a sturdyref not minted by this instance',
+    );
   }
 
   const enlivened = resolveSturdyRef(
