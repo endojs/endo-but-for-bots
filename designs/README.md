@@ -289,9 +289,9 @@ LLM-agent stack).*
 | [ocapn-noise-network](ocapn-noise-network.md) | 2026-02-14 | 2026-05-18 | **Complete** |
 | [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md) | 2026-05-14 | 2026-05-19 | Proposed |
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | Not Started |
-| [ocapn-tcp-syrups-framing](ocapn-tcp-syrups-framing.md) | 2026-04-23 | 2026-05-06 | Not Started |
-| [syrups](syrups.md) | 2026-05-04 | 2026-05-06 | Deprecated |
-| [cbors](cbors.md) | 2026-05-04 | 2026-05-05 | Not Started |
+| [ocapn-tcp-syrups-framing](ocapn-tcp-syrups-framing.md) | 2026-04-23 | 2026-07-13 | In Progress |
+| [syrups](syrups.md) | 2026-05-04 | 2026-07-13 | Deprecated |
+| [cbors](cbors.md) | 2026-05-04 | 2026-07-13 | In Progress |
 | [trust-on-first-bind](trust-on-first-bind.md) | 2026-05-08 | 2026-05-10 | Reference |
 | [outliner-design-doc](outliner-design-doc.md) | 2026-03-17 | 2026-03-18 | In Progress |
 | [patterns-diagnostic-feedback](patterns-diagnostic-feedback.md) | 2026-05-19 | 2026-05-20 | Proposed |
@@ -677,9 +677,9 @@ finalized.
 |--------|--------|-------|
 | ocapn-network-transport-separation | In Progress | Foundation for transport abstraction |
 | ocapn-tcp-for-test-extraction | Not Started | Clean separation before Noise |
-| ocapn-tcp-syrups-framing | Not Started | Comma-less netstring variant (`@endo/syrups`) on a distinct `tcp+syrups` netlayer identifier |
-| syrups | Deprecated | Consolidated with PR 29's `@endo/syrups` (same shape: `Uint8Array` chunks in, `Uint8Array`-delimited messages out); see [`ocapn-tcp-syrups-framing.md`](ocapn-tcp-syrups-framing.md) |
-| cbors | Not Started | `@endo/cbors` reader/writer for length-prefixed CBOR byte strings; peer of `@endo/syrups` and `@endo/netstring` |
+| ocapn-tcp-syrups-framing | In Progress | Comma-less netstring variant (`@endo/syrup-frame`, landed on `llm`; proposed as `@endo/syrups`) on a distinct `tcp+syrups` netlayer identifier |
+| syrups | Deprecated | Consolidated with PR 29's `@endo/syrup-frame` (same shape: `Uint8Array` chunks in, `Uint8Array`-delimited messages out); see [`ocapn-tcp-syrups-framing.md`](ocapn-tcp-syrups-framing.md) |
+| cbors | In Progress | `@endo/cbor-frame` reader/writer for length-prefixed CBOR byte strings (impl PR #288; proposed as `@endo/cbors`); peer of `@endo/syrup-frame` and `@endo/netstring` |
 | ocapn-noise-cryptographic-review | Not Started | External review coordination |
 | daemon-agent-network-identity | Not Started | Per-agent keypairs for network identity |
 | ~~ocapn-noise-network~~ | **Complete** | Noise IK netlayer for OCapN landed via PR #137 (merged 2026-05-08), consolidating the stacked PRs #111 (CBOR codec) + #112 (Noise IK netlayer) + #113 (transport tests) |
@@ -1254,9 +1254,9 @@ have been remapped: 0 → 1, ½ → 2, 1 → 3, 2 → 4, 3 → 7, 4 → 9,
 | ~~unhandled-rejection-display~~ | S | — | — | ✅ Complete (out-of-milestone diagnostic; PR #187 closes #171). CapTP `CTP_DISCONNECT.reason` now renders structured Error reasons rather than empty `{}` |
 | ocapn-network-transport-separation | M-L | 1.5 weeks | 4 | Architectural refactor (M-L bumped 1.2x) |
 | ocapn-tcp-for-test-extraction | S-M | 3 days | 4 | Code relocation |
-| ocapn-tcp-syrups-framing | S-M | 3 days | 4 | `@endo/syrups` package, new `tcp+syrups` netlayer; design merged (PR #108); impl PR #109 open |
+| ocapn-tcp-syrups-framing | S-M | 3 days | 4 | `@endo/syrup-frame` package (landed on `llm`; proposed as `@endo/syrups`), new `tcp+syrups` netlayer; design merged (PR #108) |
 | ~~syrups~~ | — | — | 4 | Consolidated into `ocapn-tcp-syrups-framing` (PR 29); see [`syrups.md`](syrups.md) |
-| cbors | S-M | 3 days | 4 | New `@endo/cbors` package; design merged with syrups in PR #86 |
+| cbors | S-M | 3 days | 4 | New `@endo/cbor-frame` package (impl PR #288; proposed as `@endo/cbors`); design merged with syrups in PR #86 |
 | ocapn-noise-cryptographic-review | S | 1 day | 4 | External review coordination |
 | daemon-agent-network-identity | S-M | 3 days | 4 | Network registration, locator construction |
 | ~~ocapn-noise-network~~ | L | — | 4 | ✅ Complete (PR #137 consolidates stacked PRs #111/#112/#113; merged 2026-05-08) |

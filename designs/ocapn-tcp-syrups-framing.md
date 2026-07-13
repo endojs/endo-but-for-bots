@@ -1,11 +1,19 @@
 # OCapN TCP Syrups Transport Framing
 
+> **Package landed as `@endo/syrup-frame`** (proposed here as
+> `@endo/syrups`). This design proposes both a new framing package and
+> an OCapN TCP netlayer migration. The **package** shipped on `llm` as
+> `@endo/syrup-frame`; the **netlayer migration** (a `tcp-syrups`
+> variant) remains a proposal. Package-name references below are
+> reconciled to the landed `@endo/syrup-frame`; the netlayer/transport
+> design and its `tcp-syrups` identifier are unchanged.
+
 | | |
 |---|---|
 | **Created** | 2026-04-23 |
-| **Updated** | 2026-05-06 |
+| **Updated** | 2026-07-13 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | Package `@endo/syrup-frame` landed on `llm`; netlayer migration Not Started |
 
 ## What is the Problem Being Solved?
 
@@ -115,8 +123,8 @@ TCP transport to use it.
 **Name.**
 We want a name that is concise, honest about what the grammar is, and
 parallel to the cohort of streaming framing packages this design sits
-in (notably `@endo/cbors`, the comma-less length-prefixed framing for
-CBOR byte-string-delimited streams).
+in (notably its sibling framer for CBOR byte-string-delimited streams,
+proposed as `@endo/cbors` and landed as `@endo/cbor-frame`).
 Candidates considered:
 
 | Name | Pros | Cons |
@@ -128,27 +136,29 @@ Candidates considered:
 | `@endo/netstring-lite` | Suggests the obvious kinship | Implies "lesser netstring"; the relationship to Syrup is the interesting property |
 | `@endo/tethered-string` | Evokes the length-tether without a separator | Cute but obscure |
 
-**Recommendation: `@endo/syrups`.**
-The package exists to deliver streams of Syrup byte-string-framed
-messages (`Uint8Array` chunks in, `Uint8Array` whole-frames out).
-Naming it `@endo/syrups` sits in the same "plural of the format being
-framed" slot as `@endo/cbors`, and makes a future cohort of similar
-packages immediately legible.
-The alternative `@endo/byte-string` is tempting for its literal
-accuracy, but the grammar is identical to Syrup's byte-string form by
-*design*, not by coincidence; the package name should preserve that
-intent.
-We document in the README that the grammar happens to be independent of
-any Syrup dependency and may be used as a bare length-prefixed framer,
-but we do not pretend the naming is neutral.
+**Recommendation (superseded): `@endo/syrups`.**
+The original recommendation was `@endo/syrups`, reasoning that it sits
+in the same "plural of the format being framed" slot as a plural
+`@endo/cbors` and makes a future cohort of similar packages legible.
+`@endo/byte-string` was considered for its literal accuracy but set
+aside because the grammar is identical to Syrup's byte-string form by
+*design*, not by coincidence; the README documents that the grammar is
+independent of any Syrup dependency and may be used as a bare
+length-prefixed framer.
 
-The earlier recommendation in this document was `@endo/syrup-frame`,
-which is preserved in the candidates table for historical reference.
-The plural-of-format rationale (consistency with `@endo/cbors` as the
-peer streaming framer for CBOR byte-string-delimited messages) won out
-on review of PR 86.
+**What landed: `@endo/syrup-frame`** (the row above).
+The plural rename was reversed. Both framing siblings shipped under the
+explicit `-frame` suffix — `@endo/syrup-frame` (this package, on `llm`)
+and `@endo/cbor-frame`
+([PR #288](https://github.com/endojs/endo-but-for-bots/pull/288),
+proposed as `@endo/cbors`) — because `-frame` reads unambiguously as
+"framing" and keeps `@endo/cbor` (the codec) from colliding with a
+plural `@endo/cbors` one letter away.
 
-The remainder of this document uses `@endo/syrups` as the working name.
+The remainder of this document was drafted against the `@endo/syrups`
+working name and is reconciled to the landed name `@endo/syrup-frame`;
+the candidates table above and the ## Prompt below preserve the
+historical `@endo/syrups` proposal.
 
 ### Grammar
 
@@ -173,7 +183,7 @@ Canonicalization notes:
   count.
 - The parser MAY impose a maximum frame size.
   `@endo/netstring` defaults to `999999999` bytes
-  (`packages/netstring/reader.js` line 18); `@endo/syrups` will
+  (`packages/netstring/reader.js` line 18); `@endo/syrup-frame` will
   adopt the same default and expose the same `maxMessageLength` option.
 
 Byte-level examples:
@@ -189,27 +199,28 @@ Byte-level examples:
 
 The package mirrors `@endo/netstring` module-for-module so that the
 migration is a mechanical rename at call sites.
-File layout:
+File layout (identifiers proposed as `makeSyrupsReader` /
+`makeSyrupsWriter`; landed as `makeSyrupReader` / `makeSyrupWriter`):
 
 ```
-packages/syrups/
+packages/syrup-frame/
   index.js          re-exports from reader.js and writer.js
-  reader.js         makeSyrupsReader
-  writer.js         makeSyrupsWriter
+  reader.js         makeSyrupReader
+  writer.js         makeSyrupWriter
   package.json
   README.md
   tsconfig.json
   tsconfig.build.json
   test/
-    syrups.test.js
+    syrup-frame.test.js
 ```
 
 Exports:
 
 ```js
 // index.js
-export { makeSyrupsReader } from './reader.js';
-export { makeSyrupsWriter } from './writer.js';
+export { makeSyrupReader } from './reader.js';
+export { makeSyrupWriter } from './writer.js';
 ```
 
 Unlike `@endo/netstring`, we do *not* carry forward the legacy
@@ -230,8 +241,8 @@ import harden from '@endo/harden';
  * @param {number} [opts.maxMessageLength]
  * @returns {import('@endo/stream').Reader<Uint8Array, undefined>}
  */
-export const makeSyrupsReader = (input, opts) => { ... };
-harden(makeSyrupsReader);
+export const makeSyrupReader = (input, opts) => { ... };
+harden(makeSyrupReader);
 ```
 
 The implementation is derived from `packages/netstring/reader.js` with
@@ -265,10 +276,10 @@ import { makePromiseKit } from '@endo/promise-kit';
  * @param {boolean} [opts.chunked]
  * @returns {import('@endo/stream').Writer<Uint8Array | Uint8Array[], undefined>}
  */
-export const makeSyrupsWriter = (output, { chunked = false } = {}) => {
+export const makeSyrupWriter = (output, { chunked = false } = {}) => {
   ...
 };
-harden(makeSyrupsWriter);
+harden(makeSyrupWriter);
 ```
 
 The implementation is derived from `packages/netstring/writer.js` with
@@ -285,7 +296,7 @@ close-early race are all unchanged.
 
 ### Tests
 
-`test/syrups.test.js` is ported from
+`test/syrup-frame.test.js` is ported from
 `packages/netstring/test/netstring.test.js` with:
 
 - String literals updated: `'5:hello,'` to `'5:hello'`,
@@ -324,16 +335,16 @@ Searching for `@endo/netstring` in `packages/ocapn/` and
 The OCapN TCP netlayer does not currently use any framing; this design
 *adds* framing where there is none.
 
-The call sites that will be modified to introduce `@endo/syrups`:
+The call sites that will be modified to introduce `@endo/syrup-frame`:
 
 | File | Change |
 |---|---|
-| `packages/ocapn/src/netlayers/tcp-test-only.js` | Wire the raw `net.Socket` through an `@endo/syrups` reader on incoming data and through a writer on outgoing `connection.write`. |
+| `packages/ocapn/src/netlayers/tcp-test-only.js` | Wire the raw `net.Socket` through an `@endo/syrup-frame` reader on incoming data and through a writer on outgoing `connection.write`. |
 | `packages/ocapn/src/client/index.js` | `handleMessageData` and `handleActiveSessionMessageData` currently receive arbitrary-boundary byte chunks and hand them to `SyrupReader`. After the change, they receive whole frames (one Syrup value each) and may simplify: the `while (syrupReader.index < data.length)` loop in `dispatchMessageData` collapses to a single read. |
 | `packages/ocapn/src/client/handshake.js` | Same: `handleHandshakeMessageData` becomes one-frame-one-call. |
 | `packages/ocapn/src/client/ocapn.js` | `serializeAndSendMessage` (line 1181) wraps its Syrup output in a syrups frame before invoking `connection.write`. Alternatively, the framing happens at the netlayer boundary and `serializeAndSendMessage` is unchanged (see *Where does framing live?* below). |
 | `packages/ocapn/src/client/types.js` | `SocketOperations.write` stays `(bytes: Uint8Array) => void`; `NetlayerHandlers.handleMessageData` signature changes to emphasize that the `data` parameter is now a single decoded frame rather than an arbitrary chunk. |
-| `packages/ocapn/package.json` | Add `@endo/syrups` dependency. |
+| `packages/ocapn/package.json` | Add `@endo/syrup-frame` dependency. |
 
 ### Where does framing live?
 
@@ -342,10 +353,10 @@ Two options, with consequences:
 **Option A: framing inside the netlayer (recommended).**
 The `tcp-test-only` netlayer owns the framer.
 On ingress, it adapts a `net.Socket` into an async iterable of byte
-chunks, pipes that through `makeSyrupsReader`, and for each yielded
+chunks, pipes that through `makeSyrupReader`, and for each yielded
 frame calls `handlers.handleMessageData(connection, frame)`.
 On egress, it wraps the socket as a byte writer and layers
-`makeSyrupsWriter` on top; `connection.write(bytes)` then means
+`makeSyrupWriter` on top; `connection.write(bytes)` then means
 "send one frame containing these bytes."
 OCapN core sees whole messages and never has to worry about chunk
 boundaries.
@@ -371,7 +382,7 @@ Framing is a transport concern.
 
 The two-sided nature of a wire-format change dictates the rollout order:
 
-1. **Land `@endo/syrups`** as a standalone package with tests.
+1. **Land `@endo/syrup-frame`** as a standalone package with tests.
    This is a pure addition; nothing consumes it yet.
 2. **Migrate the `tcp-test-only` netlayer** to wrap its socket in the
    new framer.
@@ -466,7 +477,7 @@ From `designs/ocapn-tcp-for-test-extraction.md`, the `op:start-session`
 handshake moves into the tcp-for-test network.
 That handshake is itself a Syrup record; it flows through the same
 framing as regular session traffic.
-With `@endo/syrups`, `handleHandshakeMessageData` reads exactly one
+With `@endo/syrup-frame`, `handleHandshakeMessageData` reads exactly one
 frame, decodes one Syrup record, and hands off.
 The `while (syrupReader.index < data.length)` loop disappears.
 
@@ -479,16 +490,16 @@ packages/
     reader.js
     writer.js
     test/netstring.test.js
-  syrups/                     NEW; <len>:<bytes> framing
+  syrup-frame/                NEW; <len>:<bytes> framing
     index.js
     reader.js
     writer.js
-    test/syrups.test.js
+    test/syrup-frame.test.js
   ocapn/
     src/
       netlayers/
         tcp-test-only.js      keep; add @endo/netstring framing (bug fix)
-        tcp-syrups.js         NEW; uses @endo/syrups
+        tcp-syrups.js         NEW; uses @endo/syrup-frame
       client/
         index.js              handleMessageData gets whole frames
         handshake.js          one frame = one op:start-session
@@ -501,7 +512,7 @@ What lives where:
   Continues to serve the daemon's `tcp+netstring+json+captp0`
   transport and any current or future callers that want strict
   netstring compliance.
-- **`@endo/syrups`**: comma-less length-prefixed framing.
+- **`@endo/syrup-frame`**: comma-less length-prefixed framing.
   No dependency on `@endo/ocapn`.
   It is a stream primitive usable anywhere.
 - **`packages/ocapn/src/netlayers/`**: both the fixed legacy
@@ -518,7 +529,7 @@ What lives where:
 
 ## Phased Implementation
 
-1. **Phase 1: Publish `@endo/syrups`.**
+1. **Phase 1: Publish `@endo/syrup-frame`.**
    Port `reader.js`, `writer.js`, and tests from `@endo/netstring` with
    the comma removed.
    Add `package.json`, `README.md`, `tsconfig*.json` mirrored from
@@ -535,7 +546,7 @@ What lives where:
 
 3. **Phase 3: Add `tcp-syrups` netlayer.**
    New file `packages/ocapn/src/netlayers/tcp-syrups.js` derived
-   from `tcp-test-only.js` but using `@endo/syrups`.
+   from `tcp-test-only.js` but using `@endo/syrup-frame`.
    Register under a new transport identifier (or network identifier,
    per the transport-separation design).
    Add an interop test that exercises two Endo peers over the new
@@ -565,13 +576,14 @@ What lives where:
    A separate package is more honest.
 
 3. **Name chosen for cohort consistency.**
-   `@endo/syrups` is named for parallelism with `@endo/cbors` (the
-   sibling streaming framer for CBOR byte-string-delimited messages):
-   plural of the format being framed.
+   `@endo/syrup-frame` shares the explicit `-frame` suffix with its
+   sibling streaming framer for CBOR byte-string-delimited messages,
+   `@endo/cbor-frame` (proposed as `@endo/cbors`).
+   The design originally proposed the plural `@endo/syrups` for
+   parallelism with a plural `@endo/cbors`; the `-frame` convention was
+   adopted instead (see the Name section above).
    The grammar happens to be independent of Syrup, and the README
    documents this, but the package exists because of OCapN.
-   See PR 86's review chain for the cohort-consistency discussion that
-   landed this name.
 
 4. **Framing at the netlayer, not in OCapN core.**
    See *Where does framing live?* above.
@@ -633,10 +645,12 @@ Do NOT edit `designs/README.md`; the user will synchronize it after
 all seven design docs land.
 ````
 
-The package was renamed from `@endo/syrup-frame` to `@endo/syrups`
-during PR 29's review (see PR 86's discussion for the cohort-consistency
-rationale).
-This design doc was renamed to match.
+This design was drafted proposing a rename from `@endo/syrup-frame` to
+`@endo/syrups` for cohort consistency with a plural `@endo/cbors`. That
+rename was reversed before landing: the package shipped as
+`@endo/syrup-frame`, and its sibling shipped as `@endo/cbor-frame`,
+adopting a shared `-frame` suffix. This doc is reconciled to the landed
+name.
 
 [Netstring]: https://cr.yp.to/proto/netstrings.txt
 [Syrup]: https://github.com/ocapn/syrup

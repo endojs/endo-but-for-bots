@@ -1,9 +1,17 @@
-# Sequential Syrup Message Framing (`@endo/syrups`)
+# Sequential Syrup Message Framing (`@endo/syrup-frame`)
+
+> **Proposed a rename to `@endo/syrups`; not adopted.** This design
+> recommended renaming `@endo/syrup-frame` to `@endo/syrups` for parity
+> with a plural `@endo/cbors`. That rename was reversed: both framing
+> siblings shipped under the explicit `-frame` suffix —
+> `@endo/syrup-frame` (already on `llm`) and `@endo/cbor-frame`
+> ([PR #288](https://github.com/endojs/endo-but-for-bots/pull/288),
+> proposed as `@endo/cbors`). The package name is `@endo/syrup-frame`.
 
 | | |
 |---|---|
 | **Created** | 2026-05-04 |
-| **Updated** | 2026-05-06 |
+| **Updated** | 2026-07-13 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Deprecated |
 | **Superseded by** | [`ocapn-tcp-syrups-framing.md`](./ocapn-tcp-syrups-framing.md) (PR 29) |
@@ -20,27 +28,35 @@ using length-prefixed Syrup byte-string framing on the wire
 The earlier reading in this design (that `@endo/syrups` was a separate
 "message-stream" layer carrying decoded structured Syrup values, one
 rung above PR 29's byte-string framer) was wrong.
-Both `@endo/cbors` (the sibling design in this PR) and
+Both `@endo/cbor-frame` (the sibling design in this PR) and
 `@endo/syrup-frame` (PR 29) carry `Uint8Array` at their boundaries;
 the value codec sits above either of them, not inside.
-Under the corrected reading, `@endo/syrups` and `@endo/syrup-frame` are
-the same package by different names, and only one need ship.
+Under the corrected reading, the package this design once called
+`@endo/syrups` and PR 29's `@endo/syrup-frame` are the same package;
+only one need ship, and it shipped as `@endo/syrup-frame`.
 
 ## Recommendation
 
-Adopt PR 29's design and rename the package and design from
-`@endo/syrup-frame` to `@endo/syrups`, so that the two streaming
-message-framing packages in this PR pair (`@endo/cbors` and
-`@endo/syrups`) share a naming convention.
-The rename has been applied to PR 29's branch across the package
-directory, `package.json`, exported reader and writer identifiers,
-design doc title, and PR title and body.
+**Historical recommendation (not adopted):** rename the package and
+design from `@endo/syrup-frame` to `@endo/syrups`, so that the two
+streaming message-framing packages in this PR pair would share a
+plural-of-format naming convention (`@endo/cbors` and `@endo/syrups`).
 
-## Effect on the sibling `@endo/cbors` design
+**What actually landed:** the rename was reversed. Both framing
+siblings kept (or adopted) the explicit `-frame` suffix —
+`@endo/syrup-frame` (already on `llm`) and `@endo/cbor-frame`
+([PR #288](https://github.com/endojs/endo-but-for-bots/pull/288),
+proposed as `@endo/cbors`) — because the `-frame` suffix reads
+unambiguously as "framing" and keeps `@endo/cbor` (the codec) from
+colliding with a plural `@endo/cbors` one letter away. The package
+name is `@endo/syrup-frame`.
 
-[`cbors.md`](./cbors.md) (the sibling design in this PR) is unaffected.
+## Effect on the sibling `@endo/cbor-frame` design
+
+[`cbors.md`](./cbors.md) (the sibling design in this PR, proposed as
+`@endo/cbors`, landed as `@endo/cbor-frame`) is unaffected.
 It already carries `Uint8Array` at its boundaries and is the precise
-peer of `@endo/syrups`.
+peer of `@endo/syrup-frame`.
 
 ## Prompt
 

@@ -1,11 +1,18 @@
-# CBOR Byte-String Framing (`@endo/cbors`)
+# CBOR Byte-String Framing (`@endo/cbor-frame`)
+
+> **Proposed as `@endo/cbors`.** This design originally proposed the
+> plural name `@endo/cbors`; the package landed under the explicit
+> `-frame` suffix as `@endo/cbor-frame`
+> ([PR #288](https://github.com/endojs/endo-but-for-bots/pull/288)),
+> matching its Syrup sibling `@endo/syrup-frame`. The historical
+> `@endo/cbors` reasoning is preserved below with reconciling notes.
 
 | | |
 |---|---|
 | **Created** | 2026-05-04 |
-| **Updated** | 2026-05-04 |
+| **Updated** | 2026-07-13 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | Implemented as `@endo/cbor-frame` (PR #288) |
 
 ## What is the Problem Being Solved?
 
@@ -21,16 +28,16 @@ What is missing is a small, focused framing primitive that buffers a
 stream of length-prefixed byte strings on the wire, using the CBOR
 byte-string head as its length encoding.
 This package is the precise CBOR-shaped analog of `@endo/netstring`
-and of the proposed `@endo/syrup-frame`
-(see [`ocapn-tcp-syrup-framing.md`](./ocapn-tcp-syrup-framing.md),
-PR 29 in `endojs/endo-but-for-bots`, not yet landed):
+and of `@endo/syrup-frame`
+(see [`ocapn-tcp-syrups-framing.md`](./ocapn-tcp-syrups-framing.md),
+landed on `llm`):
 each names a different on-the-wire grammar for length-prefixed byte
 strings.
-Note: PR 29's package is queued to be renamed from `@endo/syrup-frame`
-to `@endo/syrups` for naming consistency with `@endo/cbors`
-(see [`syrups.md`](./syrups.md)).
-References below use the in-flight name `@endo/syrup-frame`; the
-rename is the steward's next dispatch.
+Both framing siblings landed under the explicit `-frame` suffix
+(`@endo/cbor-frame` and `@endo/syrup-frame`); the earlier plan to
+rename `@endo/syrup-frame` to `@endo/syrups` for parity with a plural
+`@endo/cbors` (see [`syrups.md`](./syrups.md)) was abandoned in favor
+of the shared `-frame` convention.
 
 This package is deliberately **not** a CBOR codec.
 It does not understand CBOR integers, arrays, maps, floats, or tags
@@ -42,41 +49,46 @@ The reader returns the payload bytes; the consumer decodes them as it
 sees fit.
 
 The reader and writer mirror `@endo/netstring`'s shape.
-Reading a stream is `for await (const bytes of makeCborsReader(input))`;
+Reading a stream is `for await (const bytes of makeCborFrameReader(input))`;
 writing is `await writer.next(bytes)`.
 The diagnostic surface (the `name` option, the `maxMessageLength`
 ceiling, error wording) follows the same conventions.
 
 ## Naming
 
-**Package: `@endo/cbors`.**
-A repository search returns no `cbors` package, so law 1 is clear.
-The plural form names "a sequence of length-prefixed byte strings on
-the wire, each headed in CBOR's grammar."
-The proposed sibling `@endo/syrup-frame` (PR 29; not yet landed)
+**Package: `@endo/cbor-frame`** (proposed as `@endo/cbors`).
+A repository search returned no conflicting package.
+The name describes "a stream of length-prefixed byte strings on the
+wire, each headed in CBOR's grammar."
+Its sibling `@endo/syrup-frame`
+(see [`ocapn-tcp-syrups-framing.md`](./ocapn-tcp-syrups-framing.md))
 names the analogous package whose grammar is Syrup's byte-string
 record (`<digits>:<payload>`).
-See [`ocapn-tcp-syrup-framing.md`](./ocapn-tcp-syrup-framing.md).
 "CBOR" is the canonical acronym for Concise Binary Object
 Representation and is therefore permitted under the namer's rule on
 canonical acronyms.
 
-We rejected `@endo/cbor-frame` (mirroring `@endo/syrup-frame`)
-because the package frames a *sequence* of byte strings, and the
-plural form `cbors` keeps this property visible.
+This design originally proposed the plural `@endo/cbors` and *rejected*
+`@endo/cbor-frame`, reasoning that the plural kept the frames-a-*sequence*
+property visible. That decision was reversed on implementation: both
+framing siblings adopted the explicit `-frame` suffix
+(`@endo/cbor-frame`, `@endo/syrup-frame`), which reads unambiguously as
+"framing" and keeps the codec `@endo/cbor` from colliding with a plural
+`@endo/cbors` one letter away.
 
-**Reader and writer identifiers: `makeCborsReader` and
-`makeCborsWriter`.**
-This replicates the netstring naming exactly
+**Reader and writer identifiers: `makeCborFrameReader` and
+`makeCborFrameWriter`** (proposed as `makeCborsReader` /
+`makeCborsWriter`).
+This replicates the netstring naming shape
 (`makeNetstringReader`, `makeNetstringWriter`); operators familiar
 with one will read the other without translation.
-No legacy `cborsReader` / `cborsWriter` aliases (the package is new).
+No legacy aliases (the package is new).
 
 ## Design
 
 ### Scope
 
-`@endo/cbors` is byte-string framing only.
+`@endo/cbor-frame` is byte-string framing only.
 The package implements just enough of [RFC
 8949](https://www.rfc-editor.org/rfc/rfc8949.html) to read and write
 the head bytes for a CBOR byte string (major type 2), optionally
@@ -93,8 +105,8 @@ dependencies on a full CBOR codec.
 
 ```js
 // index.js
-export { makeCborsReader } from './reader.js';
-export { makeCborsWriter } from './writer.js';
+export { makeCborFrameReader } from './reader.js';
+export { makeCborFrameWriter } from './writer.js';
 ```
 
 ```js
@@ -105,7 +117,7 @@ export { makeCborsWriter } from './writer.js';
  * @param {number} [opts.maxMessageLength]
  * @returns {import('@endo/stream').Reader<Uint8Array, undefined>}
  */
-export const makeCborsReader = (input, opts) => { ... };
+export const makeCborFrameReader = (input, opts) => { ... };
 ```
 
 ```js
@@ -117,7 +129,7 @@ export const makeCborsReader = (input, opts) => { ... };
  * @param {string} [opts.name]
  * @returns {import('@endo/stream').Writer<Uint8Array, undefined>}
  */
-export const makeCborsWriter = (output, opts) => { ... };
+export const makeCborFrameWriter = (output, opts) => { ... };
 ```
 
 The `name` and `maxMessageLength` semantics are identical to
@@ -226,7 +238,7 @@ Writer mode follows the netstring template:
 ### Harden discipline
 
 Every named export is hardened immediately after declaration:
-`harden(makeCborsReader)`, `harden(makeCborsWriter)`.
+`harden(makeCborFrameReader)`, `harden(makeCborFrameWriter)`.
 The reader and writer return hardened async iterators.
 Yielded `Uint8Array` payloads are returned as-is (callers may freeze
 them if they wish; the reader does not, to keep the hot path
@@ -258,12 +270,12 @@ its own.
 ### Specimen example
 
 ```js
-import { makeCborsReader, makeCborsWriter } from '@endo/cbors';
+import { makeCborFrameReader, makeCborFrameWriter } from '@endo/cbor-frame';
 import { makePipe } from '@endo/stream';
 
 const [input, output] = makePipe();
-const writer = makeCborsWriter(output);
-const reader = makeCborsReader(input);
+const writer = makeCborFrameWriter(output);
+const reader = makeCborFrameReader(input);
 
 const enc = new TextEncoder();
 await writer.next(enc.encode('hello'));
@@ -283,26 +295,26 @@ for await (const bytes of reader) {
 | Package | Role |
 |---|---|
 | [`@endo/netstring`](../packages/netstring/) | Frames byte payloads as `<digits>:<bytes>,` |
-| `@endo/syrup-frame` ([PR 29](./ocapn-tcp-syrup-framing.md), proposed, not yet landed) | Frames byte payloads as `<digits>:<bytes>` |
-| `@endo/cbors` (this design) | Frames byte payloads as a CBOR byte-string head plus payload, optionally wrapped in CBOR tag 24 |
-| `packages/daemon/src/envelope.js` | Inline CBOR codec for the engo bus envelope protocol; a candidate consumer of `@endo/cbors` for the framing layer |
+| `@endo/syrup-frame` ([landed on `llm`](./ocapn-tcp-syrups-framing.md); proposed as `@endo/syrups`) | Frames byte payloads as `<digits>:<bytes>` |
+| `@endo/cbor-frame` (this design; proposed as `@endo/cbors`) | Frames byte payloads as a CBOR byte-string head plus payload, optionally wrapped in CBOR tag 24 |
+| `packages/daemon/src/envelope.js` | Inline CBOR codec for the engo bus envelope protocol; a candidate consumer of `@endo/cbor-frame` for the framing layer |
 
 `@endo/netstring` (which exists today),
-`@endo/syrup-frame` ([proposed in PR 29](./ocapn-tcp-syrup-framing.md),
-not yet landed), and `@endo/cbors` (this design) are intended as
+`@endo/syrup-frame` ([landed on `llm`](./ocapn-tcp-syrups-framing.md)),
+and `@endo/cbor-frame` (this design) are intended as
 sibling packages.
 Each frames a sequence of byte payloads using a different head
 grammar.
 A consumer that wants the netstring grammar takes a dependency on
 `@endo/netstring` and gets nothing else; a consumer that wants the
-syrup-frame grammar (once it lands) would take `@endo/syrup-frame`
+syrup-frame grammar takes `@endo/syrup-frame`
 only; a consumer that wants the CBOR-byte-string grammar takes
-`@endo/cbors` only.
+`@endo/cbor-frame` only.
 None of the three depends on any of the others, and adopting one
 does not entrain the rest.
 
 The daemon's existing inline encoder is the obvious migration target
-for the framing layer: once `@endo/cbors` exists, the engo envelope
+for the framing layer: once `@endo/cbor-frame` exists, the engo envelope
 protocol can drop its private head-bytes code and use the streaming
 reader and writer for that layer.
 The daemon would still encode and decode the *contents* of each frame
@@ -353,7 +365,7 @@ Cases that are CBOR-specific:
 - Verify the writer always emits the shortest argument form for the
   length (canonical encoding).
 
-Test file: `packages/cbors/test/cbors.test.js`.
+Test file: `packages/cbor-frame/test/cbor-frame.test.js`.
 
 ## Design Decisions
 
@@ -362,7 +374,7 @@ Test file: `packages/cbors/test/cbors.test.js`.
    byte-string head, optionally wrapped in tag 24.
    It does not parse or emit any other CBOR type.
    This keeps the package small, auditable, and useful as a peer of
-   `@endo/netstring` and the proposed `@endo/syrup-frame` (PR 29).
+   `@endo/netstring` and `@endo/syrup-frame`.
    Consumers that want to carry structured CBOR encode or decode the
    payload bytes themselves with whatever CBOR codec they prefer.
 
@@ -388,12 +400,13 @@ Test file: `packages/cbors/test/cbors.test.js`.
 
 ## Open Questions
 
-1. **Should `@endo/cbors` (and other framing packages) live next to
+1. **Should `@endo/cbor-frame` (and other framing packages) live next to
    `@endo/netstring` or under a `framing/` subtree?**
    Today `@endo/netstring` lives at top level
-   (`packages/netstring/`); the proposed `@endo/syrup-frame` (PR 29,
-   not yet landed) follows the same pattern.
-   Sibling consistency suggests `packages/cbors/` at top level, but a
+   (`packages/netstring/`); `@endo/syrup-frame`
+   (`packages/syrup-frame/`) followed the same pattern, and
+   `@endo/cbor-frame` landed at `packages/cbor-frame/`.
+   Sibling consistency kept the framing packages at top level, but a
    future `packages/framing/` subtree could be argued for once the
    family grows past four or five members.
    This is a layout question, not a design question, and is presented
