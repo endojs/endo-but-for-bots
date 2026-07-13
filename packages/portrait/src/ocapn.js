@@ -78,7 +78,10 @@ export const makeOcapnSpecials = () => {
     },
     /** @param {CopyTagged} tagged */
     decodeTagged: tagged => {
-      if (passStyleOf(tagged) !== 'tagged' || getTag(tagged) !== STURDYREF_TAG) {
+      if (
+        passStyleOf(tagged) !== 'tagged' ||
+        getTag(tagged) !== STURDYREF_TAG
+      ) {
         return undefined;
       }
       mintSturdyRef !== undefined ||

@@ -38,8 +38,7 @@ harden(isNearDesignator);
  * @returns {{ slot: number, facetName: string | undefined }}
  */
 export const parseNearDesignator = designator => {
-  isNearDesignator(designator) ||
-    Fail`not a near designator: ${q(designator)}`;
+  isNearDesignator(designator) || Fail`not a near designator: ${q(designator)}`;
   const rest = designator.slice(2);
   const dot = rest.indexOf('.');
   const slotText = dot < 0 ? rest : rest.slice(0, dot);

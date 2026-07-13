@@ -149,7 +149,11 @@ const makePortraitKit = (name, options) => {
       : /** @type {Record<string, unknown>} */ (d);
     (data !== null && typeof data === 'object' && !Array.isArray(data)) ||
       Fail`restored state of ${q(name)} must be a record`;
-    checkStateShape(/** @type {Record<string, unknown>} */ (data), stateShape, name);
+    checkStateShape(
+      /** @type {Record<string, unknown>} */ (data),
+      stateShape,
+      name,
+    );
     return /** @type {Record<string, unknown>} */ (data);
   };
 
@@ -323,17 +327,17 @@ export const definePersistentExoClassKit = (
             /** @this {{ facets: Record<string, any> }} */
             function wrapped(...args) {
               const binding = instanceBindings.get(this.facets[firstFacet]);
-            if (!binding || binding.cell.stateRecord === undefined) {
-              throw Fail`internal: no state for ${q(name)} kit`;
+              if (!binding || binding.cell.stateRecord === undefined) {
+                throw Fail`internal: no state for ${q(name)} kit`;
+              }
+              const context = freeze({
+                facets: this.facets,
+                state: binding.cell.stateRecord,
+              });
+              return apply(method, context, args);
             }
-            const context = freeze({
-              facets: this.facets,
-              state: binding.cell.stateRecord,
-            });
-            return apply(method, context, args);
-          }
-        ),
-    ),
+          ),
+      ),
   );
 
   const makeInternalKit = defineExoClassKit(

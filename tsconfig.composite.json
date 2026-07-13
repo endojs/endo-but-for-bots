@@ -168,6 +168,9 @@
       "path": "packages/platform/tsconfig.composite.json"
     },
     {
+      "path": "packages/portrait/tsconfig.composite.json"
+    },
+    {
       "path": "packages/promise-kit/tsconfig.composite.json"
     },
     {

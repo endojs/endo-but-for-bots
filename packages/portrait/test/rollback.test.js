@@ -59,8 +59,7 @@ test('turn: throw rolls back all persistent mutations', async t => {
     env,
     store,
     persistOn: 'manual',
-    spawnRoots: () =>
-      harden({ a: makeAccount(10), b: makeAccount(0) }),
+    spawnRoots: () => harden({ a: makeAccount(10), b: makeAccount(0) }),
   });
   const { a, b } = heap.roots;
 
@@ -143,8 +142,7 @@ test('steady state persists as deltas, not full graphs', async t => {
     env,
     store,
     persistOn: 'manual',
-    spawnRoots: () =>
-      harden({ a: makeAccount(0), b: makeAccount(0) }),
+    spawnRoots: () => harden({ a: makeAccount(0), b: makeAccount(0) }),
   });
   const { a } = heap.roots;
   a.deposit(1);

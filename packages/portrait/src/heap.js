@@ -173,10 +173,7 @@ export const makePersistentHeap = async options => {
           cell.binder.name,
         )}`;
       }
-      return formatNearDesignator(
-        /** @type {number} */ (cell.slot),
-        facetName,
-      );
+      return formatNearDesignator(/** @type {number} */ (cell.slot), facetName);
     }
     if (passStyleOf(val) === 'promise') {
       return BROKEN_DESIGNATOR;

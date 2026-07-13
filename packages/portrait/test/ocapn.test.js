@@ -105,9 +105,8 @@ test('sturdyref-bound object survives host restart over ocapn', async t => {
       { secret: secretText },
     );
     t.true(isSturdyRef(sturdyRef));
-    refExchangeSecret = /** @type {any} */ (
-      getSturdyRefDetails(sturdyRef)
-    ).secret;
+    refExchangeSecret = /** @type {any} */ (getSturdyRefDetails(sturdyRef))
+      .secret;
     t.is(refExchangeSecret, secretText);
 
     // A guest fetches through the wire and calls.
@@ -115,7 +114,10 @@ test('sturdyref-bound object survives host restart over ocapn', async t => {
     const guestRef = guest.makeSturdyRef(hostLocation, secretText);
     const remoteGreeter = await guest.enlivenSturdyRef(guestRef);
     t.is(await E(remoteGreeter).greet('bob'), 'Hello bob, my name is alice');
-    t.is(await E(remoteGreeter).greet('carol'), 'Hello carol, my name is alice');
+    t.is(
+      await E(remoteGreeter).greet('carol'),
+      'Hello carol, my name is alice',
+    );
 
     guest.shutdown();
     host.shutdown();

@@ -250,8 +250,7 @@ test('class version upgrade steps run on restore', async t => {
         upgrade: harden({
           0: old =>
             harden({
-              celsius:
-                ((/** @type {any} */ (old).fahrenheit - 32) * 5) / 9,
+              celsius: (/** @type {any} */ ((old).fahrenheit - 32) * 5) / 9,
             }),
         }),
       },
