@@ -156,6 +156,9 @@
       "path": "packages/ocapn/tsconfig.composite.json"
     },
     {
+      "path": "packages/ocapn-iroh/tsconfig.composite.json"
+    },
+    {
       "path": "packages/ocapn-noise/tsconfig.composite.json"
     },
     {
