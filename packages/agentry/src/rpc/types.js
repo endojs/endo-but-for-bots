@@ -64,8 +64,8 @@
  */
 
 /**
- * The narrow seam the bridge drives, adapting a live genie `PiAgent` to the
- * command surface. `makeGenieRpcSession` supplies the daemon-backed
+ * The narrow seam the bridge drives, adapting a live `PiAgent` to the
+ * command surface. `makeRpcSession` supplies the agent-backed
  * implementation; the tests supply a scripted fake.
  *
  * @typedef {object} Session

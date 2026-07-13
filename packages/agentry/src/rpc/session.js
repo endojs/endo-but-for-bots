@@ -1,21 +1,21 @@
 // @ts-check
+/// <reference types="ses"/>
 
 /**
- * A {@link Session} backed by a live genie `PiAgent`.
+ * A {@link Session} backed by a live `PiAgent`.
  *
- * This adapts the raw `pi-agent-core` `Agent` (as constructed by
- * `makePiAgent`) to the narrow seam the RPC bridge drives: it forwards
- * `subscribe` / `prompt` / `abort` / `steer` straight through, and answers
- * `list_models` / `set_model` / status queries against the `pi-ai` model
- * registry. The bridge itself never imports the model libraries — keeping
- * that coupling here is what lets the dispatcher be tested against a fake.
+ * This adapts the raw `pi-agent-core` `Agent` (as constructed by the
+ * harness `makePiAgent`) to the narrow seam the RPC bridge drives: it
+ * forwards `subscribe` / `prompt` / `abort` / `steer` straight through, and
+ * answers `list_models` / `set_model` / status queries against the `pi-ai`
+ * model registry. The bridge itself never imports the model libraries —
+ * keeping that coupling here is what lets the dispatcher be tested against a
+ * fake.
  */
 
-import harden from '@endo/harden';
+import { getModels, getProviders } from '@earendil-works/pi-ai/compat';
 
-import { getModels, getProviders } from '@earendil-works/pi-ai';
-
-import { resolveModel } from '../agent/index.js';
+import { resolveModel } from '../harness/model.js';
 
 /** @import { Agent as PiAgent } from '@earendil-works/pi-agent-core' */
 /** @import { ModelInfo, Session } from './types.js' */
@@ -25,12 +25,13 @@ import { resolveModel } from '../agent/index.js';
  * @param {PiAgent} options.piAgent
  * @returns {Session}
  */
-export const makeGenieRpcSession = ({ piAgent }) => {
+export const makeRpcSession = ({ piAgent }) => {
   return harden({
     subscribe: listener => piAgent.subscribe(listener),
     prompt: message => piAgent.prompt(message),
     abort: () => piAgent.abort(),
-    steer: message => piAgent.steer({ role: 'user', content: message }),
+    steer: message =>
+      piAgent.steer({ role: 'user', content: message, timestamp: Date.now() }),
     describeModel: () => {
       const model = piAgent.state.model;
       return model?.name ?? model?.id ?? 'unknown';
@@ -57,4 +58,4 @@ export const makeGenieRpcSession = ({ piAgent }) => {
     },
   });
 };
-harden(makeGenieRpcSession);
+harden(makeRpcSession);

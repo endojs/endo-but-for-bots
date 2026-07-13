@@ -1,4 +1,5 @@
 // @ts-check
+/// <reference types="ses"/>
 
 /**
  * Translation between the daemon agent's raw event stream and the
@@ -18,8 +19,6 @@
  * design's posture of namespacing Endo-only affordances.
  */
 
-import harden from '@endo/harden';
-
 /** @import { AgentEvent } from '@earendil-works/pi-agent-core' */
 /** @import { RpcEvent, ModelInfo } from './types.js' */
 
@@ -35,10 +34,9 @@ import harden from '@endo/harden';
  * could freeze live agent state. They are serialized to JSON immediately by
  * the serve layer, so the mutable window never escapes the process.
  *
- * @template {object} T
- * @param {T} event
+ * @param {RpcEvent} event
  * @param {string} [id]
- * @returns {T & { id?: string }}
+ * @returns {RpcEvent}
  */
 const withId = (event, id) => (id === undefined ? event : { ...event, id });
 

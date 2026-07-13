@@ -60,13 +60,3 @@ export { runGenieLoop } from './loop/run.js';
 export { makeSpecialsDispatcher } from './loop/specials.js';
 
 export { buildGenieTools, PLUGIN_DEFAULT_INCLUDE } from './tools/registry.js';
-
-export { makeJsonlDecoder, encodeRecord } from './rpc/framing.js';
-
-export { translateAgentEvent } from './rpc/protocol.js';
-
-export { makeRpcBridge } from './rpc/bridge.js';
-
-export { makeGenieRpcSession } from './rpc/session.js';
-
-export { serveRpc } from './rpc/serve.js';

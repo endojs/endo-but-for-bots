@@ -24,11 +24,11 @@
 
 import '@endo/init/debug.js';
 
-import { registerBuiltInApiProviders } from '@earendil-works/pi-ai';
+import { registerBuiltInApiProviders } from '@earendil-works/pi-ai/compat';
+
+import { makeRpcSession, serveRpc } from '@endo/agentry/rpc';
 
 import { DEFAULT_MODEL_STRING, makePiAgent } from './src/agent/index.js';
-import { makeGenieRpcSession } from './src/rpc/session.js';
-import { serveRpc } from './src/rpc/serve.js';
 
 // Register built-in API providers so model lookups resolve for known
 // providers (mirrors dev-repl.js / main.js).
@@ -53,7 +53,7 @@ const main = async argv => {
   const workspaceDir = getFlag(argv, '--workspace', '-w') || process.cwd();
 
   const piAgent = await makePiAgent({ model, workspaceDir });
-  const session = makeGenieRpcSession({ piAgent });
+  const session = makeRpcSession({ piAgent });
 
   process.stderr.write(
     `[genie-rpc] serving stdio JSONL RPC (model: ${model})\n`,

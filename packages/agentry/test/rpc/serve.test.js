@@ -7,9 +7,7 @@
  * in the middle of records, proving the decoder reassembles them.
  */
 
-import '@endo/harden';
-
-import test from 'ava';
+import test from '@endo/ses-ava/prepare-endo.js';
 
 import { serveRpc } from '../../src/rpc/serve.js';
 

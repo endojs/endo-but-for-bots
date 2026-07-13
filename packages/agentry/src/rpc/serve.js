@@ -1,4 +1,5 @@
 // @ts-check
+/// <reference types="ses"/>
 /* eslint-disable no-await-in-loop */
 
 /**
@@ -10,8 +11,6 @@
  * protocol stream on `output` stays clean, exactly as the design
  * requires (logs on stderr, protocol on stdout).
  */
-
-import harden from '@endo/harden';
 
 import { encodeRecord, makeJsonlDecoder } from './framing.js';
 import { makeRpcBridge } from './bridge.js';

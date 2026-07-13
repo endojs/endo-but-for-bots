@@ -9,9 +9,7 @@
  * assertion fails if the corresponding mapping or guard regresses.
  */
 
-import '@endo/harden';
-
-import test from 'ava';
+import test from '@endo/ses-ava/prepare-endo.js';
 import { setTimeout as nodeSetTimeout } from 'node:timers';
 
 import { makeRpcBridge } from '../../src/rpc/bridge.js';

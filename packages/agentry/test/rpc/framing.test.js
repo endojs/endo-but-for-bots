@@ -9,9 +9,7 @@
  * or dropped a buffered partial line.
  */
 
-import '@endo/harden';
-
-import test from 'ava';
+import test from '@endo/ses-ava/prepare-endo.js';
 
 import { encodeRecord, makeJsonlDecoder } from '../../src/rpc/framing.js';
 

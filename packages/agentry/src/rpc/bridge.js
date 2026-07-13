@@ -1,4 +1,5 @@
 // @ts-check
+/// <reference types="ses"/>
 
 /**
  * The stdio RPC bridge dispatcher.
@@ -16,8 +17,6 @@
  * error rather than silently queued (concurrent sessions are the design's
  * later multiplexing phase).
  */
-
-import harden from '@endo/harden';
 
 import {
   makeAckEvent,

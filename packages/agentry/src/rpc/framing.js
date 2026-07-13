@@ -1,4 +1,5 @@
 // @ts-check
+/// <reference types="ses"/>
 
 /**
  * Strict LF-delimited JSON (JSONL) framing for the stdio RPC bridge.
@@ -16,8 +17,6 @@
  * multibyte UTF-8 sequence split across chunk boundaries reassembles
  * correctly.
  */
-
-import harden from '@endo/harden';
 
 /** @import { JsonlDecoder } from './types.js' */
 

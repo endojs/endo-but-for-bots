@@ -41,6 +41,10 @@
       "types": "./src/edit-text.js",
       "default": "./src/edit-text.js"
     },
+    "./rpc": {
+      "types": "./src/rpc/index.js",
+      "default": "./src/rpc/index.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {

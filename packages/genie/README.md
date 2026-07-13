@@ -351,7 +351,7 @@ on the daemon path.
 ## Stdio JSONL RPC bridge
 
 `rpc.js` is the spawnable, language-agnostic counterpart of the dev REPL.
-Instead of a readline prompt it presents the stdio RPC surface from
+Instead of a readline prompt it presents the stdio JSONL RPC surface from
 [`designs/endopi-stdio-rpc-bridge.md`](../../designs/endopi-stdio-rpc-bridge.md):
 an embedding host (an IDE plug-in, a CI runner, a Familiar pane) spawns
 the process, writes one JSON command per line to stdin, and reads one JSON
@@ -362,65 +362,14 @@ Diagnostics go to stderr, so stdout carries only protocol records.
 node packages/genie/rpc.js [-m provider/modelId] [-w /workspace/path]
 ```
 
-The framing follows Pi's rule exactly: records are separated by `\n` and
-nothing else.
-A strict decoder is used rather than Node's `readline`, which also splits
-on `\r`, `U+2028`, and `U+2029`; a host in another language must not, so
-neither does the bridge.
-
-Commands the bridge accepts (the optional `id` is echoed on every event a
-command produces, for correlation):
-
-```json
-{"id": "1", "type": "prompt", "message": "Hello"}
-{"type": "steer", "message": "Stop and do this instead"}
-{"type": "abort"}
-{"type": "list_models"}
-{"type": "set_model", "provider": "anthropic", "model": "claude-sonnet-4-6"}
-{"type": "get_status"}
-```
-
-Events the bridge emits during a round:
-
-```json
-{"type": "message_start", "message": {…}, "id": "1"}
-{"type": "message_update", "delta": "…partial text…", "id": "1"}
-{"type": "endo:thinking", "delta": "…reasoning…", "id": "1"}
-{"type": "tool_execution_start", "toolCallId": "…", "toolName": "bash", "args": {…}, "id": "1"}
-{"type": "tool_execution_end", "toolCallId": "…", "toolName": "bash", "result": {…}, "isError": false, "id": "1"}
-{"type": "message_end", "message": {…}, "id": "1"}
-{"type": "agent_end", "id": "1"}
-```
-
-The streaming events mirror the daemon agent's own event stream.
-`endo:`-namespaced events carry Endo-only affordances the base Pi surface
-does not define, per the design's posture on namespacing.
-The `tool_execution_*` events appear only for a tool-bearing session; the
-spawnable `rpc.js` currently serves a tool-free agent (wiring genie's tool
-suite is a follow-on), so a round it drives emits no tool events, though the
-protocol layer relays them whenever the session has tools.
-
-The session is single-flight: a `prompt` received while a round is still
-running is rejected, and mid-round control arrives as separate `steer` and
-`abort` commands.
-Concurrent sessions over one process (a channel id per record) are the
-design's later multiplexing phase.
-
-The reusable pieces are exported from the package for hosts that embed the
-bridge directly rather than spawning `rpc.js`:
-`makeJsonlDecoder` and `encodeRecord` (framing), `translateAgentEvent`
-(event mapping), `makeGenieRpcSession` (a session over a `PiAgent`),
-`makeRpcBridge` (the dispatcher), and `serveRpc` (the stream wiring).
-
-```mermaid
-flowchart LR
-  host[Embedding host] -->|JSON commands| decoder[makeJsonlDecoder]
-  decoder --> bridge[makeRpcBridge]
-  bridge --> session[makeGenieRpcSession]
-  session --> agent[PiAgent]
-  agent -->|agent events| bridge
-  bridge -->|JSON events| host
-```
+The protocol itself — the strict `\n` framing, the command/event vocabulary,
+and the reusable building blocks (`makeJsonlDecoder`, `encodeRecord`,
+`translateAgentEvent`, `makeRpcSession`, `makeRpcBridge`, `serveRpc`) — lives
+in [`@endo/agentry/rpc`](../agentry/README.md#stdio-jsonl-rpc-bridge), shared
+across endo agent harnesses. `rpc.js` wires a genie agent to those blocks:
+it builds the agent (currently tool-free; wiring genie's tool suite is a
+follow-on) and hands it to `makeRpcSession` + `serveRpc`. A host that embeds
+the bridge over its own agent composes the same exports directly.
 
 ## Features
 
