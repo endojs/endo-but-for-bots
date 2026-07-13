@@ -36,8 +36,32 @@ The auth-storage exo here is that careful store.
   It provides the SHA-256 and randomness the PKCE flow needs, an
   AES-256-GCM authenticated cipher, and a scrypt passphrase key derivation.
 - `base64url.js`: base64url-without-padding, as PKCE requires.
+- `presets.js`: verified provider presets. Carries the one validated
+  configuration, `makeMinionTownMcpOAuthConfig`, for the minion.town MCP
+  resource server (see below); the pure flow modules stay constant-free and
+  this is the one place a provider's concrete endpoints live.
 - `index.js`: the public surface, including `makeOAuthClient`, which binds a
   flow to one provider configuration.
+
+## Validated integration: the minion.town MCP
+
+`makeMinionTownMcpOAuthConfig` (in `presets.js`) is a validated
+`ProviderOAuthConfig` for the minion.town MCP resource server, the design's
+concrete integration target. minion.town is an OAuth 2.1 protected resource
+(RFC 9728) whose authorization server is Amazon Cognito; a user authenticates
+*to* it, which is distinct in kind from the subscription providers a user
+authenticates *against* (Claude, ChatGPT, Copilot), but it exercises the same
+authorization-code-with-PKCE flow against a real, deployed server.
+
+The preset's endpoints, public client id, scopes, and registered redirect URIs
+were confirmed against the live deployment's published metadata (the RFC 9728
+protected-resource document at
+`https://minion.town/.well-known/oauth-protected-resource/mcp` and the Cognito
+OIDC discovery document its `authorization_servers` field names). The client is
+a public PKCE client, so it carries no secret. `test/oauth-presets.test.js`
+pins the flow's authorization request and token-exchange body to that server
+contract; it does not perform a live token exchange, which needs an interactive
+user consent step outside this module's scope.
 
 ## Flow
 
@@ -80,9 +104,12 @@ software AES-256-GCM one.
 - Extend the daemon `CryptoPowers` with an encrypt-at-rest and
   key-derivation surface, and derive the store's key from the host passphrase
   or a hardware key there, rather than from `deriveKeyFromPassphrase` alone.
-- Add verified provider presets (endpoints, client ids, scopes) for Claude,
-  ChatGPT, and GitHub Copilot; this module carries the flow but embeds no
-  provider constants.
+- Add verified provider presets (endpoints, client ids, scopes) for the
+  subscription providers Claude, ChatGPT, and GitHub Copilot. The minion.town
+  MCP preset above validates the flow against a real server today; each
+  subscription provider still needs its own registered OAuth client id, which
+  this module does not mint. The pure flow modules embed no provider constants;
+  presets live in `presets.js`.
 - Wire a subscription provider's bearer token from the store into the
   provider registry so the agent loop can use it, once the registry refactor
   (the design's phase 1) lands.
