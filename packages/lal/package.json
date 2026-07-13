@@ -25,10 +25,12 @@
   "scripts": {
     "build": "exit 0",
     "setup": "endo run --UNCONFINED setup.js --powers @agent",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint": "yarn lint:types && yarn lint:eslint && yarn lint:prompt",
     "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
     "lint:eslint": "eslint '**/*.js'",
+    "lint:prompt": "node optimizer/check-prompt-baseline.js",
     "lint:types": "tsc",
+    "optimize:prompt": "node optimizer/optimize-prompt.js",
     "prepack": "exit 0",
     "test": "ava",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",

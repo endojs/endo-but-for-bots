@@ -18,6 +18,12 @@ Each surface is opt-in via its own subpath export.
   built from: `toolResultToSmallcaps` + the SmallCaps codec, `makeEnvCredentials`
   (the single reader of `process.env`), `resolveModel`/`defineModels`, and
   `makePiAgent`. `@endo/lal` imports these directly.
+- `@endo/agentry/optimizer/*` — an Ax-backed prompt-optimization harness
+  (`ax-harness`, `trace-metric`, `model-matrix`, `check-prompt-baseline`,
+  `optimize-prompt`, `init`). Each consumer supplies its own trial runner,
+  examples, baseline, and system prompt; agentry owns the AxGen + AxGEPA /
+  AxACE / AxBootstrapFewShot plumbing, the trace-distance scoring rubric, and
+  the SHA256 baseline lint.
 - `@endo/agentry/execute` — the execute-only code-mode tool and its presets
   (`makeCodeModeAgent`, `makeCodeModeGitLoopAgent`), built on `defineAgent`.
 
