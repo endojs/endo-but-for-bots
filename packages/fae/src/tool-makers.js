@@ -770,6 +770,11 @@ export const makeReplyTool = powers => {
       if (messageNumber === undefined) {
         throw new Error('messageNumber is required');
       }
+      if (!strings.some(text => text.length > 0)) {
+        throw new Error(
+          'strings must include at least one non-empty reply part',
+        );
+      }
       await E(powers).reply(
         BigInt(messageNumber),
         strings,
@@ -1065,7 +1070,18 @@ export const makeAdoptToolTool = host => {
         throw new Error('messageNumber, edgeName, and toolName are required');
       }
       await E(host).adopt(BigInt(messageNumber), edgeName, ['tools', toolName]);
-      return `Adopted tool "${toolName}" from message #${messageNumber}. It is now available — use it immediately.`;
+      const functionName = toolName.replace(/-([a-z0-9])/g, (_, c) =>
+        c.toUpperCase(),
+      );
+      return (
+        `Adopted tool from message #${messageNumber}. ` +
+        `Petname \`${toolName}\`, function name \`${functionName}\`. ` +
+        `Call it directly as \`${functionName}({...})\`. ` +
+        `To compose it from exec, look it up with ` +
+        `\`E(powers).lookup(['tools', '${toolName}'])\` then ` +
+        `\`E(tool).execute(args)\`. Adopted tools are NOT methods on ` +
+        `\`powers\` and NOT globals inside exec.`
+      );
     },
     help() {
       return 'Adopt a capability from a mail message and install it as a tool.';
@@ -1151,11 +1167,23 @@ export const makeExecTool = powers => {
         'Execute JavaScript code with access to your guest powers. ' +
         'The code runs as an async function body (top-level await works). ' +
         'Return a value to get it as the tool result.\n\n' +
+        'Use exec for composition (chaining several capability calls in one ' +
+        'turn) or for one-off scripted logic. For a single tool invocation, ' +
+        'prefer calling the tool directly as a top-level tool — it is cheaper ' +
+        'and the LLM tool runtime validates arguments against the schema.\n\n' +
         'Available globals:\n' +
         '- powers: your guest interface (adopt, reply, send, lookup, list, followMessages, etc.)\n' +
         '- E: eventual send — use E(ref).method() for all remote calls\n' +
         '- harden: freeze objects for safe passing\n' +
         '- console: for logging\n\n' +
+        'Adopted tools live at petname path `tools/<petname>`. To call one ' +
+        'from exec:\n' +
+        '```\n' +
+        'const t = await E(powers).lookup(["tools", "timestamp-tool"]);\n' +
+        'return await E(t).execute({});\n' +
+        '```\n' +
+        'Adopted tools are NOT methods on `powers` and NOT globals — ' +
+        '`E(powers).timestamp()` and bare `timestamp()` will both fail.\n\n' +
         'Example — adopt a channel, join it, and post a reply:\n' +
         '```\n' +
         'await E(powers).adopt(13n, "danzone", "my-channel");\n' +

@@ -30,6 +30,14 @@ import {
   makeReadChannelTool,
 } from './src/tool-makers.js';
 import { extractToolCallsFromContent } from './src/extract-tool-calls.js';
+import { buildInboxMessageContent } from './src/inbox-message-format.js';
+import { formulaIdFromMessageId } from './src/message-id.js';
+import { guestSystemPrompt } from './src/system-prompt.js';
+import { addAdoptionHintToError } from './src/tool-error-hint.js';
+import {
+  adoptionRepairMessage,
+  emptyResponseRepairMessage,
+} from './src/repair-messages.js';
 
 /** Same pattern as isSpecialName in packages/daemon/src/pet-name.js */
 const specialNamePattern = /^[A-Z][A-Z0-9-]{0,127}$/;
@@ -45,72 +53,6 @@ const FaeFactoryInterface = M.interface('FaeFactory', {
   createAgent: M.callWhen(M.string()).optional(M.record()).returns(M.string()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
-
-const guestSystemPrompt = `\
-You are Fae, an autonomous agent inside the Endo daemon.
-
-## Rules
-1. When a message contains code to run, use exec() to run it. Copy the code \
-from the message — do not rewrite or add to it.
-2. Channel notifications include ready-to-use exec code. Run it with ONLY \
-your conversational reply as the post content. Never post internal \
-reasoning, steps, logs, or recaps to a channel.
-3. reply() sends a PRIVATE inbox message. It does NOT post to channels.
-4. References labeled "(author)" are attributions — do not adopt them.
-5. Keep channel posts concise and conversational — one or two sentences.
-
-## Tools
-- **exec** — Run JavaScript with powers, E, harden. Use for multi-step tasks.
-- **reply** — Private inbox reply to sender by message number.
-- **adopt** — Store a message reference under a pet name.
-- **list/lookup/store/remove** — Manage your pet name directory.
-- **send** — Send unsolicited inbox message to a named agent.
-- **adoptTool** — Install a FaeTool capability from a message.
-- **dismiss** — Dismiss a handled message.
-
-You receive messages from other agents and the @host. Use these tools to interact:
-
-- **reply** — Reply to a message by number. The reply is automatically routed \
-to the original sender. **Always prefer reply over send** when responding to \
-an incoming message.
-- **send** — Send a new (unsolicited) message to a named agent (e.g., "@host")
-- **listMessages** — List your inbox messages
-- **dismiss** — Acknowledge and dismiss a message
-- **adoptTool** — Adopt a capability from a message into your tools/ directory
-
-## Petname Directory
-
-You have a persistent directory of named references (petnames):
-
-- **list** — See all stored petnames
-- **lookup** — Retrieve a value by petname
-- **store** — Persist a JSON value under a petname
-- **remove** — Delete a petname
-
-## Adopting Values from Messages
-
-When you receive a message that contains values (the @name references in the \
-message text), you should ALWAYS adopt each value before doing anything else. \
-Choose your own pet name for it, but remember the edge name the sender used — \
-that is how the sender refers to it in the message text.
-
-For tool capabilities, use \`adoptTool\` to install them into your tools/ \
-directory. Once adopted, the tool is immediately available — try it right away.
-
-For other values, use the \`adopt\` tool to store them under a pet name in your \
-directory. You can then use \`lookup\` to retrieve them later.
-
-Example: if a message says "Here is @counter for you", adopt it:
-  adopt(messageNumber, "counter", "my-counter")
-
-## Response Guidelines
-
-- Use tools to accomplish requests. Do not fabricate results.
-- For multi-step tasks, break them down and execute step by step.
-- If a tool call fails, read the error and try a different approach.
-- When done, use **reply** (not send) to respond to the sender with a concise summary.
-- Always dismiss messages after handling them.
-`;
 
 /**
  * @typedef {object} ProviderConstructorConfig
@@ -236,60 +178,113 @@ export const spawnWorkerLoop = async (
   localTools.set('readChannel', makeReadChannelTool(powers));
 
   /**
-   * Process tool calls from the LLM response.
-   * Parses JSON arguments and encodes results with passableAsJustin.
-   *
-   * @param {object[]} toolCalls
-   * @param {Map<string, object>} toolMap
-   * @returns {Promise<object[]>}
+   * @param {object} toolCall
+   * @returns {Record<string, unknown>}
    */
-  const processToolCalls = async (toolCalls, toolMap) => {
-    /** @type {object[]} */
-    const results = [];
-
-    for (const toolCall of toolCalls) {
-      const { name, arguments: argsRaw } = /** @type {any} */ (toolCall)
-        .function;
-
-      /** @type {Record<string, unknown>} */
-      let args;
+  const decodeToolArgs = toolCall => {
+    const { arguments: argsRaw } = /** @type {any} */ (toolCall).function;
+    try {
+      const jsonString =
+        typeof argsRaw === 'string' ? argsRaw : JSON.stringify(argsRaw);
+      return decodeSmallcaps(jsonString);
+    } catch {
       try {
         const jsonString =
           typeof argsRaw === 'string' ? argsRaw : JSON.stringify(argsRaw);
-        args = decodeSmallcaps(jsonString);
+        return JSON.parse(jsonString);
       } catch {
-        // Smallcaps decoding failed — try plain JSON parse
-        try {
-          const jsonString =
-            typeof argsRaw === 'string' ? argsRaw : JSON.stringify(argsRaw);
-          args = JSON.parse(jsonString);
-        } catch {
-          args = {};
-        }
+        return {};
+      }
+    }
+  };
+
+  /**
+   * Process tool calls from the LLM response.
+   * Parses JSON arguments and encodes results with passableAsJustin.
+   *
+   * When `unattemptedEdges` is non-empty, adoption calls (`adopt`,
+   * `adoptTool`) in the batch run first; the local pending-edges set
+   * is updated as each adoption is attempted, and non-adoption calls
+   * are rejected only if pending edges remain.  This lets the model
+   * parallel-fire `adoptTool` + `reply` in one turn instead of paying
+   * for a second LLM round trip when the same batch covers the only
+   * pending edge.  Results are returned in input order so each
+   * tool_call_id still pairs with the model's original invocation.
+   *
+   * @param {object[]} toolCalls
+   * @param {Map<string, object>} toolMap
+   * @param {{ unattemptedEdges?: Iterable<string> }} [options]
+   * @returns {Promise<{ results: object[], attemptedAdoptionEdges: string[] }>}
+   */
+  const processToolCalls = async (toolCalls, toolMap, options = {}) => {
+    /** @type {Set<string>} */
+    const pendingEdges = new Set(options.unattemptedEdges ?? []);
+    const attemptedAdoptionEdges = new Set();
+
+    /** @type {object[]} */
+    const results = new Array(toolCalls.length);
+
+    // Pair each call with its original index, then sort so adoption
+    // calls run first within the batch.  `Array.prototype.sort` is
+    // stable in modern engines, so non-adoption calls keep their
+    // relative order.
+    const indexed = toolCalls.map((call, idx) => ({ idx, call }));
+    indexed.sort((a, b) => {
+      const aKind = ['adopt', 'adoptTool'].includes(
+        /** @type {any} */ (a.call).function?.name,
+      )
+        ? 0
+        : 1;
+      const bKind = ['adopt', 'adoptTool'].includes(
+        /** @type {any} */ (b.call).function?.name,
+      )
+        ? 0
+        : 1;
+      return aKind - bKind;
+    });
+
+    for (const { idx, call } of indexed) {
+      const { name } = /** @type {any} */ (call).function;
+      const args = decodeToolArgs(call);
+      const isAdoptionCall = ['adopt', 'adoptTool'].includes(name);
+      if (isAdoptionCall && typeof args.edgeName === 'string') {
+        attemptedAdoptionEdges.add(args.edgeName);
+        pendingEdges.delete(args.edgeName);
       }
 
       console.log(`[tool] ${name}(${passableAsJustin(harden(args), false)})`);
       replyTracker.anyToolCalled = true;
 
       let result;
-      try {
-        result = await executeTool(name, args, toolMap);
-        console.log(`[tool] ${name} -> ${passableAsJustin(result, false)}`);
-      } catch (error) {
+      if (!isAdoptionCall && pendingEdges.size > 0) {
         const errorMessage =
-          error instanceof Error ? error.message : String(error);
+          'Attached references must each be adopted or attempted before using other tools.';
         result = harden({ error: errorMessage });
         console.error(`[tool] ${name} error: ${errorMessage}`);
+      } else {
+        try {
+          result = await executeTool(name, args, toolMap);
+          console.log(`[tool] ${name} -> ${passableAsJustin(result, false)}`);
+        } catch (error) {
+          const rawMessage =
+            error instanceof Error ? error.message : String(error);
+          const errorMessage = addAdoptionHintToError(rawMessage);
+          result = harden({ error: errorMessage });
+          console.error(`[tool] ${name} error: ${errorMessage}`);
+        }
       }
 
-      results.push({
+      results[idx] = {
         role: 'tool',
         content: passableAsJustin(result, false),
-        tool_call_id: /** @type {any} */ (toolCall).id,
-      });
+        tool_call_id: /** @type {any} */ (call).id,
+      };
     }
 
-    return results;
+    return harden({
+      results,
+      attemptedAdoptionEdges: [...attemptedAdoptionEdges],
+    });
   };
 
   /**
@@ -303,18 +298,31 @@ export const spawnWorkerLoop = async (
    * @param {object[]} initialSchemas
    * @param {Map<string, object>} initialToolMap
    * @param {string} leafNodeId - the node to continue from
+   * @param {string[]} requiredAdoptionEdges - attachment edge names to attempt
    * @returns {Promise<string>} the final leaf node ID after the loop completes
    */
-  const runAgenticLoop = async (initialSchemas, initialToolMap, leafNodeId) => {
+  const runAgenticLoop = async (
+    initialSchemas,
+    initialToolMap,
+    leafNodeId,
+    requiredAdoptionEdges,
+  ) => {
+    const maxEmptyResponseRetries = 2;
     let currentSchemas = initialSchemas;
     let currentToolMap = initialToolMap;
     let currentLeafId = leafNodeId;
+    let emptyResponseRetries = 0;
+    let adoptionReminderSent = false;
+    const unattemptedAdoptionEdges = new Set(requiredAdoptionEdges);
     /** @type {boolean} */
     let continueLoop = true;
     while (continueLoop) {
       const conversationContext = await tree.getPath(currentLeafId);
       console.log(
         `[fae] context has ${conversationContext.length} messages, sending to LLM`,
+      );
+      console.log(
+        `[fae] chat messages: ${JSON.stringify(conversationContext, null, 2)}`,
       );
       const response = await chat(conversationContext, currentSchemas);
 
@@ -336,7 +344,19 @@ export const spawnWorkerLoop = async (
 
       const toolCalls = Array.isArray(rm.tool_calls) ? rm.tool_calls : [];
       if (toolCalls.length !== 0) {
-        const toolResults = await processToolCalls(toolCalls, currentToolMap);
+        const requiresAdoptionAttempt = unattemptedAdoptionEdges.size > 0;
+        const { results: toolResults, attemptedAdoptionEdges } =
+          await processToolCalls(toolCalls, currentToolMap, {
+            unattemptedEdges: unattemptedAdoptionEdges,
+          });
+        for (const edgeName of attemptedAdoptionEdges) {
+          unattemptedAdoptionEdges.delete(edgeName);
+        }
+        if (requiresAdoptionAttempt) {
+          console.log(
+            `[fae] awaiting adoption attempts for: ${[...unattemptedAdoptionEdges].join(', ') || '<none>'}`,
+          );
+        }
         console.log(
           `[fae] tool results: ${JSON.stringify(toolResults, null, 2)}`,
         );
@@ -351,6 +371,9 @@ export const spawnWorkerLoop = async (
         const adopted = toolCalls.some(
           tc => /** @type {any} */ (tc).function?.name === 'adoptTool',
         );
+        const replied = toolCalls.some(
+          tc => /** @type {any} */ (tc).function?.name === 'reply',
+        );
         if (adopted) {
           const refreshed = await discoverTools(powers, localTools);
           currentSchemas = refreshed.schemas;
@@ -359,6 +382,48 @@ export const spawnWorkerLoop = async (
             `[fae] Re-discovered tools after adoption: ${currentSchemas.length} available`,
           );
         }
+        if (replied && replyTracker.sent) {
+          continueLoop = false;
+        }
+      } else if (unattemptedAdoptionEdges.size > 0 && !adoptionReminderSent) {
+        console.log(
+          '[fae] attached references were not adopted; asking model to retry once',
+        );
+        // These repair injections are harness-level corrections, not real
+        // user input. We tag them role:'user' with a "[system]" prefix for
+        // portability across chat providers. This could be changed to
+        // role:'system' outright, provided the provider layer translates
+        // it for Anthropic (which takes system as a top-level param, not
+        // a message role).
+        const repairNode = await tree.addNode(currentLeafId, [
+          responseMessage,
+          {
+            role: 'user',
+            content: adoptionRepairMessage,
+          },
+        ]);
+        currentLeafId = repairNode.id;
+        adoptionReminderSent = true;
+      } else if (
+        !rm.content &&
+        !replyTracker.sent &&
+        emptyResponseRetries < maxEmptyResponseRetries
+      ) {
+        console.log(
+          `[fae] empty-content response; asking model to continue (${emptyResponseRetries + 1}/${maxEmptyResponseRetries})`,
+        );
+        // See note above on adoption-repair: role:'user' + "[system]" prefix
+        // is a portability hack; could become role:'system' once the
+        // provider layer translates for Anthropic.
+        const repairNode = await tree.addNode(currentLeafId, [
+          responseMessage,
+          {
+            role: 'user',
+            content: emptyResponseRepairMessage,
+          },
+        ]);
+        currentLeafId = repairNode.id;
+        emptyResponseRetries += 1;
       } else {
         // Final assistant response — store as a tree node.
         const finalNode = await tree.addNode(currentLeafId, [responseMessage]);
@@ -366,6 +431,8 @@ export const spawnWorkerLoop = async (
         continueLoop = false;
         if (rm.content) {
           console.log(`[fae] ${rm.content}`);
+        } else if (!replyTracker.sent) {
+          console.log('[fae] empty-content fallthrough; no reply sent');
         }
       }
     }
@@ -376,6 +443,16 @@ export const spawnWorkerLoop = async (
    * Initialize: move any introduced tool entries into the tools/ subdirectory.
    * Tools introduced via provideGuest's introducedNames appear at the top level.
    * We detect them by checking for the FaeTool interface (schema, execute, help).
+   *
+   * Uses `__getMethodNames__()` to filter rather than duck-typing with
+   * `.schema()` / `.help()`.  Duck-typing generates a noisy
+   * `CapTP <name> exception: TypeError: target has no method "schema"`
+   * line in the worker log for every non-FaeTool guest in the
+   * namespace (e.g., `llm-provider`, `agent`), since `connection.js`'s
+   * default `onReject` fires before our local `catch` swallows the
+   * error.  `makeExo` objects expose `__getMethodNames__()` for
+   * exactly this kind of interface introspection — see the repo-root
+   * `CLAUDE.md` § "CapTP introspection".
    *
    * @returns {Promise<void>}
    */
@@ -392,14 +469,20 @@ export const spawnWorkerLoop = async (
         if (name !== 'tools' && !specialNamePattern.test(name)) {
           try {
             const entry = await E(powers).lookup([name]);
-            await E(entry).schema();
-            await E(entry).help();
-            // Looks like a FaeTool — move it into tools/
-            await E(powers).copy([name], ['tools', name]);
-            await E(powers).remove(name);
-            console.log(`[fae] Moved introduced tool "${name}" into tools/`);
+            const methodNames = /** @type {string[]} */ (
+              // eslint-disable-next-line no-underscore-dangle
+              await E(entry).__getMethodNames__()
+            );
+            const isFaeTool = ['schema', 'execute', 'help'].every(method =>
+              methodNames.includes(method),
+            );
+            if (isFaeTool) {
+              await E(powers).copy([name], ['tools', name]);
+              await E(powers).remove(name);
+              console.log(`[fae] Moved introduced tool "${name}" into tools/`);
+            }
           } catch {
-            // Not a FaeTool; leave it alone.
+            // Not introspectable or move failed; leave it alone.
           }
         }
       }
@@ -472,6 +555,7 @@ export const spawnWorkerLoop = async (
         strings,
         names,
         done: messageDone = true,
+        ids,
       } = /** @type {any} */ (message);
 
       if (fromId !== selfLocator) {
@@ -503,6 +587,9 @@ export const spawnWorkerLoop = async (
         await rootNodeIdP;
 
         console.log(`[fae] New message #${number} from ${fromId}`);
+        console.log(
+          `[fae] inbound envelope: ${JSON.stringify({ type, strings, names, ids, replyTo, messageId }, null, 2)}`,
+        );
 
         // Discover tools (picks up newly adopted tools each turn)
         const { schemas: toolSchemas, toolMap } = await discoverTools(
@@ -510,20 +597,25 @@ export const spawnWorkerLoop = async (
           localTools,
         );
 
-        let textContent;
-        if (type === 'package' && Array.isArray(strings)) {
-          const parts = [];
-          const namesArray = Array.isArray(names) ? names : [];
-          for (let i = 0; i < strings.length; i += 1) {
-            parts.push(strings[i]);
-            if (i < namesArray.length) {
-              parts.push(`@${namesArray[i]}`);
+        const probeKind = async id => {
+          if (!id) return 'unknown';
+          try {
+            const ref = await E(powers).lookupById(formulaIdFromMessageId(id));
+            try {
+              await E(ref).schema();
+              return 'tool';
+            } catch {
+              return 'value';
             }
+          } catch {
+            return 'unknown';
           }
-          textContent = parts.join('').trim();
-        } else {
-          textContent = `(${type || 'unknown'} message)`;
-        }
+        };
+        const userContent = await buildInboxMessageContent(
+          { number, type, strings, names, ids },
+          probeKind,
+        );
+        console.log(`[fae] user prompt:\n${userContent}`);
 
         // Determine the parent node for this message:
         //  1. If replyTo matches a node in the tree, branch from there
@@ -541,7 +633,7 @@ export const spawnWorkerLoop = async (
           [
             {
               role: 'user',
-              content: `[Inbox message #${number}] ${textContent}\n\nUse reply(messageNumber: ${number}, ...) to respond to this message.`,
+              content: userContent,
             },
           ],
           { messageId },
@@ -549,7 +641,12 @@ export const spawnWorkerLoop = async (
 
         try {
           replyTracker.sent = false;
-          lastLeafId = await runAgenticLoop(toolSchemas, toolMap, userNode.id);
+          lastLeafId = await runAgenticLoop(
+            toolSchemas,
+            toolMap,
+            userNode.id,
+            Array.isArray(names) ? names : [],
+          );
 
           // If the LLM produced a final response without calling the reply
           // tool, send the content as a fallback reply so the sender

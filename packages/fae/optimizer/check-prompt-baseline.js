@@ -1,0 +1,189 @@
+#!/usr/bin/env node
+// @ts-check
+/* global process */
+
+import './init.js';
+
+import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import url from 'node:url';
+
+import examplesCorpus from './examples.js';
+
+const dirname = path.dirname(url.fileURLToPath(import.meta.url));
+const packageRoot = path.join(dirname, '..');
+const repoRoot = path.join(packageRoot, '..', '..');
+const baselinePath = path.join(dirname, 'prompt-baseline.json');
+const promptPath = path.join(packageRoot, 'src', 'system-prompt.js');
+const repairMessagesPath = path.join(packageRoot, 'src', 'repair-messages.js');
+const baselineRepoPath = path.relative(repoRoot, baselinePath);
+
+/** @param {string | Buffer} value */
+export const sha256 = value =>
+  crypto.createHash('sha256').update(value).digest('hex');
+harden(sha256);
+
+/**
+ * @typedef {{
+ *   systemPromptSha256: string,
+ *   repairMessagesSha256: string,
+ *   examplesSha256: string,
+ *   trainingScore: number,
+ *   modelScores?: Record<string, number>,
+ *   mode?: 'evaluate' | 'gepa' | 'ace' | 'bootstrap',
+ *   comment?: string,
+ * }} PromptBaseline
+ *
+ * `trainingScore` is the corpus average from
+ * `yarn optimize:prompt --evaluate` over the named model. It is NOT the
+ * mid-pass score the GEPA optimizer reports during search; for the same
+ * provider, examples, and prompts, the evaluate average is the stable
+ * regression floor. `mode: 'evaluate'` flags the recorded run as the
+ * canonical evaluate form.
+ */
+
+/**
+ * @param {{
+ *   baseline: PromptBaseline,
+ *   previousBaseline?: PromptBaseline,
+ *   systemPromptSha256: string,
+ *   repairMessagesSha256: string,
+ *   examplesSha256: string,
+ * }} input
+ */
+export const findBaselineIssues = ({
+  baseline,
+  previousBaseline,
+  systemPromptSha256,
+  repairMessagesSha256,
+  examplesSha256,
+}) => {
+  /** @type {string[]} */
+  const issues = [];
+
+  if (baseline.systemPromptSha256 !== systemPromptSha256) {
+    issues.push(
+      'system-prompt.js changed since the recorded optimizer baseline',
+    );
+  }
+  if (baseline.repairMessagesSha256 !== repairMessagesSha256) {
+    issues.push(
+      'repair-messages.js changed since the recorded optimizer baseline',
+    );
+  }
+  if (baseline.examplesSha256 !== examplesSha256) {
+    issues.push('optimizer/examples.js changed since the recorded baseline');
+  }
+  if (
+    previousBaseline &&
+    baseline.trainingScore < previousBaseline.trainingScore
+  ) {
+    issues.push(
+      `training score regressed from ${previousBaseline.trainingScore} to ${baseline.trainingScore}`,
+    );
+  }
+  for (const [model, previousScore] of Object.entries(
+    previousBaseline?.modelScores || {},
+  )) {
+    const currentScore = baseline.modelScores?.[model];
+    if (currentScore === undefined) {
+      issues.push(`model score for ${model} is missing from the baseline`);
+    } else if (currentScore < previousScore) {
+      issues.push(
+        `model score for ${model} regressed from ${previousScore} to ${currentScore}`,
+      );
+    }
+  }
+
+  return harden(issues);
+};
+harden(findBaselineIssues);
+
+const loadPreviousBaseline = () => {
+  try {
+    const previous = execFileSync('git', ['show', `HEAD:${baselineRepoPath}`], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return /** @type {PromptBaseline} */ (JSON.parse(previous));
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Resolve the provider name from the host URL.
+ *
+ * @param {string} host
+ */
+const resolveProviderName = host => {
+  if (host.includes('openrouter.ai')) return 'openrouter';
+  if (host.includes('anthropic.com')) return 'anthropic';
+  if (host.includes('generativelanguage.googleapis.com'))
+    return 'google-gemini';
+  if (host.includes('api.openai.com')) return 'openai';
+  return 'ollama';
+};
+
+/**
+ * Print a one-line banner naming the LLM provider and model the user
+ * has configured. Mirrors optimize-prompt.js's banner so every
+ * optimizer-related script prints a consistent provenance line. The
+ * banner is written to stderr.
+ *
+ * @param {NodeJS.ProcessEnv} env
+ */
+const printProviderBanner = env => {
+  const host = env.ENDO_LLM_HOST || env.LAL_HOST || '';
+  const model = env.ENDO_LLM_MODEL || env.LAL_MODEL || '(unset)';
+  const provider = host ? resolveProviderName(host) : '(unset)';
+  console.error(`Provider: ${provider}, Model: ${model}`);
+};
+
+const main = async () => {
+  printProviderBanner(process.env);
+  const [baseline, promptSource, repairMessagesSource] = await Promise.all([
+    fs.readFile(baselinePath, 'utf8').then(JSON.parse),
+    fs.readFile(promptPath),
+    fs.readFile(repairMessagesPath),
+  ]);
+  // Hash the corpus by its canonical JSON serialization rather than the
+  // raw examples.js file bytes so editorial comments and source-level
+  // formatting do not invalidate the baseline; only changes to the
+  // semantic content of the corpus do.
+  const examplesSource = JSON.stringify(examplesCorpus);
+  const issues = findBaselineIssues({
+    baseline,
+    previousBaseline: loadPreviousBaseline(),
+    systemPromptSha256: sha256(promptSource),
+    repairMessagesSha256: sha256(repairMessagesSource),
+    examplesSha256: sha256(examplesSource),
+  });
+
+  if (issues.length > 0) {
+    console.error('Prompt optimizer baseline is stale or regressed:');
+    for (const issue of issues) {
+      console.error(`- ${issue}`);
+    }
+    console.error(
+      'Re-run yarn optimize:prompt, review the result, and update optimizer/prompt-baseline.json before committing.',
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const modeLabel = baseline.mode ? ` (${baseline.mode})` : '';
+  console.log(
+    `Prompt optimizer baseline is current at score ${baseline.trainingScore}${modeLabel}.`,
+  );
+};
+
+if (process.argv[1] === url.fileURLToPath(import.meta.url)) {
+  main().catch(error => {
+    console.error(error instanceof Error ? error.stack : error);
+    process.exitCode = 1;
+  });
+}

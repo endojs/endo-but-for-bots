@@ -6,6 +6,7 @@
   },
   "include": [
     "*.js",
+    "optimizer",
     "scripts",
     "src",
     "tools",
