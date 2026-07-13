@@ -1,0 +1,115 @@
+# Subscription OAuth for Lal providers
+
+This directory implements the subscription-OAuth path from the
+`endopi-provider-registry-and-oauth` design (milestone M3, phases 3 and 4):
+the authorization-code-with-PKCE flow and the per-provider encrypted
+auth-storage exo.
+It is the genuinely-missing, unblocked slice of that design.
+The provider-registry refactor and the Lal-vs-Genie consolidation policy
+question the design also raises are deliberately out of scope here.
+
+## What subscription OAuth buys
+
+A user who already pays for a Claude Pro/Max, ChatGPT Plus/Pro, or GitHub
+Copilot subscription can authenticate Lal against that same account over
+OAuth, without minting a separate API key.
+Subscription tokens are account-level rather than workspace-level, so they
+carry a broader blast radius than API keys: the design frames them as
+equivalent to logging in on the web, and a consuming surface should confirm
+on first use and store them with care.
+The auth-storage exo here is that careful store.
+
+## Modules
+
+- `pkce.js`: Proof Key for Code Exchange (RFC 7636), S256 method only.
+  Generates a code verifier and derives its code challenge.
+  Randomness and SHA-256 are injected, so the module is pure and testable.
+- `flow.js`: the authorization-code flow.
+  Builds the authorization URL, exchanges an authorization code (with its
+  PKCE verifier) for tokens, and refreshes tokens.
+  `fetch` and the clock are injected.
+- `auth-store.js`: the per-provider encrypted credential store, a `makeExo`
+  exo keyed by provider name and account id.
+  It seals credentials on the way in and unseals on the way out through an
+  injected cipher, so at-rest state is ciphertext only.
+- `node-crypto.js`: the one module that reaches for `node:crypto`.
+  It provides the SHA-256 and randomness the PKCE flow needs, an
+  AES-256-GCM authenticated cipher, and a scrypt passphrase key derivation.
+- `base64url.js`: base64url-without-padding, as PKCE requires.
+- `presets.js`: verified provider presets. Carries the one validated
+  configuration, `makeMinionTownMcpOAuthConfig`, for the minion.town MCP
+  resource server (see below); the pure flow modules stay constant-free and
+  this is the one place a provider's concrete endpoints live.
+- `index.js`: the public surface, including `makeOAuthClient`, which binds a
+  flow to one provider configuration.
+
+## Validated integration: the minion.town MCP
+
+`makeMinionTownMcpOAuthConfig` (in `presets.js`) is a validated
+`ProviderOAuthConfig` for the minion.town MCP resource server, the design's
+concrete integration target. minion.town is an OAuth 2.1 protected resource
+(RFC 9728) whose authorization server is Amazon Cognito; a user authenticates
+*to* it, which is distinct in kind from the subscription providers a user
+authenticates *against* (Claude, ChatGPT, Copilot), but it exercises the same
+authorization-code-with-PKCE flow against a real, deployed server.
+
+The preset's endpoints, public client id, scopes, and registered redirect URIs
+were confirmed against the live deployment's published metadata (the RFC 9728
+protected-resource document at
+`https://minion.town/.well-known/oauth-protected-resource/mcp` and the Cognito
+OIDC discovery document its `authorization_servers` field names). The client is
+a public PKCE client, so it carries no secret. `test/oauth-presets.test.js`
+pins the flow's authorization request and token-exchange body to that server
+contract; it does not perform a live token exchange, which needs an interactive
+user consent step outside this module's scope.
+
+## Flow
+
+```mermaid
+sequenceDiagram
+  participant User
+  participant Lal
+  participant Provider as Provider OAuth
+  Lal->>Lal: generatePkcePair (verifier + S256 challenge)
+  Lal->>User: buildAuthorizationUrl (opens consent page)
+  User->>Provider: consents
+  Provider->>Lal: redirect with authorization code
+  Lal->>Provider: exchangeAuthorizationCode (code + verifier)
+  Provider->>Lal: access + refresh tokens
+  Lal->>Lal: auth-store seals tokens at rest
+```
+
+The redirect target is a Familiar pane in the Electron build or a local
+`127.0.0.1` HTTP listener in the daemon-only build, per the design.
+Standing up that listener is a separate concern from this module, which owns
+the flow arithmetic and the credential sealing.
+
+## Injected capabilities
+
+Every side-effecting capability is a constructor or call argument rather than
+ambient authority, in keeping with the daemon's powers discipline
+(`packages/daemon/src/daemon-node-powers.js`).
+The pure modules never import `node:crypto`; they take the capabilities that
+`node-crypto.js` produces.
+This keeps the flow and the store testable with fakes and free of host
+coupling, and it lets a caller substitute a hardware-backed cipher for the
+software AES-256-GCM one.
+
+## Follow-ups (out of scope here)
+
+- Persist the sealed credential bytes into the daemon's formula-graph store,
+  so credentials survive a restart.
+  This exo owns the seal/unseal discipline and the in-memory sealed map;
+  durable persistence layers on top without changing the interface.
+- Extend the daemon `CryptoPowers` with an encrypt-at-rest and
+  key-derivation surface, and derive the store's key from the host passphrase
+  or a hardware key there, rather than from `deriveKeyFromPassphrase` alone.
+- Add verified provider presets (endpoints, client ids, scopes) for the
+  subscription providers Claude, ChatGPT, and GitHub Copilot. The minion.town
+  MCP preset above validates the flow against a real server today; each
+  subscription provider still needs its own registered OAuth client id, which
+  this module does not mint. The pure flow modules embed no provider constants;
+  presets live in `presets.js`.
+- Wire a subscription provider's bearer token from the store into the
+  provider registry so the agent loop can use it, once the registry refactor
+  (the design's phase 1) lands.
