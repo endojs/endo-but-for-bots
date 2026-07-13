@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-13 |
+| **Updated** | 2026-07-13 |
 | **Author** | Aaron Kumavis (prompted) |
 | **Status** | Proposed |
 
@@ -449,11 +450,221 @@ guarantee:
 - Unlike Goblins, a method that throws after mutating state does not
   roll back; the mutation persists.
 
-This divergence is documented loudly.
-A later phase can recover turn-transactionality by snapshotting dirty
-state records at turn start and restoring them on throw
-(copy-on-write per turn), which is tractable precisely because state
-records are Passable copy-data plus designators.
+This divergence is documented loudly; §3.9 states exactly what
+soundness survives it and §3.10 evaluates recovering full turn
+atomicity from the engine.
+
+### 3.9 Soundness without the transactional heap
+
+"Sound" splits into three separately achievable guarantees.
+The transactional heap buys only the third.
+
+**Invariant P1 — consistent cuts.**
+The store only ever holds states the live heap actually passed
+through, i.e. every persisted snapshot is a consistent cut taken at a
+quiescent point.
+This requires, and the implementation MUST treat as named invariants:
+
+1. *Synchronous portrait capture.*
+   Portraits of the dirty set are serialized synchronously at the
+   commit point; only the I/O is deferred.
+   Lazy capture (an async writer reading state records later) can
+   interleave with subsequent turns and produce a fuzzy snapshot — a
+   mixture of states that never coexisted — which is genuinely
+   unsound and is the easiest mistake to make in JS.
+2. *Atomic store writes.*
+   Tmp+rename or a SQLite transaction; a delta applies entirely or
+   not at all.
+3. *Flush only at turn boundaries.*
+   Never mid-delivery.
+
+**Invariant P2 — output commit.**
+Outbound OCapN messages produced during a delivery are buffered and
+released only after the delta that produced them is durably written.
+Otherwise a crash between send and flush means the world saw effects
+the restored state does not remember.
+With persist-before-release, the failure mode flips to the safe side —
+"my state remembers something the world may not have seen" — which
+applications can repair idempotently.
+(Goblins itself dispatches far messages *before* persisting the
+churn, so this is a point where we can be stronger than the
+original.)
+
+**P3 — turn atomicity: not guaranteed in v1.**
+A method that mutates field A and throws before mutating B leaves a
+torn state, and we persist the tear.
+But this is a weakness of live JavaScript semantics, not of the
+persistence layer: the in-memory heap is equally torn and the program
+continues against it either way.
+Persistence-without-rollback is exactly as sound as not crashing; it
+makes an existing hazard durable without creating a new one.
+Under P1+P2, restart restores a state the process really was in and
+never worse than survival.
+
+Corollary hazard: an async exo method spans multiple turns from the
+heap's perspective, so its intermediate state commits at every
+quiescent point it awaits across.
+The discipline is the standard ocap-JS one — do not hold invariants
+broken across an `await` — and a debug mode SHOULD flag an instance
+dirtied both before and after an await within one method activation.
+
+Two recovery paths for P3, in increasing strength:
+
+- *Copy-on-write state records* (Phase 3): on the first write to an
+  instance within a turn, stash a copy of its state record; restore
+  the stashes on throw, discard on completion.
+  Nearly free because persistent state is constrained to Passable
+  copy-data plus designators; piggybacks on the dirty-tracking
+  interposition Phase 3 needs anyway.
+  Protects persistent state only — ordinary heap objects and
+  non-persistent closures still tear.
+- *Engine-level heap snapshots* (§3.10): whole-heap, Goblins-grade
+  "failed turn leaves no trace", at the cost of running the heap
+  inside an XS worker.
+
+### 3.10 Engine-level rollback: XS heap snapshots (endor)
+
+Investigated 2026-07-13: Moddable XS's snapshot machinery
+(`xs/sources/xsSnapshot.c`, upstream in
+[Moddable-OpenSource/moddable](https://github.com/Moddable-OpenSource/moddable),
+not an Agoric fork), Agoric's
+[`@agoric/xsnap`](https://github.com/Agoric/agoric-sdk/tree/master/packages/xsnap)
+harness and SwingSet's use of it, and this repo's own XS embedding in
+`rust/endo/xsnap`.
+
+**Mechanics.**
+`fxWriteSnapshot` runs a full GC then linearly serializes the entire
+machine — heap slots, closures, module records, symbol/keys tables,
+value stack — to a stream; `fxReadSnapshot` always boots a *fresh*
+machine from the stream (there is no in-place rewind).
+Preconditions: quiescent machine (xsnap only snapshots between
+commands), no host objects with native destructors, no external
+strings, and every native callback registered in an append-only table
+shared by writer and reader.
+Snapshots hard-check XS version, architecture, and a build signature
+on restore.
+
+**How SwingSet really does rollback (confirmed).**
+SwingSet never rolls back the XS heap in place.
+Per-crank atomicity of *effects* comes from SQLite savepoints around
+the syscall log (`establishCrankSavepoint`/`rollbackCrank` in
+`kernel.js`); the heap is a disposable cache rebuilt by killing the
+worker and replaying the transcript span since the last snapshot
+(every `snapshotInterval = 200` deliveries).
+Replay is what drags in the whole determinism discipline — liveslots,
+no `Date.now`/`Math.random`, GC-timing sensitivity, the
+"anachrophobia" failure class
+([agoric-sdk#4617](https://github.com/Agoric/agoric-sdk/issues/4617)).
+
+**The pivotal simplification: snapshot at *every* commit.**
+Agoric needs transcript replay only because its snapshots are sparse
+(and consensus demands reproducibility).
+If the heap is snapshotted at every churn commit, the replay gap is
+empty: rollback = kill worker, respawn from the last commit snapshot,
+discard the failed turn's buffered outputs, answer the failed
+delivery with an error.
+**No determinism requirements on guest code at all** — nothing is
+ever replayed, only restored.
+That is Goblins' transactormap semantics ("a failed turn leaves no
+trace"), achieved at the engine layer, and it also covers meter
+faults: a metering abort mid-turn leaves the machine unreliable, and
+respawn-from-last-commit is precisely the recovery the in-repo
+metering design already assumes.
+
+**Costs and constraints.**
+
+- O(heap) full write per commit; XS has no incremental snapshot.
+  Data points: empty heap ~430 kB raw; mainnet vats 2–20 MB
+  compressed; Agoric's observed 2.5–3.8 s saves include gzip, SHA-256,
+  forced GC, and an old file pipeline
+  ([#5507](https://github.com/Agoric/agoric-sdk/issues/5507),
+  [#6742](https://github.com/Agoric/agoric-sdk/issues/6742)).
+  A raw, uncompressed write to a pipe or SQLite blob for a 1–5 MB
+  agent-scale heap should land in the low tens of milliseconds;
+  ~50 MB heaps cost ~100 ms+ per turn.
+  Fine for agent- and human-paced OCapN messaging; wrong for
+  high-throughput hot paths.
+  Loads are fast (hundreds of MB/s; "a typical 2 MB compressed
+  snapshot loads in milliseconds"), and fresh-from-snapshot workers
+  measurably beat aged ones on RSS and CPU
+  ([#6661](https://github.com/Agoric/agoric-sdk/issues/6661)).
+- **Snapshots are ephemeral rollback artifacts, never durable ground
+  truth.**
+  They are pinned to XS version + architecture + build signature —
+  Agoric halted a chain on a gcc-9/gcc-10 `__has_builtin` divergence
+  ([#7829](https://github.com/Agoric/agoric-sdk/issues/7829)), and
+  treats "new xsnap cannot load old snapshots" as the default
+  ([#6361](https://github.com/Agoric/agoric-sdk/issues/6361)).
+  Portraits remain the sole durable, upgradeable representation;
+  engine upgrade = discard snapshot, restore the heap from portraits
+  (the analog of Agoric's vat-upgrade-via-baggage).
+  This division preserves the manual-persistence rationale (§1.1)
+  while borrowing the engine's transactionality: snapshot = the
+  transactormap, portraits = the store.
+- Heap rollback covers only the VM.
+  P2's output embargo becomes mandatory, enforced by the supervisor:
+  buffer outbound messages during the crank; on commit, write the
+  portrait delta, then snapshot, then release; on fault, discard.
+  (The in-repo metering design rejected an output embargo for *quota*
+  enforcement in favor of admission control; embargo for *rollback*
+  is different and sound — discarded outputs are never replayed.)
+- Session-table reconciliation is clean under
+  snapshot-every-commit + embargo: the restored heap is exactly the
+  state the peer last observed, because the failed turn's exports
+  were never released.
+  One known leak (not unsoundness): imports the worker received
+  *during* the aborted turn are forgotten by the rollback, so the
+  supervisor must emit the corresponding `op:gc-exports` on the
+  worker's behalf or the peer retains those exports forever.
+
+**What exists in this repo already.**
+`endor`'s XS embedding (`rust/endo/xsnap`, mainline Moddable submodule
+built with `mxSnapshot` + `mxMetering` + `mxLockdown`; the platform
+layer is modeled on Agoric's xsnap-pub but reimplemented in-repo) has
+most of the machinery built and unit-tested:
+
+- non-destructive `write_snapshot` (in-memory) and streaming
+  `write_snapshot_to_file` / `suspend_to_cas` with SHA-256 CAS
+  storage (`rust/endo/xsnap/src/lib.rs:375,646,728`);
+- `from_snapshot` / `resume_from_cas` restore, `endo-xs 1` signature,
+  append-only deterministic callback table
+  (`worker_snapshot_callbacks()`, lib.rs:505);
+- round-trip unit tests including closures and host functions, and
+  suspend/resume-cycle tests (lib.rs:3652–3996);
+- a metered crank pump that already brackets exactly the commit
+  boundary this design needs — one envelope plus promise-job drain to
+  quiescence (lib.rs:1603–1730), per
+  [daemon-xs-worker-metering](daemon-xs-worker-metering.md)
+  (Complete);
+- supervisor suspend/resume verbs and suspended-worker bookkeeping
+  per [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md)
+  (In Progress).
+
+Remaining build work for the transactional-heap profile:
+snapshot-after-successful-crank trigger (mechanically supported —
+`write_snapshot` does not destroy the machine; today snapshots fire
+only on explicit suspend), the supervisor outbound-message embargo,
+platform-aware resume for child-process workers (`handle_resume` is
+in-process only today), the missing end-to-end suspend/resume
+integration test, CAS GC-root bookkeeping, the missing worker-bundle
+generator (`bundle-bus-worker-xs.mjs` is referenced but absent — a
+reproducibility gap), and plumbing `@endo/ocapn` deliveries to a heap
+hosted inside an XS worker (today workers speak daemon-internal CapTP
+over CBOR envelopes, not OCapN).
+
+**Resulting architecture: two execution profiles, one durable
+format.**
+
+| | Node profile | XS profile (endor) |
+|---|---|---|
+| turn rollback | COW state records (persistent state only) | engine snapshot per commit (whole heap) |
+| commit point | ocapn dispatch wrapper + microtask drain | metered crank boundary |
+| output commit | heap buffers outbound sends | supervisor embargo |
+| durable state | portraits | portraits (snapshots ephemeral) |
+| metering | none | computron quotas per turn |
+
+Both profiles share the portrait store, the persistence env, and the
+class API; a heap can move between them by restoring from portraits.
 
 ### 3.7 OCapN integration (no wire changes)
 
@@ -501,6 +712,9 @@ restart-with-new-code, which the version machinery already covers.
 | `@endo/daemon` (reference) | SQLite discipline and reincarnation memoization prior art; not a dependency |
 | `packages/goblin-chat` | first adopter / proving app (Phase 2) |
 | [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md) | complementary: reconnect handles session liveness, portrait handles process death |
+| [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) (In Progress) | supplies the engine snapshot/restore machinery the XS profile (§3.10, Phase 6) builds on |
+| [daemon-xs-worker-metering](daemon-xs-worker-metering.md) (**Complete**) | its crank pump defines the XS profile's commit boundary; its fault model assumes respawn-from-last-snapshot |
+| [daemon-endor-architecture](daemon-endor-architecture.md) (Active) | worker lifecycle, envelope bus, and CAS the XS profile plugs into |
 
 ## Phased Implementation
 
@@ -514,9 +728,12 @@ restart-with-new-code, which the version machinery already covers.
    Durable locator + sturdyref bindings, persistent noise identity
    helper, goblin-chat host-room adoption with a
    kill-and-restart-the-host integration test.
-3. **Phase 3 — deltas and commit points.**
+3. **Phase 3 — deltas, commit points, and COW rollback.**
    Dirty tracking via write-through state records, `saveDelta`,
-   delivery-turn flush hook around ocapn dispatch, `takeSnapshot`
+   delivery-turn flush hook around ocapn dispatch honoring the P1/P2
+   invariants (synchronous capture, atomic writes, persist before
+   releasing buffered outbound sends), copy-on-write turn rollback of
+   persistent state records (restore stashes on throw), `takeSnapshot`
    compaction with mark-sweep orphan removal.
 4. **Phase 4 — upgrade ergonomics and SQLite store.**
    `migrations`-style helper, state-shape `mustMatch` at the store
@@ -524,8 +741,17 @@ restart-with-new-code, which the version machinery already covers.
 5. **Phase 5 — stretch.**
    Sleepy instances with LRU bedtime, multi-heap `'far'` designators
    with a persistence-registry rendezvous, durable gift table,
-   generational time-travel tooling over the memory store, turn
-   rollback via copy-on-write state records.
+   generational time-travel tooling over the memory store.
+6. **Phase 6 — XS transactional-heap profile (§3.10).**
+   Run a portrait heap inside an endor XS worker: snapshot after each
+   successful crank, supervisor outbound-message embargo, respawn
+   from last commit snapshot on fault or meter exhaustion, gc-exports
+   reconciliation for aborted turns, OCapN delivery plumbing into the
+   worker.
+   Gated on the remaining
+   [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) work
+   (platform-aware resume, integration test, worker-bundle
+   generator).
 
 ## Design Decisions
 
@@ -554,8 +780,14 @@ restart-with-new-code, which the version machinery already covers.
    Everything attaches at the `locator`, `giftTable`, and dispatch
    seams that `makeOcapn` already exposes.
 7. **v1 accepts weaker-than-Goblins turn atomicity** (no rollback on
-   throw), documented, with a designed path back (copy-on-write state
-   records) rather than a transactional heap rewrite of exo.
+   throw), documented, with two designed paths back — copy-on-write
+   state records in Phase 3 and the XS engine-snapshot profile in
+   Phase 6 — rather than a transactional heap rewrite of exo.
+   §3.9's P1 (synchronous capture, atomic writes, boundary-only
+   flush) and P2 (persist-before-release output commit) are
+   non-negotiable invariants in every profile; P2 is deliberately
+   stronger than Goblins, which dispatches far messages before
+   persisting.
 8. **JSON store format in v1; Goblins store-file compat is a
    non-goal.**
    Interop is at the OCapN wire, where it already works
@@ -565,6 +797,25 @@ restart-with-new-code, which the version machinery already covers.
    Alternatives considered: `@endo/aurie` (homage, but confusingly
    claims Goblins' internal codename for a non-identical system) and
    `@endo/persist` (generic).
+10. **Engine snapshots are the transactormap, never the store.**
+    XS heap snapshots taken at every crank commit give Goblins-grade
+    turn rollback with zero determinism/replay requirements on guest
+    code (the failed turn is restored over, never re-executed) — the
+    key divergence from SwingSet, whose sparse snapshots force
+    transcript replay and the liveslots discipline.
+    But snapshots are pinned to engine version, architecture, and
+    build signature, so they are ephemeral rollback artifacts and
+    warm-boot caches only; portraits remain the sole durable,
+    upgradeable representation, and engine upgrade = discard
+    snapshot, rehydrate from portraits.
+11. **Rollback strength is an execution-profile choice, not an API
+    choice.**
+    Node profile: COW state records (portable, persistent state
+    only).
+    XS/endor profile: whole-heap snapshot per commit plus supervisor
+    output embargo and per-turn computron metering.
+    Both share the portrait store, env, and class API, so a heap can
+    migrate between profiles through the durable format.
 
 ## Known Gaps and TODOs
 
@@ -580,9 +831,28 @@ restart-with-new-code, which the version machinery already covers.
   rendezvous (Phase 5).
 - [ ] Relationship to daemon formulas: a `portrait-heap` formula type
   so a daemon caplet can own a heap?
+- [ ] XS profile: outbound-embargo protocol details (where buffered
+  messages live, interaction with promise pipelining and answers to
+  the faulted delivery).
+- [ ] XS profile: supervisor-emitted `op:gc-exports` for imports
+  received during an aborted turn (leak, not unsoundness, if
+  skipped).
+- [ ] XS profile: snapshot cadence policy for heaps too large for
+  per-crank writes (fall back to COW records? snapshot every N
+  cranks *without* replay by accepting N-turn rollback windows?).
+- [ ] Async-method dirty-across-await detection in debug mode
+  (§3.9).
 
 ## Prompt
 
 > research how Spritely Goblins does persistence and plan an
 > implementation on top of our endo ocapn implementation
 > https://codeberg.org/spritely/goblins/src/branch/main/goblins
+
+Revised same day (§3.9, §3.10, Phase 6, Decisions 10–11) per
+follow-ups:
+
+> can this be sound without the transactional heap?
+
+> investigate using moddablesdk xs / agoric xsnap for thr
+> transactional heap

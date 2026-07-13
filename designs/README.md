@@ -15,7 +15,18 @@ equivalent: `@endo/portrait` with `makePersistenceEnv`,
 memory/file/SQLite stores using `@endo/marshal` capdata with
 near-slot/sturdyref/broken-promise designators, and durable locator
 bindings plugged into `makeOcapn` with no wire changes; goblin-chat
-host-room adoption is the Phase 2 proving app),
+host-room adoption is the Phase 2 proving app; revised same day with
+the soundness analysis (named P1 consistent-cut and P2
+persist-before-release invariants; turn atomicity as the only
+guarantee the transactormap uniquely buys) and the XS investigation:
+snapshot-at-every-crank-commit in an endor XS worker gives
+Goblins-grade "failed turn leaves no trace" with zero
+determinism/replay requirements — the key divergence from SwingSet's
+sparse-snapshot-plus-transcript-replay — building on the ~90%-built
+`rust/endo/xsnap` snapshot/metering machinery, with snapshots as
+ephemeral rollback artifacts only and portraits remaining the durable
+upgradeable format; lands as Phase 6, a second execution profile
+beside the Node COW-record profile),
 [cbor-codec](cbor-codec.md) (added 2026-07-12; shared canonical-CBOR
 primitive codec `@endo/cbor` at `packages/cbor/`: hardened functional
 write/read primitives for the RFC 8949 subset that slot-machine
