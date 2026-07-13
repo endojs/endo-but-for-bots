@@ -32,6 +32,11 @@ export {
 } from './flow.js';
 export { makeOAuthAuthStore } from './auth-store.js';
 export { encodeBase64Url, decodeBase64Url } from './base64url.js';
+export {
+  makeMinionTownMcpOAuthConfig,
+  MINION_TOWN_MCP_REGISTERED_REDIRECT_URIS,
+  MINION_TOWN_MCP_SCOPES,
+} from './presets.js';
 
 /**
  * Bind an OAuth flow to one provider configuration. Returns a small client
