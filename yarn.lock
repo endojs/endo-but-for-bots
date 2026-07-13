@@ -2659,6 +2659,32 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/portrait@workspace:packages/portrait":
+  version: 0.0.0-use.local
+  resolution: "@endo/portrait@workspace:packages/portrait"
+  dependencies:
+    "@endo/common": "workspace:^"
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/hex": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/lockdown": "workspace:^"
+    "@endo/marshal": "workspace:^"
+    "@endo/ocapn": "workspace:^"
+    "@endo/pass-style": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    ses: "workspace:^"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/preact-container@workspace:^, @endo/preact-container@workspace:packages/preact-container":
   version: 0.0.0-use.local
   resolution: "@endo/preact-container@workspace:packages/preact-container"
