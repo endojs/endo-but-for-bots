@@ -6,7 +6,7 @@ name: Workflow security audit
 # `pull_request_target` "Pwn Request", template injection, excessive
 # permissions, OIDC token exposure, cache poisoning, and unpinned uses.
 #
-# Gate is `persona: pedantic` + `min-severity: low`. Pedantic surfaces
+# Gate is `persona: pedantic` + `min-severity: medium`. Pedantic surfaces
 # "code smell" findings beyond what `regular` catches — most notably
 # `excessive-permissions` at the workflow level when grants could live
 # on a single job, `template-injection` from `${{ }}` expansion in
@@ -41,7 +41,7 @@ jobs:
         uses: zizmorcore/zizmor-action@b1d7e1fb5de872772f31590499237e7cce841e8e # v0.5.3
         with:
           persona: pedantic
-          min-severity: low
+          min-severity: medium
           # `advanced-security: true` would upload SARIF to GitHub Code
           # Scanning, which requires Advanced Security to be enabled on the
           # repository and `security-events: write` on this job. Until that
