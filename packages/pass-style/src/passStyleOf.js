@@ -22,6 +22,7 @@ import {
   isErrorLike,
 } from './error.js';
 import { RemotableHelper } from './remotable.js';
+import { SturdyRefHelper } from './sturdyref.js';
 
 import { assertPassableSymbol } from './symbol.js';
 import { assertSafePromise } from './safe-promise.js';
@@ -49,6 +50,7 @@ const makeHelperTable = passStyleHelpers => {
     tagged: undefined,
     error: undefined,
     remotable: undefined,
+    sturdyref: undefined,
   };
   for (const helper of passStyleHelpers) {
     const { styleName } = helper;
@@ -261,6 +263,7 @@ export const passStyleOf =
     ByteArrayHelper,
     CopyRecordHelper,
     TaggedHelper,
+    SturdyRefHelper,
     ErrorHelper,
     RemotableHelper,
   ]);
