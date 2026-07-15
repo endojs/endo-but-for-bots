@@ -872,8 +872,15 @@ harden(isEncodedRemotable);
 // /////////////////////////////////////////////////////////////////////////////
 
 /**
- * @type {Record<PassStyle, string>}
+ * @type {Record<Exclude<PassStyle, 'sturdyref'>, string>}
  * The single prefix characters to be used for each PassStyle category.
+ *
+ * The `'sturdyref'` pass-style is deliberately excluded: a SturdyRef is an
+ * opaque token whose marshal encoding and rank-order position are not yet
+ * defined (that is a separate, later slice of the sturdy-refs work). Until
+ * then `@endo/marshal` neither encodes nor rank-orders SturdyRefs, so they
+ * have no prefix here.
+ *
  * `bigint` is a two-character string because each of those characters
  * individually is a valid bigint prefix (`n` for "negative" and `p` for
  * "positive"), and copyArray is a two-character string because one encoding
