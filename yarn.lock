@@ -551,6 +551,20 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/cbor@workspace:packages/cbor":
+  version: 0.0.0-use.local
+  resolution: "@endo/cbor@workspace:packages/cbor"
+  dependencies:
+    "@endo/errors": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    ava: "catalog:dev"
+    eslint: "catalog:dev"
+    ses: "workspace:^"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/chacha12-fast-check-test@workspace:packages/chacha12-fast-check-test":
   version: 0.0.0-use.local
   resolution: "@endo/chacha12-fast-check-test@workspace:packages/chacha12-fast-check-test"
