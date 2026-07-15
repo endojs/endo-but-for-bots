@@ -189,6 +189,7 @@ LLM-agent stack).*
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
 | [endo-fs-backend-seam](endo-fs-backend-seam.md) | 2026-05-28 | 2026-05-28 | **Complete** |
+| [endo-ls-json](endo-ls-json.md) | 2026-07-15 | 2026-07-15 | Proposed |
 | [chat-color-schemes](chat-color-schemes.md) | 2026-02-26 | 2026-02-26 | **Complete** |
 | [cli-store-verb-text-modes](cli-store-verb-text-modes.md) | 2026-05-08 | 2026-05-08 | Proposed |
 | [cli-edit-verb](cli-edit-verb.md) | 2026-05-08 | 2026-05-08 | Proposed |
@@ -964,6 +965,7 @@ star.)
 | lal-transcript-memory-management | Not Started | Durable transcript nodes outliving dismissed messages |
 | patterns-diagnostic-feedback | Proposed | Opt-in `@endo/patterns/explain-mismatch.js` submodule; non-throwing `explainMismatch({ specimen, pattern, format? })` (mirrors `matches`'s boolean shape) returns a rendered diagnostic string or `undefined`; compact line-per-mismatch default (sized for AI-agent token economy) or opt-in Rust-compiler-style expanded form; zero cost to the production matcher path (submodule appears nowhere on its import graph) |
 | namehub-interface-unification | Proposed | Interface refactor so `EndoMount` and `NameHub` share a `ReadableNameHubInterface`; deferred companion to `filesystem-watchers` |
+| endo-ls-json | Proposed | Make `endo ls --json` a parseable snapshot `string[]`; retain follow-mode JSON Lines and reject incompatible display modifiers |
 
 **Exit criterion:** Chat UI feature-complete for current design scope.
 Commands are non-blocking with visible pending state. Developer tools
@@ -1318,6 +1320,7 @@ have been remapped: 0 → 1, ½ → 2, 1 → 3, 2 → 4, 3 → 7, 4 → 9,
 | lal-transcript-memory-management | S | 1 day | 9 | Durable message-to-node mapping, broken chain detection |
 | patterns-diagnostic-feedback | S-M | 2-3 days | 9 | New submodule `@endo/patterns/explain-mismatch.js`: internal tracing recursion (non-throwing, reuses `matchHelpers` in place) + dual-format renderer (compact default, expanded opt-in) folded into a single `explainMismatch({ specimen, pattern, format? })` returning a rendered string (~600 lines incl. tests). Single-PR deliverable. Production `@endo/patterns` matcher path unchanged. |
 | namehub-interface-unification | S | 1-2 days | 9 | Introduce `ReadableNameHubInterface`; refactor `MountInterface` and inventory-component dispatch; defers mount-entry locator question |
+| endo-ls-json | S | 1-2 days | 9 | CLI-only snapshot JSON contract for `endo ls`; preserves follow-mode JSON Lines and adds option validation |
 | ~~daemon-os-sandbox-plugin~~ | — | — | 10 | Superseded by `endo-posix-sandbox` |
 | endo-posix-sandbox | L-XL | 6-10 weeks remaining | 10 | Phases 0-1 shipped (bwrap on Linux); Phase 2 (podman) and Phase 3 (nested slices) in flight; Phases 1.5, 4, 6 ahead. Per-phase estimates pending PLAN backfill |
 | daemon-capability-persona | S-M | 3 days | 10 | Handle extension, epithet tracking |
@@ -1361,10 +1364,10 @@ date of this pass.
 | M6: MCP Bridge Hosting (was Milestone B) | 1 net-new (`endo-gateway-mcp` impl); cross-milestone slices in M3 (P0) and M5 (P2/P3/P4 gaps) | ~2 weeks own work + ~6-9 weeks across P0-P4 | gated by M3 gateway-package phases 2/7/8 merge cadence |
 | M7: Weblets & Integrations (was M3) | 12 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |
 | M8: Peer App Sharing (was Milestone A) | 3 net-new (`familiar-deep-link-invitations`, `endo-app-sharing`, `familiar-app-ui-hosting`); existing constituents counted under M3/M4/M7 | 2-3 weeks | 3-5 weeks |
-| M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
+| M9: UX & Tooling (was M4) | 14 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`, `endo-ls-json`) | 9-12 weeks | 11-14 weeks |
 | M10: Confinement & Ecosystem (was M5) | 6 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
 | M11: Rust Daemon (`endor`) (was M6) | 2 (`endor-tui`, `endor-bus-tui`) | 12-17 weeks | 14-19 weeks |
-| **Total remaining** | **58** + 7 M5 rows (4 in-flight + 3 design gaps) + 1 M6 own-work row | **~57-78 weeks** + M5 4-6 weeks + M6 ~2 weeks | **~69-94 weeks** |
+| **Total remaining** | **59** + 7 M5 rows (4 in-flight + 3 design gaps) + 1 M6 own-work row | **~57-78 weeks** + M5 4-6 weeks + M6 ~2 weeks | **~69-94 weeks** |
 
 The 2026-05-20 reconciliation corrects a counting gap in the prior
 snapshot's narrative: M1, M3, and M4 had absorbed new rows since the
