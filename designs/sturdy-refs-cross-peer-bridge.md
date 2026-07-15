@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-11 |
+| **Updated** | 2026-07-15 |
 | **Author** | endolinbot (prompted) |
 | **Status** | Not Started |
 
@@ -20,8 +21,9 @@ non-local ones"). This design settles that sentence:
 1. **The wire codec, both directions**, grounded in what PR #521 already
    builds: what exists, what only needs promotion, and what is missing,
    covering the in-band Syrup form, the out-of-band `ocapn://` URI form, and
-   the mint-side story (the swiss-num table a daemon EXPORT is backed by,
-   where it persists, and how it revokes).
+   the mint-side story. A formula identifier is the swiss-num, so the daemon
+   delegates its resolution to its formula machinery instead of maintaining a
+   second swiss-num table.
 2. **Foreign-locator internalization**: how a SturdyRef whose Peer Locator
    names a different peer resolves at the daemon's facet seam through a
    closely-held OCapN network capability, how the enlivened remote presence
@@ -63,8 +65,8 @@ substrate is deliberately local:
 
 What no landed or in-flight artifact provides:
 
-- A daemon cannot **export**: `mintSturdyRef` allocates no swiss-num, keeps
-  no durable table, and synthesizes a placeholder location
+- A daemon cannot **export**: `mintSturdyRef` does not use its formula
+  identifier as the swiss-num and synthesizes a placeholder location
   (`{ designator: number, network: node, transport: 'endo', hints: false }`)
   that no OCapN netlayer can dial. The OCapN codec refuses to serialize such
   a SturdyRef ("Cannot serialize: not a valid SturdyRef object") because the
@@ -141,42 +143,32 @@ of this speaks OCapN.
 | `ocapn://` URI form | Built in goblin-chat only (`parseLocator`, `formatLocator`; base64url no-padding swiss-num per the Locators draft's URI Serialization section and Goblins' `ids.scm`) | Promote both directions into `@endo/ocapn` (cut 2) |
 | Advisory `type` hint on the wire | Absent; the spec record has two fields (peer, swiss-num), so the hint cannot ride the Syrup form | Keep local-only; state it explicitly |
 | Closely-held reveal | Module-internal (`getSturdyRefDetails`), not on the client surface | Promote to the client as a closely-held `reveal` operation (cut 2) |
-| Mint for a daemon-hosted value | Missing entirely | The swiss-num store (below; cut 3) |
+| Mint for a daemon-hosted value | Missing entirely | Use the formula identifier as the swiss-num and delegate resolution to the daemon (cut 3) |
 
 #### Mint and export: the daemon as a SturdyRef host
 
-A daemon EXPORTS a wire-tier SturdyRef by binding a fresh secret to a formula
-identifier in a durable, daemon-private table.
+A daemon EXPORTS a wire-tier SturdyRef by using the target formula identifier
+as the swiss-num. The formula identifier is already durable, unforgeable at
+the daemon boundary, and sufficient for the daemon to resolve the value.
 
-- **The swiss-num store.** A new singleton formula type `sturdyref-store`,
-  mirroring `known-peers-store`: rows map `swissNum -> formulaIdentifier`
-  plus mint metadata (mint date, optional advisory `type` hint). Rows persist
-  through `persistencePowers` like other formula-adjacent state, so a minted
-  SturdyRef survives daemon restart (that is the point of a sturdy
-  reference). The store is reachable only from daemon core and host-tier
-  facets; no worker or guest ever holds it.
-- **Minting.** A host-tier method `provideSturdyRef(petNamePathOrId)`
-  resolves its argument to a formula identifier, draws a fresh 256-bit
-  swiss-num from the daemon's randomness (the `randomHex256` discipline),
-  writes the row, and returns a wire-tier SturdyRef constructed through the
-  daemon's OCapN client (`ocapn.makeSturdyRef(selfLocation, swissNum)`), so
-  the session manager holds the details and the codec can serialize it.
-  Each mint draws a fresh swiss-num even for a formula already exported:
-  grants are then independently revocable, and two grants converge on the
-  same value only at enlivenment, which is the guarantee holders may rely
-  on.
-- **Serving.** The `locator` capability injected into `makeOcapn` is the
-  store read side: `locator.get(secret)` looks up the row and returns
-  `provide(formulaIdentifier)`. The bootstrap `fetch(swissNum)` path of the
-  OCapN client then serves foreign enliveners with no further daemon code.
-- **Revocation.** Revocation is forgetting, per the enlivenment design:
-  deleting the row makes every future `locator.get` and `fetch` miss. Because
-  the SturdyRef object itself may be long gone (another peer holds it, or the
-  daemon restarted), revocation is keyed by a **grant handle**: the SHA-256
-  hash of the swiss-num, stored alongside the row. `listSturdyRefGrants()`
-  returns `(grantHandle, formulaIdentifier, mintedAt)` records, never
-  secrets; `revokeSturdyRefGrant(grantHandle)` deletes the row. The hash
-  names the grant without conferring it.
+- **Minting.** A host-tier method `provideSturdyRef(petNamePathOrId)` resolves
+  its argument to a formula identifier and returns a wire-tier SturdyRef
+  constructed through the daemon's OCapN client
+  (`ocapn.makeSturdyRef(selfLocation, formulaIdentifier)`). Minting introduces
+  no random secret, table, or extra persistence. Repeated exports of one
+  formula intentionally carry the same swiss-num and converge on the same
+  formula value.
+- **Serving.** The `locator` capability injected into `makeOcapn` delegates
+  `locator.get(swissNum)` to daemon formula resolution: it validates and
+  parses the formula identifier, then `provide`s that identifier. The
+  bootstrap `fetch(swissNum)` path therefore resolves through the daemon,
+  rather than a parallel sturdyref store.
+- **Lifetime and revocation.** A formula-identifier swiss-num remains valid
+  for the lifetime of its formula. This design deliberately provides no
+  per-export revocation or grant listing: the authority is the formula's
+  durable identity, not an independently revocable bearer grant. Keep this
+  indefinitely. Any future independently revocable delegation must introduce
+  an explicit attenuating formula, rather than reintroduce a hidden mapping.
 - **No auto-promotion on export.** When a facet passes a local-tier SturdyRef
   (a #541 `mintSturdyRef` product with no swiss-num) out over an OCapN
   session, the codec's existing refusal stands. Considered and rejected:
@@ -187,15 +179,13 @@ identifier in a durable, daemon-private table.
 
 #### The daemon's OCapN identity and self-location
 
-A new singleton formula type `ocapn` holds the daemon's OCapN identity (a
-keypair generated at formulation) and netlayer configuration, and its value
-is the daemon's OCapN client plus the closely-held operations of section 2.
-The self peer-locator (`designator` from the public key, `transport` from
-the armed netlayer, ephemeral hints fetched fresh like `endo://` connection
-hints) is what `provideSturdyRef` bakes into minted SturdyRefs. The identity
-is deliberately distinct from the daemon's `endo://` node key by default, so
-an operator's OCapN world and Endo-gateway world are not correlatable by key
-reuse; whether to offer opt-in reuse is an open question.
+The `ocapn` singleton uses the daemon node key as its OCapN identity by
+design. Its value is the daemon's OCapN client plus the closely-held
+operations of section 2. The self peer-locator uses the node key as its
+designator and the OCapN Noise Protocol Network with WebSocket transport and
+TCP with CBOR-frame transport. `provideSturdyRef` bakes that self location and
+the formula identifier swiss-num into each minted SturdyRef. There is no
+second keypair and no opt-in identity-reuse mode.
 
 ### 2. Foreign-locator internalization (the peer-to-daemon bridge)
 
@@ -213,7 +203,8 @@ imports is a daemon-local presence the daemon proxies. Its operations:
   `enlivenSturdyRef`, dialing `provideSession(location)` and fetching by
   swiss-num for foreign locations.
 - `internalize(location, swissNum) -> FormulaIdentifier`: the durable path
-  (next subsection).
+  (next subsection). For a self location, this delegates directly to daemon
+  formula resolution because the swiss-num is already a formula identifier.
 - `formatSturdyRefUri` / `parseSturdyRefUri`: the promoted URI codec, for
   deliberate out-of-band export and accept. The URI carries the secret;
   emission is host-tier only and the string never appears in logs or error
@@ -232,7 +223,7 @@ flowchart TD
   B -- no --> D{ocapn.reveal\nhas details?}
   D -- no --> E[reject: forged look-alike or\nminted by an unknown instance]
   D -- yes --> F{location is\nself-location?}
-  F -- yes --> G[locator.get via swiss-num store\n-> local formulaIdentifier]
+  F -- yes --> G[delegate swiss-num formula identifier\nto daemon resolution]
   F -- no --> H{known-sturdyrefs index\nhas an entry?}
   H -- yes --> I[existing ocapn-sturdyref\nformulaIdentifier]
   H -- no --> J[formulate ocapn-sturdyref\nrecord in index]
@@ -263,8 +254,8 @@ Two new formula types mirror the existing `peer` machinery
 - **`ocapn-sturdyref`** `{ type, ocapnPeerId, swissNum }`: depends on its
   `ocapn-peer`. Its value is the enlivened presence,
   `E(bootstrap).fetch(swissNum)` over the peer's session. The formula body
-  holds the secret; formula records are daemon-private state, the same trust
-  domain that holds the swiss-num store's rows.
+  holds the foreign formula-identifier swiss-num; formula records are
+  daemon-private state.
 
 **What the formulaIdentifier denotes.** A local identifier
 (`{number}:{LOCAL_NODE}`, random formula number) denoting the durable
@@ -314,12 +305,17 @@ out of scope; tracking issue to be filed.
   happens exactly where an identifier must exist: `identify`, name writes,
   and `evaluate` / `makeUnconfined` endowment slots.
 - **Failure surfacing.** A failed dial or a bootstrap `fetch` miss ("secret
-  not found": revoked, never minted, or the wrong peer) rejects the facet
+  not found": unknown formula identifier or the wrong peer) rejects the facet
   call. Rejections name the peer designator and never the swiss-num,
-  extending the #521 rule that secrets stay out of error chains. The memo's
-  rejection eviction and the formula's on-demand re-evaluation mean a
-  transient failure retries on next use; a revocation at the host stays a
-  rejection forever, indistinguishable by design from never-minted.
+  extending the #521 rule that capability-bearing identifiers stay out of
+  error chains. The memo's rejection eviction and the formula's on-demand
+  re-evaluation mean a transient failure retries on next use.
+- **Session partitioning.** Every value enlivened through a particular OCapN
+  session is bound to that session. When the session ends, its live presences,
+  memo entries, and dependent formula values are partitioned with it and are
+  not reused. A later use establishes a fresh session and enlivens a fresh
+  presence. This is stronger than cache eviction: a stale value cannot cross
+  the ended-session boundary.
 
 ### 3. Three-party handoff
 
@@ -340,7 +336,7 @@ sequenceDiagram
   participant A as Peer A (gifter)
   participant B as Peer B (receiver)
   participant C as Peer C (exporter)
-  Note over C: mint: swiss-num s -> value v<br/>(sturdyref-store row)
+  Note over C: mint: formula identifier s is the swiss-num for value v
   C->>A: earlier: ocapn-sturdyref(C, s) on some C-A session
   A->>B: pass: ocapn-sturdyref(C, s) in-band on the A-B session
   Note over B: inert box materialized,<br/>secret off-band in B's session manager
@@ -363,7 +359,7 @@ data. The trade is explicit:
 | C involved at pass time | Yes (gift deposit) | No (only at enliven) |
 | Secret on the A-B wire | Never (signed certificate instead) | Yes, in-band on the encrypted session |
 | Survives partition or restart | No | Yes |
-| Failure window | Redemption, near-term | Any later enliven (C down, revoked) |
+| Failure window | Redemption, near-term | Any later enliven (C down or formula unavailable) |
 
 A gifter therefore chooses tiers by intent: introduce (handoff) versus
 delegate durably (SturdyRef). Both compose on the same remotable: the grant
@@ -374,10 +370,10 @@ object.
 
 **The daemon in each role.**
 
-- **As C (exporter):** `provideSturdyRef` mints; the swiss-num store backs
-  `fetch`; revocation is row deletion. The daemon also serves the ordinary
-  gift-deposit bootstrap methods for live handoffs through its OCapN client
-  unchanged.
+- **As C (exporter):** `provideSturdyRef` uses the formula identifier as the
+  swiss-num and `fetch` delegates to daemon formula resolution. The daemon
+  also serves the ordinary gift-deposit bootstrap methods for live handoffs
+  through its OCapN client unchanged.
 - **As A (gifter):** a host-tier facet passing a wire-tier SturdyRef (its
   own mint, or a foreign one it internalized) over an OCapN session
   re-serializes the tuple. Re-gifting a C-hosted SturdyRef to a fourth peer
@@ -401,9 +397,9 @@ by the guest). Per artifact:
 |---|---|
 | Syrup wire form and codec | Opaque-and-unforgeable: the secret rides only inside an encrypted, mutually authenticated session and lands off-band in the receiving session manager, never as a property. The wire tier is peer-to-peer trusted surface; the facet seam is where the guest tier is enforced. |
 | `ocapn://` URI | The URI is location plus secret by definition (out-of-band carriage for the trusted tier). No-location and no-identification are preserved for guests by reachability: emission and acceptance are host-tier closely-held operations, and the string appears in no log, error, or guest-visible value. |
-| Swiss-num store (`sturdyref-store`) | Opaque-and-unforgeable: 256-bit random mints, rows daemon-private, revocation-by-forgetting. Grant handles are hashes; listing reveals no secret. |
+| Formula-identifier swiss-num | Opaque-and-unforgeable: the daemon alone resolves a self-location swiss-num as a formula identifier. It introduces no parallel table, grant listing, or guest-visible formula identifier. |
 | `ocapn` network capability | No-location: it is the only holder of dial authority, it never crosses the worker boundary, and cross-peer enlivenment is a daemon-side act whose result reaches a worker only as a daemon-local presence. A confined guest can neither dial nor learn that dialing occurred. |
-| `ocapn-sturdyref` formula and `known-sturdyrefs-store` index | No-identification toward guests: the formula number is random and location-free; the body (location, secret) is daemon-private; `identify` and `locate` never admit the guest-token tier (PR #695's method mask). The dedup index is daemon-side equality for the host's own bookkeeping, never guest-observable. Two grants of the same internalized foreign object reach a guest as two fresh, unlinkable #695 tokens. |
+| `ocapn-sturdyref` formula and `known-sturdyrefs-store` index | No-identification toward guests: the local formula number is random and location-free; the body (location, foreign formula identifier) is daemon-private; `identify` and `locate` never admit the guest-token tier (PR #695's method mask). The dedup index is daemon-side equality for the host's own bookkeeping, never guest-observable. Two grants of the same internalized foreign object reach a guest as two fresh, unlinkable #695 tokens. |
 | Three-party pass | The invariants govern tier boundaries, not trusted peers: A handing B the tuple is deliberate delegation between wire-tier holders. B's guests still sit behind B's mediator, so the pass widens no guest's authority. |
 
 One caveat is stated rather than hidden: token unlinkability covers the
@@ -431,9 +427,9 @@ with this design.)
 |---|---|---|
 | 1 | **Bytes-preserving wire read.** `OcapnSturdyRefCodec` read keeps non-ASCII swiss-nums as bytes (try ASCII, fall back to `Uint8Array`), symmetric with `sturdyRefTracker.lookup` and the write path. | Round-trip a Goblins-style 24-byte random secret read-to-write unchanged; ASCII secrets unchanged; existing codec snapshots green. Confinement: sweep the materialized SturdyRef's own properties and prototype chain for secret bytes (none reachable). |
 | 2 | **Promotions in `@endo/ocapn`.** URI codec (`parseSturdyRefUri` / `formatSturdyRefUri`) moves from goblin-chat into `@endo/ocapn`; goblin-chat delegates. The client gains closely-held `reveal(sturdyRef)`. | URI parse/format round-trip including hints and base64url vectors from Goblins' `ids.scm`; goblin-chat suite green against the delegating import; `reveal` answers for minted and wire-arrived refs, `undefined` for foreign-instance mints. Confinement: a SturdyRef never stringifies to its URI (no `toString` leak); `reveal` is absent from every non-closely-held surface. |
-| 3 | **Daemon mint and export (daemon as C).** `sturdyref-store` formula type; `provideSturdyRef`, `listSturdyRefGrants`, `revokeSturdyRefGrant` on the host facet; the store-backed `locator` for the daemon's OCapN client. | Mint then `fetch` round-trips in one process; rows survive daemon restart and still serve; revoke then `fetch` rejects with a secret-free error; two mints of one formula yield distinct swiss-nums converging on one value. Confinement: a confined guest cannot reach `provideSturdyRef` or the store (guard-level rejection), and a mint result is blocked from crossing to a guest by the facet tier gate. |
-| 4 | **The `ocapn` singleton.** Formula type `ocapn` (keypair, netlayers, self-location); the daemon constructs its OCapN client; #541's placeholder location is replaced by the real self peer-locator in wire-tier mints (local-tier `mintSturdyRef` unchanged). | Self-location round-trips designator and transport; a self-minted SturdyRef enlivens locally through `locator.get`. Confinement: an endowment sweep proves no worker or guest can reach the `ocapn` capability or any netlayer handle. |
-| 5 | **Foreign internalization (daemon as B).** `ocapn-peer` and `ocapn-sturdyref` formula types; `known-sturdyrefs-store` dedup index; the facet-seam fallback replacing #541's rejection; `acceptSturdyRefUri`. | Simulated two-peer (tcp-test-only netlayer): mint at one instance, pass, `lookup` / `identify` / name-write at the other; dedup yields a stable identifier across repeated internalizations; session teardown then next use re-dials; a failed fetch rejects without the secret; a forged look-alike still rejects. Confinement: a confined guest holding a #695 token backed by a foreign `ocapn-sturdyref` formula can read no locator through anything reachable from the token; cross-peer enliven occurs only via the mediator (the guest side makes no connection, asserted at the netlayer). |
+| 3 | **Daemon mint and export (daemon as C).** `provideSturdyRef` uses its resolved formula identifier as the swiss-num; the OCapN `locator` delegates self-location resolution to the daemon's formula resolver. | Mint then `fetch` round-trips in one process and after daemon restart; repeated exports of one formula carry the same swiss-num and converge on one value. Confinement: a confined guest cannot reach `provideSturdyRef`, the formula resolver, or the formula identifier. |
+| 4 | **The `ocapn` singleton.** The daemon node key is the OCapN identity; OCapN Noise Protocol Network arms WebSocket and TCP with CBOR-frame transport; #541's placeholder location is replaced by the real self peer-locator in wire-tier mints (local-tier `mintSturdyRef` unchanged). | Self-location round-trips the node-key designator and each transport; a self-minted SturdyRef enlivens locally through delegated formula resolution. Confinement: an endowment sweep proves no worker or guest can reach the `ocapn` capability or any netlayer handle. |
+| 5 | **Foreign internalization (daemon as B).** `ocapn-peer` and `ocapn-sturdyref` formula types; `known-sturdyrefs-store` dedup index; the facet-seam fallback replacing #541's rejection; `acceptSturdyRefUri`. | Simulated two-peer over the OCapN Noise Protocol Network's WebSocket and TCP/CBOR-frame transports: mint at one instance, pass, `lookup` / `identify` / name-write at the other; dedup yields a stable identifier across repeated internalizations; session teardown partitions all session-bound presences before next use re-dials; a failed fetch rejects without the formula identifier; a forged look-alike still rejects. Confinement: a confined guest holding a #695 token backed by a foreign `ocapn-sturdyref` formula can read no locator through anything reachable from the token; cross-peer enliven occurs only via the mediator (the guest side makes no connection, asserted at the netlayer). |
 | 6 | **Three-party round-trip (A, B, C).** Integration of cuts 1-5 plus the handoff contrast: two daemons and a third simulated peer in each role rotation. | The required round-trip: daemon C mints, peer A receives and passes to daemon B, B enlivens by dialing C; assert no A-C traffic at pass time and a fresh B-C session at enliven; repeat with the daemon as A and as C. Live-handoff contrast: the same object introduced via `desc:handoff-give` still works, and the grant tracker records the `handoff -> sturdy-ref` upgrade when the SturdyRef follows. Confinement: end-to-end, a confined guest at B granted the C-hosted value sees a daemon-local presence and can recover neither C's locator nor the swiss-num. |
 
 ## Acceptance criteria
@@ -441,10 +437,9 @@ with this design.)
 - Both wire directions round-trip string and byte swiss-nums; the URI form
   parses and formats in `@endo/ocapn`; the advisory `type` hint is
   documented as local-only.
-- A daemon mints wire-tier SturdyRefs backed by a persistent swiss-num
-  store, serves them via bootstrap `fetch`, lists grants without secrets,
-  and revokes by forgetting; minting never happens as a marshaling side
-  effect.
+- A daemon mints wire-tier SturdyRefs whose swiss-nums are formula
+  identifiers, and serves them via bootstrap `fetch` by delegating to daemon
+  formula resolution; minting never happens as a marshaling side effect.
 - A foreign SturdyRef at the facet seam resolves through the closely-held
   OCapN capability to an `ocapn-sturdyref` formula identifier; enlivenment
   is on demand, session loss drops presences and re-dials on next use, and
@@ -457,13 +452,10 @@ with this design.)
 
 ## Open questions
 
-- Should the daemon offer opt-in reuse of its `endo://` node key as its
-  OCapN identity, or is distinct-by-default the permanent rule? Reuse makes
-  the two worlds correlatable by key; distinct costs a second identity to
-  back up.
-- Which netlayers arm by default on the `ocapn` formula (websocket,
-  tcp-test-only stays test-only), and is arming a formulation-time choice or
-  reconfigurable? Operational; the maintainer decides at cut 4.
+- How should `@endo/captp` and slot-machine reach parity with the
+  formula-identifier swiss-num and daemon-delegated resolution model? This is
+  a follow-up design plan, to be filed before either package adopts the
+  bridge surface.
 - The enlivenment design's remaining open question (what governs the
   lifetime of an already-enlivened, worker-held presence) is narrowed but
   not resolved here: the bridge fixes the daemon-side answer (presences ride
