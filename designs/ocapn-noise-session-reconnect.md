@@ -481,7 +481,7 @@ transparently survives transport-instance changes.
 For TCP-syrups (per
 [ocapn-tcp-syrups-framing](ocapn-tcp-syrups-framing.md)) the framer
 operates per-transport-instance: each new TCP connection mounts a
-fresh `makeSyrupsReader` / `makeSyrupsWriter` pair. The session-level
+fresh `makeSyrupReader` / `makeSyrupWriter` pair. The session-level
 queue of outbound operations bridges across the framer instances.
 
 ## Diagrams
