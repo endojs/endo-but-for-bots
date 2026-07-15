@@ -59,7 +59,8 @@ export type PassStyle =
   | ContainerStyle
   | 'remotable'
   | 'error'
-  | 'promise';
+  | 'promise'
+  | 'sturdyref';
 
 export type PassStyleMarker = 'tagged' | 'remotable';
 
@@ -140,6 +141,7 @@ export type PassStyleOf = {
   (p: Promise<any>): 'promise';
   (p: Error): 'error';
   (p: CopyTagged): 'tagged';
+  (p: SturdyRef): 'sturdyref';
   (p: readonly any[]): 'copyArray';
   (p: Iterable<any>): 'remotable';
   (p: Iterator<any, any, undefined>): 'remotable';
@@ -234,6 +236,42 @@ export type CopyTagged<
   Tag extends string = string,
   Payload extends Passable = any,
 > = PassStyled<'tagged', Tag> & { payload: Payload };
+
+/**
+ * The parsed OCapN locator a SturdyRef addresses: a peer designator, a
+ * transport/network, and optional hints. `@endo/pass-style` only knows this
+ * parsed shape (a deep-frozen `copyRecord`); the on-wire serialization of the
+ * locator is owned by `@endo/ocapn`. This is a structural narrowing of
+ * `@endo/ocapn`'s `OcapnLocation`, re-declared here so non-OCapN marshaling
+ * layers can name the type without taking a runtime dependency on
+ * `@endo/ocapn`.
+ */
+export type SturdyRefLocation = {
+  type?: string;
+  designator: string;
+  transport?: string;
+  network?: string;
+  hints: false | Record<string, any>;
+};
+
+/**
+ * A SturdyRef is a first-class, pass-by-copy `@endo/pass-style` category that
+ * addresses a capability. `passStyleOf` returns `'sturdyref'`. It carries a
+ * readable `location` (the parsed OCapN locator) and an optional advisory
+ * `type` hint; the secret (swiss number) it needs to re-acquire the live
+ * capability is **never** a property — it is held off-band by the CapTP
+ * session manager (`@endo/ocapn`) keyed by the SturdyRef's identity.
+ *
+ * `@endo/pass-style` defines this shape and recognises/validates it, but does
+ * **not** construct sturdyrefs: construction is the CapTP session manager's
+ * role. There is therefore no maker exported here.
+ */
+export type SturdyRef = {
+  [PASS_STYLE]: 'sturdyref';
+  [Symbol.toStringTag]: 'SturdyRef';
+  readonly location: SturdyRefLocation;
+  readonly type?: string;
+};
 
 /**
  * This is an interface specification.
