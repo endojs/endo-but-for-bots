@@ -17,7 +17,8 @@
   },
   "dependencies": {
     "@endo/errors": "workspace:^",
-    "@endo/harden": "workspace:^"
+    "@endo/harden": "workspace:^",
+    "@endo/eventual-send": "workspace:^"
   },
   "devDependencies": {
     "@endo/ses-ava": "workspace:^",
@@ -35,5 +36,17 @@
     "lockdown": "../../ava-endo-lockdown.config.mjs",
     "unsafe": "../../ava-endo-lockdown-unsafe.config.mjs",
     "endo": "../../ava-endo-shims-only.config.mjs"
+  },
+  "author": "Endo contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/cbor"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
