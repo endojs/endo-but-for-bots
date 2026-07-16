@@ -27,6 +27,7 @@ import path from 'path';
 import { E } from '@endo/far';
 import { makePromiseKit } from '@endo/promise-kit';
 import { start, stop, purge, makeEndoClient } from '../../index.js';
+import { parseLocator } from '../../src/locator.js';
 
 const dirname = url.fileURLToPath(new URL('../..', import.meta.url)).toString();
 
@@ -104,7 +105,7 @@ const main = async () => {
     log('A: invitation locator =');
     log(`   ${invitationLocator}`);
 
-    const hints = new URL(invitationLocator).searchParams.getAll('at');
+    const { hints } = parseLocator(invitationLocator);
     log(`A: invitation advertises ${hints.length} connection hint(s):`);
     for (const hint of hints) {
       log(`   ${hint}`);

@@ -7,7 +7,7 @@ import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
 import { start, stop, restart, purge, makeEndoClient } from '../index.js';
 import { parseId } from '../src/formula-identifier.js';
-import { idFromLocator } from '../src/locator.js';
+import { idFromLocator, parseLocator } from '../src/locator.js';
 import { makeDaemonDatabase } from '../src/manager-database-node.js';
 
 /**
@@ -313,9 +313,9 @@ export const runMultiplayerSuite = ({ test, network }) => {
       // `@nets/<key>` network. This is the routing contract the
       // invite/accept path depends on: `getPeerInfo` aggregates the
       // installed networks' addresses, and the invitation embeds them.
-      const hintProtocols = new URL(invitationLocator).searchParams
-        .getAll('at')
-        .map(address => new URL(address).protocol.replace(/:$/, ''));
+      const hintProtocols = parseLocator(invitationLocator).hints.map(address =>
+        new URL(address).protocol.replace(/:$/, ''),
+      );
       t.true(
         hintProtocols.includes(network.expectedHintProtocol),
         `invitation advertises ${network.expectedHintProtocol}; got ${JSON.stringify(hintProtocols)}`,
