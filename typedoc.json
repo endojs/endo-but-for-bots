@@ -51,5 +51,8 @@
   "useTsLinkResolution": true,
   "tsconfig": "./tsconfig.json",
   "out": "api-docs",
-  "includeVersion": true
+  "includeVersion": true,
+  "tscOptions": {
+    "skipLibCheck": true
+  }
 }
