@@ -1,21 +1,25 @@
 # Live model eval transcript index
 
-- **publication:** garden transcript contract verification
+- **publication:** garden transcript contract verification v2
 - **channel:** live-eval-transcripts
 - **path layout:** 2
 - **suite(s):** agentry-git-code-mode
 - **source SHA(s):** 5f6455e4c5cf9dfc9b13b12aecc20bf89e0e8e58
-- **run id(s):** 20260716T133208Z-garden-3061326-google-gemini-3.5-flash.WazFTr
+- **run id(s):** 20260716T133126Z-garden-3036102-google-gemini-2.5-flash-lite.YQ29MK
 
 ## Newly published
 
-- `5f6455e4c5cf+20260716T133208Z-garden-3061326-google-gemini-3.5-flash.WazFTr/conflict-rebase/google-gemini-3-5-flash-results.md` (conflict-rebase / google/gemini-3.5-flash)
-- `5f6455e4c5cf+20260716T133208Z-garden-3061326-google-gemini-3.5-flash.WazFTr/conflict-rebase/google-gemini-3-5-flash-full.md` (full observable transcript)
-- `5f6455e4c5cf+20260716T133208Z-garden-3061326-google-gemini-3.5-flash.WazFTr/stage-and-commit/google-gemini-3-5-flash-results.md` (stage-and-commit / google/gemini-3.5-flash)
-- `5f6455e4c5cf+20260716T133208Z-garden-3061326-google-gemini-3.5-flash.WazFTr/stage-and-commit/google-gemini-3-5-flash-full.md` (full observable transcript)
+- `5f6455e4c5cf+20260716T133126Z-garden-3036102-google-gemini-2.5-flash-lite.YQ29MK/conflict-rebase/google-gemini-2-5-flash-lite-results.md` (conflict-rebase / google/gemini-2.5-flash-lite)
+- `5f6455e4c5cf+20260716T133126Z-garden-3036102-google-gemini-2.5-flash-lite.YQ29MK/conflict-rebase/google-gemini-2-5-flash-lite-full.md` (full observable transcript)
+- `5f6455e4c5cf+20260716T133126Z-garden-3036102-google-gemini-2.5-flash-lite.YQ29MK/stage-and-commit/google-gemini-2-5-flash-lite-results.md` (stage-and-commit / google/gemini-2.5-flash-lite)
+- `5f6455e4c5cf+20260716T133126Z-garden-3036102-google-gemini-2.5-flash-lite.YQ29MK/stage-and-commit/google-gemini-2-5-flash-lite-full.md` (full observable transcript)
 
 ## All transcript files
 
+- `5f6455e4c5cf+20260716T133126Z-garden-3036102-google-gemini-2.5-flash-lite.YQ29MK/conflict-rebase/google-gemini-2-5-flash-lite-full.md`
+- `5f6455e4c5cf+20260716T133126Z-garden-3036102-google-gemini-2.5-flash-lite.YQ29MK/conflict-rebase/google-gemini-2-5-flash-lite-results.md`
+- `5f6455e4c5cf+20260716T133126Z-garden-3036102-google-gemini-2.5-flash-lite.YQ29MK/stage-and-commit/google-gemini-2-5-flash-lite-full.md`
+- `5f6455e4c5cf+20260716T133126Z-garden-3036102-google-gemini-2.5-flash-lite.YQ29MK/stage-and-commit/google-gemini-2-5-flash-lite-results.md`
 - `5f6455e4c5cf+20260716T133208Z-garden-3061326-google-gemini-3.5-flash.WazFTr/conflict-rebase/google-gemini-3-5-flash-full.md`
 - `5f6455e4c5cf+20260716T133208Z-garden-3061326-google-gemini-3.5-flash.WazFTr/conflict-rebase/google-gemini-3-5-flash-results.md`
 - `5f6455e4c5cf+20260716T133208Z-garden-3061326-google-gemini-3.5-flash.WazFTr/stage-and-commit/google-gemini-3-5-flash-full.md`
