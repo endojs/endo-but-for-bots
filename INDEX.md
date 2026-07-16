@@ -1,6 +1,5 @@
 # Live model eval transcripts
 
-- **publication:** PR #526 rerun at source SHA 5f6455e4c5cf9dfc9b13b12aecc20bf89e0e8e58
 - **suite(s):** agentry-git-code-mode
 - **source SHA(s):** 5f6455e4c5cf9dfc9b13b12aecc20bf89e0e8e58
 - **run id(s):** 20260716T132221Z-garden-2703457-tencent-hy3-free.7xhmQr, 20260716T132336Z-garden-2744018-nvidia-nemotron-3-ultra-550b-a55b-free.rEsbs8, 20260716T132744Z-garden-2896470-anthropic-claude-sonnet-5.zmD68S, 20260716T132849Z-garden-2936869-deepseek-deepseek-v4-flash.33BEO5, 20260716T133126Z-garden-3036102-google-gemini-2.5-flash-lite.YQ29MK, 20260716T133208Z-garden-3061326-google-gemini-3.5-flash.WazFTr
