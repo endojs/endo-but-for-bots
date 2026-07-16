@@ -60,7 +60,7 @@ export type PassStyle =
   | 'remotable'
   | 'error'
   | 'promise'
-  | 'sturdyref';
+  | 'sturdyRef';
 
 export type PassStyleMarker = 'tagged' | 'remotable';
 
@@ -141,7 +141,7 @@ export type PassStyleOf = {
   (p: Promise<any>): 'promise';
   (p: Error): 'error';
   (p: CopyTagged): 'tagged';
-  (p: SturdyRef): 'sturdyref';
+  (p: SturdyRef): 'sturdyRef';
   (p: readonly any[]): 'copyArray';
   (p: Iterable<any>): 'remotable';
   (p: Iterator<any, any, undefined>): 'remotable';
@@ -256,7 +256,7 @@ export type SturdyRefLocation = {
 
 /**
  * A SturdyRef is a first-class, pass-by-copy `@endo/pass-style` category that
- * addresses a capability. `passStyleOf` returns `'sturdyref'`. It carries a
+ * addresses a capability. `passStyleOf` returns `'sturdyRef'`. It carries a
  * readable `location` (the parsed OCapN locator) and an optional advisory
  * `type` hint; the secret (swiss number) it needs to re-acquire the live
  * capability is **never** a property — it is held off-band by the CapTP
@@ -267,7 +267,7 @@ export type SturdyRefLocation = {
  * role. There is therefore no maker exported here.
  */
 export type SturdyRef = {
-  [PASS_STYLE]: 'sturdyref';
+  [PASS_STYLE]: 'sturdyRef';
   [Symbol.toStringTag]: 'SturdyRef';
   readonly location: SturdyRefLocation;
   readonly type?: string;
