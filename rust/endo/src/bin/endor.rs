@@ -14,7 +14,11 @@
 //!
 //!   endor worker  [-e xs]       # supervised worker child
 //!   endor run     [-e xs] <archive.zip>
-//!                               # standalone archive runner
+//!                               # standalone archive runner (ZIP file)
+//!   endor run     [-e xs] <entry.js>
+//!                               # standalone runner for a single
+//!                               # entry-point source (no deps;
+//!                               # Phase 4 of `endor-run-expanded`).
 //!
 //! The manager is hosted in-process by `endor daemon` on a
 //! dedicated `std::thread`; there is no separate `manager`
@@ -31,6 +35,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use endo::error::EndoError;
+use endo::run_input::{classify_run_input, RunInput};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -78,13 +83,36 @@ fn main() -> ExitCode {
                         // Run from CAS root hash.
                         result_to_exit("endor", cmd_run_from_cas(&hash))
                     } else if let Some(ref p) = path {
-                        if no_cas {
-                            xsnap_result_to_exit(xsnap::run_xs_archive(p))
-                        } else {
-                            result_to_exit("endor", cmd_run_with_cas(p))
+                        match classify_run_input(p) {
+                            RunInput::ZipArchive => {
+                                if no_cas {
+                                    xsnap_result_to_exit(xsnap::run_xs_archive(p))
+                                } else {
+                                    result_to_exit("endor", cmd_run_with_cas(p))
+                                }
+                            }
+                            RunInput::EntryPoint => {
+                                if no_cas {
+                                    eprintln!(
+                                        "endor run: --no-cas is incompatible with an \
+                                         entry-point input; entry-point runs always use \
+                                         the CAS"
+                                    );
+                                    ExitCode::from(2)
+                                } else {
+                                    result_to_exit("endor", cmd_run_entry_point_with_cas(p))
+                                }
+                            }
+                            RunInput::Missing => {
+                                eprintln!("endor run: input not found: {}", p.display());
+                                ExitCode::from(1)
+                            }
                         }
                     } else {
-                        eprintln!("usage: endor run [-e xs] [--cas <hash>] [--no-cas] <archive.zip>");
+                        eprintln!(
+                            "usage: endor run [-e xs] [--cas <hash>] [--no-cas] \
+                             <archive.zip | entry.js>"
+                        );
                         ExitCode::from(2)
                     }
                 }
@@ -124,7 +152,12 @@ fn print_help() {
     eprintln!();
     eprintln!("Child-facing commands (XS engine by default):");
     eprintln!("  worker  [-e xs]                Run a supervised worker child");
-    eprintln!("  run     [-e xs] <archive.zip>  Run a compartment-map archive");
+    eprintln!("  run     [-e xs] <archive.zip>  Run a compartment-map ZIP archive");
+    eprintln!("  run     [-e xs] <entry>        Run a single entry-point source");
+    eprintln!("                                 (no deps; .js, .mjs, .cjs, .json)");
+    eprintln!("                                 Files without an extension that begin");
+    eprintln!("                                 with the ZIP magic (PK\\x03\\x04) are");
+    eprintln!("                                 also recognised as archives.");
     eprintln!();
     eprintln!("Maintenance:");
     eprintln!("  gc                             Garbage-collect the CAS");
@@ -145,7 +178,9 @@ fn print_subcommand_help(sub: &str) {
             eprintln!("Environment:");
             eprintln!("  ENDO_WORKER_THREADS   Tokio worker thread count (default: 4)");
             eprintln!("  ENDO_MANAGER_NODE     If set, use Node.js manager child");
-            eprintln!("  ENDO_DAEMON_PATH      Path to Node.js daemon script (with ENDO_MANAGER_NODE)");
+            eprintln!(
+                "  ENDO_DAEMON_PATH      Path to Node.js daemon script (with ENDO_MANAGER_NODE)"
+            );
             eprintln!("  ENDO_DEFAULT_PLATFORM Default worker platform: separate, shared, node");
             eprintln!("  ENDO_TRACE            Enable trace logging");
         }
@@ -189,15 +224,31 @@ fn print_subcommand_help(sub: &str) {
             eprintln!("  -e, --engine <engine>  Engine to use (default: xs)");
         }
         "run" => {
-            eprintln!("Usage: endor run [-e xs] <archive.zip>");
+            eprintln!("Usage: endor run [-e xs] [--cas <hash>] [--no-cas] <path>");
             eprintln!();
             eprintln!("Run a compartment-map archive standalone.");
             eprintln!();
-            eprintln!("Executes the given .zip archive in an XS machine without a");
-            eprintln!("running daemon. Useful for testing and one-off execution.");
+            eprintln!("<path> is one of:");
+            eprintln!("  archive.zip   A compartment-map ZIP file (Phase 2).");
+            eprintln!("  entry.js      A single source file (Phase 4, no");
+            eprintln!("                dependencies). Synthesises a one-compartment");
+            eprintln!("                archive around the file and ingests it into");
+            eprintln!("                the CAS. Recognised extensions: .js, .mjs,");
+            eprintln!("                .cjs, .json.");
+            eprintln!();
+            eprintln!("Both forms ingest the contents into the CAS and execute the");
+            eprintln!("loaded archive in an XS machine, printing the root hash to");
+            eprintln!("stderr so a later run can re-use it via --cas <hash>.");
             eprintln!();
             eprintln!("Options:");
             eprintln!("  -e, --engine <engine>  Engine to use (default: xs)");
+            eprintln!("  --cas <hash>           Run from a previously ingested CAS root hash.");
+            eprintln!("  --no-cas               Skip CAS ingestion; legacy in-memory path.");
+            eprintln!("                         ZIP inputs only. Entry-point inputs always");
+            eprintln!("                         use the CAS (the synthesised compartment-map");
+            eprintln!("                         needs a content-addressed home); passing");
+            eprintln!("                         --no-cas with an entry-point input exits with");
+            eprintln!("                         code 2 and prints a diagnostic.");
         }
         "gc" => {
             eprintln!("Usage: endor gc");
@@ -280,8 +331,10 @@ fn parse_positional_path(args: &[String]) -> Option<PathBuf> {
             i += 2;
             continue;
         }
-        if a.starts_with("--engine=") || a.starts_with("-e=")
-            || a.starts_with("--cas=") || a.starts_with("--cas-dir=")
+        if a.starts_with("--engine=")
+            || a.starts_with("-e=")
+            || a.starts_with("--cas=")
+            || a.starts_with("--cas-dir=")
         {
             i += 1;
             continue;
@@ -399,6 +452,34 @@ fn cmd_run_with_cas(archive_path: &std::path::Path) -> Result<(), EndoError> {
     Ok(())
 }
 
+fn cmd_run_entry_point_with_cas(entry_path: &std::path::Path) -> Result<(), EndoError> {
+    // Phase 4 (no-dependencies) entry-point form. The synthetic
+    // single-compartment archive is ingested into a temporary
+    // CAS, the root hash is printed to stderr so the user can
+    // re-run via `endor run --cas <hash>`, and execution proceeds
+    // through the shared `run_xs_archive_loaded` path used by
+    // both ZIP and (on PR #278) directory forms.
+    let cas_dir = std::env::temp_dir().join("endor-cas");
+    let cas = endo::cas::ContentStore::open(&cas_dir)
+        .map_err(|e| EndoError::Config(format!("CAS open: {e}")))?;
+
+    // Match `cmd_run_with_cas`'s wrapping: the inner error from
+    // `ingest_entry_point` already names the offending path
+    // (`unsupported entry-point extension: /tmp/foo.txt`, `not a
+    // regular file: /tmp/bar`), so the outer prefix only names
+    // the operation. Doubling the path produced the awkward
+    // `CAS ingest from /tmp/foo.txt: unsupported entry-point
+    // extension: /tmp/foo.txt` users saw before the fix.
+    let ingested = endo::cas_archive::ingest_entry_point(&cas, entry_path)
+        .map_err(|e| EndoError::Config(format!("CAS ingest: {e}")))?;
+
+    eprintln!("endor[run]: archive root {}", ingested.root_hash);
+
+    xsnap::run_xs_archive_loaded(&ingested.archive)
+        .map_err(|e| EndoError::Config(format!("run: {e}")))?;
+    Ok(())
+}
+
 fn cmd_run_from_cas(root_hash: &str) -> Result<(), EndoError> {
     let cas_dir = std::env::temp_dir().join("endor-cas");
     let cas = endo::cas::ContentStore::open(&cas_dir)
@@ -407,8 +488,7 @@ fn cmd_run_from_cas(root_hash: &str) -> Result<(), EndoError> {
     let archive = endo::cas_archive::load_archive_from_cas(&cas, root_hash)
         .map_err(|e| EndoError::Config(format!("CAS load: {e}")))?;
 
-    xsnap::run_xs_archive_loaded(&archive)
-        .map_err(|e| EndoError::Config(format!("run: {e}")))?;
+    xsnap::run_xs_archive_loaded(&archive).map_err(|e| EndoError::Config(format!("run: {e}")))?;
     Ok(())
 }
 
