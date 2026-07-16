@@ -7,6 +7,9 @@
 // runs anywhere — the live-model counterpart (same scenario, same scorer) runs
 // only on a host where the `ENDO_LLM_*` / `LAL_*` credentials are present.
 
+import fs from 'node:fs';
+import path from 'node:path';
+
 import test from '@endo/ses-ava/prepare-endo.js';
 import {
   registerFauxProvider,
@@ -194,6 +197,12 @@ test('run metrics recorder sums assistant usage and tool errors', t => {
 
 test('outcome assertion passes when the scripted run reaches the target end-state', async t => {
   const scenario = makeStageAndCommitScenario();
+  t.deepEqual(scenario.measurementPoints, [
+    'target-file-in-commit',
+    'requested-commit-message-used',
+    'target-content-committed',
+    'working-tree-clean',
+  ]);
   const { workspace, git } = await provisionStageAndCommitRepo(t, {
     path: scenario.expected.path,
     content: scenario.expected.content,
@@ -220,6 +229,7 @@ test('outcome assertion passes when the scripted run reaches the target end-stat
     outcome.pass,
     `expected pass; checks: ${JSON.stringify(outcome.checks, null, 2)}`,
   );
+  t.is(outcome.score, 1);
   t.deepEqual(
     outcome.checks.map(c => [c.name, c.ok]),
     [
@@ -230,6 +240,16 @@ test('outcome assertion passes when the scripted run reaches the target end-stat
       ['worktree-clean', true],
     ],
   );
+  t.deepEqual(
+    outcome.measurementPoints.map(c => [c.name, c.hit]),
+    [
+      ['target-file-in-commit', true],
+      ['requested-commit-message-used', true],
+      ['target-content-committed', true],
+      ['working-tree-clean', true],
+    ],
+  );
+  t.is(outcome.divergence, null);
   t.is(metrics.turns, 2);
   t.is(metrics.assistantMessages, 2);
   t.is(metrics.toolExecutions, 1);
@@ -249,7 +269,7 @@ test('outcome assertion passes when the scripted run reaches the target end-stat
   t.true(events.includes('agent_end'));
 });
 
-test('outcome assertion fails the commit-message check when the wrong message is used', async t => {
+test('partial outcome score preserves the pass gate when one check fails', async t => {
   const scenario = makeStageAndCommitScenario();
   const { workspace, git } = await provisionStageAndCommitRepo(t, {
     path: scenario.expected.path,
@@ -270,6 +290,10 @@ test('outcome assertion fails the commit-message check when the wrong message is
   });
 
   t.false(outcome.pass);
+  t.is(outcome.score, 3 / 4);
+  t.true(outcome.score > 0);
+  t.true(outcome.score < 1);
+  t.is(outcome.divergence, null);
   const byName = Object.fromEntries(outcome.checks.map(c => [c.name, c.ok]));
   // The file is tracked with the right content, but the message is wrong, so
   // only the message check fails — outcome assertion is precise about why.
@@ -277,6 +301,41 @@ test('outcome assertion fails the commit-message check when the wrong message is
   t.true(byName['file-tracked-at-head']);
   t.true(byName['file-content']);
   t.true(byName['worktree-clean']);
+});
+
+test('outcome assertion flags a passing gate with an incomplete score', async t => {
+  const scenario = makeStageAndCommitScenario();
+  const repo = await provisionStageAndCommitRepo(t, {
+    path: scenario.expected.path,
+    content: scenario.expected.content,
+  });
+  const model = executeOnceModel(
+    t,
+    stageAndCommitSource(scenario.expected.path, scenario.expected.message),
+  );
+
+  const completed = await runGitScenario({
+    model,
+    workspace: repo.workspace,
+    git: repo.git,
+    scenario,
+    readText,
+  });
+  t.true(completed.outcome.pass);
+
+  await fs.promises.writeFile(
+    path.join(repo.repoRoot, 'unrelated-progress.txt'),
+    'unrelated pending work\n',
+  );
+  const outcome = await scenario.assertOutcome({
+    git: repo.git,
+    workspace: repo.workspace,
+    readText,
+  });
+
+  t.true(outcome.pass);
+  t.is(outcome.score, 3 / 4);
+  t.is(outcome.divergence, 'pass-with-incomplete-score');
 });
 
 test('outcome assertion fails the file-content check when the wrong content is committed', async t => {
@@ -317,6 +376,7 @@ test('outcome assertion fails the file-content check when the wrong content is c
   t.true(byName['file-tracked-at-head']);
   t.true(byName['commit-message']);
   t.true(byName['worktree-clean']);
+  t.is(outcome.score, 3 / 4);
 });
 
 test('outcome assertion fails when the agent never commits the file', async t => {
@@ -348,4 +408,5 @@ test('outcome assertion fails when the agent never commits the file', async t =>
   // it is not the scenario's commit, so the message check fails.
   t.true(byName['commit-exists']);
   t.false(byName['commit-message']);
+  t.is(outcome.score, 0);
 });

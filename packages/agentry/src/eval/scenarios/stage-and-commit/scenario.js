@@ -11,6 +11,12 @@ const referenceSourcePath =
   'packages/agentry/src/eval/scenarios/stage-and-commit/reference.js';
 /** Named export in {@link referenceSourcePath} holding the reference solution. */
 const referenceSourceExport = 'stageAndCommitSource';
+const measurementPoints = harden([
+  'target-file-in-commit',
+  'requested-commit-message-used',
+  'target-content-committed',
+  'working-tree-clean',
+]);
 
 /**
  * The minimal-success git code-mode scenario: an untracked file already exists
@@ -40,6 +46,7 @@ export const makeStageAndCommitScenario = ({
     name: 'stage-and-commit',
     expected,
     prompt: `The file ${path} already exists in the working tree but git is not yet tracking it. Stage ${path} and commit it. Use exactly this commit message: ${message}`,
+    measurementPoints,
     referenceSourcePath,
     referenceSourceExport,
     assertOutcome: ({ git, readText }) =>

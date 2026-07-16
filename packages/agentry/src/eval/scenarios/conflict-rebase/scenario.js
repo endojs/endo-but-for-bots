@@ -19,6 +19,12 @@ const referenceSourcePath =
   'packages/agentry/src/eval/scenarios/conflict-rebase/reference.js';
 /** Named export in {@link referenceSourcePath} holding the reference solution. */
 const referenceSourceExport = 'conflictRebaseSource';
+const measurementPoints = harden([
+  'rebase-engaged-onto-integration',
+  'integration-wording-kept-with-feature-sentence',
+  'both-notes-preserved',
+  'rebase-completed-with-clean-working-tree',
+]);
 
 /**
  * A git code-mode scenario for a rebase that must stop for a content conflict,
@@ -53,6 +59,7 @@ export const makeConflictRebaseScenario = ({
     name: 'conflict-rebase',
     expected,
     prompt: conflictRebasePrompt,
+    measurementPoints,
     referenceSourcePath,
     referenceSourceExport,
     assertOutcome: ({ git, readText }) =>

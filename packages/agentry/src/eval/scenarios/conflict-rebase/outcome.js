@@ -1,12 +1,18 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { OutcomeReport, ReadText } from '../../types.js' */
+/** @import { OutcomeCheck, OutcomeReport, ReadText } from '../../types.js' */
 /** @import { GitConflictRebaseTarget } from './types.js' */
 
 import { E } from '@endo/eventual-send';
 
-import { branchLog, check, readTrackedFileAt } from '../../outcome-kit.js';
+import {
+  branchLog,
+  check,
+  makeOutcomeReport,
+  measurementPoint,
+  readTrackedFileAt,
+} from '../../outcome-kit.js';
 
 /**
  * Check whether replayed commit summaries match their target sequence exactly.
@@ -37,7 +43,7 @@ export const assertGitConflictRebaseOutcome = async ({
   expected,
 }) => {
   const gitRef = /** @type {any} */ (git);
-  /** @type {Array<{ name: string, ok: boolean, detail: string }>} */
+  /** @type {OutcomeCheck[]} */
   const checks = [];
 
   const featureLog = await branchLog({ git, ref: expected.featureBranch });
@@ -216,7 +222,39 @@ export const assertGitConflictRebaseOutcome = async ({
           )}; a rebase in progress detaches HEAD`,
     ),
   );
-  const pass = checks.every(entry => entry.ok);
-  return harden({ pass, checks });
+  const notesPreserved = noteTexts.every(
+    (text, index) => text === expected.notes[index].content,
+  );
+  const workingTreeClean = rows.length === 0;
+  return makeOutcomeReport(checks, [
+    measurementPoint(
+      'rebase-engaged-onto-integration',
+      integrationIsAncestor,
+      integrationIsAncestor
+        ? `${expected.integrationBranch} is in the feature history`
+        : `${expected.integrationBranch} is not in the feature history`,
+    ),
+    measurementPoint(
+      'integration-wording-kept-with-feature-sentence',
+      appText === expected.appText,
+      appText === expected.appText
+        ? 'app.txt keeps the integration wording followed by the feature sentence'
+        : 'app.txt does not contain the requested combined wording',
+    ),
+    measurementPoint(
+      'both-notes-preserved',
+      notesPreserved,
+      notesPreserved
+        ? 'both feature and integration notes are present with their expected content'
+        : 'one or more feature or integration notes are missing or changed',
+    ),
+    measurementPoint(
+      'rebase-completed-with-clean-working-tree',
+      integrationIsAncestor && workingTreeClean && onFeature,
+      integrationIsAncestor && workingTreeClean && onFeature
+        ? `rebase completed on ${expected.featureBranch} with a clean working tree`
+        : `rebase is not complete on ${expected.featureBranch} with a clean working tree`,
+    ),
+  ]);
 };
 harden(assertGitConflictRebaseOutcome);

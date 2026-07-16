@@ -53,6 +53,30 @@ The `safeText` matcher is not production-grade redaction, so these artifacts mus
 Metrics are recorded for comparison and reporting only.
 The scenario's outcome assertion remains the only pass/fail gate.
 
+## Measurement-point score
+
+Each scenario declares a flat list of task-decomposed measurement points.
+Each point is a predicate over repository state and reports a name, whether it was hit, and a detail string.
+Points have no ordering, tiers, prerequisites, dependency graph, or weights.
+The score is the number of hit points divided by the scenario's total number of points.
+
+Measurement points are separate from the named outcome checks.
+The checks remain the sole gate, with `pass` true only when every existing outcome check is true.
+A model can make real progress without hitting an expected measurement point, and the diagnostic score does not change the gate.
+Prompts remain free-form and points never inspect prompt text or transcript events.
+Forensic repository evidence may be used when a progress marker is not visible in the final tree, such as a reflog entry showing that a rebase was attempted.
+
+The report's `divergence` field is `null` when the gate and score agree with the calibration expectation.
+It is `pass-with-incomplete-score` when `pass` is true but `score` is below 1, or `fail-with-complete-score` when `pass` is false but `score` is 1.
+The divergence is a defect signal for the environment, prompt, or measurement-point declaration.
+It is not a model-quality signal.
+
+The score and divergence are part of `OutcomeReport`, so they are returned by `runGitScenario` and included automatically in opt-in `results.jsonl` artifacts alongside the checks and pass gate.
+They do not belong in `RunMetrics`, which remain provider and execution diagnostics.
+
+Scores are meaningful only within one scenario across models or runs.
+Do not compare scores across different scenarios, and do not treat them as a cross-scenario leaderboard or aggregation contract.
+
 ## Layout
 
 The harness splits along the seam between a **shared harness** (the runner, the
@@ -79,7 +103,7 @@ Shared harness (this directory's root):
   `undefined` when no credentials are present.
 - `types.js` — shared contracts such as `GitScenario`, `ReadText`, outcome
   reports, and runner options.
-- `outcome-kit.js` — the shared outcome primitives: `check()`, the `OutcomeReport`
+- `outcome-kit.js` — the shared outcome primitives: `check()`, `measurementPoint()`, the `OutcomeReport`
   shape, and the small shared readers (`readTrackedFileAt` reads a tracked file
   at a ref through `filesystemAt`; `branchLog` resolves a branch's commit list).
   Per-eval scorers build on these so each stays short. Cap-based and portable;

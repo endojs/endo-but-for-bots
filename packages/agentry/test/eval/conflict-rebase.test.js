@@ -104,6 +104,12 @@ test('scenario retains only the declared conflict-rebase target', async t => {
   t.false('git' in scenario.expected);
   t.false('workspace' in scenario.expected);
   t.false('repoRoot' in scenario.expected);
+  t.deepEqual(scenario.measurementPoints, [
+    'rebase-engaged-onto-integration',
+    'integration-wording-kept-with-feature-sentence',
+    'both-notes-preserved',
+    'rebase-completed-with-clean-working-tree',
+  ]);
 });
 
 /**
@@ -158,6 +164,17 @@ test('outcome assertion passes when scripted run resolves and continues the reba
       ['note-present:notes/integration.md', true],
       ['worktree-clean', true],
       ['rebase-complete-on-feature-branch', true],
+    ],
+  );
+  t.is(outcome.score, 1);
+  t.is(outcome.divergence, null);
+  t.deepEqual(
+    outcome.measurementPoints.map(c => [c.name, c.hit]),
+    [
+      ['rebase-engaged-onto-integration', true],
+      ['integration-wording-kept-with-feature-sentence', true],
+      ['both-notes-preserved', true],
+      ['rebase-completed-with-clean-working-tree', true],
     ],
   );
 });
@@ -235,6 +252,9 @@ test('outcome assertion rejects an integration branch moved after a correct reba
   t.false(outcome.pass);
   const byName = Object.fromEntries(outcome.checks.map(c => [c.name, c.ok]));
   t.false(byName['integration-branch-tip']);
+  t.is(outcome.score, 1);
+  t.is(outcome.divergence, 'fail-with-complete-score');
+  t.true(outcome.measurementPoints.every(point => point.hit));
 });
 
 test('outcome assertion reports a deleted integration branch as a failed check', async t => {
@@ -309,6 +329,7 @@ test('outcome assertion fails when the run never rebases', async t => {
   t.false(byName['replayed-rewritten']);
   t.true(byName['worktree-clean']);
   t.true(byName['rebase-complete-on-feature-branch']);
+  t.is(outcome.score, 0);
 });
 
 test('outcome assertion fails when app.txt keeps the wrong resolution', async t => {
@@ -337,6 +358,7 @@ test('outcome assertion fails when app.txt keeps the wrong resolution', async t 
   t.false(byName['replayed-patches']);
   t.false(byName['feature-tree-exact']);
   t.false(byName['app-text']);
+  t.is(outcome.score, 3 / 4);
 });
 
 test('outcome assertion fails when the feature note commit is dropped', async t => {
