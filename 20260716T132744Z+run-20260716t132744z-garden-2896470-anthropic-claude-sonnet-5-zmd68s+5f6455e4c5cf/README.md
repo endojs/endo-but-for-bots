@@ -7,5 +7,5 @@
 
 ## Artifacts
 
-- [conflict-rebase / anthropic/claude-sonnet-5](./conflict-rebase/anthropic-claude-sonnet-5.md)
-- [stage-and-commit / anthropic/claude-sonnet-5](./stage-and-commit/anthropic-claude-sonnet-5.md)
+- [conflict-rebase / anthropic/claude-sonnet-5](https://github.com/endojs/endo-but-for-bots/blob/adfb005f8c1efdad03e42696fae697b193354e4d/20260716T132744Z+run-20260716t132744z-garden-2896470-anthropic-claude-sonnet-5-zmd68s+5f6455e4c5cf/conflict-rebase/anthropic-claude-sonnet-5.md)
+- [stage-and-commit / anthropic/claude-sonnet-5](https://github.com/endojs/endo-but-for-bots/blob/adfb005f8c1efdad03e42696fae697b193354e4d/20260716T132744Z+run-20260716t132744z-garden-2896470-anthropic-claude-sonnet-5-zmd68s+5f6455e4c5cf/stage-and-commit/anthropic-claude-sonnet-5.md)

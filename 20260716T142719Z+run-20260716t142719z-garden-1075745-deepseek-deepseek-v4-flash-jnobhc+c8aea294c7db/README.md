@@ -7,7 +7,7 @@
 
 ## Artifacts
 
-- [conflict-rebase / deepseek/deepseek-v4-flash](./conflict-rebase/deepseek-deepseek-v4-flash.md)
-- [conflict-rebase / unknown-model](./conflict-rebase/unknown-model.md)
-- [stage-and-commit / deepseek/deepseek-v4-flash](./stage-and-commit/deepseek-deepseek-v4-flash.md)
-- [stage-and-commit / unknown-model](./stage-and-commit/unknown-model.md)
+- [conflict-rebase / deepseek/deepseek-v4-flash](https://github.com/endojs/endo-but-for-bots/blob/adfb005f8c1efdad03e42696fae697b193354e4d/20260716T142719Z+run-20260716t142719z-garden-1075745-deepseek-deepseek-v4-flash-jnobhc+c8aea294c7db/conflict-rebase/deepseek-deepseek-v4-flash.md)
+- [conflict-rebase / unknown-model](https://github.com/endojs/endo-but-for-bots/blob/adfb005f8c1efdad03e42696fae697b193354e4d/20260716T142719Z+run-20260716t142719z-garden-1075745-deepseek-deepseek-v4-flash-jnobhc+c8aea294c7db/conflict-rebase/unknown-model.md)
+- [stage-and-commit / deepseek/deepseek-v4-flash](https://github.com/endojs/endo-but-for-bots/blob/adfb005f8c1efdad03e42696fae697b193354e4d/20260716T142719Z+run-20260716t142719z-garden-1075745-deepseek-deepseek-v4-flash-jnobhc+c8aea294c7db/stage-and-commit/deepseek-deepseek-v4-flash.md)
+- [stage-and-commit / unknown-model](https://github.com/endojs/endo-but-for-bots/blob/adfb005f8c1efdad03e42696fae697b193354e4d/20260716T142719Z+run-20260716t142719z-garden-1075745-deepseek-deepseek-v4-flash-jnobhc+c8aea294c7db/stage-and-commit/unknown-model.md)
