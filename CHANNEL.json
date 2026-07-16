@@ -1,0 +1,7 @@
+{
+  "schema": "garden.eval-transcript-channel/v1",
+  "schema_version": 1,
+  "channel": "live-eval-transcripts",
+  "branch": "orphan/eval-transcripts",
+  "path_layout_version": 2
+}
