@@ -11,23 +11,23 @@
 
 | Model | Result | Transcript |
 | --- | --- | --- |
-| anthropic/claude-sonnet-5 | passed | [transcript](./conflict-rebase/anthropic-claude-sonnet-5.md) |
-| deepseek/deepseek-v4-flash | passed | [transcript](./conflict-rebase/deepseek-deepseek-v4-flash.md) |
-| google/gemini-2.5-flash-lite | outcome failed | [transcript](./conflict-rebase/google-gemini-2-5-flash-lite.md) |
-| google/gemini-3.5-flash | provider error | [transcript](./conflict-rebase/google-gemini-3-5-flash.md) |
-| nvidia/nemotron-3-ultra-550b-a55b:free | outcome failed | [transcript](./conflict-rebase/nvidia-nemotron-3-ultra-550b-a55b-free.md) |
-| tencent/hy3:free | passed | [transcript](./conflict-rebase/tencent-hy3-free.md) |
+| anthropic/claude-sonnet-5 | passed | [transcript](https://github.com/endojs/endo-but-for-bots/blob/eb3d6736fe3bb15fc9df44ea4b879e875facccb1/20260716T142621Z+live-eval-20260716t1426z+c8aea294c7db/conflict-rebase/anthropic-claude-sonnet-5.md) |
+| deepseek/deepseek-v4-flash | passed | [transcript](https://github.com/endojs/endo-but-for-bots/blob/eb3d6736fe3bb15fc9df44ea4b879e875facccb1/20260716T142621Z+live-eval-20260716t1426z+c8aea294c7db/conflict-rebase/deepseek-deepseek-v4-flash.md) |
+| google/gemini-2.5-flash-lite | outcome failed | [transcript](https://github.com/endojs/endo-but-for-bots/blob/eb3d6736fe3bb15fc9df44ea4b879e875facccb1/20260716T142621Z+live-eval-20260716t1426z+c8aea294c7db/conflict-rebase/google-gemini-2-5-flash-lite.md) |
+| google/gemini-3.5-flash | provider error | [transcript](https://github.com/endojs/endo-but-for-bots/blob/eb3d6736fe3bb15fc9df44ea4b879e875facccb1/20260716T142621Z+live-eval-20260716t1426z+c8aea294c7db/conflict-rebase/google-gemini-3-5-flash.md) |
+| nvidia/nemotron-3-ultra-550b-a55b:free | outcome failed | [transcript](https://github.com/endojs/endo-but-for-bots/blob/eb3d6736fe3bb15fc9df44ea4b879e875facccb1/20260716T142621Z+live-eval-20260716t1426z+c8aea294c7db/conflict-rebase/nvidia-nemotron-3-ultra-550b-a55b-free.md) |
+| tencent/hy3:free | passed | [transcript](https://github.com/endojs/endo-but-for-bots/blob/eb3d6736fe3bb15fc9df44ea4b879e875facccb1/20260716T142621Z+live-eval-20260716t1426z+c8aea294c7db/conflict-rebase/tencent-hy3-free.md) |
 
 ### stage-and-commit
 
 | Model | Result | Transcript |
 | --- | --- | --- |
-| anthropic/claude-sonnet-5 | passed | [transcript](./stage-and-commit/anthropic-claude-sonnet-5.md) |
-| deepseek/deepseek-v4-flash | passed | [transcript](./stage-and-commit/deepseek-deepseek-v4-flash.md) |
-| google/gemini-2.5-flash-lite | timed out | [transcript](./stage-and-commit/google-gemini-2-5-flash-lite.md) |
-| google/gemini-3.5-flash | provider error | [transcript](./stage-and-commit/google-gemini-3-5-flash.md) |
-| nvidia/nemotron-3-ultra-550b-a55b:free | outcome failed | [transcript](./stage-and-commit/nvidia-nemotron-3-ultra-550b-a55b-free.md) |
-| tencent/hy3:free | passed | [transcript](./stage-and-commit/tencent-hy3-free.md) |
+| anthropic/claude-sonnet-5 | passed | [transcript](https://github.com/endojs/endo-but-for-bots/blob/eb3d6736fe3bb15fc9df44ea4b879e875facccb1/20260716T142621Z+live-eval-20260716t1426z+c8aea294c7db/stage-and-commit/anthropic-claude-sonnet-5.md) |
+| deepseek/deepseek-v4-flash | passed | [transcript](https://github.com/endojs/endo-but-for-bots/blob/eb3d6736fe3bb15fc9df44ea4b879e875facccb1/20260716T142621Z+live-eval-20260716t1426z+c8aea294c7db/stage-and-commit/deepseek-deepseek-v4-flash.md) |
+| google/gemini-2.5-flash-lite | timed out | [transcript](https://github.com/endojs/endo-but-for-bots/blob/eb3d6736fe3bb15fc9df44ea4b879e875facccb1/20260716T142621Z+live-eval-20260716t1426z+c8aea294c7db/stage-and-commit/google-gemini-2-5-flash-lite.md) |
+| google/gemini-3.5-flash | provider error | [transcript](https://github.com/endojs/endo-but-for-bots/blob/eb3d6736fe3bb15fc9df44ea4b879e875facccb1/20260716T142621Z+live-eval-20260716t1426z+c8aea294c7db/stage-and-commit/google-gemini-3-5-flash.md) |
+| nvidia/nemotron-3-ultra-550b-a55b:free | outcome failed | [transcript](https://github.com/endojs/endo-but-for-bots/blob/eb3d6736fe3bb15fc9df44ea4b879e875facccb1/20260716T142621Z+live-eval-20260716t1426z+c8aea294c7db/stage-and-commit/nvidia-nemotron-3-ultra-550b-a55b-free.md) |
+| tencent/hy3:free | passed | [transcript](https://github.com/endojs/endo-but-for-bots/blob/eb3d6736fe3bb15fc9df44ea4b879e875facccb1/20260716T142621Z+live-eval-20260716t1426z+c8aea294c7db/stage-and-commit/tencent-hy3-free.md) |
 
 ## Run records
 
