@@ -1,81 +1,30 @@
 # Live model eval transcript index
 
 - **channel:** live-eval-transcripts
-- **path layout:** 3
-- **suite(s):** agentry-git-code-mode
-- **source SHA(s):** c8aea294c7db6cdf55c29e32190ab04c9e2b2a2b
-- **campaign id(s):** pr-526-live-eval-20260716t1600z
+- **path layout:** 4 canonical; legacy paths retained for pinned-link stability
+- **canonical campaign folders:** 13
 
-## Newly published
+## Canonical campaign runs
 
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/conflict-rebase/anthropic-claude-sonnet-5.md` (conflict-rebase / anthropic/claude-sonnet-5)
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/conflict-rebase/deepseek-deepseek-v4-flash.md` (conflict-rebase / deepseek/deepseek-v4-flash)
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/conflict-rebase/google-gemini-2-5-flash-lite.md` (conflict-rebase / google/gemini-2.5-flash-lite)
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/conflict-rebase/google-gemini-3-5-flash.md` (conflict-rebase / google/gemini-3.5-flash)
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/conflict-rebase/nvidia-nemotron-3-ultra-550b-a55b-free.md` (conflict-rebase / nvidia/nemotron-3-ultra-550b-a55b:free)
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/conflict-rebase/tencent-hy3-free.md` (conflict-rebase / tencent/hy3:free)
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/stage-and-commit/anthropic-claude-sonnet-5.md` (stage-and-commit / anthropic/claude-sonnet-5)
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/stage-and-commit/deepseek-deepseek-v4-flash.md` (stage-and-commit / deepseek/deepseek-v4-flash)
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/stage-and-commit/google-gemini-2-5-flash-lite.md` (stage-and-commit / google/gemini-2.5-flash-lite)
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/stage-and-commit/google-gemini-3-5-flash.md` (stage-and-commit / google/gemini-3.5-flash)
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/stage-and-commit/nvidia-nemotron-3-ultra-550b-a55b-free.md` (stage-and-commit / nvidia/nemotron-3-ultra-550b-a55b:free)
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/stage-and-commit/tencent-hy3-free.md` (stage-and-commit / tencent/hy3:free)
+- [20260716T132221Z+run-20260716t132221z-garden-2703457-tencent-hy3-free-7xhmqr+5f6455e4c5cf](20260716T132221Z+run-20260716t132221z-garden-2703457-tencent-hy3-free-7xhmqr+5f6455e4c5cf/README.md) (run-20260716T132221Z-garden-2703457-tencent-hy3-free.7xhmQr / 5f6455e4c5cf9dfc9b13b12aecc20bf89e0e8e58)
+- [20260716T132336Z+run-20260716t132336z-garden-2744018-nvidia-nemotron-3-ultra-550b-a55b-free-resbs8+5f6455e4c5cf](20260716T132336Z+run-20260716t132336z-garden-2744018-nvidia-nemotron-3-ultra-550b-a55b-free-resbs8+5f6455e4c5cf/README.md) (run-20260716T132336Z-garden-2744018-nvidia-nemotron-3-ultra-550b-a55b-free.rEsbs8 / 5f6455e4c5cf9dfc9b13b12aecc20bf89e0e8e58)
+- [20260716T132744Z+run-20260716t132744z-garden-2896470-anthropic-claude-sonnet-5-zmd68s+5f6455e4c5cf](20260716T132744Z+run-20260716t132744z-garden-2896470-anthropic-claude-sonnet-5-zmd68s+5f6455e4c5cf/README.md) (run-20260716T132744Z-garden-2896470-anthropic-claude-sonnet-5.zmD68S / 5f6455e4c5cf9dfc9b13b12aecc20bf89e0e8e58)
+- [20260716T132849Z+run-20260716t132849z-garden-2936869-deepseek-deepseek-v4-flash-33beo5+5f6455e4c5cf](20260716T132849Z+run-20260716t132849z-garden-2936869-deepseek-deepseek-v4-flash-33beo5+5f6455e4c5cf/README.md) (run-20260716T132849Z-garden-2936869-deepseek-deepseek-v4-flash.33BEO5 / 5f6455e4c5cf9dfc9b13b12aecc20bf89e0e8e58)
+- [20260716T133126Z+run-20260716t133126z-garden-3036102-google-gemini-2-5-flash-lite-yq29mk+5f6455e4c5cf](20260716T133126Z+run-20260716t133126z-garden-3036102-google-gemini-2-5-flash-lite-yq29mk+5f6455e4c5cf/README.md) (run-20260716T133126Z-garden-3036102-google-gemini-2.5-flash-lite.YQ29MK / 5f6455e4c5cf9dfc9b13b12aecc20bf89e0e8e58)
+- [20260716T133208Z+run-20260716t133208z-garden-3061326-google-gemini-3-5-flash-wazftr+5f6455e4c5cf](20260716T133208Z+run-20260716t133208z-garden-3061326-google-gemini-3-5-flash-wazftr+5f6455e4c5cf/README.md) (run-20260716T133208Z-garden-3061326-google-gemini-3.5-flash.WazFTr / 5f6455e4c5cf9dfc9b13b12aecc20bf89e0e8e58)
+- [20260716T142621Z+run-20260716t142621z-garden-1041372-anthropic-claude-sonnet-5-evxak3+c8aea294c7db](20260716T142621Z+run-20260716t142621z-garden-1041372-anthropic-claude-sonnet-5-evxak3+c8aea294c7db/README.md) (run-20260716T142621Z-garden-1041372-anthropic-claude-sonnet-5.EvxAk3 / c8aea294c7db6cdf55c29e32190ab04c9e2b2a2b)
+- [20260716T142719Z+run-20260716t142719z-garden-1075745-deepseek-deepseek-v4-flash-jnobhc+c8aea294c7db](20260716T142719Z+run-20260716t142719z-garden-1075745-deepseek-deepseek-v4-flash-jnobhc+c8aea294c7db/README.md) (run-20260716T142719Z-garden-1075745-deepseek-deepseek-v4-flash.jnObHc / c8aea294c7db6cdf55c29e32190ab04c9e2b2a2b)
+- [20260716T143050Z+run-20260716t143050z-garden-1205437-google-gemini-2-5-flash-lite-jkh6en+c8aea294c7db](20260716T143050Z+run-20260716t143050z-garden-1205437-google-gemini-2-5-flash-lite-jkh6en+c8aea294c7db/README.md) (run-20260716T143050Z-garden-1205437-google-gemini-2.5-flash-lite.JKH6EN / c8aea294c7db6cdf55c29e32190ab04c9e2b2a2b)
+- [20260716T143629Z+run-20260716t143629z-garden-1413837-google-gemini-3-5-flash-je1cal+c8aea294c7db](20260716T143629Z+run-20260716t143629z-garden-1413837-google-gemini-3-5-flash-je1cal+c8aea294c7db/README.md) (run-20260716T143629Z-garden-1413837-google-gemini-3.5-flash.je1cal / c8aea294c7db6cdf55c29e32190ab04c9e2b2a2b)
+- [20260716T143715Z+run-20260716t143715z-garden-1440660-nvidia-nemotron-3-ultra-550b-a55b-free-teuzst+c8aea294c7db](20260716T143715Z+run-20260716t143715z-garden-1440660-nvidia-nemotron-3-ultra-550b-a55b-free-teuzst+c8aea294c7db/README.md) (run-20260716T143715Z-garden-1440660-nvidia-nemotron-3-ultra-550b-a55b-free.teuzsT / c8aea294c7db6cdf55c29e32190ab04c9e2b2a2b)
+- [20260716T143932Z+run-20260716t143932z-garden-1511611-tencent-hy3-free-go5uha+c8aea294c7db](20260716T143932Z+run-20260716t143932z-garden-1511611-tencent-hy3-free-go5uha+c8aea294c7db/README.md) (run-20260716T143932Z-garden-1511611-tencent-hy3-free.gO5uhA / c8aea294c7db6cdf55c29e32190ab04c9e2b2a2b)
+- [20260716T160015Z+pr-526-live-eval-20260716t1600z+c8aea294c7db](20260716T160015Z+pr-526-live-eval-20260716t1600z+c8aea294c7db/README.md) (pr-526-live-eval-20260716t1600z / c8aea294c7db6cdf55c29e32190ab04c9e2b2a2b)
 
-## All transcript files
+Each campaign README links the scenario/model transcript artifacts. When a
+model was retried, its Transcript cell links every published attempt.
 
-- `5f6455e4c5cf+20260716T133126Z-garden-3036102-google-gemini-2.5-flash-lite.YQ29MK/conflict-rebase/google-gemini-2-5-flash-lite-full.md`
-- `5f6455e4c5cf+20260716T133126Z-garden-3036102-google-gemini-2.5-flash-lite.YQ29MK/conflict-rebase/google-gemini-2-5-flash-lite-results.md`
-- `5f6455e4c5cf+20260716T133126Z-garden-3036102-google-gemini-2.5-flash-lite.YQ29MK/stage-and-commit/google-gemini-2-5-flash-lite-full.md`
-- `5f6455e4c5cf+20260716T133126Z-garden-3036102-google-gemini-2.5-flash-lite.YQ29MK/stage-and-commit/google-gemini-2-5-flash-lite-results.md`
-- `5f6455e4c5cf+20260716T133208Z-garden-3061326-google-gemini-3.5-flash.WazFTr/conflict-rebase/google-gemini-3-5-flash-full.md`
-- `5f6455e4c5cf+20260716T133208Z-garden-3061326-google-gemini-3.5-flash.WazFTr/conflict-rebase/google-gemini-3-5-flash-results.md`
-- `5f6455e4c5cf+20260716T133208Z-garden-3061326-google-gemini-3.5-flash.WazFTr/stage-and-commit/google-gemini-3-5-flash-full.md`
-- `5f6455e4c5cf+20260716T133208Z-garden-3061326-google-gemini-3.5-flash.WazFTr/stage-and-commit/google-gemini-3-5-flash-results.md`
-- `agentry-git-code-mode/20260716t132221z-garden-2703457-tencent-hy3-free-7xhmqr--conflict-rebase--tencent-hy3-free.md`
-- `agentry-git-code-mode/20260716t132221z-garden-2703457-tencent-hy3-free-7xhmqr--stage-and-commit--tencent-hy3-free.md`
-- `agentry-git-code-mode/20260716t132336z-garden-2744018-nvidia-nemotron-3-ultra-550b-a55b-free-resbs8--conflict-rebase--nvidia-nemotron-3-ultra-550b-a55b-free.md`
-- `agentry-git-code-mode/20260716t132336z-garden-2744018-nvidia-nemotron-3-ultra-550b-a55b-free-resbs8--stage-and-commit--nvidia-nemotron-3-ultra-550b-a55b-free.md`
-- `agentry-git-code-mode/20260716t132744z-garden-2896470-anthropic-claude-sonnet-5-zmd68s--conflict-rebase--anthropic-claude-sonnet-5.md`
-- `agentry-git-code-mode/20260716t132744z-garden-2896470-anthropic-claude-sonnet-5-zmd68s--stage-and-commit--anthropic-claude-sonnet-5.md`
-- `agentry-git-code-mode/20260716t132849z-garden-2936869-deepseek-deepseek-v4-flash-33beo5--conflict-rebase--deepseek-deepseek-v4-flash.md`
-- `agentry-git-code-mode/20260716t132849z-garden-2936869-deepseek-deepseek-v4-flash-33beo5--stage-and-commit--deepseek-deepseek-v4-flash.md`
-- `agentry-git-code-mode/20260716t133126z-garden-3036102-google-gemini-2-5-flash-lite-yq29mk--conflict-rebase--google-gemini-2-5-flash-lite.md`
-- `agentry-git-code-mode/20260716t133126z-garden-3036102-google-gemini-2-5-flash-lite-yq29mk--stage-and-commit--google-gemini-2-5-flash-lite.md`
-- `agentry-git-code-mode/20260716t133208z-garden-3061326-google-gemini-3-5-flash-wazftr--conflict-rebase--google-gemini-3-5-flash.md`
-- `agentry-git-code-mode/20260716t133208z-garden-3061326-google-gemini-3-5-flash-wazftr--stage-and-commit--google-gemini-3-5-flash.md`
-- `c8aea294c7db+20260716T142621Z-garden-1041372-anthropic-claude-sonnet-5.EvxAk3/conflict-rebase/anthropic-claude-sonnet-5-full.md`
-- `c8aea294c7db+20260716T142621Z-garden-1041372-anthropic-claude-sonnet-5.EvxAk3/conflict-rebase/anthropic-claude-sonnet-5-results.md`
-- `c8aea294c7db+20260716T142621Z-garden-1041372-anthropic-claude-sonnet-5.EvxAk3/stage-and-commit/anthropic-claude-sonnet-5-full.md`
-- `c8aea294c7db+20260716T142621Z-garden-1041372-anthropic-claude-sonnet-5.EvxAk3/stage-and-commit/anthropic-claude-sonnet-5-results.md`
-- `c8aea294c7db+20260716T142719Z-garden-1075745-deepseek-deepseek-v4-flash.jnObHc/conflict-rebase/deepseek-deepseek-v4-flash-full.md`
-- `c8aea294c7db+20260716T142719Z-garden-1075745-deepseek-deepseek-v4-flash.jnObHc/conflict-rebase/deepseek-deepseek-v4-flash-results.md`
-- `c8aea294c7db+20260716T142719Z-garden-1075745-deepseek-deepseek-v4-flash.jnObHc/stage-and-commit/deepseek-deepseek-v4-flash-full.md`
-- `c8aea294c7db+20260716T142719Z-garden-1075745-deepseek-deepseek-v4-flash.jnObHc/stage-and-commit/deepseek-deepseek-v4-flash-results.md`
-- `c8aea294c7db+20260716T143050Z-garden-1205437-google-gemini-2.5-flash-lite.JKH6EN/conflict-rebase/google-gemini-2-5-flash-lite-full.md`
-- `c8aea294c7db+20260716T143050Z-garden-1205437-google-gemini-2.5-flash-lite.JKH6EN/conflict-rebase/google-gemini-2-5-flash-lite-results.md`
-- `c8aea294c7db+20260716T143050Z-garden-1205437-google-gemini-2.5-flash-lite.JKH6EN/stage-and-commit/google-gemini-2-5-flash-lite-full.md`
-- `c8aea294c7db+20260716T143050Z-garden-1205437-google-gemini-2.5-flash-lite.JKH6EN/stage-and-commit/google-gemini-2-5-flash-lite-results.md`
-- `c8aea294c7db+20260716T143629Z-garden-1413837-google-gemini-3.5-flash.je1cal/conflict-rebase/google-gemini-3-5-flash-full.md`
-- `c8aea294c7db+20260716T143629Z-garden-1413837-google-gemini-3.5-flash.je1cal/conflict-rebase/google-gemini-3-5-flash-results.md`
-- `c8aea294c7db+20260716T143629Z-garden-1413837-google-gemini-3.5-flash.je1cal/stage-and-commit/google-gemini-3-5-flash-full.md`
-- `c8aea294c7db+20260716T143629Z-garden-1413837-google-gemini-3.5-flash.je1cal/stage-and-commit/google-gemini-3-5-flash-results.md`
-- `c8aea294c7db+20260716T143715Z-garden-1440660-nvidia-nemotron-3-ultra-550b-a55b-free.teuzsT/conflict-rebase/nvidia-nemotron-3-ultra-550b-a55b-free-full.md`
-- `c8aea294c7db+20260716T143715Z-garden-1440660-nvidia-nemotron-3-ultra-550b-a55b-free.teuzsT/conflict-rebase/nvidia-nemotron-3-ultra-550b-a55b-free-results.md`
-- `c8aea294c7db+20260716T143715Z-garden-1440660-nvidia-nemotron-3-ultra-550b-a55b-free.teuzsT/stage-and-commit/nvidia-nemotron-3-ultra-550b-a55b-free-full.md`
-- `c8aea294c7db+20260716T143715Z-garden-1440660-nvidia-nemotron-3-ultra-550b-a55b-free.teuzsT/stage-and-commit/nvidia-nemotron-3-ultra-550b-a55b-free-results.md`
-- `c8aea294c7db+20260716T143932Z-garden-1511611-tencent-hy3-free.gO5uhA/conflict-rebase/tencent-hy3-free-full.md`
-- `c8aea294c7db+20260716T143932Z-garden-1511611-tencent-hy3-free.gO5uhA/conflict-rebase/tencent-hy3-free-results.md`
-- `c8aea294c7db+20260716T143932Z-garden-1511611-tencent-hy3-free.gO5uhA/stage-and-commit/tencent-hy3-free-full.md`
-- `c8aea294c7db+20260716T143932Z-garden-1511611-tencent-hy3-free.gO5uhA/stage-and-commit/tencent-hy3-free-results.md`
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/conflict-rebase/anthropic-claude-sonnet-5.md`
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/conflict-rebase/deepseek-deepseek-v4-flash.md`
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/conflict-rebase/google-gemini-2-5-flash-lite.md`
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/conflict-rebase/google-gemini-3-5-flash.md`
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/conflict-rebase/nvidia-nemotron-3-ultra-550b-a55b-free.md`
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/conflict-rebase/tencent-hy3-free.md`
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/stage-and-commit/anthropic-claude-sonnet-5.md`
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/stage-and-commit/deepseek-deepseek-v4-flash.md`
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/stage-and-commit/google-gemini-2-5-flash-lite.md`
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/stage-and-commit/google-gemini-3-5-flash.md`
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/stage-and-commit/nvidia-nemotron-3-ultra-550b-a55b-free.md`
-- `c8aea294c7db+pr-526-live-eval-20260716t1600z/stage-and-commit/tencent-hy3-free.md`
+## Historical paths
+
+The original hash-first and paired full/results paths remain unchanged so
+commit-pinned links continue to work. The backup branch
+`orphan/eval-transcripts-backup-20260716` preserves the pre-migration tree.

@@ -3,5 +3,5 @@
   "schema_version": 1,
   "channel": "live-eval-transcripts",
   "branch": "orphan/eval-transcripts",
-  "path_layout_version": 3
+  "path_layout_version": 4
 }
