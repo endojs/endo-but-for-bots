@@ -132,7 +132,7 @@ test('circular object reference is rejected (does not infinite-loop)', async t =
 
 test('large Uint8Array (10000 bytes) round-trips', async t => {
   const r = makePair(Far('s', { echo: x => x }));
-  const big = new Uint8Array(10000);
+  const big = new Uint8Array(10_000);
   for (let i = 0; i < big.length; i += 1) big[i] = i % 256;
   const back = await E(r).echo(big);
   t.is(back.length, big.length);
