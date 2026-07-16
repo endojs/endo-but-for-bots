@@ -37,6 +37,7 @@ module.exports = {
     'jsdoc/no-multi-asterisks': ['warn', { allowWhitespace: true }],
     'jsdoc/no-undefined-types': 'off',
     'jsdoc/require-jsdoc': 'off',
+    'jsdoc/require-param': 'error',
     'jsdoc/require-property-description': 'off',
     'jsdoc/require-param-description': 'off',
     'jsdoc/require-returns': 'off',
