@@ -11,7 +11,7 @@ const { create, prototype: objectPrototype, isFrozen } = Object;
 /**
  * A minimal stand-in for what the CapTP session manager (`@endo/ocapn`)
  * constructs. `@endo/pass-style` deliberately exports **no** maker — it only
- * defines and validates the `'sturdyref'` shape — so these tests build the
+ * defines and validates the `'sturdyRef'` shape — so these tests build the
  * shape directly to exercise the recogniser. The shape is: an instance with
  * no own properties whose tag-record prototype carries `[PASS_STYLE]`,
  * `[Symbol.toStringTag]`, a get-only `location` accessor, and an optional
@@ -23,7 +23,7 @@ const { create, prototype: objectPrototype, isFrozen } = Object;
 const makeShapedSturdyRef = (location, type = undefined) => {
   const frozenLocation = harden(location);
   const descriptors = {
-    [PASS_STYLE]: { value: 'sturdyref', enumerable: false },
+    [PASS_STYLE]: { value: 'sturdyRef', enumerable: false },
     [Symbol.toStringTag]: { value: 'SturdyRef', enumerable: false },
     location: { get: () => frozenLocation, enumerable: false },
   };
@@ -44,7 +44,7 @@ const someLocation = harden({
 
 test('passStyleOf returns sturdyref for a shaped SturdyRef', t => {
   const sturdyRef = makeShapedSturdyRef(someLocation);
-  t.is(passStyleOf(sturdyRef), 'sturdyref');
+  t.is(passStyleOf(sturdyRef), 'sturdyRef');
   t.true(isPassable(sturdyRef));
 });
 
@@ -76,7 +76,7 @@ test('location is a readable, deep-frozen locator; the secret is never a propert
 test('the optional type hint is a string when present, absent otherwise', t => {
   const withType = makeShapedSturdyRef(someLocation, 'some-type');
   t.is(withType.type, 'some-type', 'type hint is readable');
-  t.is(passStyleOf(withType), 'sturdyref');
+  t.is(passStyleOf(withType), 'sturdyRef');
 
   const withoutType = makeShapedSturdyRef(someLocation);
   t.is(withoutType.type, undefined, 'no type hint by default');
@@ -129,17 +129,17 @@ test('an instance carrying an own location data property is rejected', t => {
 
 test('a makeTagged value with the sturdyref tag is not a SturdyRef', t => {
   // makeTagged produces a 'tagged' pass-style record; even when its tag
-  // string is 'sturdyref' it is not a first-class SturdyRef.
-  const decoy = makeTagged('sturdyref', undefined);
+  // string is 'sturdyRef' it is not a first-class SturdyRef.
+  const decoy = makeTagged('sturdyRef', undefined);
   t.is(passStyleOf(decoy), 'tagged');
 });
 
 test('a bare sturdyref-tagged record with no location accessor is rejected', t => {
-  // Carrying [PASS_STYLE] = 'sturdyref' on the instance (rather than a
+  // Carrying [PASS_STYLE] = 'sturdyRef' on the instance (rather than a
   // proper tag-record prototype with a location accessor) is not enough.
   const forged = harden(
     create(objectPrototype, {
-      [PASS_STYLE]: { value: 'sturdyref', enumerable: false },
+      [PASS_STYLE]: { value: 'sturdyRef', enumerable: false },
       [Symbol.toStringTag]: { value: 'SturdyRef', enumerable: false },
     }),
   );

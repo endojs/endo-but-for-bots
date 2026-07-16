@@ -15,10 +15,10 @@ testWithErrorUnwrapping('SturdyRef is a first-class pass-style', async t => {
 
   const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
 
-  t.is(passStyleOf(sturdyRef), 'sturdyref', 'passStyleOf returns sturdyref');
+  t.is(passStyleOf(sturdyRef), 'sturdyRef', 'passStyleOf returns sturdyref');
   t.is(
     ocapnPassStyleOf(sturdyRef),
-    'sturdyref',
+    'sturdyRef',
     'ocapnPassStyleOf returns sturdyref',
   );
   t.is(
