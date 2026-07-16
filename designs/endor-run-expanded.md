@@ -3,13 +3,13 @@
 | | |
 |---|---|
 | **Created** | 2026-04-17 |
-| **Updated** | 2026-04-17 |
+| **Updated** | 2026-05-15 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 
 ## Status
 
-Phases 1-2 implemented:
+Phases 1-3 implemented:
 
 - **Phase 1**: `ContentStore` is available standalone via
   `endo::cas::ContentStore::open()` (implemented in
@@ -21,9 +21,19 @@ Phases 1-2 implemented:
   `endor run --cas <hash>` re-runs from CAS. `--no-cas` preserves
   legacy behavior. `run_xs_archive_loaded` added to xsnap for
   executing pre-loaded archives.
+- **Phase 3**: `rust/endo/src/cas_archive.rs` — `ingest_directory`
+  walks an unpacked compartment-map directory recursively, stores
+  each file as a CAS blob, and builds tree manifests in the same
+  layout `ingest_archive` produces, so the directory- and
+  ZIP-ingested forms share a root hash for byte-equivalent inputs.
+  `endor run <directory/>` detects directory input from the path
+  type. A new `encode_manifest_sorted` helper writes tree manifests
+  with sorted keys so the CAS root hash is a deterministic function
+  of the input contents regardless of `HashMap` iteration order
+  (also applied to `ingest_archive`). `--no-cas` is incompatible
+  with directory input and reports a clear error.
 
-Remaining: Phase 3 (directory input), Phase 4-5 (entry-point with
-compartment mapper).
+Remaining: Phase 4-5 (entry-point with compartment mapper).
 
 ## What is the Problem Being Solved?
 
