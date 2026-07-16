@@ -50,7 +50,7 @@ const makeHelperTable = passStyleHelpers => {
     tagged: undefined,
     error: undefined,
     remotable: undefined,
-    sturdyref: undefined,
+    sturdyRef: undefined,
   };
   for (const helper of passStyleHelpers) {
     const { styleName } = helper;

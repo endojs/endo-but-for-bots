@@ -7,7 +7,7 @@
 import { passStyleOf } from '@endo/pass-style';
 
 // We need to extend the PassStyle type to include OCapN-specific types.
-// `'sturdyref'` is now a first-class `@endo/pass-style` category, so it
+// `'sturdyRef'` is now a first-class `@endo/pass-style` category, so it
 // arrives through `passStyleOf` directly; only the two signed-handoff
 // discriminators remain OCapN-specific here.
 /** @typedef {PassStyle | 'signedHandoffReceive' | 'signedHandoffGive'} OcapnPassStyle */

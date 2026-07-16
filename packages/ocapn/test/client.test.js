@@ -738,7 +738,7 @@ testWithErrorUnwrapping(
         },
         {
           instanceOf: Error,
-          message: /Cannot apply functions to values with pass-style sturdyref/,
+          message: /Cannot apply functions to values with pass-style sturdyRef/,
         },
         'Delivering to a promise that resolves to a sturdyref should throw',
       );
