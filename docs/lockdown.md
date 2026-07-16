@@ -82,6 +82,25 @@ new Compartment({
 })
 ```
 
+## Shared Intrinsics
+
+`lockdown` repairs and hardens a set of shared intrinsics — the JavaScript built-in
+objects that are available to every compartment (start compartment and all subsequently
+created compartments). These appear identity-equal across all compartments. The shared
+intrinsics include the standard ECMAScript built-ins (`Array`, `Object`, `Promise`,
+`Map`, `Set`, etc.) plus a carefully vetted set of WHATWG additions.
+
+On hosts that provide them, `URL` and `URLSearchParams` are also shared intrinsics.
+Their prototypes are frozen alongside the other tamed primordials. The static methods
+`createObjectURL` and `revokeObjectURL` are cauterized on every host — they both mint or
+revoke handles into a host blob registry observable across realms, which is ambient
+authority that ocap discipline forbids. Code that needs `createObjectURL` must obtain it
+from the host before lockdown and explicitly endow a wrapper into the compartment that
+needs it.
+
+On hosts that do not provide `URL` and `URLSearchParams` (e.g., XS), lockdown proceeds
+without them; compartments observe their absence as before.
+
 ## `regExpTaming` Options
 
 **Background**: In standard plain JavaScript, the builtin

@@ -254,7 +254,7 @@ to built-in objects in a way Compartments don't allow.
 Almost all existing JavaScript code runs under Node.js or inside a browser, so
 it's easy to conflate environment features with JavaScript. For example, you may
 be surprised that `Buffer` and `require` are Node.js additions. Also `setTimeout()`,
-`setInterval()`, `URL`, `atob()`, `btoa()`, `TextEncoder`, and `TextDecoder` are additions
+`setInterval()`, `atob()`, `btoa()`, `TextEncoder`, and `TextDecoder` are additions
 to the programming environment standardized by the WHATWG web platform, and are not
 intrinsic to JavaScript.
 
@@ -262,7 +262,6 @@ Most Node.js-specific [global objects](https://nodejs.org/dist/latest-v14.x/docs
 **unavailable** including:
 
 * `queueMicrotask`
-* `URL` and `URLSearchParams`
 * `WebAssembly`
 * `TextEncoder` and `TextDecoder`
 * `global`
@@ -287,7 +286,7 @@ Most Node.js-specific [global objects](https://nodejs.org/dist/latest-v14.x/docs
 
 None of the huge list of [other Browser environment features](https://developer.mozilla.org/en-US/docs/Web/API)
 presented as names in the global scope (some also added to Node.js) are available in a
-hardened environment. The most surprising removals include `atob`, `TextEncoder`, and `URL`.
+hardened environment. The most surprising removals include `atob` and `TextEncoder`.
 
 `debugger` is a first-class JavaScript statement, and behaves as expected.
 
@@ -331,6 +330,18 @@ makes those global objects available.
   Compartments can be created with support for loading modules.
   Comaprtments constructed after `repairIntrinsics()` and `hardenIntrinsics()`
   also confine the evaluation of modules.
+
+- `URL` and `URLSearchParams` are now permitted as universal intrinsics on every
+  compartment (start compartment and all subsequently created compartments). They appear
+  identity-equal across all compartments, and their prototypes are frozen alongside the
+  other tamed primordials. The dangerous static methods `createObjectURL` and
+  `revokeObjectURL` are cauterized on every host — they both mint or revoke handles into a
+  host blob registry observable across realms, which is ambient authority that ocap
+  discipline forbids. Code that needs `createObjectURL` must obtain it from the host before
+  lockdown and explicitly endow a wrapper into the compartment that needs it.
+
+  On hosts that do not provide these (e.g., XS), lockdown proceeds without them;
+  compartments observe their absence as before.
 
 ## Realms
 
