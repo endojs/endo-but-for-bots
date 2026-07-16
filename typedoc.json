@@ -38,7 +38,8 @@
     "packages/syrup",
     "packages/test262-runner/",
     "packages/where",
-    "api-docs/"
+    "api-docs/",
+    "packages/cbor"
   ],
   "plugin": [
     "typedoc-plugin-mermaid"
