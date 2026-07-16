@@ -116,6 +116,9 @@ export const writeHead = harden((writer, major, value) => {
   }
 });
 
+/** @param {{writeByte: (b) => void}} writer - The CBOR writer
+ * @param {number | bigint} value - The unsigned integer to encode
+ */
 export const writeUint = harden((writer, value) => writeHead(writer, 0, value));
 export const writeInt = harden((writer, value) => {
   if (!Number.isSafeInteger(value))
@@ -232,6 +235,9 @@ const expectHead = (reader, expected, label) => {
   return head;
 };
 
+/** @param {{readByte: () => number}} reader - The CBOR reader
+ * @returns {number | bigint} The decoded unsigned integer
+ */
 export const readUint = harden(
   reader => expectHead(reader, 0, 'unsigned integer').value,
 );
