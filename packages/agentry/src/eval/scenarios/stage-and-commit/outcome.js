@@ -1,12 +1,17 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { OutcomeReport, ReadText } from '../../types.js' */
+/** @import { OutcomeCheck, OutcomeReport, ReadText } from '../../types.js' */
 /** @import { GitCommitTarget } from './types.js' */
 
 import { E } from '@endo/eventual-send';
 
-import { check, readTrackedFileAt } from '../../outcome-kit.js';
+import {
+  check,
+  makeOutcomeReport,
+  measurementPoint,
+  readTrackedFileAt,
+} from '../../outcome-kit.js';
 
 /**
  * Score a git code-mode run by **outcome assertion**: read the repository's
@@ -34,7 +39,7 @@ import { check, readTrackedFileAt } from '../../outcome-kit.js';
  */
 export const assertGitCommitOutcome = async ({ git, readText, expected }) => {
   const gitRef = /** @type {any} */ (git);
-  /** @type {Array<{ name: string, ok: boolean, detail: string }>} */
+  /** @type {OutcomeCheck[]} */
   const checks = [];
 
   // 1. A commit exists at HEAD carrying the target message.
@@ -104,7 +109,36 @@ export const assertGitCommitOutcome = async ({ git, readText, expected }) => {
     ),
   );
 
-  const pass = checks.every(entry => entry.ok);
-  return harden({ pass, checks });
+  const workingTreeClean = rows.length === 0;
+  return makeOutcomeReport(checks, [
+    measurementPoint(
+      'target-file-in-commit',
+      tracked,
+      tracked
+        ? `${expected.path} is present in the committed HEAD tree`
+        : `${expected.path} is not present in the committed HEAD tree`,
+    ),
+    measurementPoint(
+      'requested-commit-message-used',
+      head !== undefined && head.summary === expected.message,
+      head?.summary === expected.message
+        ? `HEAD uses the requested summary ${JSON.stringify(expected.message)}`
+        : `HEAD does not use the requested summary ${JSON.stringify(expected.message)}`,
+    ),
+    measurementPoint(
+      'target-content-committed',
+      committedText === expected.content,
+      committedText === expected.content
+        ? `${expected.path} has the requested committed content`
+        : `${expected.path} does not have the requested committed content`,
+    ),
+    measurementPoint(
+      'working-tree-clean',
+      workingTreeClean,
+      workingTreeClean
+        ? 'working tree and index have no pending status rows'
+        : `${rows.length} pending status row(s) remain`,
+    ),
+  ]);
 };
 harden(assertGitCommitOutcome);

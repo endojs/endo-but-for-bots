@@ -1,7 +1,7 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { OutcomeCheck, ReadText } from './types.js' */
+/** @import { OutcomeCheck, OutcomeMeasurementPoint, OutcomeReport, ReadText } from './types.js' */
 
 import { E } from '@endo/eventual-send';
 import { Fail } from '@endo/errors';
@@ -17,6 +17,49 @@ import { Fail } from '@endo/errors';
  */
 export const check = (name, ok, detail) => harden({ name, ok, detail });
 harden(check);
+
+/**
+ * Record one task-specific progress marker separately from the gate checks.
+ *
+ * @param {string} name
+ * @param {boolean} hit
+ * @param {string} detail
+ * @returns {OutcomeMeasurementPoint}
+ */
+export const measurementPoint = (name, hit, detail) =>
+  harden({ name, hit, detail });
+harden(measurementPoint);
+
+/**
+ * Build the report shared by scenario outcome assertions.
+ * `pass` remains the existing all-checks gate.
+ * `score` is a normalized fraction of the separately declared measurement
+ * points that were hit.
+ *
+ * @param {OutcomeCheck[]} checks
+ * @param {OutcomeMeasurementPoint[]} measurementPoints
+ * @returns {OutcomeReport}
+ */
+export const makeOutcomeReport = (checks, measurementPoints) => {
+  const hitCount = measurementPoints.filter(point => point.hit).length;
+  const score =
+    measurementPoints.length === 0 ? 1 : hitCount / measurementPoints.length;
+  const pass = checks.every(entry => entry.ok);
+  const divergence =
+    pass && score < 1
+      ? 'pass-with-incomplete-score'
+      : !pass && score === 1
+        ? 'fail-with-complete-score'
+        : null;
+  return harden({
+    pass,
+    score,
+    divergence,
+    checks: harden(checks),
+    measurementPoints: harden(measurementPoints),
+  });
+};
+harden(makeOutcomeReport);
 
 /**
  * Read the UTF-8 content of a tracked file at a git ref, or `undefined` when the

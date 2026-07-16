@@ -20,12 +20,33 @@ export interface OutcomeCheck {
 }
 
 /**
- * The structured result of an outcome assertion: a pass/fail per named check,
- * plus an overall pass that holds only when every check holds.
+ * One flat measurement point that records a task-specific progress marker.
+ * Measurement points are diagnostic and do not change the outcome gate.
+ */
+export interface OutcomeMeasurementPoint {
+  name: string;
+  hit: boolean;
+  detail: string;
+}
+
+/**
+ * A calibration signal emitted when the gate and measurement score disagree.
+ */
+export type OutcomeDivergence =
+  | 'pass-with-incomplete-score'
+  | 'fail-with-complete-score';
+
+/**
+ * The structured result of an outcome assertion.
  */
 export interface OutcomeReport {
   pass: boolean;
+  /** Normalized fraction of measurement points whose `hit` value is true. */
+  score: number;
+  /** `null` for calibrated runs, or the gate/score disagreement kind. */
+  divergence: OutcomeDivergence | null;
   checks: OutcomeCheck[];
+  measurementPoints: OutcomeMeasurementPoint[];
 }
 
 /**
@@ -40,6 +61,8 @@ export interface GitScenario<Expected = unknown> {
   /** The user turn handed to the code-mode agent. */
   prompt: string;
   expected: Expected;
+  /** Flat measurement-point names; ordering is presentation-only. */
+  measurementPoints: string[];
   /**
    * Repo-relative path to the module holding this scenario's reference
    * solution.
