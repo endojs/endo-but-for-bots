@@ -53,18 +53,23 @@ if (!invitationLocator) {
 }
 
 /**
- * Rewrite the `ws:url` transport hint in every `at` connection-hint address of
+ * Rewrite the `ws:url` transport hint in every connection-hint address of
  * an `endo://` locator to the public wss endpoint, preserving the Noise
  * designator (the identity the handshake actually authenticates).
+ *
+ * The locator carries hints as `@`-delimited, URL-encoded path components
+ * after the formula address: `endo://{node}/{address}@{hint1}@{hint2}?…`.
  *
  * @param {string} locator
  * @param {string} override
  */
 const rewritePublicWsUrl = (locator, override) => {
   const u = new URL(locator);
-  const ats = u.searchParams.getAll('at');
-  u.searchParams.delete('at');
-  for (const at of ats) {
+  const [address, ...hints] = u.pathname
+    .replace(/^\//, '')
+    .split('@')
+    .map(decodeURIComponent);
+  const rewritten = hints.map(at => {
     const a = new URL(at);
     const locParam = a.searchParams.get('loc');
     if (locParam) {
@@ -74,8 +79,9 @@ const rewritePublicWsUrl = (locator, override) => {
       }
       a.searchParams.set('loc', JSON.stringify(loc));
     }
-    u.searchParams.append('at', a.href);
-  }
+    return a.href;
+  });
+  u.pathname = `/${[address, ...rewritten].map(encodeURIComponent).join('@')}`;
   return u.href;
 };
 
