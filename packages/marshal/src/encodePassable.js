@@ -913,10 +913,10 @@ harden(isEncodedRemotable);
 // /////////////////////////////////////////////////////////////////////////////
 
 /**
- * @type {Record<Exclude<PassStyle, 'sturdyref'>, string>}
+ * @type {Record<Exclude<PassStyle, 'sturdyRef'>, string>}
  * The single prefix characters to be used for each PassStyle category.
  *
- * The `'sturdyref'` pass-style is deliberately excluded: a SturdyRef is an
+ * The `'sturdyRef'` pass-style is deliberately excluded: a SturdyRef is an
  * opaque token whose marshal encoding and rank-order position are not yet
  * defined (that is a separate, later slice of the sturdy-refs work). Until
  * then `@endo/marshal` neither encodes nor rank-orders SturdyRefs, so they

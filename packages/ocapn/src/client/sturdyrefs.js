@@ -24,7 +24,7 @@ const { create, prototype: objectPrototype } = Object;
  * @typedef {PassStyleSturdyRef} SturdyRef
  * A `SturdyRef` addresses a capability by `(location, secret)`. It is a
  * first-class `@endo/pass-style` value: `passStyleOf` returns
- * `'sturdyref'`. Its `location` is a **readable** property (the raw
+ * `'sturdyRef'`. Its `location` is a **readable** property (the raw
  * SturdyRef is the trusted/wire tier and carries a readable locator by
  * design); the `secret` (swiss number) it needs to re-acquire the live
  * capability is **never** a property. The CapTP session manager (this
@@ -48,7 +48,7 @@ const { create, prototype: objectPrototype } = Object;
  * The closely-held, module-private map from a constructed SturdyRef to its
  * off-band `(location, secret)` tuple (plus the optional advisory `type`
  * hint). This is the CapTP session manager's own state: `@endo/pass-style`
- * defines the `'sturdyref'` shape but constructs nothing and holds no
+ * defines the `'sturdyRef'` shape but constructs nothing and holds no
  * locator map. The secret lives only here — never as a property on the
  * SturdyRef — so it cannot leak through pass-style introspection. Keyed by
  * SturdyRef identity, per-instance; a SturdyRef this session manager did not
@@ -61,7 +61,7 @@ const sturdyRefDetails = new WeakMap();
 
 /**
  * Construct a SturdyRef instance satisfying `@endo/pass-style`'s
- * `'sturdyref'` shape: an object with no own properties whose tag-record
+ * `'sturdyRef'` shape: an object with no own properties whose tag-record
  * prototype carries `[PASS_STYLE]`, `[Symbol.toStringTag]`, a get-only
  * `location` accessor returning the deep-frozen locator, and — when a hint
  * is supplied — a get-only `type` accessor. The secret is never placed on
@@ -75,7 +75,7 @@ const makeSturdyRefInstance = (location, type) => {
   const frozenLocation = harden(location);
   /** @type {PropertyDescriptorMap} */
   const descriptors = {
-    [PASS_STYLE]: { value: 'sturdyref', enumerable: false },
+    [PASS_STYLE]: { value: 'sturdyRef', enumerable: false },
     [Symbol.toStringTag]: { value: 'SturdyRef', enumerable: false },
     location: { get: () => frozenLocation, enumerable: false },
   };
@@ -89,7 +89,7 @@ const makeSturdyRefInstance = (location, type) => {
 
 /**
  * True when `value` is a SturdyRef: a first-class `@endo/pass-style` value
- * whose `passStyleOf` is `'sturdyref'`. Recognition is structural (no
+ * whose `passStyleOf` is `'sturdyRef'`. Recognition is structural (no
  * mint-gating): a value the session manager did not construct but that
  * satisfies the shape is still a SturdyRef, though it has no off-band
  * details here and so cannot be enlivened by this instance.
@@ -99,7 +99,7 @@ const makeSturdyRefInstance = (location, type) => {
  */
 export const isSturdyRef = value => {
   try {
-    return passStyleOf(value) === 'sturdyref';
+    return passStyleOf(value) === 'sturdyRef';
   } catch {
     return false;
   }
@@ -238,7 +238,7 @@ harden(enlivenSturdyRef);
 export const makeSturdyRefTracker = locator => {
   return harden({
     makeSturdyRef: (location, secret, type = undefined) => {
-      // Construct an instance satisfying the pass-style `'sturdyref'` shape
+      // Construct an instance satisfying the pass-style `'sturdyRef'` shape
       // (a readable `location`, optional advisory `type` hint), and keep the
       // `(location, secret)` tuple off-band in this session manager's map so
       // the secret is never a property on the SturdyRef.

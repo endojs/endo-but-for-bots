@@ -73,7 +73,7 @@ const confirmPassableLocation = (location, passStyleOfRecur, reject) =>
       reject`A sturdyref location hints must be false or a copyRecord: ${location}`));
 
 /**
- * `@endo/pass-style` defines the **shape** of the `'sturdyref'` category and
+ * `@endo/pass-style` defines the **shape** of the `'sturdyRef'` category and
  * recognises/validates it, but it does **not** construct sturdyrefs.
  * Construction (minting an instance that satisfies this shape and binding it
  * to its closely-held `(location, swissNum)` tuple) is the role of the CapTP
@@ -81,7 +81,7 @@ const confirmPassableLocation = (location, passStyleOfRecur, reject) =>
  * validates; there is no maker here and no module-private locator map.
  *
  * A valid SturdyRef is an object with no own properties whose prototype is a
- * tag record carrying `[PASS_STYLE]: 'sturdyref'`, `[Symbol.toStringTag]:
+ * tag record carrying `[PASS_STYLE]: 'sturdyRef'`, `[Symbol.toStringTag]:
  * 'SturdyRef'`, a get-only non-enumerable `location` accessor returning a
  * deep-frozen parsed `OcapnLocation` `copyRecord`, and an optional get-only
  * non-enumerable string `type` hint accessor. The secret (swiss number) is
@@ -90,7 +90,7 @@ const confirmPassableLocation = (location, passStyleOfRecur, reject) =>
  * @type {PassStyleHelper}
  */
 export const SturdyRefHelper = harden({
-  styleName: 'sturdyref',
+  styleName: 'sturdyRef',
 
   confirmCanBeValid: (candidate, reject) =>
     (!isPrimitive(candidate) ||
@@ -98,7 +98,7 @@ export const SturdyRefHelper = harden({
         reject`A sturdyref must be a non-primitive object: ${candidate}`)) &&
     (!isArray(candidate) ||
       (reject && reject`An array cannot be a sturdyref: ${candidate}`)) &&
-    confirmPassStyle(candidate, candidate[PASS_STYLE], 'sturdyref', reject),
+    confirmPassStyle(candidate, candidate[PASS_STYLE], 'sturdyRef', reject),
 
   assertRestValid: (candidate, passStyleOfRecur) => {
     // The instance itself carries no own properties: all structure lives on
@@ -109,7 +109,7 @@ export const SturdyRefHelper = harden({
       Fail`A sturdyref must have no own properties: ${q(ownKeys(ownDescs))}`;
 
     const proto = getPrototypeOf(candidate);
-    confirmTagRecord(proto, 'sturdyref', Fail);
+    confirmTagRecord(proto, 'sturdyRef', Fail);
     getTag(proto) === STURDYREF_TO_STRING_TAG ||
       Fail`A sturdyref tag must be ${q(STURDYREF_TO_STRING_TAG)}: ${candidate}`;
 
