@@ -90,7 +90,7 @@ interop('endo client → capnweb server: special values round-trip', async t => 
   const endoClient = makeCapnWebSession(a, { gcImports: false });
   const r = endoClient.getRemoteMain();
   t.is(await E(r).echo(42n), 42n);
-  const d = new Date(123456789);
+  const d = new Date(123_456_789);
   const dBack = await E(r).echo(d);
   t.is(dBack.getTime(), d.getTime());
   const back = await E(r).echo(undefined);
