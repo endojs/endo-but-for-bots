@@ -54,14 +54,17 @@ pub trait GitCas: Send + Sync {
 }
 ```
 
-`GitObjectId` carries its object-format algorithm and hex bytes, so a SHA-1 object cannot be confused with a SHA-256 object.
+`GitObjectId` carries its object-format algorithm and fixed-width object-ID bytes (with hexadecimal only as its display form), so a SHA-1 object cannot be confused with a SHA-256 object.
+Every input ID must use the repository's configured object format.
 `write_object` accepts bytes and an object kind, computes the Git object ID itself, and never trusts a caller-supplied digest.
+Before it stores a tree, it parses the tree encoding and rejects malformed entry names, modes, object IDs, and ordering; callers that construct trees use a typed encoder rather than hand-assembling tree bytes.
 `read_object` validates the type and object hash before returning data.
 `read_tree` returns normalized tree entries with mode, name, kind, and object ID; it rejects malformed names before an adapter turns entries into an Endor tree.
 
 `update_ref_if` is the only mutating ref operation.
 It is compare-and-swap: `expected: None` creates an absent ref, an expected ID must match the current direct ref, and a mismatch returns `GitCasError::Conflict` with no update.
-Symbolic refs, reflog policy, commit construction, pack import/export, and worktree/index operations are deliberately outside this first boundary.
+The implementation rejects a symbolic ref in the allowed namespace, and verifies that `next` names an existing, hash-valid object before it writes a direct ref, so this boundary cannot publish a dangling or format-mismatched root.
+Symbolic refs, caller-selected reflog policy, commit construction, pack import/export, and worktree/index operations are deliberately outside this first boundary.
 The caller writes immutable objects first, then advances an allowed ref to make a root reachable.
 
 An adapter outside the trait, `GitTreeToContentStore`, materializes a selected immutable Git tree into the existing `ContentStore` when a daemon subsystem needs Endor's `TreeManifest` vocabulary.
@@ -118,7 +121,8 @@ This separates Git reachability from Endor CAS liveness and prevents either coll
 At open, Endor checks repository discovery, object format, directory ownership and permissions, and the allowed ref namespace.
 Each object read verifies identity and kind before use.
 Failure to parse a tree, a missing promised object, a hash mismatch, or an invalid ref is fail-closed: the operation returns a structured corruption error, quarantines the affected repository for writes, and records the object or ref name without logging content bytes or credentials.
-`endor git-cas verify --full` runs the backend's full object/ref verification and is the only operation that can clear the quarantine after it succeeds.
+`endor git-cas verify --full` enumerates every object available through the object database, reads and re-hashes it, parses every tree, and validates every ref in the allowed namespace; it is the only operation that can clear the quarantine after it succeeds.
+This is a `GitCas` contract, not a promise of an unavailable libgit2 `fsck` wrapper: `Libgit2GitCas` implements it using the object-database enumeration and the same validating read path, and the `gix` spike must do the equivalent work.
 Recovery is restore from a known-good clone or backup, followed by a new verification pass; automatic object repair and destructive pruning are out of scope.
 
 ## Migration and Interoperability
@@ -152,10 +156,10 @@ The later public `Git` capability may choose `GitCas` for its in-process immutab
 | Standalone local artifact | `cargo build --release -p endo`; platform linkage inspection (`ldd`, `otool -L`, or `dumpbin /dependents`) | No runtime `git` or libgit2 dependency; local-only profile has no unexpected TLS, curl, or SSH dependency. |
 | Object identity | `cargo test -p endo git_cas::object_round_trip`; repeat under the experimental SHA-256 feature | Blob and tree IDs match Git's object framing; duplicate writes return one ID; SHA-1 and SHA-256 IDs cannot compare equal. |
 | Packed repository interoperability | `cargo test -p endo git_cas::packed_objects` after `git gc` creates fixture packs | Objects and trees written by regular Git remain readable in-process without invoking Git at runtime. |
-| Ref compare-and-swap | `cargo test -p endo git_cas::ref_compare_and_swap` | Exactly one concurrent expected-old update succeeds; the other reports `Conflict`; no ref is torn. |
+| Ref compare-and-swap | `cargo test -p endo git_cas::ref_compare_and_swap` | Exactly one concurrent expected-old update succeeds; the other reports `Conflict`; no ref is torn. Dangling targets, wrong-format IDs, and symbolic refs under `refs/endor/` are rejected. |
 | External writer race | integration fixture runs Endor and Git tooling against one repo | Endor reports a conflict and leaves an externally updated ref intact. |
 | Content-store bridge | `cargo test -p endo git_cas::materialize_tree` | Materialized Endor tree has the expected bytes and Git provenance, while its SHA-256 root differs from the Git tree ID. |
-| Corruption handling | mutate a loose object, ref, and tree entry in isolated fixtures; run `endor git-cas verify --full` | Read and verify fail closed, writes quarantine, and a verified restored repository clears quarantine. |
+| Corruption handling | mutate loose and packed-object fixtures, a ref, and a tree entry in isolated fixtures; run `endor git-cas verify --full` | Read and full verification fail closed, writes quarantine, and only a verified restored repository clears quarantine. |
 | Unsupported transport | build and run the local-only artifact against an HTTPS URL | It returns a structured unsupported-transport error without spawning `git`, prompting, or contacting a credential helper. |
 | Strategic parity | run the preceding corpus once with `Libgit2GitCas` and once with the `gix` spike | A candidate is eligible only with identical required outcomes and a documented binary-size, build-time, and maintenance comparison. |
 
