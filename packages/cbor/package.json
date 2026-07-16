@@ -17,8 +17,8 @@
   },
   "dependencies": {
     "@endo/errors": "workspace:^",
-    "@endo/harden": "workspace:^",
-    "@endo/eventual-send": "workspace:^"
+    "@endo/eventual-send": "workspace:^",
+    "@endo/harden": "workspace:^"
   },
   "devDependencies": {
     "@endo/ses-ava": "workspace:^",

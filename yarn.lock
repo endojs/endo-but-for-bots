@@ -556,6 +556,7 @@ __metadata:
   resolution: "@endo/cbor@workspace:packages/cbor"
   dependencies:
     "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     ava: "catalog:dev"
