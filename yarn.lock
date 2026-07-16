@@ -1318,6 +1318,24 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/block-device@workspace:^, @endo/block-device@workspace:packages/block-device":
+  version: 0.0.0-use.local
+  resolution: "@endo/block-device@workspace:packages/block-device"
+  dependencies:
+    "@endo/errors": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    ava: "catalog:dev"
+    babel-eslint: "npm:^10.1.0"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    prettier: "npm:^3.5.3"
+    ses: "workspace:^"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/bundle-source@workspace:^, @endo/bundle-source@workspace:packages/bundle-source":
   version: 0.0.0-use.local
   resolution: "@endo/bundle-source@workspace:packages/bundle-source"
@@ -1976,6 +1994,33 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/ext4@workspace:packages/ext4":
+  version: 0.0.0-use.local
+  resolution: "@endo/ext4@workspace:packages/ext4"
+  dependencies:
+    "@endo/base64": "workspace:^"
+    "@endo/block-device": "workspace:^"
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/luks": "workspace:^"
+    "@endo/platform": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    "@endo/stream": "workspace:^"
+    "@noble/hashes": "npm:^2.0.1"
+    ava: "catalog:dev"
+    babel-eslint: "npm:^10.1.0"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    prettier: "npm:^3.5.3"
+    ses: "workspace:^"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/fae@workspace:^, @endo/fae@workspace:packages/fae":
   version: 0.0.0-use.local
   resolution: "@endo/fae@workspace:packages/fae"
@@ -2378,6 +2423,27 @@ __metadata:
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/luks@workspace:^, @endo/luks@workspace:packages/luks":
+  version: 0.0.0-use.local
+  resolution: "@endo/luks@workspace:packages/luks"
+  dependencies:
+    "@endo/block-device": "workspace:^"
+    "@endo/errors": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    "@noble/ciphers": "npm:^2.0.0"
+    "@noble/hashes": "npm:^2.0.1"
+    ava: "catalog:dev"
+    babel-eslint: "npm:^10.1.0"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    prettier: "npm:^3.5.3"
+    ses: "workspace:^"
     typescript: "catalog:dev"
   languageName: unknown
   linkType: soft
@@ -3998,6 +4064,13 @@ __metadata:
     "@emnapi/core": ^1.7.1
     "@emnapi/runtime": ^1.7.1
   checksum: 10c0/2e88e1955258949ccf2d18c79975821ad38071b465ef126a5e14110977b97868867b016c1ad046e963cccc42c0bd9db6c8ff5fd1ebb61b87bb3487f339041658
+  languageName: node
+  linkType: hard
+
+"@noble/ciphers@npm:^2.0.0":
+  version: 2.2.0
+  resolution: "@noble/ciphers@npm:2.2.0"
+  checksum: 10c0/56396fa9b2cd7863999d9d70c6cbfcc03db9644cbbac9bb9d383d18f701bee3eb09f36878d8252a763c8d1fb6f0807339e06e2d28f18b14c525133c57c14508d
   languageName: node
   linkType: hard
 
