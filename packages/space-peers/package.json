@@ -2,7 +2,7 @@
   "name": "@endo/space-peers",
   "version": "0.1.0",
   "private": true,
-  "description": "Network peers viewer for Endo Chat — lists known remote peers and connection hints",
+  "description": "Network peers viewer for Endo Chat \u2014 lists known remote peers and connection hints",
   "keywords": [
     "endo",
     "network",
@@ -43,7 +43,8 @@
   },
   "eslintConfig": {
     "extends": [
-      "plugin:@endo/internal"
+      "plugin:@endo/internal",
+      "plugin:@endo/prefer-makeexo"
     ],
     "env": {
       "browser": true

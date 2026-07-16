@@ -2,7 +2,7 @@
   "name": "@endo/git",
   "version": "0.0.0",
   "private": true,
-  "description": "Node-side `NativeGitBackend` for the Endo `Git` capability — a subprocess wrapper over the installed `git` binary.  Pair with `@endo/exo-git` for the portable remotable exo glue.",
+  "description": "Node-side `NativeGitBackend` for the Endo `Git` capability \u2014 a subprocess wrapper over the installed `git` binary.  Pair with `@endo/exo-git` for the portable remotable exo glue.",
   "keywords": [
     "endo",
     "git"
@@ -64,7 +64,8 @@
   },
   "eslintConfig": {
     "extends": [
-      "plugin:@endo/internal"
+      "plugin:@endo/internal",
+      "plugin:@endo/prefer-makeexo"
     ]
   }
 }

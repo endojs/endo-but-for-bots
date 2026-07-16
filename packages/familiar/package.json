@@ -2,7 +2,7 @@
   "name": "@endo/familiar",
   "version": "0.1.0",
   "private": true,
-  "description": "🐈‍⬛ Endo Familiar - Electron desktop shell for Endo Chat",
+  "description": "\ud83d\udc08\u200d\u2b1b Endo Familiar - Electron desktop shell for Endo Chat",
   "keywords": [
     "endo",
     "familiar",
@@ -64,7 +64,8 @@
   },
   "eslintConfig": {
     "extends": [
-      "plugin:@endo/internal"
+      "plugin:@endo/internal",
+      "plugin:@endo/prefer-makeexo"
     ],
     "ignorePatterns": [
       "out/*"

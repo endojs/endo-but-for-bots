@@ -37,6 +37,8 @@ Extend a `plugin:@endo/CONFIG` in your `.eslintrc` configuration file. You can o
 - `style` opinions on JS coding style
 - `strict` all of the above
 - `internal` rules only for packages within the Endo source repository
+- `prefer-makeexo` opt-in rule steering `Far` toward `makeExo` (warns on bare
+  `Far(...)` call sites and the `Far` import from `@endo/far`)
 
 
 You can configure individual rules you want to use under the rules section.

@@ -2,7 +2,7 @@
   "name": "@endo/space-whylip",
   "version": "0.1.0",
   "private": true,
-  "description": "Whylip — an interactive illustrated primer powered by Fae agents",
+  "description": "Whylip \u2014 an interactive illustrated primer powered by Fae agents",
   "keywords": [
     "endo",
     "whylip",
@@ -44,7 +44,8 @@
   },
   "eslintConfig": {
     "extends": [
-      "plugin:@endo/internal"
+      "plugin:@endo/internal",
+      "plugin:@endo/prefer-makeexo"
     ],
     "env": {
       "browser": true

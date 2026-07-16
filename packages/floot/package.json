@@ -2,7 +2,7 @@
   "name": "@endo/floot",
   "version": "0.1.0",
   "private": true,
-  "description": "Streaming LLM agent harness for Endo — a fae-like factory whose agents stream reply tokens to callers",
+  "description": "Streaming LLM agent harness for Endo \u2014 a fae-like factory whose agents stream reply tokens to callers",
   "keywords": [],
   "author": "Endo contributors",
   "license": "Apache-2.0",
@@ -48,7 +48,8 @@
   },
   "eslintConfig": {
     "extends": [
-      "plugin:@endo/internal"
+      "plugin:@endo/internal",
+      "plugin:@endo/prefer-makeexo"
     ]
   }
 }
