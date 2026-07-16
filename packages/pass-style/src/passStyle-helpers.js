@@ -38,8 +38,12 @@ export const hasOwnPropertyOf = hasOwn;
 export const isPrimitive = val =>
   // Safer would be `Object(val) !== val` but is too expensive on XS.
   // So instead we use this adhoc set of type tests. But this is not safe in
-  // the face of possible evolution of the language. Beware!
-  !val || (typeof val !== 'object' && typeof val !== 'function');
+  // the face of possible evolution of the language, and already includes
+  // special logic for accepting `null` and `undefined` but not
+  // `document.all`. Beware!
+  val != null
+    ? typeof val !== 'object' && typeof val !== 'function'
+    : val === null || val === undefined;
 hideAndHardenFunction(isPrimitive);
 
 // NOTE: Do not make this type more precise because it breaks only clients
