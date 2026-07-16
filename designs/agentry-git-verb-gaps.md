@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-08 |
-| **Updated** | 2026-07-11 |
+| **Updated** | 2026-07-16 |
 | **Author** | 0xpatrickdev (prompted) |
 | **Status** | In Progress |
 
@@ -150,6 +150,12 @@ conflict-side path lineage, and non-interactive editor behavior for reword and
 autosquash.
 
 ## Code-Mode and JSON Surfaces
+
+> **The JSON slice below is parked — see #731.** The elevated JSON history
+> tool (`makeGitHistoryTool`) rides the parked JSON tool-wrapper layer; its
+> slice definition is kept for when that layer resumes. The `EndoGit` verb
+> substrate and the generated code-mode surface are unaffected and stay
+> prioritized.
 
 Code mode receives all five additions automatically by regenerating
 `packages/agent-tools/generated/code-mode-globals/git-declarations.js` from

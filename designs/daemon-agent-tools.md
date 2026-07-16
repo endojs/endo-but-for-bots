@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-03-02 |
-| **Updated** | 2026-07-15 |
+| **Updated** | 2026-07-16 |
 | **Author** | Kris Kowal, endolinbot (prompted) |
 | **Status** | In Progress |
 
@@ -101,6 +101,13 @@ What this document owns is the remainder:
 | Git (remote) | deliberately omitted ("network access is a separate capability") | `GitRemote` = `Git` + bounded HTTPS transport + non-extractable credential ([daemon-git-remotes](daemon-git-remotes.md)) | capability landed (#365, #368); `makeGitRemoteTool` remaining |
 | Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3) | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); `provideHttpClient` daemon wiring and `makeHttpTool` remaining |
 | Search | `grep` / `glob` on `Dir` | interim: `Filesystem` walks plus the Shell group's allowlisted `grep`; a capability-backed search substrate is an open question | not started |
+
+> **The JSON tool-wrapper surface is parked — see #731.** The `ToolRecord`
+> wrappers the Status column names (`makeGitTool`, `makeGitRemoteTool`,
+> `makeShellTool`, `makeHttpTool`) are parked as future work in favor of code
+> mode as the primary agent surface. The capability substrate in the
+> Reconciled-backing column is unaffected: code mode consumes those
+> capabilities directly, and they stay prioritized.
 
 Three properties of the reconciled map, each a correction to the sketch:
 
