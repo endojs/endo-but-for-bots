@@ -1,7 +1,7 @@
 // Sets up a SES environment with 'assert' global
 import test from 'ava';
 
-import { assert, throwRedacted } from '../index.js';
+import { assert, throwRedacted } from '@endo/errors';
 
 test('throwRedacted', t => {
   // eslint-disable-next-line no-constant-binary-expression

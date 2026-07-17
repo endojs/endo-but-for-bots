@@ -13,7 +13,7 @@ import '@endo/eventual-send/shim.js';
 import test from 'ava';
 
 import { E } from '@endo/eventual-send';
-import { Fail, hideAndHardenFunction, q } from '../index.js';
+import { Fail, hideAndHardenFunction, q } from '@endo/errors';
 
 const { freeze } = Object;
 
