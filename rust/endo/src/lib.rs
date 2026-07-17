@@ -3,6 +3,7 @@ pub mod cas_archive;
 pub mod codec;
 pub mod fetch;
 pub mod registry;
+pub mod resolver;
 pub mod semver;
 pub mod endo;
 pub mod engine;
