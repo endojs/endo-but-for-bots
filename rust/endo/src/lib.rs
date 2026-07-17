@@ -6,6 +6,7 @@ pub mod fetch;
 pub mod npmrc;
 pub mod registry;
 pub mod resolver;
+pub mod run_map;
 pub mod semver;
 pub mod endo;
 pub mod engine;

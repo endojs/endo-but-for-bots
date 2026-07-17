@@ -204,17 +204,19 @@ pub fn install_archive(machine: &crate::Machine, archive: &LoadedArchive) -> boo
 
         for (specifier, descriptor) in &compartment.modules {
             match descriptor {
-                ModuleDescriptor::File { .. } => {
-                    // Register source text
+                ModuleDescriptor::File { parser, .. } => {
+                    // Register source text with its parser so the
+                    // load hook can wrap cjs/json appropriately.
                     if let Some(source) = archive
                         .sources
                         .get(&(compartment_name.clone(), specifier.clone()))
                     {
                         registry_js.push_str(&format!(
-                            "__archiveRegistry['{}']['{}'] = {};\n",
+                            "__archiveRegistry['{}']['{}'] = {{ src: {}, fmt: '{}' }};\n",
                             escape_js_string(compartment_name),
                             escape_js_string(specifier),
                             json_encode_string(source),
+                            escape_js_string(parser),
                         ));
                     }
                 }
@@ -241,17 +243,98 @@ pub fn install_archive(machine: &crate::Machine, archive: &LoadedArchive) -> boo
         r#"
 var __archiveCompartments = {{}};
 
+// Resolve a relative specifier ('./x', '../y') against the referrer
+// module's directory, yielding a normalized './'-rooted specifier.
+function __resolveRelative(specifier, referrer) {{
+    var stack = referrer.split('/');
+    stack.pop(); // drop the referrer's file name
+    stack = stack.filter(function (p) {{ return p !== '.' && p !== ''; }});
+    var parts = specifier.split('/');
+    for (var i = 0; i < parts.length; i++) {{
+        var p = parts[i];
+        if (p === '.' || p === '') continue;
+        if (p === '..') stack.pop();
+        else stack.push(p);
+    }}
+    return './' + stack.join('/');
+}}
+
+// Node-style lookup: exact key, then '<spec>.js', then
+// '<spec>/index.js'. Returns the registry key that hit, or
+// undefined.
+function __lookupSource(compName, spec) {{
+    var sources = __archiveRegistry[compName] || {{}};
+    var candidates = [spec, spec + '.js', spec + '/index.js'];
+    for (var i = 0; i < candidates.length; i++) {{
+        if (sources[candidates[i]] !== undefined) return candidates[i];
+    }}
+    return undefined;
+}}
+
+// Synchronous require for cjs modules: bare specifiers follow the
+// compartment's dependency links; relative specifiers resolve
+// against the requiring module. Returns the cjs default export
+// (module.exports) when present, else the full namespace.
+function __archiveRequire(compName, referrer, spec) {{
+    var comp = __makeArchiveCompartment(compName);
+    var resolved = spec.charCodeAt(0) === 46 /* '.' */
+        ? __resolveRelative(spec, referrer)
+        : spec;
+    var ns = comp.importNow(resolved);
+    return ns && ns.default !== undefined ? ns.default : ns;
+}}
+
+// Build a ModuleSource for a registry entry, wrapping cjs and json
+// sources so native (esm-only) ModuleSource can carry them.
+function __moduleSourceFor(compName, key, entry) {{
+    var src = entry.src;
+    if (src.slice(0, 2) === '#!') {{
+        src = src.slice(src.indexOf('\n') + 1);
+    }}
+    if (entry.fmt === 'json') {{
+        return new ModuleSource(
+            'export default JSON.parse(' + JSON.stringify(src) + ');');
+    }}
+    if (entry.fmt === 'cjs') {{
+        var prelude =
+            'const [module, exports, require, __filename, __dirname] = ' +
+            '__cjsScope(' + JSON.stringify(compName) + ', ' +
+            JSON.stringify(key) + ');\n';
+        var epilogue = '\n;export default module.exports;';
+        return new ModuleSource(prelude + src + epilogue);
+    }}
+    return new ModuleSource(src);
+}}
+
 function __makeArchiveCompartment(compName) {{
     if (__archiveCompartments[compName]) return __archiveCompartments[compName];
 
     var sources = __archiveRegistry[compName] || {{}};
     var links = __archiveLinks[compName] || {{}};
 
-    var endowments = globalThis.__archiveEndowments || {{}};
+    var endowments = {{}};
+    var base = globalThis.__archiveEndowments || {{}};
+    for (var k in base) endowments[k] = base[k];
+    // The scope tuple a wrapped cjs module destructures on entry.
+    endowments.__cjsScope = function (comp, key) {{
+        var module = {{ exports: {{}} }};
+        var require = function (spec) {{
+            return __archiveRequire(comp, key, spec);
+        }};
+        var filename = key.slice(0, 2) === './' ? key.slice(2) : key;
+        var lastSlash = filename.lastIndexOf('/');
+        var dirname = lastSlash === -1 ? '.' : filename.slice(0, lastSlash);
+        return [module, module.exports, require, filename, dirname];
+    }};
     var comp = new Compartment({{
         globals: endowments,
         resolveHook: function(specifier, referrer) {{
-            return specifier;
+            if (specifier.charCodeAt(0) !== 46 /* '.' */) {{
+                return specifier; // bare: dependency link key
+            }}
+            var full = __resolveRelative(specifier, referrer);
+            var canon = __lookupSource(compName, full);
+            return canon !== undefined ? canon : full;
         }},
         loadNowHook: function(specifier) {{
             // Check for cross-compartment link first
@@ -261,11 +344,11 @@ function __makeArchiveCompartment(compName) {{
                 return {{ namespace: foreignComp.importNow(link.module) }};
             }}
             // Look up source in this compartment's registry
-            var src = sources[specifier];
-            if (src === undefined) {{
+            var key = __lookupSource(compName, specifier);
+            if (key === undefined) {{
                 throw new Error('Module not found: ' + compName + '/' + specifier);
             }}
-            return {{ source: new ModuleSource(src) }};
+            return {{ source: __moduleSourceFor(compName, key, sources[key]) }};
         }}
     }});
     __archiveCompartments[compName] = comp;

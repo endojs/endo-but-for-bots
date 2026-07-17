@@ -2930,6 +2930,135 @@ mod tests {
     }
 
     #[test]
+    fn import_archive_cjs_require_chain() {
+        // An esm entry imports a cjs package by bare specifier; that
+        // package requires a second cjs package — the shape of a
+        // real npm dependency graph (is-odd → is-number).
+        let map = make_archive_map(
+            vec![
+                (
+                    "app-v1",
+                    "app",
+                    vec![
+                        ("./main.js", archive::ModuleDescriptor::File {
+                            parser: "mjs".to_string(),
+                            location: Some("main.js".to_string()),
+                            sha512: None,
+                        }),
+                        ("is-odd", archive::ModuleDescriptor::Link {
+                            compartment: "is-odd-v3".to_string(),
+                            module: "./index.js".to_string(),
+                        }),
+                    ],
+                ),
+                (
+                    "is-odd-v3",
+                    "is-odd",
+                    vec![
+                        ("./index.js", archive::ModuleDescriptor::File {
+                            parser: "cjs".to_string(),
+                            location: Some("index.js".to_string()),
+                            sha512: None,
+                        }),
+                        ("is-number", archive::ModuleDescriptor::Link {
+                            compartment: "is-number-v6".to_string(),
+                            module: "./index.js".to_string(),
+                        }),
+                    ],
+                ),
+                (
+                    "is-number-v6",
+                    "is-number",
+                    vec![("./index.js", archive::ModuleDescriptor::File {
+                        parser: "cjs".to_string(),
+                        location: Some("index.js".to_string()),
+                        sha512: None,
+                    })],
+                ),
+            ],
+            "app-v1",
+            "./main.js",
+        );
+
+        let zip = make_test_zip(&map, &[
+            (
+                "app-v1/main.js",
+                "import isOdd from 'is-odd'; export const result = isOdd(7) ? 1 : 0;",
+            ),
+            (
+                "is-odd-v3/index.js",
+                "'use strict';\nconst isNumber = require('is-number');\nmodule.exports = function isOdd(n) {\n  if (!isNumber(n)) throw new TypeError('expected a number');\n  return (n % 2) === 1;\n};\n",
+            ),
+            (
+                "is-number-v6/index.js",
+                "'use strict';\nmodule.exports = function isNumber(n) {\n  return typeof n === 'number' && n === n;\n};\n",
+            ),
+        ]);
+
+        let loaded = archive::load_archive(std::io::Cursor::new(zip)).unwrap();
+        let machine = new_machine();
+        assert!(machine.import_archive(&loaded));
+
+        match machine.eval("__entryNs.result").unwrap() {
+            JsValue::Integer(n) => assert_eq!(n, 1),
+            other => panic!("expected 1, got {:?}", js_value_debug(&other)),
+        }
+    }
+
+    #[test]
+    fn import_archive_cjs_relative_and_json() {
+        // A cjs entry requires a nested extensionless relative
+        // module and a json file, exercising the Node-style lookup
+        // ('.js', '/index.js') and the json wrapper.
+        let map = make_archive_map(
+            vec![(
+                "app-v1",
+                "app",
+                vec![
+                    ("./main.js", archive::ModuleDescriptor::File {
+                        parser: "cjs".to_string(),
+                        location: Some("main.js".to_string()),
+                        sha512: None,
+                    }),
+                    ("./lib/util.js", archive::ModuleDescriptor::File {
+                        parser: "cjs".to_string(),
+                        location: Some("lib/util.js".to_string()),
+                        sha512: None,
+                    }),
+                    ("./package.json", archive::ModuleDescriptor::File {
+                        parser: "json".to_string(),
+                        location: Some("package.json".to_string()),
+                        sha512: None,
+                    }),
+                ],
+            )],
+            "app-v1",
+            "./main.js",
+        );
+
+        let zip = make_test_zip(&map, &[
+            (
+                "app-v1/main.js",
+                "const util = require('./lib/util');\nconst pkg = require('./package.json');\nmodule.exports = util.add(pkg.offset, 2);\n",
+            ),
+            (
+                "app-v1/lib/util.js",
+                "exports.add = function (a, b) { return a + b; };\n",
+            ),
+            ("app-v1/package.json", "{ \"offset\": 40 }"),
+        ]);
+
+        let loaded = archive::load_archive(std::io::Cursor::new(zip)).unwrap();
+        let machine = new_machine();
+        assert!(machine.import_archive(&loaded));
+
+        match machine.eval("__entryNs.default").unwrap() {
+            JsValue::Integer(n) => assert_eq!(n, 42),
+            other => panic!("expected 42, got {:?}", js_value_debug(&other)),
+        }
+    }
+
+    #[test]
     fn import_archive_base64() {
         use base64::Engine;
 

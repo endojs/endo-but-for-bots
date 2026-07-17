@@ -9,7 +9,8 @@
 
 ## Status
 
-All phases implemented except the XS execution half of Phase 4:
+All phases implemented; `endor run <entry.js>` executes end to
+end over XS:
 
 - **Phase 1**: `rust/endo/src/registry.rs` — SQLite-backed
   `RegistryTable` with `lookup`, `insert`, `list_versions`,
@@ -25,7 +26,7 @@ All phases implemented except the XS execution half of Phase 4:
   `*`, exact versions, and space-separated AND composites.
   `select_versions` implements Go-like MVS: greatest available
   version per major satisfying all ranges.
-- **Phase 4 (acquisition half)**: `rust/endo/src/resolver.rs` —
+- **Phase 4 (acquisition)**: `rust/endo/src/resolver.rs` —
   `NpmResolver` transitive MVS resolution over the CAS and
   registry table, plus the three host-function surfaces
   (`resolve_package`, `fetch_package_json`,
@@ -38,12 +39,26 @@ All phases implemented except the XS execution half of Phase 4:
   `--offline` (`OfflineClient`) resolves only from the CAS and
   registry table.
 
-Remaining: the XS execution half of Phase 4 — wiring the host
-functions into the XS-hosted compartment mapper's
-`moduleMapHook`/`importHook` so `endor run <entry.js>` executes
-the assembled compartment map. Gated on the XS boot bundles,
-whose generators are not yet in-tree ("The worker/SES boot
-generators are absent", `rust/endo/README.md`).
+- **Phase 4 (execution)**: `rust/endo/src/run_map.rs` —
+  materialises the assembled compartment map from the CAS into
+  the in-process XS archive runner's `LoadedArchive` (sources
+  from each compartment's `cas:sha256:` tree, Node-semantics
+  parser classification, `"."` dependency edges bound to each
+  target's default entry); `rust/endo/xsnap/src/archive.rs` —
+  the native archive runtime grew commonjs support (a
+  synchronous `require` over the compartment link graph, with
+  `module`/`exports`/`__filename`/`__dirname`), json modules,
+  relative-specifier resolution, and Node-style
+  `.js`/`/index.js` lookup. `endor run <entry.js>` imports the
+  entry module in an in-process XS machine — the Rust-native
+  equivalent of the design's `moduleMapHook`/`importHook`
+  wiring, without waiting for the XS-hosted compartment mapper.
+
+Known execution gaps (beyond the design-wide ones below):
+conditional `exports` maps beyond a plain string or the `"."`
+entry, the `module`/`browser` manifest fields, cyclic
+`require`, and named exports from cjs consumed via esm `import`
+(the default export carries `module.exports`).
 
 ## What is the Problem Being Solved?
 
