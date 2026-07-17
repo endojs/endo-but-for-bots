@@ -246,6 +246,9 @@
       "path": "packages/stream-node/tsconfig.composite.json"
     },
     {
+      "path": "packages/sturdyref/tsconfig.composite.json"
+    },
+    {
       "path": "packages/syrup-frame/tsconfig.composite.json"
     },
     {
