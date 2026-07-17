@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Run one package script in every workspace except explicitly excluded names.
- * npm has no counterpart for Yarn's `workspaces foreach --exclude` option.
+ * npm has no `--exclude` option for workspace script fan-out.
  */
 import { spawn } from 'node:child_process';
 import path from 'node:path';
