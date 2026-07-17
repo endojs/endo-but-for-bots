@@ -97,15 +97,15 @@ The repository already has pieces of the right convention:
 | Surface | Today | Gap |
 |---|---|---|
 | JSON-tool `mountReadText` | Truncates at a configurable `maxChars` and appends an explicit truncation marker. | The convention exists in one tool only. |
-| `OpenFile.read(offset, length)` | Byte-ranged low-level open-file read. | Line-blind, and no end-of-file or truncation signal. It is separate from the public `ReadableBlob` methods below. |
+| `OpenFile.read(offset, length)` | Byte-ranged low-level open-file read | Line-blind, with no end-of-file or truncation signal; separate from the public `ReadableBlob` methods below. |
 | `Cursor.read(limit)` | Returns `{ entries, atEnd }`. | Right result shape, directory listings only. |
 | `git.log(options)` | Bounds by `maxCount`. | Bounds row count, not output size. |
 | `git.diff()`, `git.show()`, `stashShow()` | Unbounded strings. | No bounding option at all. |
 
 The concrete filesystem/blob realization of this sed-like affordance is the
 range-read surface described in
-[platform-range-and-tree-reads.md](platform-range-and-tree-reads.md). The
-corrected public declarations in PR
+[platform-range-and-tree-reads.md](platform-range-and-tree-reads.md).
+The corrected public declarations in PR
 [#766](https://github.com/endojs/endo-but-for-bots/pull/766) separate the base
 `ReadableBlob` from the richer range surfaces, so this section uses the
 following contract rather than presenting ReadableBlob reads as an entirely
@@ -114,21 +114,27 @@ separate, not-yet-designed companion API:
 ### `ReadableBlob` byte and line windows
 
 - `fetch(offset, length) → Promise<PassableBytesReader>` is the streaming
-  byte-range primitive. It streams only the selected byte window
+  byte-range primitive.
+  It streams only the selected byte window
   `[offset, offset + length)`, rather than materializing that window as a
-  `Uint8Array` or streaming the whole blob. Both arguments are non-negative
-  `bigint` values. A valid window clamps at EOF, including an empty result for
+  `Uint8Array` or streaming the whole blob.
+  Both arguments are non-negative
+  `bigint` values.
+  A valid window clamps at EOF, including an empty result for
   a window beginning at or beyond EOF; invalid negative or non-safe values
   reject with `EINVAL`.
 - `rangeRead(offset, length) → Promise<Uint8Array>` is the whole-value byte
-  window convenience. It uses the same non-negative `bigint` byte offsets as
+  window convenience.
+  It uses the same non-negative `bigint` byte offsets as
   `fetch`, returns the selected bytes in one materialized array, and applies
   the same EOF clamping and invalid-domain behavior. “Whole-value” means the
   selected window is returned as one value, not that the entire blob is read.
 - `rangeReadText(startLine, endLine) → Promise<string>` is the whole-value
-  line window convenience. It decodes the blob as UTF-8 and returns lines
+  line window convenience.
+  It decodes the blob as UTF-8 and returns lines
   `[startLine, endLine)`, with 0-based, end-exclusive line indices, joined by
-  `\n`. A past-the-end `endLine` clamps to the last line, an empty or inverted
+  `\n`.
+  A past-the-end `endLine` clamps to the end, an empty or inverted
   range returns `''`, and a range wholly past the end also returns `''`.
   Negative or non-integer line indices reject with `EINVAL`; a trailing
   newline contributes a final empty line, and `\r` is preserved.
@@ -136,30 +142,34 @@ separate, not-yet-designed companion API:
 The byte methods and the line method deliberately have different addressing
 domains: byte windows use `bigint` offsets because blobs may exceed
 `Number.MAX_SAFE_INTEGER`, while line indices are ordinary JavaScript
-`number` counts. The blob methods return the selected bytes or text directly;
+`number` counts.
+The blob methods return the selected bytes or text directly;
 they do not add a truncation marker or `{ truncated, nextOffset }` metadata.
 
-This does not make `{ offset, limit }` the ReadableBlob method signature. That
-vocabulary remains useful for a higher-level tool or rendered-text API that
-needs a line window:
+This does not make `{ offset, limit }` the ReadableBlob method signature.
+That vocabulary remains useful for a higher-level tool or rendered-text API
+when it needs a line window:
 
 - `offset` denotes a line position (the existing proposal uses 1-based line
   positions, with an omitted value meaning the first line), and `limit` is a
   maximum line count.
 - When such an API is backed by a `ReadableBlob`, it can translate that
   vocabulary to `rangeReadText` by converting the line origin and computing an
-  exclusive end line. It must not pass those values to `fetch` or `rangeRead`,
+  exclusive end line.
+  It must not pass those values to `fetch` or `rangeRead`,
   whose offsets and lengths are byte-oriented `bigint`s.
 - A higher-level tool may choose a truncation marker, continuation metadata, or
-  a character guardrail. Those are tool/rendering policies, not properties of
+  a character guardrail.
+  Those are tool/rendering policies, not properties of
   the blob methods.
 
-The remaining Git text surfaces are intentionally separate follow-ups. The
-rendered outputs of `git.diff()`, `git.show()`, `git.log()`, and `stashShow()`
+The remaining Git text surfaces are intentionally separate follow-ups.
+The rendered outputs of `git.diff()`, `git.show()`, `git.log()`, and `stashShow()`
 remain unbounded here; a future tool or Git API design must decide how its
-line-window vocabulary and continuation result apply to those strings. The
-platform design also leaves propagation of `rangeRead` and `rangeReadText` to
-the remote daemon, Git, and mount blob exos as a follow-up. This design does
+line-window vocabulary and continuation result apply to those strings.
+The platform design also leaves propagation of `rangeRead` and `rangeReadText` to
+the remote daemon, Git, and mount blob exos as a follow-up.
+This design does
 not implement either follow-up or runtime/declaration changes beyond recording
 the contract above.
 
