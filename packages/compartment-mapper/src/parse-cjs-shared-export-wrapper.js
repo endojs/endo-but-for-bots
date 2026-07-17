@@ -6,12 +6,15 @@
  * @module
  */
 
+/* global globalThis */
+
 /** @import {ReadFn, ReadPowers} from './types.js' */
 
 import { findInvalidReadNowPowersProps, isReadNowPowers } from './powers.js';
 
 const { apply } = Reflect;
 const { freeze, keys, create, hasOwnProperty, defineProperty } = Object;
+const { Proxy, Set, URL } = globalThis;
 
 /**
  * @param {object} object
