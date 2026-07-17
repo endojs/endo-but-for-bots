@@ -49,6 +49,12 @@
       "types": "./src/fs/extended/types-index.d.ts",
       "default": "./src/fs/extended/types-index.js"
     },
+    "./fs/extended/backend-types": {
+      "types": "./src/fs/extended/backend-types-index.d.ts"
+    },
+    "./fs/extended/backend-types.js": {
+      "types": "./src/fs/extended/backend-types-index.d.ts"
+    },
     "./fs/extended/*": "./src/fs/extended/*",
     "./proc": "./src/proc.js",
     "./exo-fs": "./src/exo-fs.js",
