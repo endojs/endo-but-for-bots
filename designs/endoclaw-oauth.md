@@ -147,7 +147,12 @@ Changes from the 2026-03-03 sketch:
   `OAuth`/`OAuthControl` pairs are cheap attenuations minted from it.
   One credential backs many facets (§ Token, Facets, and Refresh).
 - **Path-pattern semantics are pinned.** A pattern is an exact path or
-  a prefix ending in `*`. Matching runs against the normalized path
+  a prefix ending in `*`. An **absent** `allowedPaths` (undefined) means
+  no path restriction within the base URL; an **empty** list (`[]`)
+  denies every path (deny-all), the explicit lock-down a caretaker sets
+  with `setAllowedPaths([])`. The two are deliberately distinct, so a
+  narrowing caretaker cannot accidentally widen a facet to unrestricted
+  by clearing its list. Matching runs against the normalized path
   only (query string excluded), after percent-decoding the unreserved
   set and dot-segment removal, so `..` segments cannot escape a prefix.
   Encoded separators (`%2F`, `%5C`) are **not** decoded into segment
@@ -322,6 +327,18 @@ of its delegate, with no round-trip to the host, the token caretaker,
 or the parent's own controller. Partition is recursive; the result is a
 delegation tree rooted at the token record.
 
+`partition` and `OAuthTokenControl.mint` return the identical
+`{ oauth, control }` shape but attenuate different things:
+`mint` carves a **sibling facet directly off the token** and may set a
+new `baseUrl` (the Sheets host versus the Drive host under one consent);
+`partition` carves a **child off an existing facet**, inheriting that
+facet's `baseUrl` and `scopes`, and can only narrow. Both are cheap,
+synchronous local attenuations on the near side; reached over CapTP
+through `E(oauth).partition(...)` the call resolves to a
+`Promise<{ oauth, control }>` whose facets are themselves eventual
+references, so a connector author awaits (or promise-pipelines) the
+result rather than treating it as an immediate value.
+
 ```mermaid
 graph TD
   T[(token record)] -.- TC[OAuthTokenControl]
@@ -341,30 +358,54 @@ mint-time-only: when an ancestor's caretaker later calls
 shrinks with it. A live child never out-lives or out-scopes a shrinking
 parent.
 
-**Enforcement is per-request conjunction along the ancestor chain, not
-a snapshot intersection at partition time.** Each facet (root or child)
-carries its own live constraint layer (`allowedPaths`, `readOnly`), and
-a request through a child is checked against the child's layer AND
-every ancestor's layer AND the token record, at request time:
+**Enforcement is per-request conjunction (logical AND) along the
+ancestor chain, not a snapshot intersection at partition time.** Each
+facet (root or child) carries its own live constraint layer
+(`allowedPaths`, `readOnly`), and a request through a child is checked
+against the child's layer AND every ancestor's layer AND the token
+record:
 
 - `allowedPaths` intersect by conjunction: the request path must match
-  every layer in the chain that declares a path restriction.
+  every layer in the chain that declares a path restriction (an absent
+  layer waives its clause; an empty `[]` layer denies unconditionally).
 - `readOnly` ORs across the chain: any ancestor's `true` binds the
   whole subtree; a child's `setReadOnly(false)` clears only its own
   layer.
 - `baseUrl` and `scopes()` are inherited unchanged from the root facet.
   A new base URL comes only from `OAuthTokenControl.mint` (a sibling
-  facet), never from partition.
+  facet), never from partition. Note the disclosure consequence:
+  `scopes()` reports the *token's* consent set, so a narrowed delegate
+  can read which scopes back the credential it was carved from —
+  including sibling-provider scopes it cannot itself exercise. This is
+  consent-only introspection (never effective authority), but a
+  deployment that does not want a Gmail delegate to learn a Sheets scope
+  exists should mint per-provider tokens (a distinct consent per
+  provider) rather than partition across providers from one broadly
+  consented token. `scopes()` remains non-attenuable by design so the
+  reported value cannot lie about the token; narrowing what a delegate
+  may *do* is `allowedPaths`/`readOnly`, not `scopes`.
+
+The live constraint layer and the revoked bit live on the **facet
+record** (what a child references), not merely on the transient control
+object, so an ancestor's `setAllowedPaths`/`setReadOnly`/`revoke` is
+visible to every descendant's request-time walk; this is the single
+point on which both dynamic monotonicity and subtree revocation rest.
 
 A snapshot intersection computed at partition time would go stale the
 moment an ancestor's caretaker narrows; conjunction makes the invariant
 unconditional. It also means `partition` performs **no subset
 validation**: a child declaring paths outside its parent's live set is
-legal, and that surplus is simply inert (denied by the ancestor layer,
-including a parent layer that shrank after the child was minted).
-Denial errors carry the same uniform codes as the root facet's
-(`'path-denied'`, `'method-denied'`, `'facet-revoked'`) and do not
-disclose which ancestor's layer denied.
+legal, and that surplus is **dormant, not discarded** — inert while an
+ancestor's narrower layer denies it, but it re-arms if that ancestor
+later *restores* (widens its own layer back, a first-class caretaker
+power). Effective authority still never exceeds the live ancestor
+conjunction, so this is not escalation; but security reasoning over a
+delegation tree must treat an over-broad child declaration as latent
+authority gated on the ancestor, not as authority that was thrown away.
+A caretaker that wants a child's breadth permanently gone `revoke()`s
+the child. Denial errors carry the same uniform codes as the root
+facet's (`'path-denied'`, `'method-denied'`, `'facet-revoked'`) and do
+not disclose which ancestor's layer denied.
 
 **Child controls are layer-local.** A child `OAuthControl`'s
 `setAllowedPaths`/`setReadOnly` adjust only the child's own layer;
@@ -373,7 +414,11 @@ disclose which ancestor's layer denied.
 (descendants' requests pass through the revoked layer and fail with
 `'facet-revoked'`). No control anywhere in the tree can widen anything;
 widening remains an incremental-authorization re-mint at the root
-(Design Decision 4).
+(Design Decision 4). The caretaker "restore" power (relax a narrowing it
+made itself) is `setAllowedPaths`/`setReadOnly` widening a node's *own*
+layer back toward — never past — the ancestor conjunction; there is
+deliberately **no un-revoke**, since `revoke()` is the one-way, terminal
+sever.
 
 **Durability and cost.** A child facet is an `oauth` formula like any
 other, referencing its **parent facet's** formula id (root facets
@@ -382,15 +427,19 @@ restarts and each node is independently petnameable and revocable.
 References run child-to-parent only; no parent-to-child index is
 required for enforcement. Enforcement cost is O(depth) string matching
 per request, and delegation chains are expected shallow; an
-implementation may cache a flattened conjunction keyed to
-ancestor-epoch counters as a pure optimization, never as semantics.
+implementation may cache a flattened conjunction as a pure optimization,
+never as semantics, provided the cache key participates in **every**
+only-shrinking mutation along the chain — `setAllowedPaths`,
+`setReadOnly`, and (critically) `revoke` must each bump the ancestor's
+epoch, or a stale cached conjunction could serve an allow after a
+narrow or a sever.
 
 **Why first-class.** A holder can always delegate opaquely by wrapping
-`fetch` in its own exo; partition does not create a new power, it makes
+`fetch` in its own exo; partition does not create a new power — it makes
 the inevitable one legible: the child is a durable formula the host can
-inspect, it composes correctly with refresh, the two revocations, and
-structured errors, and the delegator gets a real caretaker over its
-delegate instead of an ad-hoc wrapper with none.
+inspect; it composes with refresh, the two revocations, and structured
+errors; and the delegator gets a real caretaker over its delegate rather
+than an ad-hoc wrapper with none.
 
 ## The Connector Contract
 
