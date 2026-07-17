@@ -26,8 +26,6 @@
  * call.
  */
 
-/* global globalThis */
-
 import harden from '@endo/harden';
 import { Far } from '@endo/pass-style';
 
@@ -99,7 +97,6 @@ export const makeSturdyRefNamespace = () => {
     // identification). It never crosses the wire in this form.
     const sturdyRef = /** @type {SturdyRef} */ (Far('SturdyRef', {}));
     // Safe because this WeakMap owns its set method.
-    // eslint-disable-next-line @endo/no-polymorphic-call
     locators.set(sturdyRef, locator);
     return sturdyRef;
   };
@@ -107,7 +104,6 @@ export const makeSturdyRefNamespace = () => {
   /** @type {(sturdyRef: SturdyRef) => Locator} */
   const toLocation = sturdyRef => {
     // Safe because this WeakMap owns its get method.
-    // eslint-disable-next-line @endo/no-polymorphic-call
     const locator = locators.get(sturdyRef);
     if (locator === undefined) {
       throw TypeError(
@@ -146,7 +142,6 @@ const isSturdyRefNamespace = candidate => {
  * @returns {SturdyRefNamespace}
  */
 export const selectSturdyRef = () => {
-  // eslint-disable-next-line no-restricted-globals
   const { SturdyRef: existing } = globalThis;
   if (existing !== undefined) {
     if (!isSturdyRefNamespace(existing)) {

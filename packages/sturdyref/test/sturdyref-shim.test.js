@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global globalThis */
 // Exercises the shim as used in a real HardenedJS realm: lockdown FIRST, then
 // the shim installs and hardens after lockdown. Each test pins one distributed
 // confinement property from the shim's spec.
@@ -30,7 +29,11 @@ test('installed after lockdown: hardened and functioning', t => {
   const locator = harden({ kind: 'test-locator', endpoint: 'wormhole:abc' });
   const sturdyRef = fromLocation(locator);
   t.true(isFrozen(sturdyRef), 'minted sturdyref is hardened');
-  t.is(toLocation(sturdyRef), locator, 'round-trips to the same locator record');
+  t.is(
+    toLocation(sturdyRef),
+    locator,
+    'round-trips to the same locator record',
+  );
 });
 
 // Locators are OBJECTS, not strings.
@@ -53,7 +56,11 @@ test('no location: sturdyref is passStyleOf-opaque and leaks no locator', t => {
 
   // No own property (string or symbol) exposes the locator.
   for (const key of Reflect.ownKeys(sturdyRef)) {
-    t.not(Reflect.get(sturdyRef, key), locator, `own key ${String(key)} leaks locator`);
+    t.not(
+      Reflect.get(sturdyRef, key),
+      locator,
+      `own key ${String(key)} leaks locator`,
+    );
   }
   t.deepEqual(Object.keys(sturdyRef), [], 'no enumerable own keys');
 

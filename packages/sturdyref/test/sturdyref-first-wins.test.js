@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global globalThis */
 // The other direction of first-wins: when a namespace is ALREADY installed at
 // globalThis.SturdyRef (an eval twin got there first), the shim ADOPTS it rather
 // than overwriting it. Isolated in its own file (its own process) so its
@@ -8,10 +7,7 @@
 import '@endo/init';
 import test from 'ava';
 import harden from '@endo/harden';
-import {
-  provideSturdyRef,
-  selectSturdyRef,
-} from '../src/sturdyref-pony.js';
+import { provideSturdyRef, selectSturdyRef } from '../src/sturdyref-pony.js';
 
 test('first-wins: an already-installed namespace is adopted, not overwritten', t => {
   const preExisting = harden({
@@ -31,7 +27,19 @@ test('first-wins: an already-installed namespace is adopted, not overwritten', t
     configurable: true,
   });
 
-  t.is(selectSturdyRef(), preExisting, 'selectSturdyRef adopts the existing one');
-  t.is(provideSturdyRef(), preExisting, 'provideSturdyRef adopts the existing one');
-  t.is(globalThis.SturdyRef, preExisting, 'the pre-existing install is untouched');
+  t.is(
+    selectSturdyRef(),
+    preExisting,
+    'selectSturdyRef adopts the existing one',
+  );
+  t.is(
+    provideSturdyRef(),
+    preExisting,
+    'provideSturdyRef adopts the existing one',
+  );
+  t.is(
+    globalThis.SturdyRef,
+    preExisting,
+    'the pre-existing install is untouched',
+  );
 });
