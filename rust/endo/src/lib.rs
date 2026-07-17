@@ -1,3 +1,4 @@
+pub mod assemble;
 pub mod cas;
 pub mod cas_archive;
 pub mod codec;

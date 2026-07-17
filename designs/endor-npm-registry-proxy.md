@@ -3,27 +3,47 @@
 | | |
 |---|---|
 | **Created** | 2026-04-17 |
-| **Updated** | 2026-04-17 |
+| **Updated** | 2026-07-17 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 
 ## Status
 
-Phases 1 and 3 implemented:
+All phases implemented except the XS execution half of Phase 4:
 
 - **Phase 1**: `rust/endo/src/registry.rs` — SQLite-backed
   `RegistryTable` with `lookup`, `insert`, `list_versions`,
   `get_meta`/`set_meta`, `count`. Schema matches the design:
   `packages(name, version, hash, integrity, fetched_at)` and
   `package_meta(name, versions_json, fetched_at)`.
+- **Phase 2**: `rust/endo/src/fetch.rs` — npm-registry HTTP
+  fetch layer: metadata fetch, tarball download, SHA-512
+  integrity check, extraction into the CAS as a tree,
+  registry-table update.
 - **Phase 3**: `rust/endo/src/semver.rs` — `Version` parsing
   with ordering, `Range` parsing with `^`, `~`, `>=`, `<`, `<=`,
   `*`, exact versions, and space-separated AND composites.
   `select_versions` implements Go-like MVS: greatest available
   version per major satisfying all ranges.
+- **Phase 4 (acquisition half)**: `rust/endo/src/resolver.rs` —
+  `NpmResolver` transitive MVS resolution over the CAS and
+  registry table, plus the three host-function surfaces
+  (`resolve_package`, `fetch_package_json`,
+  `fetch_module_source`); `rust/endo/src/assemble.rs` —
+  `endor run <entry.js>` entry-package discovery, entry-tree
+  ingestion into the CAS, and compartment-map synthesis with
+  `cas:sha256:` locations.
+- **Phase 5**: `rust/endo/src/npmrc.rs` — `.npmrc` registry,
+  scoped registries, and `_authToken` credentials;
+  `--offline` (`OfflineClient`) resolves only from the CAS and
+  registry table.
 
-Remaining: Phase 2 (HTTP client for package fetching), Phase 4
-(compartment mapper integration), Phase 5 (offline mode, .npmrc).
+Remaining: the XS execution half of Phase 4 — wiring the host
+functions into the XS-hosted compartment mapper's
+`moduleMapHook`/`importHook` so `endor run <entry.js>` executes
+the assembled compartment map. Gated on the XS boot bundles,
+whose generators are not yet in-tree ("The worker/SES boot
+generators are absent", `rust/endo/README.md`).
 
 ## What is the Problem Being Solved?
 

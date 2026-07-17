@@ -15,6 +15,8 @@
 //!   endor worker  [-e xs]       # supervised worker child
 //!   endor run     [-e xs] <archive.zip>
 //!                               # standalone archive runner
+//!   endor run     [--offline] <entry.js>
+//!                               # assemble npm deps into the CAS
 //!
 //! The manager is hosted in-process by `endor daemon` on a
 //! dedicated `std::thread`; there is no separate `manager`
@@ -71,6 +73,7 @@ fn main() -> ExitCode {
         "run" => {
             let cas_hash = parse_flag_value(rest, "--cas");
             let no_cas = rest.iter().any(|a| a == "--no-cas");
+            let offline = rest.iter().any(|a| a == "--offline");
             let path = parse_positional_path(rest);
             match engine {
                 "xs" => {
@@ -78,13 +81,17 @@ fn main() -> ExitCode {
                         // Run from CAS root hash.
                         result_to_exit("endor", cmd_run_from_cas(&hash))
                     } else if let Some(ref p) = path {
-                        if no_cas {
+                        if is_entry_module(p) {
+                            result_to_exit("endor", cmd_run_entry(p, offline))
+                        } else if no_cas {
                             xsnap_result_to_exit(xsnap::run_xs_archive(p))
                         } else {
                             result_to_exit("endor", cmd_run_with_cas(p))
                         }
                     } else {
-                        eprintln!("usage: endor run [-e xs] [--cas <hash>] [--no-cas] <archive.zip>");
+                        eprintln!(
+                            "usage: endor run [-e xs] [--cas <hash>] [--no-cas] [--offline] <archive.zip | entry.js>"
+                        );
                         ExitCode::from(2)
                     }
                 }
@@ -125,6 +132,8 @@ fn print_help() {
     eprintln!("Child-facing commands (XS engine by default):");
     eprintln!("  worker  [-e xs]                Run a supervised worker child");
     eprintln!("  run     [-e xs] <archive.zip>  Run a compartment-map archive");
+    eprintln!("  run     [--offline] <entry.js> Assemble an entry module's npm");
+    eprintln!("                                 dependencies into the CAS");
     eprintln!();
     eprintln!("Maintenance:");
     eprintln!("  gc                             Garbage-collect the CAS");
@@ -189,15 +198,24 @@ fn print_subcommand_help(sub: &str) {
             eprintln!("  -e, --engine <engine>  Engine to use (default: xs)");
         }
         "run" => {
-            eprintln!("Usage: endor run [-e xs] <archive.zip>");
+            eprintln!("Usage: endor run [-e xs] [--offline] <archive.zip | entry.js>");
             eprintln!();
             eprintln!("Run a compartment-map archive standalone.");
             eprintln!();
             eprintln!("Executes the given .zip archive in an XS machine without a");
             eprintln!("running daemon. Useful for testing and one-off execution.");
             eprintln!();
+            eprintln!("A .js/.mjs/.cjs entry module instead resolves the entry");
+            eprintln!("package's npm dependencies (Go-like minimal version");
+            eprintln!("selection), fetches them content-addressed into the CAS,");
+            eprintln!("and assembles the compartment map binding them — no npm");
+            eprintln!("CLI, no node_modules, no lockfile. XS execution of the");
+            eprintln!("assembled map is not yet wired.");
+            eprintln!();
             eprintln!("Options:");
             eprintln!("  -e, --engine <engine>  Engine to use (default: xs)");
+            eprintln!("  --offline              Resolve only from the local CAS and");
+            eprintln!("                         registry table; no network access");
         }
         "gc" => {
             eprintln!("Usage: endor gc");
@@ -376,6 +394,85 @@ fn cmd_ping() -> Result<(), EndoError> {
     let _ = conn.shutdown(Shutdown::Both);
     eprintln!("pong");
     Ok(())
+}
+
+/// A `.js`/`.mjs`/`.cjs` positional is an entry module for the
+/// npm-registry-proxy path; anything else stays an archive.
+fn is_entry_module(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("js") | Some("mjs") | Some("cjs")
+    )
+}
+
+/// `endor run <entry.js>`: the acquisition half of Phase 4 of
+/// `designs/endor-npm-registry-proxy.md`. Resolves the entry
+/// package's transitive npm dependencies (Go-like MVS), fetches
+/// them content-addressed into the CAS (the registry table as
+/// cache/lock file), ingests the entry package, and stores the
+/// compartment map binding them — then stops: executing that map
+/// over XS is the remaining half of Phase 4, gated on the XS boot
+/// bundles.
+fn cmd_run_entry(entry_path: &std::path::Path, offline: bool) -> Result<(), EndoError> {
+    // Standalone runs share the archive path's temporary CAS; the
+    // registry table lives beside it (override: ENDOR_REGISTRY_DB).
+    let cas_dir = std::env::temp_dir().join("endor-cas");
+    let cas = endo::cas::ContentStore::open(&cas_dir)
+        .map_err(|e| EndoError::Config(format!("CAS open: {e}")))?;
+    let registry_db = std::env::var("ENDOR_REGISTRY_DB")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir().join("endor-registry.sqlite"));
+    let registry_table = endo::registry::RegistryTable::open(&registry_db)
+        .map_err(|e| EndoError::Config(format!("registry table open: {e}")))?;
+
+    let (package_root, _) = endo::assemble::find_package_root(entry_path)
+        .map_err(|e| EndoError::Config(format!("{e}")))?;
+    let home = std::env::var("HOME").ok().map(std::path::PathBuf::from);
+    let mut config = endo::npmrc::NpmConfig::load(Some(&package_root), home.as_deref());
+    if offline {
+        config.set_offline(true);
+    }
+
+    let assembled = if config.offline() {
+        endo::assemble::assemble_entry(
+            &endo::fetch::OfflineClient,
+            &cas,
+            &registry_table,
+            config,
+            entry_path,
+        )
+    } else {
+        let http = endo::fetch::UreqClient::with_config(config.clone());
+        endo::assemble::assemble_entry(&http, &cas, &registry_table, config, entry_path)
+    }
+    .map_err(|e| EndoError::Config(format!("{e}")))?;
+
+    eprintln!(
+        "endor[run]: assembled {} ({} packages)",
+        assembled.package_name,
+        assembled.resolution.len()
+    );
+    for package in assembled.resolution.packages() {
+        eprintln!(
+            "endor[run]:   {}@{} {}",
+            package.name, package.version, package.tree_hash
+        );
+    }
+    eprintln!("endor[run]: entry tree {}", assembled.entry_tree_hash);
+    eprintln!(
+        "endor[run]: compartment map {}",
+        assembled.compartment_map_hash
+    );
+
+    // The XS execution half of Phase 4 is not yet wired; be honest
+    // about where the pipeline stops rather than pretending to run.
+    Err(EndoError::Config(format!(
+        "entry-point execution over XS is not yet wired (Phase 4 of \
+         designs/endor-npm-registry-proxy.md); the compartment map \
+         {} is assembled in the CAS at {}",
+        assembled.compartment_map_hash,
+        cas_dir.display()
+    )))
 }
 
 fn cmd_run_with_cas(archive_path: &std::path::Path) -> Result<(), EndoError> {
