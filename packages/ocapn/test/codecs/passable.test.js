@@ -20,7 +20,7 @@ import {
   SyrupCodec,
 } from './_codecs_util.js';
 import { throws } from '../_util.js';
-import { getSturdyRefDetails } from '../../src/client/sturdyrefs.js';
+import { getSturdyRefLocator } from '../../src/client/sturdyrefs.js';
 
 const textEncoder = new TextEncoder();
 
@@ -144,7 +144,7 @@ const table = [
     makeValue: testKit =>
       testKit.sturdyRefTracker.makeSturdyRef(exporterLocation, '123'),
     customAssert: (t, actual) => {
-      const details = getSturdyRefDetails(actual);
+      const details = getSturdyRefLocator(actual);
       if (!details) {
         throw Error('SturdyRef has no details');
       }
@@ -158,7 +158,7 @@ const table = [
       harden([testKit.sturdyRefTracker.makeSturdyRef(exporterLocation, '123')]),
     customAssert: (t, actual) => {
       t.is(actual.length, 1);
-      const details = getSturdyRefDetails(actual[0]);
+      const details = getSturdyRefLocator(actual[0]);
       if (!details) {
         throw Error('SturdyRef has no details');
       }
@@ -203,7 +203,7 @@ const table = [
     // SturdyRefs need customAssert because object identity differs after round-trip
     customAssert: (t, actual) => {
       t.is(actual[Symbol.toStringTag], 'sturdyRefTag');
-      const details = getSturdyRefDetails(actual.payload);
+      const details = getSturdyRefLocator(actual.payload);
       if (!details) {
         throw Error('SturdyRef has no details');
       }
