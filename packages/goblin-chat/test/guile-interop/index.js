@@ -1,4 +1,5 @@
 // @ts-check
+/* global process */
 
 /**
  * Endo interop client for a Guile-hosted Goblin Chat room.

@@ -60,6 +60,22 @@
   "publishConfig": {
     "access": "public"
   },
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/ses"
+    ],
+    "overrides": [
+      {
+        "files": [
+          "test/**/*.js"
+        ],
+        "rules": {
+          "no-restricted-globals": "off",
+          "@endo/no-polymorphic-call": "off"
+        }
+      }
+    ]
+  },
   "ava": {
     "files": [
       "test/**/*.test.*"

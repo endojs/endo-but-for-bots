@@ -3,7 +3,6 @@
   "include": [
     "*.js",
     "src/**/*.js",
-    "test",
-    "bin/ses-ava.cjs"
+    "test"
   ]
 }

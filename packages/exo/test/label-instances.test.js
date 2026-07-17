@@ -1,5 +1,7 @@
+// eslint-disable-next-line import/order
 import test from './_prepare-test-env-ava-label-instances.js';
 
+// eslint-disable-next-line import/order
 import { passStyleOf } from '@endo/far';
 import { M } from '@endo/patterns';
 

@@ -1,5 +1,5 @@
 // TODO parameterize MatchHelper which will solve most of them
-
+/* eslint-disable no-continue */
 import harden from '@endo/harden';
 import {
   q,
@@ -1624,6 +1624,7 @@ const makePatternKit = () => {
       );
       return (
         confirmKind(specimen, 'copyMap', reject) &&
+        // eslint-disable-next-line @endo/restrict-comparison-operands
         (specimenMap.payload.keys.length <= numMapEntriesLimit ||
           (reject &&
             reject`CopyMap must have no more than ${q(

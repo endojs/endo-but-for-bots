@@ -1,4 +1,5 @@
 // @ts-nocheck
+/* global globalThis */
 
 // Because this package `@endo/panic` is below both `ses` and `@endo/ses-ava` in
 // package layering, its diagnostic output cannot benefit from either

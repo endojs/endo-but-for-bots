@@ -1,3 +1,5 @@
+/* global setTimeout */
+
 import { Far } from '@endo/marshal';
 import { X, Fail } from '@endo/errors';
 import { E, makeCapTP } from '../src/captp.js';
@@ -68,7 +70,7 @@ const createGuestBootstrap = (Trap, other) => {
           let ret;
           try {
             ret = thunk();
-          } catch (_e) {
+          } catch (e) {
             return;
           }
           Fail`Thunk did not throw: ${ret}`;

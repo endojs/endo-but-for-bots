@@ -60,6 +60,7 @@ const compartmentInstrumentationFactory = () => {
   const InstrumentedCompartment = /** @type {typeof Compartment} */ (
     /** @type {unknown} */ (
       function InstrumentedCompartment(...args) {
+        // eslint-disable-next-line prefer-rest-params
         const compartment = Reflect.construct(Compartment, args);
         compartments.push(compartment);
         return compartment;

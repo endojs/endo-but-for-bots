@@ -67,6 +67,11 @@
   "publishConfig": {
     "access": "public"
   },
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/internal"
+    ]
+  },
   "sesAvaConfigs": {
     "lockdown": "../../ava-endo-lockdown.config.mjs",
     "base": "../../ava-base.config.mjs",

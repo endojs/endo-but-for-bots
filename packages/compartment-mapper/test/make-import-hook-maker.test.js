@@ -1,3 +1,4 @@
+/* eslint-disable no-shadow */
 import './ses-lockdown.js';
 import test from 'ava';
 import fs from 'node:fs';

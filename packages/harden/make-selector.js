@@ -4,6 +4,8 @@
  * Object[Symbol.for('harden')].
  */
 
+/* global globalThis */
+
 /** @import { Harden } from './make-hardener.js' */
 
 const symbolForHarden = Symbol.for('harden');

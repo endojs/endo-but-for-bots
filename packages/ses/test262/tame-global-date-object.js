@@ -1,3 +1,4 @@
+/* global globalThis */
 
 import test262Runner from '@endo/test262-runner';
 import tameDateConstructor from '../src/tame-date-constructor.js';

@@ -1,3 +1,4 @@
+/* global process */
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import url from 'url';

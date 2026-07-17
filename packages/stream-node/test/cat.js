@@ -1,4 +1,5 @@
 // @ts-nocheck
+/* global process */
 // Buffer stdin until parent sends a message (any message).
 process.once('message', () => {
   process.stdin.pipe(process.stdout);

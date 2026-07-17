@@ -1,3 +1,4 @@
+/* global globalThis */
 
 import test262Runner from '@endo/test262-runner';
 import '../index.js';

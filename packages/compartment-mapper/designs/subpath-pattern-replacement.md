@@ -209,14 +209,16 @@ Assertions are shared via `_subpath-patterns-assertions.js`, so parity
 is verified by construction: if both test suites pass, the behaviors
 are equivalent.
 
-- `subpath-patterns-node-parity.test.js` runs fixtures under plain
-  Node.js using dynamic `import()`.
+- `subpath-patterns.test.js` runs fixtures both through the `scaffold()`
+  harness (the SES treatment, exercising `loadLocation`, `importLocation`,
+  `makeArchive`, `parseArchive`, `writeArchive`, `loadArchive`, and
+  `importArchive`) and under plain Node.js via dynamic `import()` (the
+  Node.js parity treatment).
+  Both treatments are registered in the same module, back-to-back per
+  scenario where the scenario has both sides.
 - `subpath-patterns-node-condition.node-condition.test.js` runs under
   `--conditions=blue-moon` via ses-ava (`nodeArguments: ['-C', 'blue-moon']`
   in `_ava-node-condition.config.js`).
-- `subpath-patterns.test.js` runs fixtures through the `scaffold()`
-  harness, exercising `loadLocation`, `importLocation`, `makeArchive`,
-  `parseArchive`, `writeArchive`, `loadArchive`, and `importArchive`.
 
 ### Unit Tests (`pattern-replacement.test.js`)
 

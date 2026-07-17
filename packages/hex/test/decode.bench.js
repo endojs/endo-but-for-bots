@@ -1,4 +1,5 @@
-/* eslint-disable no-bitwise */
+/* eslint-disable no-bitwise, @endo/restrict-comparison-operands */
+/* global globalThis */
 
 // Benchmark: decode paths.  Compares several table-based decoders
 // against the shipped charcode-arithmetic decoder across small (32 B),

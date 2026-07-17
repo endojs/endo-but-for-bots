@@ -1,4 +1,5 @@
 /// <reference types="ses"/>
+/* eslint-disable no-use-before-define */
 
 import type {
   CopyArray,
@@ -448,7 +449,7 @@ export declare const M: MatcherNamespace;
  * collision with the runtime `M` value.  Generic type parameters also named
  * `M` (e.g. `<M extends Methods>`) are locally scoped and do not conflict.
  */
-// eslint-disable-next-line no-redeclare, import/export
+// eslint-disable-next-line @typescript-eslint/no-namespace, no-redeclare, import/export
 export namespace M {
   /**
    * Infer the TypeScript type that a Pattern matches.

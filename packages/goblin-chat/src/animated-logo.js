@@ -1,5 +1,5 @@
 // @ts-check
-/* eslint-disable no-bitwise, no-continue */
+/* eslint-disable no-bitwise, no-continue, import/no-unresolved */
 /* global performance, setInterval, clearInterval */
 
 /**

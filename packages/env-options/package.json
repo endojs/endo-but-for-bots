@@ -49,6 +49,11 @@
   "publishConfig": {
     "access": "public"
   },
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/ses"
+    ]
+  },
   "ava": {
     "files": [
       "test/**/*.test.*"

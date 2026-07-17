@@ -1,24 +1,21 @@
-import { describe, it, after as afterAll } from 'node:test';
-import { RuleTester } from '@typescript-eslint/rule-tester';
-import rule from '../src/rules/no-multi-name-local-export.js';
+'use strict';
 
-RuleTester.describe = describe;
-RuleTester.it = it;
-RuleTester.afterAll = afterAll;
+const { RuleTester } = require('eslint');
+const rule = require('../lib/rules/no-multi-name-local-export.js');
 
 const tester = new RuleTester({
-  languageOptions: { ecmaVersion: 2022, sourceType: 'module' },
+  parserOptions: { ecmaVersion: 2022, sourceType: 'module' },
 });
 
 tester.run('no-multi-name-local-export', rule, {
   valid: [
-    { code: 'const foo = 1; export { foo };' },
-    { code: 'const foo = 1; export { foo as bar };' },
-    { code: 'const a = 1, b = 2; export { a, b as c };' },
-    { code: "export { x as y } from 'mod';" },
-    { code: "export * from 'mod';" },
-    { code: 'const foo = 1; export default foo; export { foo };' },
-    { code: 'const foo = 1; export { foo as default };' },
+    'const foo = 1; export { foo };',
+    'const foo = 1; export { foo as bar };',
+    'const a = 1, b = 2; export { a, b as c };',
+    "export { x as y } from 'mod';",
+    "export * from 'mod';",
+    'const foo = 1; export default foo; export { foo };',
+    'const foo = 1; export { foo as default };',
   ],
   invalid: [
     {

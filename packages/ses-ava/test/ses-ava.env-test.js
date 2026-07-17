@@ -1,3 +1,5 @@
+/* global process */
+
 import test from 'ava';
 
 test('ses-ava env', t => {

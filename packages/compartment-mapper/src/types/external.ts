@@ -4,6 +4,8 @@
  * @module
  */
 
+/* eslint-disable no-use-before-define */
+
 import type {
   FinalStaticModuleType,
   ModuleDescriptor,

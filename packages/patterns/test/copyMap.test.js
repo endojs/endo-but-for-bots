@@ -141,7 +141,7 @@ test('matching', t => {
   try {
     matches(makeCopyMap([]), makeCopyMap([])) || Fail`Unexpected match failure`;
     t.fail('CopyMap comparison support (time to test unconditionally?)');
-  } catch (_err) {
+  } catch (err) {
     // no CopyMap comparison support
     t.pass();
     return;

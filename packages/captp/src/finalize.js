@@ -1,3 +1,4 @@
+/* global globalThis */
 import { Far, isPrimitive } from '@endo/pass-style';
 
 // @ts-check

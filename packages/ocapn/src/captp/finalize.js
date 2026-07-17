@@ -1,3 +1,4 @@
+/* global globalThis */
 import { Far, isObject } from '@endo/marshal';
 
 // @ts-check

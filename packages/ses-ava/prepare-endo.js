@@ -1,3 +1,5 @@
+/* global globalThis */
+
 import '@endo/init/pre-remoting.js';
 import '@endo/init/debug.js';
 import { environmentOptionsListHas } from '@endo/env-options';

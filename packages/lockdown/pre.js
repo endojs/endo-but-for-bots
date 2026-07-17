@@ -1,6 +1,6 @@
 // pre.js - set up the default lockdown function
 // @ts-nocheck
-/* global LOCKDOWN_OPTIONS process */
+/* global globalThis LOCKDOWN_OPTIONS process */
 
 import 'ses';
 import postLockdown from './post.js';

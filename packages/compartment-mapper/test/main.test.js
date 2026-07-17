@@ -1,4 +1,5 @@
 // @ts-nocheck
+/* global globalThis */
 
 import 'ses';
 import test from 'ava';

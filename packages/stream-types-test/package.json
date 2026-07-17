@@ -48,6 +48,11 @@
   "publishConfig": {
     "access": "restricted"
   },
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/internal"
+    ]
+  },
   "typeCoverage": {
     "atLeast": 100
   }

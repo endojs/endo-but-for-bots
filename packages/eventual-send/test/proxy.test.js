@@ -76,7 +76,9 @@ test('resolveWithPresence with proxy options', async t => {
         return callback => {
           try {
             callback();
-          } catch (_err) {}
+          } catch (problem) {
+            // es-lint ignore-empty-block
+          }
         };
       }
       if (property === 'there') {
@@ -257,7 +259,9 @@ test('resolveWithPresence proxy with revoker', async t => {
         return callback => {
           try {
             callback();
-          } catch (_err) {}
+          } catch (problem) {
+            // es-lint ignore-empty-block
+          }
         };
       }
       if (property === 'there') {
@@ -452,7 +456,9 @@ test('resolveWithPresence test nr 6', async t => {
         return callback => {
           try {
             callback();
-          } catch (_err) {}
+          } catch (problem) {
+            // es-lint ignore-empty-block
+          }
         };
       }
       if (property === 'there') {

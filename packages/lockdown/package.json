@@ -49,6 +49,11 @@
       "test/**/*.test.*"
     ]
   },
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/internal"
+    ]
+  },
   "publishConfig": {
     "access": "public"
   },

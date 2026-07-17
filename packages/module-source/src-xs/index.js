@@ -1,4 +1,5 @@
 // @ts-nocheck
+/* global globalThis */
 
 /**
  * @typedef {|

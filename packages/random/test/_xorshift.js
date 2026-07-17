@@ -1,5 +1,5 @@
 // @ts-check
-/* eslint-disable no-bitwise */
+/* eslint no-bitwise:[0] */
 
 // xorshift128+ baseline used only by the comparative bench in
 // `random.bench.js`.  Wraps the underlying 64-bit-int generator in a

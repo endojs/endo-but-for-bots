@@ -1,3 +1,4 @@
+/* eslint-env node */
 /* glimport/no-extraneous-dependenciesobal process */
 import '../index.js';
 import { promises as fs } from 'fs';
@@ -7,9 +8,9 @@ import { promises as fs } from 'fs';
 //   yarn lerna run build
 // Omitting the dependency from package.json solves the problem and works
 // by dint of shared workspace node_modules.
-
+// eslint-disable-next-line import/no-extraneous-dependencies
 import { makeBundle } from '@endo/compartment-mapper/bundle.js';
-
+// eslint-disable-next-line import/no-extraneous-dependencies
 import { ModuleSource } from '@endo/module-source';
 import { fileURLToPath } from 'url';
 

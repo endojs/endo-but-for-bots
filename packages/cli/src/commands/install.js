@@ -1,3 +1,5 @@
+/* global process */
+
 import os from 'os';
 
 import openWebPage from 'open';

@@ -38,6 +38,7 @@
  */
 
 // @ts-check
+/* eslint-disable no-underscore-dangle */
 
 import {
   Map,

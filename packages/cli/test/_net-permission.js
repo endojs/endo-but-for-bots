@@ -1,3 +1,4 @@
+/* global process */
 import { spawnSync } from 'child_process';
 
 const script = `

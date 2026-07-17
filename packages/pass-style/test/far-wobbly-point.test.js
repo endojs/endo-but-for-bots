@@ -3,6 +3,7 @@
  * https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/google-caja/caja-spec-2007-12-21.pdf
  */
 
+/* eslint-disable class-methods-use-this */
 /* eslint-disable max-classes-per-file */
 import test from '@endo/ses-ava/test.js';
 

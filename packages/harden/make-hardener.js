@@ -21,6 +21,8 @@
 
 // @ts-check
 
+/* global globalThis */
+
 const {
   Array,
   JSON,
@@ -103,7 +105,7 @@ const { bind } = functionPrototype;
  *
  * @type {<F extends (this: any, ...args: any[]) => any>(fn: F) => ((thisArg: ThisParameterType<F>, ...args: Parameters<F>) => ReturnType<F>)}
  */
-const uncurryThis = bind.bind(bind.call);
+const uncurryThis = bind.bind(bind.call); // eslint-disable-line @endo/no-polymorphic-call
 
 // See https://github.com/endojs/endo/issues/2930
 if (!('hasOwn' in Object)) {
@@ -342,7 +344,7 @@ export const makeHardener = ({ traversePrototypes = false } = {}) => {
       /**
        * @param {any} val
        */
-      function enqueue(val) {
+      const enqueue = val => {
         if (isPrimitive(val)) {
           // ignore primitives
           return;
@@ -358,7 +360,7 @@ export const makeHardener = ({ traversePrototypes = false } = {}) => {
         }
         // console.warn(`adding ${val} to toFreeze`, val);
         setAdd(toFreeze, val);
-      }
+      };
 
       /**
        * @param {any} obj

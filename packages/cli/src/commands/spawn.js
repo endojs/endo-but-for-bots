@@ -1,3 +1,5 @@
+/* eslint-disable no-await-in-loop */
+/* global process */
 import os from 'os';
 import { E } from '@endo/far';
 import { withEndoAgent } from '../context.js';

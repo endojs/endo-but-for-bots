@@ -1,3 +1,4 @@
+/* global process */
 import 'ses';
 import { promises as fs } from 'fs';
 // Lerna does not like dependency cycles.

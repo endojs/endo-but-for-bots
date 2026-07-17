@@ -51,6 +51,7 @@ export const tameConsole = (
     };
   }
 
+  // eslint-disable-next-line no-restricted-globals
   const originalConsole = /** @type {VirtualConsole} */ (
     // eslint-disable-next-line no-nested-ternary
     typeof globalThis.console !== 'undefined'
@@ -60,6 +61,7 @@ export const tameConsole = (
           // log at a specific level with no special argument interpretation).
           // https://console.spec.whatwg.org/#logging
           (p => freeze({ debug: p, log: p, info: p, warn: p, error: p }))(
+            // eslint-disable-next-line no-undef
             wrapLogger(globalThis.print),
           )
         : undefined

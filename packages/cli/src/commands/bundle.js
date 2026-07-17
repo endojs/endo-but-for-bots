@@ -1,3 +1,5 @@
+/* global process */
+
 import os from 'os';
 import { E } from '@endo/far';
 import bundleSource from '@endo/bundle-source';

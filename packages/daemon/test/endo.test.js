@@ -1,4 +1,6 @@
 // @ts-check
+/* global process */
+
 // Establish a perimeter:
 import '@endo/init/debug.js';
 

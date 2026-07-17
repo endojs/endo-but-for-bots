@@ -53,6 +53,7 @@ export const getAnonymousIntrinsics = () => {
 
   // 21.1.5.2 The %StringIteratorPrototype% Object
 
+  // eslint-disable-next-line no-new-wrappers
   const StringIteratorObject = iterateString(new String());
   const StringIteratorPrototype = getPrototypeOf(StringIteratorObject);
 
@@ -64,6 +65,7 @@ export const getAnonymousIntrinsics = () => {
 
   // 22.1.5.2 The %ArrayIteratorPrototype% Object
 
+  // eslint-disable-next-line no-array-constructor
   const ArrayIteratorObject = iterateArray([]);
   const ArrayIteratorPrototype = getPrototypeOf(ArrayIteratorObject);
 
@@ -87,6 +89,10 @@ export const getAnonymousIntrinsics = () => {
 
   // 25.2.1 The GeneratorFunction Constructor
 
+  // GeneratorFunctionInstance and AsyncFunctionInstance below retain the
+  // `function` keyword by deliberate exception: named generator/async-function
+  // sentinels used only to reach intrinsic constructors via getConstructorOf,
+  // not naturally object members. See docs/house-style/function-keyword.md.
   // eslint-disable-next-line no-empty-function
   function* GeneratorFunctionInstance() {}
   const GeneratorFunction = getConstructorOf(GeneratorFunctionInstance);

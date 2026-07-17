@@ -1,4 +1,6 @@
 // @ts-check
+/* global setTimeout */
+
 import harden from '@endo/harden';
 
 /** @typedef {import('@endo/ses-ava/prepare-endo.js').default} Test */
@@ -64,7 +66,7 @@ export const maybeDecode = bytes => {
       isValidUtf8: true,
       value: strictTextDecoder.decode(bytes),
     };
-  } catch (_error) {
+  } catch (error) {
     return {
       isValidUtf8: false,
       value: undefined,
@@ -192,7 +194,7 @@ export const makeTestClient = async ({
     client._debug,
     'makeTestClient requires debugMode - client._debug must be present',
   );
-
+  // eslint-disable-next-line no-underscore-dangle
   const { _debug: debug } = client;
   // Register netlayer with client
   const netlayer = await client.registerNetlayer((handlers, logger) =>

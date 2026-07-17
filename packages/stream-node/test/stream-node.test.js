@@ -1,4 +1,5 @@
 // @ts-nocheck
+/* global setTimeout */
 import test from '@endo/ses-ava/test.js';
 
 import { fileURLToPath } from 'url';
@@ -164,8 +165,8 @@ test('stream writer abort', async (/** @type {import('ava').ExecutionContext} */
   };
 
   const makeConsumer = async () => {
-    // eslint-disable-next-line no-empty
     for await (const _ of reader) {
+      // eslint-disable-next-line no-empty
     }
   };
 

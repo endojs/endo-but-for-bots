@@ -5,6 +5,8 @@
  * @module
  */
 
+/* eslint-disable no-use-before-define */
+
 import type { ImportHook, ImportNowHook, StaticModuleType } from 'ses';
 import type {
   CompartmentDescriptor,

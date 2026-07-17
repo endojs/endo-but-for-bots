@@ -1,3 +1,4 @@
+/* global globalThis */
 export const detectEngineGC = async () => {
   const globalGC = globalThis.gc;
   if (typeof globalGC === 'function') {

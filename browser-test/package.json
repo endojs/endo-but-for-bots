@@ -4,10 +4,24 @@
   "author": "Endo Contributors",
   "license": "Apache-2.0",
   "scripts": {
-    "test": "node node_modules/playwright/cli.js test"
+    "test": "playwright test"
   },
   "devDependencies": {
     "@playwright/test": "1.60.0",
     "@types/node": "^20.11.16"
+  },
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/internal"
+    ],
+    "parserOptions": {
+      "sourceType": "script"
+    },
+    "rules": {
+      "import/extensions": "off"
+    },
+    "env": {
+      "node": true
+    }
   }
 }

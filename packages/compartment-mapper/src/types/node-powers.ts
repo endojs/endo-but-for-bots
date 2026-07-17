@@ -5,6 +5,8 @@
  * @module
  */
 
+/* eslint-disable no-use-before-define */
+
 /** For creating `ReadPowers` */
 export type FsInterface = {
   promises: {

@@ -1,3 +1,4 @@
+/* global globalThis */
 // This is a fixture for test-no-eval.js which ensures that eval is unusable at
 // the time of SES initialization.
 // eslint-disable-next-line no-eval

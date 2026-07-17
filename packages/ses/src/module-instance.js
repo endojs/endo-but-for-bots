@@ -23,6 +23,7 @@ import {
   assign,
 } from './commons.js';
 import { compartmentEvaluate } from './compartment-evaluate.js';
+import { makeNotifierWithResolver } from './notifier-with-resolver.js';
 
 const { quote: q } = assert;
 
@@ -257,6 +258,17 @@ export const makeModuleInstance = (
       configurable: false,
     };
 
+    // Define on exportsTarget eagerly so cross-module reads through the
+    // namespace import (`'*'` notifier) see the TDZ-aware getter even before
+    // imports() completes its sort-and-define pass. The late pass below
+    // redefines with the identical descriptor as a no-op, preserving the
+    // ECMA-262 sorted enumeration order.
+    defineProperty(
+      exportsTarget,
+      fixedExportName,
+      exportsProps[fixedExportName],
+    );
+
     notifiers[fixedExportName] = fixedGetNotify.notify;
   });
 
@@ -345,6 +357,16 @@ export const makeModuleInstance = (
         configurable: false,
       };
 
+      // Define on exportsTarget eagerly so cross-module reads through the
+      // namespace import see the TDZ-aware getter before imports() completes
+      // its sort-and-define pass. The late pass below redefines with the
+      // identical descriptor as a no-op, preserving sorted enumeration order.
+      defineProperty(
+        exportsTarget,
+        liveExportName,
+        exportsProps[liveExportName],
+      );
+
       notifiers[liveExportName] = liveGetNotify.notify;
     },
   );
@@ -354,23 +376,73 @@ export const makeModuleInstance = (
   };
   notifiers['*'] = notifyStar;
 
-  const wireUpExportNotifier = (exportName, notify) => {
-    if (!notifiers[exportName] && notify !== false) {
-      notifiers[exportName] = notify;
-
-      // exported live binding state
-      let value;
-      const update = newValue => (value = newValue);
-      notify(update);
-      exportsProps[exportName] = {
-        get() {
-          return value;
-        },
-        set: undefined,
-        enumerable: true,
-        configurable: false,
+  const wireUpExportNotifier = (
+    exportName,
+    notify,
+    deferredSpecifier,
+    deferredImportName,
+  ) => {
+    if (notifiers[exportName] || notify === false) {
+      return;
+    }
+    if (notify === undefined) {
+      if (deferredSpecifier === undefined) {
+        return;
+      }
+      // The upstream module did not yet expose a notifier for
+      // `deferredImportName` when this re-export was wired. This is the
+      // star-export cycle of endojs/endo#59: the upstream's notifier for
+      // that name may be wired only later, in its own candidate-all walk,
+      // after this module's `imports()` returns. Install a notifier that
+      // queues subscribers until the upstream resolves, then forwards them
+      // through. {@link makeNotifierWithResolver} is the synchronous
+      // variant of `Promise.withResolvers` that captures this pattern; each
+      // `notify` call lazily attempts to resolve against the upstream's
+      // notifiers.
+      const { notify: queueOrForward, resolve: resolveUpstream } =
+        makeNotifierWithResolver();
+      notify = update => {
+        const upstreamInstance = mapGet(importedInstances, deferredSpecifier);
+        const upstreamNotify = upstreamInstance.notifiers[deferredImportName];
+        if (upstreamNotify !== undefined) {
+          resolveUpstream(upstreamNotify);
+        }
+        queueOrForward(update);
       };
     }
+    notifiers[exportName] = notify;
+
+    // Re-exported live binding state. The exported getter throws
+    // ReferenceError until the upstream binding propagates a value through
+    // `notify`, mirroring the cross-module TDZ semantics of ECMA-262:
+    // reading a re-export of an upstream `const` or `let` binding during a
+    // cycle's linked-but-not-yet-evaluated window raises a ReferenceError
+    // rather than silently returning the cached `undefined`. An upstream
+    // `var` binding clears its TDZ as part of its hoisting preamble (see
+    // `transform-analyze.js`), so for `var` the updater fires before the
+    // downstream's getter is observed and the getter returns `undefined`.
+    let value;
+    let tdz = true;
+    const update = newValue => {
+      value = newValue;
+      tdz = false;
+    };
+    notify(update);
+    exportsProps[exportName] = {
+      get() {
+        if (tdz) {
+          throw ReferenceError(`binding ${q(exportName)} not yet initialized`);
+        }
+        return value;
+      },
+      set: undefined,
+      enumerable: true,
+      configurable: false,
+    };
+    // Define on exportsTarget eagerly so cross-module namespace reads see
+    // the TDZ-aware getter before imports() completes; the late pass below
+    // redefines with the identical descriptor as a no-op.
+    defineProperty(exportsTarget, exportName, exportsProps[exportName]);
   };
 
   // Per the calling convention for the moduleFunctor generated from
@@ -381,7 +453,7 @@ export const makeModuleInstance = (
   // The updateRecord must conform to moduleAnalysis.imports
   // updateRecord = Map<specifier, importUpdaters>
   // importUpdaters = Map<importName, [update(newValue)*]>
-  function imports(updateRecord) {
+  const imports = updateRecord => {
     // By the time imports is called, the importedInstances should already be
     // initialized with module instances that satisfy
     // imports.
@@ -428,7 +500,12 @@ export const makeModuleInstance = (
       if (reexportMap[specifier]) {
         // Set up reexport notifiers instantly so they are available in cycles.
         for (const [localName, exportedName] of reexportMap[specifier]) {
-          wireUpExportNotifier(exportedName, importNotifiers[localName]);
+          wireUpExportNotifier(
+            exportedName,
+            importNotifiers[localName],
+            specifier,
+            localName,
+          );
         }
       }
     }
@@ -452,7 +529,7 @@ export const makeModuleInstance = (
 
     freeze(exportsTarget);
     activate();
-  }
+  };
 
   let optFunctor;
   if (__syncModuleFunctor__ !== undefined) {
@@ -466,7 +543,7 @@ export const makeModuleInstance = (
   }
   let didThrow = false;
   let thrownError;
-  function execute() {
+  const execute = () => {
     if (optFunctor) {
       // uninitialized
       const functor = optFunctor;
@@ -491,7 +568,7 @@ export const makeModuleInstance = (
     if (didThrow) {
       throw thrownError;
     }
-  }
+  };
 
   return freeze({
     notifiers,

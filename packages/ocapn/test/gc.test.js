@@ -1,4 +1,6 @@
 // @ts-check
+/* global setTimeout */
+
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
 import { test, makeTestClientPair, getOcapnDebug } from './_util.js';

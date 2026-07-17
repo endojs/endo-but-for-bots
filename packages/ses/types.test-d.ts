@@ -1,5 +1,6 @@
+/* eslint-disable @endo/no-polymorphic-call, import/no-extraneous-dependencies, no-restricted-globals, no-underscore-dangle */
+import { expectType } from 'tsd';
 import type { Assert } from 'ses';
-import { expectAssignable, expectType } from 'tsd';
 
 // Lockdown
 
@@ -174,7 +175,7 @@ interface Dummy {
 
 (n: number | string) => {
   // @ts-expect-error
-
+  // eslint-disable-next-line @typescript-eslint/restrict-plus-operands
   return n + 10;
 };
 // vs
@@ -223,20 +224,9 @@ expectType<Error>(
   }),
 );
 
-expectType<AggregateError>(
-  makeError(X`details are ${stringable}`, AggregateError, {
-    errors: [new Error('error 1'), new Error('error 2')],
-  }),
-);
-
-expectAssignable<Error & { code?: string }>(
-  makeError(X`details are ${stringable}`, Error, {
-    code: '123',
-  }),
-);
-
 expectType<never>(Fail`details are ${stringable}`);
 
+// eslint-disable-next-line no-unreachable
 expectType<never>(Fail`details are ${stringable}`);
 
 // ////////////////////////////////////////////////////////////////////////

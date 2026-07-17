@@ -23,7 +23,7 @@ const { stringify: q } = JSON;
 const copyMapComparison = (() => {
   try {
     return matches(makeCopyMap([]), makeCopyMap([]));
-  } catch (_err) {
+  } catch (err) {
     return false;
   }
 })();

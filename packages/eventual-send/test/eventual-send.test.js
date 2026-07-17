@@ -1,3 +1,4 @@
+/* global setTimeout */
 import '@endo/lockdown/commit-debug.js';
 import test from 'ava';
 

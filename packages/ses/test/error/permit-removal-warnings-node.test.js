@@ -1,4 +1,5 @@
 // @ts-nocheck
+/* global Buffer */
 import test from 'ava';
 import url from 'url';
 import { spawn } from 'child_process';

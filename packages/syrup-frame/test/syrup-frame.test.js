@@ -1,4 +1,6 @@
 // @ts-nocheck
+/* global setTimeout */
+
 import '@endo/init/debug.js';
 
 import test from 'ava';

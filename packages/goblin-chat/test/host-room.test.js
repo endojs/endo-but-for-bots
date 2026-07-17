@@ -1,4 +1,5 @@
 // @ts-check
+/* eslint-disable import/no-unresolved */
 
 /**
  * `hostRoom` end-to-end test.

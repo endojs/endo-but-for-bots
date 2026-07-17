@@ -1,3 +1,5 @@
+/* global process */
+
 import { makePromiseKit } from '@endo/promise-kit';
 import { E } from '@endo/far';
 import { whereEndoSock } from '@endo/where';

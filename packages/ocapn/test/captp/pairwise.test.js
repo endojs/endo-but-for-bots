@@ -1,4 +1,5 @@
 // @ts-check
+/* eslint-disable no-restricted-syntax */
 
 import test from '@endo/ses-ava/test.js';
 import { Far } from '@endo/marshal';
