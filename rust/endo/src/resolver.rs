@@ -44,6 +44,7 @@ use std::io;
 
 use crate::cas::ContentStore;
 use crate::fetch::{fetch_metadata_cached, fetch_package, FetchError, HttpClient};
+use crate::npmrc::NpmConfig;
 use crate::registry::RegistryTable;
 use crate::semver::{Range, Version};
 
@@ -208,27 +209,50 @@ impl From<io::Error> for ResolveError {
     }
 }
 
-/// Resolver over one registry endpoint, one CAS, and one registry
-/// table.
+/// Resolver over one registry configuration, one CAS, and one
+/// registry table. The configuration picks the registry endpoint
+/// per package name, so scoped packages (`@scope/pkg`) can route to
+/// a private registry while everything else uses the default.
 pub struct NpmResolver<'a, H: HttpClient> {
     http: &'a H,
     cas: &'a ContentStore,
     registry_table: &'a RegistryTable,
-    registry_url: String,
+    config: NpmConfig,
 }
 
 impl<'a, H: HttpClient> NpmResolver<'a, H> {
+    /// Resolver pinned to a single registry URL for every package.
     pub fn new(
         http: &'a H,
         cas: &'a ContentStore,
         registry_table: &'a RegistryTable,
         registry_url: &str,
     ) -> Self {
+        NpmResolver::with_config(
+            http,
+            cas,
+            registry_table,
+            NpmConfig::with_registry(registry_url),
+        )
+    }
+
+    /// Resolver over a full [`NpmConfig`] (default + scoped
+    /// registries, from `.npmrc`/`NPM_CONFIG_REGISTRY`). Offline
+    /// mode is a property of the HTTP client, not the configuration:
+    /// pair a table populated by an earlier online run with
+    /// [`crate::fetch::OfflineClient`] and every cached package
+    /// resolves without the network.
+    pub fn with_config(
+        http: &'a H,
+        cas: &'a ContentStore,
+        registry_table: &'a RegistryTable,
+        config: NpmConfig,
+    ) -> Self {
         NpmResolver {
             http,
             cas,
             registry_table,
-            registry_url: registry_url.to_string(),
+            config,
         }
     }
 
@@ -278,7 +302,7 @@ impl<'a, H: HttpClient> NpmResolver<'a, H> {
                             self.http,
                             self.cas,
                             self.registry_table,
-                            &self.registry_url,
+                            self.config.registry_for(name),
                             name,
                             &version.to_string(),
                         )?;
@@ -350,7 +374,7 @@ impl<'a, H: HttpClient> NpmResolver<'a, H> {
             self.http,
             self.cas,
             self.registry_table,
-            &self.registry_url,
+            self.config.registry_for(name),
             name,
             &version.to_string(),
         )?;
@@ -372,7 +396,12 @@ impl<'a, H: HttpClient> NpmResolver<'a, H> {
     /// irregular key, and an unparseable version can never be
     /// selected anyway.
     fn available_versions(&self, name: &str) -> Result<Vec<Version>, ResolveError> {
-        let body = fetch_metadata_cached(self.http, self.registry_table, &self.registry_url, name)?;
+        let body = fetch_metadata_cached(
+            self.http,
+            self.registry_table,
+            self.config.registry_for(name),
+            name,
+        )?;
         let doc: serde_json::Value =
             serde_json::from_slice(&body).map_err(|e| ResolveError::BadMetadata {
                 name: name.to_string(),
@@ -1058,10 +1087,132 @@ mod tests {
         assert!(!src.is_empty());
 
         // And a second resolution is served entirely from the
-        // registry table: same hashes, no fresh fetches required.
-        let again = resolver
+        // registry table — with an `OfflineClient`, so any network
+        // access at all would fail the test.
+        let offline = crate::fetch::OfflineClient;
+        let offline_resolver = NpmResolver::new(&offline, &cas, &registry, DEFAULT_REGISTRY);
+        let again = offline_resolver
             .resolve_transitive(&root_deps(&[("is-odd", "^3.0.0")]))
-            .unwrap();
+            .expect("offline re-resolution from the populated registry table");
         assert_eq!(again.get("is-odd", 3).unwrap().tree_hash, is_odd.tree_hash);
+        assert_eq!(
+            again.get("is-number", 6).unwrap().tree_hash,
+            is_number.tree_hash
+        );
+        eprintln!("offline re-resolution served {} packages with zero HTTP", again.len());
+    }
+
+    #[test]
+    fn scoped_packages_route_to_their_scoped_registry() {
+        // `@acme/util` must be fetched from the scope's registry
+        // while `plain` stays on the default; regression evidence:
+        // if the resolver ignored `registry_for`, the `@acme/util`
+        // metadata GET would go to registry.npmjs.org, where the
+        // mock has no response, and resolution would fail.
+        let (_tmp, cas) = fresh_cas();
+        let registry = RegistryTable::open_in_memory().unwrap();
+
+        let scoped_meta = format!(
+            r#"{{"versions":{{"1.0.0":{{"dist":{{"tarball":"https://npm.acme.example/@acme/util/-/util-1.0.0.tgz"}}}}}}}}"#
+        );
+        let http = MockHttp::new()
+            .respond(
+                "https://npm.acme.example/@acme/util",
+                scoped_meta.into_bytes(),
+            )
+            .respond(
+                "https://npm.acme.example/@acme/util/-/util-1.0.0.tgz",
+                pkg_tarball("@acme/util", "1.0.0", &[]),
+            )
+            .respond(
+                "https://registry.npmjs.org/plain",
+                registry_meta("plain", &["2.0.0"]),
+            )
+            .respond(
+                &tarball_url("plain", "2.0.0"),
+                pkg_tarball("plain", "2.0.0", &[]),
+            );
+
+        let mut config = crate::npmrc::NpmConfig::new();
+        config.apply_npmrc("@acme:registry=https://npm.acme.example/\n");
+        let resolver = NpmResolver::with_config(&http, &cas, &registry, config);
+        let resolution = resolver
+            .resolve_transitive(&root_deps(&[("@acme/util", "^1.0.0"), ("plain", "^2.0.0")]))
+            .unwrap();
+
+        assert_eq!(resolution.len(), 2);
+        assert_eq!(
+            resolution.get("@acme/util", 1).unwrap().version.to_string(),
+            "1.0.0"
+        );
+        assert_eq!(
+            resolution.get("plain", 2).unwrap().version.to_string(),
+            "2.0.0"
+        );
+        // The call log shows each package hit its own registry host.
+        let calls = http.calls.borrow();
+        assert!(
+            calls
+                .iter()
+                .any(|c| c == "META https://npm.acme.example/@acme/util"),
+            "scoped metadata fetch missing from {calls:?}"
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|c| c == "META https://registry.npmjs.org/plain"),
+            "default-registry metadata fetch missing from {calls:?}"
+        );
+    }
+
+    #[test]
+    fn offline_resolution_serves_cache_and_refuses_cold_misses() {
+        // Populate the CAS and registry table online, then resolve
+        // the same graph with an `OfflineClient`: identical hashes,
+        // zero network. A package absent from the cache must surface
+        // `FetchError::Offline`, not a masked HTTP error.
+        let (_tmp, cas) = fresh_cas();
+        let registry = RegistryTable::open_in_memory().unwrap();
+        let http = MockHttp::new()
+            .respond(
+                "https://registry.npmjs.org/a",
+                registry_meta("a", &["1.0.0"]),
+            )
+            .respond(
+                &tarball_url("a", "1.0.0"),
+                pkg_tarball("a", "1.0.0", &[("b", "^2.0.0")]),
+            )
+            .respond(
+                "https://registry.npmjs.org/b",
+                registry_meta("b", &["2.1.0"]),
+            )
+            .respond(&tarball_url("b", "2.1.0"), pkg_tarball("b", "2.1.0", &[]));
+        let online = NpmResolver::new(&http, &cas, &registry, DEFAULT_REGISTRY);
+        let warm = online
+            .resolve_transitive(&root_deps(&[("a", "^1.0.0")]))
+            .unwrap();
+
+        let offline_http = crate::fetch::OfflineClient;
+        let offline = NpmResolver::new(&offline_http, &cas, &registry, DEFAULT_REGISTRY);
+        let replay = offline
+            .resolve_transitive(&root_deps(&[("a", "^1.0.0")]))
+            .expect("warm cache must resolve offline");
+        assert_eq!(replay.len(), warm.len());
+        assert_eq!(
+            replay.get("a", 1).unwrap().tree_hash,
+            warm.get("a", 1).unwrap().tree_hash
+        );
+        assert_eq!(
+            replay.get("b", 2).unwrap().tree_hash,
+            warm.get("b", 2).unwrap().tree_hash
+        );
+
+        // A cold miss fails loudly with the offline error.
+        match offline.resolve_transitive(&root_deps(&[("never-fetched", "^1.0.0")])) {
+            Err(ResolveError::Fetch(FetchError::Offline { url })) => {
+                assert_eq!(url, "https://registry.npmjs.org/never-fetched");
+            }
+            other => panic!("expected Fetch(Offline), got {other:?}"),
+        }
     }
 }

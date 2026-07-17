@@ -2,6 +2,7 @@ pub mod cas;
 pub mod cas_archive;
 pub mod codec;
 pub mod fetch;
+pub mod npmrc;
 pub mod registry;
 pub mod resolver;
 pub mod semver;
