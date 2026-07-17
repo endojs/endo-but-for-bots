@@ -17,10 +17,10 @@
  * Two renderers fill the IR from two different kinds of source; the module
  * exports both and picks no canonical one:
  *
- * - {@link extractTsModuleIR} reads a hand-written `.d.ts` and prints the named
- *   root type with the `typescript` compiler API. Full-fidelity TypeScript is
- *   the richest source when one exists (named parameters, prose-free signatures
- *   straight from the author).
+ * - {@link extractTsModuleIR} reads a TypeScript declaration source and prints
+ *   the named root type with the `typescript` compiler API. Full-fidelity
+ *   TypeScript is the richest source when one exists (named parameters,
+ *   prose-free signatures straight from the author).
  * - {@link extractGuardIR} walks the runtime `M.interface` guards of a remotable
  *   and the transitive closure of remotables they reach. This is the richest
  *   source when no expressive `.d.ts` exists (a stub, or a generated one).
@@ -215,7 +215,7 @@ const resolveTypeModule = (moduleName, fromFile) => {
   const require = createRequire(fromFile);
   if (moduleName === '@endo/platform/fs/lite/types') {
     const packageRoot = dirname(require.resolve('@endo/platform/package.json'));
-    return join(packageRoot, 'src/fs/types.d.ts');
+    return join(packageRoot, 'src/fs/types.ts');
   }
   if (moduleName === '@endo/platform/fs/extended') {
     const packageRoot = dirname(require.resolve('@endo/platform/package.json'));
@@ -304,7 +304,11 @@ const extractTsAliasesIR = ({
     if (fileName.includes('/fs/extended/')) {
       return 'Extended';
     }
-    if (fileName.includes('/fs/lite/') || fileName.endsWith('/fs/types.d.ts')) {
+    if (
+      fileName.includes('/fs/lite/') ||
+      fileName.endsWith('/fs/types.d.ts') ||
+      fileName.endsWith('/fs/types.ts')
+    ) {
       return 'Lite';
     }
     return 'Imported';

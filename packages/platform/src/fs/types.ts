@@ -1,10 +1,6 @@
-// Hand-written type declarations for the platform fs interfaces.
-//
-// Other modules in this package and its consumers import these types
-// via `@import` / `import('...')` from `./types.js`
-// (`@endo/platform/fs/lite/types`); TypeScript resolves the `.js`
-// specifier to this declaration file. There is no runtime counterpart:
-// the module is types-only.
+// Authored TypeScript source for the platform filesystem contracts.
+// TypeScript resolves existing `./types.js` type imports to this module and
+// composite declaration emit produces the corresponding `types.d.ts` artifact.
 
 /** An async iterator of Uint8Array chunks. */
 export type ReadableStream = AsyncIterator<Uint8Array>;

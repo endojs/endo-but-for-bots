@@ -5,6 +5,8 @@
   ],
   "exclude": [
     "test/",
+    "src/fs/search-types-index.d.ts",
+    "src/fs/types-index.d.ts",
     "src/fs/extended/types-index.d.ts",
     "src/fs/extended/types-index.js"
   ]
