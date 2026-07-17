@@ -27,7 +27,7 @@ import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { start, stop, restart, purge, makeEndoClient } from '../index.js';
 import { makeCryptoPowers } from '../src/manager-node-powers.js';
-import { makeDaemonDatabase } from '../src/manager-database-node.js';
+import { makeManagerDatabase } from '../src/manager-database-node.js';
 import { formatId, parseId } from '../src/formula-identifier.js';
 import {
   formatLocator,
@@ -84,10 +84,10 @@ const drainIterator = async (iteratorRef, count) => {
  * Open a read-only handle to the daemon's database for test inspection.
  *
  * @param {string} statePath
- * @returns {import('../src/manager-database.js').DaemonDatabase}
+ * @returns {import('../src/manager-database.js').ManagerDatabase}
  */
 const openTestDb = statePath => {
-  return makeDaemonDatabase({
+  return makeManagerDatabase({
     statePath,
     ephemeralStatePath: '',
     cachePath: '',

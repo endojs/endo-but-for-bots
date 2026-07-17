@@ -122,7 +122,7 @@ export type HttpConnect = (
   request: HttpRequest,
 ) => void;
 
-export type MignonicPowers = {
+export type WorkerPowers = {
   connection: {
     reader: Reader<Uint8Array>;
     writer: Writer<Uint8Array>;
@@ -339,7 +339,7 @@ export type ShellFormula = {
 
 /**
  * Public `Shell` capability surface, minted by `EndoHost.provideShell` and
- * `DaemonCore.formulateShell`.  Argv-only (`exec(command, args[])`); there is
+ * `ManagerCore.formulateShell`.  Argv-only (`exec(command, args[])`); there is
  * deliberately no shell-string mode.  `inspect()` reveals the policy bounds but
  * never the host working directory, env passlist, or search path.
  */
@@ -2005,7 +2005,7 @@ export type FilePowers = {
 
 export type AssertValidNameFn = (name: string) => void;
 
-export type DaemonDatabase = import('./manager-database.js').DaemonDatabase;
+export type ManagerDatabase = import('./manager-database.js').ManagerDatabase;
 
 export type PetStorePowers = {
   makeIdentifiedPetStore: (
@@ -2072,7 +2072,7 @@ export type AgentKeyRecord = {
   agentId: string;
 };
 
-export type DaemonicPersistencePowers = {
+export type ManagerPersistencePowers = {
   statePath: string;
   initializePersistence: () => Promise<void>;
   provideRootNonce: () => Promise<RootNonceDescriptor>;
@@ -2107,9 +2107,9 @@ export type DaemonicPersistencePowers = {
   deleteAllRetention: (guestPublicKey: string) => void;
 };
 
-export interface DaemonWorkerFacet {}
+export interface ManagerWorkerFacet {}
 
-export interface WorkerDaemonFacet {
+export interface WorkerManagerFacet {
   terminate(): Promise<void>;
   evaluate(
     source: string,
@@ -2130,10 +2130,10 @@ export interface WorkerDaemonFacet {
   ): Promise<unknown>;
 }
 
-export type DaemonicControlPowers = {
+export type ManagerControlPowers = {
   makeWorker: (
     id: string,
-    daemonWorkerFacet: DaemonWorkerFacet,
+    managerWorkerFacet: ManagerWorkerFacet,
     cancelled: Promise<never>,
     forceCancelled: Promise<never>,
     capTpConnectionRegistrar?: CapTpConnectionRegistrar,
@@ -2143,7 +2143,7 @@ export type DaemonicControlPowers = {
     marshalLoadError?: (err: Error, errorId?: string) => void,
   ) => Promise<{
     workerTerminated: Promise<void>;
-    workerDaemonFacet: ERef<WorkerDaemonFacet>;
+    workerManagerFacet: ERef<WorkerManagerFacet>;
   }>;
   /**
    * Only present in the Go supervisor (engo) variant.
@@ -2163,11 +2163,11 @@ export type DaemonicControlPowers = {
   detachDebugger?: (workerHandle: number) => void;
 };
 
-export type DaemonicPowers = {
+export type ManagerPowers = {
   crypto: CryptoPowers;
   petStore: PetStorePowers;
-  persistence: DaemonicPersistencePowers;
-  control: DaemonicControlPowers;
+  persistence: ManagerPersistencePowers;
+  control: ManagerControlPowers;
   filePowers: FilePowers;
 };
 
@@ -2261,7 +2261,7 @@ export type Provide = <T extends keyof ProvideTypes, U extends ProvideTypes[T]>(
   expectedType?: T,
 ) => Promise<U>;
 
-export interface DaemonCore {
+export interface ManagerCore {
   cancelValue: (id: FormulaIdentifier, reason: Error) => Promise<void>;
 
   formulate: (
@@ -2551,10 +2551,10 @@ export interface DaemonCore {
   provideController: (id: FormulaIdentifier) => Controller;
 }
 
-export interface DaemonCoreExternal {
-  formulateEndo: DaemonCore['formulateEndo'];
+export interface ManagerCoreExternal {
+  formulateEndo: ManagerCore['formulateEndo'];
   nodeNumber: NodeNumber;
-  provide: DaemonCore['provide'];
+  provide: ManagerCore['provide'];
   capTpConnectionRegistrar: CapTpConnectionRegistrar;
 }
 

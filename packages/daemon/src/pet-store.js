@@ -4,10 +4,10 @@ import harden from '@endo/harden';
 import { makeChangeTopic } from './pubsub.js';
 import { parseId, assertValidId } from './formula-identifier.js';
 import { makeBidirectionalMultimap } from './multimap.js';
-/** @import { BidirectionalMultimap, DaemonDatabase, IdChangesTopic, Name, NameChangesTopic, PetName, PetStore, PetStoreIdNameChange, PetStoreNameChange, PetStorePowers } from './types.js' */
+/** @import { BidirectionalMultimap, ManagerDatabase, IdChangesTopic, Name, NameChangesTopic, PetName, PetStore, PetStoreIdNameChange, PetStoreNameChange, PetStorePowers } from './types.js' */
 
 /**
- * @param {DaemonDatabase} daemonDb
+ * @param {ManagerDatabase} daemonDb
  * @returns {PetStorePowers}
  */
 export const makePetStoreMaker = daemonDb => {

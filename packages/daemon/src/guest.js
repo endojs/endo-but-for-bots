@@ -13,24 +13,24 @@ import {
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { idFromLocator } from './locator.js';
 
-/** @import { Context, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { Context, ManagerCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 import { GuestInterface } from './interfaces.js';
 import { guestHelp, makeHelp } from './help-text.js';
 
 /**
  * @param {object} args
  * @param {Provide} args.provide
- * @param {DaemonCore['provideStoreController']} args.provideStoreController
- * @param {DaemonCore['formulateEval']} args.formulateEval
- * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
- * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
- * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
- * @param {DaemonCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
+ * @param {ManagerCore['provideStoreController']} args.provideStoreController
+ * @param {ManagerCore['formulateEval']} args.formulateEval
+ * @param {ManagerCore['formulateReadableBlob']} args.formulateReadableBlob
+ * @param {ManagerCore['formulateMarshalValue']} args.formulateMarshalValue
+ * @param {ManagerCore['getFormulaForId']} args.getFormulaForId
+ * @param {ManagerCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
  * @param {MakeMailbox} args.makeMailbox
  * @param {MakeDirectoryNode} args.makeDirectoryNode
  * @param {(node: string) => boolean} args.isLocalKey
- * @param {DaemonCore['pinTransient']} [args.pinTransient]
- * @param {DaemonCore['unpinTransient']} [args.unpinTransient]
+ * @param {ManagerCore['pinTransient']} [args.pinTransient]
+ * @param {ManagerCore['unpinTransient']} [args.unpinTransient]
  */
 export const makeGuestMaker = ({
   provide,

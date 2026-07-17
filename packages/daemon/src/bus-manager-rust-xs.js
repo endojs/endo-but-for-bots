@@ -2,7 +2,7 @@
 // The XS daemon bootstrap still targets the pre-SQLite persistence
 // and pet-store interfaces; aligning it with the SQLite migration on
 // llm is tracked as follow-up work.  Re-enable @ts-check once the
-// XS daemon has a SQLite-backed DaemonicPersistencePowers that
+// XS daemon has a SQLite-backed ManagerPersistencePowers that
 // satisfies the full interface (listFormulaNumbersByNode, agent-key
 // tables, retention, etc.).
 /* eslint-disable no-bitwise -- XS daemon bootstrap performs CBOR
@@ -47,9 +47,9 @@ import { mapWriter, mapReader, makePipe } from '@endo/stream';
 import { bytesFromText } from '@endo/bytes/from-string.js';
 import { bytesToText } from '@endo/bytes/to-string.js';
 
-import { makeDaemon } from './manager.js';
-import { makeDaemonicPersistencePowers } from './manager-persistence-powers.js';
-import { makeDaemonDatabase } from './manager-database.js';
+import { makeManager } from './manager.js';
+import { makeManagerPersistencePowers } from './manager-persistence-powers.js';
+import { makeManagerDatabase } from './manager-database.js';
 import XsDatabase from './better-sqlite3-xs.js';
 import { makePetStoreMaker } from './pet-store.js';
 import {
@@ -67,7 +67,7 @@ import { makeDebugger } from './debugger.js';
 
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { ERef } from '@endo/eventual-send' */
-/** @import { CapTpConnectionRegistrar, Config, DaemonWorkerFacet, WorkerDaemonFacet } from './types.js' */
+/** @import { CapTpConnectionRegistrar, Config, ManagerWorkerFacet, WorkerManagerFacet } from './types.js' */
 
 // ---------------------------------------------------------------------------
 // Console polyfill for XS (daemon.js uses console.log/error extensively)
@@ -282,7 +282,7 @@ const cryptoPowers = makeXsCryptoPowers();
 // SQLite parity with the Node-supervised daemon.  The shared
 // daemonDb (opened via the XS-side better-sqlite3 shim that
 // routes prepared-statement calls through Rust's rusqlite host
-// functions) backs both the pet-store's DaemonDatabase contract
+// functions) backs both the pet-store's ManagerDatabase contract
 // and the persistence powers' formula/agent-key/retention
 // queries, so a single state directory can be opened by either
 // supervisor with no migration step.
@@ -291,12 +291,12 @@ const cryptoPowers = makeXsCryptoPowers();
 // defer construction until inside main() where
 // initializePersistence has run.
 
-/** @type {ReturnType<typeof makeDaemonDatabase> | null} */
+/** @type {ReturnType<typeof makeManagerDatabase> | null} */
 let daemonDb = null;
 /** @type {ReturnType<typeof makePetStoreMaker> | null} */
 let petStorePowers = null;
-/** @type {ReturnType<typeof makeDaemonicPersistencePowers> | null} */
-let daemonicPersistencePowers = null;
+/** @type {ReturnType<typeof makeManagerPersistencePowers> | null} */
+let managerPersistencePowers = null;
 
 // ---------------------------------------------------------------------------
 // Envelope I/O via issueCommand
@@ -446,7 +446,7 @@ const decodeCborInt = data => {
 
 /**
  * @param {string} workerId
- * @param {DaemonWorkerFacet} daemonWorkerFacet
+ * @param {ManagerWorkerFacet} managerWorkerFacet
  * @param {Promise<never>} cancelled
  * @param {Promise<never>} _forceCancelled
  * @param {CapTpConnectionRegistrar} [capTpConnectionRegistrar]
@@ -456,7 +456,7 @@ const decodeCborInt = data => {
  */
 const makeWorker = async (
   workerId,
-  daemonWorkerFacet,
+  managerWorkerFacet,
   cancelled,
   _forceCancelled,
   capTpConnectionRegistrar = undefined,
@@ -548,7 +548,7 @@ const makeWorker = async (
     messageWriter,
     messageReader,
     cancelled,
-    daemonWorkerFacet,
+    managerWorkerFacet,
     undefined,
     capTpConnectionRegistrar,
   );
@@ -562,10 +562,10 @@ const makeWorker = async (
 
   const workerTerminated = Promise.race([workerClosed, capTpClosed]);
 
-  /** @type {ERef<WorkerDaemonFacet>} */
-  const workerDaemonFacet = getBootstrap();
+  /** @type {ERef<WorkerManagerFacet>} */
+  const workerManagerFacet = getBootstrap();
 
-  return { workerTerminated, workerDaemonFacet };
+  return { workerTerminated, workerManagerFacet };
 };
 
 /**
@@ -619,7 +619,7 @@ harden(detachDebugger);
 const controlPowers = harden({ makeWorker, attachDebugger, detachDebugger });
 
 // ---------------------------------------------------------------------------
-// Assemble DaemonicPowers
+// Assemble ManagerPowers
 //
 // `powers` references `petStorePowers`, which is assigned inside
 // `main()` after the asynchronous pet-store load completes (see
@@ -628,7 +628,7 @@ const controlPowers = harden({ makeWorker, attachDebugger, detachDebugger });
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Daemon lifecycle
+// Manager lifecycle
 // ---------------------------------------------------------------------------
 
 const { promise: cancelled, reject: cancel } =
@@ -636,11 +636,11 @@ const { promise: cancelled, reject: cancel } =
 
 let shouldTerminate = false;
 
-/** @type {Awaited<ReturnType<typeof import('./manager.js').makeDaemon>> | null} */
+/** @type {Awaited<ReturnType<typeof import('./manager.js').makeManager>> | null} */
 let _daemonResult = null;
 
 const main = async () => {
-  const daemonLabel = `daemon[xs] on PID ${pid}`;
+  const managerLabel = `daemon[xs] on PID ${pid}`;
   hostTrace(`Endo daemon (xs) starting on PID ${pid}`);
   cancelled.catch(() => {
     hostTrace(`Endo daemon (xs) stopping on PID ${pid}`);
@@ -649,29 +649,29 @@ const main = async () => {
   // Ensure the state path exists before we open the SQLite
   // database file inside it.
   await filePowers.makePath(config.statePath);
-  daemonDb = makeDaemonDatabase(config, { Database: XsDatabase });
+  daemonDb = makeManagerDatabase(config, { Database: XsDatabase });
   petStorePowers = makePetStoreMaker(daemonDb);
-  daemonicPersistencePowers = makeDaemonicPersistencePowers(
+  managerPersistencePowers = makeManagerPersistencePowers(
     daemonDb,
     filePowers,
     cryptoPowers,
     config,
   );
 
-  await daemonicPersistencePowers.initializePersistence();
+  await managerPersistencePowers.initializePersistence();
 
   const powers = harden({
     crypto: cryptoPowers,
     petStore: petStorePowers,
-    persistence: daemonicPersistencePowers,
+    persistence: managerPersistencePowers,
     control: controlPowers,
     filePowers,
   });
 
   const gcEnabled = hostGetEnv('ENDO_GC') === '1';
-  const result = await makeDaemon(
+  const result = await makeManager(
     powers,
-    daemonLabel,
+    managerLabel,
     cancel,
     cancelled,
     {},

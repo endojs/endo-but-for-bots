@@ -5,7 +5,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
-/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitRemoteDeferredTaskParams, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ManagerCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitRemoteDeferredTaskParams, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 
 import { E } from '@endo/eventual-send';
@@ -290,51 +290,51 @@ harden(normalizeHttpClientPolicy);
 
 /**
  * @param {object} args
- * @param {DaemonCore['provide']} args.provide
- * @param {DaemonCore['provideStoreController']} args.provideStoreController
- * @param {DaemonCore['cancelValue']} args.cancelValue
- * @param {DaemonCore['formulateWorker']} args.formulateWorker
- * @param {DaemonCore['formulateHost']} args.formulateHost
- * @param {DaemonCore['formulateGuest']} args.formulateGuest
- * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
- * @param {DaemonCore['formulateEval']} args.formulateEval
- * @param {DaemonCore['formulateUnconfined']} args.formulateUnconfined
- * @param {DaemonCore['formulateArchive']} args.formulateArchive
- * @param {DaemonCore['formulateFromTree']} args.formulateFromTree
+ * @param {ManagerCore['provide']} args.provide
+ * @param {ManagerCore['provideStoreController']} args.provideStoreController
+ * @param {ManagerCore['cancelValue']} args.cancelValue
+ * @param {ManagerCore['formulateWorker']} args.formulateWorker
+ * @param {ManagerCore['formulateHost']} args.formulateHost
+ * @param {ManagerCore['formulateGuest']} args.formulateGuest
+ * @param {ManagerCore['formulateMarshalValue']} args.formulateMarshalValue
+ * @param {ManagerCore['formulateEval']} args.formulateEval
+ * @param {ManagerCore['formulateUnconfined']} args.formulateUnconfined
+ * @param {ManagerCore['formulateArchive']} args.formulateArchive
+ * @param {ManagerCore['formulateFromTree']} args.formulateFromTree
  * @param {(id: FormulaIdentifier) => string} args.getScratchMountPath
  * @param {(id: FormulaIdentifier) => string} args.getMountHostPath
  * @param {(ref: unknown) => FormulaIdentifier | undefined} args.getIdForRef
- * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
- * @param {DaemonCore['checkinTree']} args.checkinTree
- * @param {DaemonCore['formulateMount']} args.formulateMount
- * @param {DaemonCore['formulateScratchMount']} args.formulateScratchMount
- * @param {DaemonCore['formulateGit']} args.formulateGit
- * @param {DaemonCore['formulateShell']} args.formulateShell
- * @param {DaemonCore['formulateHttpClient']} args.formulateHttpClient
+ * @param {ManagerCore['formulateReadableBlob']} args.formulateReadableBlob
+ * @param {ManagerCore['checkinTree']} args.checkinTree
+ * @param {ManagerCore['formulateMount']} args.formulateMount
+ * @param {ManagerCore['formulateScratchMount']} args.formulateScratchMount
+ * @param {ManagerCore['formulateGit']} args.formulateGit
+ * @param {ManagerCore['formulateShell']} args.formulateShell
+ * @param {ManagerCore['formulateHttpClient']} args.formulateHttpClient
  * @param {(client: unknown) => unknown} args.getHttpClientControlForClient
  *   Host-private resolver from a daemon-minted `HttpClient` cap to its
  *   retained `HttpClientControl`, populated by the `http-client` maker.
- * @param {DaemonCore['formulateGitCredential']} args.formulateGitCredential
- * @param {DaemonCore['formulateGitRemote']} args.formulateGitRemote
- * @param {DaemonCore['formulateInvitation']} args.formulateInvitation
- * @param {DaemonCore['formulateDirectoryForStore']} args.formulateDirectoryForStore
- * @param {DaemonCore['getPeerIdForNodeIdentifier']} args.getPeerIdForNodeIdentifier
- * @param {DaemonCore['formulateChannel']} args.formulateChannel
- * @param {DaemonCore['formulateTimer']} args.formulateTimer
- * @param {DaemonCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
- * @param {DaemonCore['getTypeForId']} args.getTypeForId
- * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
+ * @param {ManagerCore['formulateGitCredential']} args.formulateGitCredential
+ * @param {ManagerCore['formulateGitRemote']} args.formulateGitRemote
+ * @param {ManagerCore['formulateInvitation']} args.formulateInvitation
+ * @param {ManagerCore['formulateDirectoryForStore']} args.formulateDirectoryForStore
+ * @param {ManagerCore['getPeerIdForNodeIdentifier']} args.getPeerIdForNodeIdentifier
+ * @param {ManagerCore['formulateChannel']} args.formulateChannel
+ * @param {ManagerCore['formulateTimer']} args.formulateTimer
+ * @param {ManagerCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
+ * @param {ManagerCore['getTypeForId']} args.getTypeForId
+ * @param {ManagerCore['getFormulaForId']} args.getFormulaForId
  * @param {MakeMailbox} args.makeMailbox
  * @param {MakeDirectoryNode} args.makeDirectoryNode
  * @param {NodeNumber} args.localNodeNumber
  * @param {(node: string) => boolean} args.isLocalKey
- * @param {DaemonCore['getAgentIdForHandleId']} args.getAgentIdForHandleId
+ * @param {ManagerCore['getAgentIdForHandleId']} args.getAgentIdForHandleId
  * @param {(publicKey: string, daemonNode: string) => void} [args.writeRemoteAgentKey]
- * @param {DaemonCore['pinTransient']} [args.pinTransient]
- * @param {DaemonCore['unpinTransient']} [args.unpinTransient]
- * @param {DaemonCore['getFormulaGraphSnapshot']} [args.getFormulaGraphSnapshot]
- * @param {DaemonCore['listRetentionPaths']} [args.listRetentionPaths]
- * @param {DaemonCore['followRetentionPaths']} [args.followRetentionPaths]
+ * @param {ManagerCore['pinTransient']} [args.pinTransient]
+ * @param {ManagerCore['unpinTransient']} [args.unpinTransient]
+ * @param {ManagerCore['getFormulaGraphSnapshot']} [args.getFormulaGraphSnapshot]
+ * @param {ManagerCore['listRetentionPaths']} [args.listRetentionPaths]
+ * @param {ManagerCore['followRetentionPaths']} [args.followRetentionPaths]
  * @param {ReturnType<typeof makeTraceAggregator>} [args.traceAggregator]
  *   Optional. When provided, `host.traces()` returns an Exo whose
  *   methods proxy to this aggregator. Without it, `host.traces()`

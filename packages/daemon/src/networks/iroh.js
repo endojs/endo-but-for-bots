@@ -67,7 +67,7 @@ harden(deriveIrohSecretKey);
  * authenticated, encrypted QUIC (TLS) connections. NAT traversal, relay
  * fallback, and hole-punching are handled by iroh itself.
  *
- * @param {any} powers - Daemon powers provided to unconfined caplets.
+ * @param {any} powers - Manager powers provided to unconfined caplets.
  * @param {any} context - Caplet lifecycle context.
  */
 export const make = async (powers, context) => {

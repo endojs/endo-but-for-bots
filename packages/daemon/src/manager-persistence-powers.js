@@ -2,7 +2,7 @@
 /// <reference types="ses"/>
 
 /**
- * SQLite-backed DaemonicPersistencePowers shared by every Endo
+ * SQLite-backed ManagerPersistencePowers shared by every Endo
  * daemon flavour.  Formula records, agent keys, retention
  * tables and the per-node formula index all live in the
  * SQLite-backed `daemon-database.js` schema.  The content store
@@ -25,17 +25,17 @@ import { makeSnapshotStore } from '@endo/platform/fs/lite';
 
 import { toHex, fromHex } from './hex.js';
 
-/** @import { Config, CryptoPowers, DaemonicPersistencePowers, FilePowers, Formula, FormulaNumber } from './types.js' */
-/** @import { DaemonDatabase } from './manager-database.js' */
+/** @import { Config, CryptoPowers, ManagerPersistencePowers, FilePowers, Formula, FormulaNumber } from './types.js' */
+/** @import { ManagerDatabase } from './manager-database.js' */
 
 /**
- * @param {DaemonDatabase} daemonDb
+ * @param {ManagerDatabase} daemonDb
  * @param {FilePowers} filePowers
  * @param {CryptoPowers} cryptoPowers
  * @param {Config} config
- * @returns {DaemonicPersistencePowers}
+ * @returns {ManagerPersistencePowers}
  */
-export const makeDaemonicPersistencePowers = (
+export const makeManagerPersistencePowers = (
   daemonDb,
   filePowers,
   cryptoPowers,
@@ -71,7 +71,7 @@ export const makeDaemonicPersistencePowers = (
     await Promise.all([statePathP, cachePathP, ephemeralStatePathP]);
   };
 
-  /** @type {DaemonicPersistencePowers['provideRootNonce']} */
+  /** @type {ManagerPersistencePowers['provideRootNonce']} */
   const provideRootNonce = async () => {
     const existingNonce = getState('root_nonce');
     if (existingNonce === undefined) {
@@ -87,7 +87,7 @@ export const makeDaemonicPersistencePowers = (
     };
   };
 
-  /** @type {DaemonicPersistencePowers['provideRootKeypair']} */
+  /** @type {ManagerPersistencePowers['provideRootKeypair']} */
   const provideRootKeypair = async () => {
     const existingPublicHex = getState('public_key');
     if (existingPublicHex === undefined) {
@@ -165,4 +165,4 @@ export const makeDaemonicPersistencePowers = (
     deleteAllRetention,
   });
 };
-harden(makeDaemonicPersistencePowers);
+harden(makeManagerPersistencePowers);

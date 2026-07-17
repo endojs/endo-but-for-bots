@@ -13,13 +13,13 @@ import url from 'url';
 
 import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
-import { makeDaemon } from './manager.js';
+import { makeManager } from './manager.js';
 import {
   makeFilePowers,
   makeNetworkPowers,
   makeCryptoPowers,
 } from './manager-node-powers.js';
-import { makeDaemonicBusPowers } from './bus-manager-node-powers.js';
+import { makeManagerBusPowers } from './bus-manager-node-powers.js';
 import {
   encodeEnvelope,
   decodeEnvelope,
@@ -98,7 +98,7 @@ const sendEnvelope = async (handle, verb, payload, nonce) => {
 const networkPowers = makeNetworkPowers({ net, fsp });
 const filePowers = makeFilePowers({ fs, path });
 const cryptoPowers = makeCryptoPowers(crypto);
-const powers = makeDaemonicBusPowers({
+const powers = makeManagerBusPowers({
   config,
   url,
   filePowers,
@@ -106,13 +106,13 @@ const powers = makeDaemonicBusPowers({
   sendEnvelope,
   envelopeReadStream,
 });
-const { persistence: daemonicPersistencePowers } = powers;
+const { persistence: managerPersistencePowers } = powers;
 
 const { promise: cancelled, reject: cancel } =
   /** @type {PromiseKit<never>} */ (makePromiseKit());
 
 // The supervisor owns endo.pid (the authoritative PID for kill). This
-// function overwrites it with the node daemon PID so that killDaemonProcess
+// function overwrites it with the node daemon PID so that killManagerProcess
 // targets the process that owns the socket and its child workers.
 // Killing the node daemon causes the supervisor to detect the exit and cascade.
 const updateRecordedPid = async () => {
@@ -121,7 +121,7 @@ const updateRecordedPid = async () => {
 };
 
 const main = async () => {
-  const daemonLabel = `daemon on PID ${pid}`;
+  const managerLabel = `daemon on PID ${pid}`;
   console.log(`Endo daemon (bus) starting on PID ${pid}`);
   cancelled.catch(() => {
     console.log(`Endo daemon (bus) stopping on PID ${pid}`);
@@ -137,12 +137,12 @@ const main = async () => {
     powers.control.startEnvelopeReader();
   }
 
-  await daemonicPersistencePowers.initializePersistence();
+  await managerPersistencePowers.initializePersistence();
 
   const { endoBootstrap, cancelGracePeriod, capTpConnectionRegistrar } =
-    await makeDaemon(
+    await makeManager(
       powers,
-      daemonLabel,
+      managerLabel,
       cancel,
       cancelled,
       {},
@@ -181,13 +181,13 @@ const main = async () => {
     console.log('Endo daemon (bus) ready, signaled supervisor');
   } catch (error) {
     // No IPC to parent like daemon-node.js; just log and throw.
-    console.error('Daemon startup failed:', error);
+    console.error('Manager startup failed:', error);
     throw error;
   }
 
   const servicesStopped = Promise.all(services.map(({ stopped }) => stopped));
 
-  // Record self as official daemon process so killDaemonProcess targets
+  // Record self as official daemon process so killManagerProcess targets
   // the node daemon (which owns workers) rather than the supervisor.
   await updateRecordedPid();
 
