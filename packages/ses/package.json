@@ -99,10 +99,10 @@
     "@endo/immutable-arraybuffer": "^1.1.2"
   },
   "devDependencies": {
-    "@babel/generator": "^7.28.3",
-    "@babel/parser": "~7.28.3",
-    "@babel/traverse": "~7.28.3",
-    "@babel/types": "~7.28.2",
+    "@babel/generator": "7.28.3",
+    "@babel/parser": "7.28.3",
+    "@babel/traverse": "7.28.3",
+    "@babel/types": "7.28.2",
     "@endo/compartment-mapper": "^2.3.0",
     "@endo/module-source": "^1.4.1",
     "@endo/test262-runner": "^0.1.50",
