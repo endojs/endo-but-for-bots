@@ -10,8 +10,7 @@ VERSIONSHASH=$(git hash-object -w --stdin)
 
 (
   echo package.json
-  npm query .workspace |
-  jq -r '.[].location | "\(.)/package.json"'
+  printf '%s\n' packages/*/package.json
 ) | while read -r PACKAGEJSON; do
   PACKAGEJSONHASH=$(
     jq --slurpfile versions <(git cat-file blob "$VERSIONSHASH") '

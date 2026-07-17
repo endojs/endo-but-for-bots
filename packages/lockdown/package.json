@@ -20,7 +20,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "ses": "workspace:^"
+    "ses": "^2.2.0"
   },
   "files": [
     "./*.d.ts",
@@ -58,6 +58,6 @@
     "access": "public"
   },
   "devDependencies": {
-    "eslint": "catalog:dev"
+    "eslint": "^8.57.1"
   }
 }

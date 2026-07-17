@@ -24,7 +24,7 @@ node ./packages/goblin-chat
 ```
 
 (or `node ./packages/goblin-chat/index.js`, or
-`yarn workspace @endo/goblin-chat start`, or just `goblin-chat` if the
+`npm run start --workspace @endo/goblin-chat`, or just `goblin-chat` if the
 package is installed and on `PATH` via its `bin` entry).
 
 The TUI takes over the terminal (alt screen) and opens on the main

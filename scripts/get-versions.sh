@@ -5,7 +5,6 @@ set -ueo pipefail
 WORKDIR=${1:-.}
 
 cd -- "$WORKDIR"
-npm query .workspace |
-jq -r '.[].location | "\(.)/package.json"' |
+printf '%s\n' packages/*/package.json |
 xargs jq '{key: .name, value: "^\(.version)"}' |
 jq --slurp from_entries

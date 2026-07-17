@@ -1,5 +1,5 @@
 // The package on disk named `eslint-plugin-import` is aliased in the
-// repo root `.yarnrc.yml` catalog to the actively-maintained
+// repo root `.npmrc.yml` catalog to the actively-maintained
 // `eslint-plugin-import-x` soft fork. ESLint resolves plugins by the
 // directory name in `node_modules`, so all `import/*` rule references
 // continue to work and are served by the import-x implementation. The

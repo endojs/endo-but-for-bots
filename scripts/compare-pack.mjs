@@ -8,7 +8,7 @@
  *
  *   --ref <git-ref>   Compare against this ref (default: `master`). The ref
  *                     supplies the legacy pack flow (per-package `prepack` +
- *                     `npm pack`). HEAD supplies the new flow (`yarn pack:all`).
+ *                     `npm pack`). HEAD supplies the new flow (`npm run pack:all`).
  *   --keep            Keep the temp comparison directory on exit; print its
  *                     path. Useful for spelunking. Default: removed on exit.
  *   --only <pkg>      Only diff these package names (basename of the tarball
@@ -66,30 +66,30 @@ if (args.length) {
 
 const repoRoot = path.resolve(new URL('..', import.meta.url).pathname);
 
-// Resolve `yarn` to an absolute path once. `spawn` without `shell: true` does
+// Resolve `npm` to an absolute path once. `spawn` without `shell: true` does
 // not honor shell aliases/functions or per-directory PATH hooks (direnv, nvm,
-// vite-plus, volta), so a bare `'yarn'` ENOENTs in setups where the interactive
-// shell injects yarn lazily. Pin both worktrees to the same real binary.
-const resolveYarn = async () => {
-  // 1. vite-plus stashes yarn at a deterministic path keyed by the version in
+// vite-plus, volta), so a bare `'npm'` ENOENTs in setups where the interactive
+// shell injects npm lazily. Pin both worktrees to the same real binary.
+const resolvenpm = async () => {
+  // 1. vite-plus stashes npm at a deterministic path keyed by the version in
   //    `package.json#packageManager`. Prefer this so we get the exact pinned
   //    version even when nothing's on PATH.
   const pkg = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
-  const m = /^yarn@(\d[\w.-]*)/.exec(pkg.packageManager ?? '');
+  const m = /^npm@(\d[\w.-]*)/.exec(pkg.packageManager ?? '');
   if (m) {
-    const vitePlus = path.join(process.env.HOME ?? '', '.vite-plus', 'package_manager', 'yarn', m[1], 'yarn', 'bin', 'yarn');
+    const vitePlus = path.join(process.env.HOME ?? '', '.vite-plus', 'package_manager', 'npm', m[1], 'npm', 'bin', 'npm');
     if (existsSync(vitePlus)) return vitePlus;
   }
   // 2. Fall back to PATH lookup for contributors not using vite-plus.
   try {
-    const { stdout } = await execFileAsync('which', ['yarn']);
+    const { stdout } = await execFileAsync('which', ['npm']);
     const p = stdout.trim();
     if (p) return p;
   } catch {}
-  process.stderr.write('compare-pack: could not find `yarn` (not on PATH and not in ~/.vite-plus)\n');
+  process.stderr.write('compare-pack: could not find `npm` (not on PATH and not in ~/.vite-plus)\n');
   process.exit(127);
 };
-const yarnBin = await resolveYarn();
+const npmBin = await resolvenpm();
 
 /** Inherit stdio; reject on non-zero exit. */
 const run = (cmd, argv, options = {}) =>
@@ -140,24 +140,24 @@ process.on('SIGINT', () => process.exit(130));
 process.stderr.write(`compare-pack: creating worktree at ${ref}...\n`);
 await run('git', ['worktree', 'add', '--detach', legacyRoot, ref], { cwd: repoRoot });
 
-process.stderr.write('compare-pack: yarn install in legacy worktree (this is slow)...\n');
-await run(yarnBin, ['install', '--immutable'], { cwd: legacyRoot });
+process.stderr.write('compare-pack: npm ci in legacy worktree (this is slow)...\n');
+await run(npmBin, ['install', '--immutable'], { cwd: legacyRoot });
 
-process.stderr.write('compare-pack: running legacy pack flow (prepack + yarn pack)...\n');
-// Match what master's CI ran: per-workspace `yarn pack` (which honors
+process.stderr.write('compare-pack: running legacy pack flow (prepack + npm pack)...\n');
+// Match what master's CI ran: per-workspace `npm pack` (which honors
 // prepack/postpack hooks). Use `workspaces foreach <subcommand>` rather than
-// `exec yarn …` so we don't spawn an inner bare `yarn` — that would ENOENT
-// under runtime managers (vite-plus, volta) that don't put yarn on PATH.
+// `exec npm …` so we don't spawn an inner bare `npm` — that would ENOENT
+// under runtime managers (vite-plus, volta) that don't put npm on PATH.
 await run(
-  yarnBin,
+  npmBin,
   ['workspaces', 'foreach', '--all', '--no-private', '--topological', 'pack', '--out', path.join(legacyTarballs, '%s-%v.tgz')],
   { cwd: legacyRoot },
 );
 
 // ---- Build new tarballs from HEAD --------------------------------------
 
-process.stderr.write('compare-pack: running new flow (yarn pack:all)...\n');
-await run(yarnBin, ['pack:all'], { cwd: repoRoot });
+process.stderr.write('compare-pack: running new flow (npm run pack:all)...\n');
+await run(npmBin, ['pack:all'], { cwd: repoRoot });
 // pack-all.mjs writes into repoRoot/dist; copy out so a later `pack:all`
 // doesn't wipe them (it does `rmSync(distDir)` at start of every run).
 for (const name of readdirSync(path.join(repoRoot, 'dist'))) {
@@ -181,7 +181,7 @@ const indexDir = dir => {
   return out;
 };
 
-// yarn's `--out` template uses `%s` (name) and `%v` (version), but `%s`
+// npm's `--out` template uses `%s` (name) and `%v` (version), but `%s`
 // for a scoped package writes `@scope-name`. ts-node-pack uses
 // `scope-name`. Normalize to compare apples to apples.
 const normalizeKey = k => k.replace(/^@/, '').replace('/', '-');

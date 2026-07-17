@@ -2,7 +2,7 @@
 /**
  * Tests for {@link generate-composite-tsconfigs.mjs}
  *
- * Run with: `yarn exec ava scripts/generate-composite-tsconfigs.test.mjs`
+ * Run with: `npm exec ava scripts/generate-composite-tsconfigs.test.mjs`
  *
  * @module
  */
@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  parseYarnWorkspaces,
+  parsenpmWorkspaces,
   getRuntimeWorkspaceDeps,
   detectCycle,
   makePackageCompositeConfig,
@@ -39,10 +39,10 @@ function parseGeneratedJson(text) {
 }
 
 // ---------------------------------------------------------------------------
-// parseYarnWorkspaces
+// parsenpmWorkspaces
 // ---------------------------------------------------------------------------
 
-test('parseYarnWorkspaces - parses well-formed NDJSON', t => {
+test('parsenpmWorkspaces - parses well-formed NDJSON', t => {
   const ndjson = [
     JSON.stringify({ location: '.', name: null, workspaceDependencies: [] }),
     JSON.stringify({
@@ -57,29 +57,29 @@ test('parseYarnWorkspaces - parses well-formed NDJSON', t => {
     }),
   ].join('\n');
 
-  const map = parseYarnWorkspaces(ndjson);
+  const map = parsenpmWorkspaces(ndjson);
   t.is(map.size, 2, 'root entry should be skipped');
   t.is(map.get('@scope/a'), 'packages/a');
   t.is(map.get('@scope/b'), 'packages/b');
 });
 
-test('parseYarnWorkspaces - skips the root entry (name: null)', t => {
+test('parsenpmWorkspaces - skips the root entry (name: null)', t => {
   const ndjson = JSON.stringify({
     location: '.',
     name: null,
     workspaceDependencies: [],
   });
-  const map = parseYarnWorkspaces(ndjson);
+  const map = parsenpmWorkspaces(ndjson);
   t.is(map.size, 0);
 });
 
-test('parseYarnWorkspaces - ignores blank lines', t => {
+test('parsenpmWorkspaces - ignores blank lines', t => {
   const ndjson = `\n${JSON.stringify({
     location: 'packages/a',
     name: '@scope/a',
     workspaceDependencies: [],
   })}\n\n`;
-  const map = parseYarnWorkspaces(ndjson);
+  const map = parsenpmWorkspaces(ndjson);
   t.is(map.size, 1);
 });
 
@@ -87,13 +87,16 @@ test('parseYarnWorkspaces - ignores blank lines', t => {
 // getRuntimeWorkspaceDeps
 // ---------------------------------------------------------------------------
 
-test('getRuntimeWorkspaceDeps - includes workspace: deps from dependencies, peerDependencies, optionalDependencies', t => {
+test('getRuntimeWorkspaceDeps - includes declared runtime workspace dependencies', t => {
   const pkg = {
-    dependencies: { '@scope/a': 'workspace:^', lodash: '^4' },
-    peerDependencies: { '@scope/b': 'workspace:^' },
-    optionalDependencies: { '@scope/c': 'workspace:^' },
+    dependencies: { '@scope/a': '^1.0.0', lodash: '^4' },
+    peerDependencies: { '@scope/b': '^1.0.0' },
+    optionalDependencies: { '@scope/c': '^1.0.0' },
   };
-  const deps = getRuntimeWorkspaceDeps(pkg);
+  const deps = getRuntimeWorkspaceDeps(
+    pkg,
+    new Set(['@scope/a', '@scope/b', '@scope/c']),
+  );
   t.true(deps.has('@scope/a'));
   t.true(deps.has('@scope/b'));
   t.true(deps.has('@scope/c'));
@@ -111,11 +114,11 @@ test('getRuntimeWorkspaceDeps - handles missing dep fields gracefully', t => {
   t.is(deps.size, 0);
 });
 
-test('getRuntimeWorkspaceDeps - excludes non-workspace version specs', t => {
+test('getRuntimeWorkspaceDeps - excludes external version specs', t => {
   const pkg = {
-    dependencies: { '@scope/a': '^1.2.3', '@scope/b': 'workspace:^' },
+    dependencies: { '@scope/a': '^1.2.3', '@scope/b': '^1.0.0' },
   };
-  const deps = getRuntimeWorkspaceDeps(pkg);
+  const deps = getRuntimeWorkspaceDeps(pkg, new Set(['@scope/b']));
   t.false(deps.has('@scope/a'));
   t.true(deps.has('@scope/b'));
 });

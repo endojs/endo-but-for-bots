@@ -48,7 +48,7 @@ Here are the issues resolved with SES 0.7
 ### Development
 
 - Monorepo:
-  - Based on yarn wokspaces + Lerna.
+  - Based on npm wokspaces + Lerna.
   - Automation to update package version.
 - All packages are type module:
   - No reliance on `esm` package to support esm modules.

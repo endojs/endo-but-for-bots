@@ -10,8 +10,8 @@
     "test:xs": "exit 0",
     "build": "exit 0",
     "clean": "git clean -fX -e node_modules/",
-    "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "npm run lint:eslint --fix && npm run lint:types",
+    "lint": "npm run lint:types && npm run lint:eslint",
     "lint:types": "tsc",
     "lint:eslint": "eslint ."
   },
@@ -33,17 +33,17 @@
   },
   "homepage": "https://github.com/endojs/endo#readme",
   "dependencies": {
-    "@endo/env-options": "workspace:^",
-    "@endo/harden": "workspace:^"
+    "@endo/env-options": "^1.1.11",
+    "@endo/harden": "^1.1.0"
   },
   "devDependencies": {
-    "@endo/lockdown": "workspace:^",
-    "ava": "catalog:dev",
-    "c8": "catalog:dev",
-    "eslint": "catalog:dev",
-    "ses": "workspace:^",
-    "tsd": "catalog:dev",
-    "typescript": "catalog:dev"
+    "@endo/lockdown": "^1.0.19",
+    "ava": "^8.0.1",
+    "c8": "^11.0.0",
+    "eslint": "^8.57.1",
+    "ses": "^2.2.0",
+    "tsd": "^0.33.0",
+    "typescript": "~6.0.3"
   },
   "keywords": [
     "eventual send",
