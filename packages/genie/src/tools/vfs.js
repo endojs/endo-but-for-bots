@@ -109,6 +109,10 @@
  *   Resolve a sequence of paths into an absolute path.  When the
  *   VFS was created with a limiting root, the result is guaranteed
  *   to stay under that root (throws otherwise).
+ * @property {(path: string) => Promise<string>} [realPath]
+ *   Resolve `path` to its symlink-free physical path.  Optional: a
+ *   backing with no symlink notion (memory, mount) omits it, and
+ *   consumers then treat every path as its own physical path.
  */
 
 export {};

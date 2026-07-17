@@ -103,45 +103,70 @@ test('readFile supports offset and limit', async t => {
 // editFile
 // ---------------------------------------------------------------------------
 
-test('editFile replaces first occurrence', async t => {
+test('editFile replaces a unique match and returns a diff', async t => {
   const tools = await setup();
   await tools.writeFile.execute({
     path: 'edit.txt',
+    content: 'foo bar baz',
+  });
+
+  const result = await tools.editFile.execute({
+    path: 'edit.txt',
+    oldText: 'bar',
+    newText: 'qux',
+  });
+  t.true(result.success);
+  t.is(result.applied, 1);
+  t.true(result.diff.includes('-foo bar baz'));
+  t.true(result.diff.includes('+foo qux baz'));
+
+  const read = await tools.readFile.execute({ path: 'edit.txt' });
+  t.is(read.content, 'foo qux baz');
+});
+
+test('editFile applies a batch of non-overlapping edits', async t => {
+  const tools = await setup();
+  await tools.writeFile.execute({
+    path: 'edit-batch.txt',
+    content: 'aaa bbb ccc',
+  });
+
+  const result = await tools.editFile.execute({
+    path: 'edit-batch.txt',
+    edits: [
+      { oldText: 'aaa', newText: 'xxx' },
+      { oldText: 'ccc', newText: 'zzz' },
+    ],
+  });
+  t.is(result.applied, 2);
+
+  const read = await tools.readFile.execute({ path: 'edit-batch.txt' });
+  t.is(read.content, 'xxx bbb zzz');
+});
+
+test('editFile rejects a non-unique match', async t => {
+  const tools = await setup();
+  await tools.writeFile.execute({
+    path: 'edit-dup.txt',
     content: 'foo bar foo baz',
   });
 
-  const result = await tools.editFile.execute({
-    path: 'edit.txt',
-    old_string: 'foo',
-    new_string: 'qux',
-  });
-  t.true(result.success);
-  t.true(result.replaced);
+  const err = await t.throwsAsync(() =>
+    tools.editFile.execute({
+      path: 'edit-dup.txt',
+      oldText: 'foo',
+      newText: 'qux',
+    }),
+  );
+  t.truthy(err);
+  t.true(/** @type {Error} */ (err).message.includes('matches 2 locations'));
 
-  const read = await tools.readFile.execute({ path: 'edit.txt' });
-  t.is(read.content, 'qux bar foo baz');
+  // The file is untouched on rejection.
+  const read = await tools.readFile.execute({ path: 'edit-dup.txt' });
+  t.is(read.content, 'foo bar foo baz');
 });
 
-test('editFile replaces all occurrences with replace_all', async t => {
-  const tools = await setup();
-  await tools.writeFile.execute({
-    path: 'edit-all.txt',
-    content: 'aaa bbb aaa',
-  });
-
-  const result = await tools.editFile.execute({
-    path: 'edit-all.txt',
-    old_string: 'aaa',
-    new_string: 'ccc',
-    replace_all: true,
-  });
-  t.true(result.replaced);
-
-  const read = await tools.readFile.execute({ path: 'edit-all.txt' });
-  t.is(read.content, 'ccc bbb ccc');
-});
-
-test('editFile throws when old_string not found', async t => {
+test('editFile throws when oldText not found', async t => {
   const tools = await setup();
   await tools.writeFile.execute({
     path: 'no-match.txt',
@@ -151,12 +176,42 @@ test('editFile throws when old_string not found', async t => {
   const err = await t.throwsAsync(() =>
     tools.editFile.execute({
       path: 'no-match.txt',
-      old_string: 'missing',
-      new_string: 'x',
+      oldText: 'missing',
+      newText: 'x',
     }),
   );
   t.truthy(err);
-  t.true(/** @type {Error} */ (err).message.includes('old_string not found'));
+  t.true(/** @type {Error} */ (err).message.includes('not found'));
+});
+
+test('editFile preserves CRLF line endings', async t => {
+  const tools = await setup();
+  await tools.writeFile.execute({
+    path: 'crlf.txt',
+    content: 'one\r\ntwo\r\nthree\r\n',
+  });
+
+  const result = await tools.editFile.execute({
+    path: 'crlf.txt',
+    oldText: 'two',
+    newText: 'TWO',
+  });
+  t.is(result.applied, 1);
+
+  const read = await tools.readFile.execute({ path: 'crlf.txt' });
+  t.is(read.content, 'one\r\nTWO\r\nthree\r\n');
+});
+
+test('editFile throws for a missing file', async t => {
+  const tools = await setup();
+  const err = await t.throwsAsync(() =>
+    tools.editFile.execute({
+      path: 'absent.txt',
+      oldText: 'a',
+      newText: 'b',
+    }),
+  );
+  t.true(/** @type {Error} */ (err).message.includes('File not found'));
 });
 
 // ---------------------------------------------------------------------------
@@ -321,6 +376,120 @@ test('removeDirectory recursive removes non-empty dir', async t => {
     recursive: true,
   });
   t.true(result.success);
+});
+
+// ---------------------------------------------------------------------------
+// glob
+// ---------------------------------------------------------------------------
+
+/**
+ * Helper: seed a small tree for the search tools.
+ *
+ * @param {Awaited<ReturnType<typeof setup>>} tools
+ */
+const seedTree = async tools => {
+  await tools.writeFile.execute({ path: 'a.js', content: 'const a = 1;\n' });
+  await tools.writeFile.execute({ path: 'b.txt', content: 'plain text\n' });
+  await tools.writeFile.execute({
+    path: 'src/deep/c.js',
+    content: 'const c = 3; // TODO(later)\n',
+  });
+  await tools.writeFile.execute({
+    path: 'src/d.js',
+    content: 'const d = 4;\n',
+  });
+};
+
+test('glob matches within a segment with *', async t => {
+  const tools = await setup();
+  await seedTree(tools);
+
+  const result = await tools.glob.execute({ pattern: '*.js' });
+  t.true(result.success);
+  t.deepEqual(result.matches, ['a.js']);
+  t.false(result.truncated);
+});
+
+test('glob matches across segments with **', async t => {
+  const tools = await setup();
+  await seedTree(tools);
+
+  const result = await tools.glob.execute({ pattern: '**/*.js' });
+  t.deepEqual(result.matches, ['a.js', 'src/d.js', 'src/deep/c.js']);
+});
+
+test('glob walks from a subdirectory', async t => {
+  const tools = await setup();
+  await seedTree(tools);
+
+  const result = await tools.glob.execute({ pattern: '**/*.js', path: 'src' });
+  t.is(result.path, 'src');
+  t.deepEqual(result.matches, ['d.js', 'deep/c.js']);
+});
+
+test('glob rejects paths escaping the root', async t => {
+  const tools = await setup();
+  await t.throwsAsync(() =>
+    tools.glob.execute({ pattern: '*', path: '../outside' }),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// grep
+// ---------------------------------------------------------------------------
+
+test('grep finds matching lines with file, line, and text', async t => {
+  const tools = await setup();
+  await seedTree(tools);
+
+  const result = await tools.grep.execute({ pattern: 'TODO' });
+  t.true(result.success);
+  t.deepEqual(result.matches, [
+    { file: 'src/deep/c.js', line: 1, text: 'const c = 3; // TODO(later)' },
+  ]);
+  t.false(result.truncated);
+});
+
+test('grep restricts the searched files with a glob', async t => {
+  const tools = await setup();
+  await seedTree(tools);
+
+  const all = await tools.grep.execute({ pattern: 'const' });
+  t.is(all.matches.length, 3);
+
+  const only = await tools.grep.execute({
+    pattern: 'const',
+    glob: 'src/*.js',
+  });
+  t.deepEqual(
+    only.matches.map(m => m.file),
+    ['src/d.js'],
+  );
+});
+
+test('grep searches from a subdirectory with relative paths', async t => {
+  const tools = await setup();
+  await seedTree(tools);
+
+  const result = await tools.grep.execute({ pattern: 'const', path: 'src' });
+  t.deepEqual(
+    result.matches.map(m => m.file),
+    ['d.js', 'deep/c.js'],
+  );
+});
+
+test('grep uses ECMAScript regular expressions', async t => {
+  const tools = await setup();
+  await tools.writeFile.execute({
+    path: 're.txt',
+    content: 'alpha\nbeta-42\ngamma\n',
+  });
+
+  const result = await tools.grep.execute({ pattern: '\\w+-\\d+' });
+  t.deepEqual(
+    result.matches.map(m => m.line),
+    [2],
+  );
 });
 
 // ---------------------------------------------------------------------------

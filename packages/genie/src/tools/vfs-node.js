@@ -186,6 +186,11 @@ const makeNodeVFS = rootDir => {
     });
   };
 
+  /** @type {NonNullable<VFS['realPath']>} */
+  const realPath = async path => {
+    return fs.realpath(path);
+  };
+
   return harden({
     stat,
     readFile,
@@ -200,6 +205,7 @@ const makeNodeVFS = rootDir => {
     join,
     relative,
     resolve,
+    realPath,
   });
 };
 harden(makeNodeVFS);

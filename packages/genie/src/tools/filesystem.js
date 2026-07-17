@@ -1,23 +1,35 @@
 // @ts-check
 /* global process */
-/* eslint-disable no-continue, camelcase */
+/* eslint-disable no-continue */
 
 /**
  * Filesystem Tools Module
  *
- * Provides read, write, edit, remove, and stat file tools with path-root
- * enforcement.
+ * Provides read, write, edit, glob, grep, remove, and stat file tools
+ * with path-root enforcement.
  * All accessed paths must resolve under the configured root directory.
  *
  * File I/O is delegated to a {@link VFS} backend so that the tool
  * logic is decoupled from Node-specific APIs.  By default,
  * {@link makeNodeVFS} is used, but callers may supply any conforming
  * implementation.
+ *
+ * The edit tool delegates to the shared exact-string-replacement
+ * algorithm (`@endo/agentry/edit-text`) and the glob/grep tools to the
+ * shared platform search engine (`@endo/platform/fs/search`), so the
+ * semantics presented here are the same ones Lal, Fae, and the daemon
+ * mount present (designs/fs-interface-reconciliation.md).
  */
 
 import { resolve, dirname, relative, basename } from 'path';
 import harden from '@endo/harden';
 import { M } from '@endo/patterns';
+import { applyEdits, normalizeEdits } from '@endo/agentry/edit-text';
+import {
+  makeSearch,
+  GLOB_MAX_RESULTS,
+  GREP_MAX_RESULTS,
+} from '@endo/platform/fs/search';
 
 import { makeTool } from './common.js';
 import { makeNodeVFS } from './vfs-node.js';
@@ -248,82 +260,81 @@ const makeFileTools = (options = {}) => {
 
   const editFile = makeTool('editFile', {
     *help() {
-      yield 'Replaces a specific string in an existing file with a new string.';
+      yield 'Edits a file by exact-string replacement, without rewriting the whole file.';
       yield '';
-      yield 'Use editFile when you need to change part of a file.';
+      yield 'Each edit replaces a uniquely-matching `oldText` with `newText`.';
       yield 'Read the file first with readFile to find the exact text to replace.';
+      yield 'If `oldText` matches more than one place, the edit is rejected —';
+      yield 'add surrounding context so it matches exactly once.';
+      yield 'Line endings and a leading BOM are preserved, and a unified diff';
+      yield 'of the change is returned.';
       yield 'To create a new file or fully rewrite one, use writeFile instead.';
       yield '';
       yield '**Parameters:**';
       yield '- `path`: Path to file (required)';
-      yield '- `old_string`: Exact string to find and replace (required)';
-      yield '- `new_string`: Replacement string (required)';
-      yield '- `replace_all`: Replace all occurrences (optional, default: false)';
+      yield '- `oldText`: Exact unique string to find and replace';
+      yield '- `newText`: Replacement string';
+      yield '- `edits`: Array of `{ oldText, newText }` pairs to apply several';
+      yield '  non-overlapping edits in one call (alternative to the single pair)';
       yield '';
-      yield '**Example:**';
+      yield '**Examples:**';
       yield '```';
-      yield 'editFile({ path: "README.md", old_string: "old text", new_string: "new text" })';
+      yield 'editFile({ path: "README.md", oldText: "old text", newText: "new text" })';
+      yield 'editFile({ path: "a.js", edits: [{ oldText: "x = 1", newText: "x = 2" }] })';
       yield '```';
     },
 
     schema: M.call(
       M.splitRecord(
-        { path: M.string(), old_string: M.string(), new_string: M.string() },
-        { replace_all: M.boolean() },
+        { path: M.string() },
+        {
+          oldText: M.string(),
+          newText: M.string(),
+          edits: M.arrayOf(
+            M.splitRecord({ oldText: M.string(), newText: M.string() }),
+          ),
+        },
       ),
     ).returns({
       success: M.boolean(),
       path: M.string(),
-      replaced: M.boolean(),
-      count: M.number(),
+      applied: M.number(),
+      diff: M.string(),
     }),
 
     /**
      * @param {object} opts
      * @param {string} opts.path
-     * @param {string} opts.old_string
-     * @param {string} opts.new_string
-     * @param {boolean} [opts.replace_all]
-     * @returns {Promise<{success: boolean, path: string, replaced: boolean, count: number}>}
+     * @param {string} [opts.oldText]
+     * @param {string} [opts.newText]
+     * @param {Array<{oldText: string, newText: string}>} [opts.edits]
+     * @returns {Promise<{success: boolean, path: string, applied: number, diff: string}>}
      */
-    async execute({ path, old_string, new_string, replace_all = false }) {
+    async execute({ path, oldText, newText, edits }) {
       await Promise.resolve();
 
       const fullPath = safePath(path, resolvedRoot);
+      const normalized = normalizeEdits({ oldText, newText, edits });
 
+      let before;
       try {
-        const before = await vfs.readFile(fullPath);
-
-        let updated;
-        if (replace_all) {
-          updated = before.replaceAll(old_string, new_string);
-        } else {
-          const index = before.indexOf(old_string);
-          if (index === -1) {
-            throw new Error(`old_string not found in file`);
-          }
-          updated =
-            before.substring(0, index) +
-            new_string +
-            before.substring(index + old_string.length);
-        }
-
-        await vfs.writeFile(fullPath, updated);
-
-        const replaced = updated !== before;
-        const count = updated.split(new_string).length - 1;
-
-        return {
-          success: true,
-          path,
-          replaced,
-          count,
-        };
+        before = await vfs.readFile(fullPath);
       } catch (err) {
-        throw new Error(
-          `Failed to edit file: ${/** @type {Error} */ (err).message}`,
-        );
+        if (/** @type {NodeJS.ErrnoException} */ (err).code === 'ENOENT') {
+          throw new Error(`File not found: ${path}`);
+        }
+        throw err;
       }
+
+      // The shared algorithm's errors (non-unique match, overlap, not
+      // found) propagate as-is so every agent surface reports them in
+      // the same words.
+      const { content, diff, applied } = applyEdits(before, normalized, {
+        fileName: path,
+      });
+      await vfs.writeFile(fullPath, content);
+
+      return { success: true, path, applied, diff };
     },
   });
 
@@ -635,6 +646,187 @@ const makeFileTools = (options = {}) => {
     },
   });
 
+  // -- glob / grep -----------------------------------------------------------
+
+  // Adapt the VFS read surface to the platform search engine's narrow
+  // `SearchPowers` contract. A VFS without `realPath` (memory, mount) is
+  // treated as symlink-free — each path is its own physical path —
+  // matching the lexical confinement the rest of the tool suite applies.
+  const search = makeSearch(
+    harden({
+      /** @param {string} path */
+      readDirectory: async path => {
+        await null;
+        const names = [];
+        for await (const entry of vfs.readdir(path, { recursive: false })) {
+          names.push(entry.name);
+        }
+        return harden(names);
+      },
+      /** @param {string} path */
+      isDirectory: async path => {
+        await null;
+        try {
+          return (await vfs.stat(path)).type === 'directory';
+        } catch {
+          return false;
+        }
+      },
+      /** @param {string} path */
+      readFileText: path => vfs.readFile(path),
+      /** @param {string[]} segments */
+      joinPath: (...segments) => vfs.join(...segments),
+      /** @param {string} path */
+      maybeRealPath: async path => {
+        await null;
+        if (vfs.realPath === undefined) {
+          return path;
+        }
+        try {
+          return await vfs.realPath(path);
+        } catch {
+          return undefined;
+        }
+      },
+    }),
+  );
+
+  const glob = makeTool('glob', {
+    *help() {
+      yield 'Finds paths matching a glob pattern, like `find` with globs.';
+      yield '';
+      yield 'Returns matching paths relative to the searched directory, sorted.';
+      yield '`*` matches within one path segment, `**` matches across segments,';
+      yield '`?` matches a single character.';
+      yield '';
+      yield '**Parameters:**';
+      yield '- `pattern`: Glob pattern, e.g. "src/**/*.js" (required)';
+      yield '- `path`: Directory to search under (optional, default: the root)';
+      yield '';
+      yield '**Example:**';
+      yield '```';
+      yield 'glob({ pattern: "**/*.test.js", path: "src" })';
+      yield '```';
+    },
+
+    schema: M.call(
+      M.splitRecord({ pattern: M.string() }, { path: M.string() }),
+    ).returns({
+      success: M.boolean(),
+      path: M.string(),
+      pattern: M.string(),
+      matches: M.arrayOf(M.string()),
+      truncated: M.boolean(),
+    }),
+
+    /**
+     * @param {object} opts
+     * @param {string} opts.pattern
+     * @param {string} [opts.path]
+     * @returns {Promise<{success: boolean, path: string, pattern: string, matches: string[], truncated: boolean}>}
+     */
+    async execute({ pattern, path = '.' }) {
+      await Promise.resolve();
+
+      const fullPath = safePath(path, resolvedRoot);
+
+      /** @type {string[]} */
+      const matches = [];
+      let truncated = false;
+      for await (const batch of search.globPaths(fullPath, pattern, {
+        confinementRoot: resolvedRoot,
+      })) {
+        for (const match of batch) {
+          if (matches.length >= GLOB_MAX_RESULTS) {
+            truncated = true;
+            break;
+          }
+          matches.push(match);
+        }
+        if (truncated) {
+          break;
+        }
+      }
+
+      return { success: true, path, pattern, matches, truncated };
+    },
+  });
+
+  const grep = makeTool('grep', {
+    *help() {
+      yield 'Searches file contents for a regular expression, like `grep -n`.';
+      yield '';
+      yield 'Returns matches as `{ file, line, text }` records in path-then-line';
+      yield 'order, with 1-based line numbers and paths relative to the searched';
+      yield 'directory. Unreadable (e.g. binary) files are skipped.';
+      yield '';
+      yield '**Parameters:**';
+      yield '- `pattern`: ECMAScript regular expression source (required)';
+      yield '- `path`: Directory to search under (optional, default: the root)';
+      yield '- `glob`: Only search files matching this glob pattern (optional)';
+      yield '';
+      yield '**Example:**';
+      yield '```';
+      yield 'grep({ pattern: "TODO\\\\(", path: "src", glob: "**/*.js" })';
+      yield '```';
+    },
+
+    schema: M.call(
+      M.splitRecord(
+        { pattern: M.string() },
+        { path: M.string(), glob: M.string() },
+      ),
+    ).returns({
+      success: M.boolean(),
+      path: M.string(),
+      pattern: M.string(),
+      matches: M.arrayOf({
+        file: M.string(),
+        line: M.number(),
+        text: M.string(),
+      }),
+      truncated: M.boolean(),
+    }),
+
+    /**
+     * @param {object} opts
+     * @param {string} opts.pattern
+     * @param {string} [opts.path]
+     * @param {string} [opts.glob]
+     * @returns {Promise<{success: boolean, path: string, pattern: string, matches: Array<{file: string, line: number, text: string}>, truncated: boolean}>}
+     */
+    async execute({ pattern, path = '.', glob: globPattern }) {
+      await Promise.resolve();
+
+      const fullPath = safePath(path, resolvedRoot);
+
+      const paths =
+        globPattern === undefined
+          ? undefined
+          : search.globPaths(fullPath, globPattern, {
+              confinementRoot: resolvedRoot,
+              includeDirectories: false,
+            });
+
+      // Ask for one match beyond the cap so truncation is detectable
+      // without misreporting an exactly-at-cap result as truncated.
+      /** @type {Array<{file: string, line: number, text: string}>} */
+      const matches = [];
+      for await (const batch of search.grepFiles(fullPath, pattern, paths, {
+        confinementRoot: resolvedRoot,
+        maxResults: GREP_MAX_RESULTS + 1,
+      })) {
+        matches.push(...batch);
+      }
+      const truncated = matches.length > GREP_MAX_RESULTS;
+      if (truncated) {
+        matches.length = GREP_MAX_RESULTS;
+      }
+
+      return { success: true, path, pattern, matches, truncated };
+    },
+  });
+
   return harden({
     readFile,
     writeFile,
@@ -642,6 +834,8 @@ const makeFileTools = (options = {}) => {
     removeFile,
     stat,
     listDirectory,
+    glob,
+    grep,
     makeDirectory,
     removeDirectory,
   });

@@ -34,6 +34,7 @@
   "dependencies": {
     "@earendil-works/pi-agent-core": "^0.81.1",
     "@earendil-works/pi-ai": "^0.81.1",
+    "@endo/agentry": "workspace:^",
     "@endo/daemon": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
