@@ -32,7 +32,7 @@ import {
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
-/** @import { DaemonCore, DeferredTasks, DefineRequest, Envelope, EnvelopedMessage, FormulaIdentifier, FormulaNumber, Form, Handle, Mail, MakeMailbox, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NameOrPath, NamePath, PetName, Provide, Request, Responder, StampedMessage, Topic, ValueMessage } from './types.js' */
+/** @import { ManagerCore, DeferredTasks, DefineRequest, Envelope, EnvelopedMessage, FormulaIdentifier, FormulaNumber, Form, Handle, Mail, MakeMailbox, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NameOrPath, NamePath, PetName, Provide, Request, Responder, StampedMessage, Topic, ValueMessage } from './types.js' */
 
 /** @type {PetName} */
 const NEXT_MESSAGE_NUMBER_NAME = /** @type {PetName} */ ('next-number');
@@ -116,13 +116,13 @@ const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
 /**
  * @param {object} args
  * @param {Provide} args.provide
- * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
- * @param {DaemonCore['formulatePromise']} args.formulatePromise
- * @param {DaemonCore['formulateMessage']} args.formulateMessage
- * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
+ * @param {ManagerCore['formulateMarshalValue']} args.formulateMarshalValue
+ * @param {ManagerCore['formulatePromise']} args.formulatePromise
+ * @param {ManagerCore['formulateMessage']} args.formulateMessage
+ * @param {ManagerCore['getFormulaForId']} args.getFormulaForId
  * @param {() => Promise<string>} args.randomHex256
- * @param {DaemonCore['pinTransient']} [args.pinTransient]
- * @param {DaemonCore['unpinTransient']} [args.unpinTransient]
+ * @param {ManagerCore['pinTransient']} [args.pinTransient]
+ * @param {ManagerCore['unpinTransient']} [args.unpinTransient]
  * @param args.getTypeForId
  * @param {(node: string) => boolean} args.isLocalKey
  * @returns {MakeMailbox}

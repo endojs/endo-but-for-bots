@@ -12,14 +12,14 @@
  */
 
 import Database from 'better-sqlite3';
-import { makeDaemonDatabase as makeDaemonDatabaseImpl } from './manager-database.js';
+import { makeManagerDatabase as makeManagerDatabaseImpl } from './manager-database.js';
 
 /** @import { Config } from './types.js' */
-/** @import { DaemonDatabase } from './manager-database.js' */
+/** @import { ManagerDatabase } from './manager-database.js' */
 
 /**
  * @param {Config} config
- * @returns {DaemonDatabase}
+ * @returns {ManagerDatabase}
  */
-export const makeDaemonDatabase = config =>
-  makeDaemonDatabaseImpl(config, { Database });
+export const makeManagerDatabase = config =>
+  makeManagerDatabaseImpl(config, { Database });

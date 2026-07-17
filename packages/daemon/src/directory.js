@@ -21,18 +21,18 @@ import { directoryHelp, makeHelp } from './help-text.js';
 
 import { DirectoryInterface } from './interfaces.js';
 
-/** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, StoreController } from './types.js' */
+/** @import { ManagerCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, StoreController } from './types.js' */
 
 /**
  * @param {object} args
- * @param {DaemonCore['provide']} args.provide
+ * @param {ManagerCore['provide']} args.provide
  * @param {(storeId: FormulaIdentifier) => Promise<StoreController>} args.provideStoreController
- * @param {DaemonCore['getIdForRef']} args.getIdForRef
- * @param {DaemonCore['getTypeForId']} args.getTypeForId
- * @param {DaemonCore['formulateDirectory']} args.formulateDirectory
- * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
- * @param {DaemonCore['pinTransient']} args.pinTransient
- * @param {DaemonCore['unpinTransient']} args.unpinTransient
+ * @param {ManagerCore['getIdForRef']} args.getIdForRef
+ * @param {ManagerCore['getTypeForId']} args.getTypeForId
+ * @param {ManagerCore['formulateDirectory']} args.formulateDirectory
+ * @param {ManagerCore['formulateReadableBlob']} args.formulateReadableBlob
+ * @param {ManagerCore['pinTransient']} args.pinTransient
+ * @param {ManagerCore['unpinTransient']} args.unpinTransient
  */
 export const makeDirectoryMaker = ({
   provide,

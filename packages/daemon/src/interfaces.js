@@ -749,8 +749,8 @@ export const ReadableTreeInterface = M.interface('EndoReadableTree', {
   sha256: M.call().returns(M.string()),
 });
 
-export const DaemonFacetForWorkerInterface = M.interface(
-  'EndoDaemonFacetForWorker',
+export const ManagerFacetForWorkerInterface = M.interface(
+  'EndoManagerFacetForWorker',
   {
     // Push a single trace record to the daemon's aggregate.
     // The record's workerId field is overwritten by the daemon
@@ -783,8 +783,8 @@ export const TracesInterface = M.interface('EndoTraces', {
   stats: M.call().returns(M.promise()),
 });
 
-export const WorkerFacetForDaemonInterface = M.interface(
-  'EndoWorkerFacetForDaemon',
+export const WorkerFacetForManagerInterface = M.interface(
+  'EndoWorkerFacetForManager',
   {
     terminate: M.call().returns(M.promise()),
     evaluate: M.call(

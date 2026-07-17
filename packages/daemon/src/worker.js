@@ -12,10 +12,10 @@ import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { makeNetstringCapTP } from './connection.js';
 import { getUnredactedStackString } from './unredacted-stack.js';
 
-import { WorkerFacetForDaemonInterface } from './interfaces.js';
+import { WorkerFacetForManagerInterface } from './interfaces.js';
 
 /** @import { ERef } from '@endo/eventual-send' */
-/** @import { EndoReadable, MignonicPowers } from './types.js' */
+/** @import { EndoReadable, WorkerPowers } from './types.js' */
 /** @import { TraceRecord } from './trace-aggregator.js' */
 
 const endowments = harden({
@@ -56,8 +56,8 @@ const normalizeFilePath = path => {
  */
 export const makeWorkerFacet = ({ cancel }) => {
   return makeExo(
-    'EndoWorkerFacetForDaemon',
-    WorkerFacetForDaemonInterface,
+    'EndoWorkerFacetForManager',
+    WorkerFacetForManagerInterface,
     /** @type {any} */ ({
       terminate: async () => {
         console.error('Endo worker received terminate request');
@@ -233,21 +233,21 @@ export const makeWorkerFacet = ({ cancel }) => {
  * The push uses `E.sendOnly` so the worker never blocks an outbound
  * error on the success of a trace push.
  *
- * @param {() => unknown} getDaemonFacet returns the daemon's
- *   `EndoDaemonFacetForWorker` once CapTP has resolved the bootstrap.
+ * @param {() => unknown} getManagerFacet returns the daemon's
+ *   `EndoManagerFacetForWorker` once CapTP has resolved the bootstrap.
  *   May return undefined before the bootstrap arrives, in which case
  *   the push is dropped.
  * @param {string} site label for the capture site, recorded with
  *   each trace.
  */
-const makeWorkerPushTrace = (getDaemonFacet, site) => {
+const makeWorkerPushTrace = (getManagerFacet, site) => {
   /**
    * @param {Error} err
    * @param {string} [errorId]
    */
   return (err, errorId) => {
     if (errorId === undefined) return;
-    const daemonFacet = getDaemonFacet();
+    const daemonFacet = getManagerFacet();
     if (daemonFacet === undefined) return;
     // Use the privileged SES hook (the same hack `@endo/ses-ava` taps to
     // surface unredacted traces to AVA) so the operator running
@@ -295,7 +295,7 @@ const makeWorkerPushTrace = (getDaemonFacet, site) => {
 };
 
 /**
- * @param {MignonicPowers} powers
+ * @param {WorkerPowers} powers
  * @param {number | undefined} pid
  * @param {(error: Error) => void} cancel
  * @param {Promise<never>} cancelled
@@ -314,9 +314,9 @@ export const main = async (powers, pid, cancel, cancelled) => {
 
   /** @type {unknown} */
   let daemonFacet;
-  const getDaemonFacet = () => daemonFacet;
-  const pushTraceFromMarshal = makeWorkerPushTrace(getDaemonFacet, 'marshal');
-  const pushTraceFromCapTP = makeWorkerPushTrace(getDaemonFacet, 'captp');
+  const getManagerFacet = () => daemonFacet;
+  const pushTraceFromMarshal = makeWorkerPushTrace(getManagerFacet, 'marshal');
+  const pushTraceFromCapTP = makeWorkerPushTrace(getManagerFacet, 'captp');
 
   const { closed, getBootstrap } = makeNetstringCapTP(
     'Endo',
