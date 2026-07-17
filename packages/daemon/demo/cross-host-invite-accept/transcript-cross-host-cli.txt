@@ -1,0 +1,16 @@
+== 1. endo invite on the minion.town Pet Daemon ==
+minted: endo://a6cd6e01283acd9a0ed7fd7377b377075fe5cc37569d341fb654d456e27ba377/14fea0067b65c8a48866149efcf1b9152b84f6adbda04a74fd8f836bfc26b507@ocapn%2Bnoise%2Bws%3A%2F%2F127.0.0.1%3A8930%2F%3Fnode%3Da6cd6e01283acd9a0ed7fd7377b377075fe5cc37569d341fb654d456e27ba377%26loc%3D%257B%2522type%2522%253A%2522ocapn-peer%2522%252C%2522network%2522%253A%2522np%2522%252C%2522transport%2522%253A%2522np%2522%252C%2522designator%2522%253A%2522a677fd345fc21f64c1f52f8574ab587c38217b8fed1088f80b1af47a033ea971%2522%252C%2522hints%2522%253A%257B%2522ws%253Aurl%2522%253A%2522ws%253A%252F%252F127.0.0.1%253A8930%2522%257D%257D?type=invitation&from=572189b698dbc8b0fe4b31238ca634ff8cf2a1628d817adff58460a392746a56&fromNode=9071f19a9b9f2965379f1c84ee955420727b0a67738b635c9432b76ddfaaf7d7
+== 2. boot a local Pet Daemon and install @nets/ocapn (all CLI) ==
+endo daemon ready { type: 'ready', gatewayAddress: 'http://127.0.0.1:37859' }
+ok
+CapTP health-checker exception: Error: normal termination
+
+Object [Alleged: OcapnNoiseService] {}
+installed @nets/ocapn
+== 3. rewrite the loopback ws:url hint to wss://minion.town/ocapn-daemon ==
+== 4. endo accept over wss://minion.town/ocapn-daemon ==
+accepted: pet name 'minion' bound locally
+== 5. message round-trip, both directions, over the dialed session ==
+2. "garden-cli-1949543" sent "@self" "ping from the garden CLI over Noise (1949543)" at "2026-07-17T12:32:43.612Z"
+1. "minion" sent "@self" "pong from minion.town over the same session (1949543)" at "2026-07-17T12:32:48.795Z"
+CROSS-HOST CLI DEMO PASSED

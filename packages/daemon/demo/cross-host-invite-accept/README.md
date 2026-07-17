@@ -49,7 +49,10 @@ and the capability result flow home over the same Noise session.
 | `local-accept-invitation.mjs` | local | boots a Pet Daemon, rewrites `ws:url`, `accept`s the invitation, invokes the capability |
 | `minion-ssm.py` | anywhere with AWS creds | boto3 SSM helper (an `aws`-CLI-free alternative to `demo/minion-town/ssm.sh`) |
 | `run-cross-host.sh` | local | drives steps 1–3 end to end |
+| `run-cross-host-cli.sh` | local | the same pairing driven entirely by the `endo` CLI binaries on both hosts (`endo invite` on minion; `endo start`/`store`/`make`/`mv`/`accept`/`send`/`inbox` locally), plus a message round-trip both directions |
+| `rewrite-ws-url.mjs` | local | standalone `ws:url`-hint rewrite filter for the CLI driver (designator untouched) |
 | `transcript-cross-host.txt` | — | captured live run |
+| `transcript-cross-host-cli.txt` | — | captured live run of the CLI variant |
 | `transcript-tcp-local.txt` | — | companion: local TCP two-daemon invite/accept (minion blocks non-443, so remote TCP is out of scope) |
 
 ## Run it
@@ -61,7 +64,8 @@ socket must stay on a short path such as `/tmp`), and SSM reach to the host.
 
 ```sh
 cd packages/daemon
-./demo/cross-host-invite-accept/run-cross-host.sh
+./demo/cross-host-invite-accept/run-cross-host.sh       # programmatic host facet
+./demo/cross-host-invite-accept/run-cross-host-cli.sh   # endo CLI binaries both sides
 ```
 
 Or the two steps by hand:
@@ -87,16 +91,23 @@ local: ← remote greeting: "hello local Pet Daemon in the garden container from
 local: CROSS-HOST DEMO PASSED
 ```
 
-## Gap vs. the full CLI pet-name invitation flow
+## The CLI variant
 
-This drives the **programmatic** host facet (`E(host).invite` /
+`run-cross-host.sh` drives the **programmatic** host facet (`E(host).invite` /
 `E(host).accept` / `E(host).evaluate`) — the same objects the `endo invite` /
-`endo accept` CLI subcommands wrap — rather than the CLI binaries. Reaching
-minion's host facet requires its control socket, reached here via
-`docker exec` over SSM; the public `wss://` surface exposes only the
-network-level `EndoOcapnBootstrap` (swissnum `endo-bootstrap`,
-`getNodeId`/`getAgentBinding`/`getGreeter`/`help`), not the pet-store host. The
-invite/accept workflow itself — mint on one daemon, accept on the other, durable
-guest + peer-info registration on both sides, capability round-trip — is exercised
-end to end and cross-host. Driving the `endo` CLI over an interactive shell on
-minion, and mutual (bidirectional-dialable) pairing, remain follow-ups.
+`endo accept` CLI subcommands wrap. `run-cross-host-cli.sh` closes the gap that
+used to be noted here: it performs the same cross-host pairing with the shipped
+**`endo` CLI binaries on both hosts**. On minion, `endo invite <guest>` (the CLI
+finds the daemon's control socket at `/data/endo.sock` via `ENDO_SOCK`, reached
+with `docker exec` over SSM); locally, `endo start`, then `endo store` /
+`endo make --UNCONFINED src/networks/ocapn.js` / `endo mv … '@nets/ocapn'` to
+install the network, `endo accept` to redeem the (hint-rewritten) invitation,
+and `endo send` / `endo inbox` to round-trip messages in **both directions**
+over the single wss+Noise session the local side dialed. The only non-CLI step
+is the `ws:url` hint rewrite (`rewrite-ws-url.mjs`), a NAT/ingress detail.
+
+Reaching minion's host facet still requires its control socket: the public
+`wss://` surface exposes only the network-level `EndoOcapnBootstrap` (swissnum
+`endo-bootstrap`, `getNodeId`/`getAgentBinding`/`getGreeter`/`help`), not the
+pet-store host. Mutual (bidirectional-dialable) pairing remains a follow-up —
+the garden container has no public address, so minion can never dial it back.
