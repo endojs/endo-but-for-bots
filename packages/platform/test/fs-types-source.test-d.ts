@@ -23,6 +23,30 @@ import type {
 import type { Reader } from '@endo/stream';
 
 import type {
+  DirEntry as PackageBackendDirEntry,
+  FsBackend as PackageBackendFsBackend,
+  NodeKind as PackageBackendNodeKind,
+  WatchEvent as PackageBackendWatchEvent,
+} from '@endo/platform/fs/extended/backend-types';
+import type {
+  DirEntry as PackageJsBackendDirEntry,
+  FsBackend as PackageJsBackendFsBackend,
+  NodeKind as PackageJsBackendNodeKind,
+  WatchEvent as PackageJsBackendWatchEvent,
+} from '@endo/platform/fs/extended/backend-types.js';
+import type {
+  DirEntry as PackageExtendedDirEntry,
+  FsBackend as PackageExtendedFsBackend,
+  NodeKind as PackageExtendedNodeKind,
+  WatchEvent as PackageExtendedWatchEvent,
+} from '@endo/platform/fs/extended';
+import type {
+  DirEntry as PackageJsExtendedDirEntry,
+  FsBackend as PackageJsExtendedFsBackend,
+  NodeKind as PackageJsExtendedNodeKind,
+  WatchEvent as PackageJsExtendedWatchEvent,
+} from '@endo/platform/fs/extended/types-index.js';
+import type {
   ContentStore as SourceContentStore,
   ContentStoreBlob as SourceContentStoreBlob,
   ReadableBlob as SourceReadableBlob,
@@ -33,6 +57,12 @@ import type {
   Search as SourceSearch,
   SearchFilePowers as SourceSearchFilePowers,
 } from '../src/fs/search.types.js';
+import type {
+  DirEntry as SourceBackendDirEntry,
+  FsBackend as SourceBackendFsBackend,
+  NodeKind as SourceBackendNodeKind,
+  WatchEvent as SourceBackendWatchEvent,
+} from '../src/fs/extended/backend-types.js';
 
 type ExpectedReadableBlob = {
   streamBase64: (synPromise: unknown) => Promise<unknown>;
@@ -101,3 +131,24 @@ expectTypeOf<PackageSearch>().toEqualTypeOf<SourceSearch>();
 expectTypeOf<PackageJsSearch>().toEqualTypeOf<SourceSearch>();
 expectTypeOf<PackageSearchFilePowers>().toEqualTypeOf<SourceSearchFilePowers>();
 expectTypeOf<PackageJsSearchFilePowers>().toEqualTypeOf<SourceSearchFilePowers>();
+
+// The `fs/extended/backend-types` and `fs/extended` subpath-export
+// entrypoints (bare and `.js`, direct and barrel) must all mirror the same
+// source backend types, so the watch/dir/node-kind contracts stay
+// single-sourced regardless of which entrypoint a consumer imports.
+expectTypeOf<PackageBackendDirEntry>().toEqualTypeOf<SourceBackendDirEntry>();
+expectTypeOf<PackageJsBackendDirEntry>().toEqualTypeOf<SourceBackendDirEntry>();
+expectTypeOf<PackageBackendFsBackend>().toEqualTypeOf<SourceBackendFsBackend>();
+expectTypeOf<PackageJsBackendFsBackend>().toEqualTypeOf<SourceBackendFsBackend>();
+expectTypeOf<PackageBackendNodeKind>().toEqualTypeOf<SourceBackendNodeKind>();
+expectTypeOf<PackageJsBackendNodeKind>().toEqualTypeOf<SourceBackendNodeKind>();
+expectTypeOf<PackageBackendWatchEvent>().toEqualTypeOf<SourceBackendWatchEvent>();
+expectTypeOf<PackageJsBackendWatchEvent>().toEqualTypeOf<SourceBackendWatchEvent>();
+expectTypeOf<PackageExtendedDirEntry>().toEqualTypeOf<SourceBackendDirEntry>();
+expectTypeOf<PackageJsExtendedDirEntry>().toEqualTypeOf<SourceBackendDirEntry>();
+expectTypeOf<PackageExtendedFsBackend>().toEqualTypeOf<SourceBackendFsBackend>();
+expectTypeOf<PackageJsExtendedFsBackend>().toEqualTypeOf<SourceBackendFsBackend>();
+expectTypeOf<PackageExtendedNodeKind>().toEqualTypeOf<SourceBackendNodeKind>();
+expectTypeOf<PackageJsExtendedNodeKind>().toEqualTypeOf<SourceBackendNodeKind>();
+expectTypeOf<PackageExtendedWatchEvent>().toEqualTypeOf<SourceBackendWatchEvent>();
+expectTypeOf<PackageJsExtendedWatchEvent>().toEqualTypeOf<SourceBackendWatchEvent>();
