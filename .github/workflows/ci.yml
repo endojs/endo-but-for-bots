@@ -249,7 +249,7 @@ jobs:
         run: npm run build
 
       - name: Run SES/Hermes smoke test
-        run: npm run test:hermes
+        run: npm run test:hermes --workspace ses
 
   check-action-pins:
     name: check-action-pins

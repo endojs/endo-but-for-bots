@@ -29,7 +29,10 @@ REGISTRY_PORT=$(node -e '
   const s = require("net").createServer();
   s.listen(0, () => { console.log(s.address().port); s.close(); });
 ')
-REGISTRY_URL="http://localhost:$REGISTRY_PORT"
+# `node` may bind the ephemeral port only on IPv6 when given no host.  npm's
+# legacy login helper resolves localhost to IPv4, so use an explicit IPv4
+# loopback endpoint for both the server and all npm clients.
+REGISTRY_URL="http://127.0.0.1:$REGISTRY_PORT"
 
 cleanup() {
   if [ -f "$REGISTRY_HOME/verdaccio.pid" ]; then
@@ -69,7 +72,7 @@ echo "smoketest-publishing: starting Verdaccio (HOME=$REGISTRY_HOME)"
   cd "$REGISTRY_HOME"
   : > verdaccio.log
   nohup npx --yes verdaccio@^6 --config "$REGISTRY_HOME/verdaccio.yaml" \
-    --listen "$REGISTRY_PORT" &> verdaccio.log &
+    --listen "0.0.0.0:$REGISTRY_PORT" &> verdaccio.log &
   echo $! > verdaccio.pid
   # Block until verdaccio prints its "http address" line to the log.
   grep -q 'http address' <(tail -f verdaccio.log)
@@ -85,12 +88,12 @@ echo "smoketest-publishing: starting Verdaccio (HOME=$REGISTRY_HOME)"
 # npm-cli-login automates non-interactively. `-r` pins it at our local
 # Verdaccio regardless of the ambient npm config.
 echo "smoketest-publishing: creating disposable publish user"
-npx --yes npm-cli-login@^1 \
+NPM_CONFIG_USERCONFIG="$REGISTRY_HOME/.npmrc" npx --yes npm-cli-login@^1 \
   -u smoketest -p smoketest -e smoketest@example.com \
-  -r "$REGISTRY_URL" --quotes
+  -r "$REGISTRY_URL" --quotes --config-path "$REGISTRY_HOME/.npmrc"
 
 # Sanity: confirm we are authenticated against the local registry.
-npm whoami --registry "$REGISTRY_URL"
+npm --userconfig "$REGISTRY_HOME/.npmrc" whoami --registry "$REGISTRY_URL"
 
 # Run the real release flow. `release:npm` calls `pack:all` (which
 # rebuilds dist/ via ts-node-pack) then `npm publish` for each .tgz;
@@ -99,7 +102,8 @@ npm whoami --registry "$REGISTRY_URL"
 echo "smoketest-publishing: running 'npm release:npm'"
 (
   cd "$ROOT"
-  npm_config_registry="$REGISTRY_URL" npm run release:npm
+  npm_config_userconfig="$REGISTRY_HOME/.npmrc" npm --userconfig "$REGISTRY_HOME/.npmrc" \
+    --registry "$REGISTRY_URL" run release:npm
 )
 
 # Install a representative subset into a throwaway consumer and exercise
