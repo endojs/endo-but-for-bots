@@ -17,7 +17,7 @@ files in dependencies to break through to the underlying Node.js ESM.
 ## "main": "./dist/ses.cjs"
 
 SES provides its own translation from its own ESM sources to CommonJS, emitted
-by `yarn build`, specifically `scripts/bundle.js`.
+by `pnpm build`, specifically `scripts/bundle.js`.
 This is spiritually similar to Rollup because it produces a CommonJS module
 from an JavaScript module and its transitive imports, but uses a translation
 that was designed to preserve the security properties of SES and participate

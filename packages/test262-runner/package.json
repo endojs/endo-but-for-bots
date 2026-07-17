@@ -23,12 +23,12 @@
   },
   "scripts": {
     "build": "node scripts/generate-preludes.js",
-    "lint": "yarn lint:types && yarn lint:js",
+    "lint": "pnpm lint:types && pnpm lint:js",
     "lint-fix": "eslint --fix .",
     "lint:js": "eslint .",
     "lint:types": "tsc",
     "test": "exit 0",
-    "test262": "yarn build && yarn test262:xs && yarn test262:node",
+    "test262": "pnpm build && pnpm test262:xs && pnpm test262:node",
     "test262:xs": "test262-harness --host-type xs --host-path xst --test262-dir test262 --prelude prelude/xs.js 'test262/test/**/*.js' --features-include ses-xs-parity",
     "test262:node": "test262-harness --host-type node --host-path node --test262-dir test262  --prelude prelude/node.js 'test262/test/**/*.js' --features-include ses-xs-parity"
   },
@@ -38,8 +38,8 @@
     "test262-harness": "^10.0.0"
   },
   "devDependencies": {
-    "eslint": "catalog:dev",
-    "typescript": "catalog:dev"
+    "eslint": "^8.57.1",
+    "typescript": "~6.0.3"
   },
   "files": [
     "./*.d.ts",

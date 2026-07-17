@@ -53,6 +53,6 @@
     "access": "public"
   },
   "devDependencies": {
-    "eslint": "catalog:dev"
+    "eslint": "^8.57.1"
   }
 }

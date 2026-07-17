@@ -2,7 +2,7 @@
 
 set -e
 
-echo "yarn version: $(yarn --version)"
+echo "pnpm version: $(pnpm --version)"
 
 mkdir -p "$HOME/.engines/bin"
 
@@ -103,13 +103,13 @@ fi
 chmod +x "$HOME/.engines/bin/xs" "$HOME/.engines/bin/v8"
 
 ## Adding engines to eshost (if not already) ##
-if ! yarn eshost --list | grep -q '"xs"'; then
-    yarn eshost --add "xs" xs "$HOME/.engines/bin/xs"
+if ! pnpm eshost --list | grep -q '"xs"'; then
+    pnpm eshost --add "xs" xs "$HOME/.engines/bin/xs"
 fi
 
-if ! yarn eshost --list | grep -q '"v8"'; then
-    yarn eshost --add "v8" d8 "$HOME/.engines/bin/v8"
+if ! pnpm eshost --list | grep -q '"v8"'; then
+    pnpm eshost --add "v8" d8 "$HOME/.engines/bin/v8"
 fi
 
 
-yarn eshost --list
+pnpm eshost --list

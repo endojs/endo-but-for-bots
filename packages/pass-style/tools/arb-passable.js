@@ -16,6 +16,7 @@ export const exampleCarol = Far('carol', {});
 /**
  * @param {typeof import('@fast-check/ava').fc} fc
  * @param {Array<'byteArray'>} [exclusions]
+ * @returns {any}
  */
 export const makeArbitraries = (fc, exclusions = []) => {
   const arbString = fc.oneof(fc.string(), fc.string({ unit: 'binary' }));

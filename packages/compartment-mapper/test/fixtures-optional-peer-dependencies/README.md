@@ -6,4 +6,4 @@ The _intent_ of this configuration is to declare _optional_ peer dependencies.
 
 Prior to `npm@7`, there was no way to declare a peer dependency as optional, leading packages to _omit_ optional `peerDependencies` from `package.json`.
 
-I do not know if `yarn` or `pnpm` (any version) do anything with a lone `peerDependenciesMeta` field. Assuming they don't, `peerDependenciesMeta` w/o a `peerDependencies` is little more than a _hint_ to a human reader.
+I do not know if `pnpm` or `pnpm` (any version) do anything with a lone `peerDependenciesMeta` field. Assuming they don't, `peerDependenciesMeta` w/o a `peerDependencies` is little more than a _hint_ to a human reader.

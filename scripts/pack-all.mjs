@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 /**
- * @file Build a publishable .tgz for every public workspace using ts-node-pack.
+ * @file Build a publishable .tgz for every public workspace with pnpm.
  *
- * Yarn 4 does not support swapping the pack engine, so we drive ts-node-pack
- * directly. Each tarball is written to `dist/` at the workspace root, named
+ * Each tarball is written to `dist/` at the workspace root, named
  * `<scope>-<name>-<version>.tgz`.
  *
  * Freshness guarantee: `dist/` is recursively removed before this script
@@ -15,10 +14,9 @@
  * manually after editing source without re-packing, that's on you.)
  *
  * Used by:
- *   - `yarn pack:all` (dev / CI smoke)
- *   - `yarn release:npm` (publish flow, via release-npm.mjs)
+ *   - `pnpm pack:all` (dev / CI smoke)
+ *   - `pnpm release:npm` (publish flow, via release-npm.mjs)
  *   - `scripts/files.sh` (file inventory)
- *   - `scripts/compare-pack.mjs` (legacy-vs-new tarball diff)
  */
 import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
@@ -34,30 +32,19 @@ const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(new URL('..', import.meta.url).pathname);
 const distDir = path.join(repoRoot, 'dist');
 
-const { stdout: binStdout } = await execFileAsync(
-  'yarn',
-  ['bin', 'ts-node-pack'],
-  { cwd: repoRoot, maxBuffer: 1024 * 1024 },
-);
-const tsNodePackBin = binStdout.trim().split('\n').pop();
-if (!tsNodePackBin || !existsSync(tsNodePackBin)) {
-  throw new Error(`ts-node-pack binary not found (got "${tsNodePackBin}")`);
-}
-
-// `npm query` doesn't see Yarn 4 pnpm-linked workspaces; use Yarn directly.
-// Output is one JSON object per line (NDJSON), not a JSON array.
+// Ask pnpm directly so the public package set comes from the workspace graph.
 const { stdout: listStdout } = await execFileAsync(
-  'yarn',
-  ['workspaces', 'list', '--json', '--no-private'],
+  'pnpm',
+  ['-r', 'list', '--depth', '-1', '--json'],
   { cwd: repoRoot, maxBuffer: 16 * 1024 * 1024 },
 );
-/** @type {{location: string, name: string}[]} */
-const workspaces = listStdout
-  .split('\n')
-  .filter(line => line.trim())
-  .map(line => JSON.parse(line))
-  // The root workspace shows up with location "."; skip it.
-  .filter(ws => ws.location !== '.');
+const trimmedWorkspaceList = listStdout.trim();
+/** @type {{path: string, name: string, private: boolean}[]} */
+const workspaces = trimmedWorkspaceList
+  ? JSON.parse(`[${trimmedWorkspaceList.replace(/]\s*\[/g, ',')}]`)
+      .flat()
+      .filter(ws => ws.name && !ws.private)
+  : [];
 
 if (existsSync(distDir)) rmSync(distDir, { recursive: true, force: true });
 mkdirSync(distDir, { recursive: true });
@@ -78,9 +65,9 @@ const run = (cmd, argv, options) =>
   });
 
 for (const ws of workspaces) {
-  const pkgDir = path.join(repoRoot, ws.location);
+  const pkgDir = ws.path;
   process.stderr.write(`pack-all: ${ws.name}\n`);
-  await run(process.execPath, [tsNodePackBin, pkgDir], { cwd: distDir });
+  await run('pnpm', ['pack', '--pack-destination', distDir], { cwd: pkgDir });
 }
 
 process.stderr.write(

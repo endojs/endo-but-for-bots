@@ -60,23 +60,33 @@ jobs:
           echo "GOBLINS_COMMIT=$GOBLINS_COMMIT" >> "$GITHUB_ENV"
           echo "GOBLIN_CHAT_COMMIT=$GOBLIN_CHAT_COMMIT" >> "$GITHUB_ENV"
 
-      - run: corepack enable
-        working-directory: endo
-
       - name: Use Node.js 20.x
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 20.x
-          cache: yarn
-          cache-dependency-path: endo/yarn.lock
+
+      - run: corepack enable
+        working-directory: endo
+
+      # The repository is checked out below the runner workspace, so
+      # setup-node's built-in cache probe cannot see its package manager
+      # declaration. Cache the pnpm store after Corepack resolves it from the
+      # checkout instead.
+      - name: Restore pnpm store
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('endo/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
 
       - name: Install Node dependencies
         working-directory: endo
-        run: yarn install --immutable
+        run: pnpm install --frozen-lockfile
 
       - name: Build Endo
         working-directory: endo
-        run: yarn build
+        run: pnpm build
 
       # `PromyLOPh/guix-install-action` is a composite action whose
       # `Download` step wgets the Guix nightly tarball from

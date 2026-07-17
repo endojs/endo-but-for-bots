@@ -19,11 +19,11 @@
   "exports": {},
   "scripts": {
     "build": "exit 0",
-    "lint": "yarn lint:types && yarn lint:ts",
+    "lint": "pnpm lint:types && pnpm lint:ts",
     "lint-fix": "eslint --fix . --ext .ts",
     "lint:ts": "eslint . --ext .ts",
     "lint:types": "tsc",
-    "test": "yarn lint:types"
+    "test": "pnpm lint:types"
   },
   "dependencies": {
     "@endo/nat": "workspace:^",
@@ -31,8 +31,8 @@
     "ses": "workspace:^"
   },
   "devDependencies": {
-    "eslint": "catalog:dev",
-    "typescript": "catalog:dev"
+    "eslint": "^8.57.1",
+    "typescript": "~6.0.3"
   },
   "files": [
     "./*.d.ts",

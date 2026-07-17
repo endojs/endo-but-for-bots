@@ -1,0 +1,16 @@
+packages:
+  - packages/*
+
+allowBuilds:
+  '@lavamoat/preinstall-always-fail': false
+  core-js: false
+  unrs-resolver: false
+
+overrides:
+  '@babel/generator': '7.28.3'
+  '@babel/parser': '7.28.3'
+  '@babel/traverse': '7.28.3'
+  '@endo/eslint-plugin>eslint-plugin-import': 'npm:eslint-plugin-import-x@4.16.2'
+  '@endo/eslint-plugin>typescript': '~6.0.3'
+  fast-check: '4.8.0'
+  rollup: '4.45.1'

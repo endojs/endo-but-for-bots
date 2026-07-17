@@ -40,12 +40,12 @@
   "scripts": {
     "build": "exit 0",
     "cover": "c8 ava --config test/_ava-ses.config.js",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint": "pnpm lint:types && pnpm lint:eslint",
     "lint:types": "tsc",
     "lint:eslint": "eslint .",
     "lint-fix": "eslint --fix .",
-    "test": "yarn run -T ses-ava",
-    "test:c8": "c8 ${C8_OPTIONS:-} yarn run -T ses-ava",
+    "test": "pnpm exec ses-ava",
+    "test:c8": "c8 ${C8_OPTIONS:-} pnpm exec ses-ava",
     "test:xs": "node scripts/generate-test-xs.js && xst tmp/test-xs.js"
   },
   "dependencies": {
@@ -60,11 +60,11 @@
     "@types/babel__generator": "~7.27.0",
     "@types/babel__traverse": "~7.28.0",
     "@types/node": "^20.19.41",
-    "ava": "catalog:dev",
+    "ava": "^8.0.1",
     "benchmark": "^2.1.4",
-    "c8": "catalog:dev",
-    "eslint": "catalog:dev",
-    "typescript": "catalog:dev"
+    "c8": "^11.0.0",
+    "eslint": "^8.57.1",
+    "typescript": "~6.0.3"
   },
   "files": [
     "./*.d.ts",

@@ -1,6 +1,7 @@
 import { nodeResolve } from '@rollup/plugin-node-resolve';
 
-export default {
+/** @type {import('rollup').RollupOptions} */
+const config = {
   input: 'test/index.test.js',
   output: {
     file: 'dist/bundle.js',
@@ -10,3 +11,5 @@ export default {
   },
   plugins: [nodeResolve()],
 };
+
+export default config;

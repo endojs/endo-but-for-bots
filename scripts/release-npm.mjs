@@ -116,18 +116,19 @@ if (tarballs.length === 0) {
 
 // Sanity check: one tarball per public workspace, no more and no less.
 // Catches a partial pack-all run (e.g. interrupted mid-loop) and any
-// drift between what `yarn workspaces list` reports and what
+// drift between what pnpm reports and what
 // `pack-all.mjs` actually wrote.
 const { stdout: wsStdout } = await execFileAsync(
-  'yarn',
-  ['workspaces', 'list', '--json', '--no-private'],
+  'pnpm',
+  ['-r', 'list', '--depth', '-1', '--json'],
   { cwd: repoRoot, maxBuffer: 16 * 1024 * 1024 },
 );
-const expectedPackages = wsStdout
-  .split('\n')
-  .filter(line => line.trim())
-  .map(line => JSON.parse(line))
-  .filter(ws => ws.location !== '.');
+const trimmedWorkspaceList = wsStdout.trim();
+const expectedPackages = trimmedWorkspaceList
+  ? JSON.parse(`[${trimmedWorkspaceList.replace(/]\s*\[/g, ',')}]`)
+      .flat()
+      .filter(ws => ws.name && !ws.private)
+  : [];
 if (tarballs.length !== expectedPackages.length) {
   throw new Error(
     `release:npm: tarball count mismatch — expected ${expectedPackages.length} ` +
