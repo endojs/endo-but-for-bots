@@ -9,6 +9,9 @@
  *
  * @module
  */
+
+/* global globalThis */
+
 import { asyncTrampoline, syncTrampoline } from '@endo/trampoline';
 import { resolve } from './node-module-specifier.js';
 import {

@@ -9,6 +9,8 @@
  * @module
  */
 
+/* global globalThis */
+
 /**
  * @import {
  *   CryptoInterface,
