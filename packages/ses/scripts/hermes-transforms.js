@@ -79,17 +79,19 @@ export const hermesTransforms = {
 
     traverse(ast, transforms, undefined, { filename: location });
 
-    const { code } = generate(
-      ast,
-      {
-        // Nothing being done with sourcemaps as this point
-        // @ts-expect-error Babel supports this experimental option before its types do.
-        experimental_preserveFormat: true,
-        retainLines: true,
-        verbatim: true,
-      },
-      sourceString,
-    );
+    /**
+     * Babel supports `experimental_preserveFormat`, but some compatible type
+     * declarations do not yet describe it.
+     *
+     * @type {import('@babel/generator').GeneratorOptions & { experimental_preserveFormat?: boolean, verbatim?: boolean }}
+     */
+    const generatorOptions = {
+      // Nothing being done with sourcemaps as this point
+      experimental_preserveFormat: true,
+      retainLines: true,
+      verbatim: true,
+    };
+    const { code } = generate(ast, generatorOptions, sourceString);
 
     return { bytes: encoder.encode(code), parser: 'mjs', sourceMap };
   },
