@@ -67,5 +67,8 @@
   },
   "typeCoverage": {
     "atLeast": 80
+  },
+  "exports": {
+    ".": "./src/index.js"
   }
 }
