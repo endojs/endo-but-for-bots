@@ -65,6 +65,7 @@
     "smoketest:publish": "scripts/smoketest-publishing.sh",
     "test": "pnpm -r --workspace-concurrency=1 --if-present --filter '!@endo/skel' run test",
     "test:c8": "pnpm -r --workspace-concurrency=1 --if-present run test:c8",
+    "test:hermes": "pnpm -r --workspace-concurrency=1 --if-present run test:hermes",
     "test:xs": "pnpm -r --workspace-concurrency=1 --if-present run test:xs",
     "test262": "pnpm -r --workspace-concurrency=1 --if-present run test262",
     "build": "pnpm -r --workspace-concurrency=1 --if-present run build",
