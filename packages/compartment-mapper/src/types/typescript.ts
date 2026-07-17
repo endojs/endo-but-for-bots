@@ -13,13 +13,7 @@ export type SomeObject = Record<PropertyKey, any>;
  * value}.
  */
 export type Primitive =
-  | null
-  | undefined
-  | string
-  | number
-  | boolean
-  | symbol
-  | bigint;
+  null | undefined | string | number | boolean | symbol | bigint;
 
 /**
  * Allows creating a union type by combining primitive types and literal types
@@ -38,8 +32,7 @@ export type Primitive =
  * @see {@link https://www.npmjs.com/package/type-fest}
  */
 export type LiteralUnion<LiteralType, PrimitiveType extends Primitive> =
-  | LiteralType
-  | (PrimitiveType & Record<never, never>);
+  LiteralType | (PrimitiveType & Record<never, never>);
 
 /**
  * Generic type guard function that checks if a value of type `T` is also of type `U`.

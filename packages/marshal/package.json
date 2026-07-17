@@ -22,8 +22,8 @@
     "test:xs": "exit 0",
     "pretty-fix": "prettier --write '**/*.js'",
     "pretty-check": "prettier --check '**/*.js'",
-    "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "pnpm lint:eslint --fix && pnpm lint:types",
+    "lint": "pnpm lint:types && pnpm lint:eslint",
     "lint:types": "tsc",
     "lint:eslint": "eslint ."
   },

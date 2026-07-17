@@ -17,7 +17,7 @@
     "test": "node --test \"test/**/*.test.js\"",
     "test:xs": "exit 0",
     "build": "exit 0",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint": "pnpm lint:types && pnpm lint:eslint",
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
     "lint:types": "tsc"
@@ -43,8 +43,8 @@
     "@types/eslint-config-prettier": "^6.11.3",
     "@typescript-eslint/rule-tester": "^8.62.1",
     "@typescript-eslint/types": "^8.63.0",
-    "eslint": "catalog:dev",
-    "typescript": "catalog:dev"
+    "eslint": "^10.4.1",
+    "typescript": "~6.0.3"
   },
   "publishConfig": {
     "access": "public"

@@ -28,8 +28,7 @@ export type ImplicitAttenuationDefinition = [any, ...any[]];
  * implicit definition.
  */
 export type AttenuationDefinition =
-  | FullAttenuationDefinition
-  | ImplicitAttenuationDefinition;
+  FullAttenuationDefinition | ImplicitAttenuationDefinition;
 
 /**
  * Information about the attenuator implementation
@@ -110,9 +109,7 @@ export type PackagePolicy<
    * The policy item or nested attenuation definition for builtins.
    */
   builtins?:
-    | NestedAttenuationDefinition
-    | PolicyItem<BuiltinsPolicyExtra>
-    | undefined;
+    NestedAttenuationDefinition | PolicyItem<BuiltinsPolicyExtra> | undefined;
   /**
    * Whether to disable global freeze.
    */
