@@ -64,6 +64,13 @@ declarations](#typescript-declarations) for more details.
 - Prefer `/** @import */` over dynamic `import()` in JSDoc type annotations.
   Use a top-level `/** @import {Foo} from 'bar' */` comment instead of inline
   `{import('bar').Foo}` in `@param`, `@type`, or `@returns` tags.
+- Prefer unabbreviated names for variables, parameters, and functions.
+  For example, use `options` instead of `opts`, `error` instead of `err`,
+  and `index` instead of `idx`.
+  Exceptions include:
+  * Conventional loop counters like `i`, `j`, `k`
+  * Well-established abbreviations in APIs we mirror or implement
+  * Cases where the abbreviated form is the canonical name (e.g., `stdin`, `args`)
 
 ## Markdown Style Guide
 
