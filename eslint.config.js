@@ -104,6 +104,7 @@ export default defineConfig(
   {
     ignores: [
       'api-docs/',
+      'benchmarks/',
       'packages/nat/integration-test/',
       'packages/captp/scripts/',
       'packages/marshal/src/bundles/',
