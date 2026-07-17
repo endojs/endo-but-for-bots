@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>document.all isPrimitive / passStyleOf — fix demonstration</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        font-family:
+          ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        max-width: 60rem;
+        margin: 1.5rem auto;
+        padding: 0 1rem;
+        line-height: 1.4;
+      }
+      h1 {
+        font-size: 1.25rem;
+      }
+      p,
+      li {
+        font-size: 0.95rem;
+      }
+      code,
+      pre,
+      th,
+      td.code {
+        font-family:
+          ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+        font-size: 0.85rem;
+      }
+      pre {
+        background: #0001;
+        padding: 0.5rem 0.75rem;
+        border-radius: 4px;
+        overflow-x: auto;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        margin-top: 1rem;
+      }
+      th,
+      td {
+        border: 1px solid #8884;
+        padding: 0.4rem 0.6rem;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: #8881;
+      }
+      tr.bug td {
+        background: #ffd9d9;
+      }
+      tr.bug td:first-child {
+        font-weight: 600;
+      }
+      tr.fix td {
+        background: #d9ffd9;
+      }
+      .ok {
+        color: #060;
+        font-weight: 600;
+      }
+      .bad {
+        color: #b00;
+        font-weight: 600;
+      }
+      .legend {
+        margin-top: 0.5rem;
+        font-size: 0.85rem;
+        color: #555;
+      }
+      .meta {
+        margin-top: 1.5rem;
+        font-size: 0.85rem;
+        color: #555;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>
+      <code>document.all</code> &amp; <code>@endo/pass-style</code>:
+      old vs new <code>isPrimitive</code> / <code>passStyleOf</code>
+    </h1>
+
+    <p>
+      <code>document.all</code> is the only known JavaScript value with the
+      <code>[[IsHTMLDDA]]</code> internal slot (HTML &sect;
+      <a href="https://html.spec.whatwg.org/#the-htmlallcollection-interface"
+        >the HTMLAllCollection interface</a
+      >, ECMA-262 &sect; B.3.7).
+      It is an object, but <code>typeof document.all === 'undefined'</code>,
+      and <code>document.all == null</code> is <code>true</code> while
+      <code>document.all === null</code> and
+      <code>document.all === undefined</code> are both <code>false</code>.
+    </p>
+
+    <p>
+      Before
+      <a href="https://github.com/endojs/endo/pull/3156"
+        ><code>@endo/pass-style</code> #3156</a
+      >, both <code>isPrimitive</code> and the <code>passStyleOf</code>
+      discriminator used a falsy short-circuit on <code>typeof</code>, which
+      mis-classified <code>document.all</code> as the primitive
+      <code>'undefined'</code>. The fix routes through a strict
+      <code>=== null</code> / <code>=== undefined</code> check first, and
+      falls through to <code>'object'</code> for any value that is loose-equal
+      to nullish but not strict-equal. The object branch then rejects it as
+      &ldquo;Cannot pass non-frozen objects&rdquo; because
+      <code>HTMLAllCollection</code>'s <code>[[PreventExtensions]]</code>
+      always returns <code>false</code>.
+    </p>
+
+    <p>
+      <strong>Important distinction (thanks to
+      <a href="https://github.com/endojs/endo-but-for-bots/pull/69#issuecomment-4805917972"
+        >@erights</a
+      >):</strong>
+      the two <em>passStyle class.</em> columns below are <strong>not</strong> the
+      value that <code>passStyleOf</code> returns. They are the result of
+      <code>passStyleOf</code>'s internal <em>classification</em> step alone (the
+      <code>typeof</code> / strict-nullish discriminator that decides which branch
+      a value takes), reimplemented inline. For <code>document.all</code> the NEW
+      classification is <code>'object'</code>, but that tag is never returned to a
+      caller: it merely <em>routes</em> the value into the object branch, which
+      then <strong>throws</strong> <code>Cannot pass non-frozen objects</code>
+      because <code>document.all</code> is not frozen and cannot be frozen. So the
+      <code>'object'</code> in that column is an internal routing tag, not an
+      observable <code>passStyleOf</code> result. The
+      <a href="#observable">Observable <code>passStyleOf</code> behavior</a>
+      section below shows what calling <code>passStyleOf</code> actually does:
+      OLD <em>returns</em> <code>'undefined'</code> (the silent bug); NEW
+      <em>throws</em>.
+    </p>
+
+    <h2>Code under test</h2>
+    <pre id="src"></pre>
+
+    <h2>Results</h2>
+    <table id="results">
+      <thead>
+        <tr>
+          <th>value</th>
+          <th><code>typeof v</code></th>
+          <th><code>v == null</code></th>
+          <th><code>v === null</code></th>
+          <th><code>v === undefined</code></th>
+          <th>OLD <code>isPrimitive</code></th>
+          <th>NEW <code>isPrimitive</code></th>
+          <th>OLD passStyle class.</th>
+          <th>NEW passStyle class.</th>
+          <th>agree?</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <p class="legend">
+      Rows shaded <span class="bad">red</span> are cases where the OLD code
+      mis-classifies the value (the bug). Rows shaded
+      <span class="ok">green</span> are cases where the NEW code corrects the
+      classification. White rows are unchanged behavior.
+    </p>
+
+    <h2 id="observable">Observable <code>passStyleOf</code> behavior</h2>
+    <p>
+      What actually happens when you <em>call</em> <code>passStyleOf</code>
+      (return value or thrown error), for <code>document.all</code> and for a
+      plain non-frozen object as a control:
+    </p>
+    <table id="observable-results">
+      <thead>
+        <tr>
+          <th>value</th>
+          <th>OLD <code>passStyleOf(value)</code></th>
+          <th>NEW <code>passStyleOf(value)</code></th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <p class="legend">
+      Note how <code>document.all</code> is never observable as
+      <code>'object'</code>: OLD silently <em>returns</em>
+      <code>'undefined'</code> (a non-frozen exotic object passed off as the
+      primitive <code>undefined</code> — the bug), and NEW <em>throws</em>, the
+      same rejection any other non-frozen object already gets.
+    </p>
+
+    <h2>Summary</h2>
+    <p id="summary"></p>
+
+    <p class="meta">
+      <span id="ua"></span><br />
+      <span id="docall"></span>
+    </p>
+
+    <script>
+      // ----- The functions under test, lifted verbatim from the PR -----
+
+      // OLD (buggy) — packages/pass-style/src/passStyle-helpers.js
+      //   !val || (typeof val !== 'object' && typeof val !== 'function')
+      const isPrimitiveOld = val =>
+        !val || (typeof val !== 'object' && typeof val !== 'function');
+
+      // NEW (fixed) — same file, post-fix
+      //   val != null
+      //     ? typeof val !== 'object' && typeof val !== 'function'
+      //     : val === null || val === undefined;
+      const isPrimitiveNew = val =>
+        val != null
+          ? typeof val !== 'object' && typeof val !== 'function'
+          : val === null || val === undefined;
+
+      // OLD (buggy) discriminator — packages/pass-style/src/passStyleOf.js
+      //   const typestr = typeof inner;
+      //   switch (typestr) {
+      //     case 'undefined': ...
+      //     case 'object': if (inner === null) return 'null'; ...
+      //   }
+      const passStyleTagOld = inner => {
+        const typestr = typeof inner;
+        switch (typestr) {
+          case 'undefined':
+          case 'boolean':
+          case 'number':
+          case 'bigint':
+          case 'string':
+            return typestr;
+          case 'symbol':
+            return 'symbol';
+          case 'function':
+            return 'function';
+          case 'object':
+            if (inner === null) return 'null';
+            return 'object';
+          default:
+            return typestr;
+        }
+      };
+
+      // NEW (fixed) discriminator — same file, post-fix
+      const passStyleTagNew = inner => {
+        let typestr;
+        if (inner != null) {
+          typestr = typeof inner;
+        } else if (inner === null) {
+          typestr = 'null';
+        } else if (inner === undefined) {
+          typestr = 'undefined';
+        } else {
+          // probably document.all
+          typestr = 'object';
+        }
+        switch (typestr) {
+          case 'null':
+          case 'undefined':
+          case 'boolean':
+          case 'number':
+          case 'bigint':
+          case 'string':
+            return typestr;
+          case 'symbol':
+            return 'symbol';
+          case 'function':
+            return 'function';
+          case 'object':
+            return 'object';
+          default:
+            return typestr;
+        }
+      };
+
+      // ----- Observable passStyleOf behavior -----
+      // Unlike the classification helpers above, these model what calling
+      // `passStyleOf` actually DOES: after the classification step, the object
+      // branch in packages/pass-style/src/passStyleOf.js applies
+      //   if (!isFrozen(inner)) assert.fail`Cannot pass non-frozen objects ...`
+      // before returning anything. So for a non-frozen object the function
+      // never returns a tag — it throws. These two functions reproduce the
+      // source up to that frozen gate, which is exactly as far as
+      // `document.all` (and the plain {} / [] / () => {} rows) reach.
+      const passStyleOfObservable = classify => inner => {
+        const tag = classify(inner);
+        if (tag === 'object' || tag === 'function') {
+          if (!Object.isFrozen(inner)) {
+            throw new TypeError(
+              'Cannot pass non-frozen objects like ' +
+                String(inner) +
+                '. Use harden()',
+            );
+          }
+        }
+        // Frozen objects, symbols, and promises undergo further checks in the
+        // real source; this fixture stops at the frozen gate because that is
+        // where document.all and the unfrozen sample objects are rejected.
+        return tag;
+      };
+      const passStyleOfObservableOld = passStyleOfObservable(passStyleTagOld);
+      const passStyleOfObservableNew = passStyleOfObservable(passStyleTagNew);
+
+      // Render the result of a call as either "returns <tag>" or "throws <msg>".
+      const callResult = (fn, value) => {
+        try {
+          return 'returns ' + JSON.stringify(fn(value));
+        } catch (err) {
+          return 'throws ' + (err && err.message ? err.message : String(err));
+        }
+      };
+
+      // ----- Render the source so the page is self-documenting -----
+      document.getElementById('src').textContent = [
+        '// OLD (buggy)',
+        isPrimitiveOld.toString(),
+        '',
+        passStyleTagOld.toString(),
+        '',
+        '// NEW (fixed)',
+        isPrimitiveNew.toString(),
+        '',
+        passStyleTagNew.toString(),
+        '',
+        '// Observable passStyleOf (classification + frozen gate)',
+        passStyleOfObservable.toString(),
+      ].join('\n');
+
+      // ----- Build the test cases -----
+      const cases = [
+        { label: 'null', value: null },
+        { label: 'undefined', value: undefined },
+        { label: 'false', value: false },
+        { label: '0', value: 0 },
+        { label: '""', value: '' },
+        { label: '42', value: 42 },
+        { label: '"hi"', value: 'hi' },
+        { label: 'Symbol("s")', value: Symbol('s') },
+        { label: '{}', value: {} },
+        { label: '[]', value: [] },
+        { label: '() => {}', value: () => {} },
+      ];
+
+      const documentAllAvailable =
+        typeof document !== 'undefined' && 'all' in document;
+      if (documentAllAvailable) {
+        cases.push({ label: 'document.all', value: document.all });
+      }
+
+      // ----- Render the result table -----
+      const tbody = document.querySelector('#results tbody');
+      let bugCount = 0;
+      let fixCount = 0;
+      for (const { label, value } of cases) {
+        const tr = document.createElement('tr');
+        const oldP = isPrimitiveOld(value);
+        const newP = isPrimitiveNew(value);
+        const oldTag = passStyleTagOld(value);
+        const newTag = passStyleTagNew(value);
+        const agreeP = oldP === newP;
+        const agreeTag = oldTag === newTag;
+        const agree = agreeP && agreeTag;
+
+        if (!agree) {
+          // The OLD form is the buggy one; mark whichever changed as bug-row.
+          if (label === 'document.all') {
+            tr.classList.add('bug');
+            bugCount += 1;
+          } else {
+            tr.classList.add('fix');
+            fixCount += 1;
+          }
+        }
+
+        const cells = [
+          label,
+          typeof value,
+          String(value == null),
+          String(value === null),
+          String(value === undefined),
+          String(oldP),
+          String(newP),
+          oldTag,
+          newTag,
+          agree ? '✓' : '✗',
+        ];
+        for (const c of cells) {
+          const td = document.createElement('td');
+          td.classList.add('code');
+          td.textContent = c;
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+
+      // ----- Observable passStyleOf result table -----
+      const obsTbody = document.querySelector('#observable-results tbody');
+      const obsCases = [
+        { label: '42', value: 42 },
+        { label: 'null', value: null },
+        { label: '{} (non-frozen)', value: {} },
+      ];
+      if (documentAllAvailable) {
+        obsCases.push({ label: 'document.all', value: document.all });
+      }
+      for (const { label, value } of obsCases) {
+        const tr = document.createElement('tr');
+        if (label === 'document.all') tr.classList.add('bug');
+        const cells = [
+          label,
+          callResult(passStyleOfObservableOld, value),
+          callResult(passStyleOfObservableNew, value),
+        ];
+        for (const c of cells) {
+          const td = document.createElement('td');
+          td.classList.add('code');
+          td.textContent = c;
+          tr.appendChild(td);
+        }
+        obsTbody.appendChild(tr);
+      }
+
+      // ----- Summary -----
+      const summary = document.getElementById('summary');
+      if (!documentAllAvailable) {
+        summary.innerHTML =
+          '<span class="bad">document.all is not available in this environment.</span> ' +
+          'This page only meaningfully demonstrates the bug in a browser ' +
+          '(Chrome, Firefox, Safari, Edge). Run it from a static file server ' +
+          'or open it directly in a browser.';
+      } else {
+        const oldP = isPrimitiveOld(document.all);
+        const newP = isPrimitiveNew(document.all);
+        const oldTag = passStyleTagOld(document.all);
+        const newTag = passStyleTagNew(document.all);
+        const oldCall = callResult(passStyleOfObservableOld, document.all);
+        const newCall = callResult(passStyleOfObservableNew, document.all);
+        const frozen = Object.isFrozen(document.all);
+        summary.innerHTML =
+          'For <code>document.all</code> (<code>Object.isFrozen(document.all)</code> &rarr; <code>' +
+          frozen +
+          '</code>, and it cannot be frozen): <br>' +
+          '&middot; <strong>classification</strong> (internal discriminator, not a return value): OLD &rarr; <code>' +
+          oldTag +
+          '</code> (mis-routed as the primitive <code>undefined</code> &mdash; the bug), NEW &rarr; <code>' +
+          newTag +
+          '</code> (routed into the object branch). ' +
+          'OLD <code>isPrimitive</code> &rarr; <code>' +
+          oldP +
+          '</code>, NEW <code>isPrimitive</code> &rarr; <code>' +
+          newP +
+          '</code>.<br>' +
+          '&middot; <strong>observable <code>passStyleOf(document.all)</code></strong>: ' +
+          'OLD <code>' +
+          oldCall +
+          '</code> &mdash; <span class="bad">BUG</span> (silently accepted as a primitive); ' +
+          'NEW <code>' +
+          newCall +
+          '</code> &mdash; <span class="ok">correct</span> (rejected, same as any non-frozen object).';
+      }
+
+      document.getElementById('ua').textContent =
+        'User-Agent: ' + navigator.userAgent;
+      document.getElementById('docall').textContent =
+        'document.all available: ' + documentAllAvailable;
+    </script>
+  </body>
+</html>

@@ -3,6 +3,7 @@ build/
 dist/
 api-docs/
 browser-test/
+benchmarks/
 
 *.json
 

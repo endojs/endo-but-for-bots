@@ -12,7 +12,7 @@ import {
 import { passStyleOf } from '../src/passStyleOf.js';
 import { Far, ToFarFunction } from '../src/make-far.js';
 import { makeTagged } from '../src/makeTagged.js';
-import { PASS_STYLE } from '../src/passStyle-helpers.js';
+import { isPrimitive, PASS_STYLE } from '../src/passStyle-helpers.js';
 
 const { getPrototypeOf, defineProperty, freeze } = Object;
 
@@ -536,4 +536,49 @@ test('Allow toStringTag overrides', t => {
   t.is(Object.prototype.toString.call(fred), '[object DebugName: Friedrich]');
   t.is(fred.name, 'fred');
   t.is(`${q(fred)}`, '"[Function fred]"');
+});
+
+// Regression test for https://github.com/endojs/endo/issues/3156
+//
+// `document.all` is the only known JS value with the [[IsHTMLDDA]] internal
+// slot, and is the only JS value the current TC39 specification permits to
+// have it (Annex B). Such a value reports `typeof` as `'undefined'` and is
+// loose-equal (`==`) to both `null` and `undefined`, but is strict-equal
+// (`===`) to neither. It is also non-extensible: HTMLAllCollection's
+// [[PreventExtensions]] unconditionally returns false, so the value cannot
+// be frozen. The slot is browser-only and cannot be reproduced in Node.js
+// (Proxies cannot influence `typeof`, and there is no host API to install
+// the slot), so this test exercises the code-path branches added for the
+// `document.all` case rather than constructing a real [[IsHTMLDDA]] value.
+test('isPrimitive and passStyleOf code paths for document.all-like values', t => {
+  // The two genuinely primitive nullish values must still be primitives.
+  t.is(isPrimitive(null), true);
+  t.is(isPrimitive(undefined), true);
+
+  // Plain objects and functions must not be primitives, regardless of the
+  // null-versus-typeof discrimination introduced by the new branches.
+  t.is(isPrimitive({}), false);
+  t.is(isPrimitive([]), false);
+  t.is(
+    isPrimitive(() => {}),
+    false,
+  );
+
+  // Other primitives must still be primitives.
+  t.is(isPrimitive(0), true);
+  t.is(isPrimitive(''), true);
+  t.is(isPrimitive(false), true);
+  t.is(isPrimitive(0n), true);
+  t.is(isPrimitive(Symbol.iterator), true);
+
+  // Non-frozen plain objects must be rejected by passStyleOf, which is the
+  // branch that would catch a real `document.all` (a non-extensible,
+  // non-frozen legacy platform object).
+  if (hardenIsNoop(harden)) {
+    t.is(passStyleOf({}), 'copyRecord');
+  } else {
+    t.throws(() => passStyleOf({}), {
+      message: /Cannot pass non-frozen objects/,
+    });
+  }
 });

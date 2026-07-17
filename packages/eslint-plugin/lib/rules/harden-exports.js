@@ -1,4 +1,3 @@
-/* eslint-disable func-names */
 /**
  * @module Ensure each named export is followed by a call to `harden` function
  */
@@ -146,7 +145,7 @@ module.exports = {
       ExportNamedDeclaration(node) {
         exportNodes.push(node);
       },
-      'Program:exit': function () {
+      'Program:exit'() {
         const sourceCode = context.getSourceCode();
 
         for (const exportNode of exportNodes) {
