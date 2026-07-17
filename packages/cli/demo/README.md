@@ -11,7 +11,7 @@ dependencies using npm, and arrange for the Endo command to be available as
 
 ```
 > git clone https://github.com/endojs/endo.git
-> npm
+> npm install
 > alias endo=$PWD/packages/cli/bin/endo.cjs
 ```
 

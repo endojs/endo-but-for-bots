@@ -5,13 +5,13 @@
 ```sh
 git clone git@github.com:endojs/endo.git
 cd endo
-npm
+npm install
 ```
 
-Endo is an npm workspaces repository. Running npm in the root will install and
+Endo is an npm workspaces repository. Running `npm install` in the root will install and
 hoist most dependencies up to the root `node_modules`.
 
-Note: running npm `--ignore-scripts` will not complete the setup of SES.
+Note: running `npm install --ignore-scripts` will not complete the setup of SES.
 
 ### Action pinning
 
@@ -30,7 +30,7 @@ If this check fails, run the updater and commit the resulting changes.
 Continuous Integration is comprehensive.
 Many issues can be anticipated locally by running:
 
-- `npm`
+- `npm install`
 - `npm run format` for Prettier code formatting
 - `npm run docs`, because Typedoc has a holistic view of TypeScript definitions
   that lint in individual packages may not catch.
@@ -55,7 +55,7 @@ index.test.js files.
 ## Updating Workspace Dependencies
 
 If you've added, removed, or changed a dependency between workspaces, you'll
-want to regenerate the composite TypeScript build configs.  Run `npm
+want to regenerate the composite TypeScript build configs. Run `npm run
 build:types:gen` to regenerate the composite TypeScript build. See [TypeScript
 declarations](#typescript-declarations) for more details.
 
@@ -100,7 +100,7 @@ you can use the **composite TypeScript build**:
 
 ```sh
 npm run build:types        # one-shot declaration build for all packages
-npm run build:types:watch  # incremental watch (expect a ~10–30s cold start)
+npm run build:types:watch  # incremental watch (expect a ~10-30s cold start)
 ```
 
 The `tsconfig.composite.json` files scattered across packages (and the root
@@ -210,16 +210,13 @@ The release process works as follows:
 
 ## Running CI locally
 
-You can use [act](https://github.com/nektos/act) to run the CI locally. You'll need to make some changes, however, because npm will attempt to use the global cache, which is not available to the container.
+You can use [act](https://github.com/nektos/act) to run CI locally. If the
+container cannot use npm's cache service, temporarily remove `cache: npm` from
+the affected `actions/setup-node` steps and give npm a writable cache directory:
 
-1. Any job using `actions/setup-node` will need to have `cache: npm` removed from the `with` section, as this overrides the behavior in `npmrc.yml`.
-2. Edit `npmrc.yml` and add these following lines:
-  
-  ```yaml
-  enableGlobalCache: false
-  enableMirror: false
-  globalFolder: .npm/berry
-  ```
+```sh
+npm_config_cache="$PWD/.npm-cache" act
+```
 
 By default, `act` will pull the `catthehacker/ubuntu:full-latest` image on every run. This can be slow, so you can pass `--pull=false` to `act` and only omit when you wish to update the image.
 
