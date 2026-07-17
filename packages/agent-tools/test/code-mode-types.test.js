@@ -17,7 +17,9 @@ import {
 } from '../scripts/code-mode-git-extract.js';
 import {
   buildFsTypeDeclarations,
+  buildReadOnlyWorkspaceIR,
   buildWorkspaceIR,
+  FS_READONLY_MEMBERS,
 } from '../scripts/code-mode-fs-extract.js';
 
 /**
@@ -191,4 +193,29 @@ test('workspace declaration reaches the Directory surface transitively', t => {
   // Directory verbs only reachable transitively from `root()`.
   t.true(workspace.aux.includes('lookup:'));
   t.true(workspace.aux.includes('write:'));
+});
+
+test('read-only workspace declarations omit every Filesystem mutator', t => {
+  const readOnly = buildReadOnlyWorkspaceIR();
+  t.deepEqual(
+    readOnly.members.map(member => member.name).sort(),
+    [...FS_READONLY_MEMBERS.Filesystem].sort(),
+  );
+  const { aux } = fsDeclarations.workspaceReadOnly;
+  for (const mutator of [
+    'create:',
+    'makeDirectory:',
+    'move:',
+    'remove:',
+    'rename:',
+    'setAttrs:',
+    'setStat:',
+    'truncate:',
+    'unlink:',
+    'write:',
+  ]) {
+    t.false(aux.includes(mutator), `read-only declaration leaked ${mutator}`);
+  }
+  t.true(aux.includes('lookup:'));
+  t.true(aux.includes('read:'));
 });
