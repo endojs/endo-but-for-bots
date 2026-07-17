@@ -65,6 +65,8 @@
  * @typedef {object} BundleModule
  * @property {string} key
  * @property {string} exit
+ * @property {string} [deferredError] When set, the module's source could not be
+ * resolved at map time; it is bundled as a placeholder that throws lazily.
  * @property {string} compartmentName
  * @property {string} moduleSpecifier
  * @property {string} sourceDirname
@@ -138,6 +140,40 @@ null,
 });
 
 /**
+ * Produces a bundler kit for a module whose source could not be resolved at
+ * map time and was recorded as a deferred error (see `makeDeferError` in
+ * import-hook.js). The importer tolerates such modules: the unresolved module
+ * becomes a placeholder whose error throws only if the module is actually
+ * evaluated. We mirror that runtime semantics in the bundle so that a deferred
+ * error never aborts the bundle at graph-sort time. The module contributes a
+ * single `default` cell whose getter throws the deferred error, so a bundle
+ * that never reaches this module never throws, while one that does reach it
+ * fails exactly as the importer would.
+ *
+ * @param {BundleModule<unknown>} module
+ * @returns {BundlerKit}
+ */
+const makeErrorBundlerKit = ({ deferredError }) => ({
+  getFunctor: () => `\
+null,
+`,
+  getCells: () => `\
+    {
+      default: freeze({
+        get: freeze(() => {
+          throw new Error(${JSON.stringify(deferredError)});
+        }),
+        set: freeze(() => {}),
+        observe: freeze(() => {}),
+        enumerable: true,
+      }),
+    },
+`,
+  getReexportsWiring: () => '',
+  getFunctorCall: () => ``,
+});
+
+/**
  * Produces a list of modules in the order they should be evaluated, and
  * a side-table for following aliases.
  * The modules are produce in topological postorder, such that the entry
@@ -198,9 +234,23 @@ const sortedModules = (
     const source = compartmentSources[compartmentName][moduleSpecifier];
     if (source !== undefined) {
       if (isErrorModuleSource(source)) {
-        throw Error(
-          `Cannot bundle: encountered deferredError ${source.deferredError}`,
-        );
+        // The module could not be resolved at map time and was recorded as a
+        // deferred error. The importer tolerates this: the error throws only
+        // if the module is actually evaluated. Mirror that here by emitting a
+        // placeholder module whose error throws lazily, instead of aborting
+        // the whole bundle at graph-sort time.
+        modules.push({
+          key,
+          compartmentName,
+          moduleSpecifier,
+          deferredError: source.deferredError,
+          resolvedImports: Object.create(null),
+          // @ts-expect-error
+          index: undefined,
+          // @ts-expect-error
+          bundlerKit: null,
+        });
+        return key;
       }
       if (isExitModuleSource(source)) {
         return source.exit;
@@ -424,6 +474,12 @@ export const makeFunctorFromMap = async (
         throw TypeError('Unreachable');
       }
       module.bundlerKit = makeExitBundlerKit(module);
+    } else if (module.deferredError !== undefined) {
+      // A module that could not be resolved at map time. It has no imports of
+      // its own and no parser; it contributes only a placeholder cell whose
+      // getter throws the deferred error if and when the module is reached.
+      module.indexedImports = Object.create(null);
+      module.bundlerKit = makeErrorBundlerKit(module);
     } else {
       module.indexedImports = Object.fromEntries(
         Object.entries(module.resolvedImports).map(([importSpecifier, key]) => {

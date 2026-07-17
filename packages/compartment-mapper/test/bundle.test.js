@@ -347,8 +347,13 @@ test('makeFunctor with useEvaluate and evaluate runtime option preserves stack t
   t.false(stack.includes('file:/.*bundle/main.js'));
 });
 
-// This is failing because it requires support for missing dependencies.
-// Cannot bundle: encountered deferredError Cannot find file for internal module "./spam"
+// The missing-dependency blocker for this fixture (an unresolved internal
+// module recorded as a deferred error aborting the bundle at graph-sort time)
+// is fixed; see the "bundle tolerates unreachable missing dependencies" and
+// "bundle throws a reached missing dependency lazily" tests below. This test
+// remains failing on the rest of the CJS-compat surface that the bundler's
+// runtime does not yet match the importer on, e.g. binding the top-level `this`
+// to `module.exports` and redefining `module.exports` via `defineProperty`.
 test.failing('bundle cjs-compat', async t => {
   const cjsFixture = new URL(
     'fixtures-cjs-compat/node_modules/app/index.js',
@@ -366,6 +371,41 @@ test.failing('bundle cjs-compat', async t => {
   });
   compartment.evaluate(bundle);
   t.deepEqual(log, expectedLog);
+});
+
+// A module may statically appear to require a module that cannot be resolved
+// (the CommonJS parser heuristically detects the require). The compartment
+// mapper records such a module as a deferred error whose error throws only if
+// the module is actually evaluated. The bundler must mirror that runtime
+// semantics: an unresolved module that is never reached must not abort the
+// bundle, neither at bundle time nor at evaluation time.
+test('bundle tolerates unreachable missing dependencies', async t => {
+  const fixtureLocation = new URL(
+    'fixtures-bundle-missing-dep/node_modules/unreachable-missing-dep/index.js',
+    import.meta.url,
+  ).toString();
+
+  const bundle = await makeScript(read, fixtureLocation);
+  const compartment = new Compartment();
+  const namespace = compartment.evaluate(bundle);
+  t.is(namespace.ok, true);
+});
+
+// The complementary guarantee: a missing dependency that is actually reached at
+// evaluation time throws the deferred error lazily, exactly as the importer
+// would, rather than failing the bundle eagerly.
+test('bundle throws a reached missing dependency lazily', async t => {
+  const fixtureLocation = new URL(
+    'fixtures-bundle-missing-dep/node_modules/reached-missing-dep/index.js',
+    import.meta.url,
+  ).toString();
+
+  // The bundle is produced without error even though a dependency is missing.
+  const bundle = await makeScript(read, fixtureLocation);
+  const compartment = new Compartment();
+  t.throws(() => compartment.evaluate(bundle), {
+    message: /Cannot find file for internal module "\.\/does-not-exist"/,
+  });
 });
 
 test('bundle cjs-compat default-difficulties', async t => {
