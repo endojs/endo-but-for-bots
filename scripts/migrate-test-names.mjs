@@ -1,5 +1,5 @@
 #!/usr/bin/env zx
-/* eslint-disable @jessie.js/safe-await-separator */
+
 // @ts-nocheck typecheck would require a package.json with zx
 /* global chalk, fs, $ -- provided by zx */
 
@@ -12,20 +12,18 @@
  *    cost they incur. We keep the `files` config explicit for clarity and linter tooling.
  * 2. The naming scheme chosen puts "test" at the front of what is obviously a
  *    test from its path context. To run a particular test from the CLI requires
- *    typing "test" three time to pick one: yarn test test/test-something.js.
- *    With Ava's default it would be yarn test test/something.test.js and typing
+ *    typing "test" three time to pick one: pnpm test test/test-something.js.
+ *    With Ava's default it would be pnpm test test/something.test.js and typing
  *    the "so" can autocomplete.
+ *
+ * Usage:
+ *
+ * Run this script in a package to convert its test names and Ava config.
+ * To run it over all packages,
+ *   `pnpm workspaces foreach --all exec '../../scripts/migrate-test-names.mjs'`
+ * Then for the couple deeper packages
+ *   `pnpm workspaces foreach --all exec '../../../scripts/migrate-test-names.mjs'`
  */
-
-const usage = `
-Run this script in a package to convert its test names and Ava config.
-
-To run it over all packages,
-  yarn workspaces foreach --all exec '../../scripts/migrate-test-names.mjs'
-Then for the couple deeper packages
-  yarn workspaces foreach --all exec '../../../scripts/migrate-test-names.mjs'
-
-`;
 
 const packageObj = fs.readJsonSync('package.json');
 console.log(`${chalk.bold(`Migrating test names: ${packageObj.name}`)}\n`);

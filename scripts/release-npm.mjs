@@ -18,7 +18,19 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
+/**
+ * @import {SpawnOptions} from 'node:child_process';
+ */
+
 const execFileAsync = promisify(execFile);
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(__dirname, '..');
+const distDir = path.join(repoRoot, 'dist');
+
+const tagFlag = process.argv.indexOf('--tag');
+const tag =
+  tagFlag >= 0 ? process.argv[tagFlag + 1] : process.env.npm_config_tag;
 
 /**
  * Read `name` and `version` from the package.json inside a published tarball.
@@ -66,9 +78,9 @@ const isPublished = async (name, version) => {
 
 /**
  * Run a command, inheriting stdio; reject on non-zero exit.
- * @param cmd
- * @param argv
- * @param options
+ * @param {string} cmd
+ * @param {string[]} argv
+ * @param {SpawnOptions} options
  */
 const run = (cmd, argv, options) =>
   new Promise((resolve, reject) => {
@@ -78,14 +90,6 @@ const run = (cmd, argv, options) =>
       code === 0 ? resolve() : reject(new Error(`${cmd} exited with ${code}`)),
     );
   });
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, '..');
-const distDir = path.join(repoRoot, 'dist');
-
-const tagFlag = process.argv.indexOf('--tag');
-const tag =
-  tagFlag >= 0 ? process.argv[tagFlag + 1] : process.env.npm_config_tag;
 
 // Always re-pack so the tarballs match HEAD. pack-all.mjs wipes dist/ at
 // the start of every run, so there is no way for a previous run's stale
@@ -110,20 +114,51 @@ if (tarballs.length === 0) {
   throw new Error('release:npm: no tarballs to publish');
 }
 
+/**
+ * @param {string} json
+ * @returns {{path: string, name?: string, private?: boolean}[]}
+ */
+const parsePnpmWorkspaceList = json => {
+  let entries;
+  try {
+    entries = JSON.parse(json.trim() || '[]');
+  } catch (error) {
+    throw new Error(
+      `pnpm -r list --depth -1 --json returned invalid JSON: ${error.message}`,
+      { cause: error },
+    );
+  }
+  if (!Array.isArray(entries)) {
+    throw new TypeError('pnpm -r list --depth -1 --json must return an array');
+  }
+  return entries;
+};
+
+/**
+ * @param {{path: string, name?: string, private?: boolean}[]} entries
+ */
+const getPublicWorkspaces = entries =>
+  entries.filter(workspace => {
+    if (!workspace.name) return false;
+    if (workspace.private === true) return false;
+    if (workspace.private !== false) {
+      throw new Error(
+        `pnpm workspace ${workspace.name} has no boolean private flag; refusing to publish it`,
+      );
+    }
+    return true;
+  });
+
 // Sanity check: one tarball per public workspace, no more and no less.
 // Catches a partial pack-all run (e.g. interrupted mid-loop) and any
-// drift between what `yarn workspaces list` reports and what
+// drift between what pnpm reports and what
 // `pack-all.mjs` actually wrote.
 const { stdout: wsStdout } = await execFileAsync(
-  'yarn',
-  ['workspaces', 'list', '--json', '--no-private'],
+  'pnpm',
+  ['-r', 'list', '--depth', '-1', '--json'],
   { cwd: repoRoot, maxBuffer: 16 * 1024 * 1024 },
 );
-const expectedPackages = wsStdout
-  .split('\n')
-  .filter(line => line.trim())
-  .map(line => JSON.parse(line))
-  .filter(ws => ws.location !== '.');
+const expectedPackages = getPublicWorkspaces(parsePnpmWorkspaceList(wsStdout));
 if (tarballs.length !== expectedPackages.length) {
   throw new Error(
     `release:npm: tarball count mismatch — expected ${expectedPackages.length} ` +

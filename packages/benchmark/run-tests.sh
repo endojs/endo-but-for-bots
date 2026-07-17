@@ -2,7 +2,7 @@
 
 set -e 
 
-echo "yarn version: $(yarn --version)"
+echo "pnpm version: $(pnpm --version)"
 
 are_engines_installed() {
     [ -f "$HOME/.engines/bin/xs" ] && [ -f "$HOME/.engines/bin/v8" ]
@@ -10,10 +10,10 @@ are_engines_installed() {
 
 
 if ! are_engines_installed; then
-    echo "xs and/or v8 not found in $HOME/.engines/bin; please run 'yarn install-engines' to install them."
+    echo "xs and/or v8 not found in $HOME/.engines/bin; please run 'pnpm install-engines' to install them."
     exit 127
 fi
 
-yarn rollup -c
+pnpm rollup -c
 
-yarn eshost -h xs,v8 dist/bundle.js
+pnpm eshost -h xs,v8 dist/bundle.js

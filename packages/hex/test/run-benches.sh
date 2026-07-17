@@ -7,7 +7,7 @@
 # knows about (typically xs and v8 — see `packages/benchmark/`).
 #
 # Prerequisites (matching @endo/benchmark):
-#   yarn workspace @endo/benchmark install-engines
+#   pnpm --filter @endo/benchmark run install-engines
 #
 # Usage:
 #   ./test/run-benches.sh           # both encode + decode, all engines
@@ -26,13 +26,13 @@ ROLLUP="${BENCHMARK_DIR}/node_modules/.bin/rollup"
 
 if [ ! -x "$ESHOST" ] || [ ! -x "$ROLLUP" ]; then
   echo "eshost / rollup not found in @endo/benchmark/node_modules/.bin/" >&2
-  echo "Run \`yarn workspace @endo/benchmark install\` first." >&2
+  echo "Run \`pnpm --filter @endo/benchmark install\` first." >&2
   exit 1
 fi
 
 if [ ! -f "$HOME/.engines/bin/xs" ] || [ ! -f "$HOME/.engines/bin/v8" ]; then
   echo "xs and/or v8 not found in \$HOME/.engines/bin." >&2
-  echo "Run \`yarn workspace @endo/benchmark install-engines\` first." >&2
+  echo "Run \`pnpm --filter @endo/benchmark run install-engines\` first." >&2
   exit 127
 fi
 

@@ -7,10 +7,11 @@
   "engines": {
     "node": ">=16"
   },
-  "packageManager": "yarn@4.13.0",
+  "packageManager": "pnpm@10.9.0",
   "devDependencies": {
     "@changesets/changelog-github": "^0.6.0",
     "@changesets/cli": "^2.31.0",
+    "@endo/cli": "workspace:^",
     "@endo/compartment-mapper": "workspace:^",
     "@endo/eslint-plugin": "workspace:^",
     "@endo/marshal": "workspace:^",
@@ -23,13 +24,16 @@
     "@typescript-eslint/eslint-plugin": "^8.60.0",
     "@typescript-eslint/parser": "^8.60.0",
     "ava": "catalog:dev",
-    "eslint": "^8.57.1",
+    "eslint": "catalog:dev",
     "eslint-config-airbnb-base": "^15.0.0",
     "eslint-config-jessie": "^0.0.6",
-    "eslint-config-prettier": "^9.1.2",
+    "eslint-config-prettier": "^10.0.0",
+    "eslint-plugin-eslint-plugin": "^7.4.1",
     "eslint-plugin-import": "catalog:dev",
     "eslint-plugin-jsdoc": "^50.8.0",
     "eslint-plugin-unicorn": "^56.0.1",
+    "globals": "^17.6.0",
+    "js-yaml": "^5.2.1",
     "prettier": "^3.8.3",
     "ses": "workspace:^",
     "source-map": "^0.7.6",
@@ -43,33 +47,35 @@
     "yaml": "^2.9.0",
     "zx": "^8.8.5"
   },
+  "type": "module",
   "scripts": {
     "clean": "git clean -fX -e node_modules",
     "docs": "rm -rf api-docs packages/ses/dist && typedoc && ./scripts/posttypedoc.sh",
-    "update": "echo 'DEPRECATED: use \"yarn upgrade-interactive\" or \"yarn dedupe\"'",
+    "update": "echo 'DEPRECATED: use \"pnpm update --interactive\" or \"pnpm dedupe\"'",
     "format": "prettier --write .github packages",
-    "lint": "yarn lint:prettier && yarn lint:eslint && yarn lint:sh",
+    "lint": "pnpm run lint:prettier && pnpm run lint:eslint && pnpm run lint:sh",
     "lint:eslint": "eslint .",
-    "lint:workspaces": "prettier --check .github packages && yarn workspaces foreach --all run lint",
-    "lint:workspaces:eslint": "yarn workspaces foreach --all run lint:eslint",
-    "lint:fix": "yarn lint:eslint -- --fix",
-    "lint:workspaces:fix": "yarn workspaces foreach --all run lint-fix",
+    "lint:workspaces": "prettier --check .github packages && pnpm -r --workspace-concurrency=1 --if-present run lint",
+    "lint:workspaces:eslint": "pnpm -r --workspace-concurrency=1 --if-present run lint:eslint",
+    "lint:fix": "pnpm run lint:eslint -- --fix",
+    "lint:workspaces:fix": "pnpm -r --workspace-concurrency=1 --if-present run lint-fix",
     "lint:prettier": "prettier --check .github packages",
     "lint:sh": "scripts/shellcheck.sh",
     "release:npm": "scripts/release-npm.mjs",
     "pack:all": "scripts/pack-all.mjs",
     "smoketest:publish": "scripts/smoketest-publishing.sh",
-    "test": "yarn workspaces foreach --all --exclude @endo/skel run test",
-    "test:c8": "yarn workspaces foreach --all run test:c8",
-    "test:xs": "yarn workspaces foreach --all run test:xs",
-    "test262": "yarn workspaces foreach --all run test262",
-    "build": "yarn workspaces foreach --all run build",
+    "test": "pnpm -r --workspace-concurrency=1 --if-present --filter '!@endo/skel' run test",
+    "test:c8": "pnpm -r --workspace-concurrency=1 --if-present run test:c8",
+    "test:hermes": "pnpm -r --workspace-concurrency=1 --if-present run test:hermes",
+    "test:xs": "pnpm -r --workspace-concurrency=1 --if-present run test:xs",
+    "test262": "pnpm -r --workspace-concurrency=1 --if-present run test262",
+    "build": "pnpm -r --workspace-concurrency=1 --if-present run build",
     "build-ts": "tsc --build tsconfig.build.json",
     "build:types:gen": "node scripts/generate-composite-tsconfigs.mjs",
     "build:types:check": "node scripts/generate-composite-tsconfigs.mjs --check",
     "build:types": "tsc --build tsconfig.composite.json",
-    "build:types:clean": "yarn build:types --clean",
-    "build:types:watch": "yarn build:types --watch"
+    "build:types:clean": "pnpm run build:types --clean",
+    "build:types:watch": "pnpm run build:types --watch"
   },
   "prettier": {
     "arrowParens": "avoid",
@@ -77,9 +83,6 @@
   },
   "typeCoverage": {
     "atLeast": 0
-  },
-  "eslintConfig": {
-    "root": true
   },
   "lavamoat": {
     "allowScripts": {

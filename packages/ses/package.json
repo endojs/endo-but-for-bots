@@ -78,11 +78,11 @@
   "scripts": {
     "build:vanilla": "node scripts/bundle.js",
     "build:hermes": "node scripts/bundle.js hermes",
-    "build": "yarn build:vanilla && yarn build:hermes",
+    "build": "pnpm build:vanilla && pnpm build:hermes",
     "clean": "rm -rf dist",
     "cover": "c8 ava --config test/_ava-ses.config.js",
     "demo": "python3 -m http.server",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint": "pnpm lint:types && pnpm lint:eslint",
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
@@ -106,14 +106,14 @@
     "@endo/compartment-mapper": "workspace:^",
     "@endo/module-source": "workspace:^",
     "@endo/test262-runner": "workspace:^",
-    "ava": "catalog:dev",
-    "c8": "catalog:dev",
+    "ava": "^8.0.1",
+    "c8": "^11.0.0",
     "core-js": "^3.31.0",
-    "eslint": "catalog:dev",
+    "eslint": "^8.57.1",
     "hermes-engine-cli": "^0.12.0",
     "terser": "^5.16.6",
-    "tsd": "catalog:dev",
-    "typescript": "catalog:dev"
+    "tsd": "^0.33.0",
+    "typescript": "~6.0.3"
   },
   "files": [
     "./*.d.ts",
@@ -129,11 +129,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/ses"
-    ]
   },
   "ava": {
     "files": [

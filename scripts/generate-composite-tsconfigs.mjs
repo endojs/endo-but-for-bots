@@ -1,7 +1,4 @@
 #!/usr/bin/env node
-/* eslint-disable @jessie.js/safe-await-separator */
-
-/* eslint-disable no-continue */
 
 /**
  * Generates per-package `tsconfig.composite.json` files and a root
@@ -30,21 +27,32 @@ const execFileAsync = promisify(execFile);
 // ---------------------------------------------------------------------------
 
 /**
- * Parse the NDJSON output of `yarn workspaces list -R --json -v` into a
- * name → location map.  The root workspace entry (`name: null`) is skipped.
+ * Parse the JSON array output by `pnpm -r list --depth -1 --json` into a name
+ * → absolute-location map. The root workspace entry has no name and is skipped.
  *
- * @param {string} ndjson - Raw stdout from yarn.
- * @returns {Map<string, string>} Package name to relative workspace location.
+ * @param {string} json - Raw stdout from pnpm.
+ * @returns {Map<string, string>} Package name to absolute workspace location.
  */
-export const parseYarnWorkspaces = ndjson => {
+export const parsePnpmWorkspaces = json => {
+  const trimmed = json.trim();
+  if (!trimmed) return new Map();
+  let entries;
+  try {
+    entries = JSON.parse(trimmed);
+  } catch (error) {
+    throw new Error(
+      `pnpm -r list --depth -1 --json returned invalid JSON: ${error.message}`,
+      { cause: error },
+    );
+  }
+  if (!Array.isArray(entries)) {
+    throw new TypeError('pnpm -r list --depth -1 --json must return an array');
+  }
   /** @type {Map<string, string>} */
   const map = new Map();
-  for (const line of ndjson.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const entry = JSON.parse(trimmed);
-    if (entry.name === null) continue; // skip root
-    map.set(entry.name, entry.location);
+  for (const entry of entries) {
+    if (!entry.name) continue;
+    map.set(entry.name, entry.path);
   }
   return map;
 };
@@ -237,16 +245,16 @@ export const buildConfigs = async ({
 // ---------------------------------------------------------------------------
 
 /**
- * Invoke `yarn workspaces list -R --json -v` from the given directory and
+ * Invoke `pnpm -r list --depth -1 --json` from the given directory and
  * return its stdout.
  *
  * @param {string} cwd
  * @returns {Promise<string>}
  */
-const runYarnWorkspacesList = async cwd => {
+const runPnpmWorkspacesList = async cwd => {
   const result = await execFileAsync(
-    'yarn',
-    ['workspaces', 'list', '-R', '--json', '-v'],
+    'pnpm',
+    ['-r', 'list', '--depth', '-1', '--json'],
     {
       cwd,
       encoding: 'utf8',
@@ -259,8 +267,13 @@ const main = async () => {
   const rootDir = fileURLToPath(new URL('..', import.meta.url));
   const checkMode = process.argv.includes('--check');
 
-  const ndjson = await runYarnWorkspacesList(rootDir);
-  const nameToLocation = parseYarnWorkspaces(ndjson);
+  const json = await runPnpmWorkspacesList(rootDir);
+  const nameToLocation = new Map(
+    [...parsePnpmWorkspaces(json)].map(([name, location]) => [
+      name,
+      relative(rootDir, location),
+    ]),
+  );
 
   // Participants: workspaces that have a tsconfig.build.json
   const participantLocationsArray = await Promise.all(
@@ -313,7 +326,7 @@ const main = async () => {
     );
     if (drifted) {
       console.error(
-        '\nRun `yarn build:types:gen` to regenerate composite tsconfig files.',
+        '\nRun `pnpm build:types:gen` to regenerate composite tsconfig files.',
       );
       process.exitCode = 1;
     }

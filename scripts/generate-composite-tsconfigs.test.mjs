@@ -1,8 +1,7 @@
-/* eslint-disable @jessie.js/safe-await-separator */
 /**
  * Tests for {@link generate-composite-tsconfigs.mjs}
  *
- * Run with: `yarn exec ava scripts/generate-composite-tsconfigs.test.mjs`
+ * Run with: `pnpm exec ava scripts/generate-composite-tsconfigs.test.mjs`
  *
  * @module
  */
@@ -13,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  parseYarnWorkspaces,
+  parsePnpmWorkspaces,
   getRuntimeWorkspaceDeps,
   detectCycle,
   makePackageCompositeConfig,
@@ -39,47 +38,42 @@ function parseGeneratedJson(text) {
 }
 
 // ---------------------------------------------------------------------------
-// parseYarnWorkspaces
+// parsePnpmWorkspaces
 // ---------------------------------------------------------------------------
 
-test('parseYarnWorkspaces - parses well-formed NDJSON', t => {
-  const ndjson = [
-    JSON.stringify({ location: '.', name: null, workspaceDependencies: [] }),
-    JSON.stringify({
-      location: 'packages/a',
+test('parsePnpmWorkspaces - parses a JSON array', t => {
+  const json = JSON.stringify([
+    { path: '/repo' },
+    {
+      path: '/repo/packages/a',
       name: '@scope/a',
-      workspaceDependencies: [],
-    }),
-    JSON.stringify({
-      location: 'packages/b',
+    },
+    {
+      path: '/repo/packages/[a] [b]',
       name: '@scope/b',
-      workspaceDependencies: ['packages/a'],
-    }),
-  ].join('\n');
+    },
+  ]);
 
-  const map = parseYarnWorkspaces(ndjson);
+  const map = parsePnpmWorkspaces(json);
   t.is(map.size, 2, 'root entry should be skipped');
-  t.is(map.get('@scope/a'), 'packages/a');
-  t.is(map.get('@scope/b'), 'packages/b');
+  t.is(map.get('@scope/a'), '/repo/packages/a');
+  t.is(map.get('@scope/b'), '/repo/packages/[a] [b]');
 });
 
-test('parseYarnWorkspaces - skips the root entry (name: null)', t => {
-  const ndjson = JSON.stringify({
-    location: '.',
-    name: null,
-    workspaceDependencies: [],
-  });
-  const map = parseYarnWorkspaces(ndjson);
+test('parsePnpmWorkspaces - skips the root entry with no name', t => {
+  const json = JSON.stringify([{ path: '/repo' }]);
+  const map = parsePnpmWorkspaces(json);
   t.is(map.size, 0);
 });
 
-test('parseYarnWorkspaces - ignores blank lines', t => {
-  const ndjson = `\n${JSON.stringify({
-    location: 'packages/a',
-    name: '@scope/a',
-    workspaceDependencies: [],
-  })}\n\n`;
-  const map = parseYarnWorkspaces(ndjson);
+test('parsePnpmWorkspaces - ignores blank lines', t => {
+  const json = `\n${JSON.stringify([
+    {
+      path: '/repo/packages/a',
+      name: '@scope/a',
+    },
+  ])}\n\n`;
+  const map = parsePnpmWorkspaces(json);
   t.is(map.size, 1);
 });
 

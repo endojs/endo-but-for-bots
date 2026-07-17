@@ -20,13 +20,13 @@
     "test": "ava",
     "test:xs": "exit 0",
     "lint-fix": "eslint --fix '**/*.js'",
-    "lint": "yarn lint:types && eslint '**/*.js'",
+    "lint": "pnpm lint:types && eslint '**/*.js'",
     "lint:types": "tsc"
   },
   "devDependencies": {
-    "ava": "catalog:dev",
-    "eslint": "catalog:dev",
-    "typescript": "catalog:dev"
+    "ava": "^8.0.1",
+    "eslint": "^8.57.1",
+    "typescript": "~6.0.3"
   },
   "dependencies": {
     "@endo/base64": "workspace:^",
@@ -60,14 +60,6 @@
   "ava": {
     "files": [
       "test/**/*.test.*"
-    ]
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ],
-    "ignorePatterns": [
-      "bundle-*.js"
     ]
   },
   "publishConfig": {

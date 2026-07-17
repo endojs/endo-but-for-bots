@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "exit 0",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint": "pnpm lint:types && pnpm lint:eslint",
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
@@ -32,11 +32,11 @@
     "@endo/compartment-mapper": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/ses-ava": "workspace:^",
-    "ava": "catalog:dev",
-    "c8": "catalog:dev",
-    "eslint": "catalog:dev",
+    "ava": "^8.0.1",
+    "c8": "^11.0.0",
+    "eslint": "^8.57.1",
     "ses": "workspace:^",
-    "typescript": "catalog:dev"
+    "typescript": "~6.0.3"
   },
   "directories": {
     "test": "test"
@@ -65,10 +65,5 @@
   },
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
   }
 }

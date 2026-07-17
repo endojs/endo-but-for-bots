@@ -13,8 +13,8 @@
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
     "test:xs": "exit 0",
     "build": "exit 0",
-    "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "pnpm lint:eslint --fix && pnpm lint:types",
+    "lint": "pnpm lint:types && pnpm lint:eslint",
     "lint:types": "tsc",
     "lint:eslint": "eslint ."
   },
@@ -38,11 +38,11 @@
   "devDependencies": {
     "@endo/init": "workspace:^",
     "@endo/ses-ava": "workspace:^",
-    "ava": "catalog:dev",
-    "c8": "catalog:dev",
-    "eslint": "catalog:dev",
+    "ava": "^8.0.1",
+    "c8": "^11.0.0",
+    "eslint": "^8.57.1",
     "ses": "workspace:^",
-    "typescript": "catalog:dev"
+    "typescript": "~6.0.3"
   },
   "keywords": [
     "eventual send",
@@ -62,11 +62,6 @@
     "src",
     "tools"
   ],
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
-  },
   "publishConfig": {
     "access": "public"
   },

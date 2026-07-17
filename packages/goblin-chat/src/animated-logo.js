@@ -1,5 +1,5 @@
 // @ts-check
-/* eslint-disable no-bitwise, no-continue, import/no-unresolved */
+/* eslint-disable no-bitwise, no-continue */
 /* global performance, setInterval, clearInterval */
 
 /**
@@ -295,6 +295,7 @@ const renderLogoRow = (line, rowIdx, t) => {
  * terminal still shows a fully-coloured logo before the first tick.
  *
  * @param {AnimatedLogoProps} props
+ * @returns {any}
  */
 export const AnimatedLogo = ({ cols, fps = 14 }) => {
   const startedAt = useRef(/** @type {number | undefined} */ (undefined));

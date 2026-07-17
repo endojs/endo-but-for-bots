@@ -41,19 +41,19 @@
     "build": "exit 0",
     "test": "ses-ava",
     "test:xs": "exit 0",
-    "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
-    "lint": "yarn lint:eslint && yarn lint:types",
+    "lint-fix": "pnpm lint:eslint --fix && pnpm lint:types",
+    "lint": "pnpm lint:eslint && pnpm lint:types",
     "lint:eslint": "eslint .",
     "lint:types": "tsc"
   },
   "devDependencies": {
     "@endo/init": "workspace:^",
     "@endo/ses-ava": "workspace:^",
-    "ava": "catalog:dev",
-    "c8": "catalog:dev",
-    "eslint": "catalog:dev",
+    "ava": "^8.0.1",
+    "c8": "^11.0.0",
+    "eslint": "^8.57.1",
     "ses": "workspace:^",
-    "typescript": "catalog:dev"
+    "typescript": "~6.0.3"
   },
   "dependencies": {
     "@endo/errors": "workspace:^",
@@ -74,11 +74,6 @@
     "lockdown": "../../ava-endo-lockdown.config.mjs",
     "unsafe": "../../ava-endo-lockdown-unsafe.config.mjs",
     "endo": "../../ava-endo-shims-only.config.mjs"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
   },
   "typeCoverage": {
     "atLeast": 85.14

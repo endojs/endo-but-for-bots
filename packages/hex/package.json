@@ -30,7 +30,7 @@
   "scripts": {
     "build": "exit 0",
     "cover": "c8 ses-ava",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint": "pnpm lint:types && pnpm lint:eslint",
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
@@ -45,13 +45,13 @@
     "@endo/init": "workspace:^",
     "@endo/random": "workspace:^",
     "@endo/ses-ava": "workspace:^",
-    "ava": "catalog:dev",
+    "ava": "^8.0.1",
     "babel-eslint": "^10.1.0",
-    "c8": "catalog:dev",
-    "eslint": "catalog:dev",
+    "c8": "^11.0.0",
+    "eslint": "^8.57.1",
     "prettier": "^3.5.3",
     "ses": "workspace:^",
-    "typescript": "catalog:dev"
+    "typescript": "~6.0.3"
   },
   "files": [
     "./*.d.ts",
@@ -66,11 +66,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
   },
   "sesAvaConfigs": {
     "lockdown": "../../ava-endo-lockdown.config.mjs",

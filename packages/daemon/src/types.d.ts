@@ -38,9 +38,7 @@ export type NameOrPath = Name | NamePath;
 export type NamesOrPaths = NameOrPath[];
 
 export type SomehowAsyncIterable<T> =
-  | AsyncIterable<T>
-  | Iterable<T>
-  | { next: () => IteratorResult<T> };
+  AsyncIterable<T> | Iterable<T> | { next: () => IteratorResult<T> };
 
 export type Config = {
   statePath: string;
@@ -470,12 +468,10 @@ export interface Handle {
 export type MakeSha512 = () => Sha512;
 
 export type PetStoreNameChange =
-  | { add: Name; value: IdRecord }
-  | { remove: Name };
+  { add: Name; value: IdRecord } | { remove: Name };
 
 export type PetStoreIdNameChange =
-  | { add: IdRecord; names: Name[] }
-  | { remove: IdRecord; names?: Name[] };
+  { add: IdRecord; names: Name[] } | { remove: IdRecord; names?: Name[] };
 
 export type NameChangesTopic = Topic<PetStoreNameChange>;
 
@@ -521,8 +517,7 @@ export type KnownPeersStore = Omit<
  * `add` and `remove` are locators.
  */
 export type LocatorNameChange =
-  | { add: string; names: Name[] }
-  | { remove: string; names?: Name[] };
+  { add: string; names: Name[] } | { remove: string; names?: Name[] };
 
 export interface NameHub {
   has(...petNamePath: string[]): Promise<boolean>;

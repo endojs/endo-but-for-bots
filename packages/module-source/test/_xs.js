@@ -1,4 +1,4 @@
-// This is a test fixture for XS validation (yarn test:xs with Moddable's xst
+// This is a test fixture for XS validation (pnpm test:xs with Moddable's xst
 // on the PATH)
 // This must be bundled with the -C xs condition to produce an artifact
 // (tmp/test-xs.js) suitable for running with xst.

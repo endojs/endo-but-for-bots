@@ -90,10 +90,10 @@
 
 ### Bug Fixes
 
-* Fix scaffold and transforms yarn pack ([42439e7](https://github.com/endojs/endo/commit/42439e7d452e839b9856eac0e852766c237219d0))
+* Fix scaffold and transforms pnpm pack ([42439e7](https://github.com/endojs/endo/commit/42439e7d452e839b9856eac0e852766c237219d0))
 
 ## 0.1.1 (2023-08-07)
 
 ### Bug Fixes
 
-* Fix scaffold and transforms yarn pack ([42439e7](https://github.com/endojs/endo/commit/42439e7d452e839b9856eac0e852766c237219d0))
+* Fix scaffold and transforms pnpm pack ([42439e7](https://github.com/endojs/endo/commit/42439e7d452e839b9856eac0e852766c237219d0))

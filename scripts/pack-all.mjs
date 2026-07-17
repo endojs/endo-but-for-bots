@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 /**
- * @file Build a publishable .tgz for every public workspace using ts-node-pack.
+ * @file Build a publishable .tgz for every public workspace with pnpm.
  *
- * Yarn 4 does not support swapping the pack engine, so we drive ts-node-pack
- * directly. Each tarball is written to `dist/` at the workspace root, named
+ * Each tarball is written to `dist/` at the workspace root, named
  * `<scope>-<name>-<version>.tgz`.
  *
  * Freshness guarantee: `dist/` is recursively removed before this script
@@ -15,10 +14,9 @@
  * manually after editing source without re-packing, that's on you.)
  *
  * Used by:
- *   - `yarn pack:all` (dev / CI smoke)
- *   - `yarn release:npm` (publish flow, via release-npm.mjs)
+ *   - `pnpm pack:all` (dev / CI smoke)
+ *   - `pnpm release:npm` (publish flow, via release-npm.mjs)
  *   - `scripts/files.sh` (file inventory)
- *   - `scripts/compare-pack.mjs` (legacy-vs-new tarball diff)
  */
 import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
@@ -27,53 +25,82 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * @import {SpawnOptions} from 'node:child_process';
+ */
+
 const repoRoot = path.resolve(new URL('..', import.meta.url).pathname);
 const distDir = path.join(repoRoot, 'dist');
 
-const { stdout: binStdout } = await execFileAsync(
-  'yarn',
-  ['bin', 'ts-node-pack'],
-  { cwd: repoRoot, maxBuffer: 1024 * 1024 },
-);
-const tsNodePackBin = binStdout.trim().split('\n').pop();
-if (!tsNodePackBin || !existsSync(tsNodePackBin)) {
-  throw new Error(`ts-node-pack binary not found (got "${tsNodePackBin}")`);
-}
+/**
+ * Parse and validate pnpm's workspace list before using it to select packages
+ * for publication. A missing `private` flag must fail closed: publishing a
+ * private package is worse than refusing an ambiguous release.
+ *
+ * @param {string} json
+ * @returns {{path: string, name?: string, private?: boolean}[]}
+ */
+const parsePnpmWorkspaceList = json => {
+  let entries;
+  try {
+    entries = JSON.parse(json.trim() || '[]');
+  } catch (error) {
+    throw new Error(
+      `pnpm -r list --depth -1 --json returned invalid JSON: ${error.message}`,
+      { cause: error },
+    );
+  }
+  if (!Array.isArray(entries)) {
+    throw new TypeError('pnpm -r list --depth -1 --json must return an array');
+  }
+  return entries;
+};
 
-// `npm query` doesn't see Yarn 4 pnpm-linked workspaces; use Yarn directly.
-// Output is one JSON object per line (NDJSON), not a JSON array.
+/**
+ * @param {{path: string, name?: string, private?: boolean}[]} entries
+ */
+const getPublicWorkspaces = entries =>
+  entries.filter(workspace => {
+    if (!workspace.name) return false;
+    if (workspace.private === true) return false;
+    if (workspace.private !== false) {
+      throw new Error(
+        `pnpm workspace ${workspace.name} has no boolean private flag; refusing to pack it`,
+      );
+    }
+    return true;
+  });
+
+// Ask pnpm directly so the public package set comes from the workspace graph.
 const { stdout: listStdout } = await execFileAsync(
-  'yarn',
-  ['workspaces', 'list', '--json', '--no-private'],
+  'pnpm',
+  ['-r', 'list', '--depth', '-1', '--json'],
   { cwd: repoRoot, maxBuffer: 16 * 1024 * 1024 },
 );
-/** @type {{location: string, name: string}[]} */
-const workspaces = listStdout
-  .split('\n')
-  .filter(line => line.trim())
-  .map(line => JSON.parse(line))
-  // The root workspace shows up with location "."; skip it.
-  .filter(ws => ws.location !== '.');
+const workspaces = getPublicWorkspaces(parsePnpmWorkspaceList(listStdout));
 
 if (existsSync(distDir)) rmSync(distDir, { recursive: true, force: true });
 mkdirSync(distDir, { recursive: true });
 
-/** Run a child process to completion, inheriting stdio. */
+/**
+ * Run a command, inheriting stdio; reject on non-zero exit.
+ * @param {string} cmd
+ * @param {string[]} argv
+ * @param {SpawnOptions} options
+ */
 const run = (cmd, argv, options) =>
   new Promise((resolve, reject) => {
     const child = spawn(cmd, argv, { stdio: 'inherit', ...options });
     child.once('error', reject);
     child.once('exit', code =>
-      code === 0
-        ? resolve()
-        : reject(new Error(`${cmd} exited with ${code}`)),
+      code === 0 ? resolve() : reject(new Error(`${cmd} exited with ${code}`)),
     );
   });
 
 for (const ws of workspaces) {
-  const pkgDir = path.join(repoRoot, ws.location);
+  const pkgDir = ws.path;
   process.stderr.write(`pack-all: ${ws.name}\n`);
-  await run(process.execPath, [tsNodePackBin, pkgDir], { cwd: distDir });
+  await run('pnpm', ['pack', '--pack-destination', distDir], { cwd: pkgDir });
 }
 
 process.stderr.write(
