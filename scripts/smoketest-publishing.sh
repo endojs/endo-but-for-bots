@@ -87,10 +87,10 @@ echo "smoketest-publishing: starting Verdaccio (HOME=$REGISTRY_HOME)"
 echo "smoketest-publishing: creating disposable publish user"
 npx --yes npm-cli-login@^1 \
   -u smoketest -p smoketest -e smoketest@example.com \
-  -r "$REGISTRY_URL" --quotes
+  -r "$REGISTRY_URL" --quotes --config-path "$REGISTRY_HOME/.npmrc"
 
 # Sanity: confirm we are authenticated against the local registry.
-npm whoami --registry "$REGISTRY_URL"
+npm --userconfig "$REGISTRY_HOME/.npmrc" whoami --registry "$REGISTRY_URL"
 
 # Run the real release flow. `release:npm` calls `pack:all` (which
 # rebuilds dist/ via ts-node-pack) then `npm publish` for each .tgz;
@@ -99,7 +99,7 @@ npm whoami --registry "$REGISTRY_URL"
 echo "smoketest-publishing: running 'npm run release:npm'"
 (
   cd "$ROOT"
-  npm_config_registry="$REGISTRY_URL" npm run release:npm
+  npm_config_registry="$REGISTRY_URL" npm_config_userconfig="$REGISTRY_HOME/.npmrc" npm run release:npm
 )
 
 # Install a representative subset into a throwaway consumer and exercise

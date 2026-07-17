@@ -27,8 +27,11 @@ case "$OS" in
         ;;
 esac
 
-HERMESC="node_modules/hermes-engine-cli/$OS_DIR/hermesc"
-HERMES="node_modules/hermes-engine-cli/$OS_DIR/hermes"
+# npm hoists this workspace dependency at the repository root. This script
+# runs from packages/ses, so resolve the root node_modules directory rather
+# than assuming a per-workspace node_modules link.
+HERMESC="../../node_modules/hermes-engine-cli/$OS_DIR/hermesc"
+HERMES="../../node_modules/hermes-engine-cli/$OS_DIR/hermes"
 
 echo "Concatenating: dist/ses-hermes.cjs + test/_hermes-smoke.js"
 cat dist/ses-hermes.cjs test/_hermes-smoke.js > test/_hermes-smoke-dist.js

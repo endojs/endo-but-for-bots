@@ -64,6 +64,7 @@
     "smoketest:publish": "scripts/smoketest-publishing.sh",
     "test": "npm run --workspaces --if-present test",
     "test:c8": "npm run --workspaces --if-present test:c8",
+    "test:hermes": "npm run --workspace=ses test:hermes",
     "test:xs": "npm run --workspaces --if-present test:xs",
     "test262": "npm run --workspaces --if-present test262",
     "build": "npm run --workspaces --if-present build",
