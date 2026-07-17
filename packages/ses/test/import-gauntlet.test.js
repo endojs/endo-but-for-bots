@@ -239,6 +239,437 @@ test('export name as default', async t => {
   await compartment.import('./main.js');
 });
 
+// Regression for endojs/endo#59. A module reached more than once via
+// `export *` and a renaming reexport with a different `exported` name
+// formerly raised a spurious "does not provide an export named X"
+// SyntaxError (latterly a `TypeError: notify is not a function`):
+// the export-renamer's `export { y as x } from './star-reexporter.js'`
+// was wired before star-reexporter's star-import from export-renamer had
+// populated star-reexporter's notifier for `y`. The same fixture shape is
+// also exercised through compartment-mapper's scaffold and pinned to
+// Node.js's reference behavior; see
+// packages/compartment-mapper/test/cycle-rename.test.js (one module
+// registering both the SES treatment and the Node.js parity treatment
+// back-to-back).
+test('cyclic star export with renaming reexport (issue #59)', async t => {
+  t.plan(3);
+
+  const makeImportHook = makeNodeImporter({
+    'https://example.com/star-reexporter.js': `
+      export * from './export-renamer.js';
+    `,
+    'https://example.com/export-renamer.js': `
+      export { y as x } from './star-reexporter.js';
+      export var y = 45;
+    `,
+    'https://example.com/main.js': `
+      import { x } from './star-reexporter.js';
+      import * as ns1 from './star-reexporter.js';
+      import * as ns2 from './export-renamer.js';
+      export const captured = x;
+      export const namespace1 = { x: ns1.x, y: ns1.y };
+      export const namespace2 = { x: ns2.x, y: ns2.y };
+    `,
+  });
+
+  const compartment = new Compartment({
+    resolveHook: resolveNode,
+    importHook: makeImportHook('https://example.com'),
+    __noNamespaceBox__: true,
+    __options__: true,
+  });
+
+  const namespace = await compartment.import('./main.js');
+
+  t.is(namespace.captured, 45);
+  t.deepEqual(namespace.namespace1, { x: 45, y: 45 });
+  t.deepEqual(namespace.namespace2, { x: 45, y: 45 });
+});
+
+// Companion regression for endojs/endo#59 covering the unused-live-binding
+// shape of the cyclic star-export. The export-renamer's
+// `export { y as x } from './star-reexporter.js'` re-exports a live binding
+// from the star reexporter, but the renamer's own `y` is declared without
+// initialization (`export var y;`), so the binding is never updated.
+// Every projection of the cycle reads `undefined`. Node.js agrees: the
+// in-process SES linker behavior matches Node.js's reference behavior for
+// this shape, which is the parity property the test pins. The same fixture
+// shape is also exercised through compartment-mapper's scaffold and pinned
+// to Node.js's reference behavior with a shared assertion module; see
+// packages/compartment-mapper/test/cycle-rename-unused.test.js (one module
+// registering both the SES treatment and the Node.js parity treatment
+// back-to-back).
+test('cyclic star export with renaming reexport, unused live binding', async t => {
+  t.plan(3);
+
+  const makeImportHook = makeNodeImporter({
+    'https://example.com/star-reexporter.js': `
+      export * from './export-renamer.js';
+    `,
+    'https://example.com/export-renamer.js': `
+      export { y as x } from './star-reexporter.js';
+      export var y;
+    `,
+    'https://example.com/main.js': `
+      import { x } from './star-reexporter.js';
+      import * as ns1 from './star-reexporter.js';
+      import * as ns2 from './export-renamer.js';
+      export const captured = x;
+      export const namespace1 = { x: ns1.x, y: ns1.y };
+      export const namespace2 = { x: ns2.x, y: ns2.y };
+    `,
+  });
+
+  const compartment = new Compartment({
+    resolveHook: resolveNode,
+    importHook: makeImportHook('https://example.com'),
+    __noNamespaceBox__: true,
+    __options__: true,
+  });
+
+  const namespace = await compartment.import('./main.js');
+
+  t.is(namespace.captured, undefined);
+  t.deepEqual(namespace.namespace1, { x: undefined, y: undefined });
+  t.deepEqual(namespace.namespace2, { x: undefined, y: undefined });
+});
+
+// The next six tests vary the cyclic star-export fixture along two axes
+// and observe the renamer's binding during the window when the renamer is
+// linked into the cycle but its body has not yet executed past the
+// binding's declaration. The axes are:
+//
+//   1. Whether main.js imports the export-renamer first or the
+//      star-reexporter first. The first-imported module starts evaluating
+//      first; depth-first traversal of the cycle then determines which
+//      module's body runs while the other is on the evaluation stack with
+//      bindings not yet initialized.
+//
+//   2. Whether the renamer's `y` is declared with `const`, `let`, or `var`.
+//      Under ECMA-262 semantics, `const` and `let` create a binding that is
+//      in the temporal dead zone until its declaration is evaluated, so a
+//      read raises a ReferenceError; `var` is hoisted and reads `undefined`
+//      until the assignment runs.
+//
+// The observation is performed by the star-reexporter at the top of its
+// body: it reads `r.y` through its own namespace import of the renamer and
+// captures the result (the assigned value, or the error name when reading
+// raises) as a probe export. main.js reads the probe through the
+// star-reexporter's namespace.
+//
+// When the renamer is imported first from main.js, the star-reexporter's
+// body runs while the renamer is on the evaluation stack with `y` not yet
+// initialized. The expected observation under ECMA-262 semantics is
+// ReferenceError for `const` and `let` and `undefined` for `var`. When the
+// star-reexporter is imported first, depth-first cycle resolution evaluates
+// the renamer's body to completion before the star-reexporter's body runs,
+// so the probe captures the assigned value for every binding form. The
+// "star reexporter imported first" cases therefore have no TDZ window to
+// observe (the maintainer's "in all cases that it is possible" caveat);
+// they are recorded as the expected non-observation that completes the
+// matrix.
+//
+// All six cells now match Node.js after the fix that lands the eager
+// exportsTarget property definitions in `module-instance.js` and reorders
+// the hoisted declarations to run before the imports call in
+// `module-source/src/transform-analyze.js`. The renamer-first plus `const`
+// and renamer-first plus `let` cells raise `ReferenceError` (the
+// fixed-binding and live-binding TDZ-aware getters now run against the
+// cross-module namespace access path), while renamer-first plus `var`
+// continues to read `undefined` because the hoisting preamble clears the
+// upstream's TDZ before the downstream observes.
+//
+// Each cell is also exercised through the compartment-mapper scaffold and
+// pinned to Node.js's reference behavior side-by-side in the same module.
+// The six star-reexport cells and the named-reexport cell are enumerated
+// in a single SCENARIOS table in
+// packages/compartment-mapper/test/cycle-rename-tdz-matrix.test.js, which
+// registers a SES treatment (through the compartment-mapper scaffold) and
+// a Node.js parity treatment back-to-back for each scenario. Each row's
+// `fixture` field names its directory under
+// packages/compartment-mapper/test/fixtures-cycle-{rename,named-reexport}-tdz-*/.
+
+test('cyclic star export with renaming reexport, renamer imported first, const binding observes ReferenceError during temporal dead zone', async t => {
+  t.plan(1);
+
+  const makeImportHook = makeNodeImporter({
+    'https://example.com/star-reexporter.js': `
+      import * as r from './export-renamer.js';
+      export * from './export-renamer.js';
+      export const probe = (() => {
+        try {
+          return { kind: 'value', value: r.y };
+        } catch (e) {
+          return { kind: 'error', name: e.name };
+        }
+      })();
+    `,
+    'https://example.com/export-renamer.js': `
+      export { y as x } from './star-reexporter.js';
+      export const y = 42;
+    `,
+    'https://example.com/main.js': `
+      import * as r from './export-renamer.js';
+      import * as s from './star-reexporter.js';
+      export const probe = s.probe;
+    `,
+  });
+
+  const compartment = new Compartment({
+    resolveHook: resolveNode,
+    importHook: makeImportHook('https://example.com'),
+    __noNamespaceBox__: true,
+    __options__: true,
+  });
+
+  const namespace = await compartment.import('./main.js');
+
+  t.deepEqual(namespace.probe, { kind: 'error', name: 'ReferenceError' });
+});
+
+test('cyclic star export with renaming reexport, renamer imported first, let binding observes ReferenceError during temporal dead zone', async t => {
+  t.plan(1);
+
+  const makeImportHook = makeNodeImporter({
+    'https://example.com/star-reexporter.js': `
+      import * as r from './export-renamer.js';
+      export * from './export-renamer.js';
+      export const probe = (() => {
+        try {
+          return { kind: 'value', value: r.y };
+        } catch (e) {
+          return { kind: 'error', name: e.name };
+        }
+      })();
+    `,
+    'https://example.com/export-renamer.js': `
+      export { y as x } from './star-reexporter.js';
+      export let y = 42;
+    `,
+    'https://example.com/main.js': `
+      import * as r from './export-renamer.js';
+      import * as s from './star-reexporter.js';
+      export const probe = s.probe;
+    `,
+  });
+
+  const compartment = new Compartment({
+    resolveHook: resolveNode,
+    importHook: makeImportHook('https://example.com'),
+    __noNamespaceBox__: true,
+    __options__: true,
+  });
+
+  const namespace = await compartment.import('./main.js');
+
+  t.deepEqual(namespace.probe, { kind: 'error', name: 'ReferenceError' });
+});
+
+test('cyclic star export with renaming reexport, renamer imported first, var binding observes undefined while hoisted but unassigned', async t => {
+  t.plan(1);
+
+  const makeImportHook = makeNodeImporter({
+    'https://example.com/star-reexporter.js': `
+      import * as r from './export-renamer.js';
+      export * from './export-renamer.js';
+      export const probe = (() => {
+        try {
+          return { kind: 'value', value: r.y };
+        } catch (e) {
+          return { kind: 'error', name: e.name };
+        }
+      })();
+    `,
+    'https://example.com/export-renamer.js': `
+      export { y as x } from './star-reexporter.js';
+      export var y = 42;
+    `,
+    'https://example.com/main.js': `
+      import * as r from './export-renamer.js';
+      import * as s from './star-reexporter.js';
+      export const probe = s.probe;
+    `,
+  });
+
+  const compartment = new Compartment({
+    resolveHook: resolveNode,
+    importHook: makeImportHook('https://example.com'),
+    __noNamespaceBox__: true,
+    __options__: true,
+  });
+
+  const namespace = await compartment.import('./main.js');
+
+  t.deepEqual(namespace.probe, { kind: 'value', value: undefined });
+});
+
+test('cyclic star export with renaming reexport, star reexporter imported first, const binding observes the assigned value', async t => {
+  t.plan(1);
+
+  const makeImportHook = makeNodeImporter({
+    'https://example.com/star-reexporter.js': `
+      import * as r from './export-renamer.js';
+      export * from './export-renamer.js';
+      export const probe = (() => {
+        try {
+          return { kind: 'value', value: r.y };
+        } catch (e) {
+          return { kind: 'error', name: e.name };
+        }
+      })();
+    `,
+    'https://example.com/export-renamer.js': `
+      export { y as x } from './star-reexporter.js';
+      export const y = 42;
+    `,
+    'https://example.com/main.js': `
+      import * as s from './star-reexporter.js';
+      import * as r from './export-renamer.js';
+      export const probe = s.probe;
+    `,
+  });
+
+  const compartment = new Compartment({
+    resolveHook: resolveNode,
+    importHook: makeImportHook('https://example.com'),
+    __noNamespaceBox__: true,
+    __options__: true,
+  });
+
+  const namespace = await compartment.import('./main.js');
+
+  t.deepEqual(namespace.probe, { kind: 'value', value: 42 });
+});
+
+test('cyclic star export with renaming reexport, star reexporter imported first, let binding observes the assigned value', async t => {
+  t.plan(1);
+
+  const makeImportHook = makeNodeImporter({
+    'https://example.com/star-reexporter.js': `
+      import * as r from './export-renamer.js';
+      export * from './export-renamer.js';
+      export const probe = (() => {
+        try {
+          return { kind: 'value', value: r.y };
+        } catch (e) {
+          return { kind: 'error', name: e.name };
+        }
+      })();
+    `,
+    'https://example.com/export-renamer.js': `
+      export { y as x } from './star-reexporter.js';
+      export let y = 42;
+    `,
+    'https://example.com/main.js': `
+      import * as s from './star-reexporter.js';
+      import * as r from './export-renamer.js';
+      export const probe = s.probe;
+    `,
+  });
+
+  const compartment = new Compartment({
+    resolveHook: resolveNode,
+    importHook: makeImportHook('https://example.com'),
+    __noNamespaceBox__: true,
+    __options__: true,
+  });
+
+  const namespace = await compartment.import('./main.js');
+
+  t.deepEqual(namespace.probe, { kind: 'value', value: 42 });
+});
+
+test('cyclic star export with renaming reexport, star reexporter imported first, var binding observes the assigned value', async t => {
+  t.plan(1);
+
+  const makeImportHook = makeNodeImporter({
+    'https://example.com/star-reexporter.js': `
+      import * as r from './export-renamer.js';
+      export * from './export-renamer.js';
+      export const probe = (() => {
+        try {
+          return { kind: 'value', value: r.y };
+        } catch (e) {
+          return { kind: 'error', name: e.name };
+        }
+      })();
+    `,
+    'https://example.com/export-renamer.js': `
+      export { y as x } from './star-reexporter.js';
+      export var y = 42;
+    `,
+    'https://example.com/main.js': `
+      import * as s from './star-reexporter.js';
+      import * as r from './export-renamer.js';
+      export const probe = s.probe;
+    `,
+  });
+
+  const compartment = new Compartment({
+    resolveHook: resolveNode,
+    importHook: makeImportHook('https://example.com'),
+    __noNamespaceBox__: true,
+    __options__: true,
+  });
+
+  const namespace = await compartment.import('./main.js');
+
+  t.deepEqual(namespace.probe, { kind: 'value', value: 42 });
+});
+
+// Companion to the renamer-first + const star-export case above with the
+// star reexport replaced by a named reexport: the upstream module
+// `named-reexporter.js` writes `export { y } from './export-renamer.js'`
+// instead of `export * from './export-renamer.js'`. The cycle has the same
+// shape (the named reexporter and the export renamer reference each
+// other), and the observation of `r.y` through the namespace import lands
+// during the same linked-but-not-yet-bound window when main.js imports the
+// renamer first. Node.js raises ReferenceError for `const y = 42` here,
+// matching the star-reexport case, because the temporal dead zone
+// semantics live with the binding, not with the reexport form. After the
+// fix to `module-instance.js` and `transform-analyze.js`, SES enforces the
+// same TDZ on the namespace path through `wireUpExportNotifier` whether
+// the reexport is reached through `export *` or through `export { y }
+// from`. This case confirms the gap is not specific to `export *`
+// (kriskowal follow-up on issue-comment 4675471286).
+test('cyclic named reexport with renaming reexport, renamer imported first, const binding observes ReferenceError during temporal dead zone', async t => {
+  t.plan(1);
+
+  const makeImportHook = makeNodeImporter({
+    'https://example.com/named-reexporter.js': `
+      import * as r from './export-renamer.js';
+      export { y } from './export-renamer.js';
+      export const probe = (() => {
+        try {
+          return { kind: 'value', value: r.y };
+        } catch (e) {
+          return { kind: 'error', name: e.name };
+        }
+      })();
+    `,
+    'https://example.com/export-renamer.js': `
+      export { y as x } from './named-reexporter.js';
+      export const y = 42;
+    `,
+    'https://example.com/main.js': `
+      import * as r from './export-renamer.js';
+      import * as s from './named-reexporter.js';
+      export const probe = s.probe;
+    `,
+  });
+
+  const compartment = new Compartment({
+    resolveHook: resolveNode,
+    importHook: makeImportHook('https://example.com'),
+    __noNamespaceBox__: true,
+    __options__: true,
+  });
+
+  const namespace = await compartment.import('./main.js');
+
+  t.deepEqual(namespace.probe, { kind: 'error', name: 'ReferenceError' });
+});
+
 test('export-as with duplicated export name', async t => {
   t.plan(4);
 
