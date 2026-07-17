@@ -366,7 +366,7 @@ const makeError = (
   // Note that due to the overload of AssertionUtilities['makeError'], Typescript's so-called "strict
   // mode" will complain if default parameters are provided in the method
   // signature. The below workaround (optDetails -> details; errConstructor ->
-  // errCtor) is functionally equivalent but allows us to use type assertions to
+  // errorConstructor) is functionally equivalent but allows us to use type assertions to
   // workaround the issue with TypeScript's so-called "strict mode".
   let details = /** @type {Details} */ (
     optDetails ?? redactedDetails`Assert failed`
@@ -374,7 +374,7 @@ const makeError = (
 
   // Internally, this is a GenericErrorConstructor, but externally it can be
   // some T which extends GenericErrorConstructor.
-  const errCtor = /** @type {GenericErrorConstructor} */ (
+  const errorConstructor = /** @type {GenericErrorConstructor} */ (
     errConstructor ?? globalThis.Error
   );
   // Promote string-valued `optDetails` into a minimal DetailsParts
@@ -389,10 +389,13 @@ const makeError = (
   const messageString = getMessageString(hiddenDetails);
   const opts = cause && { cause };
   let error;
-  if (typeof AggregateError !== 'undefined' && errCtor === AggregateError) {
+  if (
+    typeof AggregateError !== 'undefined' &&
+    errorConstructor === AggregateError
+  ) {
     error = AggregateError(errors || [], messageString, opts);
   } else {
-    const ErrorCtor = /** @type {ErrorConstructor} */ (errCtor);
+    const ErrorCtor = /** @type {ErrorConstructor} */ (errorConstructor);
     error = ErrorCtor(messageString, opts);
     // Since we need to tolerate `errors` on an AggregateError, we may as well
     // tolerate it on all errors.
