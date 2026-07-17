@@ -6224,7 +6224,10 @@ const makeManagerCore = async (
 
       // Register the guest's agent key so we can route to its daemon.
       if (guestHandleNode !== guestManagerNode) {
-        persistencePowers.writeRemoteAgentKey(guestHandleNode, guestManagerNode);
+        persistencePowers.writeRemoteAgentKey(
+          guestHandleNode,
+          guestManagerNode,
+        );
       }
 
       /** @type {PeerInfo} */
