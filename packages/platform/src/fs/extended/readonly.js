@@ -26,6 +26,7 @@ import {
   OpenFileInterface,
   XattrsInterface,
 } from './type-guards.js';
+import { noteFilesystemPosture } from './posture.js';
 
 /**
  * @import {
@@ -46,7 +47,7 @@ const denied = method =>
  */
 export const readOnly = inner => {
   // eslint-disable-next-line no-use-before-define
-  return makeReadOnlyFilesystem(inner);
+  return noteFilesystemPosture(makeReadOnlyFilesystem(inner), true);
 };
 harden(readOnly);
 
