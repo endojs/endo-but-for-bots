@@ -32,19 +32,52 @@ const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(new URL('..', import.meta.url).pathname);
 const distDir = path.join(repoRoot, 'dist');
 
+/**
+ * Parse and validate pnpm's workspace list before using it to select packages
+ * for publication. A missing `private` flag must fail closed: publishing a
+ * private package is worse than refusing an ambiguous release.
+ *
+ * @param {string} json
+ * @returns {{path: string, name?: string, private?: boolean}[]}
+ */
+const parsePnpmWorkspaceList = json => {
+  let entries;
+  try {
+    entries = JSON.parse(json.trim() || '[]');
+  } catch (error) {
+    throw new Error(
+      `pnpm -r list --depth -1 --json returned invalid JSON: ${error.message}`,
+      { cause: error },
+    );
+  }
+  if (!Array.isArray(entries)) {
+    throw new TypeError('pnpm -r list --depth -1 --json must return an array');
+  }
+  return entries;
+};
+
+/**
+ * @param {{path: string, name?: string, private?: boolean}[]} entries
+ */
+const getPublicWorkspaces = entries =>
+  entries.filter(workspace => {
+    if (!workspace.name) return false;
+    if (workspace.private === true) return false;
+    if (workspace.private !== false) {
+      throw new Error(
+        `pnpm workspace ${workspace.name} has no boolean private flag; refusing to pack it`,
+      );
+    }
+    return true;
+  });
+
 // Ask pnpm directly so the public package set comes from the workspace graph.
 const { stdout: listStdout } = await execFileAsync(
   'pnpm',
   ['-r', 'list', '--depth', '-1', '--json'],
   { cwd: repoRoot, maxBuffer: 16 * 1024 * 1024 },
 );
-const trimmedWorkspaceList = listStdout.trim();
-/** @type {{path: string, name: string, private: boolean}[]} */
-const workspaces = trimmedWorkspaceList
-  ? JSON.parse(`[${trimmedWorkspaceList.replace(/]\s*\[/g, ',')}]`)
-      .flat()
-      .filter(ws => ws.name && !ws.private)
-  : [];
+const workspaces = getPublicWorkspaces(parsePnpmWorkspaceList(listStdout));
 
 if (existsSync(distDir)) rmSync(distDir, { recursive: true, force: true });
 mkdirSync(distDir, { recursive: true });

@@ -48,7 +48,7 @@ jobs:
           cache: pnpm
 
       - name: Install Dependencies
-        run: pnpm
+        run: pnpm install --frozen-lockfile
 
       - name: Set up Git user
         run: |

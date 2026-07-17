@@ -29,7 +29,7 @@ jobs:
       # Without this, setup-node errors on mismatched pnpm versions
       - run: corepack enable
       # Without this the inter-package imports don't resolve
-      - run: pnpm install
+      - run: pnpm install --frozen-lockfile
       # Generate the TypeDoc site
       - run: pnpm docs
       - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4

@@ -114,6 +114,41 @@ if (tarballs.length === 0) {
   throw new Error('release:npm: no tarballs to publish');
 }
 
+/**
+ * @param {string} json
+ * @returns {{path: string, name?: string, private?: boolean}[]}
+ */
+const parsePnpmWorkspaceList = json => {
+  let entries;
+  try {
+    entries = JSON.parse(json.trim() || '[]');
+  } catch (error) {
+    throw new Error(
+      `pnpm -r list --depth -1 --json returned invalid JSON: ${error.message}`,
+      { cause: error },
+    );
+  }
+  if (!Array.isArray(entries)) {
+    throw new TypeError('pnpm -r list --depth -1 --json must return an array');
+  }
+  return entries;
+};
+
+/**
+ * @param {{path: string, name?: string, private?: boolean}[]} entries
+ */
+const getPublicWorkspaces = entries =>
+  entries.filter(workspace => {
+    if (!workspace.name) return false;
+    if (workspace.private === true) return false;
+    if (workspace.private !== false) {
+      throw new Error(
+        `pnpm workspace ${workspace.name} has no boolean private flag; refusing to publish it`,
+      );
+    }
+    return true;
+  });
+
 // Sanity check: one tarball per public workspace, no more and no less.
 // Catches a partial pack-all run (e.g. interrupted mid-loop) and any
 // drift between what pnpm reports and what
@@ -123,12 +158,7 @@ const { stdout: wsStdout } = await execFileAsync(
   ['-r', 'list', '--depth', '-1', '--json'],
   { cwd: repoRoot, maxBuffer: 16 * 1024 * 1024 },
 );
-const trimmedWorkspaceList = wsStdout.trim();
-const expectedPackages = trimmedWorkspaceList
-  ? JSON.parse(`[${trimmedWorkspaceList.replace(/]\s*\[/g, ',')}]`)
-      .flat()
-      .filter(ws => ws.name && !ws.private)
-  : [];
+const expectedPackages = getPublicWorkspaces(parsePnpmWorkspaceList(wsStdout));
 if (tarballs.length !== expectedPackages.length) {
   throw new Error(
     `release:npm: tarball count mismatch — expected ${expectedPackages.length} ` +

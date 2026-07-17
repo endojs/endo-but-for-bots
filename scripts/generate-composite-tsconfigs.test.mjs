@@ -41,36 +41,38 @@ function parseGeneratedJson(text) {
 // parsePnpmWorkspaces
 // ---------------------------------------------------------------------------
 
-test('parsePnpmWorkspaces - parses well-formed JSON arrays', t => {
-  const json = [
-    JSON.stringify([{ path: '/repo', name: null }]),
-    JSON.stringify([{
+test('parsePnpmWorkspaces - parses a JSON array', t => {
+  const json = JSON.stringify([
+    { path: '/repo' },
+    {
       path: '/repo/packages/a',
       name: '@scope/a',
-    }]),
-    JSON.stringify([{
-      path: '/repo/packages/b',
+    },
+    {
+      path: '/repo/packages/[a] [b]',
       name: '@scope/b',
-    }]),
-  ].join('\n');
+    },
+  ]);
 
   const map = parsePnpmWorkspaces(json);
   t.is(map.size, 2, 'root entry should be skipped');
   t.is(map.get('@scope/a'), '/repo/packages/a');
-  t.is(map.get('@scope/b'), '/repo/packages/b');
+  t.is(map.get('@scope/b'), '/repo/packages/[a] [b]');
 });
 
-test('parsePnpmWorkspaces - skips the root entry (name: null)', t => {
-  const json = JSON.stringify([{ path: '/repo', name: null }]);
+test('parsePnpmWorkspaces - skips the root entry with no name', t => {
+  const json = JSON.stringify([{ path: '/repo' }]);
   const map = parsePnpmWorkspaces(json);
   t.is(map.size, 0);
 });
 
 test('parsePnpmWorkspaces - ignores blank lines', t => {
-  const json = `\n${JSON.stringify([{
-    path: '/repo/packages/a',
-    name: '@scope/a',
-  }])}\n\n`;
+  const json = `\n${JSON.stringify([
+    {
+      path: '/repo/packages/a',
+      name: '@scope/a',
+    },
+  ])}\n\n`;
   const map = parsePnpmWorkspaces(json);
   t.is(map.size, 1);
 });

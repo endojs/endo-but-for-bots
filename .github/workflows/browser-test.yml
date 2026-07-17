@@ -44,7 +44,7 @@ jobs:
       - name: Provide pnpm # pnpm is missing in the Selenium image
         run: corepack enable
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
       - name: Build artifacts
         run: pnpm build
       - name: Install browser test dependencies

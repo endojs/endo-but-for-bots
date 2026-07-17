@@ -27,9 +27,8 @@ const execFileAsync = promisify(execFile);
 // ---------------------------------------------------------------------------
 
 /**
- * Parse the sequence of JSON arrays output by `pnpm -r list --depth -1 --json`
- * into a name → absolute-location map. The root workspace entry has no name
- * and is skipped.
+ * Parse the JSON array output by `pnpm -r list --depth -1 --json` into a name
+ * → absolute-location map. The root workspace entry has no name and is skipped.
  *
  * @param {string} json - Raw stdout from pnpm.
  * @returns {Map<string, string>} Package name to absolute workspace location.
@@ -37,7 +36,18 @@ const execFileAsync = promisify(execFile);
 export const parsePnpmWorkspaces = json => {
   const trimmed = json.trim();
   if (!trimmed) return new Map();
-  const entries = JSON.parse(`[${trimmed.replace(/]\s*\[/g, ',')}]`).flat();
+  let entries;
+  try {
+    entries = JSON.parse(trimmed);
+  } catch (error) {
+    throw new Error(
+      `pnpm -r list --depth -1 --json returned invalid JSON: ${error.message}`,
+      { cause: error },
+    );
+  }
+  if (!Array.isArray(entries)) {
+    throw new TypeError('pnpm -r list --depth -1 --json must return an array');
+  }
   /** @type {Map<string, string>} */
   const map = new Map();
   for (const entry of entries) {

@@ -13,7 +13,7 @@ catalogs:
     tsd: ^0.33.0
     typescript: ~6.0.3
 
-allowBuilds:
+neverBuiltDependencies:
   '@lavamoat/preinstall-always-fail': false
   core-js: false
   unrs-resolver: false

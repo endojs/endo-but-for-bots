@@ -5,13 +5,14 @@
 ```sh
 git clone git@github.com:endojs/endo.git
 cd endo
-pnpm
+pnpm install
 ```
 
-Endo is a pnpm workspaces repository. Running pnpm in the root will install and
-hoist most dependencies up to the root `node_modules`.
+Endo is a pnpm workspaces repository. Running `pnpm install` in the root will
+install and hoist most dependencies up to the root `node_modules`.
 
-Note: running pnpm `--ignore-scripts` will not complete the setup of SES.
+Note: running `pnpm install --ignore-scripts` will not complete the setup of
+SES.
 
 ### Action pinning
 
@@ -30,12 +31,12 @@ If this check fails, run the updater and commit the resulting changes.
 Continuous Integration is comprehensive.
 Many issues can be anticipated locally by running:
 
-- `pnpm`
+- `pnpm install`
 - `pnpm format` for Prettier code formatting
 - `pnpm run docs`, because Typedoc has a holistic view of TypeScript definitions
   that lint in individual packages may not catch.
-- `pnpm pack:all`: Packs every public workspace into `dist/*.tgz` via
-  `ts-node-pack`, exercising the same code path as a real release. Uncovers
+- `pnpm pack:all`: Packs every public workspace into `dist/*.tgz` with
+  `pnpm pack`, exercising the same code path as a real release. Uncovers
   issues with type definition generation, and (because each tarball is built
   from a temp staging copy rather than the source tree) ensures that type
   resolution in dependent packages works from the published state rather

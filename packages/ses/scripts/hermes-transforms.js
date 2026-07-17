@@ -83,11 +83,12 @@ export const hermesTransforms = {
      * Babel supports `experimental_preserveFormat`, but some compatible type
      * declarations do not yet describe it.
      *
-     * @type {import('@babel/generator').GeneratorOptions & { experimental_preserveFormat?: boolean, verbatim?: boolean }}
+     * @type {import('@babel/generator').GeneratorOptions & { experimental_preserveFormat?: boolean, preserveFormat?: boolean, verbatim?: boolean }}
      */
     const generatorOptions = {
       // Nothing being done with sourcemaps as this point
       experimental_preserveFormat: true,
+      preserveFormat: true,
       retainLines: true,
       verbatim: true,
     };
