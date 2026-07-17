@@ -16,12 +16,12 @@ set -ueo pipefail
 thisdir=$(cd -- "$(dirname "$0")" > /dev/null && pwd)
 ROOT=$(cd "$thisdir/.." && pwd)
 
-# Isolate npm / npm state to a per-run HOME so the smoketest cannot
+# Isolate npm configuration and state to a per-run HOME so the smoketest cannot
 # stomp on the developer's ~/.npmrc or leave auth tokens behind.
 REGISTRY_HOME=$(mktemp -d -t endo-smoketest-publishing.XXXXX)
 export HOME="$REGISTRY_HOME"
 # The per-run HOME has no corepack cache, so corepack would otherwise
-# prompt the user before downloading the pinned npm version.
+# prompt the user before downloading the configured npm version.
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 # Pick a free TCP port so a stray Verdaccio on the conventional 4873 can't
 # collide with us (and vice versa — we never stomp on an unrelated instance).
@@ -99,7 +99,7 @@ npm --userconfig "$REGISTRY_HOME/.npmrc" whoami --registry "$REGISTRY_URL"
 # rebuilds dist/ via ts-node-pack) then `npm publish` for each .tgz;
 # inlining `npm_config_registry` redirects every publish inside this
 # one command to Verdaccio without leaking into the surrounding shell.
-echo "smoketest-publishing: running 'npm release:npm'"
+echo "smoketest-publishing: running 'npm run release:npm'"
 (
   cd "$ROOT"
   npm_config_userconfig="$REGISTRY_HOME/.npmrc" npm --userconfig "$REGISTRY_HOME/.npmrc" \

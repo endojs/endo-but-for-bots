@@ -21,9 +21,9 @@ const usage = `
 Run this script in a package to convert its test names and Ava config.
 
 To run it over all packages,
-  npm run --workspaces --all exec '../../scripts/migrate-test-names.mjs'
+  npm exec --workspaces -- ../../scripts/migrate-test-names.mjs
 Then for the couple deeper packages
-  npm run --workspaces --all exec '../../../scripts/migrate-test-names.mjs'
+  npm exec --workspaces -- ../../../scripts/migrate-test-names.mjs
 
 `;
 

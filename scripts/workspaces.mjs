@@ -12,15 +12,27 @@ export const listWorkspaces = async rootDir => {
   const packagesDir = path.join(rootDir, 'packages');
   const entries = await readdir(packagesDir, { withFileTypes: true });
   const workspaces = await Promise.all(
-    entries.filter(entry => entry.isDirectory()).map(async entry => {
-      const location = path.join('packages', entry.name);
-      const manifest = JSON.parse(
-        await readFile(path.join(rootDir, location, 'package.json'), 'utf8'),
-      );
-      return { location, name: manifest.name, private: manifest.private === true };
-    }),
+    entries
+      .filter(entry => entry.isDirectory())
+      .map(async entry => {
+        const location = path.join('packages', entry.name);
+        const manifestPath = path.join(rootDir, location, 'package.json');
+        const source = await readFile(manifestPath, 'utf8').catch(error => {
+          if (error.code === 'ENOENT') return undefined;
+          throw error;
+        });
+        if (source === undefined) return undefined;
+        const manifest = JSON.parse(source);
+        return {
+          location,
+          name: manifest.name,
+          private: manifest.private === true,
+        };
+      }),
   );
-  return workspaces.sort((a, b) => a.name.localeCompare(b.name));
+  return workspaces
+    .filter(workspace => workspace !== undefined)
+    .sort((a, b) => a.name.localeCompare(b.name));
 };
 
 /** @param {string} rootDir repository root */
