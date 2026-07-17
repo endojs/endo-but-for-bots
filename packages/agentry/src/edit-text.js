@@ -23,6 +23,8 @@
  *   the way out, and a leading BOM is preserved if present.
  */
 
+import harden from '@endo/harden';
+
 /**
  * @typedef {object} TextEdit
  * @property {string} oldText - Unique snippet to replace.
