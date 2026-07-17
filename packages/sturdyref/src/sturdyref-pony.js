@@ -31,8 +31,7 @@ export {
  * @param {Locator} locator
  * @returns {SturdyRef}
  */
-export const fromLocation = locator =>
-  provideSturdyRef().fromLocation(locator);
+export const fromLocation = locator => provideSturdyRef().fromLocation(locator);
 
 /**
  * Recover the locator record a sturdyref was minted for, from the realm's
@@ -41,5 +40,4 @@ export const fromLocation = locator =>
  * @param {SturdyRef} sturdyRef
  * @returns {Locator}
  */
-export const toLocation = sturdyRef =>
-  provideSturdyRef().toLocation(sturdyRef);
+export const toLocation = sturdyRef => provideSturdyRef().toLocation(sturdyRef);
