@@ -21,10 +21,29 @@ test('agentry subpaths resolve through package exports', async t => {
     // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
     import('@endo/agentry/edit-text'),
   ]);
+  t.deepEqual(Object.keys(rootModule).sort(), [
+    'buildOllamaModel',
+    'defineAgent',
+    'defineModels',
+    'getAmbientEnv',
+    'makeApiKeyGetter',
+    'makeEnvCredentials',
+    'makePiAgent',
+    'resolveModel',
+    'resolveModelProfile',
+    'resolveModelString',
+  ]);
+  t.deepEqual(Object.keys(codeModeModule).sort(), [
+    'makeCodeModeAgent',
+    'makeCodeModeSystemPrompt',
+    'prepareCodeMode',
+  ]);
   t.is(typeof rootModule.defineAgent, 'function');
   t.is(typeof harnessModule.makePiAgent, 'function');
   t.is(typeof codeModeModule.makeCodeModeAgent, 'function');
   t.is(typeof codeModeModule.makeCodeModeSystemPrompt, 'function');
+  t.is(typeof codeModeModule.prepareCodeMode, 'function');
+  t.false('makeCodeModeGitLoopAgent' in codeModeModule);
   t.is(typeof editTextModule.applyEdits, 'function');
   t.is(typeof editTextModule.normalizeEdits, 'function');
   t.is(typeof editTextModule.computeUnifiedDiff, 'function');

@@ -7,21 +7,88 @@
 /** @import { ThinkingLevel } from './harness/model.js' */
 /** @import { Evaluate, CodeModeGlobal, CodeModePower, PowerHandle, LookupPowers } from '@endo/agent-tools/code-mode/evaluate-tool.js' */
 
-import { E } from '@endo/eventual-send';
-import { isGitHistoryRewrite, isGitReadOnly } from '@endo/exo-git';
+import { toPiAgentTool } from '@endo/agent-tools/adapters/pi.js';
+import { toolResultToSmallcaps } from '@endo/agent-tools/adapters/smallcaps.js';
+import { makeWorkspaceGlobal } from '@endo/agent-tools/code-mode-globals/fs.js';
+import { makeGitGlobal } from '@endo/agent-tools/code-mode-globals/git.js';
 import { makeCompartmentEvaluate } from '@endo/agent-tools/code-mode/compartment.js';
-import { makeEvaluateTool } from '@endo/agent-tools/code-mode/evaluate-tool.js';
+import { makeDaemonEvaluate } from '@endo/agent-tools/code-mode/daemon.js';
 import {
   formatGlobalDeclarations,
   normalizeGlobals,
 } from '@endo/agent-tools/code-mode/declarations.js';
-import { makeWorkspaceGlobal } from '@endo/agent-tools/code-mode-globals/fs.js';
-import { makeGitGlobal } from '@endo/agent-tools/code-mode-globals/git.js';
-import { toPiAgentTool } from '@endo/agent-tools/adapters/pi.js';
-import { toolResultToSmallcaps } from '@endo/agent-tools/adapters/smallcaps.js';
+import { makeEvaluateTool } from '@endo/agent-tools/code-mode/evaluate-tool.js';
+import { E } from '@endo/eventual-send';
+import { isGitHistoryRewrite, isGitReadOnly } from '@endo/exo-git';
+import {
+  isFilesystemReadOnly,
+  readOnly as readOnlyFilesystem,
+} from '@endo/platform/fs/extended';
 
 import { defineAgent } from './define-agent.js';
 import { getAmbientEnv, makeEnvCredentials } from './harness/credentials.js';
+
+/**
+ * @typedef {'inspect' | 'edit' | 'rewriteHistory'} CodeModeAccess
+ *
+ * @typedef {CodeModeGlobal & { power?: PowerHandle }} NamedCodeModePower
+ *
+ * @typedef {object} CodeModePowers
+ * @property {PowerHandle} [workspace]
+ * @property {string | string[]} [workspacePetName]
+ * @property {PowerHandle} [git]
+ * @property {string | string[]} [gitPetName]
+ * @property {NamedCodeModePower[]} [namedPowers]
+ *
+ * @typedef {object} CodeModeRepository
+ * @property {string} remoteUrl Repository setup data consumed only by a
+ *   trusted host provisioner.
+ * @property {unknown} [credential] Host-only credential capability.
+ * @property {boolean} [allowLocalFileTransport]
+ * @property {Record<string, string>} [identity]
+ *
+ * @typedef {object} InProcessCodeModeHost
+ * @property {'inProcess'} kind
+ * @property {LookupPowers} [powers] Optional lookup handle for petname-only
+ *   power declarations.
+ * @property {Record<string, unknown>} [endowments]
+ * @property {(value: unknown, resultName: string | string[]) => Promise<void> | void} [storeResult]
+ * @property {() => Promise<void> | void} [onContainedEventualSendRejection]
+ *
+ * @typedef {object} DaemonPreparationAttestation
+ * @property {CodeModeAccess} access
+ * @property {{ petName: string | string[], readOnly: boolean }} [workspace]
+ * @property {{ petName: string | string[], readOnly: boolean, historyRewrite: boolean }} [git]
+ * @property {readonly { name: string, petName: string | string[] }[]} [namedPowers]
+ *
+ * @typedef {object} DaemonCodeModePowers
+ * @property {(request: { access: CodeModeAccess, powers: CodeModePowers, repository?: CodeModeRepository }) => Promise<DaemonPreparationAttestation>} prepareCodeMode
+ * @property {(workerName: undefined, source: string, codeNames: string[], petNames: (string | string[])[], resultName?: string | string[]) => Promise<unknown>} evaluate
+ *
+ * @typedef {object} DaemonCodeModeHost
+ * @property {'daemon'} kind
+ * @property {DaemonCodeModePowers} powers A trusted daemon host boundary.
+ *
+ * @typedef {object} PrepareCodeModeOptions
+ * @property {InProcessCodeModeHost | DaemonCodeModeHost} host
+ * @property {CodeModeAccess} access
+ * @property {CodeModePowers} [powers]
+ * @property {CodeModeRepository} [repository]
+ *
+ * @typedef {object} MakeCodeModeAgentOptions
+ * @property {Model<string>} model
+ * @property {Evaluate} evaluate Host-neutral evaluator returned by
+ *   `prepareCodeMode`.
+ * @property {CodeModeGlobal[]} globals Host-attested globals returned by
+ *   `prepareCodeMode`.
+ * @property {Credentials} [credentials]
+ * @property {string} [systemPrompt]
+ * @property {string} [preamble]
+ * @property {AgentMessage[]} [messages]
+ * @property {StreamFn} [streamFn]
+ * @property {GetApiKey} [getApiKey]
+ * @property {ThinkingLevel} [thinkingLevel]
+ */
 
 /**
  * Build the system prompt for the narrow code-mode agent.
@@ -62,20 +129,18 @@ ${formatGlobalDeclarations(normalized)}
 };
 harden(makeCodeModeSystemPrompt);
 
-const IDENTIFIER_RE = /^[A-Za-z_$][0-9A-Za-z_$]*$/;
+const CODE_MODE_ACCESS = harden(['inspect', 'edit', 'rewriteHistory']);
 
 /**
- * @param {string} petName
- * @param {string} label
- * @returns {string}
+ * @param {unknown} access
+ * @returns {asserts access is CodeModeAccess}
  */
-const petNameToBindingName = (petName, label) => {
-  if (IDENTIFIER_RE.test(petName)) {
-    return petName;
+const assertCodeModeAccess = access => {
+  if (!CODE_MODE_ACCESS.includes(/** @type {CodeModeAccess} */ (access))) {
+    throw new Error(
+      'code-mode access must be "inspect", "edit", or "rewriteHistory"',
+    );
   }
-  throw new Error(
-    `code-mode ${label} petName must be a single JS identifier to use as a lexical binding`,
-  );
 };
 
 /**
@@ -84,158 +149,362 @@ const petNameToBindingName = (petName, label) => {
  * @param {string} label
  * @returns {Promise<PowerHandle>}
  */
-const lookupRequiredPower = (powers, petName, label) => {
+const lookupRequiredPower = async (powers, petName, label) => {
   if (powers === undefined || powers === null) {
-    throw new Error(`code-mode ${label} capability requires powers`);
+    throw new Error(`code-mode ${label} capability requires lookup powers`);
   }
   return E(powers).lookup(petName);
 };
 
 /**
- * @typedef {object} CodeModePowers
- * @property {CodeModePower} [workspace]
- * @property {string} [workspacePetName]
- * @property {CodeModePower} [git]
- * @property {string} [gitPetName]
- * @property {'readOnly' | 'readWrite' | 'historyRewrite'} [gitMode]
- * @property {CodeModeGlobal[]} [namedPowers]
- *
- * @typedef {object} MakeCodeModeAgentOptions
- * @property {Model<string>} model
- * @property {CodeModePowers} [powers]
- * @property {LookupPowers} [lookupPowers] A live powers handle with
- *   `lookup(petName)` for resolving capabilities not passed inline.
- * @property {Credentials} [credentials]
- * @property {Record<string, unknown>} [endowments]
- * @property {Evaluate} [evaluate]
- * @property {(value: unknown, resultName: string | string[]) => Promise<void> | void} [storeResult]
- * @property {() => Promise<void> | void} [onContainedEventualSendRejection]
- * @property {CodeModeGlobal[]} [globals]
- * @property {string} [systemPrompt]
- * @property {string} [preamble]
- * @property {AgentMessage[]} [messages]
- * @property {StreamFn} [streamFn]
- * @property {GetApiKey} [getApiKey]
- * @property {ThinkingLevel} [thinkingLevel]
+ * @param {PowerHandle | undefined} direct
+ * @param {string | string[] | undefined} petName
+ * @param {LookupPowers | undefined} lookupPowers
+ * @param {string} label
+ * @returns {Promise<PowerHandle | undefined>}
  */
+const resolvePower = async (direct, petName, lookupPowers, label) => {
+  if (direct !== undefined) {
+    return direct;
+  }
+  if (petName !== undefined) {
+    return lookupRequiredPower(lookupPowers, petName, label);
+  }
+  return undefined;
+};
 
 /**
- * Build the lexical globals for a code-mode agent from its configured powers.
- * This builder only chooses WHICH globals to inject from the configured powers;
- * the per-exo specifics (descriptions, generated declarations, the read-only
- * member policy) live in `git.js` and `fs.js`, which this delegates to. The
- * `gitMode` selects the one configured Git capability's prompt surface.
- * Runtime authority remains with that capability; `namedPowers` stay name-only
- * unless the caller attached its own `declaration`.
+ * Validate an in-process Filesystem before granting writable code-mode access.
  *
- * @param {CodeModePowers} powers
- * @returns {CodeModeGlobal[]}
+ * @param {CodeModePower} workspace
+ * @param {CodeModeAccess} access
  */
-const makeCodeModeGlobals = (powers = {}) => {
+const assertWritableWorkspace = (workspace, access) => {
+  const readOnly = isFilesystemReadOnly(workspace);
+  if (readOnly !== false) {
+    const posture = readOnly === true ? 'read-only' : 'unknown';
+    throw new Error(
+      `code-mode ${access} requires a proven writable Filesystem capability; received ${posture} posture`,
+    );
+  }
+};
+
+/**
+ * Validate an in-process Git before granting writable code-mode access.
+ * Unknown posture never defaults to writable.
+ *
+ * @param {CodeModePower} git
+ * @param {CodeModeAccess} access
+ */
+const assertGitAccess = (git, access) => {
+  const readOnly = isGitReadOnly(git);
+  const historyRewrite = isGitHistoryRewrite(git);
+  if (readOnly !== false) {
+    const posture = readOnly === true ? 'read-only' : 'unknown';
+    throw new Error(
+      `code-mode ${access} requires a proven writable Git capability; received ${posture} posture`,
+    );
+  }
+  if (access === 'edit') {
+    if (historyRewrite === true) {
+      throw new Error(
+        'code-mode edit cannot attenuate history-rewrite authority from this Git capability; supply an ordinary writable Git capability',
+      );
+    }
+    if (historyRewrite !== false) {
+      throw new Error(
+        'code-mode edit requires proven ordinary Git authority; history-rewrite posture is unknown',
+      );
+    }
+  } else if (historyRewrite !== true) {
+    const posture = historyRewrite === false ? 'ordinary' : 'unknown';
+    throw new Error(
+      `code-mode rewriteHistory requires proven history-rewrite Git authority; received ${posture} posture`,
+    );
+  }
+};
+
+/**
+ * @param {NamedCodeModePower[]} namedPowers
+ * @param {LookupPowers | undefined} lookupPowers
+ * @returns {Promise<{ globals: CodeModeGlobal[], endowments: Record<string, unknown> }>}
+ */
+const resolveNamedPowers = async (namedPowers, lookupPowers) => {
+  await null;
+  const globals = normalizeGlobals(
+    namedPowers.map(({ power: _power, ...global }) => global),
+  );
+  /** @type {Record<string, unknown>} */
+  const endowments = {};
+  for (let index = 0; index < namedPowers.length; index += 1) {
+    const namedPower = namedPowers[index];
+    const global = globals[index];
+    // eslint-disable-next-line no-await-in-loop
+    endowments[global.name] = await (namedPower.power !== undefined
+      ? namedPower.power
+      : lookupRequiredPower(
+          lookupPowers,
+          global.petName || global.name,
+          global.name,
+        ));
+  }
+  return harden({ globals, endowments: harden(endowments) });
+};
+
+/**
+ * @param {PrepareCodeModeOptions & { host: InProcessCodeModeHost }} options
+ * @returns {Promise<{ evaluate: Evaluate, globals: CodeModeGlobal[] }>}
+ */
+const prepareInProcessCodeMode = async ({
+  host,
+  powers = {},
+  repository,
+  access,
+}) => {
+  if (repository !== undefined) {
+    throw new Error(
+      'code-mode in-process repository setup is unsupported; supply existing powers or use a trusted daemon provisioner',
+    );
+  }
+  let workspace = await resolvePower(
+    powers.workspace,
+    powers.workspacePetName,
+    host.powers,
+    'workspace',
+  );
+  let git = await resolvePower(
+    powers.git,
+    powers.gitPetName,
+    host.powers,
+    'git',
+  );
+
+  if (access === 'inspect') {
+    if (workspace !== undefined) {
+      workspace = readOnlyFilesystem(workspace);
+    }
+    if (git !== undefined) {
+      git = await E(git).readOnly();
+    }
+  } else {
+    if (workspace !== undefined) {
+      assertWritableWorkspace(workspace, access);
+    }
+    if (git !== undefined) {
+      assertGitAccess(git, access);
+    }
+  }
+
+  const named = await resolveNamedPowers(powers.namedPowers || [], host.powers);
   /** @type {CodeModeGlobal[]} */
   const globals = [];
-  if (powers.workspace !== undefined || powers.workspacePetName !== undefined) {
-    const workspacePetName = powers.workspacePetName ?? 'workspace';
+  /** @type {Record<string, unknown>} */
+  const endowments = { ...(host.endowments || {}), E };
+  if (workspace !== undefined) {
+    endowments.workspace = workspace;
     globals.push(
       makeWorkspaceGlobal({
-        name: petNameToBindingName(workspacePetName, 'workspace'),
-        petName: workspacePetName,
+        name: 'workspace',
+        readOnly: access === 'inspect',
       }),
     );
   }
-  if (powers.git !== undefined || powers.gitPetName !== undefined) {
-    const gitPetName = powers.gitPetName ?? 'git';
+  if (git !== undefined) {
+    endowments.git = git;
     globals.push(
       makeGitGlobal({
-        name: petNameToBindingName(gitPetName, 'git'),
-        petName: gitPetName,
-        readOnly: powers.gitMode === 'readOnly',
-        historyRewrite: powers.gitMode === 'historyRewrite',
+        name: 'git',
+        readOnly: access === 'inspect',
+        historyRewrite: access === 'rewriteHistory',
       }),
     );
   }
-  globals.push(...(powers.namedPowers || []));
-  return normalizeGlobals(globals);
-};
-harden(makeCodeModeGlobals);
-
-/**
- * @param {CodeModePowers} powers
- * @param {LookupPowers | undefined} lookupPowers
- * @returns {Record<string, CodeModePower>}
- */
-const resolveConfiguredPowers = (powers, lookupPowers) => {
-  /** @type {Record<string, CodeModePower>} */
-  const resolved = {};
-  if (powers.workspace !== undefined || powers.workspacePetName !== undefined) {
-    const workspacePetName = powers.workspacePetName ?? 'workspace';
-    const workspaceName = petNameToBindingName(workspacePetName, 'workspace');
-    resolved[workspaceName] =
-      powers.workspace ??
-      lookupRequiredPower(lookupPowers, workspacePetName, 'workspace');
-  }
-  if (powers.git !== undefined || powers.gitPetName !== undefined) {
-    const gitPetName = powers.gitPetName ?? 'git';
-    const gitName = petNameToBindingName(gitPetName, 'git');
-    resolved[gitName] =
-      powers.git ?? lookupRequiredPower(lookupPowers, gitPetName, 'git');
-    if (powers.gitMode === 'readOnly') {
-      const gitReadOnly = isGitReadOnly(resolved[gitName]);
-      if (gitReadOnly === false) {
-        throw new Error(
-          'code-mode gitMode readOnly requires an already read-only Git capability',
-        );
-      }
-    }
-    if (powers.gitMode === 'historyRewrite') {
-      const gitHistoryRewrite = isGitHistoryRewrite(resolved[gitName]);
-      if (gitHistoryRewrite === false) {
-        throw new Error(
-          'code-mode gitMode historyRewrite requires a Git capability with history-rewrite authority',
-        );
-      }
-    }
-  }
-  return harden(resolved);
+  Object.assign(endowments, named.endowments);
+  globals.push(...named.globals);
+  const normalizedGlobals = normalizeGlobals(globals);
+  return harden({
+    evaluate: makeCompartmentEvaluate({
+      endowments: harden(endowments),
+      storeResult: host.storeResult,
+      onContainedEventualSendRejection: host.onContainedEventualSendRejection,
+    }),
+    globals: normalizedGlobals,
+  });
 };
 
 /**
- * @param {CodeModePowers} powers
- * @param {Record<string, CodeModePower>} resolvedPowers
- * @param {Record<string, unknown>} baseEndowments
- * @param {LookupPowers | undefined} lookupPowers
- * @returns {Record<string, unknown>}
+ * @param {unknown} value
+ * @returns {value is string | string[]}
  */
-const makeCodeModeEndowments = (
-  powers,
-  resolvedPowers,
-  baseEndowments,
-  lookupPowers,
-) => {
-  /** @type {Record<string, unknown>} */
-  const endowments = {
-    E,
-    ...baseEndowments,
-    ...resolvedPowers,
-  };
-  for (const namedPower of powers.namedPowers || []) {
-    if (!Object.prototype.hasOwnProperty.call(endowments, namedPower.name)) {
-      endowments[namedPower.name] = lookupRequiredPower(
-        lookupPowers,
-        namedPower.petName || namedPower.name,
-        namedPower.name,
+const isPetName = value =>
+  typeof value === 'string' ||
+  (Array.isArray(value) && value.every(part => typeof part === 'string'));
+
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {string | string[]}
+ */
+const requirePetName = (value, label) => {
+  if (!isPetName(value)) {
+    throw new Error(
+      `daemon code-mode ${label} attestation has invalid petName`,
+    );
+  }
+  return value;
+};
+
+/**
+ * @param {PrepareCodeModeOptions & { host: DaemonCodeModeHost }} options
+ * @returns {Promise<{ evaluate: Evaluate, globals: CodeModeGlobal[] }>}
+ */
+const prepareDaemonCodeMode = async ({
+  host,
+  powers = {},
+  repository,
+  access,
+}) => {
+  const namedGlobals = normalizeGlobals(
+    (powers.namedPowers || []).map(({ power: _power, ...global }) => global),
+  );
+  const requestPowers = harden({
+    ...(powers.workspace !== undefined && { workspace: powers.workspace }),
+    ...(powers.workspacePetName !== undefined && {
+      workspacePetName: powers.workspacePetName,
+    }),
+    ...(powers.git !== undefined && { git: powers.git }),
+    ...(powers.gitPetName !== undefined && {
+      gitPetName: powers.gitPetName,
+    }),
+    namedPowers: harden(
+      (powers.namedPowers || []).map((namedPower, index) =>
+        harden({
+          name: namedGlobals[index].name,
+          petName: namedGlobals[index].petName,
+          ...(namedPower.power !== undefined && { power: namedPower.power }),
+        }),
+      ),
+    ),
+  });
+  const attestation = await E(host.powers).prepareCodeMode(
+    harden({
+      access,
+      powers: requestPowers,
+      ...(repository !== undefined && { repository: harden(repository) }),
+    }),
+  );
+  if (
+    typeof attestation !== 'object' ||
+    attestation === null ||
+    attestation.access !== access
+  ) {
+    throw new Error('daemon code-mode preparation returned invalid access');
+  }
+
+  /** @type {CodeModeGlobal[]} */
+  const globals = [];
+  if (attestation.workspace !== undefined) {
+    const { petName, readOnly } = attestation.workspace;
+    if (readOnly !== (access === 'inspect')) {
+      throw new Error(
+        'daemon code-mode workspace attestation contradicts requested access',
+      );
+    }
+    globals.push(
+      makeWorkspaceGlobal({
+        name: 'workspace',
+        petName: requirePetName(petName, 'workspace'),
+        readOnly,
+      }),
+    );
+  }
+  if (attestation.git !== undefined) {
+    const { petName, readOnly, historyRewrite } = attestation.git;
+    const expectedReadOnly = access === 'inspect';
+    const expectedHistoryRewrite = access === 'rewriteHistory';
+    if (
+      readOnly !== expectedReadOnly ||
+      historyRewrite !== expectedHistoryRewrite
+    ) {
+      throw new Error(
+        'daemon code-mode Git attestation contradicts requested access',
+      );
+    }
+    globals.push(
+      makeGitGlobal({
+        name: 'git',
+        petName: requirePetName(petName, 'git'),
+        readOnly,
+        historyRewrite,
+      }),
+    );
+  }
+
+  const attestedNamed = attestation.namedPowers || [];
+  if (attestedNamed.length !== namedGlobals.length) {
+    throw new Error(
+      'daemon code-mode named-power attestation does not match the request',
+    );
+  }
+  for (let index = 0; index < namedGlobals.length; index += 1) {
+    const expected = namedGlobals[index];
+    const actual = attestedNamed[index];
+    if (
+      actual.name !== expected.name ||
+      JSON.stringify(actual.petName) !== JSON.stringify(expected.petName)
+    ) {
+      throw new Error(
+        `daemon code-mode named-power attestation does not match ${expected.name}`,
       );
     }
   }
-  return harden(endowments);
+  globals.push(...namedGlobals);
+  return harden({
+    evaluate: makeDaemonEvaluate(host.powers),
+    globals: normalizeGlobals(globals),
+  });
 };
 
 /**
- * Construct a live code-mode agent: an agent whose sole tool is `evaluate`,
- * which evaluates JavaScript in a Compartment endowed with the configured
- * lexical powers. This is the code-mode preset of {@link defineAgent}; there is
- * no separate `define*` wrapper. The powerless definition is `defineAgent`'s
- * closure; supplying powers here is the powered stage.
+ * Prepare host-neutral inputs for the generic code-mode agent maker.
+ *
+ * Host selection controls where evaluation and authority realization happen.
+ * Access selection independently controls the repository authority exposed to
+ * evaluated code. `inspect` attenuates the supported workspace and Git powers;
+ * arbitrary named powers remain unchanged and retain their caller-supplied
+ * descriptors.
+ *
+ * @param {PrepareCodeModeOptions} options
+ * @returns {Promise<{ evaluate: Evaluate, globals: CodeModeGlobal[] }>}
+ */
+export const prepareCodeMode = async options => {
+  const { host, access } = options;
+  assertCodeModeAccess(access);
+  if (!host || typeof host !== 'object') {
+    throw new Error('code-mode host must be an object');
+  }
+  if (host.kind === 'inProcess') {
+    return prepareInProcessCodeMode(
+      /** @type {PrepareCodeModeOptions & { host: InProcessCodeModeHost }} */ (
+        options
+      ),
+    );
+  }
+  if (host.kind === 'daemon') {
+    return prepareDaemonCodeMode(
+      /** @type {PrepareCodeModeOptions & { host: DaemonCodeModeHost }} */ (
+        options
+      ),
+    );
+  }
+  throw new Error('code-mode host.kind must be "inProcess" or "daemon"');
+};
+harden(prepareCodeMode);
+
+/**
+ * Construct a live code-mode agent whose sole tool is `evaluate`.
+ * Resource acquisition and authority policy belong to `prepareCodeMode`; this
+ * maker consumes only the resulting host-neutral evaluator and descriptors.
  *
  * @param {MakeCodeModeAgentOptions} options
  * @returns {{ agent: Agent, globals: CodeModeGlobal[], evaluate: Evaluate, systemPrompt: string, model: Model<string> }}
@@ -243,47 +512,22 @@ const makeCodeModeEndowments = (
 export const makeCodeModeAgent = options => {
   const {
     model,
-    powers = {},
-    lookupPowers,
+    evaluate,
     credentials = makeEnvCredentials(getAmbientEnv()),
-    endowments: baseEndowments = {},
-    storeResult,
-    onContainedEventualSendRejection,
     messages,
     streamFn,
     getApiKey,
     thinkingLevel,
     preamble,
   } = options;
-
-  const globals = options.globals
-    ? normalizeGlobals(options.globals)
-    : makeCodeModeGlobals(powers);
-  const systemPrompt =
-    options.systemPrompt || makeCodeModeSystemPrompt(globals, { preamble });
-
-  if (
-    options.evaluate !== undefined &&
-    onContainedEventualSendRejection !== undefined
-  ) {
+  if (typeof evaluate !== 'function') {
     throw new Error(
-      'code-mode onContainedEventualSendRejection has no effect with a custom evaluate; the containment wrapper lives in makeCompartmentEvaluate, which a custom evaluate bypasses',
+      'makeCodeModeAgent requires an evaluate function from prepareCodeMode',
     );
   }
-
-  const resolvedPowers = resolveConfiguredPowers(powers, lookupPowers);
-  const evaluate =
-    options.evaluate ||
-    makeCompartmentEvaluate({
-      endowments: makeCodeModeEndowments(
-        powers,
-        resolvedPowers,
-        baseEndowments,
-        lookupPowers,
-      ),
-      storeResult,
-      onContainedEventualSendRejection,
-    });
+  const globals = normalizeGlobals(options.globals);
+  const systemPrompt =
+    options.systemPrompt || makeCodeModeSystemPrompt(globals, { preamble });
   const tool = makeEvaluateTool(evaluate, globals);
 
   const maker = defineAgent({
@@ -299,59 +543,8 @@ export const makeCodeModeAgent = options => {
     thinkingLevel,
   });
   // The returned record is intentionally NOT hardened: `agent` is a live
-  // pi-agent-core instance that mutates its own run state (e.g. `activeRun`)
-  // while driving a conversation, so deep-freezing it would break the loop.
+  // pi-agent-core instance that mutates its own run state while driving a
+  // conversation.
   return { agent, globals, evaluate, systemPrompt, model };
 };
 harden(makeCodeModeAgent);
-
-/**
- * @typedef {object} GitLoopOptions
- * @property {Model<string>} model
- * @property {CodeModePower} workspace
- * @property {CodeModePower} git
- * @property {Evaluate} [evaluate]
- * @property {Record<string, unknown>} [endowments]
- * @property {() => Promise<void> | void} [onContainedEventualSendRejection]
- * @property {CodeModeGlobal[]} [globals]
- * @property {string} [systemPrompt]
- * @property {AgentMessage[]} [messages]
- * @property {StreamFn} [streamFn]
- * @property {GetApiKey} [getApiKey]
- * @property {ThinkingLevel} [thinkingLevel]
- * @property {boolean} [readOnlyGit]
- */
-
-/**
- * The git-loop preset: a thin alias over {@link makeCodeModeAgent} that wires a
- * repository `workspace` Filesystem and a `git` capability as the lexical
- * powers and supplies the repository-oriented preamble. Returns the live
- * `Agent`.
- *
- * @param {GitLoopOptions} options
- * @returns {Agent}
- */
-export const makeCodeModeGitLoopAgent = options => {
-  const { workspace, git, readOnlyGit = false } = options;
-  const { agent } = makeCodeModeAgent({
-    model: options.model,
-    powers: {
-      workspace,
-      git,
-      gitMode: readOnlyGit ? 'readOnly' : 'readWrite',
-    },
-    endowments: options.endowments,
-    globals: options.globals,
-    systemPrompt: options.systemPrompt,
-    preamble:
-      'You are an Endo-hosted Pi coding agent. Use the evaluate tool to inspect and edit the repository through the workspace Filesystem and Git capabilities.',
-    evaluate: options.evaluate,
-    onContainedEventualSendRejection: options.onContainedEventualSendRejection,
-    messages: options.messages,
-    streamFn: options.streamFn,
-    getApiKey: options.getApiKey,
-    thinkingLevel: options.thinkingLevel,
-  });
-  return agent;
-};
-harden(makeCodeModeGitLoopAgent);

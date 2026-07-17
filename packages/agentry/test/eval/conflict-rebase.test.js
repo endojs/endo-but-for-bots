@@ -1,7 +1,7 @@
 // @ts-check
 
 // The no-LLM assertion-path tests for the conflict-rebase scenario.
-// They drive the real code-mode git-loop agent and scorer against a real
+// They drive the real repository code-mode agent and scorer against a real
 // repository, using a scripted faux model where a live test would use a
 // provider.
 
