@@ -1,4 +1,5 @@
 {
+  "name": "endo",
   "private": true,
   "workspaces": [
     "packages/*"
