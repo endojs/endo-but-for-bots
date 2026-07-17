@@ -774,12 +774,12 @@ above confirms no regressions in `@endo/pass-style` or
 The implementation PR's consumer sweep therefore expects the
 following:
 
-- `yarn workspace @endo/pass-style test` after the implementation
+- `npm run test --workspace @endo/pass-style` after the implementation
   lands: passes unchanged.
   An emulated freezable `Uint8Array` does **not** pass the existing
   brand check; pass-style tests do not exercise the freezable-Uint8Array
   path and are unaffected.
-- `yarn workspace @endo/marshal test` after the implementation lands:
+- `npm run test --workspace @endo/marshal` after the implementation lands:
   passes unchanged for the same reason.
   Marshal's byte-array codec routes through pass-style's
   `byteArray` style; without the `byteArray.js` revision, no marshal
