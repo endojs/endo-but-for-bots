@@ -83,8 +83,8 @@ export const hermesTransforms = {
       ast,
       {
         // Nothing being done with sourcemaps as this point
+        // @ts-expect-error Babel supports this experimental option before its types do.
         experimental_preserveFormat: true,
-        preserveFormat: true,
         retainLines: true,
         verbatim: true,
       },
