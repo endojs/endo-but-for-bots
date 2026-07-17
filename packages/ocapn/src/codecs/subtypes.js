@@ -17,6 +17,7 @@ export const PositiveIntegerCodec = makeCodec('PositiveInteger', {
     syrupWriter.writeInteger(value);
   },
   read: syrupReader => {
+    /** @type {bigint} */
     const value = syrupReader.readInteger();
     if (value <= ZERO_N) {
       throw Error('value must be positive');
@@ -37,6 +38,7 @@ export const NonNegativeIntegerCodec = makeCodec('NonNegativeInteger', {
     syrupWriter.writeInteger(value);
   },
   read: syrupReader => {
+    /** @type {bigint} */
     const value = syrupReader.readInteger();
     if (value < ZERO_N) {
       throw Error('value must be non-negative');
