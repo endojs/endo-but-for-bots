@@ -13,7 +13,7 @@ CID=$(aws ssm send-command \
   --parameters "commands=[$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$CMD")]" \
   --query "Command.CommandId" --output text)
 # poll
-for i in $(seq 1 120); do
+for _ in $(seq 1 120); do
   STATUS=$(aws ssm get-command-invocation --region "$REGION" --command-id "$CID" --instance-id "$INSTANCE" --query "Status" --output text 2>/dev/null || echo Pending)
   case "$STATUS" in
     Success|Failed|Cancelled|TimedOut) break;;
