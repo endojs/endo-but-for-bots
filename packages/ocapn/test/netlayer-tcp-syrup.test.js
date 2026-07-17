@@ -211,7 +211,9 @@ test('syrup framing round-trip through the test-only TCP netlayer', async t => {
 
   const session = await clientA.provideSession(netlayerB.location);
   const bootstrap = session.getBootstrap();
-  const echoRef = await E(bootstrap).fetch(encodeSwissnum('Echo'));
+  const echoRef = await E(/** @type {any} */ (bootstrap)).fetch(
+    encodeSwissnum('Echo'),
+  );
   const result = await E(echoRef).echo('hello syrup');
   t.is(result, 'hello syrup');
 });

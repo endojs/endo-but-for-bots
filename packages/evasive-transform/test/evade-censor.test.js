@@ -1,7 +1,42 @@
 /* eslint-disable no-template-curly-in-string */
 // @ts-nocheck
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import url from 'node:url';
+import test from 'ava';
 import { evadeCensorSync } from '../src/index.js';
-import { test } from './_prepare-test-env-ava-fixture.js';
+
+const fixtureSourcePath = path.resolve(
+  url.fileURLToPath(
+    new URL(
+      './fixtures-transform/test-location-unmapper/cjs/index.cjs',
+      import.meta.url,
+    ),
+  ),
+);
+const fixtureSourceMapPath = path.resolve(
+  url.fileURLToPath(
+    new URL(
+      './fixtures-transform/test-location-unmapper/cjs/index.cjs.map',
+      import.meta.url,
+    ),
+  ),
+);
+
+test.before(async t => {
+  const [source, sourceMap] = await Promise.all([
+    fs.readFile(fixtureSourcePath, 'utf8'),
+    fs.readFile(fixtureSourceMapPath, 'utf8'),
+  ]);
+  t.context.source = source;
+  t.context.sourceMap = sourceMap;
+  t.context.sourceUrl = path.basename(fixtureSourcePath);
+
+  t.false(
+    path.isAbsolute(t.context.sourceUrl),
+    'Absolute source URL will befoul snapshots',
+  );
+});
 
 /**
  * Removes all linefeeds from string
