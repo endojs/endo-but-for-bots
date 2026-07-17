@@ -26,8 +26,13 @@ import { listPublicWorkspaces } from './workspaces.mjs';
 
 const repoRoot = path.resolve(new URL('..', import.meta.url).pathname);
 const distDir = path.join(repoRoot, 'dist');
+const tsNodePackBin = path.join(repoRoot, 'node_modules/.bin/ts-node-pack');
 
 const workspaces = await listPublicWorkspaces(repoRoot);
+
+if (!existsSync(tsNodePackBin)) {
+  throw new Error(`ts-node-pack binary not found at ${tsNodePackBin}`);
+}
 
 if (existsSync(distDir)) rmSync(distDir, { recursive: true, force: true });
 mkdirSync(distDir, { recursive: true });
@@ -38,16 +43,14 @@ const run = (cmd, argv, options) =>
     const child = spawn(cmd, argv, { stdio: 'inherit', ...options });
     child.once('error', reject);
     child.once('exit', code =>
-      code === 0
-        ? resolve()
-        : reject(new Error(`${cmd} exited with ${code}`)),
+      code === 0 ? resolve() : reject(new Error(`${cmd} exited with ${code}`)),
     );
   });
 
 for (const ws of workspaces) {
   const pkgDir = path.join(repoRoot, ws.location);
   process.stderr.write(`pack-all: ${ws.name}\n`);
-  await run('npm', ['exec', '--', 'ts-node-pack', pkgDir], { cwd: distDir });
+  await run(process.execPath, [tsNodePackBin, pkgDir], { cwd: distDir });
 }
 
 process.stderr.write(

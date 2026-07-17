@@ -7,7 +7,7 @@ To bundle a program that enters at `program.js` from the command line, use the
 `bundle-source` tool:
 
 ```console
-> npm bundle-source --cache-json bundles program.js program
+> npm exec -- bundle-source --cache-json bundles program.js program
 ```
 
 To do the same programmatically:
@@ -105,7 +105,7 @@ Use the `@endo/cli` to find your cache.
 
 ```console
 > npm add -D @endo/cli
-> npm endo where cache
+> npm exec -- endo where cache
 ```
 
 Use the `XDG_CACHE_HOME` environment variable to override the default location

@@ -72,7 +72,7 @@ echo "smoketest-publishing: starting Verdaccio (HOME=$REGISTRY_HOME)"
   cd "$REGISTRY_HOME"
   : > verdaccio.log
   nohup npx --yes verdaccio@^6 --config "$REGISTRY_HOME/verdaccio.yaml" \
-    --listen "0.0.0.0:$REGISTRY_PORT" &> verdaccio.log &
+    --listen "127.0.0.1:$REGISTRY_PORT" &> verdaccio.log &
   echo $! > verdaccio.pid
   # Block until verdaccio prints its "http address" line to the log.
   grep -q 'http address' <(tail -f verdaccio.log)

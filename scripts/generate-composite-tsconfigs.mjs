@@ -27,11 +27,12 @@ import { listWorkspaces } from './workspaces.mjs';
 // ---------------------------------------------------------------------------
 
 /**
- * Parse the NDJSON output of `npm query .workspace -R --json -v` into a
- * name → location map.  The root workspace entry (`name: null`) is skipped.
+ * Parse workspace entries into a name → location map. The root workspace
+ * entry (`name: null`) is skipped. String input is legacy NDJSON test data;
+ * production passes the parsed array from `listWorkspaces`.
  *
  * @param {string|Array<{name: string|null, location: string}>} workspaces -
- * Raw stdout from npm, or parsed workspace entries.
+ * Legacy NDJSON test data, or parsed workspace entries.
  * @returns {Map<string, string>} Package name to relative workspace location.
  */
 export const parseNpmWorkspaces = workspaces => {
@@ -45,7 +46,7 @@ export const parseNpmWorkspaces = workspaces => {
           .map(line => JSON.parse(line))
       : workspaces;
   for (const entry of entries) {
-    if (entry.name === null) continue;
+    if (typeof entry.name !== 'string') continue;
     map.set(entry.name, entry.location);
   }
   return map;
@@ -58,6 +59,7 @@ export const parseNpmWorkspaces = workspaces => {
  * `devDependencies` are intentionally excluded.
  *
  * @param {Record<string, any>} packageJson - Parsed package.json contents.
+ * @param {Set<string>} [workspaceNames] Names of all workspace packages.
  * @returns {Set<string>} Workspace package names.
  */
 export const getRuntimeWorkspaceDeps = (

@@ -64,7 +64,7 @@
     "release:npm": "scripts/release-npm.mjs",
     "pack:all": "scripts/pack-all.mjs",
     "smoketest:publish": "scripts/smoketest-publishing.sh",
-    "test": "npm run test --workspaces --if-present",
+    "test": "node scripts/run-workspaces.mjs test @endo/skel",
     "test:c8": "npm run test:c8 --workspaces --if-present",
     "test:xs": "npm run test:xs --workspaces --if-present",
     "test262": "npm run test262 --workspaces --if-present",

@@ -10,7 +10,7 @@ date: 2025-09-24
 ## Installing Endo
 
 To get started with Endo today, you will need a supported version of
-[Node.js][] and one of its suitable package managers like `npm` or `npm`.
+[Node.js][] and the `npm` package manager.
 If you are working inside the Endo project, you will specifically need `npm`.
 
 [Node.js]: https://nodejs.org/

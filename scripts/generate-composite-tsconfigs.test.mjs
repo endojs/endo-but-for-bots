@@ -21,6 +21,7 @@ import {
   serialise,
   buildConfigs,
 } from './generate-composite-tsconfigs.mjs';
+import { listPublicWorkspaces, listWorkspaces } from './workspaces.mjs';
 
 // ---------------------------------------------------------------------------
 // Helper: strip the generated-file comment header and parse the JSON body
@@ -81,6 +82,40 @@ test('parseNpmWorkspaces - ignores blank lines', t => {
   })}\n\n`;
   const map = parseNpmWorkspaces(ndjson);
   t.is(map.size, 1);
+});
+
+test('parseNpmWorkspaces - parses the array production passes', t => {
+  const map = parseNpmWorkspaces([
+    { location: '.', name: null },
+    { location: 'packages/a', name: '@scope/a' },
+  ]);
+  t.deepEqual([...map], [['@scope/a', 'packages/a']]);
+});
+
+test('listWorkspaces - follows declarations and excludes private workspaces', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'endo-workspaces-'));
+  await writeFile(
+    join(root, 'package.json'),
+    JSON.stringify({ workspaces: ['modules/*'] }),
+  );
+  await mkdir(join(root, 'modules', 'public'), { recursive: true });
+  await mkdir(join(root, 'modules', 'private'), { recursive: true });
+  await mkdir(join(root, 'modules', 'no-manifest'), { recursive: true });
+  await writeFile(
+    join(root, 'modules', 'public', 'package.json'),
+    JSON.stringify({ name: '@scope/public' }),
+  );
+  await writeFile(
+    join(root, 'modules', 'private', 'package.json'),
+    JSON.stringify({ name: '@scope/private', private: 'true' }),
+  );
+  t.deepEqual(await listWorkspaces(root), [
+    { location: 'modules/private', name: '@scope/private', private: true },
+    { location: 'modules/public', name: '@scope/public', private: false },
+  ]);
+  t.deepEqual(await listPublicWorkspaces(root), [
+    { location: 'modules/public', name: '@scope/public', private: false },
+  ]);
 });
 
 // ---------------------------------------------------------------------------
