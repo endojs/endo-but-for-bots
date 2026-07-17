@@ -38,6 +38,7 @@ const unhex = value =>
   new Uint8Array(value.match(/../g).map(pair => Number.parseInt(pair, 16)));
 
 test('canonical argument-width boundaries', t => {
+  /** @type {Array<[number, string]>} */
   const cases = [
     [0, '00'],
     [23, '17'],
