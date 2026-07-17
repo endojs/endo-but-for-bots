@@ -4,13 +4,14 @@
 /**
  * @import { OcapnLocation } from '../codecs/components.js'
  * @import { InternalSession } from './types.js'
- * @import { SturdyRef as PassStyleSturdyRef } from '@endo/pass-style'
+ * @import { SturdyRef } from '@endo/pass-style'
  */
 
 import harden from '@endo/harden';
 import { thawedBytes } from '@endo/immutable-arraybuffer';
 import { E } from '@endo/eventual-send';
-import { PASS_STYLE, passStyleOf } from '@endo/pass-style';
+import { isSturdyRef } from '@endo/pass-style/sturdy-ref.js';
+import { installSturdyRefShim } from '@endo/pass-style/sturdy-ref-shim.js';
 import {
   decodeSwissnum,
   encodeSwissnum,
@@ -18,106 +19,56 @@ import {
   swissnumToBytes,
 } from './util.js';
 
-const { create, prototype: objectPrototype } = Object;
+export { isSturdyRef };
 
 /**
- * @typedef {PassStyleSturdyRef} SturdyRef
- * A `SturdyRef` addresses a capability by `(location, secret)`. It is a
- * first-class `@endo/pass-style` value: `passStyleOf` returns
- * `'sturdyRef'`. Its `location` is a **readable** property (the raw
- * SturdyRef is the trusted/wire tier and carries a readable locator by
- * design); the `secret` (swiss number) it needs to re-acquire the live
- * capability is **never** a property. The CapTP session manager (this
- * module) holds the closely-held `(location, secret)` tuple off-band,
- * keyed by the SturdyRef's identity in `sturdyRefDetails`. It does not
- * cross the wire in this JavaScript form: on the wire OCapN uses the
- * `'ocapn-sturdyref'` spec tag.
+ * The off-band locator a SturdyRef points at: the parsed `location`, the
+ * `secret` (swiss number) needed to re-acquire the capability, and an optional
+ * advisory `type` hint. This is the **object locator** the realm-global
+ * `SturdyRef` shim retains, keyed by SturdyRef identity — it is never a URL or
+ * URN string, and it is never a property on the opaque SturdyRef itself.
  *
- * The `secret` may be a printable ASCII string (the friendly form for
- * locators keyed by name) or raw bytes (Uint8Array) for arbitrary-byte
- * sturdyrefs minted by other implementations such as Spritely Goblins,
- * whose 24-byte random secrets generally aren't valid ASCII.
- *
- * @typedef {object} SturdyRefDetails
+ * @typedef {object} SturdyRefLocator
  * @property {OcapnLocation} location
  * @property {string | Uint8Array} secret
  * @property {string} [type]
  */
 
 /**
- * The closely-held, module-private map from a constructed SturdyRef to its
- * off-band `(location, secret)` tuple (plus the optional advisory `type`
- * hint). This is the CapTP session manager's own state: `@endo/pass-style`
- * defines the `'sturdyRef'` shape but constructs nothing and holds no
- * locator map. The secret lives only here — never as a property on the
- * SturdyRef — so it cannot leak through pass-style introspection. Keyed by
- * SturdyRef identity, per-instance; a SturdyRef this session manager did not
- * construct simply has no entry, so it cannot be enlivened here (which is by
- * design: pass-style identity is scoped to one OCapN instance).
+ * Memoised handle on the realm-global `SturdyRef` namespace. Installed lazily
+ * (first-wins) rather than at module load: the shim hardens its namespace with
+ * `@endo/harden`, so it must be initialised **after** `lockdown` when lockdown
+ * is used. Because the shim converges every eval twin of OCapN or CapTP in one
+ * realm onto a single namespace, a SturdyRef minted by one twin's tracker is
+ * revealable and enlivenable through another twin — the intended convergence.
  *
- * @type {WeakMap<SturdyRef, SturdyRefDetails>}
+ * @type {import('@endo/pass-style').SturdyRefNamespace | undefined}
  */
-const sturdyRefDetails = new WeakMap();
-
-/**
- * Construct a SturdyRef instance satisfying `@endo/pass-style`'s
- * `'sturdyRef'` shape: an object with no own properties whose tag-record
- * prototype carries `[PASS_STYLE]`, `[Symbol.toStringTag]`, a get-only
- * `location` accessor returning the deep-frozen locator, and — when a hint
- * is supplied — a get-only `type` accessor. The secret is never placed on
- * the object; it is kept in `sturdyRefDetails` off-band.
- *
- * @param {OcapnLocation} location
- * @param {string} [type]
- * @returns {SturdyRef}
- */
-const makeSturdyRefInstance = (location, type) => {
-  const frozenLocation = harden(location);
-  /** @type {PropertyDescriptorMap} */
-  const descriptors = {
-    [PASS_STYLE]: { value: 'sturdyRef', enumerable: false },
-    [Symbol.toStringTag]: { value: 'SturdyRef', enumerable: false },
-    location: { get: () => frozenLocation, enumerable: false },
-  };
-  if (type !== undefined) {
-    const hint = type;
-    descriptors.type = { get: () => hint, enumerable: false };
+let sturdyRefNamespace;
+const getSturdyRefNamespace = () => {
+  if (sturdyRefNamespace === undefined) {
+    sturdyRefNamespace = installSturdyRefShim();
   }
-  const proto = harden(create(objectPrototype, descriptors));
-  return /** @type {SturdyRef} */ (harden(create(proto)));
+  return sturdyRefNamespace;
 };
 
 /**
- * True when `value` is a SturdyRef: a first-class `@endo/pass-style` value
- * whose `passStyleOf` is `'sturdyRef'`. Recognition is structural (no
- * mint-gating): a value the session manager did not construct but that
- * satisfies the shape is still a SturdyRef, though it has no off-band
- * details here and so cannot be enlivened by this instance.
- *
- * @param {any} value
- * @returns {boolean}
- */
-export const isSturdyRef = value => {
-  try {
-    return passStyleOf(value) === 'sturdyRef';
-  } catch {
-    return false;
-  }
-};
-harden(isSturdyRef);
-
-/**
- * Reveal a SturdyRef's off-band `(location, secret)` details, or
- * `undefined` when `sturdyRef` is not a SturdyRef this session manager
- * constructed. This is the closely-held reveal side; it is the only path
- * that yields the secret.
+ * Reveal a SturdyRef's off-band locator through the closely-held realm-global
+ * mapping, or `undefined` when `sturdyRef` is not a SturdyRef or has no locator
+ * registered in this realm. This is the only path that yields the secret; it is
+ * reachable only by holders of the closely-held `SturdyRef` namespace, never
+ * through the opaque SturdyRef object.
  *
  * @param {SturdyRef} sturdyRef
- * @returns {SturdyRefDetails | undefined}
+ * @returns {SturdyRefLocator | undefined}
  */
-export const getSturdyRefDetails = sturdyRef =>
-  isSturdyRef(sturdyRef) ? sturdyRefDetails.get(sturdyRef) : undefined;
-harden(getSturdyRefDetails);
+export const getSturdyRefLocator = sturdyRef =>
+  isSturdyRef(sturdyRef)
+    ? /** @type {SturdyRefLocator | undefined} */ (
+        getSturdyRefNamespace().toLocation(sturdyRef)
+      )
+    : undefined;
+harden(getSturdyRefLocator);
 
 /**
  * Per-client cache from a SturdyRef to its in-flight or settled
@@ -140,21 +91,21 @@ const sturdyRefToEnlivened = new WeakMap();
  * memoization wrapper stays synchronous up to the point it caches the
  * resulting promise.
  *
- * @param {SturdyRefDetails} details
+ * @param {SturdyRefLocator} locator
  * @param {(location: OcapnLocation) => Promise<InternalSession>} provideSession
  * @param {(location: OcapnLocation) => boolean} isSelfLocation
- * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} locator
+ * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} localLocator
  */
 const resolveSturdyRef = async (
-  details,
+  locator,
   provideSession,
   isSelfLocation,
-  locator,
+  localLocator,
 ) => {
-  const { location, secret } = details;
+  const { location, secret } = locator;
 
   if (isSelfLocation(location)) {
-    const value = await locator.get(secret);
+    const value = await localLocator.get(secret);
     if (value === undefined) {
       // Intentionally do NOT include `secret` in the message: this
       // error rides up into rejection chains that may be serialized
@@ -178,40 +129,44 @@ const resolveSturdyRef = async (
 
 /**
  * Resolve a `SturdyRef` to an actual reference: local values come from the
- * injected `locator`; remote values are fetched from the peer's bootstrap
+ * injected `localLocator`; remote values are fetched from the peer's bootstrap
  * over a session. The result is memoized per SturdyRef.
+ *
+ * This enlivener is closely held by each CapTP instance (it is never endowed to
+ * a child compartment or exposed through the opaque SturdyRef). It resolves a
+ * SturdyRef's locator through the realm-global mapping, so a SturdyRef minted by
+ * an eval twin in the same realm can be enlivened here.
  *
  * @param {SturdyRef} sturdyRef
  * @param {(location: OcapnLocation) => Promise<InternalSession>} provideSession
  * @param {(location: OcapnLocation) => boolean} isSelfLocation
- * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} locator
+ * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} localLocator
  */
 export const enlivenSturdyRef = (
   sturdyRef,
   provideSession,
   isSelfLocation,
-  locator,
+  localLocator,
 ) => {
   const cached = sturdyRefToEnlivened.get(sturdyRef);
   if (cached !== undefined) {
     return cached;
   }
 
-  // The off-band details live in this session manager's closely-held map;
-  // a SturdyRef with no entry (not constructed here) cannot be enlivened by
-  // this instance, which is by design.
-  const details = sturdyRefDetails.get(sturdyRef);
-  if (details === undefined) {
+  // The off-band locator lives in the realm-global mapping; a SturdyRef with no
+  // entry (never minted in this realm) cannot be enlivened.
+  const locator = getSturdyRefLocator(sturdyRef);
+  if (locator === undefined) {
     throw Error(
-      'ocapn: cannot enliven a sturdyref not minted by this instance',
+      'ocapn: cannot enliven a sturdyref with no locator in this realm',
     );
   }
 
   const enlivened = resolveSturdyRef(
-    details,
+    locator,
     provideSession,
     isSelfLocation,
-    locator,
+    localLocator,
   );
   sturdyRefToEnlivened.set(sturdyRef, enlivened);
   // Evict a failed enlivenment so a later call can retry rather than
@@ -232,19 +187,19 @@ harden(enlivenSturdyRef);
  */
 
 /**
- * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} locator
+ * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} localLocator
  * @returns {SturdyRefTracker}
  */
-export const makeSturdyRefTracker = locator => {
+export const makeSturdyRefTracker = localLocator => {
   return harden({
     makeSturdyRef: (location, secret, type = undefined) => {
-      // Construct an instance satisfying the pass-style `'sturdyRef'` shape
-      // (a readable `location`, optional advisory `type` hint), and keep the
-      // `(location, secret)` tuple off-band in this session manager's map so
-      // the secret is never a property on the SturdyRef.
-      const sturdyRef = makeSturdyRefInstance(location, type);
-      sturdyRefDetails.set(sturdyRef, harden({ location, secret, type }));
-      return sturdyRef;
+      // Mint an opaque SturdyRef through the realm-global shim and retain its
+      // `(location, secret, type)` locator off-band, keyed by the SturdyRef's
+      // identity. The secret is never a property on the SturdyRef, and the
+      // locator is reachable only through the closely-held namespace.
+      return getSturdyRefNamespace().fromLocation(
+        harden({ location, secret, type }),
+      );
     },
     lookup: async secretBytes => {
       const swissNum = swissnumFromBytes(thawedBytes(secretBytes));
@@ -257,9 +212,9 @@ export const makeSturdyRefTracker = locator => {
       try {
         secret = decodeSwissnum(swissNum);
       } catch {
-        return locator.get(swissnumToBytes(swissNum));
+        return localLocator.get(swissnumToBytes(swissNum));
       }
-      return locator.get(secret);
+      return localLocator.get(secret);
     },
   });
 };
