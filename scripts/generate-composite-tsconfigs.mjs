@@ -30,10 +30,11 @@ import { listWorkspaces } from './workspaces.mjs';
  * Parse the NDJSON output of `npm query .workspace -R --json -v` into a
  * name → location map.  The root workspace entry (`name: null`) is skipped.
  *
- * @param {string} ndjson - Raw stdout from npm.
+ * @param {string|Array<{name: string|null, location: string}>} workspaces -
+ * Raw stdout from npm, or parsed workspace entries.
  * @returns {Map<string, string>} Package name to relative workspace location.
  */
-export const parsenpmWorkspaces = workspaces => {
+export const parseNpmWorkspaces = workspaces => {
   /** @type {Map<string, string>} */
   const map = new Map();
   const entries =
@@ -243,7 +244,7 @@ const main = async () => {
   const rootDir = fileURLToPath(new URL('..', import.meta.url));
   const checkMode = process.argv.includes('--check');
 
-  const nameToLocation = parsenpmWorkspaces(await listWorkspaces(rootDir));
+  const nameToLocation = parseNpmWorkspaces(await listWorkspaces(rootDir));
 
   // Participants: workspaces that have a tsconfig.build.json
   const participantLocationsArray = await Promise.all(

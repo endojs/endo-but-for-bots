@@ -37,8 +37,5 @@ jobs:
       - name: Check for cycles
         run: scripts/check-dependency-cycles.sh 0
 
-        # Under npm "classic" this job also checked for mismatchedWorkspaceDependencies
-        # (https://github.com/npmpkg/npm/blob/158d96dce95313d9a00218302631cd263877d164/src/cli/commands/workspaces.js#L49)
-        # but it's not supported in Berry and it's better solved by the "workspace:*" protocol.
-        # If we do want more workspace constraint enforcement, we can define arbitrarily with:
-        #    https://npmpkg.com/features/constraints
+        # npm does not provide a constraints command. Workspace dependency
+        # consistency is covered by npm install and the committed lockfile.

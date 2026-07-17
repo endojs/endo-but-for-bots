@@ -18,7 +18,6 @@
  *   - `npm run pack:all` (dev / CI smoke)
  *   - `npm run release:npm` (publish flow, via release-npm.mjs)
  *   - `scripts/files.sh` (file inventory)
- *   - `scripts/compare-pack.mjs` (legacy-vs-new tarball diff)
  */
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';

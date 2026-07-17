@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  parsenpmWorkspaces,
+  parseNpmWorkspaces,
   getRuntimeWorkspaceDeps,
   detectCycle,
   makePackageCompositeConfig,
@@ -39,10 +39,10 @@ function parseGeneratedJson(text) {
 }
 
 // ---------------------------------------------------------------------------
-// parsenpmWorkspaces
+// parseNpmWorkspaces
 // ---------------------------------------------------------------------------
 
-test('parsenpmWorkspaces - parses well-formed NDJSON', t => {
+test('parseNpmWorkspaces - parses well-formed NDJSON', t => {
   const ndjson = [
     JSON.stringify({ location: '.', name: null, workspaceDependencies: [] }),
     JSON.stringify({
@@ -57,29 +57,29 @@ test('parsenpmWorkspaces - parses well-formed NDJSON', t => {
     }),
   ].join('\n');
 
-  const map = parsenpmWorkspaces(ndjson);
+  const map = parseNpmWorkspaces(ndjson);
   t.is(map.size, 2, 'root entry should be skipped');
   t.is(map.get('@scope/a'), 'packages/a');
   t.is(map.get('@scope/b'), 'packages/b');
 });
 
-test('parsenpmWorkspaces - skips the root entry (name: null)', t => {
+test('parseNpmWorkspaces - skips the root entry (name: null)', t => {
   const ndjson = JSON.stringify({
     location: '.',
     name: null,
     workspaceDependencies: [],
   });
-  const map = parsenpmWorkspaces(ndjson);
+  const map = parseNpmWorkspaces(ndjson);
   t.is(map.size, 0);
 });
 
-test('parsenpmWorkspaces - ignores blank lines', t => {
+test('parseNpmWorkspaces - ignores blank lines', t => {
   const ndjson = `\n${JSON.stringify({
     location: 'packages/a',
     name: '@scope/a',
     workspaceDependencies: [],
   })}\n\n`;
-  const map = parsenpmWorkspaces(ndjson);
+  const map = parseNpmWorkspaces(ndjson);
   t.is(map.size, 1);
 });
 

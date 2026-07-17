@@ -363,7 +363,6 @@ const makeError = (
   // as a function declaration using an @overload tag. This is a workaround so
   // that we at least have type-safety within the function body.
   //
-  // Note that due to the overload of AssertionUtilities['makeError'], strict
   // Note that due to the overload of AssertionUtilities['makeError'], Typescript's so-called "strict
   // mode" will complain if default parameters are provided in the method
   // signature. The below workaround (optDetails -> details; errConstructor ->
