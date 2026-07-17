@@ -34,7 +34,7 @@
   },
   "scripts": {
     "build": "exit 0",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint": "npm run lint:types && npm run lint:eslint",
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
@@ -42,18 +42,18 @@
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava"
   },
   "dependencies": {
-    "@endo/eventual-send": "workspace:^",
-    "@endo/harden": "workspace:^",
-    "@endo/promise-kit": "workspace:^",
-    "ses": "workspace:^"
+    "@endo/eventual-send": "^1.5.0",
+    "@endo/harden": "^1.1.0",
+    "@endo/promise-kit": "^1.2.1",
+    "ses": "^2.2.0"
   },
   "devDependencies": {
-    "@endo/init": "workspace:^",
-    "@endo/ses-ava": "workspace:^",
-    "ava": "catalog:dev",
-    "c8": "catalog:dev",
-    "eslint": "catalog:dev",
-    "typescript": "catalog:dev"
+    "@endo/init": "^1.1.13",
+    "@endo/ses-ava": "^1.4.2",
+    "ava": "^8.0.1",
+    "c8": "^11.0.0",
+    "eslint": "^10.4.1",
+    "typescript": "~6.0.3"
   },
   "files": [
     "./*.d.ts",

@@ -4,10 +4,10 @@ This file provides conventions and constraints for AI agents working in this rep
 
 ## Repository structure
 
-- Monorepo managed with Yarn workspaces
+- Monorepo managed with npm workspaces
 - Packages live in `packages/`
 - Tests use `ava` (runtime) and `tsd` (types)
-- Linting: `eslint` with project-specific rules; run `yarn lint` per-package
+- Linting: `eslint` with project-specific rules; run `npm run lint` per-package
 
 ## TypeScript usage
 
@@ -80,11 +80,11 @@ Never mix `self` and `facets` in the same context type.
 
 ## Testing
 
-- Runtime tests: `yarn test` (uses `ava`)
-- Type tests: `yarn lint:types` (uses `tsd` — test files are `test/types.test-d.ts`)
-- Lint: `yarn lint` (runs both `lint:types` and `lint:eslint`)
+- Runtime tests: `npm run test` (uses `ava`)
+- Type tests: `npm run lint:types` (uses `tsd` — test files are `test/types.test-d.ts`)
+- Lint: `npm run lint` (runs both `lint:types` and `lint:eslint`)
 
-Always run `yarn lint` in each package you've modified before committing.
+Always run `npm run lint` in each package you've modified before committing.
 
 ## Composite TypeScript build
 
@@ -93,23 +93,23 @@ declarations for the entire workspace graph with a single command instead of
 running N per-package `tsc --watch` processes:
 
 ```sh
-yarn build:types        # one-shot build
-yarn build:types:watch  # incremental watch (cold start: ~10-30s)
+npm run build:types        # one-shot build
+npm run build:types:watch  # incremental watch (cold start: ~10-30s)
 ```
 
 The config files are generated — do not edit them by hand:
 
 ```sh
-yarn build:types:gen    # regenerate tsconfig.composite.json files
-yarn build:types:check  # verify generated files are up to date (used in CI)
+npm run build:types:gen    # regenerate tsconfig.composite.json files
+npm run build:types:check  # verify generated files are up to date (used in CI)
 ```
 
-**When to regenerate:** run `yarn build:types:gen` after adding, removing, or
+**When to regenerate:** run `npm run build:types:gen` after adding, removing, or
 changing the runtime `dependencies`/`peerDependencies`/`optionalDependencies`
 of any workspace.
 
 The generator (`scripts/generate-composite-tsconfigs.mjs`) reads
-`yarn workspaces list` output and each package's `package.json`.
+`npm query ':root > .workspace'` output and each package's `package.json`.
 
 CI will fail if the generated files drift from what the generator would produce.
 
@@ -123,7 +123,7 @@ silently excluded; their types resolve through normal `package.json`
 output locations but track build state independently. If you've run `prepack`
 for any package and then switch to the composite build (or vice versa), you
 may see TS5055 "would overwrite input file" errors caused by stale outputs.
-Run `yarn clean` to reset.
+Run `npm run clean` to reset.
 
 ## Commit conventions
 

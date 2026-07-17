@@ -40,7 +40,7 @@
   - `CopyArrayInterface`, `CopyRecordInterface`, and `CopyTaggedInterface` are now exported, so downstream `.d.ts` emit can name them when they appear through structural expansion of `Passable`/`Container`.
   - The `PassStyleOf` array overload is widened from `(p: any[]) => 'copyArray'` to `(p: readonly any[]) => 'copyArray'`, so `as const` tuples and `readonly T[]` values classify as `'copyArray'`. This aligns the classifier with `CopyArray<T>`, which is already `readonly T[]`. Backward-compatible because `T[]` still extends `readonly T[]`.
 
-  Obviates the `@endo/pass-style` patch that agoric-sdk has been carrying in `.yarn/patches/`.
+  Obviates the `@endo/pass-style` patch that agoric-sdk has been carrying in `.npm/patches/`.
 
   TypeScript consumers that relied on `typeof PASS_STYLE` being `unique symbol` (e.g. annotating a value as `symbol` from `PASS_STYLE`) will need minor adjustments — widen the annotation to `symbol | string`, or cast via `unknown`.
 

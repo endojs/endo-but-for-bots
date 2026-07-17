@@ -5,9 +5,9 @@
 # the underlying checker, so callers can override severity or exclude
 # codes:
 #
-#   yarn lint:sh                     # default severity warning
-#   yarn lint:sh --severity=error    # tighter gate
-#   yarn lint:sh -- -e SC2086        # exclude a code
+#   npm run lint:sh                     # default severity warning
+#   npm run lint:sh --severity=error    # tighter gate
+#   npm run lint:sh -- -e SC2086        # exclude a code
 #
 # The list is enumerated via `git ls-files -z '*.sh'` so untracked scratch
 # scripts and worktree noise are ignored. Null-terminated paths flow
@@ -18,7 +18,7 @@
 set -eu
 
 # Skip cleanly when the checker binary is absent, so a contributor without
-# it installed can still run the rest of `yarn lint` locally. CI installs
+# it installed can still run the rest of `npm run lint` locally. CI installs
 # the binary in a setup step and relies on this script as the gate.
 if ! command -v shellcheck >/dev/null 2>&1; then
   echo "shellcheck: not installed; skipping." >&2

@@ -27,20 +27,17 @@ const execFileAsync = promisify(execFile);
 // ---------------------------------------------------------------------------
 
 /**
- * Parse the NDJSON output of `yarn workspaces list -R --json -v` into a
- * name → location map.  The root workspace entry (`name: null`) is skipped.
+ * Parse the JSON output of `npm query ':root > .workspace' --json` into a
+ * name -> location map.
  *
- * @param {string} ndjson - Raw stdout from yarn.
+ * @param {string} json - Raw stdout from npm.
  * @returns {Map<string, string>} Package name to relative workspace location.
  */
-export const parseYarnWorkspaces = ndjson => {
+export const parseNpmWorkspaces = json => {
   /** @type {Map<string, string>} */
   const map = new Map();
-  for (const line of ndjson.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const entry = JSON.parse(trimmed);
-    if (entry.name === null) continue; // skip root
+  for (const entry of JSON.parse(json)) {
+    if (!entry.name) continue;
     map.set(entry.name, entry.location);
   }
   return map;
@@ -49,13 +46,15 @@ export const parseYarnWorkspaces = ndjson => {
 /**
  * Extract the set of workspace package names that are *runtime* dependencies
  * of a given package: `dependencies`, `peerDependencies`, and
- * `optionalDependencies` whose version spec starts with `workspace:`.
+ * `optionalDependencies` whose names identify a workspace package.
  * `devDependencies` are intentionally excluded.
  *
  * @param {Record<string, any>} packageJson - Parsed package.json contents.
+ * @param {Iterable<string>} workspaceNames - Known workspace package names.
  * @returns {Set<string>} Workspace package names.
  */
-export const getRuntimeWorkspaceDeps = packageJson => {
+export const getRuntimeWorkspaceDeps = (packageJson, workspaceNames = []) => {
+  const namesToMatch = new Set(workspaceNames);
   const names = new Set();
   for (const field of [
     'dependencies',
@@ -64,8 +63,8 @@ export const getRuntimeWorkspaceDeps = packageJson => {
   ]) {
     const deps = packageJson[field];
     if (!deps) continue;
-    for (const [name, version] of Object.entries(deps)) {
-      if (String(version).startsWith('workspace:')) {
+    for (const name of Object.keys(deps)) {
+      if (namesToMatch.has(name)) {
         names.add(name);
       }
     }
@@ -181,7 +180,7 @@ export const buildConfigs = async ({
   await Promise.all(
     [...participantLocations].map(async location => {
       const pkgJson = await getPackageJson(location);
-      const runtimeNames = getRuntimeWorkspaceDeps(pkgJson);
+      const runtimeNames = getRuntimeWorkspaceDeps(pkgJson, nameToLocation.keys());
 
       const depLocations = [];
       for (const name of runtimeNames) {
@@ -234,16 +233,16 @@ export const buildConfigs = async ({
 // ---------------------------------------------------------------------------
 
 /**
- * Invoke `yarn workspaces list -R --json -v` from the given directory and
+ * Invoke `npm query ':root > .workspace' --json` from the given directory and
  * return its stdout.
  *
  * @param {string} cwd
  * @returns {Promise<string>}
  */
-const runYarnWorkspacesList = async cwd => {
+const runNpmWorkspacesQuery = async cwd => {
   const result = await execFileAsync(
-    'yarn',
-    ['workspaces', 'list', '-R', '--json', '-v'],
+    'npm',
+    ['query', ':root > .workspace', '--json'],
     {
       cwd,
       encoding: 'utf8',
@@ -256,8 +255,8 @@ const main = async () => {
   const rootDir = fileURLToPath(new URL('..', import.meta.url));
   const checkMode = process.argv.includes('--check');
 
-  const ndjson = await runYarnWorkspacesList(rootDir);
-  const nameToLocation = parseYarnWorkspaces(ndjson);
+  const json = await runNpmWorkspacesQuery(rootDir);
+  const nameToLocation = parseNpmWorkspaces(json);
 
   // Participants: workspaces that have a tsconfig.build.json
   const participantLocationsArray = await Promise.all(
@@ -310,7 +309,7 @@ const main = async () => {
     );
     if (drifted) {
       console.error(
-        '\nRun `yarn build:types:gen` to regenerate composite tsconfig files.',
+        '\nRun `npm run build:types:gen` to regenerate composite tsconfig files.',
       );
       process.exitCode = 1;
     }

@@ -8,7 +8,7 @@ TAR=$(command -v gtar || command -v tar)
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$REPO_ROOT/dist"
 
-yarn pack:all 1>&2
+npm run pack:all 1>&2
 
 for TGZ in "$DIST"/*.tgz; do
   PKG_NAME="$(basename "$TGZ" .tgz)"

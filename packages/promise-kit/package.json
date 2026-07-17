@@ -26,22 +26,22 @@
   },
   "scripts": {
     "build": "exit 0",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint": "npm run lint:types && npm run lint:eslint",
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
-    "test": "yarn run -T ses-ava",
-    "test:c8": "c8 ${C8_OPTIONS:-} yarn run -T ses-ava",
+    "test": "ses-ava",
+    "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
     "test:xs": "exit 0"
   },
   "dependencies": {
-    "@endo/harden": "workspace:^"
+    "@endo/harden": "^1.1.0"
   },
   "devDependencies": {
-    "ava": "catalog:dev",
-    "c8": "catalog:dev",
-    "eslint": "catalog:dev",
-    "typescript": "catalog:dev"
+    "ava": "^8.0.1",
+    "c8": "^11.0.0",
+    "eslint": "^10.4.1",
+    "typescript": "~6.0.3"
   },
   "files": [
     "./*.d.ts",

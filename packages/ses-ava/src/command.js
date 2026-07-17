@@ -10,7 +10,7 @@
  * to filter.
  * Consequently, the "test" script for a package using ses-ava can simply be
  * "ses-ava" and preserves the filtering behaviors of the underlying "ava"
- * sessions if run like `yarn test -m file`.
+ * sessions if run like `npm run test -m file`.
  */
 
 import popen from 'node:child_process';

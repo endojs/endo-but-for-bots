@@ -34,24 +34,24 @@
   "scripts": {
     "build": "exit 0",
     "cover": "c8 ava --config test/_ava-ses.config.js",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint": "npm run lint:types && npm run lint:eslint",
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
     "test": "ava && bin/ses-ava.cjs --only env --only raw"
   },
   "dependencies": {
-    "@endo/env-options": "workspace:^",
-    "@endo/harden": "workspace:^",
-    "@endo/init": "workspace:^",
+    "@endo/env-options": "^1.1.11",
+    "@endo/harden": "^1.1.0",
+    "@endo/init": "^1.1.13",
     "ava": "^6 || ^7 || ^8",
-    "ses": "workspace:^"
+    "ses": "^2.2.0"
   },
   "devDependencies": {
-    "@endo/panic": "workspace:^",
-    "c8": "catalog:dev",
-    "eslint": "catalog:dev",
-    "typescript": "catalog:dev"
+    "@endo/panic": "^1.0.1",
+    "c8": "^11.0.0",
+    "eslint": "^10.4.1",
+    "typescript": "~6.0.3"
   },
   "files": [
     "./*.d.ts",

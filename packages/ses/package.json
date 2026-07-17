@@ -78,11 +78,11 @@
   "scripts": {
     "build:vanilla": "node scripts/bundle.js",
     "build:hermes": "node scripts/bundle.js hermes",
-    "build": "yarn build:vanilla && yarn build:hermes",
+    "build": "npm run build:vanilla && npm run build:hermes",
     "clean": "rm -rf dist",
     "cover": "c8 ava --config test/_ava-ses.config.js",
     "demo": "python3 -m http.server",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint": "npm run lint:types && npm run lint:eslint",
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
@@ -94,26 +94,26 @@
     "postpack": "git clean -fX -e node_modules/"
   },
   "dependencies": {
-    "@endo/cache-map": "workspace:^",
-    "@endo/env-options": "workspace:^",
-    "@endo/immutable-arraybuffer": "workspace:^"
+    "@endo/cache-map": "^1.1.0",
+    "@endo/env-options": "^1.1.11",
+    "@endo/immutable-arraybuffer": "^1.1.2"
   },
   "devDependencies": {
     "@babel/generator": "^7.28.3",
     "@babel/parser": "~7.28.3",
     "@babel/traverse": "~7.28.3",
     "@babel/types": "~7.28.2",
-    "@endo/compartment-mapper": "workspace:^",
-    "@endo/module-source": "workspace:^",
-    "@endo/test262-runner": "workspace:^",
-    "ava": "catalog:dev",
-    "c8": "catalog:dev",
+    "@endo/compartment-mapper": "^2.3.0",
+    "@endo/module-source": "^1.4.1",
+    "@endo/test262-runner": "^0.1.50",
+    "ava": "^8.0.1",
+    "c8": "^11.0.0",
     "core-js": "^3.31.0",
-    "eslint": "catalog:dev",
+    "eslint": "^10.4.1",
     "hermes-engine-cli": "^0.12.0",
     "terser": "^5.16.6",
-    "tsd": "catalog:dev",
-    "typescript": "catalog:dev"
+    "tsd": "^0.33.0",
+    "typescript": "~6.0.3"
   },
   "files": [
     "./*.d.ts",

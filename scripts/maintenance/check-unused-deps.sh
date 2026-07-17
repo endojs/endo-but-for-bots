@@ -9,7 +9,7 @@ trap 'rm -f "$REPORT_FILE"' EXIT
 
 cd "$REPO_ROOT"
 
-yarn dlx -q -p knip -p typescript -p @types/node knip \
+npx -q -p knip -p typescript -p @types/node knip \
   --config "$SCRIPT_DIR/knip.json" \
   --reporter json \
   --include dependencies \
