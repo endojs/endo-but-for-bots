@@ -4,7 +4,7 @@
 /**
  * @import { ReferenceKit } from '../client/ref-kit.js'
  * @import { HandoffGiveDetails } from '../client/grant-tracker.js'
- * @import { SturdyRef } from '../client/sturdyrefs.js'
+ * @import { SturdyRef } from '@endo/pass-style'
  * @import { SyrupCodec, SyrupRecordCodec, SyrupRecordUnionCodec } from '../syrup/codec.js'
  * @import { OcapnWriter, OcapnCodec } from '../codec-interface.js'
  * @import { OcapnLocation, OcapnPublicKeyDescriptor, OcapnSignature } from './components.js'
@@ -26,7 +26,7 @@ import {
   OcapnPublicKeyCodec,
   OcapnSignatureCodec,
 } from './components.js';
-import { getSturdyRefDetails } from '../client/sturdyrefs.js';
+import { getSturdyRefLocator } from '../client/sturdyrefs.js';
 import { encodeSwissnum } from '../client/util.js';
 
 /**
@@ -330,11 +330,11 @@ export const makeDescCodecs = referenceKit => {
      * @param {OcapnWriter} writer
      */
     (sturdyRef, writer) => {
-      const details = getSturdyRefDetails(sturdyRef);
-      if (!details) {
+      const locator = getSturdyRefLocator(sturdyRef);
+      if (!locator) {
         throw Error('Cannot serialize: not a valid SturdyRef object');
       }
-      const { location, secret } = details;
+      const { location, secret } = locator;
       OcapnPeerCodec.write(location, writer);
       // String secrets get ASCII-encoded; raw-bytes secrets ride the
       // wire verbatim so non-ASCII swissnums (e.g. Spritely Goblins'

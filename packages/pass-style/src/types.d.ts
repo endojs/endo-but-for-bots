@@ -228,40 +228,39 @@ export type CopyTagged<
 > = PassStyled<'tagged', Tag> & { payload: Payload };
 
 /**
- * The parsed OCapN locator a SturdyRef addresses: a peer designator, a
- * transport/network, and optional hints. `@endo/pass-style` only knows this
- * parsed shape (a deep-frozen `copyRecord`); the on-wire serialization of the
- * locator is owned by `@endo/ocapn`. This is a structural narrowing of
- * `@endo/ocapn`'s `OcapnLocation`, re-declared here so non-OCapN marshaling
- * layers can name the type without taking a runtime dependency on
- * `@endo/ocapn`.
- */
-export type SturdyRefLocation = {
-  type?: string;
-  designator: string;
-  transport?: string;
-  network?: string;
-  hints: false | Record<string, any>;
-};
-
-/**
- * A SturdyRef is a first-class, pass-by-copy `@endo/pass-style` category that
- * addresses a capability. `passStyleOf` returns `'sturdyRef'`. It carries a
- * readable `location` (the parsed OCapN locator) and an optional advisory
- * `type` hint; the secret (swiss number) it needs to re-acquire the live
- * capability is **never** a property — it is held off-band by the CapTP
- * session manager (`@endo/ocapn`) keyed by the SturdyRef's identity.
+ * A SturdyRef is an **opaque**, first-class, pass-by-copy `@endo/pass-style`
+ * category that addresses a capability. `passStyleOf` returns `'sturdyRef'`. It
+ * is a bare identity: it carries **no** readable structure — no `location`, no
+ * `secret`, no `type`. The mapping from a SturdyRef to its locator is held
+ * off-band by the realm-global `SturdyRef` shim (see `SturdyRefNamespace`) and,
+ * closely held, by each CapTP instance (`@endo/ocapn`).
  *
- * `@endo/pass-style` defines this shape and recognises/validates it, but does
- * **not** construct sturdyrefs: construction is the CapTP session manager's
- * role. There is therefore no maker exported here.
+ * `@endo/pass-style` constructs the opaque identity (`makeSturdyRef`, from
+ * `@endo/pass-style/sturdy-ref.js`) and recognises/validates the shape, but
+ * knows nothing of where a SturdyRef points.
  */
 export type SturdyRef = {
   [PASS_STYLE]: 'sturdyRef';
   [Symbol.toStringTag]: 'SturdyRef';
-  readonly location: SturdyRefLocation;
-  readonly type?: string;
 };
+
+/**
+ * The realm-global, closely-held `SturdyRef` namespace installed by the
+ * first-wins shim (`@endo/pass-style/sturdy-ref-shim.js`). `fromLocation` mints
+ * an opaque SturdyRef bound to a locator **object** (never a URL or URN
+ * string); `toLocation` reveals that object. The mapping is retained globally
+ * so eval twins of OCapN or CapTP in one realm converge on it. The namespace
+ * has no SES permit and must never be endowed to a child compartment.
+ */
+export type SturdyRefNamespace = {
+  fromLocation(locator: object): SturdyRef;
+  toLocation(sturdyRef: SturdyRef): object | undefined;
+};
+
+declare global {
+  // eslint-disable-next-line vars-on-top, no-var
+  var SturdyRef: SturdyRefNamespace | undefined;
+}
 
 /**
  * This is an interface specification.

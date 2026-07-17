@@ -11,7 +11,8 @@ import harden from '@endo/harden';
  * @import { HandoffGiveSigEnvelope } from '../codecs/descriptors.js'
  * @import { Logger, SwissNum } from './types.js'
  * @import { GrantTracker, GrantDetails, HandoffGiveDetails } from './grant-tracker.js'
- * @import { SturdyRef, SturdyRefTracker } from './sturdyrefs.js'
+ * @import { SturdyRef } from '@endo/pass-style'
+ * @import { SturdyRefTracker } from './sturdyrefs.js'
  * @import { MakeRemoteKit, SendHandoff } from './ocapn.js'
  */
 

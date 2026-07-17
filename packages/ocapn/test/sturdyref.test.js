@@ -13,7 +13,7 @@ import {
 } from '../src/client/util.js';
 import {
   isSturdyRef,
-  getSturdyRefDetails,
+  getSturdyRefLocator,
   makeSturdyRefTracker,
 } from '../src/client/sturdyrefs.js';
 import { ocapnPassStyleOf } from '../src/codecs/ocapn-pass-style.js';
@@ -72,7 +72,7 @@ testWithErrorUnwrapping('SturdyRef is a first-class pass-style', async t => {
 });
 
 testWithErrorUnwrapping(
-  'SturdyRef exposes its location but never its secret',
+  'SturdyRef is opaque: neither location nor secret is a property',
   async t => {
     const { client: clientA, location: locationB } = await makeTestClient({
       debugLabel: 'A',
@@ -81,28 +81,29 @@ testWithErrorUnwrapping(
 
     const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
 
-    // The raw SturdyRef is the trusted/wire tier: its location is a
-    // readable property by design (the confined-guest surface, where
-    // location must be hidden, is the daemon boundary in a later cut).
-    t.true('location' in sturdyRef, 'location is a readable property');
-    t.deepEqual(sturdyRef.location, locationB, 'location deeply equals');
-
-    // The secret (swiss number) is never readable — assert over own
-    // properties and the whole prototype chain.
+    // The SturdyRef is fully opaque: it reveals nothing about where it
+    // points. The (location, secret) locator is held off-band in the
+    // realm-global mapping, reachable only through the closely-held
+    // `SturdyRef` namespace, never as a property on the SturdyRef.
+    t.false('location' in sturdyRef, 'no location property');
     t.false('secret' in sturdyRef, 'no secret property');
     t.false('swissNum' in sturdyRef, 'no swissNum property');
     t.deepEqual(Reflect.ownKeys(sturdyRef), [], 'no own properties');
-    let protoChainSecret = false;
+    let protoChainLeak = false;
     for (
       let p = Object.getPrototypeOf(sturdyRef);
       p !== null;
       p = Object.getPrototypeOf(p)
     ) {
-      if (Reflect.ownKeys(p).some(k => k === 'secret' || k === 'swissNum')) {
-        protoChainSecret = true;
+      if (
+        Reflect.ownKeys(p).some(
+          k => k === 'secret' || k === 'swissNum' || k === 'location',
+        )
+      ) {
+        protoChainLeak = true;
       }
     }
-    t.false(protoChainSecret, 'no secret anywhere on the prototype chain');
+    t.false(protoChainLeak, 'no locator anywhere on the prototype chain');
 
     const stringified = String(sturdyRef);
     t.is(stringified, '[object SturdyRef]', 'stringification shows tag name');
@@ -134,7 +135,7 @@ testWithErrorUnwrapping(
 );
 
 testWithErrorUnwrapping(
-  'getSturdyRefDetails returns correct details',
+  'the off-band locator is reachable only through the closely-held mapping',
   async t => {
     const { client: clientA, location: locationB } = await makeTestClient({
       debugLabel: 'A',
@@ -143,19 +144,21 @@ testWithErrorUnwrapping(
 
     const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
 
-    const details = getSturdyRefDetails(sturdyRef);
-    t.truthy(details, 'getSturdyRefDetails returns details');
-    if (details) {
-      t.deepEqual(details.location, locationB, 'location matches');
-      t.is(details.secret, 'test-object', 'secret matches');
+    // The realm-global mapping (installed by the first-wins shim) retains the
+    // (location, secret) locator keyed by the opaque SturdyRef's identity.
+    const locator = getSturdyRefLocator(sturdyRef);
+    t.truthy(locator, 'getSturdyRefLocator returns the off-band locator');
+    if (locator) {
+      t.deepEqual(locator.location, locationB, 'location matches');
+      t.is(locator.secret, 'test-object', 'secret matches');
     }
 
     const notASturdyRef = /** @type {any} */ ({});
-    const noDetails = getSturdyRefDetails(notASturdyRef);
+    const noLocator = getSturdyRefLocator(notASturdyRef);
     t.is(
-      noDetails,
+      noLocator,
       undefined,
-      'getSturdyRefDetails returns undefined for non-SturdyRef',
+      'getSturdyRefLocator returns undefined for non-SturdyRef',
     );
 
     clientA.shutdown();
