@@ -37,6 +37,7 @@
 import { createRequire } from 'module';
 import { encodeHex } from '@endo/hex';
 
+/* global globalThis */
 const { Function, Promise } = globalThis;
 
 /**
