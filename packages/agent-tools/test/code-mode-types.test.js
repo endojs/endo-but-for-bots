@@ -47,7 +47,7 @@ const declaredTypeMembers = (aux, typeName) => {
 };
 
 // Freshness gate (git): the checked-in git artifact must equal a fresh
-// extraction, so a change to the exo-git types.d.ts or to a renderer cannot
+// extraction, so a change to the exo-git or platform TypeScript sources cannot
 // land without regenerating and committing the declarations.
 test('generated git declarations are up to date with their source', t => {
   const fresh = buildGitTypeDeclarations();

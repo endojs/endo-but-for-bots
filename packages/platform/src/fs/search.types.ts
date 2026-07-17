@@ -1,5 +1,6 @@
 /**
- * Types for the platform glob/grep search engine (`./search.js`).
+ * Authored TypeScript types for the platform glob/grep search engine
+ * (`./search.js`).
  * See designs/platform-search-pushdown.md.
  */
 

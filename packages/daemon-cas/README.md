@@ -33,7 +33,7 @@ of contracts:
 - **The CAS interfaces it produces.** The `store`/`fetch`/`has`/`remove`
   surface and the host-side backing that `fetch()` returns are the
   `ContentStore` and `ContentStoreBlob` typedefs in
-  [`@endo/platform/fs/lite/types`](../platform/src/fs/types.d.ts).
+  [`@endo/platform/fs/lite/types`](../platform/src/fs/types.ts).
   A raw store from this package feeds `makeSnapshotStore` from
   `@endo/platform/fs/lite` unchanged.
   `ContentStoreBlob.readRange` is an internal safe-number helper used to

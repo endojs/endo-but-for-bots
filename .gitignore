@@ -119,7 +119,9 @@ api-docs
 !packages/lp32/types.d.ts
 !packages/pass-style/src/types.d.ts
 !packages/patterns/types-index.d.ts
-!packages/platform/src/fs/types.d.ts
+packages/platform/src/fs/search.types.d.ts
+!packages/platform/src/fs/search-types-index.d.ts
+!packages/platform/src/fs/types-index.d.ts
 !packages/preact-container/src/renderer.d.ts
 !packages/preact-container/src/compartment.d.ts
 !packages/reminder/src/types.d.ts
