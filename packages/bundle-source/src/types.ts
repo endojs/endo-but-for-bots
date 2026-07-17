@@ -1,8 +1,5 @@
 export type ModuleFormat =
-  | 'endoZipBase64'
-  | 'endoScript'
-  | 'nestedEvaluate'
-  | 'getExport';
+  'endoZipBase64' | 'endoScript' | 'nestedEvaluate' | 'getExport';
 
 export type Logger = (...args: unknown[]) => void;
 export type ComputeSha512 = (bytes: string | Uint8Array) => string;
@@ -127,9 +124,7 @@ export interface AtomicFileWriter extends Omit<FileWriter, 'neighbor'> {
 }
 
 export type BundleScriptModuleFormat =
-  | 'endoScript'
-  | 'nestedEvaluate'
-  | 'getExport';
+  'endoScript' | 'nestedEvaluate' | 'getExport';
 
 export interface BundleScriptOptions {
   dev?: boolean | undefined;
@@ -142,8 +137,7 @@ export interface BundleScriptOptions {
 
 export interface BundleZipBase64Options extends BundleScriptOptions {
   importHook?:
-    | import('@endo/compartment-mapper').ExitModuleImportHook
-    | undefined;
+    import('@endo/compartment-mapper').ExitModuleImportHook | undefined;
 }
 
 export type ParserForLanguageLike =
@@ -282,8 +276,7 @@ export type BundleOptions<T extends ModuleFormat> = {
        * for the `endoZipBase64` format.
        */
       importHook?:
-        | import('@endo/compartment-mapper').ExitModuleImportHook
-        | undefined;
+        import('@endo/compartment-mapper').ExitModuleImportHook | undefined;
     }
   : {});
 

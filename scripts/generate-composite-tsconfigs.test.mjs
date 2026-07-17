@@ -81,9 +81,9 @@ test('parseNpmWorkspaces - accepts formatted JSON', t => {
 
 test('getRuntimeWorkspaceDeps - includes local deps from dependencies, peerDependencies, optionalDependencies', t => {
   const pkg = {
-    dependencies: { '@scope/a': 'workspace:^', lodash: '^4' },
-    peerDependencies: { '@scope/b': 'workspace:^' },
-    optionalDependencies: { '@scope/c': 'workspace:^' },
+    dependencies: { '@scope/a': '^1.0.0', lodash: '^4' },
+    peerDependencies: { '@scope/b': '^1.0.0' },
+    optionalDependencies: { '@scope/c': '^1.0.0' },
   };
   const deps = getRuntimeWorkspaceDeps(pkg, ['@scope/a', '@scope/b', '@scope/c']);
   t.true(deps.has('@scope/a'));
@@ -93,7 +93,7 @@ test('getRuntimeWorkspaceDeps - includes local deps from dependencies, peerDepen
 });
 
 test('getRuntimeWorkspaceDeps - excludes devDependencies', t => {
-  const pkg = { devDependencies: { '@scope/dev': 'workspace:^' } };
+  const pkg = { devDependencies: { '@scope/dev': '^1.0.0' } };
   const deps = getRuntimeWorkspaceDeps(pkg, ['@scope/dev']);
   t.is(deps.size, 0);
 });
@@ -105,7 +105,7 @@ test('getRuntimeWorkspaceDeps - handles missing dep fields gracefully', t => {
 
 test('getRuntimeWorkspaceDeps - excludes packages outside the workspace', t => {
   const pkg = {
-    dependencies: { '@scope/a': '^1.2.3', '@scope/b': 'workspace:^' },
+    dependencies: { '@scope/a': '^1.2.3', '@scope/b': '^1.0.0' },
   };
   const deps = getRuntimeWorkspaceDeps(pkg, ['@scope/b']);
   t.false(deps.has('@scope/a'));
@@ -228,7 +228,7 @@ function getPackageJson(location) {
   if (location === 'packages/b') {
     return {
       name: '@scope/b',
-      dependencies: { '@scope/a': 'workspace:^', '@scope/c': 'workspace:^' },
+      dependencies: { '@scope/a': '^1.0.0', '@scope/c': '^1.0.0' },
     };
   }
   throw new Error(`Unexpected location: ${location}`);
@@ -305,9 +305,9 @@ test('buildConfigs - root config lists all participants sorted by path', async t
 test('buildConfigs - throws on a cycle', async t => {
   const cyclicPackageJson = /** @param {string} loc */ loc => {
     if (loc === 'packages/a') {
-      return { dependencies: { '@scope/b': 'workspace:^' } };
+      return { dependencies: { '@scope/b': '^1.0.0' } };
     }
-    return { dependencies: { '@scope/a': 'workspace:^' } };
+    return { dependencies: { '@scope/a': '^1.0.0' } };
   };
   await t.throwsAsync(
     () =>

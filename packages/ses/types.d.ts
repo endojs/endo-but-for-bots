@@ -133,8 +133,7 @@ export type ModuleDescriptor =
   | string;
 
 export type StrictModuleDescriptor =
-  | SourceModuleDescriptor
-  | NamespaceModuleDescriptor;
+  SourceModuleDescriptor | NamespaceModuleDescriptor;
 
 // Deprecated type aliases:
 export type PrecompiledStaticModuleInterface = PrecompiledModuleSource;
@@ -311,8 +310,7 @@ export type AssertTypeof = AssertTypeofBigint &
  * constructor is an AggregateErrorConstructor or a normal ErrorConstructor.
  */
 export type GenericErrorConstructor =
-  | ErrorConstructor
-  | AggregateErrorConstructor;
+  ErrorConstructor | AggregateErrorConstructor;
 
 /**
  * To make an `assert` which terminates some larger unit of computation

@@ -93,6 +93,17 @@ export declare function mapReader<
   transform: (value: TReadIn) => TReadOut,
 ): Stream<TReadOut, TWrite, TReadReturn, TWriteReturn>;
 
+export declare function flatMapReader<
+  TReadIn,
+  TReadOut = TReadIn,
+  TWrite = undefined,
+  TReadReturn = undefined,
+  TWriteReturn = undefined,
+>(
+  reader: Stream<TReadIn, TWrite, TReadReturn, TWriteReturn>,
+  transform: (value: TReadIn) => Iterable<TReadOut> | AsyncIterable<TReadOut>,
+): Stream<TReadOut, TWrite, TReadReturn, TWriteReturn>;
+
 export declare function mapWriter<
   TWriteIn,
   TWriteOut = TWriteIn,

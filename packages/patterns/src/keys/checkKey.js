@@ -276,7 +276,7 @@ export const makeCopyBagFromElements = elementIter => {
   const sorted = sortByRank(elementIter, fullCompare);
   /** @type {[K,bigint][]} */
   const entries = [];
-  for (let i = 0; i < sorted.length; ) {
+  for (let i = 0; i < sorted.length;) {
     const k = sorted[i];
     let j = i + 1;
     while (j < sorted.length && fullCompare(k, sorted[j]) === 0) {

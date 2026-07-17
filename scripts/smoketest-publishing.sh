@@ -105,7 +105,7 @@ echo "smoketest-publishing: running 'npm run release:npm'"
 # Install a representative subset into a throwaway consumer and exercise
 # it at runtime. Using `npm install <name>` (not `<path>`) forces npm to
 # resolve each package from the registry, which is the true end-to-end
-# check: it proves the published manifests, `workspace:` dep resolution,
+# check: it proves the published manifests, local-workspace dependency resolution,
 # and dependency graph are self-consistent within the registry.
 CONSUMER="$REGISTRY_HOME/consumer"
 mkdir -p "$CONSUMER"
