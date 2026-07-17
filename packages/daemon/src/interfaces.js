@@ -354,6 +354,12 @@ export const HostInterface = M.interface('EndoHost', {
   provideGitClone: M.callWhen(M.recordOf(M.string(), M.any())).returns(
     M.recordOf(M.string(), M.remotable()),
   ),
+  // Trusted code-mode authority preparation.
+  // The returned record attests the
+  // petname bindings and access posture that daemon evaluation will resolve.
+  prepareCodeMode: M.callWhen(M.recordOf(M.string(), M.any())).returns(
+    M.recordOf(M.string(), M.any()),
+  ),
   // Mint daemon-private Git credential capabilities.
   provideBearerCredential: M.callWhen(
     NameOrPathShape,

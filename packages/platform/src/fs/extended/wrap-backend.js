@@ -29,6 +29,7 @@ import {
   FilesystemInterface,
   OpenFileInterface,
 } from './type-guards.js';
+import { noteFilesystemPosture } from './posture.js';
 
 import { makeLockTable } from './shared/lock-table.js';
 import { makeBlobRefExo } from './shared/blobref.js';
@@ -1006,40 +1007,43 @@ export const wrapBackend = (backend, opts = {}) => {
 
   const root = makeDirectoryExo([]);
 
-  return makeExo('Filesystem', FilesystemInterface, {
-    root() {
-      return root;
-    },
-    named(name) {
-      const segs = namedDirs[name];
-      if (!segs) {
-        throw makeError(X`ENOENT: no named directory ${q(name)}`);
-      }
-      return makeDirectoryExo([...segs]);
-    },
-    async statfs() {
-      if (caps.statfs) {
-        // @ts-expect-error optional method probed above
-        const stats = await backend.statfs();
-        return harden({ type: description, ...stats });
-      }
-      // Minimal default — toy backings without real disk metrics.
-      return harden({
-        type: description,
-        blockSize: 0n,
-        totalBlocks: 0n,
-        freeBlocks: 0n,
-      });
-    },
-    async brands() {
-      return brandSet;
-    },
-    help(method) {
-      if (method === undefined) {
-        return `Filesystem (${description}): root/named/statfs/brands.`;
-      }
-      return `No documentation for method ${q(method)}.`;
-    },
-  });
+  return noteFilesystemPosture(
+    makeExo('Filesystem', FilesystemInterface, {
+      root() {
+        return root;
+      },
+      named(name) {
+        const segs = namedDirs[name];
+        if (!segs) {
+          throw makeError(X`ENOENT: no named directory ${q(name)}`);
+        }
+        return makeDirectoryExo([...segs]);
+      },
+      async statfs() {
+        if (caps.statfs) {
+          // @ts-expect-error optional method probed above
+          const stats = await backend.statfs();
+          return harden({ type: description, ...stats });
+        }
+        // Minimal default — toy backings without real disk metrics.
+        return harden({
+          type: description,
+          blockSize: 0n,
+          totalBlocks: 0n,
+          freeBlocks: 0n,
+        });
+      },
+      async brands() {
+        return brandSet;
+      },
+      help(method) {
+        if (method === undefined) {
+          return `Filesystem (${description}): root/named/statfs/brands.`;
+        }
+        return `No documentation for method ${q(method)}.`;
+      },
+    }),
+    false,
+  );
 };
 harden(wrapBackend);

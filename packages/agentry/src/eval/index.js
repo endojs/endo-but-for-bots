@@ -1,6 +1,6 @@
 // @ts-check
 
-// The git code-mode eval harness: drive a code-mode git-loop agent against a
+// The git code-mode eval harness: drive a repository code-mode agent against a
 // scenario and score it by **outcome assertion** (did the repository reach the
 // target end-state), not by trace-edit-distance. See ./README.md for the
 // eval-vs-optimize distinction.

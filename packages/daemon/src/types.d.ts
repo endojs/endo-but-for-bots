@@ -1470,7 +1470,42 @@ export interface EndoHost extends EndoAgent {
      * `Endo <endo@invalid.local>`.
      */
     identity?: GitCommitIdentity;
+    /** Explicitly mint history-rewrite authority for trusted setup. */
+    allowHistoryRewrite?: boolean;
   }): Promise<{ git: EndoGit; remote: GitRemote }>;
+  /**
+   * Realize code-mode repository authority at the daemon boundary and attest
+   * the durable petname bindings that daemon evaluation will resolve.
+   */
+  prepareCodeMode(request: {
+    access: 'inspect' | 'edit' | 'rewriteHistory';
+    powers?: {
+      workspace?: unknown;
+      workspacePetName?: string | string[];
+      git?: unknown;
+      gitPetName?: string | string[];
+      namedPowers?: Array<{
+        name: string;
+        petName: string | string[];
+        power?: unknown;
+      }>;
+    };
+    repository?: {
+      remoteUrl: string;
+      credential?: unknown;
+      allowLocalFileTransport?: boolean;
+      identity?: GitCommitIdentity;
+    };
+  }): Promise<{
+    access: 'inspect' | 'edit' | 'rewriteHistory';
+    workspace?: { petName: string | string[]; readOnly: boolean };
+    git?: {
+      petName: string | string[];
+      readOnly: boolean;
+      historyRewrite: boolean;
+    };
+    namedPowers: Array<{ name: string; petName: string | string[] }>;
+  }>;
   /**
    * Mint a bearer-token `GitCredential` capability scoped to
    * `audience` (a URL origin) and bind it to `petName`.  Material

@@ -24,6 +24,7 @@ import { encodeBase64 } from '@endo/base64';
 
 import { mountAsFilesystem } from '../src/fs/extended/from-mount.js';
 import { makeFromMountBackend } from '../src/fs/extended/backends/from-mount-backend.js';
+import { isFilesystemReadOnly } from '../src/fs/extended/posture.js';
 
 const utf8 = s => new TextEncoder().encode(s);
 const fromUtf8 = b => new TextDecoder().decode(b);
@@ -271,6 +272,7 @@ const makeMockMount = () => {
 test('adapter exposes a endo-fs Filesystem with root Directory', async t => {
   const mount = makeMockMount();
   const fs = mountAsFilesystem(mount);
+  t.false(isFilesystemReadOnly(fs));
   const root = await E(fs).root();
   const qid = await E(root).getQid();
   t.is(qid.type, 'directory');

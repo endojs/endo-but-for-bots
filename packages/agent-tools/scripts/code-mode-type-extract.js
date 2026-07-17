@@ -784,11 +784,13 @@ const methodSignature = (methodGuard, refs) => {
 /**
  * @param {import('@endo/patterns').InterfaceGuard} interfaceGuard
  * @param {Set<string>} refs
+ * @param {string[]} [memberFilter]
  * @returns {TypeMember[]}
  */
-const interfaceMembers = (interfaceGuard, refs) => {
+const interfaceMembers = (interfaceGuard, refs, memberFilter) => {
   const { methodGuards } = getInterfaceGuardPayload(interfaceGuard);
   return Object.keys(methodGuards)
+    .filter(name => memberFilter === undefined || memberFilter.includes(name))
     .sort()
     .map(name => ({
       name,
@@ -811,16 +813,22 @@ const interfaceMembers = (interfaceGuard, refs) => {
  * @param {Map<string, import('@endo/patterns').InterfaceGuard>} config.registry
  *   Remotable label -> interface guard, keyed by the label the guards use.
  * @param {string} config.rootLabel The label of the root remotable.
+ * @param {Map<string, string[]>} [config.memberFilters] Optional per-interface
+ *   member allowlists for an attenuated declaration.
  * @returns {GlobalTypeIR}
  */
-export const extractGuardIR = ({ registry, rootLabel }) => {
+export const extractGuardIR = ({ registry, rootLabel, memberFilters }) => {
   /** @type {Set<string>} */
   const refs = new Set();
   const rootGuard = registry.get(rootLabel);
   if (!rootGuard) {
     throw new Error(`no guard registered for ${rootLabel}`);
   }
-  const members = interfaceMembers(rootGuard, refs);
+  const members = interfaceMembers(
+    rootGuard,
+    refs,
+    memberFilters?.get(rootLabel),
+  );
 
   /** @type {AuxType[]} */
   const interfaceAux = [];
@@ -838,7 +846,9 @@ export const extractGuardIR = ({ registry, rootLabel }) => {
         const innerRefs = new Set();
         interfaceAux.push({
           name,
-          text: renderObjectType(interfaceMembers(guard, innerRefs)),
+          text: renderObjectType(
+            interfaceMembers(guard, innerRefs, memberFilters?.get(name)),
+          ),
         });
         for (const ref of innerRefs) {
           if (!done.has(ref)) {

@@ -60,7 +60,8 @@
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo-git": "workspace:^",
-    "@endo/far": "workspace:^"
+    "@endo/far": "workspace:^",
+    "@endo/platform": "workspace:^"
   },
   "devDependencies": {
     "@endo/daemon": "workspace:^",
@@ -70,7 +71,6 @@
     "@endo/lockdown": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
-    "@endo/platform": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "eslint": "catalog:dev",

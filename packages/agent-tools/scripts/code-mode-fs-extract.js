@@ -58,6 +58,44 @@ const FS_REGISTRY = new Map(
 const WORKSPACE_ROOT = 'Filesystem';
 
 /**
+ * Members that remain useful through the runtime Filesystem read-only
+ * attenuator.
+ * Interfaces not listed here are intrinsically read-only and keep
+ * their complete guard-derived surface.
+ */
+export const FS_READONLY_MEMBERS = harden({
+  Filesystem: harden(['brands', 'help', 'named', 'root', 'statfs']),
+  Directory: harden([
+    'getAttrs',
+    'getQid',
+    'getStat',
+    'help',
+    'list',
+    'lookup',
+    'lookupStep',
+    'subView',
+    'watch',
+    'watchFrom',
+    'xattrs',
+  ]),
+  File: harden([
+    'getAttrs',
+    'getQid',
+    'getStat',
+    'help',
+    'open',
+    'snapshot',
+    'watch',
+    'xattrs',
+  ]),
+  OpenFile: harden(['close', 'getLock', 'help', 'read']),
+  Xattrs: harden(['get', 'help', 'list']),
+});
+harden(FS_READONLY_MEMBERS);
+
+const FS_READONLY_FILTERS = new Map(Object.entries(FS_READONLY_MEMBERS));
+
+/**
  * Build the `workspace` IR by walking the `Filesystem` guard.
  *
  * @returns {import('./code-mode-type-extract.js').GlobalTypeIR}
@@ -67,10 +105,27 @@ export const buildWorkspaceIR = () =>
 harden(buildWorkspaceIR);
 
 /**
+ * Build the read-only workspace IR by applying the runtime attenuator's method
+ * policy to every reachable mutable interface.
+ *
+ * @returns {import('./code-mode-type-extract.js').GlobalTypeIR}
+ */
+export const buildReadOnlyWorkspaceIR = () =>
+  extractGuardIR({
+    registry: FS_REGISTRY,
+    rootLabel: WORKSPACE_ROOT,
+    memberFilters: FS_READONLY_FILTERS,
+  });
+harden(buildReadOnlyWorkspaceIR);
+
+/**
  * Render the `workspace` `{ aux, body }` declaration strings.
  *
  * @returns {Record<'workspace', { aux: string, body: string }>}
  */
 export const buildFsTypeDeclarations = () =>
-  harden({ workspace: renderDeclaration(buildWorkspaceIR()) });
+  harden({
+    workspace: renderDeclaration(buildWorkspaceIR()),
+    workspaceReadOnly: renderDeclaration(buildReadOnlyWorkspaceIR()),
+  });
 harden(buildFsTypeDeclarations);

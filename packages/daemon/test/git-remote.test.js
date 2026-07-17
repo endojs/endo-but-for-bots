@@ -1002,6 +1002,99 @@ test.serial(
 );
 
 test.serial(
+  'EndoHost.prepareCodeMode provisions and attests daemon-resolved inspect powers',
+  async t => {
+    const { root } = await provisionGitContext(t);
+    const remoteRoot = await provisionBareRemote(t, root);
+    const remoteUrl = pathToFileURL(remoteRoot).href;
+    const { host } = await provisionHostContext(t);
+
+    const prepared = await E(host).prepareCodeMode({
+      access: 'inspect',
+      powers: {},
+      repository: {
+        remoteUrl,
+        allowLocalFileTransport: true,
+      },
+    });
+    t.deepEqual(Object.keys(prepared).sort(), [
+      'access',
+      'git',
+      'namedPowers',
+      'workspace',
+    ]);
+    t.like(prepared, {
+      access: 'inspect',
+      workspace: { readOnly: true },
+      git: { readOnly: true, historyRewrite: false },
+      namedPowers: [],
+    });
+
+    await t.throwsAsync(
+      E(host).evaluate(
+        undefined,
+        `(async () => {
+          const rootDir = await E(workspace).root();
+          return E(rootDir).write('forbidden.txt', 'no');
+        })()`,
+        ['workspace'],
+        [prepared.workspace.petName],
+      ),
+      { message: /read-only Filesystem/ },
+    );
+    await t.throwsAsync(
+      E(host).evaluate(
+        undefined,
+        "E(git).commit('forbidden')",
+        ['git'],
+        [prepared.git.petName],
+      ),
+      { message: /not permitted on a read-only Git capability/ },
+    );
+  },
+);
+
+test.serial(
+  'EndoHost.prepareCodeMode refuses history widening and mints explicit rewrite authority for repository setup',
+  async t => {
+    const { root } = await provisionGitContext(t);
+    const remoteRoot = await provisionBareRemote(t, root);
+    const remoteUrl = pathToFileURL(remoteRoot).href;
+    const { host } = await provisionHostContext(t);
+
+    const mount = await E(host).provideScratchMount('ordinary-code-mode-mount');
+    const { git } = await E(host).provideGitClone({
+      destMount: mount,
+      endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+    });
+    await t.throwsAsync(
+      E(host).prepareCodeMode({
+        access: 'rewriteHistory',
+        powers: { workspace: mount, git },
+      }),
+      { message: /requires proven history-rewrite Git authority/ },
+    );
+
+    const prepared = await E(host).prepareCodeMode({
+      access: 'rewriteHistory',
+      powers: {},
+      repository: { remoteUrl, allowLocalFileTransport: true },
+    });
+    t.like(prepared.git, {
+      readOnly: false,
+      historyRewrite: true,
+    });
+    const amended = await E(host).evaluate(
+      undefined,
+      "E(git).reword('HEAD', 'rewritten by code mode')",
+      ['git'],
+      [prepared.git.petName],
+    );
+    t.is(amended.summary, 'rewritten by code mode');
+  },
+);
+
+test.serial(
   'EndoHost.provideGitClone rejects read-only destination without mutation',
   async t => {
     const { root } = await provisionGitContext(t);

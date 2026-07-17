@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-06-03 |
-| **Updated** | 2026-06-25 |
+| **Updated** | 2026-07-17 |
 | **Author** | 0xpatrickdev (prompted) |
 | **Status** | In Progress |
 
@@ -11,8 +11,10 @@
 
 The core of this builder shipped in
 [#517](https://github.com/endojs/endo-but-for-bots/pull/517).
-`@endo/agentry` exports `defineAgent` and the code-mode presets
-(`makeCodeModeAgent`, `makeCodeModeGitLoopAgent`).
+`@endo/agentry` exports `defineAgent`, the generic `makeCodeModeAgent`, and
+`prepareCodeMode`, which prepares host-neutral evaluator inputs from independent
+host and access selections.
+The repository-specific agent remains internal to the eval harness.
 The shipped shape differs from this design's first draft in two ways worth
 naming up front, because the rest of the document has been reconciled to the
 shipped surface:
@@ -315,42 +317,50 @@ pi-agent-core).
 There is no separate `makeAgent(template, powers)` export; the maker the
 definition returns is the make stage.
 
-### Code-mode presets
+### Code-mode preparation and maker
 
 Code mode is the primary interaction mode (§ Interaction mode: code mode is
-primary), and #517 ships it as two concrete presets exported from
-`@endo/agentry/code-mode`, each a thin specialization of `defineAgent`:
+primary).
+`@endo/agentry/code-mode` exports one generic constructor and a separate setup
+function whose host and access axes remain independent:
 
 ```ts
-import { makeCodeModeAgent, makeCodeModeGitLoopAgent } from '@endo/agentry/code-mode';
+import { makeCodeModeAgent, prepareCodeMode } from '@endo/agentry/code-mode';
 
-// makeCodeModeAgent: an agent whose sole tool is evaluate(js), evaluated in a
-// Compartment endowed with the configured lexical powers.
-const { agent } = makeCodeModeAgent({
-  model,
-  powers: { workspace, git, gitMode: 'readOnly' }, // or 'readWrite'
+const setup = await prepareCodeMode({
+  host: { kind: 'inProcess' },
+  powers: { workspace, git },
+  access: 'inspect',
 });
 
-// makeCodeModeGitLoopAgent: a thin alias that wires a workspace Filesystem and
-// a git capability as the lexical powers and supplies the repository preamble.
-const gitAgent = makeCodeModeGitLoopAgent({ model, workspace, git });
+const { agent } = makeCodeModeAgent({ model, ...setup });
 ```
 
-Each preset builds the single evaluate tool with `makeEvaluateTool`, wraps it
-as a pi-agent-core tool via `toPiAgentTool` with the SmallCaps renderer, and calls
-`defineAgent({ model, instructions, tools: [...] })`.
+`prepareCodeMode` returns the host-neutral `{ evaluate, globals }` pair the maker
+needs.
+The `host` selection chooses in-process Compartment evaluation or daemon
+evaluation, while `access` independently selects `inspect`, `edit`, or
+`rewriteHistory` repository authority.
+The same access name has the same meaning on either host.
+In-process powers are process-local endowments; daemon powers are daemon-owned,
+petname-resolved capabilities whose trusted setup boundary performs acquisition,
+attenuation, binding, and descriptor attestation.
+
+`makeCodeModeAgent` builds the single evaluate tool with `makeEvaluateTool`,
+wraps it as a pi-agent-core tool via `toPiAgentTool` with the SmallCaps renderer,
+and calls `defineAgent({ model, instructions, tools: [...] })`.
 The lexical globals (`workspace`, `git`, and any configured `namedPowers`) are
-injected into the Compartment the guest code runs in; the model discovers a
-capability's method surface at runtime via `E(cap).__getMethodNames__()` rather
-than reading a checked-in declaration.
+injected into the selected host with generated declarations matching the
+prepared authority.
 `makeCodeModeAgent` returns the record
 `{ agent, globals, evaluate, systemPrompt, model }`;
-`makeCodeModeGitLoopAgent` returns the live `Agent` directly.
 
 The per-package preset bundles this design first proposed (each harness
 exporting its own `define<Name>Agent` / `make<Name>Agent` pair, reconstructing
-lal and genie) are **not** what shipped; the shipped presets are the two
-code-mode presets above. See § Aspirational surface (not yet built).
+lal and genie) are **not** what shipped.
+The repository-specific code-mode agent is an internal eval fixture, not a
+public Git-limited constructor.
+See § Aspirational surface (not yet built).
 
 ## The SmallCaps wire contract
 
@@ -407,7 +417,8 @@ marshalled.
 ## The deriver call site (the discrete-tool path; aspirational)
 
 > This section describes the **discrete-tool** wire-derivation path, which is
-> **not** what `defineAgent` shipped in #517. The shipped code-mode presets
+> **not** what `defineAgent` shipped in #517.
+> The shipped code-mode surface
 > build a single `evaluate` tool and pass it through `toPiAgentTool` with the
 > `adapters/smallcaps.js` renderer (in `@endo/agent-tools`), which is where the
 > SmallCaps bridge actually lives
@@ -526,10 +537,9 @@ called once at load to produce the maker).
 For #370, the version-controlled-filesystem loop, the substrate already
 reads the live worktree and history through the same `Filesystem` surface.
 The builder wires that substrate in through the code-mode `workspace` /
-`git` powers: a read-only-history agent is
-`makeCodeModeGitLoopAgent({ model, workspace: Git.filesystemAt(ref), git, readOnlyGit: true })`;
-a live-worktree editing agent is the same call with a writable workspace and
-`readOnlyGit: false`.
+`git` powers: an inspection agent prepares those powers with `access: 'inspect'`,
+while a live-worktree editing agent uses `access: 'edit'` and an explicitly
+writable workspace and Git capability.
 The same evaluate tool, the same maker, a different cap.
 
 ## Aspirational surface (not yet built)
@@ -541,7 +551,7 @@ machinery addition that would extend it. None of them is described as shipped
 anywhere above. Where the shipped code has a seam the feature could plug into,
 that seam is named.
 
-- **Declarative tool attenuation.**
+- **Declarative discrete-tool attenuation.**
   A `selectTools({ from, include, attenuate })` config with
   `readOnly` / `subroot` / `rejectPatterns` levers (attenuation policies as
   functions-of-cap: `fs => readOnly(fs)`, `(fs, path) => fs.subroot(path)`, an
@@ -549,9 +559,9 @@ that seam is named.
   The shipped seam where this could plug in later is the `endow(definition,
   options)` hook: it already derives the powered tool surface from live powers
   at make time, so an attenuation layer would compose there.
-  (The code-mode preset today carries a coarser `gitMode: 'readOnly' |
-  'readWrite'` selector, enforced by the exo guard, not a declarative
-  per-tool attenuation config.)
+  This is distinct from the shipped code-mode repository access presets:
+  `prepareCodeMode` already attenuates the supported Git and Filesystem powers,
+  but does not promise universal attenuation of arbitrary named powers.
 
 - **Define-time wire-schema derivation.**
   A `deriveWireSchemas(...)` step that fills each selected tool's
@@ -583,8 +593,10 @@ that seam is named.
 1. **`defineAgent` is a declarative builder, not a per-harness `agent.js`.**
    Model, instructions, and tool surface are config, not hand-assembled
    wiring.
-   (Shipped #517. Declarative tool *selection* and *attenuation* are
-   aspirational; see § Aspirational surface.)
+   (Shipped #517.
+   Declarative discrete-tool *selection* and *attenuation* are
+   aspirational; repository access preparation is shipped separately through
+   `prepareCodeMode`.)
 
 2. **`defineAgent` is a single call returning a maker, not a `defineAgent` /
    `makeAgent` pair.**
@@ -598,8 +610,8 @@ that seam is named.
 3. **The builder is where the wire schema becomes real.** *(Aspirational.)*
    The proposal that `defineAgent` fills `Tool.parameters` and MCP
    `inputSchema` at define time is the discrete-tool path, **not** shipped in
-#517; the shipped code-mode presets carry one evaluate tool whose SmallCaps
-wrapping lives in `@endo/agent-tools` (`adapters/smallcaps.js`).
+   #517; the shipped code-mode maker carries one evaluate tool whose SmallCaps
+   wrapping lives in `@endo/agent-tools` (`adapters/smallcaps.js`).
    See § Aspirational surface.
 
 4. **The symmetric SmallCaps decode plus LLM-JSON fixups.**
@@ -618,13 +630,17 @@ wrapping lives in `@endo/agent-tools` (`adapters/smallcaps.js`).
 6. **Per-harness preset bundles.** *(Aspirational, in part.)*
    The first draft proposed each harness exporting its own
    `define<Name>Agent` / `make<Name>Agent` pair reconstructing lal and genie.
-   What shipped in #517 is the two code-mode presets (`makeCodeModeAgent`,
-   `makeCodeModeGitLoopAgent`) in `@endo/agentry/code-mode`; the per-harness lal
-   / genie reconstruction bundles are aspirational.
+   The public code-mode surface instead keeps one generic `makeCodeModeAgent`;
+   repository setup is `prepareCodeMode`, and eval-specific agents stay
+   internal.
+   The per-harness lal / genie reconstruction bundles are aspirational.
    `defineFaeAgent` is deferred (Design Decision 10).
 
-7. **Attenuation policies declared here; primitives in `agent-tools`;
-   applied to caps at make.** *(Aspirational; see § Aspirational surface.)*
+7. **Repository access is prepared before make.**
+   `prepareCodeMode` applies or validates Git and Filesystem authority at the
+   selected host boundary, then returns the evaluator and accurate descriptors.
+   General declarative discrete-tool attenuation remains aspirational; see
+   § Aspirational surface.
 
 8. **No `harness` abstraction.**
    One loop (pi-agent-core), so no `harness` enum.
@@ -670,7 +686,7 @@ wrapping lives in `@endo/agent-tools` (`adapters/smallcaps.js`).
 | [endo-agent-tools](endo-agent-tools.md) | **Consumed.** Sibling. The code-mode preset builds its evaluate tool with `@endo/agent-tools`, passes it through `toPiAgentTool`, and uses the SmallCaps renderer from `adapters/smallcaps.js`. The aspirational discrete-tool path would also select its `makeTool` tools and use its wire schemas (§ Aspirational surface). |
 | [PR #297](https://github.com/endojs/endo-but-for-bots/pull/297) | **Confinement enabler.** Fixes the module-resolution bugs that prevented pi from loading through `@endo/compartment-mapper`'s `importLocation`, so code-mode guest code loads into a confined Endo `Compartment`. |
 | [PR #290](https://github.com/endojs/endo-but-for-bots/pull/290) | **The merged pi harness.** lal's loop now drives `@earendil-works/pi-agent-core`; `defineAgent`'s maker composes the same loop. The session-tree to mail mapping pins their correspondence (§ Mapping pi's session tree to the daemon mail model). |
-| [PR #517](https://github.com/endojs/endo-but-for-bots/pull/517) | **The shipped core.** `defineAgent` plus the two code-mode presets (`makeCodeModeAgent`, `makeCodeModeGitLoopAgent`). The single-call maker shape this design is reconciled to. |
+| [PR #517](https://github.com/endojs/endo-but-for-bots/pull/517) | **The shipped core:** `defineAgent` and the original code-mode maker foundation; the single-call maker shape this design is reconciled to |
 | [PR #422](https://github.com/endojs/endo-but-for-bots/pull/422) | **The pi-ai pin.** Bumped `@earendil-works/pi-ai` / `@earendil-works/pi-agent-core` to `^0.79.0`, the version the contract is now verified against. |
 | [PR #125](https://github.com/endojs/endo-but-for-bots/pull/125) | **The revision-log axis.** Added `editMessage` / `messageHistory` / `done` (`revisionsByNumber` in `packages/daemon/src/mail.js`), the intra-node history axis the mapping invariant keeps from forking. |
 | [endo-gateway-mcp](endo-gateway-mcp.md) | The Gateway's MCP termination forwards the MCP `inputSchema` the aspirational discrete-tool path fills to an external MCP client. |

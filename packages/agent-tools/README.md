@@ -15,12 +15,19 @@ An external MCP server is a separate consumer of `@endo/agent-tools`.
 The host-independent code-mode surface is the `evaluate({ source })` tool,
 its generated capability declarations, and its provider adapters.
 The same tool can run on either of two hosts.
+`@endo/agentry`'s `prepareCodeMode` selects one of those hosts independently
+from its `inspect`, `edit`, or `rewriteHistory` access preset, then supplies the
+generic agent maker with a matching `{ evaluate, globals }` pair.
+Complete-harness policy, prompt assembly, and repository setup orchestration
+remain in agentry.
 
 The in-process host is `makeCompartmentEvaluate`.
 It evaluates source in a fresh SES `Compartment`, with no daemon, credentials,
 or network authority.
 It suits evals, CI, tests, and a standalone MCP demo.
 Results live only as long as the process.
+Preparation passes caller-supplied live powers as process-local endowments and
+performs supported attenuation locally.
 
 The daemon host is `makeDaemonEvaluate`.
 It forwards source and lexical capability names through a live powers reference
@@ -28,6 +35,11 @@ to a daemon-style host's `evaluate` method.
 The daemon host is intended for real agent use and provides durable results,
 pet-name storage, resume, mailbox, and remote messaging.
 It imports no daemon implementation.
+The trusted daemon boundary acquires or derives capabilities, stores the exact
+pet-name bindings evaluation will resolve, and attests their matching global
+descriptors.
+For repository setup, a remote URL and credentials remain host-only setup data;
+they are never lexical guest powers.
 
 Storage authority is an explicit host concern.
 The settled host policy is that an in-process host without a store exposes the

@@ -8,6 +8,7 @@ export type {
 export {
   makeInMemoryFilesystem,
   makeNodeFilesystem,
+  isFilesystemReadOnly,
   readOnly,
   mountAsFilesystem,
   emptyFilesystem,

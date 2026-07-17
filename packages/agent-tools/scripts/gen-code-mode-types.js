@@ -9,7 +9,8 @@
  * renderer it needs, and writes one checked-in runtime artifact per exo:
  *
  *   - `generated/code-mode-globals/git-declarations.js` (git, gitReadOnly)
- *   - `generated/code-mode-globals/fs-declarations.js`  (workspace)
+ *   - `generated/code-mode-globals/fs-declarations.js`
+ *     (workspace, workspaceReadOnly)
  *
  * Run with: `yarn workspace @endo/agent-tools gen:code-mode-types`
  *
@@ -129,8 +130,11 @@ writeArtifact({
   outPath: '../generated/code-mode-globals/fs-declarations.js',
   exportName: 'fsDeclarations',
   descriptorFile: 'fs.js',
-  sourceDoc: ` *   - workspace: the platform/fs/extended interface guards
+  sourceDoc: ` *   - workspace / workspaceReadOnly: the platform/fs/extended interface guards
  *     (\`FilesystemInterface\` and the remotables it reaches), the richest
- *     available source since the FS \`.d.ts\` is a stub.`,
+ *     available source since the FS \`.d.ts\` is a stub.
+ *     The read-only variant
+ *     filters every reachable mutable interface to the runtime attenuator's
+ *     inspection surface.`,
   declarations: buildFsTypeDeclarations(),
 });

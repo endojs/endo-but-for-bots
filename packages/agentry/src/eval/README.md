@@ -67,7 +67,7 @@ Shared harness (this directory's root):
 - `index.js` — the `@endo/agentry/eval` export surface: re-exports only the
   shared harness.
 - `run.js` — `runGitScenario({ model, workspace, git, scenario, readText, ... })`:
-  builds the real code-mode git-loop agent, runs the scenario prompt, and scores
+  builds the internal repository code-mode agent, runs the scenario prompt, and scores
   by outcome assertion while returning diagnostic run metrics. An optional
   `onEvent` listener receives the agent event stream. Only the `model` differs
   between a no-LLM run and a live run.

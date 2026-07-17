@@ -19,6 +19,9 @@
     },
     {
       "path": "../far/tsconfig.composite.json"
+    },
+    {
+      "path": "../platform/tsconfig.composite.json"
     }
   ]
 }

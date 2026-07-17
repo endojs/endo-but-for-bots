@@ -7,9 +7,12 @@
  * Regenerate with: yarn workspace @endo/agent-tools gen:code-mode-types
  *
  * Source of truth:
- *   - workspace: the platform/fs/extended interface guards
+ *   - workspace / workspaceReadOnly: the platform/fs/extended interface guards
  *     (`FilesystemInterface` and the remotables it reaches), the richest
  *     available source since the FS `.d.ts` is a stub.
+ *     The read-only variant
+ *     filters every reachable mutable interface to the runtime attenuator's
+ *     inspection surface.
  *
  * The generic extraction and rendering live in
  * scripts/code-mode-type-extract.js; this exo's source configuration lives in
@@ -116,6 +119,73 @@ type Xattrs = {
   list: () => ERef<PassableReader>;
   remove: (arg0: string) => Promise<unknown>;
   set: (arg0: string, arg1: unknown) => ERef<PassableBytesWriter>;
+};`,
+    body: `Filesystem`,
+  },
+  workspaceReadOnly: {
+    aux: `type Filesystem = {
+  brands: () => Promise<unknown>;
+  help: (arg0?: string) => string;
+  named: (arg0: string) => ERef<Directory>;
+  root: () => ERef<Directory>;
+  statfs: () => Promise<unknown>;
+};
+type ERef<T> = T | Promise<T>;
+type Cursor = {
+  close: () => Promise<unknown>;
+  help: (arg0?: string) => string;
+  read: (arg0?: bigint) => Promise<unknown>;
+  rewind: () => Promise<unknown>;
+  skip: (arg0: bigint) => Promise<unknown>;
+  stream: () => ERef<PassableReader>;
+  toArray: () => Promise<unknown>;
+};
+type Directory = {
+  getAttrs: () => Promise<unknown>;
+  getQid: () => unknown;
+  getStat: () => Promise<unknown>;
+  help: (arg0?: string) => string;
+  list: () => ERef<Cursor>;
+  lookup: (arg0: string | Array<string>) => ERef<Directory | File>;
+  lookupStep: (arg0: string) => ERef<Directory | File>;
+  subView: (arg0: string | Array<string>) => ERef<Directory>;
+  watch: () => ERef<NodeWatcher>;
+  watchFrom: () => ERef<unknown>;
+  xattrs: () => ERef<Xattrs>;
+};
+type File = {
+  getAttrs: () => Promise<unknown>;
+  getQid: () => unknown;
+  getStat: () => Promise<unknown>;
+  help: (arg0?: string) => string;
+  open: (arg0: unknown) => ERef<OpenFile>;
+  snapshot: () => Promise<unknown>;
+  watch: () => ERef<NodeWatcher>;
+  xattrs: () => ERef<Xattrs>;
+};
+type NodeWatcher = {
+  cancel: () => Promise<unknown>;
+  events: () => ERef<PassableReader>;
+};
+type OpenFile = {
+  close: () => Promise<unknown>;
+  getLock: (arg0: unknown) => Promise<unknown>;
+  help: (arg0?: string) => string;
+  read: (arg0?: bigint, arg1?: bigint) => unknown;
+};
+type PassableBytesReader = {
+  readReturnPattern: () => undefined | unknown;
+  streamBase64: (arg0: unknown) => Promise<unknown>;
+};
+type PassableReader = {
+  readPattern: () => undefined | unknown;
+  readReturnPattern: () => undefined | unknown;
+  stream: (arg0: unknown) => Promise<unknown>;
+};
+type Xattrs = {
+  get: (arg0: string) => ERef<PassableBytesReader>;
+  help: (arg0?: string) => string;
+  list: () => ERef<PassableReader>;
 };`,
     body: `Filesystem`,
   },

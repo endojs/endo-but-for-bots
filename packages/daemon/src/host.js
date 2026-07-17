@@ -5,7 +5,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
-/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitRemoteDeferredTaskParams, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitFormula, GitRemoteDeferredTaskParams, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 
 import { E } from '@endo/eventual-send';
@@ -14,6 +14,7 @@ import { makeError, q, X } from '@endo/errors';
 import {
   getGitCredentialController as getGitCredentialControllerForCap,
   getGitRemoteController as getGitRemoteControllerForCap,
+  isGitHistoryRewrite,
   isGitReadOnly,
   makeGitCloner,
   makeGitRemoteEndpoint,
@@ -51,6 +52,11 @@ import {
 } from './interfaces.js';
 import { hostHelp, makeHelp } from './help-text.js';
 import { assertValidTreeEntryName, getMountBacking } from './mount.js';
+
+const MOUNT_FILESYSTEM_MODULE_URL = new URL(
+  '../../platform/src/fs/extended/mount-filesystem-module.js',
+  import.meta.url,
+).href;
 
 /**
  * @param {string} name
@@ -1005,6 +1011,12 @@ export const makeHostMaker = ({
       }
       const { destMount, endpoint: endpointOptions } = opts;
       const identity = normalizeGitIdentity(opts.identity, 'provideGitClone');
+      const allowHistoryRewrite = opts.allowHistoryRewrite ?? false;
+      if (typeof allowHistoryRewrite !== 'boolean') {
+        throw makeError(
+          X`provideGitClone: allowHistoryRewrite must be a boolean`,
+        );
+      }
       const destMountId = getIdForRef(destMount);
       if (destMountId === undefined) {
         throw makeError(
@@ -1071,7 +1083,7 @@ export const makeHostMaker = ({
           const tasks = makeDeferredTasks();
           const { value, id } = await formulateGit(
             destMountId,
-            false,
+            allowHistoryRewrite,
             identity,
             tasks,
           );
@@ -1112,6 +1124,316 @@ export const makeHostMaker = ({
       return harden({
         git: gitCap,
         remote,
+      });
+    };
+
+    /**
+     * @param {string} label
+     * @returns {PetName}
+     */
+    const freshCodeModePetName = label => {
+      let petName;
+      do {
+        // This name is only a daemon pet-store key.
+        // It is never exposed as a
+        // lexical binding or host path.
+        // eslint-disable-next-line no-bitwise
+        const suffix = Math.floor(Math.random() * 0xff_ffff).toString(16);
+        petName = `code-mode-${label}-${suffix}`;
+      } while (
+        petStore.identifyLocal(/** @type {Name} */ (petName)) !== undefined
+      );
+      return /** @type {PetName} */ (petName);
+    };
+
+    /**
+     * Bind a daemon-minted formula capability to a fresh or caller-selected
+     * pet name.
+     * Foreign and ephemeral wrapper capabilities fail closed.
+     *
+     * @param {unknown} cap
+     * @param {NameOrPath} petName
+     * @param {string} label
+     */
+    const bindCodeModePower = async (cap, petName, label) => {
+      const id = getIdForRef(cap);
+      if (id === undefined) {
+        throw makeError(
+          X`prepareCodeMode: ${q(label)} must be a daemon-minted formula capability`,
+        );
+      }
+      await E(directory).storeIdentifier(petNamePathFrom(petName).namePath, id);
+    };
+
+    /**
+     * Resolve a direct daemon capability or an existing petname binding.
+     *
+     * @param {unknown} direct
+     * @param {unknown} petName
+     * @param {string} label
+     * @returns {Promise<unknown | undefined>}
+     */
+    const resolveCodeModePower = async (direct, petName, label) => {
+      await null;
+      if (direct !== undefined) {
+        return direct;
+      }
+      if (petName === undefined) {
+        return undefined;
+      }
+      const namePath = namePathFrom(/** @type {NameOrPath} */ (petName));
+      try {
+        return await E(directory).lookup(namePath);
+      } catch (error) {
+        throw makeError(
+          X`prepareCodeMode: could not resolve ${q(label)} binding`,
+          undefined,
+          { cause: /** @type {Error} */ (error) },
+        );
+      }
+    };
+
+    /** @type {EndoHost['prepareCodeMode']} */
+    const prepareCodeMode = async request => {
+      await null;
+      if (!request || typeof request !== 'object') {
+        throw makeError(X`prepareCodeMode: request must be an object`);
+      }
+      const access = request.access;
+      if (!['inspect', 'edit', 'rewriteHistory'].includes(access)) {
+        throw makeError(
+          X`prepareCodeMode: access must be inspect, edit, or rewriteHistory`,
+        );
+      }
+      const powers = request.powers || {};
+      if (!powers || typeof powers !== 'object') {
+        throw makeError(X`prepareCodeMode: powers must be an object`);
+      }
+      const repository = request.repository;
+      if (
+        repository !== undefined &&
+        (powers.workspace !== undefined ||
+          powers.workspacePetName !== undefined ||
+          powers.git !== undefined ||
+          powers.gitPetName !== undefined)
+      ) {
+        throw makeError(
+          X`prepareCodeMode: repository setup cannot be combined with pre-provisioned workspace or Git powers`,
+        );
+      }
+
+      let sourceMount;
+      let sourceGit;
+      let repositorySetup = false;
+      if (repository !== undefined) {
+        if (
+          typeof repository !== 'object' ||
+          repository === null ||
+          typeof repository.remoteUrl !== 'string'
+        ) {
+          throw makeError(
+            X`prepareCodeMode: repository.remoteUrl must be a string`,
+          );
+        }
+        repositorySetup = true;
+        const cloneMountName = freshCodeModePetName('clone-mount');
+        sourceMount = await provideScratchMount(cloneMountName);
+        const clone = await provideGitClone({
+          destMount: sourceMount,
+          endpoint: harden({
+            url: repository.remoteUrl,
+            ...(repository.credential !== undefined && {
+              credential: repository.credential,
+            }),
+            ...(repository.allowLocalFileTransport !== undefined && {
+              allowLocalFileTransport: repository.allowLocalFileTransport,
+            }),
+          }),
+          allowHistoryRewrite: access === 'rewriteHistory',
+          ...(repository.identity !== undefined && {
+            identity: repository.identity,
+          }),
+        });
+        sourceGit = clone.git;
+      } else {
+        sourceMount = await resolveCodeModePower(
+          powers.workspace,
+          powers.workspacePetName,
+          'workspace',
+        );
+        sourceGit = await resolveCodeModePower(
+          powers.git,
+          powers.gitPetName,
+          'git',
+        );
+      }
+
+      /** @type {FormulaIdentifier | undefined} */
+      let sourceMountId;
+      if (sourceMount !== undefined) {
+        sourceMountId = getIdForRef(sourceMount);
+        if (
+          sourceMountId === undefined ||
+          getMountBacking(/** @type {object} */ (sourceMount)) === undefined
+        ) {
+          throw makeError(
+            X`prepareCodeMode: workspace must be a daemon-minted top-level Mount capability`,
+          );
+        }
+      }
+
+      /** @type {GitFormula | undefined} */
+      let sourceGitFormula;
+      if (sourceGit !== undefined) {
+        const sourceGitId = getIdForRef(sourceGit);
+        if (sourceGitId === undefined) {
+          throw makeError(
+            X`prepareCodeMode: Git must be a daemon-minted formula capability`,
+          );
+        }
+        const formula = await getFormulaForId(sourceGitId);
+        if (formula.type !== 'git') {
+          throw makeError(
+            X`prepareCodeMode: Git binding does not identify a Git formula`,
+          );
+        }
+        sourceGitFormula = formula;
+        if (sourceMountId === undefined) {
+          sourceMountId = formula.mountId;
+          sourceMount = await provide(formula.mountId, 'mount');
+        } else if (formula.mountId !== sourceMountId) {
+          throw makeError(
+            X`prepareCodeMode: workspace and Git must refer to the same worktree`,
+          );
+        }
+      }
+
+      const sourceMountBacking =
+        sourceMount === undefined
+          ? undefined
+          : getMountBacking(/** @type {object} */ (sourceMount));
+      if (
+        access !== 'inspect' &&
+        sourceMountBacking !== undefined &&
+        sourceMountBacking.readOnly
+      ) {
+        throw makeError(
+          X`prepareCodeMode: ${q(access)} requires a writable workspace Mount`,
+        );
+      }
+      if (sourceGit !== undefined && !repositorySetup) {
+        const gitReadOnly = isGitReadOnly(sourceGit);
+        const gitHistoryRewrite = isGitHistoryRewrite(sourceGit);
+        if (access !== 'inspect' && gitReadOnly !== false) {
+          const posture = gitReadOnly === true ? 'read-only' : 'unknown';
+          throw makeError(
+            X`prepareCodeMode: ${q(access)} requires proven writable Git authority; received ${q(posture)} posture`,
+          );
+        }
+        if (access === 'rewriteHistory' && gitHistoryRewrite !== true) {
+          const posture = gitHistoryRewrite === false ? 'ordinary' : 'unknown';
+          throw makeError(
+            X`prepareCodeMode: rewriteHistory requires proven history-rewrite Git authority; received ${q(posture)} posture`,
+          );
+        }
+      }
+
+      let preparedMount = sourceMount;
+      if (access === 'inspect' && sourceMountId !== undefined) {
+        const hostPath = await getMountHostPath(sourceMountId);
+        preparedMount = await provideMount(
+          hostPath,
+          freshCodeModePetName('read-only-mount'),
+          { readOnly: true },
+        );
+      }
+
+      let workspaceAttestation;
+      if (
+        powers.workspace !== undefined ||
+        powers.workspacePetName !== undefined ||
+        repositorySetup
+      ) {
+        if (preparedMount === undefined) {
+          throw makeError(X`prepareCodeMode: workspace Mount is unavailable`);
+        }
+        const mountName = freshCodeModePetName('mount');
+        await bindCodeModePower(preparedMount, mountName, 'workspace Mount');
+        const workspaceName = freshCodeModePetName('workspace');
+        await makeUnconfined('@node', MOUNT_FILESYSTEM_MODULE_URL, {
+          powersName: '@agent',
+          resultName: workspaceName,
+          env: harden({
+            SOURCE_NAME: mountName,
+            READ_ONLY: access === 'inspect' ? 'true' : 'false',
+          }),
+        });
+        workspaceAttestation = harden({
+          petName: workspaceName,
+          readOnly: access === 'inspect',
+        });
+      }
+
+      let gitAttestation;
+      if (
+        powers.git !== undefined ||
+        powers.gitPetName !== undefined ||
+        repositorySetup
+      ) {
+        if (preparedMount === undefined || sourceGit === undefined) {
+          throw makeError(X`prepareCodeMode: Git worktree is unavailable`);
+        }
+        const gitName = freshCodeModePetName('git');
+        await provideGit(/** @type {EndoMount} */ (preparedMount), gitName, {
+          allowHistoryRewrite: access === 'rewriteHistory',
+          ...(sourceGitFormula?.identity !== undefined && {
+            identity: sourceGitFormula.identity,
+          }),
+        });
+        gitAttestation = harden({
+          petName: gitName,
+          readOnly: access === 'inspect',
+          historyRewrite: access === 'rewriteHistory',
+        });
+      }
+
+      const namedPowers = [];
+      for (const namedPower of powers.namedPowers || []) {
+        if (
+          !namedPower ||
+          typeof namedPower !== 'object' ||
+          typeof namedPower.name !== 'string'
+        ) {
+          throw makeError(
+            X`prepareCodeMode: named powers require a string name`,
+          );
+        }
+        const petName = /** @type {NameOrPath} */ (namedPower.petName);
+        // eslint-disable-next-line no-await-in-loop
+        const cap = await resolveCodeModePower(
+          namedPower.power,
+          petName,
+          namedPower.name,
+        );
+        if (cap === undefined) {
+          throw makeError(
+            X`prepareCodeMode: named power ${q(namedPower.name)} is unavailable`,
+          );
+        }
+        if (namedPower.power !== undefined) {
+          // eslint-disable-next-line no-await-in-loop
+          await bindCodeModePower(cap, petName, namedPower.name);
+        }
+        namedPowers.push(harden({ name: namedPower.name, petName }));
+      }
+
+      return harden({
+        access,
+        ...(workspaceAttestation !== undefined && {
+          workspace: workspaceAttestation,
+        }),
+        ...(gitAttestation !== undefined && { git: gitAttestation }),
+        namedPowers: harden(namedPowers),
       });
     };
 
@@ -2407,6 +2729,7 @@ export const makeHostMaker = ({
       getHttpClientControl,
       provideGitRemote,
       provideGitClone,
+      prepareCodeMode,
       provideBearerCredential,
       provideBasicCredential,
       getGitCredentialController,

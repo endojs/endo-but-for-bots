@@ -13,10 +13,13 @@ import {
   fauxAssistantMessage,
   fauxToolCall,
 } from '@earendil-works/pi-ai/compat';
-import { makeNodeFilesystem } from '@endo/platform/fs/extended';
+import {
+  makeNodeFilesystem,
+  readOnly as readOnlyFilesystem,
+} from '@endo/platform/fs/extended';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
-import { makeGit } from '@endo/exo-git';
+import { isGitReadOnly, makeGit } from '@endo/exo-git';
 import { makeNativeGitBackend } from '@endo/git';
 import { makeMount, lineageOf } from '@endo/daemon/src/mount.js';
 import { makeFilePowers } from '@endo/daemon/src/daemon-node-powers.js';
@@ -28,7 +31,7 @@ import { fsDeclarations } from '@endo/agent-tools/generated/code-mode-globals/fs
 import {
   makeCodeModeSystemPrompt,
   makeCodeModeAgent,
-  makeCodeModeGitLoopAgent,
+  prepareCodeMode,
 } from '../src/code-mode.js';
 import { defineAgent, makeEnvCredentials } from '../src/define-agent.js';
 
@@ -240,11 +243,16 @@ test('a typed global injects its generated declaration into the prompt', t => {
   t.true(systemPrompt.includes('__getMethodNames__'));
 });
 
-test('makeCodeModeAgent configures one history-rewrite git capability', async t => {
+test('makeCodeModeAgent infers the history-rewrite Git surface from its power', async t => {
   const { workspace, git } = await makeRealGit(t, true);
+  const setup = await prepareCodeMode({
+    host: { kind: 'inProcess' },
+    powers: { workspace, git },
+    access: 'rewriteHistory',
+  });
   const { globals, systemPrompt } = makeCodeModeAgent({
     model: fauxModel(t, []),
-    powers: { workspace, git, gitMode: 'historyRewrite' },
+    ...setup,
   });
   t.deepEqual(
     globals.map(global => global.name),
@@ -259,23 +267,31 @@ test('makeCodeModeAgent configures one history-rewrite git capability', async t 
   t.true(systemPrompt.includes('reword:'));
 });
 
-test('makeCodeModeAgent rejects ordinary Git for history-rewrite mode', async t => {
+test('makeCodeModeAgent uses the ordinary Git surface without history-rewrite authority', async t => {
   const { workspace, git } = await makeRealGit(t);
-  t.throws(
-    () =>
-      makeCodeModeAgent({
-        model: fauxModel(t, []),
-        powers: { workspace, git, gitMode: 'historyRewrite' },
-      }),
-    { message: /requires a Git capability with history-rewrite authority/ },
-  );
+  const setup = await prepareCodeMode({
+    host: { kind: 'inProcess' },
+    powers: { workspace, git },
+    access: 'edit',
+  });
+  const { systemPrompt } = makeCodeModeAgent({
+    model: fauxModel(t, []),
+    ...setup,
+  });
+  t.true(systemPrompt.includes('declare const git: WritableEndoGit;'));
+  t.false(systemPrompt.includes('declare const git: EndoGitHistory;'));
 });
 
 test('makeCodeModeAgent injects typed git + workspace declarations from powers', async t => {
   const { workspace, git } = await makeRealGit(t);
+  const setup = await prepareCodeMode({
+    host: { kind: 'inProcess' },
+    powers: { workspace, git },
+    access: 'edit',
+  });
   const { systemPrompt } = makeCodeModeAgent({
     model: fauxModel(t, []),
-    powers: { workspace, git },
+    ...setup,
   });
   t.true(systemPrompt.includes('declare const git: WritableEndoGit;'));
   t.true(systemPrompt.includes('declare const workspace: Filesystem;'));
@@ -327,25 +343,43 @@ test('defineAgent returns a maker that builds a powered agent', t => {
   t.is(agent.state.systemPrompt, 'You are codeMode.');
 });
 
-test('makeCodeModeAgent exposes only evaluate and rejects non-readOnly git in readOnly mode', async t => {
+test('prepareCodeMode inspect attenuates Git and workspace powers at runtime and in the prompt', async t => {
   const { workspace, git } = await makeRealGit(t);
   const model = fauxModel(t, [fauxAssistantMessage('done')]);
-
-  t.throws(
-    () =>
-      makeCodeModeAgent({
-        model,
-        powers: { workspace, git, gitMode: 'readOnly' },
-      }),
-    { message: /requires an already read-only Git capability/ },
+  const setup = await prepareCodeMode({
+    host: { kind: 'inProcess' },
+    powers: { workspace, git },
+    access: 'inspect',
+  });
+  await t.throwsAsync(
+    setup.evaluate({
+      source:
+        "(async () => E(await E(workspace).root()).write('new.txt', 'content'))()",
+      globals: setup.globals,
+    }),
+    {
+      message: /read-only Filesystem/,
+    },
   );
-
-  const readOnlyGit = /** @type {{ readOnly: () => unknown }} */ (
-    /** @type {unknown} */ (git)
-  ).readOnly();
-  const { agent, globals } = makeCodeModeAgent({
+  await t.throwsAsync(
+    setup.evaluate({
+      source: "E(git).commit('not allowed')",
+      globals: setup.globals,
+    }),
+    {
+      message: /not permitted on a read-only Git capability/,
+    },
+  );
+  const attenuatedGit = await setup.evaluate({
+    source: 'git',
+    globals: setup.globals,
+  });
+  t.true(isGitReadOnly(attenuatedGit));
+  const root = await E(workspace).root();
+  await E(root).write('still-writable.txt', 'content');
+  const { agent, globals, systemPrompt } = makeCodeModeAgent({
     model,
-    powers: { workspace, git: readOnlyGit, gitMode: 'readOnly' },
+    ...setup,
   });
   t.deepEqual(
     agent.state.tools.map(tool => tool.name),
@@ -355,6 +389,269 @@ test('makeCodeModeAgent exposes only evaluate and rejects non-readOnly git in re
     globals.map(global => global.name),
     ['workspace', 'git'],
   );
+  t.true(systemPrompt.includes('declare const git: ReadOnlyEndoGit;'));
+  t.true(
+    systemPrompt.includes(
+      'Read-only @endo/platform/fs/extended Filesystem for repository inspection.',
+    ),
+  );
+  t.false(systemPrompt.includes('write: (arg0: string, arg1: string)'));
+});
+
+test('prepareCodeMode refuses to widen read-only workspace or Git powers', async t => {
+  const { workspace, git } = await makeRealGit(t);
+  const readOnlyWorkspace = readOnlyFilesystem(workspace);
+  const readOnlyGit = git.readOnly();
+  await t.throwsAsync(
+    prepareCodeMode({
+      host: { kind: 'inProcess' },
+      powers: { workspace: readOnlyWorkspace, git },
+      access: 'edit',
+    }),
+    { message: /requires a proven writable Filesystem.*read-only posture/ },
+  );
+  await t.throwsAsync(
+    prepareCodeMode({
+      host: { kind: 'inProcess' },
+      powers: { workspace, git: readOnlyGit },
+      access: 'rewriteHistory',
+    }),
+    { message: /requires a proven writable Git.*read-only posture/ },
+  );
+});
+
+test('prepareCodeMode never treats unknown Git posture as writable', async t => {
+  const readOnlyFake = Far('ReadOnlyFakeGit', {
+    async branches() {
+      return harden([]);
+    },
+  });
+  const fake = Far('RemoteShapedFakeGit', {
+    readOnly() {
+      return readOnlyFake;
+    },
+  });
+  const cases = [
+    {
+      label: 'direct fake',
+      host: /** @type {const} */ ({ kind: 'inProcess' }),
+      powers: { git: fake },
+    },
+    {
+      label: 'promise',
+      host: /** @type {const} */ ({ kind: 'inProcess' }),
+      powers: { git: Promise.resolve(fake) },
+    },
+    {
+      label: 'lookup-resolved fake',
+      host: /** @type {const} */ ({
+        kind: 'inProcess',
+        powers: Far('LookupPowers', {
+          async lookup() {
+            return fake;
+          },
+        }),
+      }),
+      powers: { gitPetName: 'git-cap' },
+    },
+  ];
+  for (const candidate of cases) {
+    // eslint-disable-next-line no-await-in-loop
+    const error = await t.throwsAsync(
+      prepareCodeMode({
+        host: candidate.host,
+        powers: candidate.powers,
+        access: 'edit',
+      }),
+      { message: /unknown posture/ },
+    );
+    t.truthy(error, candidate.label);
+  }
+
+  const inspect = await prepareCodeMode({
+    host: { kind: 'inProcess' },
+    powers: { git: fake },
+    access: 'inspect',
+  });
+  t.true(inspect.globals[0].description?.startsWith('Read-only @endo/exo-git'));
+  t.is(
+    await inspect.evaluate({ source: 'git', globals: inspect.globals }),
+    readOnlyFake,
+  );
+});
+
+test('prepareCodeMode inspect leaves unsupported named powers unchanged', async t => {
+  let count = 0;
+  const counter = Far('Counter', {
+    increment() {
+      count += 1;
+      return count;
+    },
+  });
+  const description = 'Mutable counter capability; unchanged by setup.';
+  const setup = await prepareCodeMode({
+    host: { kind: 'inProcess' },
+    powers: {
+      namedPowers: [{ name: 'counter', description, power: counter }],
+    },
+    access: 'inspect',
+  });
+  t.is(setup.globals[0].description, description);
+  t.is(
+    await setup.evaluate({
+      source: 'E(counter).increment()',
+      globals: setup.globals,
+    }),
+    1,
+  );
+});
+
+test('prepareCodeMode daemon preparation trusts only matching host attestations', async t => {
+  const preparationCalls = [];
+  const evaluationCalls = [];
+  const credential = Far('Credential', {});
+  const controller = Far('HostController', {});
+  const daemonPowers = Far('DaemonPowers', {
+    async prepareCodeMode(request) {
+      preparationCalls.push(request);
+      return harden({
+        access: request.access,
+        workspace: {
+          petName: ['prepared', 'workspace'],
+          readOnly: false,
+        },
+        git: {
+          petName: ['prepared', 'git'],
+          readOnly: false,
+          historyRewrite: false,
+        },
+        namedPowers: harden([]),
+        controller,
+      });
+    },
+    async evaluate(...args) {
+      evaluationCalls.push(args);
+      return 'daemon-result';
+    },
+  });
+  const setup = await prepareCodeMode({
+    host: { kind: 'daemon', powers: daemonPowers },
+    repository: {
+      remoteUrl: 'https://example.invalid/org/repository.git',
+      credential,
+    },
+    access: 'edit',
+  });
+  t.is(preparationCalls.length, 1);
+  t.is(
+    preparationCalls[0].repository.remoteUrl,
+    'https://example.invalid/org/repository.git',
+  );
+  t.is(preparationCalls[0].repository.credential, credential);
+  t.deepEqual(
+    setup.globals.map(({ name, petName }) => ({ name, petName })),
+    [
+      { name: 'workspace', petName: ['prepared', 'workspace'] },
+      { name: 'git', petName: ['prepared', 'git'] },
+    ],
+  );
+  t.false(JSON.stringify(setup.globals).includes('HostController'));
+  t.false(JSON.stringify(setup.globals).includes('Credential'));
+  const result = await setup.evaluate({
+    source: 'E(git).status()',
+    resultName: ['results', 'status'],
+    globals: setup.globals,
+  });
+  t.is(result, 'daemon-result');
+  t.deepEqual(evaluationCalls, [
+    [
+      undefined,
+      'E(git).status()',
+      ['workspace', 'git'],
+      [
+        ['prepared', 'workspace'],
+        ['prepared', 'git'],
+      ],
+      ['results', 'status'],
+    ],
+  ]);
+});
+
+test('prepareCodeMode daemon preparation rejects contradictory attestations', async t => {
+  const daemonPowers = Far('ContradictoryDaemonPowers', {
+    async prepareCodeMode() {
+      return harden(
+        /** @type {const} */ ({
+          access: 'inspect',
+          git: {
+            petName: 'git',
+            readOnly: false,
+            historyRewrite: false,
+          },
+          namedPowers: [],
+        }),
+      );
+    },
+    async evaluate() {
+      return undefined;
+    },
+  });
+  await t.throwsAsync(
+    prepareCodeMode({
+      host: { kind: 'daemon', powers: daemonPowers },
+      powers: { gitPetName: 'git' },
+      access: 'inspect',
+    }),
+    { message: /Git attestation contradicts requested access/ },
+  );
+});
+
+test('prepareCodeMode edit grants ordinary runtime mutation', async t => {
+  const { workspace, git } = await makeRealGit(t);
+  const setup = await prepareCodeMode({
+    host: { kind: 'inProcess' },
+    powers: { workspace, git },
+    access: 'edit',
+  });
+  const result = await setup.evaluate({
+    source: `\
+(async () => {
+  const root = await E(workspace).root();
+  await E(root).write('new.txt', 'content');
+  return (await E(git).status()).some(row => row.path === 'new.txt');
+})()`,
+    globals: setup.globals,
+  });
+  t.true(result);
+  t.true(
+    setup.globals.some(global =>
+      global.description?.startsWith('Writable @endo/platform'),
+    ),
+  );
+});
+
+test('prepareCodeMode rewriteHistory advertises and retains elevated Git authority', async t => {
+  const { workspace, git } = await makeRealGit(t, true);
+  const setup = await prepareCodeMode({
+    host: { kind: 'inProcess' },
+    powers: { workspace, git },
+    access: 'rewriteHistory',
+  });
+  const prompt = makeCodeModeSystemPrompt(setup.globals);
+  t.true(prompt.includes('declare const git: EndoGitHistory;'));
+  const result = await setup.evaluate({
+    source: "E(git).commit('amended', { amend: true })",
+    globals: setup.globals,
+  });
+  t.is(/** @type {{ summary: string }} */ (result).summary, 'amended');
+});
+
+test('read-only Filesystem attenuation still rejects direct writes', async t => {
+  const { workspace } = await makeRealGit(t);
+  const root = await E(readOnlyFilesystem(workspace)).root();
+  await t.throwsAsync(E(root).write('new.txt', 'content'), {
+    message: /read-only Filesystem/,
+  });
 });
 
 test('faux provider drives a scripted evaluate-only code-mode agent', async t => {
@@ -371,12 +668,12 @@ test('faux provider drives a scripted evaluate-only code-mode agent', async t =>
   ]);
   const { agent } = makeCodeModeAgent({
     model,
-    powers: { git, gitPetName: 'git', gitMode: 'readOnly' },
     evaluate: async input => {
       const result = await compartmentEvaluateOver({ git })(input);
       executions.push(result);
       return result;
     },
+    globals: harden([{ name: 'git', description: 'Repository Git.' }]),
   });
 
   await agent.prompt('List branch names.');
@@ -386,7 +683,7 @@ test('faux provider drives a scripted evaluate-only code-mode agent', async t =>
   t.deepEqual(executions, [['main']]);
 });
 
-test('git-loop preset edits the workspace, commits, and reads HEAD~1 over a real mount', async t => {
+test('code-mode agent edits the workspace, commits, and reads HEAD~1 over a real mount', async t => {
   const { repoRoot, workspace, git } = await makeRealGit(t);
 
   const executions = [];
@@ -425,13 +722,28 @@ test('git-loop preset edits the workspace, commits, and reads HEAD~1 over a real
     currentText,
   };
 })()`;
-  const evaluate = async input => {
-    const result = await compartmentEvaluateOver({
-      git,
+  const setup = await prepareCodeMode({
+    host: { kind: 'inProcess' },
+    powers: {
       workspace,
-      readFileText,
-      writeFileText,
-    })(input);
+      git,
+      namedPowers: [
+        {
+          name: 'readFileText',
+          description: 'Read a UTF-8 file through a File capability.',
+          power: readFileText,
+        },
+        {
+          name: 'writeFileText',
+          description: 'Write UTF-8 text through a File capability.',
+          power: writeFileText,
+        },
+      ],
+    },
+    access: 'edit',
+  });
+  const evaluate = async input => {
+    const result = await setup.evaluate(input);
     executions.push(result);
     return result;
   };
@@ -441,29 +753,10 @@ test('git-loop preset edits the workspace, commits, and reads HEAD~1 over a real
     }),
     fauxAssistantMessage('done'),
   ]);
-  const agent = makeCodeModeGitLoopAgent({
+  const { agent } = makeCodeModeAgent({
     model,
-    workspace,
-    git,
     evaluate,
-    globals: harden([
-      {
-        name: 'workspace',
-        description: 'Writable repository Filesystem.',
-      },
-      {
-        name: 'git',
-        description: 'Read/write repository Git capability.',
-      },
-      {
-        name: 'readFileText',
-        description: 'Read a UTF-8 file through an endo-fs File capability.',
-      },
-      {
-        name: 'writeFileText',
-        description: 'Write UTF-8 text through an endo-fs File capability.',
-      },
-    ]),
+    globals: setup.globals,
   });
 
   await agent.prompt('Edit note.txt, commit the change, and inspect HEAD~1.');

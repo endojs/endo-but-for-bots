@@ -19,6 +19,10 @@ import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { makeInMemoryFilesystem } from '../src/fs/extended/in-memory.js';
+import {
+  isFilesystemReadOnly,
+  noteFilesystemPosture,
+} from '../src/fs/extended/posture.js';
 import { readOnly } from '../src/fs/extended/readonly.js';
 
 const utf8 = s => new TextEncoder().encode(s);
@@ -187,4 +191,13 @@ test('Filesystem.statfs passes through', async t => {
   const ro = readOnly(fs);
   const stats = await E(ro).statfs();
   t.is(typeof stats.totalBytes, 'bigint');
+});
+test('Filesystem posture is known only for trusted local construction', t => {
+  const writable = makeInMemoryFilesystem();
+  const attenuated = readOnly(writable);
+  t.false(isFilesystemReadOnly(writable));
+  t.true(isFilesystemReadOnly(attenuated));
+  t.is(isFilesystemReadOnly(harden({})), undefined);
+  t.is(isFilesystemReadOnly(Promise.resolve(writable)), undefined);
+  t.is(noteFilesystemPosture(writable, false), writable);
 });

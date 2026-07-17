@@ -1,7 +1,7 @@
 // @ts-check
 
 // The no-LLM assertion-path test for the git code-mode eval. It runs the real
-// code-mode git-loop agent and the real outcome scorer against a real git
+// repository code-mode agent and the real outcome scorer against a real git
 // repository, with the only non-live piece being a scripted faux pi-ai provider
 // standing in for the model. It needs zero credentials and no network, so it
 // runs anywhere — the live-model counterpart (same scenario, same scorer) runs

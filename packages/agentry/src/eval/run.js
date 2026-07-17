@@ -3,13 +3,14 @@
 
 /** @import { RunGitScenarioOptions, RunGitScenarioResult } from './types.js' */
 
-import { makeCodeModeGitLoopAgent } from '../code-mode.js';
+import { makeGitScenarioAgent } from './agent.js';
 import { makeRunMetricsRecorder } from './metrics.js';
+import { prepareCodeMode } from '../code-mode.js';
 
 /**
  * Run one git code-mode scenario end to end and score it by outcome assertion.
  *
- * The agent is the real code-mode git-loop preset: its sole tool is `evaluate`,
+ * The agent is the real eval-only code-mode fixture: its sole tool is `evaluate`,
  * which evaluates JavaScript against the live `workspace` and `git` powers in a
  * Compartment. Only the model varies between a no-LLM run (a scripted faux
  * model) and a live run (a credentialed provider) — the agent, the powers, and
@@ -34,10 +35,14 @@ export const runGitScenario = async ({
   streamFn,
   onEvent,
 }) => {
-  const agent = makeCodeModeGitLoopAgent({
+  const setup = await prepareCodeMode({
+    host: { kind: 'inProcess' },
+    powers: { workspace, git },
+    access: 'edit',
+  });
+  const agent = makeGitScenarioAgent({
     model,
-    workspace,
-    git,
+    ...setup,
     getApiKey,
     thinkingLevel,
     streamFn,

@@ -10,7 +10,7 @@ import { makeCompartmentEvaluate } from '@endo/agent-tools/code-mode/compartment
 import { makeEvaluateTool } from '@endo/agent-tools/code-mode/evaluate-tool.js';
 import { normalizeGlobals } from '@endo/agent-tools/code-mode/declarations.js';
 // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
-import { makeCodeModeAgent } from '@endo/agentry/code-mode';
+import { makeCodeModeAgent, prepareCodeMode } from '@endo/agentry/code-mode';
 
 /** @import { Model } from '@earendil-works/pi-ai' */
 
@@ -309,18 +309,16 @@ test('normalizeGlobals throws on a global named E (collides with the injected ev
   );
 });
 
-test('makeCodeModeAgent throws when a namedPower collides with the well-known git binding', t => {
-  // End-to-end: a configured git power plus a namedPower named `git` must be
-  // rejected at agent-construction time, not silently resolve to the
-  // well-known git capability.
+test('makeCodeModeAgent rejects duplicate prepared global names', t => {
   t.throws(
     () =>
       makeCodeModeAgent({
         model: fauxModel,
-        powers: {
-          git: Far('G', {}),
-          namedPowers: [{ name: 'git', petName: 'other', description: 'h' }],
-        },
+        evaluate: async () => undefined,
+        globals: [
+          { name: 'git', description: 'well-known git' },
+          { name: 'git', petName: 'other', description: 'named power' },
+        ],
       }),
     { message: /code-mode global name "git" is declared twice/ },
   );
@@ -349,34 +347,20 @@ test('makeEvaluateTool.invoke forwards validated args plus normalized globals', 
   t.is(captured.resultName, undefined);
 });
 
-test('makeCodeModeAgent rejects a powers lookup name that is not a JS identifier', t => {
-  t.throws(
-    () =>
-      makeCodeModeAgent({
-        model: fauxModel,
-        powers: { git: Far('G', {}), gitPetName: 'not an id' },
-      }),
-    {
-      message:
-        /code-mode git petName must be a single JS identifier to use as a lexical binding/,
-    },
-  );
-});
-
-test('makeCodeModeAgent requires a lookup powers handle when a capability is named but not passed inline', t => {
+test('prepareCodeMode requires a lookup powers handle when a capability is named but not passed inline', async t => {
   // gitPetName names a git power, but neither `git` nor `lookupPowers` is
   // supplied, so the required-power lookup has nothing to resolve against.
-  t.throws(
-    () =>
-      makeCodeModeAgent({
-        model: fauxModel,
-        powers: { gitPetName: 'git' },
-      }),
-    { message: /code-mode git capability requires powers/ },
+  await t.throwsAsync(
+    prepareCodeMode({
+      host: { kind: 'inProcess' },
+      powers: { gitPetName: 'git' },
+      access: 'inspect',
+    }),
+    { message: /code-mode git capability requires lookup powers/ },
   );
 });
 
-test('makeCodeModeAgent resolves named powers through a live lookup handle', t => {
+test('prepareCodeMode resolves named powers through a live lookup handle', async t => {
   const looked = [];
   const fakeCap = Far('Cap', {});
   const lookupPowers = Far('Powers', {
@@ -385,14 +369,18 @@ test('makeCodeModeAgent resolves named powers through a live lookup handle', t =
       return fakeCap;
     },
   });
-  const { agent, globals, evaluate, systemPrompt, model } = makeCodeModeAgent({
-    model: fauxModel,
-    lookupPowers,
+  const setup = await prepareCodeMode({
+    host: { kind: 'inProcess', powers: lookupPowers },
     powers: {
       namedPowers: [
         { name: 'helper', petName: 'helper-cap', description: 'h' },
       ],
     },
+    access: 'inspect',
+  });
+  const { agent, globals, evaluate, systemPrompt, model } = makeCodeModeAgent({
+    model: fauxModel,
+    ...setup,
   });
   t.is(model, fauxModel);
   t.is(typeof evaluate, 'function');
@@ -410,6 +398,7 @@ test('makeCodeModeAgent resolves named powers through a live lookup handle', t =
 test('makeCodeModeAgent honors an explicit globals list and preamble override', t => {
   const { systemPrompt, globals } = makeCodeModeAgent({
     model: fauxModel,
+    evaluate: async () => undefined,
     globals: harden([{ name: 'thing', description: 'a thing' }]),
     preamble: 'CUSTOM PREAMBLE.',
   });
@@ -421,32 +410,28 @@ test('makeCodeModeAgent honors an explicit globals list and preamble override', 
   );
 });
 
-test('makeCodeModeAgent uses a supplied evaluate and lexical endowments end to end', async t => {
-  const { evaluate } = makeCodeModeAgent({
-    model: fauxModel,
-    endowments: { tally: 10 },
-    powers: { namedPowers: [] },
+test('prepareCodeMode uses supplied in-process lexical endowments', async t => {
+  const { evaluate } = await prepareCodeMode({
+    host: { kind: 'inProcess', endowments: { tally: 10 } },
+    access: 'inspect',
   });
-  // The default compartment evaluate runs the source against the endowments.
   const result = await evaluate({ source: 'tally * 2', globals: [] });
   t.is(result, 20);
   // E is always endowed.
   t.is(typeof E, 'function');
 });
 
-test('makeCodeModeAgent rejects a custom evaluate paired with onContainedEventualSendRejection', t => {
-  // A custom evaluate bypasses makeCompartmentEvaluate, so the reporter would
-  // silently never fire; fail fast instead of accepting dead configuration.
+test('makeCodeModeAgent requires a prepared evaluator', t => {
   t.throws(
     () =>
-      makeCodeModeAgent({
-        model: fauxModel,
-        evaluate: async () => 'unused',
-        onContainedEventualSendRejection: () => {},
-      }),
+      Reflect.apply(makeCodeModeAgent, undefined, [
+        {
+          model: fauxModel,
+          globals: [],
+        },
+      ]),
     {
-      message:
-        /onContainedEventualSendRejection has no effect with a custom evaluate/,
+      message: /requires an evaluate function from prepareCodeMode/,
     },
   );
 });
