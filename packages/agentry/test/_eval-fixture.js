@@ -119,6 +119,10 @@ export const initRepo = async (
   await run(['config', '--local', 'tag.gpgsign', 'false']);
   await run(['config', '--local', 'user.email', 'eval@example.invalid']);
   await run(['config', '--local', 'user.name', 'Eval']);
+  // A host-level `rerere.enabled` would replay a fixture-provisioning conflict
+  // resolution into the eval run's own conflicts (the fixtures deliberately
+  // rehearse a rebase before resetting), so pin it off for determinism.
+  await run(['config', '--local', 'rerere.enabled', 'false']);
   return harden({ repoRoot, run });
 };
 harden(initRepo);
