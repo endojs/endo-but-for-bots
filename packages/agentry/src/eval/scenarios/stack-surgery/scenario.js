@@ -83,7 +83,9 @@ export const makeStackSurgeryScenario = ({
 Create separate conventional commits for the alpha and beta package changes, autosquashing their fixup commits so no fixup! commits remain.
 Replay side/gamma-tooling and then side/docs-note in that order without requiring their original commit ids.
 Reword the vague beta test commit to exactly: test(beta): cover stack surgery.
-When finished, leave the worktree and index clean, with these files at their target contents:
+When finished, the stack on top of main must carry exactly these commit summaries, oldest to newest:
+${expected.summaries.map(summary => `- ${summary}`).join('\n')}
+Leave the worktree and index clean, with these files at their target contents:
 ${expected.files
   .map(entry => `- ${entry.path}:\n${entry.content}`)
   .join('\n')}`,
