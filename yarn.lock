@@ -2229,6 +2229,7 @@ __metadata:
     "@endo/marshal": "workspace:^"
     "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
+    "@endo/platform": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
