@@ -2,7 +2,9 @@
 
 // The per-eval repository fixture for the stack-surgery scenario. It builds the
 // intentionally messy branch graph with test-side git; the scenario scorer later
-// reads only final repository state through the git capability.
+// reads only final repository state through the git capability. The agent-facing
+// powers carry history-rewrite authority because the scenario's whole task is a
+// history rewrite (cherry-pick, reword, autosquash).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -124,7 +126,9 @@ export const provisionStackSurgeryRepo = async t => {
   await run(['add', 'beta/stack.test.js']);
   await run(['commit', '-q', '-m', 'test: more coverage']);
 
-  const { workspace, git } = makePowersOver(repoRoot);
+  const { workspace, git } = makePowersOver(repoRoot, {
+    allowHistoryRewrite: true,
+  });
   return harden({ repoRoot, workspace, git, run });
 };
 harden(provisionStackSurgeryRepo);

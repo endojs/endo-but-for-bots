@@ -54,6 +54,12 @@ const DEFAULT_EXPECTED = harden({
   summaries: EXPECTED_STACK_SURGERY_SUMMARIES,
 });
 
+/** Repo-relative path to this scenario's reference solution. */
+const referenceSourcePath =
+  'packages/agentry/src/eval/scenarios/stack-surgery/reference.js';
+/** Named export in {@link referenceSourcePath} holding the reference solution. */
+const referenceSourceExport = 'stackSurgerySource';
+
 /**
  * The stack-surgery git code-mode scenario. The fixture starts on
  * `topic/stack-surgery`, where the agent must split a mixed alpha/beta commit,
@@ -70,6 +76,8 @@ export const makeStackSurgeryScenario = ({
   harden({
     name: 'stack-surgery',
     expected,
+    referenceSourcePath,
+    referenceSourceExport,
     prompt: `Rework the current topic/stack-surgery branch into a clean stack on main.
 
 Create separate conventional commits for the alpha and beta package changes, autosquashing their fixup commits so no fixup! commits remain.
