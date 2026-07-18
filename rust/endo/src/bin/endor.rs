@@ -16,7 +16,7 @@
 //!   endor run     [-e xs] <archive.zip>
 //!                               # standalone archive runner
 //!   endor run     [--offline] <entry.js>
-//!                               # assemble npm deps into the CAS
+//!                               # run an entry module, npm deps via CAS
 //!
 //! The manager is hosted in-process by `endor daemon` on a
 //! dedicated `std::thread`; there is no separate `manager`
@@ -132,8 +132,8 @@ fn print_help() {
     eprintln!("Child-facing commands (XS engine by default):");
     eprintln!("  worker  [-e xs]                Run a supervised worker child");
     eprintln!("  run     [-e xs] <archive.zip>  Run a compartment-map archive");
-    eprintln!("  run     [--offline] <entry.js> Assemble an entry module's npm");
-    eprintln!("                                 dependencies into the CAS");
+    eprintln!("  run     [--offline] <entry.js> Run an entry module, npm deps");
+    eprintln!("                                 fetched via the CAS");
     eprintln!();
     eprintln!("Maintenance:");
     eprintln!("  gc                             Garbage-collect the CAS");
@@ -208,9 +208,9 @@ fn print_subcommand_help(sub: &str) {
             eprintln!("A .js/.mjs/.cjs entry module instead resolves the entry");
             eprintln!("package's npm dependencies (Go-like minimal version");
             eprintln!("selection), fetches them content-addressed into the CAS,");
-            eprintln!("and assembles the compartment map binding them — no npm");
-            eprintln!("CLI, no node_modules, no lockfile. XS execution of the");
-            eprintln!("assembled map is not yet wired.");
+            eprintln!("assembles the compartment map binding them — no npm CLI,");
+            eprintln!("no node_modules, no lockfile — and executes it in an XS");
+            eprintln!("machine.");
             eprintln!();
             eprintln!("Options:");
             eprintln!("  -e, --engine <engine>  Engine to use (default: xs)");
@@ -405,14 +405,13 @@ fn is_entry_module(path: &std::path::Path) -> bool {
     )
 }
 
-/// `endor run <entry.js>`: the acquisition half of Phase 4 of
-/// `designs/endor-npm-registry-proxy.md`. Resolves the entry
-/// package's transitive npm dependencies (Go-like MVS), fetches
-/// them content-addressed into the CAS (the registry table as
-/// cache/lock file), ingests the entry package, and stores the
-/// compartment map binding them — then stops: executing that map
-/// over XS is the remaining half of Phase 4, gated on the XS boot
-/// bundles.
+/// `endor run <entry.js>`: Phase 4 of
+/// `designs/endor-npm-registry-proxy.md`, end to end. Resolves the
+/// entry package's transitive npm dependencies (Go-like MVS),
+/// fetches them content-addressed into the CAS (the registry table
+/// as cache/lock file), ingests the entry package, stores the
+/// compartment map binding them — then loads that map back out of
+/// the CAS and executes it in an XS machine.
 fn cmd_run_entry(entry_path: &std::path::Path, offline: bool) -> Result<(), EndoError> {
     // Standalone runs share the archive path's temporary CAS; the
     // registry table lives beside it (override: ENDOR_REGISTRY_DB).
@@ -464,15 +463,11 @@ fn cmd_run_entry(entry_path: &std::path::Path, offline: bool) -> Result<(), Endo
         assembled.compartment_map_hash
     );
 
-    // The XS execution half of Phase 4 is not yet wired; be honest
-    // about where the pipeline stops rather than pretending to run.
-    Err(EndoError::Config(format!(
-        "entry-point execution over XS is not yet wired (Phase 4 of \
-         designs/endor-npm-registry-proxy.md); the compartment map \
-         {} is assembled in the CAS at {}",
-        assembled.compartment_map_hash,
-        cas_dir.display()
-    )))
+    let archive = endo::execute::load_assembled_archive(&cas, &assembled.compartment_map_hash)
+        .map_err(|e| EndoError::Config(format!("{e}")))?;
+    xsnap::run_xs_archive_loaded(&archive)
+        .map_err(|e| EndoError::Config(format!("run: {e}")))?;
+    Ok(())
 }
 
 fn cmd_run_with_cas(archive_path: &std::path::Path) -> Result<(), EndoError> {

@@ -8,6 +8,7 @@ pub mod registry;
 pub mod resolver;
 pub mod semver;
 pub mod endo;
+pub mod execute;
 pub mod engine;
 pub mod error;
 pub mod inproc;

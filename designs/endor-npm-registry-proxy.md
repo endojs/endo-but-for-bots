@@ -3,13 +3,15 @@
 | | |
 |---|---|
 | **Created** | 2026-04-17 |
-| **Updated** | 2026-07-17 |
+| **Updated** | 2026-07-18 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 
 ## Status
 
-All phases implemented except the XS execution half of Phase 4:
+All phases implemented; `endor run <entry.js>` resolves, fetches,
+and executes npm dependencies end to end (ESM packages — CommonJS
+linkage remains a known gap, below):
 
 - **Phase 1**: `rust/endo/src/registry.rs` — SQLite-backed
   `RegistryTable` with `lookup`, `insert`, `list_versions`,
@@ -38,12 +40,22 @@ All phases implemented except the XS execution half of Phase 4:
   `--offline` (`OfflineClient`) resolves only from the CAS and
   registry table.
 
-Remaining: the XS execution half of Phase 4 — wiring the host
-functions into the XS-hosted compartment mapper's
-`moduleMapHook`/`importHook` so `endor run <entry.js>` executes
-the assembled compartment map. Gated on the XS boot bundles,
-whose generators are not yet in-tree ("The worker/SES boot
-generators are absent", `rust/endo/README.md`).
+- **Phase 4 (execution half)**: `rust/endo/src/execute.rs` —
+  `load_assembled_archive` turns the assembled compartment map
+  back into a runnable archive (module sources read out of the
+  CAS trees, `"."` dependency edges bound to each target's
+  concrete main module as cross-compartment links) and
+  `endor run <entry.js>` executes it in an XS machine.
+  Sources are normalized to ESM before loading: `.json` becomes
+  a default export, and CommonJS gets a best-effort shim
+  exporting `module.exports` with **no `require`** — a CommonJS
+  package that calls `require` fails at import time with a
+  `ReferenceError` naming it. Full CommonJS linkage (a `require`
+  wired through the compartment link graph) is a remaining gap,
+  as is directory-relative resolution for nested modules (the
+  archive resolve hook is identity, so `../sibling.js` imports
+  from nested package files do not link) and `exports`-map
+  consultation (only `main` is honoured).
 
 ## What is the Problem Being Solved?
 
@@ -410,6 +422,12 @@ The tree's children are the package's files, stored as blobs.
       does not execute arbitrary install scripts).
 - [ ] Binary packages (`.node` native modules) — not
       supported in XS.
+- [ ] CommonJS linkage: the execution shim exports
+      `module.exports` but provides no `require`, so only
+      require-free CommonJS runs; ESM packages run fully.
+- [ ] Directory-relative resolution for nested package modules
+      (the archive resolve hook is identity), and `exports`-map
+      consultation (only `main` is honoured).
 
 ## Prompt
 
