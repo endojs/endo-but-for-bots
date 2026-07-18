@@ -16,9 +16,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import {
-  GREP_MAX_RESULTS,
-} from '@endo/platform/fs/search';
+import { GREP_MAX_RESULTS } from '@endo/platform/fs/search';
 
 import { makeGlobTool, makeGrepTool } from '../src/tool-makers.js';
 
@@ -120,11 +118,9 @@ test('grep renders file:line: text matches in path-then-line order', async t => 
   const tool = makeGrepTool(cwd);
   t.is(
     await tool.execute({ pattern: 'alpha' }),
-    [
-      'a.txt:1: alpha',
-      'a.txt:3: alpha again',
-      'sub/b.txt:1: more alpha',
-    ].join('\n'),
+    ['a.txt:1: alpha', 'a.txt:3: alpha again', 'sub/b.txt:1: more alpha'].join(
+      '\n',
+    ),
   );
 });
 

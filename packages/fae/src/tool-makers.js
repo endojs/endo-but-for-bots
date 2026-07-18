@@ -540,7 +540,8 @@ export const makeGrepTool = cwd => {
         properties: {
           pattern: {
             type: 'string',
-            description: 'ECMAScript regular expression source, e.g. "TODO\\\\(".',
+            description:
+              'ECMAScript regular expression source, e.g. "TODO\\\\(".',
           },
           dirPath: {
             type: 'string',
