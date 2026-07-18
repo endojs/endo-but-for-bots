@@ -1,4 +1,5 @@
 // @ts-nocheck
+/* global globalThis */
 
 import '@endo/init/debug.js';
 
@@ -103,7 +104,9 @@ test('Gateway serves a content-addressed blob from its web-seed route', async t 
   });
   const address = await service.started;
   try {
-    const response = await fetch(`${address}/content/${'d'.repeat(64)}`);
+    const response = await globalThis.fetch(
+      `${address}/content/${'d'.repeat(64)}`,
+    );
     t.is(response.status, 200);
     t.deepEqual(new Uint8Array(await response.arrayBuffer()), bytes);
   } finally {
