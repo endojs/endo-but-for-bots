@@ -5,6 +5,12 @@ import path from 'path';
 
 import { E } from '@endo/eventual-send';
 import { applyEdits, normalizeEdits } from '@endo/agentry/edit-text';
+import {
+  makeSearch,
+  GLOB_MAX_RESULTS,
+  GREP_MAX_RESULTS,
+} from '@endo/platform/fs/search';
+import { makeNodeSearchPowers } from '@endo/platform/fs/node/search';
 
 /**
  * @typedef {object} ToolFunction
@@ -412,6 +418,199 @@ export const makeListDirTool = cwd => {
   });
 };
 harden(makeListDirTool);
+
+// The platform search engine (`@endo/platform/fs/search`) over `node:fs`
+// powers — the same engine the daemon mount and the genie agent delegate
+// their glob/grep to, so all three surfaces share one normative definition
+// of the two dialects. Pure over ambient `node:fs`; one instance serves
+// every tool.
+const search = makeSearch(makeNodeSearchPowers());
+
+/**
+ * Resolve the working directory to its symlink-free physical path and the
+ * requested subdirectory within it. The engine confines by *resolved* paths
+ * (a symlink pointing outside the root is excluded), so the confinement root
+ * must itself be physical — a symlinked cwd (`/tmp` on macOS) would otherwise
+ * exclude everything.
+ *
+ * @param {string} cwd
+ * @param {string} dirPath
+ * @returns {Promise<{ root: string, confinementRoot: string }>}
+ */
+const resolveSearchRoot = async (cwd, dirPath) => {
+  const confinementRoot = await fs.promises.realpath(cwd);
+  const root = resolveSafe(dirPath, confinementRoot);
+  return { root, confinementRoot };
+};
+
+/**
+ * @param {string} cwd
+ * @returns {FaeTool}
+ */
+export const makeGlobTool = cwd => {
+  /** @type {ToolSchema} */
+  const toolSchema = harden({
+    type: 'function',
+    function: {
+      name: 'glob',
+      description:
+        'Find paths matching a glob pattern, like `find` with globs. ' +
+        '`*` matches within one path segment, `**` matches across segments; ' +
+        'every other character is literal. Returns sorted paths relative to ' +
+        'the searched directory.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: {
+            type: 'string',
+            description: 'Glob pattern, e.g. "src/**/*.js".',
+          },
+          dirPath: {
+            type: 'string',
+            description:
+              'Relative path of the directory to search under. Defaults to ' +
+              '"." (working directory).',
+          },
+        },
+        required: ['pattern'],
+      },
+    },
+  });
+
+  return harden({
+    schema() {
+      return toolSchema;
+    },
+    async execute(args) {
+      const { pattern, dirPath = '.' } =
+        /** @type {{ pattern: string, dirPath?: string }} */ (args);
+      if (!pattern) {
+        throw new Error('pattern is required');
+      }
+      const { root, confinementRoot } = await resolveSearchRoot(cwd, dirPath);
+      /** @type {string[]} */
+      const matches = [];
+      let truncated = false;
+      for await (const batch of search.globPaths(root, pattern, {
+        confinementRoot,
+      })) {
+        for (const match of batch) {
+          if (matches.length >= GLOB_MAX_RESULTS) {
+            truncated = true;
+            break;
+          }
+          matches.push(match);
+        }
+        if (truncated) {
+          break;
+        }
+      }
+      if (matches.length === 0) {
+        return `No paths match ${pattern}`;
+      }
+      const listing = matches.join('\n');
+      return truncated
+        ? `${listing}\n... (truncated at ${GLOB_MAX_RESULTS} results)`
+        : listing;
+    },
+    help() {
+      return 'Find paths matching a glob pattern (`*` within a segment, `**` across segments) under the working directory.';
+    },
+  });
+};
+harden(makeGlobTool);
+
+/**
+ * @param {string} cwd
+ * @returns {FaeTool}
+ */
+export const makeGrepTool = cwd => {
+  /** @type {ToolSchema} */
+  const toolSchema = harden({
+    type: 'function',
+    function: {
+      name: 'grep',
+      description:
+        'Search file contents for an ECMAScript regular expression, like ' +
+        '`grep -n`. Returns `file:line: text` matches in path-then-line ' +
+        'order with 1-based line numbers and paths relative to the searched ' +
+        'directory. Unreadable (e.g. binary) files are skipped.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: {
+            type: 'string',
+            description: 'ECMAScript regular expression source, e.g. "TODO\\\\(".',
+          },
+          dirPath: {
+            type: 'string',
+            description:
+              'Relative path of the directory to search under. Defaults to ' +
+              '"." (working directory).',
+          },
+          glob: {
+            type: 'string',
+            description:
+              'Only search files matching this glob pattern (optional).',
+          },
+        },
+        required: ['pattern'],
+      },
+    },
+  });
+
+  return harden({
+    schema() {
+      return toolSchema;
+    },
+    async execute(args) {
+      const {
+        pattern,
+        dirPath = '.',
+        glob: globPattern,
+      } = /** @type {{ pattern: string, dirPath?: string, glob?: string }} */ (
+        args
+      );
+      if (!pattern) {
+        throw new Error('pattern is required');
+      }
+      const { root, confinementRoot } = await resolveSearchRoot(cwd, dirPath);
+      const paths =
+        globPattern === undefined
+          ? undefined
+          : search.globPaths(root, globPattern, {
+              confinementRoot,
+              includeDirectories: false,
+            });
+      // Ask for one match beyond the cap so truncation is detectable
+      // without misreporting an exactly-at-cap result as truncated.
+      /** @type {Array<{ file: string, line: number, text: string }>} */
+      const matches = [];
+      for await (const batch of search.grepFiles(root, pattern, paths, {
+        confinementRoot,
+        maxResults: GREP_MAX_RESULTS + 1,
+      })) {
+        matches.push(...batch);
+      }
+      const truncated = matches.length > GREP_MAX_RESULTS;
+      if (truncated) {
+        matches.length = GREP_MAX_RESULTS;
+      }
+      if (matches.length === 0) {
+        return `No matches for ${pattern}`;
+      }
+      const lines = matches.map(m => `${m.file}:${m.line}: ${m.text}`);
+      if (truncated) {
+        lines.push(`... (truncated at ${GREP_MAX_RESULTS} matches)`);
+      }
+      return lines.join('\n');
+    },
+    help() {
+      return 'Search file contents for an ECMAScript regular expression under the working directory.';
+    },
+  });
+};
+harden(makeGrepTool);
 
 /**
  * @param {string} cwd
