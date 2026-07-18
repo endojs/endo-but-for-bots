@@ -422,4 +422,50 @@ mod tests {
         let archive = load_run_archive(&cas, &map_hash).unwrap();
         xsnap::run_xs_archive_loaded(&archive).unwrap();
     }
+
+    fn single_module_map(cas: &ContentStore, source: &str) -> String {
+        let entry_main = store_blob(cas, source);
+        let entry_manifest = store_blob(cas, r#"{"name": "app", "type": "module"}"#);
+        let entry_tree = store_tree(
+            cas,
+            vec![("main.js", entry_main), ("package.json", entry_manifest)],
+        );
+        let map = serde_json::json!({
+            "tags": [],
+            "entry": { "compartment": "<entry>", "module": "./main.js" },
+            "compartments": {
+                "<entry>": {
+                    "name": "app",
+                    "location": format!("cas:sha256:{entry_tree}"),
+                    "modules": {},
+                },
+            },
+        });
+        cas.store(&serde_json::to_vec(&map).unwrap(), "compartment-map")
+            .unwrap()
+    }
+
+    /// Real npm entry code calls console.log; the standalone runner
+    /// must endow it rather than let the reference throw.
+    #[test]
+    fn console_log_is_endowed_in_the_run_machine() {
+        let (_tmp, cas) = fresh_cas();
+        let map_hash = single_module_map(
+            &cas,
+            "console.log('hello', 42, { a: 1 });\nconsole.error('to stderr');\nexport const done = true;\n",
+        );
+        let archive = load_run_archive(&cas, &map_hash).unwrap();
+        xsnap::run_xs_archive_loaded(&archive).unwrap();
+    }
+
+    /// A throw in the program being run (here a ReferenceError) must
+    /// come back as Err from the runner, not SIGSEGV the process.
+    #[test]
+    fn entry_throw_surfaces_as_error_not_crash() {
+        let (_tmp, cas) = fresh_cas();
+        let map_hash =
+            single_module_map(&cas, "noSuchGlobal(1);\nexport const unreachable = 1;\n");
+        let archive = load_run_archive(&cas, &map_hash).unwrap();
+        assert!(xsnap::run_xs_archive_loaded(&archive).is_err());
+    }
 }
