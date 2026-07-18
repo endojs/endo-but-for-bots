@@ -4569,15 +4569,17 @@ test('HTTP web-seed loads and verifies a readable blob', async t => {
   );
   const wrongLocator = await E(host).locateContent('wrong');
   const { hash: wrongHash } = parseContentLocator(wrongLocator);
-  await E(host).storeValue(
-    Far('HTTP content share', {
-      source: async suppliedHash => [
-        { plane: 'ws', payload: `${gatewayAddress}/content/${wrongHash}` },
-        { plane: 'ws', payload: `${gatewayAddress}/content/${suppliedHash}` },
-      ],
-    }),
-    'http-share',
-  );
+  const shareLocation = url.pathToFileURL(
+    path.join(dirname, 'test', 'http-content-share.js'),
+  ).href;
+  await E(host).makeUnconfined('@main', shareLocation, {
+    powersName: '@none',
+    resultName: 'http-share',
+    env: {
+      GATEWAY_ADDRESS: gatewayAddress,
+      WRONG_HASH: wrongHash,
+    },
+  });
   await E(host).move(['http-share'], ['@planes', 'http']);
 
   const sharedLocator = await E(host).storeContent('original');
@@ -4607,17 +4609,14 @@ test('HTTP web-seed loads a tar tree only after its assembled hash matches xt', 
   const gatewayAddress = fs
     .readFileSync(path.join(config.statePath, 'gateway'), 'utf8')
     .trim();
-  await E(host).storeValue(
-    Far('HTTP content share', {
-      source: async suppliedHash => [
-        {
-          plane: 'ws',
-          payload: `${gatewayAddress}/content/${suppliedHash}?kind=tree`,
-        },
-      ],
-    }),
-    'http-share',
-  );
+  const shareLocation = url.pathToFileURL(
+    path.join(dirname, 'test', 'http-content-share.js'),
+  ).href;
+  await E(host).makeUnconfined('@main', shareLocation, {
+    powersName: '@none',
+    resultName: 'http-share',
+    env: { GATEWAY_ADDRESS: gatewayAddress },
+  });
   await E(host).move(['http-share'], ['@planes', 'http']);
 
   const locator = await E(host).storeContent('tree');
