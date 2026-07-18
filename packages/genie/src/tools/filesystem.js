@@ -696,8 +696,8 @@ const makeFileTools = (options = {}) => {
       yield 'Finds paths matching a glob pattern, like `find` with globs.';
       yield '';
       yield 'Returns matching paths relative to the searched directory, sorted.';
-      yield '`*` matches within one path segment, `**` matches across segments,';
-      yield '`?` matches a single character.';
+      yield '`*` matches within one path segment, `**` matches across segments;';
+      yield 'every other character (including `?`) is literal.';
       yield '';
       yield '**Parameters:**';
       yield '- `pattern`: Glob pattern, e.g. "src/**/*.js" (required)';
