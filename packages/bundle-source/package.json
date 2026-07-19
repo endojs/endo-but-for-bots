@@ -28,7 +28,7 @@
     "@endo/init": "workspace:^",
     "@endo/promise-kit": "workspace:^",
     "@endo/where": "workspace:^",
-    "amaro": "^1.1.9"
+    "amaro": "^1.1.10"
   },
   "devDependencies": {
     "@endo/lockdown": "workspace:^",
