@@ -104,11 +104,19 @@ Phases 4 → 5 are the agentry eval lane; they touch only the local `Git` surfac
 Phase 6 is an ergonomics lane on the same contract as the landed text-first surface; consumers migrate one call site at a time when it lands.
 No phase waits on unlanded substrate or on a design outside this stack.
 
-### Commit-identity boundary (Phase 2 shape)
+**Status and the #731 grandfathering (recorded 2026-07-19).**
+The #731 parking of the JSON tool-wrapper surface does **not** abandon reviewed work already in flight; it bars *starting new* JSON-tool work.
+The two in-flight phase PRs are explicitly **grandfathered** and land in their existing order — **#705 (Phase 1) then #707 (Phase 3)**; both are non-draft, green, and past their panel/repair rounds.
+There is no contradiction between the parking notes in [daemon-agent-tools](daemon-agent-tools.md) / [agentry-git-verb-gaps](agentry-git-verb-gaps.md) and the Phase 1/3 rows above: the rows describe the grandfathered tail of the reviewed stack, and once it lands the door closes — follow-on JSON catalog expansion does not start, and new capability-exposure work prefers code mode over `ToolRecord` wrappers (the capability substrate itself stays prioritized).
+Phase status: **Phase 2 shipped** — #706 merged 2026-07-16 (`4f09410a2e`). **Phase 4 shipped in substance** — #645 merged 2026-07-17 (`7e38e5c59b`), landing `commit({ amend })` / `reword` / `cherryPick` / `rebase({ autosquash })`; `checkoutConflict` did not land and is demoted to on-demand (the stack-surgery eval lane does not need it). Phase 5's `stack-surgery` fixture/scorer/pass-path rides draft #626.
+
+### Commit-identity boundary (Phase 2 shape — shipped)
+
+**Shipped:** #706 merged 2026-07-16 (`4f09410a2e`), implementing exactly the shape pinned below; the prose is kept as the normative record of that shape.
 
 The agent's commits must be attributed from a policy it does not control.
-Today the native backend hardcodes `GIT_AUTHOR_NAME='Endo'` / `GIT_AUTHOR_EMAIL='endo@invalid.local'` (`makeGitEnv` in `@endo/git`'s `native-git-backend.js`), which is correct in shape (the guest cannot influence it) but not yet policy: every `Git` on a host commits as the same fictional author.
-The pinned Phase-2 shape is the smallest one consistent with the trio's authority model:
+Before #706 the native backend hardcoded `GIT_AUTHOR_NAME='Endo'` / `GIT_AUTHOR_EMAIL='endo@invalid.local'` (`makeGitEnv` in `@endo/git`'s `native-git-backend.js`), which was correct in shape (the guest cannot influence it) but not yet policy: every `Git` on a host committed as the same fictional author.
+The pinned Phase-2 shape — the smallest one consistent with the trio's authority model, now landed via #706:
 
 - `provideGit(mountCap, petName, { identity: { authorName, authorEmail } })` and the same option on `provideGitClone` — **formula-owned, captured at construction, guest-immutable** (the same ownership shape as `GitRemote`'s Phase-1 endpoint policy).
 - Omitted, the identity defaults to the current backend defaults, so the change is strictly additive.
@@ -116,14 +124,14 @@ The pinned Phase-2 shape is the smallest one consistent with the trio's authorit
 - Changing an existing `Git`'s identity is a host-side re-derivation, exactly like re-pinning ([daemon-git-capability](daemon-git-capability.md) Design Decision 7); guests cannot mutate it.
 
 Considered and rejected: a guest-visible `setIdentity()`. Reason: commit attribution is exactly the kind of authority the loop exists to keep out of the agent's hands.
-Per-persona identity (deriving the policy from [daemon-capability-persona](daemon-capability-persona.md) rather than per-`provideGit` options) is deferred until the persona design lands; a tracking issue is to be filed when Phase 2 is dispatched.
+Per-persona identity (deriving the policy from [daemon-capability-persona](daemon-capability-persona.md) rather than per-`provideGit` options) remains deferred until the persona design lands.
 
 ### Reconciliation deltas closed (2026-07-11)
 
 Gaps found between the stack's documents and the landed code, closed in the same pass that accepted this plan:
 
 - **`tree(ref)` / `filesystemAt(ref)` had drifted apart.** `filesystemAt(ref)` shipped on the `Git` exo, but the canonical doc still described `tree(ref)` as the only historical-read method. Now merged into [daemon-git-capability](daemon-git-capability.md) § Historical Read: `filesystemAt(ref)` is the historical-read method, `tree(ref)` its `ReadableTree` projection, with `filesystemAt`'s two documented trade-offs (path-based QID, `'sha256'` `BlobRef.algorithm`) carried into the canonical vocabulary rather than silently lost.
-- **Repository bootstrap had landed without its planned design doc.** `provideGitClone` (#538) shipped host-mediated, matching [daemon-git-remotes](daemon-git-remotes.md) § Repository Bootstrap's second flow; the once-planned `daemon-git-clone.md` is no longer needed for the clone half. The residual gap is exactly the commit-identity boundary — now Phase 2 above rather than an unanchored "future design".
+- **Repository bootstrap had landed without its planned design doc.** `provideGitClone` (#538) shipped host-mediated, matching [daemon-git-remotes](daemon-git-remotes.md) § Repository Bootstrap's second flow; the once-planned `daemon-git-clone.md` is no longer needed for the clone half. The residual gap is exactly the commit-identity boundary — Phase 2 above, since shipped via #706. **Sequencing against draft #709 (explicit, 2026-07-19):** #709 now proposes adding a `daemon-git-clone.md` record of the landed host-preclone → code-mode handoff. That is not a contradiction of this bullet but a deliberate follow-up to it: this PR lands first with the disposition stated here, and #709 then rebases as the focused follow-up whose scope is the retrospective bootstrap record and the code-mode handoff — the two branches must not land with divergent dispositions in parallel.
 - **The gated history-rewrite axis had landed undocumented in the canonical doc.** #644 added `commit({ amend })` + `reword` behind a second attenuation axis (`allowHistoryRewrite`, default withheld) and the elevated `makeGitHistoryTool`; [daemon-git-capability](daemon-git-capability.md) now records it (§ Design Decision 11 and § Implementation Progress).
 - **Phase-numbering drift between code and spec.** #616's code comments call the mount-bridged `status`/`add` tools "Phase 3"; the canonical [daemon-agent-tools](daemon-agent-tools.md) numbering calls them Phase 3.5 and reserves Phase 3 for the push tier. The plan above uses the canonical numbering.
 - **README status drift.** `daemon-mount-capabilities` is Complete in its own doc and the summary table but was still Proposed in the M3 milestone table; synced.
@@ -182,4 +190,4 @@ They are named so a builder dispatch does not mistake them for gaps in the miles
    Accepted 2026-07-11, mirroring the module-loading stack's precedent ([daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) § Phased Implementation): the coordinating document owns the cross-design sequence, sibling designs own their shapes, and statuses flip together at acceptance.
 6. **Commit identity is formula-owned policy, never guest authority.**
    The Phase-2 shape (§ Commit-identity boundary) puts attribution on `provideGit` / `provideGitClone` construction options with host-side re-derivation as the only mutation path.
-   Considered and rejected: a guest-visible `setIdentity()`; a standalone `daemon-git-clone.md` (its clone half landed via #538, its identity half is Phase 2).
+   Considered and rejected: a guest-visible `setIdentity()`; a standalone `daemon-git-clone.md` *as a prerequisite* (its clone half landed via #538, its identity half shipped as Phase 2 / #706). Draft #709's retrospective `daemon-git-clone.md` record is a sequenced follow-up, not a reversal — see § Reconciliation deltas.

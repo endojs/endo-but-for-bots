@@ -107,7 +107,12 @@ What this document owns is the remainder:
 > `makeShellTool`, `makeHttpTool`) are parked as future work in favor of code
 > mode as the primary agent surface. The capability substrate in the
 > Reconciled-backing column is unaffected: code mode consumes those
-> capabilities directly, and they stay prioritized.
+> capabilities directly, and they stay prioritized. The parking bars *new*
+> JSON-tool work, not the reviewed tail already in flight: PRs #705
+> (`makeGitRemoteTool`, this design's § Phase 3) and #707 (§ Phase 4
+> provisioning + the worked loop) are grandfathered and land in that order
+> ([daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan,
+> *Status and the #731 grandfathering*).
 
 Three properties of the reconciled map, each a correction to the sketch:
 
