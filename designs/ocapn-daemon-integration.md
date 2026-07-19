@@ -229,9 +229,13 @@ The formulation is durable (a new `Transports` formula type) so
 that the cap survives daemon restart with the same identity but
 fresh socket state.
 
-`@nets` is not provided to new agents.
-Existing agents whose pet stores contain `@nets` continue to
-resolve it during the migration window (see Migration path).
+`@nets` is not provided at all — neither to new agents nor to
+existing ones.
+The agent-facing surface is `@transports` outright: there is no
+`@nets`/`@transports` coexistence window.
+`@nets` is not widely deployed, so a staged migration is
+unnecessary; the swap is a single cutover (see *Replacing
+`@nets`*).
 
 #### Revocation
 
@@ -300,36 +304,38 @@ socket carrying CapTP for many local-agent sessions); the
 `Transports` proxy presents an independent session per agent so
 that revocation, accounting, and identity remain per-agent.
 
-### Migration path from `@nets`
+### Replacing `@nets`
 
-#### Step 1: shadow the singleton
+`@nets` is not widely deployed, so there is no migration window,
+no shadowing, and no deprecation period: `@transports` replaces
+`@nets` in a single cutover, all in the one change.
 
-Add a `Transports` formula type and `provideTransports` host
+#### Agents get `@transports`, not `@nets`
+
+Add a `Transports` formula type and a `provideTransports` host
 method.
-For new agents, populate `@transports` instead of `@nets`.
-For existing agents, populate both during the transition.
-The agent-side code can probe `@transports` first and fall back
-to `@nets`.
+Formulation populates `@transports`; `@nets` is never injected.
+There is no dual-population and no agent-side
+`@transports`-then-`@nets` fallback probe.
 
-#### Step 2: route `@nets` callers through `@transports`
+#### Internal callers move to `@transports`
 
 The current callers of `@nets` (per `grep`, primarily test
-fixtures, `host.js:200`, and `daemon.js:4762` `makePeer`) move
-to look up `@transports` and call `connect(locator)` rather than
-listing nets and selecting one.
+fixtures, `host.js:200`, and `daemon.js:4762` `makePeer`) look up
+`@transports` and call `connect(locator)` rather than listing
+nets and selecting one.
 `getAllNetworkAddresses` becomes a daemon-internal helper used by
 the `TransportFactory` proxy; it is not surfaced to agents.
 
-#### Step 3: remove `@nets` injection
+#### `@nets` injection is removed
 
-Once all internal callers have migrated and a deprecation period
-has elapsed, remove `@nets` from `specialNames` in `host.js` and
+`@nets` is removed from `specialNames` in `host.js` and
 `guest.js`.
 The `networksDirectoryId` parameter remains on the formulation
 path because the daemon still needs the underlying netlayer
 registry; only the agent-facing surface is removed.
 
-#### Step 4: per-agent signing keys
+#### Per-agent signing keys
 
 With `@transports` in place, the per-agent Ed25519 key path
 (blocked today on the singleton) becomes natural.
@@ -473,7 +479,8 @@ The questions raised during design review are resolved as follows
     The host reaches netlayers through `@transports.list()` plus
     the daemon-internal registry API; there is no surviving
     directory-shaped `@nets` view for any agent, host included.
-    The migration path (above) ends in full removal.
+    The cutover (see *Replacing `@nets`*) removes `@nets`
+    outright, with no deprecation window.
 
 ## Out of Scope, Future Work
 
@@ -556,10 +563,10 @@ Shape only:
   preserved; outstanding sessions are not preserved (correct
   behavior, documented).
 
-- **Integration: migration.**
-  Agent with `@nets` (legacy) and `@transports` (new) coexist;
-  `@nets` callers continue to work; new callers prefer
-  `@transports`.
+- **Integration: `@nets` is gone.**
+  A formulated agent exposes `@transports` and no `@nets`;
+  a lookup of `@nets` fails (there is no coexistence window to
+  test — the cutover is complete).
 
 - **Integration: cross-agent loopback.**
   Two local agents connect via `connect(locatorOfSibling)`;
@@ -573,20 +580,21 @@ Shape only:
 
 - This is a breaking change to the agent-facing API.
   `@nets` becomes `@transports` with a different shape.
-  Agents that lookup `@nets` directly will break unless they
-  fall back via the migration path.
+  Agents that look up `@nets` directly break; because this is
+  not widely deployed there is no compatibility shim — the few
+  such agents are updated to `@transports` in the same change.
 
 - The daemon's persistence format gains a new formula type
   (`Transports`).
-  Old daemon state files lack it; the daemon must
-  formulate-on-first-resolve when an agent's pet store has
-  `@nets` but no `@transports`.
+  Old daemon state files lack it; on resolve the daemon
+  formulate-on-first-resolve populates `@transports` for any
+  agent that lacks it and drops `@nets`.
 
 - The CLI gains per-agent
   `endo agent <name> transports` verbs (Design Decisions #9);
-  `endo nets` is deprecated through the migration window (emitting
-  a warning that points at the new verbs) and then **retired**
-  together with `@nets` (#10).
+  `endo nets` is **retired** together with `@nets` (#10) outright,
+  with no deprecation window (there is no migration window to
+  warn through).
 
 ## Upgrade Considerations
 
@@ -604,5 +612,6 @@ Shape only:
   `packages/daemon/src/networks/loopback.js` is repurposed:
   the `TransportFactory` proxy uses it as the default for
   in-daemon sibling connections.
-  Existing test fixtures that use `@nets` to reach the
-  loopback continue to work via the migration shim.
+  Existing test fixtures that use `@nets` to reach the loopback
+  are updated to `@transports` in the same change; there is no
+  migration shim.
