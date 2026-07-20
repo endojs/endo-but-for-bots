@@ -41,6 +41,10 @@ import { q } from '@endo/errors';
  * @property {(storeNumber: string) => {localClock: number, remoteAckedClock: number}} getSyncedMeta
  * @property {(storeNumber: string, localClock: number, remoteAckedClock: number) => void} setSyncedMeta
  * @property {(storeNumber: string) => void} deleteSyncedMeta
+ * @property {(storeNumber: string, keyBody: string, keySlots: string, valueBody: string, valueSlots: string) => void} writeMapStoreEntry
+ * @property {(storeNumber: string, keyBody: string, keySlots: string) => void} deleteMapStoreEntry
+ * @property {(storeNumber: string) => Array<{keyBody: string, keySlots: string, valueBody: string, valueSlots: string}>} listMapStoreEntries
+ * @property {(storeNumber: string) => void} deleteMapStore
  */
 
 const SCHEMA_VERSION = 2;
@@ -102,6 +106,15 @@ const SCHEMA_SQL = `
     store_number TEXT PRIMARY KEY,
     local_clock INTEGER NOT NULL DEFAULT 0,
     remote_acked_clock INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS map_store_entry (
+    store_number TEXT NOT NULL,
+    key_body TEXT NOT NULL,
+    key_slots TEXT NOT NULL,
+    value_body TEXT NOT NULL,
+    value_slots TEXT NOT NULL,
+    PRIMARY KEY (store_number, key_body, key_slots)
   );
 `;
 
@@ -241,6 +254,19 @@ export const makeDaemonDatabase = (config, options) => {
   );
   const stmtDeleteSyncedMeta = db.prepare(
     'DELETE FROM synced_store_meta WHERE store_number = ?',
+  );
+
+  const stmtWriteMapEntry = db.prepare(
+    'INSERT OR REPLACE INTO map_store_entry (store_number, key_body, key_slots, value_body, value_slots) VALUES (?, ?, ?, ?, ?)',
+  );
+  const stmtDeleteMapEntry = db.prepare(
+    'DELETE FROM map_store_entry WHERE store_number = ? AND key_body = ? AND key_slots = ?',
+  );
+  const stmtListMapEntries = db.prepare(
+    'SELECT key_body AS keyBody, key_slots AS keySlots, value_body AS valueBody, value_slots AS valueSlots FROM map_store_entry WHERE store_number = ?',
+  );
+  const stmtDeleteAllMapEntries = db.prepare(
+    'DELETE FROM map_store_entry WHERE store_number = ?',
   );
 
   // -- Formula operations --
@@ -550,6 +576,49 @@ export const makeDaemonDatabase = (config, options) => {
     stmtDeleteSyncedMeta.run(storeNumber);
   };
 
+  // -- Map store operations --
+
+  /**
+   * @param {string} storeNumber
+   * @param {string} keyBody
+   * @param {string} keySlots - JSON-encoded array of formula ids.
+   * @param {string} valueBody
+   * @param {string} valueSlots - JSON-encoded array of formula ids.
+   */
+  const writeMapStoreEntry = (
+    storeNumber,
+    keyBody,
+    keySlots,
+    valueBody,
+    valueSlots,
+  ) => {
+    stmtWriteMapEntry.run(storeNumber, keyBody, keySlots, valueBody, valueSlots);
+  };
+
+  /**
+   * @param {string} storeNumber
+   * @param {string} keyBody
+   * @param {string} keySlots - JSON-encoded array of formula ids.
+   */
+  const deleteMapStoreEntry = (storeNumber, keyBody, keySlots) => {
+    stmtDeleteMapEntry.run(storeNumber, keyBody, keySlots);
+  };
+
+  /**
+   * @param {string} storeNumber
+   * @returns {Array<{keyBody: string, keySlots: string, valueBody: string, valueSlots: string}>}
+   */
+  const listMapStoreEntries = storeNumber => {
+    return /** @type {Array<{keyBody: string, keySlots: string, valueBody: string, valueSlots: string}>} */ (
+      stmtListMapEntries.all(storeNumber)
+    );
+  };
+
+  /** @param {string} storeNumber */
+  const deleteMapStore = storeNumber => {
+    stmtDeleteAllMapEntries.run(storeNumber);
+  };
+
   const close = () => {
     db.close();
   };
@@ -589,6 +658,10 @@ export const makeDaemonDatabase = (config, options) => {
     getSyncedMeta,
     setSyncedMeta,
     deleteSyncedMeta,
+    writeMapStoreEntry,
+    deleteMapStoreEntry,
+    listMapStoreEntries,
+    deleteMapStore,
   });
 };
 harden(makeDaemonDatabase);

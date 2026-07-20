@@ -297,6 +297,7 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['formulateHost']} args.formulateHost
  * @param {DaemonCore['formulateGuest']} args.formulateGuest
  * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
+ * @param {DaemonCore['formulateMapStore']} args.formulateMapStore
  * @param {DaemonCore['formulateEval']} args.formulateEval
  * @param {DaemonCore['formulateUnconfined']} args.formulateUnconfined
  * @param {DaemonCore['formulateArchive']} args.formulateArchive
@@ -349,6 +350,7 @@ export const makeHostMaker = ({
   formulateHost,
   formulateGuest,
   formulateMarshalValue,
+  formulateMapStore,
   formulateEval,
   formulateUnconfined,
   formulateArchive,
@@ -1136,6 +1138,19 @@ export const makeHostMaker = ({
 
       const { id } = await formulateMarshalValue(value, tasks, pinTransient);
       await unpinTransient(id);
+    };
+
+    /** @type {EndoHost['makeMapStore']} */
+    const makeMapStore = async petName => {
+      const { namePath } = petNamePathFrom(petName);
+      const { value: mapStore, id } = await formulateMapStore();
+      pinTransient(id);
+      try {
+        await E(directory).storeIdentifier(namePath, id);
+      } finally {
+        await unpinTransient(id);
+      }
+      return /** @type {any} */ (mapStore);
     };
 
     /**
@@ -2417,6 +2432,7 @@ export const makeHostMaker = ({
       // Host
       storeBlob,
       storeValue,
+      makeMapStore,
       storeTree,
       provideMount,
       provideScratchMount,

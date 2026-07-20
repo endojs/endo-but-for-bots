@@ -25,6 +25,7 @@ const formulaTypes = new Set([
   'make-archive',
   'make-from-tree',
   'make-unconfined',
+  'map-store',
   'marshal',
   'message',
   'mount',

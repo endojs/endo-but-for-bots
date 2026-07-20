@@ -75,6 +75,7 @@ import { makeResidenceTracker } from './residence.js';
 import { toHex, fromHex } from './hex.js';
 import { makeSerialJobs } from './serial-jobs.js';
 import { makeLocalStoreController } from './store-controller.js';
+import { makeMapStoreMaker } from './map-store.js';
 import { makeWeakMultimap } from './multimap.js';
 import { makeLoopbackNetwork } from './networks/loopback.js';
 import { assertValidFormulaType } from './formula-type.js';
@@ -111,7 +112,7 @@ import { getUnredactedStackString } from './unredacted-stack.js';
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { ReadableBlobRange, SnapshotTree } from '@endo/platform/fs/lite/types' */
 /** @import { ArchiveTreeMethods } from './tar-checkin.js' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobFormula, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MapStore, MapStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobFormula, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * @typedef {{ kind: 'bearer', token: string } | { kind: 'basic', username: string, password: string }} GitCredentialMaterial
@@ -882,7 +883,8 @@ const makeDaemonCore = async (
         if (
           formula.type === 'pet-store' ||
           formula.type === 'mailbox-store' ||
-          formula.type === 'known-peers-store'
+          formula.type === 'known-peers-store' ||
+          formula.type === 'map-store'
         ) {
           formulaGraph.onPetStoreRemoveAll(id);
         }
@@ -926,6 +928,8 @@ const makeDaemonCore = async (
               parseId(id).number,
               formula.type,
             );
+          } else if (formula.type === 'map-store') {
+            persistencePowers.deleteMapStore(parseId(id).number);
           }
         }),
       );
@@ -1383,6 +1387,38 @@ const makeDaemonCore = async (
         }
       }),
     );
+
+    // Seed map-store retention edges before the sweep. A map-store's
+    // remotable entries join the retention graph via the same store→slot
+    // edges pet stores use, but those edges live only in memory, so they
+    // must be rebuilt from the persisted `map_store_entry` rows or the
+    // referenced formulas would be swept as unreachable. We read the rows
+    // directly (no exo construction) and register each local slot id.
+    await withFormulaGraphLock(async () => {
+      for (const { id, formula } of entries) {
+        if (formula.type === 'map-store') {
+          const { number: storeNumber } = parseId(id);
+          const storeId = /** @type {FormulaIdentifier} */ (id);
+          /** @type {Set<FormulaIdentifier>} */
+          const slotIds = new Set();
+          for (const row of persistencePowers.listMapStoreEntries(
+            storeNumber,
+          )) {
+            for (const slot of JSON.parse(row.keySlots)) {
+              slotIds.add(slot);
+            }
+            for (const slot of JSON.parse(row.valueSlots)) {
+              slotIds.add(slot);
+            }
+          }
+          for (const slot of slotIds) {
+            if (isLocalId(slot)) {
+              formulaGraph.onPetStoreWrite(storeId, slot);
+            }
+          }
+        }
+      }
+    });
 
     // Load retention edges from SQLite into the graph.
     const agentKeys = persistencePowers.listAgentKeys();
@@ -2189,6 +2225,17 @@ const makeDaemonCore = async (
 
   const marshaller = makeMarshal(mustGetIdForRef, mustGetRefForId, {
     serializeBodyFormat: 'smallcaps',
+  });
+
+  // The map-store factory reuses the marshaller (key/value body+slots
+  // encoding), `provide` (to reconstitute remotable slots on read), and the
+  // retention hooks (so a stored remotable joins the GC graph exactly like a
+  // pet-store entry). `gcHooks` and `persistencePowers` are already in scope.
+  const mapStorePowers = makeMapStoreMaker({
+    daemonDb: persistencePowers,
+    marshaller,
+    provide,
+    gcHooks,
   });
 
   /**
@@ -3944,6 +3991,7 @@ const makeDaemonCore = async (
             form: disallowedFn,
             storeBlob: disallowedFn,
             storeValue: disallowedFn,
+            makeMapStore: disallowedFn,
             submit: disallowedFn,
             sendValue: disallowedFn,
             deliver: disallowedSyncFn,
@@ -3980,6 +4028,10 @@ const makeDaemonCore = async (
         'known-peers-store',
         assertValidNumber,
       );
+    },
+    'map-store': async (_formula, _context, id, formulaNumber) => {
+      await null;
+      return mapStorePowers.makeIdentifiedMapStore(id, formulaNumber);
     },
     'pet-inspector': ({ petStore: petStoreId }) =>
       // Behold, unavoidable forward-reference:
@@ -4830,6 +4882,31 @@ const makeDaemonCore = async (
     };
     return /** @type {FormulateResult<PetStore>} */ (
       formulate(formulaNumber, formula, nodeNumber)
+    );
+  };
+
+  /**
+   * Formulates a `map-store` formula (a fresh, empty durable MapStore) and
+   * synchronously adds it to the formula graph. The store's entries live in
+   * the SQLite `map_store_entry` table keyed by this formula number; the
+   * formula record itself carries only the type.
+   *
+   * @type {DaemonCore['formulateMapStore']}
+   */
+  const formulateMapStore = async (nodeNumber = localNodeNumber) => {
+    return /** @type {FormulateResult<MapStore>} */ (
+      withFormulaGraphLock(async () => {
+        const formulaNumber = /** @type {FormulaNumber} */ (
+          await randomHex256()
+        );
+        /** @type {MapStoreFormula} */
+        const formula = {
+          type: 'map-store',
+        };
+        const result = await formulate(formulaNumber, formula, nodeNumber);
+        pinTransient(result.id);
+        return result;
+      })
     );
   };
 
@@ -6401,6 +6478,7 @@ const makeDaemonCore = async (
     formulateEval,
     formulateReadableBlob,
     formulateMarshalValue,
+    formulateMapStore,
     getFormulaForId,
     getAllNetworkAddresses,
     getAllContentSources,
@@ -6775,6 +6853,7 @@ const makeDaemonCore = async (
     formulateHost,
     formulateGuest,
     formulateMarshalValue,
+    formulateMapStore,
     formulateEval,
     formulateUnconfined,
     formulateArchive,

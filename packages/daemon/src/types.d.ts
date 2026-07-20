@@ -513,6 +513,16 @@ export type MailboxStoreFormula = {
   type: 'mailbox-store';
 };
 
+/**
+ * A durable, incrementally mutable `MapStore` (scalar keys). The formula
+ * record is minimal — it records only the store's identity and kind; the
+ * entries live in the SQLite `map_store_entry` table keyed by the store's
+ * formula number.
+ */
+export type MapStoreFormula = {
+  type: 'map-store';
+};
+
 export type MailHubFormula = {
   type: 'mail-hub';
   store: FormulaIdentifier;
@@ -631,6 +641,7 @@ export type Formula =
   | KnownPeersStoreFormula
   | PetStoreFormula
   | MailboxStoreFormula
+  | MapStoreFormula
   | MailHubFormula
   | MessageFormula
   | PromiseFormula
@@ -1412,6 +1423,35 @@ export interface EndoAgent extends EndoDirectory, ContentLocatable {
   lookupByLocator(locator: string): Promise<unknown>;
 }
 
+/**
+ * A durable, incrementally mutable map keyed by scalar keys, mirroring the
+ * `@agoric/store` `MapStore` method surface over the daemon's native
+ * formula + SQLite durability substrate. Every mutation writes through to
+ * SQLite in the same turn, so the collection survives a daemon restart.
+ * Iteration methods return arrays (not live iterators) so the CapTP
+ * boundary stays simple.
+ */
+export interface MapStore {
+  /** True if `key` is present; never throws. */
+  has(key: Passable): Promise<boolean>;
+  /** The value at `key`; throws if absent. */
+  get(key: Passable): Promise<Passable>;
+  /** Add a new entry; throws if `key` is already present. */
+  init(key: Passable, value: Passable): Promise<void>;
+  /** Replace an existing entry's value; throws if `key` is absent. */
+  set(key: Passable, value: Passable): Promise<void>;
+  /** Remove an entry; throws if `key` is absent. */
+  delete(key: Passable): Promise<void>;
+  getSize(): Promise<number>;
+  keys(): Promise<Passable[]>;
+  values(): Promise<Passable[]>;
+  entries(): Promise<Array<[Passable, Passable]>>;
+  /** A hardened, passable `CopyMap` snapshot that can cross CapTP. */
+  snapshot(): Promise<Passable>;
+}
+
+export type FarMapStore = FarRef<MapStore>;
+
 export interface EndoGuest extends EndoAgent {
   /** Evaluate code directly in a worker, constrained by reachable capabilities. */
   evaluate(
@@ -1438,6 +1478,12 @@ export interface EndoGuest extends EndoAgent {
     value: T,
     petName: string | string[],
   ): Promise<void>;
+  /**
+   * Create a fresh durable `MapStore`, bind it to `petName`, and return the
+   * live store. Re-looking-up the name (including after a restart) returns a
+   * store backed by the same persisted entries.
+   */
+  makeMapStore(petName: string | string[]): Promise<FarRef<MapStore>>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
   sendValue: Mail['sendValue'];
 }
@@ -1458,6 +1504,12 @@ export interface EndoHost extends EndoAgent {
     value: T,
     petName: string | string[],
   ): Promise<void>;
+  /**
+   * Create a fresh durable `MapStore`, bind it to `petName`, and return the
+   * live store. Re-looking-up the name (including after a restart) returns a
+   * store backed by the same persisted entries.
+   */
+  makeMapStore(petName: string | string[]): Promise<FarRef<MapStore>>;
   storeTree(remoteTree: unknown, petName: string | string[]): Promise<unknown>;
   provideMount(
     path: string,
@@ -2191,6 +2243,25 @@ export type DaemonicPersistencePowers = {
   listRetention: (guestPublicKey: string) => Array<{ formulaNumber: string }>;
   replaceRetention: (guestPublicKey: string, formulaNumbers: string[]) => void;
   deleteAllRetention: (guestPublicKey: string) => void;
+  writeMapStoreEntry: (
+    storeNumber: string,
+    keyBody: string,
+    keySlots: string,
+    valueBody: string,
+    valueSlots: string,
+  ) => void;
+  deleteMapStoreEntry: (
+    storeNumber: string,
+    keyBody: string,
+    keySlots: string,
+  ) => void;
+  listMapStoreEntries: (storeNumber: string) => Array<{
+    keyBody: string;
+    keySlots: string;
+    valueBody: string;
+    valueSlots: string;
+  }>;
+  deleteMapStore: (storeNumber: string) => void;
 };
 
 export interface DaemonWorkerFacet {}
@@ -2392,6 +2463,8 @@ export interface DaemonCore {
   formulateDirectoryForStore: (
     storeId: FormulaIdentifier,
   ) => FormulateResult<EndoDirectory>;
+
+  formulateMapStore: (nodeNumber?: NodeNumber) => FormulateResult<MapStore>;
 
   getPeerIdForNodeIdentifier: (
     nodeNumber: NodeNumber,

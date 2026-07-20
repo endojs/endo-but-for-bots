@@ -61,6 +61,10 @@ export const makeDaemonicPersistencePowers = (
     listRetention,
     replaceRetention,
     deleteAllRetention,
+    writeMapStoreEntry,
+    deleteMapStoreEntry,
+    listMapStoreEntries,
+    deleteMapStore,
   } = daemonDb;
 
   const initializePersistence = async () => {
@@ -163,6 +167,10 @@ export const makeDaemonicPersistencePowers = (
     listRetention,
     replaceRetention,
     deleteAllRetention,
+    writeMapStoreEntry,
+    deleteMapStoreEntry,
+    listMapStoreEntries,
+    deleteMapStore,
   });
 };
 harden(makeDaemonicPersistencePowers);
