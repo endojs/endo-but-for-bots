@@ -76,6 +76,19 @@ The voice id encodes its path: `en_GB-alba-medium` → `en/en_GB/alba/medium/`.
    Create a Chat Space and set its object paths to `floot-factory`, STT path
    `floot-stt`, TTS path `floot-tts`.
 
+## Session lifecycle
+
+Each session's guest facets and petstore live under one daemon directory.
+Deleting a session drops that directory, so its conversation records, named
+evaluation results, and other session-owned capabilities are collected as one
+formula-graph cascade without asking the agent to clean up after itself.
+
+The factory also sweeps expired sessions and guest directories left behind when
+a prior factory process persisted deletion but stopped before the final drop.
+Set `FLOOT_SESSION_TTL_MS` to a positive integer to give new sessions an
+absolute lifetime in milliseconds; the default `0` retains them until explicit
+deletion.
+
 ## Swapping an implementation
 
 `floot-stt` and `floot-tts` are separate daemon formulas, each behind its own
