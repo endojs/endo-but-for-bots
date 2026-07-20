@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-18 |
-| **Updated** | 2026-07-06 |
+| **Updated** | 2026-07-20 |
 | **Author** | 0xPatrick (prompted) |
 | **Status** | Proposed (Phases 0-5 + bulk-archive landed via #364/#365/#367, hardening via #371) |
 
@@ -14,7 +14,8 @@
 ## Summary
 
 Define a local-git capability `Git` whose authority is derived from an already-authorized `EndoMount` (not from a path string).
-Worktree operations (status / diff / log / add / commit / branch / merge / rebase / stash) and historical tree reads (`tree(ref)`) live on `Git`; `Git.readOnly()` attenuates the cap for read-only auditor agents, matching the `EndoMount.readOnly()` idiom.
+Worktree operations (status / diff / log / add / commit / branch / merge / rebase / stash) and historical reads live on `Git`; `Git.readOnly()` attenuates the cap for read-only auditor agents, matching the `EndoMount.readOnly()` idiom.
+Historical read is one API in two projections: `filesystemAt(ref)` is the historical-read method, returning an `@endo/endo-fs` `Filesystem` view of the ref's tree ([endo-fs-from-git](endo-fs-from-git.md)); `tree(ref)` projects the same tree as the narrower `ReadableTree`.
 Path-bearing inputs are `EndoMountEntry` values, not free-form strings.
 The first backend is native git (`NativeGitBackend`) on a pinned `git >= 2.30`, with the hardening envelope (sanitized env, askpass-only authentication, allowlist, repo-local-filter rejection) called out separately from the essential `GitBackend` contract so a future JS backend can implement the essential parts without inheriting native-only methods.
 Structured result shapes for diff / show / merge / rebase / stash arrive in a later phase; the first phase returns those as text so consumers can start integrating against the path-bearing inputs immediately.
@@ -28,6 +29,7 @@ This document assumes you know the following primitives from [daemon-mount-capab
 - **`EndoMountEntry`** is the mount-scoped value-shaped descriptor for a path that may not currently exist on disk; the `Git` capability consumes entries (not free-form path strings) for its path-bearing methods.
 - **`EndoMountBacking`** is the host-private Exo facet on the mount formula that trusted daemon code uses to reach the physical worktree without leaking the path to guests; `provideGit` uses it to verify a mount is physical.
 - **`ReadableTree` / `ReadableBlob`** are the shared read-surface interfaces in [platform-fs](platform-fs.md); `Git.tree(ref)` returns a `ReadableTree`.
+- **`Filesystem`** is `@endo/endo-fs`'s richer read surface (directories, files, open-file handles, `BlobRef` snapshots, cursor listings) — the same shape the content layer exposes for the live worktree; `Git.filesystemAt(ref)` returns a read-only `Filesystem` over a ref's tree ([endo-fs-from-git](endo-fs-from-git.md)).
 
 ## What is the Problem Being Solved?
 
@@ -71,6 +73,7 @@ This document revises the git design around those facts.
 | [daemon-mount](daemon-mount.md) | Current physical mount formula implementation. |
 | [platform-fs](platform-fs.md) | Shared `ReadableTree` / `SnapshotTree` vocabulary for git tree exposure. |
 | [daemon-capability-filesystem](daemon-capability-filesystem.md) | Broader multi-provider VFS model including physical and git-tree backends. |
+| [endo-fs-from-git](endo-fs-from-git.md) | Historical-read foundation: `Git.filesystemAt(ref)` returning an `@endo/endo-fs` `Filesystem` over the git object database; carries the authoritative implementation-status notes for that method. |
 | [daemon-agent-tools](daemon-agent-tools.md) | Earlier agent-facing sketch to be revised by this design. |
 | [daemon-git-remotes](daemon-git-remotes.md) | Companion MVP design for fetch, pull, push, and credentialed remote use. |
 
@@ -95,7 +98,7 @@ That work should remain useful as a reference for a `NativeGitBackend`.
 |---|---|
 | Repository root string configured authority | `EndoMount` carries public worktree authority |
 | Path strings were passed into git calls | `EndoMountEntry` values are passed after mount-local resolution |
-| Git only meant commands against a worktree | Git exposes worktree mutation, `tree(ref)` for immutable historical reads, and `readOnly()` for in-place attenuation |
+| Git only meant commands against a worktree | Git exposes worktree mutation, `filesystemAt(ref)` / `tree(ref)` for immutable historical reads, and `readOnly()` for in-place attenuation |
 | Adapter details leaked into the tool design | Public `Git` capability is backend-shaped (native-first), with `NativeGitBackend` named separately |
 
 ## Architecture
@@ -324,7 +327,11 @@ interface Git {
   stashPop(index?: number): Promise<void>;
   stashDrop(index?: number): Promise<void>;
 
-  // Immutable tree access (one-turn read on the same capability).
+  // Historical read (one-turn read on the same capability).
+  // filesystemAt(ref) is the historical-read method; tree(ref) is its
+  // ReadableTree projection.  See § Historical Read: One API, Two
+  // Projections.
+  filesystemAt(ref: GitRef | string): Promise<Filesystem>;
   tree(ref: GitRef | string): Promise<ReadableTree>;
 
   // Attenuation to a read-only posture.  Mutation methods on the returned
@@ -335,6 +342,22 @@ interface Git {
 ```
 
 `tree(ref)` returns the read surface defined by `GitTreeProvider` below; the interface name remains as the documented shape of the returned read capability even though tree access lives as a method on `Git` itself.
+
+### Historical Read: One API, Two Projections
+
+`filesystemAt(ref)` and `tree(ref)` are not two competing historical-read APIs — they are one API in a projection relationship, and this section is the canonical statement of it (reconciling this document with [endo-fs-from-git](endo-fs-from-git.md), per the roadmap in [daemon-git-next-steps](daemon-git-next-steps.md)):
+
+- **`filesystemAt(ref)` is the historical-read method.**
+  It lifts the ref's tree into the full `@endo/endo-fs` `Filesystem` shape — the same vocabulary the content layer exposes for the live worktree — so an agent inspects `HEAD~1`, another branch, or a remote-tracking ref as an ordinary filesystem: directory listings, open-file handles, range reads, `BlobRef` snapshots.
+  The view is natively read-only; write verbs reject at the cap boundary.
+  Its design and implementation status live in [endo-fs-from-git](endo-fs-from-git.md).
+- **`tree(ref)` is `filesystemAt`'s `ReadableTree` projection.**
+  It projects the same git tree as the narrower shared read surface ([platform-fs](platform-fs.md)), for callers that want a tree anywhere a `ReadableTree` is accepted today — checkin, checkout, staging, VFS mounting — without the richer `Filesystem` machinery.
+
+Two `filesystemAt` trade-offs travel with this vocabulary so they are not silently lost.
+As first shipped through the shared `wrapBackend` seam, the `Filesystem` view's QID was **path-based, not the git OID** (two paths at the same blob reported different QIDs), and its `BlobRef.algorithm` was **`'sha256'`, not the git tree's `git-sha1`**.
+Both are restored by a backend-supplied QID / hash hook on `wrapBackend` (PR #708): the git-tree backend then supplies the tree/blob OID as the QID `pathId` and a `git-sha1` `BlobRef`, recovering content-address equivalence across paths and refs.
+[endo-fs-from-git](endo-fs-from-git.md) § Status is the authoritative record of which of these holds on any given branch.
 
 `readOnly()` mirrors the `EndoMount.readOnly()` attenuation idiom ([daemon-mount-capabilities](daemon-mount-capabilities.md) § Design Decision 6): the returned `Git` exposes the same methods, but the mutation methods (`add`, `restore`, `commit`, `createBranch`, `deleteBranch`, `renameBranch`, `switchBranch`, `detach`, `merge`, `rebase`, `stashPush`, `stashApply`, `stashPop`, `stashDrop`) throw at runtime initially and are narrowed out of the type when structured shapes land (Phase 7).
 A read-only auditor agent holds the attenuated `Git`; the operator hands it `await E(git).readOnly()` rather than the unattenuated cap.
@@ -373,7 +396,13 @@ const readme = await E(worktree).entry('README.md');
 await E(git).add([readme]);
 const commit = await E(git).commit('docs: update README');
 
-// browse a historical tree without touching the worktree
+// browse history without touching the worktree: filesystemAt is the
+// historical-read method (full Filesystem shape) ...
+const previous = await E(git).filesystemAt('HEAD~1');
+const oldReadmeFile = await E(E(previous).root()).lookup('README.md');
+
+// ... and tree(ref) is its ReadableTree projection for callers that
+// want the narrower shared read surface
 const headTree = await E(git).tree('HEAD');
 const oldReadme = await E(headTree).lookup('README.md');
 const text = await E(oldReadme).text();
@@ -460,8 +489,7 @@ Without them, the design inevitably falls back to free-form relative strings and
 
 ### Read Surface
 
-The git-tree backend's read surface is `ReadableTree` (with blobs as `ReadableBlob`).
-`Git.tree(ref)` returns it directly:
+The git-tree backend serves both historical-read projections (§ Historical Read: One API, Two Projections): `Git.filesystemAt(ref)` lifts a ref's tree into the full `@endo/endo-fs` `Filesystem` via the shared `wrapBackend` seam ([endo-fs-from-git](endo-fs-from-git.md)), and `Git.tree(ref)` returns the narrower `ReadableTree` (with blobs as `ReadableBlob`) directly:
 
 ```ts
 interface GitTreeProvider {
@@ -807,7 +835,8 @@ No open questions remain on this document; revisit if real implementation surfac
 2. **Entries, not strings, carry path authority.**
    Path strings may appear at UI boundaries, but git operations consume mount-minted descriptors.
 3. **Live worktree and immutable trees are separate methods, not separate capabilities.**
-   Mutable worktree operations and `tree(ref)` both live on `Git`; read-only attenuation comes via `Git.readOnly()`, matching the `EndoMount.readOnly()` idiom.
+   Mutable worktree operations and the historical-read methods both live on `Git`; read-only attenuation comes via `Git.readOnly()`, matching the `EndoMount.readOnly()` idiom.
+   Historical read is one API in two projections, not two APIs: `filesystemAt(ref)` is the historical-read method and `tree(ref)` is its `ReadableTree` projection (§ Historical Read: One API, Two Projections; [endo-fs-from-git](endo-fs-from-git.md)).
    An audit-grant for a read-only auditor agent is `await E(git).readOnly()`; the auditor holds an attenuated `Git`.
    See § Alternatives Considered for Tree Access Shape for the split-capability variant the design panel originally recommended and the rationale for picking attenuation instead.
 4. **Backend choice is best-effort pluggable, not contractually swappable.**

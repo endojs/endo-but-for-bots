@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-27 |
-| **Updated** | 2026-06-03 |
+| **Updated** | 2026-07-20 |
 | **Author** | 0xPatrick (prompted) |
 | **Status** | Proposed |
 
@@ -91,7 +91,8 @@ Each is a dispatchable work item or a pointer to the design that owns it.
   Together these close the "you give me a URL, the agent runs, and its commits are attributed correctly" gap.
   The bootstrap design (and the identity boundary as a section or sibling) lives in its own `daemon-git-clone.md`; depends on the `GitRemote` composition being stable.
 
-- [ ] **Reconcile `tree(ref)` and `filesystemAt(ref)` into one canonical vocabulary — a focused edit to [daemon-git-capability](daemon-git-capability.md).**
+- [x] **Reconcile `tree(ref)` and `filesystemAt(ref)` into one canonical vocabulary — a focused edit to [daemon-git-capability](daemon-git-capability.md).**
+  *Done: [daemon-git-capability](daemon-git-capability.md) § Historical Read: One API, Two Projections carries the reconciled vocabulary and both trade-offs.*
   `tree(ref)` (returning `ReadableTree`) is specified in [daemon-git-capability](daemon-git-capability.md) § Git-Tree Backend and Design Decision 3; `filesystemAt(ref)` (returning an `@endo/endo-fs` `Filesystem`) is specified in [endo-fs-from-git](endo-fs-from-git.md).
   They are not two competing names for one thing — they are two methods in a projection relationship: `tree(ref)` projects the narrower `ReadableTree`, `filesystemAt(ref)` lifts the same git tree into the richer `Filesystem` (the same shape the content layer exposes for the live worktree).
   The edit names `filesystemAt(ref)` as the historical-read method and `tree(ref)` as its `ReadableTree` projection, cross-linking [endo-fs-from-git](endo-fs-from-git.md), so the canonical doc carries one historical-read API, not two.
