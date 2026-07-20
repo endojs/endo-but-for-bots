@@ -3,31 +3,31 @@
 | | |
 |---|---|
 | **Created** | 2026-03-11 |
-| **Updated** | 2026-05-19 |
+| **Updated** | 2026-07-20 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+| **Status** | **Complete** |
 
 ## Status
 
-**In Progress** (design proposed 2026-03-13; implementation on bot
-fork branch open as PR #133, not yet merged to `llm`).
+**Complete** (design proposed 2026-03-13; implementation merged to
+`llm` via PR #133 on 2026-07-13).
 
 Implemented on branch `feat/chat-pending-commands` (commits 677e51a3c,
-5b2490dcd, 9317a2db4) and forwarded under the bot as
+5b2490dcd, 9317a2db4), forwarded under the bot as
 [PR #133](https://github.com/endojs/endo-but-for-bots/pull/133)
-(re-opened from #43, currently open).
-Not yet merged to `llm`; `packages/chat/pending-commands.js` does
-not exist on the `llm` branch as of 2026-05-19.
-Verification per maintainer hint of "believe merged" turned up the
-open PR rather than a merged change.
+(re-opened from #43), and merged to `llm` on 2026-07-13 (merge commit
+`82c81afa1`). The region component landed as
+`packages/spaces-util/src/pending-commands.js`; `packages/chat/chat.js`
+and `packages/chat/index.css` carry the `#pending-commands-region`
+mount point, with coverage in
+`packages/chat/test/component/chat-bar.test.js`.
 
 ### Roadmap calibration (per `git blame` on `llm`)
 
 - Design phase: 2026-03-13 (single commit `60a63bc40`, "Designs
   update"; this commit added the design doc on `llm`).
-- Implementation phase: open as PR #133 against `llm`. No completion
-  date yet. The design has been awaiting merge since 2026-03-13;
-  calendar gap since design is 67+ days and counting.
+- Implementation phase: merged to `llm` via PR #133 on 2026-07-13
+  (merge commit `82c81afa1`), after awaiting merge since 2026-03-13.
 
 ## What is the Problem Being Solved?
 

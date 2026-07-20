@@ -22,7 +22,7 @@ stream of length-prefixed byte strings on the wire, using the CBOR
 byte-string head as its length encoding.
 This package is the precise CBOR-shaped analog of `@endo/netstring`
 and of the proposed `@endo/syrup-frame`
-(see [`ocapn-tcp-syrup-framing.md`](./ocapn-tcp-syrup-framing.md),
+(see [`ocapn-tcp-syrups-framing.md`](./ocapn-tcp-syrups-framing.md),
 PR 29 in `endojs/endo-but-for-bots`, not yet landed):
 each names a different on-the-wire grammar for length-prefixed byte
 strings.
@@ -56,7 +56,7 @@ the wire, each headed in CBOR's grammar."
 The proposed sibling `@endo/syrup-frame` (PR 29; not yet landed)
 names the analogous package whose grammar is Syrup's byte-string
 record (`<digits>:<payload>`).
-See [`ocapn-tcp-syrup-framing.md`](./ocapn-tcp-syrup-framing.md).
+See [`ocapn-tcp-syrups-framing.md`](./ocapn-tcp-syrups-framing.md).
 "CBOR" is the canonical acronym for Concise Binary Object
 Representation and is therefore permitted under the namer's rule on
 canonical acronyms.
@@ -283,12 +283,12 @@ for await (const bytes of reader) {
 | Package | Role |
 |---|---|
 | [`@endo/netstring`](../packages/netstring/) | Frames byte payloads as `<digits>:<bytes>,` |
-| `@endo/syrup-frame` ([PR 29](./ocapn-tcp-syrup-framing.md), proposed, not yet landed) | Frames byte payloads as `<digits>:<bytes>` |
+| `@endo/syrup-frame` ([PR 29](./ocapn-tcp-syrups-framing.md), proposed, not yet landed) | Frames byte payloads as `<digits>:<bytes>` |
 | `@endo/cbors` (this design) | Frames byte payloads as a CBOR byte-string head plus payload, optionally wrapped in CBOR tag 24 |
 | `packages/daemon/src/envelope.js` | Inline CBOR codec for the engo bus envelope protocol; a candidate consumer of `@endo/cbors` for the framing layer |
 
 `@endo/netstring` (which exists today),
-`@endo/syrup-frame` ([proposed in PR 29](./ocapn-tcp-syrup-framing.md),
+`@endo/syrup-frame` ([proposed in PR 29](./ocapn-tcp-syrups-framing.md),
 not yet landed), and `@endo/cbors` (this design) are intended as
 sibling packages.
 Each frames a sequence of byte payloads using a different head

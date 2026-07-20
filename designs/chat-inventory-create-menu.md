@@ -408,7 +408,7 @@ Capabilities like the agent provisioner stay on the root host; the user-host has
 This isolates provisioning machinery from the day-to-day UX surface without hiding it: a power user can still navigate up to the root.
 
 The `@root` endowment:
-Adding `@root` as a special name on every Endo host (alongside the existing `@self`, `@host`, `@agent`, `@keypair`, `@main`, `@endo` per [d256 § Per-agent keypairs](d256.md) and the broader special-name idiom) gives every host a stable way to reach the root host agent.
+Adding `@root` as a special name on every Endo host (alongside the existing `@self`, `@host`, `@agent`, `@keypair`, `@main`, `@endo` per [d256 § Per-agent keypairs](daemon-256-bit-identifiers.md) and the broader special-name idiom) gives every host a stable way to reach the root host agent.
 Familiar precedent: the `@apps` special name in [familiar-bundled-agents § Specials](familiar-bundled-agents.md) is preformulated at daemon initialization, before root host / pet stores / guest profiles exist; `@root` lands as a sibling Specials entry that names the root host formula.
 A separate designer dispatch authors the full design (see [§ Open Questions](#open-questions) question 8); this design's contribution is the directive's encoding and the link to the existing precedent.
 
@@ -445,7 +445,7 @@ That design's status is "Proposed (partially satisfied)" via Genie's existing de
 | [endo-gateway-mcp](endo-gateway-mcp.md) | Adjacent design whose "+ Add agent" affordance plugs into this design's wizard. |
 | [daemon-capability-bank](daemon-capability-bank.md) | Roster source for pane 3's nine endowment rows and the six design principles the wizard cites. |
 | [daemon-mount](daemon-mount.md) | Substrate for the `@fs` row's *scratch* and *snapshot* alternatives, and for the posix-sandbox composition with `@main`. |
-| [d256](d256.md) | Per-agent keypairs and the special-name idiom on hosts and guests (`@self`, `@host`, `@agent`, `@keypair`, `@main`, `@endo`); precedent for the future `@root` special name. |
+| [d256](daemon-256-bit-identifiers.md) | Per-agent keypairs and the special-name idiom on hosts and guests (`@self`, `@host`, `@agent`, `@keypair`, `@main`, `@endo`); precedent for the future `@root` special name. |
 | [chat-spaces-gutter](chat-spaces-gutter.md) (already cited above) | The "typed namespace over the untyped pet-store" precedent the root host agent's pet store follows. |
 
 ## Files Expected to Be Modified
@@ -569,7 +569,7 @@ When [endopi-provider-registry-and-oauth § Phases 3-4](endopi-provider-registry
    The maintainer's inline 499 ("Agreed.") confirms the transitional framing on pane 1; no further change here.
 
 6. **Root host agent, user-host split, and the `@root` endowment: sibling design.**
-   Per the maintainer's inline 363 directive, a separate designer dispatch authors the design that names the *user / user-profile* split on top of the root host agent and the `@root` endowment registered alongside the other special names per [d256 § Per-agent keypairs](d256.md).
+   Per the maintainer's inline 363 directive, a separate designer dispatch authors the design that names the *user / user-profile* split on top of the root host agent and the `@root` endowment registered alongside the other special names per [d256 § Per-agent keypairs](daemon-256-bit-identifiers.md).
    This design's contribution is the encoding of the directive (in [§ Root host agent as a special place](#root-host-agent-as-a-special-place) above) and the cascade for how Chat installs provisioning capabilities on the root and exposes user-facing surfaces through the user host.
    The sibling design owns the full shape (`@root` as a Specials entry analogous to `@apps`, the `user` / `user-profile` formula shapes, the lazy-vs-eager bootstrap question; see [familiar-bundled-agents § Three-option powers analysis](familiar-bundled-agents.md) for the parallel rubric).
 
@@ -592,7 +592,7 @@ The maintainer's review directives on this PR explicitly call for three separate
 |---|---|---|
 | Inline 477 (root host pet store + encrypted at rest) | `chat-inventory-encrypted-formulas` | Maintainer; the slug is the designer's proposal pending confirmation |
 | Inline 484 (provider-key recovery and rotation) | (to be named by the maintainer) | Maintainer; the scope (key recovery only, or also rotation and the gateway-key-recovery parallel?) is the maintainer's call |
-| Inline 363 (`@root` endowment + user / user-profile split) | (to be named by the maintainer; candidate: `endo-root-special-and-user-host`) | Maintainer; the design composes [d256](d256.md), [familiar-bundled-agents](familiar-bundled-agents.md), and the root-host-pet-store directive on inline 477 |
+| Inline 363 (`@root` endowment + user / user-profile split) | (to be named by the maintainer; candidate: `endo-root-special-and-user-host`) | Maintainer; the design composes [d256](daemon-256-bit-identifiers.md), [familiar-bundled-agents](familiar-bundled-agents.md), and the root-host-pet-store directive on inline 477 |
 
 This design does not author the three sibling designs in its own diff; doing so would inflate the PR beyond the maintainer's intended scope.
 The dispatches surface as separate `message` entries to the steward and the maintainer per [garden/skills/dispatch-worktree/SKILL.md](../../skills/dispatch-worktree/SKILL.md), and each one originates its own designer dispatch when authorized.
