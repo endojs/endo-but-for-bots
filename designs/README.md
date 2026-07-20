@@ -33,7 +33,7 @@ bodies; follow a link to read a design's narrative.
 | [chat-invariants](chat-invariants.md) | 2026-03-02 | 2026-03-02 | **Complete** |
 | [chat-inventory-create-menu](chat-inventory-create-menu.md) | 2026-06-02 | 2026-06-14 | Not Started |
 | [chat-markdown-render](chat-markdown-render.md) | 2026-03-03 | 2026-05-19 | **Complete** |
-| [chat-pending-commands](chat-pending-commands.md) | 2026-03-11 | 2026-05-19 | In Progress (PR #133) |
+| [chat-pending-commands](chat-pending-commands.md) | 2026-03-11 | 2026-07-20T02:29:49Z | **Complete** (PR #133) |
 | [chat-per-space-color-scheme](chat-per-space-color-scheme.md) | 2026-02-26 | 2026-02-26 | **Complete** |
 | [chat-playwright-smoke](chat-playwright-smoke.md) | 2026-05-06 | 2026-05-18 | **Complete** |
 | [chat-rename-dismiss-to-clear](chat-rename-dismiss-to-clear.md) | 2026-03-03 | 2026-05-19 | **Complete** |
