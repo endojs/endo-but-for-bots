@@ -632,10 +632,11 @@ test('map store semantics', async t => {
 
   // keys / values / entries
   t.deepEqual([...(await E(store).keys())].sort(), [3n, 'a', 'b']);
-  t.deepEqual(
-    [...(await E(store).entries())].map(([k]) => k).sort(),
-    [3n, 'a', 'b'],
-  );
+  t.deepEqual([...(await E(store).entries())].map(([k]) => k).sort(), [
+    3n,
+    'a',
+    'b',
+  ]);
 
   // snapshot is a passable CopyMap mirroring the current contents
   const snapshot = await E(store).snapshot();

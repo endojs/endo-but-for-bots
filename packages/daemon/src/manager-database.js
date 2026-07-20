@@ -592,7 +592,13 @@ export const makeDaemonDatabase = (config, options) => {
     valueBody,
     valueSlots,
   ) => {
-    stmtWriteMapEntry.run(storeNumber, keyBody, keySlots, valueBody, valueSlots);
+    stmtWriteMapEntry.run(
+      storeNumber,
+      keyBody,
+      keySlots,
+      valueBody,
+      valueSlots,
+    );
   };
 
   /**
