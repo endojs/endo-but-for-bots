@@ -164,7 +164,9 @@ export function scaffold(
     return wrappedTest(title, async t => {
       await null;
       const compartmentInstrumentation = compartmentInstrumentationFactory();
-      /** @type {object} */
+      // Typed `any` because the fixture namespace shape is generic over the
+      // assertion fixture type and only the per-fixture assertFixture knows it.
+      /** @type {any} */
       let namespace;
       try {
         namespace = await implementation(

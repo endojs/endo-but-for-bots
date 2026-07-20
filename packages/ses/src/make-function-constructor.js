@@ -16,7 +16,13 @@ const { Fail } = assert;
  * is specified (then a TypeError is thrown on use).
  */
 export const makeFunctionConstructor = evaluator => {
-  // Define an unused parameter to ensure Function.length === 1
+  // Define an unused parameter to ensure Function.length === 1. The runtime
+  // function is variadic (it reads all of `arguments`: a list of parameter
+  // names followed by the body text), so type it with a rest parameter; the
+  // single declared `_body` parameter exists only to pin `.length === 1`.
+  /**
+   * @type {(...args: string[]) => Function}
+   */
   const newFunction = function Function(_body) {
     // Sanitize all parameters at the entry point.
     // eslint-disable-next-line prefer-rest-params

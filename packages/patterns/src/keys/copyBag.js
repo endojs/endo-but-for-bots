@@ -107,12 +107,16 @@ harden(confirmBagEntries);
 
 // eslint-disable-next-line jsdoc/require-returns-check -- doesn't understand asserts
 /**
+ * Declared as a function declaration so the `asserts ...` assertion signature
+ * attaches to the function's own type; tsgo does not preserve it through
+ * assignment to a `const` (call sites would fail TS2775).
+ *
  * @param {[Passable,bigint][]} bagEntries
  * @returns {asserts bagEntries is [Passable,bigint][]}
  */
-export const assertBagEntries = bagEntries => {
+export function assertBagEntries(bagEntries) {
   confirmBagEntries(bagEntries, Fail);
-};
+}
 hideAndHardenFunction(assertBagEntries);
 
 /**

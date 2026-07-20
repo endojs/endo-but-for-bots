@@ -22,7 +22,7 @@
     "lint": "yarn lint:types && yarn lint:ts",
     "lint-fix": "eslint --fix . --ext .ts",
     "lint:ts": "eslint . --ext .ts",
-    "lint:types": "tsc",
+    "lint:types": "tsgo --tsBuildInfoFile tsconfig.tsgo.tsbuildinfo",
     "test": "yarn lint:types"
   },
   "dependencies": {
@@ -31,6 +31,7 @@
     "ses": "workspace:^"
   },
   "devDependencies": {
+    "@typescript/native-preview": "catalog:dev",
     "eslint": "catalog:dev",
     "typescript": "catalog:dev"
   },

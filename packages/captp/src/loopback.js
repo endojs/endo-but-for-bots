@@ -22,7 +22,7 @@ export { E };
  *   isOnlyFar(x: any): boolean,
  *   getNearStats(): any,
  *   getFarStats(): any,
- *   Trap: Trap
+ *   Trap: ReturnType<typeof import('./trap.js').makeTrap>
  * }}
  */
 export const makeLoopback = (ourId, nearOptions, farOptions) => {
@@ -99,7 +99,7 @@ export const makeLoopback = (ourId, nearOptions, farOptions) => {
       lastNonce += 1;
       const myNonce = lastNonce;
       const val = await x;
-      nonceToRef.set(myNonce, harden(val));
+      nonceToRef.set(myNonce, /** @type {object} */ (harden(val)));
       // @ts-expect-error Type 'T | Awaited<T>' is not assignable to type 'EResult<T>'
       return E(refGetter).getRef(myNonce);
     };

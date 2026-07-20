@@ -41,7 +41,7 @@ const baseFreezableProxyHandler = {
  *
  * @param {any} recipient Any value passed to E(x)
  * @param {HandledPromiseConstructor} HandledPromise
- * @returns {ProxyHandler<unknown>} the Proxy handler
+ * @returns {ProxyHandler<object>} the Proxy handler
  */
 const makeEProxyHandler = (recipient, HandledPromise) =>
   harden({
@@ -102,7 +102,7 @@ const makeEProxyHandler = (recipient, HandledPromise) =>
  *
  * @param {any} recipient Any value passed to E.sendOnly(x)
  * @param {HandledPromiseConstructor} HandledPromise
- * @returns {ProxyHandler<unknown>} the Proxy handler
+ * @returns {ProxyHandler<object>} the Proxy handler
  */
 const makeESendOnlyProxyHandler = (recipient, HandledPromise) =>
   harden({
@@ -159,7 +159,7 @@ const makeESendOnlyProxyHandler = (recipient, HandledPromise) =>
  *
  * @param {any} x Any value passed to E.get(x)
  * @param {HandledPromiseConstructor} HandledPromise
- * @returns {ProxyHandler<unknown>} the Proxy handler
+ * @returns {ProxyHandler<object>} the Proxy handler
  */
 const makeEGetProxyHandler = (x, HandledPromise) =>
   harden({
@@ -208,8 +208,12 @@ const makeE = HandledPromise => {
        * @param {T} x target for method/function call
        * @returns {ECallableOrMethods<RemoteFunctions<T>>} method/function call proxy
        */
-      // @ts-expect-error XXX typedef
-      x => new Proxy(funcTarget, makeEProxyHandler(x, HandledPromise)),
+      x =>
+        /** @type {ECallableOrMethods<RemoteFunctions<T>>} */ (
+          /** @type {unknown} */ (
+            new Proxy(funcTarget, makeEProxyHandler(x, HandledPromise))
+          )
+        ),
       {
         /**
          * E.get(x) returns a proxy on which you can get arbitrary properties.
@@ -222,8 +226,12 @@ const makeE = HandledPromise => {
          * @returns {EGetters<LocalRecord<T>>} property get proxy
          * @readonly
          */
-        // @ts-expect-error XXX typedef
-        get: x => new Proxy(objTarget, makeEGetProxyHandler(x, HandledPromise)),
+        get: x =>
+          /** @type {EGetters<LocalRecord<T>>} */ (
+            /** @type {unknown} */ (
+              new Proxy(objTarget, makeEGetProxyHandler(x, HandledPromise))
+            )
+          ),
 
         /**
          * E.resolve(x) converts x to a handled promise. It is
@@ -246,8 +254,11 @@ const makeE = HandledPromise => {
          * @readonly
          */
         sendOnly: x =>
-          // @ts-expect-error XXX typedef
-          new Proxy(funcTarget, makeESendOnlyProxyHandler(x, HandledPromise)),
+          /** @type {ESendOnlyCallableOrMethods<RemoteFunctions<T>>} */ (
+            /** @type {unknown} */ (
+              new Proxy(funcTarget, makeESendOnlyProxyHandler(x, HandledPromise))
+            )
+          ),
 
         /**
          * E.when(x, res, rej) is equivalent to
@@ -272,7 +283,7 @@ const makeE = HandledPromise => {
 
 export default makeE;
 
-/** @typedef {ReturnType<makeE>} EProxy */
+/** @typedef {ReturnType<typeof makeE>} EProxy */
 
 /**
  * Declare an object that is potentially a far reference of type Primary whose

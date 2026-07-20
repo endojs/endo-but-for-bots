@@ -170,7 +170,9 @@ const resolveLocation = (rel, abs) => {
  * @param {unknown} allegedPackageLocation - a package location to assert
  * @returns {asserts allegedPackageLocation is FileUrlString}
  */
-const assertFileUrlString = allegedPackageLocation => {
+// Declared as a function declaration so the assertion signature attaches to the
+// function's own type; tsgo does not preserve it through assignment to a const.
+function assertFileUrlString(allegedPackageLocation) {
   assert(
     typeof allegedPackageLocation === 'string',
     `Package location must be a string, got ${q(allegedPackageLocation)}`,
@@ -179,7 +181,7 @@ const assertFileUrlString = allegedPackageLocation => {
     allegedPackageLocation.startsWith('file://'),
     `Package location must be a file URL, got ${q(allegedPackageLocation)}`,
   );
-};
+}
 
 // Exported for testing:
 /**
@@ -209,13 +211,15 @@ export const basename = location => {
  * @param {unknown} allegedPackageDescriptor
  * @returns {asserts allegedPackageDescriptor is PackageDescriptor}
  */
-const assertPackageDescriptor = allegedPackageDescriptor => {
+// Declared as a function declaration so the assertion signature attaches to the
+// function's own type; tsgo does not preserve it through assignment to a const.
+function assertPackageDescriptor(allegedPackageDescriptor) {
   assert(
     typeof allegedPackageDescriptor !== 'function' &&
       Object(allegedPackageDescriptor) === allegedPackageDescriptor,
     `Package descriptor must be a plain object, got ${q(allegedPackageDescriptor)}`,
   );
-};
+}
 
 /**
  * Asserts that the given `PackageDescriptor` has a non-empty `name`.
@@ -325,7 +329,11 @@ const findPackage = async (readDescriptor, canonical, directory, name) => {
       return { packageLocation, packageDescriptor };
     }
 
-    const parent = resolveLocation('../', directory);
+    // `directory` is a file URL and `resolveLocation` preserves the scheme of
+    // its base, so the resolved parent is also a file URL.
+    const parent = /** @type {FileUrlString} */ (
+      resolveLocation('../', directory)
+    );
     if (parent === directory) {
       return undefined;
     }
@@ -333,7 +341,9 @@ const findPackage = async (readDescriptor, canonical, directory, name) => {
 
     const base = basename(directory);
     if (base === 'node_modules') {
-      directory = resolveLocation('../', directory);
+      directory = /** @type {FileUrlString} */ (
+        resolveLocation('../', directory)
+      );
       if (parent === directory) {
         return undefined;
       }

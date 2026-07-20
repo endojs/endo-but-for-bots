@@ -26,13 +26,15 @@ import { makeDeferredTasks } from './deferred-tasks.js';
 
 import { HostInterface } from './interfaces.js';
 
+// Function declaration (not arrow-const) so tsgo preserves the `asserts`
+// assertion signature at call sites.
 /**
  * @param {string} name
  * @returns {asserts name is Name}
  */
-const assertPowersName = name => {
+function assertPowersName(name) {
   ['NONE', 'AGENT', 'ENDO'].includes(name) || assertPetName(name);
-};
+}
 
 /**
  * @param {object} args

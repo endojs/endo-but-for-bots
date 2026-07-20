@@ -37,7 +37,7 @@
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
-    "lint:types": "tsc",
+    "lint:types": "tsgo --tsBuildInfoFile tsconfig.tsgo.tsbuildinfo",
     "test": "ava",
     "test:clean": "rm -rf tmp && yarn test"
   },
@@ -68,6 +68,7 @@
     "@endo/bundle-source": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/ses-ava": "workspace:^",
+    "@typescript/native-preview": "catalog:dev",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",

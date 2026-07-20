@@ -197,6 +197,6 @@ export type WrappedTestFn = (
   implementation: (
     t: ExecutionContext,
     compartment: typeof Compartment,
-  ) => Promise<void>,
+  ) => Promise<object>,
 ) => void | Promise<void>;
 // #endregion

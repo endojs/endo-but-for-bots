@@ -105,12 +105,14 @@ const isPlainObject = item =>
  * @param {string} [message]
  * @returns {asserts item is Record<string, any>}
  */
-const assertPlainObject = (item, message) => {
+// Declared as a function declaration so the assertion signature attaches to the
+// function's own type; tsgo does not preserve it through assignment to a const.
+function assertPlainObject(item, message) {
   assert(
     isPlainObject(item),
     message ?? `Expected a plain object, got ${q(item)}`,
   );
-};
+}
 
 /**
  * Checks if the result of `keys(item).length` is `0`.
@@ -189,11 +191,12 @@ const isImplicitAttenuationDefinition =
  * @template {SomeTypeGuard} T
  * @param {T[]} guards
  */
-const or =
-  guards =>
-  /** @param {any} item */
-  item =>
-    guards.some(guard => guard(item));
+// Declared as a function declaration so the overloaded type-guard signature
+// attaches to the function's own type; tsgo does not preserve it through
+// assignment to a const.
+function or(guards) {
+  return /** @param {any} item */ item => guards.some(guard => guard(item));
+}
 
 /**
  * Combine multiple type guards with a logical "AND" operation.
@@ -208,8 +211,12 @@ const or =
  * @template {SomeTypeGuard} T
  * @param {T[]} guards
  */
-const and = guards => /** @param {any} item */ item =>
-  guards.every(guard => guard(item));
+// Declared as a function declaration so the overloaded type-guard signature
+// attaches to the function's own type; tsgo does not preserve it through
+// assignment to a const.
+function and(guards) {
+  return /** @param {any} item */ item => guards.every(guard => guard(item));
+}
 
 /**
  * @template {SomeTypeGuard} T
@@ -222,7 +229,12 @@ const and = guards => /** @param {any} item */ item =>
  * @template {SomeTypeGuard} T
  * @param {T} guard
  */
-const not = guard => /** @param {any} item */ item => !guard(item);
+// Declared as a function declaration so the overloaded type-guard signature
+// attaches to the function's own type; tsgo does not preserve it through
+// assignment to a const.
+function not(guard) {
+  return /** @param {any} item */ item => !guard(item);
+}
 /**
  * Type guard for a string
  *
@@ -379,7 +391,9 @@ const isDefaultAttenuator = or([
  * @param {string} [url] - URL of the policy file; used for error messages only
  * @returns {asserts allegedPackagePolicy is SomePackagePolicy|undefined}
  */
-export const assertPackagePolicy = (allegedPackagePolicy, keypath, url) => {
+// Declared as a function declaration so the assertion signature attaches to the
+// function's own type; tsgo does not preserve it through assignment to a const.
+export function assertPackagePolicy(allegedPackagePolicy, keypath, url) {
   if (isUndefined(allegedPackagePolicy)) {
     return;
   }
@@ -435,7 +449,7 @@ export const assertPackagePolicy = (allegedPackagePolicy, keypath, url) => {
       builtins,
     })}${inUrl}`,
   );
-};
+}
 
 /**
  * This asserts (i.e., throws) that `allegedPolicy` is a valid `Policy`
@@ -445,7 +459,9 @@ export const assertPackagePolicy = (allegedPackagePolicy, keypath, url) => {
  * @param {unknown} allegedPolicy - Alleged `Policy` to test
  * @returns {asserts allegedPolicy is (SomePolicy | undefined)}
  */
-export const assertPolicy = allegedPolicy => {
+// Declared as a function declaration so the assertion signature attaches to the
+// function's own type; tsgo does not preserve it through assignment to a const.
+export function assertPolicy(allegedPolicy) {
   if (isUndefined(allegedPolicy)) {
     return;
   }
@@ -476,4 +492,4 @@ export const assertPolicy = allegedPolicy => {
   for (const [key, value] of entries(resources)) {
     assertPackagePolicy(value, `policy.resources["${key}"]`);
   }
-};
+}

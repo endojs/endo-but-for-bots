@@ -489,7 +489,7 @@ export interface PetStore {
    * Subscribe to all name changes. First publishes all existing names in alphabetical order.
    * Then publishes diffs as names are added and removed.
    */
-  followNameChanges(): AsyncGenerator<PetStoreNameChange, undefined, undefined>;
+  followNameChanges(): AsyncGenerator<PetStoreNameChange, void, undefined>;
   /**
    * Subscribe to name changes for the specified id. First publishes the existing names for the id.
    * Then publishes diffs as names are added and removed, or if the id is itself removed.
@@ -497,7 +497,7 @@ export interface PetStore {
    */
   followIdNameChanges(
     id: string,
-  ): AsyncGenerator<PetStoreIdNameChange, undefined, undefined>;
+  ): AsyncGenerator<PetStoreIdNameChange, void, undefined>;
   write(petName: PetName, id: string): Promise<void>;
   remove(petName: PetName): Promise<void>;
   rename(fromPetName: PetName, toPetName: PetName): Promise<void>;
@@ -531,14 +531,14 @@ export interface NameHub {
   reverseLocate(locator: string): Promise<Name[]>;
   followLocatorNameChanges(
     locator: string,
-  ): AsyncGenerator<LocatorNameChange, undefined, undefined>;
+  ): AsyncGenerator<LocatorNameChange, void, undefined>;
   list(...petNamePath: string[]): Promise<Array<Name>>;
   listIdentifiers(...petNamePath: string[]): Promise<Array<string>>;
   followNameChanges(
     ...petNamePath: string[]
-  ): AsyncGenerator<PetStoreNameChange, undefined, undefined>;
+  ): AsyncGenerator<PetStoreNameChange, void, undefined>;
   lookup(petNamePath: string | string[]): Promise<unknown>;
-  reverseLookup(value: unknown): Array<Name>;
+  reverseLookup(value: unknown): Promise<Array<Name>>;
   write(petNamePath: string | string[], id: string): Promise<void>;
   remove(...petNamePath: string[]): Promise<void>;
   move(fromPetName: string[], toPetName: string[]): Promise<void>;
@@ -557,7 +557,7 @@ export interface Mail {
   petStore: PetStore;
   // Mail operations:
   listMessages(): Promise<Array<StampedMessage>>;
-  followMessages(): AsyncGenerator<StampedMessage, undefined, undefined>;
+  followMessages(): AsyncGenerator<StampedMessage, void, undefined>;
   resolve(messageNumber: bigint, resolutionName: string): Promise<void>;
   reject(messageNumber: bigint, message?: string): Promise<void>;
   adopt(

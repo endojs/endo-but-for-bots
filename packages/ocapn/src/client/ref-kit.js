@@ -257,7 +257,9 @@ export const makeReferenceKit = (
       }
       // Record that we're receiving this reference in the current message
       ocapnTable.recordReceivedSlot(slot);
-      return value;
+      // The slot is a promise slot ('p'), so the registered value is a promise;
+      // getValueForSlot is typed as returning a generic object.
+      return /** @type {Promise<unknown>} */ (value);
     },
     provideLocalExportValue: position => {
       // Exports are either promises or objects.

@@ -204,13 +204,9 @@ export const makeTcpNetLayer = async ({
    * @returns {Promise<void>}
    */
   const listen = () => {
-    return new Promise((resolve, reject) => {
-      server.listen(specifiedPort, specifiedHostname, err => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve();
-        }
+    return new Promise(resolve => {
+      server.listen({ port: specifiedPort, host: specifiedHostname }, () => {
+        resolve();
       });
     });
   };

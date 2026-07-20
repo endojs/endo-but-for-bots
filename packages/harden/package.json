@@ -30,12 +30,13 @@
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
     "lint:eslint": "eslint .",
-    "lint:types": "tsc",
+    "lint:types": "tsgo --tsBuildInfoFile tsconfig.tsgo.tsbuildinfo",
     "test": "ava",
     "test:c8": "c8 ${C8_OPTIONS:-} ava",
     "test:xs": "exit 0"
   },
   "devDependencies": {
+    "@typescript/native-preview": "catalog:dev",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",

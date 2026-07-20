@@ -18,7 +18,7 @@
     "lint-fix": "eslint --fix '**/*.js'",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint:eslint": "eslint .",
-    "lint:types": "tsc"
+    "lint:types": "tsgo --tsBuildInfoFile tsconfig.tsgo.tsbuildinfo"
   },
   "dependencies": {
     "@endo/base64": "workspace:^",
@@ -34,6 +34,7 @@
     "@endo/lockdown": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@endo/zip": "workspace:^",
+    "@typescript/native-preview": "catalog:dev",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",

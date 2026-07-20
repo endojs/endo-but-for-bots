@@ -3,7 +3,7 @@
 var node_fs = require('node:fs');
 
 /**
- * @returns {import('node:fs').constants.F_OK}
+ * @returns {typeof import('node:fs').constants.F_OK}
  */
 function bambalam() {
   return node_fs.constants.F_OK;

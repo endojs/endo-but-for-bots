@@ -75,7 +75,9 @@ export const makeEnvironmentCaptor = (aGlobal, dropNames = false) => {
 
     /** @type {string} */
     let setting = defaultSetting;
-    const globalProcess = aGlobal.process || undefined;
+    const globalProcess =
+      /** @type {{ process?: { env?: Record<string, string> } }} */ (aGlobal)
+        .process || undefined;
     const globalEnv =
       (typeof globalProcess === 'object' && globalProcess.env) || undefined;
     if (typeof globalEnv === 'object') {

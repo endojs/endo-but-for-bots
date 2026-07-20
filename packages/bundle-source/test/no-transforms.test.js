@@ -11,11 +11,17 @@ test('no-transforms applies no transforms', async t => {
   const entryPath = url.fileURLToPath(
     new URL(`../demo/circular/a.js`, import.meta.url),
   );
-  // @ts-expect-error Property 'endoZipBase64' does not exist on type '{ moduleFormat: "endoScript"; source: string; } | { moduleFormat: "endoZipBase64"; endoZipBase64: string; endoZipBase64Sha512: string; } | { moduleFormat: "nestedEvaluate"; source: string; sourceMap: string; } | { ...; }'.
-  const { endoZipBase64 } = await bundleSource(entryPath, {
-    moduleFormat: 'endoZipBase64',
-    noTransforms: true,
-  });
+  // `moduleFormat` is the legacy option alias and the result type is a union
+  // that does not surface `endoZipBase64` directly; cast the options to bypass
+  // the unknown-property check and the destructured result to read the field.
+  const result = await bundleSource(
+    entryPath,
+    /** @type {any} */ ({
+      moduleFormat: 'endoZipBase64',
+      noTransforms: true,
+    }),
+  );
+  const { endoZipBase64 } = /** @type {{ endoZipBase64: string }} */ (result);
   const endoZipBytes = decodeBase64(endoZipBase64);
   const zipReader = new ZipReader(endoZipBytes);
   const compartmentMapBytes = zipReader.read('compartment-map.json');

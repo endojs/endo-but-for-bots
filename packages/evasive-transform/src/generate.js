@@ -74,7 +74,8 @@ const generator = /** @type {typeof import('@babel/generator')['default']} */ (
  * Generates new code from a Babel AST; returns code only
  *
  * @param {import('@babel/types').File} ast - Babel "File" AST
- * @param {GenerateAstOptions} [options] - Options for the transform
+ * @param {GenerateAstOptions | GenerateAstOptionsWithSourceMap} [options] -
+ *   Options for the transform
  * @internal
  */
 export const generate = (ast, options) => {

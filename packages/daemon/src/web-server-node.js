@@ -78,7 +78,10 @@ export const make = async (_powers, context) => {
         if (request.url === `/${accessToken}/`) {
           return {
             status: 200,
-            headers: { 'Content-Type': 'text/html', Charset: 'utf-8' },
+            headers: /** @type {Record<string, string>} */ ({
+              'Content-Type': 'text/html',
+              Charset: 'utf-8',
+            }),
             content: `\
   <meta charset="utf-8">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 10 10%22><text y=%228%22 font-size=%228%22>🐈‍⬛</text></svg>">

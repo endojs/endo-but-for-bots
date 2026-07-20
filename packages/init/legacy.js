@@ -4,6 +4,7 @@ import './pre-remoting.js';
 
 // The loosest, non-stack-hiding SES environment.
 // Useful for converting an existing app to start using lockdown.
+/** @type {Parameters<typeof lockdown>[0]} */
 const options = {
   overrideTaming: 'severe',
   stackFiltering: 'verbose',

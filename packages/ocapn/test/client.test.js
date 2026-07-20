@@ -1332,7 +1332,7 @@ test('op:untag with nested payload containing remotable', async t => {
     );
 
     // The payload should contain the remotable, which we can call
-    const result = await E(payload.inner).getValue();
+    const result = await E(/** @type {any} */ (payload).inner).getValue();
     t.is(result, 99);
   } finally {
     shutdownBoth();

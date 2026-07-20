@@ -165,7 +165,10 @@ export const makeHttpPowers = ({ http, ws }) => {
     }
 
     return new Promise((resolve, reject) => {
-      server.listen(port, host, error => {
+      // The 'listening' callback receives no arguments; `error` is always
+      // undefined here (listen errors surface via the 'error' event above).
+      // The param is optional so the callback satisfies the `() => void` type.
+      server.listen({ port, host }, (/** @type {any} */ error = undefined) => {
         if (error) {
           reject(error);
         } else {

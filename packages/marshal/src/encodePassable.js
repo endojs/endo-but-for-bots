@@ -740,8 +740,9 @@ const makeInnerDecode = (decodeStringSuffix, decodeArray, options) => {
       }
       case '[':
       case '^': {
-        // @ts-expect-error Type 'unknown[]' is not Passable
-        return decodeArray(encoded, innerDecode, skip);
+        return /** @type {Passable} */ (
+          decodeArray(encoded, innerDecode, skip)
+        );
       }
       case '(': {
         return decodeRecord(encoded, decodeArray, innerDecode, skip);
@@ -759,8 +760,8 @@ const makeInnerDecode = (decodeStringSuffix, decodeArray, options) => {
 
 /**
  * @typedef {object} PassableKit
- * @property {ReturnType<makeInnerEncode>} encodePassable
- * @property {ReturnType<makeInnerDecode>} decodePassable
+ * @property {ReturnType<typeof makeInnerEncode>} encodePassable
+ * @property {ReturnType<typeof makeInnerDecode>} decodePassable
  */
 
 /**

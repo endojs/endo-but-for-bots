@@ -278,6 +278,7 @@ function extractMembersFromJSDocTypedef(typedefTag, checker) {
     //   continue;
     // }
 
+    /** @type {ts.Type | null} */
     let propType = null;
     if (propTag.typeExpression) {
       propType = checker.getTypeFromTypeNode(propTag.typeExpression.type);

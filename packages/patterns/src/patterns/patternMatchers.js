@@ -2208,12 +2208,16 @@ export const isAwaitArgGuard = specimen =>
 hideAndHardenFunction(isAwaitArgGuard);
 
 /**
+ * Declared as a function declaration so the `asserts ...` assertion signature
+ * attaches to the function's own type; tsgo does not preserve it through
+ * assignment to a `const` (call sites would fail TS2775).
+ *
  * @param {any} specimen
  * @returns {asserts specimen is AwaitArgGuard}
  */
-export const assertAwaitArgGuard = specimen => {
+export function assertAwaitArgGuard(specimen) {
   mustMatch(specimen, AwaitArgGuardShape, 'awaitArgGuard');
-};
+}
 hideAndHardenFunction(assertAwaitArgGuard);
 
 /**
@@ -2279,12 +2283,16 @@ export const MethodGuardPayloadShape = M.or(
 export const MethodGuardShape = M.kind('guard:methodGuard');
 
 /**
+ * Declared as a function declaration so the `asserts ...` assertion signature
+ * attaches to the function's own type; tsgo does not preserve it through
+ * assignment to a `const` (call sites would fail TS2775).
+ *
  * @param {any} specimen
  * @returns {asserts specimen is MethodGuard}
  */
-export const assertMethodGuard = specimen => {
+export function assertMethodGuard(specimen) {
   mustMatch(specimen, MethodGuardShape, 'methodGuard');
-};
+}
 hideAndHardenFunction(assertMethodGuard);
 
 /**
@@ -2348,12 +2356,16 @@ export const InterfaceGuardPayloadShape = M.splitRecord(
 export const InterfaceGuardShape = M.kind('guard:interfaceGuard');
 
 /**
+ * Declared as a function declaration so the `asserts ...` assertion signature
+ * attaches to the function's own type; tsgo does not preserve it through
+ * assignment to a `const` (call sites would fail TS2775).
+ *
  * @param {any} specimen
  * @returns {asserts specimen is InterfaceGuard}
  */
-export const assertInterfaceGuard = specimen => {
+export function assertInterfaceGuard(specimen) {
   mustMatch(specimen, InterfaceGuardShape, 'interfaceGuard');
-};
+}
 hideAndHardenFunction(assertInterfaceGuard);
 
 /**

@@ -73,11 +73,15 @@ const ONLY_WELL_FORMED_STRINGS_PASSABLE =
  * TODO once the switch is removed, simplify `assertPassableString` to
  * simply be `assertWellFormedString`.
  *
+ * Declared as a function declaration so the `asserts str is string`
+ * assertion signature attaches to the function's own type; tsgo does not
+ * preserve it through assignment to a `const` (call sites would fail TS2775).
+ *
  * @param { unknown } str
  * @returns {asserts str is string }
  */
-export const assertPassableString = str => {
+export function assertPassableString(str) {
   typeof str === 'string' || Fail`Expected string ${str}`;
   !ONLY_WELL_FORMED_STRINGS_PASSABLE || assertWellFormedString(str);
-};
+}
 hideAndHardenFunction(assertPassableString);

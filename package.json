@@ -22,6 +22,7 @@
     "@types/node": "^20.19.41",
     "@typescript-eslint/eslint-plugin": "^8.60.0",
     "@typescript-eslint/parser": "^8.60.0",
+    "@typescript/native-preview": "catalog:dev",
     "ava": "catalog:dev",
     "eslint": "^8.57.1",
     "eslint-config-airbnb-base": "^15.0.0",
@@ -56,6 +57,8 @@
     "lint:workspaces:fix": "yarn workspaces foreach --all run lint-fix",
     "lint:prettier": "prettier --check .github packages",
     "lint:sh": "scripts/shellcheck.sh",
+    "typecheck-all": "tsgo -p tsconfig.json --tsBuildInfoFile tsconfig.tsgo.tsbuildinfo",
+    "typecheck-packages": "yarn workspaces foreach --all --parallel --verbose run lint:types",
     "release:npm": "scripts/release-npm.mjs",
     "pack:all": "scripts/pack-all.mjs",
     "smoketest:publish": "scripts/smoketest-publishing.sh",
@@ -85,5 +88,8 @@
     "allowScripts": {
       "@lavamoat/preinstall-always-fail": false
     }
+  },
+  "resolutions": {
+    "@typescript/native-preview": "7.0.0-dev.20260612.1"
   }
 }

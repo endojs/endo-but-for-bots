@@ -27,7 +27,7 @@
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
     "lint:eslint": "eslint .",
-    "lint:types": "tsc",
+    "lint:types": "tsgo --tsBuildInfoFile tsconfig.tsgo.tsbuildinfo",
     "install-engines": "./install-engines.sh",
     "test:xs": "./run-tests.sh",
     "cpu-prof-test": "yarn rollup -c && node --jitless --cpu-prof dist/bundle.js"
@@ -39,6 +39,7 @@
     "@rollup/plugin-commonjs": "^28.0.2",
     "@rollup/plugin-node-resolve": "^16.0.0",
     "@types/rollup": "^0.54.0",
+    "@typescript/native-preview": "catalog:dev",
     "c8": "catalog:dev",
     "eshost-cli": "^9.0.0",
     "eslint": "catalog:dev",

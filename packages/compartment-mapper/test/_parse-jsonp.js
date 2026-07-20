@@ -13,7 +13,7 @@ export const parseJsonp = (bytes, _specifier, _location, _packageLocation) => {
   const imports = harden([]);
 
   /**
-   * @param {object} exports
+   * @param {Record<string, unknown>} exports
    */
   const execute = exports => {
     const compartment = new Compartment({

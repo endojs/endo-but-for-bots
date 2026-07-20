@@ -43,6 +43,17 @@ const analyzeModule = makeModuleSourceAnalyzer();
  * so a cache of ModuleSources may be shared by multiple Compartments.
  *
  * @class
+ * @this {{
+ *   imports: string[];
+ *   exports: string[];
+ *   reexports: string[];
+ *   __syncModuleProgram__: string;
+ *   __liveExportMap__: unknown;
+ *   __reexportMap__: unknown;
+ *   __fixedExportMap__: unknown;
+ *   __needsImport__: unknown;
+ *   __needsImportMeta__: unknown;
+ * }}
  * @param {string} source
  * @param {string | ModuleSourceOptions} [opts]
  */

@@ -445,6 +445,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/base64@workspace:packages/base64"
   dependencies:
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
     c8: "catalog:dev"
@@ -464,6 +465,7 @@ __metadata:
     "@rollup/plugin-commonjs": "npm:^28.0.2"
     "@rollup/plugin-node-resolve": "npm:^16.0.0"
     "@types/rollup": "npm:^0.54.0"
+    "@typescript/native-preview": "catalog:dev"
     c8: "catalog:dev"
     eshost-cli: "npm:^9.0.0"
     eslint: "catalog:dev"
@@ -487,6 +489,7 @@ __metadata:
     "@endo/ses-ava": "workspace:^"
     "@endo/where": "workspace:^"
     "@endo/zip": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     amaro: "npm:^1.1.9"
     ava: "catalog:dev"
     c8: "catalog:dev"
@@ -508,6 +511,7 @@ __metadata:
     "@endo/init": "workspace:^"
     "@endo/pass-style": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
     c8: "catalog:dev"
@@ -522,6 +526,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/cache-map@workspace:packages/cache-map"
   dependencies:
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -543,6 +548,7 @@ __metadata:
     "@endo/pass-style": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -602,6 +608,7 @@ __metadata:
     "@endo/init": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/zip": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
     c8: "catalog:dev"
@@ -620,6 +627,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/cjs-module-analyzer@workspace:packages/cjs-module-analyzer"
   dependencies:
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -648,6 +656,7 @@ __metadata:
     "@endo/stream": "workspace:^"
     "@endo/stream-node": "workspace:^"
     "@endo/where": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
     commander: "npm:^5.0.0"
@@ -674,6 +683,7 @@ __metadata:
     "@endo/lockdown": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -700,6 +710,7 @@ __metadata:
     "@endo/ses-ava": "workspace:^"
     "@endo/trampoline": "workspace:^"
     "@endo/zip": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
     c8: "catalog:dev"
@@ -740,6 +751,7 @@ __metadata:
     "@endo/stream": "workspace:^"
     "@endo/stream-node": "workspace:^"
     "@endo/where": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -753,6 +765,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/env-options@workspace:packages/env-options"
   dependencies:
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     eslint: "catalog:dev"
     typescript: "catalog:dev"
@@ -767,6 +780,7 @@ __metadata:
     "@endo/harden": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -786,6 +800,7 @@ __metadata:
     "@typescript-eslint/eslint-plugin": "npm:^8.39.1"
     "@typescript-eslint/parser": "npm:^8.39.1"
     "@typescript-eslint/utils": "npm:^8.39.1"
+    "@typescript/native-preview": "catalog:dev"
     eslint: "catalog:dev"
     eslint-plugin-import: "catalog:dev"
     mocha: "npm:^10.6.0"
@@ -809,6 +824,7 @@ __metadata:
     "@endo/ses-ava": "workspace:^"
     "@types/babel__generator": "npm:~7.27.0"
     "@types/babel__traverse": "npm:~7.28.0"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -824,6 +840,7 @@ __metadata:
     "@endo/env-options": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/lockdown": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -848,6 +865,7 @@ __metadata:
     "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
     c8: "catalog:dev"
@@ -873,6 +891,7 @@ __metadata:
     "@endo/init": "workspace:^"
     "@endo/pass-style": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -895,6 +914,7 @@ __metadata:
     "@endo/patterns": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@types/react": "npm:^19.2.0"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -912,6 +932,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/harden@workspace:packages/harden"
   dependencies:
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -931,6 +952,7 @@ __metadata:
     "@endo/init": "workspace:^"
     "@endo/random": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
     c8: "catalog:dev"
@@ -945,6 +967,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/immutable-arraybuffer@workspace:packages/immutable-arraybuffer"
   dependencies:
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -967,6 +990,7 @@ __metadata:
     "@endo/init": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/where": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -984,6 +1008,7 @@ __metadata:
     "@endo/harden": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/promise-kit": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     eslint: "catalog:dev"
     typescript: "catalog:dev"
@@ -1009,6 +1034,7 @@ __metadata:
     "@endo/init": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/stream": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -1031,6 +1057,7 @@ __metadata:
     "@endo/pass-style": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@fast-check/ava": "catalog:dev"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
     c8: "catalog:dev"
@@ -1052,6 +1079,7 @@ __metadata:
     "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -1071,6 +1099,7 @@ __metadata:
     "@types/babel__generator": "npm:~7.27.0"
     "@types/babel__traverse": "npm:~7.28.0"
     "@types/node": "npm:^20.19.41"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     benchmark: "npm:^2.1.4"
     c8: "catalog:dev"
@@ -1087,6 +1116,7 @@ __metadata:
     "@endo/compartment-mapper": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -1105,6 +1135,7 @@ __metadata:
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/stream": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -1118,6 +1149,7 @@ __metadata:
   dependencies:
     "@endo/lockdown": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -1148,6 +1180,7 @@ __metadata:
     "@noble/curves": "npm:^1.9.0"
     "@noble/hashes": "npm:^1.8.0"
     "@types/ws": "npm:^8"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -1162,6 +1195,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/panic@workspace:packages/panic"
   dependencies:
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -1183,6 +1217,7 @@ __metadata:
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@fast-check/ava": "catalog:dev"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
     c8: "catalog:dev"
@@ -1202,6 +1237,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/path-compare@workspace:packages/path-compare"
   dependencies:
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -1223,6 +1259,7 @@ __metadata:
     "@endo/pass-style": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@fast-check/ava": "catalog:dev"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
     c8: "catalog:dev"
@@ -1243,6 +1280,7 @@ __metadata:
   resolution: "@endo/promise-kit@workspace:packages/promise-kit"
   dependencies:
     "@endo/harden": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -1277,6 +1315,7 @@ __metadata:
     "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/panic": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "npm:^6 || ^7 || ^8"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -1293,6 +1332,7 @@ __metadata:
   dependencies:
     "@endo/lockdown": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -1310,6 +1350,7 @@ __metadata:
     "@endo/harden": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/stream": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -1323,6 +1364,7 @@ __metadata:
   dependencies:
     "@endo/nat": "workspace:^"
     "@endo/stream": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     eslint: "catalog:dev"
     ses: "workspace:^"
     typescript: "catalog:dev"
@@ -1338,6 +1380,7 @@ __metadata:
     "@endo/init": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -1356,6 +1399,7 @@ __metadata:
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/stream": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -1368,6 +1412,7 @@ __metadata:
   resolution: "@endo/test262-runner@workspace:packages/test262-runner"
   dependencies:
     "@endo/compartment-mapper": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     eslint: "catalog:dev"
     ses: "workspace:^"
     test262-harness: "npm:^10.0.0"
@@ -1379,6 +1424,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/trampoline@workspace:packages/trampoline"
   dependencies:
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -1391,6 +1437,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/where@workspace:packages/where"
   dependencies:
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -1404,6 +1451,7 @@ __metadata:
   dependencies:
     "@endo/eventual-send": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -2487,6 +2535,87 @@ __metadata:
     "@typescript-eslint/types": "npm:8.60.0"
     eslint-visitor-keys: "npm:^5.0.0"
   checksum: 10c0/5ff775fe5352d359e25ed47ce27d8d61dea7aa9aa4d21a3556a9ee02957673e8d4787ad1d0c325977f47cca56ecdce401417864de0c773b6167053fe36bf9e65
+  languageName: node
+  linkType: hard
+
+"@typescript/native-preview-darwin-arm64@npm:7.0.0-dev.20260612.1":
+  version: 7.0.0-dev.20260612.1
+  resolution: "@typescript/native-preview-darwin-arm64@npm:7.0.0-dev.20260612.1"
+  conditions: os=darwin & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@typescript/native-preview-darwin-x64@npm:7.0.0-dev.20260612.1":
+  version: 7.0.0-dev.20260612.1
+  resolution: "@typescript/native-preview-darwin-x64@npm:7.0.0-dev.20260612.1"
+  conditions: os=darwin & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@typescript/native-preview-linux-arm64@npm:7.0.0-dev.20260612.1":
+  version: 7.0.0-dev.20260612.1
+  resolution: "@typescript/native-preview-linux-arm64@npm:7.0.0-dev.20260612.1"
+  conditions: os=linux & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@typescript/native-preview-linux-arm@npm:7.0.0-dev.20260612.1":
+  version: 7.0.0-dev.20260612.1
+  resolution: "@typescript/native-preview-linux-arm@npm:7.0.0-dev.20260612.1"
+  conditions: os=linux & cpu=arm
+  languageName: node
+  linkType: hard
+
+"@typescript/native-preview-linux-x64@npm:7.0.0-dev.20260612.1":
+  version: 7.0.0-dev.20260612.1
+  resolution: "@typescript/native-preview-linux-x64@npm:7.0.0-dev.20260612.1"
+  conditions: os=linux & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@typescript/native-preview-win32-arm64@npm:7.0.0-dev.20260612.1":
+  version: 7.0.0-dev.20260612.1
+  resolution: "@typescript/native-preview-win32-arm64@npm:7.0.0-dev.20260612.1"
+  conditions: os=win32 & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@typescript/native-preview-win32-x64@npm:7.0.0-dev.20260612.1":
+  version: 7.0.0-dev.20260612.1
+  resolution: "@typescript/native-preview-win32-x64@npm:7.0.0-dev.20260612.1"
+  conditions: os=win32 & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@typescript/native-preview@npm:7.0.0-dev.20260612.1":
+  version: 7.0.0-dev.20260612.1
+  resolution: "@typescript/native-preview@npm:7.0.0-dev.20260612.1"
+  dependencies:
+    "@typescript/native-preview-darwin-arm64": "npm:7.0.0-dev.20260612.1"
+    "@typescript/native-preview-darwin-x64": "npm:7.0.0-dev.20260612.1"
+    "@typescript/native-preview-linux-arm": "npm:7.0.0-dev.20260612.1"
+    "@typescript/native-preview-linux-arm64": "npm:7.0.0-dev.20260612.1"
+    "@typescript/native-preview-linux-x64": "npm:7.0.0-dev.20260612.1"
+    "@typescript/native-preview-win32-arm64": "npm:7.0.0-dev.20260612.1"
+    "@typescript/native-preview-win32-x64": "npm:7.0.0-dev.20260612.1"
+  dependenciesMeta:
+    "@typescript/native-preview-darwin-arm64":
+      optional: true
+    "@typescript/native-preview-darwin-x64":
+      optional: true
+    "@typescript/native-preview-linux-arm":
+      optional: true
+    "@typescript/native-preview-linux-arm64":
+      optional: true
+    "@typescript/native-preview-linux-x64":
+      optional: true
+    "@typescript/native-preview-win32-arm64":
+      optional: true
+    "@typescript/native-preview-win32-x64":
+      optional: true
+  bin:
+    tsgo: bin/tsgo.js
+  checksum: 10c0/01df8518b4438120eafa9edb92c584aa68657795dd4ef365103bbf1548acaf59adac54748cdf44eb04d2ce3a5f498b55ee5a1d5f6b142679b0a7b60aa751d2f5
   languageName: node
   linkType: hard
 
@@ -8244,6 +8373,7 @@ __metadata:
     "@types/node": "npm:^20.19.41"
     "@typescript-eslint/eslint-plugin": "npm:^8.60.0"
     "@typescript-eslint/parser": "npm:^8.60.0"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     eslint: "npm:^8.57.1"
     eslint-config-airbnb-base: "npm:^15.0.0"
@@ -8447,6 +8577,7 @@ __metadata:
     "@endo/immutable-arraybuffer": "workspace:^"
     "@endo/module-source": "workspace:^"
     "@endo/test262-runner": "workspace:^"
+    "@typescript/native-preview": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     core-js: "npm:^3.31.0"

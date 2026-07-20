@@ -22,7 +22,7 @@ const { isArray } = Array;
 
 /**
  * @param {string} name - the name of the referrer package.
- * @param {object} browser - the `browser` field from a package.json
+ * @param {string | object} browser - the `browser` field from a package.json
  * @param {string} main - the `main` field from a package.json
  * @yields {[string, string]}
  */

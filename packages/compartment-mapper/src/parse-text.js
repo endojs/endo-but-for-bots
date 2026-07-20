@@ -26,7 +26,7 @@ export const parseText = (bytes, _specifier, _location, _packageLocation) => {
   const imports = freeze([]);
 
   /**
-   * @param {object} exports
+   * @param {Record<string, unknown>} exports
    */
   const execute = exports => {
     exports.default = text;

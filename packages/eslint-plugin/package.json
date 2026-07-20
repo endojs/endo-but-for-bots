@@ -16,7 +16,7 @@
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
-    "lint:types": "tsc"
+    "lint:types": "tsgo --tsBuildInfoFile tsconfig.tsgo.tsbuildinfo"
   },
   "dependencies": {
     "@eslint-community/eslint-utils": "^4.7.0",
@@ -34,6 +34,7 @@
   },
   "devDependencies": {
     "@types/mocha": "^10",
+    "@typescript/native-preview": "catalog:dev",
     "eslint": "catalog:dev",
     "mocha": "^10.6.0"
   },

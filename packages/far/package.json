@@ -15,7 +15,7 @@
     "build": "exit 0",
     "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
     "lint": "yarn lint:types && yarn lint:eslint",
-    "lint:types": "tsc",
+    "lint:types": "tsgo --tsBuildInfoFile tsconfig.tsgo.tsbuildinfo",
     "lint:eslint": "eslint ."
   },
   "repository": {
@@ -38,6 +38,7 @@
   "devDependencies": {
     "@endo/init": "workspace:^",
     "@endo/ses-ava": "workspace:^",
+    "@typescript/native-preview": "catalog:dev",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",

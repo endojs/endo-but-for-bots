@@ -9,86 +9,96 @@ import { q } from '@endo/errors';
 const validPetNamePattern = /^[a-z0-9][a-z0-9-]{0,127}$/;
 const validSpecialNamePattern = /^[A-Z][A-Z0-9-]{0,127}$/;
 
+// Function declarations (not arrow-const) so tsgo preserves the type-predicate
+// signatures at call sites.
 /**
  * @param {string} petName
  * @returns {petName is PetName}
  */
-export const isPetName = petName => validPetNamePattern.test(petName);
+export function isPetName(petName) {
+  return validPetNamePattern.test(petName);
+}
 
 /**
  * @param {string} name
  * @returns {name is SpecialName}
  */
-export const isSpecialName = name => validSpecialNamePattern.test(name);
+export function isSpecialName(name) {
+  return validSpecialNamePattern.test(name);
+}
 
 /**
  * @param {string} name
  * @returns {name is Name}
  */
-export const isName = name => isPetName(name) || isSpecialName(name);
+export function isName(name) {
+  return isPetName(name) || isSpecialName(name);
+}
 
+// Function declarations (not arrow-const) so tsgo preserves the `asserts`
+// assertion signatures at call sites.
 /**
  * @param {string} petName
  * @returns {asserts petName is PetName}
  */
-export const assertPetName = petName => {
+export function assertPetName(petName) {
   if (typeof petName !== 'string' || !isPetName(petName)) {
     throw new Error(`Invalid pet name ${q(petName)}`);
   }
-};
+}
 
 /**
  * @param {string} name
  * @returns {asserts name is SpecialName}
  */
-export const assertSpecialName = name => {
+export function assertSpecialName(name) {
   if (typeof name !== 'string' || !isSpecialName(name)) {
     throw new Error(`Invalid special name ${q(name)}`);
   }
-};
+}
 
 /**
  * @param {string} name
  * @returns {asserts name is Name}
  */
-export const assertName = name => {
+export function assertName(name) {
   if (typeof name !== 'string' || !isName(name)) {
     throw new Error(`Invalid name ${q(name)}`);
   }
-};
+}
 
 /**
  * @param {string[]} names
  * @returns {asserts names is Name[]}
  */
-export const assertNames = names => {
+export function assertNames(names) {
   for (const name of names) {
     assertName(name);
   }
-};
+}
 
 /**
  * @param {string[]} petNames
  * @returns {asserts petNames is PetName[]}
  */
-export const assertPetNames = petNames => {
+export function assertPetNames(petNames) {
   for (const petName of petNames) {
     assertPetName(petName);
   }
-};
+}
 
 /**
  * @param {string[]} namePath
  * @returns {asserts namePath is NamePath}
  */
-export const assertNamePath = namePath => {
+export function assertNamePath(namePath) {
   if (!Array.isArray(namePath) || namePath.length < 1) {
     throw new Error(`Invalid name path`);
   }
   for (const name of namePath) {
     assertName(name);
   }
-};
+}
 
 /**
  * Asserts that the path is a valid name path ending in a pet name.

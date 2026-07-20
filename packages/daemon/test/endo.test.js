@@ -103,7 +103,7 @@ const makeConfig = (...root) => {
 };
 
 /**
- * @param {ReturnType<makeConfig>} config
+ * @param {ReturnType<typeof makeConfig>} config
  * @param {Promise<void>} cancelled
  */
 const makeHost = async (config, cancelled) => {
@@ -118,7 +118,7 @@ const makeHost = async (config, cancelled) => {
 
 /**
  * @param {import('ava').ExecutionContext<any>} t
- * @returns {Promise<ReturnType<prepareConfig> & ReturnType<makeHost>>}
+ * @returns {Promise<ReturnType<typeof prepareConfig> & ReturnType<typeof makeHost>>}
  */
 const prepareHost = async t => {
   // eslint-disable-next-line no-use-before-define

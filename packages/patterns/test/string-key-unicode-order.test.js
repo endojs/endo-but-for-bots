@@ -21,10 +21,10 @@ const {
 test('unicode code point order', t => {
   const strs = harden(Object.values(multiplanarStrings));
 
-  // @ts-expect-error We know that for strings, `compareKeys` never returns
-  // NaN because it never judges strings to be incomparable. Thus, the
-  // KeyComparison it returns happens to also be a RankComparison we can
-  // sort with.
+  // We know that for strings, `compareKeys` never returns NaN because it
+  // never judges strings to be incomparable. Thus, the KeyComparison it
+  // returns happens to also be a RankComparison we can sort with.
+  // @ts-expect-error KeyCompare is not structurally a RankCompare
   const keySorted = sorted(strs, compareKeys);
 
   t.deepEqual(keySorted, [

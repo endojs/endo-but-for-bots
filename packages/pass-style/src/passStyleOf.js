@@ -113,10 +113,6 @@ const makePassStyleOf = passStyleHelpers => {
    */
   const passStyleMemo = new WeakMap();
 
-  /**
-   * @type {PassStyleOf}
-   */
-  // @ts-expect-error cast
   const passStyleOf = passable => {
     // Even when a WeakSet is correct, when the set has a shorter lifetime
     // than its keys, we prefer a Set due to expected implementation
@@ -227,7 +223,12 @@ const makePassStyleOf = passStyleHelpers => {
 
     return passStyleOfRecur(passable);
   };
-  return harden(passStyleOf);
+  // A cast (rather than a `@type`-plus-`@ts-expect-error` on the arrow) keeps
+  // both checkers happy: tsc-6 declaration emit needs the suppression, but tsgo
+  // sees no error and would flag the directive as unused (TS2578).
+  return /** @type {PassStyleOf} */ (
+    /** @type {unknown} */ (harden(passStyleOf))
+  );
 };
 
 export const PassStyleOfEndowmentSymbol = Symbol.for('@endo passStyleOf');

@@ -21,9 +21,10 @@
     "test:xs": "exit 0",
     "lint-fix": "eslint --fix '**/*.js'",
     "lint": "yarn lint:types && eslint '**/*.js'",
-    "lint:types": "tsc"
+    "lint:types": "tsgo --tsBuildInfoFile tsconfig.tsgo.tsbuildinfo"
   },
   "devDependencies": {
+    "@typescript/native-preview": "catalog:dev",
     "ava": "catalog:dev",
     "eslint": "catalog:dev",
     "typescript": "catalog:dev"

@@ -313,7 +313,7 @@ const attenuateGlobalThis = async ({
  * Filters available globals and returns a copy according to the policy
  *
  * @param {object} globalThis
- * @param {object} globals
+ * @param {Record<PropertyKey, any>} globals
  * @param {PackagePolicy|undefined} packagePolicy
  * @param {DeferredAttenuatorsProvider} attenuators
  * @param {Array<Promise>} pendingJobs
