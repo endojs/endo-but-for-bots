@@ -2101,8 +2101,6 @@ export const permitted = {
   TextEncoder: {
     // Properties of the TextEncoder Constructor
     '[[Proto]]': '%FunctionPrototype%',
-    encode: fn,
-    encoding: getter,
     prototype: '%TextEncoderPrototype%',
   },
 
@@ -2117,9 +2115,6 @@ export const permitted = {
   TextDecoder: {
     // Properties of the TextDecoder Constructor
     '[[Proto]]': '%FunctionPrototype%',
-    encoding: false,
-    fatal: false,
-    ignoreBOM: false,
     prototype: '%TextDecoderPrototype%',
   },
 
@@ -2128,8 +2123,11 @@ export const permitted = {
     constructor: 'TextDecoder',
     decode: fn,
     encoding: getter,
-    fatal: false,
-    ignoreBOM: false,
+    // `fatal` and `ignoreBOM` are accessor properties (getters) on the
+    // prototype, exactly like `encoding`, so they carry the getter permit
+    // rather than a data-property permit.
+    fatal: getter,
+    ignoreBOM: getter,
   },
 
   lockdown: fn,

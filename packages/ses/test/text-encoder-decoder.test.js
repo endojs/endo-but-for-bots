@@ -1,4 +1,5 @@
 /* eslint-disable no-restricted-globals */
+/* global globalThis */
 import test from 'ava';
 import '../index.js';
 
@@ -154,27 +155,13 @@ test('TextDecoder with explicit options works', t => {
 // ---------------------------------------------------------------------------
 // 5. Degradation: host without the codecs
 // ---------------------------------------------------------------------------
-
-test('TextEncoder and TextDecoder are absent when not on host', t => {
-  const c = new Compartment({}, {
-    globalNames: Reflect.ownKeys(globalThis).filter(
-      name => !['TextEncoder', 'TextDecoder'].includes(name),
-    ),
-  });
-  // The compartment evaluate evaluates in a realm that lacks the codecs;
-  // after lockdown the permits mechanism should not add them since they were
-  // not sampled during intrinsics collection.
-  t.is(
-    c.evaluate("typeof TextEncoder"),
-    'undefined',
-    'TextEncoder absent when host lacks it',
-  );
-  t.is(
-    c.evaluate("typeof TextDecoder"),
-    'undefined',
-    'TextDecoder absent when host lacks it',
-  );
-});
+//
+// The degradation path — a host that never provided TextEncoder/TextDecoder,
+// so lockdown's intrinsics-collection pass never sampled them — cannot be
+// simulated from a post-lockdown Compartment: universal intrinsics are added
+// to every compartment regardless of its `globalNames`. It is exercised in a
+// dedicated worker that deletes the globals before `lockdown()`, in
+// text-encoder-decoder-missing.test.js (mirroring url-shim-missing.test.js).
 
 // ---------------------------------------------------------------------------
 // 6. No prototype pollution — ensure codecs are not iterable
@@ -187,7 +174,7 @@ test('TextEncoder has no iterator prototype exposed', t => {
   }
   const c = new Compartment();
   t.is(
-    c.evaluate("typeof TextEncoder[Symbol.iterator]"),
+    c.evaluate('typeof TextEncoder[Symbol.iterator]'),
     'undefined',
     'TextEncoder has no Symbol.iterator',
   );
@@ -200,7 +187,7 @@ test('TextDecoder has no iterator prototype exposed', t => {
   }
   const c = new Compartment();
   t.is(
-    c.evaluate("typeof TextDecoder[Symbol.iterator]"),
+    c.evaluate('typeof TextDecoder[Symbol.iterator]'),
     'undefined',
     'TextDecoder has no Symbol.iterator',
   );
