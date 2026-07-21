@@ -332,7 +332,11 @@ export const makeCollectionStoreMaker = ({
 
     return /** @type {MapStore} */ (
       /** @type {unknown} */ (
-        makeExo('MapStore', makeMapStoreInterface(M.scalar()), mapStore)
+        // Full `M.key()` keys: primitives, nested copy-collections, and
+        // remotables at any depth. Each remotable — top-level or nested — is
+        // encoded by its stable formula id (for the canonical rank key) and
+        // serialized to a slot (for durable reconstruction and retention).
+        makeExo('MapStore', makeMapStoreInterface(M.key()), mapStore)
       )
     );
   };

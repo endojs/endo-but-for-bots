@@ -7596,6 +7596,45 @@ test('MapStore round-trips a remotable value across CapTP', async t => {
   t.is(back, guest);
 });
 
+test('MapStore accepts full M.key() structured keys', async t => {
+  const { host } = await prepareHost(t);
+  const map = await E(host).makeMapStore('m');
+
+  // Copy-record and copy-array keys (nested passable data).
+  await E(map).init({ a: 1, b: 2 }, 'record-value');
+  await E(map).init([1, 2, 3], 'array-value');
+
+  t.is(await E(map).get({ b: 2, a: 1 }), 'record-value'); // key equality by value
+  t.is(await E(map).get([1, 2, 3]), 'array-value');
+  t.true(await E(map).has({ a: 1, b: 2 }));
+  t.false(await E(map).has({ a: 1, b: 3 }));
+  t.is(await E(map).getSize(), 2);
+});
+
+test('MapStore keys on a nested remotable and persists it across a restart', async t => {
+  const { cancelled, config, host } = await prepareHost(t);
+  const map = await E(host).makeMapStore('m');
+
+  // A key that embeds a remotable at depth (a record whose field is a guest).
+  const guest = await E(host).provideGuest('key-guest');
+  await E(map).init(harden({ owner: guest }), 'owned');
+  await E(host).remove('key-guest'); // the store's edge is the only retainer
+
+  t.is(await E(map).get(harden({ owner: guest })), 'owned');
+
+  await restart(config);
+
+  const { host: hostAfter } = await makeHost(config, cancelled);
+  const mapAfter = await E(hostAfter).lookup(['m']);
+  t.is(await E(mapAfter).getSize(), 1);
+  // The nested-remotable key survived; its embedded remotable is live again,
+  // and looking up by an equal key reconstructed from the same identity works.
+  const [[key, value]] = await E(mapAfter).entries();
+  t.is(value, 'owned');
+  await E(key.owner).listMessages();
+  t.pass();
+});
+
 test('MapStore entries persist across a daemon restart', async t => {
   const { cancelled, config, host } = await prepareHost(t);
   const map = await E(host).makeMapStore('m');
