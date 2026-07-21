@@ -2,7 +2,7 @@
 
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
-import { Far } from '@endo/marshal';
+import { Far } from '@endo/pass-style';
 import { testWithErrorUnwrapping, makeTestClient } from './_util.js';
 import { encodeSwissnum, locationToLocationId } from '../src/client/util.js';
 import { makeCryptography, randomGiftId } from '../src/cryptography.js';

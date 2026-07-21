@@ -6,7 +6,8 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { Far } from '@endo/pass-style';
-import { makeCapTP, E } from '@endo/captp';
+import { makeCapTP } from '@endo/captp';
+import { E } from '@endo/eventual-send';
 import { makePipe } from '@endo/stream';
 import { readerFromIterator } from '../reader-from-iterator.js';
 import { iterateReader } from '../iterate-reader.js';

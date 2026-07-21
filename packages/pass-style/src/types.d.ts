@@ -244,7 +244,10 @@ export type CopyTagged<
 export type InterfaceSpec = string;
 
 /**
- * Consider this export deprecated.
- * Import `Checker` directly from `'@endo/common/ident-checker.js'` instead.
+ * @deprecated Import `Checker` from `@endo/common/ident-checker.js` directly.
+ * `@endo/pass-style` plain-re-exports this type
+ * (endojs/endo-but-for-bots#543): importing it through `@endo/pass-style` rather
+ * than from the package that originally exports it is discouraged, and this
+ * re-export is slated for removal in a future major version.
  */
 export type { Checker } from '@endo/common/ident-checker.js';

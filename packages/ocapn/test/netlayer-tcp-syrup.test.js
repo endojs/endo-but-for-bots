@@ -2,7 +2,7 @@
 
 import net from 'net';
 import { E } from '@endo/eventual-send';
-import { Far } from '@endo/marshal';
+import { Far } from '@endo/pass-style';
 import { test } from './_util.js';
 import { makeOcapn } from '../src/client/index.js';
 import { makeTcpNetLayer } from '../src/netlayers/tcp-test-only.js';

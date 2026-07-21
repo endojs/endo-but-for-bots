@@ -3,7 +3,8 @@ import { q, hideAndHardenFunction } from '@endo/errors';
 
 /**
  * @import {Rejector} from '@endo/errors/rejector.js';
- * @import {Checker, PassStyle, JSPrimitive} from './types.js';
+ * @import {Checker} from '@endo/common/ident-checker.js';
+ * @import {PassStyle, JSPrimitive} from './types.js';
  */
 
 const { isArray } = Array;

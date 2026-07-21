@@ -18,7 +18,7 @@ import harden from '@endo/harden';
 /** @typedef {import('../cryptography.js').OcapnPublicKey} OcapnPublicKey */
 
 import { ONE_N, ZERO_N } from '@endo/nat';
-import { Far, Remotable } from '@endo/marshal';
+import { Far, Remotable } from '@endo/pass-style';
 import { makeSlot, parseSlot } from '../captp/pairwise.js';
 
 /**

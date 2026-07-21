@@ -1,6 +1,6 @@
 import test from '@endo/ses-ava/test.js';
 
-import { Far } from '@endo/marshal';
+import { Far } from '@endo/pass-style';
 import { makeLoopback, E } from '../src/loopback.js';
 
 test('prevent crosstalk', async t => {

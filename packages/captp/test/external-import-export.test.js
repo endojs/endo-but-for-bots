@@ -1,6 +1,6 @@
 import test from '@endo/ses-ava/test.js';
 
-import { Far, Remotable } from '@endo/marshal';
+import { Far, Remotable } from '@endo/pass-style';
 import { isPromise } from '@endo/promise-kit';
 import { makeLoopback, E } from '../src/loopback.js';
 

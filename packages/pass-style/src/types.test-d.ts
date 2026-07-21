@@ -4,8 +4,8 @@ import { expectAssignable, expectType, expectNotType } from 'tsd';
 import { Far } from './make-far.js';
 import { passStyleOf } from './passStyleOf.js';
 import { makeTagged } from './makeTagged.js';
+import type { Checker } from '@endo/common/ident-checker.js';
 import type {
-  Checker,
   CopyArrayInterface,
   CopyRecordInterface,
   CopyTagged,

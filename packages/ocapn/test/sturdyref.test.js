@@ -1,8 +1,7 @@
 // @ts-check
 
 import { E } from '@endo/eventual-send';
-import { Far } from '@endo/marshal';
-import { passStyleOf } from '@endo/pass-style';
+import { passStyleOf, Far } from '@endo/pass-style';
 import { test, testWithErrorUnwrapping, makeTestClient } from './_util.js';
 import { isSturdyRef, getSturdyRefDetails } from '../src/client/sturdyrefs.js';
 import { ocapnPassStyleOf } from '../src/codecs/ocapn-pass-style.js';

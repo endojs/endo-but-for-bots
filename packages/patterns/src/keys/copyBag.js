@@ -1,13 +1,12 @@
 import harden from '@endo/harden';
 import { Fail, hideAndHardenFunction } from '@endo/errors';
 import {
-  makeTagged,
-  passStyleOf,
   compareAntiRank,
   isRankSorted,
   makeFullOrderComparatorKit,
   sortByRank,
 } from '@endo/marshal';
+import { makeTagged, passStyleOf } from '@endo/pass-style';
 
 /// <reference types="ses"/>
 

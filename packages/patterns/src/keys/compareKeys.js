@@ -1,12 +1,11 @@
 import harden from '@endo/harden';
 import {
-  passStyleOf,
-  getTag,
   compareNumerics,
   compareRank,
   recordNames,
   recordValues,
 } from '@endo/marshal';
+import { passStyleOf, getTag } from '@endo/pass-style';
 import { q, Fail } from '@endo/errors';
 import {
   assertKey,

@@ -3,7 +3,8 @@ import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
 import { Fail } from '@endo/errors';
-import { makeTagged, Far, qp, passableAsJustin } from '@endo/marshal';
+import { qp, passableAsJustin } from '@endo/marshal';
+import { makeTagged, Far } from '@endo/pass-style';
 import {
   makeCopyBag,
   makeCopyMap,

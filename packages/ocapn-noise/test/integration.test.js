@@ -3,7 +3,7 @@
 import test from '@endo/ses-ava/test.js';
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
-import { Far } from '@endo/marshal';
+import { Far } from '@endo/pass-style';
 
 import { makeOcapn } from '@endo/ocapn';
 import { cborCodec } from '@endo/ocapn/cbor';

@@ -11,7 +11,7 @@ import {
 } from '../src/patterns/patternMatchers.js';
 
 /**
- * @import {Passable} from '@endo/marshal'
+ * @import {Passable} from '@endo/pass-style'
  * @import {Pattern} from '../src/types.js'
  */
 

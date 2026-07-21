@@ -1,5 +1,5 @@
 /* global globalThis */
-import { Far, isObject } from '@endo/marshal';
+import { Far, isObject } from '@endo/pass-style';
 
 // @ts-check
 const { WeakRef, FinalizationRegistry } = globalThis;

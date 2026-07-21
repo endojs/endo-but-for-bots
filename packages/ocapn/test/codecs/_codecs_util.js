@@ -14,7 +14,7 @@
 import harden from '@endo/harden';
 import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { encodeHex } from '@endo/hex';
-import { Far } from '@endo/marshal';
+import { Far } from '@endo/pass-style';
 import { HandledPromise } from '@endo/eventual-send';
 
 import {

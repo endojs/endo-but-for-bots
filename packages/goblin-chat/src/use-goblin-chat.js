@@ -36,7 +36,7 @@
 
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { E } from '@endo/eventual-send';
-import { Far } from '@endo/marshal';
+import { Far } from '@endo/pass-style';
 
 import { makeOcapn, swissnumToBytes } from '@endo/ocapn';
 import { makeWebSocketNetLayer } from '@endo/ocapn/netlayer/ws';

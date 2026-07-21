@@ -18,6 +18,13 @@ import type {
   RankCover,
 } from '@endo/marshal';
 
+/**
+ * @deprecated Import `FullCompare` from `@endo/marshal` directly. `@endo/patterns`
+ * plain-re-exports this type (endojs/endo-but-for-bots#543): importing it through
+ * `@endo/patterns` rather than from the package that originally exports it is
+ * discouraged, and this re-export is slated for removal in a future major
+ * version.
+ */
 export type { FullCompare } from '@endo/marshal';
 
 /**

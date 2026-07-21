@@ -3,7 +3,7 @@
 import '@endo/init';
 
 import { E } from '@endo/eventual-send';
-import { Far } from '@endo/marshal';
+import { Far } from '@endo/pass-style';
 import { getSelectorName } from '../../src/selector.js';
 import { makeTcpNetLayer } from '../../src/netlayers/tcp-test-only.js';
 import { makeOcapn } from '../../src/client/index.js';
