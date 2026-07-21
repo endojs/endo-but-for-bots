@@ -5,6 +5,7 @@ import { q } from '@endo/errors';
 // Note: Alphabetically sorted
 const formulaTypes = new Set([
   'channel',
+  'collection-store',
   'directory',
   'endo',
   'eval',
