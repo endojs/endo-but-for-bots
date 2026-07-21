@@ -282,6 +282,7 @@ export const makeFormulaRecord = (formula, number, options = {}) => {
     case 'pet-store':
     case 'mailbox-store':
     case 'known-peers-store':
+    case 'map-store':
     case 'least-authority':
     case 'loopback-network': {
       // Empty-state formula types: the formula type itself is meaningful

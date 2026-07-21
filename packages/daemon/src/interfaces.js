@@ -240,6 +240,8 @@ export const GuestInterface = M.interface('EndoGuest', {
     .returns(M.promise()),
   // Store a passable value
   storeValue: M.call(M.any(), NameOrPathShape).returns(M.promise()),
+  // Create a durable MapStore bound to a pet name
+  makeMapStore: M.call(NameOrPathShape).returns(M.promise()),
   // Submit values for a form
   submit: M.call(
     MessageNumberShape, // messageNumber
@@ -308,6 +310,8 @@ export const HostInterface = M.interface('EndoHost', {
     .returns(M.promise()),
   // Store a passable value
   storeValue: M.call(M.any(), NameOrPathShape).returns(M.promise()),
+  // Create a durable MapStore bound to a pet name
+  makeMapStore: M.call(NameOrPathShape).returns(M.promise()),
   // Check in a remote readable-tree Exo, storing content-addressed
   storeTree: M.call(M.remotable(), NameOrPathShape).returns(M.promise()),
   // Mount an external directory. `deniedSegments` replaces the mount's

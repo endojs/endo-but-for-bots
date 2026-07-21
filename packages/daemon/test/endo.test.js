@@ -16,7 +16,7 @@ import { promisify as nodePromisify } from 'util';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 import { makeExo } from '@endo/exo';
-import { M } from '@endo/patterns';
+import { M, makeCopyMap, getCopyMapEntries } from '@endo/patterns';
 import { makeCancelKit } from '@endo/cancel';
 import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
@@ -595,6 +595,171 @@ test('store formula values', async t => {
     const counter = await E(host).lookup(['counter']);
     t.is(1, await E(counter).incr());
     t.is(2, await E(counter).incr());
+  }
+});
+
+test('map store semantics', async t => {
+  const { host } = await prepareHost(t);
+  const store = await E(host).makeMapStore('mymap');
+
+  // init / get / has / getSize
+  t.is(await E(store).getSize(), 0);
+  t.false(await E(store).has('a'));
+  await E(store).init('a', 1);
+  await E(store).init('b', 'two');
+  await E(store).init(3n, harden([BigInt(4), 'five']));
+  t.true(await E(store).has('a'));
+  t.is(await E(store).get('a'), 1);
+  t.is(await E(store).get('b'), 'two');
+  t.deepEqual(await E(store).get(3n), harden([BigInt(4), 'five']));
+  t.is(await E(store).getSize(), 3);
+
+  // init throws on an existing key
+  await t.throwsAsync(() => E(store).init('a', 9), {
+    message: /already registered/,
+  });
+
+  // set replaces; throws when the key is absent
+  await E(store).set('a', 11);
+  t.is(await E(store).get('a'), 11);
+  await t.throwsAsync(() => E(store).set('nope', 1), {
+    message: /not found/,
+  });
+
+  // get / delete throw when the key is absent
+  await t.throwsAsync(() => E(store).get('nope'), { message: /not found/ });
+  await t.throwsAsync(() => E(store).delete('nope'), { message: /not found/ });
+
+  // keys / values / entries
+  t.deepEqual([...(await E(store).keys())].sort(), [3n, 'a', 'b']);
+  t.deepEqual([...(await E(store).entries())].map(([k]) => k).sort(), [
+    3n,
+    'a',
+    'b',
+  ]);
+
+  // snapshot is a passable CopyMap mirroring the current contents
+  const snapshot = await E(store).snapshot();
+  t.deepEqual(
+    snapshot,
+    makeCopyMap([
+      ['a', 11],
+      ['b', 'two'],
+      [3n, harden([BigInt(4), 'five'])],
+    ]),
+  );
+  // A snapshot is a frozen copy — later mutations do not affect it.
+  await E(store).delete('b');
+  t.is([...getCopyMapEntries(snapshot)].length, 3);
+
+  // delete removes
+  t.false(await E(store).has('b'));
+  t.is(await E(store).getSize(), 2);
+});
+
+test('map store CapTP round-trip of a remotable value', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).provideWorker(['w1']);
+  const counter = await E(host).evaluate(
+    'w1',
+    `
+      (() => {
+        let value = 0;
+        return makeExo(
+          'Counter',
+          M.interface('Counter', {}, { defaultGuards: 'passable' }),
+          {
+            incr: () => value += 1,
+          }
+        );
+      })();
+    `,
+    [],
+    [],
+    ['a-counter'],
+  );
+
+  const store = await E(host).makeMapStore('caps');
+  await E(store).init('counter', counter);
+  const restored = await E(store).get('counter');
+  // The remotable survives the store round-trip and remains live.
+  t.is(await E(restored).incr(), 1);
+  t.is(await E(restored).incr(), 2);
+});
+
+test('map store persists across restart', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+    const store = await E(host).makeMapStore('durable');
+    await E(store).init('greeting', 'hello');
+    await E(store).init('count', 42);
+    await E(store).set('greeting', 'howdy');
+  }
+
+  await restart(config);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+    const store = await E(host).lookup(['durable']);
+    t.is(await E(store).getSize(), 2);
+    t.is(await E(store).get('greeting'), 'howdy');
+    t.is(await E(store).get('count'), 42);
+    // The restored store is still mutable.
+    await E(store).init('added-after-restart', true);
+    t.true(await E(store).get('added-after-restart'));
+  }
+
+  await restart(config);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+    const store = await E(host).lookup(['durable']);
+    t.is(await E(store).getSize(), 3);
+    t.true(await E(store).has('added-after-restart'));
+  }
+});
+
+test('map store retains remotable values across restart', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+    await E(host).provideWorker(['w1']);
+    const counter = await E(host).evaluate(
+      'w1',
+      `
+        (() => {
+          let value = 0;
+          return makeExo(
+            'Counter',
+            M.interface('Counter', {}, { defaultGuards: 'passable' }),
+            {
+              incr: () => value += 1,
+            }
+          );
+        })();
+      `,
+      [],
+      [],
+      ['temporary-retainer'],
+    );
+    const store = await E(host).makeMapStore('caps');
+    await E(store).init('counter', counter);
+    // Drop the only other name for the counter; the map store's retention
+    // edge must keep its formula alive across the restart.
+    await E(host).remove('temporary-retainer');
+  }
+
+  await restart(config);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+    const store = await E(host).lookup(['caps']);
+    const counter = await E(store).get('counter');
+    t.is(await E(counter).incr(), 1);
+    t.is(await E(counter).incr(), 2);
   }
 });
 

@@ -24,6 +24,7 @@ import { guestHelp, makeHelp } from './help-text.js';
  * @param {DaemonCore['formulateEval']} args.formulateEval
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
+ * @param {DaemonCore['formulateMapStore']} args.formulateMapStore
  * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
  * @param {DaemonCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
  * @param {DaemonCore['getAllContentSources']} args.getAllContentSources
@@ -39,6 +40,7 @@ export const makeGuestMaker = ({
   formulateEval,
   formulateReadableBlob,
   formulateMarshalValue,
+  formulateMapStore,
   getFormulaForId,
   getAllNetworkAddresses,
   getAllContentSources,
@@ -334,6 +336,19 @@ export const makeGuestMaker = ({
       await unpinTransient(id);
     };
 
+    /** @type {EndoGuest['makeMapStore']} */
+    const makeMapStore = async petName => {
+      const { namePath } = petNamePathFrom(petName);
+      const { value: mapStore, id } = await formulateMapStore();
+      pinTransient(id);
+      try {
+        await E(directory).storeIdentifier(namePath, id);
+      } finally {
+        await unpinTransient(id);
+      }
+      return /** @type {any} */ (mapStore);
+    };
+
     /** @type {EndoGuest} */
     const guest = {
       // Directory
@@ -387,6 +402,7 @@ export const makeGuestMaker = ({
       form,
       storeBlob,
       storeValue,
+      makeMapStore,
       submit,
       sendValue,
     };
