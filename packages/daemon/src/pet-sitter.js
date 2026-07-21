@@ -68,7 +68,10 @@ export const makePetSitter = (petStore, specialNames) => {
 
   /** @type {PetStore['followIdNameChanges']} */
   const followIdNameChanges = {
-    /** @returns {ReturnType<PetStore['followIdNameChanges']>} */
+    /**
+     * @param {string} id
+     * @returns {ReturnType<PetStore['followIdNameChanges']>}
+     */
     async *currentAndSubsequentIds(id) {
       const subscription = petStore.followIdNameChanges(id);
 
