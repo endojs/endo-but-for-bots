@@ -88,6 +88,10 @@ export const universalPropertyNames = {
   // https://github.com/endojs/endo/issues/550
   AggregateError: 'AggregateError',
 
+  // Text Processing
+  TextEncoder: 'TextEncoder',
+  TextDecoder: 'TextDecoder',
+
   // https://github.com/tc39/proposal-explicit-resource-management
   // TODO DisposableStack, AsyncDisposableStack
   // DisposableStack: 'DisposableStack',
@@ -2090,6 +2094,42 @@ export const permitted = {
     importNow: fn,
     module: fn,
     '@@toStringTag': 'string',
+  },
+
+  // Text Encoding
+
+  TextEncoder: {
+    // Properties of the TextEncoder Constructor
+    '[[Proto]]': '%FunctionPrototype%',
+    encode: fn,
+    encoding: getter,
+    prototype: '%TextEncoderPrototype%',
+  },
+
+  '%TextEncoderPrototype%': {
+    // Properties of the TextEncoder Prototype Object
+    constructor: 'TextEncoder',
+    encode: fn,
+    encodeInto: fn,
+    encoding: getter,
+  },
+
+  TextDecoder: {
+    // Properties of the TextDecoder Constructor
+    '[[Proto]]': '%FunctionPrototype%',
+    encoding: false,
+    fatal: false,
+    ignoreBOM: false,
+    prototype: '%TextDecoderPrototype%',
+  },
+
+  '%TextDecoderPrototype%': {
+    // Properties of the TextDecoder Prototype Object
+    constructor: 'TextDecoder',
+    decode: fn,
+    encoding: getter,
+    fatal: false,
+    ignoreBOM: false,
   },
 
   lockdown: fn,
