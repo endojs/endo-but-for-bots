@@ -9,7 +9,7 @@ on:
   pull_request:
 
 # Minimal permissions for workflows and jobs. `actions/cache` and
-# `setup-node`'s `cache: yarn` use the runner's built-in cache service,
+# `setup-node`'s `cache: npm` use the runner's built-in cache service,
 # which is authenticated independently of the `actions:` permission;
 # `contents: read` is sufficient for every job below.
 permissions:
@@ -39,43 +39,52 @@ jobs:
         with:
           persist-credentials: false
 
-      # without this, setup-node errors on mismatched yarn versions
+      # without this, setup-node errors on mismatched npm versions
       - run: corepack enable
 
       - name: Use Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: .node-version
-          cache: yarn
+          cache: npm
 
       - name: Install dependencies
-        run: yarn install --immutable
+        run: npm ci
 
       # end macro
 
-      - name: Run yarn build
-        run: yarn build
+      - name: Run npm run build
+        run: npm run build
 
       # shellcheck ships preinstalled on ubuntu-latest runners. Print
       # the version so a regression in the image surfaces here rather
-      # than as an unexplained gate flap. `yarn lint` runs `lint:sh`
+      # than as an unexplained gate flap. `npm run lint` runs `lint:sh`
       # against the same binary; this step is the install-presence
       # check.
       - name: Show shellcheck version
         run: shellcheck --version
 
-      - name: Run yarn lint
-        run: yarn lint
+      - name: Run npm run lint
+        run: npm run lint
 
       - name: Check composite tsconfig files are up to date
-        run: yarn build:types:check
+        run: npm run build:types:check
+
+      # this will fail if the "include" paths in the tsconfigs are too broad,
+      # (e.g., "*.ts"); typescript will complain about overwriting files
+      - name: Check tsconfigs are compatible with composite build
+        run: npm run build:types && npm run build:types
+
+      # types must be cleaned up after to avoid problems with the docs build below
+      - name: Cleanup types
+        run: npm run clean
 
       - name: Check package uniformity
         run: node scripts/check-package-uniformity.mjs
 
       # build the API docs to verify it works
       - name: build API docs
-        run: yarn docs
+        run: npm run docs
 
   test:
     name: test
@@ -89,7 +98,7 @@ jobs:
         node-version: [22.x, 24.x]
         platform: [ubuntu-latest, macos-15]
         # windows-latest exhibited flakey tests that are not yet worth the
-        # trouble to investigate, and blocked us from upgrading yarn from 1 to
+        # trouble to investigate, and blocked us from upgrading npm from 1 to
         # 4.
 
     steps:
@@ -98,14 +107,14 @@ jobs:
         with:
           persist-credentials: false
 
-      # without this, setup-node errors on mismatched yarn versions
+      # without this, setup-node errors on mismatched npm versions
       - run: corepack enable
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ matrix.node-version }}
-          cache: yarn
+          cache: npm
 
       # Some tests (e.g., in package "daemon") create Unix domain sockets, and
       # their full absolute paths MUST remain short.
@@ -121,17 +130,17 @@ jobs:
 
       - name: Install dependencies
         working-directory: ${{ env.WORKDIR }}
-        run: yarn install --immutable
+        run: npm ci
 
       # end macro
 
-      - name: Run yarn build
+      - name: Run npm run build
         working-directory: ${{ env.WORKDIR }}
-        run: yarn build
+        run: npm run build
 
-      - name: Run yarn test
+      - name: Run npm run test
         working-directory: ${{ env.WORKDIR }}
-        run: yarn test
+        run: npm run test
 
       - name: Restore working directory
         if: ${{ steps.move-wd.outcome == 'success' }}
@@ -151,25 +160,25 @@ jobs:
         with:
           persist-credentials: false
 
-      # without this, setup-node errors on mismatched yarn versions
+      # without this, setup-node errors on mismatched npm versions
       - run: corepack enable
 
       - name: Use Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: .node-version
-          cache: yarn
+          cache: npm
 
       - name: Install dependencies
-        run: yarn install --immutable
+        run: npm ci
 
       # end macro
 
-      - name: Run yarn build
-        run: yarn build
+      - name: Run npm run build
+        run: npm run build
 
-      - name: Run yarn test:c8
-        run: yarn test:c8
+      - name: Run npm run test:c8
+        run: npm run test:c8
 
   test262:
     name: test262
@@ -189,24 +198,24 @@ jobs:
         with:
           persist-credentials: false
 
-      # without this, setup-node errors on mismatched yarn versions
+      # without this, setup-node errors on mismatched npm versions
       - run: corepack enable
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ matrix.node-version }}
-          cache: yarn
+          cache: npm
 
       - name: Install dependencies
-        run: yarn install --immutable
+        run: npm ci
 
       # end macro
 
-      - name: Run yarn build
-        run: yarn build
+      - name: Run npm run build
+        run: npm run build
 
-      - name: Run yarn test262
+      - name: Run npm run test262
         run: exit 0 # TODO remove test262 from required tests for CI
 
   test-hermes:
@@ -222,25 +231,25 @@ jobs:
         with:
           persist-credentials: false
 
-      # without this, setup-node errors on mismatched yarn versions
+      # without this, setup-node errors on mismatched npm versions
       - run: corepack enable
 
       - name: Use Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: .node-version
-          cache: yarn
+          cache: npm
 
       - name: Install dependencies
-        run: yarn install --immutable
+        run: npm ci
 
       # end macro
 
-      - name: Run yarn build
-        run: yarn build
+      - name: Run npm run build
+        run: npm run build
 
       - name: Run SES/Hermes smoke test
-        run: yarn test:hermes
+        run: npm run test:hermes
 
   check-action-pins:
     name: check-action-pins
@@ -253,17 +262,17 @@ jobs:
         with:
           persist-credentials: false
 
-      # without this, setup-node errors on mismatched yarn versions
+      # without this, setup-node errors on mismatched npm versions
       - run: corepack enable
 
       - name: Use Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: .node-version
-          cache: yarn
+          cache: npm
 
       - name: Install dependencies
-        run: yarn install --immutable
+        run: npm ci
 
       - name: Detect workflow changes
         id: paths
@@ -290,28 +299,28 @@ jobs:
         with:
           persist-credentials: false
 
-      # without this, setup-node errors on mismatched yarn versions
+      # without this, setup-node errors on mismatched npm versions
       - run: corepack enable
 
       - name: Use Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: .node-version
-          cache: yarn
+          cache: npm
 
       - name: Install dependencies
-        run: yarn install --immutable
+        run: npm ci
 
       # end macro
 
       - name: build
-        run: yarn run build
+        run: npm run build
 
       # Smoke-test the publish flow end to end. Boots a disposable
-      # Verdaccio registry, runs `yarn release:npm` against it, then
+      # Verdaccio registry, runs `npm run release:npm` against it, then
       # installs a representative subset of the published tarballs into
       # a fresh consumer and exercises them under SES lockdown. This
-      # replaces the previous `yarn workspaces foreach exec npm pack`
+      # replaces the previous `npm exec --workspaces -- npm pack`
       # step (which could not have worked after the ts-node-pack
       # refactor because the .ts-using packages no longer have prepack
       # hooks to turn their sources into publishable JS) and also
@@ -320,7 +329,7 @@ jobs:
       # cross-package from their published tarball state, not from
       # whatever source tree happens to be on disk.
       - name: Smoke-test publish
-        run: yarn smoketest:publish
+        run: npm run smoketest:publish
 
   test-xs:
     name: test-xs
@@ -340,31 +349,31 @@ jobs:
           path: endo
           persist-credentials: false
 
-      # without this, setup-node errors on mismatched yarn versions
+      # without this, setup-node errors on mismatched npm versions
       - run: corepack enable
         working-directory: endo
 
       # The tests run on the XS engine; Node is just driving the harness.
       - name: Use Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: endo/.node-version
-          cache: yarn
-          cache-dependency-path: endo/yarn.lock
+          cache: npm
+          cache-dependency-path: endo/package-lock.json
 
       - name: Install dependencies
         working-directory: endo
-        run: yarn install --immutable
+        run: npm ci
 
       - name: Install engines
         working-directory: endo
-        run: yarn workspace @endo/benchmark run install-engines
+        run: npm run --workspace=@endo/benchmark install-engines
 
       # end macro
 
-      - name: Run yarn build
+      - name: Run npm run build
         working-directory: endo
-        run: yarn build
+        run: npm run build
 
       - name: Restore XS binary cache
         id: restore-xs
@@ -413,7 +422,7 @@ jobs:
         working-directory: endo
         run: |
           PATH=$PATH:$GITHUB_WORKSPACE/bin
-          yarn test:xs
+          npm run test:xs
 
   test-ocapn-python:
     name: test-ocapn-python
@@ -440,11 +449,11 @@ jobs:
         working-directory: endo
 
       - name: Use Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: endo/.node-version
-          cache: yarn
-          cache-dependency-path: endo/yarn.lock
+          cache: npm
+          cache-dependency-path: endo/package-lock.json
 
       - name: Set up Python 3.10
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -453,11 +462,11 @@ jobs:
 
       - name: Install Node dependencies
         working-directory: endo
-        run: yarn install --immutable
+        run: npm ci
 
       - name: Build Endo
         working-directory: endo
-        run: yarn build
+        run: npm run build
 
       - name: Set up Python virtual environment
         working-directory: ocapn-test-suite
@@ -469,7 +478,7 @@ jobs:
       - name: Start OCapN test server
         working-directory: endo
         run: |
-          yarn workspace @endo/ocapn run test:python > /tmp/ocapn-server.log 2>&1 &
+          npm run --workspace=@endo/ocapn test:python > /tmp/ocapn-server.log 2>&1 &
           echo $! > /tmp/ocapn-server.pid
           # Wait for server to be ready
           sleep 5

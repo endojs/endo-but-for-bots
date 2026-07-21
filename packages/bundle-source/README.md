@@ -7,7 +7,7 @@ To bundle a program that enters at `program.js` from the command line, use the
 `bundle-source` tool:
 
 ```console
-> yarn bundle-source --cache-json bundles program.js program
+> npx bundle-source --cache-json bundles program.js program
 ```
 
 To do the same programmatically:
@@ -104,8 +104,8 @@ await importBundle(
 Use the `@endo/cli` to find your cache.
 
 ```console
-> yarn add -D @endo/cli
-> yarn endo where cache
+> npm add -D @endo/cli
+> npx endo where cache
 ```
 
 Use the `XDG_CACHE_HOME` environment variable to override the default location

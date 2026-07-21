@@ -28,8 +28,8 @@
   },
   "scripts": {
     "build": "exit 0",
-    "lint": "yarn lint:types && yarn lint:eslint",
-    "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
+    "lint": "npm run lint:types && npm run lint:eslint",
+    "lint-fix": "npm run lint:eslint --fix && npm run lint:types",
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
     "test": "ava",
@@ -37,11 +37,11 @@
     "test:xs": "exit 0"
   },
   "devDependencies": {
-    "ava": "catalog:dev",
-    "c8": "catalog:dev",
-    "eslint": "catalog:dev",
-    "tsd": "catalog:dev",
-    "typescript": "catalog:dev"
+    "ava": "^8.0.1",
+    "c8": "^11.0.0",
+    "eslint": "^10.4.1",
+    "tsd": "^0.33.0",
+    "typescript": "~6.0.3"
   },
   "files": [
     "./*.d.ts",
@@ -56,11 +56,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
   },
   "ava": {
     "files": [

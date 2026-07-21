@@ -1,7 +1,7 @@
 #! /bin/bash
 # Smoke-test the ts-node-pack publish path against a local Verdaccio
-# registry. Runs the full `yarn release:npm` flow (which internally
-# calls `yarn pack:all` + `npm publish` per tarball) pointed at a
+# registry. Runs the full `npm run release:npm` flow (which internally
+# calls `npm run pack:all` + `npm publish` per tarball) pointed at a
 # disposable Verdaccio instance, then installs a representative subset
 # of the published packages into a fresh consumer project and imports
 # them under SES lockdown.
@@ -16,12 +16,12 @@ set -ueo pipefail
 thisdir=$(cd -- "$(dirname "$0")" > /dev/null && pwd)
 ROOT=$(cd "$thisdir/.." && pwd)
 
-# Isolate npm / yarn state to a per-run HOME so the smoketest cannot
+# Isolate npm / npm state to a per-run HOME so the smoketest cannot
 # stomp on the developer's ~/.npmrc or leave auth tokens behind.
 REGISTRY_HOME=$(mktemp -d -t endo-smoketest-publishing.XXXXX)
 export HOME="$REGISTRY_HOME"
 # The per-run HOME has no corepack cache, so corepack would otherwise
-# prompt the user before downloading the pinned yarn version.
+# prompt the user before downloading the pinned npm version.
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 # Pick a free TCP port so a stray Verdaccio on the conventional 4873 can't
 # collide with us (and vice versa — we never stomp on an unrelated instance).
@@ -87,25 +87,25 @@ echo "smoketest-publishing: starting Verdaccio (HOME=$REGISTRY_HOME)"
 echo "smoketest-publishing: creating disposable publish user"
 npx --yes npm-cli-login@^1 \
   -u smoketest -p smoketest -e smoketest@example.com \
-  -r "$REGISTRY_URL" --quotes
+  -r "$REGISTRY_URL" --quotes --config-path "$REGISTRY_HOME/.npmrc"
 
 # Sanity: confirm we are authenticated against the local registry.
-npm whoami --registry "$REGISTRY_URL"
+npm --userconfig "$REGISTRY_HOME/.npmrc" whoami --registry "$REGISTRY_URL"
 
 # Run the real release flow. `release:npm` calls `pack:all` (which
 # rebuilds dist/ via ts-node-pack) then `npm publish` for each .tgz;
 # inlining `npm_config_registry` redirects every publish inside this
 # one command to Verdaccio without leaking into the surrounding shell.
-echo "smoketest-publishing: running 'yarn release:npm'"
+echo "smoketest-publishing: running 'npm run release:npm'"
 (
   cd "$ROOT"
-  npm_config_registry="$REGISTRY_URL" yarn release:npm
+  npm_config_registry="$REGISTRY_URL" npm_config_userconfig="$REGISTRY_HOME/.npmrc" npm run release:npm
 )
 
 # Install a representative subset into a throwaway consumer and exercise
 # it at runtime. Using `npm install <name>` (not `<path>`) forces npm to
 # resolve each package from the registry, which is the true end-to-end
-# check: it proves the published manifests, `workspace:` dep resolution,
+# check: it proves the published manifests, local-workspace dependency resolution,
 # and dependency graph are self-consistent within the registry.
 CONSUMER="$REGISTRY_HOME/consumer"
 mkdir -p "$CONSUMER"

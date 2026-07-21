@@ -260,5 +260,5 @@ When writing a new function:
 3. Otherwise, use an arrow function.
 
 When converting existing `function`-keyword code, verify that the conversion
-falls outside all exception categories above, run `yarn test` for the affected
+falls outside all exception categories above, run `npm test` for the affected
 package, and confirm the behavioral diff is zero.

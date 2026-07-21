@@ -13,8 +13,8 @@
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
     "test:xs": "exit 0",
     "build": "exit 0",
-    "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "npm run lint:eslint --fix && npm run lint:types",
+    "lint": "npm run lint:types && npm run lint:eslint",
     "lint:types": "tsc",
     "lint:eslint": "eslint ."
   },
@@ -30,19 +30,19 @@
   },
   "homepage": "https://github.com/endojs/endo#readme",
   "dependencies": {
-    "@endo/errors": "workspace:^",
-    "@endo/eventual-send": "workspace:^",
-    "@endo/harden": "workspace:^",
-    "@endo/pass-style": "workspace:^"
+    "@endo/errors": "^1.3.1",
+    "@endo/eventual-send": "^1.5.0",
+    "@endo/harden": "^1.1.0",
+    "@endo/pass-style": "^1.8.1"
   },
   "devDependencies": {
-    "@endo/init": "workspace:^",
-    "@endo/ses-ava": "workspace:^",
-    "ava": "catalog:dev",
-    "c8": "catalog:dev",
-    "eslint": "catalog:dev",
-    "ses": "workspace:^",
-    "typescript": "catalog:dev"
+    "@endo/init": "^1.1.13",
+    "@endo/ses-ava": "^1.4.2",
+    "ava": "^8.0.1",
+    "c8": "^11.0.0",
+    "eslint": "^10.4.1",
+    "ses": "^2.2.0",
+    "typescript": "~6.0.3"
   },
   "keywords": [
     "eventual send",
@@ -62,11 +62,6 @@
     "src",
     "tools"
   ],
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
-  },
   "publishConfig": {
     "access": "public"
   },

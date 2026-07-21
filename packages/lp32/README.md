@@ -125,10 +125,10 @@ All exported functions and the streams they produce are hardened.
 npm install @endo/lp32
 ```
 
-Or with yarn:
+Or with npm:
 
 ```sh
-yarn add @endo/lp32
+npm add @endo/lp32
 ```
 
 ## License

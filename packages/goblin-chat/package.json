@@ -38,8 +38,8 @@
   "bin": "./bin/goblin-chat.js",
   "scripts": {
     "build": "exit 0",
-    "lint": "yarn lint:types && yarn lint:eslint",
-    "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
+    "lint": "npm run lint:types && npm run lint:eslint",
+    "lint-fix": "npm run lint:eslint --fix && npm run lint:types",
     "lint:eslint": "eslint '**/*.js'",
     "lint:types": "tsc",
     "start": "node ./index.js",
@@ -48,26 +48,26 @@
     "test:xs": "exit 0"
   },
   "dependencies": {
-    "@endo/base64": "workspace:^",
-    "@endo/eventual-send": "workspace:^",
-    "@endo/exo": "workspace:^",
-    "@endo/init": "workspace:^",
-    "@endo/marshal": "workspace:^",
-    "@endo/ocapn": "workspace:^",
-    "@endo/patterns": "workspace:^",
+    "@endo/base64": "^1.1.1",
+    "@endo/eventual-send": "^1.5.0",
+    "@endo/exo": "^1.7.0",
+    "@endo/init": "^1.1.13",
+    "@endo/marshal": "^1.10.0",
+    "@endo/ocapn": "^1.1.1",
+    "@endo/patterns": "^2.0.0",
     "ink": "^7.0.1",
     "react": "^19.2.0"
   },
   "devDependencies": {
-    "@endo/lockdown": "workspace:^",
-    "@endo/ses-ava": "workspace:^",
+    "@endo/lockdown": "^1.0.19",
+    "@endo/ses-ava": "^1.4.2",
     "@types/react": "^19.2.0",
-    "ava": "catalog:dev",
-    "c8": "catalog:dev",
-    "eslint": "catalog:dev",
-    "ses": "workspace:^",
-    "tsd": "catalog:dev",
-    "typescript": "catalog:dev"
+    "ava": "^8.0.1",
+    "c8": "^11.0.0",
+    "eslint": "^10.4.1",
+    "ses": "^2.2.0",
+    "tsd": "^0.33.0",
+    "typescript": "~6.0.3"
   },
   "files": [
     "./*.d.ts",
@@ -80,22 +80,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ],
-    "rules": {
-      "import/no-unresolved": [
-        "error",
-        {
-          "ignore": [
-            "ava",
-            "^@endo/ocapn(?:/.*)?$"
-          ]
-        }
-      ]
-    }
   },
   "ava": {
     "files": [

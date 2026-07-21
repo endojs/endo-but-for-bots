@@ -1,8 +1,7 @@
-/* eslint-disable @jessie.js/safe-await-separator */
 /**
  * Tests for {@link generate-composite-tsconfigs.mjs}
  *
- * Run with: `yarn exec ava scripts/generate-composite-tsconfigs.test.mjs`
+ * Run with: `npm exec ava scripts/generate-composite-tsconfigs.test.mjs`
  *
  * @module
  */
@@ -13,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  parseYarnWorkspaces,
+  parseNpmWorkspaces,
   getRuntimeWorkspaceDeps,
   detectCycle,
   makePackageCompositeConfig,
@@ -39,47 +38,40 @@ function parseGeneratedJson(text) {
 }
 
 // ---------------------------------------------------------------------------
-// parseYarnWorkspaces
+// parseNpmWorkspaces
 // ---------------------------------------------------------------------------
 
-test('parseYarnWorkspaces - parses well-formed NDJSON', t => {
-  const ndjson = [
-    JSON.stringify({ location: '.', name: null, workspaceDependencies: [] }),
-    JSON.stringify({
+test('parseNpmWorkspaces - parses well-formed JSON', t => {
+  const json = JSON.stringify([
+    { location: '.', name: null },
+    {
       location: 'packages/a',
       name: '@scope/a',
-      workspaceDependencies: [],
-    }),
-    JSON.stringify({
+    },
+    {
       location: 'packages/b',
       name: '@scope/b',
-      workspaceDependencies: ['packages/a'],
-    }),
-  ].join('\n');
+    },
+  ]);
 
-  const map = parseYarnWorkspaces(ndjson);
+  const map = parseNpmWorkspaces(json);
   t.is(map.size, 2, 'root entry should be skipped');
   t.is(map.get('@scope/a'), 'packages/a');
   t.is(map.get('@scope/b'), 'packages/b');
 });
 
-test('parseYarnWorkspaces - skips the root entry (name: null)', t => {
-  const ndjson = JSON.stringify({
+test('parseNpmWorkspaces - skips the root entry (name: null)', t => {
+  const json = JSON.stringify([{
     location: '.',
     name: null,
-    workspaceDependencies: [],
-  });
-  const map = parseYarnWorkspaces(ndjson);
+  }]);
+  const map = parseNpmWorkspaces(json);
   t.is(map.size, 0);
 });
 
-test('parseYarnWorkspaces - ignores blank lines', t => {
-  const ndjson = `\n${JSON.stringify({
-    location: 'packages/a',
-    name: '@scope/a',
-    workspaceDependencies: [],
-  })}\n\n`;
-  const map = parseYarnWorkspaces(ndjson);
+test('parseNpmWorkspaces - accepts formatted JSON', t => {
+  const json = JSON.stringify([{ location: 'packages/a', name: '@scope/a' }], null, 2);
+  const map = parseNpmWorkspaces(json);
   t.is(map.size, 1);
 });
 
@@ -87,13 +79,13 @@ test('parseYarnWorkspaces - ignores blank lines', t => {
 // getRuntimeWorkspaceDeps
 // ---------------------------------------------------------------------------
 
-test('getRuntimeWorkspaceDeps - includes workspace: deps from dependencies, peerDependencies, optionalDependencies', t => {
+test('getRuntimeWorkspaceDeps - includes local deps from dependencies, peerDependencies, optionalDependencies', t => {
   const pkg = {
-    dependencies: { '@scope/a': 'workspace:^', lodash: '^4' },
-    peerDependencies: { '@scope/b': 'workspace:^' },
-    optionalDependencies: { '@scope/c': 'workspace:^' },
+    dependencies: { '@scope/a': '^1.0.0', lodash: '^4' },
+    peerDependencies: { '@scope/b': '^1.0.0' },
+    optionalDependencies: { '@scope/c': '^1.0.0' },
   };
-  const deps = getRuntimeWorkspaceDeps(pkg);
+  const deps = getRuntimeWorkspaceDeps(pkg, ['@scope/a', '@scope/b', '@scope/c']);
   t.true(deps.has('@scope/a'));
   t.true(deps.has('@scope/b'));
   t.true(deps.has('@scope/c'));
@@ -101,8 +93,8 @@ test('getRuntimeWorkspaceDeps - includes workspace: deps from dependencies, peer
 });
 
 test('getRuntimeWorkspaceDeps - excludes devDependencies', t => {
-  const pkg = { devDependencies: { '@scope/dev': 'workspace:^' } };
-  const deps = getRuntimeWorkspaceDeps(pkg);
+  const pkg = { devDependencies: { '@scope/dev': '^1.0.0' } };
+  const deps = getRuntimeWorkspaceDeps(pkg, ['@scope/dev']);
   t.is(deps.size, 0);
 });
 
@@ -111,11 +103,11 @@ test('getRuntimeWorkspaceDeps - handles missing dep fields gracefully', t => {
   t.is(deps.size, 0);
 });
 
-test('getRuntimeWorkspaceDeps - excludes non-workspace version specs', t => {
+test('getRuntimeWorkspaceDeps - excludes packages outside the workspace', t => {
   const pkg = {
-    dependencies: { '@scope/a': '^1.2.3', '@scope/b': 'workspace:^' },
+    dependencies: { '@scope/a': '^1.2.3', '@scope/b': '^1.0.0' },
   };
-  const deps = getRuntimeWorkspaceDeps(pkg);
+  const deps = getRuntimeWorkspaceDeps(pkg, ['@scope/b']);
   t.false(deps.has('@scope/a'));
   t.true(deps.has('@scope/b'));
 });
@@ -236,7 +228,7 @@ function getPackageJson(location) {
   if (location === 'packages/b') {
     return {
       name: '@scope/b',
-      dependencies: { '@scope/a': 'workspace:^', '@scope/c': 'workspace:^' },
+      dependencies: { '@scope/a': '^1.0.0', '@scope/c': '^1.0.0' },
     };
   }
   throw new Error(`Unexpected location: ${location}`);
@@ -313,9 +305,9 @@ test('buildConfigs - root config lists all participants sorted by path', async t
 test('buildConfigs - throws on a cycle', async t => {
   const cyclicPackageJson = /** @param {string} loc */ loc => {
     if (loc === 'packages/a') {
-      return { dependencies: { '@scope/b': 'workspace:^' } };
+      return { dependencies: { '@scope/b': '^1.0.0' } };
     }
-    return { dependencies: { '@scope/a': 'workspace:^' } };
+    return { dependencies: { '@scope/a': '^1.0.0' } };
   };
   await t.throwsAsync(
     () =>

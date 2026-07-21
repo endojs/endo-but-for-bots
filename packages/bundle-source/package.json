@@ -16,29 +16,29 @@
     "test": "ava",
     "test:xs": "exit 0",
     "lint-fix": "eslint --fix '**/*.js'",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint": "npm run lint:types && npm run lint:eslint",
     "lint:eslint": "eslint .",
     "lint:types": "tsc"
   },
   "dependencies": {
-    "@endo/base64": "workspace:^",
-    "@endo/compartment-mapper": "workspace:^",
-    "@endo/evasive-transform": "workspace:^",
-    "@endo/harden": "workspace:^",
-    "@endo/init": "workspace:^",
-    "@endo/promise-kit": "workspace:^",
-    "@endo/where": "workspace:^",
+    "@endo/base64": "^1.1.1",
+    "@endo/compartment-mapper": "^2.3.0",
+    "@endo/evasive-transform": "^2.3.0",
+    "@endo/harden": "^1.1.0",
+    "@endo/init": "^1.1.13",
+    "@endo/promise-kit": "^1.2.1",
+    "@endo/where": "^1.0.11",
     "amaro": "^1.1.9"
   },
   "devDependencies": {
-    "@endo/lockdown": "workspace:^",
-    "@endo/ses-ava": "workspace:^",
-    "@endo/zip": "workspace:^",
-    "ava": "catalog:dev",
-    "c8": "catalog:dev",
-    "eslint": "catalog:dev",
-    "ses": "workspace:^",
-    "typescript": "catalog:dev"
+    "@endo/lockdown": "^1.0.19",
+    "@endo/ses-ava": "^1.4.2",
+    "@endo/zip": "^1.1.0",
+    "ava": "^8.0.1",
+    "c8": "^11.0.0",
+    "eslint": "^10.4.1",
+    "ses": "^2.2.0",
+    "typescript": "~6.0.3"
   },
   "keywords": [],
   "files": [
@@ -69,16 +69,6 @@
   "ava": {
     "files": [
       "test/**/*.test.*"
-    ]
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ],
-    "ignorePatterns": [
-      "dist/",
-      "scripts/",
-      "demo/"
     ]
   },
   "typeCoverage": {

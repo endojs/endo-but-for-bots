@@ -13,13 +13,13 @@ double-check that you have a suitable version.
 
 * git clone https://github.com/Agoric/@REPO@/
 * npm install
-* npm test
+* npm run test
 
 ## Pull Requests
 
 Before submitting a pull request, please:
 
-* run `npm test` and make sure all the unit tests pass
+* run `npm run test` and make sure all the unit tests pass
 * run `npm run-script lint-fix` to reformat the code according to our
   `eslint` profile, and fix any complaints that it can't automatically
   correct

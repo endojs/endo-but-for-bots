@@ -5,13 +5,13 @@
 ```sh
 git clone git@github.com:endojs/endo.git
 cd endo
-yarn
+npm install
 ```
 
-Endo is a yarn workspaces repository. Running yarn in the root will install and
+Endo is an npm workspaces repository. Running `npm install` in the root will install and
 hoist most dependencies up to the root `node_modules`.
 
-Note: running yarn `--ignore-scripts` will not complete the setup of SES.
+Note: running `npm install --ignore-scripts` will not complete the setup of SES.
 
 ### Action pinning
 
@@ -30,18 +30,18 @@ If this check fails, run the updater and commit the resulting changes.
 Continuous Integration is comprehensive.
 Many issues can be anticipated locally by running:
 
-- `yarn`
-- `yarn format` for Prettier code formatting
-- `yarn docs`, because Typedoc has a holistic view of TypeScript definitions
+- `npm install`
+- `npm run format` for Prettier code formatting
+- `npm run docs`, because Typedoc has a holistic view of TypeScript definitions
   that lint in individual packages may not catch.
-- `yarn pack:all`: Packs every public workspace into `dist/*.tgz` via
+- `npm run pack:all`: Packs every public workspace into `dist/*.tgz` via
   `ts-node-pack`, exercising the same code path as a real release. Uncovers
   issues with type definition generation, and (because each tarball is built
   from a temp staging copy rather than the source tree) ensures that type
   resolution in dependent packages works from the published state rather
   than whatever happens to be on the local filesystem.
-- `yarn smoketest:publish`: Boots a disposable Verdaccio registry, runs
-  `yarn release:npm` against it, and installs a representative subset of
+- `npm run smoketest:publish`: Boots a disposable Verdaccio registry, runs
+  `npm run release:npm` against it, and installs a representative subset of
   the published tarballs into a fresh consumer under SES lockdown. This is
   what CI runs, and is the most thorough local check of the publish flow.
 
@@ -55,7 +55,7 @@ index.test.js files.
 ## Updating Workspace Dependencies
 
 If you've added, removed, or changed a dependency between workspaces, you'll
-want to regenerate the composite TypeScript build configs.  Run `yarn
+want to regenerate the composite TypeScript build configs. Run `npm run
 build:types:gen` to regenerate the composite TypeScript build. See [TypeScript
 declarations](#typescript-declarations) for more details.
 
@@ -99,8 +99,8 @@ declarations for all of the relevant dependencies.  To simplify this process,
 you can use the **composite TypeScript build**:
 
 ```sh
-yarn build:types        # one-shot declaration build for all packages
-yarn build:types:watch  # incremental watch (expect a ~10–30s cold start)
+npm run build:types        # one-shot declaration build for all packages
+npm run build:types:watch  # incremental watch (expect a ~10-30s cold start)
 ```
 
 The `tsconfig.composite.json` files scattered across packages (and the root
@@ -109,19 +109,19 @@ The `tsconfig.composite.json` files scattered across packages (and the root
 After adding, removing, or changing runtime dependencies of any workspace, run:
 
 ```sh
-yarn build:types:gen
+npm run build:types:gen
 ```
 
 CI checks that these files are in sync with the generator output.
 
 If the composite build complains about `TS5055` "would overwrite input file"
 errors, you have stale `.d.ts` outputs from a previous per-package build.
-Run `yarn build:types --clean` once to reset, then build normally.
+Run `npm run build:types --clean` once to reset, then build normally.
 
 ## Rebuilding `ses`
 
-Changes to `ses` require a `yarn build` to be reflected in any dependency where
-`import 'ses';` appears. Use `yarn build` under `packages/ses` to refresh the
+Changes to `ses` require a `npm run build` to be reflected in any dependency where
+`import 'ses';` appears. Use `npm run build` under `packages/ses` to refresh the
 build. Everything else is wired up thanks to workspaces, so no need to run
 installs in other packages.
 
@@ -154,7 +154,7 @@ itself_), when the context is fresh.
 
 When your PR includes changes that should be released, add a changeset:
 
-1. Run `yarn changeset`
+1. Run `npm run changeset`
 2. Select the affected packages (use arrow keys to navigate, space to select,
    enter to confirm)
 3. Choose the appropriate bump type for each package
@@ -205,21 +205,18 @@ The release process works as follows:
 3. Maintainers review the Release PR to verify versions and changelog entries
    look correct. Maintainer will approve and/or merge when ready.
    Merging will also create tags and GitHub Releases for each affected package.
-4. After merging the Release PR, pull `master` and run `yarn release:npm` to
+4. After merging the Release PR, pull `master` and run `npm run release:npm` to
    publish the updated packages to npm.
 
 ## Running CI locally
 
-You can use [act](https://github.com/nektos/act) to run the CI locally. You'll need to make some changes, however, because Yarn will attempt to use the global cache, which is not available to the container.
+You can use [act](https://github.com/nektos/act) to run CI locally. If the
+container cannot use npm's cache service, temporarily remove `cache: npm` from
+the affected `actions/setup-node` steps and give npm a writable cache directory:
 
-1. Any job using `actions/setup-node` will need to have `cache: yarn` removed from the `with` section, as this overrides the behavior in `yarnrc.yml`.
-2. Edit `yarnrc.yml` and add these following lines:
-  
-  ```yaml
-  enableGlobalCache: false
-  enableMirror: false
-  globalFolder: .yarn/berry
-  ```
+```sh
+npm_config_cache="$PWD/.npm-cache" act
+```
 
 By default, `act` will pull the `catthehacker/ubuntu:full-latest` image on every run. This can be slow, so you can pass `--pull=false` to `act` and only omit when you wish to update the image.
 

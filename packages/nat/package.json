@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "exit 0",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint": "npm run lint:types && npm run lint:eslint",
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
@@ -29,14 +29,14 @@
   },
   "homepage": "https://github.com/endojs/endo#readme",
   "devDependencies": {
-    "@endo/compartment-mapper": "workspace:^",
-    "@endo/eventual-send": "workspace:^",
-    "@endo/ses-ava": "workspace:^",
-    "ava": "catalog:dev",
-    "c8": "catalog:dev",
-    "eslint": "catalog:dev",
-    "ses": "workspace:^",
-    "typescript": "catalog:dev"
+    "@endo/compartment-mapper": "^2.3.0",
+    "@endo/eventual-send": "^1.5.0",
+    "@endo/ses-ava": "^1.4.2",
+    "ava": "^8.0.1",
+    "c8": "^11.0.0",
+    "eslint": "^10.4.1",
+    "ses": "^2.2.0",
+    "typescript": "~6.0.3"
   },
   "directories": {
     "test": "test"
@@ -65,10 +65,5 @@
   },
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
   }
 }

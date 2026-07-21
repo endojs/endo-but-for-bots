@@ -6,12 +6,12 @@ One day, this will be as simple as:
 > npm install -g @endo/cli
 
 Until that day, you will need to clone the Endo repository, install
-dependencies using Yarn, and arrange for the Endo command to be available as
+dependencies using npm, and arrange for the Endo command to be available as
 `endo` in whatever shell you favor.
 
 ```
 > git clone https://github.com/endojs/endo.git
-> yarn
+> npm install
 > alias endo=$PWD/packages/cli/bin/endo.cjs
 ```
 

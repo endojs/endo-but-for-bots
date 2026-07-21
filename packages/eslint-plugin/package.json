@@ -1,6 +1,7 @@
 {
   "name": "@endo/eslint-plugin",
   "version": "2.6.0",
+  "type": "module",
   "description": "ESLint plugin for using Endo",
   "keywords": [
     "eslint",
@@ -8,37 +9,42 @@
     "eslint-plugin"
   ],
   "author": "Endo contributors",
-  "main": "./lib/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
   "scripts": {
-    "test": "mocha",
+    "test": "node --test \"test/**/*.test.js\"",
     "test:xs": "exit 0",
     "build": "exit 0",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint": "npm run lint:types && npm run lint:eslint",
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
     "lint:types": "tsc"
   },
   "dependencies": {
     "@eslint-community/eslint-utils": "^4.7.0",
+    "@eslint/js": "^10.0.1",
+    "@stylistic/eslint-plugin": "^5.0.0",
     "@typescript-eslint/eslint-plugin": "^8.39.1",
     "@typescript-eslint/parser": "^8.39.1",
-    "@typescript-eslint/utils": "^8.39.1",
-    "eslint-plugin-import": "catalog:dev",
-    "requireindex": "~1.2.0",
-    "tsutils": "~3.21.0",
-    "typescript": "catalog:dev",
+    "@typescript-eslint/utils": "^8.62.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-import": "npm:eslint-plugin-import-x@4.16.2",
+    "eslint-plugin-jsdoc": "^50.8.0",
+    "eslint-plugin-unicorn": "^56.0.1",
     "typescript-eslint": "^8.39.1"
   },
   "peerDependencies": {
-    "eslint-plugin-unicorn": "^56.0.1"
+    "eslint": "^8.57.0 || ^9.0.0 || ^10.0.0",
+    "typescript": ">=4.8.4 <7.0.0"
   },
   "devDependencies": {
-    "@types/mocha": "^10",
-    "eslint": "catalog:dev",
-    "mocha": "^10.6.0"
-  },
-  "engines": {
-    "node": ">=0.10.0"
+    "@types/eslint-config-prettier": "^6.11.3",
+    "@typescript-eslint/rule-tester": "^8.62.1",
+    "@typescript-eslint/types": "^8.63.0",
+    "eslint": "^10.4.1",
+    "typescript": "~6.0.3"
   },
   "publishConfig": {
     "access": "public"
@@ -50,46 +56,11 @@
     "directory": "packages/eslint-plugin"
   },
   "files": [
-    "./*.d.ts",
-    "./*.js",
-    "./*.map",
-    "LICENSE*",
-    "SECURITY*",
-    "dist",
-    "lib",
+    "docs",
     "src",
-    "tools"
+    "LICENSE*",
+    "SECURITY*"
   ],
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ],
-    "parserOptions": {
-      "sourceType": "script"
-    },
-    "rules": {
-      "import/extensions": "off"
-    },
-    "overrides": [
-      {
-        "files": [
-          "lib/rules/*.js"
-        ],
-        "rules": {
-          "object-shorthand": [
-            "error",
-            "always",
-            {
-              "avoidQuotes": false
-            }
-          ]
-        }
-      }
-    ],
-    "env": {
-      "node": true
-    }
-  },
   "bugs": {
     "url": "https://github.com/endojs/endo/issues"
   }

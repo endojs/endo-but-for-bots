@@ -1,5 +1,3 @@
-/* global globalThis */
-
 import {
   immutableArrayBufferLibProperties,
   freezableTypedArrayLibProperties,
@@ -7,11 +5,8 @@ import {
   concreteTypedArrayCtors,
 } from './lib.js';
 
-const {
-  ArrayBuffer,
-  Object,
-  // eslint-disable-next-line no-restricted-globals
-} = globalThis;
+// eslint-disable-next-line no-restricted-globals
+const { ArrayBuffer, Object } = globalThis;
 
 const {
   getOwnPropertyDescriptors,

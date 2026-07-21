@@ -1,4 +1,4 @@
-/* eslint-disable no-await-in-loop, no-continue, no-labels, no-unreachable-loop */
+/* eslint-disable no-await-in-loop */
 
 /* The ses-ava command allows a single package to run the same test suite with
  * multiple configurations named in package.json under `sesAvaConfigs`.
@@ -10,7 +10,7 @@
  * to filter.
  * Consequently, the "test" script for a package using ses-ava can simply be
  * "ses-ava" and preserves the filtering behaviors of the underlying "ava"
- * sessions if run like `yarn test -m file`.
+ * sessions if run like `npm run test -m file`.
  */
 
 import popen from 'node:child_process';
