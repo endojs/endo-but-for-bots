@@ -252,6 +252,31 @@ export type EvalDeferredTaskParams = {
   workerId: FormulaIdentifier;
 };
 
+export type CollectionStoreDeferredTaskParams = {
+  collectionStoreFormulaNumber: FormulaNumber;
+  collectionStoreId: FormulaIdentifier;
+};
+
+/**
+ * The daemon-native mirror of `@agoric/store`'s `MapStore`: a durable,
+ * incrementally-mutable map from passable keys to passable values. Every
+ * mutator writes through to SQLite in the same turn, so entries survive a
+ * daemon restart. Iteration methods return arrays (not live iterators) to
+ * keep the CapTP boundary simple.
+ */
+export interface MapStore<K = unknown, V = unknown> {
+  has(key: K): Promise<boolean>;
+  get(key: K): Promise<V>;
+  init(key: K, value: V): Promise<void>;
+  set(key: K, value: V): Promise<void>;
+  delete(key: K): Promise<void>;
+  getSize(): Promise<number>;
+  keys(): Promise<K[]>;
+  values(): Promise<V[]>;
+  entries(): Promise<Array<[K, V]>>;
+  snapshot(): Promise<unknown>;
+}
+
 export type ReadableBlobFormula = {
   type: 'readable-blob';
   content: string;
@@ -558,6 +583,18 @@ export type MailboxStoreFormula = {
   type: 'mailbox-store';
 };
 
+/**
+ * A durable, incrementally-mutable passable collection (the daemon-native
+ * analogue of `@agoric/store`). The formula carries only the collection
+ * `kind`; its entries live in the `collection_store_entry` SQLite table keyed
+ * by this formula's number. Phase 1 implements `kind: 'map'` (a strong
+ * `MapStore`); the remaining kinds land in later phases.
+ */
+export type CollectionStoreFormula = {
+  type: 'collection-store';
+  kind: 'map';
+};
+
 export type MailHubFormula = {
   type: 'mail-hub';
   store: FormulaIdentifier;
@@ -677,6 +714,7 @@ export type Formula =
   | KnownPeersStoreFormula
   | PetStoreFormula
   | MailboxStoreFormula
+  | CollectionStoreFormula
   | MailHubFormula
   | MessageFormula
   | PromiseFormula
@@ -1540,6 +1578,12 @@ export interface EndoGuest extends EndoAgent {
     value: T,
     petName: string | string[],
   ): Promise<void>;
+  /**
+   * Create a durable strong `MapStore`, bind it under `petName` in this
+   * agent's namespace, and return the live store. Re-looking-up the pet name
+   * after a daemon restart yields a store backed by the same entries.
+   */
+  makeMapStore(petName: string | string[]): Promise<FarRef<MapStore>>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
   sendValue: Mail['sendValue'];
 }
@@ -1560,6 +1604,12 @@ export interface EndoHost extends EndoAgent {
     value: T,
     petName: string | string[],
   ): Promise<void>;
+  /**
+   * Create a durable strong `MapStore`, bind it under `petName` in this
+   * agent's namespace, and return the live store. Re-looking-up the pet name
+   * after a daemon restart yields a store backed by the same entries.
+   */
+  makeMapStore(petName: string | string[]): Promise<FarRef<MapStore>>;
   storeTree(remoteTree: unknown, petName: string | string[]): Promise<unknown>;
   provideMount(
     path: string,
@@ -2321,6 +2371,36 @@ export type DaemonicPersistencePowers = {
   listRetention: (guestPublicKey: string) => Array<{ formulaNumber: string }>;
   replaceRetention: (guestPublicKey: string, formulaNumbers: string[]) => void;
   deleteAllRetention: (guestPublicKey: string) => void;
+  writeCollectionEntry: (
+    storeNumber: string,
+    keyRank: string,
+    keyBody: string,
+    keySlots: string,
+    valueBody: string | null,
+    valueSlots: string | null,
+  ) => void;
+  getCollectionEntry: (
+    storeNumber: string,
+    keyRank: string,
+  ) =>
+    | {
+        keyBody: string;
+        keySlots: string;
+        valueBody: string | null;
+        valueSlots: string | null;
+      }
+    | undefined;
+  hasCollectionEntry: (storeNumber: string, keyRank: string) => boolean;
+  deleteCollectionEntry: (storeNumber: string, keyRank: string) => void;
+  listCollectionEntries: (storeNumber: string) => Array<{
+    keyRank: string;
+    keyBody: string;
+    keySlots: string;
+    valueBody: string | null;
+    valueSlots: string | null;
+  }>;
+  countCollectionEntries: (storeNumber: string) => number;
+  deleteAllCollectionEntries: (storeNumber: string) => void;
 };
 
 export interface DaemonWorkerFacet {}
@@ -2567,6 +2647,12 @@ export interface DaemonCore {
     deferredTasks: DeferredTasks<MarshalDeferredTaskParams>,
     pin?: (id: FormulaIdentifier) => void,
   ) => FormulateResult<void>;
+
+  formulateCollectionStore: (
+    kind: CollectionStoreFormula['kind'],
+    deferredTasks: DeferredTasks<CollectionStoreDeferredTaskParams>,
+    pin?: (id: FormulaIdentifier) => void,
+  ) => FormulateResult<MapStore>;
 
   formulatePromise: (
     pinTransient?: (id: FormulaIdentifier) => void,

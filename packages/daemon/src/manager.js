@@ -8,7 +8,7 @@ import harden from '@endo/harden';
 import { makeExo } from '@endo/exo';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
-import { makeMarshal } from '@endo/marshal';
+import { makeMarshal, makeEncodePassable } from '@endo/marshal';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makeError, q, X } from '@endo/errors';
 import { ZipWriter } from '@endo/zip/writer.js';
@@ -84,6 +84,7 @@ import { makeResidenceTracker } from './residence.js';
 import { toHex, fromHex } from './hex.js';
 import { makeSerialJobs } from './serial-jobs.js';
 import { makeLocalStoreController } from './store-controller.js';
+import { makeCollectionStoreMaker } from './collection-store.js';
 import { makeWeakMultimap } from './multimap.js';
 import { makeLoopbackNetwork } from './networks/loopback.js';
 import { assertValidFormulaType } from './formula-type.js';
@@ -967,6 +968,8 @@ const makeDaemonCore = async (
               parseId(id).number,
               formula.type,
             );
+          } else if (formula.type === 'collection-store') {
+            persistencePowers.deleteAllCollectionEntries(parseId(id).number);
           }
         }),
       );
@@ -1424,6 +1427,28 @@ const makeDaemonCore = async (
         }
       }),
     );
+
+    // Seed collection-store retention edges from the durable entry rows
+    // BEFORE the unreachable sweep below, so a stored remotable key or value
+    // is not collected out from under a store that survives a restart. The
+    // store exo is constructed lazily on first provide (possibly after the
+    // sweep), so its constructor cannot be the seam that protects them.
+    await withFormulaGraphLock(async () => {
+      for (const { id, formula } of entries) {
+        if (formula.type === 'collection-store') {
+          const { number: formulaNumber } = parseId(id);
+          const slotIds = collectionStoreMaker.collectionRetentionSlots(
+            /** @type {FormulaNumber} */ (formulaNumber),
+          );
+          for (const slotId of slotIds) {
+            formulaGraph.onPetStoreWrite(
+              /** @type {FormulaIdentifier} */ (id),
+              slotId,
+            );
+          }
+        }
+      }
+    });
 
     // Load retention edges from SQLite into the graph.
     const agentKeys = persistencePowers.listAgentKeys();
@@ -3151,6 +3176,48 @@ const makeDaemonCore = async (
     return messageHub;
   };
 
+  // The daemon-native persistent collection family (Phase 1: strong MapStore).
+  // Its exos reuse the daemon's marshal codec for durable key/value
+  // representation and a `makeEncodePassable` rank encoder for canonical keys,
+  // and join the formula retention graph via the same pet-store edge hooks so
+  // that remotable keys and values survive as long as the store names them.
+  const encodeKeyRank = makeEncodePassable({
+    encodeRemotable: (remotable, _encodeRecur) =>
+      `r${mustGetIdForRef(/** @type {any} */ (remotable))}`,
+  });
+
+  /**
+   * @param {string[]} ids
+   * @returns {FormulaIdentifier[]}
+   */
+  const filterLocalIds = ids =>
+    /** @type {FormulaIdentifier[]} */ (ids.filter(isLocalId));
+
+  const collectionStoreMaker = makeCollectionStoreMaker({
+    persistence: persistencePowers,
+    marshalToCapData: value => marshaller.toCapData(value),
+    unmarshalFromCapData: async ({ body, slots }) => {
+      await Promise.all(
+        slots.map(id => provide(/** @type {FormulaIdentifier} */ (id))),
+      );
+      return marshaller.fromCapData(/** @type {any} */ ({ body, slots }));
+    },
+    encodeKeyRank,
+    filterLocalIds,
+    addStoreEdges: async (storeId, ids) =>
+      withFormulaGraphLock(async () => {
+        for (const id of ids) {
+          formulaGraph.onPetStoreWrite(storeId, id);
+        }
+      }),
+    removeStoreEdges: async (storeId, ids) =>
+      withFormulaGraphLock(async () => {
+        for (const id of ids) {
+          formulaGraph.onPetStoreRemove(storeId, id);
+        }
+      }),
+  });
+
   /** @type {FormulaMakerTable} */
   const makers = {
     marshal: async ({ body, slots }) => {
@@ -4135,6 +4202,7 @@ const makeDaemonCore = async (
             form: disallowedFn,
             storeBlob: disallowedFn,
             storeValue: disallowedFn,
+            makeMapStore: disallowedFn,
             submit: disallowedFn,
             sendValue: disallowedFn,
             deliver: disallowedSyncFn,
@@ -4160,6 +4228,11 @@ const makeDaemonCore = async (
         assertMailboxStoreName,
       );
     },
+    'collection-store': (_formula, _context, id, formulaNumber) =>
+      collectionStoreMaker.makeIdentifiedMapStore(
+        /** @type {FormulaIdentifier} */ (id),
+        formulaNumber,
+      ),
     'mail-hub': ({ store: storeId }, context) => makeMailHub(storeId, context),
     message: (formula, context) => makeMessageHub(formula, context),
     promise: ({ store: storeId }, context) => makePromise(storeId, context),
@@ -5707,6 +5780,38 @@ const makeDaemonCore = async (
     );
   }
 
+  /** @type {DaemonCore['formulateCollectionStore']} */
+  async function formulateCollectionStore(kind, deferredTasks, pin) {
+    return /** @type {FormulateResult<import('./types.js').MapStore>} */ (
+      withFormulaGraphLock(async () => {
+        const ownFormulaNumber = /** @type {FormulaNumber} */ (
+          await randomHex256()
+        );
+        const ownId = formatId({
+          number: ownFormulaNumber,
+          node: localNodeNumber,
+        });
+        if (pin) {
+          pin(ownId);
+        }
+
+        const identifiers = harden({
+          collectionStoreId: ownId,
+          collectionStoreFormulaNumber: ownFormulaNumber,
+        });
+
+        await deferredTasks.execute(identifiers);
+
+        /** @type {import('./types.js').CollectionStoreFormula} */
+        const formula = {
+          type: 'collection-store',
+          kind,
+        };
+        return formulate(ownFormulaNumber, formula);
+      })
+    );
+  }
+
   /** @type {DaemonCore['formulatePromise']} */
   const formulatePromise = async pin => {
     return withFormulaGraphLock(async () => {
@@ -6821,6 +6926,7 @@ const makeDaemonCore = async (
     formulateEval,
     formulateReadableBlob,
     formulateMarshalValue,
+    formulateCollectionStore,
     getFormulaForId,
     getAllNetworkAddresses,
     getAllContentSources,
@@ -7197,6 +7303,7 @@ const makeDaemonCore = async (
     formulateHost,
     formulateGuest,
     formulateMarshalValue,
+    formulateCollectionStore,
     formulateEval,
     formulateUnconfined,
     formulateArchive,

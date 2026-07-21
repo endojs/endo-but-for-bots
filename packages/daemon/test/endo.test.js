@@ -15,7 +15,7 @@ import { promisify as nodePromisify } from 'util';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 import { makeExo } from '@endo/exo';
-import { M } from '@endo/patterns';
+import { M, makeCopyMap, getCopyMapEntries } from '@endo/patterns';
 import { makeCancelKit } from '@endo/cancel';
 import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
@@ -7491,4 +7491,152 @@ test('readLog follow discovers new logs and settles on disconnect', async t => {
   );
   cancel(Error('readLog follow new-log test done'));
   t.is(await pending, 'settled');
+});
+
+// -- Persistent strong MapStore (collection-store, kind: 'map') --
+// Phase 1 of the daemon-native persistent collection family
+// (packages/daemon/designs/daemon-persistent-stores.md), closing
+// kriskowal/garden#59.
+
+test('MapStore supports init/set/get/has/delete/getSize/keys/values/entries', async t => {
+  const { host } = await prepareHost(t);
+  const map = await E(host).makeMapStore('m');
+
+  t.is(await E(map).getSize(), 0);
+  t.false(await E(map).has('a'));
+
+  await E(map).init('b', 2);
+  await E(map).init('a', 1);
+  await E(map).init('c', 3);
+
+  t.is(await E(map).getSize(), 3);
+  t.true(await E(map).has('a'));
+  t.is(await E(map).get('a'), 1);
+  t.is(await E(map).get('b'), 2);
+
+  // `set` replaces an existing entry's value.
+  await E(map).set('b', 22);
+  t.is(await E(map).get('b'), 22);
+
+  // Enumeration is in key-rank order regardless of insertion order.
+  t.deepEqual(await E(map).keys(), ['a', 'b', 'c']);
+  t.deepEqual(await E(map).values(), [1, 22, 3]);
+  t.deepEqual(await E(map).entries(), [
+    ['a', 1],
+    ['b', 22],
+    ['c', 3],
+  ]);
+
+  await E(map).delete('b');
+  t.false(await E(map).has('b'));
+  t.is(await E(map).getSize(), 2);
+  t.deepEqual(await E(map).keys(), ['a', 'c']);
+});
+
+test('MapStore snapshot yields a passable CopyMap', async t => {
+  const { host } = await prepareHost(t);
+  const map = await E(host).makeMapStore('m');
+  await E(map).init('x', 10);
+  await E(map).init('y', 20);
+
+  const snapshot = await E(map).snapshot();
+  t.deepEqual(
+    [...getCopyMapEntries(snapshot)],
+    [...getCopyMapEntries(
+      makeCopyMap([
+        ['x', 10],
+        ['y', 20],
+      ]),
+    )],
+  );
+});
+
+test('MapStore enforces @agoric/store throw conditions', async t => {
+  const { host } = await prepareHost(t);
+  const map = await E(host).makeMapStore('m');
+
+  await E(map).init('k', 1);
+  // init on an existing key throws.
+  await t.throwsAsync(() => E(map).init('k', 2));
+  // set/get/delete on an absent key throw.
+  await t.throwsAsync(() => E(map).set('absent', 1));
+  await t.throwsAsync(() => E(map).get('absent'));
+  await t.throwsAsync(() => E(map).delete('absent'));
+  // has never throws.
+  t.false(await E(map).has('absent'));
+  t.true(await E(map).has('k'));
+});
+
+test('MapStore accepts scalar keys of several passable types', async t => {
+  const { host } = await prepareHost(t);
+  const map = await E(host).makeMapStore('m');
+
+  await E(map).init('string-key', 'sv');
+  await E(map).init(42, 'nv');
+  await E(map).init(7n, 'bv');
+  await E(map).init(true, 'tv');
+
+  t.is(await E(map).get('string-key'), 'sv');
+  t.is(await E(map).get(42), 'nv');
+  t.is(await E(map).get(7n), 'bv');
+  t.is(await E(map).get(true), 'tv');
+  t.is(await E(map).getSize(), 4);
+});
+
+test('MapStore round-trips a remotable value across CapTP', async t => {
+  const { host } = await prepareHost(t);
+  const map = await E(host).makeMapStore('m');
+
+  // A guest is a daemon remotable with a stable formula identity.
+  const guest = await E(host).provideGuest('the-guest');
+  await E(map).init('agent', guest);
+
+  const back = await E(map).get('agent');
+  // CapTP preserves identity: the value read back is the same presence.
+  t.is(back, guest);
+});
+
+test('MapStore entries persist across a daemon restart', async t => {
+  const { cancelled, config, host } = await prepareHost(t);
+  const map = await E(host).makeMapStore('m');
+  await E(map).init('alpha', 1);
+  await E(map).init('beta', 'two');
+  await E(map).init('gamma', 3n);
+
+  await restart(config);
+
+  const { host: hostAfter } = await makeHost(config, cancelled);
+  const mapAfter = await E(hostAfter).lookup(['m']);
+  t.is(await E(mapAfter).getSize(), 3);
+  t.is(await E(mapAfter).get('alpha'), 1);
+  t.is(await E(mapAfter).get('beta'), 'two');
+  t.is(await E(mapAfter).get('gamma'), 3n);
+  t.deepEqual(await E(mapAfter).keys(), ['alpha', 'beta', 'gamma']);
+
+  // The rehydrated store is still mutable and the mutation persists again.
+  await E(mapAfter).set('alpha', 11);
+  await E(mapAfter).init('delta', 4);
+  t.is(await E(mapAfter).get('alpha'), 11);
+  t.is(await E(mapAfter).getSize(), 4);
+});
+
+test('MapStore retains a remotable value across a restart', async t => {
+  const { cancelled, config, host } = await prepareHost(t);
+  const map = await E(host).makeMapStore('m');
+
+  // Store a remotable value and drop every pet name to it, so the store's
+  // own retention edge is the only thing keeping the value's formula alive.
+  const guest = await E(host).provideGuest('ret-guest');
+  await E(map).init('agent', guest);
+  await E(host).remove('ret-guest');
+
+  await restart(config);
+
+  const { host: hostAfter } = await makeHost(config, cancelled);
+  const mapAfter = await E(hostAfter).lookup(['m']);
+  t.is(await E(mapAfter).getSize(), 1);
+  // The remotable value survived the restart and is live again.
+  const back = await E(mapAfter).get('agent');
+  await E(back).listMessages();
+  t.pass();
 });
