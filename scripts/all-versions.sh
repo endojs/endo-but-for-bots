@@ -8,8 +8,7 @@ cd -- "$WORKDIR"
 
 (
   echo package.json
-  npm query .workspace |
-  jq -r '.[].location | "\(.)/package.json"'
+  printf '%s\n' packages/*/package.json
 ) |
 xargs jq '
   ((.dependencies // {}), (.devDependencies // {}))

@@ -1,8 +1,8 @@
 // The package on disk named `eslint-plugin-import` is aliased in the
-// repo root `.yarnrc.yml` catalog to the actively-maintained
-// `eslint-plugin-import-x` soft fork. ESLint resolves plugins by the
-// directory name in `node_modules`, so all `import/*` rule references
-// continue to work and are served by the import-x implementation. The
+// repo root package manifest to the actively-maintained
+// `eslint-plugin-import-x` fork. ESLint resolves plugins by the directory
+// name in `node_modules`, so all `import/*` rule references continue to work
+// and are served by the import-x implementation. The
 // import-x plugin's bundled `unrs-resolver` natively honours the
 // `package.json` `exports` field, so the explicit `import/resolver`
 // chain previously needed here is no longer required.

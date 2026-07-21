@@ -80,17 +80,17 @@ export const hermesTransforms = {
 
     traverse(ast, transforms, undefined, { filename: location });
 
-    const { code } = generate(
-      ast,
-      {
-        // Nothing being done with sourcemaps as this point
-        experimental_preserveFormat: true,
-        preserveFormat: true,
-        retainLines: true,
-        verbatim: true,
-      },
-      sourceString,
-    );
+    // Keep the experimental Babel runtime option outside the call's object
+    // literal. `@types/babel__generator` does not yet declare it, although
+    // the pinned generator version supports it.
+    const generatorOptions = {
+      // Nothing being done with sourcemaps as this point
+      experimental_preserveFormat: true,
+      preserveFormat: true,
+      retainLines: true,
+      verbatim: true,
+    };
+    const { code } = generate(ast, generatorOptions, sourceString);
 
     return { bytes: encoder.encode(code), parser: 'mjs', sourceMap };
   },

@@ -99,8 +99,7 @@ export type PackageDependenciesHook = (params: {
  * The `moduleSource` property value for {@link ModuleSourceHook}
  */
 export type ModuleSourceHookModuleSource =
-  | ModuleSourceHookFileModuleSource
-  | ModuleSourceHookExitModuleSource;
+  ModuleSourceHookFileModuleSource | ModuleSourceHookExitModuleSource;
 
 /**
  * The `moduleSource` property value for {@link ModuleSourceHook} for a module
@@ -622,9 +621,7 @@ export type Sources = Record<string, CompartmentSources>;
 export type CompartmentSources = Record<string, ModuleSource>;
 
 export type ModuleSource =
-  | LocalModuleSource
-  | ExitModuleSource
-  | ErrorModuleSource;
+  LocalModuleSource | ExitModuleSource | ErrorModuleSource;
 
 export interface BaseModuleSource {
   /** module loading error deferred to later stage */

@@ -27,8 +27,9 @@ case "$OS" in
         ;;
 esac
 
-HERMESC="node_modules/hermes-engine-cli/$OS_DIR/hermesc"
-HERMES="node_modules/hermes-engine-cli/$OS_DIR/hermes"
+HERMES_CLI_DIR=$(dirname "$(node -p "require.resolve('hermes-engine-cli/package.json')")")
+HERMESC="$HERMES_CLI_DIR/$OS_DIR/hermesc"
+HERMES="$HERMES_CLI_DIR/$OS_DIR/hermes"
 
 echo "Concatenating: dist/ses-hermes.cjs + test/_hermes-smoke.js"
 cat dist/ses-hermes.cjs test/_hermes-smoke.js > test/_hermes-smoke-dist.js

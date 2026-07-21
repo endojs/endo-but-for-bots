@@ -133,8 +133,7 @@ export type ModuleDescriptor =
   | string;
 
 export type StrictModuleDescriptor =
-  | SourceModuleDescriptor
-  | NamespaceModuleDescriptor;
+  SourceModuleDescriptor | NamespaceModuleDescriptor;
 
 // Deprecated type aliases:
 export type PrecompiledStaticModuleInterface = PrecompiledModuleSource;
@@ -242,6 +241,11 @@ export interface AssertMakeErrorOptions {
    * {@link sanitizeError}.
    */
   sanitize?: boolean;
+
+  /**
+   * The error code to assign to the error.
+   */
+  code?: string;
 }
 
 // TODO inline overloading
@@ -306,8 +310,7 @@ export type AssertTypeof = AssertTypeofBigint &
  * constructor is an AggregateErrorConstructor or a normal ErrorConstructor.
  */
 export type GenericErrorConstructor =
-  | ErrorConstructor
-  | AggregateErrorConstructor;
+  ErrorConstructor | AggregateErrorConstructor;
 
 /**
  * To make an `assert` which terminates some larger unit of computation
@@ -393,11 +396,33 @@ export interface AssertionUtilities {
    * Create an error with a `message` in which unquoted {@link details}
    * substitution values may have been redacted into lossy `typeof` output but
    * are still available for logging to an associated console.
+   *
+   * Narrows the return type to the constructor type.
+   *
+   * @template T The constructor to use
+   * @param details The details of what was asserted
+   * @param errConstructor The constructor to use
+   * @param options Options
+   * @returns Instance of `T`
+   */
+  makeError<T extends GenericErrorConstructor>(
+    details: Details,
+    errConstructor: T,
+    options?: AssertMakeErrorOptions,
+  ): InstanceType<T>;
+
+  /**
+   * Create an error with a `message` in which unquoted {@link details}
+   * substitution values may have been redacted into lossy `typeof` output but
+   * are still available for logging to an associated console.
+   *
+   * @param details The details of what was asserted
+   * @param errConstructor The constructor to use
+   * @param options Options
+   * @returns Instance of `Error`
    */
   makeError(
-    /** The details of what was asserted */
     details?: Details,
-    /** An optional alternate error constructor to use */
     errConstructor?: GenericErrorConstructor,
     options?: AssertMakeErrorOptions,
   ): Error;

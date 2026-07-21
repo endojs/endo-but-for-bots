@@ -16,6 +16,9 @@ while read -r PKGJSON; do
   ))
   git cat-file blob "$NEWPKGJSON" > "$PKGJSON"
 done < <(
-  npm query '.workspace:not([private])' |
-  jq -r '.[].location | "\(.)/package.json"'
+  for pkgjson in packages/*/package.json; do
+    if [ "$(jq -r '.private // false' "$pkgjson")" != true ]; then
+      echo "$pkgjson"
+    fi
+  done
 )

@@ -6,7 +6,7 @@ version: 2
 updates:
   # Experiment with analyzing only the root package. We don't like having a PR
   # for every subpackage, and we expect that bumping this package will cause the
-  # yarn.lock to bump the resolved versions for all the subpackages.
+  # package-lock.json to bump the resolved versions for all the subpackages.
   - package-ecosystem: npm
     # TODO try the `directories` option to get all the subpackages
     directory: /.

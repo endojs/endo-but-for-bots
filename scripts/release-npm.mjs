@@ -17,6 +17,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { listPublicWorkspaces } from './workspaces.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -112,18 +113,9 @@ if (tarballs.length === 0) {
 
 // Sanity check: one tarball per public workspace, no more and no less.
 // Catches a partial pack-all run (e.g. interrupted mid-loop) and any
-// drift between what `yarn workspaces list` reports and what
+// drift between the declared public workspaces and what
 // `pack-all.mjs` actually wrote.
-const { stdout: wsStdout } = await execFileAsync(
-  'yarn',
-  ['workspaces', 'list', '--json', '--no-private'],
-  { cwd: repoRoot, maxBuffer: 16 * 1024 * 1024 },
-);
-const expectedPackages = wsStdout
-  .split('\n')
-  .filter(line => line.trim())
-  .map(line => JSON.parse(line))
-  .filter(ws => ws.location !== '.');
+const expectedPackages = await listPublicWorkspaces(repoRoot);
 if (tarballs.length !== expectedPackages.length) {
   throw new Error(
     `release:npm: tarball count mismatch — expected ${expectedPackages.length} ` +

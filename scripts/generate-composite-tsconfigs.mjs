@@ -17,33 +17,36 @@
  * ```
  */
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { access, readFile, writeFile } from 'node:fs/promises';
 import { relative, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-
-const execFileAsync = promisify(execFile);
+import { listWorkspaces } from './workspaces.mjs';
 
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for tests)
 // ---------------------------------------------------------------------------
 
 /**
- * Parse the NDJSON output of `yarn workspaces list -R --json -v` into a
- * name → location map.  The root workspace entry (`name: null`) is skipped.
+ * Parse workspace entries into a name → location map. The root workspace
+ * entry (`name: null`) is skipped. String input is legacy NDJSON test data;
+ * production passes the parsed array from `listWorkspaces`.
  *
- * @param {string} ndjson - Raw stdout from yarn.
+ * @param {string|Array<{name: string|null, location: string}>} workspaces -
+ * Legacy NDJSON test data, or parsed workspace entries.
  * @returns {Map<string, string>} Package name to relative workspace location.
  */
-export const parseYarnWorkspaces = ndjson => {
+export const parseNpmWorkspaces = workspaces => {
   /** @type {Map<string, string>} */
   const map = new Map();
-  for (const line of ndjson.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const entry = JSON.parse(trimmed);
-    if (entry.name === null) continue; // skip root
+  const entries =
+    typeof workspaces === 'string'
+      ? workspaces
+          .split('\n')
+          .filter(line => line.trim())
+          .map(line => JSON.parse(line))
+      : workspaces;
+  for (const entry of entries) {
+    if (typeof entry.name !== 'string') continue;
     map.set(entry.name, entry.location);
   }
   return map;
@@ -56,9 +59,13 @@ export const parseYarnWorkspaces = ndjson => {
  * `devDependencies` are intentionally excluded.
  *
  * @param {Record<string, any>} packageJson - Parsed package.json contents.
+ * @param {Set<string>} [workspaceNames] Names of all workspace packages.
  * @returns {Set<string>} Workspace package names.
  */
-export const getRuntimeWorkspaceDeps = packageJson => {
+export const getRuntimeWorkspaceDeps = (
+  packageJson,
+  workspaceNames = new Set(),
+) => {
   const names = new Set();
   for (const field of [
     'dependencies',
@@ -68,7 +75,7 @@ export const getRuntimeWorkspaceDeps = packageJson => {
     const deps = packageJson[field];
     if (!deps) continue;
     for (const [name, version] of Object.entries(deps)) {
-      if (String(version).startsWith('workspace:')) {
+      if (workspaceNames.has(name) && typeof version === 'string') {
         names.add(name);
       }
     }
@@ -184,7 +191,10 @@ export const buildConfigs = async ({
   await Promise.all(
     [...participantLocations].map(async location => {
       const pkgJson = await getPackageJson(location);
-      const runtimeNames = getRuntimeWorkspaceDeps(pkgJson);
+      const runtimeNames = getRuntimeWorkspaceDeps(
+        pkgJson,
+        new Set(nameToLocation.keys()),
+      );
 
       const depLocations = [];
       for (const name of runtimeNames) {
@@ -232,35 +242,11 @@ export const buildConfigs = async ({
   return files;
 };
 
-// ---------------------------------------------------------------------------
-// I/O helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Invoke `yarn workspaces list -R --json -v` from the given directory and
- * return its stdout.
- *
- * @param {string} cwd
- * @returns {Promise<string>}
- */
-const runYarnWorkspacesList = async cwd => {
-  const result = await execFileAsync(
-    'yarn',
-    ['workspaces', 'list', '-R', '--json', '-v'],
-    {
-      cwd,
-      encoding: 'utf8',
-    },
-  );
-  return result.stdout;
-};
-
 const main = async () => {
   const rootDir = fileURLToPath(new URL('..', import.meta.url));
   const checkMode = process.argv.includes('--check');
 
-  const ndjson = await runYarnWorkspacesList(rootDir);
-  const nameToLocation = parseYarnWorkspaces(ndjson);
+  const nameToLocation = parseNpmWorkspaces(await listWorkspaces(rootDir));
 
   // Participants: workspaces that have a tsconfig.build.json
   const participantLocationsArray = await Promise.all(
@@ -313,7 +299,7 @@ const main = async () => {
     );
     if (drifted) {
       console.error(
-        '\nRun `yarn build:types:gen` to regenerate composite tsconfig files.',
+        '\nRun `npm run build:types:gen` to regenerate composite tsconfig files.',
       );
       process.exitCode = 1;
     }

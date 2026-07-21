@@ -30,21 +30,21 @@
     "test:c8": "c8 ${C8_OPTIONS:-} ava",
     "test:xs": "exit 0",
     "build": "exit 0",
-    "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "npm run lint:eslint --fix && npm run lint:types",
+    "lint": "npm run lint:types && npm run lint:eslint",
     "lint:types": "tsc",
     "lint:eslint": "eslint .",
     "test:rebuild-fixtures": "node test/rebuild-fixtures.js"
   },
   "devDependencies": {
-    "@babel/types": "~7.28.2",
-    "@endo/ses-ava": "workspace:^",
+    "@babel/types": "7.28.2",
+    "@endo/ses-ava": "^1.4.2",
     "@types/babel__generator": "~7.27.0",
-    "ava": "catalog:dev",
-    "c8": "catalog:dev",
-    "eslint": "catalog:dev",
-    "tsd": "catalog:dev",
-    "typescript": "catalog:dev"
+    "ava": "^8.0.1",
+    "c8": "^11.0.0",
+    "eslint": "^8.57.1",
+    "tsd": "^0.33.0",
+    "typescript": "~6.0.3"
   },
   "files": [
     "./*.d.ts",
@@ -72,9 +72,9 @@
     "timeout": "2m"
   },
   "dependencies": {
-    "@babel/generator": "^7.28.3",
-    "@babel/parser": "~7.28.3",
-    "@babel/traverse": "~7.28.3",
+    "@babel/generator": "7.28.3",
+    "@babel/parser": "7.28.3",
+    "@babel/traverse": "7.28.3",
     "@types/babel__traverse": "~7.28.0"
   }
 }

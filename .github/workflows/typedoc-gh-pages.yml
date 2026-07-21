@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read # checkout source for `yarn docs`
+  contents: read # checkout source for `npm run docs`
   actions: read # `actions/configure-pages` reads workflow-run metadata
 
 # Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
@@ -26,19 +26,19 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
-      # Without this, setup-node errors on mismatched yarn versions
+      # Without this, setup-node errors on mismatched npm versions
       - run: corepack enable
       # Without this the inter-package imports don't resolve
-      - run: yarn install
+      - run: npm ci
       # Generate the TypeDoc site
-      - run: yarn docs
+      - run: npm run docs
       - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:
           path: ./api-docs # the "out" path in typedoc.json
   deploy:
     runs-on: ubuntu-latest
     # Keeping these grants on the deploy job — not the workflow —
-    # ensures the `build` job's dependency graph (TypeDoc, yarn install)
+    # ensures the `build` job's dependency graph (TypeDoc, npm ci)
     # cannot reach an `id-token: write` context, which is the primary
     # surface for OIDC-extraction supply-chain attacks of the
     # TanStack / tj-actions class.

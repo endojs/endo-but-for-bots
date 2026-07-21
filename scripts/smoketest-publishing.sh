@@ -1,7 +1,7 @@
 #! /bin/bash
 # Smoke-test the ts-node-pack publish path against a local Verdaccio
-# registry. Runs the full `yarn release:npm` flow (which internally
-# calls `yarn pack:all` + `npm publish` per tarball) pointed at a
+# registry. Runs the full `npm run release:npm` flow (which internally
+# calls `npm run pack:all` + `npm publish` per tarball) pointed at a
 # disposable Verdaccio instance, then installs a representative subset
 # of the published packages into a fresh consumer project and imports
 # them under SES lockdown.
@@ -16,12 +16,12 @@ set -ueo pipefail
 thisdir=$(cd -- "$(dirname "$0")" > /dev/null && pwd)
 ROOT=$(cd "$thisdir/.." && pwd)
 
-# Isolate npm / yarn state to a per-run HOME so the smoketest cannot
+# Isolate npm configuration and state to a per-run HOME so the smoketest cannot
 # stomp on the developer's ~/.npmrc or leave auth tokens behind.
 REGISTRY_HOME=$(mktemp -d -t endo-smoketest-publishing.XXXXX)
 export HOME="$REGISTRY_HOME"
 # The per-run HOME has no corepack cache, so corepack would otherwise
-# prompt the user before downloading the pinned yarn version.
+# prompt the user before downloading the configured npm version.
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 # Pick a free TCP port so a stray Verdaccio on the conventional 4873 can't
 # collide with us (and vice versa — we never stomp on an unrelated instance).
@@ -29,7 +29,10 @@ REGISTRY_PORT=$(node -e '
   const s = require("net").createServer();
   s.listen(0, () => { console.log(s.address().port); s.close(); });
 ')
-REGISTRY_URL="http://localhost:$REGISTRY_PORT"
+# `node` may bind the ephemeral port only on IPv6 when given no host.  npm's
+# legacy login helper resolves localhost to IPv4, so use an explicit IPv4
+# loopback endpoint for both the server and all npm clients.
+REGISTRY_URL="http://127.0.0.1:$REGISTRY_PORT"
 
 cleanup() {
   if [ -f "$REGISTRY_HOME/verdaccio.pid" ]; then
@@ -69,7 +72,7 @@ echo "smoketest-publishing: starting Verdaccio (HOME=$REGISTRY_HOME)"
   cd "$REGISTRY_HOME"
   : > verdaccio.log
   nohup npx --yes verdaccio@^6 --config "$REGISTRY_HOME/verdaccio.yaml" \
-    --listen "$REGISTRY_PORT" &> verdaccio.log &
+    --listen "127.0.0.1:$REGISTRY_PORT" &> verdaccio.log &
   echo $! > verdaccio.pid
   # Block until verdaccio prints its "http address" line to the log.
   grep -q 'http address' <(tail -f verdaccio.log)
@@ -85,21 +88,22 @@ echo "smoketest-publishing: starting Verdaccio (HOME=$REGISTRY_HOME)"
 # npm-cli-login automates non-interactively. `-r` pins it at our local
 # Verdaccio regardless of the ambient npm config.
 echo "smoketest-publishing: creating disposable publish user"
-npx --yes npm-cli-login@^1 \
+NPM_CONFIG_USERCONFIG="$REGISTRY_HOME/.npmrc" npx --yes npm-cli-login@^1 \
   -u smoketest -p smoketest -e smoketest@example.com \
-  -r "$REGISTRY_URL" --quotes
+  -r "$REGISTRY_URL" --quotes --config-path "$REGISTRY_HOME/.npmrc"
 
 # Sanity: confirm we are authenticated against the local registry.
-npm whoami --registry "$REGISTRY_URL"
+npm --userconfig "$REGISTRY_HOME/.npmrc" whoami --registry "$REGISTRY_URL"
 
 # Run the real release flow. `release:npm` calls `pack:all` (which
 # rebuilds dist/ via ts-node-pack) then `npm publish` for each .tgz;
 # inlining `npm_config_registry` redirects every publish inside this
 # one command to Verdaccio without leaking into the surrounding shell.
-echo "smoketest-publishing: running 'yarn release:npm'"
+echo "smoketest-publishing: running 'npm run release:npm'"
 (
   cd "$ROOT"
-  npm_config_registry="$REGISTRY_URL" yarn release:npm
+  npm_config_userconfig="$REGISTRY_HOME/.npmrc" npm --userconfig "$REGISTRY_HOME/.npmrc" \
+    --registry "$REGISTRY_URL" run release:npm
 )
 
 # Install a representative subset into a throwaway consumer and exercise

@@ -65,10 +65,10 @@ defensiveness, unobservable memoization, and isolation preservation, see
 npm install @endo/memoize
 ```
 
-Or with yarn:
+Or with npm:
 
 ```sh
-yarn add @endo/memoize
+npm add @endo/memoize
 ```
 
 ## License
