@@ -411,7 +411,7 @@ function __resolveExports(compName, subpath, condsOrder) {
 /// required ESM graph using top-level await fails at `importNow`
 /// with the engine's async-module error, as it does in Node.
 const CJS_RUNTIME_JS: &str = r#"
-var __cjsModuleCache = {};
+var __cjsModuleCache = Object.create(null);
 
 function __cjsDirname(key) {
     var i = key.lastIndexOf('/');
@@ -453,7 +453,8 @@ function __resolveRequire(compName, referrer, spec) {
         return { compartment: compName, key: canon };
     }
     var links = __archiveLinks[compName] || {};
-    var link = links[spec];
+    var link = Object.prototype.hasOwnProperty.call(links, spec)
+        ? links[spec] : undefined;
     if (link) {
         var mod = link.module;
         if (mod === '.') {
@@ -466,7 +467,8 @@ function __resolveRequire(compName, referrer, spec) {
     }
     var parsed = __parsePackageName(spec);
     if (parsed !== undefined) {
-        var plink = links[parsed.name];
+        var plink = Object.prototype.hasOwnProperty.call(links, parsed.name)
+            ? links[parsed.name] : undefined;
         if (plink) {
             return {
                 compartment: plink.compartment,
@@ -506,22 +508,31 @@ function __makeRequire(compName, referrerKey) {
 
 function __loadCjs(compName, key) {
     var cache = __cjsModuleCache[compName]
-        || (__cjsModuleCache[compName] = {});
+        || (__cjsModuleCache[compName] = Object.create(null));
     if (Object.prototype.hasOwnProperty.call(cache, key)) {
         return cache[key].exports;
+    }
+    var sources = __archiveCjsSources[compName] || {};
+    if (!Object.prototype.hasOwnProperty.call(sources, key)) {
+        throw new Error(
+            "Cannot find module '" + key + "' required from " + compName);
     }
     var module = { exports: {} };
     // Pre-register before evaluation so a require cycle observes the
     // partial exports, as in Node.
     cache[key] = module;
-    var src = __archiveCjsSources[compName][key];
+    var src = sources[key];
     var comp = __makeArchiveCompartment(compName);
     try {
         var fn = comp.evaluate(
             '(function (module, exports, require, __filename, __dirname) {'
             + src + '\n})');
-        fn(module, module.exports, __makeRequire(compName, key),
-           key, __cjsDirname(key));
+        // Node invokes the CJS wrapper with `this === module.exports`;
+        // a plain call would leave `this` bound to the (sloppy-mode)
+        // compartment global, so a module doing `this.foo = ...` would
+        // silently mis-export and pollute the shared global.
+        fn.call(module.exports, module, module.exports,
+           __makeRequire(compName, key), key, __cjsDirname(key));
     } catch (e) {
         // Node deletes the cache entry when evaluation throws, so a
         // later require retries rather than seeing half a module.
@@ -726,8 +737,15 @@ function __makeArchiveCompartment(compName) {{
     }});
     // The CJS facade modules (`export default __loadCjs(...)`) call
     // back into the shared CommonJS loader through their
-    // compartment's global.
-    comp.globalThis.__loadCjs = __loadCjs;
+    // compartment's global. The exposed callback IGNORES the
+    // caller-supplied compartment name and always resolves in THIS
+    // compartment, so guest module code cannot pass an arbitrary
+    // compartment name and force-load a module outside its link map.
+    // (The facade already passes its own compartment; the argument is
+    // accepted only for call-shape compatibility.)
+    comp.globalThis.__loadCjs = function (_callerComp, key) {{
+        return __loadCjs(compName, key);
+    }};
     __archiveCompartments[compName] = comp;
     return comp;
 }}

@@ -242,11 +242,14 @@ fn normalize_to_esm(
         Some("mjs") => esm_only(source),
         Some("js") if esm_by_default => esm_only(source),
         _ => {
+            // Strip the shebang line but keep the newline in its place,
+            // as Node does, so line numbers (and stack traces) stay
+            // aligned to the original source.
             let raw = match source.strip_prefix("#!") {
-                Some(rest) => rest
-                    .split_once('\n')
-                    .map(|(_, body)| body.to_string())
-                    .unwrap_or_default(),
+                Some(rest) => match rest.split_once('\n') {
+                    Some((_, body)) => format!("\n{body}"),
+                    None => String::new(),
+                },
                 None => source,
             };
             NormalizedSource {
@@ -626,14 +629,16 @@ mod tests {
         );
         assert_eq!(cjs.cjs_raw.as_deref(), Some("module.exports = 5;"));
 
-        // A CJS bin-style shebang line is stripped, as Node strips it.
+        // A CJS bin-style shebang line is stripped, as Node strips it,
+        // but the newline is kept in its place so line numbers stay
+        // aligned to the original source.
         let shebang = normalize_to_esm(
             "cli.js",
             b"#!/usr/bin/env node\nmodule.exports = 9;",
             false,
             "dep-v1.0.0",
         );
-        assert_eq!(shebang.cjs_raw.as_deref(), Some("module.exports = 9;"));
+        assert_eq!(shebang.cjs_raw.as_deref(), Some("\nmodule.exports = 9;"));
 
         let json = normalize_to_esm("data.json", b"{\"a\":1}", false, "dep-v1.0.0");
         assert_eq!(json.esm, "export default ({\"a\":1});");
@@ -1229,6 +1234,14 @@ mod tests {
                 ("index.js", "module.exports = require('./nope');\n"),
             ],
         );
-        assert!(result.is_err());
+        // A missing require must be a clean, identifiable failure, not a
+        // crash: assert the thrown error is the Node-shaped "Cannot find
+        // module" message rather than merely that the run errored (an XS
+        // panic would also satisfy is_err()).
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Cannot find module"),
+            "expected a clean 'Cannot find module' failure, got: {err}"
+        );
     }
 }

@@ -469,12 +469,20 @@ The tree's children are the package's files, stored as blobs.
       see `module.exports` as the default export, and a CJS
       `require` of an ESM module returns its namespace
       (modern-Node `require(esm)` shape). Remaining CJS
-      sub-gaps, deliberate or minor: Node core builtins are
+      sub-gaps, all deliberate: Node core builtins are
       not provided (confined runtime — a clean cannot-find
       error); ESM `import` of a CJS module binds only
-      `default` (no cjs-module-lexer named-export synthesis);
+      `default` (no cjs-module-lexer named-export synthesis) —
+      deliberate but significant, since `import { named } from
+      'cjsPkg'` is the dominant ESM-consumes-CJS pattern;
       `require('./dir')` completes through `dir/index.js(on)`
-      but does not consult a nested `dir/package.json` `main`.
+      but does not consult a nested `dir/package.json` `main`;
+      `require.resolve`, `__filename`, and `__dirname` return
+      archive-relative (`./`-prefixed) keys, not Node's absolute
+      filesystem paths (no filesystem in the confined runtime);
+      and `require` resolution activates the `import` exports
+      condition as a lenient fallback after `require`, where
+      Node's `require` never selects `import`.
 
 ## Prompt
 
