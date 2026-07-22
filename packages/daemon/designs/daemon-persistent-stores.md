@@ -90,9 +90,12 @@ src/collection-store.js: factories for all six guarded collection exos
 ```
 
 `map` and `set` are strong stores. `weak-map` and `weak-set` are weak-key
-stores. `sorted-map` and `sorted-set` are strong stores with an ordered-key
-interface. The common formula type keeps lifecycle and cleanup uniform while
-the `kind` selects the allowed methods and retention policy.
+stores. `map`/`set` enumeration is in deterministic passable rank order,
+matching `@agoric/store`: it is neither insertion order nor incidental SQLite
+row order. `sorted-map` and `sorted-set` retain that same enumeration order and
+add an ordered-key range-query interface. The common formula type keeps
+lifecycle and cleanup uniform while the `kind` selects the allowed methods and
+retention policy.
 
 ### Keys, values, and durable serialization
 
@@ -216,6 +219,12 @@ entries(pattern = M.any(), bounds = undefined)
 keys. `pattern` is checked with `@endo/patterns`; its rank cover narrows the SQL
 scan before exact matching. An omitted pattern means all keys. The final exact
 pattern check is required because a rank cover can be a superset.
+
+The distinction is therefore **range-query capability, not ordinary iteration
+order**. `MapStore` and `SetStore` already return `keys`, `values`, and
+`entries` in deterministic passable rank order, as `@agoric/store` does.
+`SortedMapStore` and `SortedSetStore` add the `bounds` argument and the indexed
+range-scan guarantee. Neither family uses insertion order.
 
 For all map-like kinds, semantics match `@agoric/store`:
 
