@@ -73,7 +73,7 @@
     "ses": "workspace:^",
     "tsd": "catalog:dev",
     "typescript": "catalog:dev",
-    "ws": "^8.13.0"
+    "ws": "^8.21.1"
   },
   "files": [
     "./*.d.ts",
