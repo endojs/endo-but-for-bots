@@ -18,6 +18,7 @@ import { encodeBase64 } from '@endo/base64';
 import { q } from '@endo/errors';
 
 import { BlobRefInterface } from '../type-guards.js';
+import { blobFromBytes } from '../../../blob.js';
 import {
   EMPTY_BYTES,
   makeBytesReaderFromBytes,
@@ -57,6 +58,33 @@ export const makeBlobRefExo = (bytes, help) => {
       const slice =
         off >= captured.length ? EMPTY_BYTES : captured.slice(off, end);
       return makeBytesReaderFromBytes(slice);
+    },
+    async range(start, end) {
+      const startOffset = toSafeNumber(start, 'start');
+      const endOffset = toSafeNumber(end, 'end');
+      if (endOffset < startOffset) {
+        throw new Error('EINVAL: end must not precede start');
+      }
+      return blobFromBytes(
+        captured.slice(startOffset, Math.min(endOffset, captured.length)),
+      );
+    },
+    async textRange(startLine, endLine) {
+      const start = toSafeNumber(startLine, 'startLine');
+      const end = toSafeNumber(endLine, 'endLine');
+      if (end < start) {
+        throw new Error('EINVAL: endLine must not precede startLine');
+      }
+      const starts = [0];
+      for (let offset = 0; offset < captured.length; offset += 1) {
+        if (captured[offset] === 0x0a) starts.push(offset + 1);
+      }
+      return blobFromBytes(
+        captured.slice(
+          starts[Math.min(start, starts.length - 1)],
+          end >= starts.length ? captured.length : starts[end],
+        ),
+      );
     },
     // Whole-value conveniences mirroring the daemon `EndoBlob` / lite
     // `SnapshotBlob` surface, decoding the captured bytes as UTF-8.
