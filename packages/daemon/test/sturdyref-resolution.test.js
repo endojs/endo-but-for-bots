@@ -41,7 +41,7 @@ test('isSturdyRef recognizes a minted SturdyRef and rejects others', t => {
 test('passStyleOf answers "sturdyRef" and M.kind admits it (the cut-3 guard recognizer)', t => {
   const sturdyRef = mintSturdyRef(localId);
   t.is(passStyleOf(sturdyRef), 'sturdyRef');
-  // The daemon's read-side guards widen with `M.kind('sturdyref')` because
+  // The daemon's read-side guards widen with `M.kind('sturdyRef')` because
   // `M.sturdyRef()` is a deferred `@endo/patterns` follow-up. Prove that
   // recognizer admits a SturdyRef and rejects a pet-name / pet-name-path.
   t.true(matches(sturdyRef, M.kind('sturdyRef')));

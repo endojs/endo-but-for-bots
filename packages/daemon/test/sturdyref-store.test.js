@@ -74,7 +74,7 @@ test('mint then fetch round-trips in one process', async t => {
   const { exporter, values } = makeFixture();
   const { sturdyRef } = await exporter.mintGrant('0:node-a');
 
-  t.is(passStyleOf(sturdyRef), 'sturdyref');
+  t.is(passStyleOf(sturdyRef), 'sturdyRef');
   // The serve path: reveal the off-band swiss-num, then resolve it through the
   // store-backed locator exactly as a peer's bootstrap.fetch(swissNum) would.
   const details = exporter.reveal(sturdyRef);
@@ -181,8 +181,8 @@ test('confinement: opaque-and-unforgeable, no reachable secret', async t => {
   // introspecting holder can read carries the swiss-num.
   t.deepEqual(Reflect.ownKeys(sturdyRef), []);
   t.is(JSON.stringify(sturdyRef), '{}');
-  // The location is readable (wire tier) but the secret is not a property.
-  t.is(sturdyRef.location.designator, 'self-node');
+  // Neither the location nor the secret is readable from the SturdyRef.
+  t.is(sturdyRef.location, undefined);
   t.is(sturdyRef.secret, undefined);
   // The swiss-num lives only in daemon-private state, never in a returned
   // value: it is in the state blob, but absent from every grant listing.
@@ -192,22 +192,15 @@ test('confinement: opaque-and-unforgeable, no reachable secret', async t => {
   // Unforgeable: a structurally-valid look-alike this exporter never minted
   // has no off-band details, so reveal declines and enliven rejects.
   const forged = (() => {
-    const location = harden({
-      type: 'ocapn-peer',
-      designator: 'self-node',
-      transport: 'ocapn',
-      hints: false,
-    });
     const proto = harden(
       create(objectPrototype, {
-        [PASS_STYLE]: { value: 'sturdyref', enumerable: false },
+        [PASS_STYLE]: { value: 'sturdyRef', enumerable: false },
         [Symbol.toStringTag]: { value: 'SturdyRef', enumerable: false },
-        location: { get: () => location, enumerable: false },
       }),
     );
     return harden(create(proto));
   })();
-  t.is(passStyleOf(forged), 'sturdyref');
+  t.is(passStyleOf(forged), 'sturdyRef');
   t.is(exporter.reveal(forged), undefined);
   await t.throwsAsync(() => exporter.enlivenSelf(forged));
 });
