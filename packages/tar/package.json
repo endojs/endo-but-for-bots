@@ -23,6 +23,7 @@
   "exports": {
     ".": "./index.js",
     "./reader.js": "./reader.js",
+    "./writer.js": "./writer.js",
     "./package.json": "./package.json"
   },
   "scripts": {

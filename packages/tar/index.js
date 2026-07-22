@@ -9,3 +9,4 @@ export {
   makeTarReader,
   readTarEntries,
 } from './src/reader.js';
+export { writeTar } from './src/writer.js';

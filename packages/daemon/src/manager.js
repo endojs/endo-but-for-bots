@@ -36,6 +36,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
+import { writeTar } from '@endo/tar/writer.js';
 import { checkinTarTree } from './tar-checkin.js';
 import { makeDirectoryMaker } from './directory.js';
 import { makeContentDataPlaneRegistry } from './content-data-plane.js';
@@ -1448,6 +1449,57 @@ const makeDaemonCore = async (
 
   const provideRemoteControl = makeRemoteControlProvider(localNodeNumber);
 
+  /** @param {string} hash */
+  const provideBlob = hash => {
+    assertValidNumber(hash);
+    return bytesReaderFromIterator(contentStore.fetch(hash).makeFileReader());
+  };
+
+  /** @param {string} hash */
+  const provideTree = hash => {
+    assertValidNumber(hash);
+    async function* archiveTree(treeHash, prefix = '') {
+      const entries = await contentStore.fetch(treeHash).json();
+      if (!Array.isArray(entries)) {
+        throw makeError(`Invalid readable tree ${q(treeHash)}`);
+      }
+      for (const entry of entries) {
+        if (!Array.isArray(entry) || entry.length !== 3) {
+          throw makeError(`Invalid readable tree entry in ${q(treeHash)}`);
+        }
+        const [name, type, childHash] = entry;
+        if (
+          typeof name !== 'string' ||
+          typeof type !== 'string' ||
+          typeof childHash !== 'string'
+        ) {
+          throw makeError(`Invalid readable tree entry in ${q(treeHash)}`);
+        }
+        const path = `${prefix}${name}`;
+        if (type === 'tree') {
+          yield* archiveTree(childHash, `${path}/`);
+        } else if (type === 'blob') {
+          const blob = /** @type {DaemonContentStoreBlob} */ (
+            contentStore.fetch(childHash)
+          );
+          const size = Number(await blob.size());
+          if (!Number.isSafeInteger(size)) {
+            throw makeError(`Web-seed blob is too large for tar: ${q(path)}`);
+          }
+          yield {
+            path,
+            size,
+            content: blob.makeFileReader(),
+          };
+        } else {
+          throw makeError(`Invalid readable tree entry type ${q(type)}`);
+        }
+      }
+    }
+
+    return bytesReaderFromIterator(writeTar(archiveTree(hash)));
+  };
+
   // Gateway is equivalent to E's "nonce locator".
   // It provides a value for a locator to a remote client.
   const localGateway = Far('Gateway', {
@@ -1466,7 +1518,7 @@ const makeDaemonCore = async (
     },
     /**
      * Stream a content-addressed blob, or a canonical tar representation of a
-     * readable tree, for the HTTP web-seed route.  The hash is a bearer read
+     * readable tree, for the HTTP web-seed route. The hash is a bearer read
      * capability, but the HTTP receiver still treats these bytes as untrusted
      * and verifies them against `xt` before using them.
      *
@@ -1474,90 +1526,9 @@ const makeDaemonCore = async (
      * @param {'blob' | 'tree'} kind
      */
     async fetchContent(hash, kind) {
-      assertValidNumber(hash);
-      if (kind === 'blob') {
-        return bytesReaderFromIterator(
-          contentStore.fetch(hash).makeFileReader(),
-        );
-      }
-      if (kind !== 'tree') {
-        throw makeError(`Invalid content kind ${q(kind)}`);
-      }
-
-      /** @param {string} text @param {Uint8Array} bytes @param {number} start */
-      const writeTarText = (text, bytes, start) => {
-        bytes.set(new TextEncoder().encode(text), start);
-      };
-      /** @param {number} value @param {number} width */
-      const tarNumber = (value, width) =>
-        `${value.toString(8).padStart(width - 1, '0')}\0`;
-      /** @param {string} path @param {number} size */
-      const tarHeader = (path, size) => {
-        if (new TextEncoder().encode(path).byteLength > 100) {
-          throw makeError(`Tree path is too long for web-seed tar: ${q(path)}`);
-        }
-        const header = new Uint8Array(512);
-        writeTarText(path, header, 0);
-        writeTarText(tarNumber(0o644, 8), header, 100);
-        writeTarText(tarNumber(0, 8), header, 108);
-        writeTarText(tarNumber(0, 8), header, 116);
-        writeTarText(tarNumber(size, 12), header, 124);
-        writeTarText(tarNumber(0, 12), header, 136);
-        header.fill(0x20, 148, 156);
-        header[156] = '0'.charCodeAt(0);
-        writeTarText('ustar\0', header, 257);
-        writeTarText('00', header, 263);
-        let checksum = 0;
-        for (const byte of header) checksum += byte;
-        writeTarText(tarNumber(checksum, 8), header, 148);
-        return header;
-      };
-
-      async function* archiveTree(treeHash, prefix = '') {
-        const entries = await contentStore.fetch(treeHash).json();
-        if (!Array.isArray(entries)) {
-          throw makeError(`Invalid readable tree ${q(treeHash)}`);
-        }
-        for (const entry of entries) {
-          if (!Array.isArray(entry) || entry.length !== 3) {
-            throw makeError(`Invalid readable tree entry in ${q(treeHash)}`);
-          }
-          const [name, type, childHash] = entry;
-          if (
-            typeof name !== 'string' ||
-            typeof type !== 'string' ||
-            typeof childHash !== 'string'
-          ) {
-            throw makeError(`Invalid readable tree entry in ${q(treeHash)}`);
-          }
-          const path = `${prefix}${name}`;
-          if (type === 'tree') {
-            yield* archiveTree(childHash, `${path}/`);
-          } else if (type === 'blob') {
-            const blob = /** @type {DaemonContentStoreBlob} */ (
-              contentStore.fetch(childHash)
-            );
-            const size = Number(await blob.size());
-            if (!Number.isSafeInteger(size)) {
-              throw makeError(`Web-seed blob is too large for tar: ${q(path)}`);
-            }
-            yield tarHeader(path, size);
-            for await (const chunk of blob.makeFileReader()) {
-              yield chunk;
-            }
-            const remainder = size % 512;
-            if (remainder !== 0) yield new Uint8Array(512 - remainder);
-          } else {
-            throw makeError(`Invalid readable tree entry type ${q(type)}`);
-          }
-        }
-      }
-
-      async function* tar() {
-        yield* archiveTree(hash);
-        yield new Uint8Array(1024);
-      }
-      return bytesReaderFromIterator(tar());
+      if (kind === 'blob') return provideBlob(hash);
+      if (kind === 'tree') return provideTree(hash);
+      throw makeError(`Invalid content kind ${q(kind)}`);
     },
     /**
      * Return the formula numbers from `peerNodeNumber` that this

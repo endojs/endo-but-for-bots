@@ -12,6 +12,7 @@ import {
   tarPathSegments,
   makeTarReader,
   readTarEntries,
+  writeTar,
 } from '../index.js';
 
 const TAR_BLOCK_SIZE = 512;
@@ -108,6 +109,14 @@ async function* single(bytes) {
   yield bytes;
 }
 
+async function* tarEntries() {
+  yield {
+    path: 'greeting.txt',
+    size: 5,
+    content: single(utf8.encode('hello')),
+  };
+}
+
 // Collect entries plus their fully-drained content into plain records.
 const collect = async source => {
   const out = [];
@@ -126,6 +135,23 @@ const collect = async source => {
   }
   return out;
 };
+
+test('writeTar produces a readable ustar archive', async t => {
+  const archive = [];
+  for await (const chunk of writeTar(tarEntries())) {
+    archive.push(chunk);
+  }
+  const entries = await collect(single(concatBytes(archive)));
+  t.deepEqual(entries, [
+    {
+      type: 'file',
+      path: 'greeting.txt',
+      size: 5,
+      linkname: '',
+      content: 'hello',
+    },
+  ]);
+});
 
 test('isZeroTarBlock distinguishes the archive terminator', t => {
   t.true(isZeroTarBlock(new Uint8Array(TAR_BLOCK_SIZE)));
