@@ -4,7 +4,7 @@ import test from '@endo/ses-ava/test.js';
 import harden from '@endo/harden';
 
 import { fc } from '@fast-check/ava';
-import { makeTagged } from '@endo/pass-style';
+import { makeSturdyRef, makeTagged } from '@endo/pass-style';
 import { makeArbitraries } from '@endo/pass-style/tools.js';
 
 import { q } from '@endo/errors';
@@ -23,6 +23,13 @@ import {
   coveredEntries,
 } from '../src/rankOrder.js';
 import { unsortedSample, sortedSample } from '../tools/marshal-test-data.js';
+
+test('sturdyRefs use the locator prefix and tie within their rank', t => {
+  const first = makeSturdyRef();
+  const second = makeSturdyRef();
+  t.deepEqual(getPassStyleCover('sturdyRef'), ['l', 'm']);
+  t.is(compareRank(first, second), 0);
+});
 
 const { arbPassable } = makeArbitraries(fc);
 
