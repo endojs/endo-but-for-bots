@@ -19,8 +19,6 @@
   "module": "./index.js",
   "exports": {
     ".": "./index.js",
-    "./sturdy-ref.js": "./sturdy-ref.js",
-    "./sturdy-ref-shim.js": "./sturdy-ref-shim.js",
     "./tools.js": "./tools.js",
     "./endow.js": "./endow.js",
     "./package.json": "./package.json"

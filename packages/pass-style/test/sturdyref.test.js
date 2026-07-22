@@ -5,7 +5,8 @@ import harden from '@endo/harden';
 import { passStyleOf, isPassable } from '../src/passStyleOf.js';
 import { makeTagged } from '../src/makeTagged.js';
 import { PASS_STYLE } from '../src/passStyle-helpers.js';
-import { makeSturdyRef, isSturdyRef } from '../src/sturdy-ref.js';
+import { makeSturdyRef } from '../src/sturdyref.js';
+import { isSturdyRef } from '../src/sturdy-ref.js';
 
 const { create, prototype: objectPrototype, isFrozen, getPrototypeOf } = Object;
 
