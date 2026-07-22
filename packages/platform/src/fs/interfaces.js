@@ -125,6 +125,13 @@ export const rangeReadConvenienceMethodGuards = harden({
   rangeReadText: M.call(M.number(), M.number()).returns(M.promise()),
 });
 
+// A range is an attenuation, not a materialized read. The returned capability
+// has the same ReadableBlob surface and can therefore be narrowed again.
+export const readableBlobRangeMethodGuards = harden({
+  range: M.call(M.bigint(), M.bigint()).returns(M.promise()),
+  textRange: M.call(M.number(), M.number()).returns(M.promise()),
+});
+
 // `listTree(petNamePath, options?)` is the recursive counterpart to `list`:
 // where `list` yields only the immediate child names of the sub-path,
 // `listTree` walks the whole subtree in one round-trip and returns every
@@ -153,6 +160,8 @@ export const recursiveListMethodGuards = harden({
 
 export const ReadableBlobInterface = M.interface('ReadableBlob', {
   ...readableBlobMethodGuards,
+  ...getInfoMethodGuard,
+  ...readableBlobRangeMethodGuards,
 });
 harden(ReadableBlobInterface);
 
@@ -184,6 +193,7 @@ export const ReadableBlobRangeReadInterface = M.interface(
     ...readableBlobMethodGuards,
     ...rangeReadMethodGuards,
     ...rangeReadConvenienceMethodGuards,
+    ...readableBlobRangeMethodGuards,
   },
 );
 harden(ReadableBlobRangeReadInterface);
