@@ -90,6 +90,7 @@
     "@endo/relay-server": "workspace:^",
     "@endo/stream": "workspace:^",
     "@endo/stream-node": "workspace:^",
+    "@endo/sturdyref": "workspace:^",
     "@endo/tar": "workspace:^",
     "@endo/utf8": "workspace:^",
     "@endo/where": "workspace:^",
