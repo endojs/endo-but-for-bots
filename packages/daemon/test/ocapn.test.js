@@ -234,7 +234,7 @@ test('formatUri emits a parseable ocapn:// sturdyref URI for a self-mint (out-of
   // the recovered swiss-num bytes ASCII-decode back to the hex string the
   // exporter's locator keys on — so a peer could fetch it.
   const materialized = identity.materializeFromUri(uri);
-  t.is(passStyleOf(materialized), 'sturdyref');
+  t.is(passStyleOf(materialized), 'sturdyRef');
   const recovered = identity.reveal(materialized);
   t.deepEqual(recovered.location, identity.getSelfLocation());
   // reveal normalizes a materialized secret to a Uint8Array; it ASCII-decodes
@@ -266,7 +266,7 @@ test('materializeFromUri round-trips a foreign byte-secret sturdyref URI (the ac
   });
 
   const materialized = identity.materializeFromUri(uri);
-  t.is(passStyleOf(materialized), 'sturdyref');
+  t.is(passStyleOf(materialized), 'sturdyRef');
   const recovered = identity.reveal(materialized);
   t.deepEqual(
     recovered.location,
