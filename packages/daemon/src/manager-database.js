@@ -48,9 +48,14 @@ import { q } from '@endo/errors';
  * @property {(storeNumber: string) => Array<{keyRank: string, keyBody: string, keySlots: string, valueBody: string | null, valueSlots: string | null}>} listCollectionEntries
  * @property {(storeNumber: string) => number} countCollectionEntries
  * @property {(storeNumber: string) => void} deleteAllCollectionEntries
+ * @property {(keyFormulaNumber: string, storeNumber: string, keyRank: string) => void} writeCollectionWeakKey
+ * @property {(storeNumber: string, keyRank: string) => void} deleteCollectionWeakKey
+ * @property {(storeNumber: string) => void} clearCollectionWeakKeys
+ * @property {(storeNumber: string) => void} rebuildCollectionWeakKeys
+ * @property {(keyFormulaNumber: string) => Array<{storeNumber: string, keyRank: string, valueSlots: string | null}>} deleteWeakCollectionEntriesForKey
  */
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS schema_version (
@@ -123,6 +128,16 @@ const SCHEMA_SQL = `
 
   CREATE INDEX IF NOT EXISTS collection_store_entry_rank
     ON collection_store_entry (store_number, key_rank);
+
+  CREATE TABLE IF NOT EXISTS collection_store_weak_key (
+    key_formula_number TEXT NOT NULL,
+    store_number TEXT NOT NULL,
+    key_rank TEXT NOT NULL,
+    PRIMARY KEY (key_formula_number, store_number, key_rank)
+  );
+
+  CREATE INDEX IF NOT EXISTS collection_store_weak_key_lookup
+    ON collection_store_weak_key (key_formula_number);
 `;
 
 /**
@@ -283,6 +298,24 @@ export const makeDaemonDatabase = (config, options) => {
   );
   const stmtDeleteAllCollectionEntries = db.prepare(
     'DELETE FROM collection_store_entry WHERE store_number = ?',
+  );
+  const stmtWriteCollectionWeakKey = db.prepare(
+    'INSERT OR REPLACE INTO collection_store_weak_key (key_formula_number, store_number, key_rank) VALUES (?, ?, ?)',
+  );
+  const stmtDeleteCollectionWeakKey = db.prepare(
+    'DELETE FROM collection_store_weak_key WHERE store_number = ? AND key_rank = ?',
+  );
+  const stmtDeleteAllCollectionWeakKeys = db.prepare(
+    'DELETE FROM collection_store_weak_key WHERE store_number = ?',
+  );
+  const stmtListWeakCollectionEntriesForKey = db.prepare(
+    'SELECT weak.store_number AS storeNumber, weak.key_rank AS keyRank, entry.value_slots AS valueSlots FROM collection_store_weak_key AS weak JOIN collection_store_entry AS entry ON entry.store_number = weak.store_number AND entry.key_rank = weak.key_rank WHERE weak.key_formula_number = ?',
+  );
+  const stmtDeleteWeakCollectionEntriesForKey = db.prepare(
+    'DELETE FROM collection_store_entry WHERE store_number = ? AND key_rank = ?',
+  );
+  const stmtDeleteWeakCollectionKeysForKey = db.prepare(
+    'DELETE FROM collection_store_weak_key WHERE key_formula_number = ?',
   );
 
   // -- Formula operations --
@@ -653,6 +686,7 @@ export const makeDaemonDatabase = (config, options) => {
    */
   const deleteCollectionEntry = (storeNumber, keyRank) => {
     stmtDeleteCollectionEntry.run(storeNumber, keyRank);
+    stmtDeleteCollectionWeakKey.run(storeNumber, keyRank);
   };
 
   /**
@@ -679,7 +713,57 @@ export const makeDaemonDatabase = (config, options) => {
   /** @param {string} storeNumber */
   const deleteAllCollectionEntries = storeNumber => {
     stmtDeleteAllCollectionEntries.run(storeNumber);
+    stmtDeleteAllCollectionWeakKeys.run(storeNumber);
   };
+
+  /**
+   * @param {string} keyFormulaNumber
+   * @param {string} storeNumber
+   * @param {string} keyRank
+   */
+  const writeCollectionWeakKey = (keyFormulaNumber, storeNumber, keyRank) => {
+    stmtWriteCollectionWeakKey.run(keyFormulaNumber, storeNumber, keyRank);
+  };
+
+  /** @param {string} storeNumber @param {string} keyRank */
+  const deleteCollectionWeakKey = (storeNumber, keyRank) => {
+    stmtDeleteCollectionWeakKey.run(storeNumber, keyRank);
+  };
+
+  /** @param {string} storeNumber */
+  const clearCollectionWeakKeys = storeNumber => {
+    stmtDeleteAllCollectionWeakKeys.run(storeNumber);
+  };
+
+  /** @param {string} storeNumber */
+  const rebuildCollectionWeakKeys = storeNumber => {
+    stmtDeleteAllCollectionWeakKeys.run(storeNumber);
+    for (const row of listCollectionEntries(storeNumber)) {
+      const slots = JSON.parse(row.keySlots);
+      if (slots.length === 1) {
+        stmtWriteCollectionWeakKey.run(slots[0], storeNumber, row.keyRank);
+      }
+    }
+  };
+
+  /**
+   * Atomically delete every weak entry indexed by a collected formula, and
+   * return the removed value slots so the formula graph can release values.
+   *
+   * @param {string} keyFormulaNumber
+   */
+  const deleteWeakCollectionEntriesForKey = keyFormulaNumber =>
+    db.transaction(() => {
+      const rows =
+        /** @type {Array<{storeNumber: string, keyRank: string, valueSlots: string | null}>} */ (
+          stmtListWeakCollectionEntriesForKey.all(keyFormulaNumber)
+        );
+      for (const { storeNumber, keyRank } of rows) {
+        stmtDeleteWeakCollectionEntriesForKey.run(storeNumber, keyRank);
+      }
+      stmtDeleteWeakCollectionKeysForKey.run(keyFormulaNumber);
+      return rows;
+    })();
 
   const close = () => {
     db.close();
@@ -727,6 +811,11 @@ export const makeDaemonDatabase = (config, options) => {
     listCollectionEntries,
     countCollectionEntries,
     deleteAllCollectionEntries,
+    writeCollectionWeakKey,
+    deleteCollectionWeakKey,
+    clearCollectionWeakKeys,
+    rebuildCollectionWeakKeys,
+    deleteWeakCollectionEntriesForKey,
   });
 };
 harden(makeDaemonDatabase);

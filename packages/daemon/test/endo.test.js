@@ -7442,3 +7442,149 @@ test('SetStore entries persist across a daemon restart', async t => {
   t.false(await E(setAfter).has('beta'));
   t.true(await E(setAfter).has('gamma'));
 });
+
+// -- Persistent weak collection stores (collection-store, Phase 3) --
+
+test('WeakMapStore and WeakSetStore provide only the weak collection surface', async t => {
+  const { host } = await prepareHost(t);
+  const weakMap = await E(host).makeWeakMapStore('weak-map');
+  const weakSet = await E(host).makeWeakSetStore('weak-set');
+  const key = await E(host).provideGuest('weak-key');
+
+  await E(weakMap).init(key, 'value');
+  t.true(await E(weakMap).has(key));
+  t.is(await E(weakMap).get(key), 'value');
+  await E(weakMap).set(key, 'next');
+  t.is(await E(weakMap).get(key), 'next');
+  await E(weakMap).delete(key);
+  t.false(await E(weakMap).has(key));
+
+  await E(weakSet).add(key);
+  t.true(await E(weakSet).has(key));
+  await E(weakSet).delete(key);
+  t.false(await E(weakSet).has(key));
+});
+
+test('WeakMapStore restart preserves live keys and rebuilds their index', async t => {
+  const { cancelled, config, host } = await prepareHost(t);
+  const weakMap = await E(host).makeWeakMapStore('weak-map');
+  const key = await E(host).provideGuest('weak-key');
+  await E(weakMap).init(key, harden({ balance: 7n }));
+
+  await restart(config);
+  const { host: hostAfter } = await makeHost(config, cancelled);
+  const weakMapAfter = await E(hostAfter).lookup(['weak-map']);
+  const keyAfter = await E(hostAfter).lookup(['weak-key']);
+  t.true(await E(weakMapAfter).has(keyAfter));
+  t.deepEqual(await E(weakMapAfter).get(keyAfter), { balance: 7n });
+});
+
+test('collecting a weak key removes its entry and releases its value', async t => {
+  const { config, host } = await prepareHost(t);
+  const weakMap = await E(host).makeWeakMapStore('weak-map');
+  const key = await E(host).provideGuest('weak-key');
+  const value = await E(host).provideGuest('weak-value');
+  const storeId = await E(host).identify('weak-map');
+  const keyId = await E(host).identify('weak-key');
+  const valueId = await E(host).identify('weak-value');
+
+  await E(weakMap).init(key, value);
+  await E(host).remove('weak-value');
+  t.true(formulaExistsInDb(config.statePath, valueId));
+
+  await E(host).remove('weak-key');
+  await waitForCondition(
+    async () => !formulaExistsInDb(config.statePath, keyId),
+  );
+  await waitForCondition(
+    async () => !formulaExistsInDb(config.statePath, valueId),
+  );
+  t.is(
+    openTestDb(config.statePath).countCollectionEntries(
+      parseId(storeId).number,
+    ),
+    0,
+  );
+});
+
+test('minimal ERTP issuer kit conserves Amount across restart on WeakMapStore', async t => {
+  const { cancelled, config, host } = await prepareHost(t);
+  const ledger = await E(host).makeWeakMapStore('ertp-ledger');
+  const AmountMath = harden({
+    make: value => harden({ brand: 'ERTP', value }),
+    add: (left, right) =>
+      harden({ brand: 'ERTP', value: left.value + right.value }),
+    subtract: (left, right) =>
+      harden({ brand: 'ERTP', value: left.value - right.value }),
+  });
+  const purseA = await E(host).provideGuest('ertp-purse-a');
+  const purseB = await E(host).provideGuest('ertp-purse-b');
+  const mintPayment = await E(host).provideGuest('ertp-mint-payment');
+  const transferPayment = await E(host).provideGuest('ertp-transfer-payment');
+  const mintAmount = AmountMath.make(10n);
+  const transferAmount = AmountMath.make(4n);
+
+  // mint -> deposit -> withdraw -> transfer. The ledger is the issuer's only
+  // balance authority and every purse/payment is a daemon remotable weak key.
+  await E(ledger).init(mintPayment, mintAmount);
+  await E(ledger).init(purseA, AmountMath.make(0n));
+  await E(ledger).set(
+    purseA,
+    AmountMath.add(
+      await E(ledger).get(purseA),
+      await E(ledger).get(mintPayment),
+    ),
+  );
+  await E(ledger).delete(mintPayment);
+  await E(ledger).init(
+    transferPayment,
+    AmountMath.subtract(await E(ledger).get(purseA), AmountMath.make(6n)),
+  );
+  await E(ledger).set(purseA, AmountMath.make(6n));
+  await E(ledger).init(purseB, AmountMath.make(0n));
+  await E(ledger).set(
+    purseB,
+    AmountMath.add(
+      await E(ledger).get(purseB),
+      await E(ledger).get(transferPayment),
+    ),
+  );
+  await E(ledger).delete(transferPayment);
+  const outstandingPayment = await E(host).provideGuest(
+    'ertp-outstanding-payment',
+  );
+  await E(ledger).init(outstandingPayment, transferAmount);
+  await E(ledger).set(
+    purseB,
+    AmountMath.subtract(await E(ledger).get(purseB), transferAmount),
+  );
+
+  await restart(config);
+  const { host: hostAfter } = await makeHost(config, cancelled);
+  const ledgerAfter = await E(hostAfter).lookup(['ertp-ledger']);
+  const purseAAfter = await E(hostAfter).lookup(['ertp-purse-a']);
+  const purseBAfter = await E(hostAfter).lookup(['ertp-purse-b']);
+  const paymentAfter = await E(hostAfter).lookup(['ertp-outstanding-payment']);
+  const balances = await Promise.all([
+    E(ledgerAfter).get(purseAAfter),
+    E(ledgerAfter).get(purseBAfter),
+    E(ledgerAfter).get(paymentAfter),
+  ]);
+  t.is(
+    balances.reduce((total, amount) => total + amount.value, 0n),
+    10n,
+  );
+
+  const paymentId = await E(hostAfter).identify('ertp-outstanding-payment');
+  const ledgerId = await E(hostAfter).identify('ertp-ledger');
+  await E(hostAfter).remove('ertp-outstanding-payment');
+  await waitForCondition(
+    async () => !formulaExistsInDb(config.statePath, paymentId),
+  );
+  t.is(
+    openTestDb(config.statePath).countCollectionEntries(
+      parseId(ledgerId).number,
+    ),
+    2,
+  );
+});

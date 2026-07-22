@@ -286,6 +286,22 @@ export interface SetStore<K = unknown> {
   snapshot(): Promise<unknown>;
 }
 
+/** A non-enumerable MapStore whose remotable keys are not retained. */
+export interface WeakMapStore<K = object, V = unknown> {
+  has(key: K): Promise<boolean>;
+  get(key: K): Promise<V>;
+  init(key: K, value: V): Promise<void>;
+  set(key: K, value: V): Promise<void>;
+  delete(key: K): Promise<void>;
+}
+
+/** A non-enumerable SetStore whose remotable keys are not retained. */
+export interface WeakSetStore<K = object> {
+  has(key: K): Promise<boolean>;
+  add(key: K): Promise<void>;
+  delete(key: K): Promise<void>;
+}
+
 export type ReadableBlobFormula = {
   type: 'readable-blob';
   content: string;
@@ -563,7 +579,7 @@ export type MailboxStoreFormula = {
  */
 export type CollectionStoreFormula = {
   type: 'collection-store';
-  kind: 'map' | 'set';
+  kind: 'map' | 'set' | 'weak-map' | 'weak-set';
 };
 
 export type MailHubFormula = {
@@ -1500,6 +1516,8 @@ export interface EndoGuest extends EndoAgent {
   makeMapStore(petName: string | string[]): Promise<FarRef<MapStore>>;
   /** Create a durable strong `SetStore` bound under `petName`. */
   makeSetStore(petName: string | string[]): Promise<FarRef<SetStore>>;
+  makeWeakMapStore(petName: string | string[]): Promise<FarRef<WeakMapStore>>;
+  makeWeakSetStore(petName: string | string[]): Promise<FarRef<WeakSetStore>>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
   sendValue: Mail['sendValue'];
 }
@@ -1528,6 +1546,8 @@ export interface EndoHost extends EndoAgent {
   makeMapStore(petName: string | string[]): Promise<FarRef<MapStore>>;
   /** Create a durable strong `SetStore` bound under `petName`. */
   makeSetStore(petName: string | string[]): Promise<FarRef<SetStore>>;
+  makeWeakMapStore(petName: string | string[]): Promise<FarRef<WeakMapStore>>;
+  makeWeakSetStore(petName: string | string[]): Promise<FarRef<WeakSetStore>>;
   storeTree(remoteTree: unknown, petName: string | string[]): Promise<unknown>;
   provideMount(
     path: string,
@@ -2291,6 +2311,19 @@ export type DaemonicPersistencePowers = {
   }>;
   countCollectionEntries: (storeNumber: string) => number;
   deleteAllCollectionEntries: (storeNumber: string) => void;
+  writeCollectionWeakKey: (
+    keyFormulaNumber: string,
+    storeNumber: string,
+    keyRank: string,
+  ) => void;
+  deleteCollectionWeakKey: (storeNumber: string, keyRank: string) => void;
+  clearCollectionWeakKeys: (storeNumber: string) => void;
+  rebuildCollectionWeakKeys: (storeNumber: string) => void;
+  deleteWeakCollectionEntriesForKey: (keyFormulaNumber: string) => Array<{
+    storeNumber: string;
+    keyRank: string;
+    valueSlots: string | null;
+  }>;
 };
 
 export interface DaemonWorkerFacet {}
@@ -2511,7 +2544,7 @@ export interface DaemonCore {
     kind: CollectionStoreFormula['kind'],
     deferredTasks: DeferredTasks<CollectionStoreDeferredTaskParams>,
     pin?: (id: FormulaIdentifier) => void,
-  ) => FormulateResult<MapStore | SetStore>;
+  ) => FormulateResult<MapStore | SetStore | WeakMapStore | WeakSetStore>;
 
   formulatePromise: (
     pinTransient?: (id: FormulaIdentifier) => void,

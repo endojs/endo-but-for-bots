@@ -68,6 +68,11 @@ export const makeDaemonicPersistencePowers = (
     listCollectionEntries,
     countCollectionEntries,
     deleteAllCollectionEntries,
+    writeCollectionWeakKey,
+    deleteCollectionWeakKey,
+    clearCollectionWeakKeys,
+    rebuildCollectionWeakKeys,
+    deleteWeakCollectionEntriesForKey,
   } = daemonDb;
 
   const initializePersistence = async () => {
@@ -177,6 +182,11 @@ export const makeDaemonicPersistencePowers = (
     listCollectionEntries,
     countCollectionEntries,
     deleteAllCollectionEntries,
+    writeCollectionWeakKey,
+    deleteCollectionWeakKey,
+    clearCollectionWeakKeys,
+    rebuildCollectionWeakKeys,
+    deleteWeakCollectionEntriesForKey,
   });
 };
 harden(makeDaemonicPersistencePowers);

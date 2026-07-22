@@ -5,7 +5,7 @@ import { makeExo } from '@endo/exo';
 import { M, makeCopyMap, makeCopySet } from '@endo/patterns';
 import { Fail, q } from '@endo/errors';
 
-/** @import { FormulaIdentifier, FormulaNumber, MapStore, SetStore } from './types.js' */
+/** @import { FormulaIdentifier, FormulaNumber, MapStore, SetStore, WeakMapStore, WeakSetStore } from './types.js' */
 /** @import { Passable } from '@endo/pass-style' */
 
 /**
@@ -46,6 +46,22 @@ export const makeSetStoreInterface = keyShape =>
     snapshot: M.callWhen().returns(M.any()),
   });
 
+/** The deliberately non-enumerable weak MapStore surface. */
+export const WeakMapStoreInterface = M.interface('WeakMapStore', {
+  has: M.callWhen(M.remotable()).returns(M.boolean()),
+  get: M.callWhen(M.remotable()).returns(M.any()),
+  init: M.callWhen(M.remotable(), M.any()).returns(M.undefined()),
+  set: M.callWhen(M.remotable(), M.any()).returns(M.undefined()),
+  delete: M.callWhen(M.remotable()).returns(M.undefined()),
+});
+
+/** The deliberately non-enumerable weak SetStore surface. */
+export const WeakSetStoreInterface = M.interface('WeakSetStore', {
+  has: M.callWhen(M.remotable()).returns(M.boolean()),
+  add: M.callWhen(M.remotable()).returns(M.undefined()),
+  delete: M.callWhen(M.remotable()).returns(M.undefined()),
+});
+
 /**
  * The daemon-native persistent collection family. Phase 1 implements the
  * strong `MapStore` (`kind: 'map'`) over the daemon's own durability
@@ -68,6 +84,9 @@ export const makeSetStoreInterface = keyShape =>
  * @param {(key: Passable) => string} powers.encodeKeyRank
  *   Produce a key's canonical rank encoding (its primary key within a store).
  * @param {(ids: string[]) => FormulaIdentifier[]} powers.filterLocalIds
+ * @param {(ref: object) => FormulaIdentifier} powers.getIdForRef
+ * @param {(id: FormulaIdentifier) => FormulaIdentifier} powers.canonicalWeakKeyId
+ * @param {(formulaNumber: FormulaNumber) => FormulaIdentifier} powers.formatStoreId
  * @param {(storeId: FormulaIdentifier, ids: FormulaIdentifier[]) => Promise<void>} powers.addStoreEdges
  * @param {(storeId: FormulaIdentifier, ids: FormulaIdentifier[]) => Promise<void>} powers.removeStoreEdges
  */
@@ -77,6 +96,9 @@ export const makeCollectionStoreMaker = ({
   unmarshalFromCapData,
   encodeKeyRank,
   filterLocalIds,
+  getIdForRef,
+  canonicalWeakKeyId,
+  formatStoreId,
   addStoreEdges,
   removeStoreEdges,
 }) => {
@@ -91,12 +113,14 @@ export const makeCollectionStoreMaker = ({
    * @param {FormulaNumber} formulaNumber
    * @returns {FormulaIdentifier[]}
    */
-  const collectionRetentionSlots = formulaNumber => {
+  const collectionRetentionSlots = (formulaNumber, kind = 'map') => {
     /** @type {Set<string>} */
     const ids = new Set();
     for (const row of listCollectionEntries(formulaNumber)) {
-      for (const slot of JSON.parse(row.keySlots)) {
-        ids.add(slot);
+      if (kind !== 'weak-map' && kind !== 'weak-set') {
+        for (const slot of JSON.parse(row.keySlots)) {
+          ids.add(slot);
+        }
       }
       if (row.valueSlots !== null) {
         for (const slot of JSON.parse(row.valueSlots)) {
@@ -105,6 +129,63 @@ export const makeCollectionStoreMaker = ({
       }
     }
     return filterLocalIds([...ids]);
+  };
+
+  /** @type {Map<string, { delete: (rank: string) => void }>} */
+  const liveWeakEntries = new Map();
+
+  /** @param {FormulaNumber} formulaNumber */
+  const rebuildWeakKeyIndex = formulaNumber => {
+    persistence.clearCollectionWeakKeys(formulaNumber);
+    for (const row of listCollectionEntries(formulaNumber)) {
+      const slots = JSON.parse(row.keySlots);
+      if (slots.length === 1) {
+        persistence.writeCollectionWeakKey(
+          canonicalWeakKeyId(slots[0]),
+          formulaNumber,
+          row.keyRank,
+        );
+      }
+    }
+  };
+
+  /**
+   * Synchronously remove every weak entry whose key was just collected. The
+   * database operation is transactional, and returning edge removals lets the
+   * manager update the formula graph before the collection turn completes.
+   *
+   * @param {FormulaIdentifier[]} collectedKeyIds
+   */
+  const collectWeakEntries = collectedKeyIds => {
+    /** @type {Map<FormulaNumber, Set<FormulaIdentifier>>} */
+    const candidatesByStore = new Map();
+    for (const keyId of collectedKeyIds) {
+      for (const row of persistence.deleteWeakCollectionEntriesForKey(keyId)) {
+        liveWeakEntries
+          .get(/** @type {FormulaNumber} */ (row.storeNumber))
+          ?.delete(row.keyRank);
+        if (row.valueSlots !== null) {
+          const storeNumber = /** @type {FormulaNumber} */ (row.storeNumber);
+          const candidates = candidatesByStore.get(storeNumber) ?? new Set();
+          for (const id of filterLocalIds(JSON.parse(row.valueSlots))) {
+            candidates.add(id);
+          }
+          candidatesByStore.set(storeNumber, candidates);
+        }
+      }
+    }
+    return [...candidatesByStore.entries()].map(([storeNumber, candidates]) => {
+      const remaining = new Set(
+        collectionRetentionSlots(
+          /** @type {FormulaNumber} */ (storeNumber),
+          'weak-map',
+        ),
+      );
+      return harden({
+        storeId: formatStoreId(/** @type {FormulaNumber} */ (storeNumber)),
+        ids: harden([...candidates].filter(id => !remaining.has(id))),
+      });
+    });
   };
 
   /**
@@ -511,10 +592,219 @@ export const makeCollectionStoreMaker = ({
     );
   };
 
+  /**
+   * A weak collection key is one daemon remotable formula identity. We persist
+   * it for lookup but never retain it. Values are reference counted exactly as
+   * strong-map values, and are released either by delete or by key collection.
+   *
+   * @param {FormulaIdentifier} storeId
+   * @param {FormulaNumber} formulaNumber
+   * @returns {WeakMapStore}
+   */
+  const makeIdentifiedWeakMapStore = (storeId, formulaNumber) => {
+    /** @typedef {{valueBody: string, valueSlots: string[], valueIds: FormulaIdentifier[]}} WeakMapEntry */
+    /** @type {Map<string, WeakMapEntry>} */
+    const entriesByRank = new Map();
+    /** @type {Map<FormulaIdentifier, number>} */
+    const valueCounts = new Map();
+
+    for (const row of listCollectionEntries(formulaNumber)) {
+      const valueSlots = JSON.parse(/** @type {string} */ (row.valueSlots));
+      const valueIds = filterLocalIds(valueSlots);
+      entriesByRank.set(row.keyRank, {
+        valueBody: /** @type {string} */ (row.valueBody),
+        valueSlots,
+        valueIds,
+      });
+      for (const id of valueIds) {
+        valueCounts.set(id, (valueCounts.get(id) ?? 0) + 1);
+      }
+    }
+
+    liveWeakEntries.set(formulaNumber, {
+      delete: rank => {
+        const entry = entriesByRank.get(rank);
+        if (entry !== undefined) {
+          entriesByRank.delete(rank);
+          for (const id of entry.valueIds) {
+            const count = valueCounts.get(id) ?? 0;
+            if (count <= 1) {
+              valueCounts.delete(id);
+            } else {
+              valueCounts.set(id, count - 1);
+            }
+          }
+        }
+      },
+    });
+
+    /** @param {FormulaIdentifier[]} add @param {FormulaIdentifier[]} remove */
+    const applyValueDelta = async (add, remove) => {
+      /** @type {FormulaIdentifier[]} */
+      const edgesToAdd = [];
+      /** @type {FormulaIdentifier[]} */
+      const edgesToRemove = [];
+      for (const id of add) {
+        const count = valueCounts.get(id) ?? 0;
+        valueCounts.set(id, count + 1);
+        if (count === 0) edgesToAdd.push(id);
+      }
+      for (const id of remove) {
+        const count = valueCounts.get(id) ?? 0;
+        if (count <= 1) {
+          valueCounts.delete(id);
+          if (count === 1) edgesToRemove.push(id);
+        } else {
+          valueCounts.set(id, count - 1);
+        }
+      }
+      if (edgesToAdd.length > 0) await addStoreEdges(storeId, edgesToAdd);
+      if (edgesToRemove.length > 0)
+        await removeStoreEdges(storeId, edgesToRemove);
+    };
+
+    /** @param {Passable} key */
+    const keyInfo = key => {
+      const keyId = canonicalWeakKeyId(
+        getIdForRef(/** @type {object} */ (key)),
+      );
+      const keySlots = filterLocalIds([keyId]);
+      keySlots.length === 1 ||
+        Fail`weak key ${q(key)} is not a local remotable`;
+      return harden({
+        rank: `r${keyId}`,
+        keyId,
+      });
+    };
+
+    /** @param {string} rank @param {FormulaIdentifier} keyId @param {Passable} key @param {Passable} value */
+    const put = async (rank, keyId, key, value) => {
+      const keyCapData = marshalToCapData(key);
+      const valueCapData = marshalToCapData(value);
+      const valueIds = filterLocalIds(valueCapData.slots);
+      const old = entriesByRank.get(rank);
+      writeCollectionEntry(
+        formulaNumber,
+        rank,
+        keyCapData.body,
+        JSON.stringify(keyCapData.slots),
+        valueCapData.body,
+        JSON.stringify(valueCapData.slots),
+      );
+      persistence.writeCollectionWeakKey(keyId, formulaNumber, rank);
+      entriesByRank.set(rank, {
+        valueBody: valueCapData.body,
+        valueSlots: valueCapData.slots,
+        valueIds,
+      });
+      await applyValueDelta(valueIds, old?.valueIds ?? []);
+    };
+
+    const weakMapStore = {
+      /** @param {Passable} key */
+      has: async key => entriesByRank.has(keyInfo(key).rank),
+      /** @param {Passable} key */
+      get: async key => {
+        const entry = entriesByRank.get(keyInfo(key).rank);
+        entry !== undefined || Fail`key ${q(key)} not found`;
+        return unmarshalFromCapData({
+          body: /** @type {WeakMapEntry} */ (entry).valueBody,
+          slots: /** @type {WeakMapEntry} */ (entry).valueSlots,
+        });
+      },
+      /** @param {Passable} key @param {Passable} value */
+      init: async (key, value) => {
+        const { rank, keyId } = keyInfo(key);
+        !entriesByRank.has(rank) || Fail`key ${q(key)} already registered`;
+        await put(rank, keyId, key, value);
+      },
+      /** @param {Passable} key @param {Passable} value */
+      set: async (key, value) => {
+        const { rank, keyId } = keyInfo(key);
+        entriesByRank.has(rank) || Fail`key ${q(key)} not found`;
+        await put(rank, keyId, key, value);
+      },
+      /** @param {Passable} key */
+      delete: async key => {
+        const { rank } = keyInfo(key);
+        const entry = entriesByRank.get(rank);
+        entry !== undefined || Fail`key ${q(key)} not found`;
+        deleteCollectionEntry(formulaNumber, rank);
+        entriesByRank.delete(rank);
+        await applyValueDelta([], /** @type {WeakMapEntry} */ (entry).valueIds);
+      },
+    };
+    return /** @type {WeakMapStore} */ (
+      /** @type {unknown} */ (
+        makeExo('WeakMapStore', WeakMapStoreInterface, weakMapStore)
+      )
+    );
+  };
+
+  /** @param {FormulaIdentifier} storeId @param {FormulaNumber} formulaNumber @returns {WeakSetStore} */
+  const makeIdentifiedWeakSetStore = (storeId, formulaNumber) => {
+    /** @type {Map<string, unknown>} */
+    const entriesByRank = new Map();
+    liveWeakEntries.set(formulaNumber, {
+      delete: rank => entriesByRank.delete(rank),
+    });
+    for (const row of listCollectionEntries(formulaNumber)) {
+      entriesByRank.set(row.keyRank, undefined);
+    }
+    /** @param {Passable} key */
+    const keyInfo = key => {
+      const keyId = canonicalWeakKeyId(
+        getIdForRef(/** @type {object} */ (key)),
+      );
+      filterLocalIds([keyId]).length === 1 ||
+        Fail`weak key ${q(key)} is not a local remotable`;
+      return harden({
+        rank: `r${keyId}`,
+        keyId,
+      });
+    };
+    const weakSetStore = {
+      /** @param {Passable} key */
+      has: async key => entriesByRank.has(keyInfo(key).rank),
+      /** @param {Passable} key */
+      add: async key => {
+        const { rank, keyId } = keyInfo(key);
+        !entriesByRank.has(rank) || Fail`key ${q(key)} already registered`;
+        const capData = marshalToCapData(key);
+        writeCollectionEntry(
+          formulaNumber,
+          rank,
+          capData.body,
+          JSON.stringify(capData.slots),
+          null,
+          null,
+        );
+        persistence.writeCollectionWeakKey(keyId, formulaNumber, rank);
+        entriesByRank.set(rank, undefined);
+      },
+      /** @param {Passable} key */
+      delete: async key => {
+        const { rank } = keyInfo(key);
+        entriesByRank.has(rank) || Fail`key ${q(key)} not found`;
+        deleteCollectionEntry(formulaNumber, rank);
+        entriesByRank.delete(rank);
+      },
+    };
+    return /** @type {WeakSetStore} */ (
+      /** @type {unknown} */ (
+        makeExo('WeakSetStore', WeakSetStoreInterface, weakSetStore)
+      )
+    );
+  };
+
   return harden({
     makeIdentifiedMapStore,
     makeIdentifiedSetStore,
+    makeIdentifiedWeakMapStore,
+    makeIdentifiedWeakSetStore,
     collectionRetentionSlots,
+    rebuildWeakKeyIndex,
+    collectWeakEntries,
   });
 };
 harden(makeCollectionStoreMaker);

@@ -1174,6 +1174,40 @@ export const makeHostMaker = ({
       return /** @type {any} */ (value);
     };
 
+    /** @type {EndoHost['makeWeakMapStore']} */
+    const makeWeakMapStore = async petName => {
+      const { namePath } = petNamePathFrom(petName);
+      /** @type {DeferredTasks<CollectionStoreDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        E(directory).storeIdentifier(namePath, identifiers.collectionStoreId),
+      );
+      const { id, value } = await formulateCollectionStore(
+        'weak-map',
+        tasks,
+        pinTransient,
+      );
+      await unpinTransient(id);
+      return /** @type {any} */ (value);
+    };
+
+    /** @type {EndoHost['makeWeakSetStore']} */
+    const makeWeakSetStore = async petName => {
+      const { namePath } = petNamePathFrom(petName);
+      /** @type {DeferredTasks<CollectionStoreDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        E(directory).storeIdentifier(namePath, identifiers.collectionStoreId),
+      );
+      const { id, value } = await formulateCollectionStore(
+        'weak-set',
+        tasks,
+        pinTransient,
+      );
+      await unpinTransient(id);
+      return /** @type {any} */ (value);
+    };
+
     /**
      * @param {NameOrPath} workerNamePath
      */
@@ -2455,6 +2489,8 @@ export const makeHostMaker = ({
       storeValue,
       makeMapStore,
       makeSetStore,
+      makeWeakMapStore,
+      makeWeakSetStore,
       storeTree,
       provideMount,
       provideScratchMount,
