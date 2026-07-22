@@ -52,11 +52,10 @@ const flattenTokens = roots => {
   const queue = [...roots];
   while (queue.length > 0) {
     const token = queue.shift();
-    if (!token) {
-      continue;
+    if (token) {
+      tokens.push(token);
+      queue.push(...token.children);
     }
-    tokens.push(token);
-    queue.push(...token.children);
   }
   return tokens;
 };
@@ -95,18 +94,17 @@ const maskToken = (charactersByLine, token) => {
     lineNumber += 1
   ) {
     const characters = charactersByLine.get(lineNumber);
-    if (!characters) {
-      continue;
-    }
-    const start = lineNumber === token.startLine ? token.startColumn - 1 : 0;
-    const end =
-      lineNumber === token.endLine ? token.endColumn - 1 : characters.length;
-    characters.fill(' ', start, end);
-    if (lineNumber === token.startLine && token.type === 'codeText') {
-      characters[start] = '`';
-    }
-    if (lineNumber === token.startLine && token.type === 'literalAutolink') {
-      characters[start] = 'A';
+    if (characters) {
+      const start = lineNumber === token.startLine ? token.startColumn - 1 : 0;
+      const end =
+        lineNumber === token.endLine ? token.endColumn - 1 : characters.length;
+      characters.fill(' ', start, end);
+      if (lineNumber === token.startLine && token.type === 'codeText') {
+        characters[start] = '`';
+      }
+      if (lineNumber === token.startLine && token.type === 'literalAutolink') {
+        characters[start] = 'A';
+      }
     }
   }
 };
@@ -192,35 +190,33 @@ const sentencePerLine = {
       const original = params.lines[lineNumber - 1];
       const line = charactersByLine.get(lineNumber)?.join('') ?? original;
       for (const punctuation of line.matchAll(/[.!?]+/g)) {
-        if (punctuation.index === undefined) {
-          continue;
+        if (punctuation.index !== undefined) {
+          const punctuationIndex = punctuation.index;
+          let cursor = punctuationIndex + punctuation[0].length;
+          while (closingCharacters.has(line[cursor])) {
+            cursor += 1;
+          }
+          const whitespaceStart = cursor;
+          while (line[cursor] === ' ' || line[cursor] === '\t') {
+            cursor += 1;
+          }
+          const isSentenceBoundary =
+            cursor !== whitespaceStart &&
+            startsSentence(line.slice(cursor)) &&
+            !isAbbreviation(
+              line,
+              punctuationIndex + punctuation[0].length - 1,
+              punctuation[0].at(-1) ?? '',
+            );
+          if (isSentenceBoundary) {
+            onError({
+              lineNumber,
+              detail: 'Move the next sentence to a new line.',
+              context: original,
+              range: [punctuationIndex + 1, cursor - punctuationIndex],
+            });
+          }
         }
-        const punctuationIndex = punctuation.index;
-        let cursor = punctuationIndex + punctuation[0].length;
-        while (closingCharacters.has(line[cursor])) {
-          cursor += 1;
-        }
-        const whitespaceStart = cursor;
-        while (line[cursor] === ' ' || line[cursor] === '\t') {
-          cursor += 1;
-        }
-        if (
-          cursor === whitespaceStart ||
-          !startsSentence(line.slice(cursor)) ||
-          isAbbreviation(
-            line,
-            punctuationIndex + punctuation[0].length - 1,
-            punctuation[0].at(-1) ?? '',
-          )
-        ) {
-          continue;
-        }
-        onError({
-          lineNumber,
-          detail: 'Move the next sentence to a new line.',
-          context: original,
-          range: [punctuationIndex + 1, cursor - punctuationIndex],
-        });
       }
     }
   },

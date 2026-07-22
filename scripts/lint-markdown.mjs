@@ -5,8 +5,6 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { lint } from 'markdownlint/promise';
-
 import sentencePerLine from './markdown-sentence-per-line.mjs';
 
 const intendedRoots = new Set([
@@ -90,13 +88,12 @@ export const parseAddedLineNumbers = diff => {
   const lines = new Set();
   for (const line of diff.split('\n')) {
     const match = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
-    if (!match) {
-      continue;
-    }
-    const start = Number(match[1]);
-    const count = match[2] === undefined ? 1 : Number(match[2]);
-    for (let offset = 0; offset < count; offset += 1) {
-      lines.add(start + offset);
+    if (match) {
+      const start = Number(match[1]);
+      const count = match[2] === undefined ? 1 : Number(match[2]);
+      for (let offset = 0; offset < count; offset += 1) {
+        lines.add(start + offset);
+      }
     }
   }
   return lines;
@@ -181,10 +178,10 @@ const getAddedLines = (base, paths, untracked) => {
         path,
         new Set(Array.from({ length: count }, (_value, index) => index + 1)),
       );
-      continue;
+    } else {
+      const diff = git(['diff', '--unified=0', '--no-color', base, '--', path]);
+      added.set(path, parseAddedLineNumbers(diff));
     }
-    const diff = git(['diff', '--unified=0', '--no-color', base, '--', path]);
-    added.set(path, parseAddedLineNumbers(diff));
   }
   return added;
 };
@@ -195,8 +192,10 @@ const getAddedLines = (base, paths, untracked) => {
  * @param {string[]} files
  * @returns {Promise<import('markdownlint').LintResults>}
  */
-const lintFiles = files =>
-  lint({
+const lintFiles = async files => {
+  // Avoid loading the parser at all on the steady-state no-Markdown path.
+  const { lint } = await import('markdownlint/promise');
+  return lint({
     files,
     customRules: [sentencePerLine],
     config: {
@@ -204,6 +203,7 @@ const lintFiles = files =>
       'sentence-per-line': true,
     },
   });
+};
 
 /**
  * Parse command-line arguments.
@@ -268,7 +268,8 @@ const main = async arguments_ => {
       .filter(existsSync);
     const fullFallback = changed.some(isFullFallbackPath);
     // Tooling changes parse the entire maintained corpus so they cannot hide
-    // parser or configuration regressions. Diagnostics remain limited to added
+    // parser or configuration regressions.
+    // Diagnostics remain limited to added
     // lines because the existing corpus predates this rule; --all audits that
     // grandfathered debt explicitly.
     files = fullFallback ? listAllMarkdown() : changedMarkdown;
@@ -287,14 +288,13 @@ const main = async arguments_ => {
   let errorCount = 0;
   for (const [path, errors] of Object.entries(results)) {
     for (const error of errors) {
-      if (addedLines && !addedLines.get(path)?.has(error.lineNumber)) {
-        continue;
+      if (!addedLines || addedLines.get(path)?.has(error.lineNumber)) {
+        const column = error.errorRange?.[0] ?? 1;
+        console.error(
+          `${path}:${error.lineNumber}:${column} ${error.ruleNames[0]} ${error.errorDetail ?? error.ruleDescription}`,
+        );
+        errorCount += 1;
       }
-      const column = error.errorRange?.[0] ?? 1;
-      console.error(
-        `${path}:${error.lineNumber}:${column} ${error.ruleNames[0]} ${error.errorDetail ?? error.ruleDescription}`,
-      );
-      errorCount += 1;
     }
   }
   console.error(
@@ -305,6 +305,8 @@ const main = async arguments_ => {
   }
 };
 
+let mainPromise = Promise.resolve();
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  await main(process.argv.slice(2));
+  mainPromise = main(process.argv.slice(2));
 }
+await mainPromise;

@@ -48,7 +48,14 @@ test('two sentences on one physical line fail in prose containers', async t => {
 test('front matter is ignored without shifting physical diagnostics', async t => {
   const errors = await lintText(
     'frontmatter.md',
-    '---\ntitle: One. Two.\n---\n\nFirst sentence. Second sentence.\n',
+    [
+      '---',
+      ['title: One.', 'Two.'].join(' '),
+      '---',
+      '',
+      ['First sentence.', 'Second sentence.'].join(' '),
+      '',
+    ].join('\n'),
   );
   t.deepEqual(
     errors.map(error => error.lineNumber),
