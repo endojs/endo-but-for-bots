@@ -129,7 +129,7 @@ test('a self-minted SturdyRef reveals the real self-location and enlivens locall
   const selfLocation = identity.getSelfLocation();
 
   const { sturdyRef } = await identity.exporter.mintGrant('0:node-a');
-  t.is(passStyleOf(sturdyRef), 'sturdyref');
+  t.is(passStyleOf(sturdyRef), 'sturdyRef');
 
   // The mint stamps the real self-location (not cut 3's placeholder).
   const details = identity.exporter.reveal(sturdyRef);
