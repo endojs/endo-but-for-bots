@@ -1,8 +1,9 @@
 // @ts-nocheck
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { passStyleOf, PASS_STYLE } from '@endo/pass-style';
+import { passStyleOf } from '@endo/pass-style';
 import { M, matches } from '@endo/patterns';
+import { fromLocation } from '@endo/sturdyref';
 import {
   isSturdyRef,
   mintSturdyRef,
@@ -11,8 +12,6 @@ import {
 import { formatId } from '../src/formula-identifier.js';
 
 /** @import { FormulaIdentifier, NodeNumber } from '../src/types.js' */
-
-const { create, prototype: objectPrototype } = Object;
 
 const localNode = /** @type {NodeNumber} */ ('0'.repeat(64));
 const otherNode = /** @type {NodeNumber} */ (
@@ -24,25 +23,9 @@ const formulaNumber =
 const localId = formatId({ number: formulaNumber, node: localNode });
 const otherId = formatId({ number: formulaNumber, node: otherNode });
 
-// Build a structurally-valid SturdyRef WITHOUT going through mintSturdyRef,
-// so it is never entered in the daemon's closely-held off-band map. This is
-// the "forged look-alike" a confined guest could attempt to fabricate.
-const forgeSturdyRefLookAlike = (designator, node) => {
-  const location = harden({
-    designator,
-    network: node,
-    transport: 'endo',
-    hints: false,
-  });
-  const proto = harden(
-    create(objectPrototype, {
-      [PASS_STYLE]: { value: 'sturdyref', enumerable: false },
-      [Symbol.toStringTag]: { value: 'SturdyRef', enumerable: false },
-      location: { get: () => location, enumerable: false },
-    }),
-  );
-  return harden(create(proto));
-};
+// Mint through the shared shim, without entering the daemon's private map.
+// It is a genuine SturdyRef but cannot be resolved by this daemon.
+const foreignSturdyRef = () => fromLocation(harden({}));
 
 // --- Recognition (cut 3 structural recognizer) ---------------------------
 
@@ -55,15 +38,15 @@ test('isSturdyRef recognizes a minted SturdyRef and rejects others', t => {
   t.false(isSturdyRef(undefined));
 });
 
-test('passStyleOf answers "sturdyref" and M.kind admits it (the cut-3 guard recognizer)', t => {
+test('passStyleOf answers "sturdyRef" and M.kind admits it (the cut-3 guard recognizer)', t => {
   const sturdyRef = mintSturdyRef(localId);
-  t.is(passStyleOf(sturdyRef), 'sturdyref');
+  t.is(passStyleOf(sturdyRef), 'sturdyRef');
   // The daemon's read-side guards widen with `M.kind('sturdyref')` because
   // `M.sturdyRef()` is a deferred `@endo/patterns` follow-up. Prove that
   // recognizer admits a SturdyRef and rejects a pet-name / pet-name-path.
-  t.true(matches(sturdyRef, M.kind('sturdyref')));
-  t.false(matches('a-pet-name', M.kind('sturdyref')));
-  t.false(matches(harden(['a', 'path']), M.kind('sturdyref')));
+  t.true(matches(sturdyRef, M.kind('sturdyRef')));
+  t.false(matches('a-pet-name', M.kind('sturdyRef')));
+  t.false(matches(harden(['a', 'path']), M.kind('sturdyRef')));
 });
 
 // --- Resolution (cut 4 closely-held capability) --------------------------
@@ -81,14 +64,12 @@ test('mintSturdyRef binds distinct ids to distinct SturdyRefs', t => {
   t.not(a, b);
 });
 
-test('an optional type hint is carried but excluded from the resolved id', t => {
-  const withHint = mintSturdyRef(localId, 'agent');
-  const withoutHint = mintSturdyRef(localId);
-  t.is(withHint.type, 'agent');
-  t.is(withoutHint.type, undefined);
-  // The hint does not participate in identity: both resolve to the same id.
-  t.is(resolveSturdyRefToId(withHint), localId);
-  t.is(resolveSturdyRefToId(withoutHint), localId);
+test('distinct opaque tokens can resolve to the same id', t => {
+  const a = mintSturdyRef(localId);
+  const b = mintSturdyRef(localId);
+  t.not(a, b);
+  t.is(resolveSturdyRefToId(a), localId);
+  t.is(resolveSturdyRefToId(b), localId);
 });
 
 test('resolveSturdyRefToId rejects a non-SturdyRef value', t => {
@@ -110,53 +91,34 @@ test('confinement: the resolution binding is unforgeable (opaque-and-unforgeable
   // A structurally-valid SturdyRef the daemon did NOT mint has no entry in
   // the closely-held off-band map, so it cannot be resolved: a guest cannot
   // fabricate a token the mediator will resolve.
-  const forged = forgeSturdyRefLookAlike(formulaNumber, localNode);
-  t.true(isSturdyRef(forged)); // it passes the structural shape...
-  t.throws(() => resolveSturdyRefToId(forged), {
+  const foreign = foreignSturdyRef();
+  t.true(isSturdyRef(foreign));
+  t.throws(() => resolveSturdyRefToId(foreign), {
     message: /not resolvable by this daemon/,
   });
 });
 
 test('confinement: the off-band id binding is not a readable property (no-secret)', t => {
-  const sturdyRef = mintSturdyRef(localId, 'agent');
+  const sturdyRef = mintSturdyRef(localId);
   // The instance carries no own properties at all: the resolution secret
   // (the formula-id binding) lives only in the module-private WeakMap.
   t.deepEqual(Reflect.ownKeys(sturdyRef), []);
   // Nothing reachable by property read yields the formula identifier.
   const proto = Reflect.getPrototypeOf(sturdyRef);
   const protoKeys = Reflect.ownKeys(proto);
-  // Only the pass-style tag machinery plus the readable location/type hint
-  // accessors are present — no id, no secret, no swiss number. (Compare by
-  // membership; key enumeration order is not part of the contract.)
-  const expectedKeys = [PASS_STYLE, Symbol.toStringTag, 'location', 'type'];
-  t.is(protoKeys.length, expectedKeys.length);
-  for (const key of expectedKeys) {
-    t.true(protoKeys.includes(key), `expected key ${String(key)} present`);
-  }
+  t.false(protoKeys.includes('id'));
+  t.false(protoKeys.includes('location'));
+  t.false(protoKeys.includes('secret'));
   for (const key of protoKeys) {
-    t.not(
-      sturdyRef[key],
-      localId,
-      `property ${String(key)} must not leak the id`,
-    );
+    t.not(sturdyRef[key], localId, `property ${String(key)} must not leak id`);
   }
 });
 
-test('confinement: the readable surface is a locator, never a swiss number (no-location-secret)', t => {
+test('confinement: a token cannot reveal its shim locator or a swiss number', t => {
   const sturdyRef = mintSturdyRef(localId);
-  // `location` is a readable accessor by design (the raw SturdyRef is the
-  // trusted/wire tier and names a locator). It is a parsed OCapN-shaped
-  // location copyRecord — no swiss number / secret is anywhere on it.
-  const { location } = sturdyRef;
-  t.is(passStyleOf(location), 'copyRecord');
-  t.deepEqual(
-    new Set(Reflect.ownKeys(location)),
-    new Set(['designator', 'network', 'transport', 'hints']),
-  );
-  // No `secret` / `swissNum` property exists on the location or the ref.
-  t.is(location.secret, undefined);
-  t.is(location.swissNum, undefined);
+  t.is(sturdyRef.location, undefined);
   t.is(sturdyRef.secret, undefined);
+  t.is(sturdyRef.swissNum, undefined);
 });
 
 test('confinement: resolution is keyed on the minted identity, not reproducible structure', t => {
@@ -166,11 +128,8 @@ test('confinement: resolution is keyed on the minted identity, not reproducible 
   // a structurally-identical value still cannot get it resolved: the rebuilt
   // value is a different identity with no binding. Structure is not a
   // resolution channel; only the closely-held mint populates the map.
-  const minted = mintSturdyRef(localId, 'agent');
-  const structuralCopy = forgeSturdyRefLookAlike(
-    minted.location.designator,
-    minted.location.network,
-  );
+  const minted = mintSturdyRef(localId);
+  const structuralCopy = foreignSturdyRef();
   t.is(resolveSturdyRefToId(minted), localId);
   t.throws(() => resolveSturdyRefToId(structuralCopy), {
     message: /not resolvable by this daemon/,

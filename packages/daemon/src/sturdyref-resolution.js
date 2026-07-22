@@ -3,10 +3,8 @@
 /** @import { FormulaIdentifier } from './types.js' */
 
 import { makeError, X } from '@endo/errors';
-import { PASS_STYLE, passStyleOf } from '@endo/pass-style';
-import { parseId } from './formula-identifier.js';
-
-const { create, prototype: objectPrototype } = Object;
+import { passStyleOf } from '@endo/pass-style';
+import { fromLocation } from '@endo/sturdyref';
 
 /**
  * The daemon's **closely-held** off-band binding from a SturdyRef it minted
@@ -36,7 +34,7 @@ const { create, prototype: objectPrototype } = Object;
 const sturdyRefToId = new WeakMap();
 
 /**
- * True when `value` is a first-class `'sturdyref'` pass-style value.
+ * True when `value` is a first-class `'sturdyRef'` pass-style value.
  * Recognition is structural (per the realigned shape-only design, #521):
  * a value satisfies the shape whether or not this daemon minted it. A
  * SturdyRef this daemon did not mint is still a SturdyRef, but has no local
@@ -47,7 +45,7 @@ const sturdyRefToId = new WeakMap();
  */
 export const isSturdyRef = value => {
   try {
-    return passStyleOf(/** @type {any} */ (value)) === 'sturdyref';
+    return passStyleOf(/** @type {any} */ (value)) === 'sturdyRef';
   } catch {
     return false;
   }
@@ -59,52 +57,19 @@ harden(isSturdyRef);
  * map — to a local formula identifier.
  *
  * This is the daemon-side minting half of the closely-held resolution
- * capability. Construction mirrors `@endo/ocapn`'s CapTP session manager
- * (`makeSturdyRefInstance`): the instance carries no own properties; all
- * structure lives on a tag-record prototype carrying `[PASS_STYLE]`,
- * `[Symbol.toStringTag]`, a get-only non-enumerable `location` accessor
- * returning a deep-frozen parsed locator, and (when a hint is supplied) a
- * get-only non-enumerable `type` accessor. The formula identifier — the
- * secret this daemon resolves the SturdyRef against — is kept only in the
- * off-band map, never as a property.
- *
- * `location` is a **readable** accessor by design: the raw SturdyRef is the
- * trusted/wire tier and names a locator. The confined-guest tier (an opaque,
- * location-less token) is an open question in the design and is deliberately
- * not built here (the job's cut-3/cut-4 obligation is only that the secret
- * and the resolution capability stay daemon-side).
+ * capability. The opaque token comes from the shared `@endo/sturdyref`
+ * first-wins shim. The formula identifier remains only in this module's
+ * private map and never appears on the token or its locator.
  *
  * @param {FormulaIdentifier} id - the local formula identifier the minted
  *   SturdyRef resolves to.
- * @param {string} [type] - an optional advisory type hint (excluded from
- *   identity).
- * @returns {object} a first-class `'sturdyref'` pass-style value.
+ * @returns {object} a first-class `'sturdyRef'` pass-style value.
  */
-export const mintSturdyRef = (id, type) => {
-  // Derive a structurally-valid parsed locator (an OCapN-shaped location
-  // `copyRecord`) from the formula identity. `location` is readable at the
-  // trusted tier; it is not the resolution path (resolution is the off-band
-  // map), so it carries only the formula address and peer key, never a
-  // secret.
-  const { number, node } = parseId(id);
-  const location = harden({
-    designator: number,
-    network: node,
-    transport: 'endo',
-    hints: false,
-  });
-  /** @type {PropertyDescriptorMap} */
-  const descriptors = {
-    [PASS_STYLE]: { value: 'sturdyref', enumerable: false },
-    [Symbol.toStringTag]: { value: 'SturdyRef', enumerable: false },
-    location: { get: () => location, enumerable: false },
-  };
-  if (type !== undefined) {
-    const hint = type;
-    descriptors.type = { get: () => hint, enumerable: false };
-  }
-  const proto = harden(create(objectPrototype, descriptors));
-  const sturdyRef = harden(create(proto));
+export const mintSturdyRef = id => {
+  // The shim requires an object locator but does not expose it to token
+  // holders. Resolution uses the daemon-private WeakMap below, not this
+  // deliberately empty locator.
+  const sturdyRef = fromLocation(harden({}));
   sturdyRefToId.set(sturdyRef, id);
   return sturdyRef;
 };
