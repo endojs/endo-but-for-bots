@@ -3026,7 +3026,8 @@ const makeDaemonCore = async (
     return messageHub;
   };
 
-  // The daemon-native persistent collection family (Phase 1: strong MapStore).
+  // The daemon-native persistent collection family (Phases 1-2: strong MapStore
+  // and SetStore).
   // Its exos reuse the daemon's marshal codec for durable key/value
   // representation and a `makeEncodePassable` rank encoder for canonical keys,
   // and join the formula retention graph via the same pet-store edge hooks so
@@ -4012,6 +4013,7 @@ const makeDaemonCore = async (
             storeBlob: disallowedFn,
             storeValue: disallowedFn,
             makeMapStore: disallowedFn,
+            makeSetStore: disallowedFn,
             submit: disallowedFn,
             sendValue: disallowedFn,
             deliver: disallowedSyncFn,
@@ -4037,11 +4039,19 @@ const makeDaemonCore = async (
         assertMailboxStoreName,
       );
     },
-    'collection-store': (_formula, _context, id, formulaNumber) =>
-      collectionStoreMaker.makeIdentifiedMapStore(
-        /** @type {FormulaIdentifier} */ (id),
+    'collection-store': (formula, _context, id, formulaNumber) => {
+      const storeId = /** @type {FormulaIdentifier} */ (id);
+      if (formula.kind === 'map') {
+        return collectionStoreMaker.makeIdentifiedMapStore(
+          storeId,
+          formulaNumber,
+        );
+      }
+      return collectionStoreMaker.makeIdentifiedSetStore(
+        storeId,
         formulaNumber,
-      ),
+      );
+    },
     'mail-hub': ({ store: storeId }, context) => makeMailHub(storeId, context),
     message: (formula, context) => makeMessageHub(formula, context),
     promise: ({ store: storeId }, context) => makePromise(storeId, context),
@@ -5474,7 +5484,7 @@ const makeDaemonCore = async (
 
   /** @type {DaemonCore['formulateCollectionStore']} */
   async function formulateCollectionStore(kind, deferredTasks, pin) {
-    return /** @type {FormulateResult<import('./types.js').MapStore>} */ (
+    return /** @type {FormulateResult<import('./types.js').MapStore | import('./types.js').SetStore>} */ (
       withFormulaGraphLock(async () => {
         const ownFormulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()

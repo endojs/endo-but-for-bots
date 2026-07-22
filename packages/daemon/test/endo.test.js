@@ -16,7 +16,13 @@ import { promisify as nodePromisify } from 'util';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 import { makeExo } from '@endo/exo';
-import { M, makeCopyMap, getCopyMapEntries } from '@endo/patterns';
+import {
+  M,
+  makeCopyMap,
+  getCopyMapEntries,
+  makeCopySet,
+  getCopySetKeys,
+} from '@endo/patterns';
 import { makeCancelKit } from '@endo/cancel';
 import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
@@ -7348,4 +7354,91 @@ test('MapStore retains a remotable value across a restart', async t => {
   const back = await E(mapAfter).get('agent');
   await E(back).listMessages();
   t.pass();
+});
+
+// -- Persistent strong SetStore (collection-store, kind: 'set') --
+// Phase 2 of the daemon-native persistent collection family.
+
+test('SetStore supports add/has/delete/getSize/keys/entries', async t => {
+  const { host } = await prepareHost(t);
+  const set = await E(host).makeSetStore('s');
+
+  t.is(await E(set).getSize(), 0);
+  t.false(await E(set).has('a'));
+
+  await E(set).add('b');
+  await E(set).add('a');
+  await E(set).add('c');
+
+  t.is(await E(set).getSize(), 3);
+  t.true(await E(set).has('a'));
+  // Enumeration is in key-rank order regardless of insertion order. A set
+  // entry is its key, so entries has the same result as keys.
+  t.deepEqual(await E(set).keys(), ['a', 'b', 'c']);
+  t.deepEqual(await E(set).entries(), ['a', 'b', 'c']);
+
+  await E(set).delete('b');
+  t.false(await E(set).has('b'));
+  t.is(await E(set).getSize(), 2);
+  t.deepEqual(await E(set).keys(), ['a', 'c']);
+});
+
+test('SetStore enforces @agoric/store throw conditions', async t => {
+  const { host } = await prepareHost(t);
+  const set = await E(host).makeSetStore('s');
+
+  await E(set).add('k');
+  await t.throwsAsync(() => E(set).add('k'));
+  await t.throwsAsync(() => E(set).delete('absent'));
+  t.false(await E(set).has('absent'));
+  t.true(await E(set).has('k'));
+});
+
+test('SetStore round-trips a remotable key across CapTP', async t => {
+  const { host } = await prepareHost(t);
+  const set = await E(host).makeSetStore('s');
+  const guest = await E(host).provideGuest('set-key-guest');
+
+  await E(set).add(guest);
+  t.true(await E(set).has(guest));
+  const [key] = await E(set).keys();
+  t.is(key, guest);
+});
+
+test('SetStore snapshot yields a passable CopySet', async t => {
+  const { host } = await prepareHost(t);
+  const set = await E(host).makeSetStore('s');
+  await E(set).add('x');
+  await E(set).add('y');
+
+  const snapshot = await E(set).snapshot();
+  t.deepEqual(
+    [...getCopySetKeys(snapshot)],
+    [...getCopySetKeys(makeCopySet(['x', 'y']))],
+  );
+});
+
+test('SetStore entries persist across a daemon restart', async t => {
+  const { cancelled, config, host } = await prepareHost(t);
+  const set = await E(host).makeSetStore('s');
+  await E(set).add('alpha');
+  await E(set).add('beta');
+  await E(set).add(3n);
+
+  await restart(config);
+
+  const { host: hostAfter } = await makeHost(config, cancelled);
+  const setAfter = await E(hostAfter).lookup(['s']);
+  t.is(await E(setAfter).getSize(), 3);
+  t.true(await E(setAfter).has('alpha'));
+  t.true(await E(setAfter).has('beta'));
+  t.true(await E(setAfter).has(3n));
+  // Enumeration is in @endo passable rank order, where a bigint sorts before
+  // any string — independent of insertion order and stable across the restart.
+  t.deepEqual(await E(setAfter).keys(), [3n, 'alpha', 'beta']);
+
+  await E(setAfter).delete('beta');
+  await E(setAfter).add('gamma');
+  t.false(await E(setAfter).has('beta'));
+  t.true(await E(setAfter).has('gamma'));
 });

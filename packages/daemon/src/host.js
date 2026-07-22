@@ -1157,6 +1157,23 @@ export const makeHostMaker = ({
       return /** @type {any} */ (value);
     };
 
+    /** @type {EndoHost['makeSetStore']} */
+    const makeSetStore = async petName => {
+      const { namePath } = petNamePathFrom(petName);
+      /** @type {DeferredTasks<CollectionStoreDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        E(directory).storeIdentifier(namePath, identifiers.collectionStoreId),
+      );
+      const { id, value } = await formulateCollectionStore(
+        'set',
+        tasks,
+        pinTransient,
+      );
+      await unpinTransient(id);
+      return /** @type {any} */ (value);
+    };
+
     /**
      * @param {NameOrPath} workerNamePath
      */
@@ -2437,6 +2454,7 @@ export const makeHostMaker = ({
       storeBlob,
       storeValue,
       makeMapStore,
+      makeSetStore,
       storeTree,
       provideMount,
       provideScratchMount,
