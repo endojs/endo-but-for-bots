@@ -2,11 +2,19 @@
 
 import harden from '@endo/harden';
 import { makeExo } from '@endo/exo';
-import { M, makeCopyMap, makeCopySet } from '@endo/patterns';
+import {
+  getRankCover,
+  M,
+  makeCopyMap,
+  makeCopySet,
+  matches,
+  mustMatch,
+} from '@endo/patterns';
 import { Fail, q } from '@endo/errors';
 
-/** @import { FormulaIdentifier, FormulaNumber, MapStore, SetStore, WeakMapStore, WeakSetStore } from './types.js' */
+/** @import { FormulaIdentifier, FormulaNumber, MapStore, SetStore, SortedMapStore, SortedSetStore, WeakMapStore, WeakSetStore } from './types.js' */
 /** @import { Passable } from '@endo/pass-style' */
+/** @import { Pattern } from '@endo/patterns' */
 
 /**
  * The interface guard for a strong `MapStore`. Mirrors the `@agoric/store`
@@ -45,6 +53,41 @@ export const makeSetStoreInterface = keyShape =>
     entries: M.callWhen().returns(M.arrayOf(M.any())),
     snapshot: M.callWhen().returns(M.any()),
   });
+
+const ScanBoundsShape = M.splitRecord(
+  {},
+  {
+    start: M.key(),
+    end: M.key(),
+    startInclusive: M.boolean(),
+    endInclusive: M.boolean(),
+  },
+);
+
+/** The bounded, rank-ordered surface for durable sorted maps. */
+export const SortedMapStoreInterface = M.interface('SortedMapStore', {
+  has: M.callWhen(M.key()).returns(M.boolean()),
+  get: M.callWhen(M.key()).returns(M.any()),
+  init: M.callWhen(M.key(), M.any()).returns(M.undefined()),
+  set: M.callWhen(M.key(), M.any()).returns(M.undefined()),
+  delete: M.callWhen(M.key()).returns(M.undefined()),
+  getSize: M.callWhen().returns(M.number()),
+  keys: M.callWhen().rest(M.any()).returns(M.arrayOf(M.any())),
+  values: M.callWhen().rest(M.any()).returns(M.arrayOf(M.any())),
+  entries: M.callWhen().rest(M.any()).returns(M.arrayOf(M.array())),
+  snapshot: M.callWhen().returns(M.any()),
+});
+
+/** The bounded, rank-ordered surface for durable sorted sets. */
+export const SortedSetStoreInterface = M.interface('SortedSetStore', {
+  has: M.callWhen(M.key()).returns(M.boolean()),
+  add: M.callWhen(M.key()).returns(M.undefined()),
+  delete: M.callWhen(M.key()).returns(M.undefined()),
+  getSize: M.callWhen().returns(M.number()),
+  keys: M.callWhen().rest(M.any()).returns(M.arrayOf(M.any())),
+  entries: M.callWhen().rest(M.any()).returns(M.arrayOf(M.any())),
+  snapshot: M.callWhen().returns(M.any()),
+});
 
 /** The deliberately non-enumerable weak MapStore surface. */
 export const WeakMapStoreInterface = M.interface('WeakMapStore', {
@@ -102,8 +145,12 @@ export const makeCollectionStoreMaker = ({
   addStoreEdges,
   removeStoreEdges,
 }) => {
-  const { writeCollectionEntry, deleteCollectionEntry, listCollectionEntries } =
-    persistence;
+  const {
+    writeCollectionEntry,
+    deleteCollectionEntry,
+    listCollectionEntries,
+    listCollectionEntriesInRange,
+  } = persistence;
 
   /**
    * The distinct local slot ids retained by a store's persisted entries.
@@ -196,7 +243,7 @@ export const makeCollectionStoreMaker = ({
    * @param {FormulaNumber} formulaNumber
    * @returns {MapStore}
    */
-  const makeIdentifiedMapStore = (storeId, formulaNumber) => {
+  const makeIdentifiedMapStore = (storeId, formulaNumber, sorted = false) => {
     /**
      * key rank encoding -> the durable representation of one entry, plus the
      * local slot ids the entry retains (so overwrite/delete can release them).
@@ -286,13 +333,65 @@ export const makeCollectionStoreMaker = ({
     /** @param {Passable} key */
     const rankOf = key => encodeKeyRank(harden(key));
 
-    /** @param {Entry} entry */
+    /** @param {{keyBody: string, keySlots: string[]}} entry */
     const readKey = entry =>
       unmarshalFromCapData({ body: entry.keyBody, slots: entry.keySlots });
 
-    /** @param {Entry} entry */
+    /** @param {{valueBody: string, valueSlots: string[]}} entry */
     const readValue = entry =>
       unmarshalFromCapData({ body: entry.valueBody, slots: entry.valueSlots });
+
+    /**
+     * Intersect a pattern rank cover with optional inclusive/exclusive bounds,
+     * then let SQLite seek the resulting half-open interval. Exact matching is
+     * still necessary because rank covers are intentionally conservative.
+     *
+     * @param {Pattern} [pattern]
+     * @param {{start?: Passable, end?: Passable, startInclusive?: boolean, endInclusive?: boolean} | undefined} bounds
+     */
+    const scan = async (pattern = M.any(), bounds = undefined) => {
+      mustMatch(pattern, M.pattern());
+      if (bounds !== undefined) {
+        mustMatch(bounds, ScanBoundsShape);
+      }
+      const [coverStart, coverEnd] = getRankCover(pattern, encodeKeyRank);
+      const {
+        start,
+        end,
+        startInclusive = true,
+        endInclusive = true,
+      } = bounds ?? {};
+      const startRank =
+        start === undefined
+          ? coverStart
+          : (() => {
+              const rank = rankOf(start);
+              if (rank < coverStart) return coverStart;
+              return startInclusive ? rank : `${rank}~`;
+            })();
+      const endRank =
+        end === undefined
+          ? coverEnd
+          : (() => {
+              const rank = endInclusive ? `${rankOf(end)}~` : rankOf(end);
+              return rank < coverEnd ? rank : coverEnd;
+            })();
+      const candidates = listCollectionEntriesInRange(
+        formulaNumber,
+        startRank,
+        endRank,
+      );
+      const entries = await Promise.all(
+        candidates.map(async entry => {
+          const key = await readKey({
+            keyBody: entry.keyBody,
+            keySlots: JSON.parse(entry.keySlots),
+          });
+          return matches(key, pattern) ? { entry, key } : undefined;
+        }),
+      );
+      return entries.filter(entry => entry !== undefined);
+    };
 
     /**
      * Persist a new or replacement entry, updating the durable row, the
@@ -373,7 +472,10 @@ export const makeCollectionStoreMaker = ({
 
       getSize: async () => entriesByRank.size,
 
-      keys: async () => {
+      keys: async (pattern, bounds) => {
+        if (sorted) {
+          return harden((await scan(pattern, bounds)).map(({ key }) => key));
+        }
         const ranks = sortedRanks();
         const result = await Promise.all(
           ranks.map(rank =>
@@ -383,7 +485,22 @@ export const makeCollectionStoreMaker = ({
         return harden(result);
       },
 
-      values: async () => {
+      values: async (pattern, bounds) => {
+        if (sorted) {
+          const selected = await scan(pattern, bounds);
+          return harden(
+            await Promise.all(
+              selected.map(({ entry }) =>
+                readValue({
+                  valueBody: /** @type {string} */ (entry.valueBody),
+                  valueSlots: JSON.parse(
+                    /** @type {string} */ (entry.valueSlots),
+                  ),
+                }),
+              ),
+            ),
+          );
+        }
         const ranks = sortedRanks();
         const result = await Promise.all(
           ranks.map(rank =>
@@ -393,7 +510,23 @@ export const makeCollectionStoreMaker = ({
         return harden(result);
       },
 
-      entries: async () => {
+      entries: async (pattern, bounds) => {
+        if (sorted) {
+          const selected = await scan(pattern, bounds);
+          return harden(
+            await Promise.all(
+              selected.map(async ({ entry, key }) => [
+                key,
+                await readValue({
+                  valueBody: /** @type {string} */ (entry.valueBody),
+                  valueSlots: JSON.parse(
+                    /** @type {string} */ (entry.valueSlots),
+                  ),
+                }),
+              ]),
+            ),
+          );
+        }
         const ranks = sortedRanks();
         const result = await Promise.all(
           ranks.map(async rank => {
@@ -425,13 +558,17 @@ export const makeCollectionStoreMaker = ({
       },
     };
 
-    return /** @type {MapStore} */ (
+    return /** @type {MapStore | SortedMapStore} */ (
       /** @type {unknown} */ (
         // Full `M.key()` keys: primitives, nested copy-collections, and
         // remotables at any depth. Each remotable — top-level or nested — is
         // encoded by its stable formula id (for the canonical rank key) and
         // serialized to a slot (for durable reconstruction and retention).
-        makeExo('MapStore', makeMapStoreInterface(M.key()), mapStore)
+        makeExo(
+          sorted ? 'SortedMapStore' : 'MapStore',
+          sorted ? SortedMapStoreInterface : makeMapStoreInterface(M.key()),
+          mapStore,
+        )
       )
     );
   };
@@ -446,7 +583,7 @@ export const makeCollectionStoreMaker = ({
    * @param {FormulaNumber} formulaNumber
    * @returns {SetStore}
    */
-  const makeIdentifiedSetStore = (storeId, formulaNumber) => {
+  const makeIdentifiedSetStore = (storeId, formulaNumber, sorted = false) => {
     /**
      * @typedef {object} Entry
      * @property {string} keyBody
@@ -510,9 +647,57 @@ export const makeCollectionStoreMaker = ({
     const sortedRanks = () => [...entriesByRank.keys()].sort();
     /** @param {Passable} key */
     const rankOf = key => encodeKeyRank(harden(key));
-    /** @param {Entry} entry */
+    /** @param {{keyBody: string, keySlots: string[]}} entry */
     const readKey = entry =>
       unmarshalFromCapData({ body: entry.keyBody, slots: entry.keySlots });
+
+    /**
+     * @param {Pattern} [pattern]
+     * @param {{start?: Passable, end?: Passable, startInclusive?: boolean, endInclusive?: boolean} | undefined} bounds
+     */
+    const scan = async (pattern = M.any(), bounds = undefined) => {
+      mustMatch(pattern, M.pattern());
+      if (bounds !== undefined) {
+        mustMatch(bounds, ScanBoundsShape);
+      }
+      const [coverStart, coverEnd] = getRankCover(pattern, encodeKeyRank);
+      const {
+        start,
+        end,
+        startInclusive = true,
+        endInclusive = true,
+      } = bounds ?? {};
+      const startRank =
+        start === undefined
+          ? coverStart
+          : (() => {
+              const rank = rankOf(start);
+              if (rank < coverStart) return coverStart;
+              return startInclusive ? rank : `${rank}~`;
+            })();
+      const endRank =
+        end === undefined
+          ? coverEnd
+          : (() => {
+              const rank = endInclusive ? `${rankOf(end)}~` : rankOf(end);
+              return rank < coverEnd ? rank : coverEnd;
+            })();
+      const candidates = listCollectionEntriesInRange(
+        formulaNumber,
+        startRank,
+        endRank,
+      );
+      const entries = await Promise.all(
+        candidates.map(async entry => {
+          const key = await readKey({
+            keyBody: entry.keyBody,
+            keySlots: JSON.parse(entry.keySlots),
+          });
+          return matches(key, pattern) ? key : undefined;
+        }),
+      );
+      return entries.filter(entry => entry !== undefined);
+    };
 
     /** @param {string} rank @param {Passable} key */
     const putEntry = async (rank, key) => {
@@ -557,7 +742,10 @@ export const makeCollectionStoreMaker = ({
 
       getSize: async () => entriesByRank.size,
 
-      keys: async () => {
+      keys: async (pattern, bounds) => {
+        if (sorted) {
+          return harden(await scan(pattern, bounds));
+        }
         const result = await Promise.all(
           sortedRanks().map(rank =>
             readKey(/** @type {Entry} */ (entriesByRank.get(rank))),
@@ -566,7 +754,10 @@ export const makeCollectionStoreMaker = ({
         return harden(result);
       },
 
-      entries: async () => {
+      entries: async (pattern, bounds) => {
+        if (sorted) {
+          return harden(await scan(pattern, bounds));
+        }
         const result = await Promise.all(
           sortedRanks().map(rank =>
             readKey(/** @type {Entry} */ (entriesByRank.get(rank))),
@@ -585,9 +776,13 @@ export const makeCollectionStoreMaker = ({
       },
     };
 
-    return /** @type {SetStore} */ (
+    return /** @type {SetStore | SortedSetStore} */ (
       /** @type {unknown} */ (
-        makeExo('SetStore', makeSetStoreInterface(M.key()), setStore)
+        makeExo(
+          sorted ? 'SortedSetStore' : 'SetStore',
+          sorted ? SortedSetStoreInterface : makeSetStoreInterface(M.key()),
+          setStore,
+        )
       )
     );
   };
@@ -800,6 +995,10 @@ export const makeCollectionStoreMaker = ({
   return harden({
     makeIdentifiedMapStore,
     makeIdentifiedSetStore,
+    makeIdentifiedSortedMapStore: (storeId, formulaNumber) =>
+      makeIdentifiedMapStore(storeId, formulaNumber, true),
+    makeIdentifiedSortedSetStore: (storeId, formulaNumber) =>
+      makeIdentifiedSetStore(storeId, formulaNumber, true),
     makeIdentifiedWeakMapStore,
     makeIdentifiedWeakSetStore,
     collectionRetentionSlots,
