@@ -204,7 +204,8 @@ export const makeComparatorKit = (compareRemotables = (_x, _y) => NaN) => {
       case 'undefined':
       case 'null':
       case 'error':
-      case 'promise': {
+      case 'promise':
+      case 'sturdyRef': {
         // For each of these passStyles, all members of that passStyle are tied
         // for the same rank.
         return 0;

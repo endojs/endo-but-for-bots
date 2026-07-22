@@ -34,6 +34,8 @@ export {
   toThrowable,
 } from './src/passStyleOf.js';
 
+export { makeSturdyRef, isSturdyRef } from './src/sturdy-ref.js';
+
 export { makeTagged } from './src/makeTagged.js';
 export {
   Remotable,

@@ -872,14 +872,12 @@ harden(isEncodedRemotable);
 // /////////////////////////////////////////////////////////////////////////////
 
 /**
- * @type {Record<Exclude<PassStyle, 'sturdyRef'>, string>}
+ * @type {Record<PassStyle, string>}
  * The single prefix characters to be used for each PassStyle category.
  *
- * The `'sturdyRef'` pass-style is deliberately excluded: a SturdyRef is an
- * opaque token whose marshal encoding and rank-order position are not yet
- * defined (that is a separate, later slice of the sturdy-refs work). Until
- * then `@endo/marshal` neither encodes nor rank-orders SturdyRefs, so they
- * have no prefix here.
+ * A SturdyRef uses `l` for "locator". It remains deliberately unencodable by
+ * this generic marshal because its locator is closely held by
+ * `@endo/sturdyref`; the prefix supplies its rank-order position.
  *
  * `bigint` is a two-character string because each of those characters
  * individually is a valid bigint prefix (`n` for "negative" and `p` for
@@ -905,6 +903,7 @@ export const passStylePrefixes = {
   boolean: 'b',
   number: 'f',
   bigint: 'np',
+  sturdyRef: 'l',
   remotable: 'r',
   string: 's',
   null: 'v',

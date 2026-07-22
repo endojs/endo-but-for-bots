@@ -29,9 +29,9 @@
 /* global globalThis */
 
 import harden from '@endo/harden';
-import { Far } from '@endo/pass-style';
+import { makeSturdyRef } from '@endo/pass-style';
 
-/** @import { RemotableObject } from '@endo/pass-style' */
+/** @import { SturdyRef } from '@endo/pass-style' */
 
 const { defineProperty } = Object;
 
@@ -50,10 +50,6 @@ const { defineProperty } = Object;
  * not the namespace can neither read its locator (no location) nor correlate
  * two sturdyrefs of the same locator (no identification — each mint is fresh).
  *
- * @typedef {RemotableObject} SturdyRef
- */
-
-/**
  * @typedef {object} SturdyRefNamespace
  * @property {(locator: Locator) => SturdyRef} fromLocation Mint a fresh opaque
  *   sturdyref for a locator record, retaining the mapping in the shared,
@@ -94,10 +90,10 @@ export const makeSturdyRefNamespace = () => {
     // The locator record is closely held; harden it so the value behind the
     // WeakMap cannot be mutated by a later holder of the same record.
     harden(locator);
-    // A fresh opaque remotable: passStyleOf-opaque, no own property carries the
+    // A fresh opaque pass-by-copy SturdyRef: no own property carries the
     // locator, and two sturdyrefs of the same locator are distinct (no
     // identification). It never crosses the wire in this form.
-    const sturdyRef = /** @type {SturdyRef} */ (Far('SturdyRef', {}));
+    const sturdyRef = makeSturdyRef();
     // Safe because this WeakMap owns its set method.
     // eslint-disable-next-line @endo/no-polymorphic-call
     locators.set(sturdyRef, locator);

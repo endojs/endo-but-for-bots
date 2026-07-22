@@ -2548,6 +2548,7 @@ __metadata:
     "@endo/random": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/stream": "workspace:^"
+    "@endo/sturdyref": "workspace:^"
     "@endo/syrup-frame": "workspace:^"
     "@noble/curves": "npm:^1.9.0"
     "@noble/hashes": "npm:^2.0.1"
@@ -2986,7 +2987,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/sturdyref@workspace:packages/sturdyref":
+"@endo/sturdyref@workspace:^, @endo/sturdyref@workspace:packages/sturdyref":
   version: 0.0.0-use.local
   resolution: "@endo/sturdyref@workspace:packages/sturdyref"
   dependencies:

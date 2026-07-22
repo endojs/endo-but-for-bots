@@ -245,32 +245,14 @@ export type CopyTagged<
  * off-band by the realm-global `SturdyRef` shim (see `SturdyRefNamespace`) and,
  * closely held, by each CapTP instance (`@endo/ocapn`).
  *
- * `@endo/pass-style` constructs the opaque identity (`makeSturdyRef`, from
- * `@endo/pass-style/sturdy-ref.js`) and recognises/validates the shape, but
- * knows nothing of where a SturdyRef points.
+ * `@endo/pass-style` constructs the opaque identity (`makeSturdyRef`) and
+ * recognises/validates the shape, but knows nothing of where a SturdyRef
+ * points.
  */
 export type SturdyRef = {
   [PASS_STYLE]: 'sturdyRef';
   [Symbol.toStringTag]: 'SturdyRef';
 };
-
-/**
- * The realm-global, closely-held `SturdyRef` namespace installed by the
- * first-wins shim (`@endo/pass-style/sturdy-ref-shim.js`). `fromLocation` mints
- * an opaque SturdyRef bound to a locator **object** (never a URL or URN
- * string); `toLocation` reveals that object. The mapping is retained globally
- * so eval twins of OCapN or CapTP in one realm converge on it. The namespace
- * has no SES permit and must never be endowed to a child compartment.
- */
-export type SturdyRefNamespace = {
-  fromLocation(locator: object): SturdyRef;
-  toLocation(sturdyRef: SturdyRef): object | undefined;
-};
-
-declare global {
-  // eslint-disable-next-line vars-on-top, no-var
-  var SturdyRef: SturdyRefNamespace | undefined;
-}
 
 /**
  * This is an interface specification.

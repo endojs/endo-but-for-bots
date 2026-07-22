@@ -16,7 +16,8 @@
 
 import { provideSturdyRef } from './sturdyref-shim.js';
 
-/** @import { Locator, SturdyRef } from './sturdyref-shim.js' */
+/** @import { Locator } from './sturdyref-shim.js' */
+/** @import { SturdyRef } from '@endo/pass-style' */
 
 export {
   provideSturdyRef,
