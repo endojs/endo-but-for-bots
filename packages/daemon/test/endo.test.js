@@ -7604,9 +7604,12 @@ test('SortedMapStore orders arbitrary keys and filters bounded pattern scans', a
     'beta',
     'gamma',
   ];
-  for (const [index, key] of keys.entries()) {
-    await E(map).init(key, `value-${index}`);
-  }
+  await E(map).init(keys[0], 'value-0');
+  await E(map).init(keys[1], 'value-1');
+  await E(map).init(keys[2], 'value-2');
+  await E(map).init(keys[3], 'value-3');
+  await E(map).init(keys[4], 'value-4');
+  await E(map).init(keys[5], 'value-5');
 
   const expectedOrder = [...keys].sort(compareKeys);
   t.deepEqual(await E(map).keys(), expectedOrder);
