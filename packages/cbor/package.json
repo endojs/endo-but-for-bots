@@ -2,12 +2,24 @@
   "name": "@endo/cbor",
   "version": "0.1.0",
   "description": "Canonical CBOR primitives for one item",
+  "author": "Endo contributors",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/cbor"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
   "type": "module",
   "main": "./index.js",
   "exports": {
     ".": "./index.js",
     "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "exit 0",
