@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-27 |
-| **Updated** | 2026-07-20 |
+| **Updated** | 2026-07-22 |
 | **Author** | 0xPatrick (prompted) |
 | **Status** | Proposed |
 
@@ -92,10 +92,10 @@ Each is a dispatchable work item or a pointer to the design that owns it.
   The bootstrap design (and the identity boundary as a section or sibling) lives in its own `daemon-git-clone.md`; depends on the `GitRemote` composition being stable.
 
 - [x] **Reconcile `tree(ref)` and `filesystemAt(ref)` into one canonical vocabulary — a focused edit to [daemon-git-capability](daemon-git-capability.md).**
-  *Done: [daemon-git-capability](daemon-git-capability.md) § Historical Read: One API, Two Projections carries the reconciled vocabulary and both trade-offs.*
+  *Done: [daemon-git-capability](daemon-git-capability.md) § Historical Read: Canonical Entry Point and Compatibility Surface names `filesystemAt` as canonical and preserves the implementation decision for [issue #732](https://github.com/endojs/endo-but-for-bots/issues/732).*
   `tree(ref)` (returning `ReadableTree`) is specified in [daemon-git-capability](daemon-git-capability.md) § Git-Tree Backend and Design Decision 3; `filesystemAt(ref)` (returning an `@endo/endo-fs` `Filesystem`) is specified in [endo-fs-from-git](endo-fs-from-git.md).
-  They are not two competing names for one thing — they are two methods in a projection relationship: `tree(ref)` projects the narrower `ReadableTree`, `filesystemAt(ref)` lifts the same git tree into the richer `Filesystem` (the same shape the content layer exposes for the live worktree).
-  The edit names `filesystemAt(ref)` as the historical-read method and `tree(ref)` as its `ReadableTree` projection, cross-linking [endo-fs-from-git](endo-fs-from-git.md), so the canonical doc carries one historical-read API, not two.
+  `filesystemAt(ref)` is the canonical entry point because it exposes the same `Filesystem` shape the content layer uses for the live worktree. `tree(ref)` remains the currently implemented, narrower `ReadableTree` compatibility surface, rather than a documented projection of `filesystemAt`.
+  The edit names the canonical entry point, cross-links [endo-fs-from-git](endo-fs-from-git.md), and leaves the retirement decision to the implementation work in [issue #732](https://github.com/endojs/endo-but-for-bots/issues/732).
   It must carry `filesystemAt`'s two documented trade-offs into the canonical vocabulary so they are not silently lost: the `Filesystem` view's QID is **path-based, not the git OID**, and its `BlobRef.algorithm` is **`'sha256'`, not the git tree's `git-sha1`** (both reintroducible if `wrapBackend` grows a backend-supplied QID / hash hook — see [endo-fs-from-git](endo-fs-from-git.md) § Status).
   This is a documentation merge, not a new design; it is listed because letting the two names drift apart in the canonical corpus is the failure this roadmap exists to prevent.
   Small, but it must happen in the same window the canonical doc next moves.
@@ -140,9 +140,8 @@ They are named so a builder dispatch does not mistake them for gaps in the miles
 2. **The layer split is the load-bearing contribution.**
    Content / versioning / network / historical-read / bulk-storage each carry a distinct authority; every roadmap item lands in exactly one layer, and the priority order falls out of which layers gate which.
    Keeping the layers distinct is what keeps the agent from editing through git, reaching the wire through `Git`, or mutating through a history view.
-3. **Historical read is two methods in a projection relationship.**
-   `filesystemAt(ref)` (returns a `Filesystem`) is the historical-read method; `tree(ref)` (returns the narrower `ReadableTree`) is its predecessor / projection.
-   The canonical doc carries one API, reconciled rather than forked.
+3. **Historical read has one canonical entry point.**
+   `filesystemAt(ref)` (returns a `Filesystem`) is the historical-read method. `tree(ref)` (returns the narrower `ReadableTree`) is an existing compatibility surface whose retirement depends on a type-correct migration in [issue #732](https://github.com/endojs/endo-but-for-bots/issues/732).
 4. **The agent-tools layer belongs to #416, not here.**
    The agent tool adapters were this roadmap's "item 1"; PR #416 makes them concrete (`endo-agent-tools` + `agentry-agent-builder`) and wires this roadmap.
    This document defers to #416 rather than re-specifying the tool surface.

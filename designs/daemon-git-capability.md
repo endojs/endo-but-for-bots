@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-18 |
-| **Updated** | 2026-07-20 |
+| **Updated** | 2026-07-22 |
 | **Author** | 0xPatrick (prompted) |
 | **Status** | Proposed (Phases 0-5 + bulk-archive landed via #364/#365/#367, hardening via #371) |
 
@@ -15,7 +15,7 @@
 
 Define a local-git capability `Git` whose authority is derived from an already-authorized `EndoMount` (not from a path string).
 Worktree operations (status / diff / log / add / commit / branch / merge / rebase / stash) and historical reads live on `Git`; `Git.readOnly()` attenuates the cap for read-only auditor agents, matching the `EndoMount.readOnly()` idiom.
-Historical read is one API in two projections: `filesystemAt(ref)` is the historical-read method, returning an `@endo/endo-fs` `Filesystem` view of the ref's tree ([endo-fs-from-git](endo-fs-from-git.md)); `tree(ref)` projects the same tree as the narrower `ReadableTree`.
+`filesystemAt(ref)` is the canonical historical-read entry point, returning an `@endo/endo-fs` `Filesystem` view of the ref's tree ([endo-fs-from-git](endo-fs-from-git.md)). `tree(ref)` remains the existing compatibility surface returning the distinct, narrower `ReadableTree`; its retirement is an implementation decision tracked by [issue #732](https://github.com/endojs/endo-but-for-bots/issues/732), not a claim this documentation change makes.
 Path-bearing inputs are `EndoMountEntry` values, not free-form strings.
 The first backend is native git (`NativeGitBackend`) on a pinned `git >= 2.30`, with the hardening envelope (sanitized env, askpass-only authentication, allowlist, repo-local-filter rejection) called out separately from the essential `GitBackend` contract so a future JS backend can implement the essential parts without inheriting native-only methods.
 Structured result shapes for diff / show / merge / rebase / stash arrive in a later phase; the first phase returns those as text so consumers can start integrating against the path-bearing inputs immediately.
@@ -328,9 +328,9 @@ interface Git {
   stashDrop(index?: number): Promise<void>;
 
   // Historical read (one-turn read on the same capability).
-  // filesystemAt(ref) is the historical-read method; tree(ref) is its
-  // ReadableTree projection.  See § Historical Read: One API, Two
-  // Projections.
+  // filesystemAt(ref) is the canonical historical-read entry point.
+  // tree(ref) remains the existing ReadableTree compatibility surface.
+  // See § Historical Read: Canonical Entry Point and Compatibility Surface.
   filesystemAt(ref: GitRef | string): Promise<Filesystem>;
   tree(ref: GitRef | string): Promise<ReadableTree>;
 
@@ -343,16 +343,16 @@ interface Git {
 
 `tree(ref)` returns the read surface defined by `GitTreeProvider` below; the interface name remains as the documented shape of the returned read capability even though tree access lives as a method on `Git` itself.
 
-### Historical Read: One API, Two Projections
+### Historical Read: Canonical Entry Point and Compatibility Surface
 
-`filesystemAt(ref)` and `tree(ref)` are not two competing historical-read APIs — they are one API in a projection relationship, and this section is the canonical statement of it (reconciling this document with [endo-fs-from-git](endo-fs-from-git.md), per the roadmap in [daemon-git-next-steps](daemon-git-next-steps.md)):
+This section reconciles this document with [endo-fs-from-git](endo-fs-from-git.md), per the roadmap in [daemon-git-next-steps](daemon-git-next-steps.md), without claiming that the two current methods are interchangeable:
 
 - **`filesystemAt(ref)` is the historical-read method.**
   It lifts the ref's tree into the full `@endo/endo-fs` `Filesystem` shape — the same vocabulary the content layer exposes for the live worktree — so an agent inspects `HEAD~1`, another branch, or a remote-tracking ref as an ordinary filesystem: directory listings, open-file handles, range reads, `BlobRef` snapshots.
   The view is natively read-only; write verbs reject at the cap boundary.
   Its design and implementation status live in [endo-fs-from-git](endo-fs-from-git.md).
-- **`tree(ref)` is `filesystemAt`'s `ReadableTree` projection.**
-  It projects the same git tree as the narrower shared read surface ([platform-fs](platform-fs.md)), for callers that want a tree anywhere a `ReadableTree` is accepted today — checkin, checkout, staging, VFS mounting — without the richer `Filesystem` machinery.
+- **`tree(ref)` is the existing `ReadableTree` compatibility surface.**
+  It directly returns the narrower shared read surface ([platform-fs](platform-fs.md)) for callers that accept `ReadableTree` today. It is not presently implemented as a projection of `filesystemAt`: the two methods have separate implementations and result contracts. Its potential deprecation and call-site migration belong to [issue #732](https://github.com/endojs/endo-but-for-bots/issues/732), where an implementation can demonstrate a type-correct replacement before removing it.
 
 Two `filesystemAt` trade-offs travel with this vocabulary so they are not silently lost.
 As first shipped through the shared `wrapBackend` seam, the `Filesystem` view's QID was **path-based, not the git OID** (two paths at the same blob reported different QIDs), and its `BlobRef.algorithm` was **`'sha256'`, not the git tree's `git-sha1`**.
@@ -401,8 +401,8 @@ const commit = await E(git).commit('docs: update README');
 const previous = await E(git).filesystemAt('HEAD~1');
 const oldReadmeFile = await E(E(previous).root()).lookup('README.md');
 
-// ... and tree(ref) is its ReadableTree projection for callers that
-// want the narrower shared read surface
+// ... and tree(ref) remains the existing ReadableTree compatibility
+// surface for callers that want the narrower shared read surface
 const headTree = await E(git).tree('HEAD');
 const oldReadme = await E(headTree).lookup('README.md');
 const text = await E(oldReadme).text();
@@ -489,7 +489,7 @@ Without them, the design inevitably falls back to free-form relative strings and
 
 ### Read Surface
 
-The git-tree backend serves both historical-read projections (§ Historical Read: One API, Two Projections): `Git.filesystemAt(ref)` lifts a ref's tree into the full `@endo/endo-fs` `Filesystem` via the shared `wrapBackend` seam ([endo-fs-from-git](endo-fs-from-git.md)), and `Git.tree(ref)` returns the narrower `ReadableTree` (with blobs as `ReadableBlob`) directly:
+The git-tree backend serves the canonical historical-read entry point and the existing compatibility surface (§ Historical Read: Canonical Entry Point and Compatibility Surface): `Git.filesystemAt(ref)` lifts a ref's tree into the full `@endo/endo-fs` `Filesystem` via the shared `wrapBackend` seam ([endo-fs-from-git](endo-fs-from-git.md)), and `Git.tree(ref)` returns the narrower `ReadableTree` (with blobs as `ReadableBlob`) directly:
 
 ```ts
 interface GitTreeProvider {
@@ -836,7 +836,7 @@ No open questions remain on this document; revisit if real implementation surfac
    Path strings may appear at UI boundaries, but git operations consume mount-minted descriptors.
 3. **Live worktree and immutable trees are separate methods, not separate capabilities.**
    Mutable worktree operations and the historical-read methods both live on `Git`; read-only attenuation comes via `Git.readOnly()`, matching the `EndoMount.readOnly()` idiom.
-   Historical read is one API in two projections, not two APIs: `filesystemAt(ref)` is the historical-read method and `tree(ref)` is its `ReadableTree` projection (§ Historical Read: One API, Two Projections; [endo-fs-from-git](endo-fs-from-git.md)).
+   `filesystemAt(ref)` is the canonical historical-read entry point. `tree(ref)` remains the existing `ReadableTree` compatibility surface until the implementation work in [issue #732](https://github.com/endojs/endo-but-for-bots/issues/732) makes a type-correct removal decision (§ Historical Read: Canonical Entry Point and Compatibility Surface; [endo-fs-from-git](endo-fs-from-git.md)).
    An audit-grant for a read-only auditor agent is `await E(git).readOnly()`; the auditor holds an attenuated `Git`.
    See § Alternatives Considered for Tree Access Shape for the split-capability variant the design panel originally recommended and the rationale for picking attenuation instead.
 4. **Backend choice is best-effort pluggable, not contractually swappable.**
