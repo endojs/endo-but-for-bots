@@ -10,8 +10,8 @@
 import harden from '@endo/harden';
 import { thawedBytes } from '@endo/immutable-arraybuffer';
 import { E } from '@endo/eventual-send';
-import { isSturdyRef } from '@endo/pass-style/sturdy-ref.js';
-import { installSturdyRefShim } from '@endo/pass-style/sturdy-ref-shim.js';
+import { isSturdyRef } from '@endo/pass-style';
+import { fromLocation, toLocation } from '@endo/sturdyref';
 import {
   decodeSwissnum,
   encodeSwissnum,
@@ -35,24 +35,6 @@ export { isSturdyRef };
  */
 
 /**
- * Memoised handle on the realm-global `SturdyRef` namespace. Installed lazily
- * (first-wins) rather than at module load: the shim hardens its namespace with
- * `@endo/harden`, so it must be initialised **after** `lockdown` when lockdown
- * is used. Because the shim converges every eval twin of OCapN or CapTP in one
- * realm onto a single namespace, a SturdyRef minted by one twin's tracker is
- * revealable and enlivenable through another twin — the intended convergence.
- *
- * @type {import('@endo/pass-style').SturdyRefNamespace | undefined}
- */
-let sturdyRefNamespace;
-const getSturdyRefNamespace = () => {
-  if (sturdyRefNamespace === undefined) {
-    sturdyRefNamespace = installSturdyRefShim();
-  }
-  return sturdyRefNamespace;
-};
-
-/**
  * Reveal a SturdyRef's off-band locator through the closely-held realm-global
  * mapping, or `undefined` when `sturdyRef` is not a SturdyRef or has no locator
  * registered in this realm. This is the only path that yields the secret; it is
@@ -64,9 +46,7 @@ const getSturdyRefNamespace = () => {
  */
 export const getSturdyRefLocator = sturdyRef =>
   isSturdyRef(sturdyRef)
-    ? /** @type {SturdyRefLocator | undefined} */ (
-        getSturdyRefNamespace().toLocation(sturdyRef)
-      )
+    ? /** @type {SturdyRefLocator | undefined} */ (toLocation(sturdyRef))
     : undefined;
 harden(getSturdyRefLocator);
 
@@ -197,9 +177,7 @@ export const makeSturdyRefTracker = localLocator => {
       // `(location, secret, type)` locator off-band, keyed by the SturdyRef's
       // identity. The secret is never a property on the SturdyRef, and the
       // locator is reachable only through the closely-held namespace.
-      return getSturdyRefNamespace().fromLocation(
-        harden({ location, secret, type }),
-      );
+      return fromLocation(harden({ location, secret, type }));
     },
     lookup: async secretBytes => {
       const swissNum = swissnumFromBytes(thawedBytes(secretBytes));

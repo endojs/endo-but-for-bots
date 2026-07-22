@@ -62,6 +62,7 @@
     "@endo/pass-style": "workspace:^",
     "@endo/promise-kit": "workspace:^",
     "@endo/stream": "workspace:^",
+    "@endo/sturdyref": "workspace:^",
     "@endo/syrup-frame": "workspace:^",
     "@endo/utf8": "workspace:^",
     "@noble/curves": "^2.3.0",
