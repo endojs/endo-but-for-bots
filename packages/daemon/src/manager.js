@@ -890,6 +890,31 @@ const makeDaemonCore = async (
       }
     }
 
+    // Weak collection entries deliberately have no graph edge to their key.
+    // Once the graph collects a key, remove all indexed entries in one SQLite
+    // transaction and release any values whose last weak entry disappeared.
+    const collectedSet = new Set(collectedIds);
+    const weakValueReleases = collectionStoreMaker.collectWeakEntries(
+      collectedIds.filter(isLocalId),
+    );
+    for (const { storeId, ids } of weakValueReleases) {
+      if (!collectedSet.has(storeId) && formulaForId.has(storeId)) {
+        for (const valueId of ids) {
+          if (!collectedSet.has(valueId)) {
+            formulaGraph.onPetStoreRemove(storeId, valueId);
+          }
+        }
+      }
+    }
+    if (weakValueReleases.length > 0) {
+      // Graph collection is intentionally non-reentrant. Sweep after this
+      // callback returns so values whose final weak edge was removed collect
+      // in the same externally visible operation.
+      pendingCollectionCleanup.push(async () => {
+        formulaGraph.sweepUnreachable();
+      });
+    }
+
     // Snapshot controllers before dropping live values, then drop
     // synchronously so no stale controllers are accessible.
     /** @type {Array<{id: FormulaIdentifier, controller: Controller}>} */
@@ -1396,8 +1421,14 @@ const makeDaemonCore = async (
       for (const { id, formula } of entries) {
         if (formula.type === 'collection-store') {
           const { number: formulaNumber } = parseId(id);
+          if (formula.kind === 'weak-map' || formula.kind === 'weak-set') {
+            collectionStoreMaker.rebuildWeakKeyIndex(
+              /** @type {FormulaNumber} */ (formulaNumber),
+            );
+          }
           const slotIds = collectionStoreMaker.collectionRetentionSlots(
             /** @type {FormulaNumber} */ (formulaNumber),
+            formula.kind,
           );
           for (const slotId of slotIds) {
             formulaGraph.onPetStoreWrite(
@@ -3055,6 +3086,12 @@ const makeDaemonCore = async (
     },
     encodeKeyRank,
     filterLocalIds,
+    getIdForRef: mustGetIdForRef,
+    canonicalWeakKeyId: id => {
+      const formula = formulaForId.get(id);
+      return formula?.type === 'guest' ? formula.handle : id;
+    },
+    formatStoreId: number => formatId({ number, node: localNodeNumber }),
     addStoreEdges: async (storeId, ids) =>
       withFormulaGraphLock(async () => {
         for (const id of ids) {
@@ -4014,6 +4051,8 @@ const makeDaemonCore = async (
             storeValue: disallowedFn,
             makeMapStore: disallowedFn,
             makeSetStore: disallowedFn,
+            makeWeakMapStore: disallowedFn,
+            makeWeakSetStore: disallowedFn,
             submit: disallowedFn,
             sendValue: disallowedFn,
             deliver: disallowedSyncFn,
@@ -4047,7 +4086,19 @@ const makeDaemonCore = async (
           formulaNumber,
         );
       }
-      return collectionStoreMaker.makeIdentifiedSetStore(
+      if (formula.kind === 'set') {
+        return collectionStoreMaker.makeIdentifiedSetStore(
+          storeId,
+          formulaNumber,
+        );
+      }
+      if (formula.kind === 'weak-map') {
+        return collectionStoreMaker.makeIdentifiedWeakMapStore(
+          storeId,
+          formulaNumber,
+        );
+      }
+      return collectionStoreMaker.makeIdentifiedWeakSetStore(
         storeId,
         formulaNumber,
       );

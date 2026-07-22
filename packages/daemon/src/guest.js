@@ -372,6 +372,40 @@ export const makeGuestMaker = ({
       return /** @type {any} */ (value);
     };
 
+    /** @type {EndoGuest['makeWeakMapStore']} */
+    const makeWeakMapStore = async petName => {
+      const { namePath } = petNamePathFrom(petName);
+      /** @type {DeferredTasks<CollectionStoreDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        E(directory).storeIdentifier(namePath, identifiers.collectionStoreId),
+      );
+      const { id, value } = await formulateCollectionStore(
+        'weak-map',
+        tasks,
+        pinTransient,
+      );
+      await unpinTransient(id);
+      return /** @type {any} */ (value);
+    };
+
+    /** @type {EndoGuest['makeWeakSetStore']} */
+    const makeWeakSetStore = async petName => {
+      const { namePath } = petNamePathFrom(petName);
+      /** @type {DeferredTasks<CollectionStoreDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        E(directory).storeIdentifier(namePath, identifiers.collectionStoreId),
+      );
+      const { id, value } = await formulateCollectionStore(
+        'weak-set',
+        tasks,
+        pinTransient,
+      );
+      await unpinTransient(id);
+      return /** @type {any} */ (value);
+    };
+
     /** @type {EndoGuest} */
     const guest = {
       // Directory
@@ -427,6 +461,8 @@ export const makeGuestMaker = ({
       storeValue,
       makeMapStore,
       makeSetStore,
+      makeWeakMapStore,
+      makeWeakSetStore,
       submit,
       sendValue,
     };
