@@ -388,8 +388,8 @@ LLM-agent stack).*
 | [ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) | 2026-07-16 | 2026-07-22 | In Progress |
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [ocapn-tcp-syrups-framing](ocapn-tcp-syrups-framing.md) | 2026-04-23 | 2026-05-06 | Not Started |
-| [syrups](syrups.md) | 2026-05-04 | 2026-05-06 | Deprecated |
-| [cbors](cbors.md) | 2026-05-04 | 2026-05-05 | Not Started |
+| [syrup-frame](syrup-frame.md) | 2026-05-04 | 2026-05-06 | Deprecated |
+| [cbor-frame](cbor-frame.md) | 2026-05-04 | 2026-05-05 | Not Started |
 | [cbor-codec](cbor-codec.md) | 2026-07-12 | 2026-07-28 | Phase 1 implemented |
 | [trust-on-first-bind](trust-on-first-bind.md) | 2026-05-08 | 2026-05-10 | Reference |
 | [outliner-design-doc](outliner-design-doc.md) | 2026-03-17 | 2026-03-18 | In Progress |
@@ -1385,7 +1385,7 @@ have been remapped: 0 → 1, ½ → 2, 1 → 3, 2 → 4, 3 → 7, 4 → 9,
 | ocapn-network-transport-separation | M-L | 1.5 weeks | 4 | Architectural refactor (M-L bumped 1.2x) |
 | ocapn-tcp-for-test-extraction | S-M | 3 days | 4 | Code relocation |
 | ocapn-tcp-syrups-framing | S-M | 3 days | 4 | `@endo/syrups` package, new `tcp+syrups` netlayer; design merged (PR #108); impl PR #109 open |
-| ~~syrups~~ | — | — | 4 | Consolidated into `ocapn-tcp-syrups-framing` (PR 29); see [`syrups.md`](syrups.md) |
+| ~~syrup-frame~~ | — | — | 4 | Consolidated into `ocapn-tcp-syrups-framing` (PR 29); see [`syrup-frame.md`](syrup-frame.md) |
 | cbors | S-M | 3 days | 4 | New `@endo/cbor-frame` package (proposed as `@endo/cbors`); design merged with syrups in PR #86 |
 | cbor-codec | S | 2-3 days | 4 | New `@endo/cbor` package plus ocapn and slots migrations; slots adoption gated on PR #124 landing |
 | ocapn-noise-cryptographic-review | S | 1 day | 4 | External review coordination |
