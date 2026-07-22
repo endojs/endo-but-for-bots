@@ -41,6 +41,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 2
           persist-credentials: false
 
       # without this, setup-node errors on mismatched yarn versions
@@ -55,11 +56,9 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
-      # Prettier is the only lint that can meaningfully run against a
-      # doc-only change. ESLint targets `.js` sources; running it on a
-      # branch with no source diff would be a no-op.
-      - name: Run yarn lint:prettier
-        run: yarn lint:prettier
+      # ESLint targets `.js` sources and would be a no-op for this job.
+      - name: Lint documentation
+        run: yarn lint:prettier && yarn lint:markdown:test && yarn lint:markdown --base HEAD^
 
   test:
     name: test

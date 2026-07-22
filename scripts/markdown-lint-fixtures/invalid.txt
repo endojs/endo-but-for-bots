@@ -1,0 +1,17 @@
+First ordinary sentence. Second ordinary sentence.
+
+- First list sentence. Second list sentence.
+
+> First quoted sentence. Second quoted sentence.
+
+"First quoted sentence." Second quoted sentence.
+
+(First parenthesized sentence.) Second parenthesized sentence.
+
+**First emphasized sentence.** Second emphasized sentence.
+
+An inline-code sentence uses `some.method()`. Another sentence follows.
+
+A linked sentence ends with [the docs](https://example.com). Another sentence follows.
+
+What happened? Another question follows!
