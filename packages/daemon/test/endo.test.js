@@ -7542,12 +7542,14 @@ test('MapStore snapshot yields a passable CopyMap', async t => {
   const snapshot = await E(map).snapshot();
   t.deepEqual(
     [...getCopyMapEntries(snapshot)],
-    [...getCopyMapEntries(
-      makeCopyMap([
-        ['x', 10],
-        ['y', 20],
-      ]),
-    )],
+    [
+      ...getCopyMapEntries(
+        makeCopyMap([
+          ['x', 10],
+          ['y', 20],
+        ]),
+      ),
+    ],
   );
 });
 

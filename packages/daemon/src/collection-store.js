@@ -64,11 +64,8 @@ export const makeCollectionStoreMaker = ({
   addStoreEdges,
   removeStoreEdges,
 }) => {
-  const {
-    writeCollectionEntry,
-    deleteCollectionEntry,
-    listCollectionEntries,
-  } = persistence;
+  const { writeCollectionEntry, deleteCollectionEntry, listCollectionEntries } =
+    persistence;
 
   /**
    * The distinct local slot ids retained by a store's persisted entries.
@@ -166,7 +163,8 @@ export const makeCollectionStoreMaker = ({
     // durable entries forward.
     for (const row of listCollectionEntries(formulaNumber)) {
       const keySlots = JSON.parse(row.keySlots);
-      const valueSlots = row.valueSlots === null ? [] : JSON.parse(row.valueSlots);
+      const valueSlots =
+        row.valueSlots === null ? [] : JSON.parse(row.valueSlots);
       const slotIds = filterLocalIds([...keySlots, ...valueSlots]);
       entriesByRank.set(row.keyRank, {
         keyBody: row.keyBody,
