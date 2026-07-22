@@ -26,8 +26,8 @@ import {
 // (re-exported as `@endo/daemon/type-guards.js` for consumers like
 // `@endo/lal`).  See that module for the contract.
 
-// A SturdyRef is the first-class `'sturdyref'` pass-style category
-// (packages/pass-style). `M.kind('sturdyref')` admits any properly
+// A SturdyRef is the first-class `'sturdyRef'` pass-style category
+// (packages/pass-style). `M.kind('sturdyRef')` admits any properly
 // constructed SturdyRef and rejects every other passable. A SturdyRef
 // may appear anywhere a pet-name-path may on the **read** side of the
 // daemon's agent surface (lookup / identify / locate / list /
@@ -37,9 +37,9 @@ import {
 // designs/sturdy-refs-ocapn-enlivenment.md § "Daemon: SturdyRef as
 // pet-name-path substitute" (cut 3) and § "Migration / staged adoption".
 // `M.sturdyRef()` in `@endo/patterns` is a deferred follow-up (blocked on
-// the `@endo/marshal` rank-order for sturdyref); `M.kind('sturdyref')` is
+// the `@endo/marshal` rank-order for sturdyref); `M.kind('sturdyRef')` is
 // the structural recognizer used here in its place.
-const SturdyRefShape = M.kind('sturdyref');
+const SturdyRefShape = M.kind('sturdyRef');
 
 // The read-side sum: a single pet-name, a pet-name-path, or a SturdyRef.
 const NameOrPathOrSturdyRefShape = M.or(NameOrPathShape, SturdyRefShape);
