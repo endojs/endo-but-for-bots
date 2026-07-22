@@ -11,7 +11,7 @@ import { fromLocation } from '@endo/sturdyref';
  * to the formula identifier that SturdyRef resolves to.
  *
  * This mirrors the CapTP session manager's `sturdyRefDetails` WeakMap in
- * `@endo/ocapn`: `@endo/pass-style` defines the `'sturdyref'` **shape** and
+ * `@endo/ocapn`: `@endo/pass-style` defines the `'sturdyRef'` **shape** and
  * holds no binding; the trusted holder that minted a SturdyRef is the one
  * that holds its off-band resolution. Here that holder is the daemon.
  *
@@ -88,7 +88,7 @@ harden(mintSturdyRef);
  * A SturdyRef minted by another authority — an OCapN peer's CapTP session
  * manager — likewise has no local binding. Enlivening or resolving such a
  * SturdyRef requires the closely-held OCapN network capability
- * (`getSturdyRefDetails` / `enlivenSturdyRef` in `@endo/ocapn`) bridged to
+ * (`getSturdyRefLocator` / `enlivenSturdyRef` in `@endo/ocapn`) bridged to
  * the daemon's `internalizeLocator` flow; that bridge is a tracked
  * follow-up (design § "Enlivenment is on demand" and the #539 dependency).
  * Until it lands, a non-locally-minted SturdyRef rejects cleanly rather than

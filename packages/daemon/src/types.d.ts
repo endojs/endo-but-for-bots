@@ -502,11 +502,11 @@ export type KnownPeersStoreFormula = {
   type: 'known-peers-store';
 };
 
-export type PetStoreFormula = {
 type SturdyRefStoreFormula = {
   type: 'sturdyref-store';
 };
 
+export type PetStoreFormula = {
   type: 'pet-store';
 };
 
