@@ -184,16 +184,16 @@ strong stores expose the following surfaces (the initial `MapStore` has
 
 ```js
 export const MapStoreInterface = M.interface('MapStore', {
-  has:     M.callWhen(KeyShape).returns(M.boolean()),
-  get:     M.callWhen(KeyShape).returns(M.any()),
-  init:    M.callWhen(KeyShape, M.any()).returns(),
-  set:     M.callWhen(KeyShape, M.any()).returns(),
-  delete:  M.callWhen(KeyShape).returns(),
-  getSize: M.callWhen().returns(M.number()),
-  keys:    M.callWhen(M.opt(M.pattern())).returns(M.arrayOf(M.any())),
-  values:  M.callWhen(M.opt(M.pattern())).returns(M.arrayOf(M.any())),
-  entries: M.callWhen(M.opt(M.pattern())).returns(M.arrayOf(M.array())),
-  snapshot: M.callWhen().returns(M.any()), // a passable CopyMap
+  has:      M.call(KeyShape).returns(M.boolean()),
+  get:      M.call(KeyShape).returns(M.any()),
+  init:     M.call(KeyShape, M.any()).returns(),
+  set:      M.call(KeyShape, M.any()).returns(),
+  delete:   M.call(KeyShape).returns(),
+  getSize:  M.call().returns(M.number()),
+  keys:     M.call(M.opt(M.pattern())).returns(M.arrayOf(M.any())),
+  values:   M.call(M.opt(M.pattern())).returns(M.arrayOf(M.any())),
+  entries:  M.call(M.opt(M.pattern())).returns(M.arrayOf(M.array())),
+  snapshot: M.call().returns(M.any()), // a passable CopyMap
 });
 ```
 
@@ -229,7 +229,7 @@ For all map-like kinds, semantics match `@agoric/store`:
   bridge symmetric with the existing write-once `storeValue`.
 
 Every mutating method **writes through to SQLite in the same turn** before
-resolving, so a crash between the in-memory update and the row write cannot
+returning, so a crash between the in-memory update and the row write cannot
 diverge (the row write is the commit). Iteration methods return arrays rather
 than live iterators so the CapTP boundary stays simple.
 
