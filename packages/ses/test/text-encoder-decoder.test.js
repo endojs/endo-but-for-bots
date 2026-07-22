@@ -4,7 +4,8 @@ import test from 'ava';
 import '../index.js';
 
 // Ensure TextEncoder/TextDecoder are available on the global (Node.js host).
-const hasTextCodecs = typeof TextEncoder === 'function' && typeof TextDecoder === 'function';
+const hasTextCodecs =
+  typeof TextEncoder === 'function' && typeof TextDecoder === 'function';
 
 lockdown();
 
@@ -18,7 +19,11 @@ test('TextEncoder is present in post-lockdown compartments', t => {
     return;
   }
   const c = new Compartment();
-  t.is(c.evaluate('typeof TextEncoder'), 'function', 'TextEncoder is a function');
+  t.is(
+    c.evaluate('typeof TextEncoder'),
+    'function',
+    'TextEncoder is a function',
+  );
 });
 
 test('TextDecoder is present in post-lockdown compartments', t => {
@@ -27,7 +32,11 @@ test('TextDecoder is present in post-lockdown compartments', t => {
     return;
   }
   const c = new Compartment();
-  t.is(c.evaluate('typeof TextDecoder'), 'function', 'TextDecoder is a function');
+  t.is(
+    c.evaluate('typeof TextDecoder'),
+    'function',
+    'TextDecoder is a function',
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -42,7 +51,11 @@ test('TextEncoder identity matches across compartments', t => {
   const startTE = globalThis.TextEncoder;
   const c = new Compartment();
   const compartmentTE = c.evaluate('TextEncoder');
-  t.is(compartmentTE, startTE, 'TextEncoder is identity-equal across compartments');
+  t.is(
+    compartmentTE,
+    startTE,
+    'TextEncoder is identity-equal across compartments',
+  );
 });
 
 test('TextDecoder identity matches across compartments', t => {
@@ -53,7 +66,11 @@ test('TextDecoder identity matches across compartments', t => {
   const startTD = globalThis.TextDecoder;
   const c = new Compartment();
   const compartmentTD = c.evaluate('TextDecoder');
-  t.is(compartmentTD, startTD, 'TextDecoder is identity-equal across compartments');
+  t.is(
+    compartmentTD,
+    startTD,
+    'TextDecoder is identity-equal across compartments',
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -73,7 +90,10 @@ test('TextEncoder.prototype is frozen', t => {
     t.pass('skipped: host does not provide TextEncoder/TextDecoder');
     return;
   }
-  t.truthy(Object.isFrozen(TextEncoder.prototype), 'TextEncoder.prototype is frozen');
+  t.truthy(
+    Object.isFrozen(TextEncoder.prototype),
+    'TextEncoder.prototype is frozen',
+  );
 });
 
 test('TextDecoder constructor is frozen', t => {
@@ -89,7 +109,10 @@ test('TextDecoder.prototype is frozen', t => {
     t.pass('skipped: host does not provide TextEncoder/TextDecoder');
     return;
   }
-  t.truthy(Object.isFrozen(TextDecoder.prototype), 'TextDecoder.prototype is frozen');
+  t.truthy(
+    Object.isFrozen(TextDecoder.prototype),
+    'TextDecoder.prototype is frozen',
+  );
 });
 
 // ---------------------------------------------------------------------------
