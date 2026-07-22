@@ -66,6 +66,30 @@ const client = await makeOcapn({
 Supply a persistent 32-byte `secretKey` to keep a stable designator
 across restarts; a fresh random key is generated when omitted.
 
+## The validation listener
+
+`demo/ocapn-iroh-server.mjs` is a standalone boot entry that stands up a
+single OCapN instance over this netlayer, serving a demo `Greeter`
+bootstrap and printing its computed location (designator + hints) as JSON:
+
+```sh
+# stable EndpointId across restarts; prints location JSON to stdout
+ENDO_IROH_SECRET_KEY_FILE=./ocapn-iroh-secret.key \
+  node demo/ocapn-iroh-server.mjs [location-out.json]
+```
+
+It reads the persistent secret from `ENDO_IROH_SECRET_KEY_FILE` (a 64-hex
+file it creates `0600` on first run), so the published designator is stable.
+`ENDO_IROH_PUBLISH_PRIVATE=1` publishes loopback/private direct addresses as
+dialing hints for same-host tests (leave it off for a real deployment). An
+optional path argument (or `ENDO_IROH_LOCATION_FILE`) also writes the
+location JSON to a file, mirroring the websocket demo's location file.
+
+This is the server half of the `ocapn-cbor-quic-iroh` lane described in
+[minion.town's `designs/ocapn-iroh-validation-lane.md`](https://github.com/kriscendobot/minion.town/blob/main/designs/ocapn-iroh-validation-lane.md);
+the corresponding `endo-ocapn-iroh.service` unit runs exactly this entry
+with a persisted key and — unlike the Noise-WS lanes — no Caddy route.
+
 ## The native binding
 
 The netlayer drives iroh through the
