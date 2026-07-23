@@ -20,6 +20,15 @@ The final packaging step owns the push and must remove this file first.
   declarations with `yarn build:types`.
 - Reproduced the posting-time baseline exactly: Exo has four diagnostics,
   Marshal has three diagnostics, and Patterns has 24 diagnostics.
+- Audited and repaired all 24 Patterns diagnostics. Eight shorthand and typed
+  collection diagnostics came from lossy `any`/intersection inference; two
+  deep-record diagnostics came from contextual widening; and the bare-return
+  diagnostic exposed a default generic widened to `any` inside an interface.
+  The remaining 13 fixture sites were stale exact expectations or used the
+  wrong concrete-remotable spelling; one diagnostic was the literal-narrowing
+  assertion itself.
+- A clean composite build followed by the focused Patterns shared-runner command
+  is green.
 - Commit map:
   - `10a01ca33 test(types): align opt-in tsd contracts` establishes the shared
     runner and opts in six existing suites.
@@ -32,15 +41,20 @@ The final packaging step owns the push and must remove this file first.
   unresolved-contract resolution.
 - Keep the PR draft and do not mutate its body, comments, review state, or
   issue #830.
+- Preserve concrete non-InterfaceGuard remotable types with
+  `CastedPattern<T>`; `M.remotable<T>()` intentionally resolves non-interface
+  payloads to `any` for compatibility.
+- Validate `splitRecord` fields through a mapped intersection so inline nested
+  pattern values remain narrow while non-Pattern values are still rejected.
 
 ## Pending work
 
-- Classify and repair the Exo diagnostics, prove changed coverage is
-  load-bearing, and commit the coherent package change with refreshed state.
+- Commit the coherent Patterns source, fixture, and package opt-in change with
+  this refreshed state.
 - Classify and repair the Marshal diagnostics, prove changed coverage is
   load-bearing, and commit the coherent package change with refreshed state.
-- Audit Patterns by root cause, repair only established contracts, prove
-  changed coverage is load-bearing, and either enable or explicitly defer it.
+- Classify and repair the Exo diagnostics, prove changed coverage is
+  load-bearing, and commit the coherent package change with refreshed state.
 - Run all required type, lint, runtime, formatting, uniformity, freshness, and
   diff gates; measure root `test:types` wall time.
 - Package the branch by removing `STATE.md`, confirming it is absent from the

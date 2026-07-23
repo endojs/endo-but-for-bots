@@ -47,7 +47,7 @@ const passable: Passable = null as any;
   const str = 'some string';
   if (isKey(str)) {
     // doesn't widen
-    expectType<string>(str);
+    expectType<'some string'>(str);
   }
 }
 
@@ -206,14 +206,14 @@ const passable: Passable = null as any;
   const guard = M.call().rest(PathShape).returns(M.any());
   type Fn = TypeFromMethodGuard<typeof guard>;
   // (...args: string[]) — not (...args: string[][])
-  expectType<(...args: string[]) => any>(null as unknown as Fn);
+  expectType<(...args: string[]) => Passable>(null as unknown as Fn);
 }
 
 // Non-array rest pattern still wraps: `.rest(M.string())` → `string[]`
 {
   const guard = M.call().rest(M.string()).returns(M.any());
   type Fn = TypeFromMethodGuard<typeof guard>;
-  expectType<(...args: string[]) => any>(null as unknown as Fn);
+  expectType<(...args: string[]) => Passable>(null as unknown as Fn);
 }
 
 // =============================================================================
@@ -474,10 +474,10 @@ expectType<null>(null as unknown as TypeFromPattern<null>);
   expectType<1 | 2 | 3>(null as unknown as T);
 }
 
-// M.remotable<Brand>() with a branded type
+// CastedPattern preserves a concrete, non-InterfaceGuard remotable type.
 {
   type Brand = RemotableBrand<{}, { getBrand: () => string }>;
-  const p = M.remotable<Brand>('Brand');
+  const p: CastedPattern<Brand> = M.remotable('Brand');
   type T = TypeFromPattern<typeof p>;
   expectType<Brand>(null as unknown as T);
 }
@@ -570,13 +570,11 @@ expectType<null>(null as unknown as TypeFromPattern<null>);
   expectType<() => number>(null as unknown as Fn);
 }
 
-// Sync method with optional args: (string, number | undefined) => Passable
+// Sync method with optional args: (string, number?) => void
 {
   const mg = M.call(M.string()).optional(M.number()).returns();
   type Fn = TypeFromMethodGuard<typeof mg>;
-  expectType<(arg0: string, arg1: number | undefined) => Passable>(
-    null as unknown as Fn,
-  );
+  expectType<(arg0: string, arg1?: number) => void>(null as unknown as Fn);
 }
 
 // Async method via callWhen: (...) => Promise<string>
@@ -649,7 +647,7 @@ expectType<null>(null as unknown as TypeFromPattern<null>);
   });
   type Methods = TypeFromInterfaceGuard<typeof CounterI>;
   expectType<{
-    incr: (arg0: number | undefined) => number;
+    incr: (arg0?: number) => number;
     decr: (arg0: number) => number;
     getValue: () => number;
   }>(null as unknown as Methods);
@@ -675,21 +673,21 @@ expectType<null>(null as unknown as TypeFromPattern<null>);
 {
   type Brand = RemotableBrand<{}, { getAllegedName: () => string }>;
   type Issuer = RemotableBrand<{}, { getAmountOf: (payment: any) => any }>;
+  const BrandShape: CastedPattern<Brand> = M.remotable('Brand');
+  const IssuerShape: CastedPattern<Issuer> = M.remotable('Issuer');
 
   const IssuerRecordShape = M.splitRecord({
-    brand: M.remotable<Brand>('Brand'),
-    issuer: M.remotable<Issuer>('Issuer'),
+    brand: BrandShape,
+    issuer: IssuerShape,
   });
   type IssuerRecord = TypeFromPattern<typeof IssuerRecordShape>;
   expectType<{ brand: Brand; issuer: Issuer }>(null as unknown as IssuerRecord);
 
   // Full Exo pattern: define interface, infer methods type, use for impl
   const ExchangeI = M.interface('Exchange', {
-    getIssuer: M.call().returns(M.remotable<Issuer>('Issuer')),
-    swap: M.call(M.remotable<Brand>('Brand'), M.nat()).returns(M.nat()),
-    swapAsync: M.callWhen(M.await(M.remotable<Brand>('Brand'))).returns(
-      M.nat(),
-    ),
+    getIssuer: M.call().returns(IssuerShape),
+    swap: M.call(BrandShape, M.nat()).returns(M.nat()),
+    swapAsync: M.callWhen(M.await(BrandShape)).returns(M.nat()),
   });
   type ExchangeMethods = TypeFromInterfaceGuard<typeof ExchangeI>;
 
@@ -736,14 +734,16 @@ expectType<null>(null as unknown as TypeFromPattern<null>);
 {
   const mg = M.call(M.opt(M.string())).returns(M.boolean());
   type Fn = TypeFromMethodGuard<typeof mg>;
-  expectType<(arg0: string | undefined) => boolean>(null as unknown as Fn);
+  expectType<(arg0: string | void) => boolean>(null as unknown as Fn);
 }
 
 // M.eref in method guard position
 {
   const mg = M.call(M.eref(M.nat())).returns(M.string());
   type Fn = TypeFromMethodGuard<typeof mg>;
-  expectType<(arg0: bigint | Promise<any>) => string>(null as unknown as Fn);
+  expectType<(arg0: bigint | PromiseLike<any>) => string>(
+    null as unknown as Fn,
+  );
 }
 
 // Nested arrayOf inside splitRecord
@@ -847,7 +847,10 @@ expectType<null>(null as unknown as TypeFromPattern<null>);
 
 // M.or with many branches
 {
-  const p = M.or(M.string(), M.nat(), M.boolean(), M.remotable());
+  const RemotableShape: CastedPattern<
+    RemotableObject | RemotableBrand<any, any>
+  > = M.remotable();
+  const p = M.or(M.string(), M.nat(), M.boolean(), RemotableShape);
   type T = TypeFromPattern<typeof p>;
   expectType<
     string | bigint | boolean | RemotableObject | RemotableBrand<any, any>
@@ -1126,11 +1129,8 @@ expectType<null>(null as unknown as TypeFromPattern<null>);
 
   type Methods = TypeFromInterfaceGuard<typeof ChainStorageNodeI>;
 
-  // setValue: async method, bare .returns() defaults to MatcherOf<'kind', 'undefined'>
-  // so the return type is Promise<undefined> — NOT void, NOT null
-  expectType<Promise<undefined>>(
-    null as unknown as ReturnType<Methods['setValue']>,
-  );
+  // setValue: async method, bare .returns() defaults to void.
+  expectType<Promise<void>>(null as unknown as ReturnType<Methods['setValue']>);
 
   // getPath: sync, returns string
   expectType<string>(null as unknown as ReturnType<Methods['getPath']>);

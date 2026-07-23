@@ -77,6 +77,25 @@ type TFTuple<T extends readonly any[]> = T extends readonly [
   ? [TypeFromPattern<H>, ...TFTuple<R>]
   : [];
 
+/** Detect `any` without also matching `unknown`. */
+type IsAny<T> = 0 extends 1 & T ? true : false;
+
+/** Keep the key portion of a pattern without leaving noisy intersections. */
+type KeyFromPattern<P> =
+  IsAny<TypeFromPattern<P>> extends true
+    ? Key
+    : TypeFromPattern<P> extends Key
+      ? TypeFromPattern<P>
+      : Extract<TypeFromPattern<P>, Key>;
+
+/** Keep the passable portion of a pattern without noisy intersections. */
+type PassableFromPattern<P> =
+  IsAny<TypeFromPattern<P>> extends true
+    ? Passable
+    : TypeFromPattern<P> extends Passable
+      ? TypeFromPattern<P>
+      : Extract<TypeFromPattern<P>, Passable>;
+
 /**
  * Leaf matcher lookup table.
  * These matcher types return their Payload type directly or a fixed type, with no
@@ -171,18 +190,21 @@ type TFStructural<K extends string, Payload> = K extends 'kind'
           ? TFAnd<Payload>
           : Passable
         : K extends 'arrayOf'
-          ? Array<TypeFromPattern<Payload>>
+          ? IsAny<Payload> extends true
+            ? CopyArray
+            : Array<TypeFromPattern<Payload>>
           : K extends 'recordOf'
-            ? Payload extends readonly [any, infer VP]
-              ? Record<string, TypeFromPattern<VP>>
-              : Record<string, any>
+            ? IsAny<Payload> extends true
+              ? CopyRecord
+              : Payload extends readonly [any, infer VP]
+                ? Record<string, TypeFromPattern<VP>>
+                : Record<string, any>
             : K extends 'mapOf'
-              ? Payload extends readonly [infer KP, infer VP]
-                ? CopyMap<
-                    TypeFromPattern<KP> & Key,
-                    TypeFromPattern<VP> & Passable
-                  >
-                : CopyMap
+              ? IsAny<Payload> extends true
+                ? CopyMap
+                : Payload extends readonly [infer KP, infer VP]
+                  ? CopyMap<KeyFromPattern<KP>, PassableFromPattern<VP>>
+                  : CopyMap
               : K extends 'splitRecord'
                 ? Payload extends readonly [infer Req, infer Opt, infer Rest]
                   ? TFSplitRecord<Req, Opt, Rest>
@@ -196,14 +218,18 @@ type TFStructural<K extends string, Payload> = K extends 'kind'
                       ? TFSplitArray<Req, Opt>
                       : CopyArray
                   : K extends 'setOf'
-                    ? CopySet<TypeFromPattern<Payload> & Key>
+                    ? IsAny<Payload> extends true
+                      ? CopySet
+                      : CopySet<KeyFromPattern<Payload>>
                     : K extends 'bagOf'
-                      ? CopyBag<TypeFromPattern<Payload> & Key>
+                      ? IsAny<Payload> extends true
+                        ? CopyBag
+                        : CopyBag<KeyFromPattern<Payload>>
                       : K extends 'tagged'
                         ? Payload extends readonly [infer TP, infer PP]
                           ? CopyTagged<
                               TypeFromPattern<TP> & string,
-                              TypeFromPattern<PP> & Passable
+                              PassableFromPattern<PP>
                             >
                           : CopyTagged
                         : K extends 'remotable'
@@ -291,12 +317,10 @@ type TFOptionalTuple<T extends readonly any[]> = {
  * - `M.remotable<typeof SomeInterfaceGuard>()`: the Payload carries the
  *   InterfaceGuard type. We resolve to the interface's methods with
  *   remotable branding, giving facet-isolated return types.
- * - `M.remotable<SomeTypedef>()` (or via a TypedPattern cast): the
- *   Payload is a concrete remotable type like `Brand`. Return it
- *   directly so guards using these shapes preserve the actual type.
- * - Unparameterized (`M.remotable()`): Payload defaults to `any` so
- *   the inferred type is compatible with any concrete remotable
- *   interface, matching `M.promise()`.
+ * - Other payloads, including unparameterized `M.remotable()`, resolve to
+ *   `any` so they remain compatible with any concrete remotable interface,
+ *   matching `M.promise()`. Use `CastedPattern<T>` to claim a concrete
+ *   non-InterfaceGuard remotable type.
  */
 type TFRemotable<Payload> =
   Payload extends InterfaceGuard<infer MG>

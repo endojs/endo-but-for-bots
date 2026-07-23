@@ -251,6 +251,11 @@ export type AllLimits = {
 
 export type Limits = Partial<AllLimits>;
 
+/** Validate record values as Patterns without contextually widening them. */
+type PatternRecord<R extends CopyRecord<any>> = {
+  [K in keyof R]: R[K] extends Pattern ? R[K] : never;
+};
+
 /**
  * It is either a PassStyle other than 'tagged', or, if the underlying
  * PassStyle is 'tagged', then the `getTag` value for tags that are
@@ -328,7 +333,10 @@ export type PatternMatchers = {
    * `M.string()`. If `payloadPatt` is omitted, it defaults to
    * `M.any()`.
    */
-  tagged: <TP extends Pattern = Pattern, PP extends Pattern = Pattern>(
+  tagged: <
+    TP extends Pattern = MatcherOf<'string', string>,
+    PP extends Pattern = MatcherOf<'any'>,
+  >(
     tagPatt?: TP,
     payloadPatt?: PP,
   ) => MatcherOf<'tagged', [TP, PP]>;
@@ -587,12 +595,12 @@ export type PatternMatchers = {
    * but may omit properties that appear on `optional`.
    */
   splitRecord: <
-    const Req extends CopyRecord<Pattern> = CopyRecord<Pattern>,
-    const Opt extends CopyRecord<Pattern> = {},
+    const Req extends CopyRecord<any> = CopyRecord<Pattern>,
+    const Opt extends CopyRecord<any> = {},
     const Rest extends Pattern = never,
   >(
-    required: Req,
-    optional?: Opt,
+    required: Req & PatternRecord<Req>,
+    optional?: Opt & PatternRecord<Opt>,
     rest?: Rest,
   ) => MatcherOf<'splitRecord', [Req, Opt, Rest]>;
 
@@ -919,9 +927,18 @@ export type MethodGuardReturns<
   OptArgs extends ArgGuard[] = ArgGuard[],
   RestGuard extends SyncValueGuard = SyncValueGuard,
 > = {
-  returns: <RG extends SyncValueGuard = MatcherOf<'kind', 'undefined'>>(
-    returnGuard?: RG,
-  ) => MethodGuard<CK, Args, OptArgs, RG, RestGuard>;
+  returns: {
+    (): MethodGuard<
+      CK,
+      Args,
+      OptArgs,
+      MatcherOf<'kind', 'undefined'>,
+      RestGuard
+    >;
+    <RG extends SyncValueGuard>(
+      returnGuard: RG,
+    ): MethodGuard<CK, Args, OptArgs, RG, RestGuard>;
+  };
 };
 
 /**
