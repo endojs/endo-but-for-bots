@@ -37,6 +37,15 @@ The final packaging step owns the push and must remove this file first.
 - Updated Marshal's `parse` declaration and the two CapTP protocol decode
   boundaries that knowingly refine `fromCapData` output. A clean composite
   build and the focused Marshal shared-runner command are green.
+- Audited and repaired all four Exo diagnostics. The `PromiseLike<any>` and
+  defaulted optional `bigint` mismatches were stale exact expectations. The kit
+  parameter was a stale contextual-inference assumption: the public declaration
+  intentionally requires an implementation annotation to preserve consumer
+  method types, now verified on the returned facet. The `Promise<any>` result
+  was the same bare-return defect corrected in the Patterns commit and now
+  remains exactly `Promise<void>` in Exo's vstorage fixture.
+- The focused Exo shared-runner command is green after the clean composite
+  build.
 - Commit map:
   - `10a01ca33 test(types): align opt-in tsd contracts` establishes the shared
     runner and opts in six existing suites.
@@ -44,6 +53,9 @@ The final packaging step owns the push and must remove this file first.
   - `b5c94da10 fix(patterns): align inferred type contracts (#840)` removes
     three inference defects, aligns stale fixture expectations, and opts the
     Patterns suite into the shared runner.
+  - `4d0fcec59 fix(marshal): remove decoded value any leak (#840)` returns
+    `unknown` from untyped CapData decoding, narrows trusted protocol consumers,
+    aligns `AtomStyle` assignability checks, and opts in Marshal.
 
 ## Decisions
 
@@ -60,10 +72,8 @@ The final packaging step owns the push and must remove this file first.
 
 ## Pending work
 
-- Commit the coherent Marshal source, fixture, collateral consumer narrowing,
-  and package opt-in change with this refreshed state.
-- Classify and repair the Exo diagnostics, prove changed coverage is
-  load-bearing, and commit the coherent package change with refreshed state.
+- Commit the coherent Exo fixture and package opt-in change with this refreshed
+  state.
 - Run all required type, lint, runtime, formatting, uniformity, freshness, and
   diff gates; measure root `test:types` wall time.
 - Package the branch by removing `STATE.md`, confirming it is absent from the

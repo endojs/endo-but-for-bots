@@ -29,7 +29,8 @@
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
     "test": "ses-ava",
-    "test:c8": "c8 ${C8_OPTIONS:-} ses-ava"
+    "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
+    "test:types": "node ../../scripts/run-tsd.mjs --typings index.d.ts --files 'test/*.test-d.ts'"
   },
   "dependencies": {
     "@endo/common": "workspace:^",

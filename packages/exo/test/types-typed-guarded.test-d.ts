@@ -37,8 +37,9 @@ const CounterI = M.interface('Counter', {
   const counter = makeCounter(0n);
   expectAssignable<Passable>(counter);
 
-  // The exo's `incr` has the impl's param name `step`
-  expectType<(step: bigint) => bigint>(counter.incr);
+  // The exo's `incr` preserves the impl's parameter name and defaulted
+  // optionality.
+  expectType<(step?: bigint) => bigint>(counter.incr);
   expectType<() => bigint>(counter.read);
 }
 

@@ -100,11 +100,11 @@ import { makeExo, defineExoClass, defineExoClassKit } from '../index.js';
 // M.promise() as a plain (non-awaited) arg: the runtime passes the Promise
 // object straight through to the implementation (no unwrapping).
 // M.promise() has default Payload `any`, and TFStructural's 'promise' branch
-// produces Promise<any>.
+// produces PromiseLike<any>.
 {
   const mg = M.callWhen(M.promise()).returns(M.string());
   type Fn = TypeFromMethodGuard<typeof mg>;
-  expectType<(p: Promise<any>) => Promise<string>>(null as unknown as Fn);
+  expectType<(p: PromiseLike<any>) => Promise<string>>(null as unknown as Fn);
 }
 
 // M.callWhen with mixed args: M.await + plain pattern
@@ -242,9 +242,7 @@ import { makeExo, defineExoClass, defineExoClassKit } from '../index.js';
         },
       },
       loader: {
-        async loadData(key) {
-          // key: bigint (awaited nat)
-          expectType<bigint>(key);
+        async loadData(key: bigint) {
           return this.facets.data;
         },
       },
@@ -252,6 +250,9 @@ import { makeExo, defineExoClass, defineExoClassKit } from '../index.js';
   );
 
   const kit = makeKit('hello');
+  expectType<[key: bigint]>(
+    null as unknown as Parameters<typeof kit.loader.loadData>,
+  );
   // loadData returns Promise<DataFacet> — typed with get() method
   type LoadResult = ReturnType<typeof kit.loader.loadData>;
   expectAssignable<Promise<{ get: () => string }>>(
