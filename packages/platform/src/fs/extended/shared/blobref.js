@@ -11,7 +11,7 @@
  * range.
  */
 
-import { createHash } from 'node:crypto';
+import { sha256 } from '@endo/sha256';
 
 import { makeExo } from '@endo/exo';
 import { encodeBase64 } from '@endo/base64';
@@ -36,12 +36,11 @@ const textDecoder = new TextDecoder();
  */
 export const makeBlobRefExo = (bytes, help) => {
   const captured = harden(new Uint8Array(bytes));
-  const hashBytes = createHash('sha256').update(captured).digest();
+  const hashBytes = sha256(captured);
   const info = harden({
     algorithm: 'sha256',
-    // `encodeBase64` (over the `Buffer`, a `Uint8Array` subclass) matches the
-    // base64 hash spelling every other implementer in this PR uses, rather
-    // than the Node-only `Buffer.prototype.toString('base64')`.
+    // `encodeBase64` operates over the raw `Uint8Array` digest and matches
+    // the base64 hash spelling every other implementer in this PR uses.
     hash: encodeBase64(hashBytes),
     size: BigInt(captured.length),
   });

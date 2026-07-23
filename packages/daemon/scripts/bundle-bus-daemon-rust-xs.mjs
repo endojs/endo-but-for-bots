@@ -46,12 +46,17 @@ const EXCLUDED_PACKAGES = new Set([
   'ws',
 ]);
 
+// Conditions for conditional export resolution in XS.
+// The "xs" condition selects platform-specific entries (e.g., sha256-xs.js).
+const CONDITIONS = new Set(['import', 'default', 'endo', 'xs']);
+
 // Bundle the daemon entry point
 const daemonUrl = url.pathToFileURL(
   path.resolve(__dirname, '../src/bus-manager-rust-xs.js'),
 ).href;
 
 const daemonBundle = await makeBundle(readPowers, daemonUrl, {
+  conditions: CONDITIONS,
   packageDependenciesHook: ({ canonicalName, dependencies }) => {
     const filtered = new Set(
       [...dependencies].filter(dep => !EXCLUDED_PACKAGES.has(dep)),

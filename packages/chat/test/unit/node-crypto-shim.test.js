@@ -1,15 +1,14 @@
 // @ts-check
 
-// The shim is consumed at runtime by `@endo/platform/fs/extended` via the Vite
-// `node:crypto` alias (see `vite.config.js`). These tests pin the
-// digest output against canonical SHA-256 vectors and assert the
-// shape `node:crypto` callers depend on: indexable bytes plus a
-// Buffer-like `toString(encoding)` (`base64` / `hex`).
+// The browser build's `node:crypto` alias (see vite.config.js) is now
+// provided by `@endo/sha256/sha256-browser.js`. This test file verifies
+// that the createHash compatibility layer on sha256-browser matches
+// canonical SHA-256 vectors and the shape node:crypto callers depend on.
 
 import '@endo/init/debug.js';
 
 import test from 'ava';
-import { createHash } from '../../node-crypto-shim.js';
+import { createHash } from '@endo/sha256/sha256-browser.js';
 
 // SHA-256 vectors from NIST FIPS 180-2 ("abc" / two-block) and the
 // well-known empty-input vector.
