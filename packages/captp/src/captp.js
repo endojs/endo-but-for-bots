@@ -649,11 +649,14 @@ export const makeCapTP = (
       //   answers first; otherwise goes through unserializer
       const { questionID, target, trap } = obj;
 
-      const [prop, args] = /** @type {
-        | [PropertyKey]
-        | [null, any[]]
-        | [PropertyKey, any[]]
-      } */ (unserialize(obj.method));
+      const [prop, args] =
+        /**
+         * @type {
+         *   | [PropertyKey]
+         *   | [null, any[]]
+         *   | [PropertyKey, any[]]
+         * }
+         */ (unserialize(obj.method));
       let val;
       if (answers.has(target)) {
         val = answers.get(target);
