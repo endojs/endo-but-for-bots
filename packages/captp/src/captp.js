@@ -19,8 +19,8 @@ import { makeFinalizingMap } from './finalize.js';
 /**
  * @typedef {
  *   | [PropertyKey]
- *   | [null, any[]]
- *   | [PropertyKey, any[]]
+ *   | [null, unknown[]]
+ *   | [PropertyKey, unknown[]]
  * } DecodedMethod
  */
 
@@ -752,7 +752,7 @@ export const makeCapTP = (
       const resultP = trapIteratorResultP.get(questionID);
       resultP || Fail`CTP_TRAP_ITERATE did not expect ${questionID}`;
 
-      const [method, args] = /** @type {[string, any[]]} */ (
+      const [method, args] = /** @type {[string, unknown[]]} */ (
         unserialize(serialized)
       );
 
