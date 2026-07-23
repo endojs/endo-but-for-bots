@@ -1,0 +1,55 @@
+---
+title: Two sentences. Still metadata.
+---
+
+# A heading. With punctuation.
+
+One ordinary sentence appears on this line.
+The next ordinary sentence starts on its own line.
+
+This is one deliberately long sentence whose words wrap across several physical
+lines without beginning another sentence until the final punctuation mark is
+reached here.
+
+- A list sentence stays on one line.
+  Its next sentence starts on a continuation line.
+- A long list sentence can wrap across
+  physical lines before it ends.
+
+> A quoted sentence stays on one line.
+> Its next sentence starts on another quoted line.
+
+Abbreviations e.g. and i.e. stay with Mr. Smith, Dr. Jones, and A. B. Example.
+Initials such as J. R. R. Tolkien stay inside one sentence.
+Versions v1.2.3 and Node.js 22.1 combine with decimal 3.14 in one sentence.
+Visit https://example.com/a.b?x=1.2 or use `some.method()` in one sentence.
+Read [the API v2.1 docs](https://example.com/api.v2) in one sentence.
+
+| Table sentence one. | Table sentence two. |
+| --- | --- |
+| One. Two. | Three. Four. |
+
+[two-sentence-label]: https://example.com "One sentence. Another sentence."
+
+<div title="One sentence. Another sentence.">
+HTML prose has one sentence. HTML prose has another sentence.
+</div>
+
+```js
+const prose = 'One sentence. Another sentence.';
+```
+
+"A quoted sentence ends here."
+The sentence after the quote starts on another line.
+
+(A parenthesized sentence ends here.)
+The sentence after the parenthesis starts on another line.
+
+**An emphasized sentence ends here.**
+The sentence after the emphasis starts on another line.
+
+An inline-code sentence uses `some.method()`.
+The sentence after inline code starts on another line.
+
+A linked sentence ends with [the docs](https://example.com).
+The sentence after the link starts on another line.
