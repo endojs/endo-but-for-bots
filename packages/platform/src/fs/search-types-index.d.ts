@@ -1,1 +1,1 @@
-export type * from './search.types.js';
+export type * from './search-types.js';
