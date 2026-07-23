@@ -11,6 +11,7 @@ import {
   pathEntryMethodGuards,
   pathEntryIssuerMethodGuards,
   rangeReadMethodGuards,
+  readableBlobRangeMethodGuards,
   getInfoMethodGuard,
 } from '@endo/platform/fs/lite';
 import {
@@ -625,6 +626,7 @@ export const InspectorInterface = M.interface('EndoInspector', {
 export const BlobInterface = M.interface('EndoBlob', {
   ...readableBlobMethodGuards,
   ...rangeReadMethodGuards,
+  ...readableBlobRangeMethodGuards,
 });
 
 const PathSegmentsShape = M.arrayOf(M.string());
