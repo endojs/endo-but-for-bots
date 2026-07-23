@@ -24,6 +24,7 @@
     "lint:eslint": "eslint '**/*.js'",
     "test": "ava",
     "test:c8": "c8 ${C8_OPTIONS:-} ava",
+    "test:types": "node ../../scripts/run-tsd.mjs --typings ../eventual-send/src/no-shim.d.ts --files 'test/*.test-d.ts'",
     "test:xs": "exit 0"
   },
   "dependencies": {
