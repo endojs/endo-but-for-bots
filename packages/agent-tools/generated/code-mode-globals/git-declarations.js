@@ -204,6 +204,8 @@ type GitLiteReadableBlob = {
     streamBase64: (synPromise: unknown) => Promise<unknown>;
     text: () => Promise<string>;
     json: () => Promise<any>;
+    range: (start: bigint, end: bigint) => Promise<GitLiteReadableBlob>;
+    textRange: (startLine: number, endLine: number) => Promise<GitLiteReadableBlob>;
     help: (method?: string) => string;
 };
 type GitLiteReadableTree = {
@@ -483,6 +485,8 @@ type GitLiteReadableBlob = {
     streamBase64: (synPromise: unknown) => Promise<unknown>;
     text: () => Promise<string>;
     json: () => Promise<any>;
+    range: (start: bigint, end: bigint) => Promise<GitLiteReadableBlob>;
+    textRange: (startLine: number, endLine: number) => Promise<GitLiteReadableBlob>;
     help: (method?: string) => string;
 };
 type GitLiteReadableTree = {
