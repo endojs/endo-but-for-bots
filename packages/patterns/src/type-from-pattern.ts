@@ -319,8 +319,9 @@ type TFOptionalTuple<T extends readonly any[]> = {
  *   remotable branding, giving facet-isolated return types.
  * - Other payloads, including unparameterized `M.remotable()`, resolve to
  *   `any` so they remain compatible with any concrete remotable interface,
- *   matching `M.promise()`. Use `CastedPattern<T>` to claim a concrete
- *   non-InterfaceGuard remotable type.
+ *   matching `M.promise()`.
+ *   Use `CastedPattern<T>` to claim a concrete non-InterfaceGuard remotable
+ *   type.
  */
 type TFRemotable<Payload> =
   Payload extends InterfaceGuard<infer MG>
