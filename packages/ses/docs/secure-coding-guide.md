@@ -1,7 +1,7 @@
 # Secure Coding Guidelines under SES
 
 SES is a JavaScript-based programming environment that
-makes it easier to write *defensively consistent* programs. We define
+makes it easier to write _defensively consistent_ programs. We define
 **defensive consistency** as a program (or function, or service.. something
 written in code) that provides correct service to its correctly-behaving
 customers, despite also being subjected to incorrectly-behaving customers.
@@ -53,7 +53,7 @@ function makeLogger() {
 
 What can go wrong? First of all, the reader has too much authority: it gets a
 mutable copy of the original list, which means it could remove items from the
-log (this customer is *reader*, not a *reader-and-deleter*):
+log (this customer is _reader_, not a _reader-and-deleter_):
 
 ```js
 function reader(log) {
@@ -67,7 +67,7 @@ service to a (different) correctly-functioning customer:
 
 ```js
 function writer1(write) {
-  Array.prototype.push = function(msg) {
+  Array.prototype.push = function (msg) {
     console.log('haha I ate your message');
   };
 }
@@ -108,7 +108,7 @@ still giving the reader too much authority:
 
 ```js
 function writer(write) {
-  Array.prototype.push = function(msg) {
+  Array.prototype.push = function (msg) {
     console.log('haha I ate your message');
   }; // throws error: Array.prototype is frozen
 }
@@ -140,7 +140,7 @@ function makeLogger() {
 This still suffers from a problem: it grants a communication channel between
 multiple holders of one of the API functions. Two principles of
 object-capability security are **no ambient authority**, and **connectivity
-begets connectivity**. That means the *only* way for two objects to talk to
+begets connectivity**. That means the _only_ way for two objects to talk to
 each other or have any causal influence over each other is for there to be a
 path in the object graph that reaches both of them. Every object in that path
 gets to decide how much influence to allow.
@@ -149,16 +149,16 @@ The log Array is obviously a communication channel between writers and
 readers: that one is explicit and intentional. The surprising channel is
 through the `write` function itself (and `read` too), because in JavaScript,
 `Function`s are just callable `Object`s, and Objects are mutable. SES freezes
-the *prototypes* of `Object` and `Function`, but it is up to application code
+the _prototypes_ of `Object` and `Function`, but it is up to application code
 to freeze any new instances it makes.
 
 ```js
 function writer1(write) {
-  write.messageToWriter2 = "psst hey buddy";
+  write.messageToWriter2 = 'psst hey buddy';
 }
 
 function writer2(write) {
-  console.log("got message", write.messageToWriter2);
+  console.log('got message', write.messageToWriter2);
 }
 ```
 
@@ -219,7 +219,7 @@ induce bad results for correctly-behaving customers):
 
 ```js
 function writer1(updown) {
-  updown.decrement = function() {
+  updown.decrement = function () {
     console.log('haha today is backwards day');
     updown.increment();
   };
@@ -261,7 +261,7 @@ place where you keep losing every time. You (as the owner of the container in
 which the game runs) would like to be able to erase its memory, or prevent it
 from remembering things in the first place.
 
-The `reader` is being granted a *mutable* array, albeit a separate copy than
+The `reader` is being granted a _mutable_ array, albeit a separate copy than
 the one the logger is relying upon. If everyone else has been careful to not
 give any long-term storage to the reader, then this would violate that plan.
 To avoid this, we should `harden` the array before returning it:
@@ -286,15 +286,15 @@ properties could have been used to store data as well. Each `read()` call is
 made by a single caller, so a mutable return value isn't opening up an
 obvious communication channel between previously non-communicating parties.
 But the mutability of that Array is effectively enabling communication across
-*time*, between two subsequent instances of the same party.
+_time_, between two subsequent instances of the same party.
 
 You should get into the habit of applying `harden()` to all objects, just
 before you return from each function. Remember that `harden` is recursive,
 which has two consequences:
 
-* you don't need to `harden` an object that will be included as a property of
+- you don't need to `harden` an object that will be included as a property of
   some other hardened object: you only have to `harden` the top-most object
-* any Arrays reachable from the hardened object will become immutable
+- any Arrays reachable from the hardened object will become immutable
 
 ## More Patterns
 
@@ -451,7 +451,6 @@ For the sample attack, the coercion step will invoke the attacker's
 something that can be converted to a primitive value. That commits them to
 their `Haha` string, which can then be correctly examined by `s.search`.
 
-
 ### Promises Prevent Reentrancy Hazards
 
 ```js
@@ -469,35 +468,35 @@ function makePubSub() {
       s(msg);
     }
   }
-  return harden({subscribe, unsubscribe, publish});
+  return harden({ subscribe, unsubscribe, publish });
 }
 ```
 
 The synchronous invocation of attacker-controlled callbacks introduces a
 variety of ordering hazards:
 
-* if the callback throws an exception, some number of other subscribers won't
+- if the callback throws an exception, some number of other subscribers won't
   receive the message
-* if the callback adds a new subscriber, the new subscriber may or may not
+- if the callback adds a new subscriber, the new subscriber may or may not
   get called, depending upon the iterator order and where the subscriber
   lands in the list (note that Sets have improved iteration-ordering
   properties, so this is not as unpredictable as it would be with other
   collection types or in other languages)
-* if the callback removes an existing subscriber, they may or may not receive
+- if the callback removes an existing subscriber, they may or may not receive
   this message, depending upon where they were in the list
-* if the callback publishes a new message, the two messages might be received
+- if the callback publishes a new message, the two messages might be received
   in different orders by different subscribers
 
 The simple fix to all of these hazards is to defer the delivery of the
 message to a future turn, by using a Promise:
 
 ```js
-  // secure
-  function publish(msg) {
-    for (const s of subscribers) {
-      Promise.resolve(s).then(s => s(msg));
-    }
+// secure
+function publish(msg) {
+  for (const s of subscribers) {
+    Promise.resolve(s).then(s => s(msg));
   }
+}
 ```
 
 JavaScript defines `Promise.resolve(x)` to return a real Promise. If `x` was
@@ -505,7 +504,7 @@ not already a Promise, this returns a new Promise that is already resolved to
 `x`. When we invoke the `.then` callback, it schedules an invocation of the
 provided function (`s => s(msg)`, which therefore just calls `s(msg)`) for
 some future turn of the event loop. The important property is that `s()`
-won't get invoked in *this* turn: our `publish()` loop will be safely
+won't get invoked in _this_ turn: our `publish()` loop will be safely
 complete before the subscriber's callback gets a chance to run.
 
 In JavaScript, if `x` is already a Promise, `Promise.resolve(x)` returns it

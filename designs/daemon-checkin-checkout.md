@@ -1,11 +1,11 @@
 # Daemon Checkin / Checkout Commands
 
-| | |
-|---|---|
-| **Created** | 2026-03-17 |
-| **Updated** | 2026-05-19 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-03-17            |
+| **Updated** | 2026-05-19            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | **Complete**          |
 
 ## Status
 
@@ -60,7 +60,7 @@ filesystem and the daemon's formula store.
 
 The `endo store` command can ingest a single file as a `readable-blob`,
 and the `mkweblet` verb can extract a zip archive into a `readable-tree`
-for weblet hosting.  But neither provides a direct way to:
+for weblet hosting. But neither provides a direct way to:
 
 - **Check in** a local directory as a `readable-tree` of
   `readable-blob` formulas, preserving directory structure.
@@ -80,7 +80,7 @@ snapshots, seeding agent workspaces, or exporting results.
 #### `endo checkin` (`endo ci`)
 
 Reads a local filesystem tree (or zip archive) into the daemon as a
-hierarchy of `readable-tree` and `readable-blob` formulas.  Returns the
+hierarchy of `readable-tree` and `readable-blob` formulas. Returns the
 formula identifier of the root `readable-tree`.
 
 **Directory mode (default):**
@@ -91,7 +91,7 @@ endo ci <path> -n <name> [--as <agent>]
 ```
 
 Recursively walks `<path>`, storing each file as a `readable-blob` and
-each directory level as a `readable-tree`.  The root tree is written to
+each directory level as a `readable-tree`. The root tree is written to
 the agent's pet store under `<name>`.
 
 **Zip mode (`-z`):**
@@ -102,7 +102,7 @@ endo ci -z <path> -n <name> [--as <agent>]
 ```
 
 Reads `<path>` as a zip archive, extracts its entries, and builds the
-same `readable-tree` / `readable-blob` hierarchy.  Equivalent to
+same `readable-tree` / `readable-blob` hierarchy. Equivalent to
 directory mode but from a zip file instead of a directory.
 
 **Zip from stdin:**
@@ -127,8 +127,8 @@ endo co <name> <path> [--as <agent>]
 ```
 
 Resolves `<name>` to a `readable-tree`, walks the tree recursively, and
-recreates the directory structure at `<path>`.  Each `readable-blob`
-is streamed to a local file.  `<path>` must not already exist (to
+recreates the directory structure at `<path>`. Each `readable-blob`
+is streamed to a local file. `<path>` must not already exist (to
 prevent accidental overwrites).
 
 **Zip mode (`-z`):**
@@ -147,24 +147,24 @@ endo checkout -z <name> [--as <agent>] > archive.zip
 endo co -z <name> --stdout [--as <agent>] > archive.zip
 ```
 
-Writes the zip archive to stdout.  Useful for piping to other tools.
+Writes the zip archive to stdout. Useful for piping to other tools.
 
 ### Flag Summary
 
-| Flag | Short | Commands | Description |
-|------|-------|----------|-------------|
-| `--name <name>` | `-n` | `checkin` | Pet name for the root `readable-tree` |
-| `--as <agent>` | `-a` | both | Agent to act as |
-| `--zip` | `-z` | both | Interpret input as zip / produce zip output |
-| `--stdin` | | `checkin` | Read zip archive from stdin (requires `-z`) |
-| `--stdout` | | `checkout` | Write zip archive to stdout (requires `-z`) |
+| Flag            | Short | Commands   | Description                                 |
+| --------------- | ----- | ---------- | ------------------------------------------- |
+| `--name <name>` | `-n`  | `checkin`  | Pet name for the root `readable-tree`       |
+| `--as <agent>`  | `-a`  | both       | Agent to act as                             |
+| `--zip`         | `-z`  | both       | Interpret input as zip / produce zip output |
+| `--stdin`       |       | `checkin`  | Read zip archive from stdin (requires `-z`) |
+| `--stdout`      |       | `checkout` | Write zip archive to stdout (requires `-z`) |
 
 Positional arguments:
 
-| Position | `checkin` | `checkout` |
-|----------|-----------|------------|
-| 1st | `<path>` — local directory or zip file | `<name>` — pet name of `readable-tree` |
-| 2nd | — | `<path>` — local directory or zip file to write |
+| Position | `checkin`                              | `checkout`                                      |
+| -------- | -------------------------------------- | ----------------------------------------------- |
+| 1st      | `<path>` — local directory or zip file | `<name>` — pet name of `readable-tree`          |
+| 2nd      | —                                      | `<path>` — local directory or zip file to write |
 
 ### Checkin Algorithm
 
@@ -203,15 +203,15 @@ formulateTree(tree):
     return formulate(randomHex256(), formula)
 ```
 
-**Content deduplication** is automatic.  The content store is keyed by
+**Content deduplication** is automatic. The content store is keyed by
 SHA-256: identical files (within the same checkin or across different
-checkins) share the same `store-sha256/` entry.  However, each file
+checkins) share the same `store-sha256/` entry. However, each file
 produces its own `readable-blob` formula (distinct formula number,
-same `content` hash).  This matches the existing `formulateReadableBlob`
+same `content` hash). This matches the existing `formulateReadableBlob`
 behavior.
 
 **Empty directories** produce a `readable-tree` with an empty `entries`
-record.  This is a valid formula.
+record. This is a valid formula.
 
 #### Zip Mode
 
@@ -240,7 +240,7 @@ buildTreeFromZipEntries(zipEntries):
 
 Zip extraction reuses the algorithm from `daemon-weblet-application`
 (lines 287-351) but is available as a standalone command without weblet
-coupling.  Both `checkin -z` (reading) and `checkout -z` (writing) use
+coupling. Both `checkin -z` (reading) and `checkout -z` (writing) use
 `@endo/zip` with its new compression support for DEFLATE inflation and
 deflation.
 
@@ -267,23 +267,23 @@ writeTree(tree, dirPath):
             await writeTree(value, localEntryPath)
 ```
 
-**Type discrimination.**  The checkout code must distinguish
-`readable-blob` (files) from `readable-tree` (directories).  Two
+**Type discrimination.** The checkout code must distinguish
+`readable-blob` (files) from `readable-tree` (directories). Two
 approaches:
 
-1. **Duck typing:** Call `E(value).list()`.  If it succeeds, it is a
-   tree; if it throws, it is a blob.  Fragile but requires no new
+1. **Duck typing:** Call `E(value).list()`. If it succeeds, it is a
+   tree; if it throws, it is a blob. Fragile but requires no new
    interface methods.
 
 2. **Formula type query (preferred):** The `readable-tree` and
    `readable-blob` formulas already carry their type in the formula
-   store.  Expose a `type()` method on both interfaces (or use the
-   existing locator format which encodes the formula type).  The
+   store. Expose a `type()` method on both interfaces (or use the
+   existing locator format which encodes the formula type). The
    checkout code resolves the pet name to a locator, inspects the type,
    and dispatches accordingly.
 
 The `locate()` method on directories already returns a locator string
-that encodes the formula type (e.g., `?type=readable-tree`).  The
+that encodes the formula type (e.g., `?type=readable-tree`). The
 checkout implementation can use this:
 
 ```
@@ -318,7 +318,7 @@ addTreeToZip(writer, tree, prefix):
 ### Daemon-Side Methods
 
 The checkin operation requires a new method on the host/agent interface
-that orchestrates the recursive tree formulation.  The checkout
+that orchestrates the recursive tree formulation. The checkout
 operation can be implemented entirely client-side (in the CLI) using
 existing `list()`, `lookup()`, and `streamBase64()` methods.
 
@@ -333,13 +333,13 @@ checkinTree: M.callWhen(
 ```
 
 The CLI walks the local directory structure and sends it to the daemon
-as a structured reader.  The daemon receives the directory listing,
+as a structured reader. The daemon receives the directory listing,
 streams each file into the content store, and formulates the tree
 bottom-up.
 
-**Alternative: CLI-side formulation.**  The CLI could call
+**Alternative: CLI-side formulation.** The CLI could call
 `formulateReadableBlob` for each file and `formulateReadableTree` for
-each directory, building the tree entirely from the client side.  This
+each directory, building the tree entirely from the client side. This
 requires exposing `formulateReadableTree` as a host method:
 
 ```ts
@@ -352,11 +352,12 @@ formulateReadableTree: M.callWhen(
 
 This approach is simpler: the CLI handles filesystem walking (which it
 can do directly via Node.js APIs), and the daemon handles formula
-creation (which it already knows how to do).  The CLI calls
+creation (which it already knows how to do). The CLI calls
 `storeBlob()` for each file (reusing the existing method), then calls
 `formulateReadableTree()` with the collected entry IDs.
 
 The CLI-side approach is preferred because:
+
 - `storeBlob()` already exists and handles streaming.
 - The daemon does not need to understand local filesystem walking.
 - The CLI has direct access to `fs` APIs for reading directories.
@@ -374,7 +375,7 @@ storeTree: M.callWhen(
 ).returns(M.string()),                 // formula identifier
 ```
 
-This is the tree analog of `storeBlob`.  The CLI calls `storeBlob` for
+This is the tree analog of `storeBlob`. The CLI calls `storeBlob` for
 each file, then `storeTree` for each directory level (bottom-up),
 finally `storeTree` for the root with `-n <name>`.
 
@@ -383,6 +384,7 @@ finally `storeTree` for the root with `-n <name>`.
 #### Ignored Entries
 
 The checkin command ignores:
+
 - Symbolic links (no formula representation; print a warning).
 - Special files (devices, sockets, FIFOs).
 - `.git` directories (common and large; print a note).
@@ -392,17 +394,17 @@ The checkin command ignores:
 #### Entry Name Validation
 
 `readable-tree` entries are keyed by single-segment names (no `/` or
-`..`).  The checkin command validates each directory entry name against
-this constraint.  In practice, all valid filenames on POSIX and Windows
+`..`). The checkin command validates each directory entry name against
+this constraint. In practice, all valid filenames on POSIX and Windows
 systems satisfy this constraint because `/` is not allowed in filenames
 and `..` is a reserved name.
 
 #### File Permissions and Metadata
 
 `readable-tree` and `readable-blob` formulas store **content only**, not
-metadata (permissions, timestamps, ownership).  This is intentional:
+metadata (permissions, timestamps, ownership). This is intentional:
 the formulas represent immutable content snapshots, not filesystem
-replicas.  On checkout, files are created with the process's default
+replicas. On checkout, files are created with the process's default
 umask.
 
 #### Large Trees
@@ -422,20 +424,20 @@ in a future optimization.
 #### Maximum Depth
 
 The checkin command enforces a maximum directory depth (default 64
-levels) to prevent pathological inputs.  This is a CLI-side guard, not a
+levels) to prevent pathological inputs. This is a CLI-side guard, not a
 daemon constraint.
 
 ### Relationship to `endo store` and `mkweblet`
 
-| Command | Input | Output | Use Case |
-|---------|-------|--------|----------|
-| `endo store -p <file> -n <name>` | Single file | `readable-blob` | Store one file |
-| `endo checkin <dir> -n <name>` | Directory tree | `readable-tree` | Store a file tree |
-| `endo checkin -z <zip> -n <name>` | Zip archive | `readable-tree` | Store a zip as a tree |
-| `endo mkweblet <name>` | `readable-tree` | weblet | Host a tree as a web app |
+| Command                           | Input           | Output          | Use Case                 |
+| --------------------------------- | --------------- | --------------- | ------------------------ |
+| `endo store -p <file> -n <name>`  | Single file     | `readable-blob` | Store one file           |
+| `endo checkin <dir> -n <name>`    | Directory tree  | `readable-tree` | Store a file tree        |
+| `endo checkin -z <zip> -n <name>` | Zip archive     | `readable-tree` | Store a zip as a tree    |
+| `endo mkweblet <name>`            | `readable-tree` | weblet          | Host a tree as a web app |
 
 `endo checkin -z` replaces the zip extraction that was previously
-embedded inside `mkweblet`.  The `mkweblet` verb can be simplified to
+embedded inside `mkweblet`. The `mkweblet` verb can be simplified to
 accept a `readable-tree` directly (already checked in) rather than
 performing extraction itself:
 
@@ -459,15 +461,15 @@ For Familiar (Electron), this means paths on the user's local machine.
 For a remote daemon (Docker), this means paths inside the container —
 less useful unless the container mounts a host volume.
 
-The Chat commands are secondary to the CLI commands.  The primary
+The Chat commands are secondary to the CLI commands. The primary
 workflow is CLI-driven.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|-------------|
-| [daemon-weblet-application](daemon-weblet-application.md) | Defines `readable-tree` formula type and zip extraction algorithm.  This design reuses both and proposes exposing them as standalone commands. |
-| [daemon-capability-filesystem](daemon-capability-filesystem.md) | Explores filesystem capabilities.  Checkin/checkout is complementary: it moves content between the local FS and daemon formulas, while Dir/File capabilities provide live confined access. |
+| Design                                                          | Relationship                                                                                                                                                                              |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [daemon-weblet-application](daemon-weblet-application.md)       | Defines `readable-tree` formula type and zip extraction algorithm. This design reuses both and proposes exposing them as standalone commands.                                             |
+| [daemon-capability-filesystem](daemon-capability-filesystem.md) | Explores filesystem capabilities. Checkin/checkout is complementary: it moves content between the local FS and daemon formulas, while Dir/File capabilities provide live confined access. |
 
 ## Implementation Phases
 
@@ -528,43 +530,43 @@ design:
 1. **Checkin builds formulas from the CLI side, not the daemon side.**
    The CLI walks the local directory (using Node.js `fs` APIs it already
    has), calls `storeBlob()` for each file, and `storeTree()` for each
-   directory.  The daemon does not need filesystem walking logic.  This
+   directory. The daemon does not need filesystem walking logic. This
    keeps the daemon focused on formula management and avoids giving it
    ambient filesystem access.
 
-2. **Checkout is entirely CLI-side.**  The CLI resolves the tree via
+2. **Checkout is entirely CLI-side.** The CLI resolves the tree via
    `list()`, `lookup()`, and `streamBase64()` — all existing methods.
    No new daemon methods are needed for checkout.
 
 3. **`readable-tree` entries store formula IDs, not content hashes.**
    Each entry in the tree points to a formula identifier (which may be a
-   `readable-blob` or a nested `readable-tree`).  The content hash is
+   `readable-blob` or a nested `readable-tree`). The content hash is
    one level of indirection away, inside the `readable-blob` formula.
    This preserves the formula graph for GC and allows the same content
    hash to back multiple formulas with different identities.
 
-4. **Zip mode reuses the same tree formulation.**  Whether the input is
+4. **Zip mode reuses the same tree formulation.** Whether the input is
    a directory or a zip file, the result is the same `readable-tree` /
-   `readable-blob` hierarchy.  The zip is just an alternative
-   serialization of a file tree.  This means `endo checkin ./dist -n app`
+   `readable-blob` hierarchy. The zip is just an alternative
+   serialization of a file tree. This means `endo checkin ./dist -n app`
    and `endo checkin -z dist.zip -n app` produce structurally identical
    formula trees (given identical content).
 
-5. **No metadata preservation.**  Formulas store content only.
-   Permissions, timestamps, and ownership are not captured.  This
+5. **No metadata preservation.** Formulas store content only.
+   Permissions, timestamps, and ownership are not captured. This
    simplifies the model and avoids platform-specific metadata concerns.
    If metadata preservation is needed in the future, it can be added as
    an optional sidecar formula without changing the core tree structure.
 
-6. **Symlinks are skipped with a warning.**  The `readable-tree` model
-   has no concept of symlinks.  Following symlinks could create cycles
-   or reference files outside the intended tree.  Skipping them is the
+6. **Symlinks are skipped with a warning.** The `readable-tree` model
+   has no concept of symlinks. Following symlinks could create cycles
+   or reference files outside the intended tree. Skipping them is the
    safe default.
 
-7. **`.endoignore` for exclusion.**  Rather than inventing a new flag
+7. **`.endoignore` for exclusion.** Rather than inventing a new flag
    syntax for exclusion patterns, checkin respects a `.endoignore` file
-   (`.gitignore` syntax) in the root directory.  This is familiar to
-   developers and composable with existing tooling.  `.git` directories
+   (`.gitignore` syntax) in the root directory. This is familiar to
+   developers and composable with existing tooling. `.git` directories
    are always ignored regardless of `.endoignore`.
 
 ## Prompt
@@ -574,5 +576,5 @@ design:
 > filesystem snapshot into a tree of readable-tree and readable-blob
 > formulas in the daemon's content address store, and give both of them
 > a `--zip` (`-z`) flag for indicating the content of a zip file instead
-> of an ordinary file.  The `-n` name flag and `--as` flag should be
+> of an ordinary file. The `-n` name flag and `--as` flag should be
 > consistent with other commands.

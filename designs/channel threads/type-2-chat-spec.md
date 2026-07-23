@@ -10,7 +10,7 @@ Type 2 is a hybrid between a chat and a threaded forum. Think of a Reddit post's
 
 - The chat view displays messages in a **tree structure rendered upside-down** relative to Reddit.
 - The **latest message** is at the bottom of the viewport.
-- Above it is the message it replies to, and above that is the message *that* replies to, and so on — the current active chain reads bottom-up.
+- Above it is the message it replies to, and above that is the message _that_ replies to, and so on — the current active chain reads bottom-up.
 - When a subtree is expanded, it dominates the channel view.
 - Users can **collapse threads inline**, hiding branches they aren't currently interested in.
 

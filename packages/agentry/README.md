@@ -34,7 +34,9 @@ import { defineAgent } from '@endo/agentry';
 const makeAgent = defineAgent({
   model: 'sonnet', // a profile id, or a concrete pi-ai Model
   instructions: 'You are a helpful agent.',
-  tools: [/* model-facing AgentTools */],
+  tools: [
+    /* model-facing AgentTools */
+  ],
 });
 
 const agent = makeAgent(/* powers? */);

@@ -10,6 +10,7 @@ Whether an object is in the same vat, a different vat, or across a network,
 `E()` provides a consistent API that always returns promises.
 
 This enables:
+
 - **Uniform communication**: Same code for local and remote objects
 - **Promise pipelining**: Chain operations without waiting for resolution
 - **Message ordering**: Preserve message order per target
@@ -51,14 +52,15 @@ const counter = makeCounter(10);
 
 // Send message, get promise
 const resultP = E(counter).increment(5);
-const result = await resultP;  // 15
+const result = await resultP; // 15
 
 // Works even if counter is a promise
 const counterP = Promise.resolve(counter);
-const result2 = await E(counterP).increment(3);  // 18
+const result2 = await E(counterP).increment(3); // 18
 ```
 
 **Key property:** Works uniformly whether the target is:
+
 - A local object
 - A local promise for an object
 - A remote presence in another vat
@@ -74,11 +76,11 @@ Eventual get: retrieve a property, returning a promise for its value.
 ```javascript
 const config = harden({
   timeout: 5000,
-  retries: 3
+  retries: 3,
 });
 
 const timeoutP = E.get(config).timeout;
-const timeout = await timeoutP;  // 5000
+const timeout = await timeoutP; // 5000
 ```
 
 Useful for accessing properties on remote objects or promises.
@@ -97,6 +99,7 @@ E.sendOnly(logger).log('Event occurred');
 ```
 
 **When to use:**
+
 - Don't need the return value
 - Want to optimize latency (no promise creation)
 - Logging, notifications, fire-and-forget operations
@@ -112,14 +115,16 @@ Shorthand for promise handling with turn tracking:
 E.when(
   E(counter).getValue(),
   value => console.log('Value:', value),
-  error => console.error('Error:', error)
+  error => console.error('Error:', error),
 );
 
 // Equivalent to:
-E(counter).getValue().then(
-  value => console.log('Value:', value),
-  error => console.error('Error:', error)
-);
+E(counter)
+  .getValue()
+  .then(
+    value => console.log('Value:', value),
+    error => console.error('Error:', error),
+  );
 ```
 
 Primarily useful in contexts that need explicit turn tracking for debugging.
@@ -156,10 +161,10 @@ Without pipelining, you'd need to await each step:
 
 ```javascript
 // Without pipelining: 4 round trips
-const mint = await bootstrap.getMint();        // wait
-const purse = await mint.makePurse();          // wait
-const payment = await purse.withdraw(100);     // wait
-await receiverPurse.deposit(100, payment);     // wait
+const mint = await bootstrap.getMint(); // wait
+const purse = await mint.makePurse(); // wait
+const payment = await purse.withdraw(100); // wait
+await receiverPurse.deposit(100, payment); // wait
 
 // With pipelining: messages sent immediately, only wait at end
 ```
@@ -168,6 +173,7 @@ This can **dramatically reduce latency** in distributed systems by eliminating
 round trips.
 
 **How it works:**
+
 - Messages to unresolved promises are queued
 - When the promise resolves, queued messages are delivered in order
 - Each message returns a new promise that resolves when the operation completes
@@ -195,9 +201,9 @@ Write local code, deploy distributed, no changes needed.
 Messages to the same target are delivered and processed in send order:
 
 ```javascript
-E(counter).increment(1);  // executed first
-E(counter).increment(2);  // executed second
-E(counter).increment(3);  // executed third
+E(counter).increment(1); // executed first
+E(counter).increment(2); // executed second
+E(counter).increment(3); // executed third
 // Order is guaranteed
 ```
 
@@ -230,13 +236,13 @@ import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 
 const CounterI = M.interface('Counter', {
-  increment: M.call(M.number()).returns(M.number())
+  increment: M.call(M.number()).returns(M.number()),
 });
 
 const counter = makeExo('Counter', CounterI, {
   increment(n) {
-    return count += n;
-  }
+    return (count += n);
+  },
 });
 
 // E() provides async wrapper
@@ -247,6 +253,7 @@ const resultP = E(counter).increment(5);
 ```
 
 Even for local exos, using `E()` provides benefits:
+
 - **Consistent async behavior** throughout your codebase
 - **Turn-based execution** prevents reentrancy bugs
 - **Error isolation** via promise rejection
@@ -263,15 +270,19 @@ import { HandledPromise } from '@endo/eventual-send';
 // HandledPromise extends native Promise
 const hp = new HandledPromise((resolve, reject, resolveWithPresence) => {
   // Three ways to settle the promise
-  resolve(value);           // Normal resolution
-  reject(reason);           // Rejection
-  resolveWithPresence(h);   // Resolve with a remote presence
+  resolve(value); // Normal resolution
+  reject(reason); // Rejection
+  resolveWithPresence(h); // Resolve with a remote presence
 }, handler);
 
 // Handler intercepts operations
 const handler = {
-  get(target, prop) { /* ... */ },
-  applyMethod(target, verb, args) { /* ... */ }
+  get(target, prop) {
+    /* ... */
+  },
+  applyMethod(target, verb, args) {
+    /* ... */
+  },
 };
 ```
 
@@ -297,6 +308,7 @@ test('counter increments correctly', async t => {
 ```
 
 Benefits:
+
 - Tests mirror production code
 - Async behavior is tested
 - Easy to mock remote objects

@@ -69,35 +69,35 @@ const fragment = renderInlineTokens(tokens, document);
 
 ### Inline
 
-| Syntax | Renders as |
-|--------|-----------|
-| `*text*` | `<em>` (italic) |
-| `**text**` | `<strong>` (bold) |
-| `_text_` | `<em>` (italic) |
-| `__text__` | `<strong>` (bold) |
-| `~text~` | `<s>` (strikethrough) |
-| `~~text~~` | `<s>` (strikethrough) |
-| `` `code` `` | `<code>` (inline code) |
-| ` `` code `` ` | Multi-backtick code span |
-| `[text](url)` | `<a>` (link, opens in new tab) |
-| `\*` | Literal `*` (escape) |
+| Syntax         | Renders as                     |
+| -------------- | ------------------------------ |
+| `*text*`       | `<em>` (italic)                |
+| `**text**`     | `<strong>` (bold)              |
+| `_text_`       | `<em>` (italic)                |
+| `__text__`     | `<strong>` (bold)              |
+| `~text~`       | `<s>` (strikethrough)          |
+| `~~text~~`     | `<s>` (strikethrough)          |
+| `` `code` ``   | `<code>` (inline code)         |
+| ` `` code `` ` | Multi-backtick code span       |
+| `[text](url)`  | `<a>` (link, opens in new tab) |
+| `\*`           | Literal `*` (escape)           |
 
 Delimiter recognition follows CommonMark flanking rules:
 `foo_bar_baz` does not trigger emphasis, but `foo*bar*baz` does.
 
 ### Block
 
-| Syntax | Renders as |
-|--------|-----------|
-| `# Heading` | `<h1>` through `<h6>` |
-| ` ``` ` | Fenced code block (`<pre><code>`) |
-| ` ~~~ ` | Tilde code fence |
-| `- item` | Unordered list |
-| `1. item` | Ordered list |
-| Indented sub-items | Nested lists |
-| `> text` | Blockquote |
-| `---` | Horizontal rule |
-| `\| a \| b \|` | GFM table |
+| Syntax             | Renders as                        |
+| ------------------ | --------------------------------- |
+| `# Heading`        | `<h1>` through `<h6>`             |
+| ` ``` `            | Fenced code block (`<pre><code>`) |
+| `~~~`              | Tilde code fence                  |
+| `- item`           | Unordered list                    |
+| `1. item`          | Ordered list                      |
+| Indented sub-items | Nested lists                      |
+| `> text`           | Blockquote                        |
+| `---`              | Horizontal rule                   |
+| `\| a \| b \|`     | GFM table                         |
 
 Code fences support N >= 3 backticks or tildes; a fence opened
 with 4 backticks can contain triple-backtick content.
@@ -135,10 +135,10 @@ Render a block array to DOM.
 
 Options:
 
-| Option | Type | Default |
-|--------|------|---------|
-| `document` | `Document` | `globalThis.document` |
-| `highlightCode` | `(code, language, document) => DocumentFragment` | Plain text |
+| Option          | Type                                             | Default               |
+| --------------- | ------------------------------------------------ | --------------------- |
+| `document`      | `Document`                                       | `globalThis.document` |
+| `highlightCode` | `(code, language, document) => DocumentFragment` | Plain text            |
 
 ## Testing
 

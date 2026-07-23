@@ -1,11 +1,11 @@
 # Daemon Git Capability over EndoMount
 
-| | |
-|---|---|
-| **Created** | 2026-05-18 |
-| **Updated** | 2026-07-06 |
-| **Author** | 0xPatrick (prompted) |
-| **Status** | Proposed (Phases 0-5 + bulk-archive landed via #364/#365/#367, hardening via #371) |
+|             |                                                                                    |
+| ----------- | ---------------------------------------------------------------------------------- |
+| **Created** | 2026-05-18                                                                         |
+| **Updated** | 2026-07-06                                                                         |
+| **Author**  | 0xPatrick (prompted)                                                               |
+| **Status**  | Proposed (Phases 0-5 + bulk-archive landed via #364/#365/#367, hardening via #371) |
 
 > **Read in order.**
 > This is doc 2 of 3.
@@ -65,14 +65,14 @@ This document revises the git design around those facts.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| [daemon-mount-capabilities](daemon-mount-capabilities.md) | Required prerequisite: snapshot bridge, mount-scoped descriptors, handle-oriented navigation, and trusted backing provenance. |
-| [daemon-mount](daemon-mount.md) | Current physical mount formula implementation. |
-| [platform-fs](platform-fs.md) | Shared `ReadableTree` / `SnapshotTree` vocabulary for git tree exposure. |
-| [daemon-capability-filesystem](daemon-capability-filesystem.md) | Broader multi-provider VFS model including physical and git-tree backends. |
-| [daemon-agent-tools](daemon-agent-tools.md) | Earlier agent-facing sketch to be revised by this design. |
-| [daemon-git-remotes](daemon-git-remotes.md) | Companion MVP design for fetch, pull, push, and credentialed remote use. |
+| Design                                                          | Relationship                                                                                                                  |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| [daemon-mount-capabilities](daemon-mount-capabilities.md)       | Required prerequisite: snapshot bridge, mount-scoped descriptors, handle-oriented navigation, and trusted backing provenance. |
+| [daemon-mount](daemon-mount.md)                                 | Current physical mount formula implementation.                                                                                |
+| [platform-fs](platform-fs.md)                                   | Shared `ReadableTree` / `SnapshotTree` vocabulary for git tree exposure.                                                      |
+| [daemon-capability-filesystem](daemon-capability-filesystem.md) | Broader multi-provider VFS model including physical and git-tree backends.                                                    |
+| [daemon-agent-tools](daemon-agent-tools.md)                     | Earlier agent-facing sketch to be revised by this design.                                                                     |
+| [daemon-git-remotes](daemon-git-remotes.md)                     | Companion MVP design for fetch, pull, push, and credentialed remote use.                                                      |
 
 ## Current State
 
@@ -91,12 +91,12 @@ That work should remain useful as a reference for a `NativeGitBackend`.
 
 ### What Changes in This Design
 
-| Earlier shape | Revised shape |
-|---|---|
-| Repository root string configured authority | `EndoMount` carries public worktree authority |
-| Path strings were passed into git calls | `EndoMountEntry` values are passed after mount-local resolution |
-| Git only meant commands against a worktree | Git exposes worktree mutation, `tree(ref)` for immutable historical reads, and `readOnly()` for in-place attenuation |
-| Adapter details leaked into the tool design | Public `Git` capability is backend-shaped (native-first), with `NativeGitBackend` named separately |
+| Earlier shape                               | Revised shape                                                                                                        |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Repository root string configured authority | `EndoMount` carries public worktree authority                                                                        |
+| Path strings were passed into git calls     | `EndoMountEntry` values are passed after mount-local resolution                                                      |
+| Git only meant commands against a worktree  | Git exposes worktree mutation, `tree(ref)` for immutable historical reads, and `readOnly()` for in-place attenuation |
+| Adapter details leaked into the tool design | Public `Git` capability is backend-shaped (native-first), with `NativeGitBackend` named separately                   |
 
 ## Architecture
 
@@ -151,10 +151,10 @@ const worktree = await E(host).provideMount('/repo', 'repo-worktree');
 const git = await E(host).provideGit(worktree, 'repo-git');
 ```
 
-The `petName` (the second argument, `'repo-git'` in the example above) registers the constructed `Git` capability in the host's name table so the operator can later resolve it back by name (e.g., `await E(host).lookup('repo-git')`).  It is purely a host-side handle for later lookup; the `Git`-deriving authority is the mount cap, not the name.
+The `petName` (the second argument, `'repo-git'` in the example above) registers the constructed `Git` capability in the host's name table so the operator can later resolve it back by name (e.g., `await E(host).lookup('repo-git')`). It is purely a host-side handle for later lookup; the `Git`-deriving authority is the mount cap, not the name.
 
 Cap-passing is the only normative form on `provideGit`.
-Pet-name lookup is not part of this API: an agent-facing CLI or tool adapter that needs to look up a mount by name uses a separate `E(host).lookup(name)` capability (or whatever convenience method the harness layer provides) to resolve the name to a mount cap *before* calling `provideGit`.
+Pet-name lookup is not part of this API: an agent-facing CLI or tool adapter that needs to look up a mount by name uses a separate `E(host).lookup(name)` capability (or whatever convenience method the harness layer provides) to resolve the name to a mount cap _before_ calling `provideGit`.
 
 `provideGit()`:
 
@@ -190,7 +190,7 @@ The same backing invariants — same repository-root verification, same backing-
 Git authority is bounded by the mount it was derived from, and `Git.readOnly()` can only attenuate further; it can never widen.
 
 The same-authority-shape invariant is what makes the repository-identity pin (Design Decision 7) construct-able on a read-only mount in the first place: pinning needs read access to `.git/config` and `git rev-parse` output, and the read-only mount grants exactly that historical-contents read access at construction time.
-See Design Decision 8 § *Two additional boundaries on a read-only `Git`* for the explicit cross-link between read-only mount authority and historical-contents grant, and for the inverse note (callers handing out a read-only `Git` derived from a read-only mount are simultaneously granting historical-contents read access, not just present-worktree read access).
+See Design Decision 8 § _Two additional boundaries on a read-only `Git`_ for the explicit cross-link between read-only mount authority and historical-contents grant, and for the inverse note (callers handing out a read-only `Git` derived from a read-only mount are simultaneously granting historical-contents read access, not just present-worktree read access).
 
 Behavioral boundaries that follow from this same-authority-shape invariant are catalogued in § Design Decision 8 (allowed and rejected operations on a read-only `Git`) and § Design Decision 9 (`Git.readOnly()` idempotence and attenuation semantics).
 `GitRemote` construction from a read-only `Git` is rejected for now, even for `fetch`, because fetching mutates `.git` object and ref state (see `daemon-git-remotes.md` § Capability Construction).
@@ -281,17 +281,22 @@ interface Git {
 
   // Worktree and index mutation.
   add(entries: EndoMountEntry[]): Promise<void>;
-  restore(entries: EndoMountEntry[], options?: { staged?: boolean }):
-    Promise<void>;
+  restore(
+    entries: EndoMountEntry[],
+    options?: { staged?: boolean },
+  ): Promise<void>;
   commit(message: string): Promise<GitCommit>;
 
   // Branching.
   currentBranch(): Promise<GitRef | undefined>;
   branches(): Promise<GitRef[]>;
-  createBranch(name: string, options?: {
-    startPoint?: GitRef | string;
-    switchAfterCreate?: boolean;
-  }): Promise<GitRef>;
+  createBranch(
+    name: string,
+    options?: {
+      startPoint?: GitRef | string;
+      switchAfterCreate?: boolean;
+    },
+  ): Promise<GitRef>;
   deleteBranch(name: string, options?: { force?: boolean }): Promise<void>;
   renameBranch(from: string, to: string): Promise<void>;
   // Branch checkout and detached-HEAD checkout are separate methods so
@@ -304,13 +309,17 @@ interface Git {
   detach(ref: GitRef | string): Promise<void>;
 
   // History editing and integration.
-  merge(ref: GitRef | string, options?: { noFastForward?: boolean }):
-    Promise<string>;
-  rebase(input:
-    | { mode: 'start'; upstream: GitRef | string }
-    | { mode: 'continue' }
-    | { mode: 'abort' }
-    | { mode: 'skip' }): Promise<string>;
+  merge(
+    ref: GitRef | string,
+    options?: { noFastForward?: boolean },
+  ): Promise<string>;
+  rebase(
+    input:
+      | { mode: 'start'; upstream: GitRef | string }
+      | { mode: 'continue' }
+      | { mode: 'abort' }
+      | { mode: 'skip' },
+  ): Promise<string>;
 
   // Local stash state.
   stashPush(options?: {
@@ -345,11 +354,11 @@ The design panel recommended splitting tree access off `Git` into a separately-g
 Two further shapes were considered.
 The chosen shape (tree on `Git` plus `Git.readOnly()`) was picked for consistency with the existing `EndoMount.readOnly()` idiom and for the one-turn cost on the common case.
 
-| Shape | Pros | Cons |
-|---|---|---|
-| **Chosen: `Git.tree(ref)` plus `Git.readOnly()`** | One-turn read on the common case (caller holds `Git`, wants `tree`).  Matches `EndoMount.readOnly()` idiom.  Read-only auditor is `await E(git).readOnly()` — no new cap shape. | No standalone "tree-only" grant shape: a caller who should only read historical trees still holds an attenuated `Git`, which advertises the read methods it does not care about. |
-| **Considered: split-only (`git.trees() → GitTreeProvider.tree(ref)`)** | Cleanest decomposition: tree-only callers hold a different cap type, not an attenuated parent.  Matches decomplector's "different concerns → different caps" lens. | Two-turn cost on every read (`await E(git).trees()` then `await E(provider).tree(ref)`), unless the holder caches the provider.  No in-place attenuation pattern for the rest of `Git`. |
-| **Considered: both axes (`Git.tree(ref)` + `Git.readOnly()` + separately-grantable `GitTreeProvider` via host shortcut)** | Covers every use case: one-turn tree access for `Git` holders, read-only attenuation posture, and tree-only grants for build systems / archivers that should never see worktree state. | Widest public surface.  Two ways to obtain a tree-reading capability (via `Git.tree(ref)` and via the separately-granted provider) is the kind of accidental complexity creep an implementation later regrets. |
+| Shape                                                                                                                     | Pros                                                                                                                                                                                   | Cons                                                                                                                                                                                                          |
+| ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Chosen: `Git.tree(ref)` plus `Git.readOnly()`**                                                                         | One-turn read on the common case (caller holds `Git`, wants `tree`). Matches `EndoMount.readOnly()` idiom. Read-only auditor is `await E(git).readOnly()` — no new cap shape.          | No standalone "tree-only" grant shape: a caller who should only read historical trees still holds an attenuated `Git`, which advertises the read methods it does not care about.                              |
+| **Considered: split-only (`git.trees() → GitTreeProvider.tree(ref)`)**                                                    | Cleanest decomposition: tree-only callers hold a different cap type, not an attenuated parent. Matches decomplector's "different concerns → different caps" lens.                      | Two-turn cost on every read (`await E(git).trees()` then `await E(provider).tree(ref)`), unless the holder caches the provider. No in-place attenuation pattern for the rest of `Git`.                        |
+| **Considered: both axes (`Git.tree(ref)` + `Git.readOnly()` + separately-grantable `GitTreeProvider` via host shortcut)** | Covers every use case: one-turn tree access for `Git` holders, read-only attenuation posture, and tree-only grants for build systems / archivers that should never see worktree state. | Widest public surface. Two ways to obtain a tree-reading capability (via `Git.tree(ref)` and via the separately-granted provider) is the kind of accidental complexity creep an implementation later regrets. |
 
 If a real build-system or code-archiver use case surfaces that wants a genuinely tree-only grant (without worktree-method advertisement at all), the implementation can revisit and add the separately-grantable `GitTreeProvider` shape.
 Until then, an attenuated `Git` plus `tree(ref)` covers the auditor case without inventing a new cap type.
@@ -380,8 +389,8 @@ const text = await E(oldReadme).text();
 
 // hand a read-only attenuated Git to an auditor agent
 const auditor = await E(git).readOnly();
-await E(auditor).status();          // ok — read method
-await E(auditor).commit('nope');    // throws — mutation method on read-only
+await E(auditor).status(); // ok — read method
+await E(auditor).commit('nope'); // throws — mutation method on read-only
 ```
 
 ### Structured Result Shapes (Phase 7)
@@ -610,12 +619,12 @@ Evaluation criteria for any future backend:
 
 ### Authority Separation
 
-| Capability | Allows |
-|---|---|
-| `EndoMount` | Live worktree filesystem access within one confined root |
-| `Git` | Local repository operations over that worktree |
-| network capability | Remote repository interaction, if separately granted |
-| shell capability | Process execution, if separately granted |
+| Capability         | Allows                                                   |
+| ------------------ | -------------------------------------------------------- |
+| `EndoMount`        | Live worktree filesystem access within one confined root |
+| `Git`              | Local repository operations over that worktree           |
+| network capability | Remote repository interaction, if separately granted     |
+| shell capability   | Process execution, if separately granted                 |
 
 Granting git does not imply shell or network authority.
 
@@ -826,13 +835,11 @@ No open questions remain on this document; revisit if real implementation surfac
 
    **Pin algorithm.**
    The pin is computed at construction time by reading `git rev-parse --git-common-dir --git-path config --git-path HEAD` inside the worktree, then hashing a canonical tuple of:
-
    - the absolute `--git-common-dir` (canonicalized, symlinks resolved);
    - the contents of `<common-dir>/config` at the moment of the pin, excluding mutable-by-design sections (`remote.*.url`, `branch.*.merge`, and similar settings the operator may legitimately edit post-pin without changing repository identity);
    - the OID of the first commit reachable from HEAD if the repo has commits (`git rev-list --max-count=1 HEAD`), or the sentinel `EMPTY` if the repo is unborn or empty.
 
    **Edge cases.**
-
    - **Linked worktrees** (`git worktree add`): the pin uses the `--git-common-dir`, not the `.git`-file's pointer.
      A worktree-add against the same parent repo therefore pins to the same identity, which is correct: the same git object database serves both worktrees.
    - **Detached HEAD**: the first-commit OID is used (HEAD's own OID for a detached single-commit case, the rev-list root otherwise); the pin is stable so long as that OID remains reachable.
@@ -851,6 +858,7 @@ No open questions remain on this document; revisit if real implementation surfac
    That per-operation cost is a concern in hot loops where a guest fans out many small reads (`status` per file in a watcher, `log` across a directory of pet-named worktrees, repeated `revParse` in a UI refresh).
    Caching or throttling the verification — for example, an mtime/inode short-circuit on `<common-dir>/config`, a TTL-bounded memoization keyed on the canonical pin tuple, or an invalidation hook tied to host-side re-pin operations — is permitted as a backend-private optimization on the same contract as Design Decision 10 (Bulk reads as a backend data plane): callers cannot observe which strategy was used except through latency, and the fail-closed semantics above are preserved regardless of cache state.
    Adding the caching/throttling itself is **out of scope for this PR**; the optimization is licenced here so the future implementer and reviewers see the cadence concern was acknowledged at the surface that introduces the pin.
+
 8. **Read-only worktree mounts permit inspection + immutable trees + `worktree.snapshot()`; reject everything else.**
    A read-only `Git` can be obtained two ways and the two paths produce the same authority shape (see § Read-only construction paths):
    - **Writable→readOnly path:** `await E(git).readOnly()` returns a read-only attenuation of a `Git` constructed from a writable mount.
@@ -864,6 +872,7 @@ No open questions remain on this document; revisit if real implementation surfac
      Even `fetch` mutates `.git` object and ref state, so the read-only posture cannot host a remote.
    - `tree(ref)` is allowed and grants access to historical repository contents reachable from `ref`.
      That is consistent with the read-only mount granting authority over repository history, but it must be made explicit on the grant: callers handing out a read-only `Git` derived from a read-only mount are simultaneously granting historical-contents read access, not just present-worktree read access.
+
 9. **Read-only audit grants come via `Git.readOnly()`, not a separate cap shape; the method is idempotent.**
    The operator hands the auditor `await E(git).readOnly()` and the auditor holds an attenuated `Git` whose mutation methods throw.
    `Git.readOnly()` is idempotent: invoked on an already-read-only `Git`, it returns the same cap (or an equivalent read-only cap with the same surface); composing `readOnly()` calls does not produce nested or differently-attenuated wrappers.

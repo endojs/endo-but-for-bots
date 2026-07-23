@@ -8,18 +8,19 @@ immediately by a metadata table using this format:
 ```markdown
 # Title
 
-| | |
-|---|---|
-| **Created** | YYYY-MM-DD |
-| **Updated** | YYYY-MM-DD |
-| **Author** | Name (prompted) |
-| **Status** | Not Started |
+|             |                 |
+| ----------- | --------------- |
+| **Created** | YYYY-MM-DD      |
+| **Updated** | YYYY-MM-DD      |
+| **Author**  | Name (prompted) |
+| **Status**  | Not Started     |
 ```
 
 Required fields: **Created**, **Author**, **Status**.
 **Updated** is included when the document has been revised after creation.
 
 Optional fields (used when applicable):
+
 - **Source** — provenance if extracted from another document (e.g., `Extracted from packages/chat/DESIGN.md`).
 - **Supersedes** — path to the design this one replaces (e.g., `designs/chat-reply-chain-visualization.md`).
 
@@ -35,16 +36,16 @@ the document is materially revised.
 
 ## Status Values
 
-| Status | Meaning |
-|--------|---------|
-| Not Started | Design written, no implementation work begun |
-| Proposed | Design under discussion, not yet accepted |
-| In Progress | Implementation underway |
-| **Complete** | Fully implemented (bolded) |
-| Implemented | Synonym for Complete (some docs use this) |
-| Active | Living document, continuously maintained |
-| Reference | Informational; not an implementation target |
-| Deprecated | Superseded by another design |
+| Status       | Meaning                                      |
+| ------------ | -------------------------------------------- |
+| Not Started  | Design written, no implementation work begun |
+| Proposed     | Design under discussion, not yet accepted    |
+| In Progress  | Implementation underway                      |
+| **Complete** | Fully implemented (bolded)                   |
+| Implemented  | Synonym for Complete (some docs use this)    |
+| Active       | Living document, continuously maintained     |
+| Reference    | Informational; not an implementation target  |
+| Deprecated   | Superseded by another design                 |
 
 Complete/Implemented status is sometimes bolded (`**Complete**`) for visual
 emphasis in the metadata table and in the README summary table.

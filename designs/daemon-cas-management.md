@@ -1,11 +1,11 @@
 # Endor Content Address Store Management
 
-| | |
-|---|---|
-| **Created** | 2026-04-17 |
-| **Updated** | 2026-04-17 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-04-17            |
+| **Updated** | 2026-04-17            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | In Progress           |
 
 ## Status
 
@@ -111,12 +111,12 @@ The `.meta` file is a small JSON object:
 
 Content types:
 
-| Type | Description |
-|------|-------------|
-| `blob` | Opaque byte sequence (default) |
-| `snapshot` | XS machine snapshot (has signature header) |
-| `tree` | Directory tree (JSON manifest + child hashes) |
-| `archive` | Compartment-map archive (has `compartment-map.json`) |
+| Type       | Description                                          |
+| ---------- | ---------------------------------------------------- |
+| `blob`     | Opaque byte sequence (default)                       |
+| `snapshot` | XS machine snapshot (has signature header)           |
+| `tree`     | Directory tree (JSON manifest + child hashes)        |
+| `archive`  | Compartment-map archive (has `compartment-map.json`) |
 
 The `type` field is advisory — the content bytes are
 self-describing (snapshots have a signature, archives have
@@ -167,11 +167,11 @@ the supervisor.
 
 Store a blob in the CAS.
 
-| Field | Value |
-|-------|-------|
-| verb | `"cas-store"` |
+| Field   | Value                                         |
+| ------- | --------------------------------------------- |
+| verb    | `"cas-store"`                                 |
 | payload | CBOR map: `{"data": <bytes>, "type": <text>}` |
-| nonce | request nonce |
+| nonce   | request nonce                                 |
 
 Response: `"cas-stored"` with payload
 `{"hash": "sha256:..."}`.
@@ -185,11 +185,11 @@ This avoids buffering large blobs in a single envelope.
 
 Retrieve content by hash.
 
-| Field | Value |
-|-------|-------|
-| verb | `"cas-fetch"` |
+| Field   | Value                        |
+| ------- | ---------------------------- |
+| verb    | `"cas-fetch"`                |
 | payload | CBOR map: `{"hash": <text>}` |
-| nonce | request nonce |
+| nonce   | request nonce                |
 
 Response: `"cas-content"` with payload containing the bytes.
 For large content, `"cas-content-stream"` sends chunked
@@ -199,11 +199,11 @@ frames.
 
 Check existence.
 
-| Field | Value |
-|-------|-------|
-| verb | `"cas-has"` |
+| Field   | Value                        |
+| ------- | ---------------------------- |
+| verb    | `"cas-has"`                  |
 | payload | CBOR map: `{"hash": <text>}` |
-| nonce | request nonce |
+| nonce   | request nonce                |
 
 Response: `"cas-exists"` with payload `{"exists": true/false}`.
 
@@ -211,11 +211,11 @@ Response: `"cas-exists"` with payload `{"exists": true/false}`.
 
 Reference counting for GC roots.
 
-| Field | Value |
-|-------|-------|
-| verb | `"cas-retain"` or `"cas-release"` |
-| payload | CBOR map: `{"hash": <text>}` |
-| nonce | 0 |
+| Field   | Value                             |
+| ------- | --------------------------------- |
+| verb    | `"cas-retain"` or `"cas-release"` |
+| payload | CBOR map: `{"hash": <text>}`      |
+| nonce   | 0                                 |
 
 `cas-retain` increments the ref count in `.meta`.
 `cas-release` decrements it.
@@ -229,11 +229,11 @@ workers and releases them on resume or cancellation.
 
 Store a directory tree from an in-memory representation.
 
-| Field | Value |
-|-------|-------|
-| verb | `"cas-store-tree"` |
+| Field   | Value                                                |
+| ------- | ---------------------------------------------------- |
+| verb    | `"cas-store-tree"`                                   |
 | payload | CBOR map with tree entries (blobs inline or by hash) |
-| nonce | request nonce |
+| nonce   | request nonce                                        |
 
 The supervisor recursively stores child blobs, builds the
 tree JSON, and stores the tree itself.
@@ -260,6 +260,7 @@ to avoid blocking the supervisor's routing loop.
 #### Trigger
 
 GC is triggered by:
+
 - A `cas-gc` control verb from the JS manager.
 - A configurable timer (e.g., every 10 minutes).
 - An explicit `endor gc` CLI subcommand.
@@ -298,11 +299,11 @@ Control verb handlers in `endo.rs` delegate to it.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|-------------|
-| [daemon-content-store-gc](daemon-content-store-gc.md) | Supersedes: this design replaces the JS-side GC approach with a Rust-native implementation |
-| [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | Integrates: snapshots become typed CAS entries with retain/release |
-| [daemon-endor-architecture](daemon-endor-architecture.md) | Extends: supervisor gains CAS management responsibility |
+| Design                                                    | Relationship                                                                               |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| [daemon-content-store-gc](daemon-content-store-gc.md)     | Supersedes: this design replaces the JS-side GC approach with a Rust-native implementation |
+| [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | Integrates: snapshots become typed CAS entries with retain/release                         |
+| [daemon-endor-architecture](daemon-endor-architecture.md) | Extends: supervisor gains CAS management responsibility                                    |
 
 ## Implementation phases
 

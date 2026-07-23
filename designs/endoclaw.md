@@ -1,7 +1,7 @@
 # EndoClaw: Feature Parity with OpenClaw
 
 |             |                          |
-|-------------|--------------------------|
+| ----------- | ------------------------ |
 | **Created** | 2026-03-03               |
 | **Updated** | 2026-03-04               |
 | **Author**  | Kris Kowal (prompted)    |
@@ -14,6 +14,7 @@ OpenClaw (formerly ClawdBot, formerly Moltbot) is a free and open-source
 personal AI assistant created by Peter Steinberger.
 It runs locally, uses messaging platforms (WhatsApp, Telegram, Discord, etc.)
 as its primary interface, and provides the agent with system-level tools:
+
 - filesystem access
 - shell execution
 - browser automation
@@ -27,7 +28,7 @@ would require new work.
 ## Architecture Comparison
 
 | Aspect               | OpenClaw                                             | Endo                                                      |
-|----------------------|------------------------------------------------------|-----------------------------------------------------------|
+| -------------------- | ---------------------------------------------------- | --------------------------------------------------------- |
 | **Runtime**          | Node.js daemon, `~/.openclaw/workspace`              | Node.js daemon, `$ENDO_STATE/state`                       |
 | **Control plane**    | WebSocket gateway (`ws://127.0.0.1:18789`)           | WebSocket gateway (`ws://127.0.0.1:8920`)                 |
 | **Agent model**      | Multi-agent with isolated workspaces                 | Multi-agent with per-guest formula isolation              |
@@ -52,7 +53,7 @@ OpenClaw's primary interface is messaging platforms. Users control the
 agent by sending messages on WhatsApp, Telegram, etc.
 
 | OpenClaw Channel       | Endo Equivalent         | Status                                    |
-|------------------------|-------------------------|-------------------------------------------|
+| ---------------------- | ----------------------- | ----------------------------------------- |
 | WhatsApp               | —                       | Not planned. Endo uses its own messaging. |
 | Telegram               | —                       | Not planned                               |
 | Discord                | —                       | Not planned                               |
@@ -68,6 +69,7 @@ agent by sending messages on WhatsApp, Telegram, etc.
 | WebChat                | Chat UI (packages/chat) | **Complete**                              |
 
 **Endo approach**:
+
 - Rather than bridging to external messaging platforms, Endo provides its own
   inbox/space messaging system with the Chat UI as the primary interface.
 - The Chat UI runs inside the Familiar (Electron) or can be served by a
@@ -76,6 +78,7 @@ agent by sending messages on WhatsApp, Telegram, etc.
   current roadmap.
 
 **Gap**:
+
 - Endo has no channel bridges.
 - Users who want to control their agent from a phone app today would need to
   use the Chat UI in a mobile browser (once remote access is implemented).
@@ -84,7 +87,7 @@ agent by sending messages on WhatsApp, Telegram, etc.
 ### AI Model Support
 
 | OpenClaw Model           | Endo Equivalent                     | Status                 |
-|--------------------------|-------------------------------------|------------------------|
+| ------------------------ | ----------------------------------- | ---------------------- |
 | Claude (Anthropic)       | `@anthropic-ai/sdk` in Lal/Fae      | **Available**          |
 | GPT-4 / GPT-3.5 (OpenAI) | `openai` SDK in Lal                 | **Available**          |
 | Ollama (local)           | `ollama` SDK in Lal                 | **Available**          |
@@ -94,6 +97,7 @@ agent by sending messages on WhatsApp, Telegram, etc.
 | Gemini (Google)          | —                                   | Not yet; could add SDK |
 
 **Endo approach**:
+
 - Lal supports Anthropic, OpenAI, and Ollama APIs directly.
 - With [lal-fae-form-provisioning](lal-fae-form-provisioning.md), users
   configure model host and API key via form submission
@@ -106,7 +110,7 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
 ### System Access Tools
 
 | OpenClaw Tool                   | Endo Equivalent             | Status                                                                                                                  |
-|---------------------------------|-----------------------------|-------------------------------------------------------------------------------------------------------------------------|
+| ------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `system.run` (shell execution)  | `Shell` capability          | Designed ([daemon-agent-tools](daemon-agent-tools.md))                                                                  |
 | File read/write                 | `Dir` / `File` capabilities | Designed ([daemon-capability-filesystem](daemon-capability-filesystem.md), [daemon-agent-tools](daemon-agent-tools.md)) |
 | `system.notify` (notifications) | —                           | Not designed                                                                                                            |
@@ -115,6 +119,7 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
 | Screen recording                | —                           | Not designed; not applicable to server daemon                                                                           |
 
 **Endo approach**:
+
 - Endo's [daemon-agent-tools](daemon-agent-tools.md) design provides
   `Dir`-backed filesystem tools and a `Shell` capability with command
   allowlists.
@@ -126,6 +131,7 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
   granted `Dir` root.
 
 **Gap**:
+
 - System notifications could be surfaced through the Familiar's Electron
   `Notification` API.
 - Location, camera, and screen capture are device-specific features that would
@@ -134,7 +140,7 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
 ### Browser Control
 
 | OpenClaw Feature                   | Endo Equivalent | Status       |
-|------------------------------------|-----------------|--------------|
+| ---------------------------------- | --------------- | ------------ |
 | Dedicated Chrome/Chromium instance | —               | Not designed |
 | Page snapshots                     | —               | Not designed |
 | Form filling                       | —               | Not designed |
@@ -143,6 +149,7 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
 | Browser profiles                   | —               | Not designed |
 
 **Endo approach**:
+
 - Endo does not currently have a browser automation design.
 - This is a significant capability gap for use cases like flight check-in, web
   research, and form automation.
@@ -152,24 +159,25 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
   accessible.
 
 **Gap**:
+
 - Browser automation would be a new capability category in the
   [daemon-capability-bank](daemon-capability-bank.md).
 - A design document (`daemon-capability-browser.md`) would be needed.
 
 > Josh: Only need a full-fat browser to evade countermeasures like [Anubis][anubis].
->   ... To gets tarted, all we need is a pair of "web_fetch" and "web_search" tools.
->   ... Search is deliberately separated, for better integration across
->       providers, typical ones include: Brave, Tavily, and Provider-Native
->       options (e.g. Ollama and others).
->   ... Past that, if we add an MCP bridge, than we could just use pre-existing
->       browser MCP servers
+> ... To gets tarted, all we need is a pair of "web_fetch" and "web_search" tools.
+> ... Search is deliberately separated, for better integration across
+> providers, typical ones include: Brave, Tavily, and Provider-Native
+> options (e.g. Ollama and others).
+> ... Past that, if we add an MCP bridge, than we could just use pre-existing
+> browser MCP servers
 
 [anubis]: https://github.com/TecharoHQ/anubis
 
 ### Productivity Integrations
 
 | OpenClaw Integration    | Endo Equivalent | Status       |
-|-------------------------|-----------------|--------------|
+| ----------------------- | --------------- | ------------ |
 | Gmail                   | —               | Not designed |
 | Outlook                 | —               | Not designed |
 | Calendar (Google/Apple) | —               | Not designed |
@@ -179,6 +187,7 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
 | Gmail Pub/Sub           | —               | Not designed |
 
 **Endo approach**:
+
 - These would be implemented as guest plugins (confined JS modules) that
   receive API credentials as capabilities.
 - For example, a Gmail plugin would receive an `OAuth` capability that provides
@@ -187,6 +196,7 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
 - Each integration is a separate plugin with its own confined scope.
 
 **Gap**:
+
 - No productivity integrations exist.
 - The plugin architecture (guest modules with granted capabilities) is ready,
   but no specific integrations have been built.
@@ -196,7 +206,7 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
 ### Smart Home
 
 | OpenClaw Integration | Endo Equivalent | Status       |
-|----------------------|-----------------|--------------|
+| -------------------- | --------------- | ------------ |
 | Home Assistant (OSS) | —               | Not designed |
 | HomeKit              | —               | Not designed |
 | Google Home          | —               | Not designed |
@@ -206,26 +216,28 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
 | Shortcuts (Apple)    | —               | Not designed |
 
 **Endo approach**:
+
 - Smart home integrations would be guest plugins that receive network
   capabilities scoped to specific local devices or cloud APIs.
 - The [daemon-capability-bank](daemon-capability-bank.md) network category
   would provide host-allowlisted HTTP access for cloud-based smart home APIs.
 
 **Gap**:
+
 - Smart home is out of scope for the current roadmap.
 - It could become relevant once the capability bank and network capabilities
   are implemented.
 
 > Josh: if we're going to even sketch a thing on the roadmap, start with [Home
->       Assistant][homeass], rather than any one of the vendor platforms, as
->       it'll serve as an abstraction/intermediary to such vendors
+> Assistant][homeass], rather than any one of the vendor platforms, as
+> it'll serve as an abstraction/intermediary to such vendors
 
 [homeass]: https://www.home-assistant.io/
 
 ### Agent Management
 
 | OpenClaw Feature                       | Endo Equivalent                                    | Status                                                               |
-|----------------------------------------|----------------------------------------------------|----------------------------------------------------------------------|
+| -------------------------------------- | -------------------------------------------------- | -------------------------------------------------------------------- |
 | Multi-agent routing                    | Multi-guest with per-agent spaces                  | **Available**                                                        |
 | Isolated workspaces per agent          | Per-guest formula isolation + pet-name directories | **Available**                                                        |
 | `sessions_list` (discover agents)      | `endo list` / Chat spaces gutter                   | **Complete**                                                         |
@@ -237,6 +249,7 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
 > Josh: I'm really not convinced that the claw notion of session is 1:1 with our chat spaces
 
 **Endo approach**:
+
 - Endo's multi-agent model is more structured than OpenClaw's file-based
   workspace.
 - Each agent is a guest with its own formula identity, pet-name directory,
@@ -247,19 +260,20 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
   form to configure each agent persona.
 
 **Gap**:
+
 - No equivalent to `SOUL.md` as a user-editable personality file.
 - Agent personality is currently coded into the agent module.
 - A future enhancement could let the form include a "system prompt" field that
   the agent prepends to its LLM context.
 
 > Josh: insufficient, the claw's soul, identity, memory file (s) need to be
->       part of its mutable workspace so that it can "evolve" or at least be
->       told to modify itself or remember a thing
+> part of its mutable workspace so that it can "evolve" or at least be
+> told to modify itself or remember a thing
 
 ### Persistence and Memory
 
 | OpenClaw Feature                                  | Endo Equivalent               | Status        |
-|---------------------------------------------------|-------------------------------|---------------|
+| ------------------------------------------------- | ----------------------------- | ------------- |
 | Persistent memory across sessions                 | Formula store (durable state) | **Available** |
 | Conversation history                              | Inbox message history         | **Complete**  |
 | User preference tracking                          | Pet-name directory state      | **Available** |
@@ -268,6 +282,7 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
 | Webhooks                                          | —                             | Not designed  |
 
 **Endo approach**:
+
 - The daemon's formula store provides durable persistence for all agent state.
 - Messages, pet names, and capabilities survive daemon restarts.
 - Lal's transcript node store
@@ -275,12 +290,13 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
   conversation history with reply chain structure.
 
 > Josh: whatever else we do internally, message history (sessions) should get
->       stored as Pi-compatible jsonl files (openclaw and localgpt at least bot
->       do this, probably most of the other too).
->       This is at least for offline operator inspect-ability, but also the
->       claw itself can use these as a form of memory if withing its workspace.
+> stored as Pi-compatible jsonl files (openclaw and localgpt at least bot
+> do this, probably most of the other too).
+> This is at least for offline operator inspect-ability, but also the
+> claw itself can use these as a form of memory if withing its workspace.
 
 **Gap**:
+
 - Endo has no cron/scheduler or proactive outreach mechanism.
 - An agent cannot currently initiate a conversation unprompted.
 - A `Timer` capability is listed in the
@@ -291,7 +307,7 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
 ### Voice and Media
 
 | OpenClaw Feature                      | Endo Equivalent | Status       |
-|---------------------------------------|-----------------|--------------|
+| ------------------------------------- | --------------- | ------------ |
 | Voice Wake (macOS/iOS)                | —               | Not designed |
 | Talk Mode (Android continuous voice)  | —               | Not designed |
 | Media pipeline (images, audio, video) | —               | Not designed |
@@ -300,12 +316,13 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
 > Josh: <https://github.com/TrevorS/voxtral-mini-realtime-rs>
 
 > Josh: at an LLM level, there's plenty of support for vision models and
->       multi-modal models if we can plumb "give image attachment" thru to
->       their chat api; come to think of it
+> multi-modal models if we can plumb "give image attachment" thru to
+> their chat api; come to think of it
 
 > Josh: file attachment is probably more general than just "image file" eh?
 
 **Gap**:
+
 - Voice and media are not on the current Endo roadmap.
 - These are device-specific features that would live in the Familiar (Electron
   for desktop, future mobile apps).
@@ -315,7 +332,7 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
 ### Security Model
 
 | OpenClaw Mechanism                     | Endo Equivalent                                | Status                                                                     |
-|----------------------------------------|------------------------------------------------|----------------------------------------------------------------------------|
+| -------------------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------- |
 | DM pairing (approval for new contacts) | Guest provisioning (explicit `provideGuest`)   | **Available**                                                              |
 | Owner-only group commands              | Host-only privileged operations                | **Available**                                                              |
 | Pairing codes for unknown senders      | —                                              | Not designed (no external messaging)                                       |
@@ -327,6 +344,7 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
 | —                                      | Caretaker revocation (revoke caps at any time) | Designed ([daemon-capability-filesystem](daemon-capability-filesystem.md)) |
 
 **Endo advantage**:
+
 - Endo's security model is fundamentally stronger than OpenClaw's.
 - OpenClaw's agent has ambient authority — it can read `~/.ssh/id_rsa`, run
   `curl` to exfiltrate data, or modify `~/.bashrc` for persistence.
@@ -336,19 +354,20 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
   endpoints outside its granted scope.
 
 > Josh: other claws like LocalGPT, PicoClaw, and IronClaw at least implement
->       system level sandboxing around their tool executions at least, things
->       like seccomp, or even just basic file path filtering
+> system level sandboxing around their tool executions at least, things
+> like seccomp, or even just basic file path filtering
 
 ### Companion Apps
 
 | OpenClaw App                         | Endo Equivalent            | Status                                                               |
-|--------------------------------------|----------------------------|----------------------------------------------------------------------|
+| ------------------------------------ | -------------------------- | -------------------------------------------------------------------- |
 | macOS menu bar app                   | Familiar (Electron, macOS) | **Complete** ([familiar-electron-shell](familiar-electron-shell.md)) |
 | iOS node (Canvas, voice, camera)     | —                          | Not designed                                                         |
 | Android node (voice, camera, screen) | —                          | Not designed                                                         |
 | WebChat                              | Chat UI (packages/chat)    | **Complete**                                                         |
 
 **Gap**:
+
 - Mobile companion apps are not on the current roadmap.
 - The Chat UI served by a self-hosted daemon
   ([daemon-docker-selfhost](daemon-docker-selfhost.md)) provides mobile access
@@ -358,7 +377,7 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
 ### Skills / Plugin Ecosystem
 
 | OpenClaw Feature                         | Endo Equivalent                              | Status                                                           |
-|------------------------------------------|----------------------------------------------|------------------------------------------------------------------|
+| ---------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------- |
 | Bundled skills                           | Bundled agents (Lal, Fae)                    | Designed ([familiar-bundled-agents](familiar-bundled-agents.md)) |
 | Managed skills (curated registry)        | —                                            | Not designed                                                     |
 | Workspace skills (user-installed)        | Guest plugins (`endo install`)               | **Available**                                                    |
@@ -367,6 +386,7 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
 | Install gating (approval before install) | `endo install` requires user confirmation    | **Available**                                                    |
 
 **Endo approach**:
+
 - Endo's plugin model is guest modules that export `make(powers)` and receive
   only the capabilities granted to them.
 - This is more secure than OpenClaw's skill model (which has full system
@@ -374,6 +394,7 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
 - Endo does not have a centralized skill registry.
 
 **Gap**:
+
 - No skill registry or marketplace.
 - Community plugins would need to be distributed as npm packages or git URLs
   and installed via `endo install`.
@@ -408,7 +429,7 @@ OpenAI-compatible, so it should work via the OpenAI SDK path.
 ### Not yet designed — would close significant gaps
 
 | Gap                                                 | Priority | Notes                                               |
-|-----------------------------------------------------|----------|-----------------------------------------------------|
+| --------------------------------------------------- | -------- | --------------------------------------------------- |
 | Web Fetch and Search capability                     | High     | Basic fetch and search provider API usage           |
 | Core workspace / memory system                      | High     | This is the core engine that contitues a claw       |
 | Heartbeat Timer                                     | High     | This is the core "there" that makes a claw tick     |

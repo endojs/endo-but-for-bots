@@ -1,12 +1,12 @@
 # EndoPi: Stdio JSONL RPC Bridge to a Daemon Agent
 
-| | |
-|---|---|
-| **Created** | 2026-05-15 |
-| **Updated** | 2026-05-15 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
-| **Parent** | [endopi](endopi.md) |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-05-15            |
+| **Updated** | 2026-05-15            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Proposed              |
+| **Parent**  | [endopi](endopi.md)   |
 
 ## Motivation
 
@@ -110,12 +110,12 @@ stdio bridge becomes a thin front-end for the bus.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|--------------|
-| [daemon-web-gateway](daemon-web-gateway.md) | Sibling transport |
-| [gateway-bearer-token-auth](gateway-bearer-token-auth.md) | Same auth surface (or none, when stdio is local) |
-| [endor-bus-tui](endor-bus-tui.md) | Future replacement; shares vocabulary |
-| [lal-reply-chain-transcripts](lal-reply-chain-transcripts.md) | The transcript shape the events flow through |
+| Design                                                        | Relationship                                     |
+| ------------------------------------------------------------- | ------------------------------------------------ |
+| [daemon-web-gateway](daemon-web-gateway.md)                   | Sibling transport                                |
+| [gateway-bearer-token-auth](gateway-bearer-token-auth.md)     | Same auth surface (or none, when stdio is local) |
+| [endor-bus-tui](endor-bus-tui.md)                             | Future replacement; shares vocabulary            |
+| [lal-reply-chain-transcripts](lal-reply-chain-transcripts.md) | The transcript shape the events flow through     |
 
 ## Out of scope
 
@@ -145,5 +145,5 @@ stdio bridge becomes a thin front-end for the bus.
 
 ## Prompt
 
-> Extracted from [endopi](endopi.md) § *Operating modes*. The short-
+> Extracted from [endopi](endopi.md) § _Operating modes_. The short-
 > term shape of "embed Endo in another process" before `endor` lands.

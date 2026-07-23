@@ -1,12 +1,12 @@
 # EndoClaw: Browser Capability
 
-| | |
-|---|---|
-| **Created** | 2026-03-03 |
-| **Updated** | 2026-03-03 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | PR #106 (`@endo/exo-playwright`) |
-| **Parent** | [endoclaw](endoclaw.md) |
+|             |                                  |
+| ----------- | -------------------------------- |
+| **Created** | 2026-03-03                       |
+| **Updated** | 2026-03-03                       |
+| **Author**  | Kris Kowal (prompted)            |
+| **Status**  | PR #106 (`@endo/exo-playwright`) |
+| **Parent**  | [endoclaw](endoclaw.md)          |
 
 ## Summary
 
@@ -33,14 +33,14 @@ interface Page {
   fill(selector: string, value: string): Promise<void>;
   click(selector: string): Promise<void>;
   submit(selector: string): Promise<void>;
-  snapshot(): Promise<string>;  // returns page text or screenshot
+  snapshot(): Promise<string>; // returns page text or screenshot
   waitForSelector(selector: string): Promise<void>;
   help(): string;
 }
 
 interface BrowserControl {
   setAllowedOrigins(origins: string[]): void;
-  setReadOnly(flag: boolean): void;  // disables fill/click/submit
+  setReadOnly(flag: boolean): void; // disables fill/click/submit
   revoke(): void;
   help(): string;
 }

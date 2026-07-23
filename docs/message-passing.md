@@ -32,6 +32,7 @@ showing all four packages working together.
 ### Prerequisites
 
 This guide assumes familiarity with:
+
 - [Hardened JavaScript](./guide.md) and the `lockdown()` function
 - Object capabilities and the principle of least authority
 - Promises and asynchronous JavaScript
@@ -68,21 +69,21 @@ system at sufficient scale.
 
 Every passable value falls into one of eight categories:
 
-| Pass Style | Description | Examples |
-|------------|-------------|----------|
-| `'null'` | The null value | `null` |
-| `'undefined'` | The undefined value | `undefined` |
-| `'boolean'` | Boolean primitives | `true`, `false` |
-| `'number'` | IEEE 754 floats | `42`, `3.14`, `NaN`, `Infinity` |
-| `'bigint'` | Arbitrary integers | `123n`, `-456n` |
-| `'string'` | Well-formed strings | `'hello'`, `''` |
-| `'symbol'` | Registered/well-known symbols | `Symbol.iterator` |
-| `'copyArray'` | Frozen arrays of passables | `harden([1, 2, 3])` |
-| `'copyRecord'` | Frozen plain objects | `harden({ x: 10 })` |
-| `'remotable'` | Far objects & presences | `Far('Counter', {...})` |
-| `'tagged'` | Extension point for domain types | `makeTagged('copySet', [...])` |
-| `'error'` | Error objects | `harden(Error('failed'))` |
-| `'promise'` | Promise objects | `Promise.resolve(42)` |
+| Pass Style     | Description                      | Examples                        |
+| -------------- | -------------------------------- | ------------------------------- |
+| `'null'`       | The null value                   | `null`                          |
+| `'undefined'`  | The undefined value              | `undefined`                     |
+| `'boolean'`    | Boolean primitives               | `true`, `false`                 |
+| `'number'`     | IEEE 754 floats                  | `42`, `3.14`, `NaN`, `Infinity` |
+| `'bigint'`     | Arbitrary integers               | `123n`, `-456n`                 |
+| `'string'`     | Well-formed strings              | `'hello'`, `''`                 |
+| `'symbol'`     | Registered/well-known symbols    | `Symbol.iterator`               |
+| `'copyArray'`  | Frozen arrays of passables       | `harden([1, 2, 3])`             |
+| `'copyRecord'` | Frozen plain objects             | `harden({ x: 10 })`             |
+| `'remotable'`  | Far objects & presences          | `Far('Counter', {...})`         |
+| `'tagged'`     | Extension point for domain types | `makeTagged('copySet', [...])`  |
+| `'error'`      | Error objects                    | `harden(Error('failed'))`       |
+| `'promise'`    | Promise objects                  | `Promise.resolve(42)`           |
 
 The key distinction is between **pass-by-copy** (the value itself is copied)
 and **pass-by-reference**:
@@ -96,20 +97,26 @@ The `@endo/pass-style` package provides core functions for inspecting
 the pass-style of a value.
 
 ```javascript
-import { passStyleOf, isPassable, Far, makeTagged, passableSymbolForName } from '@endo/pass-style';
+import {
+  passStyleOf,
+  isPassable,
+  Far,
+  makeTagged,
+  passableSymbolForName,
+} from '@endo/pass-style';
 
 // Classify a value's pass style
-passStyleOf(42);  // 'number'
-passStyleOf(harden([1, 2]));  // 'copyArray'
-passStyleOf(Promise.resolve());  // 'promise'
+passStyleOf(42); // 'number'
+passStyleOf(harden([1, 2])); // 'copyArray'
+passStyleOf(Promise.resolve()); // 'promise'
 
 // Check if a value is passable
-isPassable({ x: 1 });  // false (not frozen)
-isPassable(harden({ x: 1 }));  // true
+isPassable({ x: 1 }); // false (not frozen)
+isPassable(harden({ x: 1 })); // true
 
 // Create passable symbols
 const mySymbol = passableSymbolForName('mySymbol');
-passStyleOf(mySymbol);  // 'symbol'
+passStyleOf(mySymbol); // 'symbol'
 ```
 
 It also provides a `Far` utility function for making "remotables", values that
@@ -120,10 +127,14 @@ patterns, which we will remedy with `makeExo` and type guards farther along.
 ```javascript
 // Create a remotable object
 const counter = Far('Counter', {
-  increment(n) { return n + 1; },
-  getValue() { return 42; }
+  increment(n) {
+    return n + 1;
+  },
+  getValue() {
+    return 42;
+  },
 });
-passStyleOf(counter);  // 'remotable'
+passStyleOf(counter); // 'remotable'
 ```
 
 ### What Makes Something Passable?
@@ -144,12 +155,12 @@ const data = harden([1, 2, 3]);
 
 // This is NOT passable - not frozen
 const mutable = [1, 2, 3];
-passStyleOf(mutable);  // throws Error
+passStyleOf(mutable); // throws Error
 
 // This is NOT passable - cyclic reference
 const cyclic = harden([]);
 cyclic.push(cyclic);
-passStyleOf(cyclic);  // throws Error
+passStyleOf(cyclic); // throws Error
 ```
 
 ### Creating Remotable Objects
@@ -169,7 +180,7 @@ const makeCounter = (initialValue = 0) => {
     },
     getValue() {
       return count;
-    }
+    },
   });
 };
 
@@ -199,26 +210,26 @@ The `M` namespace offers matchers for all pass styles:
 import { M, matches, mustMatch } from '@endo/patterns';
 
 // Primitive matchers
-M.any();         // Matches any passable
-M.number();      // Matches any number
-M.string();      // Matches any string
-M.boolean();     // Matches any boolean
+M.any(); // Matches any passable
+M.number(); // Matches any number
+M.string(); // Matches any string
+M.boolean(); // Matches any boolean
 
 // Constrained matchers
-M.gte(0);        // Matches numbers >= 0
-M.string({ maxSize: 100 });  // Matches strings up to 100 chars
-M.nat();         // Matches non-negative bigints
+M.gte(0); // Matches numbers >= 0
+M.string({ maxSize: 100 }); // Matches strings up to 100 chars
+M.nat(); // Matches non-negative bigints
 
 // Container matchers
-M.array();       // Matches any copyArray
-M.record();      // Matches any copyRecord
-M.arrayOf(M.number());  // Matches arrays of numbers only
-M.recordOf(M.string(), M.number());  // Matches {string: number} records
+M.array(); // Matches any copyArray
+M.record(); // Matches any copyRecord
+M.arrayOf(M.number()); // Matches arrays of numbers only
+M.recordOf(M.string(), M.number()); // Matches {string: number} records
 
 // Logical operators
-M.and(M.number(), M.gte(0));  // Matches non-negative numbers
-M.or(M.string(), M.number());  // Matches strings or numbers
-M.opt(M.string());  // Matches undefined or string (optional)
+M.and(M.number(), M.gte(0)); // Matches non-negative numbers
+M.or(M.string(), M.number()); // Matches strings or numbers
+M.opt(M.string()); // Matches undefined or string (optional)
 ```
 
 ### Pattern Matching in Practice
@@ -230,9 +241,9 @@ import { M, matches, mustMatch } from '@endo/patterns';
 
 const pattern = M.and(M.number(), M.gte(0), M.lte(100));
 
-matches(50, pattern);    // true
-matches(-10, pattern);   // false
-matches('50', pattern);  // false
+matches(50, pattern); // true
+matches(-10, pattern); // false
+matches('50', pattern); // false
 
 // mustMatch() throws with a descriptive error
 mustMatch(42, M.string());
@@ -249,30 +260,30 @@ import { M, mustMatch } from '@endo/patterns';
 
 // Define a pattern with required and optional properties
 const UserPattern = M.splitRecord(
-  { name: M.string() },                     // required properties
-  { age: M.number(), email: M.string() },   // optional properties
-  M.string()                                 // rest properties must be strings
+  { name: M.string() }, // required properties
+  { age: M.number(), email: M.string() }, // optional properties
+  M.string(), // rest properties must be strings
 );
 
 // Valid: has required 'name'
 const user1 = harden({ name: 'Alice' });
-mustMatch(user1, UserPattern);  // passes
+mustMatch(user1, UserPattern); // passes
 
 // Valid: has required and optional properties
 const user2 = harden({ name: 'Bob', age: 30 });
-mustMatch(user2, UserPattern);  // passes
+mustMatch(user2, UserPattern); // passes
 
 // Valid: has required, optional, and extra properties
 const user3 = harden({ name: 'Carol', age: 25, bio: 'Engineer' });
-mustMatch(user3, UserPattern);  // passes (bio matches rest pattern)
+mustMatch(user3, UserPattern); // passes (bio matches rest pattern)
 
 // Invalid: missing required 'name'
 const user4 = harden({ age: 30 });
-mustMatch(user4, UserPattern);  // throws: missing required property 'name'
+mustMatch(user4, UserPattern); // throws: missing required property 'name'
 
 // Invalid: rest property is not a string
 const user5 = harden({ name: 'Dave', score: 100 });
-mustMatch(user5, UserPattern);  // throws: rest property 'score' must be string
+mustMatch(user5, UserPattern); // throws: rest property 'score' must be string
 ```
 
 This pattern is particularly useful for validating configuration objects,
@@ -296,7 +307,7 @@ const colors = makeCopySet(['red', 'blue', 'green']);
 
 // Pattern for sets
 const ColorSet = M.setOf(M.string());
-mustMatch(colors, ColorSet);  // passes
+mustMatch(colors, ColorSet); // passes
 ```
 
 #### CopyBag
@@ -308,7 +319,7 @@ import { makeCopyBag } from '@endo/patterns';
 
 const inventory = makeCopyBag([
   ['apples', 5n],
-  ['oranges', 3n]
+  ['oranges', 3n],
 ]);
 
 const InventoryPattern = M.bagOf(M.string(), M.bigint());
@@ -325,7 +336,7 @@ import { makeCopyMap } from '@endo/patterns';
 // Map user IDs to balances
 const balances = makeCopyMap([
   ['alice', 100],
-  ['bob', 50]
+  ['bob', 50],
 ]);
 
 const BalancesPattern = M.mapOf(M.string(), M.number());
@@ -352,7 +363,7 @@ const CounterI = M.interface('Counter', {
   getValue: M.call().returns(M.number()),
 
   // Method with optional arguments
-  reset: M.call().optional(M.number()).returns()
+  reset: M.call().optional(M.number()).returns(),
 });
 ```
 
@@ -385,7 +396,7 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
 const CounterI = M.interface('Counter', {
-  increment: M.call(M.number()).returns(M.number())
+  increment: M.call(M.number()).returns(M.number()),
 });
 
 let count = 0;
@@ -395,11 +406,11 @@ const counter = makeExo('Counter', CounterI, {
     // By the time we reach here, n is guaranteed to be a number
     count += n;
     return count;
-  }
+  },
 });
 
 // Valid call
-counter.increment(5);  // returns 5
+counter.increment(5); // returns 5
 
 // Invalid call - caught by guard
 counter.increment('5');
@@ -423,13 +434,13 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
 const GreeterI = M.interface('Greeter', {
-  greet: M.call(M.string()).returns(M.string())
+  greet: M.call(M.string()).returns(M.string()),
 });
 
 const greeter = makeExo('Greeter', GreeterI, {
   greet(name) {
     return `Hello, ${name}!`;
-  }
+  },
 });
 ```
 
@@ -443,7 +454,7 @@ import { M } from '@endo/patterns';
 
 const CounterI = M.interface('Counter', {
   increment: M.call().optional(M.number()).returns(M.number()),
-  getValue: M.call().returns(M.number())
+  getValue: M.call().returns(M.number()),
 });
 
 const makeCounter = defineExoClass(
@@ -462,15 +473,15 @@ const makeCounter = defineExoClass(
     },
     getValue() {
       return this.state.count;
-    }
-  }
+    },
+  },
 );
 
 const counter1 = makeCounter(0);
 const counter2 = makeCounter(100);
 
-counter1.increment();  // 1
-counter2.increment();  // 101
+counter1.increment(); // 1
+counter2.increment(); // 101
 ```
 
 #### Pattern 3: defineExoClassKit (Multiple Facets with Shared State)
@@ -485,14 +496,14 @@ import { M } from '@endo/patterns';
 
 const CounterI = {
   up: M.interface('UpCounter', {
-    increment: M.call(M.number()).returns(M.number())
+    increment: M.call(M.number()).returns(M.number()),
   }),
   down: M.interface('DownCounter', {
-    decrement: M.call(M.number()).returns(M.number())
+    decrement: M.call(M.number()).returns(M.number()),
   }),
   reader: M.interface('CounterReader', {
-    getValue: M.call().returns(M.number())
-  })
+    getValue: M.call().returns(M.number()),
+  }),
 };
 
 const makeCounterKit = defineExoClassKit(
@@ -508,20 +519,20 @@ const makeCounterKit = defineExoClassKit(
       increment(delta) {
         this.state.count += delta;
         return this.state.count;
-      }
+      },
     },
     down: {
       decrement(delta) {
         this.state.count -= delta;
         return this.state.count;
-      }
+      },
     },
     reader: {
       getValue() {
         return this.state.count;
-      }
-    }
-  }
+      },
+    },
+  },
 );
 
 const { up, down, reader } = makeCounterKit(50);
@@ -529,9 +540,9 @@ const { up, down, reader } = makeCounterKit(50);
 // Give clients only the facets they need
 // incrementer only gets `up`, decrementer only gets `down`
 // but both affect the same shared state
-up.increment(10);    // 60
-down.decrement(5);   // 55
-reader.getValue();   // 55
+up.increment(10); // 60
+down.decrement(5); // 55
+reader.getValue(); // 55
 ```
 
 ### Async Methods with M.callWhen()
@@ -546,7 +557,7 @@ import { E } from '@endo/eventual-send';
 
 const FetcherI = M.interface('Fetcher', {
   // Async method: awaits the url argument, returns promise
-  fetch: M.callWhen(M.string()).returns(M.string())
+  fetch: M.callWhen(M.string()).returns(M.string()),
 });
 
 const fetcher = makeExo('Fetcher', FetcherI, {
@@ -554,11 +565,12 @@ const fetcher = makeExo('Fetcher', FetcherI, {
     // url is validated, then awaited if it's a promise
     const response = await E(httpClient).get(url);
     return response.text();
-  }
+  },
 });
 ```
 
 The `M.callWhen()` guard:
+
 1. Validates the argument pattern
 2. Awaits the argument if it's a promise
 3. Then calls the method with the resolved value
@@ -577,7 +589,7 @@ Each exo pattern handles state differently:
 const makeWallet = defineExoClass(
   'Wallet',
   WalletI,
-  (initialBalance) => ({ balance: initialBalance }),
+  initialBalance => ({ balance: initialBalance }),
   {
     deposit(amount) {
       // Access state
@@ -592,8 +604,8 @@ const makeWallet = defineExoClass(
       }
       this.state.balance -= amount;
       return amount;
-    }
-  }
+    },
+  },
 );
 ```
 
@@ -612,7 +624,7 @@ const guard = counter[GET_INTERFACE_GUARD]();
 
 // Inspect available methods
 const methods = getInterfaceMethodKeys(guard);
-console.log(methods);  // ['increment', 'getValue']
+console.log(methods); // ['increment', 'getValue']
 ```
 
 This enables runtime introspection and dynamic client generation.
@@ -645,12 +657,13 @@ const counter = makeCounter(0);
 const resultP = E(counter).increment(5);
 
 // resultP is a promise, even though counter is local
-const result = await resultP;  // 5
+const result = await resultP; // 5
 ```
 
 Even for local objects, `E()` introduces asynchrony by deferring the method
 call to the next turn of the event loop.
 This provides:
+
 - **Consistent async behavior** whether local or remote
 - **Message ordering** per target object
 - **Turn-based execution** for better reasoning about concurrency
@@ -666,11 +679,11 @@ const counter = makeCounter(10);
 
 // Send message, get promise
 const result = await E(counter).increment(5);
-console.log(result);  // 15
+console.log(result); // 15
 
 // Works even if counter is a promise
 const counterP = Promise.resolve(counter);
-const result2 = await E(counterP).increment(3);  // 18
+const result2 = await E(counterP).increment(3); // 18
 ```
 
 #### E.get(target).property
@@ -680,11 +693,11 @@ Eventual get: retrieve a property, returning a promise for its value.
 ```javascript
 const config = harden({
   timeout: 5000,
-  retries: 3
+  retries: 3,
 });
 
 const timeoutP = E.get(config).timeout;
-const timeout = await timeoutP;  // 5000
+const timeout = await timeoutP; // 5000
 ```
 
 #### E.sendOnly(target).method(...args)
@@ -709,7 +722,7 @@ Shorthand for promise handling with turn tracking:
 E.when(
   E(counter).getValue(),
   value => console.log('Value:', value),
-  error => console.error('Error:', error)
+  error => console.error('Error:', error),
 );
 ```
 
@@ -740,9 +753,9 @@ Without pipelining, you'd need to await each step:
 
 ```javascript
 // Without pipelining: 3 round trips
-const mint = await bootstrap.getMint();     // wait
-const purse = await mint.makePurse();       // wait
-const balance = await purse.getBalance();   // wait
+const mint = await bootstrap.getMint(); // wait
+const purse = await mint.makePurse(); // wait
+const balance = await purse.getBalance(); // wait
 
 // With pipelining: messages sent immediately
 const balance = await E(E(E(bootstrap).getMint()).makePurse()).getBalance();
@@ -779,13 +792,13 @@ import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 
 const CounterI = M.interface('Counter', {
-  increment: M.call(M.number()).returns(M.number())
+  increment: M.call(M.number()).returns(M.number()),
 });
 
 const counter = makeExo('Counter', CounterI, {
   increment(n) {
-    return count += n;
-  }
+    return (count += n);
+  },
 });
 
 // E() provides async wrapper
@@ -796,6 +809,7 @@ const resultP = E(counter).increment(5);
 ```
 
 Even for local exos, using `E()` provides benefits:
+
 - **Consistent async behavior** in your codebase
 - **Turn-based execution** prevents reentrancy bugs
 - **Error isolation** via promise rejection
@@ -816,6 +830,7 @@ This pattern is fundamental to digital assets in capability systems.
 ### The Design
 
 Our system will have three facets:
+
 - **Mint facet**: Can create new purses (privileged operation)
 - **Purse facet**: Holds a balance, can deposit and withdraw
 - **Payment facet**: Single-use payment that can be deposited once
@@ -833,20 +848,20 @@ import { E } from '@endo/eventual-send';
 // Step 1: Define interfaces (patterns)
 
 const MintI = M.interface('Mint', {
-  makePurse: M.call().returns(M.remotable('Purse'))
+  makePurse: M.call().returns(M.remotable('Purse')),
 });
 
 const PurseI = M.interface('Purse', {
   getBalance: M.call().returns(M.number()),
   deposit: M.callWhen(
     M.and(M.number(), M.gte(0)),
-    M.remotable('Payment')
+    M.remotable('Payment'),
   ).returns(),
-  withdraw: M.call(M.and(M.number(), M.gte(0))).returns(M.remotable('Payment'))
+  withdraw: M.call(M.and(M.number(), M.gte(0))).returns(M.remotable('Payment')),
 });
 
 const PaymentI = M.interface('Payment', {
-  getBalance: M.call().returns(M.number())
+  getBalance: M.call().returns(M.number()),
 });
 
 // Step 2: Define the Mint/Purse Kit
@@ -864,7 +879,7 @@ const makeMintKit = defineExoClassKit(
         // Return the purse facet, not the mint facet
         // This ensures the holder of a purse can't mint
         return this.facets.purse;
-      }
+      },
     },
 
     purse: {
@@ -900,9 +915,9 @@ const makeMintKit = defineExoClassKit(
 
         // Create a new payment
         return makePayment(amount);
-      }
-    }
-  }
+      },
+    },
+  },
 );
 
 // Step 3: Define single-use Payment
@@ -912,7 +927,7 @@ const makePayment = defineExoClass(
   PaymentI,
 
   // init: payment created with specific amount
-  (amount) => ({ balance: amount, spent: false }),
+  amount => ({ balance: amount, spent: false }),
 
   {
     getBalance() {
@@ -924,8 +939,8 @@ const makePayment = defineExoClass(
       // Mark as spent (single-use)
       this.state.spent = true;
       return this.state.balance;
-    }
-  }
+    },
+  },
 );
 
 // Step 4: Usage across vat boundaries
@@ -949,14 +964,14 @@ const payment50 = E(alicePurse).withdraw(50);
 await E(bobPurse).deposit(50, payment50);
 
 // Check balances (all eventual sends)
-const ourBalance = await E(ourPurse).getBalance();     // 900
+const ourBalance = await E(ourPurse).getBalance(); // 900
 const aliceBalance = await E(alicePurse).getBalance(); // 50
-const bobBalance = await E(bobPurse).getBalance();     // 50
+const bobBalance = await E(bobPurse).getBalance(); // 50
 
 // Try to reuse a payment (fails - single use)
 const payment = E(alicePurse).withdraw(10);
-await E(bobPurse).deposit(10, payment);  // succeeds
-await E(ourPurse).deposit(10, payment);  // fails - balance is 0
+await E(bobPurse).deposit(10, payment); // succeeds
+await E(ourPurse).deposit(10, payment); // fails - balance is 0
 ```
 
 ### What's Happening Here
@@ -994,11 +1009,13 @@ needs to await `E(payment).getBalance()`.
 The guard validates the types, then the method validates business logic.
 
 **Defense in Depth**: Multiple layers of protection:
+
 - InterfaceGuards reject malformed calls
 - State encapsulation prevents direct manipulation
 - Business logic validates invariants (sufficient balance, etc.)
 
 **Uniform Communication**: The same code works whether Alice and Bob are:
+
 - In the same vat
 - In different vats on the same machine
 - On different machines across a network
@@ -1011,6 +1028,7 @@ structuring your distributed objects.
 ### When to Use Each Exo Pattern
 
 **Use `makeExo` when:**
+
 - You need a single instance
 - State is managed in closure variables
 - Simple use cases without complex lifecycle
@@ -1020,11 +1038,12 @@ structuring your distributed objects.
 const validator = makeExo('Validator', ValidatorI, {
   validate(data) {
     return checkRules(data);
-  }
+  },
 });
 ```
 
 **Use `defineExoClass` when:**
+
 - You need multiple independent instances
 - Each instance has its own state
 
@@ -1033,12 +1052,15 @@ const validator = makeExo('Validator', ValidatorI, {
 const makeSession = defineExoClass(
   'Session',
   SessionI,
-  (userId) => ({ userId, startTime: Date.now() }),
-  { /* methods */ }
+  userId => ({ userId, startTime: Date.now() }),
+  {
+    /* methods */
+  },
 );
 ```
 
 **Use `defineExoClassKit` when:**
+
 - You need multiple facets with shared state
 - Implementing least authority (different clients get different facets)
 - State needs to be synchronized across related objects
@@ -1050,15 +1072,24 @@ const makeService = defineExoClassKit(
   { admin: AdminI, user: UserI },
   () => ({ data: [] }),
   {
-    admin: { reset() { this.state.data = []; } },
-    user: { getData() { return this.state.data; } }
-  }
+    admin: {
+      reset() {
+        this.state.data = [];
+      },
+    },
+    user: {
+      getData() {
+        return this.state.data;
+      },
+    },
+  },
 );
 ```
 
 ### Copyable Data vs Remotable Objects
 
 **Choose copyable (pass-by-copy) for:**
+
 - Immutable data (configurations, messages, values)
 - Small data structures (arrays, records)
 - Data that will be stored or compared
@@ -1068,7 +1099,7 @@ const makeService = defineExoClassKit(
 const config = harden({
   timeout: 5000,
   retries: 3,
-  endpoints: ['api.example.com']
+  endpoints: ['api.example.com'],
 });
 
 // Copyable: message/event
@@ -1077,11 +1108,12 @@ const event = harden({
   from: 'alice',
   to: 'bob',
   amount: 100,
-  timestamp: Date.now()
+  timestamp: Date.now(),
 });
 ```
 
 **Choose remotable (pass-by-presence) for:**
+
 - Objects with behavior (methods)
 - Objects with mutable state
 - Objects representing capabilities/authority
@@ -1090,14 +1122,22 @@ const event = harden({
 ```javascript
 // Remotable: service with methods
 const database = Far('Database', {
-  query: (sql) => { /* ... */ },
-  insert: (record) => { /* ... */ }
+  query: sql => {
+    /* ... */
+  },
+  insert: record => {
+    /* ... */
+  },
 });
 
 // Remotable: capability
 const fileHandle = Far('FileHandle', {
-  read: () => { /* ... */ },
-  write: (data) => { /* ... */ }
+  read: () => {
+    /* ... */
+  },
+  write: data => {
+    /* ... */
+  },
 });
 ```
 
@@ -1114,7 +1154,7 @@ const service = makeExo('Service', ServiceI, {
       throw Error('Invalid input');
     }
     return result;
-  }
+  },
 });
 
 // Caller in different vat
@@ -1122,11 +1162,12 @@ try {
   await E(service).doOperation(badInput);
 } catch (err) {
   // err is a passable error
-  console.error(err.message);  // 'Invalid input'
+  console.error(err.message); // 'Invalid input'
 }
 ```
 
 **Best practices:**
+
 - Throw `Error` objects (they're automatically made passable)
 - Don't throw non-passable values
 - Use error messages, and properties, but avoid entraining capabilities: errors
@@ -1151,6 +1192,7 @@ test('counter increments correctly', async t => {
 ```
 
 This ensures:
+
 - Tests mirror production code
 - Async behavior is tested
 - Easy to mock remote objects
@@ -1163,7 +1205,7 @@ const mockRemoteService = Far('MockService', {
     // Simulate network delay
     await new Promise(resolve => setTimeout(resolve, 100));
     return testData;
-  }
+  },
 });
 ```
 
@@ -1172,26 +1214,28 @@ const mockRemoteService = Far('MockService', {
 ### Forgetting M.callWhen() for Async Methods
 
 **Problem:**
+
 ```javascript
 const FetcherI = M.interface('Fetcher', {
   // Wrong: M.call() for async method
-  fetch: M.call(M.string()).returns(M.string())
+  fetch: M.call(M.string()).returns(M.string()),
 });
 
 const fetcher = makeExo('Fetcher', FetcherI, {
   async fetch(url) {
-    return await E(httpClient).get(url);  // Returns promise
-  }
+    return await E(httpClient).get(url); // Returns promise
+  },
 });
 ```
 
 The return guard expects a string, but gets a promise!
 
 **Solution:**
+
 ```javascript
 const FetcherI = M.interface('Fetcher', {
   // Correct: M.callWhen() for async method
-  fetch: M.callWhen(M.string()).returns(M.string())
+  fetch: M.callWhen(M.string()).returns(M.string()),
 });
 ```
 
@@ -1199,26 +1243,29 @@ Or if the method is truly synchronous, don't use `async`:
 
 ```javascript
 const FetcherI = M.interface('Fetcher', {
-  fetch: M.call(M.string()).returns(M.promise())  // Returns promise explicitly
+  fetch: M.call(M.string()).returns(M.promise()), // Returns promise explicitly
 });
 
 const fetcher = makeExo('Fetcher', FetcherI, {
   fetch(url) {
-    return E(httpClient).get(url);  // Return promise, don't await
-  }
+    return E(httpClient).get(url); // Return promise, don't await
+  },
 });
 ```
 
 ### Not All Remotables Are Exos
 
 **Problem:**
+
 ```javascript
 const obj = Far('MyObject', {
-  doSomething(x) { /* ... */ }
+  doSomething(x) {
+    /* ... */
+  },
 });
 
 // This works, but has no input validation
-obj.doSomething('invalid');  // No guard to catch this
+obj.doSomething('invalid'); // No guard to catch this
 ```
 
 Far objects are remotable but don't validate inputs.
@@ -1226,13 +1273,16 @@ Far objects are remotable but don't validate inputs.
 **Solution:**
 
 Use `makeExo` when you need defensive behavior:
+
 ```javascript
 const obj = makeExo('MyObject', MyObjectI, {
-  doSomething(x) { /* ... */ }
+  doSomething(x) {
+    /* ... */
+  },
 });
 
 // Now inputs are validated
-obj.doSomething('invalid');  // throws if pattern doesn't match
+obj.doSomething('invalid'); // throws if pattern doesn't match
 ```
 
 ### Promise Pipelining Limitations
@@ -1244,7 +1294,7 @@ You can't pipeline to computed property names or conditional logic:
 ```javascript
 // This doesn't pipeline correctly
 const methodName = await E(obj).getMethodName();
-const result = E(obj)[methodName]();  // Second call waits for first
+const result = E(obj)[methodName](); // Second call waits for first
 ```
 
 **Solution:**
@@ -1265,9 +1315,10 @@ const result = await E(obj).dispatch(methodName, ...args);
 ### Mutating State in Copyable Data
 
 **Problem:**
+
 ```javascript
 const config = harden({ timeout: 5000 });
-config.timeout = 10000;  // throws - object is frozen
+config.timeout = 10000; // throws - object is frozen
 ```
 
 Copyable data is frozen and can't be mutated.
@@ -1289,6 +1340,7 @@ Here are resources for going deeper:
 ### Package Documentation
 
 For detailed API reference:
+
 - [@endo/pass-style](../packages/pass-style/README.md) - Pass styles, Far,
   makeTagged
 - [@endo/patterns](../packages/patterns/README.md) - M namespace, copy
@@ -1309,6 +1361,7 @@ survive vat restarts.
 For high cardinality or upgrade-survivable exos, see
 [@agoric/vat-data](https://github.com/Agoric/agoric-sdk/tree/master/packages/vat-data)
 which provides:
+
 - `defineVirtualExoClass` - backed by virtual object storage
 - `defineDurableExoClass` - survives vat upgrades
 - `prepareExoClass` - unified API for both

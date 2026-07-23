@@ -1,11 +1,11 @@
 # `@endo/platform` — Filesystem Types and Adapters
 
-| | |
-|---|---|
-| **Created** | 2026-03-18 |
-| **Updated** | 2026-05-19 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-03-18            |
+| **Updated** | 2026-05-19            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | **Complete**          |
 
 ## Status
 
@@ -50,10 +50,10 @@ live in `packages/platform/`.
 
 Filesystem primitives are scattered across `packages/daemon` and
 `packages/cli`, tightly coupled to Node.js and to the daemon's formula
-system.  The daemon defines `EndoReadable`, `ReadableTree`, and content-
+system. The daemon defines `EndoReadable`, `ReadableTree`, and content-
 addressed blob storage inside `daemon-node-powers.js` and `daemon.js`.
 The CLI builds `Far('LocalTree')` objects inline in `checkin.js` and
-reconstructs trees to disk inline in `checkout.js`.  Both sides use the
+reconstructs trees to disk inline in `checkout.js`. Both sides use the
 same conceptual vocabulary — trees, blobs, streaming, content hashes —
 but share no code and no types.
 
@@ -61,23 +61,23 @@ This coupling has three consequences:
 
 1. **The CLI cannot present a local filesystem to a remote daemon
    without reimplementing the tree protocol from scratch in each
-   command.**  `checkin.js` and `checkout.js` each contain ad-hoc
+   command.** `checkin.js` and `checkout.js` each contain ad-hoc
    `Far` wrappers and duck-typing logic that should be reusable.
 
 2. **The daemon's filesystem types (`EndoReadable`, readable-tree
-   manifests) are entangled with formula persistence.**  A Go or Rust
+   manifests) are entangled with formula persistence.** A Go or Rust
    supervisor, a browser client, or a test harness cannot use them
    without importing the entire daemon.
 
 3. **There is no shared type vocabulary for the distinction between
    a shallow readable view (the capability a guest holds) and the
-   content-addressed representation (what the store manages).**  The
+   content-addressed representation (what the store manages).** The
    `readOnly()` attenuation pattern from `daemon-capability-filesystem`
    has no home.
 
-`@endo/platform` is the package.  `@endo/platform/fs` is the module
+`@endo/platform` is the package. `@endo/platform/fs` is the module
 that provides the common ground: types, interfaces, and platform-agnostic
-tree operations.  Platform-specific adapters live in condition-gated
+tree operations. Platform-specific adapters live in condition-gated
 modules (`@endo/platform/fs/node` for Node.js).
 
 ## Design
@@ -115,37 +115,37 @@ packages/platform/
     "./fs": {
       "node": {
         "types": "./src/fs-node/types.d.ts",
-        "default": "./src/fs-node/index.js"
-      }
+        "default": "./src/fs-node/index.js",
+      },
       // Future: "browser", "endo-go", "endo-rust"
     },
     "./fs/lite": {
       "types": "./src/fs/types.d.ts",
-      "default": "./src/fs/index.js"
+      "default": "./src/fs/index.js",
     },
     "./fs/node": {
       "types": "./src/fs-node/types.d.ts",
-      "default": "./src/fs-node/index.js"
-    }
-  }
+      "default": "./src/fs-node/index.js",
+    },
+  },
 }
 ```
 
 - `import { ... } from '@endo/platform/fs'` resolves via the `"node"`
-  condition.  A bundler targeting `"browser"` would get a different
-  implementation (or an error, until one exists).  A Go or Rust host
+  condition. A bundler targeting `"browser"` would get a different
+  implementation (or an error, until one exists). A Go or Rust host
   would provide its own adapter under `"endo-go"` or `"endo-rust"`.
 
 - `import { ... } from '@endo/platform/fs/lite'` always resolves to
   the platform-agnostic subset: types, interfaces, `makeSnapshotTree`,
-  `makeSnapshotBlob`, `checkinTree`, `checkoutTree`.  This module never
+  `makeSnapshotBlob`, `checkinTree`, `checkoutTree`. This module never
   imports `node:fs` or any platform module.
 
 - `import { ... } from '@endo/platform/fs/node'` is an explicit request
   for the Node.js adapter, bypassing condition resolution.
 
 `@endo/platform/fs/node` re-exports everything from `@endo/platform/fs/lite`
-plus the Node.js-specific factories.  So `@endo/platform/fs` (under the
+plus the Node.js-specific factories. So `@endo/platform/fs` (under the
 `"node"` condition) is a superset.
 
 ### Type Vocabulary
@@ -153,14 +153,14 @@ plus the Node.js-specific factories.  So `@endo/platform/fs` (under the
 The central design challenge is distinguishing three roles an object
 can play:
 
-1. **Readable** — a shallow, possibly-remote capability.  The holder
-   can `list`, `lookup`, and stream content, but cannot write.  This
+1. **Readable** — a shallow, possibly-remote capability. The holder
+   can `list`, `lookup`, and stream content, but cannot write. This
    is what a guest or CLI client holds when interacting with a
    potentially-remote daemon.
 
 2. **Snapshot** — a content-addressed, immutable snapshot whose identity
-   is a hash.  The holder can obtain the hash (`sha256()`) and retrieve
-   content from a `SnapshotStore`.  This is what the daemon persists.
+   is a hash. The holder can obtain the hash (`sha256()`) and retrieve
+   content from a `SnapshotStore`. This is what the daemon persists.
 
 3. **Mutable** — a live filesystem node that supports writes.
    `readOnly()` attenuates a mutable node to a readable one.
@@ -188,9 +188,9 @@ mutability — producing a type lattice:
 ```
 
 A `SnapshotBlob` **is-a** `ReadableBlob` (it has all the same read
-methods plus `sha256()`).  A `File` can produce a `ReadableBlob` via
-`readOnly()`.  A `Directory` can produce a `ReadableTree` via
-`readOnly()`.  These are structural subtypes, enforced by interface
+methods plus `sha256()`). A `File` can produce a `ReadableBlob` via
+`readOnly()`. A `Directory` can produce a `ReadableTree` via
+`readOnly()`. These are structural subtypes, enforced by interface
 guards.
 
 ### Types
@@ -390,8 +390,12 @@ export const DirectoryInterface = M.interface('Directory', {
   lookup: M.call().rest(M.arrayOf(M.string())).returns(M.promise()),
   write: M.call(M.arrayOf(M.string()), M.remotable()).returns(M.promise()),
   remove: M.call(M.arrayOf(M.string())).returns(M.promise()),
-  move: M.call(M.arrayOf(M.string()), M.arrayOf(M.string())).returns(M.promise()),
-  copy: M.call(M.arrayOf(M.string()), M.arrayOf(M.string())).returns(M.promise()),
+  move: M.call(M.arrayOf(M.string()), M.arrayOf(M.string())).returns(
+    M.promise(),
+  ),
+  copy: M.call(M.arrayOf(M.string()), M.arrayOf(M.string())).returns(
+    M.promise(),
+  ),
   makeDirectory: M.call(M.arrayOf(M.string())).returns(M.promise()),
   readOnly: M.call().returns(M.remotable('ReadableTree')),
   snapshot: M.call().returns(M.promise()),
@@ -402,7 +406,7 @@ export const DirectoryInterface = M.interface('Directory', {
 
 #### `makeSnapshotBlob(store, sha256)`
 
-Creates a `SnapshotBlob` Exo backed by a `SnapshotStore`.  Extracted from
+Creates a `SnapshotBlob` Exo backed by a `SnapshotStore`. Extracted from
 `daemon.js:makeReadableBlob`.
 
 ```js
@@ -419,8 +423,8 @@ export const makeSnapshotBlob = (store, sha256) => {
 
 #### `makeSnapshotTree(store, sha256)`
 
-Creates a `SnapshotTree` Exo backed by a `SnapshotStore`.  Extracted from
-`daemon.js:makeReadableTree`.  Children are themselves `SnapshotBlob` or
+Creates a `SnapshotTree` Exo backed by a `SnapshotStore`. Extracted from
+`daemon.js:makeReadableTree`. Children are themselves `SnapshotBlob` or
 `SnapshotTree`.
 
 ```js
@@ -439,9 +443,15 @@ export const makeSnapshotTree = (store, sha256) => {
   };
   return makeExo('SnapshotTree', SnapshotTreeInterface, {
     sha256: () => sha256,
-    has: async (...path) => { /* walk entries */ },
-    list: async (...path) => { /* walk entries, return names */ },
-    lookup: async (nameOrPath) => { /* resolve to child Exo */ },
+    has: async (...path) => {
+      /* walk entries */
+    },
+    list: async (...path) => {
+      /* walk entries, return names */
+    },
+    lookup: async nameOrPath => {
+      /* resolve to child Exo */
+    },
   });
 };
 ```
@@ -449,7 +459,7 @@ export const makeSnapshotTree = (store, sha256) => {
 #### `checkinTree(remoteTree, store, options?)`
 
 Recursively ingests a remote `ReadableTree` (possibly over CapTP) into
-a `SnapshotStore`, producing a root SHA-256.  Extracted from
+a `SnapshotStore`, producing a root SHA-256. Extracted from
 `daemon.js:checkinNode`.
 
 ```js
@@ -474,13 +484,20 @@ export const checkinTree = async (remoteTree, store, options = {}) => {
     for (const name of names) {
       const child = await E(node).lookup(name);
       let childIsTree = false;
-      try { await E(child).list(); childIsTree = true; } catch (_) {}
+      try {
+        await E(child).list();
+        childIsTree = true;
+      } catch (_) {}
       const result = await checkinNode(child, childIsTree, depth + 1);
       entries.push([name, result.type, result.sha256]);
     }
     entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
     const manifest = new TextEncoder().encode(JSON.stringify(entries));
-    const sha256 = await store.store((async function* () { yield manifest; })());
+    const sha256 = await store.store(
+      (async function* () {
+        yield manifest;
+      })(),
+    );
     return { type: 'tree', sha256 };
   };
   return checkinNode(remoteTree, true, 0);
@@ -490,7 +507,7 @@ export const checkinTree = async (remoteTree, store, options = {}) => {
 #### `checkoutTree(tree, writer, options?)`
 
 Recursively walks a `ReadableTree` (local or remote) and materializes
-it through a `TreeWriter`.  Extracted from `cli/checkout.js:writeTree`.
+it through a `TreeWriter`. Extracted from `cli/checkout.js:writeTree`.
 
 ```js
 /**
@@ -507,7 +524,10 @@ export const checkoutTree = async (tree, writer, options = {}) => {
       const child = await E(node).lookup(name);
       const childPath = [...pathSegments, name];
       let isTree = false;
-      try { await E(child).list(); isTree = true; } catch (_) {}
+      try {
+        await E(child).list();
+        isTree = true;
+      } catch (_) {}
       if (isTree) {
         await walk(child, childPath);
       } else {
@@ -525,15 +545,15 @@ export const checkoutTree = async (tree, writer, options = {}) => {
 
 #### `makeSnapshotSha256Store(storePath, filePowers)`
 
-File-backed `SnapshotStore`.  Extracted from
-`daemon-node-powers.js:makeSnapshotSha256Store`.  Streams bytes to a
+File-backed `SnapshotStore`. Extracted from
+`daemon-node-powers.js:makeSnapshotSha256Store`. Streams bytes to a
 temp file while computing SHA-256, atomically renames to
 `{storePath}/{sha256}`.
 
 #### `makeLocalTree(dirPath, options?)`
 
-Creates a `ReadableTree` Exo from a local directory.  Extracted from
-`cli/checkin.js:makeLocalTree`.  The returned object satisfies
+Creates a `ReadableTree` Exo from a local directory. Extracted from
+`cli/checkin.js:makeLocalTree`. The returned object satisfies
 `ReadableTree` — it can be passed to `checkinTree` or sent over CapTP
 to a remote daemon.
 
@@ -547,8 +567,12 @@ import { ReadableTreeInterface } from '@endo/platform/fs/lite';
  */
 export const makeLocalTree = (dirPath, options = {}) => {
   return makeExo('LocalTree', ReadableTreeInterface, {
-    has: async (...path) => { /* fs.access */ },
-    list: async (...path) => { /* fs.readdir, filter, sort */ },
+    has: async (...path) => {
+      /* fs.access */
+    },
+    list: async (...path) => {
+      /* fs.readdir, filter, sort */
+    },
     lookup: async (...path) => {
       // stat → isDirectory ? makeLocalTree(child) : makeLocalBlob(child)
     },
@@ -558,13 +582,13 @@ export const makeLocalTree = (dirPath, options = {}) => {
 
 #### `makeLocalBlob(filePath)`
 
-Creates a `ReadableBlob` Exo from a local file.  Streams file content
+Creates a `ReadableBlob` Exo from a local file. Streams file content
 as base64 via `@endo/stream-node`.
 
 ```js
 import { ReadableBlobInterface } from '@endo/platform/fs/lite';
 
-export const makeLocalBlob = (filePath) => {
+export const makeLocalBlob = filePath => {
   return makeExo('LocalBlob', ReadableBlobInterface, {
     streamBase64: () => {
       const reader = makeNodeReader(fs.createReadStream(filePath));
@@ -578,20 +602,22 @@ export const makeLocalBlob = (filePath) => {
 
 #### `makeTreeWriter(dirPath)`
 
-Creates a `TreeWriter` Exo that writes to a local directory.  Extracted
+Creates a `TreeWriter` Exo that writes to a local directory. Extracted
 from `cli/checkout.js:writeTree`.
 
 ```js
 import { TreeWriterInterface } from '@endo/platform/fs/lite';
 
-export const makeTreeWriter = (dirPath) => {
+export const makeTreeWriter = dirPath => {
   return makeExo('TreeWriter', TreeWriterInterface, {
     writeBlob: async (pathSegments, readable) => {
       const filePath = path.join(dirPath, ...pathSegments);
       // stream readable → file
     },
-    makeDirectory: async (pathSegments) => {
-      await fs.promises.mkdir(path.join(dirPath, ...pathSegments), { recursive: true });
+    makeDirectory: async pathSegments => {
+      await fs.promises.mkdir(path.join(dirPath, ...pathSegments), {
+        recursive: true,
+      });
     },
   });
 };
@@ -599,7 +625,7 @@ export const makeTreeWriter = (dirPath) => {
 
 #### Receiving `node:fs` Powers
 
-`@endo/platform/fs/node` imports `node:fs` directly.  This is the
+`@endo/platform/fs/node` imports `node:fs` directly. This is the
 "elevator" module — it does `import fs from 'node:fs'` so that the
 lite module never has to.
 
@@ -648,7 +674,9 @@ export const makeDaemonicPersistencePowers = (...) => {
 // cli/src/commands/checkin.js
 import { makeLocalTree } from '@endo/platform/fs/node';
 
-const localTree = makeLocalTree(resolvedPath, { onFile: () => progress.files++ });
+const localTree = makeLocalTree(resolvedPath, {
+  onFile: () => progress.files++,
+});
 await E(agent).storeTree(localTree, petName);
 ```
 
@@ -664,12 +692,12 @@ await checkoutTree(tree, writer, { onFile: () => progress.files++ });
 
 ### Relationship to Existing Interfaces
 
-**EndoNameHub / EndoDirectory.**  `ReadableTree` is structurally
+**EndoNameHub / EndoDirectory.** `ReadableTree` is structurally
 compatible with the read surface of `EndoNameHub` (`has`, `list`,
-`lookup`).  `Directory` is structurally compatible with the mutation
-surface.  However, `@endo/platform/fs` types do **not** include
+`lookup`). `Directory` is structurally compatible with the mutation
+surface. However, `@endo/platform/fs` types do **not** include
 `identify`, `locate`, `followNameChanges`, or other formula-system
-concepts.  The daemon's `EndoDirectory` extends beyond filesystem
+concepts. The daemon's `EndoDirectory` extends beyond filesystem
 semantics into the formula graph; `@endo/platform/fs` stops at the
 filesystem boundary.
 
@@ -677,12 +705,12 @@ A daemon `EndoDirectory` could implement `ReadableTree` (it already
 has `has`, `list`, `lookup`), making it usable wherever a
 `ReadableTree` is expected — for example, as input to `checkinTree`.
 
-**EndoReadable.**  The existing `EndoReadable` type (`sha256`,
-`streamBase64`, `text`, `json`) maps directly to `SnapshotBlob`.  The
+**EndoReadable.** The existing `EndoReadable` type (`sha256`,
+`streamBase64`, `text`, `json`) maps directly to `SnapshotBlob`. The
 daemon can type-alias `EndoReadable = SnapshotBlob` or keep both during
 migration.
 
-**daemon-capability-filesystem.md.**  The `Dir` and `File` interfaces
+**daemon-capability-filesystem.md.** The `Dir` and `File` interfaces
 in that design document correspond to `Directory` and `File` here.
 The attenuation pattern (`readOnly()`, `subDir()`) is preserved.
 `subDir()` is not in this design because it is a VFS namespace
@@ -691,10 +719,10 @@ that composes `@endo/platform/fs` primitives.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|-------------|
-| [daemon-capability-filesystem](daemon-capability-filesystem.md) | Speculative Dir/File/VFS design.  This design provides the concrete types and adapters that the capability filesystem would build on. |
-| [daemon-checkin-checkout](daemon-checkin-checkout.md) | Checkin/checkout commands.  After this design, those commands delegate to `@endo/platform/fs` factories instead of inline implementations. |
+| Design                                                          | Relationship                                                                                                                              |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| [daemon-capability-filesystem](daemon-capability-filesystem.md) | Speculative Dir/File/VFS design. This design provides the concrete types and adapters that the capability filesystem would build on.      |
+| [daemon-checkin-checkout](daemon-checkin-checkout.md)           | Checkin/checkout commands. After this design, those commands delegate to `@endo/platform/fs` factories instead of inline implementations. |
 
 ## Implementation Phases
 
@@ -734,41 +762,41 @@ that composes `@endo/platform/fs` primitives.
 
 ## Design Decisions
 
-1. **`@endo/platform/fs` not `@endo/tree`.**  Trees are one node kind
-   among several (blobs, files, directories).  The module name reflects
+1. **`@endo/platform/fs` not `@endo/tree`.** Trees are one node kind
+   among several (blobs, files, directories). The module name reflects
    the broader filesystem concern, and the package name (`@endo/platform`)
    leaves room for future platform abstractions beyond filesystems.
 
-2. **Condition-gated `"node"` export, not assumed.**  Importing
-   `@endo/platform/fs` requires the `"node"` build condition.  This
+2. **Condition-gated `"node"` export, not assumed.** Importing
+   `@endo/platform/fs` requires the `"node"` build condition. This
    makes it explicit that the import resolves differently (or not at
-   all) on non-Node platforms.  `@endo/platform/fs/lite` is always
+   all) on non-Node platforms. `@endo/platform/fs/lite` is always
    available for platform-agnostic code.
 
-3. **`ReadableBlob` is shallow; `SnapshotBlob` adds `sha256()`.**  A
+3. **`ReadableBlob` is shallow; `SnapshotBlob` adds `sha256()`.** A
    consumer streaming file content over CapTP does not need to know
-   the content hash.  Separating the readable surface from the
+   the content hash. Separating the readable surface from the
    content-addressed identity keeps the guest-facing capability minimal
    and allows `readOnly()` on `File` to return a `ReadableBlob` that
    cannot reveal the storage identity.
 
 4. **`readOnly()` returns the readable interface, not a frozen copy.**
    Calling `file.readOnly()` returns a `ReadableBlob`, not a `File`
-   with write methods that throw.  The attenuation is structural —
+   with write methods that throw. The attenuation is structural —
    the returned object simply lacks mutation methods — not behavioral.
 
-5. **No `help()` in this layer.**  The `help()` method is a daemon
-   convention for LLM discoverability.  `@endo/platform/fs` provides
+5. **No `help()` in this layer.** The `help()` method is a daemon
+   convention for LLM discoverability. `@endo/platform/fs` provides
    the raw interfaces; the daemon wraps them with `help()` when
    constructing Exos for guest consumption.
 
-6. **Tree manifest format is `[name, type, sha256][]`.**  This matches
+6. **Tree manifest format is `[name, type, sha256][]`.** This matches
    the existing `readable-tree` formula content in the daemon's CAS.
    Sorted by name for deterministic hashing.
 
-7. **`TreeWriter` is a push interface.**  Rather than requiring the
+7. **`TreeWriter` is a push interface.** Rather than requiring the
    checkout target to implement a full `Directory`, we define a minimal
-   `TreeWriter` with `writeBlob` and `makeDirectory`.  This decouples
+   `TreeWriter` with `writeBlob` and `makeDirectory`. This decouples
    checkout from any specific mutable tree implementation and allows
    zip writers, memory buffers, or remote filesystems to serve as
    targets.
@@ -776,12 +804,12 @@ that composes `@endo/platform/fs` primitives.
 ## Prompt
 
 > Let's name the package `@endo/platform` and the module pertaining
-> to the representation of files `@endo/platform/fs`.  Let's name a
+> to the representation of files `@endo/platform/fs`. Let's name a
 > module `@endo/platform/fs/node` that captures the Node.js specific
-> concern of elevating a Node.js `node:fs` module.  Let's allow
+> concern of elevating a Node.js `node:fs` module. Let's allow
 > `@endo/platform/fs/lite` to contain the portion that is not
-> platform-specific.  We will require the build condition `"node"` to
-> import the module `@endo/platform/fs`.  The most important common
+> platform-specific. We will require the build condition `"node"` to
+> import the module `@endo/platform/fs`. The most important common
 > ground will be the types for File, Blob, Tree, and Readable*
-> attenuations.  Distinguish Readable* (shallow) from content-
-> addressable.  Leave space for .readOnly() methods.
+> attenuations. Distinguish Readable* (shallow) from content-
+> addressable. Leave space for .readOnly() methods.

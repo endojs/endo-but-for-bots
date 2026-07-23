@@ -15,7 +15,7 @@ Fae uses a three-layer architecture:
 
 2. **Fae Factory** (`agent.js` — `make()`) — bound to a named LLM
    provider. Creates agent instances on demand via `createAgent(name,
-   options)`. Each agent gets its own guest (inbox, petstore, tools)
+options)`. Each agent gets its own guest (inbox, petstore, tools)
    and a driver caplet.
 
 3. **Driver** (`driver.js`) — a standalone caplet per agent that runs
@@ -40,11 +40,11 @@ config and agent guest from the driver's namespace, and restarts
 
 Fae uses the same LLM provider configuration as `@endo/lal`.
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `LAL_HOST` | API base URL (Ollama, llama.cpp, or Anthropic) | `http://localhost:11434/v1` |
-| `LAL_MODEL` | Model name | `qwen3` (Ollama) or `claude-opus-4-5-20251101` (Anthropic) |
-| `LAL_AUTH_TOKEN` | API key (required for Anthropic, optional for local) | - |
+| Variable         | Description                                          | Default                                                    |
+| ---------------- | ---------------------------------------------------- | ---------------------------------------------------------- |
+| `LAL_HOST`       | API base URL (Ollama, llama.cpp, or Anthropic)       | `http://localhost:11434/v1`                                |
+| `LAL_MODEL`      | Model name                                           | `qwen3` (Ollama) or `claude-opus-4-5-20251101` (Anthropic) |
+| `LAL_AUTH_TOKEN` | API key (required for Anthropic, optional for local) | -                                                          |
 
 Create a `.env` file from the example:
 

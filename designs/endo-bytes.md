@@ -1,13 +1,13 @@
 # `@endo/bytes`: Portable `Uint8Array` Helpers
 
-| | |
-|---|---|
-| **Created** | 2026-05-08 |
-| **Updated** | 2026-05-10 |
-| **Author** | Designer (dispatched per kriskowal review) |
-| **Status** | Implemented |
-| **Source** | [PR 122 inline review comment 3205507716](https://github.com/endojs/endo-but-for-bots/pull/122#discussion_r3205507716) |
-| **Implementation** | [PR #142](https://github.com/endojs/endo-but-for-bots/pull/142) |
+|                    |                                                                                                                        |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| **Created**        | 2026-05-08                                                                                                             |
+| **Updated**        | 2026-05-10                                                                                                             |
+| **Author**         | Designer (dispatched per kriskowal review)                                                                             |
+| **Status**         | Implemented                                                                                                            |
+| **Source**         | [PR 122 inline review comment 3205507716](https://github.com/endojs/endo-but-for-bots/pull/122#discussion_r3205507716) |
+| **Implementation** | [PR #142](https://github.com/endojs/endo-but-for-bots/pull/142)                                                        |
 
 ## What is the Problem Being Solved?
 
@@ -163,8 +163,8 @@ its own entry, plus the conventional `package.json` re-export:
     "./from-string.js": "./from-string.js",
     "./to-string.js": "./to-string.js",
     "./concat.js": "./concat.js",
-    "./package.json": "./package.json"
-  }
+    "./package.json": "./package.json",
+  },
 }
 ```
 
@@ -210,7 +210,9 @@ ship in the published tarball alongside `src/`.
  * @param {readonly Uint8Array[]} chunks
  * @returns {Uint8Array}
  */
-export const concatBytes = chunks => { /* ... */ };
+export const concatBytes = chunks => {
+  /* ... */
+};
 
 /**
  * Compares two `Uint8Array` values byte-for-byte.
@@ -221,7 +223,9 @@ export const concatBytes = chunks => { /* ... */ };
  * @param {Uint8Array} b
  * @returns {boolean}
  */
-export const bytesEqual = (a, b) => { /* ... */ };
+export const bytesEqual = (a, b) => {
+  /* ... */
+};
 
 /**
  * Encodes a string as UTF-8 bytes.
@@ -231,7 +235,9 @@ export const bytesEqual = (a, b) => { /* ... */ };
  * @param {string} s
  * @returns {Uint8Array}
  */
-export const bytesFromText = s => { /* ... */ };
+export const bytesFromText = s => {
+  /* ... */
+};
 
 /**
  * Decodes UTF-8 bytes to a string.
@@ -240,7 +246,9 @@ export const bytesFromText = s => { /* ... */ };
  * @param {Uint8Array} view
  * @returns {string}
  */
-export const bytesToText = view => { /* ... */ };
+export const bytesToText = view => {
+  /* ... */
+};
 ```
 
 ### Reference implementation of `concatBytes`
@@ -276,24 +284,24 @@ so the canonical version uses `length`.
 
 ### Helper rationale
 
-| Helper | Why include in the first release | Existing duplicates |
-|---|---|---|
-| `concatBytes(chunks)` | The PR 122 trigger.  Three verbatim copies in `fs-node/`, plus one in `cli/src/commands/store.js`, plus `concatUint8Arrays` in `ocapn/src/buffer-utils.js`, plus several `Buffer.concat(chunks)` ports that should be portable.  Highest-value extraction. | 5+ |
-| `bytesEqual(a, b)` | Tests across the codebase compare bytes via `t.deepEqual` or via ad-hoc `for`-loops.  A canonical helper is one line and well-defined.  Including it pre-empts the next reviewer flag. | Several inline loops; not yet a named helper. |
-| `bytesFromText(s)` | Every place that constructs a `Uint8Array` from a string today calls `new TextEncoder().encode(s)`.  At least 8 daemon-side modules construct their own `TextEncoder` (see audit).  A shared helper avoids the per-module encoder allocation. | 8 module-scoped encoders in `daemon/src`, plus `connection.js`, plus `worker.js`. |
-| `bytesToText(view)` | Symmetric to `bytesFromText`.  `daemon.js` lines 1742-1743 construct a fresh `TextDecoder` per call. | At least 4 sites. |
+| Helper                | Why include in the first release                                                                                                                                                                                                                         | Existing duplicates                                                               |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `concatBytes(chunks)` | The PR 122 trigger. Three verbatim copies in `fs-node/`, plus one in `cli/src/commands/store.js`, plus `concatUint8Arrays` in `ocapn/src/buffer-utils.js`, plus several `Buffer.concat(chunks)` ports that should be portable. Highest-value extraction. | 5+                                                                                |
+| `bytesEqual(a, b)`    | Tests across the codebase compare bytes via `t.deepEqual` or via ad-hoc `for`-loops. A canonical helper is one line and well-defined. Including it pre-empts the next reviewer flag.                                                                     | Several inline loops; not yet a named helper.                                     |
+| `bytesFromText(s)`    | Every place that constructs a `Uint8Array` from a string today calls `new TextEncoder().encode(s)`. At least 8 daemon-side modules construct their own `TextEncoder` (see audit). A shared helper avoids the per-module encoder allocation.              | 8 module-scoped encoders in `daemon/src`, plus `connection.js`, plus `worker.js`. |
+| `bytesToText(view)`   | Symmetric to `bytesFromText`. `daemon.js` lines 1742-1743 construct a fresh `TextDecoder` per call.                                                                                                                                                      | At least 4 sites.                                                                 |
 
 ### Helpers explicitly deferred
 
-| Helper | Reason for deferral |
-|---|---|
-| `slice(view, start?, end?)` | `Uint8Array.prototype.subarray` already does this with no copy.  Adding our own `slice` would either duplicate `subarray` (and confuse readers) or copy unnecessarily.  If a caller wants a copy, `view.slice()` is built in.  Defer until a real use case. |
-| `fromBase64` / `toBase64` | Already covered by `@endo/base64`. |
-| `fromHex` / `toHex` | Already covered (or about to be) by `@endo/hex` per [hex-package.md](hex-package.md).  PR 119 also flagged this with "We should use @endo/hex." |
-| `compare(a, b)` (lex order) | No current call site needs lexicographic ordering of byte arrays.  Add when a consumer asks. |
-| `concatInto(dest, chunks, offset)` | TC39 has `Uint8Array.prototype.setFromBase64` and similar in-place writers.  Symmetry suggests we may want `setFromConcat` someday, but no current call site asks for it. |
-| `fromArrayBuffer(ab)` / `toArrayBuffer(view)` | `new Uint8Array(ab)` and `view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength)` are one-liners.  The OCapN `concatArrayBuffers` is the only current case, and it has special immutable-ArrayBuffer handling that is OCapN-specific; do not generalize. |
-| `bytesEqual` for `ArrayBuffer` inputs | The `Uint8Array` overload covers the common case;  callers with `ArrayBuffer` can wrap with `new Uint8Array(ab)` first. |
+| Helper                                        | Reason for deferral                                                                                                                                                                                                                                                    |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `slice(view, start?, end?)`                   | `Uint8Array.prototype.subarray` already does this with no copy. Adding our own `slice` would either duplicate `subarray` (and confuse readers) or copy unnecessarily. If a caller wants a copy, `view.slice()` is built in. Defer until a real use case.               |
+| `fromBase64` / `toBase64`                     | Already covered by `@endo/base64`.                                                                                                                                                                                                                                     |
+| `fromHex` / `toHex`                           | Already covered (or about to be) by `@endo/hex` per [hex-package.md](hex-package.md). PR 119 also flagged this with "We should use @endo/hex."                                                                                                                         |
+| `compare(a, b)` (lex order)                   | No current call site needs lexicographic ordering of byte arrays. Add when a consumer asks.                                                                                                                                                                            |
+| `concatInto(dest, chunks, offset)`            | TC39 has `Uint8Array.prototype.setFromBase64` and similar in-place writers. Symmetry suggests we may want `setFromConcat` someday, but no current call site asks for it.                                                                                               |
+| `fromArrayBuffer(ab)` / `toArrayBuffer(view)` | `new Uint8Array(ab)` and `view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength)` are one-liners. The OCapN `concatArrayBuffers` is the only current case, and it has special immutable-ArrayBuffer handling that is OCapN-specific; do not generalize. |
+| `bytesEqual` for `ArrayBuffer` inputs         | The `Uint8Array` overload covers the common case; callers with `ArrayBuffer` can wrap with `new Uint8Array(ab)` first.                                                                                                                                                 |
 
 The principle (per the user's
 "maximal-power-minimal-area" guidance):
@@ -394,13 +402,13 @@ The first builder PR (#142) lands the package, the changeset, and
 the consumer migrations in a single 3-commit set:
 scaffold, implementation, and yarn.lock.
 
-| File | Today | After |
-|---|---|---|
-| `packages/cli/src/commands/store.js` | local `concat` + `asyncConcat` | `import { concatBytes } from '@endo/bytes/concat.js'`; `asyncConcat` kept as a four-line wrapper over it |
-| `packages/ocapn/src/buffer-utils.js` | `concatUint8Arrays` | `concatBytes` from `@endo/bytes/concat.js` (call sites updated) |
-| `packages/daemon/src/envelope.js` | `new Uint8Array(Buffer.concat(chunks))` | `concatBytes(chunks)` (removes a `Buffer` use) |
+| File                                                                                                                                                      | Today                                                | After                                                                                                                     |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `packages/cli/src/commands/store.js`                                                                                                                      | local `concat` + `asyncConcat`                       | `import { concatBytes } from '@endo/bytes/concat.js'`; `asyncConcat` kept as a four-line wrapper over it                  |
+| `packages/ocapn/src/buffer-utils.js`                                                                                                                      | `concatUint8Arrays`                                  | `concatBytes` from `@endo/bytes/concat.js` (call sites updated)                                                           |
+| `packages/daemon/src/envelope.js`                                                                                                                         | `new Uint8Array(Buffer.concat(chunks))`              | `concatBytes(chunks)` (removes a `Buffer` use)                                                                            |
 | `packages/daemon/src/{bus-daemon-node-powers,bus-daemon-rust-xs,connection,daemon-go-powers,daemon-node-powers,daemon,debug-session,directory,worker}.js` | per-module `new TextEncoder()` / `new TextDecoder()` | `import { bytesFromText } from '@endo/bytes/from-string.js'` and `import { bytesToText } from '@endo/bytes/to-string.js'` |
-| `packages/daemon/src/networks/ws-relay.js` | per-module text codec | `bytesFromText` / `bytesToText` from `@endo/bytes` |
+| `packages/daemon/src/networks/ws-relay.js`                                                                                                                | per-module text codec                                | `bytesFromText` / `bytesToText` from `@endo/bytes`                                                                        |
 
 ### Not migrated in PR #142
 

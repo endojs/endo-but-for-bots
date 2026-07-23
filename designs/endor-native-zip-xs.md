@@ -1,15 +1,15 @@
 # Endor native ZIP DEFLATE for XS
 
-| | |
-|---|---|
-| **Created** | 2026-07-22 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
-| **Source** | [PR #160 review](https://github.com/endojs/endo-but-for-bots/pull/160#discussion_r3628160416) |
+|             |                                                                                               |
+| ----------- | --------------------------------------------------------------------------------------------- |
+| **Created** | 2026-07-22                                                                                    |
+| **Author**  | Kris Kowal (prompted)                                                                         |
+| **Status**  | Proposed                                                                                      |
+| **Source**  | [PR #160 review](https://github.com/endojs/endo-but-for-bots/pull/160#discussion_r3628160416) |
 
 ## What is the Problem Being Solved?
 
-`@endo/zip` deliberately leaves compression pluggable.  The helpers exported at
+`@endo/zip` deliberately leaves compression pluggable. The helpers exported at
 `@endo/zip/deflate.js` and `@endo/zip/inflate.js` currently implement raw
 DEFLATE through `CompressionStream('deflate-raw')` and
 `DecompressionStream('deflate-raw')`.
@@ -60,10 +60,10 @@ dependency.
 Add `rust/endo/xsnap/src/powers/compression.rs`, registered after the existing
 power modules, with these byte-only functions:
 
-| XS function | Arguments | Result |
-|---|---|---|
-| `hostDeflateRaw` | `Uint8Array` | fresh `ArrayBuffer` containing a raw RFC 1951 DEFLATE stream |
-| `hostInflateRaw` | `Uint8Array`, maximum decoded byte count | fresh `ArrayBuffer` containing the decoded bytes |
+| XS function      | Arguments                                | Result                                                       |
+| ---------------- | ---------------------------------------- | ------------------------------------------------------------ |
+| `hostDeflateRaw` | `Uint8Array`                             | fresh `ArrayBuffer` containing a raw RFC 1951 DEFLATE stream |
+| `hostInflateRaw` | `Uint8Array`, maximum decoded byte count | fresh `ArrayBuffer` containing the decoded bytes             |
 
 The implementation uses `flate2`'s raw `DeflateEncoder` and
 `DeflateDecoder`, with its explicit pure-Rust `rust_backend` feature.
@@ -126,7 +126,7 @@ STORE archive, because callers that requested compression need a visible error.
    trips, the checked-in native-DEFLATE ZIP fixture, corrupt streams, and a
    stream whose expansion exceeds the supplied limit.
 2. Extend `packages/zip/test/zip.test.js` with portable golden vectors and
-   `ZipWriter`/`ZipReader` round trips.  The default path continues to use its
+   `ZipWriter`/`ZipReader` round trips. The default path continues to use its
    web-stream implementation; the XS test bundle proves the same vectors
    through the conditional exports.
 3. Build a fixture with `-C xs`, assert that both `@endo/zip` subpaths resolve
@@ -139,10 +139,10 @@ STORE archive, because callers that requested compression need a visible error.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| [exo-zip-package](exo-zip-package.md) | Consumer.  Its writer and reader adapters gain working method-8 support in Endor XS. |
-| [endor-run-expanded](endor-run-expanded.md) | Consumer.  `endor run` can execute archives whose dependency tree uses the ZIP helpers under XS. |
+| Design                                      | Relationship                                                                                    |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| [exo-zip-package](exo-zip-package.md)       | Consumer. Its writer and reader adapters gain working method-8 support in Endor XS.             |
+| [endor-run-expanded](endor-run-expanded.md) | Consumer. `endor run` can execute archives whose dependency tree uses the ZIP helpers under XS. |
 
 ## Design Decisions
 
@@ -150,9 +150,9 @@ STORE archive, because callers that requested compression need a visible error.
    selects at build time with `-C xs`; it does not make every XS program carry
    Blob, Response, and stream emulation just to transform one byte array.
 2. **Raw DEFLATE only.** ZIP method 8 requires RFC 1951 bytes, not zlib or gzip
-   framing.  Higher-level archive parsing remains in `@endo/zip`.
+   framing. Higher-level archive parsing remains in `@endo/zip`.
 3. **Bound inflation at the ZIP call site.** The central directory already
-   supplies the expected decoded length.  Passing it to the host function
+   supplies the expected decoded length. Passing it to the host function
    prevents a compressed entry from allocating without limit.
 4. **Preserve asynchronous JavaScript helpers.** The native operation need not
    force a synchronous public API or split downstream callers by engine.

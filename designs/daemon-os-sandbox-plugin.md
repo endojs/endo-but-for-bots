@@ -1,11 +1,11 @@
 # Daemon OS Sandbox Plugin
 
-|             |                           |
-|-------------|---------------------------|
-| **Created** | 2026-02-15                |
-| **Updated** | 2026-05-18                |
-| **Author**  | Kris Kowal (prompted)     |
-| **Author**  | Joshua T Corbin (revised) |
+|             |                                                           |
+| ----------- | --------------------------------------------------------- |
+| **Created** | 2026-02-15                                                |
+| **Updated** | 2026-05-18                                                |
+| **Author**  | Kris Kowal (prompted)                                     |
+| **Author**  | Joshua T Corbin (revised)                                 |
 | **Status**  | Superseded by [endo-posix-sandbox](endo-posix-sandbox.md) |
 
 ## Status
@@ -48,12 +48,12 @@ platform-specific sandboxing outside of Endo.
 A plugin that can describe a set of OS-level endowments (filesystem paths,
 network access, device access, IPC) and then execute programs within a
 sandbox enforcing exactly those endowments would let Endo extend its
-principle of least authority to native processes.  macOS provides
+principle of least authority to native processes. macOS provides
 `sandbox-exec` with SBPL profiles, and Linux provides several
 complementary confinement mechanisms: `bubblewrap` (combining user
 namespaces, bind mounts, and seccomp-bpf), Landlock (a stackable LSM for
 unprivileged filesystem and network scoping, available since Linux 5.13
-with network rules since 6.3), and container runtimes.  Both macOS SBPL
+with network rules since 6.3), and container runtimes. Both macOS SBPL
 and the Linux tooling can be driven programmatically by generating
 configuration and spawning a child process.
 
@@ -81,9 +81,9 @@ without the limitations of the initial bubblewrap-only approach.
 ### Overview
 
 The plugin is an unconfined caplet (`makeUnconfined`) that exports a
-`SandboxMaker` capability.  A holder of `SandboxMaker` can describe a set
+`SandboxMaker` capability. A holder of `SandboxMaker` can describe a set
 of endowments and receive back a `Sandbox` capability scoped to exactly
-those endowments.  The `Sandbox` can then execute programs, returning
+those endowments. The `Sandbox` can then execute programs, returning
 their stdout, stderr, and exit code.
 
 The plugin detects the host platform at startup and delegates to a
@@ -107,7 +107,7 @@ HOST
 ```
 
 Guests never receive `SandboxMaker` directly unless the host explicitly
-grants it.  More commonly the host creates a `Sandbox` with a specific
+grants it. More commonly the host creates a `Sandbox` with a specific
 endowment set and passes only that `Sandbox` to the guest, preventing the
 guest from escalating its own OS-level authority.
 
@@ -154,7 +154,7 @@ lists the resources a sandbox should provide:
 ### Interface guards
 
 Guards should be specific enough that an LLM inspecting them can
-construct valid calls without guessing.  In particular, the endowment
+construct valid calls without guessing. In particular, the endowment
 descriptor passed to `describe()` and the options passed to `run()` use
 `M.splitRecord` with named fields rather than an opaque `M.record()`.
 
@@ -164,9 +164,7 @@ const FsEndowmentShape = M.splitRecord(
   { mountAt: M.string() },
 );
 
-const NetRuleShape = M.splitRecord(
-  { cidr: M.string(), port: M.number() },
-);
+const NetRuleShape = M.splitRecord({ cidr: M.string(), port: M.number() });
 
 const NetEndowmentShape = M.splitRecord(
   {},
@@ -223,31 +221,31 @@ const SandboxI = M.interface('Sandbox', {
 ### LLM discoverability
 
 It is critical that an LLM agent can discover how to use this plugin
-without out-of-band documentation.  An LLM driving Endo on behalf of a
+without out-of-band documentation. An LLM driving Endo on behalf of a
 user prompt will typically receive a capability reference and need to
 figure out what it does and how to call it using only the object's own
-self-description.  Two mechanisms make this possible:
+self-description. Two mechanisms make this possible:
 
-1. **`help()` methods must be comprehensive.**  Every Exo in this plugin
+1. **`help()` methods must be comprehensive.** Every Exo in this plugin
    exposes a `help()` method that returns a natural-language description
    of the object's purpose _and_ a usage guide including the shape of
-   arguments it expects and the values it returns.  `help()` text should
+   arguments it expects and the values it returns. `help()` text should
    be written as if the reader is an LLM that has never seen the plugin
    before: explain what the capability does, enumerate every method with
    its parameters and return type in prose, and give a concrete example
    invocation.
 
-2. **Interface guards must be maximally specific.**  The `M.interface()`
+2. **Interface guards must be maximally specific.** The `M.interface()`
    patterns are the machine-readable schema an LLM can inspect (via
    Endo's interface introspection) to understand method signatures.
    Guards must use precise pattern shapes — named record fields,
    enumerations, and descriptive remotable tags — rather than opaque
-   `M.record()` or `M.any()`.  The more structure the guards expose, the
+   `M.record()` or `M.any()`. The more structure the guards expose, the
    less the LLM must guess.
 
 Together, `help()` provides the narrative a language model can reason
 over, and the interface guards provide the structural contract it can
-use to construct valid calls.  If either is vague, the LLM will be
+use to construct valid calls. If either is vague, the LLM will be
 unable to use the capability reliably.
 
 The `help()` text and interface guards shown below in the plugin entry
@@ -262,19 +260,19 @@ descriptor and invokes `sandbox-exec -p <profile> <command>`.
 
 Mapping from endowments to SBPL operations:
 
-| Endowment | SBPL rules |
-|---|---|
-| `fs[].mode === 'read'` | `(allow file-read* (subpath "<path>"))` |
-| `fs[].mode === 'read-write'` | `(allow file-read* file-write* (subpath "<path>"))` |
-| `net.allowOutbound` | `(allow network-outbound)` with SBPL ip/port filters per rule |
-| `net.allowInbound` | `(allow network-inbound network-bind)` with SBPL ip/port filters per rule |
-| `exec.allowPaths` | `(allow process-exec (subpath "<path>"))` plus `(allow process-fork)` |
-| `devices.camera` | `(allow device-camera)` |
-| `devices.microphone` | `(allow device-microphone)` |
+| Endowment                    | SBPL rules                                                                |
+| ---------------------------- | ------------------------------------------------------------------------- |
+| `fs[].mode === 'read'`       | `(allow file-read* (subpath "<path>"))`                                   |
+| `fs[].mode === 'read-write'` | `(allow file-read* file-write* (subpath "<path>"))`                       |
+| `net.allowOutbound`          | `(allow network-outbound)` with SBPL ip/port filters per rule             |
+| `net.allowInbound`           | `(allow network-inbound network-bind)` with SBPL ip/port filters per rule |
+| `exec.allowPaths`            | `(allow process-exec (subpath "<path>"))` plus `(allow process-fork)`     |
+| `devices.camera`             | `(allow device-camera)`                                                   |
+| `devices.microphone`         | `(allow device-microphone)`                                               |
 
 A baseline set of rules is always included: reading system libraries
 (`/usr/lib`, `/System/Library`), executing the shell, and accessing
-`/dev/null`, `/dev/urandom`.  The default policy is `(deny default)`.
+`/dev/null`, `/dev/urandom`. The default policy is `(deny default)`.
 
 Example generated profile for a read-only `/tmp/data` sandbox with
 network denied:
@@ -292,8 +290,8 @@ network denied:
 ```
 
 Note: `sandbox-exec` is marked deprecated by Apple but remains functional
-and is still used internally by Apple (e.g. BlastDoor).  The SBPL engine
-is actively maintained as a private interface.  Should Apple remove it in
+and is still used internally by Apple (e.g. BlastDoor). The SBPL engine
+is actively maintained as a private interface. Should Apple remove it in
 a future release, the macOS backend can be updated to use the Endpoint
 Security framework or a user-space FUSE-based approach.
 
@@ -304,13 +302,13 @@ descriptor.
 
 Mapping from endowments to bwrap flags:
 
-| Endowment | bwrap flags |
-|---|---|
-| `fs[].mode === 'read'` | `--ro-bind <path> <mountAt>` |
-| `fs[].mode === 'read-write'` | `--bind <path> <mountAt>` |
+| Endowment                                 | bwrap flags                                                                                                                           |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `fs[].mode === 'read'`                    | `--ro-bind <path> <mountAt>`                                                                                                          |
+| `fs[].mode === 'read-write'`              | `--bind <path> <mountAt>`                                                                                                             |
 | `net.allowOutbound \|\| net.allowInbound` | `--share-net` (default is `--unshare-net`); per-rule CIDR/port filtering requires a network namespace with nftables — see Limitations |
-| `exec.allowPaths` | Included via bind mounts; no additional flag |
-| `env` | `--setenv <key> <value>` for each entry; `--clearenv` first |
+| `exec.allowPaths`                         | Included via bind mounts; no additional flag                                                                                          |
+| `env`                                     | `--setenv <key> <value>` for each entry; `--clearenv` first                                                                           |
 
 The baseline `bwrap` invocation always includes:
 
@@ -337,7 +335,7 @@ exported filter file) can further restrict dangerous syscalls (`ptrace`,
 When the kernel supports Landlock (≥ 5.13), the backend can layer
 Landlock rulesets on top of bubblewrap to enforce filesystem path
 scoping and (on ≥ 6.3) network port restrictions without requiring
-root or a separate network namespace.  This complements bubblewrap's
+root or a separate network namespace. This complements bubblewrap's
 namespace-based isolation and enables per-rule network filtering that
 bubblewrap alone cannot provide.
 
@@ -392,9 +390,7 @@ harden(makeSandbox);
 
 export const make = (_powers, _context, _options) => {
   const os = platform();
-  const backend = os === 'darwin'
-    ? makeSbplBackend()
-    : makeLinuxBackend();
+  const backend = os === 'darwin' ? makeSbplBackend() : makeLinuxBackend();
 
   return makeExo('SandboxMaker', SandboxMakerI, {
     describe(endowmentDescriptor) {
@@ -450,40 +446,40 @@ harden(make);
 
 ## Security Considerations
 
-- **Profile generation is security-critical.**  The SBPL and bwrap
+- **Profile generation is security-critical.** The SBPL and bwrap
   argument generators must be carefully audited to prevent injection.
   Paths in endowment descriptors must be validated and canonicalized
   before interpolation into SBPL strings or command arguments.
 - **The plugin itself is unconfined** (it needs `child_process` access).
   Only the host should hold `SandboxMaker`; guests should receive
   pre-scoped `Sandbox` objects.
-- **Sandbox escapes.**  Both `sandbox-exec` and `bwrap` have known
-  limitations.  `sandbox-exec` is a process-level MAC policy that can be
-  circumvented by kernel exploits.  `bwrap` depends on user namespace
-  support and may be restricted on some kernels.  The plugin provides
+- **Sandbox escapes.** Both `sandbox-exec` and `bwrap` have known
+  limitations. `sandbox-exec` is a process-level MAC policy that can be
+  circumvented by kernel exploits. `bwrap` depends on user namespace
+  support and may be restricted on some kernels. The plugin provides
   defense-in-depth, not absolute isolation.
-- **Path traversal.**  The endowment descriptor must reject paths
+- **Path traversal.** The endowment descriptor must reject paths
   containing `..` segments or symlinks that resolve outside the declared
-  scope.  On macOS, SBPL `subpath` handles this at the kernel level; on
+  scope. On macOS, SBPL `subpath` handles this at the kernel level; on
   Linux, `bwrap` bind mounts achieve the same effect.
-- **Network filtering granularity.**  macOS SBPL can filter connections
-  by CIDR and port natively via ip-filter rules.  Linux `bwrap` alone
-  can only toggle network namespace sharing (all-or-nothing).  To enforce
+- **Network filtering granularity.** macOS SBPL can filter connections
+  by CIDR and port natively via ip-filter rules. Linux `bwrap` alone
+  can only toggle network namespace sharing (all-or-nothing). To enforce
   the per-rule CIDR/port restrictions expressed in `allowOutbound` and
   `allowInbound` on Linux, the backend must either set up nftables rules
   inside a network namespace, use Landlock network scoping (Linux ≥ 6.3),
   or delegate to a container runtime that provides its own network
-  namespace.  The initial Linux implementation falls back to
+  namespace. The initial Linux implementation falls back to
   all-or-nothing network sharing when fine-grained rules cannot be
-  enforced and logs a warning.  Future backends (containers, VMs) will
+  enforced and logs a warning. Future backends (containers, VMs) will
   naturally support full per-rule filtering.
-- **`sandbox-exec` deprecation.**  Apple has marked `sandbox-exec` as
-  deprecated.  The design isolates the macOS backend so it can be
+- **`sandbox-exec` deprecation.** Apple has marked `sandbox-exec` as
+  deprecated. The design isolates the macOS backend so it can be
   replaced without affecting the capability interface.
 
 ## Scaling Considerations
 
-- Each `run()` call spawns a child process.  Concurrent sandbox
+- Each `run()` call spawns a child process. Concurrent sandbox
   invocations are bounded by OS process limits and available memory.
 - SBPL profile generation and bwrap argument construction are
   lightweight string operations with negligible overhead.
@@ -518,19 +514,19 @@ harden(make);
 ## Compatibility Considerations
 
 - The plugin's capability interface (`SandboxMaker`, `Sandbox`) is
-  platform-independent.  Consumers do not need to know which backend is
+  platform-independent. Consumers do not need to know which backend is
   in use.
 - The endowment descriptor is a plain record and can be serialized over
   OCapN without special marshalling.
 - Some endowment fields are platform-specific (e.g., `devices.camera` on
-  macOS, `mountAt` on Linux).  The backends silently ignore fields that
+  macOS, `mountAt` on Linux). The backends silently ignore fields that
   do not apply to their platform, and `getEndowments()` returns the
   effective endowments.
 - bubblewrap requires Linux kernel ≥ 3.18 with user namespace support
-  enabled.  Some distributions disable unprivileged user namespaces by
+  enabled. Some distributions disable unprivileged user namespaces by
   default.
 - Landlock filesystem scoping requires kernel ≥ 5.13; network scoping
-  requires ≥ 6.3.  The backend detects availability at runtime and falls
+  requires ≥ 6.3. The backend detects availability at runtime and falls
   back gracefully.
 
 ## Upgrade Considerations
@@ -541,4 +537,4 @@ harden(make);
   (e.g., a `version` field) so that `SandboxMaker` can reject or adapt
   to older descriptor formats.
 - If Apple removes `sandbox-exec`, the macOS backend will need
-  replacement.  The `Sandbox` capability interface will remain stable.
+  replacement. The `Sandbox` capability interface will remain stable.

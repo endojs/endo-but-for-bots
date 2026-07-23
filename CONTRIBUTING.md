@@ -55,7 +55,7 @@ index.test.js files.
 ## Updating Workspace Dependencies
 
 If you've added, removed, or changed a dependency between workspaces, you'll
-want to regenerate the composite TypeScript build configs.  Run `yarn
+want to regenerate the composite TypeScript build configs. Run `yarn
 build:types:gen` to regenerate the composite TypeScript build. See [TypeScript
 declarations](#typescript-declarations) for more details.
 
@@ -67,7 +67,7 @@ declarations](#typescript-declarations) for more details.
 
 - Import a name from the package that originally defines and exports it, not
   from another package that plain-re-exports it.
-  A *plain re-export* is a non-renaming `export { name } from 'other-package'`
+  A _plain re-export_ is a non-renaming `export { name } from 'other-package'`
   (or `export *`) that adds nothing an importer could not get by importing
   `name` straight from the originating package.
   The convenience re-exporter `@endo/far` is the canonical case.
@@ -79,7 +79,7 @@ declarations](#typescript-declarations) for more details.
 
 - Within a package, import a name from the module that originally defines and
   exports it, not from a sibling module that plain-re-exports it.
-  A *plain re-export* is a non-renaming `export { name } from './other.js'`
+  A _plain re-export_ is a non-renaming `export { name } from './other.js'`
   (or `export *`) that adds nothing an importer could not get from `./other.js`
   directly.
   In particular, a module should not reach back through its own package's public
@@ -148,7 +148,7 @@ sequenceDiagram
 TypeScript `.d.ts` declarations are generated as part of the publishing process, with each package's declarations created individually.
 
 However, when you need to link Endo against another project, you'll need to build the
-declarations for all of the relevant dependencies.  To simplify this process,
+declarations for all of the relevant dependencies. To simplify this process,
 you can use the **composite TypeScript build**:
 
 ```sh
@@ -170,7 +170,6 @@ CI checks that these files are in sync with the generator output.
 If the composite build complains about `TS5055` "would overwrite input file"
 errors, you have stale `.d.ts` outputs from a previous per-package build.
 Run `yarn build:types --clean` once to reset, then build normally.
-
 
 ## Rebuilding `ses`
 
@@ -284,7 +283,7 @@ You typically **do not** need a changeset for:
   the conditions that raise it are unchanged
 
 The helpful [changeset-bot](https://github.com/apps/changeset-bot) will comment
-on your PR if no changeset is present, but this won't block merging.  
+on your PR if no changeset is present, but this won't block merging.
 
 > [!TIP]
 >
@@ -326,12 +325,12 @@ You can use [act](https://github.com/nektos/act) to run the CI locally. You'll n
 
 1. Any job using `actions/setup-node` will need to have `cache: yarn` removed from the `with` section, as this overrides the behavior in `yarnrc.yml`.
 2. Edit `yarnrc.yml` and add these following lines:
-  
-  ```yaml
-  enableGlobalCache: false
-  enableMirror: false
-  globalFolder: .yarn/berry
-  ```
+
+```yaml
+enableGlobalCache: false
+enableMirror: false
+globalFolder: .yarn/berry
+```
 
 By default, `act` will pull the `catthehacker/ubuntu:full-latest` image on every run. This can be slow, so you can pass `--pull=false` to `act` and only omit when you wish to update the image.
 

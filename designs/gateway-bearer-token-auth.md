@@ -1,11 +1,11 @@
 # Gateway Remote Access
 
-| | |
-|---|---|
-| **Created** | 2026-03-02 |
-| **Updated** | 2026-03-06 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Implemented |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-03-02            |
+| **Updated** | 2026-03-06            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Implemented           |
 
 ## What is the Problem Being Solved?
 
@@ -52,10 +52,10 @@ Remote mode is controlled by the `ENDO_GATEWAY` environment variable:
 const allowRemote = env.ENDO_GATEWAY === 'remote';
 ```
 
-| Configuration | Mode | Auth |
-|---|---|---|
-| `ENDO_GATEWAY` unset or `local` (default) | Local | Localhost IP check |
-| `ENDO_GATEWAY=remote` | Remote | Bearer token via CapTP |
+| Configuration                             | Mode   | Auth                   |
+| ----------------------------------------- | ------ | ---------------------- |
+| `ENDO_GATEWAY` unset or `local` (default) | Local  | Localhost IP check     |
+| `ENDO_GATEWAY=remote`                     | Remote | Bearer token via CapTP |
 
 Remote mode must be set explicitly alongside `ENDO_ADDR`. Binding to
 `0.0.0.0` without `ENDO_GATEWAY=remote` will accept connections on all
@@ -119,8 +119,8 @@ The Docker design addresses TLS termination via reverse proxy.
 
 ## Files Modified
 
-| File | Change |
-|---|---|
+| File                                     | Change                                                                    |
+| ---------------------------------------- | ------------------------------------------------------------------------- |
 | `packages/daemon/src/web-server-node.js` | `ENDO_GATEWAY=remote` mode, per-IP rate limiter on `fetch()`, TLS warning |
 
 ## Design Decisions

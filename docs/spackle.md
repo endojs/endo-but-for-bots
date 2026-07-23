@@ -10,7 +10,7 @@ Kris Kowal, 2026-05-21
 
 # Spackle
 
-A *spackle* module races to install a behavior on a shared intrinsic at a
+A _spackle_ module races to install a behavior on a shared intrinsic at a
 registered symbol, and exports an ergonomic function that calls through to the
 installed behavior.
 The first instance to load wins the race; later instances find the property
@@ -21,8 +21,8 @@ registered symbol).
 
 ## Eval twins
 
-A piece of code that gets instantiated more than once in a realm has *eval
-twins*.
+A piece of code that gets instantiated more than once in a realm has _eval
+twins_.
 Eval twins of unique symbols are not equal, eval twins of private class fields
 do not recognize each other, and `instanceof` does not work across eval twins
 of the same class.
@@ -39,10 +39,10 @@ point and ergonomic exports as the calling convention.
 
 ## Shim, polyfill, ponyfill, spackle
 
-A *shim* or *polyfill* is JavaScript that runs early to modify the global
+A _shim_ or _polyfill_ is JavaScript that runs early to modify the global
 environment so it more closely resembles a later standard.
-Remy Sharp coined "polyfill" in [*What is a Polyfill?*](https://remysharp.com/2010/10/08/what-is-a-polyfill)
-(2010), drawing on the British brand name *Polyfilla* for spackling paste.
+Remy Sharp coined "polyfill" in [_What is a Polyfill?_](https://remysharp.com/2010/10/08/what-is-a-polyfill)
+(2010), drawing on the British brand name _Polyfilla_ for spackling paste.
 "Shim" has older and less attributable use, predating its JavaScript
 application as a general term in systems software for a thin compatibility
 layer interposed between a caller and a changed interface.
@@ -63,7 +63,7 @@ Unconditional overwrite risks composition hazards with other polyfills;
 conditional install risks behavior drift when the native implementation lands
 or differs.
 
-A *ponyfill* is a function exported from a module that falls through to the
+A _ponyfill_ is a function exported from a module that falls through to the
 native behavior when present and provides a user-code fallback when not.
 Sindre Sorhus coined "ponyfill" alongside the [`object-assign`](https://github.com/sindresorhus/object-assign)
 package (2014) and later collected the convention at
@@ -72,7 +72,7 @@ A ponyfill leaves the global context untouched, so there is no race to install,
 but the calling code receives whatever the ponyfill chose for it rather than a
 realm-wide consensus.
 
-A *spackle* is both.
+A _spackle_ is both.
 It installs a behavior on a shared intrinsic at a registered symbol, so every
 copy of the module in the realm sees the same function.
 It also exports a callable that prefers the installed behavior and falls back
@@ -110,9 +110,9 @@ Object[Symbol.for('harden')](object);
 ```
 
 Two coordinated behaviors share that install site.
-If `lockdown` runs first, it installs a *volumetric* `harden` that traverses
+If `lockdown` runs first, it installs a _volumetric_ `harden` that traverses
 the prototype chain; `@endo/harden` then defers to that installed function.
-If `@endo/harden` runs first, it installs a *surface* `harden` that freezes
+If `@endo/harden` runs first, it installs a _surface_ `harden` that freezes
 the object and its own properties without walking the prototype chain.
 A surface `harden` is what makes hardened modules usable outside HardenedJS:
 prototype-chain hardening would have effects similar to `lockdown` on shared
@@ -150,7 +150,7 @@ itself might want.
 
 ## Conclusion
 
-This new invention enables us to make *hardened modules* and for applications
+This new invention enables us to make _hardened modules_ and for applications
 to use them without arranging shims.
 These are modules that work with or without HardenedJS `lockdown`, within or
 without compartments.

@@ -25,6 +25,7 @@ yarn dev
 That's it! The application will be available at `http://localhost:5173`.
 
 The Vite Endo plugin:
+
 1. Ensures the system Endo daemon is running (using this repo's CLI)
 2. Reads the daemon's gateway address and agent ID
 3. Injects connection parameters (`ENDO_GATEWAY`, `ENDO_AGENT`) into the app
@@ -46,6 +47,7 @@ yarn build
 The built files will be in the `dist/` directory.
 
 For production deployment, you'll need to:
+
 1. Run an Endo daemon with a gateway or proxy
 2. Configure the app to connect to that gateway
 

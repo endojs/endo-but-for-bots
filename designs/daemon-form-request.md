@@ -1,11 +1,11 @@
 # Daemon Form
 
-| | |
-|---|---|
-| **Created** | 2026-02-25 |
-| **Updated** | 2026-03-02 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Implemented |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-25            |
+| **Updated** | 2026-03-02            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Implemented           |
 
 ## What is the Problem Being Solved?
 
@@ -385,14 +385,14 @@ definitions between agents.
    instance of the form. The form view generator selects the input widget
    for each field based on its `pattern`:
 
-   | Pattern | Widget |
-   |---------|--------|
-   | `M.string()` (or omitted) | Text input |
-   | `M.number()` | Number input |
-   | `M.boolean()` | Checkbox |
-   | `M.remotable()` | Pet name path selector |
-   | `M.promise()` | Pet name path selector |
-   | `M.scalar()` | Text input (passable scalar) |
+   | Pattern                   | Widget                       |
+   | ------------------------- | ---------------------------- |
+   | `M.string()` (or omitted) | Text input                   |
+   | `M.number()`              | Number input                 |
+   | `M.boolean()`             | Checkbox                     |
+   | `M.remotable()`           | Pet name path selector       |
+   | `M.promise()`             | Pet name path selector       |
+   | `M.scalar()`              | Text input (passable scalar) |
 
    The pet name path selector lets the user browse and pick from their pet
    store, resolving the selected name to a capability reference on
@@ -417,11 +417,11 @@ definitions between agents.
    submissions appear as `value` messages in the reply chain below the form.
 
 10. **Simplified internals.** `makeForm` generates a `messageId` and envelope
-   without allocating any promise/resolver pair. `makeStampedMessage` does
-   not reconstruct promises for form messages. `makeMessageFormula` does not
-   store `promiseId` or `resolverId`. The message hub registers only
-   `DESCRIPTION` and standard edges (`FROM`, `TO`, `DATE`, `TYPE`,
-   `MESSAGE`) — no `PROMISE`, `RESOLVER`, or `RESULT` edges.
+    without allocating any promise/resolver pair. `makeStampedMessage` does
+    not reconstruct promises for form messages. `makeMessageFormula` does not
+    store `promiseId` or `resolverId`. The message hub registers only
+    `DESCRIPTION` and standard edges (`FROM`, `TO`, `DATE`, `TYPE`,
+    `MESSAGE`) — no `PROMISE`, `RESOLVER`, or `RESULT` edges.
 
 ## Related Designs
 

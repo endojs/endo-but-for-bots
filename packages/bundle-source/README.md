@@ -123,6 +123,7 @@ not exist.
 ## `moduleFormat` explanations
 
 <a id="getexport-moduleformat"></a>
+
 ### getExport
 
 The most primitive `moduleFormat` is "getExport".
@@ -154,6 +155,7 @@ const exports = compartment.evaluate(source)();
 > See [nestedEvaluate](#nestedevaluate) below for compatibility caveats.
 
 <a id="nestedevaluate-moduleformat"></a>
+
 ### nestedEvaluate
 
 This is logically similar to the "getExport" format, except that the code
@@ -229,6 +231,7 @@ The "endoScript" format does not support importing host modules with CommonJS
 `require`.
 
 <a id="endozipbase64-moduleformat"></a>
+
 ### endoZipBase64
 
 An Endo (zip, base64) bundle is an object with properties:

@@ -1,14 +1,14 @@
 # CLI HTTP Client: Controller + Client Pair under `endo http`
 
-| | |
-|---|---|
-| **Created** | 2026-05-09 |
-| **Updated** | 2026-07-15 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
-| **Source** | PR #144 review id 4256844646 (`CHANGES_REQUESTED`) |
-| **Supersedes (in part)** | [endoclaw-network-fetch](endoclaw-network-fetch.md) |
-| **Superseded (in part) by** | [endo-fetch](endo-fetch.md) |
+|                             |                                                     |
+| --------------------------- | --------------------------------------------------- |
+| **Created**                 | 2026-05-09                                          |
+| **Updated**                 | 2026-07-15                                          |
+| **Author**                  | Kris Kowal (prompted)                               |
+| **Status**                  | Proposed                                            |
+| **Source**                  | PR #144 review id 4256844646 (`CHANGES_REQUESTED`)  |
+| **Supersedes (in part)**    | [endoclaw-network-fetch](endoclaw-network-fetch.md) |
+| **Superseded (in part) by** | [endo-fetch](endo-fetch.md)                         |
 
 > **Packaging superseded in part by [endo-fetch](endo-fetch.md)**
 > (2026-07-13). The daemon-formula packaging this document assumed (the
@@ -49,7 +49,7 @@ controller to mutate the client's policy or revoke it.
 In scope:
 
 - The CLI subcommand tree (`endo http mk`, `endo http allow`, `endo
-  http deny`, `endo http revoke`, `endo http inspect`, etc.).
+http deny`, `endo http revoke`, `endo http inspect`, etc.).
 - The controller / client cap split, including which methods sit on
   which facet.
 - Origin allowlist semantics carried over from PR #144: structural
@@ -149,19 +149,19 @@ Compared to PR #144's `endo http-client --name <petname> --origins
 
 ### Method placement
 
-| Method | Facet | Notes |
-|---|---|---|
-| `request(req, cancellation)` | client | The use-the-policy authority. |
-| `allowedOrigins()` | client | Inspection of own bounds. |
-| `help()` | both | Each describes its own surface. |
-| `inspect()` | controller | Read the current policy. |
-| `setAllowedOrigins(origins)` | controller | Replaces the set. |
-| `addAllowedOrigin(origin)` | controller | Convenience. |
-| `removeAllowedOrigin(origin)` | controller | Convenience. |
-| `setMaxRequestsPerMinute(n)` | controller | |
-| `setMaxResponseBytes(n)` | controller | |
-| `setTimeoutMs(n)` | controller | |
-| `revoke()` | controller | Idempotent; flips the shared bit. |
+| Method                        | Facet      | Notes                             |
+| ----------------------------- | ---------- | --------------------------------- |
+| `request(req, cancellation)`  | client     | The use-the-policy authority.     |
+| `allowedOrigins()`            | client     | Inspection of own bounds.         |
+| `help()`                      | both       | Each describes its own surface.   |
+| `inspect()`                   | controller | Read the current policy.          |
+| `setAllowedOrigins(origins)`  | controller | Replaces the set.                 |
+| `addAllowedOrigin(origin)`    | controller | Convenience.                      |
+| `removeAllowedOrigin(origin)` | controller | Convenience.                      |
+| `setMaxRequestsPerMinute(n)`  | controller |                                   |
+| `setMaxResponseBytes(n)`      | controller |                                   |
+| `setTimeoutMs(n)`             | controller |                                   |
+| `revoke()`                    | controller | Idempotent; flips the shared bit. |
 
 (Method names above are placeholder; final names land via the namer
 dispatch.)
@@ -375,12 +375,12 @@ individual slow request without giving up the whole client.
 The interfaces above adopt the following established conventions
 rather than inventing new shapes:
 
-| Idiom | Cited example | Adopted in |
-|---|---|---|
-| `ReadableBlob` remotable for byte content | `packages/platform/src/fs/interfaces.js` `ReadableBlobInterface`, `packages/platform/src/fs-node/local-blob.js` `makeLocalBlob` | `RequestShape.body`, `ResponseShape.body` |
-| `cancellation: Promise<never>` for in-flight cancellation | `packages/platform/src/proc.js` `waitForExitOrCancel`, `packages/daemon/src/interfaces.js` `WorkerFacetForDaemon.evaluate`, `packages/daemon/src/types.d.ts` `SocketPowers.servePort`, `Context.cancelled` | `HttpClientInterface.request` second argument |
-| `makeExo(name, IFace, methods)` with `M.interface(...)` boundary check | every interface in `packages/daemon/src/interfaces.js` | `HttpClientInterface`, `HttpControllerInterface` |
-| Async-iterator chunk shape (`AsyncIterator<Uint8Array>`) for streamed bytes | `packages/platform/src/fs/types.js` `ReadableStream` typedef, `packages/daemon/src/mount.js` `writeBytes` | The `streamBase64()` method on each body reads from the same iterator-of-`Uint8Array` shape, base64-encoded for CapTP transit |
+| Idiom                                                                       | Cited example                                                                                                                                                                                              | Adopted in                                                                                                                    |
+| --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `ReadableBlob` remotable for byte content                                   | `packages/platform/src/fs/interfaces.js` `ReadableBlobInterface`, `packages/platform/src/fs-node/local-blob.js` `makeLocalBlob`                                                                            | `RequestShape.body`, `ResponseShape.body`                                                                                     |
+| `cancellation: Promise<never>` for in-flight cancellation                   | `packages/platform/src/proc.js` `waitForExitOrCancel`, `packages/daemon/src/interfaces.js` `WorkerFacetForDaemon.evaluate`, `packages/daemon/src/types.d.ts` `SocketPowers.servePort`, `Context.cancelled` | `HttpClientInterface.request` second argument                                                                                 |
+| `makeExo(name, IFace, methods)` with `M.interface(...)` boundary check      | every interface in `packages/daemon/src/interfaces.js`                                                                                                                                                     | `HttpClientInterface`, `HttpControllerInterface`                                                                              |
+| Async-iterator chunk shape (`AsyncIterator<Uint8Array>`) for streamed bytes | `packages/platform/src/fs/types.js` `ReadableStream` typedef, `packages/daemon/src/mount.js` `writeBytes`                                                                                                  | The `streamBase64()` method on each body reads from the same iterator-of-`Uint8Array` shape, base64-encoded for CapTP transit |
 
 ### Forward compatibility with `exo-stream`
 
@@ -473,13 +473,13 @@ time, with the host retaining `control` and granting `client`.
 Mechanically this is close to what this design proposes; the
 difference is in how the kit is named, surfaced, and mutated:
 
-| Concern | PR #144 shape | Revised shape |
-|---|---|---|
-| Names | One pet name (`name`) for the client; the control has no pet name and is held only by the host's transient closure. | Pet names for both facets; the controller is addressable across CLI invocations. |
-| Policy revision | Re-create the client to change anything about it. | `endo http allow` / `endo http set-rate` etc. on the named controller. |
-| Revocation | The host has to remember the in-process control reference. | `endo http revoke <name>` from anywhere with shell access. |
-| CLI surface | `endo http-client` (single verb at top level). | `endo http <verb>` (subcommand tree, room to grow). |
-| Cap discipline | Same: client has no policy methods, control has no `fetch`. | Same. |
+| Concern         | PR #144 shape                                                                                                       | Revised shape                                                                    |
+| --------------- | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Names           | One pet name (`name`) for the client; the control has no pet name and is held only by the host's transient closure. | Pet names for both facets; the controller is addressable across CLI invocations. |
+| Policy revision | Re-create the client to change anything about it.                                                                   | `endo http allow` / `endo http set-rate` etc. on the named controller.           |
+| Revocation      | The host has to remember the in-process control reference.                                                          | `endo http revoke <name>` from anywhere with shell access.                       |
+| CLI surface     | `endo http-client` (single verb at top level).                                                                      | `endo http <verb>` (subcommand tree, room to grow).                              |
+| Cap discipline  | Same: client has no policy methods, control has no `fetch`.                                                         | Same.                                                                            |
 
 The split is a strict generalization: anything PR #144 could express,
 the revised shape can express by making one `mk` call and never
@@ -634,11 +634,11 @@ tables and called out where they appear.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| [endoclaw-network-fetch](endoclaw-network-fetch.md) | Parent; this design replaces its CLI surface and cap-split section. |
-| [daemon-agent-tools](daemon-agent-tools.md) | Sibling agent-capability design; the http client is one such tool. |
-| `designs/http-client-trust-on-first-bind.md` (forthcoming) | Sibling; owns the trust-mode question deferred from this design. |
+| Design                                                     | Relationship                                                        |
+| ---------------------------------------------------------- | ------------------------------------------------------------------- |
+| [endoclaw-network-fetch](endoclaw-network-fetch.md)        | Parent; this design replaces its CLI surface and cap-split section. |
+| [daemon-agent-tools](daemon-agent-tools.md)                | Sibling agent-capability design; the http client is one such tool.  |
+| `designs/http-client-trust-on-first-bind.md` (forthcoming) | Sibling; owns the trust-mode question deferred from this design.    |
 
 ## Prompt
 

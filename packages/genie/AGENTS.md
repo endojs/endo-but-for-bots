@@ -63,7 +63,7 @@ When a new daemon-side tool needs filesystem access:
   `setup.js` mints `workspace-mount` via
   `E(host).provideMount(GENIE_WORKSPACE, 'workspace-mount')` and
   introduces it into the genie guest as `workspace`; downstream tools
-  resolve paths *under* that cap rather than accepting strings from
+  resolve paths _under_ that cap rather than accepting strings from
   the model.
 - The cap-to-host-path resolution lives in `provideHostPath` on the
   daemon side (see
@@ -140,10 +140,10 @@ hunting for `/workspace` on its own filesystem.
 
 `setup.js` introduces two host-side caps under fixed pet names:
 
-| Pet name (in guest) | Origin                                                        | Consumer                          |
-| ------------------- | ------------------------------------------------------------- | --------------------------------- |
-| `workspace`         | `E(host).provideMount(GENIE_WORKSPACE, 'workspace-mount')`    | `spawnAgent` (bound to `/workspace`); also passed to daemon-side fs tools as the canonical workspace cap.  Downstream agents inherit the same cap (rather than minting their own per-agent mount) when the configuration form's `workspace` field is set to a pet name introduced into the agent's namespace; see § "Workspace form-field shapes" in the README. |
-| `sandboxes`         | `E(host).makeUnconfined('@main', '@endo/sandbox/agent.js', { powersName: '@agent', resultName: 'sandbox-factory' })` | `spawnAgent` calls `E(sandboxes).make({...})` to mint a `SandboxHandle` per agent. |
+| Pet name (in guest) | Origin                                                                                                               | Consumer                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace`         | `E(host).provideMount(GENIE_WORKSPACE, 'workspace-mount')`                                                           | `spawnAgent` (bound to `/workspace`); also passed to daemon-side fs tools as the canonical workspace cap. Downstream agents inherit the same cap (rather than minting their own per-agent mount) when the configuration form's `workspace` field is set to a pet name introduced into the agent's namespace; see § "Workspace form-field shapes" in the README. |
+| `sandboxes`         | `E(host).makeUnconfined('@main', '@endo/sandbox/agent.js', { powersName: '@agent', resultName: 'sandbox-factory' })` | `spawnAgent` calls `E(sandboxes).make({...})` to mint a `SandboxHandle` per agent.                                                                                                                                                                                                                                                                              |
 
 Both lookups in `main.js` are guarded with structured-error fallbacks
 so a partial rollout (factory present but no workspace mount, or vice
@@ -173,19 +173,18 @@ either layer alone is insufficient:
   `['readText', 'writeText', 'makeDirectory', 'has', 'list']` subset.
   This produces a friendly, agent-named error when the operator
   pet-names something that isn't a Mount (a guest, a value blob, a
-  typo).  It is **not** an identity check: any `makeExo` / `Far` exo
+  typo). It is **not** an identity check: any `makeExo` / `Far` exo
   advertising the right method names satisfies it.
 - **Identity gate** — `E(hostAgent).provideHostPath(cap)` (daemon
-  path; see `packages/daemon/src/host.js` `provideHostPath` ~line
-  302) or `E(powers).provideHostPath(cap)` (dev-repl path; see
+  path; see `packages/daemon/src/host.js` `provideHostPath` ~line 302) or `E(powers).provideHostPath(cap)` (dev-repl path; see
   `local-powers.js`'s `WeakMap` lookup) consults the authoritative
   registry of mints and rejects strangers with
-  `not a daemon-minted mount` / `not a local-minted mount`.  This is
+  `not a daemon-minted mount` / `not a local-minted mount`. This is
   the only authentication standing between a spoofed exo and
   `factory.make`'s bind-mount surface.
 
 The order is "friendly shape error first, authoritative identity
-error second"; both must remain in place.  The pin tests live at
+error second"; both must remain in place. The pin tests live at
 `packages/daemon/test/endo.test.js` ("provideHostPath rejects a spoof
 that passes the genie shape gate") and
 `packages/genie/test/local-sandbox-powers.test.js`
@@ -201,12 +200,12 @@ slice's bwrap (or podman) driver mounts as `/`.
 constructing the `RootfsSpec` payload passed into
 `E(sandboxFactory).make({ rootfs })`:
 
-| Form value (`rootfs`)              | `ParsedRootfsValue`                | Resulting `RootfsSpec` arm                                       |
-| ---------------------------------- | ---------------------------------- | ---------------------------------------------------------------- |
-| `host-bind` (default)              | `{ kind: 'host-bind' }`            | Same kind, passed through.  Bwrap and podman both accept it.     |
-| `minimal`                          | `{ kind: 'minimal' }`              | Same kind, passed through.  Bwrap and podman both accept it.     |
-| `oci:<ref>`                        | `{ kind: 'oci', ref }`             | Same kind, passed through.  **Podman only — bwrap rejects.**     |
-| `<pet-name>`                       | `{ kind: 'pet-name', petName }`    | Resolved via `E(agentGuest).lookup(petName)`, validated against `MountInterface`, and inserted as the `MountCap` arm.  Bwrap and podman both accept it. |
+| Form value (`rootfs`) | `ParsedRootfsValue`             | Resulting `RootfsSpec` arm                                                                                                                             |
+| --------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `host-bind` (default) | `{ kind: 'host-bind' }`         | Same kind, passed through. Bwrap and podman both accept it.                                                                                            |
+| `minimal`             | `{ kind: 'minimal' }`           | Same kind, passed through. Bwrap and podman both accept it.                                                                                            |
+| `oci:<ref>`           | `{ kind: 'oci', ref }`          | Same kind, passed through. **Podman only — bwrap rejects.**                                                                                            |
+| `<pet-name>`          | `{ kind: 'pet-name', petName }` | Resolved via `E(agentGuest).lookup(petName)`, validated against `MountInterface`, and inserted as the `MountCap` arm. Bwrap and podman both accept it. |
 
 The keyword arms (`host-bind`, `minimal`) and the pet-name arm pass
 through to whichever driver the resolved backend selects.
@@ -215,7 +214,7 @@ the constraint surfaces twice on purpose:
 
 - `assertRootfsBackendCompatible` (in `main.js`) front-runs the check
   on the form-side and throws a structured error naming the agent
-  *before* `E(sandboxFactory).make(...)` is reached.  The fix string
+  _before_ `E(sandboxFactory).make(...)` is reached. The fix string
   ("set `backend` to `podman` or pick a non-oci rootfs") is exactly
   what the operator sees on the configuration form's reply.
 - The bwrap driver (in
@@ -238,12 +237,12 @@ receives" above for the full layering): `assertIsMountCap`'s
 agent-named friendly errors, and `E(sandboxFactory).make({ rootfs })`
 later passes the cap through `provideHostPath`, the authoritative
 **identity** gate (`not a daemon-minted mount` /
-`not a local-minted mount`).  The shape gate alone is not
+`not a local-minted mount`). The shape gate alone is not
 authentication; the identity gate alone has no operator context.
 
 `setup.js` does **not** auto-submit `rootfs` — operators tuning it
 answer the form by hand on first boot, and the field's value is
-persisted by the genie guest formula across restarts.  See
+persisted by the genie guest formula across restarts. See
 [`packages/genie/README.md` § "Rootfs form-field shapes"](./README.md#rootfs-form-field-shapes)
 for the operator's view of the same surface, including the `endo
 make-mount` workflow for the pet-name shape.
@@ -260,16 +259,16 @@ entry point to build a `SandboxFactory` directly.
 
 The asymmetry with the daemon path is intentional and worth pinning:
 
-| Concern                          | Daemon (`main.js`)                                                                                     | Dev REPL (`dev-repl.js`)                                                                                  |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
-| `SandboxPowers` source           | `EndoHost` exo in `packages/daemon/src/host.js`; lives behind a CapTP boundary.                        | `makeLocalSandboxPowers()` exo, in-process, `WeakMap`-backed.                                             |
-| Workspace `MountCap` source      | `E(host).provideMount(GENIE_WORKSPACE, 'workspace-mount')` — daemon-minted, persisted across restarts. | `makeMountCapForPath(workspaceDir)` — minted by the REPL itself, lives only for the lifetime of the run. |
-| `provideHostPath(cap)`           | Daemon resolves the cap via its mount-formula registry (`packages/daemon/src/host.js` `provideHostPath`); rejects strangers with `not a daemon-minted mount`. | Local powers consult their own `WeakMap<cap, hostPath>`; rejects strangers with `not a local-minted mount`. |
-| Scratch tmpdir cleanup           | Daemon's `provideScratchMount` formulas are GC-pinned to the slice and reaped with the agent.          | `disposeSandboxPowers()` `rm -rf`s every tmpdir minted via `provideScratchMount`; called from the REPL's teardown registry on exit (TODO/54). |
+| Concern                     | Daemon (`main.js`)                                                                                                                                            | Dev REPL (`dev-repl.js`)                                                                                                                      |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SandboxPowers` source      | `EndoHost` exo in `packages/daemon/src/host.js`; lives behind a CapTP boundary.                                                                               | `makeLocalSandboxPowers()` exo, in-process, `WeakMap`-backed.                                                                                 |
+| Workspace `MountCap` source | `E(host).provideMount(GENIE_WORKSPACE, 'workspace-mount')` — daemon-minted, persisted across restarts.                                                        | `makeMountCapForPath(workspaceDir)` — minted by the REPL itself, lives only for the lifetime of the run.                                      |
+| `provideHostPath(cap)`      | Daemon resolves the cap via its mount-formula registry (`packages/daemon/src/host.js` `provideHostPath`); rejects strangers with `not a daemon-minted mount`. | Local powers consult their own `WeakMap<cap, hostPath>`; rejects strangers with `not a local-minted mount`.                                   |
+| Scratch tmpdir cleanup      | Daemon's `provideScratchMount` formulas are GC-pinned to the slice and reaped with the agent.                                                                 | `disposeSandboxPowers()` `rm -rf`s every tmpdir minted via `provideScratchMount`; called from the REPL's teardown registry on exit (TODO/54). |
 
 The dev-repl owns the workspace `MountCap` end-to-end — there is no
 agent-guest namespace, so the daemon's pet-name resolution path
-(`E(agentGuest).lookup(petName)`) does not apply.  For the same
+(`E(agentGuest).lookup(petName)`) does not apply. For the same
 reason the dev-repl rejects `--rootfs <pet-name>` at the CLI boundary
 rather than falling through; the only accepted `--rootfs` shapes are
 `host-bind`, `minimal`, and `oci:<ref>`.
@@ -280,7 +279,7 @@ boundary: [`src/sandbox/slice.js`](./src/sandbox/slice.js)'s
 [`TODO/52`](../../TADA/52_genie_dev_repl_slice_factory_helper.md)) is
 the single place that probes backends, validates rootfs / network,
 calls `factory.make({ ... })`, and wraps the resulting handle in a
-`Spawner`.  When you change the slice-mint sequence, both call sites
+`Spawner`. When you change the slice-mint sequence, both call sites
 pick up the change automatically; when you change the form-side
 parsing (`parseRootfsValue`, `assertRootfsBackendCompatible`) the
 helper module is the source of truth and `main.js` re-exports the
@@ -289,27 +288,27 @@ symbols only to preserve the public test surface.
 The dev-repl's local powers reject sub-Mounts and symlink escapes to
 mirror the daemon's `EndoHost.provideHostPath` rejection surface —
 adversarially-shaped workspace trees cannot widen the slice's bind
-set.  Three constraints compose to close the surface (see
+set. Three constraints compose to close the surface (see
 [`TODO/61`](../../TADA/61_genie_local_powers_symlink_realpath.md)
 saboteur findings 1, 2, and 4 for the original attack analysis):
 
 - **`Mount.lookup` realpaths the resolved target** and refuses to
-  return a sub-Mount whose canonical path escapes the mount root.  A
+  return a sub-Mount whose canonical path escapes the mount root. A
   workspace symlink such as `${workspaceDir}/escape -> /etc` is
   rejected with `local Mount.lookup: … escapes mount root`, matching
   the daemon's `assertConfined` realpath check in
   [`packages/daemon/src/mount.js`](../daemon/src/mount.js).
-- **`provideHostPath` rejects sub-Mount views.**  Only top-level caps
+- **`provideHostPath` rejects sub-Mount views.** Only top-level caps
   (those minted by `provideScratchMount` / `makeMountCapForPath`)
   pass; sub-Mounts returned by `Mount.lookup()` are tracked
   separately and refused with `cap is a sub-Mount view, not a
-  top-level mount`.  This mirrors
+top-level mount`. This mirrors
   [`packages/daemon/src/host.js`](../daemon/src/host.js)'s explicit
-  rejection of subdirectory views.  Callers that need to bind a
+  rejection of subdirectory views. Callers that need to bind a
   sub-directory must mint a fresh top-level cap via
   `makeMountCapForPath(subPath)` — the same explicit-mint workflow
   the daemon's `provideMount(absolutePath, …)` requires.
-- **`assertNoEscape` rejects absolute path segments.**  In addition
+- **`assertNoEscape` rejects absolute path segments.** In addition
   to the long-standing `..` / `\0` veto, segments that begin with
   `/` or `\\` are refused as defense in depth, so a future swap to
   `path.resolve` or `path.win32` semantics cannot quietly promote
@@ -459,13 +458,13 @@ If you wire a new driver (lima, containerization, wsl…) into
 2. Update the form-field label string under `name: 'backend'` so
    operators see the new option.
 3. Update the [`README.md`](./README.md) form-field table.
-4. Declare which `RootfsSpec` shapes the new driver supports.  Bwrap
+4. Declare which `RootfsSpec` shapes the new driver supports. Bwrap
    accepts `host-bind` / `minimal` / `mount`; podman additionally
-   accepts `oci`.  If the new driver's support set diverges from the
+   accepts `oci`. If the new driver's support set diverges from the
    bwrap/podman pair, mirror the divergence into the form-side
    cross-check by extending `assertRootfsBackendCompatible` in
    [`main.js`](./main.js) so the asymmetry surfaces at the form
-   boundary rather than as a slice-mint failure.  When the divergence
+   boundary rather than as a slice-mint failure. When the divergence
    touches the keyword-only subset, also reconsider whether
    `ALLOWED_ROOTFS_KINDS` and the form-field label string under
    `name: 'rootfs'` need updating in lockstep.

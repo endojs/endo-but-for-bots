@@ -1,11 +1,11 @@
 # Sequential Syrup Message Framing (`@endo/syrups`)
 
-| | |
-|---|---|
-| **Created** | 2026-05-04 |
-| **Updated** | 2026-05-06 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Deprecated |
+|                   |                                                                        |
+| ----------------- | ---------------------------------------------------------------------- |
+| **Created**       | 2026-05-04                                                             |
+| **Updated**       | 2026-05-06                                                             |
+| **Author**        | Kris Kowal (prompted)                                                  |
+| **Status**        | Deprecated                                                             |
 | **Superseded by** | [`ocapn-tcp-syrups-framing.md`](./ocapn-tcp-syrups-framing.md) (PR 29) |
 
 ## Status

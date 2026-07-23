@@ -3,7 +3,7 @@
 This file is the **honest list** of what's incomplete, what's
 overstated, and what's deliberately deferred.
 It complements `DESIGN.md` §9 — that section enumerates the F-numbered
-feature plan; this file enumerates the *post-implementation reality*.
+feature plan; this file enumerates the _post-implementation reality_.
 
 Three tracks:
 
@@ -33,11 +33,11 @@ deliver X" can find the gap in one place.
 
 ### 1.1 Design-claim corrections
 
-| Earlier claim | Correct framing |
-|---|---|
-| **"Eager qid / `BlobRef.getInfo` avoid a round-trip."** Earlier drafts of DESIGN.md §4.10 proposed that CapTP would marshal the qid / blob info alongside the cap's slot, making the getter free on the consumer side. | The slot-state-ride mechanism never landed and won't. The getter is sync on the *responder* (no I/O), but across CapTP it costs one RTT like any other call. Callers always pipeline it into the same batch as the call that produced the cap (`resolveNodeWithQid` in `cached-fs.js`, the `withCachedReads` read path) so the incremental RTT is zero. No deferred work; just usage convention. |
-| **"CAS-cached read skips the network entirely on cache hit."** | Reframed: a hit skips the bytes payload, not the `snapshot + getInfo` discovery. With watch-based invalidation in `withCachedReads` (§2.2 — landed), a same-file repeat read with a still-cached payload pays zero RTT. The hit benefit is "no payload over the wire" + (with the hash cache) "no discovery either". |
-| **"Pipelined walk is one round-trip."** | True for any CapTP-shaped FS — Mount's lookup chains pipeline too. The endo-fs distinction is **typed pipelining**: the guard discriminates `Directory` vs `File` at the boundary, so a deep chain doesn't bottom out in an `any`-typed leaf. Phrase as "typed pipelining"; reserve "single RTT" for the cost-framework sense (no control-flow dependency). |
+| Earlier claim                                                                                                                                                                                                          | Correct framing                                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **"Eager qid / `BlobRef.getInfo` avoid a round-trip."** Earlier drafts of DESIGN.md §4.10 proposed that CapTP would marshal the qid / blob info alongside the cap's slot, making the getter free on the consumer side. | The slot-state-ride mechanism never landed and won't. The getter is sync on the _responder_ (no I/O), but across CapTP it costs one RTT like any other call. Callers always pipeline it into the same batch as the call that produced the cap (`resolveNodeWithQid` in `cached-fs.js`, the `withCachedReads` read path) so the incremental RTT is zero. No deferred work; just usage convention. |
+| **"CAS-cached read skips the network entirely on cache hit."**                                                                                                                                                         | Reframed: a hit skips the bytes payload, not the `snapshot + getInfo` discovery. With watch-based invalidation in `withCachedReads` (§2.2 — landed), a same-file repeat read with a still-cached payload pays zero RTT. The hit benefit is "no payload over the wire" + (with the hash cache) "no discovery either".                                                                             |
+| **"Pipelined walk is one round-trip."**                                                                                                                                                                                | True for any CapTP-shaped FS — Mount's lookup chains pipeline too. The endo-fs distinction is **typed pipelining**: the guard discriminates `Directory` vs `File` at the boundary, so a deep chain doesn't bottom out in an `any`-typed leaf. Phrase as "typed pipelining"; reserve "single RTT" for the cost-framework sense (no control-flow dependency).                                      |
 
 ### 1.2 Composition primitives
 
@@ -95,10 +95,10 @@ covering leaf symlinks, mid-tree symlink swap, and `O_NOFOLLOW` on
   Cross-side delivery is `queueMicrotask` (or `setTimeout` for the
   latency variant) — there is no socket, no syscall, no IPC.
   The transcripts capture every `@endo/captp` wire message, so the
-  *message-order properties* the snapshots pin (pipelined chain ↔
+  _message-order properties_ the snapshots pin (pipelined chain ↔
   N consecutive `CTP_CALL`s; CAS cache hit ↔ no `CTP_CALL` for
   `fetch`) are real.
-  What the tests *don't* prove: real wire latency, real bytes-on-the-
+  What the tests _don't_ prove: real wire latency, real bytes-on-the-
   wire savings, or behavior under a real transport's failure modes.
   Same convention as `@endo/captp`'s own tests.
 
@@ -148,7 +148,7 @@ current behavior so the gap doesn't regress silently.
   watcher are both minted inside a single exo method invocation,
   so any mutation observable after `watchFrom` returns is in the
   watcher. Pinned by `PATTERN: Directory.watchFrom atomically
-  snapshots entries + subscribes` in `optimal-querying.test.js`.
+snapshots entries + subscribes` in `optimal-querying.test.js`.
 
 ---
 

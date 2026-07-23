@@ -11,10 +11,12 @@ Each message is prefixed with a 32-bit unsigned integer indicating the message
 length in bytes, using host byte order.
 
 The protocol is simple:
+
 - A 4-byte length prefix (uint32, host byte order)
 - Followed by the message payload of that length
 
 For example, a 5-byte message `hello` is transmitted as:
+
 ```
 [0x05, 0x00, 0x00, 0x00] [h, e, l, l, o]
 ```
@@ -35,7 +37,7 @@ an async iterable of complete messages:
 import { makeLp32Reader } from '@endo/lp32';
 
 const reader = makeLp32Reader(byteStream, {
-  name: '<my-stream>',        // optional, for error messages
+  name: '<my-stream>', // optional, for error messages
   maxMessageLength: 1024 * 1024, // optional, defaults to 1MB
 });
 
@@ -95,6 +97,7 @@ for await (const message of reader) {
 Creates a reader that decodes length-prefixed messages from a byte stream.
 
 **Parameters:**
+
 - `reader` - An `Iterable<Uint8Array>` or `AsyncIterable<Uint8Array>`
 - `options.name` - Optional name for error messages
 - `options.maxMessageLength` - Maximum allowed message size (default: 1MB)
@@ -107,6 +110,7 @@ Creates a reader that decodes length-prefixed messages from a byte stream.
 Creates a writer that encodes messages with length prefixes.
 
 **Parameters:**
+
 - `output` - A `Writer<Uint8Array, undefined>` from `@endo/stream`
 - `options.name` - Optional name for error messages
 - `options.maxMessageLength` - Maximum allowed message size (default: 1MB)

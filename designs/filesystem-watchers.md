@@ -1,11 +1,11 @@
 # Filesystem Watchers for EndoMount
 
-| | |
-|---|---|
-| **Created** | 2026-05-07 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
-| **Source** | Issue #110 |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-05-07            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
+| **Source**  | Issue #110            |
 
 ## What is the Problem Being Solved?
 
@@ -21,26 +21,26 @@ its contents over time rather than poll:
   as that locator gains or loses names.
 
 Both stream a snapshot followed by a diff over a `pubsub` topic
-(`packages/daemon/src/pubsub.js`).  Hubs derived from `EndoDirectory`
+(`packages/daemon/src/pubsub.js`). Hubs derived from `EndoDirectory`
 inherit this contract via `NameHubInterface` (`interfaces.js`).
 
 `EndoMount` is the new name hub that backs scratch and external mount
 points (`packages/daemon/src/mount.js`, `MountInterface` in
-`interfaces.js`).  Its read surface (`has`, `list`, `lookup`,
+`interfaces.js`). Its read surface (`has`, `list`, `lookup`,
 `readText`, `maybeReadText`) is a `ReadableTree`-compatible
-look-alike, but it has **no follow method**.  Callers that want to
+look-alike, but it has **no follow method**. Callers that want to
 observe file additions or removals must poll `list()` and diff.
 
 The issue is two-fold:
 
-1. **Surface parity.**  Code that consumes a `NameHub` for live updates
+1. **Surface parity.** Code that consumes a `NameHub` for live updates
    (`chat-spaces-gutter`, the inventory view, the `endo log` follower)
    cannot be retargeted at an `EndoMount` because the method is
-   absent.  Hub abstractions that pick between a directory and a mount
+   absent. Hub abstractions that pick between a directory and a mount
    based on what the user has bound at a name path break down at the
    subscription edge.
-2. **Mechanism parity.**  Even where polling is acceptable, every
-   consumer reinvents debounce, ordering, and disposal.  A central
+2. **Mechanism parity.** Even where polling is acceptable, every
+   consumer reinvents debounce, ordering, and disposal. A central
    adapter from `node:fs` watcher events to `pubsub` would let callers
    share one code path with `EndoDirectory` consumers.
 
@@ -69,7 +69,7 @@ Out of scope:
 - Recursive watch semantics across deep subtrees in a single
   subscription (called out under Open Questions; the proposal here is
   one watcher per subscribed subdirectory).
-- Cross-peer or remote mount watchers.  An `EndoMount` is local to its
+- Cross-peer or remote mount watchers. An `EndoMount` is local to its
   daemon; remote consumers see the watcher stream over CapTP via
   `makeIteratorRef`, which is the same shape `EndoDirectory` already
   uses.
@@ -109,7 +109,7 @@ const followNameChanges = async function* currentAndSubsequentNames() {
 };
 ```
 
-The topic is a `makeChangeTopic` from `pubsub.js`.  Subscribers join
+The topic is a `makeChangeTopic` from `pubsub.js`. Subscribers join
 the live stream after their snapshot completes.
 
 ### `EndoMount`
@@ -126,7 +126,7 @@ export const MountInterface = M.interface('EndoMount', {
 });
 ```
 
-There is no `followNameChanges`.  `list()` returns a sorted snapshot
+There is no `followNameChanges`. `list()` returns a sorted snapshot
 read from `filePowers.readDirectory` and filtered through the
 confinement check.
 
@@ -145,7 +145,7 @@ export type FilePowers = {
 };
 ```
 
-There is no watcher primitive.  The Node implementation lives in
+There is no watcher primitive. The Node implementation lives in
 `packages/daemon/src/daemon-node-powers.js`.
 
 ## Design
@@ -165,7 +165,7 @@ type MountEntryType = 'file' | 'directory';
 ```
 
 The shape mirrors `PetStoreNameChange` but replaces `value: IdRecord`
-with `type: 'file' | 'directory'`.  An `EndoMount` does not have
+with `type: 'file' | 'directory'`. An `EndoMount` does not have
 formula identifiers to publish (file contents are not capabilities),
 so the second field carries the `stat`-derived kind instead, which is
 the information a consumer needs to decide whether to recurse.
@@ -203,7 +203,7 @@ The Node implementation in `daemon-node-powers.js` wraps
   would carry, and is out of scope).
 - Coalesce events with a short debounce window (default 50 ms) so
   editor "save dance" patterns (write-tmp + rename) deliver one
-  `replace` per filename rather than a remove/add pair.  Coalescing
+  `replace` per filename rather than a remove/add pair. Coalescing
   is bookkeeping over the in-memory entry set, not a timer per
   event.
 
@@ -262,12 +262,12 @@ handle.
 ### Multiplexing
 
 Each `followNameChanges(...pathSegments)` call opens its own
-`watchDirectory` handle.  Multiplexing across many concurrent
+`watchDirectory` handle. Multiplexing across many concurrent
 subscribers to the same subdirectory is a worthwhile follow-up but
 not load-bearing for parity: even unmultiplexed, `fs.watch`
 allocates one inotify watch per directory (Linux), one
 `FSEventStream` (macOS), or one `ReadDirectoryChangesW` overlapped
-I/O (Windows).  These are cheap.
+I/O (Windows). These are cheap.
 
 If the multiplexing becomes a hotspot (a Familiar window with many
 panels watching the same scratch mount), a follow-up can wrap the
@@ -278,17 +278,17 @@ for evidence?
 
 ### Lifecycle
 
-1. **Create.**  A consumer calls `E(mount).followNameChanges(...path)`.
+1. **Create.** A consumer calls `E(mount).followNameChanges(...path)`.
    The exo returns an `AsyncIteratorInterface` reference produced by
    `makeIteratorRef`.
-2. **Snapshot.**  The first batch of `next()` calls yield the current
-   directory entries.  Confinement filtering applies to each entry,
+2. **Snapshot.** The first batch of `next()` calls yield the current
+   directory entries. Confinement filtering applies to each entry,
    so a symlink that escapes the mount root is omitted from the
    snapshot just as it is from `list()`.
-3. **Live.**  After the snapshot, `next()` blocks until
-   `fs.watch` reports a `rename` event for an entry.  The handler
+3. **Live.** After the snapshot, `next()` blocks until
+   `fs.watch` reports a `rename` event for an entry. The handler
    reconciles by `stat`-ing the child and emitting the diff record.
-4. **Cancel.**  The consumer drops the iterator (returns or throws).
+4. **Cancel.** The consumer drops the iterator (returns or throws).
    `makeIteratorRef` invokes the iterator's `return()`, which runs
    the `finally` block and releases the watcher handle.
 
@@ -297,22 +297,22 @@ for evidence?
 The `EndoMount` confinement model carries through unchanged:
 
 - The watched path is resolved with `resolveSegments` and validated
-  with `assertConfined` before the watcher is opened.  A path that
+  with `assertConfined` before the watcher is opened. A path that
   escapes the mount root cannot be subscribed to.
 - Each emitted name passes through the same `isConfinedPath` filter
-  used by `list()`.  Symlinks added at runtime that point outside
+  used by `list()`. Symlinks added at runtime that point outside
   the root are silently dropped from the stream.
-- The watcher path itself does not change after creation.  A
+- The watcher path itself does not change after creation. A
   subscriber to `mount/foo` who calls `await
-  E(mount).move('foo', 'bar')` keeps watching the moved-out
+E(mount).move('foo', 'bar')` keeps watching the moved-out
   directory; the receiver of the new name path opens its own
-  watcher.  This matches `EndoDirectory` semantics, where a
+  watcher. This matches `EndoDirectory` semantics, where a
   subscription to `petName` survives the rename of `petName`.
 
 ### Read-only mounts
 
 A read-only attenuation (`mount.readOnly()`) inherits
-`followNameChanges`.  Subscribers are read operations and are safe.
+`followNameChanges`. Subscribers are read operations and are safe.
 
 ## Alternatives Considered
 
@@ -343,7 +343,7 @@ and rename-tracking heuristics.
   hand-rolled wrapper would re-discover.
 - Con: a 50 KB+ dependency for a daemon that takes pride in a thin
   surface; pulls in `anymatch`, `braces`, and a graph of
-  micromatch utilities.  Most of `chokidar`'s value is in glob
+  micromatch utilities. Most of `chokidar`'s value is in glob
   matching, which `EndoMount` does not need (paths are name lists,
   not patterns).
 
@@ -357,14 +357,14 @@ A native-binding wrapper around the OS primitives directly.
 - Pro: avoids `fs.watch`'s well-known cross-platform inconsistencies
   (filename truncation on Linux when the path is in a non-UTF-8
   locale; missing event coalescing on macOS).
-- Con: a native dependency in the daemon distribution.  Familiar's
+- Con: a native dependency in the daemon distribution. Familiar's
   bundled-agents posture treats native modules as a last resort.
 
-Defer.  Forward-looking note: a Rust implementation of the daemon or
+Defer. Forward-looking note: a Rust implementation of the daemon or
 worker is the most plausible future home for direct OS-binding
-watchers.  A Rust port already needs platform-specific I/O bindings,
+watchers. A Rust port already needs platform-specific I/O bindings,
 so the marginal cost of a native watcher there is low compared with
-the Node-side cost of shipping a native module.  Track this on the
+the Node-side cost of shipping a native module. Track this on the
 Rust-port roadmap rather than within this design.
 
 ### `fs.watchFile`
@@ -385,38 +385,38 @@ Use as a per-entry fallback inside the polling implementation of
 Add to `packages/daemon/test/endo.test.js` alongside the existing
 twenty mount tests:
 
-1. **Snapshot.**  A scratch mount with three pre-existing files.
-   Subscribe with `followNameChanges()`.  Assert the first three
+1. **Snapshot.** A scratch mount with three pre-existing files.
+   Subscribe with `followNameChanges()`. Assert the first three
    `next()` results are `{ add: name, type: 'file' }` in
    alphabetical order.
-2. **Live add.**  After the snapshot drains, write a new file
+2. **Live add.** After the snapshot drains, write a new file
    directly to the backing path with `fs.promises.writeFile`.
    Assert `next()` returns `{ add: 'new.txt', type: 'file' }`.
-3. **Live remove.**  After (2), delete the file directly with
-   `fs.promises.unlink`.  Assert `next()` returns
+3. **Live remove.** After (2), delete the file directly with
+   `fs.promises.unlink`. Assert `next()` returns
    `{ remove: 'new.txt' }`.
-4. **Subdirectory.**  A scratch mount with a subdirectory `sub`.
-   Subscribe with `followNameChanges('sub')`.  Add a file inside
-   `sub`.  Assert the diff is reported under the subdirectory's
+4. **Subdirectory.** A scratch mount with a subdirectory `sub`.
+   Subscribe with `followNameChanges('sub')`. Add a file inside
+   `sub`. Assert the diff is reported under the subdirectory's
    subscription, and a parallel `followNameChanges()` on the root
    does not see the inner file.
-5. **External-mount parity.**  An external mount over a fresh
-   `mkdtemp` directory.  Assert the same snapshot-then-diff
-   behaviour.  This is the parity assertion: the `EndoDirectory`
+5. **External-mount parity.** An external mount over a fresh
+   `mkdtemp` directory. Assert the same snapshot-then-diff
+   behaviour. This is the parity assertion: the `EndoDirectory`
    tests already exercise the same shape under `pet-store`.
-6. **Confinement.**  Create a symlink in the watched directory that
-   points outside the mount root.  Assert the symlink is omitted
+6. **Confinement.** Create a symlink in the watched directory that
+   points outside the mount root. Assert the symlink is omitted
    from the snapshot and from any subsequent diff event.
-7. **Disposal.**  Subscribe, drain a few entries, call `return()`
-   on the iterator.  Assert that subsequent `fs.promises.writeFile`
+7. **Disposal.** Subscribe, drain a few entries, call `return()`
+   on the iterator. Assert that subsequent `fs.promises.writeFile`
    calls into the directory do not produce events (the watcher is
-   released).  A regression for this is hard to assert directly
+   released). A regression for this is hard to assert directly
    without inspecting OS handles; use `t.timeout(2000)` and a
    bounded "expect zero events" probe.
-8. **Daemon restart.**  A scratch mount with a live subscriber, the
+8. **Daemon restart.** A scratch mount with a live subscriber, the
    daemon restarts, the subscriber retries and re-subscribes.
    Assert the new subscription's snapshot reflects post-restart
-   reality.  This is a weaker contract than `EndoDirectory`'s
+   reality. This is a weaker contract than `EndoDirectory`'s
    snapshot-on-reconnect, because the watcher is process-local and
    intentionally does not survive restart; the test pins the
    intended behaviour.
@@ -426,31 +426,31 @@ All tests are `test.serial` per existing daemon-test convention.
 ## Design Decisions
 
 The following questions were raised during initial drafting and
-resolved in maintainer review on 2026-05-07.  They are captured here
+resolved in maintainer review on 2026-05-07. They are captured here
 for traceability rather than relitigation.
 
-1. **Fan-out multiplexing.**  Decision: one watcher per subscriber
-   in the first cut.  Rationale: simple, sufficient for current
-   fan-out; revisit only if profiling shows pressure.  An adapter
+1. **Fan-out multiplexing.** Decision: one watcher per subscriber
+   in the first cut. Rationale: simple, sufficient for current
+   fan-out; revisit only if profiling shows pressure. An adapter
    that fans out one watcher's events to many subscribers is a
    future optimization.
-2. **Recursive subscriptions.**  Decision: shallow only, matching
-   `EndoDirectory`.  `followNameChanges(...path)` emits only the
-   immediate children of the named subdirectory.  Rationale:
+2. **Recursive subscriptions.** Decision: shallow only, matching
+   `EndoDirectory`. `followNameChanges(...path)` emits only the
+   immediate children of the named subdirectory. Rationale:
    shallow is the parity contract; a reactive, recursive subscriber
    can be built from these primitives in user-space without
    widening the `EndoMount` surface.
-3. **File-content changes.**  Decision: parity-first.  The diff
+3. **File-content changes.** Decision: parity-first. The diff
    stream emits only `add` and `remove` records, matching
-   `EndoDirectory`.  A `replace` arm (or a separate
+   `EndoDirectory`. A `replace` arm (or a separate
    `followContentChanges` on `EndoMountFile`) is deferred.
    Rationale: when content-change semantics arrive, they should
    land uniformly across name hubs rather than land on `EndoMount`
    first and diverge.
-4. **Coalescing window.**  Decision: a hard-coded 50 ms debounce
-   constant.  Rationale: tuning is premature; promote to an option
+4. **Coalescing window.** Decision: a hard-coded 50 ms debounce
+   constant. Rationale: tuning is premature; promote to an option
    only if a real consumer needs it.
-5. **Polling fallback default.**  Decision: silent fallback when
+5. **Polling fallback default.** Decision: silent fallback when
    `fs.watch` is unavailable or unreliable on the host filesystem.
    The fallback emits a `console.error` diagnostic on activation,
    matching the project's "silent by default with `console.error`
@@ -458,22 +458,22 @@ for traceability rather than relitigation.
 
 ## Open Questions
 
-1. **`NameHub` interface unification.**  Should `EndoMount` adopt
+1. **`NameHub` interface unification.** Should `EndoMount` adopt
    the broader `NameHubInterface` (which includes `identify`,
    `locate`, `reverseLocate`, etc.) so the same hub-walking code
-   in `chat-spaces-gutter` works against both?  This is a larger
+   in `chat-spaces-gutter` works against both? This is a larger
    refactor than the watcher addition and crosses into mount
-   identity semantics.  This design stays focused on parity for
-   `followNameChanges`.  A sibling design has been dispatched to
+   identity semantics. This design stays focused on parity for
+   `followNameChanges`. A sibling design has been dispatched to
    address hub-interface unification on its own; cross-link here
    once that design lands.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|--------------|
-| [daemon-mount](daemon-mount.md) | Defines `EndoMount`; this design adds one method. |
-| [platform-fs](platform-fs.md) | Owns `FilePowers`; adds `watchDirectory`. |
+| Design                                                | Relationship                                                                                                         |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| [daemon-mount](daemon-mount.md)                       | Defines `EndoMount`; this design adds one method.                                                                    |
+| [platform-fs](platform-fs.md)                         | Owns `FilePowers`; adds `watchDirectory`.                                                                            |
 | [daemon-content-store-gc](daemon-content-store-gc.md) | Cleans up scratch mount backing directories at GC time; the watcher's `finally` release is the runtime-side cleanup. |
 
 ## Prompt

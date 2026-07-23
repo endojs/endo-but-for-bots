@@ -180,7 +180,8 @@ Indentation is achieved with `padding-left: ${depth * 24}px` on the bullet conta
   content: '';
   position: absolute;
   left: 32px;
-  top: 0; bottom: 0;
+  top: 0;
+  bottom: 0;
   width: 1px;
   background-color: var(--border-light, #e0e0e0);
 }
@@ -226,12 +227,20 @@ export function getNavigationAction(ctx: NavigationContext): NavigationResult {
 
   // LEFT at position 0 → jump to END of previous block
   if (key === 'ArrowLeft' && cursorPosition === 0 && ctx.previousBlock) {
-    return { action: 'navigate', target: ctx.previousBlock, cursorPosition: 'end' };
+    return {
+      action: 'navigate',
+      target: ctx.previousBlock,
+      cursorPosition: 'end',
+    };
   }
 
   // RIGHT at end → jump to START of next block
   if (key === 'ArrowRight' && cursorPosition === textLength && ctx.nextBlock) {
-    return { action: 'navigate', target: ctx.nextBlock, cursorPosition: 'start' };
+    return {
+      action: 'navigate',
+      target: ctx.nextBlock,
+      cursorPosition: 'start',
+    };
   }
 
   // LEFT/RIGHT within text: let browser handle it
@@ -241,12 +250,20 @@ export function getNavigationAction(ctx: NavigationContext): NavigationResult {
 
   // UP at text start → navigate to previous block
   if (key === 'ArrowUp' && cursorPosition === 0 && ctx.previousBlock) {
-    return { action: 'navigate', target: ctx.previousBlock, cursorPosition: 'end' };
+    return {
+      action: 'navigate',
+      target: ctx.previousBlock,
+      cursorPosition: 'end',
+    };
   }
 
   // DOWN at text end → navigate to next block
   if (key === 'ArrowDown' && cursorPosition === textLength && ctx.nextBlock) {
-    return { action: 'navigate', target: ctx.nextBlock, cursorPosition: 'start' };
+    return {
+      action: 'navigate',
+      target: ctx.nextBlock,
+      cursorPosition: 'start',
+    };
   }
 
   return { action: 'default' };
@@ -255,13 +272,13 @@ export function getNavigationAction(ctx: NavigationContext): NavigationResult {
 
 **Key behavioral details:**
 
-| Key | Position | Result |
-|-----|----------|--------|
-| Left Arrow | Position 0 | Jump to **end** of previous block |
-| Right Arrow | End of text | Jump to **start** of next block |
-| Up Arrow | Position 0 | Jump to **end** of previous block |
-| Down Arrow | End of text | Jump to **start** of next block |
-| Any arrow | Mid-text | Default browser behavior (move within text) |
+| Key         | Position    | Result                                      |
+| ----------- | ----------- | ------------------------------------------- |
+| Left Arrow  | Position 0  | Jump to **end** of previous block           |
+| Right Arrow | End of text | Jump to **start** of next block             |
+| Up Arrow    | Position 0  | Jump to **end** of previous block           |
+| Down Arrow  | End of text | Jump to **start** of next block             |
+| Any arrow   | Mid-text    | Default browser behavior (move within text) |
 
 The Left/Right crossing works across indentation levels — pressing Left at the start of a child block jumps to the end of the parent, and Right at the end of a parent jumps into the first child.
 
@@ -271,7 +288,7 @@ Navigation respects collapsed state: if a parent block is collapsed, its childre
 export function findAdjacentVisibleBlock(
   currentId: string,
   blocks: Array<{ id: string; isVisible: boolean }>,
-  direction: 'previous' | 'next'
+  direction: 'previous' | 'next',
 ): string | null {
   const visibleBlocks = blocks.filter(b => b.isVisible);
   const currentIndex = visibleBlocks.findIndex(b => b.id === currentId);
@@ -281,7 +298,8 @@ export function findAdjacentVisibleBlock(
     return currentIndex > 0 ? visibleBlocks[currentIndex - 1].id : null;
   } else {
     return currentIndex < visibleBlocks.length - 1
-      ? visibleBlocks[currentIndex + 1].id : null;
+      ? visibleBlocks[currentIndex + 1].id
+      : null;
   }
 }
 ```
@@ -317,14 +335,14 @@ export function getEnterAction(ctx: EditingContext): EditAction {
 }
 ```
 
-| Cursor Position | Context | Result |
-|-----------------|---------|--------|
-| End of text | No children | Create empty sibling below |
-| End of text | Has expanded children | Create empty child (first position) |
-| Beginning | Any | Insert empty block above, keep cursor in original |
-| Mid-text | Any | Split: text before stays, text after moves to new block |
-| Any | Shift held | Insert `\n` within block (soft line break) |
-| End of empty block | Has children | Create sibling (not child) |
+| Cursor Position    | Context               | Result                                                  |
+| ------------------ | --------------------- | ------------------------------------------------------- |
+| End of text        | No children           | Create empty sibling below                              |
+| End of text        | Has expanded children | Create empty child (first position)                     |
+| Beginning          | Any                   | Insert empty block above, keep cursor in original       |
+| Mid-text           | Any                   | Split: text before stays, text after moves to new block |
+| Any                | Shift held            | Insert `\n` within block (soft line break)              |
+| End of empty block | Has children          | Create sibling (not child)                              |
 
 **Split helper:**
 
@@ -381,15 +399,15 @@ export function mergeContent(first: string, second: string) {
 }
 ```
 
-| Key | Position | Block State | Result |
-|-----|----------|-------------|--------|
-| Backspace | Position 0 | Empty, has previous | Delete block, focus previous at end |
-| Backspace | Position 0 | Has text, has previous | Merge: concatenate with previous, cursor at junction |
-| Backspace | Position 0 | No previous | No-op |
-| Backspace | Mid-text | Any | Default (delete char) |
-| Delete | End of text | Has next block | Merge: pull next block's text into this one |
-| Delete | End of text | No next | No-op |
-| Delete | Mid-text | Any | Default (delete char) |
+| Key       | Position    | Block State            | Result                                               |
+| --------- | ----------- | ---------------------- | ---------------------------------------------------- |
+| Backspace | Position 0  | Empty, has previous    | Delete block, focus previous at end                  |
+| Backspace | Position 0  | Has text, has previous | Merge: concatenate with previous, cursor at junction |
+| Backspace | Position 0  | No previous            | No-op                                                |
+| Backspace | Mid-text    | Any                    | Default (delete char)                                |
+| Delete    | End of text | Has next block         | Merge: pull next block's text into this one          |
+| Delete    | End of text | No next                | No-op                                                |
+| Delete    | Mid-text    | Any                    | Default (delete char)                                |
 
 ### Indent and Dedent
 
@@ -407,20 +425,24 @@ export function getTabAction(ctx: EditingContext): EditAction {
 ```
 
 **Indent operation** (tree mutation):
+
 1. Find the block's previous sibling in the parent's children array
 2. Remove the block from its current parent
 3. Append the block as the last child of the previous sibling
 4. Expand the new parent so children are visible
 
 **Unindent operation** (tree mutation):
+
 1. Remove the block from its current parent
 2. Insert it into the grandparent's children array, immediately after the parent
 
 **When indent is allowed:**
+
 - Block has a previous sibling (you can't indent the first child — there's nothing to nest under)
 - Block is not at root level (implementation-specific)
 
 **When unindent is allowed:**
+
 - Block has a parent AND that parent has a parent (grandparent exists)
 - Block is not already at root level
 
@@ -428,18 +450,18 @@ export function getTabAction(ctx: EditingContext): EditAction {
 
 ### Modifier Combos
 
-| Combo | Action |
-|-------|--------|
-| Cmd/Ctrl+Z | Undo |
-| Cmd/Ctrl+Shift+Z / Cmd/Ctrl+Y | Redo |
-| Cmd/Ctrl+Up | Collapse children |
-| Cmd/Ctrl+Down | Expand children |
-| Cmd/Ctrl+A | Move to block start (first press) / Select all (second press) |
-| Cmd/Ctrl+E | Jump to block end |
-| Cmd/Ctrl+J | Create new note |
-| Shift+Enter | Soft line break within block |
-| Shift+Up/Down | Extend block selection |
-| `[` with selected text | Wrap with `[[` `]]` (wikilink) |
+| Combo                         | Action                                                        |
+| ----------------------------- | ------------------------------------------------------------- |
+| Cmd/Ctrl+Z                    | Undo                                                          |
+| Cmd/Ctrl+Shift+Z / Cmd/Ctrl+Y | Redo                                                          |
+| Cmd/Ctrl+Up                   | Collapse children                                             |
+| Cmd/Ctrl+Down                 | Expand children                                               |
+| Cmd/Ctrl+A                    | Move to block start (first press) / Select all (second press) |
+| Cmd/Ctrl+E                    | Jump to block end                                             |
+| Cmd/Ctrl+J                    | Create new note                                               |
+| Shift+Enter                   | Soft line break within block                                  |
+| Shift+Up/Down                 | Extend block selection                                        |
+| `[` with selected text        | Wrap with `[[` `]]` (wikilink)                                |
 
 ---
 
@@ -488,7 +510,13 @@ const collectBlockRects = () => {
     // CRITICAL: measure .block-row, not the outer .block div
     const rowElement = block.querySelector('.block-row');
     const rect = (rowElement || block).getBoundingClientRect();
-    rects.push({ url, top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right });
+    rects.push({
+      url,
+      top: rect.top,
+      bottom: rect.bottom,
+      left: rect.left,
+      right: rect.right,
+    });
   });
 
   blockRectsRef.current = rects;
@@ -502,17 +530,19 @@ const collectBlockRects = () => {
 During drag, we render a semi-transparent blue rectangle:
 
 ```typescript
-const boxStyle = selectionBox ? {
-  position: 'fixed',
-  left: Math.min(selectionBox.startX, selectionBox.currentX),
-  top: Math.min(selectionBox.startY, selectionBox.currentY),
-  width: Math.abs(selectionBox.currentX - selectionBox.startX),
-  height: Math.abs(selectionBox.currentY - selectionBox.startY),
-  backgroundColor: 'rgba(66, 133, 244, 0.2)',
-  border: '1px solid rgba(66, 133, 244, 0.5)',
-  pointerEvents: 'none',
-  zIndex: 9999,
-} : null;
+const boxStyle = selectionBox
+  ? {
+      position: 'fixed',
+      left: Math.min(selectionBox.startX, selectionBox.currentX),
+      top: Math.min(selectionBox.startY, selectionBox.currentY),
+      width: Math.abs(selectionBox.currentX - selectionBox.startX),
+      height: Math.abs(selectionBox.currentY - selectionBox.startY),
+      backgroundColor: 'rgba(66, 133, 244, 0.2)',
+      border: '1px solid rgba(66, 133, 244, 0.5)',
+      pointerEvents: 'none',
+      zIndex: 9999,
+    }
+  : null;
 ```
 
 ### Overlap Detection
@@ -563,9 +593,9 @@ Selection uses an **anchor-focus model** borrowed from browser text selection:
 
 ```typescript
 interface SelectionContext {
-  anchor: BlockId | null;   // where selection started
-  focus: BlockId | null;    // where selection currently ends
-  selected: Set<BlockId>;   // computed set of all blocks in range
+  anchor: BlockId | null; // where selection started
+  focus: BlockId | null; // where selection currently ends
+  selected: Set<BlockId>; // computed set of all blocks in range
 }
 ```
 
@@ -579,7 +609,7 @@ Given anchor and focus, compute the contiguous range using the flattened block l
 export function computeSelectedBlocks(
   anchor: BlockId | null,
   focus: BlockId | null,
-  flattenedBlocks: BlockPosition[]
+  flattenedBlocks: BlockPosition[],
 ): Set<BlockId> {
   if (!anchor || !focus) return new Set();
 
@@ -625,19 +655,23 @@ The provider maintains a sorted array of these positions representing document o
 export function shiftClickBlock(
   blockUrl: BlockId,
   currentSelection: SelectionContext,
-  flattenedBlocks: BlockPosition[]
+  flattenedBlocks: BlockPosition[],
 ): SelectionContext {
   if (currentSelection.selected.has(blockUrl)) {
     // Remove block + descendants
     const toRemove = getBlockAndDescendants(blockUrl, flattenedBlocks);
     const newSelected = new Set(
-      [...currentSelection.selected].filter(url => !toRemove.has(url))
+      [...currentSelection.selected].filter(url => !toRemove.has(url)),
     );
     if (newSelected.size === 0) return clearSelection();
     // ... update anchor/focus
   } else {
     // Extend range from anchor
-    return selectRange(currentSelection.anchor || blockUrl, blockUrl, flattenedBlocks);
+    return selectRange(
+      currentSelection.anchor || blockUrl,
+      blockUrl,
+      flattenedBlocks,
+    );
   }
 }
 ```
@@ -652,9 +686,11 @@ When multiple blocks are selected, Tab/Shift+Tab applies to all of them. Validat
 export function canBatchIndent(
   selection: SelectionContext,
   flattenedBlocks: BlockPosition[],
-  direction: 'indent' | 'unindent'
+  direction: 'indent' | 'unindent',
 ): boolean {
-  const selectedBlocks = flattenedBlocks.filter(b => selection.selected.has(b.url));
+  const selectedBlocks = flattenedBlocks.filter(b =>
+    selection.selected.has(b.url),
+  );
   if (selectedBlocks.length === 0) return false;
 
   if (direction === 'indent') {
@@ -691,7 +727,7 @@ export function calculateDropZone(
   mouseY: number,
   blockBounds: { top: number; bottom: number; height: number },
   parentUrl: BlockId,
-  indexInParent: number
+  indexInParent: number,
 ): DropZone {
   const percentage = (mouseY - blockBounds.top) / blockBounds.height;
 
@@ -705,11 +741,11 @@ export function calculateDropZone(
 }
 ```
 
-| Mouse Position | Zone | Visual Indicator | Result |
-|---------------|------|------------------|--------|
-| Top 25% | Before | Horizontal blue line above | Insert as sibling before |
-| Middle 50% | Into | Blue outline around block | Insert as first child |
-| Bottom 25% | After | Horizontal blue line below | Insert as sibling after |
+| Mouse Position | Zone   | Visual Indicator           | Result                   |
+| -------------- | ------ | -------------------------- | ------------------------ |
+| Top 25%        | Before | Horizontal blue line above | Insert as sibling before |
+| Middle 50%     | Into   | Blue outline around block  | Insert as first child    |
+| Bottom 25%     | After  | Horizontal blue line below | Insert as sibling after  |
 
 ### Validation
 
@@ -719,7 +755,7 @@ Blocks cannot be dropped into themselves or their descendants:
 export function isValidDrop(
   draggingUrls: BlockId[],
   targetUrl: BlockId,
-  targetDescendants: Set<BlockId>
+  targetDescendants: Set<BlockId>,
 ): boolean {
   if (draggingUrls.includes(targetUrl)) return false;
   for (const url of draggingUrls) {
@@ -750,7 +786,7 @@ When dragging over a collapsed block, it auto-expands after 500ms so you can dro
 export function shouldExpandOnDragHover(
   isCollapsed: boolean,
   hoverDuration: number,
-  expandDelay: number = 500
+  expandDelay: number = 500,
 ): boolean {
   return isCollapsed && hoverDuration >= expandDelay;
 }
@@ -763,7 +799,7 @@ When moving blocks within the same parent, removing the source blocks shifts ind
 ```typescript
 export function adjustDropIndexForSameParent(
   sourceIndices: number[],
-  targetIndex: number
+  targetIndex: number,
 ): number {
   const countBefore = sourceIndices.filter(i => i < targetIndex).length;
   return targetIndex - countBefore;
@@ -867,16 +903,27 @@ describe('Enter Key Behavior', () => {
 
   it('inserts empty block above at beginning', () => {
     const ctx = createContext({ cursorPosition: 0, textLength: 20 });
-    expect(getEnterAction(ctx)).toEqual({ type: 'create-sibling', content: '' });
+    expect(getEnterAction(ctx)).toEqual({
+      type: 'create-sibling',
+      content: '',
+    });
   });
 
   it('creates child when parent has children', () => {
-    const ctx = createContext({ cursorPosition: 20, textLength: 20, hasChildren: true });
+    const ctx = createContext({
+      cursorPosition: 20,
+      textLength: 20,
+      hasChildren: true,
+    });
     expect(getEnterAction(ctx)).toEqual({ type: 'create-child' });
   });
 
   it('creates sibling for empty block even with children', () => {
-    const ctx = createContext({ cursorPosition: 0, textLength: 0, hasChildren: true });
+    const ctx = createContext({
+      cursorPosition: 0,
+      textLength: 0,
+      hasChildren: true,
+    });
     expect(getEnterAction(ctx).type).toBe('create-sibling');
   });
 });
@@ -923,9 +970,9 @@ test('ArrowLeft at position 0 crosses to previous block', async ({ page }) => {
 
   const focused = page.locator('.block-textarea:focus');
   expect(await focused.inputValue()).toBe('First block');
-  expect(await focused.evaluate(
-    (el: HTMLTextAreaElement) => el.selectionStart
-  )).toBe('First block'.length);
+  expect(
+    await focused.evaluate((el: HTMLTextAreaElement) => el.selectionStart),
+  ).toBe('First block'.length);
 });
 
 test('Enter splits block and focuses new block', async ({ page }) => {
@@ -965,16 +1012,16 @@ test('Tab indents block under previous sibling', async ({ page }) => {
 
 ### What Unit Tests Catch vs. E2E
 
-| Concern | Unit Tests | E2E Tests |
-|---------|------------|-----------|
-| Decision logic (what action to take) | Yes | — |
-| Edge cases in behavior functions | Yes | — |
-| Focus actually moves to correct block | — | Yes |
-| Cursor position after operations | — | Yes |
-| Textarea auto-resize | — | Yes |
-| Drag-to-select visual behavior | — | Yes |
-| Block creation renders in DOM | — | Yes |
-| Cross-browser keyboard handling | — | Yes |
+| Concern                               | Unit Tests | E2E Tests |
+| ------------------------------------- | ---------- | --------- |
+| Decision logic (what action to take)  | Yes        | —         |
+| Edge cases in behavior functions      | Yes        | —         |
+| Focus actually moves to correct block | —          | Yes       |
+| Cursor position after operations      | —          | Yes       |
+| Textarea auto-resize                  | —          | Yes       |
+| Drag-to-select visual behavior        | —          | Yes       |
+| Block creation renders in DOM         | —          | Yes       |
+| Cross-browser keyboard handling       | —          | Yes       |
 
 ---
 

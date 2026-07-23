@@ -89,9 +89,11 @@ To read ZIP files with DEFLATE compression, provide an inflate function:
 
 ```javascript
 // Using the Compression Streams API
-const inflate = async (bytes) => {
+const inflate = async bytes => {
   const blob = new Blob([bytes]);
-  const stream = blob.stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  const stream = blob
+    .stream()
+    .pipeThrough(new DecompressionStream('deflate-raw'));
   const decompressed = await new Response(stream).arrayBuffer();
   return new Uint8Array(decompressed);
 };
@@ -132,12 +134,12 @@ const fileBytes = await read('file.txt');
 
 This is a modernization and specialization of [JSZip][] (MIT License) that has
 no dependencies on any built-in modules and is entirely implemented with
-ECMAScript modules.  This makes the library suitable for embedding in an XS
+ECMAScript modules. This makes the library suitable for embedding in an XS
 binary, bundling for any platform with Rollup, and usable with `node -r esm`.
 
 Modernization afforded the opportunity to focus on use of TypedArrays and UTF-8
 without reservation, and to use TypeScript JSDoc comments to verify the flow of
-information.  It also afforded an opportunity to make some security-conscious
+information. It also afforded an opportunity to make some security-conscious
 decisions, like treating file name spoofing as an integrity error and
 requiring a date to be expressly provided instead of reaching for the ambient
 original Date constructor, which will pointedly be absent in constructed
@@ -165,7 +167,7 @@ modules, which is not much effort.
 
 JSZip supports an asynchronous mode, that despite the name, is not concurrent.
 The mode is intended to keep the main thread lively while emitting progress
-reports.  For expedience, this mode is omitted, but could be restored using the
+reports. For expedience, this mode is omitted, but could be restored using the
 same underlying utilities, and I expect async/await and async iterators would
 make the feature easier to maintain.
 
@@ -173,16 +175,16 @@ Provided an async seekable reader, a lazy ZIP reader could be built on the same
 foundations, deferring decompression and validation until the file is opened.
 
 For expedience, support for streaming compression and the necessary data
-descriptors have been dropped.  They are not necessary for synchronous writing.
+descriptors have been dropped. They are not necessary for synchronous writing.
 The data descriptors are also redundant with the central directory for reading,
 so they've been omitted, though recovering them for additional integrity
 checks would be useful.
 
 For expedience, explicit directory records are ignored on read and omitted on
-write.  These would also be straightforward to recover.
+write. These would also be straightforward to recover.
 
 For expedience, there is no API for enumerating the contents of the archive.
 This would be straightforward to implement.
 
- [JSZip]: https://github.com/Stuk/jszip
- [Compression Streams API]: https://developer.mozilla.org/en-US/docs/Web/API/Compression_Streams_API
+[JSZip]: https://github.com/Stuk/jszip
+[Compression Streams API]: https://developer.mozilla.org/en-US/docs/Web/API/Compression_Streams_API

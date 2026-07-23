@@ -1,11 +1,11 @@
 # EndoMount Capability Completion Plan
 
-| | |
-|---|---|
-| **Created** | 2026-05-18 |
-| **Updated** | 2026-05-27 |
-| **Author** | 0xPatrick (prompted) |
-| **Status** | **Complete** |
+|             |                      |
+| ----------- | -------------------- |
+| **Created** | 2026-05-18           |
+| **Updated** | 2026-05-27           |
+| **Author**  | 0xPatrick (prompted) |
+| **Status**  | **Complete**         |
 
 > **Read in order.**
 > This is doc 1 of 3.
@@ -97,12 +97,12 @@ The implementation is symlink-aware and confines all resolved paths to the mount
 
 ### Existing Related Designs
 
-| Design | Relationship |
-|---|---|
-| [daemon-mount](daemon-mount.md) | Current implementation note for mount and scratch-mount formulas.  This plan completes the unfinished capability surface. |
-| [platform-fs](platform-fs.md) | Shared type lattice for `ReadableBlob`, `ReadableTree`, `File`, `Directory`, `SnapshotBlob`, and `SnapshotTree`. |
-| [daemon-capability-filesystem](daemon-capability-filesystem.md) | Broader VFS vision covering `Dir` / `File`, multi-provider backends, and caretaker control. |
-| [virtual-filesystem-design](../docs/virtual-filesystem-design.md) | Earlier handle-oriented sketch and logical-node-identity model. |
+| Design                                                            | Relationship                                                                                                             |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| [daemon-mount](daemon-mount.md)                                   | Current implementation note for mount and scratch-mount formulas. This plan completes the unfinished capability surface. |
+| [platform-fs](platform-fs.md)                                     | Shared type lattice for `ReadableBlob`, `ReadableTree`, `File`, `Directory`, `SnapshotBlob`, and `SnapshotTree`.         |
+| [daemon-capability-filesystem](daemon-capability-filesystem.md)   | Broader VFS vision covering `Dir` / `File`, multi-provider backends, and caretaker control.                              |
+| [virtual-filesystem-design](../docs/virtual-filesystem-design.md) | Earlier handle-oriented sketch and logical-node-identity model.                                                          |
 
 ## Design Principles
 
@@ -135,18 +135,18 @@ Future read-only views should prefer exposing read-only interfaces rather than o
 
 ### Public Facets
 
-| Capability | Role |
-|---|---|
-| `EndoMount` | Live mutable directory rooted at a confined physical subtree |
-| `EndoMountFile` | Live mutable file inside an `EndoMount` |
+| Capability       | Role                                                                                                      |
+| ---------------- | --------------------------------------------------------------------------------------------------------- |
+| `EndoMount`      | Live mutable directory rooted at a confined physical subtree                                              |
+| `EndoMountFile`  | Live mutable file inside an `EndoMount`                                                                   |
 | `EndoMountEntry` | Mount-scoped logical reference to a normalized relative entry, whether or not that entry currently exists |
 
 ### Host-Private Facets
 
-| Capability | Role |
-|---|---|
+| Capability                      | Role                                                                                                                                                                                                                |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `EndoHost.provideHostPath(cap)` | Privileged accessor on `EndoHost` that resolves a daemon-minted `EndoMount` capability to its physical-worktree path by consulting the daemon's formula registry; available only to host-side code, never to guests |
-| `EndoMountControl` | Future caretaker facet for host-only mutability / revocation control, if the broader capability-filesystem plan is realized |
+| `EndoMountControl`              | Future caretaker facet for host-only mutability / revocation control, if the broader capability-filesystem plan is realized                                                                                         |
 
 `provideHostPath` is deliberately not part of the guest-facing interface.
 It is the bridge a trusted provider such as native git needs in order to operate on the same physical worktree without making that path observable to the guest.
@@ -215,7 +215,7 @@ interface EndoMount {
 ```
 
 `lookup()` is the single handle-minting method.
-It returns either an `EndoMount` or an `EndoMountFile` depending on what is at the path, and throws for an absent path (see § *`lookup()` semantics on missing nodes* below).
+It returns either an `EndoMount` or an `EndoMountFile` depending on what is at the path, and throws for an absent path (see § _`lookup()` semantics on missing nodes_ below).
 There is no separate `openFile` / `openDirectory` pair: `lookup` already covers both kinds, and the existing `mount.has(entry) → mount.lookup(entry)` idiom (or a runtime `kind` check on the returned handle) handles the cases where the caller wants to discriminate.
 
 ### `EndoMountFile`
@@ -265,7 +265,7 @@ It carries:
 It carries **no live-filesystem authority at all** — no observational queries like `exists()` or `stat()`, and no handle-minting methods.
 Existence and metadata queries live on `EndoMount` and accept an entry: `mount.has(entry)` for the existence test and `mount.stat(entry)` for the metadata query.
 Handle-minting also lives on `EndoMount` and accepts an entry as the path-bearing argument: `mount.lookup(entry)`.
-This keeps the entry shape value-shaped — a deeply read-only value an agent can pass around freely — and concentrates *both* observational authority and handle-minting authority on the mount where they can be revoked or attenuated as a unit.
+This keeps the entry shape value-shaped — a deeply read-only value an agent can pass around freely — and concentrates _both_ observational authority and handle-minting authority on the mount where they can be revoked or attenuated as a unit.
 
 An entry:
 
@@ -297,11 +297,11 @@ That shape made entries mini-capabilities that both observed the live filesystem
 Rejected for these reasons:
 
 - **Diffuses authority across many handles.**
-  Every entry holding both a reference to its mount's observational authority *and* its handle-minting authority means the mount's effective surface is everywhere a passed-around entry lives.
+  Every entry holding both a reference to its mount's observational authority _and_ its handle-minting authority means the mount's effective surface is everywhere a passed-around entry lives.
   The mount becomes the sum of its issued entries plus itself; revoking or attenuating the mount has to chase down the entries too.
   An entry that looks like a value but invokes the backing filesystem on every call is not really a value — it is a mini-capability with the syntax of a value, which is harder to reason about than either pole.
 - **Harder to reason about authority lineage.**
-  When a handle is minted via `entry.openFile()`, the lineage is `mount → entry → handle`; the entry might be from a `readOnly()` view, or it might predate a mount attenuation, and the resulting handle's authority is the *minimum* of all three layers.
+  When a handle is minted via `entry.openFile()`, the lineage is `mount → entry → handle`; the entry might be from a `readOnly()` view, or it might predate a mount attenuation, and the resulting handle's authority is the _minimum_ of all three layers.
   When the same mint goes through the mount (`mount.lookup(entry)`), the mount's current state is the single-point authority.
   The same argument applies to observational authority: `entry.exists()` against a stale mount-attenuation state is harder to reason about than `mount.has(entry)` against the current mount.
 - **Concentrates authority where the panel-flagged ocap-discipline says it should be.**
@@ -390,7 +390,7 @@ The captures of different files may correspond to different moments.
 A concurrent writer that touches file A and then file B during the operation may produce a snapshot in which A reflects the post-write state while B reflects the pre-write state.
 The snapshot is hash-consistent per file, not per tree.
 
-**Missing-file and missing-directory races.**  A file removed mid-snapshot (the directory walk listed it, the per-file open found it absent) and a directory renamed or removed mid-snapshot (its listing succeeded, its child traversal found the path gone) **omit that entry from the snapshot tree** rather than fail the whole operation with a structured error.  The captured tree represents what was reachable from the mount root during the operation; an entry that vanished before its bytes could be captured was reachable for less than the whole walk and is excluded.  Reasoning: the per-file consistency contract above already permits the snapshot to represent different files at different moments, so omitting a moment-zero-existed-then-vanished entry is the natural extension of that mode, and the existing `@endo/platform/fs/lite` `checkinTree()` ingestion already accommodates a tree whose listing reflects what was reachable at walk time.  The structured-error alternative ("a missing-file race fails the whole snapshot") would push the burden onto every caller to retry against a sufficiently quiescent worktree, which the per-file mode already promises not to require.  If a downstream consumer surfaces a need to distinguish "absent because never present" from "absent because raced", the structured-error variant can be added as a stricter consistency mode alongside the future transactional mode.
+**Missing-file and missing-directory races.** A file removed mid-snapshot (the directory walk listed it, the per-file open found it absent) and a directory renamed or removed mid-snapshot (its listing succeeded, its child traversal found the path gone) **omit that entry from the snapshot tree** rather than fail the whole operation with a structured error. The captured tree represents what was reachable from the mount root during the operation; an entry that vanished before its bytes could be captured was reachable for less than the whole walk and is excluded. Reasoning: the per-file consistency contract above already permits the snapshot to represent different files at different moments, so omitting a moment-zero-existed-then-vanished entry is the natural extension of that mode, and the existing `@endo/platform/fs/lite` `checkinTree()` ingestion already accommodates a tree whose listing reflects what was reachable at walk time. The structured-error alternative ("a missing-file race fails the whole snapshot") would push the burden onto every caller to retry against a sufficiently quiescent worktree, which the per-file mode already promises not to require. If a downstream consumer surfaces a need to distinguish "absent because never present" from "absent because raced", the structured-error variant can be added as a stricter consistency mode alongside the future transactional mode.
 
 Stronger transactional capture (single filesystem instant across the whole tree) can be future work.
 
@@ -417,7 +417,7 @@ interface EndoHost {
 The accessor lives on `EndoHost` (a host-side capability), not on `EndoMount` itself; guest-visible introspection (`__getMethodNames__`, `inspect`) on a mount sees only the public mount methods.
 
 Resolvable inputs are restricted to top-level `mount` / `scratch-mount` formulas.
-Sub-mount views minted by `mount.lookup()` and read-only attenuations minted by `mount.readOnly()` are *not* top-level mount formulas — they do not have their own formula identifier — and `provideHostPath` throws a structured error rather than returning a path for them.
+Sub-mount views minted by `mount.lookup()` and read-only attenuations minted by `mount.readOnly()` are _not_ top-level mount formulas — they do not have their own formula identifier — and `provideHostPath` throws a structured error rather than returning a path for them.
 Callers that need a sub-tree path mint a fresh `provideMount(absolutePath, …)` against the sub-tree's host path instead.
 
 Trade-off rationale (a hidden Exo facet, a `WeakMap` keyed on the public Exo, and a sealer/unsealer pair were the other options considered):
@@ -437,14 +437,14 @@ The privileged-accessor implementation:
 
 The intended convergence is:
 
-| Current daemon term | Shared filesystem role |
-|---|---|
-| `EndoMountFile` | `File` |
-| `EndoMount` | `Directory` |
-| `EndoMountFile.readOnly()` | `ReadableBlob` view |
-| `EndoMount.readOnly()` | `ReadableTree` view |
-| `EndoMountFile.snapshot()` | `SnapshotBlob` |
-| `EndoMount.snapshot()` | `SnapshotTree` |
+| Current daemon term        | Shared filesystem role |
+| -------------------------- | ---------------------- |
+| `EndoMountFile`            | `File`                 |
+| `EndoMount`                | `Directory`            |
+| `EndoMountFile.readOnly()` | `ReadableBlob` view    |
+| `EndoMount.readOnly()`     | `ReadableTree` view    |
+| `EndoMountFile.snapshot()` | `SnapshotBlob`         |
+| `EndoMount.snapshot()`     | `SnapshotTree`         |
 
 This plan does not require renaming the current daemon interfaces first.
 Instead, it requires every new method to move toward the shared shape so a later adapter or migration is mostly mechanical.
@@ -452,14 +452,14 @@ Instead, it requires every new method to move toward the shared shape so a later
 ### Convergence shape: specialization, not wrapping
 
 The convergence is implemented as **specialization**.
-`EndoMount` *is* a `Directory`: its `M.interface('EndoMount', ...)` guard's
+`EndoMount` _is_ a `Directory`: its `M.interface('EndoMount', ...)` guard's
 overlapping methods exactly match `DirectoryInterface`'s method shapes,
-and `EndoMountFile` *is* a `File` in the same way.
+and `EndoMountFile` _is_ a `File` in the same way.
 No wrapping Exo sits between `EndoMount` and a platform-side `Directory`
 Exo, and no separate adapter object is involved.
 The `makeMountExo` factory in `packages/daemon/src/mount.js` continues
 to mint one Exo per mount; that Exo simply gains the methods required
-to satisfy `DirectoryInterface` (see § *Phase 5* below for the concrete
+to satisfy `DirectoryInterface` (see § _Phase 5_ below for the concrete
 additions).
 
 **Why specialize rather than wrap.**
@@ -477,7 +477,7 @@ Specializing keeps a single Exo, a single confinement check per method,
 and a single set of mount-specific extensions (`entry`, `stat(entry)`,
 `displayPath`, symlink-confined realpath checks) co-located with the
 methods they constrain.
-The host-private backing accessor lives on `EndoHost` (see § *Host-Private Physical Backing*) rather than on the mount Exo, so the mount specialization does not need to carry it.
+The host-private backing accessor lives on `EndoHost` (see § _Host-Private Physical Backing_) rather than on the mount Exo, so the mount specialization does not need to carry it.
 A wrapper shape would instead need a platform `Directory` Exo built
 first, then a daemon Exo around it.
 That arrangement would split the confinement boundary across two
@@ -489,8 +489,8 @@ facet.
 A future generic `Directory` Exo in `@endo/platform/fs-node/` (the
 platform-fs Phase 4 work) is **not** a prerequisite for `EndoMount`
 Phase 5.
-The `Directory` *contract* (the interface guard) is the prerequisite;
-the *implementation* of that contract for the daemon's mount is what
+The `Directory` _contract_ (the interface guard) is the prerequisite;
+the _implementation_ of that contract for the daemon's mount is what
 this plan delivers.
 A separate platform-side `Directory` Exo can be added later for
 in-memory, zip-backed, or remote-only directories without disturbing
@@ -503,14 +503,14 @@ Three names in adjacent regions of the codebase are easy to confuse:
 - `EndoDirectory` (in `packages/daemon/src/interfaces.js` and
   `packages/daemon/src/directory.js`) is the daemon's formula-graph
   **naming hub** — `identify`, `locate`, `followNameChanges`, `lookup` by
-  pet name.  It is *not* a filesystem directory.  Its `M.interface`
+  pet name. It is _not_ a filesystem directory. Its `M.interface`
   label is `'EndoDirectory'`.
 - `Directory` (in `packages/platform/src/fs/interfaces.js`) is the
   shared filesystem contract — `write`, `remove`, `move`, `copy`,
   `makeDirectory`, `readOnly() → ReadableTree`, `snapshot() → SnapshotTree`.
   Its `M.interface` label is `'Directory'`.
 - `EndoMount` (in `packages/daemon/src/mount.js`) is the daemon's
-  specialization of `Directory` for a confined physical subtree.  Its
+  specialization of `Directory` for a confined physical subtree. Its
   `M.interface` label is `'EndoMount'`.
 
 Both `packages/platform/src/fs/interfaces.js` and
@@ -570,10 +570,10 @@ hub is a separate decision with wide blast radius.
 ### Phase 3: Add Entry Overloads, Metadata, and the `makeFile` Sibling
 
 - [x] Add the `lookup(entry)`, `has(entry)`, and `stat(entry)` overloads on `EndoMount`.
-  Each accepts an entry as the path-bearing argument (the no-observational-authority queries an earlier draft had on the entry itself).
+      Each accepts an entry as the path-bearing argument (the no-observational-authority queries an earlier draft had on the entry itself).
 - [x] Add `stat(path)` for the path-form metadata query.
 - [x] Add `makeFile(path, content?)` as the path-form sibling of `makeDirectory` (parallel construction; string content only — binary content is supplied via `write(path, readableBlob)` because mutable typed arrays do not cross CapTP).
-  Existing path-form mutators (`writeText`, `remove`, `move`, `makeDirectory`) keep their current signatures unchanged.
+      Existing path-form mutators (`writeText`, `remove`, `move`, `makeDirectory`) keep their current signatures unchanged.
 - [x] Add `stat`, `append`, and `snapshot` on `EndoMountFile`.
 - [x] Keep existing path convenience methods for compatibility.
 - [x] Update help text and TypeScript declarations together with interface guards.
@@ -587,7 +587,7 @@ hub is a separate decision with wide blast radius.
 **Resolution.** The phase landed as a privileged host-side accessor (`EndoHost.provideHostPath`) rather than as a hidden sibling Exo facet on the mount formula or a sealer/unsealer pair.
 The accessor consults the daemon's formula registry (`getIdForRef` plus `getMountHostPath`) and resolves only top-level `mount` / `scratch-mount` formula identifiers; sub-mount views from `mount.lookup()` and read-only attenuations from `mount.readOnly()` are rejected with a structured error rather than producing a host path.
 This shape sidesteps the formula-machinery prerequisite the earlier hidden-facet draft carried — today's `mount` formula in `packages/daemon/src/mount.js` returns a single `makeExo('EndoMount', ...)` and `packages/daemon/src/daemon.js`'s formula switch (`case 'mount':`) returns one Exo per formula id, and the privileged-accessor shape does not require that to change.
-See § [*Host-Private Physical Backing*](#host-private-physical-backing) for the full rationale and the trade-off against the hidden-facet and sealer/unsealer alternatives.
+See § [_Host-Private Physical Backing_](#host-private-physical-backing) for the full rationale and the trade-off against the hidden-facet and sealer/unsealer alternatives.
 
 ### Phase 5: Converge with Shared Filesystem Types
 
@@ -616,7 +616,7 @@ See § [*Host-Private Physical Backing*](#host-private-physical-backing) for the
 
 ### Resolved (recorded as Design Decisions)
 
-The following questions were carried in early drafts; their resolutions live in *Design Decisions* below.
+The following questions were carried in early drafts; their resolutions live in _Design Decisions_ below.
 
 - `readOnly()` interface narrowing — decision 6.
 - `entry(path)` accepting both arrays and slash strings — already in the `EndoMount` interface (`string | string[]`).

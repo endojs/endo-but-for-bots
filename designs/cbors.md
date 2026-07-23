@@ -1,11 +1,11 @@
 # CBOR Byte-String Framing (`@endo/cbors`)
 
-| | |
-|---|---|
-| **Created** | 2026-05-04 |
-| **Updated** | 2026-05-04 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-05-04            |
+| **Updated** | 2026-05-04            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## What is the Problem Being Solved?
 
@@ -62,7 +62,7 @@ Representation and is therefore permitted under the namer's rule on
 canonical acronyms.
 
 We rejected `@endo/cbor-frame` (mirroring `@endo/syrup-frame`)
-because the package frames a *sequence* of byte strings, and the
+because the package frames a _sequence_ of byte strings, and the
 plural form `cbors` keeps this property visible.
 
 **Reader and writer identifiers: `makeCborsReader` and
@@ -198,7 +198,7 @@ the byte offset where the truncated frame began.
 This mirrors `@endo/netstring`'s "Unexpected dangling message at
 offset" error.
 
-The `maxMessageLength` cap is enforced *before* allocation: when the
+The `maxMessageLength` cap is enforced _before_ allocation: when the
 head declares a payload length greater than the cap, the reader
 throws without buffering the payload.
 
@@ -280,12 +280,12 @@ for await (const bytes of reader) {
 
 ## Relationship to existing packages
 
-| Package | Role |
-|---|---|
-| [`@endo/netstring`](../packages/netstring/) | Frames byte payloads as `<digits>:<bytes>,` |
-| `@endo/syrup-frame` ([PR 29](./ocapn-tcp-syrup-framing.md), proposed, not yet landed) | Frames byte payloads as `<digits>:<bytes>` |
-| `@endo/cbors` (this design) | Frames byte payloads as a CBOR byte-string head plus payload, optionally wrapped in CBOR tag 24 |
-| `packages/daemon/src/envelope.js` | Inline CBOR codec for the engo bus envelope protocol; a candidate consumer of `@endo/cbors` for the framing layer |
+| Package                                                                               | Role                                                                                                              |
+| ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| [`@endo/netstring`](../packages/netstring/)                                           | Frames byte payloads as `<digits>:<bytes>,`                                                                       |
+| `@endo/syrup-frame` ([PR 29](./ocapn-tcp-syrup-framing.md), proposed, not yet landed) | Frames byte payloads as `<digits>:<bytes>`                                                                        |
+| `@endo/cbors` (this design)                                                           | Frames byte payloads as a CBOR byte-string head plus payload, optionally wrapped in CBOR tag 24                   |
+| `packages/daemon/src/envelope.js`                                                     | Inline CBOR codec for the engo bus envelope protocol; a candidate consumer of `@endo/cbors` for the framing layer |
 
 `@endo/netstring` (which exists today),
 `@endo/syrup-frame` ([proposed in PR 29](./ocapn-tcp-syrup-framing.md),
@@ -305,7 +305,7 @@ The daemon's existing inline encoder is the obvious migration target
 for the framing layer: once `@endo/cbors` exists, the engo envelope
 protocol can drop its private head-bytes code and use the streaming
 reader and writer for that layer.
-The daemon would still encode and decode the *contents* of each frame
+The daemon would still encode and decode the _contents_ of each frame
 with whatever CBOR codec it likes.
 That migration is out of scope here; this design only delivers the
 framing package.

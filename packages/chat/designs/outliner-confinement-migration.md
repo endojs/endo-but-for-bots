@@ -132,6 +132,7 @@ onDedent, onSelectAll, onSlashQuery, onTokenClick }`. `effective` from
 
 **Cross-node coordination — every global-selection reach to eliminate (§3.4):**
 the controller is the only authority on document order.
+
 1. `getAllVisibleTextNodes` (355) + `focusTextNode(idx±1)` (1916/2258/…) →
    island reports `onCaretArrow(key, dir, atEdge)`; controller computes
    prev/next visible key from the snapshot and calls `requestFocus` on that
@@ -199,9 +200,9 @@ replyType)` — called for `'edit'` (1129), draft commit (1206), `'deletion'`
   imperative DOM. `outliner/controller.js`, `outliner/tree-source.js`. Existing
   `outliner-enter-key.test.js` stays green.
 - **Phase 2 — confined structure shell (MED).** `OutlinerRoot` + `OutlinerNode`
-  + `NodeDisclosure`/`NodeBadge`/`NodeMeta`/`Breadcrumb` from `treeSnapshot`;
-  the Phase-0 island per node; selection as a prop. Host wrapper
-  `chat/outliner-component.js`.
+  - `NodeDisclosure`/`NodeBadge`/`NodeMeta`/`Breadcrumb` from `treeSnapshot`;
+    the Phase-0 island per node; selection as a prop. Host wrapper
+    `chat/outliner-component.js`.
 - **Phase 3 — keyboard + draft intent over the seam (HIGH).** Wire
   `onEnter`/`onBackspaceEmpty`/`onIndent`/`onDedent`/`onCaretArrow`/`onCommit`;
   cross-node caret via `requestFocus` (§3.4).

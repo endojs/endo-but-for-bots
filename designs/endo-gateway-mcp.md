@@ -1,11 +1,11 @@
 # Endo Gateway: Model Context Protocol Termination
 
-| | |
-|---|---|
-| **Created** | 2026-05-29 |
-| **Updated** | 2026-05-29 |
-| **Author** | kriscendobot (prompted) |
-| **Status** | Not Started |
+|             |                         |
+| ----------- | ----------------------- |
+| **Created** | 2026-05-29              |
+| **Updated** | 2026-05-29              |
+| **Author**  | kriscendobot (prompted) |
+| **Status**  | Not Started             |
 
 ## What is the Problem Being Solved?
 
@@ -169,7 +169,7 @@ The endpoint is `POST /mcp` for client-to-server requests and
 event stream.
 JSON-RPC framing follows MCP spec verbatim; the Gateway does not
 inspect the payload beyond what it needs to route, with the deliberate
-exception of the `initialize` handshake (see *Initialize* below).
+exception of the `initialize` handshake (see _Initialize_ below).
 
 ### Authentication
 
@@ -187,7 +187,7 @@ The Gateway:
 1. Hex-validates the bearer (64 lowercase hex chars).
 2. Looks up the formula id in its bearer-token table, which is itself
    populated by the per-user Daemon at registration time (`E(registration)
-   .publishAgent({ formulaId, agentExo })`, a new method paralleling
+.publishAgent({ formulaId, agentExo })`, a new method paralleling
    `publishWeblet`).
 3. On hit, the table yields the User Daemon handle plus an `agentExo`
    that exposes the agent's MCP adapter.
@@ -239,7 +239,7 @@ The translation is a one-line projection per tool and happens in the
 MCP adapter, not the Gateway:
 
 ```ts
-const mcpTool = (lalTool) => ({
+const mcpTool = lalTool => ({
   name: lalTool.function.name,
   description: lalTool.function.description,
   inputSchema: lalTool.function.parameters,
@@ -322,7 +322,7 @@ capabilities granted to it" only types-as-true once the tool catalog
 is a parameterized package, not an inline switch.
 
 The MCP termination needs to bind tools to an `EndoGuest` that is not
-the agent's *own* powers.
+the agent's _own_ powers.
 The Gateway's MCP adapter binds to whatever `EndoGuest` the bearer
 resolves to, and a given Gateway may have many bound adapters live
 concurrently (one per active MCP session).
@@ -467,10 +467,10 @@ A new "MCP" tab on each agent's space-home view that shows:
     "<agent-pet-name>": {
       "url": "https://<gateway-host>/mcp",
       "headers": {
-        "Authorization": "Bearer <64-char-formula-id>"
-      }
-    }
-  }
+        "Authorization": "Bearer <64-char-formula-id>",
+      },
+    },
+  },
 }
 ```
 
@@ -521,7 +521,7 @@ The Gateway persists the published agents in its sqlite store next to
 the weblet table.
 The per-user Daemon publishes every agent it owns: the bearer is the
 agent's 256-bit formula identifier, knowledge of the bearer **is** the
-authorization (see Design Decision §3, *Capability discipline*), and
+authorization (see Design Decision §3, _Capability discipline_), and
 a per-agent opt-in toggle would only obscure the actual policy.
 `unpublishAgent` exists for the agent-deletion path, not for "hide from
 MCP while keeping the agent alive".
@@ -546,14 +546,14 @@ existing ones.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|--------------|
-| [endo-gateway](endo-gateway.md) | The Gateway this design adds an endpoint to. The MCP termination is a third application protocol on the same bind port; the TLS-proxy assumption from `endo-gateway` carries over. |
-| [gateway-bearer-token-auth](gateway-bearer-token-auth.md) | The bearer is the 256-bit hex formula identifier from this design, applied to the new `/mcp` surface. Per-IP rate limiter is reused. |
-| [daemon-agent-tools](daemon-agent-tools.md) | Capability-scoped tools (`Dir` / `Shell` / `Git`) compose into `makeAgentTools` via the `extra` option as they land. Out of scope for the initial MCP catalog. |
-| [lal-fae-form-provisioning](lal-fae-form-provisioning.md) | The Chat "+ Add agent" affordance routes to the existing manager configuration form. |
-| [chat-components](chat-components.md), [chat-spaces-gutter](chat-spaces-gutter.md), [chat-spaces-home](chat-spaces-home.md) | Hosting surfaces for the two Chat-side affordances. |
-| [daemon-web-gateway](daemon-web-gateway.md) | The Gateway's HTTP routing layer the new `/mcp` route attaches to. |
+| Design                                                                                                                      | Relationship                                                                                                                                                                       |
+| --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [endo-gateway](endo-gateway.md)                                                                                             | The Gateway this design adds an endpoint to. The MCP termination is a third application protocol on the same bind port; the TLS-proxy assumption from `endo-gateway` carries over. |
+| [gateway-bearer-token-auth](gateway-bearer-token-auth.md)                                                                   | The bearer is the 256-bit hex formula identifier from this design, applied to the new `/mcp` surface. Per-IP rate limiter is reused.                                               |
+| [daemon-agent-tools](daemon-agent-tools.md)                                                                                 | Capability-scoped tools (`Dir` / `Shell` / `Git`) compose into `makeAgentTools` via the `extra` option as they land. Out of scope for the initial MCP catalog.                     |
+| [lal-fae-form-provisioning](lal-fae-form-provisioning.md)                                                                   | The Chat "+ Add agent" affordance routes to the existing manager configuration form.                                                                                               |
+| [chat-components](chat-components.md), [chat-spaces-gutter](chat-spaces-gutter.md), [chat-spaces-home](chat-spaces-home.md) | Hosting surfaces for the two Chat-side affordances.                                                                                                                                |
+| [daemon-web-gateway](daemon-web-gateway.md)                                                                                 | The Gateway's HTTP routing layer the new `/mcp` route attaches to.                                                                                                                 |
 
 ## Design Decisions
 
@@ -660,7 +660,7 @@ existing ones.
 
 ## Open Questions
 
-1. **Capability-scoped tools timing.** *(deferred)*
+1. **Capability-scoped tools timing.** _(deferred)_
    [daemon-agent-tools](daemon-agent-tools.md) is Not Started.
    When it lands, the MCP catalog should grow to include the
    capability-scoped tools.
@@ -671,7 +671,7 @@ existing ones.
    tools.
    Resolve when the first capability-scoped tool ships.
 
-2. **`resources` and `prompts` MCP capabilities.** *(deferred)*
+2. **`resources` and `prompts` MCP capabilities.** _(deferred)_
    Both are advertised-then-implemented in MCP servers in the wild.
    Endo's resource model (pet store, formula store, content-addressed
    store) is plausibly an MCP resource source.

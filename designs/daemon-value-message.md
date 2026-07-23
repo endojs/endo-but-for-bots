@@ -1,11 +1,11 @@
 # Daemon Value Message
 
-| | |
-|---|---|
-| **Created** | 2026-03-02 |
-| **Updated** | 2026-03-02 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Complete — `value` message type, persistence, delivery via `submit()`, Chat UI rendering, `VALUE` edge, standalone `sendValue` method on Mail/Host/Guest, and `send-value` CLI command all implemented. |
+|             |                                                                                                                                                                                                         |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Created** | 2026-03-02                                                                                                                                                                                              |
+| **Updated** | 2026-03-02                                                                                                                                                                                              |
+| **Author**  | Kris Kowal (prompted)                                                                                                                                                                                   |
+| **Status**  | Complete — `value` message type, persistence, delivery via `submit()`, Chat UI rendering, `VALUE` edge, standalone `sendValue` method on Mail/Host/Guest, and `send-value` CLI command all implemented. |
 
 ## What is the Problem Being Solved?
 
@@ -72,7 +72,7 @@ type MessageFormula = {
     | 'form'
     | 'eval-proposal-reviewer'
     | 'eval-proposal-proposer'
-    | 'value';  // new
+    | 'value'; // new
   // ...existing fields...
   valueId?: FormulaIdentifier; // new
 };
@@ -165,15 +165,15 @@ using the `VALUE` edge name on the message hub directory.
 
 The message hub formula for a `value` message exposes:
 
-| Edge name | Value |
-|-----------|-------|
-| `FROM` | Sender handle formula ID |
-| `TO` | Recipient handle formula ID |
-| `DATE` | ISO 8601 timestamp |
-| `TYPE` | `'value'` |
-| `MESSAGE` | `messageId` |
-| `REPLY` | `replyTo` messageId |
-| `VALUE` | The retained value (resolved from `valueId`) |
+| Edge name | Value                                        |
+| --------- | -------------------------------------------- |
+| `FROM`    | Sender handle formula ID                     |
+| `TO`      | Recipient handle formula ID                  |
+| `DATE`    | ISO 8601 timestamp                           |
+| `TYPE`    | `'value'`                                    |
+| `MESSAGE` | `messageId`                                  |
+| `REPLY`   | `replyTo` messageId                          |
+| `VALUE`   | The retained value (resolved from `valueId`) |
 
 The `VALUE` edge is the primary payload. Recipients can `adopt` it:
 
@@ -302,22 +302,22 @@ In the inbox component, a `value` message renders as:
 
 ## Files Modified
 
-| File | Change |
-|------|--------|
-| `packages/daemon/src/types.d.ts` | Add `ValueMessage` type, update `Message` union, update `MessageFormula`, add `sendValue` to `Mail`, `EndoGuest`, `EndoHost` |
-| `packages/daemon/src/mail.js` | Implement `sendValue`, update `makeStampedMessage` and `deliver` for value type, update message hub directory |
-| `packages/daemon/src/host.js` | Expose `sendValue` on host exo |
-| `packages/daemon/src/guest.js` | Expose `sendValue` on guest exo, delegate to mailbox |
-| `packages/daemon/src/interfaces.js` | Add `sendValue` guard to Guest and Host interfaces |
-| `packages/daemon/src/help-text.js` | Add help text for `sendValue` |
-| `packages/daemon/src/daemon.js` | Update `makeMessageHub` to expose `VALUE` edge for value messages |
-| `packages/cli/src/endo.js` | Add `send-value` command definition |
-| `packages/cli/src/commands/send-value.js` | New — CLI command implementation |
-| `packages/cli/src/commands/inbox.js` | Add value message display formatting |
-| `packages/daemon/test/endo.test.js` | Add value message integration tests |
-| `packages/chat/inbox-component.js` | Render value messages with preview and adopt |
-| `packages/chat/command-registry.js` | Register `/send-value` command |
-| `packages/chat/command-executor.js` | Execute send-value via `E(host).sendValue()` |
+| File                                      | Change                                                                                                                       |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `packages/daemon/src/types.d.ts`          | Add `ValueMessage` type, update `Message` union, update `MessageFormula`, add `sendValue` to `Mail`, `EndoGuest`, `EndoHost` |
+| `packages/daemon/src/mail.js`             | Implement `sendValue`, update `makeStampedMessage` and `deliver` for value type, update message hub directory                |
+| `packages/daemon/src/host.js`             | Expose `sendValue` on host exo                                                                                               |
+| `packages/daemon/src/guest.js`            | Expose `sendValue` on guest exo, delegate to mailbox                                                                         |
+| `packages/daemon/src/interfaces.js`       | Add `sendValue` guard to Guest and Host interfaces                                                                           |
+| `packages/daemon/src/help-text.js`        | Add help text for `sendValue`                                                                                                |
+| `packages/daemon/src/daemon.js`           | Update `makeMessageHub` to expose `VALUE` edge for value messages                                                            |
+| `packages/cli/src/endo.js`                | Add `send-value` command definition                                                                                          |
+| `packages/cli/src/commands/send-value.js` | New — CLI command implementation                                                                                             |
+| `packages/cli/src/commands/inbox.js`      | Add value message display formatting                                                                                         |
+| `packages/daemon/test/endo.test.js`       | Add value message integration tests                                                                                          |
+| `packages/chat/inbox-component.js`        | Render value messages with preview and adopt                                                                                 |
+| `packages/chat/command-registry.js`       | Register `/send-value` command                                                                                               |
+| `packages/chat/command-executor.js`       | Execute send-value via `E(host).sendValue()`                                                                                 |
 
 ## Related Designs
 

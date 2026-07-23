@@ -22,7 +22,10 @@ logic stays uniform across engines.
 import { makeHostSpawner } from '@endo/host-spawner';
 
 const spawn = makeHostSpawner({ searchPath: '/usr/bin:/bin', defaultEnv: {} });
-const proc = await spawn(['echo', 'hello'], { cwd: '/tmp', env: { CI: 'true' } });
+const proc = await spawn(['echo', 'hello'], {
+  cwd: '/tmp',
+  env: { CI: 'true' },
+});
 ```
 
 `@endo/genie` re-exports `makeHostSpawner` from here (its `src/tools/spawner.js`

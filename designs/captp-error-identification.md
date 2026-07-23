@@ -1,11 +1,11 @@
 # CapTP Error Identification
 
-| | |
-|---|---|
-| **Created** | 2026-07-02 |
-| **Updated** | 2026-07-02 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Draft — design only, no implementation |
+|             |                                        |
+| ----------- | -------------------------------------- |
+| **Created** | 2026-07-02                             |
+| **Updated** | 2026-07-02                             |
+| **Author**  | Kris Kowal (prompted)                  |
+| **Status**  | Draft — design only, no implementation |
 
 ## What is the Problem Being Solved?
 
@@ -24,7 +24,7 @@ preserves the same functionality but improves OCapN and CapTP so that error
 not yet satisfy. The shipped mechanism embeds the sender's `errorId` **as a data
 field inside the pass-style error record on the wire**, and reflects it onto the
 decoded error's `.name` (`Remote${name}(${errorId})`). That places the identifier
-*on the error object* — exactly what the invariants below forbid.
+_on the error object_ — exactly what the invariants below forbid.
 
 This design specifies how each invariant is met and names the OCapN- and
 CapTP-level changes required. It is a **design-phase deliverable**; the build is
@@ -57,10 +57,10 @@ a separate PR.
 
 ```js
 // encodeErrorCommon
-const errorId = encodeRecur(nextErrorId());      // `error:${marshalName}#N`
+const errorId = encodeRecur(nextErrorId()); // `error:${marshalName}#N`
 annotateError(err, X`Sent as ${errorId}`);
-marshalSaveError(err, errorId);                  // out-of-body hook
-return harden({ errorId, message, name });       // <-- id ON the wire record
+marshalSaveError(err, errorId); // out-of-body hook
+return harden({ errorId, message, name }); // <-- id ON the wire record
 ```
 
 Decode path names the reconstructed error `Remote${name}(${errorId})` and passes
@@ -74,8 +74,8 @@ Two properties of the current mechanism conflict with the invariants:
 
 - The identifier travels **inside** the error record (`{ errorId, message, name }`)
   and is reflected onto `.name` — violating invariant 3.
-- `nextErrorId()` increments on **every** serialization, so the *same* source
-  error serialized twice gets *two different* ids — violating invariant 5.
+- `nextErrorId()` increments on **every** serialization, so the _same_ source
+  error serialized twice gets _two different_ ids — violating invariant 5.
 
 The sender-namespacing (`error:${marshalName}#N`) and the authoritative
 worker-id stamping are already correct and are preserved.
@@ -99,7 +99,7 @@ same shape to error identifiers.
 - The identifier remains **in-band** in the OCapN sense: it rides the same CapTP
   frame as the message that carries the error, not a separate out-of-band push.
   (This retires #58's dependence on a separate `reportTrace` round-trip for the
-  *identifier*; see "Relationship to the aggregator" below.)
+  _identifier_; see "Relationship to the aggregator" below.)
 
 This satisfies **invariant 1**: in-band on the wire, namespace dictated by the
 sender. The receiver treats the identifier as opaque and meaningful only relative
@@ -108,8 +108,8 @@ to the sending peer.
 **OCapN/CapTP change:** a new per-message `errorIds` field (parallel to `slots`)
 in the OCapN message framing, and the CapTP marshal glue that populates and
 consumes it. This is a wire-format addition to be specified in OCapN. Per
-kriskowal's review of #595 — *"we do not yet have existing deployments of any
-consequence"* — backward compatibility with pre-change peers is **not** a
+kriskowal's review of #595 — _"we do not yet have existing deployments of any
+consequence"_ — backward compatibility with pre-change peers is **not** a
 constraint on this change: the wire format may change outright rather than being
 gated behind capability negotiation for old peers. (Version negotiation may still
 be added later as OCapN matures, but it is not a requirement of this change, and
@@ -120,13 +120,13 @@ its absence is not a blocker.)
 The sending marshal assigns identifiers from its own namespace. To make re-sends
 stable, the send side keeps a **WeakMap `sourceError → assignedId`**: the first
 serialization of a given error object allocates a fresh id from the sender's
-monotone sequence; subsequent serializations of the *same* object reuse it.
+monotone sequence; subsequent serializations of the _same_ object reuse it.
 
-Per kriskowal's review of #595 — *"it will be good for OCapN and CapTP to own the
-numbering"* — the id is drawn from an **OCapN-defined per-session sender
+Per kriskowal's review of #595 — _"it will be good for OCapN and CapTP to own the
+numbering"_ — the id is drawn from an **OCapN-defined per-session sender
 sequence** owned by OCapN/CapTP, **not** an ad-hoc `marshalName`-scoped marshal
-counter. This does not weaken invariant 1: the namespace is still *dictated by the
-sender* — OCapN defines the *scheme* and owns the sequence, while the sender
+counter. This does not weaken invariant 1: the namespace is still _dictated by the
+sender_ — OCapN defines the _scheme_ and owns the sequence, while the sender
 remains the party that allocates the next id from it. Making OCapN own the
 numbering keeps the id space uniform across marshal instances and gives the
 pairwise scoping a single authoritative definition rather than a per-marshal
@@ -140,8 +140,8 @@ sender id:
 ```js
 const a = await bob.echo(theError);
 const b = await bob.echo(theError);
-assert(a !== b && !Object.is(a, b));                 // distinct identities
-assert(identifyError(a) === identifyError(b));       // same sender id
+assert(a !== b && !Object.is(a, b)); // distinct identities
+assert(identifyError(a) === identifyError(b)); // same sender id
 ```
 
 This is **invariant 5**, and it drops out of the design rather than being
@@ -167,13 +167,17 @@ data property holds an application value, sends it, and asserts:
 
 ```js
 const err = harden(makeError('boom'));
-err.errorId = 'app-chosen-value';                    // unrelated application data
+err.errorId = 'app-chosen-value'; // unrelated application data
 const received = await peer.roundTrip(err);
 // The CapTP identifier is a different, sender-assigned value:
 assert(identifyError(received) !== 'app-chosen-value');
 // and it is NOT reachable as a property of the error object at all:
-assert(received.errorId === undefined || received.errorId === 'app-chosen-value');
-assert(!('errorId' in received) || received.errorId !== identifyError(received));
+assert(
+  received.errorId === undefined || received.errorId === 'app-chosen-value',
+);
+assert(
+  !('errorId' in received) || received.errorId !== identifyError(received),
+);
 ```
 
 The essential proof obligation: `identifyError(received)` (from the side table)
@@ -188,7 +192,7 @@ closely-held server object obtains identifiers through a **closely-held method**
 on a facet it was explicitly granted — e.g. a per-session diagnostics facet:
 
 ```js
-E(diagnostics).identifyError(err) // -> senderId | undefined
+E(diagnostics).identifyError(err); // -> senderId | undefined
 ```
 
 `identifyError` reads the receive-side WeakMap. It returns `undefined` for any
@@ -198,7 +202,7 @@ direct peer's namespace?". Confined guests do not receive this facet by default;
 it is granted like any other capability.
 
 This replaces #58's more list-shaped `traces.lookup(errorId)` surface with an
-ocap-clean `identifyError(err)`: you must already hold the error object *and* the
+ocap-clean `identifyError(err)`: you must already hold the error object _and_ the
 diagnostics facet to identify.
 
 Per kriskowal's review of #595, the new `identifyError` diagnostics facet and the
@@ -241,12 +245,12 @@ formula identifier, worker-assigned error identifier)**:
 - The **worker-assigned error identifier** is now the in-band, sender-scoped id
   from the worker↔daemon session (the worker is the sender; the daemon is its
   direct pairwise peer, so the id is meaningful to the daemon). This is precisely
-  the pairwise-invariance of invariant 6: it works *because* worker↔daemon is a
+  the pairwise-invariance of invariant 6: it works _because_ worker↔daemon is a
   single hop.
 
 The composite key `(workerFormulaId, senderErrorId)` is well-formed because the
 daemon disambiguates same-numbered ids across different workers by the formula
-id. The daemon-side side table maps *its own* CLI-facing pairwise id (a fresh
+id. The daemon-side side table maps _its own_ CLI-facing pairwise id (a fresh
 daemon-scoped id assigned when the daemon re-serializes to the CLI) to the
 `(workerFormulaId, workerErrorId)` pair internally. The CLI thus identifies via
 the daemon↔CLI pairwise id and never sees the worker's namespace directly — the
@@ -259,15 +263,15 @@ side channel.
 
 ## An alternative to `unredacted-stack.js` — moved to its own design
 
-Per kriskowal's review of #595 — *"Let's post a separate design for this
-improvement and hand that to @erights for review."* — the alternative to the
+Per kriskowal's review of #595 — _"Let's post a separate design for this
+improvement and hand that to @erights for review."_ — the alternative to the
 `packages/daemon/src/unredacted-stack.js` SES-internal tap is now its own design:
 [`unredacted-stack-sanctioned-ses-api.md`](./unredacted-stack-sanctioned-ses-api.md).
 It is split out because that fix depends on an upstream `ses` API decision that is
-@erights' to steer, on a review track independent of error *identification*. The
+@erights' to steer, on a review track independent of error _identification_. The
 two are independent changes to the same `@endo/daemon` error-diagnostics
 subsystem: identification (the side-channel id) does not depend on how unredacted
-diagnostics are *rendered*, and vice versa.
+diagnostics are _rendered_, and vice versa.
 
 ## Testing plan (proof obligations)
 
@@ -278,7 +282,7 @@ The build must prove, with tests:
 - **Inv. 2:** the aggregator keys by `(workerFormulaId, workerErrorId)`; two
   workers emitting the same-numbered id do not collide.
 - **Inv. 3:** an error carrying its own `errorId` data property arrives with the
-  transport identifier *different from and unrelated to* that property, and the
+  transport identifier _different from and unrelated to_ that property, and the
   transport id is reachable only via the side table (the independence test
   above). Also: the wire encoding of an error contains no `errorId` field
   (assert on the serialized body) and the decoded error's `.name` does not embed
@@ -311,8 +315,8 @@ Called out in the same review, to be carried by the **build** PR, not here:
    it is not a prerequisite of this change.)
 2. **Namespace form — RESOLVED (kriskowal, #595).** OCapN and CapTP own the
    numbering: the sender namespace is an OCapN-defined per-session sender sequence,
-   not a `marshalName`-scoped marshal counter. (See *Sender-scoped, stable
-   identifiers* above.)
+   not a `marshalName`-scoped marshal counter. (See _Sender-scoped, stable
+   identifiers_ above.)
 3. **SES API shape — MOVED (kriskowal, #595).** The sanctioned unredacted-diagnostic
    SES export, and the whole `unredacted-stack.js` alternative, are now a separate
    design handed to @erights:
@@ -321,6 +325,6 @@ Called out in the same review, to be carried by the **build** PR, not here:
 4. **Facet placement — RESOLVED (kriskowal, #595).** The `identifyError` facet and
    the existing host `traces` facet are related; **consolidation is at the
    builder's discretion** (fold into `traces`, or mint a distinct diagnostics
-   facet). See *`identifyError` is closely held* above. Where exactly the facet is
+   facet). See _`identifyError` is closely held_ above. Where exactly the facet is
    minted (per-session bootstrap vs. explicit grant) follows from that build-time
    choice.

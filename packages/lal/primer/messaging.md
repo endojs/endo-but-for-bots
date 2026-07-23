@@ -35,7 +35,7 @@ Workflow for processing messages:
      your own pet name for it, but remember the edge name the
      sender used — that is how the sender refers to it in the
      message text (the @name references). Example:
-       `adopt("+3", "counter", "my-counter")`
+     `adopt("+3", "counter", "my-counter")`
      This adopts the value the sender labeled `counter` and
      stores it as `my-counter` in your directory.
    - ALWAYS use `reply(messageNumber, ...)` to respond — this

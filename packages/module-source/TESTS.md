@@ -1,4 +1,3 @@
-
 ## Reference: Test Results
 
 Pairs of module source vs functor source. The output was generated.
@@ -8,59 +7,82 @@ Pairs of module source vs functor source. The output was generated.
 #### Case 1
 
 ```js
- export default bb;
+export default bb;
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   $h͏_imports(new Map([]), []);   const { default: $c͏_default } = { default: bb };$h͏_once.default($c͏_default);
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  $h͏_imports(new Map([]), []);
+  const { default: $c͏_default } = { default: bb };
+  $h͏_once.default($c͏_default);
+};
 ```
 
 #### Case 2
 
 ```js
- export default class { valueOf() { return 45; } }
-
+export default class {
+  valueOf() {
+    return 45;
+  }
+}
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   $h͏_imports(new Map([]), []);   const { default: $c͏_default } = { default: class {valueOf() {return 45;}} };$h͏_once.default($c͏_default);
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  $h͏_imports(new Map([]), []);
+  const { default: $c͏_default } = {
+    default: class {
+      valueOf() {
+        return 45;
+      }
+    },
+  };
+  $h͏_once.default($c͏_default);
+};
 ```
 
 #### Case 3
 
 ```js
- //#! /usr/bin/env node
-export default 123
+//#! /usr/bin/env node
+export default 123;
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   $h͏_imports(new Map([]), []);   //#! /usr/bin/env node
-const { default: $c͏_default } = { default: 123 };$h͏_once.default($c͏_default);
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  $h͏_imports(new Map([]), []); //#! /usr/bin/env node
+  const { default: $c͏_default } = { default: 123 };
+  $h͏_once.default($c͏_default);
+};
 ```
 
 #### Case 4
 
 ```js
- export default arguments;
+export default arguments;
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   $h͏_imports(new Map([]), []);   const { default: $c͏_default } = { default: arguments };$h͏_once.default($c͏_default);
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  $h͏_imports(new Map([]), []);
+  const { default: $c͏_default } = { default: arguments };
+  $h͏_once.default($c͏_default);
+};
 ```
 
 #### Case 5
 
 ```js
- export default this;
+export default this;
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   $h͏_imports(new Map([]), []);   const { default: $c͏_default } = { default: this };$h͏_once.default($c͏_default);
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  $h͏_imports(new Map([]), []);
+  const { default: $c͏_default } = { default: this };
+  $h͏_once.default($c͏_default);
+};
 ```
 
 ### test-export-name.js
@@ -68,176 +90,260 @@ const { default: $c͏_default } = { default: 123 };$h͏_once.default($c͏_defaul
 #### Case 1
 
 ```js
- export let abc = 123;
+export let abc = 123;
 export let def = 456;
 export let def2 = def;
-def ++;
+def++;
 export const ghi = 789;
-
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   $h͏_imports(new Map([]), []);   let abc = 123;$h͏_once.abc(abc);
-let $c͏_def = 456;$h͏_live.def($c͏_def);
-let def2 = def;$h͏_once.def2(def2);
-def++;
-const ghi = 789;$h͏_once.ghi(ghi);
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  $h͏_imports(new Map([]), []);
+  let abc = 123;
+  $h͏_once.abc(abc);
+  let $c͏_def = 456;
+  $h͏_live.def($c͏_def);
+  let def2 = def;
+  $h͏_once.def2(def2);
+  def++;
+  const ghi = 789;
+  $h͏_once.ghi(ghi);
+};
 ```
 
 #### Case 2
 
 ```js
- export const abc = 123;
-export const { def, nest: [, ghi, ...nestrest], ...rest } = { def: 456, nest: [ 'skip', 789, 'a', 'b' ], other: 999, and: 998 };
-
+export const abc = 123;
+export const {
+  def,
+  nest: [, ghi, ...nestrest],
+  ...rest
+} = { def: 456, nest: ['skip', 789, 'a', 'b'], other: 999, and: 998 };
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   $h͏_imports(new Map([]), []);   const abc = 123;$h͏_once.abc(abc);
-const { def, nest: [, ghi, ...nestrest], ...rest } = { def: 456, nest: ['skip', 789, 'a', 'b'], other: 999, and: 998 };$h͏_once.def(def);$h͏_once.ghi(ghi);$h͏_once.nestrest(nestrest);$h͏_once.rest(rest);
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  $h͏_imports(new Map([]), []);
+  const abc = 123;
+  $h͏_once.abc(abc);
+  const {
+    def,
+    nest: [, ghi, ...nestrest],
+    ...rest
+  } = { def: 456, nest: ['skip', 789, 'a', 'b'], other: 999, and: 998 };
+  $h͏_once.def(def);
+  $h͏_once.ghi(ghi);
+  $h͏_once.nestrest(nestrest);
+  $h͏_once.rest(rest);
+};
 ```
 
 #### Case 3
-```js
- const abc2 = abc;
-export const abc = 123;
 
+```js
+const abc2 = abc;
+export const abc = 123;
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   $h͏_imports(new Map([]), []);   const abc2 = abc;
-const abc = 123;$h͏_once.abc(abc);
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  $h͏_imports(new Map([]), []);
+  const abc2 = abc;
+  const abc = 123;
+  $h͏_once.abc(abc);
+};
 ```
 
 #### Case 4
-```js
- const abc2 = abc;
-export let abc = 123;
 
+```js
+const abc2 = abc;
+export let abc = 123;
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   $h͏_imports(new Map([]), []);   const abc2 = abc;
-let abc = 123;$h͏_once.abc(abc);
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  $h͏_imports(new Map([]), []);
+  const abc2 = abc;
+  let abc = 123;
+  $h͏_once.abc(abc);
+};
 ```
 
 #### Case 5
+
 ```js
- export const abc2 = abc;
+export const abc2 = abc;
 export var abc = 123;
 export const abc3 = abc;
-
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   $h͏_imports(new Map([]), []);$h͏_live.abc();   const abc2 = abc;$h͏_once.abc2(abc2);
-var $c͏_abc = 123;abc = $c͏_abc;
-const abc3 = abc;$h͏_once.abc3(abc3);
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  $h͏_imports(new Map([]), []);
+  $h͏_live.abc();
+  const abc2 = abc;
+  $h͏_once.abc2(abc2);
+  var $c͏_abc = 123;
+  abc = $c͏_abc;
+  const abc3 = abc;
+  $h͏_once.abc3(abc3);
+};
 ```
 
 #### Case 6
+
 ```js
- export const fn2 = fn;
+export const fn2 = fn;
 export function fn() {
   return 'foo';
 }
 export const fn3 = fn;
-
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   $h͏_imports(new Map([]), []);Object.defineProperty($c͏_fn, 'name', {value: "fn"});$h͏_live.fn($c͏_fn);   const fn2 = fn;$h͏_once.fn2(fn2);
-function $c͏_fn() {
-  return 'foo';
-}
-const fn3 = fn;$h͏_once.fn3(fn3);
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  $h͏_imports(new Map([]), []);
+  Object.defineProperty($c͏_fn, 'name', { value: 'fn' });
+  $h͏_live.fn($c͏_fn);
+  const fn2 = fn;
+  $h͏_once.fn2(fn2);
+  function $c͏_fn() {
+    return 'foo';
+  }
+  const fn3 = fn;
+  $h͏_once.fn3(fn3);
+};
 ```
 
 #### Case 7
-```js
- export let count = 0;
-export class C {} if (C) { count += 1; }
 
+```js
+export let count = 0;
+export class C {}
+if (C) {
+  count += 1;
+}
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   $h͏_imports(new Map([]), []);   let $c͏_count = 0;$h͏_live.count($c͏_count);{
-  class C {}$h͏_live.C(C);}if (C) {count += 1;}
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  $h͏_imports(new Map([]), []);
+  let $c͏_count = 0;
+  $h͏_live.count($c͏_count);
+  {
+    class C {}
+    $h͏_live.C(C);
+  }
+  if (C) {
+    count += 1;
+  }
+};
 ```
 
 #### Case 8
-```js
- export default class C {}
 
+```js
+export default class C {}
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   $h͏_imports(new Map([]), []);   const { default: $c͏_default } = { default: class C {} };$h͏_once.default($c͏_default);
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  $h͏_imports(new Map([]), []);
+  const { default: $c͏_default } = { default: class C {} };
+  $h͏_once.default($c͏_default);
+};
 ```
 
 #### Case 9
-```js
- export default class {}
 
+```js
+export default class {}
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   $h͏_imports(new Map([]), []);   const { default: $c͏_default } = { default: class {} };$h͏_once.default($c͏_default);
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  $h͏_imports(new Map([]), []);
+  const { default: $c͏_default } = { default: class {} };
+  $h͏_once.default($c͏_default);
+};
 ```
 
 #### Case 10
-```js
- export default (class {});
 
+```js
+export default (class {});
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   $h͏_imports(new Map([]), []);   const { default: $c͏_default } = { default: class {} };$h͏_once.default($c͏_default);
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  $h͏_imports(new Map([]), []);
+  const { default: $c͏_default } = { default: class {} };
+  $h͏_once.default($c͏_default);
+};
 ```
 
 #### Case 11
-```js
- F(123);
-export function F(arg) { return arg; }
 
+```js
+F(123);
+export function F(arg) {
+  return arg;
+}
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   $h͏_imports(new Map([]), []);Object.defineProperty($c͏_F, 'name', {value: "F"});$h͏_live.F($c͏_F);   F(123);
-function $c͏_F(arg) {return arg;}
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  $h͏_imports(new Map([]), []);
+  Object.defineProperty($c͏_F, 'name', { value: 'F' });
+  $h͏_live.F($c͏_F);
+  F(123);
+  function $c͏_F(arg) {
+    return arg;
+  }
+};
 ```
 
 #### Case 12
-```js
- export default async function F(arg) { return arg; }
 
+```js
+export default async function F(arg) {
+  return arg;
+}
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   $h͏_imports(new Map([]), []);   const { default: $c͏_default } = { default: async function F(arg) {return arg;} };$h͏_once.default($c͏_default);
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  $h͏_imports(new Map([]), []);
+  const { default: $c͏_default } = {
+    default: async function F(arg) {
+      return arg;
+    },
+  };
+  $h͏_once.default($c͏_default);
+};
 ```
 
 #### Case 13
-```js
- export default async function(arg) { return arg; };
 
+```js
+export default async function (arg) {
+  return arg;
+}
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   $h͏_imports(new Map([]), []);   const { default: $c͏_default } = { default: async function (arg) {return arg;} };$h͏_once.default($c͏_default);;
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  $h͏_imports(new Map([]), []);
+  const { default: $c͏_default } = {
+    default: async function (arg) {
+      return arg;
+    },
+  };
+  $h͏_once.default($c͏_default);
+};
 ```
 
 ### test-import.js
@@ -245,55 +351,91 @@ function $c͏_F(arg) {return arg;}
 #### Case 1
 
 ```js
- import * as ns from 'module';
+import * as ns from 'module';
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   let ns;$h͏_imports(new Map([["module", new Map([["*", [$h͏_a => (ns = $h͏_a)]]])]]), []);   
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  let ns;
+  $h͏_imports(
+    new Map([['module', new Map([['*', [$h͏_a => (ns = $h͏_a)]]])]]),
+    [],
+  );
+};
 ```
 
 #### Case 2
 
 ```js
- import { foo, bar } from 'module';
+import { foo, bar } from 'module';
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   let foo,bar;$h͏_imports(new Map([["module", new Map([["foo", [$h͏_a => (foo = $h͏_a)]],["bar", [$h͏_a => (bar = $h͏_a)]]])]]), []);   
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  let foo, bar;
+  $h͏_imports(
+    new Map([
+      [
+        'module',
+        new Map([
+          ['foo', [$h͏_a => (foo = $h͏_a)]],
+          ['bar', [$h͏_a => (bar = $h͏_a)]],
+        ]),
+      ],
+    ]),
+    [],
+  );
+};
 ```
+
 #### Case 3
 
 ```js
- import myName from 'module';
+import myName from 'module';
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   let myName;$h͏_imports(new Map([["module", new Map([["default", [$h͏_a => (myName = $h͏_a)]]])]]), []);   
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  let myName;
+  $h͏_imports(
+    new Map([['module', new Map([['default', [$h͏_a => (myName = $h͏_a)]]])]]),
+    [],
+  );
+};
 ```
 
 #### Case 4
 
 ```js
- import myName, { otherName as other } from 'module';
-
+import myName, { otherName as other } from 'module';
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   let myName,other;$h͏_imports(new Map([["module", new Map([["default", [$h͏_a => (myName = $h͏_a)]],["otherName", [$h͏_a => (other = $h͏_a)]]])]]), []);   
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  let myName, other;
+  $h͏_imports(
+    new Map([
+      [
+        'module',
+        new Map([
+          ['default', [$h͏_a => (myName = $h͏_a)]],
+          ['otherName', [$h͏_a => (other = $h͏_a)]],
+        ]),
+      ],
+    ]),
+    [],
+  );
+};
 ```
 
 #### Case 5
 
 ```js
- import 'module';
-
+import 'module';
 ```
 
 ```js
- (({   imports: $h͏_imports,   liveVar: $h͏_live,   onceVar: $h͏_once,  }) => {   $h͏_imports(new Map([["module", new Map([])]]), []);   
-})
+({ imports: $h͏_imports, liveVar: $h͏_live, onceVar: $h͏_once }) => {
+  $h͏_imports(new Map([['module', new Map([])]]), []);
+};
 ```

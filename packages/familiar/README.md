@@ -15,6 +15,7 @@ yarn dev
 ### Electron Install Problems
 
 If you get:
+
 ```
 /home/user/endo/node_modules/electron/index.js:17
     throw new Error('Electron failed to install correctly, please delete node_modules/electron and try installing again');
@@ -29,6 +30,7 @@ yarn allow-scripts run
 ### Unix Socket Leftovers
 
 If you ungloriously stop the electron app, say with `SIGINT`, you may see this at next start:
+
 ```
 [🐈‍⬛ Familiar] Starting...
 [🐈‍⬛ Familiar] Dev mode: true

@@ -1,11 +1,11 @@
 # Endo App Sharing and Cloning
 
-| | |
-|---|---|
-| **Created** | 2026-06-01 |
-| **Updated** | 2026-06-01 |
-| **Author** | Aaron (prompted) |
-| **Status** | Proposed |
+|             |                  |
+| ----------- | ---------------- |
+| **Created** | 2026-06-01       |
+| **Updated** | 2026-06-01       |
+| **Author**  | Aaron (prompted) |
+| **Status**  | Proposed         |
 
 ## What is the Problem Being Solved?
 
@@ -25,13 +25,13 @@ supports:
   program exports `make(powers, context, { env }) => exo`. That `exo` is the
   running app.
 
-What is missing is everything around *transfer*:
+What is missing is everything around _transfer_:
 
 1. **An app handle worth sharing.** A single named thing that bundles
    `{ source tree, exec/run config, optional UI manifest }`, rather than the
    user wiring `node-fs-module` → `tree-view-module` → `make-from-tree` by hand
    each time.
-2. **Share as remote reference.** Hand a peer a capability to the *running*
+2. **Share as remote reference.** Hand a peer a capability to the _running_
    exo (or to the app handle) so they invoke it on the author's machine.
 3. **Clone for independence.** When marked cloneable, materialise the source
    tree on the recipient's daemon as local `readable-tree` / `readable-blob`
@@ -40,14 +40,14 @@ What is missing is everything around *transfer*:
 
 ## Background: what already exists
 
-| Capability | Location | Status |
-|---|---|---|
-| `@endo/endo-fs` `Filesystem` caps (in-memory, node-fs, from-mount; `FsBackend` seam) | `packages/endo-fs`, [`endo-fs-backend-seam`](endo-fs-backend-seam.md) | Complete |
-| `tree-view-module.js` adapting endo-fs → `make-from-tree` | `packages/endo-fs-exec/src/tree-view-module.js` | Complete |
-| `make-from-tree` formula running a compartment-mapped program | `packages/daemon/src/daemon.js` (`makeFromTree`) | Complete |
-| `readable-tree` / `readable-blob` formulas (transitively read-only, content-addressed) | `packages/daemon/src/daemon.js` | Complete |
-| `endo checkin` / `endo checkout` (tree ⇄ filesystem, zip via `-z`) | `packages/cli/src/commands/`, [`daemon-checkin-checkout`](daemon-checkin-checkout.md) | Complete |
-| In-memory zip-as-tree (`@endo/exo-zip`) | [`exo-zip-package`](exo-zip-package.md) | Proposed |
+| Capability                                                                             | Location                                                                              | Status   |
+| -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | -------- |
+| `@endo/endo-fs` `Filesystem` caps (in-memory, node-fs, from-mount; `FsBackend` seam)   | `packages/endo-fs`, [`endo-fs-backend-seam`](endo-fs-backend-seam.md)                 | Complete |
+| `tree-view-module.js` adapting endo-fs → `make-from-tree`                              | `packages/endo-fs-exec/src/tree-view-module.js`                                       | Complete |
+| `make-from-tree` formula running a compartment-mapped program                          | `packages/daemon/src/daemon.js` (`makeFromTree`)                                      | Complete |
+| `readable-tree` / `readable-blob` formulas (transitively read-only, content-addressed) | `packages/daemon/src/daemon.js`                                                       | Complete |
+| `endo checkin` / `endo checkout` (tree ⇄ filesystem, zip via `-z`)                     | `packages/cli/src/commands/`, [`daemon-checkin-checkout`](daemon-checkin-checkout.md) | Complete |
+| In-memory zip-as-tree (`@endo/exo-zip`)                                                | [`exo-zip-package`](exo-zip-package.md)                                               | Proposed |
 
 So reading a tree, running it, and serialising it to/from disk and zip all
 exist. What does not exist is a **cross-daemon** "pull this remote tree into my
@@ -89,19 +89,19 @@ Available only when `cloneable` is true. The recipient performs a **clone**:
    recipient a single reader.
 2. The recipient drains that one stream into a **fresh durable filesystem**
    under its own control (the durable backing is pluggable — see below).
-3. Re-run `make-from-tree` against the *local* copy under the recipient's own
+3. Re-run `make-from-tree` against the _local_ copy under the recipient's own
    `run` powers, producing an independent instance.
 
 A new CLI verb (working name `endo clone <remote-app> --name <local-name>`)
 and a Chat "Make my own copy" action drive mode B. The cloned app's powers are
 the recipient's to grant — the clone does not inherit the author's
-capabilities, only the author's *code*.
+capabilities, only the author's _code_.
 
 ### Streaming clone: one tree-stream, not a pipelined walk
 
 The clone transport is a **single `@endo/exo-stream` stream** whose items are
 tree entries (path + node kind + file content), emitted depth-first by the
-producer and consumed in order by the recipient. This is deliberately *not* a
+producer and consumed in order by the recipient. This is deliberately _not_ a
 client-driven pipelined walk (`lookup`/`snapshot`/`fetch` per node):
 
 - **One round-trip class, not one-per-file.** The recipient opens the stream
@@ -130,7 +130,7 @@ durability, and the runnable backing.
 ### Durable filesystem on the receiving side (pluggable backing)
 
 The recipient needs the clone to **persist and reincarnate across daemon
-restart**, and we may *not* want to spray loose files onto the host disk. The
+restart**, and we may _not_ want to spray loose files onto the host disk. The
 `@endo/endo-fs` `FsBackend` seam (`backend-types.js` + `wrap-backend.js`) is
 built exactly for this: `wrapBackend(backend)` synthesises the full
 `Filesystem` exo surface over a minimal path-keyed backend, so a new backing
@@ -162,15 +162,15 @@ not implied by sharing.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| [endo-fs-backend-seam](endo-fs-backend-seam.md) | The `FsBackend` seam (`wrapBackend`) that makes a zip-backed (or CAS-backed) durable receiver ~100 lines. **Load-bearing for the receiving side.** |
-| [exo-zip-package](exo-zip-package.md) | Projects the received/durable zip back as a runnable `ReadableTree`; in-flight as exo-zip / exo-unzip ([PR #160](https://github.com/endojs/endo-but-for-bots/pull/160)). |
-| [daemon-checkin-checkout](daemon-checkin-checkout.md) | The local serialisation primitive the cross-daemon clone generalises (CAS-backed receiver option). |
-| [ocapn-noise-network](ocapn-noise-network.md) | The secure transport we trust for clone integrity and peer authenticity in lieu of per-blob hashing. |
-| [familiar-app-ui-hosting](familiar-app-ui-hosting.md) | Hosts the app's `ui` manifest as partially-sandboxed UI. |
-| [daemon-weblet-application](daemon-weblet-application.md) | Prior art for "readable tree + powers → served application". |
-| [app-sharing-milestone](app-sharing-milestone.md) | Parent milestone; this is the "make & share runnable apps" pillar. |
+| Design                                                    | Relationship                                                                                                                                                             |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [endo-fs-backend-seam](endo-fs-backend-seam.md)           | The `FsBackend` seam (`wrapBackend`) that makes a zip-backed (or CAS-backed) durable receiver ~100 lines. **Load-bearing for the receiving side.**                       |
+| [exo-zip-package](exo-zip-package.md)                     | Projects the received/durable zip back as a runnable `ReadableTree`; in-flight as exo-zip / exo-unzip ([PR #160](https://github.com/endojs/endo-but-for-bots/pull/160)). |
+| [daemon-checkin-checkout](daemon-checkin-checkout.md)     | The local serialisation primitive the cross-daemon clone generalises (CAS-backed receiver option).                                                                       |
+| [ocapn-noise-network](ocapn-noise-network.md)             | The secure transport we trust for clone integrity and peer authenticity in lieu of per-blob hashing.                                                                     |
+| [familiar-app-ui-hosting](familiar-app-ui-hosting.md)     | Hosts the app's `ui` manifest as partially-sandboxed UI.                                                                                                                 |
+| [daemon-weblet-application](daemon-weblet-application.md) | Prior art for "readable tree + powers → served application".                                                                                                             |
+| [app-sharing-milestone](app-sharing-milestone.md)         | Parent milestone; this is the "make & share runnable apps" pillar.                                                                                                       |
 
 **Related in-flight PRs (reconcile, don't duplicate):** exo-stream
 [#330](https://github.com/endojs/endo-but-for-bots/pull/330) is the streaming
@@ -191,7 +191,7 @@ index lives in [app-sharing-milestone](app-sharing-milestone.md).
    `@endo/endo-fs` (producer serialises the tree to one stream; consumer
    drains it), plus a **zip-backed `FsBackend`** so the recipient gets a
    durable, self-contained archive that reincarnates across restart. `endo
-   clone` verb wires producer → stream → durable backing → `make-from-tree`.
+clone` verb wires producer → stream → durable backing → `make-from-tree`.
 3. **Cloneability policy + UX.** Honour the `cloneable` flag end to end; Chat
    surfaces "Open (remote)" vs "Make my own copy" per the author's policy.
 

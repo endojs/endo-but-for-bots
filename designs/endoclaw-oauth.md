@@ -1,12 +1,12 @@
 # EndoClaw: OAuth / Credential Capability
 
-| | |
-|---|---|
-| **Created** | 2026-03-03 |
-| **Updated** | 2026-03-03 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
-| **Parent** | [endoclaw](endoclaw.md) |
+|             |                         |
+| ----------- | ----------------------- |
+| **Created** | 2026-03-03              |
+| **Updated** | 2026-03-03              |
+| **Author**  | Kris Kowal (prompted)   |
+| **Status**  | Not Started             |
+| **Parent**  | [endoclaw](endoclaw.md) |
 
 ## Summary
 
@@ -30,8 +30,8 @@ interface OAuth {
 interface OAuthControl {
   setScopes(scopes: string[]): void;
   setAllowedPaths(patterns: string[]): void;
-  setReadOnly(flag: boolean): void;  // restricts to GET/HEAD
-  refresh(): Promise<void>;  // force token refresh
+  setReadOnly(flag: boolean): void; // restricts to GET/HEAD
+  refresh(): Promise<void>; // force token refresh
   revoke(): void;
   help(): string;
 }
@@ -69,7 +69,7 @@ type Response = {
 ## Endo Idiom
 
 **The agent never sees the token.** The `OAuth` interface has no method
-that returns the credential. The agent can *use* the service but cannot
+that returns the credential. The agent can _use_ the service but cannot
 extract the token to forward it elsewhere or use it on a different
 endpoint. This is the canonical ocap pattern: authority to use, not
 authority to delegate outside the capability graph.

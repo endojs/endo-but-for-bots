@@ -1,11 +1,11 @@
 # XS Worker Debugger for Endo Rust
 
-| | |
-|---|---|
-| **Created** | 2026-04-14 |
-| **Updated** | 2026-04-15 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-04-14            |
+| **Updated** | 2026-04-15            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | In Progress           |
 
 ## Motivation
 
@@ -63,39 +63,39 @@ The existing reference implementation is in
 
 ### Commands (client → VM)
 
-| Command | XML | Purpose |
-|---------|-----|---------|
-| go | `<go/>` | Resume execution |
-| step | `<step/>` | Step over |
-| step-inside | `<step-inside/>` | Step into |
-| step-outside | `<step-outside/>` | Step out |
-| abort | `<abort/>` | Terminate |
-| set-breakpoint | `<set-breakpoint path="..." line="..."/>` | Set breakpoint |
-| clear-breakpoint | `<clear-breakpoint path="..." line="..."/>` | Clear breakpoint |
-| clear-all-breakpoints | `<clear-all-breakpoints/>` | Clear all |
-| set-all-breakpoints | `<set-all-breakpoints>...</set-all-breakpoints>` | Bulk set |
-| select | `<select id="..."/>` | Select frame |
-| toggle | `<toggle id="..."/>` | Expand property |
-| start-profiling | `<start-profiling/>` | Begin CPU profile |
-| stop-profiling | `<stop-profiling/>` | End CPU profile |
-| script | `<script path="..." line="..."><![CDATA[...]]><script/>` | Eval script |
+| Command               | XML                                                      | Purpose           |
+| --------------------- | -------------------------------------------------------- | ----------------- |
+| go                    | `<go/>`                                                  | Resume execution  |
+| step                  | `<step/>`                                                | Step over         |
+| step-inside           | `<step-inside/>`                                         | Step into         |
+| step-outside          | `<step-outside/>`                                        | Step out          |
+| abort                 | `<abort/>`                                               | Terminate         |
+| set-breakpoint        | `<set-breakpoint path="..." line="..."/>`                | Set breakpoint    |
+| clear-breakpoint      | `<clear-breakpoint path="..." line="..."/>`              | Clear breakpoint  |
+| clear-all-breakpoints | `<clear-all-breakpoints/>`                               | Clear all         |
+| set-all-breakpoints   | `<set-all-breakpoints>...</set-all-breakpoints>`         | Bulk set          |
+| select                | `<select id="..."/>`                                     | Select frame      |
+| toggle                | `<toggle id="..."/>`                                     | Expand property   |
+| start-profiling       | `<start-profiling/>`                                     | Begin CPU profile |
+| stop-profiling        | `<stop-profiling/>`                                      | End CPU profile   |
+| script                | `<script path="..." line="..."><![CDATA[...]]><script/>` | Eval script       |
 
 ### Responses (VM → client)
 
-| Element | Content |
-|---------|---------|
-| `<login>` | Machine name and tag |
-| `<break>` | Breakpoint hit: path, line, context |
-| `<frames>` | Call stack frames |
-| `<local>` | Local variables with property trees |
-| `<global>` | Global scope |
-| `<log>` | Console output |
-| `<bubble>` | Exception: name, value, path, line |
-| `<eval>` | Script evaluation result |
-| `<breakpoints>` | Current breakpoint set |
-| `<files>` | Loaded source files |
-| `<instruments>` | Metering/memory stats descriptions |
-| `<samples>` | Instrument sample values (CSV) |
+| Element                | Content                              |
+| ---------------------- | ------------------------------------ |
+| `<login>`              | Machine name and tag                 |
+| `<break>`              | Breakpoint hit: path, line, context  |
+| `<frames>`             | Call stack frames                    |
+| `<local>`              | Local variables with property trees  |
+| `<global>`             | Global scope                         |
+| `<log>`                | Console output                       |
+| `<bubble>`             | Exception: name, value, path, line   |
+| `<eval>`               | Script evaluation result             |
+| `<breakpoints>`        | Current breakpoint set               |
+| `<files>`              | Loaded source files                  |
+| `<instruments>`        | Metering/memory stats descriptions   |
+| `<samples>`            | Instrument sample values (CSV)       |
 | `<pr>`, `<ps>`, `<pt>` | Profile records, samples, timestamps |
 
 ### Platform hooks
@@ -162,6 +162,7 @@ worker) parses the XML using a SAX parser, same as
 `xsbug-machine.js`.
 
 **Advantages:**
+
 - Zero changes to xsDebug.c itself.
 - The entire xsbug protocol works unchanged — breakpoints,
   stepping, profiling, variable inspection.
@@ -169,6 +170,7 @@ worker) parses the XML using a SAX parser, same as
 - Small Rust surface area: just pipe bytes.
 
 **Disadvantages:**
+
 - XML parsing needed in the JS debugger client.
 - The protocol is chatty (verbose XML), but debug sessions are
   low-frequency and human-speed.
@@ -180,6 +182,7 @@ Replace the XML protocol with Rust host functions
 `xsDebug.c` internals directly.
 
 **Rejected** because:
+
 - `xsDebug.c` internals are not public API — they parse XML
   commands in `fxDebugCommand` and produce XML responses.
   Bypassing the XML layer would require forking xsDebug.c or
@@ -192,6 +195,7 @@ Replace the XML protocol with Rust host functions
 Fork `xsDebug.c` to emit JSON instead of XML.
 
 **Rejected** because:
+
 - Massive fork divergence from upstream Moddable.
 - Same information content, different syntax — not worth the cost.
 - The XML is simple enough to parse with a streaming SAX parser.
@@ -382,10 +386,10 @@ unsafe extern "C" fn rust_debug_readable(
 Two new envelope verbs carry debug traffic between the daemon
 and workers:
 
-| Verb | Direction | Payload | Nonce |
-|------|-----------|---------|-------|
-| `"debug"` | daemon → worker | Raw xsbug XML bytes (command) | 0 |
-| `"debug"` | worker → daemon | Raw xsbug XML bytes (response) | 0 |
+| Verb      | Direction       | Payload                        | Nonce |
+| --------- | --------------- | ------------------------------ | ----- |
+| `"debug"` | daemon → worker | Raw xsbug XML bytes (command)  | 0     |
+| `"debug"` | worker → daemon | Raw xsbug XML bytes (response) | 0     |
 
 The verb is the same in both directions — handle rewriting
 distinguishes sender.
@@ -475,6 +479,7 @@ packages/daemon/src/debug-session.js
 ```
 
 The session maintains:
+
 - SAX parser state (a minimal XML parser — no need for the
   Saxophone npm dep; a ~100-line state machine suffices for
   xsbug's simple XML subset)
@@ -498,22 +503,22 @@ Each method writes XML to the outbound buffer and returns a
 promise that resolves when the corresponding response arrives:
 
 ```js
-session.go()              // → Promise<void>
-session.step()            // → Promise<BreakInfo>
-session.stepIn()          // → Promise<BreakInfo>
-session.stepOut()         // → Promise<BreakInfo>
-session.setBreakpoint(path, line)    // → Promise<void>
-session.clearBreakpoint(path, line)  // → Promise<void>
-session.clearAllBreakpoints()        // → Promise<void>
-session.getFrames()       // → Promise<Frame[]>
-session.getLocals()       // → Promise<Property[]>
-session.getGlobals()      // → Promise<Property[]>
-session.selectFrame(id)   // → Promise<LocalInfo>
-session.toggleProperty(id) // → Promise<Property[]>
-session.evaluate(source)  // → Promise<string>
-session.startProfiling()  // → Promise<void>
-session.stopProfiling()   // → Promise<Profile>
-session.abort()           // → Promise<void>
+session.go(); // → Promise<void>
+session.step(); // → Promise<BreakInfo>
+session.stepIn(); // → Promise<BreakInfo>
+session.stepOut(); // → Promise<BreakInfo>
+session.setBreakpoint(path, line); // → Promise<void>
+session.clearBreakpoint(path, line); // → Promise<void>
+session.clearAllBreakpoints(); // → Promise<void>
+session.getFrames(); // → Promise<Frame[]>
+session.getLocals(); // → Promise<Property[]>
+session.getGlobals(); // → Promise<Property[]>
+session.selectFrame(id); // → Promise<LocalInfo>
+session.toggleProperty(id); // → Promise<Property[]>
+session.evaluate(source); // → Promise<string>
+session.startProfiling(); // → Promise<void>
+session.stopProfiling(); // → Promise<Profile>
+session.abort(); // → Promise<void>
 ```
 
 ### Layer 4: Debugger exo — CapTP capability
@@ -587,6 +592,7 @@ other capability:
 #### Web debugger panel
 
 A weblet-based debug UI renders:
+
 - Source code with breakpoint gutters
 - Call stack (frames)
 - Variables (locals/globals with expandable property trees)
@@ -645,12 +651,12 @@ await E(debugRef).go();
 
 ### New verb: `debug`
 
-| Field | Value |
-|-------|-------|
-| handle | Worker handle (supervisor-rewritten) |
-| verb | `"debug"` |
-| payload | Raw xsbug XML bytes |
-| nonce | 0 |
+| Field   | Value                                |
+| ------- | ------------------------------------ |
+| handle  | Worker handle (supervisor-rewritten) |
+| verb    | `"debug"`                            |
+| payload | Raw xsbug XML bytes                  |
+| nonce   | 0                                    |
 
 Same routing as `"deliver"` — the supervisor passes it through
 with handle rewriting.
@@ -659,12 +665,12 @@ with handle rewriting.
 
 Activates dormant debug hooks on a running worker:
 
-| Field | Value |
-|-------|-------|
-| handle | Worker handle |
-| verb | `"debug-attach"` |
+| Field   | Value                   |
+| ------- | ----------------------- |
+| handle  | Worker handle           |
+| verb    | `"debug-attach"`        |
 | payload | Empty (or CBOR options) |
-| nonce | request nonce |
+| nonce   | request nonce           |
 
 The Rust supervisor calls `debug_enable()` for the worker
 thread, then responds with a `"debug-attached"` envelope.
@@ -675,12 +681,12 @@ verb exchange.
 
 Deactivates debug hooks and returns the worker to dormant state:
 
-| Field | Value |
-|-------|-------|
-| handle | Worker handle |
-| verb | `"debug-detach"` |
-| payload | Empty |
-| nonce | request nonce |
+| Field   | Value            |
+| ------- | ---------------- |
+| handle  | Worker handle    |
+| verb    | `"debug-detach"` |
+| payload | Empty            |
+| nonce   | request nonce    |
 
 Response: `"debug-detached"`.
 
@@ -707,40 +713,40 @@ flushes the outbound debug buffer.
 
 ### New files
 
-| File | Purpose |
-|------|---------|
-| `rust/endo/xsnap/src/powers/debug.rs` | Debug I/O buffers, C callbacks, host functions |
-| `rust/endo/xsnap/src/cesu8.rs` | CESU-8 ↔ UTF-8 codec for XS string round-tripping |
-| `rust/endo/xsnap/src/debug_protocol_tests.rs` | 11 Rust-level debug protocol integration tests |
-| `packages/daemon/src/debug-session.js` | xsbug XML SAX parser and structured API |
-| `packages/daemon/src/debugger.js` | Debugger exo (CapTP-remotable debug controller) |
-| `packages/daemon/test/debugger-captp.test.js` | 16 CapTP debugger integration tests |
-| `packages/chat/debugger-panel.js` | Chat debugger panel UI component |
+| File                                          | Purpose                                           |
+| --------------------------------------------- | ------------------------------------------------- |
+| `rust/endo/xsnap/src/powers/debug.rs`         | Debug I/O buffers, C callbacks, host functions    |
+| `rust/endo/xsnap/src/cesu8.rs`                | CESU-8 ↔ UTF-8 codec for XS string round-tripping |
+| `rust/endo/xsnap/src/debug_protocol_tests.rs` | 11 Rust-level debug protocol integration tests    |
+| `packages/daemon/src/debug-session.js`        | xsbug XML SAX parser and structured API           |
+| `packages/daemon/src/debugger.js`             | Debugger exo (CapTP-remotable debug controller)   |
+| `packages/daemon/test/debugger-captp.test.js` | 16 CapTP debugger integration tests               |
+| `packages/chat/debugger-panel.js`             | Chat debugger panel UI component                  |
 
 ### Modified files
 
-| File | Change |
-|------|--------|
-| `rust/endo/xsnap/Cargo.toml` | Add `debug` feature flag |
-| `rust/endo/xsnap/build.rs` | Conditionally define `mxDebug`, `mxInstrument` |
-| `rust/endo/xsnap/xsnap-platform.h` | Replace `mxUseDefaultDebug` with custom debug block |
-| `rust/endo/xsnap/xsnap-platform.c` | Implement `fxConnect`/`fxDisconnect`/`fxReceive`/`fxSend` via Rust callbacks |
-| `rust/endo/xsnap/src/powers/mod.rs` | Add `pub mod debug;` |
-| `rust/endo/xsnap/src/lib.rs` | Register debug powers; expose `run_debugger()` on Machine; integrate debug polling in worker event loop |
-| `rust/endo/xsnap/src/ffi.rs` | Add `fxRunDebugger`, `fxSetDebugCallbacks`, `fxDescribeInstrumentation`, `fxSampleInstrumentation` FFI declarations |
-| `rust/endo/xsnap/src/worker_io.rs` | Add debug envelope handling in message pump |
-| `rust/endo/xsnap/src/host_aliases.js` | Add `debugPoll` alias |
-| `rust/endo/src/inproc.rs` | Route `"debug"` / `"debug-attach"` / `"debug-detach"` verbs |
-| `rust/endo/src/proc.rs` | Route `"debug"` / `"debug-attach"` / `"debug-detach"` verbs |
-| `packages/daemon/src/bus-daemon-rust-xs.js` | Handle `"debug"` envelopes; create DebugSession per worker; `attachDebugger` |
-| `packages/daemon/src/bus-xs-core.js` | Add `sendDebug(payload)` helper |
-| `packages/daemon/src/daemon.js` | Debugger formula type; `attachDebugger()` method |
-| `packages/daemon/src/types.d.ts` | Add Debugger, DebugSession, BreakEvent, Frame, Property types |
-| `packages/chat/chat.js` | Add debugger panel backdrop and container divs |
-| `packages/chat/chat-bar-component.js` | Import debugger panel, wire `openDebugger` callback |
-| `packages/chat/command-registry.js` | Add `/debug` command definition |
-| `packages/chat/command-executor.js` | Add `openDebugger` callback and `debug` case handler |
-| `packages/chat/index.css` | Add ~460 lines of debugger panel styles |
+| File                                        | Change                                                                                                              |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `rust/endo/xsnap/Cargo.toml`                | Add `debug` feature flag                                                                                            |
+| `rust/endo/xsnap/build.rs`                  | Conditionally define `mxDebug`, `mxInstrument`                                                                      |
+| `rust/endo/xsnap/xsnap-platform.h`          | Replace `mxUseDefaultDebug` with custom debug block                                                                 |
+| `rust/endo/xsnap/xsnap-platform.c`          | Implement `fxConnect`/`fxDisconnect`/`fxReceive`/`fxSend` via Rust callbacks                                        |
+| `rust/endo/xsnap/src/powers/mod.rs`         | Add `pub mod debug;`                                                                                                |
+| `rust/endo/xsnap/src/lib.rs`                | Register debug powers; expose `run_debugger()` on Machine; integrate debug polling in worker event loop             |
+| `rust/endo/xsnap/src/ffi.rs`                | Add `fxRunDebugger`, `fxSetDebugCallbacks`, `fxDescribeInstrumentation`, `fxSampleInstrumentation` FFI declarations |
+| `rust/endo/xsnap/src/worker_io.rs`          | Add debug envelope handling in message pump                                                                         |
+| `rust/endo/xsnap/src/host_aliases.js`       | Add `debugPoll` alias                                                                                               |
+| `rust/endo/src/inproc.rs`                   | Route `"debug"` / `"debug-attach"` / `"debug-detach"` verbs                                                         |
+| `rust/endo/src/proc.rs`                     | Route `"debug"` / `"debug-attach"` / `"debug-detach"` verbs                                                         |
+| `packages/daemon/src/bus-daemon-rust-xs.js` | Handle `"debug"` envelopes; create DebugSession per worker; `attachDebugger`                                        |
+| `packages/daemon/src/bus-xs-core.js`        | Add `sendDebug(payload)` helper                                                                                     |
+| `packages/daemon/src/daemon.js`             | Debugger formula type; `attachDebugger()` method                                                                    |
+| `packages/daemon/src/types.d.ts`            | Add Debugger, DebugSession, BreakEvent, Frame, Property types                                                       |
+| `packages/chat/chat.js`                     | Add debugger panel backdrop and container divs                                                                      |
+| `packages/chat/chat-bar-component.js`       | Import debugger panel, wire `openDebugger` callback                                                                 |
+| `packages/chat/command-registry.js`         | Add `/debug` command definition                                                                                     |
+| `packages/chat/command-executor.js`         | Add `openDebugger` callback and `debug` case handler                                                                |
+| `packages/chat/index.css`                   | Add ~460 lines of debugger panel styles                                                                             |
 
 ## Implementation phases
 
@@ -832,6 +838,7 @@ flushes the outbound debug buffer.
    Shift+F11 (step out), Esc (close).
 
 **Remaining:**
+
 - The host does not yet expose `attachDebugger` over CapTP —
   the `/debug` command will produce a CapTP method-not-found
   error until that is wired.
@@ -1097,14 +1104,13 @@ break mode:
 const DebuggerI = M.interface('Debugger', {
   // ...existing methods...
   setExceptionBreakMode: M.call(
-    M.or(M.literal('none'),
-         M.literal('all'),
-         M.literal('uncaught')),
+    M.or(M.literal('none'), M.literal('all'), M.literal('uncaught')),
   ).returns(M.undefined()),
 });
 ```
 
 The `DebugSession` translates:
+
 - `'none'` → clear both `exceptions` and `uncaughtExceptions`
 - `'all'` → set `exceptions`, clear `uncaughtExceptions`
 - `'uncaught'` → clear `exceptions`, set `uncaughtExceptions`
@@ -1175,12 +1181,12 @@ catching exceptions often indicates an error condition.
 
 ### Files to modify
 
-| File | Change |
-|------|--------|
-| `c/moddable/xs/sources/xsAll.h` | Add `breakOnUncaughtExceptionsFlag` to txMachine |
-| `c/moddable/xs/sources/xsDebug.c` | Modify `fxDebugThrow`, `fxSetBreakpoint`, `fxClearBreakpoint` |
-| `packages/daemon/src/debug-session.js` | Add `setExceptionBreakMode` command |
-| `packages/daemon/src/debugger.js` | Add `setExceptionBreakMode` to Debugger exo |
+| File                                   | Change                                                        |
+| -------------------------------------- | ------------------------------------------------------------- |
+| `c/moddable/xs/sources/xsAll.h`        | Add `breakOnUncaughtExceptionsFlag` to txMachine              |
+| `c/moddable/xs/sources/xsDebug.c`      | Modify `fxDebugThrow`, `fxSetBreakpoint`, `fxClearBreakpoint` |
+| `packages/daemon/src/debug-session.js` | Add `setExceptionBreakMode` command                           |
+| `packages/daemon/src/debugger.js`      | Add `setExceptionBreakMode` to Debugger exo                   |
 
 ### Implementation phase
 

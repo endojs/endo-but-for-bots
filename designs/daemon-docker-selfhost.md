@@ -1,11 +1,11 @@
 # Daemon Docker Self-Hosting
 
-| | |
-|---|---|
-| **Created** | 2026-03-02 |
-| **Updated** | 2026-03-02 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-03-02            |
+| **Updated** | 2026-03-02            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## What is the Problem Being Solved?
 
@@ -144,7 +144,7 @@ services:
   endo:
     image: endojs/daemon:latest
     ports:
-      - "8920:8920"
+      - '8920:8920'
     volumes:
       - endo-state:/data/endo
     environment:
@@ -155,7 +155,7 @@ services:
   caddy:
     image: caddy:2
     ports:
-      - "443:443"
+      - '443:443'
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
     depends_on:
@@ -200,13 +200,13 @@ docker build -t endojs/daemon:latest docker/
 
 ## Files Modified
 
-| File | Change |
-|------|--------|
-| `docker/Dockerfile` | New — Docker image definition |
-| `docker/docker-entrypoint.sh` | New — entrypoint script |
-| `docker/docker-compose.yml` | New — example compose file |
-| `packages/daemon/src/daemon-node.js` | Add `--addr` flag for bind address override |
-| `packages/daemon/src/gateway.js` | Support `ENDO_GATEWAY_REMOTE` for remote auth mode |
+| File                                 | Change                                             |
+| ------------------------------------ | -------------------------------------------------- |
+| `docker/Dockerfile`                  | New — Docker image definition                      |
+| `docker/docker-entrypoint.sh`        | New — entrypoint script                            |
+| `docker/docker-compose.yml`          | New — example compose file                         |
+| `packages/daemon/src/daemon-node.js` | Add `--addr` flag for bind address override        |
+| `packages/daemon/src/gateway.js`     | Support `ENDO_GATEWAY_REMOTE` for remote auth mode |
 
 ## Design Decisions
 

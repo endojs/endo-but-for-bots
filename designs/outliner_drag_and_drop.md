@@ -51,9 +51,9 @@ Selection uses an **anchor-focus model**, borrowed from browser text selection s
 
 ```typescript
 interface SelectionContext {
-  anchor: AutomergeUrl | null;   // where the selection started
-  focus: AutomergeUrl | null;    // where the selection currently ends
-  selected: Set<AutomergeUrl>;   // all blocks in the contiguous range
+  anchor: AutomergeUrl | null; // where the selection started
+  focus: AutomergeUrl | null; // where the selection currently ends
+  selected: Set<AutomergeUrl>; // all blocks in the contiguous range
 }
 ```
 
@@ -65,7 +65,7 @@ The `selected` set is always the computed result of "every block between anchor 
 function computeSelectedBlocks(
   anchor: AutomergeUrl | null,
   focus: AutomergeUrl | null,
-  flattenedBlocks: BlockPosition[]
+  flattenedBlocks: BlockPosition[],
 ): Set<AutomergeUrl> {
   if (!anchor || !focus) return new Set();
 
@@ -106,7 +106,7 @@ The `SelectionProvider` maintains a sorted array of these positions. When a bloc
 ```typescript
 const registerBlock = (position: BlockPosition) => {
   blockPositions.current = blockPositions.current.filter(
-    p => p.url !== position.url
+    p => p.url !== position.url,
   );
   blockPositions.current.push(position);
   // Sort to maintain document order
@@ -118,6 +118,7 @@ const registerBlock = (position: BlockPosition) => {
 ```
 
 This registry is the single source of truth for "what comes before/after what." It's used by:
+
 - Range computation (Shift+Click, Shift+Arrow)
 - Batch operation ordering (indent/unindent apply in document order)
 - Bounding box selection (mapping spatial overlap to block identity)
@@ -144,7 +145,7 @@ In the component, the bullet's click handler checks for the Shift modifier to de
 const handleClick = (e: React.MouseEvent) => {
   e.preventDefault();
   e.stopPropagation();
-  select(e.shiftKey);  // extend=true when Shift held
+  select(e.shiftKey); // extend=true when Shift held
 };
 ```
 
@@ -166,7 +167,7 @@ Creates a contiguous selection from the current anchor to the clicked block:
 function selectRange(
   fromBlock: AutomergeUrl,
   toBlock: AutomergeUrl,
-  flattenedBlocks: BlockPosition[]
+  flattenedBlocks: BlockPosition[],
 ): SelectionContext {
   return {
     anchor: fromBlock,
@@ -180,30 +181,32 @@ If there's no existing anchor (empty selection), the clicked block becomes both 
 
 ### Clicking an already-selected block: remove it and its descendants
 
-This is the non-obvious behavior. Shift+clicking a block that's *already in the selection* removes it **and all its descendants** from the selection:
+This is the non-obvious behavior. Shift+clicking a block that's _already in the selection_ removes it **and all its descendants** from the selection:
 
 ```typescript
 function shiftClickBlock(
   blockUrl: AutomergeUrl,
   currentSelection: SelectionContext,
-  flattenedBlocks: BlockPosition[]
+  flattenedBlocks: BlockPosition[],
 ): SelectionContext {
   if (currentSelection.selected.has(blockUrl)) {
     // Remove block and its descendants
     const toRemove = getBlockAndDescendants(blockUrl, flattenedBlocks);
     const newSelected = new Set(
-      [...currentSelection.selected].filter(url => !toRemove.has(url))
+      [...currentSelection.selected].filter(url => !toRemove.has(url)),
     );
 
     if (newSelected.size === 0) return clearSelection();
 
     // Preserve anchor if it's still selected, else pick first remaining
-    const anchor = currentSelection.anchor && newSelected.has(currentSelection.anchor)
-      ? currentSelection.anchor
-      : flattenedBlocks.find(b => newSelected.has(b.url))?.url ?? null;
+    const anchor =
+      currentSelection.anchor && newSelected.has(currentSelection.anchor)
+        ? currentSelection.anchor
+        : (flattenedBlocks.find(b => newSelected.has(b.url))?.url ?? null);
     // Focus becomes last remaining block in document order
-    const focus = [...flattenedBlocks].reverse()
-      .find(b => newSelected.has(b.url))?.url ?? null;
+    const focus =
+      [...flattenedBlocks].reverse().find(b => newSelected.has(b.url))?.url ??
+      null;
 
     return { anchor, focus, selected: newSelected };
   } else {
@@ -214,14 +217,14 @@ function shiftClickBlock(
 }
 ```
 
-**Why remove descendants too?** In a tree, selecting a parent implies its subtree. Deselecting a parent but keeping its children would be confusing — the children are visually nested *inside* the parent.
+**Why remove descendants too?** In a tree, selecting a parent implies its subtree. Deselecting a parent but keeping its children would be confusing — the children are visually nested _inside_ the parent.
 
 **Finding descendants** uses the flattened block list and depth: walk forward from the block until you hit a block at the same or shallower depth:
 
 ```typescript
 function getBlockAndDescendants(
   blockUrl: AutomergeUrl,
-  flattenedBlocks: BlockPosition[]
+  flattenedBlocks: BlockPosition[],
 ): Set<AutomergeUrl> {
   const result = new Set<AutomergeUrl>();
   const blockIndex = flattenedBlocks.findIndex(b => b.url === blockUrl);
@@ -240,13 +243,13 @@ function getBlockAndDescendants(
 
 ### Shift+Click summary table
 
-| Starting state | Click target | Result |
-|---------------|-------------|--------|
-| No selection | Any block | Select just that block |
-| Block A selected | Unselected block B | Select range A→B |
-| Range A→D selected | Unselected block F | Extend range A→F |
-| Range A→D selected | Selected block C (has children C1, C2) | Remove C, C1, C2 from selection |
-| Single block A selected | Block A (same block) | Clear selection entirely |
+| Starting state          | Click target                           | Result                          |
+| ----------------------- | -------------------------------------- | ------------------------------- |
+| No selection            | Any block                              | Select just that block          |
+| Block A selected        | Unselected block B                     | Select range A→B                |
+| Range A→D selected      | Unselected block F                     | Extend range A→F                |
+| Range A→D selected      | Selected block C (has children C1, C2) | Remove C, C1, C2 from selection |
+| Single block A selected | Block A (same block)                   | Clear selection entirely        |
 
 ---
 
@@ -271,7 +274,7 @@ The component layer receives this `extend-selection` action and calls:
 function extendSelection(
   currentSelection: SelectionContext,
   toBlock: AutomergeUrl,
-  flattenedBlocks: BlockPosition[]
+  flattenedBlocks: BlockPosition[],
 ): SelectionContext {
   const anchor = currentSelection.anchor || toBlock;
   return {
@@ -283,8 +286,9 @@ function extendSelection(
 ```
 
 **Key behavior:** The anchor stays fixed. Only the focus moves. This means:
+
 - Shift+Down repeatedly extends the selection downward
-- Shift+Up after Shift+Down *contracts* the selection (focus moves back toward anchor)
+- Shift+Up after Shift+Down _contracts_ the selection (focus moves back toward anchor)
 - When focus crosses the anchor, the selection direction reverses
 
 This matches how Shift+Arrow works in browser text selection — the anchor is planted, the focus is the moving end.
@@ -305,7 +309,7 @@ The fundamental challenge: dragging inside a textarea should select text (normal
 
 ```typescript
 const handleMouseDown = (e: React.MouseEvent) => {
-  if (e.button !== 0) return;   // left click only
+  if (e.button !== 0) return; // left click only
 
   // Don't start if clicking on interactive block elements
   const target = e.target as HTMLElement;
@@ -322,6 +326,7 @@ const handleMouseDown = (e: React.MouseEvent) => {
 ```
 
 `isPointInBlock` uses `document.elementFromPoint()` to check whether the click landed on a `.block-textarea` or `.block-bullet`. If so, the bounding box doesn't activate. This allows:
+
 - **Click inside textarea** → places text cursor (no block selection)
 - **Click on bullet** → selects that block (handled by bullet click, not bounding box)
 - **Click on empty space** → starts bounding box drag-select
@@ -340,7 +345,13 @@ const collectBlockRects = () => {
     // CRITICAL: measure .block-row, not the full .block div
     const rowElement = block.querySelector('.block-row');
     const rect = (rowElement || block).getBoundingClientRect();
-    rects.push({ url, top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right });
+    rects.push({
+      url,
+      top: rect.top,
+      bottom: rect.bottom,
+      left: rect.left,
+      right: rect.right,
+    });
   });
 
   blockRectsRef.current = rects;
@@ -393,17 +404,19 @@ selectBlocks: (urls: AutomergeUrl[]) => {
 The box is a `position: fixed` div with semi-transparent styling and `pointerEvents: 'none'` so it doesn't interfere with the underlying content:
 
 ```typescript
-const boxStyle = selectionBox ? {
-  position: 'fixed',
-  left: Math.min(selectionBox.startX, selectionBox.currentX),
-  top: Math.min(selectionBox.startY, selectionBox.currentY),
-  width: Math.abs(selectionBox.currentX - selectionBox.startX),
-  height: Math.abs(selectionBox.currentY - selectionBox.startY),
-  backgroundColor: 'rgba(66, 133, 244, 0.2)',
-  border: '1px solid rgba(66, 133, 244, 0.5)',
-  pointerEvents: 'none',
-  zIndex: 9999,
-} : null;
+const boxStyle = selectionBox
+  ? {
+      position: 'fixed',
+      left: Math.min(selectionBox.startX, selectionBox.currentX),
+      top: Math.min(selectionBox.startY, selectionBox.currentY),
+      width: Math.abs(selectionBox.currentX - selectionBox.startX),
+      height: Math.abs(selectionBox.currentY - selectionBox.startY),
+      backgroundColor: 'rgba(66, 133, 244, 0.2)',
+      border: '1px solid rgba(66, 133, 244, 0.5)',
+      pointerEvents: 'none',
+      zIndex: 9999,
+    }
+  : null;
 ```
 
 The box is rendered as a sibling of the block tree, not inside any specific block. It appears during drag and disappears on `mouseup`.
@@ -427,15 +440,15 @@ useEffect(() => {
 
 ### Edge cases to test
 
-| Scenario | Expected behavior |
-|----------|-------------------|
-| Click in textarea, drag within it | Normal text selection, no bounding box |
-| Click in textarea, drag vertically past block boundary | Should NOT trigger block selection (text selection continues) |
-| Click in textarea, drag horizontally left past textarea edge | Should NOT trigger block selection |
-| Click on empty space, drag across blocks | Bounding box appears, blocks selected |
-| Click on empty space, drag outside the container | Selection continues tracking via window listeners |
-| Triple-click in textarea (select all text) | No block selection, just text selection |
-| Selection box disappears on mouseup | Box element removed from DOM, selected blocks remain highlighted |
+| Scenario                                                     | Expected behavior                                                |
+| ------------------------------------------------------------ | ---------------------------------------------------------------- |
+| Click in textarea, drag within it                            | Normal text selection, no bounding box                           |
+| Click in textarea, drag vertically past block boundary       | Should NOT trigger block selection (text selection continues)    |
+| Click in textarea, drag horizontally left past textarea edge | Should NOT trigger block selection                               |
+| Click on empty space, drag across blocks                     | Bounding box appears, blocks selected                            |
+| Click on empty space, drag outside the container             | Selection continues tracking via window listeners                |
+| Triple-click in textarea (select all text)                   | No block selection, just text selection                          |
+| Selection box disappears on mouseup                          | Box element removed from DOM, selected blocks remain highlighted |
 
 ---
 
@@ -478,10 +491,10 @@ Tab and Shift+Tab apply to all selected blocks. But the operation must be **vali
 function canBatchIndent(
   selection: SelectionContext,
   flattenedBlocks: BlockPosition[],
-  direction: 'indent' | 'unindent'
+  direction: 'indent' | 'unindent',
 ): boolean {
   const selectedBlocks = flattenedBlocks.filter(b =>
-    selection.selected.has(b.url)
+    selection.selected.has(b.url),
   );
   if (selectedBlocks.length === 0) return false;
 
@@ -510,7 +523,7 @@ Batch operations always process blocks in **document order** (top-to-bottom), re
 ```typescript
 function getBlocksForBatchOperation(
   selection: SelectionContext,
-  flattenedBlocks: BlockPosition[]
+  flattenedBlocks: BlockPosition[],
 ): AutomergeUrl[] {
   return flattenedBlocks
     .filter(b => selection.selected.has(b.url))
@@ -524,13 +537,13 @@ function getBlocksForBatchOperation(
 
 Selection clears in these situations:
 
-| Trigger | Behavior |
-|---------|----------|
-| Click a bullet without Shift | Clears previous selection, selects clicked block |
-| Click inside a textarea | Clears block selection, enters text editing mode |
-| Start bounding box drag | Clears previous selection before starting new one |
-| Shift+Click the only selected block | Clears selection entirely |
-| Escape key (if implemented) | Clears selection |
+| Trigger                             | Behavior                                          |
+| ----------------------------------- | ------------------------------------------------- |
+| Click a bullet without Shift        | Clears previous selection, selects clicked block  |
+| Click inside a textarea             | Clears block selection, enters text editing mode  |
+| Start bounding box drag             | Clears previous selection before starting new one |
+| Shift+Click the only selected block | Clears selection entirely                         |
+| Escape key (if implemented)         | Clears selection                                  |
 
 ```typescript
 function clearSelection(): SelectionContext {
@@ -552,8 +565,8 @@ The outliner's tree is composed of **blocks**, where each block is an independen
 
 ```typescript
 interface ChildReference {
-  url: AutomergeUrl;      // Points to the child block document
-  instanceId: string;     // UUID unique to this specific placement
+  url: AutomergeUrl; // Points to the child block document
+  instanceId: string; // UUID unique to this specific placement
 }
 
 interface Block {
@@ -566,7 +579,7 @@ interface Block {
 
 **Why `instanceId`?** The same block can appear in multiple places in the tree (transclusion / block references). Each placement gets a unique `instanceId` so the UI can distinguish between them. When you Alt+drag to create a reference, a new `ChildReference` is created with the same `url` but a fresh `instanceId`.
 
-**Why per-block documents?** Each block being its own document means drag-and-drop is a metadata operation — you never copy content, you just move or duplicate a *reference*. This also means all drag-drop operations work offline and sync via CRDT merge.
+**Why per-block documents?** Each block being its own document means drag-and-drop is a metadata operation — you never copy content, you just move or duplicate a _reference_. This also means all drag-drop operations work offline and sync via CRDT merge.
 
 The three mutation primitives needed for drag-and-drop:
 
@@ -617,9 +630,10 @@ Drag starts from the bullet element via the HTML5 Drag and Drop API:
 ```typescript
 const onDragStart = (e: React.DragEvent) => {
   // If this block is part of a multi-block selection, drag all selected
-  const urls = selectionState.selected.size > 0
-    ? Array.from(selectionState.selected)
-    : [blockUrl];
+  const urls =
+    selectionState.selected.size > 0
+      ? Array.from(selectionState.selected)
+      : [blockUrl];
 
   e.dataTransfer.effectAllowed = 'copyMove';
   e.dataTransfer.setData('text/plain', JSON.stringify(urls));
@@ -630,6 +644,7 @@ const onDragStart = (e: React.DragEvent) => {
 ```
 
 **Key decisions:**
+
 - `effectAllowed = 'copyMove'` because we support both move (default) and copy/reference (Alt+drag)
 - We use the native browser drag image (the ghosted element). No custom `setDragImage()` needed — simpler and more predictable.
 - The drag payload is serialized as JSON in `text/plain`, containing the URLs of all blocks being dragged.
@@ -656,14 +671,14 @@ Each block is divided into three vertical zones based on mouse Y position:
 interface DropZone {
   parentUrl: AutomergeUrl;
   position: 'before' | 'after' | 'into';
-  index: number;  // insertion index in the parent's children array
+  index: number; // insertion index in the parent's children array
 }
 
 function calculateDropZone(
   mouseY: number,
   blockBounds: { top: number; bottom: number; height: number },
   parentUrl: AutomergeUrl,
-  indexInParent: number
+  indexInParent: number,
 ): DropZone {
   const percentage = (mouseY - blockBounds.top) / blockBounds.height;
 
@@ -691,21 +706,26 @@ The 25/50/25 split is a good default. Some implementations use dynamic zones tha
 Three CSS classes correspond to the three drop zones:
 
 ```typescript
-function getDropZoneClass(position: 'before' | 'after' | 'into' | null): string {
+function getDropZoneClass(
+  position: 'before' | 'after' | 'into' | null,
+): string {
   if (!position) return '';
   switch (position) {
-    case 'before': return 'drop-zone-before';
-    case 'after':  return 'drop-zone-after';
-    case 'into':   return 'drop-zone-into';
+    case 'before':
+      return 'drop-zone-before';
+    case 'after':
+      return 'drop-zone-after';
+    case 'into':
+      return 'drop-zone-into';
   }
 }
 ```
 
-| Zone | Visual Treatment | CSS Approach |
-|------|-----------------|--------------|
-| Before | Horizontal blue line above the block | `border-top` or `::before` pseudo-element |
-| After | Horizontal blue line below the block | `border-bottom` or `::after` pseudo-element |
-| Into | Blue outline/highlight around the block | `outline` or `box-shadow` |
+| Zone   | Visual Treatment                        | CSS Approach                                |
+| ------ | --------------------------------------- | ------------------------------------------- |
+| Before | Horizontal blue line above the block    | `border-top` or `::before` pseudo-element   |
+| After  | Horizontal blue line below the block    | `border-bottom` or `::after` pseudo-element |
+| Into   | Blue outline/highlight around the block | `outline` or `box-shadow`                   |
 
 Cursor feedback changes based on the drag mode:
 
@@ -713,7 +733,7 @@ Cursor feedback changes based on the drag mode:
 function getDragVisualFeedback(altKey: boolean) {
   return {
     cursorStyle: altKey ? 'copy' : 'move',
-    showPlusIndicator: altKey,  // "+" badge signals reference creation
+    showPlusIndicator: altKey, // "+" badge signals reference creation
   };
 }
 ```
@@ -722,7 +742,7 @@ Set `e.dataTransfer.dropEffect` on every `dragover` event to make the browser sh
 
 ```typescript
 const onDragOver = (e: React.DragEvent) => {
-  e.preventDefault();  // Required to allow drop
+  e.preventDefault(); // Required to allow drop
   e.dataTransfer.dropEffect = e.altKey ? 'copy' : 'move';
   // ... calculate and display drop zone
 };
@@ -766,9 +786,9 @@ const onDrop = (e: React.DragEvent) => {
 
 ## Modifier Keys
 
-| Modifier | During Drag | Effect |
-|----------|-------------|--------|
-| None | Default | **Move**: block is relocated, removed from source |
+| Modifier   | During Drag      | Effect                                                                         |
+| ---------- | ---------------- | ------------------------------------------------------------------------------ |
+| None       | Default          | **Move**: block is relocated, removed from source                              |
 | Alt/Option | Hold during drag | **Reference**: block stays at source, a new reference is placed at destination |
 
 ```typescript
@@ -777,7 +797,7 @@ function getDragMode(altKey: boolean): 'move' | 'reference' {
 }
 ```
 
-**Implementation detail:** Check `e.altKey` on every `dragover` event, not just `dragstart`. This lets users toggle the mode in real-time by pressing or releasing Alt mid-drag. This is better UX than Roam Research's approach, which requires Alt to be held *before* initiating the drag and doesn't allow mid-drag mode changes.
+**Implementation detail:** Check `e.altKey` on every `dragover` event, not just `dragstart`. This lets users toggle the mode in real-time by pressing or releasing Alt mid-drag. This is better UX than Roam Research's approach, which requires Alt to be held _before_ initiating the drag and doesn't allow mid-drag mode changes.
 
 Visual feedback must update in real-time too — when the user presses Alt mid-drag, the cursor should immediately switch from "move" to "copy" and the `+` indicator should appear.
 
@@ -791,9 +811,9 @@ Selection uses an anchor-focus model with a contiguous range constraint:
 
 ```typescript
 interface SelectionContext {
-  anchor: BlockId | null;   // where selection started
-  focus: BlockId | null;    // where selection ends
-  selected: Set<BlockId>;   // all blocks in the contiguous range
+  anchor: BlockId | null; // where selection started
+  focus: BlockId | null; // where selection ends
+  selected: Set<BlockId>; // all blocks in the contiguous range
 }
 ```
 
@@ -805,9 +825,10 @@ When the user drags from a block that's part of a selection, the entire selectio
 
 ```typescript
 const onDragStart = (e: React.DragEvent) => {
-  const urls = selectionState.selected.size > 0
-    ? Array.from(selectionState.selected)
-    : [blockUrl];
+  const urls =
+    selectionState.selected.size > 0
+      ? Array.from(selectionState.selected)
+      : [blockUrl];
   dragOps.startDrag(urls);
 };
 ```
@@ -816,12 +837,12 @@ On drop, each block in the selection is moved/referenced in order. The selection
 
 ### Selection Inputs
 
-| Action | Result |
-|--------|--------|
-| Click bullet | Select single block (clear previous) |
-| Shift+Click bullet | Extend selection range from anchor to clicked block |
-| Shift+Arrow Up/Down | Extend selection by one block |
-| Drag in empty space | Bounding box selection (see below) |
+| Action              | Result                                              |
+| ------------------- | --------------------------------------------------- |
+| Click bullet        | Select single block (clear previous)                |
+| Shift+Click bullet  | Extend selection range from anchor to clicked block |
+| Shift+Arrow Up/Down | Extend selection by one block                       |
+| Drag in empty space | Bounding box selection (see below)                  |
 
 ---
 
@@ -833,7 +854,7 @@ Drops must be validated to prevent creating cycles in the tree:
 function isValidDrop(
   draggingUrls: AutomergeUrl[],
   targetUrl: AutomergeUrl,
-  targetDescendants: Set<AutomergeUrl>
+  targetDescendants: Set<AutomergeUrl>,
 ): boolean {
   // Cannot drop a block onto itself
   if (draggingUrls.includes(targetUrl)) return false;
@@ -848,7 +869,7 @@ function isValidDrop(
 
 **Why this matters:** If block A contains child B, and you drop A into B, you've created A→B→A — a cycle. The tree becomes infinite. You need to walk the target's ancestor chain (or precompute descendants) and reject any drop where the dragged block is an ancestor of the target.
 
-For multi-block drag, validate *every* block in the selection against the target. If any single block would create a cycle, the entire drop is invalid.
+For multi-block drag, validate _every_ block in the selection against the target. If any single block would create a cycle, the entire drop is invalid.
 
 When validation fails, return `{ action: 'invalid' }` and suppress all visual drop indicators — no blue line, cursor shows "not-allowed."
 
@@ -861,7 +882,7 @@ When moving blocks within the same parent, removing a source block shifts the in
 ```typescript
 function adjustDropIndexForSameParent(
   sourceIndices: number[],
-  targetIndex: number
+  targetIndex: number,
 ): number {
   const countBefore = sourceIndices.filter(i => i < targetIndex).length;
   return targetIndex - countBefore;
@@ -883,6 +904,7 @@ Drag B (index 1) to after D (target index 4):
 ```
 
 For multi-block moves (e.g., dragging indices 1 and 3 to index 5):
+
 ```
 adjustDropIndexForSameParent([1, 3], 5) = 5 - 2 = 3
 ```
@@ -899,7 +921,7 @@ When a user drags over a collapsed block, it should auto-expand after a short de
 function shouldExpandOnDragHover(
   isCollapsed: boolean,
   hoverDuration: number,
-  expandDelay: number = 500  // milliseconds
+  expandDelay: number = 500, // milliseconds
 ): boolean {
   return isCollapsed && hoverDuration >= expandDelay;
 }
@@ -936,6 +958,7 @@ The most important architectural decision: **all selection and drag-drop logic i
 ```
 
 **Why this matters:**
+
 - Behavior functions are trivially unit-testable — no DOM, no async, just data in → data out
 - The component layer is thin: translate events into context objects, call behavior functions, execute the result
 - The data layer knows nothing about drag-and-drop — it just exposes tree mutation primitives
@@ -949,25 +972,29 @@ it('Shift+Click on selected block removes it and descendants', () => {
     { url: 'a1', parentUrl: 'a', indexInParent: 0, depth: 1 },
     { url: 'b', parentUrl: null, indexInParent: 1, depth: 0 },
   ];
-  const selection = { anchor: 'a', focus: 'b', selected: new Set(['a', 'a1', 'b']) };
+  const selection = {
+    anchor: 'a',
+    focus: 'b',
+    selected: new Set(['a', 'a1', 'b']),
+  };
 
   const result = shiftClickBlock('a', selection, blocks);
 
-  expect(result.selected.has('a')).toBe(false);   // removed
-  expect(result.selected.has('a1')).toBe(false);  // descendant removed
-  expect(result.selected.has('b')).toBe(true);    // kept
+  expect(result.selected.has('a')).toBe(false); // removed
+  expect(result.selected.has('a1')).toBe(false); // descendant removed
+  expect(result.selected.has('b')).toBe(true); // kept
 });
 
 // Example: testing drop zone calculation with no DOM
 it('middle of block returns into zone', () => {
   const zone = calculateDropZone(
-    150,                                    // mouseY: middle of block
+    150, // mouseY: middle of block
     { top: 100, bottom: 200, height: 100 }, // block bounds
     'parent-url' as AutomergeUrl,
-    2                                       // index in parent
+    2, // index in parent
   );
   expect(zone.position).toBe('into');
-  expect(zone.index).toBe(0);  // first child
+  expect(zone.index).toBe(0); // first child
 });
 ```
 
@@ -1007,14 +1034,15 @@ Touch devices don't have modifier keys. If you need reference-creation on mobile
 
 ## Browser Compatibility
 
-| Browser | Reliability | Notes |
-|---------|-------------|-------|
-| Chrome | Best | Most reliable drag-drop and visual feedback |
-| Firefox | Good | Sidebar-to-main drag may have issues |
-| Safari | Fair | Accuracy problems with drop zone visual feedback |
-| Mobile browsers | Variable | No modifier keys; long-press initiation varies |
+| Browser         | Reliability | Notes                                            |
+| --------------- | ----------- | ------------------------------------------------ |
+| Chrome          | Best        | Most reliable drag-drop and visual feedback      |
+| Firefox         | Good        | Sidebar-to-main drag may have issues             |
+| Safari          | Fair        | Accuracy problems with drop zone visual feedback |
+| Mobile browsers | Variable    | No modifier keys; long-press initiation varies   |
 
 The HTML5 Drag and Drop API is well-supported but has quirks:
+
 - You **must** call `e.preventDefault()` in `dragover` to allow drops
 - `dropEffect` and `effectAllowed` interact in non-obvious ways across browsers
 - Some browsers fire `dragleave` before `dragenter` when moving between adjacent elements, causing flicker. Debounce or use a counter to track enter/leave pairs.

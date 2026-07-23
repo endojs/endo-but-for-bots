@@ -6,11 +6,13 @@ for OCapN data types, showing both human-readable notation and wire format.
 ## Notation Conventions
 
 **Human-readable notation**:
+
 - Syrup: Uses a presentation syntax where `N"` means N-byte string, `N'` means
   N-byte symbol, `N+` means positive integer N, `N-` means negative magnitude N
 - CBOR: Uses [diagnostic notation][Diagnostic] per RFC 8949 §8
 
 **Wire format**:
+
 - Both shown as annotated hexadecimal with comments
 
 ## Primitive Types
@@ -26,12 +28,14 @@ for OCapN data types, showing both human-readable notation and wire format.
 **Wire format**:
 
 True:
+
 ```
 Syrup: 74                          # 't'
 CBOR:  F5                          # Simple value 21 (true)
 ```
 
 False:
+
 ```
 Syrup: 66                          # 'f'
 CBOR:  F4                          # Simple value 20 (false)
@@ -52,12 +56,14 @@ CBOR:  F4                          # Simple value 20 (false)
 **Wire format**:
 
 Integer 42:
+
 ```
 Syrup: 34 32 2B                    # "42+"
 CBOR:  C2 41 2A                    # Tag 2, 1-byte bstr, 0x2A
 ```
 
 Integer -1:
+
 ```
 Syrup: 31 2D                       # "1-"
 CBOR:  C3 40                       # Tag 3, 0-byte bstr
@@ -74,6 +80,7 @@ CBOR:  C3 40                       # Tag 3, 0-byte bstr
 **Wire format**:
 
 Float 1.5:
+
 ```
 Syrup: 44 3F F8 00 00 00 00 00 00  # 'D' + 8-byte IEEE 754 BE
 CBOR:  FB 3F F8 00 00 00 00 00 00  # Major 7, info 27, 8-byte IEEE 754 BE
@@ -90,6 +97,7 @@ CBOR:  FB 3F F8 00 00 00 00 00 00  # Major 7, info 27, 8-byte IEEE 754 BE
 **Wire format**:
 
 String "hello":
+
 ```
 Syrup: 35 22 68 65 6C 6C 6F        # "5" + '"' + "hello"
 CBOR:  65 68 65 6C 6C 6F           # Major 3, len 5, "hello"
@@ -106,6 +114,7 @@ CBOR:  65 68 65 6C 6C 6F           # Major 3, len 5, "hello"
 **Wire format**:
 
 ByteArray 0xCAFE:
+
 ```
 Syrup: 32 3A CA FE                 # "2" + ':' + bytes
 CBOR:  42 CA FE                    # Major 2, len 2, bytes
@@ -122,6 +131,7 @@ CBOR:  42 CA FE                    # Major 2, len 2, bytes
 **Wire format**:
 
 Symbol 'foo:
+
 ```
 Syrup: 33 27 66 6F 6F              # "3" + "'" + "foo"
 CBOR:  D9 01 18 63 66 6F 6F        # Tag 280, text len 3, "foo"
@@ -134,12 +144,14 @@ CBOR:  D9 01 18 63 66 6F 6F        # Tag 280, text len 3, "foo"
 **Presentation notation**:
 
 Empty list:
+
 ```
 Syrup: []
 CBOR:  []
 ```
 
 List [1, 2]:
+
 ```
 Syrup: [1+2+]
 CBOR:  [2(h'01'), 2(h'02')]
@@ -148,6 +160,7 @@ CBOR:  [2(h'01'), 2(h'02')]
 **Wire format**:
 
 List [1, 2]:
+
 ```
 Syrup: 5B                          # '['
        31 2B                       # 1+
@@ -164,6 +177,7 @@ CBOR:  82                          # Array, 2 elements
 **Presentation notation**:
 
 Struct {"a": 1}:
+
 ```
 Syrup: {1"a1+}
 CBOR:  {"a": 2(h'01')}
@@ -172,6 +186,7 @@ CBOR:  {"a": 2(h'01')}
 **Wire format**:
 
 Struct {"a": 1}:
+
 ```
 Syrup: 7B                          # '{'
        31 22 61                    # 1"a
@@ -188,6 +203,7 @@ CBOR:  A1                          # Map, 1 pair
 **Presentation notation**:
 
 Set {1, 2}:
+
 ```
 Syrup: #1+2+$
 CBOR:  [2(h'01'), 2(h'02')]
@@ -196,6 +212,7 @@ CBOR:  [2(h'01'), 2(h'02')]
 **Wire format**:
 
 Set {1, 2}:
+
 ```
 Syrup: 23                          # '#'
        31 2B                       # 1+
@@ -217,12 +234,14 @@ Syrup uses **symbol labels**, while CBOR uses **plain string labels**.
 Record with label "export" and field value 5:
 
 **Presentation notation**:
+
 ```
 Syrup: <6'export5+>
 CBOR:  27(["export", 2(h'05')])
 ```
 
 **Wire format**:
+
 ```
 Syrup: 3C                          # '<'
        36 27 65 78 70 6F 72 74     # 6'export
@@ -240,12 +259,14 @@ CBOR:  D8 1B                       # Tag 27
 A deliver-only with export descriptor at position 0:
 
 **Presentation notation**:
+
 ```
 Syrup: <12'deliver-only<6'export0+>...>
 CBOR:  27(["deliver-only", 27(["export", 2(h'00')]), ...])
 ```
 
 **Wire format** (partial, showing nesting):
+
 ```
 Syrup: 3C                          # '<'
        31 32 27                    # "12'"
@@ -275,6 +296,7 @@ CBOR:  D8 1B                       # Tag 27
 ### import-object (position 5)
 
 **Presentation notation**:
+
 ```
 Syrup: <13'import-object5+>
 CBOR:  27(["import-object", 2(h'05')])
@@ -283,6 +305,7 @@ CBOR:  27(["import-object", 2(h'05')])
 ### export (position 0)
 
 **Presentation notation**:
+
 ```
 Syrup: <6'export0+>
 CBOR:  27(["export", 2(h'00')])
@@ -291,6 +314,7 @@ CBOR:  27(["export", 2(h'00')])
 ### answer (position 7)
 
 **Presentation notation**:
+
 ```
 Syrup: <6'answer7+>
 CBOR:  27(["answer", 2(h'07')])
@@ -301,12 +325,14 @@ CBOR:  27(["answer", 2(h'07')])
 ### Target marker
 
 **Presentation notation**:
+
 ```
 Syrup: <6'target>
 CBOR:  27(["target"])
 ```
 
 **Wire format**:
+
 ```
 Syrup: 3C                          # '<'
        36 27 74 61 72 67 65 74     # 6'target
@@ -320,6 +346,7 @@ CBOR:  D8 1B                       # Tag 27
 ### Promise marker
 
 **Presentation notation**:
+
 ```
 Syrup: <7'promise>
 CBOR:  27(["promise"])
@@ -328,12 +355,14 @@ CBOR:  27(["promise"])
 ### Error marker
 
 **Presentation notation**:
+
 ```
 Syrup: <5'error9"TypeError>
 CBOR:  27(["error", "TypeError"])
 ```
 
 **Wire format**:
+
 ```
 Syrup: 3C                          # '<'
        35 27 65 72 72 6F 72        # 5'error
@@ -353,6 +382,7 @@ CBOR:  D8 1B                       # Tag 27
 ### abort
 
 **Presentation notation**:
+
 ```
 Syrup: <5'abort14"session closed>
 CBOR:  27(["abort", "session closed"])
@@ -361,6 +391,7 @@ CBOR:  27(["abort", "session closed"])
 ### listen
 
 **Presentation notation**:
+
 ```
 Syrup: <6'listen<6'export1+><13'import-object2+>f>
 CBOR:  27(["listen", 27(["export", 2(h'01')]), 27(["import-object", 2(h'02')]), false])
@@ -371,12 +402,14 @@ CBOR:  27(["listen", 27(["export", 2(h'01')]), 27(["import-object", 2(h'02')]), 
 OCapN tagged values use a record with label "tag":
 
 **Presentation notation**:
+
 ```
 Syrup: <3'tag7'decimal4"3.14>
 CBOR:  27(["tag", "decimal", "3.14"])
 ```
 
 **Wire format**:
+
 ```
 Syrup: 3C                          # '<'
        33 27 74 61 67              # 3'tag
@@ -400,22 +433,23 @@ the body to be forwarded as an opaque byte string. Syrup encodes bodies inline
 without a wrapper.
 
 **CBOR only**:
+
 ```
 24(h'...')  # Byte string containing encoded CBOR passable data
 ```
 
 ## Summary of Differences
 
-| Aspect | Syrup | CBOR |
-|--------|-------|------|
-| Encoding style | Delimiter-based (`<`, `>`, `[`, `]`) | Length-prefixed |
-| Record labels | Symbols (`N'label`) | Strings (`"label"`) |
-| Record delimiters | `<` ... `>` | Tag 27 + array |
-| Integers | ASCII decimal + `+`/`-` | Tag 2/3 bignums |
-| Strings | `N"content` | Major type 3 |
-| Symbols | `N'content` | Tag 280 + text |
-| Body wrapper | None (inline) | Tag 24 byte string |
-| Parser availability | Custom implementation | Standard CBOR libraries |
+| Aspect              | Syrup                                | CBOR                    |
+| ------------------- | ------------------------------------ | ----------------------- |
+| Encoding style      | Delimiter-based (`<`, `>`, `[`, `]`) | Length-prefixed         |
+| Record labels       | Symbols (`N'label`)                  | Strings (`"label"`)     |
+| Record delimiters   | `<` ... `>`                          | Tag 27 + array          |
+| Integers            | ASCII decimal + `+`/`-`              | Tag 2/3 bignums         |
+| Strings             | `N"content`                          | Major type 3            |
+| Symbols             | `N'content`                          | Tag 280 + text          |
+| Body wrapper        | None (inline)                        | Tag 24 byte string      |
+| Parser availability | Custom implementation                | Standard CBOR libraries |
 
 ## Codec Layer Abstraction
 
@@ -429,7 +463,7 @@ as symbols (Syrup) or strings (CBOR):
 
 // makeRecordCodec automatically uses the appropriate label type
 const codec = makeRecordCodec('export', 'selector', writeBody, readBody);
-codec.write(value, writer);  // Adapts to writer's recordLabelType
+codec.write(value, writer); // Adapts to writer's recordLabelType
 ```
 
 [Diagnostic]: https://www.rfc-editor.org/rfc/rfc8949.html#section-8

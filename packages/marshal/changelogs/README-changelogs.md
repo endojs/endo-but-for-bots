@@ -10,4 +10,3 @@ during the release process. Their filenames will be used to indicate which
 issues were closed in the release.
 
 See the top-level developer docs for more details.
-

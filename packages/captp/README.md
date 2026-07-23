@@ -14,11 +14,17 @@ import { E, makeCapTP } from '@endo/captp';
 
 // Create a message dispatcher and bootstrap.
 // Messages on myconn are exchanged with JSON-able objects.
-const { dispatch, getBootstrap, abort } = makeCapTP('myid', myconn.send, myBootstrap);
+const { dispatch, getBootstrap, abort } = makeCapTP(
+  'myid',
+  myconn.send,
+  myBootstrap,
+);
 myconn.onReceive = obj => dispatch(obj);
 
 // Get the remote's bootstrap object and call a remote method.
-E(getBootstrap()).method(args).then(res => console.log('got res', res));
+E(getBootstrap())
+  .method(args)
+  .then(res => console.log('got res', res));
 
 // Tear down the CapTP connection if it fails (e.g. connection is closed).
 abort(Error('Connection aborted by user.'));
@@ -27,7 +33,7 @@ abort(Error('Connection aborted by user.'));
 ## Loopback
 
 The `makeLoopback()` function creates an async barrier between "near" and "far"
-objects.  This is useful for testing and isolation within the same address
+objects. This is useful for testing and isolation within the same address
 space.
 
 ## TrapCaps
@@ -47,19 +53,19 @@ code and synchronous devices.
 2. On the host side, use the returned `makeTrapHandler(target)` to mark a target
    as synchronous-enabled.
 3. On the guest side, use the returned `Trap(target)` proxy maker much like
-   `E(target)`, but it will return a synchronous result.  `Trap` will throw an
+   `E(target)`, but it will return a synchronous result. `Trap` will throw an
    error if `target` was not marked as a TrapHandler by the host.
 
 To understand how `trapHost` and `trapGuest` relate, consider the `trapHost` as
-a maker of AsyncIterators which don't return any useful value.  These specific
+a maker of AsyncIterators which don't return any useful value. These specific
 iterators are used to drive the transfer of serialized data back to the guest.
 
 `trapGuest` receives arguments to describe the specific trap request, including
 `startTrap()` which sends data to the host to perform the actual work of the
-trap.  The returned (synchronous) iterator from `startTrap()` drives the async
+trap. The returned (synchronous) iterator from `startTrap()` drives the async
 iterator of the host until it fully transfers the trap results to the guest, and
 the guest unblocks.
 
 The Loopback implementation provides partial support for TrapCaps, except it
-cannot unwrap promises.  Loopback TrapHandlers must return synchronously, or an
+cannot unwrap promises. Loopback TrapHandlers must return synchronously, or an
 exception will be thrown.

@@ -26,18 +26,21 @@ const shell = makeShell({
   spawner: makeHostSpawner({ searchPath: process.env.PATH, defaultEnv: {} }),
 });
 
-const { stdout, exitCode, truncated } = await shell.exec('grep', ['-r', 'TODO']);
+const { stdout, exitCode, truncated } = await shell.exec('grep', [
+  '-r',
+  'TODO',
+]);
 ```
 
 The exo enforces the guest-facing bounds: allowlist-before-spawn, argv arrays
 only (no shell string / interpolation), the policy's sanitized environment, a
 per-stream output cap with a `truncated` flag, and a timeout that a per-call
-value may only *narrow*. `inspect()` reveals the policy bounds but never the host
+value may only _narrow_. `inspect()` reveals the policy bounds but never the host
 working directory, env passlist, or search path.
 
 ## The honest boundary
 
-Under the host spawner, a `Shell` bounds *which* commands start and *with what*
+Under the host spawner, a `Shell` bounds _which_ commands start and _with what_
 env, cwd, timeout, and output budget. A started child is still an ordinary host
 process (an allowlisted `grep` can read `~/.ssh` if the OS user can). Kernel-level
 confinement comes from running the same capability over a sandbox spawner; the

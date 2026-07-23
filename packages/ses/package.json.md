@@ -77,7 +77,7 @@ do not directly import the shim.
 
 Node.js introduced `imports` and `exports` properties to `package.json`
 when it added support for JavaScript modules.
-Any package that provides `exports` can *enforce* which modules inside its
+Any package that provides `exports` can _enforce_ which modules inside its
 package are externally visible, can create aliases, and can declare predicates
 for which alias to use depending on the environment, like `import` for systems
 supporting JavaScript modules, `require` for CommonJS, `browser` for scripts.
@@ -86,7 +86,7 @@ supporting JavaScript modules, `require` for CommonJS, `browser` for scripts.
 
 This could have been a single value and had any extension to support every
 usage pattern through versions of Node.js. Before supporting `exports`, Node.js
-would simply have used `main`. And, `node -r esm` just uses `module`.  After
+would simply have used `main`. And, `node -r esm` just uses `module`. After
 supporting `exports`, ignores the extension, relying on the `import` or
 `require` to redirect if necessary for the importers's needs.
 
@@ -122,7 +122,7 @@ Node.js and other tools will use this file when importing `ses` as an CommonJS m
 
 #### "types": "./dist/types.d.cts"
 
-As of TypeScript v5.5 beta, if a package is an ESM package (`"type": "module"`), any `.d.ts` file in the package is considered to be for ESM consumers only.  If CommonJS is targeted, ESM packages must now export types in `.d.cts` files. Think of it this way: *`.d.ts` is to `.d.cts` as `.js` is to `.cjs`*.
+As of TypeScript v5.5 beta, if a package is an ESM package (`"type": "module"`), any `.d.ts` file in the package is considered to be for ESM consumers only. If CommonJS is targeted, ESM packages must now export types in `.d.cts` files. Think of it this way: _`.d.ts` is to `.d.cts` as `.js` is to `.cjs`_.
 
 At build time, `./types.d.ts` is copied to `./dist/types.d.ts`; it is otherwise identical.
 

@@ -1,11 +1,11 @@
 # JS Reference Implementation of Go-like Minimum Version Selection
 
-| | |
-|---|---|
-| **Created** | 2026-06-02 |
-| **Updated** | 2026-07-10 |
-| **Author** | endolinbot (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-06-02            |
+| **Updated** | 2026-07-10            |
+| **Author**  | endolinbot (prompted) |
+| **Status**  | Not Started           |
 
 ## Summary
 
@@ -74,12 +74,12 @@ turns the resolution into a `CompartmentMap` is
 This is the **algorithm layer** of the daemon-worker
 `importLocation` stack:
 
-| Layer | Doc | Concern |
-|-------|-----|---------|
-| Capability | [registry-capability](registry-capability.md) | `EndoRegistry` shape, `@registry` slot, lifetime |
-| Algorithm | this | MVS walk, lockfile stance, who walks the graph |
-| Mapper | [snapshot-mapper](snapshot-mapper.md) | `mapSnapshot`, `makeMountReadPowers`, `endo-mount:` scheme |
-| Integration | [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | `makeFromPackage`, worker dispatch, CLI, XS bridging |
+| Layer       | Doc                                                                   | Concern                                                    |
+| ----------- | --------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Capability  | [registry-capability](registry-capability.md)                         | `EndoRegistry` shape, `@registry` slot, lifetime           |
+| Algorithm   | this                                                                  | MVS walk, lockfile stance, who walks the graph             |
+| Mapper      | [snapshot-mapper](snapshot-mapper.md)                                 | `mapSnapshot`, `makeMountReadPowers`, `endo-mount:` scheme |
+| Integration | [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | `makeFromPackage`, worker dispatch, CLI, XS bridging       |
 
 ## The MVS algorithm
 
@@ -90,7 +90,7 @@ minor (and patch) per major", because npm packages routinely
 declare incompatible majors and the Go assumption of one major
 per module does not hold.
 [endor-npm-registry-proxy](endor-npm-registry-proxy.md)
-§ *Comparison with Go's MVS* states the rule the JS reference
+§ _Comparison with Go's MVS_ states the rule the JS reference
 implementation also follows.
 
 The resolution shape that emerges:
@@ -152,14 +152,14 @@ must resolve to the sibling subdirectory rather than to the
 registry.
 
 The walk-up search below is performed by the **mapper layer**
-([snapshot-mapper](snapshot-mapper.md) § *Workspace-root
-discovery*), which holds the snapshot tree; the resolver receives
+([snapshot-mapper](snapshot-mapper.md) § _Workspace-root
+discovery_), which holds the snapshot tree; the resolver receives
 its outcome as the `workspaceRoot` option on
 `EndoRegistry.resolve`.
 The split is a least-authority boundary, not merely an
 accident of encoding: the resolver is handed only the discovered
-workspace subtree and its enumerated members, so it *cannot* and
-*must not* read the filesystem above the workspace root.
+workspace subtree and its enumerated members, so it _cannot_ and
+_must not_ read the filesystem above the workspace root.
 The entry `package.json` reaches `resolve` as opaque bytes with
 no location precisely so the resolver has no handle with which to
 walk outside its scope; narrowing the resolver's authority to the
@@ -174,8 +174,8 @@ evaluates the `workspaces` globs during discovery, and
 name-keyed map (`package name -> member subtree`), not a bare
 directory list the resolver would have to read names from (the
 shape is pinned in
-[registry-capability](registry-capability.md) § *Capability
-shape*).
+[registry-capability](registry-capability.md) § _Capability
+shape_).
 The resolver therefore matches a `workspace:` specifier against
 that name-keyed member map directly; it never re-evaluates a glob
 and never reads a member's `package.json` `name` for itself.
@@ -207,7 +207,7 @@ The reject for a stranded `workspace:` specifier is therefore the
 graph, encounters a `workspace:` specifier, and no `workspaceRoot`
 was supplied, it raises the clean error ("workspace dependency
 declared but no enclosing workspace root").
-When a workspace root *is* found, the discovered root supplies the
+When a workspace root _is_ found, the discovered root supplies the
 `workspaceRoot` option to `EndoRegistry.resolve` so the workspace
 branch of the algorithm above can look up sibling members.
 
@@ -215,8 +215,8 @@ Workspace members differ from registry-resolved packages in two
 ways:
 
 - They have no version segment in the synthesized location URL
-  (see [snapshot-mapper](snapshot-mapper.md) § *Synthesized
-  layout*); a workspace member named `@endo/patterns` resolves
+  (see [snapshot-mapper](snapshot-mapper.md) § _Synthesized
+  layout_); a workspace member named `@endo/patterns` resolves
   to `@endo/patterns/`, distinct from any registry-resolved
   `@endo/patterns@1.0.0/`.
 - The workspace member's version on disk wins regardless of
@@ -239,7 +239,7 @@ The first cut limits scope to MVS resolution from
 MVS runs freely and produces the conservative "greatest mentioned
 minor per major" result described in
 [endor-npm-registry-proxy](endor-npm-registry-proxy.md)
-§ *Comparison with Go's MVS*; lockfile honoring is a follow-up
+§ _Comparison with Go's MVS_; lockfile honoring is a follow-up
 design that can land once the MVS path is stable.
 
 Lockfile honoring slots in as a constraint pass within
@@ -283,7 +283,7 @@ const resolve = async (packageJsonBytes, options = {}) => {
   const frontier = enqueueAllDependencies(root);
   const resolved = new Map();
   const peerRequirements = []; // (importer, peer name, range)
-  const unmetOptionals = [];   // (importer, dep name, range, reason)
+  const unmetOptionals = []; // (importer, dep name, range, reason)
 
   while (frontier.length > 0) {
     const edge = frontier.shift();
@@ -297,15 +297,17 @@ const resolve = async (packageJsonBytes, options = {}) => {
         // the resolver's: only the graph walk sees the specifier
         // (see "Workspace resolution").
         throw makeError(
-          X`workspace dependency ${
-            q(name)} declared but no enclosing workspace root`,
+          X`workspace dependency ${q(
+            name,
+          )} declared but no enclosing workspace root`,
         );
       }
       const memberTree = workspaceRoot.members[name];
       if (memberTree === undefined) {
         throw makeError(
-          X`workspace dependency ${q(name)} not found in workspace at ${
-            q(workspaceRoot.root)}`,
+          X`workspace dependency ${q(name)} not found in workspace at ${q(
+            workspaceRoot.root,
+          )}`,
         );
       }
       const workspacePj = await readWorkspaceMemberPackageJson(memberTree);
@@ -366,7 +368,7 @@ Notes on the sketch:
   MVS's per-major coexistence; the resolver tracks one selection
   per `(name, major)`, not one per `name`.
 - `buildRegistryResolution` flattens the `(name, major) ->
-  selection` map into the `packagesByKey` shape the capability
+selection` map into the `packagesByKey` shape the capability
   returns, computes the canonical key list, and derives
   `resolutionHash`.
   The `unmetOptionals` list is attached as diagnostic state on
@@ -388,7 +390,7 @@ the JS reference implementation of
 [registry-capability](registry-capability.md) § Phase 1; the
 canonical dependency-ordered build plan (accepted 2026-07-10) is
 [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md)
-§ *Phased Implementation*.
+§ _Phased Implementation_.
 That section enumerates the test surface (lookup, resolve,
 fetch).
 The MVS-specific shape tests this design adds:
@@ -410,7 +412,7 @@ The MVS-specific shape tests this design adds:
   missing a required pair.
 - **Workspace resolution.**
   A fixture with a root `package.json` declaring `workspaces:
-  ['packages/*']` and two members `packages/lib-a` and
+['packages/*']` and two members `packages/lib-a` and
   `packages/lib-b`, where `lib-a` declares a dependency
   `'lib-b': 'workspace:^'`.
   The resolution carries `lib-b` as a workspace member entry
@@ -439,7 +441,7 @@ The MVS-specific shape tests this design adds:
   mapper found no enclosing workspace root); `resolve` rejects
   with the clean no-enclosing-workspace-root error.
   This exercises the resolver-owned reject the discovery
-  reassignment creates (§ *Workspace resolution*), the one failure
+  reassignment creates (§ _Workspace resolution_), the one failure
   mode injecting `workspaceRoot` directly cannot cover.
 - **`peerDependencies` satisfied.**
   A fixture where `pkg-a` declares
@@ -520,13 +522,13 @@ The MVS-specific shape tests this design adds:
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|--------------|
-| [registry-capability](registry-capability.md) | Hosts this algorithm.  The capability surface (`resolve`, `RegistryResolution`) is where the algorithm meets its callers. |
-| [snapshot-mapper](snapshot-mapper.md) | Consumes the `RegistryResolution` this algorithm produces; the `compartment-mapper`'s package descriptor walk binds each import site to the right `(name, version)` entry. |
-| [endor-npm-registry-proxy](endor-npm-registry-proxy.md) | The Rust-side analogue of this algorithm.  Both lanes follow the same Go-like MVS rule and produce structurally identical `RegistryResolution` outputs; the JS lane is what the Rust lane is checked against. |
-| [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | Drives the algorithm exactly once per `makeFromPackage` invocation.  The integration layer does not loop over the resolver. |
-| [endor-run-expanded](endor-run-expanded.md) | Describes the Rust-side entry flow.  Phase 5 there is the analogue of this design's single-call eager-resolution shape. |
+| Design                                                                | Relationship                                                                                                                                                                                                 |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [registry-capability](registry-capability.md)                         | Hosts this algorithm. The capability surface (`resolve`, `RegistryResolution`) is where the algorithm meets its callers.                                                                                     |
+| [snapshot-mapper](snapshot-mapper.md)                                 | Consumes the `RegistryResolution` this algorithm produces; the `compartment-mapper`'s package descriptor walk binds each import site to the right `(name, version)` entry.                                   |
+| [endor-npm-registry-proxy](endor-npm-registry-proxy.md)               | The Rust-side analogue of this algorithm. Both lanes follow the same Go-like MVS rule and produce structurally identical `RegistryResolution` outputs; the JS lane is what the Rust lane is checked against. |
+| [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | Drives the algorithm exactly once per `makeFromPackage` invocation. The integration layer does not loop over the resolver.                                                                                   |
+| [endor-run-expanded](endor-run-expanded.md)                           | Describes the Rust-side entry flow. Phase 5 there is the analogue of this design's single-call eager-resolution shape.                                                                                       |
 
 ## Prompt
 
@@ -551,4 +553,4 @@ discovery is assigned to the mapper layer (the resolver consumes
 the `workspaceRoot` option, it does not perform the walk-up).
 Canonical build order:
 [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md)
-§ *Phased Implementation*.
+§ _Phased Implementation_.

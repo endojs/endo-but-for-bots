@@ -1,11 +1,11 @@
 # Endor: Rust Daemon Architecture
 
-| | |
-|---|---|
-| **Created** | 2026-04-16 |
-| **Updated** | 2026-04-16 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Active |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-04-16            |
+| **Updated** | 2026-04-16            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Active                |
 
 ## Overview
 
@@ -32,14 +32,14 @@ The implementation lives in two crates:
 
 `rust/endo/src/bin/endor.rs` dispatches subcommands:
 
-| Subcommand | Role |
-|---|---|
-| `endor daemon` | Foreground daemon (capability bus) |
-| `endor start` | Spawn detached daemon |
-| `endor stop` | Graceful shutdown via SIGINT |
-| `endor ping` | Liveness check |
-| `endor worker [-e xs]` | Supervised XS worker child |
-| `endor run [-e xs] <archive>` | Standalone archive runner |
+| Subcommand                    | Role                               |
+| ----------------------------- | ---------------------------------- |
+| `endor daemon`                | Foreground daemon (capability bus) |
+| `endor start`                 | Spawn detached daemon              |
+| `endor stop`                  | Graceful shutdown via SIGINT       |
+| `endor ping`                  | Liveness check                     |
+| `endor worker [-e xs]`        | Supervised XS worker child         |
+| `endor run [-e xs] <archive>` | Standalone archive runner          |
 
 The `-e <engine>` flag selects the execution engine for the
 `worker` and `run` subcommands (currently only XS is wired).
@@ -51,20 +51,20 @@ threads (`ENDO_WORKER_THREADS`, default 4).
 
 ## Endo crate modules
 
-| Module | Responsibility |
-|---|---|
-| `supervisor` | Handle allocation, inbox routing, suspend/resume state |
-| `endo` | Daemon lifecycle, manager hosting, control verb dispatch |
-| `inproc` | Shared (in-process) XS peers on machine runner threads |
-| `proc` | Separate (child process) spawning with fd 3/4 pipes |
-| `socket` | Unix socket listener, netstring client bridging |
-| `codec` | CBOR frame/envelope encoding and decoding |
-| `engine` | Worker platform resolution and spawn dispatch |
-| `mailbox` | Async-safe message queue (tokio mpsc) |
-| `paths` | XDG / macOS path resolution |
-| `pidfile` | PID file management |
-| `types` | Handle, Envelope, Message, WorkerInfo |
-| `error` | EndoError enum |
+| Module       | Responsibility                                           |
+| ------------ | -------------------------------------------------------- |
+| `supervisor` | Handle allocation, inbox routing, suspend/resume state   |
+| `endo`       | Daemon lifecycle, manager hosting, control verb dispatch |
+| `inproc`     | Shared (in-process) XS peers on machine runner threads   |
+| `proc`       | Separate (child process) spawning with fd 3/4 pipes      |
+| `socket`     | Unix socket listener, netstring client bridging          |
+| `codec`      | CBOR frame/envelope encoding and decoding                |
+| `engine`     | Worker platform resolution and spawn dispatch            |
+| `mailbox`    | Async-safe message queue (tokio mpsc)                    |
+| `paths`      | XDG / macOS path resolution                              |
+| `pidfile`    | PID file management                                      |
+| `types`      | Handle, Envelope, Message, WorkerInfo                    |
+| `error`      | EndoError enum                                           |
 
 ## Core types
 
@@ -135,12 +135,14 @@ synchronously, but a child cannot block its parent.
 ## Daemon lifecycle
 
 `Endo::start()`:
+
 1. Resolve paths (XDG / macOS conventions, env overrides).
 2. Create state, ephemeral, cache directories.
 3. Write PID file.
 4. Create supervisor and outbox receiver.
 
 `Endo::serve()`:
+
 1. Install supervisor routing with control and resume
    callbacks.
 2. Host the manager:
@@ -153,6 +155,7 @@ synchronously, but a child cannot block its parent.
 4. Block until SIGINT, SIGTERM, or manager exit.
 
 `Endo::stop()`:
+
 1. Signal supervisor to close outbox (drain routing task).
 2. Wait up to 5 s for the routing task.
 3. Remove PID file.
@@ -161,14 +164,14 @@ synchronously, but a child cannot block its parent.
 
 The daemon handles these control verbs (to=0):
 
-| Verb | Payload | Response | Description |
-|---|---|---|---|
-| `ready` | — | — | Manager startup acknowledgement |
-| `listen-path` | CBOR `{path}` | `listening-path` | Bind Unix socket listener |
-| `spawn` | CBOR `{platform, ...}` | `spawned` + handle | Spawn worker (see Worker platforms) |
-| `list` | — | `workers` + list | Enumerate registered workers |
-| `suspend` | CBOR `{handle}` | forwarded to worker | Initiate worker suspension |
-| `suspended` | SHA-256 hex | — | Worker confirms snapshot written to CAS |
+| Verb          | Payload                | Response            | Description                             |
+| ------------- | ---------------------- | ------------------- | --------------------------------------- |
+| `ready`       | —                      | —                   | Manager startup acknowledgement         |
+| `listen-path` | CBOR `{path}`          | `listening-path`    | Bind Unix socket listener               |
+| `spawn`       | CBOR `{platform, ...}` | `spawned` + handle  | Spawn worker (see Worker platforms)     |
+| `list`        | —                      | `workers` + list    | Enumerate registered workers            |
+| `suspend`     | CBOR `{handle}`        | forwarded to worker | Initiate worker suspension              |
+| `suspended`   | SHA-256 hex            | —                   | Worker confirms snapshot written to CAS |
 
 ## Manager hosting
 
@@ -188,6 +191,7 @@ caller-selectable — it is a daemon configuration choice.
 ### In-process XS (`inproc.rs`)
 
 `spawn_inproc_xs_manager`:
+
 1. Set env vars (`ENDO_SOCK_PATH`, `ENDO_STATE_PATH`, etc.).
 2. Delegate to `spawn_shared_xs_peer` with the manager
    bootstrap bundle and a shutdown notify.
@@ -197,6 +201,7 @@ caller-selectable — it is a daemon configuration choice.
 ### Node.js child (`proc.rs`)
 
 `spawn_node_daemon` (legacy, `ENDO_MANAGER_NODE=1`):
+
 1. Spawn Node.js with args: script path, sock path, state
    path, ephemeral path, cache path.
 2. Wire fd 3/4 for envelope I/O via `spawn_with_pipes`.
@@ -225,13 +230,13 @@ When `platform` is omitted, the daemon treats it as
 
 ### Platform resolution (`engine.rs`)
 
-| Requested | Resolved to | Condition |
-|---|---|---|
-| `"separate"` (default) | XS child process | Always available |
-| `"shared"` | XS in supervisor process | XS linked into binary |
-| `"shared"` | XS child process (downgrade) | XS not linked (graceful fallback) |
-| `"node"` | Node.js child process | `NODE_BIN` env or `node` on PATH |
-| `"node"` | Error | No Node.js binary found |
+| Requested              | Resolved to                  | Condition                         |
+| ---------------------- | ---------------------------- | --------------------------------- |
+| `"separate"` (default) | XS child process             | Always available                  |
+| `"shared"`             | XS in supervisor process     | XS linked into binary             |
+| `"shared"`             | XS child process (downgrade) | XS not linked (graceful fallback) |
+| `"node"`               | Node.js child process        | `NODE_BIN` env or `node` on PATH  |
+| `"node"`               | Error                        | No Node.js binary found           |
 
 **Separate** is the default and preferred mode.
 Each worker runs in its own OS process, providing fault
@@ -274,6 +279,7 @@ to runner threads round-robin (or by least-loaded
 heuristic).
 
 Advantages over separate workers:
+
 - No process-spawn overhead.
 - No pipe I/O serialization — envelopes pass through
   in-memory channels.
@@ -281,6 +287,7 @@ Advantages over separate workers:
   no duplicate XS runtime image).
 
 Trade-offs:
+
 - No fault isolation — a crash or OOM in any shared machine
   takes down the supervisor and all co-resident machines.
 - Cooperative scheduling — a CPU-bound JS computation
@@ -323,6 +330,7 @@ resolution rules above.
 ### Separate spawning (`proc.rs`)
 
 `spawn_process`:
+
 1. Allocate handle.
 2. `spawn_with_pipes` creates two OS pipes, `pre_exec` dups
    them to fds 3 (write) and 4 (read) in the child.
@@ -338,6 +346,7 @@ resolution rules above.
 ### Shared spawning (`inproc.rs`)
 
 `spawn_shared_xs_peer`:
+
 1. Allocate handle, register inbox.
 2. Select a runner thread (round-robin or least-loaded).
 3. Send a `RunMachine` request to the runner, carrying:
@@ -413,8 +422,8 @@ It gains an optional second argument:
 ```js
 provideWorker(
   petNamePath,
-  { platform: 'shared' }  // optional
-)
+  { platform: 'shared' }, // optional
+);
 ```
 
 The options record is validated by the interface guard:
@@ -516,7 +525,7 @@ This parameter is renamed to `defaultPlatform` and accepts
 the new platform values:
 
 ```js
-defaultPlatform = 'separate'  // was defaultWorkerKind = 'node'
+defaultPlatform = 'separate'; // was defaultWorkerKind = 'node'
 ```
 
 When running under the Rust supervisor, `defaultPlatform`
@@ -526,17 +535,18 @@ The legacy Node.js daemon (if still used) would set
 
 #### Summary of renames
 
-| Old | New | Notes |
-|---|---|---|
-| `kind: 'locked'` | `platform: 'separate'` | Default; XS child process |
-| `kind: 'locked'` | `platform: 'shared'` | Explicit request for in-process |
-| `kind: 'node'` | `platform: 'node'` | Node.js child process |
-| `defaultWorkerKind` | `defaultPlatform` | Bootstrap parameter |
-| `workerKind` | `workerPlatform` | Caplet options field |
+| Old                 | New                    | Notes                           |
+| ------------------- | ---------------------- | ------------------------------- |
+| `kind: 'locked'`    | `platform: 'separate'` | Default; XS child process       |
+| `kind: 'locked'`    | `platform: 'shared'`   | Explicit request for in-process |
+| `kind: 'node'`      | `platform: 'node'`     | Node.js child process           |
+| `defaultWorkerKind` | `defaultPlatform`      | Bootstrap parameter             |
+| `workerKind`        | `workerPlatform`       | Caplet options field            |
 
 ## Client bridging (`socket.rs`)
 
 `start_socket_listener`:
+
 1. Bind `UnixListener` on the socket path.
 2. For each connection: allocate handle, register inbox.
 3. Send `"connect"` envelope to daemon.
@@ -558,6 +568,7 @@ The envelope wire format is CBOR throughout.
 `[handle: int, verb: text, payload: bytes, nonce: int]`.
 
 Nonce semantics:
+
 - 0 = fire-and-forget.
 - Positive = synchronous call (response carries same nonce).
 
@@ -610,34 +621,35 @@ through the XS write/read callbacks directly to/from disk.
 Not `Send` or `Sync` — each worker gets its own machine on a
 dedicated thread.
 
-| Method | Description |
-|---|---|
-| `new(creation, name)` | Create fresh machine |
-| `eval(source)` | Evaluate JS, return `JsValue` |
-| `run_promise_jobs()` | Drain microtask queue once |
-| `quiesce()` | Drain until no pending jobs |
-| `run_loop()` | Full event loop (promises + timers) |
-| `define_function(name, cb, argc)` | Register host function |
-| `register_powers(ptr)` | Install fs/crypto/module/sqlite callbacks |
-| `register_worker_io()` | Install envelope I/O callbacks |
-| `write_snapshot(sig, cbs)` | In-memory snapshot |
-| `from_snapshot(data, name, sig, cbs)` | Restore from bytes |
-| `suspend_to_cas(sig, cas_dir)` | Stream snapshot to CAS |
-| `resume_from_cas(dir, hash, name, sig, cbs)` | Stream restore from CAS |
+| Method                                       | Description                               |
+| -------------------------------------------- | ----------------------------------------- |
+| `new(creation, name)`                        | Create fresh machine                      |
+| `eval(source)`                               | Evaluate JS, return `JsValue`             |
+| `run_promise_jobs()`                         | Drain microtask queue once                |
+| `quiesce()`                                  | Drain until no pending jobs               |
+| `run_loop()`                                 | Full event loop (promises + timers)       |
+| `define_function(name, cb, argc)`            | Register host function                    |
+| `register_powers(ptr)`                       | Install fs/crypto/module/sqlite callbacks |
+| `register_worker_io()`                       | Install envelope I/O callbacks            |
+| `write_snapshot(sig, cbs)`                   | In-memory snapshot                        |
+| `from_snapshot(data, name, sig, cbs)`        | Restore from bytes                        |
+| `suspend_to_cas(sig, cas_dir)`               | Stream snapshot to CAS                    |
+| `resume_from_cas(dir, hash, name, sig, cbs)` | Stream restore from CAS                   |
 
 ### Unified runner
 
 `run_xs_program(program, creation, label, transport)` encodes
 the four modes:
 
-| Program | Transport | Mode |
-|---|---|---|
-| Bundle | Some | Supervised peer (worker or manager) |
-| Archive | Some | Supervised archive (future) |
-| Archive | None | Standalone (`endor run`) |
-| Bundle | None | Standalone bundle |
+| Program | Transport | Mode                                |
+| ------- | --------- | ----------------------------------- |
+| Bundle  | Some      | Supervised peer (worker or manager) |
+| Archive | Some      | Supervised archive (future)         |
+| Archive | None      | Standalone (`endor run`)            |
+| Bundle  | None      | Standalone bundle                   |
 
 Bootstrap sequence (fresh machine):
+
 1. Ensure XS shared cluster initialized.
 2. Install transport, init handshake.
 3. Create machine (or restore from snapshot file).
@@ -678,16 +690,17 @@ the JS `handleCommand(Uint8Array)` global.
 
 `WorkerTransport` trait (Send):
 
-| Method | Description |
-|---|---|
-| `init_handshake()` | Consume init envelope → `InitResult` |
-| `recv_raw_envelope()` | Blocking receive |
-| `try_recv_raw_envelope()` | Non-blocking receive |
-| `send_raw_frame(data)` | Send raw CBOR bytes |
-| `send_frame(payload)` | Wrap in deliver envelope |
-| `daemon_handle()` | Parent handle from init |
+| Method                    | Description                          |
+| ------------------------- | ------------------------------------ |
+| `init_handshake()`        | Consume init envelope → `InitResult` |
+| `recv_raw_envelope()`     | Blocking receive                     |
+| `try_recv_raw_envelope()` | Non-blocking receive                 |
+| `send_raw_frame(data)`    | Send raw CBOR bytes                  |
+| `send_frame(payload)`     | Wrap in deliver envelope             |
+| `daemon_handle()`         | Parent handle from init              |
 
 Two implementations:
+
 - **PipeTransport** — fd 3 (write) / fd 4 (read), used by
   child-process workers.
 - **ChannelTransport** — `std::sync::mpsc`, used by
@@ -704,14 +717,14 @@ The `HostPowers` struct (stored in the machine context
 pointer) holds cap-std directory capabilities and
 pre-populated module sources.
 
-| Module | Functions | Description |
-|---|---|---|
-| `fs` | 19 | File I/O: read, write, readDir, mkdir, remove, rename, exists, isDir, symlink, etc. |
-| `crypto` | 8 | SHA-256 (streaming), random, Ed25519 keygen/sign |
-| `modules` | 2 | Dynamic import hook, specifier resolution |
-| `process` | 4 | getPid, getEnv, joinPath, realPath |
-| `sqlite` | 9 | Database open/close, prepare/run/get/all/columns/finalize |
-| `debug` | — | Debug protocol I/O buffers (not registered as host functions) |
+| Module    | Functions | Description                                                                         |
+| --------- | --------- | ----------------------------------------------------------------------------------- |
+| `fs`      | 19        | File I/O: read, write, readDir, mkdir, remove, rename, exists, isDir, symlink, etc. |
+| `crypto`  | 8         | SHA-256 (streaming), random, Ed25519 keygen/sign                                    |
+| `modules` | 2         | Dynamic import hook, specifier resolution                                           |
+| `process` | 4         | getPid, getEnv, joinPath, realPath                                                  |
+| `sqlite`  | 9         | Database open/close, prepare/run/get/all/columns/finalize                           |
+| `debug`   | —         | Debug protocol I/O buffers (not registered as host functions)                       |
 
 Worker I/O adds 13 host functions: recvFrame, sendFrame,
 getDaemonHandle, issueCommand, sendRawFrame, importArchive,
@@ -722,13 +735,13 @@ base64Encode/Decode, debugPoll.
 
 Five JavaScript files included via `include_str!()`:
 
-| File | Purpose |
-|---|---|
-| `polyfills.js` | harden, assert, TextEncoder stubs |
-| `host_aliases.js` | `globalThis.host*` → unprefixed names |
-| `ses_boot.js` | SES lockdown + HandledPromise shim |
+| File                  | Purpose                                    |
+| --------------------- | ------------------------------------------ |
+| `polyfills.js`        | harden, assert, TextEncoder stubs          |
+| `host_aliases.js`     | `globalThis.host*` → unprefixed names      |
+| `ses_boot.js`         | SES lockdown + HandledPromise shim         |
 | `worker_bootstrap.js` | Worker: bus-xs-core + single CapTP session |
-| `daemon_bootstrap.js` | Manager: multiplexed CapTP sessions |
+| `daemon_bootstrap.js` | Manager: multiplexed CapTP sessions        |
 
 ### CESU-8
 
@@ -764,43 +777,43 @@ Falls back to prebuilt `libxs.a` if sources are absent.
 `paths.rs` resolves daemon paths using environment variables
 or platform defaults:
 
-| Path | Env override | macOS default | Linux default |
-|---|---|---|---|
-| State | `ENDO_STATE_PATH` | ~/Library/Application Support/Endo | $XDG_STATE_HOME/endo |
-| Ephemeral | `ENDO_EPHEMERAL_STATE_PATH` | (same as state) | $XDG_RUNTIME_DIR/endo |
-| Socket | `ENDO_SOCK_PATH` | {ephemeral}/captp0.sock | {ephemeral}/captp0.sock |
-| Cache | `ENDO_CACHE_PATH` | ~/Library/Caches/Endo | $XDG_CACHE_HOME/endo |
+| Path      | Env override                | macOS default                      | Linux default           |
+| --------- | --------------------------- | ---------------------------------- | ----------------------- |
+| State     | `ENDO_STATE_PATH`           | ~/Library/Application Support/Endo | $XDG_STATE_HOME/endo    |
+| Ephemeral | `ENDO_EPHEMERAL_STATE_PATH` | (same as state)                    | $XDG_RUNTIME_DIR/endo   |
+| Socket    | `ENDO_SOCK_PATH`            | {ephemeral}/captp0.sock            | {ephemeral}/captp0.sock |
+| Cache     | `ENDO_CACHE_PATH`           | ~/Library/Caches/Endo              | $XDG_CACHE_HOME/endo    |
 
 ## Dependencies
 
 ### endo crate
 
-| Dependency | Purpose |
-|---|---|
-| `libc` | Process management (pre_exec, pipe) |
-| `tokio` | Async runtime, signals, process, I/O |
-| `xsnap` | XS engine bindings (path dependency) |
+| Dependency | Purpose                              |
+| ---------- | ------------------------------------ |
+| `libc`     | Process management (pre_exec, pipe)  |
+| `tokio`    | Async runtime, signals, process, I/O |
+| `xsnap`    | XS engine bindings (path dependency) |
 
 ### xsnap crate
 
-| Dependency | Purpose |
-|---|---|
-| `cap-std`, `cap-tempfile` | Capability-safe filesystem |
-| `sha2` | SHA-256 for snapshots and crypto powers |
-| `rand` | Random number generation |
-| `ed25519-dalek` | Ed25519 signatures |
-| `hex` | Hex encoding |
-| `zip` | Archive (compartment-map) loading |
-| `serde`, `serde_json` | JSON for SQLite FFI layer |
-| `base64` | Base64 codec |
-| `rusqlite` (bundled) | SQLite database |
-| `cc` (build) | C compiler driver for XS |
+| Dependency                | Purpose                                 |
+| ------------------------- | --------------------------------------- |
+| `cap-std`, `cap-tempfile` | Capability-safe filesystem              |
+| `sha2`                    | SHA-256 for snapshots and crypto powers |
+| `rand`                    | Random number generation                |
+| `ed25519-dalek`           | Ed25519 signatures                      |
+| `hex`                     | Hex encoding                            |
+| `zip`                     | Archive (compartment-map) loading       |
+| `serde`, `serde_json`     | JSON for SQLite FFI layer               |
+| `base64`                  | Base64 codec                            |
+| `rusqlite` (bundled)      | SQLite database                         |
+| `cc` (build)              | C compiler driver for XS                |
 
 ## Related designs
 
-| Design | Relationship |
-|---|---|
-| [daemon-capability-bus](daemon-capability-bus.md) | Protocol specification that endor implements |
-| [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | Suspend/resume feature design |
-| [daemon-xs-worker-debugger](daemon-xs-worker-debugger.md) | XS debugger protocol |
-| [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) | SQLite host function design |
+| Design                                                    | Relationship                                 |
+| --------------------------------------------------------- | -------------------------------------------- |
+| [daemon-capability-bus](daemon-capability-bus.md)         | Protocol specification that endor implements |
+| [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | Suspend/resume feature design                |
+| [daemon-xs-worker-debugger](daemon-xs-worker-debugger.md) | XS debugger protocol                         |
+| [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md)     | SQLite host function design                  |

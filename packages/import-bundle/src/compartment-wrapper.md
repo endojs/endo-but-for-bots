@@ -6,10 +6,9 @@ Impose inescapable options on a `Compartment`.
 
 Compartments can also apply a transform or add globals to all the code they evaluate which can futher control its behavior. Some of those transforms or globals may need to be inescapable, such that any child compartment (transitively) will have these transforms and globals. Particularly, to ensure that a Compartment and its transitive child Compartments all have a `WeakMap` or `WeakSet` that tracks the content of all guest `Weak*` collections, these endowments must be "inescapable".
 
-To prevent code from escaping a transform by evaluating its code in a new child `Compartment`, the creator of the confined compartment must replace its `Compartment` constructor with a wrapped version. The wrapper will modify the arguments to include the transforms (and other options). It must merge the provided options with the imposed ones in the right order, to ensure they cannot be overridden (i.e. the imposed transforms must appear at the *end* of the list). Finally, it must also propogate the wrapper itself to the new child Compartment, by modifying `c.thisGlobal.Compartment` on each newly created compartment.
+To prevent code from escaping a transform by evaluating its code in a new child `Compartment`, the creator of the confined compartment must replace its `Compartment` constructor with a wrapped version. The wrapper will modify the arguments to include the transforms (and other options). It must merge the provided options with the imposed ones in the right order, to ensure they cannot be overridden (i.e. the imposed transforms must appear at the _end_ of the list). Finally, it must also propogate the wrapper itself to the new child Compartment, by modifying `c.thisGlobal.Compartment` on each newly created compartment.
 
 This module provides a function to create a `Compartment` constructor that enforces a set of "inescapable options".
-
 
 ## Usage
 
@@ -42,8 +41,8 @@ const c2 = new Compartment();
 c2.evaluate(`new WeakMap()`);
 ```
 
-  [Compartments]: ../../ses/README.md#compartment
-  [SES]: ../../ses/README.md
+[Compartments]: ../../ses/README.md#compartment
+[SES]: ../../ses/README.md
 
 ## Note expected semantic changes
 
@@ -52,6 +51,7 @@ own properties, whether string-named or symbol-named, and whether enumerable
 or not. This
 differs from the longer term agreement discussed at
 https://www.youtube.com/watch?v=xlR21uDigGE in these ways:
+
 - The option in question should be named `inescapableGlobals` since
   we want to reserve `*Properties` for descriptor copying rather
   than value copying.
@@ -64,7 +64,7 @@ https://www.youtube.com/watch?v=xlR21uDigGE in these ways:
 - Following the `assign`-like semantics agree on in that meeting,
   this should only copy enumerable own properties, whereas the loop
   below copies all own properties.
-The loop here does follow this agreement by differing from `assign` in
-making all the target properties non-enumerable. The agreement would
-further align the normal `Compartment` endowments argument to also
-make the target properties non-enumerable.
+  The loop here does follow this agreement by differing from `assign` in
+  making all the target properties non-enumerable. The agreement would
+  further align the normal `Compartment` endowments argument to also
+  make the target properties non-enumerable.

@@ -93,6 +93,7 @@ User input
 ```
 
 The conversation tree is backed by `@endo/conversation-tree`:
+
 - **Fae side**: `EndoPetstoreBackend` — nodes persist in the daemon's petname store, survive restarts
 - **Whylip UI side**: `MemoryBackend` — reconstructed from the mailbox on each page load
 

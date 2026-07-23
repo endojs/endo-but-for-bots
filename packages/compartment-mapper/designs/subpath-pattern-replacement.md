@@ -64,7 +64,7 @@ import z from '#internal/z.js';
    even if a broader pattern would match.
 6. **Conditional patterns.** Pattern values can be condition objects,
    following the same condition-matching rules as non-pattern exports.
-7. **No `**` (globstar).** Subpath patterns do not support globstar.
+7. **No `**` (globstar).\*\* Subpath patterns do not support globstar.
    Globstar entries are silently ignored.
 
 ## Implementation
@@ -113,8 +113,8 @@ the extracted wildcard patterns:
 
 ```ts
 interface PatternDescriptor {
-  from: string;         // e.g., "./*.js"
-  to: string | null;    // e.g., "./src/*.js", or null for exclusion
+  from: string; // e.g., "./*.js"
+  to: string | null; // e.g., "./src/*.js", or null for exclusion
   compartment?: string; // foreign compartment for dependency patterns
 }
 ```
@@ -241,18 +241,18 @@ Primary fixture for cross-package subpath patterns.
 
 #### Cases Covered
 
-| Case | Specifier | Resolves to |
-|------|-----------|-------------|
-| Single-segment match | `patterns-lib/features/alpha.js` | `./src/features/alpha.js` |
-| Cross-separator match | `patterns-lib/features/beta/gamma.js` | `./src/features/beta/gamma.js` |
-| Exact over pattern | `patterns-lib/features/beta/exact` | `./src/features/beta/exact-target.js` |
-| Imports pattern | `#internal/helper.js` | `./src/internal/helper.js` |
-| Specificity | `patterns-lib/utils/private/thing.js` | `./src/private/thing.js` |
-| Null-target exclusion | `patterns-lib/features/secret/data.js` | throws |
-| Conditional (blue-moon) | `cond-patterns-lib/things/widget.js` | `./src/blue/widget.js` |
-| Conditional (default) | `cond-patterns-lib/things/widget.js` | `./src/default/widget.js` |
-| Multi-star | `multi-star-lib/x/foo/y/bar/z.js` | silently ignored |
-| Globstar | `globstar-lib/deep/nested/thing.js` | silently ignored |
+| Case                    | Specifier                              | Resolves to                           |
+| ----------------------- | -------------------------------------- | ------------------------------------- |
+| Single-segment match    | `patterns-lib/features/alpha.js`       | `./src/features/alpha.js`             |
+| Cross-separator match   | `patterns-lib/features/beta/gamma.js`  | `./src/features/beta/gamma.js`        |
+| Exact over pattern      | `patterns-lib/features/beta/exact`     | `./src/features/beta/exact-target.js` |
+| Imports pattern         | `#internal/helper.js`                  | `./src/internal/helper.js`            |
+| Specificity             | `patterns-lib/utils/private/thing.js`  | `./src/private/thing.js`              |
+| Null-target exclusion   | `patterns-lib/features/secret/data.js` | throws                                |
+| Conditional (blue-moon) | `cond-patterns-lib/things/widget.js`   | `./src/blue/widget.js`                |
+| Conditional (default)   | `cond-patterns-lib/things/widget.js`   | `./src/default/widget.js`             |
+| Multi-star              | `multi-star-lib/x/foo/y/bar/z.js`      | silently ignored                      |
+| Globstar                | `globstar-lib/deep/nested/thing.js`    | silently ignored                      |
 
 ### Integration Tests (`subpath-patterns.test.js`)
 

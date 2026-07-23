@@ -19,38 +19,38 @@ for OCapN messages, as an alternative to Syrup encoding.
 
 ## Quick Reference
 
-| OCapN Type | CBOR Encoding | Diagnostic Example |
-|------------|---------------|-------------------|
-| Undefined | Simple value 23 | `undefined` |
-| Null | Simple value 22 | `null` |
-| Boolean | Simple values 20/21 | `false`, `true` |
-| Integer | Tag 2/3 + byte string | `2(h'01')` = 1 |
-| Float64 | Float64 (major 7) | `1.5` |
-| String | Text string (major 3) | `"hello"` |
-| ByteArray | Byte string (major 2) | `h'deadbeef'` |
-| Symbol | Tag 280 + text string | `280("method")` |
-| List | Array (major 4) | `[1, 2, 3]` |
-| Struct | Map (major 5) | `{"a": 1, "b": 2}` |
-| Record | Tag 27 + array | `27(["deliver", ...])` |
-| Tagged | Record encapsulating tag string and value | `27(["tag", "decimal", "3.14"])` |
-| Error | Record with string label | `27(["error", "message"])` |
-| Target (in-band) | Record marker | `27(["target"])` |
-| Promise (in-band) | Record marker | `27(["promise"])` |
-| Error (in-band) | Record with message | `27(["error", "TypeError"])` |
-| Embedded CBOR | Tag 24 + byte string | `24(h'...')` |
+| OCapN Type        | CBOR Encoding                             | Diagnostic Example               |
+| ----------------- | ----------------------------------------- | -------------------------------- |
+| Undefined         | Simple value 23                           | `undefined`                      |
+| Null              | Simple value 22                           | `null`                           |
+| Boolean           | Simple values 20/21                       | `false`, `true`                  |
+| Integer           | Tag 2/3 + byte string                     | `2(h'01')` = 1                   |
+| Float64           | Float64 (major 7)                         | `1.5`                            |
+| String            | Text string (major 3)                     | `"hello"`                        |
+| ByteArray         | Byte string (major 2)                     | `h'deadbeef'`                    |
+| Symbol            | Tag 280 + text string                     | `280("method")`                  |
+| List              | Array (major 4)                           | `[1, 2, 3]`                      |
+| Struct            | Map (major 5)                             | `{"a": 1, "b": 2}`               |
+| Record            | Tag 27 + array                            | `27(["deliver", ...])`           |
+| Tagged            | Record encapsulating tag string and value | `27(["tag", "decimal", "3.14"])` |
+| Error             | Record with string label                  | `27(["error", "message"])`       |
+| Target (in-band)  | Record marker                             | `27(["target"])`                 |
+| Promise (in-band) | Record marker                             | `27(["promise"])`                |
+| Error (in-band)   | Record with message                       | `27(["error", "TypeError"])`     |
+| Embedded CBOR     | Tag 24 + byte string                      | `24(h'...')`                     |
 
 ## CBOR Major Types Used
 
-| Major Type | Value | Usage in OCapN |
-|------------|-------|----------------|
-| 0 | Unsigned int | Length prefixes only (not for OCapN integers) |
-| 1 | Negative int | Length prefixes only (not for OCapN integers) |
-| 2 | Byte string | ByteArray values |
-| 3 | Text string | String values |
-| 4 | Array | List values |
-| 5 | Map | Struct values |
-| 6 | Tag | Symbols (280), Records (27), Bignums (2/3), Embedded CBOR (24) |
-| 7 | Float/Simple | Float64, Boolean, Null, Undefined |
+| Major Type | Value        | Usage in OCapN                                                 |
+| ---------- | ------------ | -------------------------------------------------------------- |
+| 0          | Unsigned int | Length prefixes only (not for OCapN integers)                  |
+| 1          | Negative int | Length prefixes only (not for OCapN integers)                  |
+| 2          | Byte string  | ByteArray values                                               |
+| 3          | Text string  | String values                                                  |
+| 4          | Array        | List values                                                    |
+| 5          | Map          | Struct values                                                  |
+| 6          | Tag          | Symbols (280), Records (27), Bignums (2/3), Embedded CBOR (24) |
+| 7          | Float/Simple | Float64, Boolean, Null, Undefined                              |
 
 **Note**: This encoding prohibits indefinite-length values. All arrays, maps,
 strings, and byte strings MUST use definite-length encoding.
@@ -86,15 +86,19 @@ CBOR Simple Value 22 (Null).
 CBOR Simple Values 20 (False) and 21 (True).
 
 **False**:
+
 ```
 0xF4
 ```
+
 - Byte 0: `0b111_10100` = Major type 7, additional info 20
 
 **True**:
+
 ```
 0xF5
 ```
+
 - Byte 0: `0b111_10101` = Major type 7, additional info 21
 
 **Diagnostic notation**: `false`, `true`
@@ -125,15 +129,15 @@ value zero (which is represented using an empty byte string).
 
 **Examples**:
 
-| Value | Encoding | Diagnostic |
-|-------|----------|------------|
-| 0 | `C2 40` | `2(h'')` |
-| 1 | `C2 41 01` | `2(h'01')` |
-| 255 | `C2 41 FF` | `2(h'ff')` |
-| 256 | `C2 42 01 00` | `2(h'0100')` |
-| -1 | `C3 40` | `3(h'')` |
-| -2 | `C3 41 01` | `3(h'01')` |
-| -256 | `C3 41 FF` | `3(h'ff')` |
+| Value | Encoding      | Diagnostic   |
+| ----- | ------------- | ------------ |
+| 0     | `C2 40`       | `2(h'')`     |
+| 1     | `C2 41 01`    | `2(h'01')`   |
+| 255   | `C2 41 FF`    | `2(h'ff')`   |
+| 256   | `C2 42 01 00` | `2(h'0100')` |
+| -1    | `C3 40`       | `3(h'')`     |
+| -2    | `C3 41 01`    | `3(h'01')`   |
+| -256  | `C3 41 FF`    | `3(h'ff')`   |
 
 ### Float64
 
@@ -154,15 +158,15 @@ Any other NaN bit pattern MUST be rejected.
 
 **Examples**:
 
-| Value | Encoding | Diagnostic |
-|-------|----------|------------|
-| 0.0 | `FB 00 00 00 00 00 00 00 00` | `0.0` |
-| -0.0 | `FB 80 00 00 00 00 00 00 00` | `-0.0` |
-| 1.0 | `FB 3F F0 00 00 00 00 00 00` | `1.0` |
-| -1.0 | `FB BF F0 00 00 00 00 00 00` | `-1.0` |
-| Infinity | `FB 7F F0 00 00 00 00 00 00` | `Infinity` |
+| Value     | Encoding                     | Diagnostic  |
+| --------- | ---------------------------- | ----------- |
+| 0.0       | `FB 00 00 00 00 00 00 00 00` | `0.0`       |
+| -0.0      | `FB 80 00 00 00 00 00 00 00` | `-0.0`      |
+| 1.0       | `FB 3F F0 00 00 00 00 00 00` | `1.0`       |
+| -1.0      | `FB BF F0 00 00 00 00 00 00` | `-1.0`      |
+| Infinity  | `FB 7F F0 00 00 00 00 00 00` | `Infinity`  |
 | -Infinity | `FB FF F0 00 00 00 00 00 00` | `-Infinity` |
-| NaN | `FB 7F F8 00 00 00 00 00 00` | `NaN` |
+| NaN       | `FB 7F F8 00 00 00 00 00 00` | `NaN`       |
 
 ### String
 
@@ -181,11 +185,11 @@ precludes surrogate code points (U+D800–U+DFFF).
 
 **Examples**:
 
-| Value | Encoding | Diagnostic |
-|-------|----------|------------|
-| "" | `60` | `""` |
-| "a" | `61 61` | `"a"` |
-| "hello" | `65 68 65 6C 6C 6F` | `"hello"` |
+| Value   | Encoding            | Diagnostic |
+| ------- | ------------------- | ---------- |
+| ""      | `60`                | `""`       |
+| "a"     | `61 61`             | `"a"`      |
+| "hello" | `65 68 65 6C 6C 6F` | `"hello"`  |
 
 ### ByteArray
 
@@ -200,9 +204,9 @@ Raw byte sequence of definite length.
 
 **Examples**:
 
-| Value | Encoding | Diagnostic |
-|-------|----------|------------|
-| (empty) | `40` | `h''` |
+| Value      | Encoding         | Diagnostic    |
+| ---------- | ---------------- | ------------- |
+| (empty)    | `40`             | `h''`         |
 | 0xDEADBEEF | `44 DE AD BE EF` | `h'deadbeef'` |
 
 ### Symbol
@@ -222,10 +226,10 @@ Tag 280 wrapping a text string. Symbols are distinguished from strings by type.
 
 **Examples**:
 
-| Value | Encoding | Diagnostic |
-|-------|----------|------------|
+| Value   | Encoding                        | Diagnostic      |
+| ------- | ------------------------------- | --------------- |
 | 'method | `D9 01 18 66 6D 65 74 68 6F 64` | `280("method")` |
-| 'x | `D9 01 18 61 78` | `280("x")` |
+| 'x      | `D9 01 18 61 78`                | `280("x")`      |
 
 ### List
 
@@ -241,9 +245,9 @@ CBOR array with definite length.
 
 **Examples**:
 
-| Value | Encoding | Diagnostic |
-|-------|----------|------------|
-| [] | `80` | `[]` |
+| Value  | Encoding               | Diagnostic             |
+| ------ | ---------------------- | ---------------------- |
+| []     | `80`                   | `[]`                   |
 | [1, 2] | `82 C2 41 01 C2 41 02` | `[2(h'01'), 2(h'02')]` |
 
 ### Struct
@@ -266,10 +270,10 @@ same prefix.
 
 **Examples**:
 
-| Value | Encoding | Diagnostic |
-|-------|----------|------------|
-| {} | `A0` | `{}` |
-| {"a": 1} | `A1 61 61 C2 41 01` | `{"a": 2(h'01')}` |
+| Value            | Encoding                           | Diagnostic                       |
+| ---------------- | ---------------------------------- | -------------------------------- |
+| {}               | `A0`                               | `{}`                             |
+| {"a": 1}         | `A1 61 61 C2 41 01`                | `{"a": 2(h'01')}`                |
 | {"a": 1, "b": 2} | `A2 61 61 C2 41 01 61 62 C2 41 02` | `{"a": 2(h'01'), "b": 2(h'02')}` |
 
 ### Record
@@ -290,11 +294,11 @@ followed by the record fields.
 
 **OCapN CBOR records use plain string labels** for type identification:
 
-| Record Type | Label | Example |
-|-------------|-------|---------|
-| deliver | `"deliver"` | `27(["deliver", ...])` |
+| Record Type   | Label             | Example                           |
+| ------------- | ----------------- | --------------------------------- |
+| deliver       | `"deliver"`       | `27(["deliver", ...])`            |
 | import-object | `"import-object"` | `27(["import-object", position])` |
-| error | `"error"` | `27(["error", "message"])` |
+| error         | `"error"`         | `27(["error", "message"])`        |
 
 > **Note**: Syrup uses symbol (selector) labels for records, while CBOR uses
 > plain strings. This distinction is handled automatically by the codec layer.
@@ -466,11 +470,11 @@ remapping only the positions in the parallel arrays.
 Delivery operations include parallel arrays that map in-band markers to their
 CapTP table positions:
 
-| Array | Content | Purpose |
-|-------|---------|---------|
-| `targets` | List of integers | CapTP positions for each `target` marker |
-| `promises` | List of integers | CapTP positions for each `promise` marker |
-| `errors` | List of ByteArrays | Error identifiers (or `h''` for anonymous) |
+| Array      | Content            | Purpose                                    |
+| ---------- | ------------------ | ------------------------------------------ |
+| `targets`  | List of integers   | CapTP positions for each `target` marker   |
+| `promises` | List of integers   | CapTP positions for each `promise` marker  |
+| `errors`   | List of ByteArrays | Error identifiers (or `h''` for anonymous) |
 
 The arrays are indexed by order of appearance. The first `target` marker in the
 body corresponds to `targets[0]`, the second to `targets[1]`, and so on.
@@ -481,11 +485,13 @@ Similarly for `promises` and `errors`.
 Consider a passable array containing two targets, a promise, and an error:
 
 **Logical structure**:
+
 ```
 [target@-10, target@2, promise@3, error("TypeError")]
 ```
 
 **Encoded body** (inside Tag 24 byte string):
+
 ```cbor
 [                            # Array of 4 elements
   27(["target"]),            # First target  → targets[0]
@@ -496,6 +502,7 @@ Consider a passable array containing two targets, a promise, and an error:
 ```
 
 **Parallel arrays**:
+
 ```
 targets:  [-10, 2]       # CapTP positions for targets
 promises: [3]            # CapTP positions for promises
@@ -505,6 +512,7 @@ errors:   [h'']          # Error identifiers (unidentified in this case)
 **Diagnostic notation**:
 
 Standard CBOR diagnostic notation shows Tag 24 as a hex byte string:
+
 ```
 24(h'84d81b81667461726765d81b816674617267...')
 ```
@@ -620,6 +628,7 @@ Delivers a message without expecting a return value.
 ```
 
 **Fields**:
+
 - `to-desc`: The target object to deliver to (an `export` record)
 - `body`: Embedded CBOR (Tag 24) containing the method selector and arguments
   with in-band `target`, `promise`, and `error` markers
@@ -660,6 +669,7 @@ Delivers a message and expects a return value (promise pipelining).
 ```
 
 **Fields**:
+
 - `to-desc`: The target to deliver to (`export` or `answer`)
 - `body`: Embedded CBOR (Tag 24) containing method selector and arguments
 - `targets`: Parallel array for target markers → CapTP positions
@@ -844,14 +854,14 @@ For signature verification and comparison, CBOR encoding MUST be canonical:
 
 ## Comparison with Syrup
 
-| Aspect | Syrup | CBOR |
-|--------|-------|------|
-| Format | Text-based delimiters | Binary length prefixes |
-| Integers | ASCII digits + `+`/`-` | Tag 2/3 bignums |
-| Strings | `len"content` | Major type 3 |
-| Records | `<selector body>` | Tag 27 + array |
-| Symbols | `len'content` | Tag 280 + text |
-| Parsers | Custom only | Standard CBOR libraries |
+| Aspect   | Syrup                  | CBOR                    |
+| -------- | ---------------------- | ----------------------- |
+| Format   | Text-based delimiters  | Binary length prefixes  |
+| Integers | ASCII digits + `+`/`-` | Tag 2/3 bignums         |
+| Strings  | `len"content`          | Major type 3            |
+| Records  | `<selector body>`      | Tag 27 + array          |
+| Symbols  | `len'content`          | Tag 280 + text          |
+| Parsers  | Custom only            | Standard CBOR libraries |
 
 ## Validation
 
@@ -873,5 +883,3 @@ Messages encoded per this specification can be validated by:
 [Model]: https://github.com/ocapn/ocapn/blob/main/draft-specifications/Model.md
 [Slots]: https://github.com/ocapn/ocapn/issues/172
 [SelfDescribe]: https://datatracker.ietf.org/doc/html/rfc8949#self-describe
-
-

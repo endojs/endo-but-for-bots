@@ -1,12 +1,12 @@
 # Endo POSIX Sandbox
 
-| | |
-|---|---|
-| **Created** | 2026-05-07 |
-| **Updated** | 2026-05-07 |
-| **Author** | Joshua T Corbin (PLAN) |
-| **Author** | kriscendobot (prompted by kriskowal) |
-| **Status** | In Progress (Phase 3) |
+|             |                                      |
+| ----------- | ------------------------------------ |
+| **Created** | 2026-05-07                           |
+| **Updated** | 2026-05-07                           |
+| **Author**  | Joshua T Corbin (PLAN)               |
+| **Author**  | kriscendobot (prompted by kriskowal) |
+| **Status**  | In Progress (Phase 3)                |
 
 ## Source
 
@@ -150,24 +150,27 @@ to translate `SandboxHandle` operations into a particular runtime.
 
 ```ts
 interface SandboxDriver {
-  name: string
-  probe(): Promise<{ available: boolean, reason?: string, version?: string }>
-  prepareSlice(spec: SliceSpec): Promise<DriverSliceContext>
-  spawn(slice: DriverSliceContext, argv: string[], opts: SpawnOpts):
-    Promise<DriverProcess>
-  teardown(slice: DriverSliceContext): Promise<void>
+  name: string;
+  probe(): Promise<{ available: boolean; reason?: string; version?: string }>;
+  prepareSlice(spec: SliceSpec): Promise<DriverSliceContext>;
+  spawn(
+    slice: DriverSliceContext,
+    argv: string[],
+    opts: SpawnOpts,
+  ): Promise<DriverProcess>;
+  teardown(slice: DriverSliceContext): Promise<void>;
 }
 ```
 
 Drivers in scope:
 
-| Driver           | OS      | External deps              | Phase |
-|------------------|---------|----------------------------|-------|
-| `bwrap`          | Linux   | `bwrap`, optional `pasta`  | 1     |
-| `podman`         | Linux   | `podman` (rootless)        | 2     |
-| `lima`           | macOS   | `lima` / `colima`          | 4     |
-| `containerization`| macOS  | macOS 15+, Apple framework | 4     |
-| `wsl`            | Windows | `wsl.exe`                  | 6     |
+| Driver             | OS      | External deps              | Phase |
+| ------------------ | ------- | -------------------------- | ----- |
+| `bwrap`            | Linux   | `bwrap`, optional `pasta`  | 1     |
+| `podman`           | Linux   | `podman` (rootless)        | 2     |
+| `lima`             | macOS   | `lima` / `colima`          | 4     |
+| `containerization` | macOS   | macOS 15+, Apple framework | 4     |
+| `wsl`              | Windows | `wsl.exe`                  | 6     |
 
 Drivers do **not** receive Endo capabilities directly.
 The plugin layer is the single mediator: it resolves each granted
@@ -223,7 +226,7 @@ does not supply one explicitly:
   falls back to the canonical default when the image declares no
   PATH.
   The resolved value is injected at `podman create` time as `-e
-  PATH=…` so the slice's effective PATH is observable from the
+PATH=…` so the slice's effective PATH is observable from the
   host regardless of whether the image declared one.
 
 Caller-granted mounts whose `innerPath` ends in `/bin` or `/sbin`

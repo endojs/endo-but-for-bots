@@ -3,6 +3,7 @@
 A collection of common low level utilities.
 
 Each of the utilities in this packages
+
 - are low level in the sense of not depending on anything higher level than `ses`, `@endo/eventual-send`, and `@endo/promise-kit`. Many depend on nothing beyond plain old JavaScript.
 - highly reusable, i.e., potentially useful many places.
 - sufficiently general that it would be awkward to import from a more specialized package.

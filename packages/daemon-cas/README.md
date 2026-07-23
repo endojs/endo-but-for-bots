@@ -76,12 +76,12 @@ of contracts:
 The four-method `ContentStore` contract this package implements
 (per `@endo/platform/fs/lite/types`):
 
-| Method | Signature | Notes |
-|--------|-----------|-------|
-| `store` | `(readable) => Promise<string>` | Streams to a temp file, hashes as bytes land, atomically renames to the sha256 hex name. |
-| `fetch` | `(sha256) => ContentStoreBlob` | Returns `{ makeFileReader, text, json, size, readRange }` over the host-side backing: a whole-blob byte reader, decoded text and JSON, the blob's byte length (`bigint`), and a windowed `(offset, length)` range read. |
-| `has` | `(sha256) => Promise<boolean>` | Probes by attempting a read. |
-| `remove` | `(sha256) => Promise<void>` | Idempotent: removing a missing blob is not an error. |
+| Method   | Signature                       | Notes                                                                                                                                                                                                                   |
+| -------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `store`  | `(readable) => Promise<string>` | Streams to a temp file, hashes as bytes land, atomically renames to the sha256 hex name.                                                                                                                                |
+| `fetch`  | `(sha256) => ContentStoreBlob`  | Returns `{ makeFileReader, text, json, size, readRange }` over the host-side backing: a whole-blob byte reader, decoded text and JSON, the blob's byte length (`bigint`), and a windowed `(offset, length)` range read. |
+| `has`    | `(sha256) => Promise<boolean>`  | Probes by attempting a read.                                                                                                                                                                                            |
+| `remove` | `(sha256) => Promise<void>`     | Idempotent: removing a missing blob is not an error.                                                                                                                                                                    |
 
 ## Status
 

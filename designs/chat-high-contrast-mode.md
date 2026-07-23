@@ -1,11 +1,11 @@
 # Chat High Contrast Mode
 
-| | |
-|---|---|
-| **Created** | 2026-02-26 |
-| **Updated** | 2026-02-26 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Complete |
+|                |                                                                                                            |
+| -------------- | ---------------------------------------------------------------------------------------------------------- |
+| **Created**    | 2026-02-26                                                                                                 |
+| **Updated**    | 2026-02-26                                                                                                 |
+| **Author**     | Kris Kowal (prompted)                                                                                      |
+| **Status**     | Complete                                                                                                   |
 | **Depends on** | [chat-color-schemes](chat-color-schemes.md), [chat-per-space-color-scheme](chat-per-space-color-scheme.md) |
 
 ## Motivation
@@ -42,15 +42,15 @@ combination with `prefers-color-scheme`.
 High contrast mode makes the following changes relative to the
 corresponding base scheme:
 
-| Property | Standard | High Contrast |
-|----------|----------|---------------|
-| Borders | 1px subtle gray | 2px solid, higher contrast |
-| Text contrast ratio | >= 4.5:1 (AA) | >= 7:1 (AAA) |
-| Focus rings | 3px accent glow | 3px solid outline + offset |
-| Muted text | Low contrast | Medium contrast (still distinguishable) |
-| Hover states | Background tint | Background tint + border |
-| Shadows | Soft blurs | Replaced with solid borders |
-| Backdrop | Semi-transparent | Higher opacity |
+| Property            | Standard         | High Contrast                           |
+| ------------------- | ---------------- | --------------------------------------- |
+| Borders             | 1px subtle gray  | 2px solid, higher contrast              |
+| Text contrast ratio | >= 4.5:1 (AA)    | >= 7:1 (AAA)                            |
+| Focus rings         | 3px accent glow  | 3px solid outline + offset              |
+| Muted text          | Low contrast     | Medium contrast (still distinguishable) |
+| Hover states        | Background tint  | Background tint + border                |
+| Shadows             | Soft blurs       | Replaced with solid borders             |
+| Backdrop            | Semi-transparent | Higher opacity                          |
 
 ### CSS Structure
 
@@ -69,7 +69,7 @@ corresponding base scheme:
 }
 
 /* Explicit high contrast */
-:root[data-scheme="high-contrast-light"] {
+:root[data-scheme='high-contrast-light'] {
   /* same overrides */
 }
 
@@ -82,7 +82,7 @@ corresponding base scheme:
   }
 }
 
-:root[data-scheme="high-contrast-dark"] {
+:root[data-scheme='high-contrast-dark'] {
   /* dark values + high contrast overrides */
 }
 ```
@@ -181,7 +181,7 @@ The `ColorScheme` typedef includes `'high-contrast-light'` and
   WCAG AAA (7:1) ratios for every text/background combination. A
   dedicated audit with a contrast checker tool would confirm compliance.
 - **Focus ring refinement:** The design calls for `3px solid outline +
-  offset` focus rings in high contrast mode. The current implementation
+offset` focus rings in high contrast mode. The current implementation
   sets shadows to `none` but does not add explicit focus ring overrides.
   Elements using `box-shadow` for focus indication may lose visibility.
 - **Hover state borders:** The design specifies hover states should gain

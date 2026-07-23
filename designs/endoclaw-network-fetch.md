@@ -1,12 +1,12 @@
 # EndoClaw: Network Fetch Capability
 
-| | |
-|---|---|
-| **Created** | 2026-03-03 |
-| **Updated** | 2026-07-15 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Superseded by [endo-fetch](endo-fetch.md) |
-| **Parent** | [endoclaw](endoclaw.md) |
+|             |                                           |
+| ----------- | ----------------------------------------- |
+| **Created** | 2026-03-03                                |
+| **Updated** | 2026-07-15                                |
+| **Author**  | Kris Kowal (prompted)                     |
+| **Status**  | Superseded by [endo-fetch](endo-fetch.md) |
+| **Parent**  | [endoclaw](endoclaw.md)                   |
 
 > **Superseded by [endo-fetch](endo-fetch.md)** (2026-07-13). The capability
 > shape specified here was realized by PR #566 (`@endo/exo-http-client` over

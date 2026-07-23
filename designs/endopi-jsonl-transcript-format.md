@@ -1,17 +1,17 @@
 # EndoPi: Pi-Compatible JSONL Transcript Format
 
-| | |
-|---|---|
-| **Created** | 2026-05-15 |
-| **Updated** | 2026-05-15 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
-| **Parent** | [endopi](endopi.md) |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-05-15            |
+| **Updated** | 2026-05-15            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Proposed              |
+| **Parent**  | [endopi](endopi.md)   |
 
 ## Motivation
 
-The maintainer's existing note on [endoclaw](endoclaw.md) § *Persistence
-and Memory* names the desired shape: "whatever else we do internally,
+The maintainer's existing note on [endoclaw](endoclaw.md) § _Persistence
+and Memory_ names the desired shape: "whatever else we do internally,
 message history (sessions) should get stored as Pi-compatible jsonl
 files (openclaw and localgpt at least both do this, probably most of the
 other too). This is at least for offline operator inspect-ability, but
@@ -119,12 +119,12 @@ place of the elided ones.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|--------------|
-| [lal-reply-chain-transcripts](lal-reply-chain-transcripts.md) | Provides the tree the file projects |
-| [endopi-iterative-compaction](endopi-iterative-compaction.md) | Writes `compaction` entries into the same file |
-| [daemon-value-message](daemon-value-message.md) | Provides the `value` message shape that maps to Pi's `custom` |
-| [endoclaw](endoclaw.md) | Source of the maintainer's directive ("Pi-compatible jsonl files") |
+| Design                                                        | Relationship                                                       |
+| ------------------------------------------------------------- | ------------------------------------------------------------------ |
+| [lal-reply-chain-transcripts](lal-reply-chain-transcripts.md) | Provides the tree the file projects                                |
+| [endopi-iterative-compaction](endopi-iterative-compaction.md) | Writes `compaction` entries into the same file                     |
+| [daemon-value-message](daemon-value-message.md)               | Provides the `value` message shape that maps to Pi's `custom`      |
+| [endoclaw](endoclaw.md)                                       | Source of the maintainer's directive ("Pi-compatible jsonl files") |
 
 ## Phased implementation
 
@@ -159,7 +159,7 @@ place of the elided ones.
 
 ## Prompt
 
-> Extracted from [endopi](endopi.md) § *Session model*. The maintainer's
-> directive on endoclaw § *Persistence and Memory* names this as the
+> Extracted from [endopi](endopi.md) § _Session model_. The maintainer's
+> directive on endoclaw § _Persistence and Memory_ names this as the
 > shape: Pi-compatible JSONL on disk, both for operator inspect-ability
 > and for the agent's own long-term memory.

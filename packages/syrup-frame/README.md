@@ -45,10 +45,7 @@ strict netstring compliance.
 ## API
 
 ```js
-import {
-  makeSyrupReader,
-  makeSyrupWriter,
-} from '@endo/syrup-frame';
+import { makeSyrupReader, makeSyrupWriter } from '@endo/syrup-frame';
 ```
 
 ### `makeSyrupReader(input, opts?) -> Reader<Uint8Array, undefined>`
@@ -71,7 +68,7 @@ Wraps an output byte writer into a frame writer.
 Options:
 
 - `chunked`: when true, emit the prefix and each payload chunk as
-  separate writes.  Required for zero-copy writers.  Identical to
+  separate writes. Required for zero-copy writers. Identical to
   `@endo/netstring`'s `chunked` option minus the separator write.
 
 ## Design

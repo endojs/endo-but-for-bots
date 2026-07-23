@@ -1,11 +1,11 @@
 # `@endo/hex` — Hex Encode/Decode Ponyfill
 
-| | |
-|---|---|
-| **Created** | 2026-04-23 |
-| **Updated** | 2026-05-18 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-04-23            |
+| **Updated** | 2026-05-18            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | **Complete**          |
 
 ## Status
 
@@ -122,8 +122,8 @@ unused shim entries:
     ".": "./index.js",
     "./encode.js": "./encode.js",
     "./decode.js": "./decode.js",
-    "./package.json": "./package.json"
-  }
+    "./package.json": "./package.json",
+  },
 }
 ```
 
@@ -300,16 +300,16 @@ export const decodeHex =
 
 ### Parity with `@endo/base64`
 
-| Concern | `@endo/base64` | `@endo/hex` |
-|---------|----------------|-------------|
-| Named exports | `encodeBase64`, `decodeBase64`, `atob`, `btoa` | `encodeHex`, `decodeHex` |
-| Secondary entry points | `./atob.js`, `./btoa.js`, `./encode.js`, `./decode.js`, `./shim.js` | `./encode.js`, `./decode.js` |
-| Native fast path | `globalThis.Base64.encode` / `.decode` (XS) | `Uint8Array.prototype.toHex` / `Uint8Array.fromHex` (TC39) |
-| Fallback algorithm | Bit-register quantum accumulator | Byte-wise nibble lookup |
-| Error API | `Error("Invalid base64 character …")`, includes string name | `Error("Invalid hex character …")`, includes string name |
-| Exported slow path | `jsEncodeBase64`, `jsDecodeBase64` (not re-exported from index) | `jsEncodeHex`, `jsDecodeHex` (not re-exported from index) |
-| `shim.js` | Installs `atob`/`btoa` globals | **Omitted** (no hex globals to shim; reserved for future Uint8Array prototype install) |
-| Benchmark harness | `test/_bench-main.js` | `test/_bench-main.js` (same skeleton) |
+| Concern                | `@endo/base64`                                                      | `@endo/hex`                                                                            |
+| ---------------------- | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Named exports          | `encodeBase64`, `decodeBase64`, `atob`, `btoa`                      | `encodeHex`, `decodeHex`                                                               |
+| Secondary entry points | `./atob.js`, `./btoa.js`, `./encode.js`, `./decode.js`, `./shim.js` | `./encode.js`, `./decode.js`                                                           |
+| Native fast path       | `globalThis.Base64.encode` / `.decode` (XS)                         | `Uint8Array.prototype.toHex` / `Uint8Array.fromHex` (TC39)                             |
+| Fallback algorithm     | Bit-register quantum accumulator                                    | Byte-wise nibble lookup                                                                |
+| Error API              | `Error("Invalid base64 character …")`, includes string name         | `Error("Invalid hex character …")`, includes string name                               |
+| Exported slow path     | `jsEncodeBase64`, `jsDecodeBase64` (not re-exported from index)     | `jsEncodeHex`, `jsDecodeHex` (not re-exported from index)                              |
+| `shim.js`              | Installs `atob`/`btoa` globals                                      | **Omitted** (no hex globals to shim; reserved for future Uint8Array prototype install) |
+| Benchmark harness      | `test/_bench-main.js`                                               | `test/_bench-main.js` (same skeleton)                                                  |
 
 ## Audit
 
@@ -324,49 +324,49 @@ parsing) are listed separately and are **not** migration targets —
 
 ### Byte-array hex sites (migration targets)
 
-| File | Lines | Direction | Case | Form | Notes |
-|---|---|---|---|---|---|
-| `packages/daemon/src/hex.js` | 14–20, 28–39 | encode + decode | lower | `toString(16).padStart(2, '0')` / `parseInt(slice, 16)` | Existing ponyfill with native short-circuit. Exports `toHex`, `fromHex`. **Delete and re-export from `@endo/hex`** (or retain as thin adapter if rename is costly). |
-| `packages/daemon/test/hex.test.js` | 1–24 | test | lower | — | Five assertions: encode, empty encode, decode, empty decode, round-trip. **Migrate to `@endo/hex` test suite**; retain a shim test if the daemon re-export survives. |
-| `packages/daemon/src/daemon.js` | 50, 2359, 3346, 3353, 3354, 3510, 3517, 3518, 4873 | encode + decode | lower | via `./hex.js` | Keypair hex serialization, `sign(hexBytes)` RPC. **Change import to `@endo/hex`**. No call-site rewriting needed. |
-| `packages/daemon/src/daemon-node-powers.js` | 15, 319, 455–465 | encode + decode | lower | via `./hex.js` and `bytes.toString('hex')` | Uses both the ponyfill and Node `Buffer.toString('hex')`. `randomHex256` (line 319) should either stream bytes through `encodeHex` or stay Node-native — see Design Decision 4. |
-| `packages/daemon/src/daemon-node-powers.js` | 309 | encode | lower | `digester.digest('hex')` | `makeSha256().digestHex()` delegates to Node's `crypto.createHash().digest('hex')`. Retained at the Node-powers boundary; callers still receive lowercase hex. |
-| `packages/daemon/src/daemon-node-powers.js` | 325–328 | decode | lower | `Buffer.from(str, 'hex')` | Decodes the fixed PKCS8 DER prefix for Ed25519 keys. **Replace with `decodeHex`**; preserves the constant as `Uint8Array`. |
-| `packages/daemon/src/host.js` | 25, 946 | encode + decode | lower | via `./hex.js` | `sign(hexBytes)` at the host boundary. **Change import to `@endo/hex`**. |
-| `packages/daemon/src/networks/ws-relay.js` | 12, 103, 329, 331, 419 | encode + decode | lower | via `../hex.js` | Node ID hex serialization, challenge/response signing on the relay wire. **Change import to `@endo/hex`**. |
-| `packages/daemon/src/networks/libp2p.js` | 22, 290 | decode | lower | via `../hex.js` | Node-ID-hex → seed bytes for libp2p key derivation. **Change import to `@endo/hex`**. |
-| `packages/relay-server/src/protocol.js` | 29–30, 33–39 | encode + decode | lower | inline JS | Duplicate of the daemon ponyfill, sans native fallthrough. Relay server must remain a leaf package with no Node-specific imports, so `@endo/hex` is a better dependency than `@endo/daemon/hex.js`. **Delete local impl, depend on `@endo/hex`**. |
-| `packages/relay-server/src/relay.js` | 25, 193, 234 | encode | lower | via `./protocol.js` | `hexNodeId` and `targetHex` for diagnostic logging and session key derivation. **No call-site change** after `protocol.js` re-exports or imports from `@endo/hex`. |
-| `packages/ocapn/src/client/util.js` | 18–20 | encode | lower | `Buffer.from(bytes).toString('hex')` | `toHex(value: ArrayBufferLike)` helper. **Replace** `Buffer.from(...).toString('hex')` with `encodeHex(immutableArrayBufferToUint8Array(value))`. Removes a Node-only `Buffer` import from this module. |
-| `packages/ocapn/src/client/ocapn.js` | 32, 537, 580, 591, 604, 644 | encode | lower | via `./util.js` | Session-id and gift-id hex keys in multimap lookup, diagnostic messages. No call-site change. |
-| `packages/ocapn/src/client/index.js` | 16, 114, 165 | encode | lower | via `./util.js` | Session-id-to-public-key map keyed by hex. No call-site change. |
-| `packages/ocapn/src/buffer-utils.js` | 61–72 | decode | lower | inline JS + length check | `hexToArrayBuffer(hexString)`. Throws on odd length. Returns an immutable `ArrayBuffer` rather than a `Uint8Array`. **Keep the wrapper**; internally call `decodeHex(hexString)` and feed through `uint8ArrayToImmutableArrayBuffer`. |
-| `packages/ocapn/test/buffer-utils.test.js` | 305–310 | encode (test fixture) | lower | `toString(16).padStart(2, '0')` | Builds the `'00'..'ff'` string to round-trip through `hexToArrayBuffer`. **Migrate to `encodeHex`** or retain inline as a spec fixture. Low priority. |
-| `packages/ocapn/test/codecs/_codecs_util.js` | 39–43, 356–359 | encode | lower | `Buffer.from(buffer).toString('hex')` and inline `toString(16)` | Test snapshot formatting for non-UTF-8 syrup bytes. **Migrate to `encodeHex`** to remove the `Buffer` dependency from test scaffolding. |
-| `packages/ocapn/test/codecs/passable-fuzz.test.js` | 158 | encode | lower | `Buffer.from(bytes).toString('hex')` | Fuzz diagnostic. **Migrate to `encodeHex`**. |
-| `packages/check-bundle/index.js` | 14 | encode | lower | `hash.digest().toString('hex')` | Node `crypto.createHash('sha512').digest('hex')` — SHA-512 digest at the Node powers boundary. **Retained as-is**: the hash digest already returns a hex string directly from Node; converting through `encodeHex` would require `digest()` + conversion with no benefit. Marked as "boundary" — not a migration target. |
-| `packages/check-bundle/test/check-bundle.test.js` | 30 | encode | lower | `hash.digest().toString('hex')` | Same as above. Not a migration target. |
-| `packages/compartment-mapper/src/node-powers.js` | 162–168 | encode | lower | `hash.digest().toString('hex')` | Same pattern. Not a migration target. |
-| `packages/compartment-mapper/demo/policy/app.js` | 15–18 | decode | lower | `Buffer.from(str, 'hex')` | Demo code parsing a hex-encoded 32-byte key. Could migrate for consistency; **low priority**, not on the critical migration path. |
-| `packages/cli/src/random.js` | 9 | encode | lower | `bytes.toString('hex')` | Node `crypto.randomBytes(16).toString('hex')`. Same boundary concern — the Node primitive returns hex directly. **Retained as-is** at the Node boundary. |
-| `packages/base64/test/main.test.js` | 20 | format | lower | `byte.toString(16).padStart(4, '0')` | **Not a byte-array site** — formats a single 16-bit Unicode code point in a diagnostic. Out of scope. |
+| File                                               | Lines                                              | Direction             | Case  | Form                                                            | Notes                                                                                                                                                                                                                                                                                                                    |
+| -------------------------------------------------- | -------------------------------------------------- | --------------------- | ----- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `packages/daemon/src/hex.js`                       | 14–20, 28–39                                       | encode + decode       | lower | `toString(16).padStart(2, '0')` / `parseInt(slice, 16)`         | Existing ponyfill with native short-circuit. Exports `toHex`, `fromHex`. **Delete and re-export from `@endo/hex`** (or retain as thin adapter if rename is costly).                                                                                                                                                      |
+| `packages/daemon/test/hex.test.js`                 | 1–24                                               | test                  | lower | —                                                               | Five assertions: encode, empty encode, decode, empty decode, round-trip. **Migrate to `@endo/hex` test suite**; retain a shim test if the daemon re-export survives.                                                                                                                                                     |
+| `packages/daemon/src/daemon.js`                    | 50, 2359, 3346, 3353, 3354, 3510, 3517, 3518, 4873 | encode + decode       | lower | via `./hex.js`                                                  | Keypair hex serialization, `sign(hexBytes)` RPC. **Change import to `@endo/hex`**. No call-site rewriting needed.                                                                                                                                                                                                        |
+| `packages/daemon/src/daemon-node-powers.js`        | 15, 319, 455–465                                   | encode + decode       | lower | via `./hex.js` and `bytes.toString('hex')`                      | Uses both the ponyfill and Node `Buffer.toString('hex')`. `randomHex256` (line 319) should either stream bytes through `encodeHex` or stay Node-native — see Design Decision 4.                                                                                                                                          |
+| `packages/daemon/src/daemon-node-powers.js`        | 309                                                | encode                | lower | `digester.digest('hex')`                                        | `makeSha256().digestHex()` delegates to Node's `crypto.createHash().digest('hex')`. Retained at the Node-powers boundary; callers still receive lowercase hex.                                                                                                                                                           |
+| `packages/daemon/src/daemon-node-powers.js`        | 325–328                                            | decode                | lower | `Buffer.from(str, 'hex')`                                       | Decodes the fixed PKCS8 DER prefix for Ed25519 keys. **Replace with `decodeHex`**; preserves the constant as `Uint8Array`.                                                                                                                                                                                               |
+| `packages/daemon/src/host.js`                      | 25, 946                                            | encode + decode       | lower | via `./hex.js`                                                  | `sign(hexBytes)` at the host boundary. **Change import to `@endo/hex`**.                                                                                                                                                                                                                                                 |
+| `packages/daemon/src/networks/ws-relay.js`         | 12, 103, 329, 331, 419                             | encode + decode       | lower | via `../hex.js`                                                 | Node ID hex serialization, challenge/response signing on the relay wire. **Change import to `@endo/hex`**.                                                                                                                                                                                                               |
+| `packages/daemon/src/networks/libp2p.js`           | 22, 290                                            | decode                | lower | via `../hex.js`                                                 | Node-ID-hex → seed bytes for libp2p key derivation. **Change import to `@endo/hex`**.                                                                                                                                                                                                                                    |
+| `packages/relay-server/src/protocol.js`            | 29–30, 33–39                                       | encode + decode       | lower | inline JS                                                       | Duplicate of the daemon ponyfill, sans native fallthrough. Relay server must remain a leaf package with no Node-specific imports, so `@endo/hex` is a better dependency than `@endo/daemon/hex.js`. **Delete local impl, depend on `@endo/hex`**.                                                                        |
+| `packages/relay-server/src/relay.js`               | 25, 193, 234                                       | encode                | lower | via `./protocol.js`                                             | `hexNodeId` and `targetHex` for diagnostic logging and session key derivation. **No call-site change** after `protocol.js` re-exports or imports from `@endo/hex`.                                                                                                                                                       |
+| `packages/ocapn/src/client/util.js`                | 18–20                                              | encode                | lower | `Buffer.from(bytes).toString('hex')`                            | `toHex(value: ArrayBufferLike)` helper. **Replace** `Buffer.from(...).toString('hex')` with `encodeHex(immutableArrayBufferToUint8Array(value))`. Removes a Node-only `Buffer` import from this module.                                                                                                                  |
+| `packages/ocapn/src/client/ocapn.js`               | 32, 537, 580, 591, 604, 644                        | encode                | lower | via `./util.js`                                                 | Session-id and gift-id hex keys in multimap lookup, diagnostic messages. No call-site change.                                                                                                                                                                                                                            |
+| `packages/ocapn/src/client/index.js`               | 16, 114, 165                                       | encode                | lower | via `./util.js`                                                 | Session-id-to-public-key map keyed by hex. No call-site change.                                                                                                                                                                                                                                                          |
+| `packages/ocapn/src/buffer-utils.js`               | 61–72                                              | decode                | lower | inline JS + length check                                        | `hexToArrayBuffer(hexString)`. Throws on odd length. Returns an immutable `ArrayBuffer` rather than a `Uint8Array`. **Keep the wrapper**; internally call `decodeHex(hexString)` and feed through `uint8ArrayToImmutableArrayBuffer`.                                                                                    |
+| `packages/ocapn/test/buffer-utils.test.js`         | 305–310                                            | encode (test fixture) | lower | `toString(16).padStart(2, '0')`                                 | Builds the `'00'..'ff'` string to round-trip through `hexToArrayBuffer`. **Migrate to `encodeHex`** or retain inline as a spec fixture. Low priority.                                                                                                                                                                    |
+| `packages/ocapn/test/codecs/_codecs_util.js`       | 39–43, 356–359                                     | encode                | lower | `Buffer.from(buffer).toString('hex')` and inline `toString(16)` | Test snapshot formatting for non-UTF-8 syrup bytes. **Migrate to `encodeHex`** to remove the `Buffer` dependency from test scaffolding.                                                                                                                                                                                  |
+| `packages/ocapn/test/codecs/passable-fuzz.test.js` | 158                                                | encode                | lower | `Buffer.from(bytes).toString('hex')`                            | Fuzz diagnostic. **Migrate to `encodeHex`**.                                                                                                                                                                                                                                                                             |
+| `packages/check-bundle/index.js`                   | 14                                                 | encode                | lower | `hash.digest().toString('hex')`                                 | Node `crypto.createHash('sha512').digest('hex')` — SHA-512 digest at the Node powers boundary. **Retained as-is**: the hash digest already returns a hex string directly from Node; converting through `encodeHex` would require `digest()` + conversion with no benefit. Marked as "boundary" — not a migration target. |
+| `packages/check-bundle/test/check-bundle.test.js`  | 30                                                 | encode                | lower | `hash.digest().toString('hex')`                                 | Same as above. Not a migration target.                                                                                                                                                                                                                                                                                   |
+| `packages/compartment-mapper/src/node-powers.js`   | 162–168                                            | encode                | lower | `hash.digest().toString('hex')`                                 | Same pattern. Not a migration target.                                                                                                                                                                                                                                                                                    |
+| `packages/compartment-mapper/demo/policy/app.js`   | 15–18                                              | decode                | lower | `Buffer.from(str, 'hex')`                                       | Demo code parsing a hex-encoded 32-byte key. Could migrate for consistency; **low priority**, not on the critical migration path.                                                                                                                                                                                        |
+| `packages/cli/src/random.js`                       | 9                                                  | encode                | lower | `bytes.toString('hex')`                                         | Node `crypto.randomBytes(16).toString('hex')`. Same boundary concern — the Node primitive returns hex directly. **Retained as-is** at the Node boundary.                                                                                                                                                                 |
+| `packages/base64/test/main.test.js`                | 20                                                 | format                | lower | `byte.toString(16).padStart(4, '0')`                            | **Not a byte-array site** — formats a single 16-bit Unicode code point in a diagnostic. Out of scope.                                                                                                                                                                                                                    |
 
 ### Non-migration sites (non-byte-array hex)
 
 Sites that touch hex but do not encode/decode `Uint8Array`.
 These are listed for completeness; `@endo/hex` does **not** replace them.
 
-| File | Purpose |
-|---|---|
-| `packages/marshal/src/encodePassable.js` line 137 | 64-bit `BigInt.toString(16)` for passable-number encoding. Not a byte-array. |
-| `packages/marshal/src/encodePassable.js` line 147 | Reverse: `BigInt("0x" + suffix)`. Not a byte-array. |
-| `packages/marshal/test/encodePassable.test.js` lines 272, 333 | Unicode code point formatting (`U+XXXX`). |
-| `packages/daemon/src/cidr.js` line 79 | Parse IPv6 group (`parseInt(group, 16)`). Not a byte-array, four-digit groups. |
-| `packages/zip/src/format-reader.js` line 354 | Error diagnostic: `bitFlag.toString(16)`. |
-| `packages/genie/src/dom-parser/tokenizer.js` line 80 | HTML numeric character reference `&#xABCD;` code-point parse. |
-| `packages/space-whylip/src/hooks/useConversation.js` line 52 | JSON escape `\\uXXXX` code-point parse. |
-| `packages/fae/test/whylip-json-encoding.test.js` line 73 | Same. |
-| `packages/ses/test/tame-nan-sidechannel.test.js` line 30 | `BigInt.toString(16)` for debugging. |
+| File                                                          | Purpose                                                                        |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `packages/marshal/src/encodePassable.js` line 137             | 64-bit `BigInt.toString(16)` for passable-number encoding. Not a byte-array.   |
+| `packages/marshal/src/encodePassable.js` line 147             | Reverse: `BigInt("0x" + suffix)`. Not a byte-array.                            |
+| `packages/marshal/test/encodePassable.test.js` lines 272, 333 | Unicode code point formatting (`U+XXXX`).                                      |
+| `packages/daemon/src/cidr.js` line 79                         | Parse IPv6 group (`parseInt(group, 16)`). Not a byte-array, four-digit groups. |
+| `packages/zip/src/format-reader.js` line 354                  | Error diagnostic: `bitFlag.toString(16)`.                                      |
+| `packages/genie/src/dom-parser/tokenizer.js` line 80          | HTML numeric character reference `&#xABCD;` code-point parse.                  |
+| `packages/space-whylip/src/hooks/useConversation.js` line 52  | JSON escape `\\uXXXX` code-point parse.                                        |
+| `packages/fae/test/whylip-json-encoding.test.js` line 73      | Same.                                                                          |
+| `packages/ses/test/tame-nan-sidechannel.test.js` line 30      | `BigInt.toString(16)` for debugging.                                           |
 
 ### Edge cases the new API must support
 
@@ -557,12 +557,12 @@ native vs JS paths, modeled after `packages/base64/test/_bench-main.js`.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| `base64-native-fallthrough.md` (sibling, in parallel) | Shares the runtime-detection pattern.  Both packages should use the same shape for `const native... = typeof X === 'function' ? X : undefined` and the same error-rewrap strategy.  If one design diverges, the other should be updated for consistency. |
-| [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md) | **Complete.**  Identifiers are 256-bit values rendered as 64-character lowercase hex.  The identifier pipeline (`deriveId`, `digestHex`, `toHex`) is the largest single consumer of the new package. |
-| [daemon-agent-network-identity](daemon-agent-network-identity.md) | Planned.  Agent keypair bytes are exchanged over the wire as hex.  Will depend on `@endo/hex` from the outset. |
-| [ocapn-noise-network](ocapn-noise-network.md) | Planned.  Noise handshake involves 32-byte public keys and 16-byte nonces, canonically rendered as hex for diagnostics and test vectors.  Will import from `@endo/hex`. |
+| Design                                                            | Relationship                                                                                                                                                                                                                                           |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `base64-native-fallthrough.md` (sibling, in parallel)             | Shares the runtime-detection pattern. Both packages should use the same shape for `const native... = typeof X === 'function' ? X : undefined` and the same error-rewrap strategy. If one design diverges, the other should be updated for consistency. |
+| [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md)       | **Complete.** Identifiers are 256-bit values rendered as 64-character lowercase hex. The identifier pipeline (`deriveId`, `digestHex`, `toHex`) is the largest single consumer of the new package.                                                     |
+| [daemon-agent-network-identity](daemon-agent-network-identity.md) | Planned. Agent keypair bytes are exchanged over the wire as hex. Will depend on `@endo/hex` from the outset.                                                                                                                                           |
+| [ocapn-noise-network](ocapn-noise-network.md)                     | Planned. Noise handshake involves 32-byte public keys and 16-byte nonces, canonically rendered as hex for diagnostics and test vectors. Will import from `@endo/hex`.                                                                                  |
 
 ## Design Decisions
 
@@ -603,7 +603,7 @@ native vs JS paths, modeled after `packages/base64/test/_bench-main.js`.
    at the Node powers boundary, use whatever the `crypto` API gives
    you.
 
-5. **`options.uppercase` only on encode;  `decodeHex` accepts both.**
+5. **`options.uppercase` only on encode; `decodeHex` accepts both.**
    Symmetric to the native TC39 proposal:
    `Uint8Array.prototype.toHex` takes no case option (output is
    lowercase);

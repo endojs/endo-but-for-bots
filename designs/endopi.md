@@ -1,21 +1,21 @@
 # EndoPi: Comparative Analysis with the Pi Agent Harness
 
-| | |
-|---|---|
-| **Created** | 2026-05-15 |
-| **Updated** | 2026-06-25 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Reference |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-05-15            |
+| **Updated** | 2026-06-25            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Reference             |
 
 (2026-05-15 second pass: extended to cover `packages/genie` per jcorbin's
-inline review on PR #265. Two affected sections: § *Endo-side surfaces
-covered* and § *Genie: Pi inside Endo*.)
+inline review on PR #265. Two affected sections: § _Endo-side surfaces
+covered_ and § _Genie: Pi inside Endo_.)
 
 (2026-05-15 third pass: corrected the sandbox-driver mix per jcorbin's
 follow-up review on PR #265 (`packages/sandbox` uses podman as primary
 driver today, with bwrap also present and macOS/Windows drivers
 anticipated); added the 9p filesystem server alternative to the vfs-endo
-backend angle in § *What Genie's existence tells us* point 3.)
+backend angle in § _What Genie's existence tells us_ point 3.)
 
 ## Endo-side surfaces covered
 
@@ -27,7 +27,7 @@ embeds Pi inside Endo directly: it ships `@mariozechner/pi-agent-core` and
 `@mariozechner/pi-ai` as runtime dependencies, exposes the ollama provider
 adaptor missing from `pi-ai`'s default registry, and layers Claw-like
 heartbeat / observer / reflector subagents over the result. The genie
-surface is summarised under § *Genie: Pi inside Endo* below; where the
+surface is summarised under § _Genie: Pi inside Endo_ below; where the
 Lal/Fae mapping leaves a gap, the cell calls out whether genie already
 fills it.
 
@@ -45,8 +45,8 @@ existing [endoclaw](endoclaw.md) reference design). Where OpenClaw is a
 personal-assistant daemon glued to messaging platforms, Pi is a
 terminal-first coding harness with a deliberately minimal core and a
 strong extension model. The two designs (endoclaw, endopi) are
-complementary: OpenClaw frames Endo's *assistant* shape; Pi frames Endo's
-*coding-agent* shape.
+complementary: OpenClaw frames Endo's _assistant_ shape; Pi frames Endo's
+_coding-agent_ shape.
 
 This document maps Pi's surface onto Endo's existing surface (daemon +
 chat + familiar + cli + lal + fae) and inventories the gaps worth
@@ -72,31 +72,31 @@ v0.74.x. Alternatives surveyed and rejected:
 
 The maintainer's existing [endoclaw](endoclaw.md) reference already cites
 "Pi-compatible jsonl files" as the desired session-persistence shape (see
-endoclaw § *Persistence and Memory*), which is consistent with pi-mono
+endoclaw § _Persistence and Memory_), which is consistent with pi-mono
 being the intended target.
 
 ## Architecture Comparison
 
-| Aspect               | Pi                                                      | Endo                                                       |
-|----------------------|---------------------------------------------------------|------------------------------------------------------------|
-| **Runtime**          | Node.js CLI (`pi`), TypeScript monorepo                 | Node.js daemon, `$ENDO_STATE/state`                        |
-| **Embedding**        | Library SDK (`createAgentSession`) + RPC over stdio     | Daemon + WebSocket gateway (`ws://127.0.0.1:8920`)         |
-| **Agent shape**      | Single-process coding agent, optional sub-agents        | Multi-guest, per-guest formula isolation                   |
-| **Tool model**       | Four built-ins (read/write/edit/bash); extensions add   | Capabilities (`Dir`, `Shell`, `Git`, ...) granted per agent|
-| **Capability model** | Ambient authority + opt-in container/sandbox            | Object-capability (agent holds only granted caps)          |
-| **Provider model**   | `pi-ai`: unified, multi-provider LLM API                | `packages/lal/providers/`: per-provider modules            |
-| **Persistence**      | JSONL session files; tree of entries (id, parentId)     | Formula store (typed graph) + Lal reply-chain transcripts  |
-| **Branching**        | First-class: `/tree`, `/fork`, `/clone` on a single file| Reply-chain branching via `replyTo`; no in-file tree UI    |
-| **Compaction**       | Auto + manual `/compact`; structured summary; iterative | Designed only ([lal-transcript-memory-management](lal-transcript-memory-management.md))|
-| **Extensions**       | TypeScript modules; events, tools, commands, UI         | Guest plugins (confined JS modules) with granted caps      |
-| **Skills**           | Markdown skills following agentskills.io spec; on-demand| Designed only ([endoclaw-skill-registry](endoclaw-skill-registry.md))|
-| **UI**               | Terminal (`pi-tui`), web (`pi-web-ui`), RPC for hosts   | Chat UI (browser), Familiar (Electron)                     |
-| **Distribution**     | npm packages (`pi install`), git URLs                   | Guest plugins (`endo install`); no central registry        |
-| **Security**         | Ambient; review-before-install for packages             | SES lockdown, structural confinement, interface guards     |
+| Aspect               | Pi                                                       | Endo                                                                                    |
+| -------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| **Runtime**          | Node.js CLI (`pi`), TypeScript monorepo                  | Node.js daemon, `$ENDO_STATE/state`                                                     |
+| **Embedding**        | Library SDK (`createAgentSession`) + RPC over stdio      | Daemon + WebSocket gateway (`ws://127.0.0.1:8920`)                                      |
+| **Agent shape**      | Single-process coding agent, optional sub-agents         | Multi-guest, per-guest formula isolation                                                |
+| **Tool model**       | Four built-ins (read/write/edit/bash); extensions add    | Capabilities (`Dir`, `Shell`, `Git`, ...) granted per agent                             |
+| **Capability model** | Ambient authority + opt-in container/sandbox             | Object-capability (agent holds only granted caps)                                       |
+| **Provider model**   | `pi-ai`: unified, multi-provider LLM API                 | `packages/lal/providers/`: per-provider modules                                         |
+| **Persistence**      | JSONL session files; tree of entries (id, parentId)      | Formula store (typed graph) + Lal reply-chain transcripts                               |
+| **Branching**        | First-class: `/tree`, `/fork`, `/clone` on a single file | Reply-chain branching via `replyTo`; no in-file tree UI                                 |
+| **Compaction**       | Auto + manual `/compact`; structured summary; iterative  | Designed only ([lal-transcript-memory-management](lal-transcript-memory-management.md)) |
+| **Extensions**       | TypeScript modules; events, tools, commands, UI          | Guest plugins (confined JS modules) with granted caps                                   |
+| **Skills**           | Markdown skills following agentskills.io spec; on-demand | Designed only ([endoclaw-skill-registry](endoclaw-skill-registry.md))                   |
+| **UI**               | Terminal (`pi-tui`), web (`pi-web-ui`), RPC for hosts    | Chat UI (browser), Familiar (Electron)                                                  |
+| **Distribution**     | npm packages (`pi install`), git URLs                    | Guest plugins (`endo install`); no central registry                                     |
+| **Security**         | Ambient; review-before-install for packages              | SES lockdown, structural confinement, interface guards                                  |
 
-The fundamental difference echoes endoclaw's: Pi takes the *ambient
-authority + ergonomics* path; Endo takes the *least authority +
-auditable structure* path. The interesting question is not which
+The fundamental difference echoes endoclaw's: Pi takes the _ambient
+authority + ergonomics_ path; Endo takes the _least authority +
+auditable structure_ path. The interesting question is not which
 architecture wins, but which of Pi's design moves Endo should adopt
 verbatim, which it should refract through capabilities, and which it
 should decline.
@@ -105,13 +105,13 @@ should decline.
 
 ### Built-in tool core
 
-| Pi Tool                         | Endo Equivalent                              | Status                                              |
-|---------------------------------|----------------------------------------------|-----------------------------------------------------|
-| `read`                          | `Dir.lookup` + `File.read`                   | Designed ([daemon-agent-tools](daemon-agent-tools.md), [daemon-capability-filesystem](daemon-capability-filesystem.md))|
-| `write`                         | `Dir.write` + `File.write`                   | Designed (same)                                     |
-| `edit` (oldText/newText replace)| `applyEditsToNormalizedContent` analogue     | Not designed                                        |
-| `bash` (with timeout, streaming)| `Shell.exec` with allowlist                  | Designed ([daemon-agent-tools](daemon-agent-tools.md))|
-| `ls`, `find`, `grep` (internal) | `Dir.list`, `Dir.glob`                       | Designed (same)                                     |
+| Pi Tool                          | Endo Equivalent                          | Status                                                                                                                  |
+| -------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `read`                           | `Dir.lookup` + `File.read`               | Designed ([daemon-agent-tools](daemon-agent-tools.md), [daemon-capability-filesystem](daemon-capability-filesystem.md)) |
+| `write`                          | `Dir.write` + `File.write`               | Designed (same)                                                                                                         |
+| `edit` (oldText/newText replace) | `applyEditsToNormalizedContent` analogue | Not designed                                                                                                            |
+| `bash` (with timeout, streaming) | `Shell.exec` with allowlist              | Designed ([daemon-agent-tools](daemon-agent-tools.md))                                                                  |
+| `ls`, `find`, `grep` (internal)  | `Dir.list`, `Dir.glob`                   | Designed (same)                                                                                                         |
 
 Pi's `edit` tool is the interesting one. It implements unique-match
 oldText/newText replacement on normalized line endings, with structured
@@ -122,22 +122,22 @@ primitive a tool-calling LLM uses. See gap [endopi-edit-tool](endopi-edit-tool.m
 
 ### Session model
 
-| Pi Feature                                  | Endo Equivalent                                | Status                                                 |
-|---------------------------------------------|------------------------------------------------|--------------------------------------------------------|
-| JSONL session file with tree entries        | Lal reply-chain transcripts (in-memory graph)  | **Complete** for in-memory; on-disk JSONL not built    |
-| `id` / `parentId` tree linking              | `messageId` / `replyTo` on daemon messages     | **Available** (different naming)                       |
-| `/tree` navigation UI                       | —                                              | Not designed                                           |
-| `/fork`, `/clone`                           | Reply at a chosen prior message produces a new branch | **Available** (different mechanism)             |
+| Pi Feature                                  | Endo Equivalent                                                                          | Status                                                                                                                          |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| JSONL session file with tree entries        | Lal reply-chain transcripts (in-memory graph)                                            | **Complete** for in-memory; on-disk JSONL not built                                                                             |
+| `id` / `parentId` tree linking              | `messageId` / `replyTo` on daemon messages                                               | **Available** (different naming)                                                                                                |
+| `/tree` navigation UI                       | —                                                                                        | Not designed                                                                                                                    |
+| `/fork`, `/clone`                           | Reply at a chosen prior message produces a new branch                                    | **Available** (different mechanism)                                                                                             |
 | Per-message edit / revision log             | `revisionsByNumber` per message number: `editMessage` / `messageHistory` / `done` (#125) | **Available**; pinned as intra-node, orthogonal to the reply-to branch axis ([agentry-agent-builder](agentry-agent-builder.md)) |
-| `--no-session` ephemeral mode               | —                                              | Implicit (formula not persisted on a one-shot guest)   |
-| Cross-host session export (Hugging Face)    | —                                              | Not designed                                           |
-| `/export` to HTML                           | —                                              | Not designed                                           |
-| `/share` as private GitHub gist             | —                                              | Out of scope                                           |
-| Auto-compaction (context overflow recovery) | —                                              | Designed only ([lal-transcript-memory-management](lal-transcript-memory-management.md))|
+| `--no-session` ephemeral mode               | —                                                                                        | Implicit (formula not persisted on a one-shot guest)                                                                            |
+| Cross-host session export (Hugging Face)    | —                                                                                        | Not designed                                                                                                                    |
+| `/export` to HTML                           | —                                                                                        | Not designed                                                                                                                    |
+| `/share` as private GitHub gist             | —                                                                                        | Out of scope                                                                                                                    |
+| Auto-compaction (context overflow recovery) | —                                                                                        | Designed only ([lal-transcript-memory-management](lal-transcript-memory-management.md))                                         |
 
 Pi's session-on-disk format is the part of pi worth porting verbatim:
-maintainer's existing note on [endoclaw](endoclaw.md) (§ *Persistence
-and Memory*) names "Pi-compatible jsonl files" as the desired offline
+maintainer's existing note on [endoclaw](endoclaw.md) (§ _Persistence
+and Memory_) names "Pi-compatible jsonl files" as the desired offline
 operator shape. The session-export feature also doubles as the
 agent's own form of long-term memory inside its workspace. See gap
 [endopi-jsonl-transcript-format](endopi-jsonl-transcript-format.md).
@@ -154,15 +154,15 @@ current when a reply branched off a node.
 
 ### Multi-provider LLM API
 
-| Pi Feature                                  | Endo Equivalent                                | Status                                                 |
-|---------------------------------------------|------------------------------------------------|--------------------------------------------------------|
-| Unified provider/model registry             | `packages/lal/providers/` (Anthropic, OpenAI, Ollama, Gemini, Llama.cpp); `packages/genie` re-exports `pi-ai`'s registry directly | **Available** (two surfaces)|
-| 30+ providers, auto-discovered models       | Five providers in Lal; `pi-ai`'s full registry in Genie | Lal gap; **available via Genie**                |
-| Subscription auth (Claude Pro/Max, ChatGPT Plus, Copilot) | API-key only                       | Gap                                                    |
-| Cross-provider session handoff              | —                                              | Not designed                                           |
-| Token / cost tracking per usage block       | Per-message usage in Lal transcripts (partial) | Partial                                                |
-| Tool-call streaming with partial JSON       | Tool-call extraction (`extractToolCallsFromContent`)| **Available** for Fae                            |
-| Image input on user messages                | Designed ([daemon-value-message](daemon-value-message.md)) for `value` types | Designed             |
+| Pi Feature                                                | Endo Equivalent                                                                                                                   | Status                           |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| Unified provider/model registry                           | `packages/lal/providers/` (Anthropic, OpenAI, Ollama, Gemini, Llama.cpp); `packages/genie` re-exports `pi-ai`'s registry directly | **Available** (two surfaces)     |
+| 30+ providers, auto-discovered models                     | Five providers in Lal; `pi-ai`'s full registry in Genie                                                                           | Lal gap; **available via Genie** |
+| Subscription auth (Claude Pro/Max, ChatGPT Plus, Copilot) | API-key only                                                                                                                      | Gap                              |
+| Cross-provider session handoff                            | —                                                                                                                                 | Not designed                     |
+| Token / cost tracking per usage block                     | Per-message usage in Lal transcripts (partial)                                                                                    | Partial                          |
+| Tool-call streaming with partial JSON                     | Tool-call extraction (`extractToolCallsFromContent`)                                                                              | **Available** for Fae            |
+| Image input on user messages                              | Designed ([daemon-value-message](daemon-value-message.md)) for `value` types                                                      | Designed                         |
 
 Pi's `pi-ai` package is a focused dependency Endo could either vendor
 (bundling 30+ providers in one place), or take inspiration from while
@@ -173,21 +173,21 @@ of an API key) is its highest-leverage feature for end users. See gap
 
 ### Extension model
 
-| Pi Feature                                  | Endo Equivalent                                | Status                                                 |
-|---------------------------------------------|------------------------------------------------|--------------------------------------------------------|
-| Extensions: TS modules, full system access  | Guest plugins (`make(powers)`) under SES       | **Available** (and structurally safer)                 |
-| Extension API: events (`tool_call`, `session_start`, ...) | Daemon eventual-send patterns       | Different shape                                        |
-| `pi.registerTool` (LLM-callable)            | Tool registration in Fae (`makeFooTool`)       | **Available**                                          |
-| `pi.registerCommand` (`/foo`)               | Chat command bar; slash-commands designed      | In progress ([chat-slot-slash-commands](chat-slot-slash-commands.md))|
-| `pi.registerShortcut` (keybinding)          | Chat UI keyboard system                        | **Available**                                          |
-| Async extension factory (await before start)| Guest module top-level init                    | **Available**                                          |
-| Hot-reload (`/reload`)                      | Designed for inventory but not for guest code  | Partial                                                |
-| Extensions as `pi install` packages         | `endo install` for guest plugins               | **Available**                                          |
-| `pi-package` keyword in `package.json`      | —                                              | Gap                                                    |
-| Permission gates as extensions              | Caretaker revocation + interface guards        | **Available** (structural, not opt-in)                 |
+| Pi Feature                                                | Endo Equivalent                               | Status                                                                |
+| --------------------------------------------------------- | --------------------------------------------- | --------------------------------------------------------------------- |
+| Extensions: TS modules, full system access                | Guest plugins (`make(powers)`) under SES      | **Available** (and structurally safer)                                |
+| Extension API: events (`tool_call`, `session_start`, ...) | Daemon eventual-send patterns                 | Different shape                                                       |
+| `pi.registerTool` (LLM-callable)                          | Tool registration in Fae (`makeFooTool`)      | **Available**                                                         |
+| `pi.registerCommand` (`/foo`)                             | Chat command bar; slash-commands designed     | In progress ([chat-slot-slash-commands](chat-slot-slash-commands.md)) |
+| `pi.registerShortcut` (keybinding)                        | Chat UI keyboard system                       | **Available**                                                         |
+| Async extension factory (await before start)              | Guest module top-level init                   | **Available**                                                         |
+| Hot-reload (`/reload`)                                    | Designed for inventory but not for guest code | Partial                                                               |
+| Extensions as `pi install` packages                       | `endo install` for guest plugins              | **Available**                                                         |
+| `pi-package` keyword in `package.json`                    | —                                             | Gap                                                                   |
+| Permission gates as extensions                            | Caretaker revocation + interface guards       | **Available** (structural, not opt-in)                                |
 
-Endo's existing guest-plugin model is *more* secure than Pi's. The gap
-is not the architecture but the *ergonomics*: Pi extensions can ship
+Endo's existing guest-plugin model is _more_ secure than Pi's. The gap
+is not the architecture but the _ergonomics_: Pi extensions can ship
 both code and resources (skills, prompts, themes) under one keyword in
 `package.json`, and a single `pi install` command resolves them all.
 Endo's `endo install` is single-purpose. See gap
@@ -195,14 +195,14 @@ Endo's `endo install` is single-purpose. See gap
 
 ### Skills system
 
-| Pi Feature                                  | Endo Equivalent                                | Status                                                 |
-|---------------------------------------------|------------------------------------------------|--------------------------------------------------------|
-| `SKILL.md` with frontmatter (name, description, license)| —                                  | Not designed                                           |
-| Progressive disclosure (descriptions in prompt; full body on demand) | —                       | Not designed                                           |
-| `/skill:name` slash command                 | —                                              | Not designed                                           |
-| Skill discovery (project + global, walking up cwd)| —                                        | Not designed                                           |
-| Skills as a directory on disk               | Skills as EndoDirectory                        | Designed ([endoclaw-skill-registry](endoclaw-skill-registry.md))|
-| Cross-harness skill paths (`~/.claude/skills`)| —                                            | Not designed                                           |
+| Pi Feature                                                           | Endo Equivalent         | Status                                                           |
+| -------------------------------------------------------------------- | ----------------------- | ---------------------------------------------------------------- |
+| `SKILL.md` with frontmatter (name, description, license)             | —                       | Not designed                                                     |
+| Progressive disclosure (descriptions in prompt; full body on demand) | —                       | Not designed                                                     |
+| `/skill:name` slash command                                          | —                       | Not designed                                                     |
+| Skill discovery (project + global, walking up cwd)                   | —                       | Not designed                                                     |
+| Skills as a directory on disk                                        | Skills as EndoDirectory | Designed ([endoclaw-skill-registry](endoclaw-skill-registry.md)) |
+| Cross-harness skill paths (`~/.claude/skills`)                       | —                       | Not designed                                                     |
 
 The Endo design [endoclaw-skill-registry](endoclaw-skill-registry.md) is
 the right framing on the daemon side. The complementary piece — a
@@ -212,36 +212,36 @@ Codex — is the on-disk side. See gap [endopi-skills-markdown-format](endopi-sk
 
 ### Prompt templates
 
-| Pi Feature                                  | Endo Equivalent                                | Status                                                 |
-|---------------------------------------------|------------------------------------------------|--------------------------------------------------------|
-| Markdown templates with `{{var}}` interpolation| —                                           | Gap                                                    |
-| `/templatename` expansion in editor         | —                                              | Gap                                                    |
-| Global + project + package locations        | —                                              | Gap                                                    |
+| Pi Feature                                      | Endo Equivalent | Status |
+| ----------------------------------------------- | --------------- | ------ |
+| Markdown templates with `{{var}}` interpolation | —               | Gap    |
+| `/templatename` expansion in editor             | —               | Gap    |
+| Global + project + package locations            | —               | Gap    |
 
 Self-contained, low-risk feature. See gap
 [endopi-prompt-templates](endopi-prompt-templates.md).
 
 ### Context files
 
-| Pi Feature                                  | Endo Equivalent                                | Status                                                 |
-|---------------------------------------------|------------------------------------------------|--------------------------------------------------------|
-| `AGENTS.md` at startup        | System prompt in `packages/lal/agent.js`       | **Available** (but not editable per-project)           |
-| Walking parents from cwd                    | —                                              | Gap                                                    |
-| Append vs replace via `SYSTEM.md`           | —                                              | Gap                                                    |
+| Pi Feature                        | Endo Equivalent                          | Status                                       |
+| --------------------------------- | ---------------------------------------- | -------------------------------------------- |
+| `AGENTS.md` at startup            | System prompt in `packages/lal/agent.js` | **Available** (but not editable per-project) |
+| Walking parents from cwd          | —                                        | Gap                                          |
+| Append vs replace via `SYSTEM.md` | —                                        | Gap                                          |
 
 This composes with [endopi-skills-markdown-format](endopi-skills-markdown-format.md);
 the discovery rule is the same one. Tracked under the skills-format gap.
 
 ### Operating modes
 
-| Pi Mode                                     | Endo Equivalent                                | Status                                                 |
-|---------------------------------------------|------------------------------------------------|--------------------------------------------------------|
-| Interactive (TUI)                           | Chat UI; no first-party TUI                    | Partial (Chat in browser, not terminal)                |
-| Print (one-shot, prints + exits)            | `endo run` for one-shot guests                 | **Available** (different shape)                        |
-| RPC over stdio (LF-delimited JSONL)         | Daemon WebSocket gateway                       | Gap (different transport, different framing)           |
-| SDK (`createAgentSession`)                  | Guest module's `make(powers)`                  | **Available**                                          |
+| Pi Mode                             | Endo Equivalent                | Status                                       |
+| ----------------------------------- | ------------------------------ | -------------------------------------------- |
+| Interactive (TUI)                   | Chat UI; no first-party TUI    | Partial (Chat in browser, not terminal)      |
+| Print (one-shot, prints + exits)    | `endo run` for one-shot guests | **Available** (different shape)              |
+| RPC over stdio (LF-delimited JSONL) | Daemon WebSocket gateway       | Gap (different transport, different framing) |
+| SDK (`createAgentSession`)          | Guest module's `make(powers)`  | **Available**                                |
 
-Pi's RPC mode is the part Endo does *not* have: a strict line-delimited
+Pi's RPC mode is the part Endo does _not_ have: a strict line-delimited
 JSON protocol for embedding the agent in another process (an IDE, a CI
 harness, a Familiar pane) without WebSocket overhead. The
 maintainer's `endor-bus-tui` direction may eventually subsume this; the
@@ -250,14 +250,14 @@ short-term gap is real today. See gap
 
 ### Compaction
 
-| Pi Feature                                  | Endo Equivalent                                | Status                                                 |
-|---------------------------------------------|------------------------------------------------|--------------------------------------------------------|
-| Auto-compaction on context overflow         | —                                              | Designed only ([lal-transcript-memory-management](lal-transcript-memory-management.md))|
-| Manual `/compact [instructions]`            | —                                              | Gap                                                    |
-| Structured summary format                   | —                                              | Gap                                                    |
-| Iterative (prior summary feeds next)        | —                                              | Gap                                                    |
-| `keepRecentTokens` / `reserveTokens` knobs  | —                                              | Gap                                                    |
-| Branch summarization on `/tree` navigation  | —                                              | N/A (no /tree)                                         |
+| Pi Feature                                 | Endo Equivalent | Status                                                                                  |
+| ------------------------------------------ | --------------- | --------------------------------------------------------------------------------------- |
+| Auto-compaction on context overflow        | —               | Designed only ([lal-transcript-memory-management](lal-transcript-memory-management.md)) |
+| Manual `/compact [instructions]`           | —               | Gap                                                                                     |
+| Structured summary format                  | —               | Gap                                                                                     |
+| Iterative (prior summary feeds next)       | —               | Gap                                                                                     |
+| `keepRecentTokens` / `reserveTokens` knobs | —               | Gap                                                                                     |
+| Branch summarization on `/tree` navigation | —               | N/A (no /tree)                                                                          |
 
 Pi's compaction shape is a refinement of what
 `lal-transcript-memory-management` already describes. See gap
@@ -265,11 +265,11 @@ Pi's compaction shape is a refinement of what
 
 ### Session sharing for OSS
 
-| Pi Feature                                  | Endo Equivalent                                | Status                                                 |
-|---------------------------------------------|------------------------------------------------|--------------------------------------------------------|
-| `pi-share-hf` to publish to Hugging Face    | —                                              | Out of scope (philosophical)                           |
-| `/export` to standalone HTML                | —                                              | Gap                                                    |
-| `/share` as private GitHub gist             | —                                              | Out of scope                                           |
+| Pi Feature                               | Endo Equivalent | Status                       |
+| ---------------------------------------- | --------------- | ---------------------------- |
+| `pi-share-hf` to publish to Hugging Face | —               | Out of scope (philosophical) |
+| `/export` to standalone HTML             | —               | Gap                          |
+| `/share` as private GitHub gist          | —               | Out of scope                 |
 
 HTML export is the only piece worth carrying forward; the rest is
 philosophical (sharing transcripts is a workflow choice). Tracked as a
@@ -288,31 +288,31 @@ of Lal/Fae have different answers when asked of Genie.
 
 ### Mapping
 
-| Aspect                                | Lal/Fae mapping (rest of this doc)          | Genie mapping                                                  |
-|---------------------------------------|---------------------------------------------|----------------------------------------------------------------|
-| **LLM API**                           | `packages/lal/providers/` (5 providers)     | `pi-ai` registry verbatim; full provider list **available**     |
-| **Ollama provider**                   | One module in Lal                           | Custom ollama adaptor (`buildOllamaModel`) masquerades ollama as the `openai-completions` API style at `http://127.0.0.1:11434/v1`, bypassing `pi-ai`'s absent native ollama entry. See `src/agent/index.js`. |
-| **Subscription OAuth**                | Gap                                         | Gap (Genie inherits whatever `pi-ai` ships; OAuth providers are not enabled out of the box but the registry shape supports them) |
-| **Agent loop**                        | Lal/Fae's own loop                          | `PiAgent` from `pi-agent-core`, subscribed via `runAgentRound` which translates `pi-agent-core` events into Genie's `ChatEvent` stream |
-| **Tool model**                        | Tool registration in Fae (`makeFooTool`)    | Genie's `ToolSpec` converted at boundary into `AgentTool` for `pi-agent-core` (`toAgentTool`); tools live in `src/tools/` (`vfs`, `command`, `web-fetch`, `web-search`, `memory`) |
-| **Capability confinement**            | SES + caretaker revocation (rest of doc)    | Per-tool gating via `tool-gate.js` over an ambient-Node tool surface; tool execution is gated on expected tool/arg pairs but is not capability-confined by SES grants. The intent (per jcorbin) is to confine via `packages/sandbox` (whose primary driver today is podman; bwrap is also present; additional drivers for macos/windows are anticipated) for `command` and `vfs-node`; that wiring is **not yet present in main**. |
-| **System prompt constitution**        | `packages/lal/agent.js` system prompt       | `buildSystemPrompt` in `src/system/index.js`: composes runtime info, policy / strict-policy / security-notes sections, tool list, and a Claw-style workspace section. Builds a flexible library of prompt parts. |
-| **Persistence shape**                 | Formula store + Lal reply-chains            | A Claw-compatible workspace dir (default `workspace_template/`): `SOUL.md` (persona), `HEARTBEAT.md` (tasks), `memory/` (observations.md, reflections.md, profile.md). Markdown-on-disk; the agent reads its own past sessions through the memory tools. |
-| **Compaction**                        | Designed only ([lal-transcript-memory-management](lal-transcript-memory-management.md)) | **In progress**: an observer subagent compresses chat into prioritised `observations.md` entries (token-threshold + idle-timer trigger; 30k-token default); a reflector subagent consolidates observations into long-term `reflections.md` and `profile.md` (40k-token threshold + daily heartbeat). Both run as separate `PiAgent` instances with focused tool sets, gated by `tool-gate.js`. |
-| **Autonomous execution**              | None                                        | A heartbeat subagent loads `HEARTBEAT.md`, executes pending tasks, and records `.heartbeats.log` per tick. Claw's autonomous-task shape. |
-| **Skill format**                      | Designed only ([endoclaw-skill-registry](endoclaw-skill-registry.md)) | A `skillsPrompt` option on `buildSystemPrompt` accepts a pre-rendered skills section. The on-disk format and discovery walker are not in Genie; the open spinout [endopi-skills-markdown-format](endopi-skills-markdown-format.md) still applies. |
-| **Interval scheduler**                | None                                        | `makeIntervalScheduler` runs periodic agent prompts (cron-style) under the agent loop |
+| Aspect                         | Lal/Fae mapping (rest of this doc)                                                      | Genie mapping                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------------------ | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **LLM API**                    | `packages/lal/providers/` (5 providers)                                                 | `pi-ai` registry verbatim; full provider list **available**                                                                                                                                                                                                                                                                                                                                                                        |
+| **Ollama provider**            | One module in Lal                                                                       | Custom ollama adaptor (`buildOllamaModel`) masquerades ollama as the `openai-completions` API style at `http://127.0.0.1:11434/v1`, bypassing `pi-ai`'s absent native ollama entry. See `src/agent/index.js`.                                                                                                                                                                                                                      |
+| **Subscription OAuth**         | Gap                                                                                     | Gap (Genie inherits whatever `pi-ai` ships; OAuth providers are not enabled out of the box but the registry shape supports them)                                                                                                                                                                                                                                                                                                   |
+| **Agent loop**                 | Lal/Fae's own loop                                                                      | `PiAgent` from `pi-agent-core`, subscribed via `runAgentRound` which translates `pi-agent-core` events into Genie's `ChatEvent` stream                                                                                                                                                                                                                                                                                             |
+| **Tool model**                 | Tool registration in Fae (`makeFooTool`)                                                | Genie's `ToolSpec` converted at boundary into `AgentTool` for `pi-agent-core` (`toAgentTool`); tools live in `src/tools/` (`vfs`, `command`, `web-fetch`, `web-search`, `memory`)                                                                                                                                                                                                                                                  |
+| **Capability confinement**     | SES + caretaker revocation (rest of doc)                                                | Per-tool gating via `tool-gate.js` over an ambient-Node tool surface; tool execution is gated on expected tool/arg pairs but is not capability-confined by SES grants. The intent (per jcorbin) is to confine via `packages/sandbox` (whose primary driver today is podman; bwrap is also present; additional drivers for macos/windows are anticipated) for `command` and `vfs-node`; that wiring is **not yet present in main**. |
+| **System prompt constitution** | `packages/lal/agent.js` system prompt                                                   | `buildSystemPrompt` in `src/system/index.js`: composes runtime info, policy / strict-policy / security-notes sections, tool list, and a Claw-style workspace section. Builds a flexible library of prompt parts.                                                                                                                                                                                                                   |
+| **Persistence shape**          | Formula store + Lal reply-chains                                                        | A Claw-compatible workspace dir (default `workspace_template/`): `SOUL.md` (persona), `HEARTBEAT.md` (tasks), `memory/` (observations.md, reflections.md, profile.md). Markdown-on-disk; the agent reads its own past sessions through the memory tools.                                                                                                                                                                           |
+| **Compaction**                 | Designed only ([lal-transcript-memory-management](lal-transcript-memory-management.md)) | **In progress**: an observer subagent compresses chat into prioritised `observations.md` entries (token-threshold + idle-timer trigger; 30k-token default); a reflector subagent consolidates observations into long-term `reflections.md` and `profile.md` (40k-token threshold + daily heartbeat). Both run as separate `PiAgent` instances with focused tool sets, gated by `tool-gate.js`.                                     |
+| **Autonomous execution**       | None                                                                                    | A heartbeat subagent loads `HEARTBEAT.md`, executes pending tasks, and records `.heartbeats.log` per tick. Claw's autonomous-task shape.                                                                                                                                                                                                                                                                                           |
+| **Skill format**               | Designed only ([endoclaw-skill-registry](endoclaw-skill-registry.md))                   | A `skillsPrompt` option on `buildSystemPrompt` accepts a pre-rendered skills section. The on-disk format and discovery walker are not in Genie; the open spinout [endopi-skills-markdown-format](endopi-skills-markdown-format.md) still applies.                                                                                                                                                                                  |
+| **Interval scheduler**         | None                                                                                    | `makeIntervalScheduler` runs periodic agent prompts (cron-style) under the agent loop                                                                                                                                                                                                                                                                                                                                              |
 
 ### What Genie's existence tells us
 
-Genie is the existence proof that *embedding* Pi inside Endo is viable: a
+Genie is the existence proof that _embedding_ Pi inside Endo is viable: a
 single package can depend on `pi-ai` for the provider/model registry, wrap
 `pi-agent-core` for the agent loop, and project the result into Endo's
 event vocabulary without rewriting either Pi surface. Three implications
 follow.
 
 1. **The provider-registry gap is partially closed today.** Genie ships
-   `pi-ai`'s full registry by transitive dependency. See § *Roadmap impact*
+   `pi-ai`'s full registry by transitive dependency. See § _Roadmap impact_
    in [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md);
    M1's scope reduces to (a) consolidating onto one registry surface
    (Genie's vs. Lal's) and (b) the OAuth and cross-provider-handoff work
@@ -406,16 +406,16 @@ reuses the embedding-shaped agent core, not the cli-shaped one.
 
 Each gap below has a sibling design at the path indicated.
 
-| Gap                                    | Sibling design                                                    | Pi reference            |
-|----------------------------------------|-------------------------------------------------------------------|-------------------------|
-| LLM-friendly edit-by-replacement tool  | [endopi-edit-tool](endopi-edit-tool.md)                           | `coding-agent/src/core/tools/edit.ts`|
-| Pi-compatible JSONL session format     | [endopi-jsonl-transcript-format](endopi-jsonl-transcript-format.md)| `coding-agent/src/core/session-manager.ts`, `docs/session-format.md`|
-| Multi-provider registry + subscription OAuth| [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md)| `ai/src/oauth.ts`, `ai/src/api-registry.ts`|
-| Markdown skill format (agentskills.io) | [endopi-skills-markdown-format](endopi-skills-markdown-format.md) | `coding-agent/src/core/skills.ts`, `docs/skills.md`|
-| Prompt templates                       | [endopi-prompt-templates](endopi-prompt-templates.md)             | `coding-agent/src/core/prompt-templates.ts`|
-| Iterative compaction with structured summary| [endopi-iterative-compaction](endopi-iterative-compaction.md)| `coding-agent/src/core/compaction/compaction.ts`|
-| Stdio JSONL RPC bridge to a daemon agent| [endopi-stdio-rpc-bridge](endopi-stdio-rpc-bridge.md)            | `coding-agent/src/modes/rpc/`, `docs/rpc.md`|
-| Extension package manifest (one `package.json` keyword for code + skills + prompts + themes)| [endopi-extension-package-manifest](endopi-extension-package-manifest.md)| `coding-agent/docs/packages.md`|
+| Gap                                                                                          | Sibling design                                                              | Pi reference                                                         |
+| -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| LLM-friendly edit-by-replacement tool                                                        | [endopi-edit-tool](endopi-edit-tool.md)                                     | `coding-agent/src/core/tools/edit.ts`                                |
+| Pi-compatible JSONL session format                                                           | [endopi-jsonl-transcript-format](endopi-jsonl-transcript-format.md)         | `coding-agent/src/core/session-manager.ts`, `docs/session-format.md` |
+| Multi-provider registry + subscription OAuth                                                 | [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md) | `ai/src/oauth.ts`, `ai/src/api-registry.ts`                          |
+| Markdown skill format (agentskills.io)                                                       | [endopi-skills-markdown-format](endopi-skills-markdown-format.md)           | `coding-agent/src/core/skills.ts`, `docs/skills.md`                  |
+| Prompt templates                                                                             | [endopi-prompt-templates](endopi-prompt-templates.md)                       | `coding-agent/src/core/prompt-templates.ts`                          |
+| Iterative compaction with structured summary                                                 | [endopi-iterative-compaction](endopi-iterative-compaction.md)               | `coding-agent/src/core/compaction/compaction.ts`                     |
+| Stdio JSONL RPC bridge to a daemon agent                                                     | [endopi-stdio-rpc-bridge](endopi-stdio-rpc-bridge.md)                       | `coding-agent/src/modes/rpc/`, `docs/rpc.md`                         |
+| Extension package manifest (one `package.json` keyword for code + skills + prompts + themes) | [endopi-extension-package-manifest](endopi-extension-package-manifest.md)   | `coding-agent/docs/packages.md`                                      |
 
 ### Pi-specific moves Endo declines
 
@@ -447,7 +447,7 @@ Each gap below has a sibling design at the path indicated.
 
 ### Capability model
 
-Pi takes the ergonomic path: the agent's process *is* the user's
+Pi takes the ergonomic path: the agent's process _is_ the user's
 process. Tools run with the user's permissions; safety is one of
 "review extensions before installing", "run pi in a container", or
 "write a permission-gate extension". This is fine for a developer who
@@ -457,7 +457,7 @@ technical user.
 Endo's [daemon-capability-filesystem](daemon-capability-filesystem.md) +
 [daemon-agent-tools](daemon-agent-tools.md) inverts the default: the
 agent receives a `Dir(/path/to/project)` and a `Shell({allowed: [...]})`
-and *cannot name* anything outside. The user does not have to remember
+and _cannot name_ anything outside. The user does not have to remember
 to review the agent's actions, because the agent's authority is bounded
 by what was granted at provisioning time.
 
@@ -481,25 +481,25 @@ Pi's shape is simpler and more debuggable for the operator. Endo's shape
 is more structurally sound and survives malicious-formula crashes
 without losing history. The gap-closing move
 ([endopi-jsonl-transcript-format](endopi-jsonl-transcript-format.md))
-imports Pi's file shape as a *projection* of Endo's transcript graph —
+imports Pi's file shape as a _projection_ of Endo's transcript graph —
 not a replacement.
 
 ### Extensibility
 
 Pi extensions are TS modules with full system access. The shape is
-*plug-in*: pi loads them, calls their factory, lets them register tools
+_plug-in_: pi loads them, calls their factory, lets them register tools
 and listen to events. The same module can register a tool, replace a
 built-in UI component, hook compaction, and emit a status-line widget —
 all with no security boundary.
 
 Endo guest plugins are guest modules with bounded authority. The shape
-is *guest*: the daemon hands the module a `powers` argument with the
+is _guest_: the daemon hands the module a `powers` argument with the
 capabilities the host approved. The plugin author cannot escalate by
 "just adding another import"; the import resolution itself is mediated
 by Endo's compartment mapper.
 
 The right move for Endo is not to copy Pi's plug-in model, but to make
-its guest model *as ergonomic as Pi's plug-in model* for the cases where
+its guest model _as ergonomic as Pi's plug-in model_ for the cases where
 the user actually wants the broad authority (developer-on-their-own-box).
 That is what
 [endopi-extension-package-manifest](endopi-extension-package-manifest.md)
@@ -521,11 +521,11 @@ without repeating it.
 
 ### Agent-orchestration shape
 
-Pi's default is *one agent, one session, one cwd*. Sub-agents are a
+Pi's default is _one agent, one session, one cwd_. Sub-agents are a
 deliberate non-feature, pushed to extensions ("there's many ways to do
 this; tmux is one"). The harness assumes the human stays in the loop.
 
-Endo's default is *many guests, many spaces, many capabilities*. The
+Endo's default is _many guests, many spaces, many capabilities_. The
 multi-guest formula model is the orchestration layer; the human can
 delegate one guest to another (`send`, `request`, `form`) without the
 human being on the message path. This is the shape that matters for the
@@ -534,9 +534,9 @@ Endo bot fleet's eventual self-organization.
 Pi and Endo are pointed at different problems. Pi optimizes for a
 single developer's coding velocity; Endo optimizes for a multi-agent
 system in which the human is one of N participants. The gap-closing
-designs in this document are about adopting Pi's *developer-velocity*
+designs in this document are about adopting Pi's _developer-velocity_
 moves (edit tool, JSONL transcripts, OAuth providers, skills format,
-RPC) without giving up Endo's *multi-agent-system* shape.
+RPC) without giving up Endo's _multi-agent-system_ shape.
 
 ## Pi source-file citation index
 

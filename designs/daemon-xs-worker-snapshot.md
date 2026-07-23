@@ -1,11 +1,11 @@
 # XS Worker Heap Snapshots
 
-| | |
-|---|---|
-| **Created** | 2026-04-15 |
-| **Author** | Kris Kowal (prompted) |
-| **Updated** | 2026-04-15 |
-| **Status** | In Progress |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-04-15            |
+| **Author**  | Kris Kowal (prompted) |
+| **Updated** | 2026-04-15            |
+| **Status**  | In Progress           |
 
 ## Motivation
 
@@ -187,47 +187,47 @@ released.
 
 #### `suspend` (supervisor → worker)
 
-| Field | Value |
-|-------|-------|
-| handle | 0 (control) |
-| verb | `"suspend"` |
+| Field   | Value                      |
+| ------- | -------------------------- |
+| handle  | 0 (control)                |
+| verb    | `"suspend"`                |
 | payload | CAS directory path (UTF-8) |
-| nonce | request nonce |
+| nonce   | request nonce              |
 
 Tells the worker to quiesce and stream its snapshot to the
 CAS directory.
 
 #### `suspended` (worker → supervisor)
 
-| Field | Value |
-|-------|-------|
-| handle | 0 (control) |
-| verb | `"suspended"` |
+| Field   | Value                      |
+| ------- | -------------------------- |
+| handle  | 0 (control)                |
+| verb    | `"suspended"`              |
 | payload | SHA-256 hex digest (UTF-8) |
-| nonce | matching nonce |
+| nonce   | matching nonce             |
 
 Worker's response after streaming the snapshot to CAS.
 The worker exits after sending this.
 
 #### `suspend-error` (worker → supervisor)
 
-| Field | Value |
-|-------|-------|
-| handle | 0 (control) |
-| verb | `"suspend-error"` |
+| Field   | Value                 |
+| ------- | --------------------- |
+| handle  | 0 (control)           |
+| verb    | `"suspend-error"`     |
 | payload | error message (UTF-8) |
-| nonce | matching nonce |
+| nonce   | matching nonce        |
 
 Worker cannot suspend (not idle, snapshot write failed).
 
 #### `restore` (supervisor → worker, init variant)
 
-| Field | Value |
-|-------|-------|
-| handle | parent handle |
-| verb | `"restore"` |
+| Field   | Value                 |
+| ------- | --------------------- |
+| handle  | parent handle         |
+| verb    | `"restore"`           |
 | payload | CAS file path (UTF-8) |
-| nonce | 0 |
+| nonce   | 0                     |
 
 Sent as the init envelope to a new worker thread to indicate
 it should stream-restore from the CAS file rather than
@@ -360,22 +360,22 @@ the mismatch.
 ## Prompt
 
 > Please design (in designs/) a feature for capturing a snapshot
-> of a worker and restoring a worker from a snapshot.  This will
+> of a worker and restoring a worker from a snapshot. This will
 > not likely not be directly usable to the daemon because
 > restoring a snapshot requires the host process to restore the
 > state of any connectivity through captp to live objects, which
 > have likely been disincarnated, and the daemon deliberately
 > restarts workers from durable persistence to avoid dealing with
-> severence over live captp connections.  But, that might not be
+> severence over live captp connections. But, that might not be
 > the case and it might be reasonable to obligate the worker to
 > sense and recover from loss of ephemeral connectivity and
 > procede from the latest incarnation of any capabilities it
-> received for which there are locators.  As such, a snapshot
+> received for which there are locators. As such, a snapshot
 > would need to produce a formula that retains the dependent
 > formulas as well as the xsnap version needed to run the
-> program.  After completing the design, hazard guesses for any
+> program. After completing the design, hazard guesses for any
 > open questions and make a preliminary implementation and tests.
-> Run until tests pass or an impasse in the design is met.  The
+> Run until tests pass or an impasse in the design is met. The
 > purpose of this feature would be to put some kinds of long
 > running workflows to sleep and restoring them from heap state
 > instead of durable persistence when possible.
@@ -383,6 +383,7 @@ the mismatch.
 ### Revised scope (discussion 2026-04-15)
 
 The design was revised based on discussion:
+
 - Snapshots are not formulas — they are internal to worker
   lifecycle.
 - `suspend()` on the worker controller drops a snapshot into the

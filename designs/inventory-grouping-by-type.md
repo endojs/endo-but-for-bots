@@ -1,11 +1,11 @@
 # Inventory Grouping by Type
 
-| | |
-|---|---|
-| **Created** | 2026-02-14 |
-| **Updated** | 2026-06-28 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-14            |
+| **Updated** | 2026-06-28            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | In Progress           |
 
 ## What is the Problem Being Solved?
 
@@ -23,14 +23,14 @@ currently expose it through the agent's naming API.
 Group inventory items into collapsible sections, rendered in this fixed manual
 order (not alphabetical or derived):
 
-| Group | Formula Types | Icon | Description |
-|-------|--------------|------|-------------|
-| **Handles** | `handle` | Bust in silhouette | Agent handles (identities representing people / contacts) |
-| **Directories** | `directory`, `readable-tree`, `mount`, `scratch-mount`, `pet-store` | Folder | Directories, readable trees, mounts, scratch mounts, pet stores |
-| **Values** | `marshal` | Diamond | Marshalled values |
-| **Capabilities** | All remaining types | Key | Everything else: workers, blobs, eval results, promises, lookups, peers, remotes, etc. |
-| **Agents** | `guest` | Robot | Delegated guests |
-| **Personas** | `host` | Performing-arts masks | The agent's own host identities |
+| Group            | Formula Types                                                       | Icon                  | Description                                                                            |
+| ---------------- | ------------------------------------------------------------------- | --------------------- | -------------------------------------------------------------------------------------- |
+| **Handles**      | `handle`                                                            | Bust in silhouette    | Agent handles (identities representing people / contacts)                              |
+| **Directories**  | `directory`, `readable-tree`, `mount`, `scratch-mount`, `pet-store` | Folder                | Directories, readable trees, mounts, scratch mounts, pet stores                        |
+| **Values**       | `marshal`                                                           | Diamond               | Marshalled values                                                                      |
+| **Capabilities** | All remaining types                                                 | Key                   | Everything else: workers, blobs, eval results, promises, lookups, peers, remotes, etc. |
+| **Agents**       | `guest`                                                             | Robot                 | Delegated guests                                                                       |
+| **Personas**     | `host`                                                              | Performing-arts masks | The agent's own host identities                                                        |
 
 A group renders **only when it has at least one visible item**. An empty group
 does not appear at all (for example the Agents section is absent when there are

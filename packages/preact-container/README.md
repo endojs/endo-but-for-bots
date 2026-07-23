@@ -80,7 +80,7 @@ Two independent reasons:
    `Object.prototype.constructor` is a frozen, non-writable data
    property, so assigning a `constructor` that resolves up the prototype
    chain throws. The `'severe'` enablement sets `'%ObjectPrototype%':
-   '*'`, which makes every `Object.prototype` property — including
+'*'`, which makes every `Object.prototype` property — including
    `constructor` — overridable, so the assignment succeeds. `'min'` and
    `'moderate'` do **not** enable `constructor`. The lockdown is still
    real: primordials are frozen and compartment isolation is in force.

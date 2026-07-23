@@ -7,12 +7,12 @@ const line = await console.readLine();
 const value = eval(line); // Whoa!
 ```
 
-JavaScript normally interprets a *direct eval expression* like `eval(line)` as
-a syntactic *special form*, not a function call. This is gives the code read and
+JavaScript normally interprets a _direct eval expression_ like `eval(line)` as
+a syntactic _special form_, not a function call. This is gives the code read and
 write access to the lexical scope of the code containing the direct eval
 expression. Because the direct eval expression looks like a function call, the
 scope of the code containing the direct eval expression is often mistakenly
-called the *caller scope*, as it would in a genuine function call.
+called the _caller scope_, as it would in a genuine function call.
 
 ```js
 'use strict';
@@ -33,7 +33,7 @@ Even more confusing, a direct eval expression only expresses a direct eval if
 the binding for `eval` looked up by normal lexical lookup is the original
 `eval` function, i.e., the original binding of the `eval` global variable. If
 this occurrence of `eval` evaluates to anything else, then the direct eval
-expression expresses an *indirect eval*. The semantics of an indirect eval is
+expression expresses an _indirect eval_. The semantics of an indirect eval is
 exactly the function call that it looks like: it does a normal function call to
 whatever it is that this `eval` evaluated to.
 
@@ -47,8 +47,8 @@ SES-shim necessarily expresses an indirect eval.
 Neither direct nor indirect eval raise any SES safety issue. Both semantics are
 consistent with ocap rules. However, the divergence means that code written for
 a SES machine, when run on the SES-shim, may mean something else and behave
-differently. And likewise in the other direction. *By default* the SES-shim
-therefore rejects *some* apparent direct eval expressions--the ones that
+differently. And likewise in the other direction. _By default_ the SES-shim
+therefore rejects _some_ apparent direct eval expressions--the ones that
 obviously look like direct eval expressions. Our rejection test has both false
 negatives and false positives. Because there is no fundamental
 safety issue at stake, the regexp will miss some direct eval expressions, such

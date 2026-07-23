@@ -13,16 +13,15 @@ Here’s an example of how `makePromiseKit` might be used in an Agoric smart con
 import { makePromiseKit } from '@endo/promise-kit';
 
 function asyncOperation() {
-
   const { promise, resolve, reject } = makePromiseKit();
   setTimeout(() => {
     const success = true; // Simulating success or failure
     if (success) {
-      resolve("Operation successful!");
+      resolve('Operation successful!');
     } else {
-      reject("Operation failed!");
+      reject('Operation failed!');
     }
-  }, 2000); 
+  }, 2000);
 
   return promise;
 }
@@ -52,21 +51,24 @@ kit2.promise.then(value => console.log('Kit 2 resolved with:', value));
 
 kit1.resolve('First success');
 kit2.resolve('Second success');
-
 ```
 
 ## API
 
 ### `makePromiseKit()`
+
 Creates a new promise kit.
 
 **Returns**
+
 - **`promise`**: The promise object.
 - **`resolve`**: The resolve function for the promise.
 - **`reject`**: The reject function for the promise.
 
 ## Links
+
 [Repository](https://github.com/endojs/endo/tree/master/packages/promise-kit)
 
 ## License
+
 This package is licensed under the Apache-2.0 License.

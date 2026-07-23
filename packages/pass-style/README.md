@@ -17,21 +17,21 @@ and **Pass-by-reference**.
 
 ## Pass Styles
 
-| Pass Style | Category | Description | Examples |
-|------------|----------|-------------|----------|
-| `'null'` | Primitive | The null value | `null` |
-| `'undefined'` | Primitive | The undefined value | `undefined` |
-| `'boolean'` | Primitive | Boolean primitives | `true`, `false` |
-| `'number'` | Primitive | IEEE 754 floats | `42`, `3.14`, `NaN`, `Infinity` |
-| `'bigint'` | Primitive | Arbitrary-precision integers | `123n`, `-456n` |
-| `'string'` | Primitive | Well-formed strings | `'hello'`, `''` |
-| `'symbol'` | Primitive | Registered/well-known symbols | `Symbol.iterator` |
-| `'copyArray'` | Pass-by-copy | Frozen arrays of passables | `harden([1, 2, 3])` |
-| `'copyRecord'` | Pass-by-copy | Frozen plain objects | `harden({ x: 10 })` |
-| `'remotable'` | Pass-by-presence | Far objects & remote presences | `Far('Counter', {...})` |
-| `'tagged'` | Extension | Domain-specific types | `makeTagged('copySet', [...])` |
-| `'error'` | Pass-by-presence | Error objects | `harden(Error('failed'))` |
-| `'promise'` | Pass-by-presence | Promise objects | `Promise.resolve(42)` |
+| Pass Style     | Category         | Description                    | Examples                        |
+| -------------- | ---------------- | ------------------------------ | ------------------------------- |
+| `'null'`       | Primitive        | The null value                 | `null`                          |
+| `'undefined'`  | Primitive        | The undefined value            | `undefined`                     |
+| `'boolean'`    | Primitive        | Boolean primitives             | `true`, `false`                 |
+| `'number'`     | Primitive        | IEEE 754 floats                | `42`, `3.14`, `NaN`, `Infinity` |
+| `'bigint'`     | Primitive        | Arbitrary-precision integers   | `123n`, `-456n`                 |
+| `'string'`     | Primitive        | Well-formed strings            | `'hello'`, `''`                 |
+| `'symbol'`     | Primitive        | Registered/well-known symbols  | `Symbol.iterator`               |
+| `'copyArray'`  | Pass-by-copy     | Frozen arrays of passables     | `harden([1, 2, 3])`             |
+| `'copyRecord'` | Pass-by-copy     | Frozen plain objects           | `harden({ x: 10 })`             |
+| `'remotable'`  | Pass-by-presence | Far objects & remote presences | `Far('Counter', {...})`         |
+| `'tagged'`     | Extension        | Domain-specific types          | `makeTagged('copySet', [...])`  |
+| `'error'`      | Pass-by-presence | Error objects                  | `harden(Error('failed'))`       |
+| `'promise'`    | Pass-by-presence | Promise objects                | `Promise.resolve(42)`           |
 
 ## Core Functions
 
@@ -43,13 +43,13 @@ Throws if the value is not passable.
 ```javascript
 import { passStyleOf } from '@endo/pass-style';
 
-passStyleOf(42);                    // 'number'
-passStyleOf(harden([1, 2]));        // 'copyArray'
-passStyleOf(harden({ x: 1 }));      // 'copyRecord'
-passStyleOf(Promise.resolve());     // 'promise'
+passStyleOf(42); // 'number'
+passStyleOf(harden([1, 2])); // 'copyArray'
+passStyleOf(harden({ x: 1 })); // 'copyRecord'
+passStyleOf(Promise.resolve()); // 'promise'
 
 // Throws for non-passable values
-passStyleOf({ x: 1 });  // Error: not frozen
+passStyleOf({ x: 1 }); // Error: not frozen
 ```
 
 ### isPassable(value)
@@ -60,10 +60,10 @@ Returns `true` if the value is passable, `false` otherwise.
 ```javascript
 import { isPassable } from '@endo/pass-style';
 
-isPassable(42);                // true
-isPassable(harden([1, 2]));    // true
-isPassable({ x: 1 });          // false - not frozen
-isPassable(harden({ x: 1 }));  // true
+isPassable(42); // true
+isPassable(harden([1, 2])); // true
+isPassable({ x: 1 }); // false - not frozen
+isPassable(harden({ x: 1 })); // true
 ```
 
 Use `isPassable()` when you want a boolean result.
@@ -78,11 +78,15 @@ Creates a remotable object that can be passed by reference.
 import { Far } from '@endo/pass-style';
 
 const counter = Far('Counter', {
-  increment() { return count += 1; },
-  getValue() { return count; }
+  increment() {
+    return (count += 1);
+  },
+  getValue() {
+    return count;
+  },
 });
 
-passStyleOf(counter);  // 'remotable'
+passStyleOf(counter); // 'remotable'
 ```
 
 **Note:** Far objects are remotable but don't validate their inputs.
@@ -98,7 +102,7 @@ types.
 import { makeTagged } from '@endo/pass-style';
 
 const tagged = makeTagged('customType', { data: 42 });
-passStyleOf(tagged);  // 'tagged'
+passStyleOf(tagged); // 'tagged'
 ```
 
 Tagged objects are used internally by [@endo/patterns](../patterns/README.md)
@@ -142,7 +146,7 @@ Changes to the original don't affect copies.
 ```javascript
 const config = harden({
   timeout: 5000,
-  retries: 3
+  retries: 3,
 });
 
 // When passed, config is copied
@@ -160,7 +164,9 @@ The object remains in its original location.
 
 ```javascript
 const service = Far('Service', {
-  getData() { return data; }
+  getData() {
+    return data;
+  },
 });
 
 // When passed, only a reference is passed
@@ -173,10 +179,14 @@ The package provides type guards for common pass styles:
 
 ```javascript
 import {
-  isRecord, assertRecord,
-  isCopyArray, assertCopyArray,
-  isRemotable, assertRemotable,
-  isAtom, assertAtom
+  isRecord,
+  assertRecord,
+  isCopyArray,
+  assertCopyArray,
+  isRemotable,
+  assertRemotable,
+  isAtom,
+  assertAtom,
 } from '@endo/pass-style';
 
 // Boolean checks
@@ -207,6 +217,7 @@ eventual-send.
 ## Deep Dives
 
 For implementation details:
+
 - [CopyRecord guarantees](./doc/copyRecord-guarantees.md) - Detailed validation
   guarantees for CopyRecord
 - [CopyArray guarantees](./doc/copyArray-guarantees.md) - Detailed validation

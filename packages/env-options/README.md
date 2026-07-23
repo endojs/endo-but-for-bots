@@ -16,16 +16,17 @@ module instance. Compartments instead lets us parameterize the meaning
 of a module instance derived from a static module according to the
 three namespaces provided by the JavaScript semantics, affecting the
 meaning of a module instance.
-   * The global variable namespaces.
-      * The global scope, aliased to properties of the global object.
-        This is necessarily compartment-wide. In our
-        recommened usage pattern of one compartment per package,
-        each global would be package-wide. (See LavaMoat)
-      * The global lexical scope. The SES-shim compartments support
-        these both compartment-wide as well as per-module. But it is
-        not yet clear what we will propose in the Compartment proposal.
-   * The import namespace.
-   * The host hooks.
+
+- The global variable namespaces.
+  - The global scope, aliased to properties of the global object.
+    This is necessarily compartment-wide. In our
+    recommened usage pattern of one compartment per package,
+    each global would be package-wide. (See LavaMoat)
+  - The global lexical scope. The SES-shim compartments support
+    these both compartment-wide as well as per-module. But it is
+    not yet clear what we will propose in the Compartment proposal.
+- The import namespace.
+- The host hooks.
 
 This `@endo/env-options` package follows the Node precedent for
 finding Unix environment variable settings: looking for a

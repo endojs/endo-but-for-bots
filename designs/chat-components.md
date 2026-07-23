@@ -1,12 +1,12 @@
 # Chat Component Architecture
 
-| | |
-|---|---|
-| **Created** | 2026-03-02 |
-| **Updated** | 2026-03-02 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
-| **Source** | Extracted from `packages/chat/DESIGN.md` |
+|             |                                          |
+| ----------- | ---------------------------------------- |
+| **Created** | 2026-03-02                               |
+| **Updated** | 2026-03-02                               |
+| **Author**  | Kris Kowal (prompted)                    |
+| **Status**  | **Complete**                             |
+| **Source**  | Extracted from `packages/chat/DESIGN.md` |
 
 ## File Structure
 
@@ -67,17 +67,17 @@ packages/chat/
 
 ## Component Responsibilities
 
-| Component | Responsibility |
-|-----------|----------------|
-| `chat.js` | Orchestrates components, manages profile navigation |
-| `inbox-component.js` | Renders messages, token chips, eval proposals |
-| `inventory-component.js` | Displays pet names, handles expansion |
-| `chat-bar-component.js` | Command input, mode management, modeline |
-| `value-component.js` | Value modal, save functionality |
-| `send-form.js` | Message composition, state tracking |
-| `token-autocomplete.js` | Token chip creation, autocomplete |
-| `spaces-gutter.js` | Space navigation, home config, context menus |
-| `icon-selector.js` | Shared emoji/letter icon selector |
+| Component                | Responsibility                                      |
+| ------------------------ | --------------------------------------------------- |
+| `chat.js`                | Orchestrates components, manages profile navigation |
+| `inbox-component.js`     | Renders messages, token chips, eval proposals       |
+| `inventory-component.js` | Displays pet names, handles expansion               |
+| `chat-bar-component.js`  | Command input, mode management, modeline            |
+| `value-component.js`     | Value modal, save functionality                     |
+| `send-form.js`           | Message composition, state tracking                 |
+| `token-autocomplete.js`  | Token chip creation, autocomplete                   |
+| `spaces-gutter.js`       | Space navigation, home config, context menus        |
+| `icon-selector.js`       | Shared emoji/letter icon selector                   |
 
 ## Inventory Panel
 
@@ -91,6 +91,7 @@ The inventory displays named values with contextual actions:
 ### Expansion Behavior
 
 Directories (values with `followNameChanges`) can be expanded:
+
 - Click disclosure triangle to expand/collapse
 - Nested items use wrapped powers for correct paths
 - Collapse cleans up subscriptions
@@ -100,17 +101,20 @@ Directories (values with `followNameChanges`) can be expanded:
 Messages in the inbox show:
 
 ### Package Messages
+
 - Sender chip (`@name`)
 - Markdown-rendered content
 - Token chips for embedded values (clickable to inspect)
 
 ### Eval Proposal Messages
+
 - Proposer chip
 - Source code in syntax-highlighted fence
 - Endowments mapping (codeName ← @petName)
 - Action buttons: Grant, Counter-proposal, Reject
 
 ### Request Messages
+
 - Description text
 - Resolve/Reject inputs
 - Status after settlement

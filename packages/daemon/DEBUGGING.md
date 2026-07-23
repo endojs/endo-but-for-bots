@@ -7,6 +7,7 @@ failure modes.
 ## Run In Foreground
 
 For easier debugging, the endo daemon can be told not to fork:
+
 ```sh
 # stop hiding from me!
 endo start -f
@@ -18,7 +19,7 @@ endo start -f --feral-errors
 ## Environment Variables
 
 | Variable                | Description                                                               |
-|-------------------------|---------------------------------------------------------------------------|
+| ----------------------- | ------------------------------------------------------------------------- |
 | `ENDO_ADDR`             | Address for the Endo daemon (connect to or listen on)                     |
 | `ENDO_DAEMON`           | Path to the Node.js executable to use for running endo daemon processes   |
 | `ENDO_DAEMON_PATH`      | Path to the daemon script to use when not loading from `package.json`     |
@@ -67,13 +68,13 @@ Worker logs live at `<state>/worker/<hash>/worker.log`.
 ### Always-on (default)
 
 | Variable      | Purpose                                                                                 |
-|---------------|-----------------------------------------------------------------------------------------|
+| ------------- | --------------------------------------------------------------------------------------- |
 | Lifecycle log | Formula lifecycle events are logged by default. Set `ENDO_LIFECYCLE_LOG=0` to suppress. |
 
 ### Opt-in
 
 | Variable             | Purpose                                                                           |
-|----------------------|-----------------------------------------------------------------------------------|
+| -------------------- | --------------------------------------------------------------------------------- |
 | `ENDO_CAPTP_TRACE`   | Log every CapTP message (SEND/RECV) per connection. Very verbose.                 |
 | `ENDO_FORMULA_GRAPH` | Dump the full formula dependency graph after loading from persistence at startup. |
 | `ENDO_GC=0`          | Disable formula garbage collection for a daemon run.                              |
@@ -109,7 +110,7 @@ Additional `LOCKDOWN_*` environment variables can be set manually.
 Workers inherit the daemon's environment, so these apply everywhere.
 
 | Variable                   | Values                                     | Effect                                                           |
-|----------------------------|--------------------------------------------|------------------------------------------------------------------|
+| -------------------------- | ------------------------------------------ | ---------------------------------------------------------------- |
 | `LOCKDOWN_ERROR_TAMING`    | `safe` (default), `unsafe`, `unsafe-debug` | Preserve error `.message` and `.stack` instead of redacting them |
 | `LOCKDOWN_CONSOLE_TAMING`  | `safe` (default), `unsafe`                 | Use original `console` instead of SES wrapper                    |
 | `LOCKDOWN_STACK_FILTERING` | `concise` (default), `verbose`             | Show full stack traces instead of filtered                       |
@@ -150,7 +151,7 @@ T+<ms>  <id-prefix>  <type>  <event>  <detail>
 ```
 
 | Field         | Description                                                       |
-|---------------|-------------------------------------------------------------------|
+| ------------- | ----------------------------------------------------------------- |
 | `T+<ms>`      | Milliseconds since daemon core initialization                     |
 | `<id-prefix>` | First 12 characters of the formula identifier                     |
 | `<type>`      | Formula type (`worker`, `guest`, `make-unconfined`, `host`, etc.) |
@@ -160,7 +161,7 @@ T+<ms>  <id-prefix>  <type>  <event>  <detail>
 ### Events
 
 | Event            | Meaning                                              |
-|------------------|------------------------------------------------------|
+| ---------------- | ---------------------------------------------------- |
 | `FORMULATE`      | New formula created and persisted                    |
 | `REINCARNATE`    | Existing formula being re-evaluated from persistence |
 | `WORKER_READY`   | Worker process spawned and CapTP connected           |
@@ -267,7 +268,7 @@ Formula graph after persistence seed:
 ```
 
 | Annotation   | Meaning                                         |
-|--------------|-------------------------------------------------|
+| ------------ | ----------------------------------------------- |
 | `[ROOT]`     | Formula is in the GC root set (never collected) |
 | `deps=[...]` | Static dependency IDs (first 12 chars)          |
 

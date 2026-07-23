@@ -1,11 +1,11 @@
 # Familiar Chat Weblet Hosting
 
-| | |
-|---|---|
-| **Created** | 2026-02-14 |
-| **Updated** | 2026-02-26 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-14            |
+| **Updated** | 2026-02-26            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## Status
 
@@ -92,6 +92,7 @@ installs a weblet through Chat, the process is:
    identifier.
 
 This means each weblet:
+
 - Has its own pet store (can name things independently).
 - Has its own mailbox (can receive messages and capability grants).
 - Has its own handle (other agents can reference it by handle).

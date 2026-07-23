@@ -185,17 +185,17 @@ Every tool conforms to the `FaeTool` exo interface, guarded by
 
 ```javascript
 FaeToolInterface = M.interface('FaeTool', {
-  schema:  M.call().returns(M.record()),
+  schema: M.call().returns(M.record()),
   execute: M.call(M.record()).returns(M.promise()),
-  help:    M.call().returns(M.string()),
+  help: M.call().returns(M.string()),
 });
 ```
 
-| Method | Purpose |
-|--------|---------|
-| `schema()` | Returns OpenAI-format tool schema (`{ type: 'function', function: { name, description, parameters } }`) |
-| `execute(args)` | Async execution, returns a string result |
-| `help()` | Human-readable description |
+| Method          | Purpose                                                                                                 |
+| --------------- | ------------------------------------------------------------------------------------------------------- |
+| `schema()`      | Returns OpenAI-format tool schema (`{ type: 'function', function: { name, description, parameters } }`) |
+| `execute(args)` | Async execution, returns a string result                                                                |
+| `help()`        | Human-readable description                                                                              |
 
 ### Tool Discovery: `discoverTools()`
 
@@ -231,32 +231,32 @@ tools are called uniformly. The result is serialized to a Justin string
 
 ### Built-in Tools (registered in `localTools`)
 
-| Tool | Source | Description |
-|------|--------|-------------|
-| `list` | `tool-makers.js` | List petnames in the Endo directory |
-| `lookup` | `tool-makers.js` | Retrieve a value by petname |
-| `store` | `tool-makers.js` | Persist a JSON value under a petname |
-| `remove` | `tool-makers.js` | Delete a petname |
-| `adoptTool` | `tool-makers.js` | Adopt a capability from mail into `tools/` |
-| `send` | `tool-makers.js` | Send a message with optional capability attachments |
-| `listMessages` | `tool-makers.js` | List inbox messages |
-| `dismiss` | `tool-makers.js` | Acknowledge and remove a message |
+| Tool           | Source           | Description                                         |
+| -------------- | ---------------- | --------------------------------------------------- |
+| `list`         | `tool-makers.js` | List petnames in the Endo directory                 |
+| `lookup`       | `tool-makers.js` | Retrieve a value by petname                         |
+| `store`        | `tool-makers.js` | Persist a JSON value under a petname                |
+| `remove`       | `tool-makers.js` | Delete a petname                                    |
+| `adoptTool`    | `tool-makers.js` | Adopt a capability from mail into `tools/`          |
+| `send`         | `tool-makers.js` | Send a message with optional capability attachments |
+| `listMessages` | `tool-makers.js` | List inbox messages                                 |
+| `dismiss`      | `tool-makers.js` | Acknowledge and remove a message                    |
 
 ### Daemon-Side Tool Caplets (`tools/*.js`)
 
 Unsandboxed modules that produce `FaeTool` exo objects. Created via
 `endo run --UNCONFINED` and stored in any agent's inventory:
 
-| Tool | Description |
-|------|-------------|
-| `timestamp` | Current date/time with timezone support |
-| `greet` | Greeting generator |
-| `math` | Arithmetic operations |
-| `readFile` | Read files under a fixed root directory |
-| `writeFile` | Write files under a fixed root directory |
-| `edit` | Exact-text replacement editing (single or batched), returns a unified diff |
-| `listDir` | List directory contents |
-| `runCommand` | Execute shell commands with timeout |
+| Tool         | Description                                                                |
+| ------------ | -------------------------------------------------------------------------- |
+| `timestamp`  | Current date/time with timezone support                                    |
+| `greet`      | Greeting generator                                                         |
+| `math`       | Arithmetic operations                                                      |
+| `readFile`   | Read files under a fixed root directory                                    |
+| `writeFile`  | Write files under a fixed root directory                                   |
+| `edit`       | Exact-text replacement editing (single or batched), returns a unified diff |
+| `listDir`    | List directory contents                                                    |
+| `runCommand` | Execute shell commands with timeout                                        |
 
 Filesystem tools have their root directory fixed at creation time via
 `FAE_CWD`. Path traversal above the root is rejected.
@@ -311,13 +311,13 @@ const messageIterator = makeRefIterator(E(powers).followMessages());
 
 Messages arrive as `InboxMessage` objects with:
 
-| Field | Description |
-|-------|-------------|
-| `from` | Formula ID of the sender |
-| `number` | Message sequence number (BigInt) |
-| `type` | `"package"` for normal messages |
-| `strings` | Text parts of the message |
-| `names` | Edge names for attached capabilities |
+| Field     | Description                          |
+| --------- | ------------------------------------ |
+| `from`    | Formula ID of the sender             |
+| `number`  | Message sequence number (BigInt)     |
+| `type`    | `"package"` for normal messages      |
+| `strings` | Text parts of the message            |
+| `names`   | Edge names for attached capabilities |
 
 ### Outbound Messages
 
@@ -365,11 +365,11 @@ Fae reuses `@endo/lal`'s provider system via
 
 Based on the `LAL_HOST` environment variable:
 
-| Host URL pattern | Provider | Default model |
-|------------------|----------|---------------|
-| Contains `anthropic.com` | Anthropic SDK | `claude-opus-4-5-20251101` |
-| Contains `/v1` | llama.cpp (OpenAI SDK) | `qwen3` |
-| Other | Native Ollama SDK | `qwen3` |
+| Host URL pattern         | Provider               | Default model              |
+| ------------------------ | ---------------------- | -------------------------- |
+| Contains `anthropic.com` | Anthropic SDK          | `claude-opus-4-5-20251101` |
+| Contains `/v1`           | llama.cpp (OpenAI SDK) | `qwen3`                    |
+| Other                    | Native Ollama SDK      | `qwen3`                    |
 
 ### Provider Interface
 
@@ -383,11 +383,11 @@ to this common format.
 
 ### Configuration
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `LAL_HOST` | API base URL | `http://localhost:11434/v1` |
-| `LAL_MODEL` | Model name | `qwen3` or `claude-opus-4-5-20251101` |
-| `LAL_AUTH_TOKEN` | API key | (optional for local) |
+| Variable         | Description  | Default                               |
+| ---------------- | ------------ | ------------------------------------- |
+| `LAL_HOST`       | API base URL | `http://localhost:11434/v1`           |
+| `LAL_MODEL`      | Model name   | `qwen3` or `claude-opus-4-5-20251101` |
+| `LAL_AUTH_TOKEN` | API key      | (optional for local)                  |
 
 ---
 

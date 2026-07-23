@@ -1,16 +1,16 @@
 # Persistent Stores in the Endo Pet Daemon
 
-| | |
-|---|---|
-| **Created** | 2026-07-20 |
-| **Author** | dckc (prompted) |
-| **Status** | Not Started |
-| **Source** | Extracted from kriskowal/garden#59 |
+|             |                                    |
+| ----------- | ---------------------------------- |
+| **Created** | 2026-07-20                         |
+| **Author**  | dckc (prompted)                    |
+| **Status**  | Not Started                        |
+| **Source**  | Extracted from kriskowal/garden#59 |
 
 ## Status
 
 Not started. This document answers the question raised in kriskowal/garden#59
-— *"Does the endo pet daemon support the `@agoric/store` interfaces?"* — with
+— _"Does the endo pet daemon support the `@agoric/store` interfaces?"_ — with
 **No, not today**, and specifies the work to add them.
 
 ## What is the Problem Being Solved?
@@ -24,7 +24,7 @@ the collection is durable, so it survives a restart of the hosting vat.
 
 The endo pet daemon has **no equivalent**. What it has today:
 
-- **Persistence substrate.** Every capability is defined by a *formula* — a
+- **Persistence substrate.** Every capability is defined by a _formula_ — a
   small JSON record with a `type` and typed references — persisted in a SQLite
   database (`${statePath}/endo.sqlite`, `src/manager-database.js`) plus a
   content-addressed blob store (`packages/daemon-cas`). Objects are re-derived
@@ -42,7 +42,7 @@ The endo pet daemon has **no equivalent**. What it has today:
 - **No `@agoric/store`, `@agoric/zone`, `vatstore`, or durable-kind
   machinery** anywhere in `packages/daemon` (dependency set:
   `packages/daemon/package.json` — `@endo/exo` and `@endo/patterns`, no
-  `@agoric/*`). The exo objects the daemon builds are *transient*: re-created
+  `@agoric/*`). The exo objects the daemon builds are _transient_: re-created
   from formulas on each restart. Durability lives entirely in the
   formula/SQLite/CAS layers.
 
@@ -52,21 +52,21 @@ the daemon restarts" has no primitive to reach for. That is the gap.
 ### Why endo has the ingredients but not the dish
 
 `@agoric/store` is a **downstream consumer** of `@endo/patterns`. Endo already
-ships the *foundation*:
+ships the _foundation_:
 
 - `@endo/patterns` — the `M` pattern/guard vocabulary, `Key` comparison
   (`compareKeys`, `keyEQ`), and the **immutable, passable** copy-collections
   `makeCopyMap` / `makeCopySet` / `makeCopyBag` (`src/keys/checkKey.js`).
 - `@endo/exo` — `makeExo` / `defineExoClass` for guarded remotable objects.
 
-What endo does **not** ship is the *mutable persistent* collection layer that
+What endo does **not** ship is the _mutable persistent_ collection layer that
 `@agoric/store` adds on top (`makeScalarMapStore` et al.). The daemon
 deliberately does not depend on `@agoric/store` (it avoids `@agoric/*`
 altogether), so we cannot simply import it; and `@agoric/store`'s durability is
 built on `@agoric/vat-data` durable kinds / the vatstore, a substrate the
 daemon does not have. We therefore build a **daemon-native** store: the same
-*API shape* as `@agoric/store` (so the mental model transfers) over the
-daemon's *own* durability substrate (formula + SQLite), reusing `@endo/patterns`
+_API shape_ as `@agoric/store` (so the mental model transfers) over the
+daemon's _own_ durability substrate (formula + SQLite), reusing `@endo/patterns`
 for keys/patterns and `@endo/exo` for the guarded object.
 
 ## Design
@@ -107,9 +107,9 @@ durable collection event.
 Keys and values are **passable**, so they are serialized with the daemon's
 existing marshal machinery — the same body+slots encoding used by the `marshal`
 formula (`formula-record.js`) and by `synced-store` entries. This is the
-**body serialization** (a value *representation*), distinct from the separate
+**body serialization** (a value _representation_), distinct from the separate
 **rank encoding** (`key_rank`, § SQLite schema) that carries sort order; the two
-roles are independent (see *Two encoding roles*, below):
+roles are independent (see _Two encoding roles_, below):
 
 - A strong-store **remotable key or value**, including a remotable nested inside
   an `M.key()` key, serializes to formula-id slots. The entry creates retention
@@ -140,7 +140,7 @@ keeping them separate is what makes the eventual serialization choice a
 free variable:
 
 - **Body serialization — a value representation.** `key_body`/`key_slots` and
-  `value_body`/`value_slots` hold the *reconstructable* passable. Today this is
+  `value_body`/`value_slots` hold the _reconstructable_ passable. Today this is
   the daemon's existing marshal body+slots (smallcaps) encoding. It is optimized
   for faithful, capability-aware round-trip (slots carry formula-id references),
   **not** for order: byte order of a marshal body has no relation to passable
@@ -148,7 +148,7 @@ free variable:
 - **Rank encoding — a sort key.** `key_rank` is produced by `@endo/marshal`
   `makeEncodePassable`, whose defining property is that the **lexicographic byte
   order of the encoding equals passable rank order**
-  (`packages/marshal/src/encodePassable.js`). This is the *only* column sorted
+  (`packages/marshal/src/encodePassable.js`). This is the _only_ column sorted
   stores scan and order by; it exists precisely because the body encoding is not
   order-preserving.
 
@@ -160,14 +160,14 @@ scan queries, provided `key_rank` remains `makeEncodePassable` (or an
 equivalent order-preserving codec). Only `key_body` / `value_body` change.
 Values need no rank encoding and remain free to use any passable codec.
 
-This directly answers the review question *"does CBOR-encoded passable preserve
-passable order?"* — **it does not need to, and general CBOR does not.** CBOR
+This directly answers the review question _"does CBOR-encoded passable preserve
+passable order?"_ — **it does not need to, and general CBOR does not.** CBOR
 (RFC 8949), including its canonical/deterministic profile, is a compact
 self-describing body format; its byte order does not track passable rank order
-(canonical CBOR only sorts *map keys within a map* by encoded bytes — a different,
+(canonical CBOR only sorts _map keys within a map_ by encoded bytes — a different,
 narrower guarantee). So a CBOR body would be an alternative **value
 representation**, never a substitute for the `key_rank` sort key. If one instead
-wanted the sort key *itself* to be CBOR bytes, general/canonical CBOR would be
+wanted the sort key _itself_ to be CBOR bytes, general/canonical CBOR would be
 unsuitable — an order-preserving encoding (`makeEncodePassable`, or a
 purpose-built order-preserving CBOR profile) would still be required. The design
 therefore keeps `key_rank = makeEncodePassable` fixed and treats the marshal->CBOR
@@ -184,14 +184,14 @@ strong stores expose the following surfaces (the initial `MapStore` has
 
 ```js
 export const MapStoreInterface = M.interface('MapStore', {
-  has:     M.callWhen(KeyShape).returns(M.boolean()),
-  get:     M.callWhen(KeyShape).returns(M.any()),
-  init:    M.callWhen(KeyShape, M.any()).returns(),
-  set:     M.callWhen(KeyShape, M.any()).returns(),
-  delete:  M.callWhen(KeyShape).returns(),
+  has: M.callWhen(KeyShape).returns(M.boolean()),
+  get: M.callWhen(KeyShape).returns(M.any()),
+  init: M.callWhen(KeyShape, M.any()).returns(),
+  set: M.callWhen(KeyShape, M.any()).returns(),
+  delete: M.callWhen(KeyShape).returns(),
   getSize: M.callWhen().returns(M.number()),
-  keys:    M.callWhen(M.opt(M.pattern())).returns(M.arrayOf(M.any())),
-  values:  M.callWhen(M.opt(M.pattern())).returns(M.arrayOf(M.any())),
+  keys: M.callWhen(M.opt(M.pattern())).returns(M.arrayOf(M.any())),
+  values: M.callWhen(M.opt(M.pattern())).returns(M.arrayOf(M.any())),
   entries: M.callWhen(M.opt(M.pattern())).returns(M.arrayOf(M.array())),
   snapshot: M.callWhen().returns(M.any()), // a passable CopyMap
 });
@@ -207,9 +207,9 @@ Weak stores deliberately have no `getSize`, enumeration, or `snapshot`.
 methods, always accept `M.key()` keys, and add bounded scans:
 
 ```js
-keys(pattern = M.any(), bounds = undefined)
-values(pattern = M.any(), bounds = undefined)
-entries(pattern = M.any(), bounds = undefined)
+keys((pattern = M.any()), (bounds = undefined));
+values((pattern = M.any()), (bounds = undefined));
+entries((pattern = M.any()), (bounds = undefined));
 ```
 
 `bounds` is a passable record of optional inclusive/exclusive `start` and `end`
@@ -304,26 +304,26 @@ persistence before it lands.
 
 ### Relationship to `@agoric/store`
 
-| Concern | `@agoric/store` | This design |
-|---|---|---|
-| Key/pattern vocabulary | `@endo/patterns` (`M`, keys) | same — `@endo/patterns` |
-| Guarded object | exo | same — `@endo/exo` |
-| Method surface | `MapStore` / `SetStore` / weak and sorted variants | **mirrors** the same method names/semantics |
-| Durability substrate | `@agoric/vat-data` durable kinds / vatstore | **daemon formula + SQLite** |
-| Constructor | `makeScalarMapStore(label, opts)` | `makeMapStore(petName)` over CapTP |
+| Concern                | `@agoric/store`                                    | This design                                 |
+| ---------------------- | -------------------------------------------------- | ------------------------------------------- |
+| Key/pattern vocabulary | `@endo/patterns` (`M`, keys)                       | same — `@endo/patterns`                     |
+| Guarded object         | exo                                                | same — `@endo/exo`                          |
+| Method surface         | `MapStore` / `SetStore` / weak and sorted variants | **mirrors** the same method names/semantics |
+| Durability substrate   | `@agoric/vat-data` durable kinds / vatstore        | **daemon formula + SQLite**                 |
+| Constructor            | `makeScalarMapStore(label, opts)`                  | `makeMapStore(petName)` over CapTP          |
 
-We match the *interface* so a `@agoric/store` user is immediately at home, while
-the *implementation* is native to the daemon and adds no `@agoric/*` dependency.
+We match the _interface_ so a `@agoric/store` user is immediately at home, while
+the _implementation_ is native to the daemon and adds no `@agoric/*` dependency.
 
 ### CLI and WUI command vocabulary
 
-The `makeMapStore` method above is the *programmatic* surface (guest/host code
-over CapTP). This section specifies the two *human* surfaces — the `endo` CLI
+The `makeMapStore` method above is the _programmatic_ surface (guest/host code
+over CapTP). This section specifies the two _human_ surfaces — the `endo` CLI
 and the chat client's "spaces" web UI (**WUI**) — so a person can create and
 drive a store without writing code, using verbs coherent with the vocabulary
 the daemon already has. Two problems are specific to these surfaces: (a) a set
 of appropriate, non-colliding verbs for each interface, and (b) how a human
-types an *arbitrary passable key* on a command line or in a form.
+types an _arbitrary passable key_ on a command line or in a form.
 
 #### Constructors (`mk*`)
 
@@ -331,14 +331,14 @@ The daemon already has an `mk*` constructor family — `mkdir`, `mkhost`,
 `mkguest`, `mktmp` (`packages/cli/src/endo.js`), each taking `--name <petName>`
 and `--as <agent>`. The store constructors join it, one flat verb per kind:
 
-| Command | Creates | Guest/host method |
-|---|---|---|
-| `endo mkmap --name <n>`     | strong `MapStore`     | `makeMapStore` |
-| `endo mkset --name <n>`     | strong `SetStore`     | `makeSetStore` |
-| `endo mkweakmap --name <n>` | `WeakMapStore`        | `makeWeakMapStore` |
-| `endo mkweakset --name <n>` | `WeakSetStore`        | `makeWeakSetStore` |
-| `endo mksortedmap --name <n>` | `SortedMapStore`     | `makeSortedMapStore` |
-| `endo mksortedset --name <n>` | `SortedSetStore`     | `makeSortedSetStore` |
+| Command                       | Creates           | Guest/host method    |
+| ----------------------------- | ----------------- | -------------------- |
+| `endo mkmap --name <n>`       | strong `MapStore` | `makeMapStore`       |
+| `endo mkset --name <n>`       | strong `SetStore` | `makeSetStore`       |
+| `endo mkweakmap --name <n>`   | `WeakMapStore`    | `makeWeakMapStore`   |
+| `endo mkweakset --name <n>`   | `WeakSetStore`    | `makeWeakSetStore`   |
+| `endo mksortedmap --name <n>` | `SortedMapStore`  | `makeSortedMapStore` |
+| `endo mksortedset --name <n>` | `SortedSetStore`  | `makeSortedSetStore` |
 
 The bound pet name is nameable / lookup-able / restart-surviving like any other
 cap, exactly as `mkdir`'s directory is.
@@ -355,17 +355,17 @@ method count. The constructors stay flat as `mk*` to match `mkdir`.
 
 `MapStore` (`endo map <name> …`):
 
-| Interface method | CLI verb |
-|---|---|
-| `init(key, value)` | `endo map <name> init <key> <value>` |
-| `set(key, value)`  | `endo map <name> set <key> <value>` |
-| `get(key)`         | `endo map <name> get <key>` |
-| `has(key)`         | `endo map <name> has <key>` |
-| `delete(key)`      | `endo map <name> delete <key>` (alias `rm`) |
-| `getSize()`        | `endo map <name> size` |
-| `keys()`           | `endo map <name> keys` |
-| `values()`         | `endo map <name> values` |
-| `entries()`        | `endo map <name> entries` |
+| Interface method   | CLI verb                                                                                                             |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `init(key, value)` | `endo map <name> init <key> <value>`                                                                                 |
+| `set(key, value)`  | `endo map <name> set <key> <value>`                                                                                  |
+| `get(key)`         | `endo map <name> get <key>`                                                                                          |
+| `has(key)`         | `endo map <name> has <key>`                                                                                          |
+| `delete(key)`      | `endo map <name> delete <key>` (alias `rm`)                                                                          |
+| `getSize()`        | `endo map <name> size`                                                                                               |
+| `keys()`           | `endo map <name> keys`                                                                                               |
+| `values()`         | `endo map <name> values`                                                                                             |
+| `entries()`        | `endo map <name> entries`                                                                                            |
 | `snapshot()`       | `endo map <name> snapshot --name <copymap-name>` (binds a passable `CopyMap`, symmetric with the write-once `store`) |
 
 `SetStore` (`endo set <name> …`) uses the same verbs with `add` in place of
@@ -385,14 +385,14 @@ as the daemon API. They return key-rank order.
 #### Expressing keys and values
 
 The crux of the review: keys can be arbitrary passable data, not just strings, so
-a CLI/form field needs a way to *write* a passable **and** a guarantee that the
+a CLI/form field needs a way to _write_ a passable **and** a guarantee that the
 decoder **halts** — never runs arbitrary code, never loops — so a hostile key
 expression cannot hang the daemon or escape the sandbox. Every `<key>` and
 `<value>` positional accepts a **typed encoding**, selected by a flag namespace
 mirroring the encodings today's `store` command already offers (`--json`,
 `--text`, `--bigint`, `--path`, `--stdin`):
 
-- `--json <text>` — plain JSON; covers primitive and structured *data* keys via a
+- `--json <text>` — plain JSON; covers primitive and structured _data_ keys via a
   total parser.
 - `--justin <text>` — **Justin** (endo's `packages/marshal/src/marshal-justin.js`),
   the JS-expression superset marshal uses for passables. Extends JSON with
@@ -405,17 +405,17 @@ mirroring the encodings today's `store` command already offers (`--json`,
 - `--ref <pet-name>`, or a bare `@pet-name:edge` — a **remotable** key or value,
   resolved through the agent's name graph exactly like `send`'s embedded
   `@pet-name` references (`packages/cli/src/message-parse.js`). This is how you
-  key a map on a *capability*.
+  key a map on a _capability_.
 - `--text` / `--stdin` / `--path` / `--bigint` — the same scalar shorthands
   `store` already offers, for the common cases. Default when no flag is given is
   `--text`, keeping the common `endo map m set alice @bob` readable.
 
 **Deterministic halting is a hard requirement, not a nicety.** All three DSLs
-(JSON, Justin, SHON) are *total, non-evaluating* decoders: they parse to passable
+(JSON, Justin, SHON) are _total, non-evaluating_ decoders: they parse to passable
 data without invoking user code, so a key expression can neither diverge nor
 execute. This is exactly why the vocabulary must **not** accept raw `eval`-style
-source for a key (unlike `endo eval`, whose purpose *is* to run code): a key is
-*data*, decoded → `harden`ed → `M.scalar()`/`M.key()`-checked before it ever
+source for a key (unlike `endo eval`, whose purpose _is_ to run code): a key is
+_data_, decoded → `harden`ed → `M.scalar()`/`M.key()`-checked before it ever
 touches the store. Output is symmetric: `get`/`keys`/`values`/`entries`/`snapshot`
 render passables back in the same encodings (`--out json|justin|shon`, default a
 human Justin-ish render), so round-tripping a key through the shell is lossless
@@ -446,22 +446,23 @@ between the two surfaces.
 
 ## Dependencies
 
-| Design / package | Relationship |
-|---|---|
-| `@endo/patterns` | Provides `M`, `Key` comparison, and `makeCopyMap`/`makeCopySet` for `snapshot()`. Reused, not modified. |
-| `@endo/exo` | Provides `makeExo` for the guarded store object. Reused. |
-| daemon `marshal` formula (`src/formula-record.js`) | The body+slots durable serialization we reuse for keys/values. |
-| daemon formula graph and `store-controller.js` | The refcount/retention edges strong entries must join, plus the collection callback that drops weak-key entries. |
-| `@endo/marshal` `makeEncodePassable` | Canonical rank-order encoding for every key and the indexed range scans of sorted stores. |
-| `synced-store` (`synced_store_entry`) | Precedent for a passable-payload SQLite table; a later phase may replicate stores across peers the same way. |
-| `packages/cli` (`endo.js`, `message-parse.js`) | Host of the `mk*` constructors, the `endo map`/`endo set` verb groups, and the `@pet-name` key/value reference syntax. |
-| `marshal-justin.js` (`@endo/marshal`) | The total, non-evaluating Justin decoder the CLI/WUI use to accept passable keys/values (`--justin`, `--out justin`). |
-| SHON decoder | **Deferred.** The authoritative sources are
-  [kriskowal.com/shon](https://kriskowal.com/shon) and [kriskowal.com/yay](https://kriskowal.com/yay); post a scholar to ingest before implementation.
-  See design decision 11. |
+| Design / package                                   | Relationship                                                                                                           |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `@endo/patterns`                                   | Provides `M`, `Key` comparison, and `makeCopyMap`/`makeCopySet` for `snapshot()`. Reused, not modified.                |
+| `@endo/exo`                                        | Provides `makeExo` for the guarded store object. Reused.                                                               |
+| daemon `marshal` formula (`src/formula-record.js`) | The body+slots durable serialization we reuse for keys/values.                                                         |
+| daemon formula graph and `store-controller.js`     | The refcount/retention edges strong entries must join, plus the collection callback that drops weak-key entries.       |
+| `@endo/marshal` `makeEncodePassable`               | Canonical rank-order encoding for every key and the indexed range scans of sorted stores.                              |
+| `synced-store` (`synced_store_entry`)              | Precedent for a passable-payload SQLite table; a later phase may replicate stores across peers the same way.           |
+| `packages/cli` (`endo.js`, `message-parse.js`)     | Host of the `mk*` constructors, the `endo map`/`endo set` verb groups, and the `@pet-name` key/value reference syntax. |
+| `marshal-justin.js` (`@endo/marshal`)              | The total, non-evaluating Justin decoder the CLI/WUI use to accept passable keys/values (`--justin`, `--out justin`).  |
+| SHON decoder                                       | **Deferred.** The authoritative sources are                                                                            |
+
+[kriskowal.com/shon](https://kriskowal.com/shon) and [kriskowal.com/yay](https://kriskowal.com/yay); post a scholar to ingest before implementation.
+See design decision 11. |
 | `@endo/justin` | The total, non-evaluating Justin decoder (companion spec at
-  [kriskowal.com/yay](https://kriskowal.com/yay)) the CLI/WUI use to accept passable keys/values
-  (`--justin`, `--out justin`). |
+[kriskowal.com/yay](https://kriskowal.com/yay)) the CLI/WUI use to accept passable keys/values
+(`--justin`, `--out justin`). |
 | `packages/space-*` (spaces WUI) | Host of the new **Store Space**; the File Explorer Space is the pattern for a capability-backed, direct-manipulation table. |
 
 ## Phased Implementation
@@ -509,7 +510,7 @@ query-plan use, and restart persistence for each sorted variant.
 multiplayer replication via the synced-store substrate.
 
 **Phase 6 — human surfaces (CLI + WUI).** The command vocabulary specified in
-*Design → CLI and WUI command vocabulary*: the `mk*` constructors, the
+_Design → CLI and WUI command vocabulary_: the `mk*` constructors, the
 `endo map`/`endo set` (and weak) verb groups, the typed key/value encodings
 (`--json`/`--justin`/`--shon`/`@pet-name`) over a total non-evaluating decoder,
 and the chat client's **Store Space**. Can land incrementally alongside any of
@@ -563,7 +564,7 @@ new dependency.
    subcommand groups, a departure the method count justifies.
 
 9. **Keys expressed via total, non-evaluating DSLs — never `eval`.** A key on a
-   CLI or in a form is *data*, so it is accepted only through JSON, Justin, or
+   CLI or in a form is _data_, so it is accepted only through JSON, Justin, or
    SHON decoders (plus `@pet-name` for remotables), each of which is total
    (guaranteed to halt) and does not run user code. Raw source (as in
    `endo eval`) is deliberately disallowed for keys: it would let an untrusted
@@ -571,27 +572,27 @@ new dependency.
    requirement that keys be "a deterministically halting DSL for passable keys."
 
 10. **Same verbs across CLI and WUI.** The Store Space uses the same words
-   (`add`/`set`/`get`/`delete`/`snapshot`) and the same encoding selector as the
-   CLI, so the mental model and documentation transfer between surfaces; the WUI
-   is a direct-manipulation skin over the identical vocabulary, not a second one.
+    (`add`/`set`/`get`/`delete`/`snapshot`) and the same encoding selector as the
+    CLI, so the mental model and documentation transfer between surfaces; the WUI
+    is a direct-manipulation skin over the identical vocabulary, not a second one.
 
 11. **Defer `--shon` until scholar ingests kriskowal.com/shon + kriskowal.com/yay.**
-   Kriskowal posted that SHON and YAY (YET Another YAML) live at those URLs; post
-   a scholar to ingest before implementing the `--shon` key/value encoding. This keeps
-   the `--json`/`--justin`/`@pet-name` encodings implementable immediately with no new
-   dependency, while deferring the SHON decoder until its spec is ingested.
+    Kriskowal posted that SHON and YAY (YET Another YAML) live at those URLs; post
+    a scholar to ingest before implementing the `--shon` key/value encoding. This keeps
+    the `--json`/`--justin`/`@pet-name` encodings implementable immediately with no new
+    dependency, while deferring the SHON decoder until its spec is ingested.
 
 12. **Body serialization and rank order are separate columns.** Sort order is
-   carried solely by `key_rank` (`makeEncodePassable`, an order-preserving
-   encoding); the `*_body`/`*_slots` columns are a value representation with no
-   ordering role. This makes the value body a swap-out: the marshal body may
-   later become a **CBOR-encoded passable** with no effect on ordering, indexes,
-   or scans. A key still requires `key_rank = makeEncodePassable` or an
-   equivalent order-preserving codec; values need no rank encoding. General /
-   canonical CBOR is not order-preserving and is therefore never a candidate
-   for `key_rank` itself. See § Two encoding roles. Whether to adopt CBOR bodies
-   is a downstream endo
-   serialization call (deferred to @kriskowal / endo maintainers).
+    carried solely by `key_rank` (`makeEncodePassable`, an order-preserving
+    encoding); the `*_body`/`*_slots` columns are a value representation with no
+    ordering role. This makes the value body a swap-out: the marshal body may
+    later become a **CBOR-encoded passable** with no effect on ordering, indexes,
+    or scans. A key still requires `key_rank = makeEncodePassable` or an
+    equivalent order-preserving codec; values need no rank encoding. General /
+    canonical CBOR is not order-preserving and is therefore never a candidate
+    for `key_rank` itself. See § Two encoding roles. Whether to adopt CBOR bodies
+    is a downstream endo
+    serialization call (deferred to @kriskowal / endo maintainers).
 
 ## Known Gaps and TODOs
 

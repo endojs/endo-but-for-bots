@@ -19,7 +19,7 @@ Every source of authority is an **injected capability**, never ambient:
 
 - `fetch` — the network authority.
 - `signer` — the key authority, a `{ address, signTypedData(typedData) }`
-  object. The connector never sees a private key; it can only *ask* the
+  object. The connector never sees a private key; it can only _ask_ the
   signer to authorize a transfer, and the signer's own policy is the last
   word on what it will sign.
 - `facilitator` — a client for the verify/settle service, so a receiver
@@ -31,7 +31,7 @@ Because those are the only authorities, the same code path runs in tests
 
 ## Receiving — a self-hosted alternative to Open Collective
 
-Stand up a pay-to endpoint at *your* Base address. Every successful call
+Stand up a pay-to endpoint at _your_ Base address. Every successful call
 settles USDC to you; there is no platform account to provision.
 
 ```js
@@ -91,7 +91,7 @@ caller's `network`/`maxValue` constraints.
 ## Escrow exchange (the main use case)
 
 x402's `exact` scheme is itself an escrow primitive. The payer signs an
-EIP-3009 authorization — a *deferred* instrument that moves no funds until
+EIP-3009 authorization — a _deferred_ instrument that moves no funds until
 someone submits it and voids after its `validBefore` deadline. A neutral
 agent can **hold** the signed authorization and either **release** it
 (settle) once the counter-obligation is met, or **abort** / let it expire
@@ -129,7 +129,7 @@ message }`) and must return a `0x`-prefixed 65-byte signature. Adapters:
 
 - **[viem][]**: `account.signTypedData(typedData)`.
 - **ethers**: `wallet.signTypedData(domain, { TransferWithAuthorization:
-  types.TransferWithAuthorization }, message)`.
+types.TransferWithAuthorization }, message)`.
 - **Coinbase CDP / a remote KMS**: forward the typed data to the signing
   service; only the signature returns.
 
@@ -142,16 +142,16 @@ is free to refuse.
 - `makeX402Client({ fetch, signer, makeNonce?, now?, selectRequirement? })`
   → `{ fetchWithPayment(url, init?, opts?) }`
 - `makePaywall({ payTo, amount, facilitator, network?, asset?, resource?,
-  description?, maxTimeoutSeconds? })` → `{ requirement, challenge, collect,
-  paymentResponseHeader }`
+description?, maxTimeoutSeconds? })` → `{ requirement, challenge, collect,
+paymentResponseHeader }`
 - `makeX402Client(...).createPayment(requirement, resource?)` → a signed
   `PaymentPayload` to submit later (the escrow-friendly primitive).
 - `makeEscrowAgent({ facilitator, now? })` → `{ deposit, release, abort,
-  status }`
+status }`
 - `makeFacilitatorClient({ fetch, baseUrl, headers? })` → `{ verify, settle,
-  supported }`
+supported }`
 - `buildExactEvmAuthorization({ requirement, from, nonce, validAfter,
-  validBefore })` → `{ authorization, typedData }`
+validBefore })` → `{ authorization, typedData }`
 - `encodeHeaderObject` / `decodeHeaderObject` — the base64 header codec.
 - `selectExactRequirement(accepts, { network?, maxValue? })`
 - `NETWORKS`, `resolveNetwork`, `X402_VERSION`, `EXACT_SCHEME`.

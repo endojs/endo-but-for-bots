@@ -1,11 +1,11 @@
 # Configurable Home Space (Space 0)
 
-| | |
-|---|---|
-| **Created** | 2026-03-02 |
-| **Updated** | 2026-03-02 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-03-02            |
+| **Updated** | 2026-03-02            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | **Complete**          |
 
 ## Motivation
 
@@ -39,8 +39,12 @@ passable object (same format as regular space configs). User spaces start at
 
 ```js
 const HOME_SPACE_DEFAULTS = harden({
-  id: 'home', name: 'Home', icon: '🐈‍⬛',
-  profilePath: [], mode: 'inbox', scheme: 'auto',
+  id: 'home',
+  name: 'Home',
+  icon: '🐈‍⬛',
+  profilePath: [],
+  mode: 'inbox',
+  scheme: 'auto',
 });
 ```
 
@@ -54,10 +58,10 @@ storing at `['spaces', '0']`.
 
 Menu items have a `data-menu-scope` attribute:
 
-| Scope | Shown for |
-|-------|-----------|
-| `"all"` | All spaces (indelible and delible) |
-| `"delible"` | Only non-home spaces |
+| Scope       | Shown for                          |
+| ----------- | ---------------------------------- |
+| `"all"`     | All spaces (indelible and delible) |
+| `"delible"` | Only non-home spaces               |
 
 When `showContextMenu` is called, it toggles visibility:
 
@@ -66,8 +70,7 @@ const isIndelible = spaceId === 'home';
 for (const $item of $menu.querySelectorAll('[data-menu-scope]')) {
   const scope = $item.getAttribute('data-menu-scope');
   $item.style.display =
-    (scope === 'all' || (!isIndelible && scope === 'delible'))
-      ? '' : 'none';
+    scope === 'all' || (!isIndelible && scope === 'delible') ? '' : 'none';
 }
 ```
 
@@ -109,32 +112,32 @@ The spaces directory watcher handles space `'0'` specially:
 
 ## Files Modified
 
-| File | Change |
-|------|--------|
-| `packages/chat/icon-selector.js` | New — shared icon selector module |
-| `packages/chat/add-space-modal.js` | Import shared icon selector, remove duplicates |
-| `packages/chat/edit-space-modal.js` | Import shared icon selector, add `showName` option |
-| `packages/chat/spaces-gutter.js` | Home config storage/loading, context menu, wiring |
-| `packages/chat/test/component/spaces-gutter-home.test.js` | New — component tests |
+| File                                                      | Change                                             |
+| --------------------------------------------------------- | -------------------------------------------------- |
+| `packages/chat/icon-selector.js`                          | New — shared icon selector module                  |
+| `packages/chat/add-space-modal.js`                        | Import shared icon selector, remove duplicates     |
+| `packages/chat/edit-space-modal.js`                       | Import shared icon selector, add `showName` option |
+| `packages/chat/spaces-gutter.js`                          | Home config storage/loading, context menu, wiring  |
+| `packages/chat/test/component/spaces-gutter-home.test.js` | New — component tests                              |
 
 ## Test Coverage
 
-| Test | Description |
-|------|-------------|
-| Right-click home shows Edit not Delete | Context menu scope system |
-| Right-click regular space shows both | Scope system for delible spaces |
-| Edit home modal omits Name field | `showName: false` behavior |
+| Test                                     | Description                                        |
+| ---------------------------------------- | -------------------------------------------------- |
+| Right-click home shows Edit not Delete   | Context menu scope system                          |
+| Right-click regular space shows both     | Scope system for delible spaces                    |
+| Edit home modal omits Name field         | `showName: false` behavior                         |
 | Change home icon/scheme stores correctly | Store at `['spaces', '0']` with enforced name/path |
-| Home loads stored icon/scheme on refresh | Merge from stored config |
+| Home loads stored icon/scheme on refresh | Merge from stored config                           |
 
 ## Numbering Scheme
 
 Config keys, keyboard shortcuts, and shortcut badges are all aligned:
 
-| Config key | Badge | Shortcut | Role |
-|------------|-------|----------|------|
-| `spaces/0` | `0` | Cmd+0 | Home — indelible |
-| `spaces/1` | `1` | Cmd+1 | First user space |
-| `spaces/2` | `2` | Cmd+2 | Second user space |
-| ... | ... | ... | ... |
-| `spaces/9` | `9` | Cmd+9 | Ninth user space |
+| Config key | Badge | Shortcut | Role              |
+| ---------- | ----- | -------- | ----------------- |
+| `spaces/0` | `0`   | Cmd+0    | Home — indelible  |
+| `spaces/1` | `1`   | Cmd+1    | First user space  |
+| `spaces/2` | `2`   | Cmd+2    | Second user space |
+| ...        | ...   | ...      | ...               |
+| `spaces/9` | `9`   | Cmd+9    | Ninth user space  |

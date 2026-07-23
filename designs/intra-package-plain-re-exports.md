@@ -1,16 +1,16 @@
 # Intra-Package Plain Re-Exports
 
-| | |
-|---|---|
-| **Created** | 2026-06-26 |
-| **Updated** | 2026-06-30 |
-| **Author** | Mark S. Miller (prompted) |
-| **Status** | Not Started |
-| **Source** | endojs/endo-but-for-bots#543 (intra-package follow-up comment) |
+|             |                                                                |
+| ----------- | -------------------------------------------------------------- |
+| **Created** | 2026-06-26                                                     |
+| **Updated** | 2026-06-30                                                     |
+| **Author**  | Mark S. Miller (prompted)                                      |
+| **Status**  | Not Started                                                    |
+| **Source**  | endojs/endo-but-for-bots#543 (intra-package follow-up comment) |
 
 ## Summary
 
-Issue #543 establishes a rule for *cross-package* imports, articulated in the
+Issue #543 establishes a rule for _cross-package_ imports, articulated in the
 inter-package design (#548):
 a name should be imported from the package that originally exports it,
 never from another package that merely re-exports it unchanged.
@@ -19,7 +19,7 @@ a re-export that does not rename and adds no value to an importer over
 importing the name from its originally-exporting module.
 
 The maintainer's follow-up on #543 observes that the same rationale applies
-*among modules within a single package*, and asks for that work as a separate,
+_among modules within a single package_, and asks for that work as a separate,
 decoupled pull request.
 This design is that separate articulation.
 It states the intra-package rule, gives its rationale, and lays out its staging.
@@ -54,12 +54,12 @@ The rule has two corollaries that the removal pass will act on:
    part of the package's public API surface, is the intra-package analog of
    `@endo/far`.** If `./convenience.js` only re-exports names that other modules
    in the same package already export, adds no value of its own, and is not
-   reachable through the package's `package.json` `"exports"` map (see *What the
-   rule does not touch*), it is a candidate for removal once its importers are
-   repointed at the defining modules. A pass-through module that *is* a declared
+   reachable through the package's `package.json` `"exports"` map (see _What the
+   rule does not touch_), it is a candidate for removal once its importers are
+   repointed at the defining modules. A pass-through module that _is_ a declared
    export is public API and stays, even when it only re-exports siblings.
 
-### What the rule does *not* touch
+### What the rule does _not_ touch
 
 The package's **public API surface** is everything listed in its `package.json`
 `"exports"` map, not only a single entry barrel. A package may declare several
@@ -70,15 +70,15 @@ just the most frequent instance of the surface, not its definition: the surface
 is the whole `"exports"` map.
 
 Every module reachable through that map is a deliberate, value-adding API
-surface. That holds even when such a module is *itself* a plain re-export of a
+surface. That holds even when such a module is _itself_ a plain re-export of a
 sibling: from outside the package there is nowhere else to import that name
 from, so the re-export is the canonical public location, not a removable
 pass-through. A name that an external importer reaches through the `"exports"`
 map must keep a stable import path there; the staging below never removes a
 re-export that backs a declared export.
 
-This rule is therefore about *intra-package* import edges only: a package's
-*own* modules should import from each other directly rather than through the
+This rule is therefore about _intra-package_ import edges only: a package's
+_own_ modules should import from each other directly rather than through the
 package's declared-export entries or through internal pass-through modules that
 no `"exports"` entry names. The public surface (every module the `"exports"` map
 reaches) stays exactly as declared: this refactor neither removes a surface
@@ -111,7 +111,7 @@ The rationale is #543's, re-read at module granularity.
 This work is **decoupled** from the inter-package design (#548) and its
 mechanical follow-up, the two cross-package PRs requested in #543, and can land
 independently.
-It shares #543's vocabulary (*plain re-export*), but it operates entirely inside
+It shares #543's vocabulary (_plain re-export_), but it operates entirely inside
 package boundaries, so it neither blocks nor depends on the cross-package rule.
 
 The two designs differ in staging, and the difference is the point. The
@@ -121,7 +121,7 @@ plain re-exports without removing them, then a later removal PR that bumps the
 **major version** of every affected package, because removing a cross-package
 re-export can break an importer in another repository that has not yet been
 repointed. An intra-package pass-through is never part of a package's published
-surface (see *What the rule does not touch*), so no importer in any other
+surface (see _What the rule does not touch_), so no importer in any other
 repository can depend on it. Removing one therefore causes no inter-repo
 compatibility problem, which is why this design needs neither #548's deprecation
 step nor its version bump, and why its mechanical work is a single
@@ -161,7 +161,7 @@ no inter-repo compatibility hazard, so, unlike the inter-package design's (#548)
 removal stage, its content may be merged into `endojs/endo` as soon as it is
 ready and approved, with no deferral to a major release. The only correctness
 obligation is the local one the mechanical pass already discharges: before
-deleting a pass-through module, confirm that no module *inside its own package*
+deleting a pass-through module, confirm that no module _inside its own package_
 still imports through it.
 
 ## Examples in the current tree
@@ -175,7 +175,7 @@ exhaustive inventory.
   The removal pass first checks whether the package's `package.json` `"exports"`
   map reaches this module; if it does, the module is public API and stays. If it
   does not, its module comment still carries documentation value — which means
-  the re-export is not *plain* by this design's definition, because it adds
+  the re-export is not _plain_ by this design's definition, because it adds
   something an importer could not get by importing straight from
   `./transform-ast.js`. Such a re-export is kept as a documented seam. Any further
   refinement of a kept seam — for example relocating its documentation so the seam
@@ -189,11 +189,11 @@ exhaustive inventory.
   `"exports"` map reaches, not just the entry barrel. When an import truly routes
   through a non-defining re-exporter, the repoint targets the defining module and
   only the importer's edge moves. The declared-export module it reached through is
-  public API, so it stays unchanged and undeprecated (see *What the rule does not
-  touch*): the removal pass never touches, deprecates, or repoints any module the
+  public API, so it stays unchanged and undeprecated (see _What the rule does not
+  touch_): the removal pass never touches, deprecates, or repoints any module the
   `"exports"` map names.
 
-  An import that *looks* like a reach-back is not always one. The pass therefore
+  An import that _looks_ like a reach-back is not always one. The pass therefore
   resolves each candidate to its defining module before repointing. The running
   `genie` example shows why. `packages/genie/src/agent/tool-gate.js` imports
   `ChatEvent` from `./index.js`, which at first reads like a reach-back. But that
@@ -214,7 +214,7 @@ The follow-up PR enumerates these mechanically, package by package.
   The removal pass treats a non-renaming `export *` from a sibling as a plain
   re-export for the corollary-1 reach-back case, but an `export *` in any module
   the package's `package.json` `"exports"` map reaches is part of the API surface
-  and is out of scope (see *What the rule does not touch*).
+  and is out of scope (see _What the rule does not touch_).
 
 - **Type-only re-exports.**
   A re-export used purely for `@import` types has the same ambiguity cost for

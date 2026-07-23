@@ -14,12 +14,16 @@ record's metadata, evaluate the functor, call the functor with linkage.
 import { makeModuleAnalyzer } from './src/transform-analyze.js';
 const analyze = makeModuleAnalyzer();
 const moduleAnalysis = analyze(moduleSource);
-const moduleFunctor = evaluateModuleFunctor(moduleAnalysis.functorSource, /* ... */);
+const moduleFunctor = evaluateModuleFunctor(
+  moduleAnalysis.functorSource /* ... */,
+);
 moduleFunctor({
-  imports(importedVariableUpdaters) { /* ... */ },
+  imports(importedVariableUpdaters) {
+    /* ... */
+  },
   liveVar: exportedVariableUpdaters,
   onceVar: exportedConstantEmitters,
-  importMeta: Object.create(null)
+  importMeta: Object.create(null),
 });
 ```
 
@@ -82,7 +86,7 @@ collisions with sensibly constructed modules, and the transformation preserves
 line numbers.
 
 ```js
-(({
+({
   imports: $h_imports,
   liveVar: $h_live,
   onceVar: $h_once,
@@ -91,25 +95,29 @@ line numbers.
   let foo, bar, fizz, buzz, colour;
   $h_imports(
     new Map([
-      ["import-default-export-from-me.js", new Map([
-        ["default", [$h_a => (foo = $h_a)]],
-      ])],
-      ["import-all-from-me.js", new Map([
-        ["*", [$h_a => (bar = $h_a)]]
-      ])],
-      ["import-named-exports-from-me.js", new Map([
-        ["fizz", [$h_a => (fizz = $h_a)]],
-        ["buzz", [$h_a => (buzz = $h_a)]],
-      ])],
-      ["import-named-export-and-rename.js", new Map([
-        ["color", [$h_a => (colour = $h_a)]],
-      ])],
-      ["import-and-reexport-name-from-me.js", new Map([
-        ["qux", [$h_live["qux"]]]
-      ])],
-      ["import-and-export-all.js", new Map([])]
+      [
+        'import-default-export-from-me.js',
+        new Map([['default', [$h_a => (foo = $h_a)]]]),
+      ],
+      ['import-all-from-me.js', new Map([['*', [$h_a => (bar = $h_a)]]])],
+      [
+        'import-named-exports-from-me.js',
+        new Map([
+          ['fizz', [$h_a => (fizz = $h_a)]],
+          ['buzz', [$h_a => (buzz = $h_a)]],
+        ]),
+      ],
+      [
+        'import-named-export-and-rename.js',
+        new Map([['color', [$h_a => (colour = $h_a)]]]),
+      ],
+      [
+        'import-and-reexport-name-from-me.js',
+        new Map([['qux', [$h_live['qux']]]]),
+      ],
+      ['import-and-export-all.js', new Map([])],
     ]),
-    ["import-and-export-all.js"]
+    ['import-and-export-all.js'],
   );
 
   let $c_quuux = null;
@@ -123,7 +131,7 @@ line numbers.
   $h_once.quux(quux);
 
   quuux = 'Sorry for binding late!';
-})
+};
 ```
 
 For the final live binding to `quuux`, we depend on the evaluator to put a

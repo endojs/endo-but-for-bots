@@ -17,7 +17,7 @@ the user to follow-up with a show command.
 
 Big refactor needed to change identifier to locator.
 
-Bit refactor needed to support listing and watching pet names with all 
+Bit refactor needed to support listing and watching pet names with all
 
 makeFarContext -> makeExoContext, with help and interface
 

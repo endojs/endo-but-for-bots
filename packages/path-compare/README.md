@@ -67,7 +67,7 @@ This package exports `pathCompare`.
 
 ### `pathCompare(a?: string[], b?: string[]) => number`
 
-Compares two arrays of strings (if provided) and returns a numeric comparison result: 0 if they are equal, -1 if `a` is "less than" `b`, and 1 if `a` is "greater than" `b` (where "less than" means having fewer elements, or the same element count but a shorter cumulative length, or the same element count and cumulative length but prior when comparing each element lexicographically by UTF-16 code unit).  
+Compares two arrays of strings (if provided) and returns a numeric comparison result: 0 if they are equal, -1 if `a` is "less than" `b`, and 1 if `a` is "greater than" `b` (where "less than" means having fewer elements, or the same element count but a shorter cumulative length, or the same element count and cumulative length but prior when comparing each element lexicographically by UTF-16 code unit).
 
 ```js
 import { pathCompare } from '@endo/path-compare';

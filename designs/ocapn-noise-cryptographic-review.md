@@ -1,11 +1,11 @@
 # OCapN-Noise Cryptographic Review
 
-| | |
-|---|---|
-| **Created** | 2026-02-14 |
-| **Updated** | 2026-02-24 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-14            |
+| **Updated** | 2026-02-24            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## What is the Problem Being Solved?
 
@@ -69,6 +69,7 @@ DH and reveals less about the handshake state to passive observers (the
 initiator's first message is already encrypted to the responder's static key).
 
 **Advantages of IK:**
+
 - One fewer message pattern element.
 - The initiator's identity is protected from passive observers from the first
   message (encrypted under the responder's static key).
@@ -76,6 +77,7 @@ initiator's first message is already encrypted to the responder's static key).
   (containing the public key) to connect.
 
 **Disadvantages of IK:**
+
 - If the responder's static key is compromised, an attacker can decrypt the
   initiator's identity from recorded traffic (weaker identity hiding than XX).
 - Less flexibility if we ever want anonymous or exploratory connections.
@@ -93,6 +95,7 @@ The initiator knows the responder's static key but still transmits their own
 static key in the third message.
 
 **Advantages of XK:**
+
 - Simpler than XX while preserving forward secrecy.
 - The initiator's static key is encrypted under the DH result before
   transmission.
@@ -101,7 +104,7 @@ static key in the third message.
 
 Leave this as an open design review question. The choice depends on:
 
-- Whether identity hiding from passive observers is a priority for OCapN.  We
+- Whether identity hiding from passive observers is a priority for OCapN. We
   probably cannot afford to hide the identity of the intended responder because
   relays and user agents will need to multiplex with a single addressable
   socket.

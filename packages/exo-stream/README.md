@@ -214,6 +214,7 @@ Wrap a local `AsyncIterator<TRead>` as a `PassableReader` Exo
 (responder side).
 
 **Options:**
+
 - `buffer` (number, default 0): Number of values to pre-pull before waiting for synchronizes
 - `readPattern` (Pattern): Pattern describing TRead (yielded values)
 - `readReturnPattern` (Pattern): Pattern describing TReadReturn (return value)
@@ -224,6 +225,7 @@ Convert a remote `PassableReader` reference to a local
 `AsyncIterableIterator<TRead>` (initiator side).
 
 **Options:**
+
 - `buffer` (number, default 0): Number of values to pre-synchronize
 - `readPattern` (Pattern): Pattern to validate each TRead value
 - `readReturnPattern` (Pattern): Pattern to validate TReadReturn
@@ -238,6 +240,7 @@ Use this when building custom Exos that need reader streaming alongside
 other methods.
 
 **Options:**
+
 - `buffer` (number, default 0): Number of values to pre-pull
 
 ### Writer Modules
@@ -250,6 +253,7 @@ Each value received from the initiator is pushed to the iterator via
 `iterator.next(value)`.
 
 **Options:**
+
 - `buffer` (number, default 0): Number of flow-control acks to pre-send
 - `writePattern` (Pattern): Pattern describing TWrite (yielded values)
 - `writeReturnPattern` (Pattern): Pattern describing TWriteReturn (return value)
@@ -261,6 +265,7 @@ Create a local writer iterator that sends values to a remote `PassableWriter`
 to close the stream.
 
 **Options:**
+
 - `buffer` (number, default 0): Number of data values to pre-send before waiting for acks
 - `writePattern` (Pattern): Pattern to validate each TWrite value
 - `writeReturnPattern` (Pattern): Pattern to validate TWriteReturn
@@ -272,6 +277,7 @@ Takes a local sink iterator and returns a pump function suitable for use as
 the `stream` method on a custom Exo.
 
 **Options:**
+
 - `buffer` (number, default 0): Number of flow-control acks to pre-send
 
 ### Bytes Reader Modules
@@ -285,6 +291,7 @@ Uses `streamBase64()` method instead of `stream()` to allow future migration
 to direct bytes transport when CapTP supports it.
 
 **Options:**
+
 - `buffer` (number, default 0): Number of values to pre-pull
 - `readReturnPattern` (Pattern): Pattern describing TReadReturn (return value)
 
@@ -295,6 +302,7 @@ Convert a remote `PassableBytesReader` reference to a local
 Base64 strings are automatically decoded to bytes.
 
 **Options:**
+
 - `buffer` (number, default 0): Number of values to pre-synchronize
 - `readReturnPattern` (Pattern): Pattern to validate TReadReturn
 - `stringLengthLimit` (number): Maximum base64 string length per chunk
@@ -311,6 +319,7 @@ Uses `streamBase64()` method instead of `stream()` to allow future migration
 to direct bytes transport when CapTP supports it.
 
 **Options:**
+
 - `buffer` (number, default 0): Number of flow-control acks to pre-send
 - `writeReturnPattern` (Pattern): Pattern describing TWriteReturn (return value)
 
@@ -322,6 +331,7 @@ and `writer.return()` to close the stream. Bytes are automatically base64-encode
 for transmission over CapTP.
 
 **Options:**
+
 - `buffer` (number, default 0): Number of data values to pre-send before waiting for acks
 
 ### Migration Path for Bytes Streams

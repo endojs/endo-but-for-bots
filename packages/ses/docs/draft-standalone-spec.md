@@ -2,7 +2,7 @@
 
 In the Realms, Frozen Realms, Realms shim, and SES shim work, we've
 generally worked towards standardizing the APIs for dynamically
-*creating* a SES world from within a standard EcmaScript world. For IoT
+_creating_ a SES world from within a standard EcmaScript world. For IoT
 or blockchain purposes, the more relevant question is: What is the
 resulting standard SES world, independent of whether it was created from
 within a standard EcmaScript world, or whether it was implemented
@@ -20,38 +20,38 @@ would simply omit these elements, resulting in a simpler and smaller
 engine. Starting from standard EcmaScript, the simplification or omissions for
 the default configuration of SES are
 
- * Omit all support for sloppy mode
- * Aside from `BigInt`, omit everything else outside the EcmaScript 2018 spec.
- * In particular, omit the `import()` and `import.meta` expressions.
- * Omit annex B (except those `ses` explicitly permits)
- * In particular, omit the `RegExp` static properties that provide a global
-   communications channel.
- * On the `Math` namespace object shared by constructed compartments:
-   - `Math.random()` throws a `TypeError` rather than provide a random number,
-     which would be a source of non-determinism.
- * On the `Date` constructor shared by constructed compartments:
-   - `Date.now()` throws a `TypeError` rather than returning the millisecods
-     representing the current time.
-   - `new Date()`, calling it as a constructor (with `new`) with no arguments,
-     throws a `TypeError` rather than returning a date instance
-     representing the current time.
-   - `Date(...)`, calling it as a function (without `new`) no matter what
-     the arguments, throws a `TypeError` rather than a string presenting
-     the current time.
- * By default, omit `Intl`, the internationalization APIs
- * If some of `Intl` is included, it must suppress ambient authority and
-   non-determinism.
- * For all forms of function expressible by syntax (function, generator,
-   async-function, async-generator)
-   * *func*`.[[Prototype]].constructor` is a function constructor that always
-     throws. Because these function constructors always throw, we do not
-     consider them to be evaluators.
+- Omit all support for sloppy mode
+- Aside from `BigInt`, omit everything else outside the EcmaScript 2018 spec.
+- In particular, omit the `import()` and `import.meta` expressions.
+- Omit annex B (except those `ses` explicitly permits)
+- In particular, omit the `RegExp` static properties that provide a global
+  communications channel.
+- On the `Math` namespace object shared by constructed compartments:
+  - `Math.random()` throws a `TypeError` rather than provide a random number,
+    which would be a source of non-determinism.
+- On the `Date` constructor shared by constructed compartments:
+  - `Date.now()` throws a `TypeError` rather than returning the millisecods
+    representing the current time.
+  - `new Date()`, calling it as a constructor (with `new`) with no arguments,
+    throws a `TypeError` rather than returning a date instance
+    representing the current time.
+  - `Date(...)`, calling it as a function (without `new`) no matter what
+    the arguments, throws a `TypeError` rather than a string presenting
+    the current time.
+- By default, omit `Intl`, the internationalization APIs
+- If some of `Intl` is included, it must suppress ambient authority and
+  non-determinism.
+- For all forms of function expressible by syntax (function, generator,
+  async-function, async-generator)
+  - _func_`.[[Prototype]].constructor` is a function constructor that always
+    throws. Because these function constructors always throw, we do not
+    consider them to be evaluators.
 
-We define the *shared globals* as all the standard shared global
+We define the _shared globals_ as all the standard shared global
 variable bindings defined by the above, i.e., without `Intl` by default,
 with `Realm` (see below), without `eval`, without `Function`, without
 anything outside the EcmaScript 2018 spec, and with `BigInt`. We define
-the *shared intrinsics* as all the objects transitively reachable from
+the _shared intrinsics_ as all the objects transitively reachable from
 the shared globals. Note that no global objects or evaluators are
 reachable from the shared intrinsics.
 
@@ -63,26 +63,25 @@ would appear as follows.
 
 1.  Include the portion of the Realm API for creating compartments, and
     for evaluating script code in a compartment with endowments:
-
-    -   `Realm.makeCompartment(options={})` -> aRealm instance
-        representing a new compartment
-    -   `Realm.prototype.global` -> global object of compartment.
-        This is a getter-only accessor.
-    -   `Realm.prototype.evaluateProgram(programSrcString, endowments={})`
-        -> completion value
-        -   The own properties of the endowments which are legal
-            variable names become the const variable bindings of the
-            global lexical scope in which the program is evaluated.
-            Unlike standard EcmaScript, there is no shared global
-            lexical scope. Each global lexical scope comes *only* from
-            the endowments.
-    -   `Realm.prototype.evaluateExpr(exprSrcString, endowments={})`
-        -> value of expression
-        -   Given that `exprSrcString` parses as an expression,
-            `js   aRealm.evaluateExpr(exprSrcString, endowments)` is
-            equivalent to
-            `js   aRealm.evaluateProgram(`(\${exprSrcString});\`,
-            endowments)\`
+    - `Realm.makeCompartment(options={})` -> aRealm instance
+      representing a new compartment
+    - `Realm.prototype.global` -> global object of compartment.
+      This is a getter-only accessor.
+    - `Realm.prototype.evaluateProgram(programSrcString, endowments={})`
+      -> completion value
+      - The own properties of the endowments which are legal
+        variable names become the const variable bindings of the
+        global lexical scope in which the program is evaluated.
+        Unlike standard EcmaScript, there is no shared global
+        lexical scope. Each global lexical scope comes _only_ from
+        the endowments.
+    - `Realm.prototype.evaluateExpr(exprSrcString, endowments={})`
+      -> value of expression
+      - Given that `exprSrcString` parses as an expression,
+        `js   aRealm.evaluateExpr(exprSrcString, endowments)` is
+        equivalent to
+        `js   aRealm.evaluateProgram(`(\${exprSrcString});\`,
+        endowments)\`
 
     The additional element from the proposed Realm API is
     `Realm.makeRootRealm(options={})`. SES allows but does not require
@@ -101,27 +100,26 @@ would appear as follows.
     bookkeeping needed for them to point at any objects not in ROM.
 
 3.  For each compartment, create a new global populated by:
-
-    -   The shared globals with their standard global property names.
-    -   An `eval` function and `Function` constructor that evaluates
-        code in the scope of that global
-        -   Both this `eval` function and `Function` constructor inherit
-            from the shared %FunctionPrototype% intrinsic.
-        -   Each of these `eval` functions is considered an initial eval
-            function for purposes of determining whether a an expression
-            in direct-eval syntax is indeed a direct-eval. (The
-            direct-eval feature is impossible to shim and rarely needed
-            anyway, and so is low priority. When omitted, the
-            direct-eval syntax should also be statically rejected with
-            an early error.)
-        -   `Function.prototype` is initialized to point at the same
-            shared %FunctionPrototype% intrinsic.
-    -   All of these global properties are made non-configurable
-        non-writable data properties. The new per-global objects (the
-        eval function and Function constructor) are frozen. Since they
-        have no hidden state, they are immutable and rom-able.
-    -   This new global object is *not* frozen. It remains extensible.
-        However, the global's \[\[Prototype\]\] slot cannot be altered.
+    - The shared globals with their standard global property names.
+    - An `eval` function and `Function` constructor that evaluates
+      code in the scope of that global
+      - Both this `eval` function and `Function` constructor inherit
+        from the shared %FunctionPrototype% intrinsic.
+      - Each of these `eval` functions is considered an initial eval
+        function for purposes of determining whether a an expression
+        in direct-eval syntax is indeed a direct-eval. (The
+        direct-eval feature is impossible to shim and rarely needed
+        anyway, and so is low priority. When omitted, the
+        direct-eval syntax should also be statically rejected with
+        an early error.)
+      - `Function.prototype` is initialized to point at the same
+        shared %FunctionPrototype% intrinsic.
+    - All of these global properties are made non-configurable
+      non-writable data properties. The new per-global objects (the
+      eval function and Function constructor) are frozen. Since they
+      have no hidden state, they are immutable and rom-able.
+    - This new global object is _not_ frozen. It remains extensible.
+      However, the global's \[\[Prototype\]\] slot cannot be altered.
 
 4.  The host creates a start-compartment whose start-global is populated
     as above.
@@ -139,15 +137,16 @@ same `Function.prototype.constructor` which is a function that only
 throws. Thus, in all compartment scopes,
 
 ```javascript
-Function !== Function.prototype.constructor
+Function !== Function.prototype.constructor;
 ```
 
 TBD:
- * What portion of the additions above are relevant to a standalone
-SES without runtime evaluators?
- * Should `eval` and `Function` actually
-be on a compartment's global object, or should we include them in the
-compartment's global lexical scope?
+
+- What portion of the additions above are relevant to a standalone
+  SES without runtime evaluators?
+- Should `eval` and `Function` actually
+  be on a compartment's global object, or should we include them in the
+  compartment's global lexical scope?
 
 ## Work in Progress
 
@@ -159,16 +158,17 @@ access to the exports of the packages currently named '\@agoric/nat' and
 `Nat` and `harden`. We'll revisit all this is a separate document.
 
 TBD:
- * `System`
- * error stacks
- * weak references
- * loader?
- * Should
-SES provide support for `require` and core CommonJS Modules?
- * Where
-should `Nat` and `harden` come from?
- * `SES`
- * `SES.confine`
+
+- `System`
+- error stacks
+- weak references
+- loader?
+- Should
+  SES provide support for `require` and core CommonJS Modules?
+- Where
+  should `Nat` and `harden` come from?
+- `SES`
+- `SES.confine`
 
 ## Stage Separated SES
 
@@ -176,14 +176,15 @@ Full SES, as embedded into EcmaScript, supports running vetted
 customization code in a freezable realm prior to freezing it into a SES
 realm. Such vetted customization code runs in an environment like that
 described above except:
- * The shared intrinsics are not yet frozen \*
-No host objects have been added to the global. Thus the vetted
-customizations run fully confined, without access to any external world.
+
+- The shared intrinsics are not yet frozen \*
+  No host objects have been added to the global. Thus the vetted
+  customizations run fully confined, without access to any external world.
 
 Although the custoimizations run confined, because they can arbitrarily
 mutate the shared intrinsic state before other code runs, all later
 code is fully vulnerable to these custiomizations. This is why we refer
-to them as *vetted customization code*. Once the shared intrinsic state
+to them as _vetted customization code_. Once the shared intrinsic state
 is transitively frozen, then we can support the standalone SES
 environment described above, where compartments are units of protection
 between subgraphs of mutually suspicious objects.

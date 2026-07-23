@@ -1,11 +1,11 @@
 # Key-Sniffing Ciphertext Relay and Terminating OCapN-Noise Listeners
 
-| | |
-|---|---|
-| **Created** | 2026-07-18 |
-| **Updated** | 2026-07-19 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-07-18            |
+| **Updated** | 2026-07-19            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Proposed              |
 
 ## What is the Problem Being Solved?
 
@@ -19,8 +19,8 @@ solely to cross the CapTP handoff.
 
 The redirection recorded below removes that partial implementation by moving in
 the opposite direction from an earlier draft of this design. Rather than pulling
-Noise termination *up* into the gateway so the gateway hands daemons an
-authenticated plaintext session, we keep Noise termination *at the recipient*
+Noise termination _up_ into the gateway so the gateway hands daemons an
+authenticated plaintext session, we keep Noise termination _at the recipient_
 and reduce the gateway to a dumb router. The gateway sniffs only the cleartext
 intended-responder public key that already prefixes the SYN, and forwards the
 untouched encrypted stream to the true OCapN listener for that key. The gateway
@@ -35,8 +35,8 @@ minimal:
 - It does **not** terminate the Noise protocol and does **not** depend on a
   Noise implementation.
 - It forwards the whole encrypted byte stream, unmodified, to the true OCapN
-  listener registered for that responder key — routing *closer to the
-  recipient* in the network, for example across a unix domain socket.
+  listener registered for that responder key — routing _closer to the
+  recipient_ in the network, for example across a unix domain socket.
 
 Noise IK — reading the SYN, authenticating the initiator, decrypting, and
 delivering plaintext application messages — belongs to the **true OCapN
@@ -47,7 +47,7 @@ signing store and no privileged key material at all: a plaintext-key routing
 table is its entire authority.
 
 This is a routing boundary, not a session-termination boundary. The relay is a
-*ciphertext* relay by construction — the only thing it ever reads in the clear
+_ciphertext_ relay by construction — the only thing it ever reads in the clear
 is the responder key prefix used to pick the next hop. Relays may chain
 (relay-to-relay-to-listener); every hop makes the same cheap plaintext-key
 routing decision and forwards ciphertext onward.
@@ -292,7 +292,7 @@ Prototype the whole thing in Node to validate the split and the tests, but
 prepare for the data plane to be replaced by Rust. The intended end state is a
 **parallel Rust crate and JS package** pair, following the precedent already in
 this repository — `rust/ocapn_noise` (`ocapn_noise_protocol_facilities`, built
-  as a `cdylib`) paired with an independent JS application adapter.
+as a `cdylib`) paired with an independent JS application adapter.
 
 - The **data plane** — the byte-splicing relay and the Noise IK responder/
   initiator state machine — is the part that moves to Rust. It is CPU- and
@@ -352,11 +352,11 @@ direction dated 2026-07-18.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| [ocapn-noise-network](ocapn-noise-network.md) | Existing network, handshake, transport, and session substrate. The terminating listener draws its responder/initiator state machine from here; the relay draws only the SYN-prefix framing constant. |
-| [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md) | Session ownership and close behavior must remain compatible with reconnection and crossed-hello settlement at the terminating listener. |
-| [gateway-package](gateway-package.md) | Its OCapN WebSocket feature becomes a transport-to-relay adapter that forwards ciphertext instead of owning a raw-SYN termination path. |
+| Design                                                            | Relationship                                                                                                                                                                                         |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [ocapn-noise-network](ocapn-noise-network.md)                     | Existing network, handshake, transport, and session substrate. The terminating listener draws its responder/initiator state machine from here; the relay draws only the SYN-prefix framing constant. |
+| [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md) | Session ownership and close behavior must remain compatible with reconnection and crossed-hello settlement at the terminating listener.                                                              |
+| [gateway-package](gateway-package.md)                             | Its OCapN WebSocket feature becomes a transport-to-relay adapter that forwards ciphertext instead of owning a raw-SYN termination path.                                                              |
 
 ## Prompt
 

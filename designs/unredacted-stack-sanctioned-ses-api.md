@@ -1,18 +1,18 @@
 # Sanctioned SES API for Unredacted Error Diagnostics
 
-| | |
-|---|---|
-| **Created** | 2026-07-02 |
-| **Updated** | 2026-07-10 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Draft — design only, no implementation |
-| **Reviewer** | @erights (requested) |
+|              |                                        |
+| ------------ | -------------------------------------- |
+| **Created**  | 2026-07-02                             |
+| **Updated**  | 2026-07-10                             |
+| **Author**   | Kris Kowal (prompted)                  |
+| **Status**   | Draft — design only, no implementation |
+| **Reviewer** | @erights (requested)                   |
 
 > Split out of [`captp-error-identification.md`](./captp-error-identification.md)
 > at kriskowal's request in review
 > [4616479253](https://github.com/endojs/endo-but-for-bots/pull/595#pullrequestreview-4616479253)
-> on #595: *"Let's post a separate design for this improvement and hand that to
-> @erights for review."* This is that separate design. It is handed to @erights
+> on #595: _"Let's post a separate design for this improvement and hand that to
+> @erights for review."_ This is that separate design. It is handed to @erights
 > for review because the fix depends on an upstream `ses` API decision that is
 > his to steer.
 >
@@ -34,8 +34,8 @@ by tapping SES start-compartment internals that are not a supported public API:
   the same undocumented SES start-compartment hooks `@endo/ses-ava` uses to
   surface unredacted causal traces.
 
-Inline on `unredacted-stack.js:53`, kriskowal wrote, tagging @erights: *"This
-should not be. We need an alternative."* The daemon should not depend on an
+Inline on `unredacted-stack.js:53`, kriskowal wrote, tagging @erights: _"This
+should not be. We need an alternative."_ The daemon should not depend on an
 `@endo/ses-ava`-internal symbol and an undocumented global accessor to render
 unredacted error diagnostics. Both are private contracts that can change without
 notice, and neither is intended for third-party consumption.
@@ -52,7 +52,7 @@ for that decision.
 ### 1. Capture at the throw site, not by reconstruction
 
 The unredacted rendering is privileged information that belongs to the party that
-*holds* the error — the worker where the error originated. Capture the unredacted
+_holds_ the error — the worker where the error originated. Capture the unredacted
 diagnostic **in the worker** at `marshalSaveError` time (in the trusted start
 compartment, where the information is legitimately available) and ship the
 **pre-rendered** text as the `TraceRecord` payload. The daemon aggregator then
@@ -81,7 +81,7 @@ The sanctioned surface should therefore expose (at least) these:
 - **Get the rendered causal stack as a string** — the fully rendered causal
   trace. This convenience does **not** obviate the value of a more opinionated
   renderer for a terminal or the web; such a renderer would consume the
-  *structured* diagnostics above rather than this pre-rendered string.
+  _structured_ diagnostics above rather than this pre-rendered string.
 - **Get the (serial or parallel) causes** — the error's causes. (These are not
   currently redacted, so this is completeness within the same diagnostic surface
   rather than an unredaction per se.)
@@ -105,7 +105,7 @@ the trusted party that holds the error — access is not propagated by-construct
 into guest code.
 
 An **alternative worth considering** is to hang these methods off the **start
-compartment's `Error`** object — which is *not* the `SharedError` that confined
+compartment's `Error`** object — which is _not_ the `SharedError` that confined
 compartments see. That path would entail **adding permits** for the new `Error`
 members, a cost this design flags rather than resolves. It is still worth
 considering precisely because we anticipate more than one unredaction method: a
@@ -115,7 +115,7 @@ durable, discoverable home for the set (whether a `globalThis` accessor object o
 ### 4. Feature-test against the sanctioned API
 
 The daemon keeps a narrow feature-test/fallback (to `err.stack`) but tests for
-the *sanctioned* API, so the daemon no longer breaks when SES retires the ses-ava
+the _sanctioned_ API, so the daemon no longer breaks when SES retires the ses-ava
 symbol.
 
 ## The specific request for @erights
@@ -132,7 +132,7 @@ Two things, on top of the general "is this the alternative you had in mind":
    leave the worker at all** (the worker renders and stores; the daemon only ever
    receives already-rendered text and never even feature-tests SES), which may be
    cleaner if the daemon never needs to re-render — though it forecloses the
-   daemon consuming *structured* diagnostics for its own rendering.
+   daemon consuming _structured_ diagnostics for its own rendering.
 
 ## Open Questions
 
@@ -155,5 +155,5 @@ This is a sibling cleanup to
 [`captp-error-identification.md`](./captp-error-identification.md), split out per
 the review so it can be reviewed on its own upstream-`ses`-dependent track. The
 two share the error-diagnostics subsystem in `@endo/daemon` but are independent
-changes: error *identification* (the side-channel id) does not depend on how
-unredacted diagnostics are *rendered*, and vice versa.
+changes: error _identification_ (the side-channel id) does not depend on how
+unredacted diagnostics are _rendered_, and vice versa.

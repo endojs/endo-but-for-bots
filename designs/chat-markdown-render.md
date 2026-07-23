@@ -1,11 +1,11 @@
 # Chat Markdown Render: Gap Analysis and Redesign
 
-| | |
-|---|---|
-| **Created** | 2026-03-03 |
-| **Updated** | 2026-05-19 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+|                |                                              |
+| -------------- | -------------------------------------------- |
+| **Created**    | 2026-03-03                                   |
+| **Updated**    | 2026-05-19                                   |
+| **Author**     | Kris Kowal (prompted)                        |
+| **Status**     | **Complete**                                 |
 | **Supersedes** | (replaces earlier revision of this document) |
 
 ## Status
@@ -60,15 +60,15 @@ phased implementation plan.
 
 ### Current delimiter mapping
 
-| Delimiter | Current | CommonMark |
-|-----------|---------|------------|
-| `*text*` | bold (`<strong>`) | italic (`<em>`) |
-| `**text**` | **broken** — produces `<strong>*text</strong>` | bold (`<strong>`) |
-| `/text/` | italic (`<em>`) | not markup |
-| `_text_` | underline (`<u>`) | italic (`<em>`) |
-| `__text__` | not supported | bold (`<strong>`) |
-| `~text~` | strikethrough (`<s>`) | (GFM) strikethrough |
-| `` `text` `` | inline code | inline code |
+| Delimiter    | Current                                        | CommonMark          |
+| ------------ | ---------------------------------------------- | ------------------- |
+| `*text*`     | bold (`<strong>`)                              | italic (`<em>`)     |
+| `**text**`   | **broken** — produces `<strong>*text</strong>` | bold (`<strong>`)   |
+| `/text/`     | italic (`<em>`)                                | not markup          |
+| `_text_`     | underline (`<u>`)                              | italic (`<em>`)     |
+| `__text__`   | not supported                                  | bold (`<strong>`)   |
+| `~text~`     | strikethrough (`<s>`)                          | (GFM) strikethrough |
+| `` `text` `` | inline code                                    | inline code         |
 
 ### Current block-level support
 
@@ -97,16 +97,16 @@ Markdown.
 
 **Decision:** Align fully with CommonMark:
 
-| Delimiter | New meaning |
-|-----------|-------------|
-| `*text*` | italic (`<em>`) |
-| `**text**` | bold (`<strong>`) |
-| `_text_` | italic (`<em>`) |
-| `__text__` | bold (`<strong>`) |
-| `~text~` | strikethrough (`<s>`) — GFM extension |
-| `~~text~~` | strikethrough (`<s>`) — GFM extension |
-| `` `text` `` | inline code — unchanged |
-| `/text/` | **not markup** — retired |
+| Delimiter    | New meaning                           |
+| ------------ | ------------------------------------- |
+| `*text*`     | italic (`<em>`)                       |
+| `**text**`   | bold (`<strong>`)                     |
+| `_text_`     | italic (`<em>`)                       |
+| `__text__`   | bold (`<strong>`)                     |
+| `~text~`     | strikethrough (`<s>`) — GFM extension |
+| `~~text~~`   | strikethrough (`<s>`) — GFM extension |
+| `` `text` `` | inline code — unchanged               |
+| `/text/`     | **not markup** — retired              |
 
 Underline (`<u>`) is dropped entirely.
 There is no standard Markdown delimiter for underline, and
@@ -154,6 +154,7 @@ LLM responses frequently include pipe-delimited tables.
 Without support, tables render as broken paragraph text.
 
 **Syntax:**
+
 ```
 | Header 1 | Header 2 |
 |----------|----------|
@@ -182,7 +183,7 @@ are parsed left-to-right, top-to-bottom.
 ### Gap 5 — Multi-backtick code spans and code fences
 
 **Priority: Medium-High.**
-The current inline code regex `` /^`([^`]+)`/ `` supports only
+The current inline code regex ``/^`([^`]+)`/`` supports only
 single-backtick code spans and cannot contain literal backtick
 characters.
 
@@ -198,6 +199,7 @@ and closed by a matching run of exactly N backticks:
   literal double backticks
 
 Rules:
+
 - The opening run of N backticks scans forward for the next run of
   exactly N backticks; everything between is the code content.
 - Leading and trailing single spaces are stripped if the content
@@ -208,25 +210,26 @@ Rules:
 
 **Code fences (CommonMark §4.5):**
 
-The current code fence parser uses `` /^```(\w*)$/ `` which only
+The current code fence parser uses `/^```(\w*)$/` which only
 matches exactly three backticks.
 CommonMark allows fences opened with N >= 3 backticks (or tildes),
 closed by a line with >= N of the same character:
 
 - ` ```` ` (4 backticks) opens a fence that can contain ` ``` `
   as literal content.
-- ` ~~~~~ ` (5 tildes) opens a fence closed by ` ~~~~~ ` or more.
+- `~~~~~` (5 tildes) opens a fence closed by `~~~~~` or more.
 
 The closing fence must use the same character (`\`` or `~`) as the
 opener and must have at least as many characters.
 
 **Design:**
+
 - Inline scanner: when a backtick is encountered, count the run
   length N. Scan forward for the next run of exactly N backticks.
   If found, emit a code token. If not found, emit the backticks as
   literal text.
 - Block parser: detect fence openers with
-  `` /^(`{3,}|~{3,})(\w*)$/ ``. Record the fence character and
+  ``/^(`{3,}|~{3,})(\w*)$/``. Record the fence character and
   length N. Close when a line starts with N or more of the same
   character and nothing else follows.
 
@@ -242,7 +245,7 @@ text token and advance past both characters.
 This check must precede all delimiter matching.
 
 CommonMark escapable characters:
-`` \  `  *  _  {  }  [  ]  (  )  #  +  -  .  !  |  ~ ``
+``\  `  *  _  {  }  [  ]  (  )  #  +  -  .  !  |  ~``
 
 ### Gap 7 — Links `[text](url)`
 
@@ -258,7 +261,7 @@ Currently rendered as literal text.
 - Link text is parsed recursively for inline formatting and
   placeholders (a chip inside link text is valid).
 - Render as `<a class="md-link" href="url" target="_blank"
-  rel="noopener noreferrer">`.
+rel="noopener noreferrer">`.
 - **Security:** Only allow `https:`, `http:`, and `mailto:` schemes.
   Reject `javascript:`, `data:`, and anything else.
 - Reference-style links (`[text][ref]`) are not worth implementing
@@ -539,10 +542,10 @@ to its dependencies.
 
 Add a render mode selector to the timestamp tooltip on each message:
 
-| Mode | Behavior |
-|------|----------|
-| **Markdown** | Default rendered view |
-| **Literal** | Raw text, no formatting |
+| Mode             | Behavior                              |
+| ---------------- | ------------------------------------- |
+| **Markdown**     | Default rendered view                 |
+| **Literal**      | Raw text, no formatting               |
 | **Preformatted** | Entire message in `<pre>` / monospace |
 
 The selected mode is per-message and ephemeral (not persisted).
@@ -550,7 +553,7 @@ The selected mode is per-message and ephemeral (not persisted).
 **Implementation:**
 
 - Store mode in a `WeakMap<Element, 'markdown' | 'literal' |
-  'preformatted'>`.
+'preformatted'>`.
 - On mode change, re-render the message body using the appropriate
   render function.
 - The toggle is a small `</>` icon or segmented control inside the
@@ -558,22 +561,22 @@ The selected mode is per-message and ephemeral (not persisted).
 
 ## Summary Table
 
-| # | Gap | Priority | Implement? | Phase |
-|---|-----|----------|------------|-------|
-| 1 | `**bold**` | High | Yes | 1 |
-| 2 | Delimiter realignment | High | Yes | 1 |
-| 3 | Word boundaries | High | Yes | 1 |
-| 4 | Tables | High | Yes | 2 |
-| 5 | Multi-backtick code spans/fences | Medium-High | Yes | 1 |
-| 6 | Escape sequences | Medium | Yes | 1 |
-| 7 | Links | Medium-High | Yes | 2 |
-| 8 | Inline nesting | Medium | Yes | 1 |
-| 9 | Blockquotes | Medium | Yes | 3 |
-| 10 | Nested lists | Medium | Yes | 3 |
-| 11 | Horizontal rules | Low | Yes | 3 |
-| 12 | Images | Low | Defer | — |
-| 13 | Line breaks | — | Keep as-is | — |
-| 14 | Raw HTML | — | No | — |
+| #   | Gap                              | Priority    | Implement? | Phase |
+| --- | -------------------------------- | ----------- | ---------- | ----- |
+| 1   | `**bold**`                       | High        | Yes        | 1     |
+| 2   | Delimiter realignment            | High        | Yes        | 1     |
+| 3   | Word boundaries                  | High        | Yes        | 1     |
+| 4   | Tables                           | High        | Yes        | 2     |
+| 5   | Multi-backtick code spans/fences | Medium-High | Yes        | 1     |
+| 6   | Escape sequences                 | Medium      | Yes        | 1     |
+| 7   | Links                            | Medium-High | Yes        | 2     |
+| 8   | Inline nesting                   | Medium      | Yes        | 1     |
+| 9   | Blockquotes                      | Medium      | Yes        | 3     |
+| 10  | Nested lists                     | Medium      | Yes        | 3     |
+| 11  | Horizontal rules                 | Low         | Yes        | 3     |
+| 12  | Images                           | Low         | Defer      | —     |
+| 13  | Line breaks                      | —           | Keep as-is | —     |
+| 14  | Raw HTML                         | —           | No         | —     |
 
 ## Phased Implementation
 
@@ -597,6 +600,7 @@ out of `packages/chat/markdown-render.js`.
 6. Verify existing chat tests still pass.
 
 **Files:**
+
 - `packages/markmdown/` — new package (all files)
 - `packages/chat/markdown-render.js` — rewrite as wrapper
 - `packages/chat/package.json` — add dependency
@@ -623,6 +627,7 @@ This is the foundation for everything else.
 7. Build out test fixtures in `packages/markmdown/test/fixtures/`.
 
 **Files:**
+
 - `packages/markmdown/src/parse-inline.js`
 - `packages/markmdown/src/parse-blocks.js` — code fence update
 - `packages/markmdown/src/render-dom.js`
@@ -640,6 +645,7 @@ This is the foundation for everything else.
 4. Add CSS for `md-table`, `md-link` in `packages/chat`.
 
 **Files:**
+
 - `packages/markmdown/src/parse-blocks.js`
 - `packages/markmdown/src/parse-inline.js`
 - `packages/markmdown/src/render-dom.js`
@@ -655,6 +661,7 @@ This is the foundation for everything else.
 4. Implement per-message render mode toggle in `packages/chat`.
 
 **Files:**
+
 - `packages/markmdown/src/parse-blocks.js`
 - `packages/markmdown/src/render-dom.js`
 - `packages/markmdown/test/fixtures/md/blockquotes.md`,
@@ -713,10 +720,10 @@ This is the foundation for everything else.
 ## Known Gaps and TODOs
 
 - [ ] Autolinks (bare URL detection) — deferred, can add in Phase 2
-  or later.
+      or later.
 - [ ] Image syntax — deferred indefinitely.
 - [ ] Nested blockquotes — supported by the recursive design but
-  may need depth-limiting for display.
+      may need depth-limiting for display.
 - [ ] Task lists (`- [ ]` / `- [x]`) — GFM extension, low priority.
 
 ## Prompt
@@ -726,7 +733,7 @@ This is the foundation for everything else.
 > with an affordance for interpolating chips (aka tokens) in the
 > output. It diverges and falls short of Markdown in a few details.
 > Please perform a gap analysis and propose a design (in
-> designs/*.md) that will address those gaps, notably for tables and
+> designs/\*.md) that will address those gaps, notably for tables and
 > for divergence in behavior for certain markup at word boundaries.
 > I believe we may also lack support for _underscore_. We also seem
 > to be lacking **bold**.

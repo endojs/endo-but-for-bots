@@ -115,7 +115,7 @@ With these three components, we can begin to rely on certain guarantees:
 - JavaScript itself guarantees that _capabilities_ cannot be forged.
   That is, a useful reference cannot be obtained by guessing its address.
 - JavaScript also enforces certain structures like closures and `WeakMap`
-  can guard capabilities. 
+  can guard capabilities.
 - The only way to obtain a _capability_ is to have received it as an argument,
   return, global, or module of the surrounding compartmnet.
 - Once hardened, an object and its methods cannot be altered.
@@ -127,7 +127,7 @@ From this point forward, any interesting policy can be created with code.
 We can then use Endo to stretch references to Object-capabliities between
 processes and over networks.
 Instead of relying on the memory-safety of JavaScript, we then rely on
-cryptography to preserve confidentiality and unforgeability of references.  A
+cryptography to preserve confidentiality and unforgeability of references. A
 suitably large, signed, cryptographically random number, reachable over a
 network over an encrypted connection, may safely designate a capability.
 
@@ -137,24 +137,25 @@ _Object-capabilities_ with human-meaningful names.
 
 ## Ruminations on the Name
 
-* In Greek, "endo-" means "internal" or "within".
+- In Greek, "endo-" means "internal" or "within".
   This is fitting because Endo runs Node _within_ a safe sandbox.
   This is fitting in turn because Endo is built on the legacy of Google Caja.
   In Spanish, "caja" means "box" and is related to the Latin word "capsum" and
   English "capsule", as in "encapsulate".
-* Endo is an anagram of Node and Deno.
+- Endo is an anagram of Node and Deno.
   That is to say, we are not Done yet.
-* The `endo` command, like the `sudo` command, is a "do" command.
+- The `endo` command, like the `sudo` command, is a "do" command.
   However, instead of escalating privilege, it attenuates privilege.
-* Endo lets applications endow packages with limited powerful objects and
-  modules.  As they say, you can't spell "endow" without "endo"!
-* So, "E.N.Do" forms the acronym "Encapsulated Node Do".
+- Endo lets applications endow packages with limited powerful objects and
+  modules. As they say, you can't spell "endow" without "endo"!
+- So, "E.N.Do" forms the acronym "Encapsulated Node Do".
 
 So, just as "soo-doo" (super user do) and "soo-doh" (like "pseudo") are valid
 pronunciations of `sudo`, "en-doh" and "en-doo" are both valid pronunciations of
 `endo`.
 
 <a name="§pola"></a>
+
 ### Principle of Least Authority
 
 The Principle of Least Authority [(Wikipedia)][Principle of Least Authority]

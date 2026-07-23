@@ -1,11 +1,11 @@
 # Daemon Cross-Peer Garbage Collection
 
-| | |
-|---|---|
-| **Created** | 2026-03-07 |
-| **Updated** | 2026-04-29 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+|              |                             |
+| ------------ | --------------------------- |
+| **Created**  | 2026-03-07                  |
+| **Updated**  | 2026-04-29                  |
+| **Author**   | Kris Kowal (prompted)       |
+| **Status**   | **Complete**                |
 | **Code rev** | `5c83f4d8d9` (`llm` branch) |
 
 ## Status
@@ -24,7 +24,7 @@ This revision documents what actually shipped.
 - `packages/daemon/src/retention-accumulator.js` — pure batching primitive
   that consolidates `add(formulaNumber)` / `remove(formulaNumber)` events
   over a microtask window and yields `{ add: string[], remove: string[] }`
-  deltas to subscribers.  The first delta is the snapshot
+  deltas to subscribers. The first delta is the snapshot
   (all adds, no removes); subsequent deltas are consolidated.
   Adds and removes within the same window cancel out so they never
   appear on the wire.
@@ -44,10 +44,10 @@ This revision documents what actually shipped.
   peer (`makePeer`,
   `packages/daemon/src/daemon.js:4316`),
   spawns a background task that calls `followRetentionSet` on the
-  *remote* gateway.
+  _remote_ gateway.
   The task drains deltas for the lifetime of the connection.
 - Persistence — SQLite table `retention(guest_public_key,
-  retained_formula_number)` in
+retained_formula_number)` in
   `packages/daemon/src/daemon-database.js:87`.
   Operations: `writeRetention`, `deleteRetention`,
   `replaceRetention`, `listRetention`, `deleteAllRetention`
@@ -73,7 +73,7 @@ This revision documents what actually shipped.
 
 ### Why the CRDT approach was abandoned
 
-The CRDT-of-pet-stores design solved a *broader* problem than was
+The CRDT-of-pet-stores design solved a _broader_ problem than was
 actually needed: a fully shared mutable namespace between two peers,
 with offline progress on both sides and tombstone semantics that
 survive partition.
@@ -89,9 +89,9 @@ section identified, and does so without:
 - migration of the invitation/accept flow.
 
 Each peer continues to own its own pet store.
-The single new fact a daemon learns about its peer is the *set of
+The single new fact a daemon learns about its peer is the _set of
 formula numbers from this peer that the peer is currently retaining
-on our behalf* — i.e., the set of remote handles a peer has issued
+on our behalf_ — i.e., the set of remote handles a peer has issued
 to us that we still treat as live.
 That set, kept in sync via consolidated deltas, is exactly what the
 local collector needs to avoid prematurely collecting formulas we
@@ -101,12 +101,12 @@ The capabilities the CRDT design promised but the retention-set
 approach does not provide:
 
 - **Bidirectional shared namespace.** The retention set is one-way:
-  it tells us what *they* hold of *ours*.  There is no
+  it tells us what _they_ hold of _ours_. There is no
   symmetric shared map of grants.
   Pet names and grants remain peer-local.
 - **Offline progress on both sides.** Revocations from the host land
   immediately locally and propagate when the peer reconnects, exactly
-  as in the CRDT design.  But the *guest side* (the holder) cannot
+  as in the CRDT design. But the _guest side_ (the holder) cannot
   unilaterally write into a shared structure while disconnected; the
   guest's pet store records the remote handle as a regular pet store
   entry.
@@ -141,14 +141,14 @@ this document explains the mechanism in detail.
 ### One-way retention set per peer
 
 For each peer connection, each daemon maintains an authoritative set
-of *its own* formula numbers that the peer is currently holding.
-The peer is the *publisher* of this set.
-The local daemon is the *subscriber*.
+of _its own_ formula numbers that the peer is currently holding.
+The peer is the _publisher_ of this set.
+The local daemon is the _subscriber_.
 
 This inverts what an outsider might expect:
 a daemon does not directly know which of its peer's formulas it holds
 — it knows by introspecting its own graph.
-What it doesn't know, and what the peer does, is which of *its own*
+What it doesn't know, and what the peer does, is which of _its own_
 formulas the peer holds.
 So the peer publishes the set, and the local daemon adapts its
 collector to honor it.
@@ -213,9 +213,9 @@ Two daemon paths feed the topic:
 1. **Formulation.**
    `formulate` and `formulateLazy`
    (`daemon.js:2739`, `:2767`) publish
-   `{ add: formulaNumber, node: nodeNumber }` *after* writing the
+   `{ add: formulaNumber, node: nodeNumber }` _after_ writing the
    formula JSON to disk and adding it to the in-memory graph.
-   The node number is the *creator's* node number, not necessarily
+   The node number is the _creator's_ node number, not necessarily
    the local node.
 2. **Collection.**
    The collector publishes `{ remove: formulaNumber, node: nodeNumber }`
@@ -268,17 +268,17 @@ CREATE TABLE IF NOT EXISTS retention (
 The `guest_public_key` column is the peer's identity — keyed by
 public key rather than node number to be robust against
 node-number rotations.
-The `retained_formula_number` column is one of *our* formula
+The `retained_formula_number` column is one of _our_ formula
 numbers that the peer holds.
 
 The accompanying daemon API:
 
 ```javascript
-writeRetention(guestPublicKey, formulaNumber);          // single add
-deleteRetention(guestPublicKey, formulaNumber);          // single remove
-listRetention(guestPublicKey);                           // snapshot read
-replaceRetention(guestPublicKey, formulaNumbers);        // bulk replace
-deleteAllRetention(guestPublicKey);                      // tear down
+writeRetention(guestPublicKey, formulaNumber); // single add
+deleteRetention(guestPublicKey, formulaNumber); // single remove
+listRetention(guestPublicKey); // snapshot read
+replaceRetention(guestPublicKey, formulaNumbers); // bulk replace
+deleteAllRetention(guestPublicKey); // tear down
 ```
 
 `replaceRetention` is the primitive used at session start to apply
@@ -319,7 +319,7 @@ On daemon restart:
 - `replaceRetention` reconciles the local table to the peer's
   current view in one transaction.
 
-This means the *peer* is authoritative for what it currently holds,
+This means the _peer_ is authoritative for what it currently holds,
 and an offline period of arbitrary length is reconciled correctly on
 reconnect.
 There is no need for vector clocks, watermarks, or acks — the
@@ -348,26 +348,26 @@ the local collector.
 The CRDT design's "tombstone bias on tie" rule has no analog here
 because there is no concurrent write between peers — the retention
 set is a one-way authoritative stream.
-What is preserved is the property that *revocation cannot be
-overridden by a concurrent grant*: there is no concurrent grant,
+What is preserved is the property that _revocation cannot be
+overridden by a concurrent grant_: there is no concurrent grant,
 because the publisher of the retention set is also the only entity
 that can issue handles for its own formulas.
 
 ## Comparison with the Original Design
 
-| Aspect | CRDT design (rejected) | Retention-set sync (shipped) |
-|---|---|---|
-| New formula type | `synced-pet-store` | none |
-| New on-disk format | per-store directory | one SQLite table |
-| Direction | bidirectional | one-way per direction (each side subscribes to the other) |
-| Wire payload | per-key Lamport-stamped LWW entry | flat list of formula numbers |
-| Shared writability | yes (grantor adds, both delete) | no (each side owns its pet store) |
-| Tombstones | yes, with watermark-gated GC | no (deletion is just "remove" in next delta) |
-| Watermarks / acks | yes | no |
-| Migration cost | rewires invitation/accept, pet-sitter, provideGuest | no migration (additive subscription) |
-| Offline progress | grantor and grantee both | only the publisher (our collector still acts on local revocations) |
-| Solves cross-peer GC | yes | yes |
-| Solves shared namespace | yes | no, and we no longer need it |
+| Aspect                  | CRDT design (rejected)                              | Retention-set sync (shipped)                                       |
+| ----------------------- | --------------------------------------------------- | ------------------------------------------------------------------ |
+| New formula type        | `synced-pet-store`                                  | none                                                               |
+| New on-disk format      | per-store directory                                 | one SQLite table                                                   |
+| Direction               | bidirectional                                       | one-way per direction (each side subscribes to the other)          |
+| Wire payload            | per-key Lamport-stamped LWW entry                   | flat list of formula numbers                                       |
+| Shared writability      | yes (grantor adds, both delete)                     | no (each side owns its pet store)                                  |
+| Tombstones              | yes, with watermark-gated GC                        | no (deletion is just "remove" in next delta)                       |
+| Watermarks / acks       | yes                                                 | no                                                                 |
+| Migration cost          | rewires invitation/accept, pet-sitter, provideGuest | no migration (additive subscription)                               |
+| Offline progress        | grantor and grantee both                            | only the publisher (our collector still acts on local revocations) |
+| Solves cross-peer GC    | yes                                                 | yes                                                                |
+| Solves shared namespace | yes                                                 | no, and we no longer need it                                       |
 
 ## References
 

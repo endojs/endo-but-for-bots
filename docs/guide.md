@@ -6,11 +6,12 @@ category: Guides
 
 # Endo and HardenedJS (SES) Programming Guide
 
-This is a guide to programming with *HardenedJS* and *Endo*. It:
+This is a guide to programming with _HardenedJS_ and _Endo_. It:
+
 - Shows what you can and cannot do with a HardenedJS program.
 - Defines what SES, the HardenedJS shim, is and does.
 - Provides background on why JavaScript functionality was added, removed, or changed.
-- Describes *realms* and *compartments*.
+- Describes _realms_ and _compartments_.
 - Introduces Endo.
 
 This is intended for initial reading when starting to use or learn about Agoric. For
@@ -21,6 +22,7 @@ for to use HardenedJS without much explanation.
 ## What is HardenedJS?
 
 HardenedJS:
+
 - Is a JavaScript runtime library for safely running third-party code.
 - Addresses JavaScript’s lack of internal security.
   - This is particularly significant because JavaScript applications
@@ -30,13 +32,14 @@ HardenedJS:
   mutable state and lack of encapsulation in sloppy mode.
 - Is a safe deterministic subset of "strict mode" JavaScript.
 - Does not include any IO objects that provide
-  [*ambient authority*](https://en.wikipedia.org/wiki/Ambient_authority).
+  [_ambient authority_](https://en.wikipedia.org/wiki/Ambient_authority).
 - Removes non-determinism by modifying a few built-in objects.
 - Adds functionality to freeze and make immutable both built-in JavaScript
   objects and program created objects and make them immutable.
 - Is (tentatively named SES) a proposed extension to the JavaScript standard.
 
 HardenedJS consists of three parts:
+
 - Lockdown is a function that irreversibly repairs and hardens an existing
   mutable JavaScript environment.
 - Harden is a function that makes interfaces tamper-proof, so objects can be
@@ -78,7 +81,7 @@ Agoric smart contracts are an example of Endo guest programs.
 ## The HardenedJS story
 
 JavaScript was created to let web surfers safely run programs from strangers.
-Web pages put JavaScript programs in a *sandbox* that restricts their abilities
+Web pages put JavaScript programs in a _sandbox_ that restricts their abilities
 while maximizing utility.
 
 This worked well until web applications started inviting multiple strangers
@@ -87,22 +90,23 @@ every stranger had their own sandbox.
 
 Meanwhile, server-side JavaScript applications imbued their sandbox with unbounded
 abilities and ran programs written by strangers. They were vulnerable
-to both their dependencies *and* also the rarely reviewed dependencies of their dependencies.
+to both their dependencies _and_ also the rarely reviewed dependencies of their dependencies.
 
-HardenedJS uses a finer grain security model, *Object Capabilities* or *OCaps*.
+HardenedJS uses a finer grain security model, _Object Capabilities_ or _OCaps_.
 With OCaps, many strangers can collaborate in a single sandbox, without risking them
 frustrating, interfering, or conspiring with or against the user or each other.
 
-To do this, the Lockdown function *hardens* the entire surface of the
+To do this, the Lockdown function _hardens_ the entire surface of the
 JavaScript environment.
-*The only way a program can subvert or communicate with another program is to
-have been expressly granted a reference to an object provided by that other program.*
+_The only way a program can subvert or communicate with another program is to
+have been expressly granted a reference to an object provided by that other program._
 
 Any programming environment fitting the OCaps model satisfies three requirements:
+
 - Any program can protect its invariants by hiding its own data and capabilities.
 - Power can only be exercised over something by having a reference to the
   object providing that power, for example, a file system object. A
-  reference to a powerful object is a *capability*.
+  reference to a powerful object is a _capability_.
 - The only way to get a capability is by being given one. For example, by receiving
   one as an argument of a constructor or method.
 
@@ -117,7 +121,7 @@ As of February 2021, HardenedJS (under the name SES) is making its way
 through JavaScript standards committees.
 It is expected to become official JavaScript when the standards process
 is completed.
-Meanwhile, Agoric provides its own SES *shim* (a library providing
+Meanwhile, Agoric provides its own SES _shim_ (a library providing
 the needed HardenedJS features) for writing secure smart contracts in
 JavaScript.
 Several Agoric engineers are on the relevant standards committees
@@ -130,27 +134,33 @@ The Lockdown function transforms ordinary JavaScript environments into Hardened
 JavaScript environments.
 
 On Node.js you can import or require `ses` in either CommonJS or ECMAScript
-modules, then call `lockdown()`. This is a *shim*. It mutates the environment
+modules, then call `lockdown()`. This is a _shim_. It mutates the environment
 in place so any code running after the shim can assume it’s running in a hardened
 environment. This includes the globals `lockdown()`, `harden()`, `Compartment`,
 and so on. For example:
+
 ```js
-require("ses");
+require('ses');
 lockdown();
 ```
+
 Or:
+
 ```js
 import 'ses';
 lockdown();
 ```
 
 To ensure a module runs in a hardened environment, wrap the above code in a `ses-lockdown.js` module and import it:
+
 ```js
 import './non-ses-code-before-lockdown.js';
 import './ses-lockdown.js'; // calls lockdown.
 import './ses-code-after-lockdown.js';
 ```
+
 To use SES as a script on the web, use the UMD build.
+
 ```js
 <script src="node_modules/ses/dist/ses.umd.min.js">
 ```
@@ -204,7 +214,7 @@ application’s integrity invariants.
 
 ## What Lockdown does to JavaScript
 
-HardenedJS does not include any I/O objects providing "unsafe" [*ambient authority*](https://en.wikipedia.org/wiki/Ambient_authority).
+HardenedJS does not include any I/O objects providing "unsafe" [_ambient authority_](https://en.wikipedia.org/wiki/Ambient_authority).
 It also doesn't allow non-determinism from built-in JavaScript objects.
 
 As of SES-0.8.0/Fall 2020, [Agoric's SES source code](https://github.com/endojs/endo/blob/SES-v0.8.0/packages/ses/src/permits.js)
@@ -234,7 +244,7 @@ Much of the `Intl` package, and some other objects' locale-specific aspects (e.g
 have results that depend upon which locale is configured. This varies from one process to another.
 See [`lockdown()`](./lockdown.md) for how those are handled.
 
-Lockdown freezes *primordials*; built-in JavaScript objects such as `Object`, `Array`, and `RegExp`,
+Lockdown freezes _primordials_; built-in JavaScript objects such as `Object`, `Array`, and `RegExp`,
 and their prototype chains. `globalThis` is also frozen. This prevents malicious code from changing their behavior
 (imagine `Array.prototype.push` delivering a copy of its argument to an attacker, or ignoring
 certain values). It also prevents using, for example, `Object.heyBuddy` or `globalThis.heyBuddy`
@@ -258,27 +268,28 @@ to JavaScript.
 Most Node.js-specific [global objects](https://nodejs.org/dist/latest-v14.x/docs/api/globals.html) are
 **unavailable** including:
 
-* `queueMicrotask`
-* `URL` and `URLSearchParams`
-* `WebAssembly`
-* `TextEncoder` and `TextDecoder`
-* `global`
-  * Use `globalThis` instead.
-* `process`
-  * No `process.env` to access the process's environment variables.
-  * No `process.argv` for the argument array.
-* `Buffer` (consider using `TypedArray` instead, but see below)
-* `setImmediate`/`clearImmediate`
-  * You can generally replace `setImmediate(fn)`
+- `queueMicrotask`
+- `URL` and `URLSearchParams`
+- `WebAssembly`
+- `TextEncoder` and `TextDecoder`
+- `global`
+  - Use `globalThis` instead.
+- `process`
+  - No `process.env` to access the process's environment variables.
+  - No `process.argv` for the argument array.
+- `Buffer` (consider using `TypedArray` instead, but see below)
+- `setImmediate`/`clearImmediate`
+  - You can generally replace `setImmediate(fn)`
     with `Promise.resolve().then(_ => fn())` to defer execution of `fn` until after the current event/callback
-    finishes processing. But it won't run until after all *other* ready Promise callbacks execute.
+    finishes processing. But it won't run until after all _other_ ready Promise callbacks execute.
 
-    There are two queues: the *IO queue* (accessed by `setImmediate`), and the *Promise queue* (accessed by
+    There are two queues: the _IO queue_ (accessed by `setImmediate`), and the _Promise queue_ (accessed by
     Promise resolution). HardenedJS code can add to the Promise queue, but needs to be given a
     capability to be able to add to the I/O queue. Note that the Promise queue is
     higher-priority than the IO queue, so the Promise queue must be empty for any IO or timers to be handled.
-* `setInterval` and `setTimeout` (and `clearInterval`/`clearTimeout`)
-  * Any notion of time must come from
+
+- `setInterval` and `setTimeout` (and `clearInterval`/`clearTimeout`)
+  - Any notion of time must come from
     exchanging messages with external timer services (the SwingSet environment provides a `TimerService` object
     to the bootstrap vat, which can share it with other vats)
 
@@ -331,31 +342,31 @@ makes those global objects available.
 
 ## Realms
 
-Agoric deploy scripts and smart contract code run in an *immutable
-realm* with *Compartments* providing just enough authority to create
+Agoric deploy scripts and smart contract code run in an _immutable
+realm_ with _Compartments_ providing just enough authority to create
 useful and secure contracts. But not enough authority to do anything
 unintended or harmful to the participants of the smart contract.
 
 JavaScript code runs in the context of
-a [*Realm*](https://www.ecma-international.org/ecma-262/10.0/index.html#sec-code-realms). A
-realm is the set of *primordials* (objects and standard library functions
+a [_Realm_](https://www.ecma-international.org/ecma-262/10.0/index.html#sec-code-realms). A
+realm is the set of _primordials_ (objects and standard library functions
 like `Array.prototype.push`) and a global object. In a web browser, an iframe is a realm.
 In Node.js, a Node process is a realm.
 
 For historical reasons, the ECMAScript specification requires primordials
 be mutable (`Array.prototype.push = yourFunction` is valid ECMAScript but not
 recommended). By using the Agoric SES shim and calling `lockdown()`, you can turn the
-current realm into an *immutable realm*; a realm within which the primordials
+current realm into an _immutable realm_; a realm within which the primordials
 are deeply frozen.
 
-SES also lets programs create *Compartments*. These are "mini-realms".
+SES also lets programs create _Compartments_. These are "mini-realms".
 A Compartment has its own dedicated global object and environment, but
 it inherits the primordials from their parent realm. Components are described
 in detail in the next section.
 
 ## Compartments
 
-A *compartment* is an execution environment for evaluating a stranger’s code. It has
+A _compartment_ is an execution environment for evaluating a stranger’s code. It has
 its own `globalThis` global object and wholly independent system of
 modules. Otherwise it shares the same batch of intrinsics such as `Array` with its surrounding
 compartment. The concept of a compartment implies an initial compartment,
@@ -363,6 +374,7 @@ the initial execution environment of a realm. After lockdown is called, all comp
 frozen realm.
 
 Here we create a compartment with a `print()` function on `globalThis`.
+
 ```js
 import 'ses';
 
@@ -374,6 +386,7 @@ c.evaluate(`
   print('Hello! Hello?');
 `);
 ```
+
 This new compartment has a different global object than the start compartment. We
 posit that all JavaScript executes in a realm and compartment. Every realm has
 distinct intrinsics, whereas every compartment shares intrinsics. The initial
@@ -400,12 +413,14 @@ c.globalThis.JSON === JSON; // true
 
 Other pairs of compartments also share many identical intrinsics and undeniable objects
 of the realm. Each has a unique, initially mutable, global object.
+
 ```js
 const c1 = new Compartment();
 const c2 = new Compartment();
 c1.globalThis === c2.globalThis; // false
 c1.globalThis.JSON === c2.globalThis.JSON; // true
 ```
+
 Every compartment's global scope includes a shallow, specialized copy of the JavaScript
 intrinsics. These disable `Math.random()`, `Date.now()`, and the behaviors of
 the `Date` constructor which would provide the current time,
@@ -415,6 +430,7 @@ communication channels.
 However, a compartment may be expressly given access to these objects through
 the compartment constructor's first argument or by assigning them to the
 compartment's `globalThis` after construction.
+
 ```js
 const powerfulCompartment = new Compartment({ Math });
 powerfulCompartment.globalThis.Date = Date;
@@ -445,22 +461,31 @@ be a URL and may appear in stack traces. The `importHook` may use the `ModuleSta
 constructor to create a reusable, parsed representation of the module text.
 
 ```js
-const dependency = new Compartment({}, {}, {
-  resolveHook: (moduleSpecifier, moduleReferrer) =>
-    resolve(moduleSpecifier, moduleReferrer),
-  importHook: async moduleSpecifier => {
-    const moduleLocation = locate(moduleSpecifier);
-    const moduleText = await retrieve(moduleLocation);
-    return new ModuleStaticRecord(moduleText, moduleLocation);
+const dependency = new Compartment(
+  {},
+  {},
+  {
+    resolveHook: (moduleSpecifier, moduleReferrer) =>
+      resolve(moduleSpecifier, moduleReferrer),
+    importHook: async moduleSpecifier => {
+      const moduleLocation = locate(moduleSpecifier);
+      const moduleText = await retrieve(moduleLocation);
+      return new ModuleStaticRecord(moduleText, moduleLocation);
+    },
   },
-});
-const application = new Compartment({}, {
-  'dependency': dependency.module('./main.js'),
-}, {
-  resolveHook,
-  importHook,
-});
+);
+const application = new Compartment(
+  {},
+  {
+    dependency: dependency.module('./main.js'),
+  },
+  {
+    resolveHook,
+    importHook,
+  },
+);
 ```
+
 Compartments provide a low-level loader API for JavaScript modules.
 Your code might run in compartments, but they are an implementation
 detail of tools and runtimes.
@@ -518,7 +543,7 @@ as their constructors do that work. You mainly need to harden records, callbacks
 The general rule is if you make a new object and give it to someone else (and don't
 immediately forget it yourself), you should give them `harden(obj)` instead of the raw object.
 This ensures other objects can only interact with them through their defined method interface,
-i.e. the functions in the object's API. *CapTP*, our communications layer for passing
+i.e. the functions in the object's API. _CapTP_, our communications layer for passing
 references to distributed objects, enforces this at vat boundaries.
 
 Hardening an instance also hardens its class.
@@ -532,20 +557,22 @@ but it means their methods stay the same and can't be surprisingly changed by so
 > try adding `/* global harden */` to the top of the file.
 >
 > You use `harden()` like this:
+>
 > ```js
-> const o = {a: 2};
-> o.a  = 12;
+> const o = { a: 2 };
+> o.a = 12;
 > console.log(o.a); // 12 because o is still mutable
 > harden(o);
-> o.a  = 37; // throws a TypeError because o is now hardened
+> o.a = 37; // throws a TypeError because o is now hardened
 > ```
+
 ## `lockdown()` and `harden()`
 
 `lockdown()` and `harden()` essentially do the same thing; freeze objects so their
 properties cannot be changed. The only way to interact with frozen objects is through
 their methods. Their differences are what objects you use them on, and when you use them.
 
-`lockdown()` **must** be called first. It hardens JavaScript's built-in *primordials*
+`lockdown()` **must** be called first. It hardens JavaScript's built-in _primordials_
 (implicitly shared global objects) and enables `harden()`. If you call `harden()`
 before `lockdown()` executes, it throws an error.
 
@@ -591,6 +618,7 @@ into falsely rejecting legitimate code.
 
 For example, the word “import” near a parenthesis or at the end of a line inside a
 comment is identified as a disallowed use of `import()` and falsely rejected:
+
 ```js
 //
 // This function calculates the import
@@ -599,15 +627,17 @@ comment is identified as a disallowed use of `import()` and falsely rejected:
 ```
 
 But the following obfuscated dynamic import usage is rightly rejected:
+
 ```js
-sneaky = import
-// comment to hide invocation
-(modulename);
+sneaky = import(
+  // comment to hide invocation
+  modulename
+);
 ```
 
 ## Direct vs. indirect eval expressions
 
-A *direct eval*, invoked as `eval(code)`, behaves as if `code` were expanded in place. The
+A _direct eval_, invoked as `eval(code)`, behaves as if `code` were expanded in place. The
 evaluated code sees the same scope as the `eval` itself sees, so this `code` can reference `x`:
 
 ```js
@@ -619,7 +649,7 @@ function foo(code) {
 
 If you perform a direct eval, you cannot hide your internal authorities from the code being evaluated.
 
-In contrast, an *indirect eval* only gets the global scope, not the local scope. In a hardened
+In contrast, an _indirect eval_ only gets the global scope, not the local scope. In a hardened
 environment, indirect eval is a useful and common tool. The evaluated code can only access global
 objects, and those are all safe (and frozen). The only bad thing an indirect eval can do is consume
 unbounded CPU or memory. Once you've evaluated the code, you can invoke it with arguments to give it

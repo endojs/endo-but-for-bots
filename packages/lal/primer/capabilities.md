@@ -50,13 +50,13 @@ directory providing those values.
 
 ## How Endowments and Results Work
 
-Endowments are *lexical bindings* — each code name in your
+Endowments are _lexical bindings_ — each code name in your
 source becomes a variable in scope when the code executes.
 If you `define()` with `{"db": {"label": "A database"}}`,
 the variable `db` is available in the source code, bound to
 whatever capability the host provides.
 
-The *completion value* of the program (the value of its last
+The _completion value_ of the program (the value of its last
 expression) becomes the result. To produce an output, make
 sure the last expression evaluates to the value you want:
 
@@ -112,16 +112,25 @@ available:
 - **makeExo(tag, interface, methods)** — Create new capability
   objects. Example:
   ```javascript
-  makeExo('Counter', M.interface('Counter', {
-    increment: M.call().returns(M.number()),
-    getValue: M.call().returns(M.number()),
-  }), {
-    increment() { return ++this.state.count; },
-    getValue() { return this.state.count; },
-  })
+  makeExo(
+    'Counter',
+    M.interface('Counter', {
+      increment: M.call().returns(M.number()),
+      getValue: M.call().returns(M.number()),
+    }),
+    {
+      increment() {
+        return ++this.state.count;
+      },
+      getValue() {
+        return this.state.count;
+      },
+    },
+  );
   ```
 
 Use these to:
+
 - Invoke methods on capabilities passed as endowments
 - Create new capabilities to send back to requesters
 - Define type-safe interfaces for your created objects

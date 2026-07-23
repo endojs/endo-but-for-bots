@@ -1,11 +1,11 @@
 # Daemon Git Remotes for Agent MVP
 
-| | |
-|---|---|
-| **Created** | 2026-05-18 |
-| **Updated** | 2026-05-29 |
-| **Author** | 0xPatrick (prompted) |
-| **Status** | Proposed (Phases 1-5 landed via #365; fd-pipe askpass landed via #368) |
+|             |                                                                        |
+| ----------- | ---------------------------------------------------------------------- |
+| **Created** | 2026-05-18                                                             |
+| **Updated** | 2026-05-29                                                             |
+| **Author**  | 0xPatrick (prompted)                                                   |
+| **Status**  | Proposed (Phases 1-5 landed via #365; fd-pipe askpass landed via #368) |
 
 > **Read in order.**
 > This is doc 3 of 3.
@@ -80,52 +80,52 @@ This document defines that companion capability.
 
 Remote operations add at least two authorities that local git does not need:
 
-| Authority | Why it is distinct |
-|---|---|
-| network transport | `fetch` and `push` communicate outside the daemon boundary |
-| credentials | authenticated remotes must use secrets the agent should not inspect |
+| Authority         | Why it is distinct                                                  |
+| ----------------- | ------------------------------------------------------------------- |
+| network transport | `fetch` and `push` communicate outside the daemon boundary          |
+| credentials       | authenticated remotes must use secrets the agent should not inspect |
 
 Keeping them separate means each authority can be granted, revoked, and audited independently, and a guest with one of them does not implicitly hold the others.
 The local and remote designs ship close together for product reasons but stay separate capabilities for authority-isolation reasons.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| [daemon-git-capability](daemon-git-capability.md) | Required local repository capability. |
-| [daemon-mount-capabilities](daemon-mount-capabilities.md) | Required indirectly through local `Git`. |
-| [cli-http-client](cli-http-client.md) | Controller / client split for policy-bearing network capabilities. |
-| [trust-on-first-bind](trust-on-first-bind.md) | Reusable policy-binding pattern for first-seen remote endpoints. |
-| [endoclaw-network-fetch](endoclaw-network-fetch.md) | Earlier HTTP capability note; superseded in part by `cli-http-client`. |
-| [endoclaw-oauth](endoclaw-oauth.md) | Existing non-extractable credential pattern, useful by analogy. |
-| [daemon-capability-bank](daemon-capability-bank.md) | Broader resource-category framing for network, git, and credentials. |
+| Design                                                    | Relationship                                                           |
+| --------------------------------------------------------- | ---------------------------------------------------------------------- |
+| [daemon-git-capability](daemon-git-capability.md)         | Required local repository capability.                                  |
+| [daemon-mount-capabilities](daemon-mount-capabilities.md) | Required indirectly through local `Git`.                               |
+| [cli-http-client](cli-http-client.md)                     | Controller / client split for policy-bearing network capabilities.     |
+| [trust-on-first-bind](trust-on-first-bind.md)             | Reusable policy-binding pattern for first-seen remote endpoints.       |
+| [endoclaw-network-fetch](endoclaw-network-fetch.md)       | Earlier HTTP capability note; superseded in part by `cli-http-client`. |
+| [endoclaw-oauth](endoclaw-oauth.md)                       | Existing non-extractable credential pattern, useful by analogy.        |
+| [daemon-capability-bank](daemon-capability-bank.md)       | Broader resource-category framing for network, git, and credentials.   |
 
 ## Capability Model
 
 ### Guest-Visible Facets
 
-| Capability | Role |
-|---|---|
-| `Git` | Local repository and worktree authority |
-| `GitRemote` | Authority to use one configured remote endpoint with bounded operations |
+| Capability     | Role                                                                             |
+| -------------- | -------------------------------------------------------------------------------- |
+| `Git`          | Local repository and worktree authority                                          |
+| `GitRemote`    | Authority to use one configured remote endpoint with bounded operations          |
 | `GitRemoteSet` | Optional collection capability for named remotes associated with one local `Git` |
 
 ### Construction Inputs
 
-| Capability | Role |
-|---|---|
-| HTTPS transport cap | Outbound network authority, initially modeled by `HttpClient`-like origin policy |
-| `BearerCredential` / `BasicCredential` | Non-extractable authentication-use authority |
+| Capability                             | Role                                                                             |
+| -------------------------------------- | -------------------------------------------------------------------------------- |
+| HTTPS transport cap                    | Outbound network authority, initially modeled by `HttpClient`-like origin policy |
+| `BearerCredential` / `BasicCredential` | Non-extractable authentication-use authority                                     |
 
 ### Host-Private / Controller Facets
 
-| Capability | Role |
-|---|---|
-| `GitRemoteController` | Host-held policy facet for endpoint, allowed refs, direction, revocation, and inspection |
-| `GitCredentialController` | Host-held facet that installs, rotates, or revokes credential material |
-| transport-specific backing | Trusted implementation detail used by native git or another backend |
+| Capability                 | Role                                                                                     |
+| -------------------------- | ---------------------------------------------------------------------------------------- |
+| `GitRemoteController`      | Host-held policy facet for endpoint, allowed refs, direction, revocation, and inspection |
+| `GitCredentialController`  | Host-held facet that installs, rotates, or revokes credential material                   |
+| transport-specific backing | Trusted implementation detail used by native git or another backend                      |
 
-The agent-facing remote capability should be able to *use* a remote, not retarget it, widen its branch policy, or read the secret backing it.
+The agent-facing remote capability should be able to _use_ a remote, not retarget it, widen its branch policy, or read the secret backing it.
 
 `GitRemote` is the guest-visible bounded remote-use authority for one git endpoint.
 It is constructed from separate local-repository, transport, and credential capabilities.
@@ -187,10 +187,7 @@ interface GitRemote {
   // `pushRefspecs` at construction time and is not re-surfaced here.
   inspect(): Promise<GitRemotePolicy & { name: string }>;
 
-  fetch(options?: {
-    prune?: boolean;
-    tags?: boolean;
-  }): Promise<GitFetchResult>;
+  fetch(options?: { prune?: boolean; tags?: boolean }): Promise<GitFetchResult>;
 
   // strategy uses an enum string rather than a tagged union because pull is
   // a one-shot operation with mutually-exclusive integration choices, not a
@@ -216,8 +213,14 @@ interface GitRemote {
 type GitRefUpdate = {
   local?: GitRef; // present on push and on fetches that update tracking refs
   remote: GitRef | string; // GitRef when known structurally, string otherwise
-  result: 'created' | 'updated' | 'up-to-date' | 'fast-forward'
-    | 'forced' | 'pruned' | 'rejected';
+  result:
+    | 'created'
+    | 'updated'
+    | 'up-to-date'
+    | 'fast-forward'
+    | 'forced'
+    | 'pruned'
+    | 'rejected';
 };
 
 type GitFetchResult = {
@@ -321,7 +324,7 @@ const remote = await E(host).provideGitRemote({
 ```
 
 The exact maker names are placeholders.
-Phase 5 (see *Implementation Plan*) adds a sibling `provideGitRemoteController()` that returns the host-held controller for revocation / policy updates; until then, the operator's only post-setup lever is `revoke()` on the credential cap.
+Phase 5 (see _Implementation Plan_) adds a sibling `provideGitRemoteController()` that returns the host-held controller for revocation / policy updates; until then, the operator's only post-setup lever is `revoke()` on the credential cap.
 
 The required properties are:
 
@@ -344,7 +347,7 @@ Reasons:
 - revocation is per-bundle: revoking the credential invalidates exactly the bundles that used it, no more.
 
 The cost is that the guest holding `GitRemote` cannot observe events that touch one bundled authority without holding the controller for that authority too: a credential identity rotation (the operator swapping the bearer token behind a `BearerCredential` via `GitCredentialController.rotate()`) is invisible to the agent unless the agent is also granted the credential controller, which would defeat the non-extractable-credential guarantee.
-The agent sees only "fetch succeeded" or "fetch failed with credential-revoked"; observing *which* credential identity served a given fetch requires the host-side audit surface.
+The agent sees only "fetch succeeded" or "fetch failed with credential-revoked"; observing _which_ credential identity served a given fetch requires the host-side audit surface.
 This is the deliberate trade-off the bundling pattern makes: an agent that wants finer-grained visibility into one of the three authority axes has to either hold the controller for it (and accept the wider authority) or read the host-retained audit log.
 
 The host-side **decomposition** surface is the Phase 5 controllers (`GitRemoteController`, `GitCredentialController`).
@@ -412,14 +415,14 @@ This belongs in the controller layer, not in the guest-held remote cap.
 The combinations below catch the subtle failure modes where a refspec form and a policy flag interact (`+` force prefix vs. `allowForcePush`, deletion refspecs vs. `allowDelete`, tag refspecs vs. `allowTags`, short vs. fully-qualified names, wildcard scopes, and the `allowedBranches` vs. `pushRefspecs` shortcut).
 The implementation should reject the listed "Rejected" forms with a structured error citing the offending policy field and the specific refspec / flag combination.
 
-| Policy field | Accepted forms | Rejected forms | Validation rule |
-|---|---|---|---|
-| `fetchRefspecs` | Fully-qualified refs (`refs/heads/main:refs/remotes/origin/main`); wildcards under a fixed parent (`+refs/heads/*:refs/remotes/origin/*`); leading `+` force prefix to update non-fast-forward remote-tracking refs (fetch-side force is local-only and does not require `allowForcePush`); deletion refspecs (`:refs/remotes/origin/foo`) only when `allowDelete: true` | Short names (`main:origin/main`); refspecs whose destination lies outside `refs/remotes/<remote-name>/`; tag refspecs (`refs/tags/*`) when `allowTags: false`; deletion refspecs when `allowDelete: false` | At construction, every fetch refspec must parse to `[+]<src>:<dst>` where `<dst>` is rooted at `refs/remotes/<remote-name>/`; deletion forms (empty `<src>`) require `allowDelete: true`; tag-prefix sources require `allowTags: true` |
-| `pushRefspecs` | Fully-qualified source and destination (`refs/heads/agent/main:refs/heads/agent/main`); wildcards under a fixed parent on both sides (`refs/heads/agent/*:refs/heads/agent/*`); leading `+` only when `allowForcePush: true`; deletion refspecs (`:refs/heads/foo`) only when `allowDelete: true`; tag-source refspecs only when `allowTags: true` | Short names; `+`-prefixed refspecs when `allowForcePush: false`; deletion refspecs when `allowDelete: false`; tag refspecs when `allowTags: false`; refspecs whose source resolves outside the local repo's `refs/` namespace | Mirror of `fetchRefspecs` validation, plus the force / delete / tag flag interactions; the source side must be a known local ref namespace, not an arbitrary string |
-| `allowedBranches` | A list of branch names or `refs/heads/<glob>` patterns interpreted as a shortcut: equivalent to a derived `pushRefspecs` of `refs/heads/<b>:refs/heads/<b>` for each branch, AND a destination-side filter on any explicit `pushRefspecs` | Short names with no `refs/heads/` anchoring that would also match tags or remote-tracking refs by accident | If both `allowedBranches` and `pushRefspecs` are set, the union is forbidden: the policy must choose one mode.  If only `allowedBranches` is set, the implementation derives `pushRefspecs` from it.  If `pushRefspecs` is empty AND `allowedBranches` is empty, push is rejected entirely (a push-direction remote with no allowed targets is misconfigured, not "permit nothing"; the operator must say so explicitly with `allowedDirections: ['fetch']`) |
-| `allowTags` | `true` to allow tag refspecs in fetch and push (`refs/tags/*` on either side); `false` (default) to reject any tag-prefix refspec | Tag refspecs when `false` | Validated at refspec-parse time against both `fetchRefspecs` and `pushRefspecs` |
-| `allowDelete` | `true` to allow deletion refspecs (empty `<src>`) in fetch (`:refs/remotes/origin/foo`) and push (`:refs/heads/foo`); `false` (default) to reject deletion forms | Deletion refspecs when `false` | Deletion form is detected by an empty `<src>` in `[+]<src>:<dst>`; both directions are gated by the same flag |
-| `allowForcePush` | `true` to allow leading `+` on `pushRefspecs` entries; `false` (default) to reject the `+` prefix on push.  Fetch-side `+` is unaffected (remote-tracking refs are local). | `+`-prefixed push refspecs when `false`; non-`+` push refspecs that the server reports as non-fast-forward (the local validation cannot detect this; the post-push response check fail-closes) | Local validation rejects the `+` prefix at refspec-parse time; the post-push response check rejects an upstream non-fast-forward result regardless of the `+` flag |
+| Policy field      | Accepted forms                                                                                                                                                                                                                                                                                                                                                           | Rejected forms                                                                                                                                                                                                                | Validation rule                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fetchRefspecs`   | Fully-qualified refs (`refs/heads/main:refs/remotes/origin/main`); wildcards under a fixed parent (`+refs/heads/*:refs/remotes/origin/*`); leading `+` force prefix to update non-fast-forward remote-tracking refs (fetch-side force is local-only and does not require `allowForcePush`); deletion refspecs (`:refs/remotes/origin/foo`) only when `allowDelete: true` | Short names (`main:origin/main`); refspecs whose destination lies outside `refs/remotes/<remote-name>/`; tag refspecs (`refs/tags/*`) when `allowTags: false`; deletion refspecs when `allowDelete: false`                    | At construction, every fetch refspec must parse to `[+]<src>:<dst>` where `<dst>` is rooted at `refs/remotes/<remote-name>/`; deletion forms (empty `<src>`) require `allowDelete: true`; tag-prefix sources require `allowTags: true`                                                                                                                                                                                                                     |
+| `pushRefspecs`    | Fully-qualified source and destination (`refs/heads/agent/main:refs/heads/agent/main`); wildcards under a fixed parent on both sides (`refs/heads/agent/*:refs/heads/agent/*`); leading `+` only when `allowForcePush: true`; deletion refspecs (`:refs/heads/foo`) only when `allowDelete: true`; tag-source refspecs only when `allowTags: true`                       | Short names; `+`-prefixed refspecs when `allowForcePush: false`; deletion refspecs when `allowDelete: false`; tag refspecs when `allowTags: false`; refspecs whose source resolves outside the local repo's `refs/` namespace | Mirror of `fetchRefspecs` validation, plus the force / delete / tag flag interactions; the source side must be a known local ref namespace, not an arbitrary string                                                                                                                                                                                                                                                                                        |
+| `allowedBranches` | A list of branch names or `refs/heads/<glob>` patterns interpreted as a shortcut: equivalent to a derived `pushRefspecs` of `refs/heads/<b>:refs/heads/<b>` for each branch, AND a destination-side filter on any explicit `pushRefspecs`                                                                                                                                | Short names with no `refs/heads/` anchoring that would also match tags or remote-tracking refs by accident                                                                                                                    | If both `allowedBranches` and `pushRefspecs` are set, the union is forbidden: the policy must choose one mode. If only `allowedBranches` is set, the implementation derives `pushRefspecs` from it. If `pushRefspecs` is empty AND `allowedBranches` is empty, push is rejected entirely (a push-direction remote with no allowed targets is misconfigured, not "permit nothing"; the operator must say so explicitly with `allowedDirections: ['fetch']`) |
+| `allowTags`       | `true` to allow tag refspecs in fetch and push (`refs/tags/*` on either side); `false` (default) to reject any tag-prefix refspec                                                                                                                                                                                                                                        | Tag refspecs when `false`                                                                                                                                                                                                     | Validated at refspec-parse time against both `fetchRefspecs` and `pushRefspecs`                                                                                                                                                                                                                                                                                                                                                                            |
+| `allowDelete`     | `true` to allow deletion refspecs (empty `<src>`) in fetch (`:refs/remotes/origin/foo`) and push (`:refs/heads/foo`); `false` (default) to reject deletion forms                                                                                                                                                                                                         | Deletion refspecs when `false`                                                                                                                                                                                                | Deletion form is detected by an empty `<src>` in `[+]<src>:<dst>`; both directions are gated by the same flag                                                                                                                                                                                                                                                                                                                                              |
+| `allowForcePush`  | `true` to allow leading `+` on `pushRefspecs` entries; `false` (default) to reject the `+` prefix on push. Fetch-side `+` is unaffected (remote-tracking refs are local).                                                                                                                                                                                                | `+`-prefixed push refspecs when `false`; non-`+` push refspecs that the server reports as non-fast-forward (the local validation cannot detect this; the post-push response check fail-closes)                                | Local validation rejects the `+` prefix at refspec-parse time; the post-push response check rejects an upstream non-fast-forward result regardless of the `+` flag                                                                                                                                                                                                                                                                                         |
 
 ## Operation Semantics
 
@@ -515,13 +518,13 @@ The exact bootstrap API is a follow-up design point because it must combine moun
 
 ### Authority Separation
 
-| Capability | Grants |
-|---|---|
-| `Git` | local repository operations |
-| transport cap | outbound network access bounded by origin / transport policy |
-| `GitRemote` | bounded use of one remote |
-| `GitRemote` endpoint policy | bounded access to one remote endpoint |
-| credential cap | non-extractable authentication use |
+| Capability                  | Grants                                                       |
+| --------------------------- | ------------------------------------------------------------ |
+| `Git`                       | local repository operations                                  |
+| transport cap               | outbound network access bounded by origin / transport policy |
+| `GitRemote`                 | bounded use of one remote                                    |
+| `GitRemote` endpoint policy | bounded access to one remote endpoint                        |
+| credential cap              | non-extractable authentication use                           |
 
 The guest-held `GitRemote` intentionally composes bounded local-repository use, outbound transport, endpoint use, and credential use for one remote.
 The host-held controllers remain separate so endpoint policy and credential state can be revoked or changed independently.
@@ -606,8 +609,8 @@ This defends the parser against future git-cli format drift without silently mis
 Forward-defense; not a current correctness gap.
 
 These two concerns are orthogonal and should not be conflated.
-A **secret manager** answers *where durable secret authority lives*: a daemon-owned (or external) capability that holds, rotates, and revokes credentials across restarts and across multiple repos.
-The **fd-based askpass** answers *how one native-git invocation receives the secret without disk, env, or argv exposure*: it is the in-process injection envelope, not a place to durably store anything.
+A **secret manager** answers _where durable secret authority lives_: a daemon-owned (or external) capability that holds, rotates, and revokes credentials across restarts and across multiple repos.
+The **fd-based askpass** answers _how one native-git invocation receives the secret without disk, env, or argv exposure_: it is the in-process injection envelope, not a place to durably store anything.
 The long-term home for durable authority is [daemon-capability-bank](daemon-capability-bank.md); once it lands, the askpass helper should fetch the credential from that bank (or an external secret manager it fronts) on demand rather than reading from git's own credential store, which keeps `.git` restartable without making git credential files durable.
 Until then, Phase 1 ships the askpass envelope on its own and treats bank-backed sourcing as the planned follow-up for unattended, multi-repo, post-restart workflows.
 
@@ -671,7 +674,7 @@ The public `GitRemote` contract should survive those swaps.
 - [ ] Add `git-remote` formula type bound to a local `Git`.
 - [ ] Add a host method to mint a `GitRemote` with policy baked in at construction (`provideGitRemote({...})`), including fetch-only, push-limited, and branch-limited validation.
 - [ ] The minimum viable agent flow (fetch + ff-only-pull + branch-limited push) is exercised end-to-end on this surface, with no controller in sight.
-  Controllers come in Phase 5.
+      Controllers come in Phase 5.
 
 ### Phase 2: HTTPS Credentialed Fetch
 
@@ -698,7 +701,7 @@ The public `GitRemote` contract should survive those swaps.
 
 - [ ] Add `GitRemoteController` and `GitCredentialController` for post-construction policy updates and revocation.
 - [ ] Add `GitRemoteSet` if a collection capability is useful (host can also defer this).
-- [ ] Wire `revoke()` against in-flight operations (see *daemon-restart mid-operation* in the testing plan).
+- [ ] Wire `revoke()` against in-flight operations (see _daemon-restart mid-operation_ in the testing plan).
 - [ ] The agent-facing surface from Phase 1 does not change; controllers add a parallel host-held authority for ops-team work.
 
 ### Phase 6: Interactive Provisioning

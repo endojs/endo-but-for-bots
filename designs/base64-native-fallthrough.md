@@ -1,11 +1,11 @@
 ## `@endo/base64` — Native `Uint8Array` Base64 Fallthrough
 
-| | |
-|---|---|
-| **Created** | 2026-04-23 |
-| **Updated** | 2026-05-18 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-04-23            |
+| **Updated** | 2026-05-18            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | **Complete**          |
 
 ## Status
 
@@ -68,7 +68,7 @@ export const encodeBase64 =
 ```
 
 That mechanism is XS-specific and predates the TC39 proposal.
-It also selects at module load time, which happens *before* SES
+It also selects at module load time, which happens _before_ SES
 lockdown in some embeddings, and so it reads a possibly-mutable
 `globalThis.Base64` that no longer exists on modern XS builds.
 
@@ -103,10 +103,8 @@ The native intrinsics, when present, are available as:
 Detection is a feature test that runs once at module initialization:
 
 ```js
-const hasNativeToBase64 =
-  typeof Uint8Array.prototype.toBase64 === 'function';
-const hasNativeFromBase64 =
-  typeof Uint8Array.fromBase64 === 'function';
+const hasNativeToBase64 = typeof Uint8Array.prototype.toBase64 === 'function';
+const hasNativeFromBase64 = typeof Uint8Array.fromBase64 === 'function';
 ```
 
 These are independent.
@@ -114,7 +112,7 @@ A correct proposal implementation ships both, but we feature-test each
 separately so that a partial or hand-patched environment does not
 silently fall back on both paths when only one is missing.
 
-The test runs *before* `lockdown()` freezes the intrinsics.
+The test runs _before_ `lockdown()` freezes the intrinsics.
 Because `@endo/base64` is a plain ESM module and SES performs lockdown
 at a known point in the host bootstrap, the module's top level executes
 early — `globalThis`, `Uint8Array`, and `Uint8Array.prototype` are still
@@ -146,9 +144,7 @@ export const encodeBase64 =
 harden(encodeBase64);
 
 export const decodeBase64 =
-  typeof nativeFromBase64 === 'function'
-    ? decodeBase64Native
-    : jsDecodeBase64;
+  typeof nativeFromBase64 === 'function' ? decodeBase64Native : jsDecodeBase64;
 harden(decodeBase64);
 ```
 
@@ -212,11 +208,11 @@ dispatcher.
 
 The native intrinsics accept an option bag with three relevant fields:
 
-| Option | Values | @endo/base64 default |
-|---|---|---|
-| `alphabet` | `'base64'`, `'base64url'` | `'base64'` (the `A-Za-z0-9+/` set) |
+| Option              | Values                                         | @endo/base64 default                        |
+| ------------------- | ---------------------------------------------- | ------------------------------------------- |
+| `alphabet`          | `'base64'`, `'base64url'`                      | `'base64'` (the `A-Za-z0-9+/` set)          |
 | `lastChunkHandling` | `'loose'`, `'strict'`, `'stop-before-partial'` | `'strict'` (reject incomplete final chunks) |
-| `omitPadding` | `true`, `false` | `false` (emit `=` padding) |
+| `omitPadding`       | `true`, `false`                                | `false` (emit `=` padding)                  |
 
 The existing `@endo/base64` polyfill:
 
@@ -244,7 +240,7 @@ observably equivalent to the JS polyfill for all well-formed inputs.
 
 The native `Uint8Array.fromBase64` throws `SyntaxError` with
 implementation-defined messages.
-The error *constructor* and *message text* are not part of the
+The error _constructor_ and _message text_ are not part of the
 `@endo/base64` public contract — the existing test suite regex-matches
 specific substrings but it does so against its own polyfill, and no
 downstream consumer in the monorepo (checked across `@endo/daemon`,
@@ -370,13 +366,13 @@ On the native path it is ignored (see Error Semantics above).
 For well-formed inputs there is no observable difference.
 For malformed inputs:
 
-| Malformed input | JS path | Native path |
-|---|---|---|
-| `'%'` | `Error: Invalid base64 character % ...` | `SyntaxError: ...` |
-| `'Z'` (missing padding) | `Error: Missing padding at offset 1 ...` | `SyntaxError: ...` |
-| `'Zg==%'` (trailing garbage) | `Error: ... trailing garbage % ...` | `SyntaxError: ...` |
+| Malformed input              | JS path                                  | Native path        |
+| ---------------------------- | ---------------------------------------- | ------------------ |
+| `'%'`                        | `Error: Invalid base64 character % ...`  | `SyntaxError: ...` |
+| `'Z'` (missing padding)      | `Error: Missing padding at offset 1 ...` | `SyntaxError: ...` |
+| `'Zg==%'` (trailing garbage) | `Error: ... trailing garbage % ...`      | `SyntaxError: ...` |
 
-The error *type* widens from `Error` to `SyntaxError | Error`, and the
+The error _type_ widens from `Error` to `SyntaxError | Error`, and the
 message text changes.
 Consumers who today `try { decodeBase64(x) } catch (_) { ... }` continue
 to work.
@@ -423,9 +419,10 @@ driven by environment variables:
 /* global process */
 // @ts-check
 
-const force = typeof process !== 'undefined' && process.env
-  ? process.env.ENDO_BASE64_FORCE
-  : undefined;
+const force =
+  typeof process !== 'undefined' && process.env
+    ? process.env.ENDO_BASE64_FORCE
+    : undefined;
 
 export const forcedPath =
   force === 'native' || force === 'polyfill' ? force : undefined;
@@ -439,7 +436,7 @@ The dispatchers in `encode.js` and `decode.js` consult `forcedPath`:
   module load if the intrinsics are absent.
 - Unset — use native if present, else polyfill.
 
-This gating is a *test-only affordance*.
+This gating is a _test-only affordance_.
 In production the env var is unset and detection is automatic.
 We do **not** ship a runtime switch on `globalThis` because that would
 create a footgun: any tenant in a multi-tenant realm could flip the
@@ -495,11 +492,11 @@ entry.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| `@endo/hex` (sibling, parallel proposal) | Same ponyfill-shim pattern applied to `Uint8Array.fromHex` / `Uint8Array.prototype.toHex`. Structurally isomorphic modules; shared testing strategy. |
-| `daemon-message-streaming` | Heavy consumer of `encodeBase64` / `decodeBase64` via `@endo/exo-stream`. Benefits proportionally from native throughput on every base64-encoded stream chunk. |
-| `platform-fs` | `@endo/platform/fs/reader-ref.js` wraps `encodeBase64` in a `mapReader`. Benefits from this change transparently. |
+| Design                                   | Relationship                                                                                                                                                   |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@endo/hex` (sibling, parallel proposal) | Same ponyfill-shim pattern applied to `Uint8Array.fromHex` / `Uint8Array.prototype.toHex`. Structurally isomorphic modules; shared testing strategy.           |
+| `daemon-message-streaming`               | Heavy consumer of `encodeBase64` / `decodeBase64` via `@endo/exo-stream`. Benefits proportionally from native throughput on every base64-encoded stream chunk. |
+| `platform-fs`                            | `@endo/platform/fs/reader-ref.js` wraps `encodeBase64` in a `mapReader`. Benefits from this change transparently.                                              |
 
 ## Phases
 
@@ -597,7 +594,7 @@ No public API change; no version bump beyond patch.
    Earlier XSnap builds still ship `globalThis.Base64` and no native
    `Uint8Array.fromBase64`.
    If either of those runtime variants is supported, the dispatch in
-   `src/native.js` can fall through a *second* time to
+   `src/native.js` can fall through a _second_ time to
    `globalThis.Base64.encode` / `globalThis.Base64.decode` before
    giving up and selecting the pure-JS polyfill.
    The adapter for the `globalThis.Base64.decode` case that returns

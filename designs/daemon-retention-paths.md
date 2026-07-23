@@ -1,11 +1,11 @@
 # Retention Paths Inspector
 
-| | |
-|---|---|
-| **Created** | 2026-04-30 |
-| **Updated** | 2026-05-19 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-04-30            |
+| **Updated** | 2026-05-19            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | In Progress           |
 
 ## Status
 
@@ -34,8 +34,8 @@ open PR rather than a merged change.
 
 ### What PR #284 delivers
 
-PR #284 collapses the design's *Phase 1 (Daemon snapshot API)*,
-*Phase 2 (Subscription API)*, and *Phase 3 (CLI)* into a single
+PR #284 collapses the design's _Phase 1 (Daemon snapshot API)_,
+_Phase 2 (Subscription API)_, and _Phase 3 (CLI)_ into a single
 PR, on the rationale that the subscription form matches the
 existing `followNameChanges` / `followLocatorNameChanges` shape
 and adds little surface area beyond the snapshot, and that the
@@ -44,8 +44,8 @@ CLI verb is a thin wrapper that exercises the same daemon API.
 What ships in the PR:
 
 - `EndoHost.listRetentionPaths(locator)` returns the
-  `RetentionPath[]` shape defined under *Notation: paths and
-  segments* below.
+  `RetentionPath[]` shape defined under _Notation: paths and
+  segments_ below.
   Pet-store edges along each path render as `pet:<name>` labels
   via reverse-resolution of the upstream store's name table;
   field-name edges (`worker`, `petStore`, `retention`, etc.)
@@ -61,8 +61,8 @@ What ships in the PR:
   matching `followNameChanges`.
 - `endo paths <name-or-locator>` CLI verb with `--locator` and
   `--json` flags.
-  Default output is the per-path block notation from *CLI: endo
-  paths* below; `--json` emits the raw `RetentionPath[]`.
+  Default output is the per-path block notation from _CLI: endo
+  paths_ below; `--json` emits the raw `RetentionPath[]`.
 - Both methods live on the host facet only, never on `EndoGuest`
   or the CapTP gateway: enumerating paths through capabilities a
   guest does not own would reveal host structure.
@@ -85,7 +85,7 @@ What is deferred to follow-up work:
   output at the host layer.
   A future cut may move the label-normalization into `graph.js`
   itself once the right edge-event topic shape is settled (see
-  *Known Gaps and TODOs* below).
+  _Known Gaps and TODOs_ below).
 - **Finer-grained edge-event topic**: Phase 1 uses
   `formulaChangeTopic` as the coarse change signal for the
   subscription's recompute trigger.
@@ -130,12 +130,12 @@ workers panel; the components below are intentionally reusable.
 This design **partially supersedes** two existing designs by extracting
 a shared retention-path component out of each:
 
-| Design | Overlap | Resolution |
-|---|---|---|
-| `formula-inspector` (Not Started) | Mentions "Provide a facility for revealing every retention path in the formula graph for identified formulas" as a one-line aside. | The retention-path facility moves here; `formula-inspector` remains responsible for *non-retention* metadata (formula type, fields, source, etc.). The two compose: the inspector panel in Chat embeds the paths panel below the formula fields. |
-| `workers-panel` (Not Started) | Has a "Pet Name Retention Paths" subsection with a proposed `E(agent).retentionPath(petName)` API returning a flat array. | The workers panel keeps its event-loop-latency sparkline and tenant list, but imports the paths viewer from this design rather than defining its own. The flat-array API in `workers-panel.md` is replaced by the richer `RetentionPath[]` shape defined here. |
+| Design                            | Overlap                                                                                                                            | Resolution                                                                                                                                                                                                                                                     |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `formula-inspector` (Not Started) | Mentions "Provide a facility for revealing every retention path in the formula graph for identified formulas" as a one-line aside. | The retention-path facility moves here; `formula-inspector` remains responsible for _non-retention_ metadata (formula type, fields, source, etc.). The two compose: the inspector panel in Chat embeds the paths panel below the formula fields.               |
+| `workers-panel` (Not Started)     | Has a "Pet Name Retention Paths" subsection with a proposed `E(agent).retentionPath(petName)` API returning a flat array.          | The workers panel keeps its event-loop-latency sparkline and tenant list, but imports the paths viewer from this design rather than defining its own. The flat-array API in `workers-panel.md` is replaced by the richer `RetentionPath[]` shape defined here. |
 
-`daemon-cross-peer-gc` (Complete) supplies one of the *kinds* of edges
+`daemon-cross-peer-gc` (Complete) supplies one of the _kinds_ of edges
 this design surfaces: `retention` edges from a peer's local agent ID
 to formulas that peer is keeping alive.
 This design does not change the cross-peer mechanism; it just renders
@@ -169,7 +169,7 @@ type RetentionPath = RetentionPathSegment[];
 ```
 
 The leaf segment is the target group; subsequent segments walk
-*upstream* toward a root.
+_upstream_ toward a root.
 This matches `listRetentionPaths` already.
 
 ### Edge-label conventions
@@ -177,15 +177,15 @@ This matches `listRetentionPaths` already.
 `graph.js` already records labels on `addLabeledEdge`.
 The labels we expose:
 
-| Label form | Meaning | Source |
-|---|---|---|
-| `pet:<name>` | The upstream's pet store contains the literal pet name `<name>` mapping to a formula in this group. | `onPetStoreWrite` paths |
-| `<field>` (e.g. `worker`, `handle`, `petStore`, `hub`, `powers`, `slot0`, `bundle`, `agent`, `mailbox`, `mailHub`, `inspector`, `endo`, `networks`, `pins`) | A static formula-field reference. | `extractLabeledDeps` in `daemon.js:476` |
-| `retention` | A cross-peer retention edge: the upstream agent's peer is holding this formula. | `formulaGraph.addRetention` |
-| `transient` | A short-lived pin held by an in-flight host operation. | `transientRoots` |
+| Label form                                                                                                                                                  | Meaning                                                                                             | Source                                  |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| `pet:<name>`                                                                                                                                                | The upstream's pet store contains the literal pet name `<name>` mapping to a formula in this group. | `onPetStoreWrite` paths                 |
+| `<field>` (e.g. `worker`, `handle`, `petStore`, `hub`, `powers`, `slot0`, `bundle`, `agent`, `mailbox`, `mailHub`, `inspector`, `endo`, `networks`, `pins`) | A static formula-field reference.                                                                   | `extractLabeledDeps` in `daemon.js:476` |
+| `retention`                                                                                                                                                 | A cross-peer retention edge: the upstream agent's peer is holding this formula.                     | `formulaGraph.addRetention`             |
+| `transient`                                                                                                                                                 | A short-lived pin held by an in-flight host operation.                                              | `transientRoots`                        |
 
 The `pet:` prefix is the central point of the user's request: the CLI
-and UI must distinguish *human-facing names* from *internal links*.
+and UI must distinguish _human-facing names_ from _internal links_.
 The prefix is unambiguous because pet names never start with `:`.
 
 ### Daemon surface (host-only)
@@ -199,9 +199,7 @@ interface EndoHost {
    * Snapshot every retention path from a GC root to the target.
    * Locator is in the same string form as `locate()`.
    */
-  listRetentionPaths(
-    locator: string,
-  ): Promise<RetentionPath[]>;
+  listRetentionPaths(locator: string): Promise<RetentionPath[]>;
 
   /**
    * Stream retention-path snapshots for the target.  The first delta
@@ -227,7 +225,7 @@ type RetentionPathDelta =
 
 The first delta is always a `snapshot`.
 Subsequent deltas are diffs.
-A diff over a path uses *path equality* (deep equal on the segments'
+A diff over a path uses _path equality_ (deep equal on the segments'
 group representatives and labels) — not pointer identity.
 If the target locator becomes invalid (the formula has been
 collected), the iterator yields `{ snapshot: [] }` and ends.
@@ -266,7 +264,7 @@ topics — TBD in implementation; the spec is independent).
 What's missing:
 
 1. A `formulaGraphChangeTopic` (or extension of `formulaChangeTopic`
-   to carry edge-add / edge-remove events) that lets us know *when*
+   to carry edge-add / edge-remove events) that lets us know _when_
    to recompute.
 2. A debouncing wrapper that recomputes paths once per microtask
    batch — analogous to `retention-accumulator.js`.
@@ -274,7 +272,7 @@ What's missing:
 3. Diffing the new snapshot against the last-emitted snapshot to
    produce `{ added, removed }` deltas.
    Path equality is structural over `[referencedBy, labels[],
-   groupMembers[]]`.
+groupMembers[]]`.
 
 ### CLI: `endo paths`
 
@@ -287,7 +285,7 @@ endo paths <name-or-locator> [--locator] [--json]
   `listRetentionPaths`.
 - `--locator` interprets the argument as an already-encoded locator.
 - Default output is human-readable, one path per block, segments
-  newline-separated, with `pet:<name>` rendered as `<name>` in *bold*
+  newline-separated, with `pet:<name>` rendered as `<name>` in _bold_
   and field labels rendered as `→<field>` in italics.
   Each segment line shows the group's primary type (e.g. `pet-store`,
   `eval`, `handle`).
@@ -314,8 +312,8 @@ Path 2 (rooted at known-peers-store):
 
 The first path is human-named (the user's own pin).
 The second is a cross-peer retention edge from Bob's agent.
-The user can see at a glance that *if I unpin "shared-file" but
-disconnect from Bob, the value still survives via Bob's retention*.
+The user can see at a glance that _if I unpin "shared-file" but
+disconnect from Bob, the value still survives via Bob's retention_.
 
 ### Chat UI
 
@@ -391,7 +389,7 @@ The shipping requirements:
 
 - `followRetentionPaths(locator)` must coalesce updates in a
   microtask window so a `provideGuest` (which incarnates a chain of
-  ~7 dependent formulas) yields *one* delta, not seven.
+  ~7 dependent formulas) yields _one_ delta, not seven.
   Use the same accumulator pattern as
   `retention-accumulator.js`.
 - The first delta must arrive promptly even if there are no changes
@@ -402,12 +400,12 @@ The shipping requirements:
 
 ### Security
 
-| Concern | Mitigation |
-|---|---|
-| Guests learning host structure | Methods are on host/mail interfaces only; not in CapTP-exposed gateway. |
-| Cross-peer revelation | Retention edges from peers expose the peer's *agent ID*, which is already a host-known fact (it's in `known-peers-store`). The peer's *pet names* are never exposed — only the local node's edges, of which the peer's edge is one. |
-| Disincarnating critical formulas | The UI suppresses the button for `endo`, `host-agent`, the user's own agent, and any other formula on a deny-list maintained by the host. |
-| Pet-name removal cascades | Confirmation modal lists every name on the path before commit. |
+| Concern                          | Mitigation                                                                                                                                                                                                                          |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Guests learning host structure   | Methods are on host/mail interfaces only; not in CapTP-exposed gateway.                                                                                                                                                             |
+| Cross-peer revelation            | Retention edges from peers expose the peer's _agent ID_, which is already a host-known fact (it's in `known-peers-store`). The peer's _pet names_ are never exposed — only the local node's edges, of which the peer's edge is one. |
+| Disincarnating critical formulas | The UI suppresses the button for `endo`, `host-agent`, the user's own agent, and any other formula on a deny-list maintained by the host.                                                                                           |
+| Pet-name removal cascades        | Confirmation modal lists every name on the path before commit.                                                                                                                                                                      |
 
 ## Affected Packages
 
@@ -478,12 +476,12 @@ The shipping requirements:
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| `daemon-cross-peer-gc` (Complete) | Supplies the `retention` edge kind that this surface renders. |
+| Design                            | Relationship                                                            |
+| --------------------------------- | ----------------------------------------------------------------------- |
+| `daemon-cross-peer-gc` (Complete) | Supplies the `retention` edge kind that this surface renders.           |
 | `formula-inspector` (Not Started) | Embeds the paths panel; remains responsible for non-retention metadata. |
-| `workers-panel` (Not Started) | Imports the paths panel; flat-array API replaced by `RetentionPath[]`. |
-| `chat-components` (Complete) | Paths panel is a new chat-components-style component. |
+| `workers-panel` (Not Started)     | Imports the paths panel; flat-array API replaced by `RetentionPath[]`.  |
+| `chat-components` (Complete)      | Paths panel is a new chat-components-style component.                   |
 
 ## Design Decisions
 
@@ -497,7 +495,7 @@ The shipping requirements:
    Avoids an explicit `unsubscribe` method.
 4. **Microtask-coalesced deltas**, mirroring
    `retention-accumulator`.
-   A `provideGuest` should produce *one* delta.
+   A `provideGuest` should produce _one_ delta.
 5. **Disincarnate/reincarnate are existing daemon operations**,
    merely surfaced in the UI.
    We are not introducing a new lifecycle verb.
@@ -524,7 +522,7 @@ The shipping requirements:
 
 ## Prompt
 
-> Please propose a new design doc in designs/*.md. I would like
+> Please propose a new design doc in designs/\*.md. I would like
 > daemon hosts, not guests, to be able to list the retention paths
 > for a particular locator. The list should include every path,
 > including petnames in petstores and internal links to formulas.

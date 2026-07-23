@@ -1,11 +1,11 @@
 # Agent Tools: `@endo/endo-fs` `Filesystem`-backed Tool Group
 
-| | |
-|---|---|
-| **Created** | 2026-06-01 |
-| **Updated** | 2026-06-25 |
-| **Author** | 0xPatrick (prompted) |
-| **Status** | Superseded |
+|                   |                                         |
+| ----------------- | --------------------------------------- |
+| **Created**       | 2026-06-01                              |
+| **Updated**       | 2026-06-25                              |
+| **Author**        | 0xPatrick (prompted)                    |
+| **Status**        | Superseded                              |
 | **Superseded by** | [endo-agent-tools](endo-agent-tools.md) |
 
 > **Superseded.**
@@ -19,7 +19,7 @@
 > the live worktree and history through the unified substrate, and PR #523
 > shipped it: `makeMountReadTool` now builds through `makeTool` and emits
 > the canonical `ToolRecord` (`{ name, description, parameters,
-> inputSchema, invoke }`), at parity with the git tools and compatible with
+inputSchema, invoke }`), at parity with the git tools and compatible with
 > `toPiAgentTool`.
 > This document is retained for history; its security framing (the tool
 > holds a capability, not a path; fail-closed on revoke) carries over to
@@ -39,7 +39,7 @@ online".
 that capability-tool model; its 2026-05-18 revision routes local
 filesystem and git authority through a confined filesystem capability.
 
-Neither design says *how* a capability-filesystem tool group is
+Neither design says _how_ a capability-filesystem tool group is
 constructed, what its `schema` / `execute` records look like, how it
 slots into the `extra` array, or what happens when the underlying
 filesystem capability is revoked mid-session.
@@ -65,13 +65,13 @@ A `Filesystem` is not a flat path-keyed surface: it has no `readText`.
 child `Directory` or `File` eref; `E(file).open({ read: true })` returns
 an `OpenFile`, whose `read(offset, length)` yields a
 `PassableBytesReader` over the requested slice (Uint8Array can't cross
-CapTP directly, so bytes arrive base64-streamed). A read therefore *walks*
+CapTP directly, so bytes arrive base64-streamed). A read therefore _walks_
 the tree segment-by-segment rather than naming a whole path in one call.
 The package ships porcelain helpers for exactly this: `walk(root, segments)`
 chains the per-segment `lookup`s into one pipelined CapTP batch, and
 `collectBytes(reader)` drains a `PassableBytesReader` into one `Uint8Array`.
 Confinement is structural and enforced at two layers: `Directory.lookup`
-rejects the reserved names `.` and `..` (a `..` segment is *not* a parent
+rejects the reserved names `.` and `..` (a `..` segment is _not_ a parent
 traversal — it is an invalid name), and the disk backend's `realpath`
 containment check rejects any path — including one reached through a
 symlink — whose physical target escapes the filesystem root.
@@ -100,7 +100,7 @@ contributions composed in alongside the built-ins.
 
 ### What a mount-backed tool group is
 
-A *tool group* is a function that takes a capability and returns one or
+A _tool group_ is a function that takes a capability and returns one or
 more tool contributions shaped to drop into `makeAgentTools`' `extra`
 array.
 A single contribution is the same record shape `@endo/agent-tools`
@@ -154,7 +154,7 @@ filesystem group and surfaced for the maintainer in Open Questions:
 
 - **Name collisions.** The mount-read tool is named `mountReadText`
   (not `readText`) so it does not collide with Lal's built-in `readText`
-  (which reads from the *petname* namespace, a different surface). The
+  (which reads from the _petname_ namespace, a different surface). The
   built-in keeps its name; the capability tool takes a distinct one.
 - **Absent capability.** A filesystem-backed group is only added to
   `extra` when the caller already holds the `Filesystem`. There is no
@@ -246,7 +246,7 @@ surface (`root` / `lookup` / `open` / `read`) and the `walk` /
 live in `packages/endo-fs/`. The confinement (the backend's `realpath`
 containment check, following symlinks) and the `..`-segment rejection
 (`Directory.lookup`'s reserved-name validator) are enforced inside the
-`Filesystem` exos, so the tool carries *no* path-safety logic of its
+`Filesystem` exos, so the tool carries _no_ path-safety logic of its
 own.
 What it needs that does **not** yet ship: `@endo/agent-tools` itself
 (its Phase-1 extraction) and the post-#290 tool seam (below).
@@ -255,7 +255,7 @@ The truncation cap keeps large reads bounded at 50 000 chars.
 
 ### Attenuation model
 
-Authority on a filesystem tool is shaped by attenuating the *`Filesystem`*
+Authority on a filesystem tool is shaped by attenuating the _`Filesystem`_
 handed to the maker, never by the tool gating itself:
 
 - **Read-only.** Pass `readOnly(fs)`. The returned `Filesystem` passes
@@ -265,11 +265,11 @@ handed to the maker, never by the tool gating itself:
   entirely on the read path, so it works unchanged over the read-only
   view; a write attempted through the same handle fails closed.
 - **Subtree scoping.** Pass `chroot(fs, subPath)` to hand the tool a
-  `Filesystem` whose root *is* the named subtree. A tool over it resolves
+  `Filesystem` whose root _is_ the named subtree. A tool over it resolves
   every path relative to the subtree and cannot name anything above it —
   a path that walks off the top is an `ENOENT`, not an escape.
 - **Destructive-op gating.** Write / move / remove tools are deferred
-  past the first slice. When they land they are *separate* makers
+  past the first slice. When they land they are _separate_ makers
   (`makeMountWriteTool`, etc.) added to `extra` only when a writable
   `Filesystem` is granted; a read-only deployment does not include
   them. Gating is by which makers the caller composes, not by a runtime
@@ -281,7 +281,7 @@ handed to the maker, never by the tool gating itself:
 A `Filesystem` is a daemon formula. When the formula is cancelled
 (`E(host).cancel(petName)`) or garbage-collected (the `Filesystem`
 becomes unreachable from any retained formula), the daemon tears down the
-exo. The tool holds an `ERef` to that exo, so the *next* `E(fs).root()`
+exo. The tool holds an `ERef` to that exo, so the _next_ `E(fs).root()`
 (or any deeper send in the walk) after revocation rejects — the
 eventual-send resolves to a rejection because the target no longer
 resolves.
@@ -297,7 +297,7 @@ Three operational properties follow:
    drop the authority.
 3. **Stale handles do not re-acquire authority.** Because the tool
    closes over the capability reference (not a path), a re-minted
-   `Filesystem` at the same path under a new formula id is a *different*
+   `Filesystem` at the same path under a new formula id is a _different_
    capability; the old tool's reference does not silently start working
    again. Re-granting is an explicit re-composition of `extra` with the
    new `Filesystem`.
@@ -344,7 +344,7 @@ the actual confinement and revocation behavior, not a stub.
    subtree is `ENOENT`.
 2. **Structural out-of-root access failure.** Assert
    `t.throwsAsync(() => execute({ path: '../secret' }), { message:
-   /reserved|EINVAL|ENOENT/ })` — the `..` segment is rejected by
+/reserved|EINVAL|ENOENT/ })` — the `..` segment is rejected by
    `Directory.lookup` (reserved name), not by the tool. Add a symlink
    inside the root pointing outside it and assert reading through it
    rejects (`/escapes filesystem root|EACCES|ENOENT/`), proving the guard
@@ -359,7 +359,7 @@ the actual confinement and revocation behavior, not a stub.
    filesystem fallback.
 4. **`extra`-seam integration.** Once `@endo/agent-tools` Phase 1 is
    landed: assert `makeAgentTools(powers, { extra: [makeMountReadTool(
-   mount)] })` surfaces `mountReadText` in `tools` and that
+mount)] })` surfaces `mountReadText` in `tools` and that
    `executeTool('mountReadText', { path })` routes to the group's
    `execute`. This test is gated on Phase 1 and may land with the
    integration, not the first slice.
@@ -375,7 +375,7 @@ This work has two hard predecessors, stated plainly:
    entangled with the pre-pi harness in `packages/lal/agent.js`. Building
    the `extra`-seam consumer against the pre-#290 file would mean writing
    against a tool seam that #290 reshapes. The mount-fs maker itself does
-   not import Lal, so it can be *written* independently, but its
+   not import Lal, so it can be _written_ independently, but its
    integration test (test 4) and the Lal-side composition example assume
    the post-#290 separated seam.
 
@@ -400,11 +400,11 @@ The capability itself (`@endo/endo-fs`, `makeNodeFilesystem`,
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|--------------|
-| [endo-gateway-mcp](endo-gateway-mcp.md) | Defines `@endo/agent-tools` and the `extra` seam this group plugs into. This design does not re-spec the package; it fills the "compose via `extra`" gap that design's Open Questions §1 leaves open for filesystem tools. |
-| [daemon-agent-tools](daemon-agent-tools.md) | Conceptual parent: the `Dir` / `Shell` / `Git` capability-tool model. Its 2026-05-18 revision routes fs authority through a confined filesystem capability; this design is the concrete first realization (Phase 1, filesystem, read slice) of that revised model over the `@endo/endo-fs` `Filesystem`. |
-| [daemon-mount-capabilities](daemon-mount-capabilities.md) | The legacy `EndoMount` capability and the `Filesystem` it bridges to via `mountAsFilesystem`. This group binds the `@endo/endo-fs` `Filesystem` surface directly; it deliberately uses no host-path accessor — the tool holds the capability, not a path. |
+| Design                                                    | Relationship                                                                                                                                                                                                                                                                                             |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [endo-gateway-mcp](endo-gateway-mcp.md)                   | Defines `@endo/agent-tools` and the `extra` seam this group plugs into. This design does not re-spec the package; it fills the "compose via `extra`" gap that design's Open Questions §1 leaves open for filesystem tools.                                                                               |
+| [daemon-agent-tools](daemon-agent-tools.md)               | Conceptual parent: the `Dir` / `Shell` / `Git` capability-tool model. Its 2026-05-18 revision routes fs authority through a confined filesystem capability; this design is the concrete first realization (Phase 1, filesystem, read slice) of that revised model over the `@endo/endo-fs` `Filesystem`. |
+| [daemon-mount-capabilities](daemon-mount-capabilities.md) | The legacy `EndoMount` capability and the `Filesystem` it bridges to via `mountAsFilesystem`. This group binds the `@endo/endo-fs` `Filesystem` surface directly; it deliberately uses no host-path accessor — the tool holds the capability, not a path.                                                |
 
 ## Design Decisions
 

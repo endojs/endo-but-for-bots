@@ -1,11 +1,11 @@
 # `mapSnapshot`: JS-Snapshot to Compartment-Map-Snapshot Mapper
 
-| | |
-|---|---|
-| **Created** | 2026-06-02 |
-| **Updated** | 2026-07-10 |
-| **Author** | endolinbot (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-06-02            |
+| **Updated** | 2026-07-10            |
+| **Author**  | endolinbot (prompted) |
+| **Status**  | Not Started           |
 
 ## Summary
 
@@ -13,7 +13,7 @@ A daemon-specific variation on `compartment-mapper.mapNodeModules`
 that takes a pair of daemon capabilities (an `EndoRegistry`
 capability and an `EndoMount` or `readable-tree` entry source) and
 produces a `CompartmentMap` whose locations follow the
-compartment-mapper *archive* precedent: a top-level
+compartment-mapper _archive_ precedent: a top-level
 `compartment-map.json` plus peer directories named by package
 (`@endo/patterns@1.0.0/`, `ses@2.3.4/`, and so on).
 The mapper output is the trio
@@ -64,26 +64,26 @@ exposes); the rest of `mapSnapshot` lives in `packages/daemon/`.
   and the mapper consumes `resolution.packagesByKey` directly.
 - Reading source bytes from the live mount.
   By contract (see
-  [registry-capability](registry-capability.md) § *Mount snapshot
-  vs live read*), the entry has been snapshotted before `mapSnapshot`
+  [registry-capability](registry-capability.md) § _Mount snapshot
+  vs live read_), the entry has been snapshotted before `mapSnapshot`
   runs, so the mapper reads from an immutable tree.
 - Hosting on XS.
   `compartment-mapper` cannot run on XS today; the deferred path
   is captured in
   [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md)
-  § *XS bridging*.
+  § _XS bridging_.
 
 ## Where This Sits
 
 This is the **mapper layer** of the daemon-worker
 `importLocation` stack:
 
-| Layer | Doc | Concern |
-|-------|-----|---------|
-| Capability | [registry-capability](registry-capability.md) | `EndoRegistry` shape, `@registry` slot, lifetime |
-| Algorithm | [mvs-resolver](mvs-resolver.md) | MVS walk, lockfile stance, who walks the graph |
-| Mapper | this | `mapSnapshot`, `makeMountReadPowers`, archive-precedent layout |
-| Integration | [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | `makeFromPackage`, worker dispatch, CLI, XS bridging |
+| Layer       | Doc                                                                   | Concern                                                        |
+| ----------- | --------------------------------------------------------------------- | -------------------------------------------------------------- |
+| Capability  | [registry-capability](registry-capability.md)                         | `EndoRegistry` shape, `@registry` slot, lifetime               |
+| Algorithm   | [mvs-resolver](mvs-resolver.md)                                       | MVS walk, lockfile stance, who walks the graph                 |
+| Mapper      | this                                                                  | `mapSnapshot`, `makeMountReadPowers`, archive-precedent layout |
+| Integration | [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | `makeFromPackage`, worker dispatch, CLI, XS bridging           |
 
 ## `mapSnapshot` in context
 
@@ -106,8 +106,8 @@ It lives in `packages/daemon/src/map-snapshot.js` as a
 daemon-specific variation on `mapNodeModules`, reusing the
 `compartment-mapper`'s internal package-descriptor and
 graph-walk modules through a small extension point that
-`compartment-mapper` exposes for that purpose (see § *Phased
-implementation* below; the extension point is the one new
+`compartment-mapper` exposes for that purpose (see § _Phased
+implementation_ below; the extension point is the one new
 addition to `compartment-mapper` itself, alongside re-exports of
 the package descriptor walker).
 
@@ -139,7 +139,7 @@ resolver and not in the integration layer: the entry
 `package.json` reaches `EndoRegistry.resolve` as opaque bytes
 with no location, so only the holder of the snapshot tree can
 perform the walk-up that
-[mvs-resolver](mvs-resolver.md) § *Workspace resolution*
+[mvs-resolver](mvs-resolver.md) § _Workspace resolution_
 describes.
 Keeping discovery here also keeps the resolver least-authoritative:
 it is handed only the workspace subtree it may read, never a
@@ -154,8 +154,8 @@ option as a `{ root, members }` pair: that directory's tree handle
 plus the enumerated members as a **name-keyed map**
 (`package name -> member subtree`, the glob-expansion result).
 Its exact shape is pinned in
-[registry-capability](registry-capability.md) § *Capability
-shape*, so the resolver matches `workspace:` specifiers against a
+[registry-capability](registry-capability.md) § _Capability
+shape_, so the resolver matches `workspace:` specifiers against a
 ready-made member list by name and never re-evaluates a glob.
 When none is found, `resolve` is called without `workspaceRoot`,
 and any `workspace:` specifier in the graph rejects with the
@@ -213,7 +213,7 @@ The peer directory naming rule:
   segment: `@endo/patterns/`, `lib-b/`.
   This is the maintainer-intended semantic: workspace members
   short-circuit version selection (per
-  [mvs-resolver](mvs-resolver.md) § *Workspace resolution*), so
+  [mvs-resolver](mvs-resolver.md) § _Workspace resolution_), so
   the layout reflects that they have no version segment to
   begin with.
   Workspace-member directories can never collide with
@@ -287,7 +287,7 @@ const makeMountReadPowers = ({ entryMount, registry, resolution }) => {
 The `compartment-mapper`'s package descriptor walk reads each
 importer's `package.json#dependencies` (and
 `peerDependencies`, `optionalDependencies`; per
-[mvs-resolver](mvs-resolver.md) § *Anti-design steers*), maps
+[mvs-resolver](mvs-resolver.md) § _Anti-design steers_), maps
 each bare specifier to the selected version (or workspace
 member) from `resolution.packagesByKey`, and emits the
 dependency compartment's peer-directory name accordingly.
@@ -311,14 +311,14 @@ on top of CAS trees rather than physically present on disk
 
 The translation `mapSnapshot` performs is:
 
-| npm concept | `RegistryResolution` field | `CompartmentMap` shape |
-|-------------|----------------------------|------------------------|
-| Selected `(name, version)` | `packagesByKey[key]`, where `key = '<name>@<version>'` | One compartment per key, with peer-directory `<name>@<version>/` |
-| Workspace member `name` | `packagesByKey[key]`, where `key = '<name>'` (no version segment) | One compartment per key, with peer-directory `<name>/` |
-| Importer's `dependencies['pkg']` | Lookup `(pkg, range)` against `packagesByKey` (workspace match preferred over registry match) | A compartment-map module record pointing at the selected version's compartment |
-| Importer's `dependencies` (transitive) | The same lookup, per importer | A per-compartment dependency map |
-| Package contents (the `.tgz` unpacked, or workspace-member directory bytes) | `packagesByKey[key].treeRef` | Compartment served by the archive-shaped `read` function from `<key>/` |
-| Entry module | Caller-supplied `entry?` or `compartment-mapper`'s default entry resolution | Compartment-map entry compartment, served from the top-level mount snapshot |
+| npm concept                                                                 | `RegistryResolution` field                                                                    | `CompartmentMap` shape                                                         |
+| --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Selected `(name, version)`                                                  | `packagesByKey[key]`, where `key = '<name>@<version>'`                                        | One compartment per key, with peer-directory `<name>@<version>/`               |
+| Workspace member `name`                                                     | `packagesByKey[key]`, where `key = '<name>'` (no version segment)                             | One compartment per key, with peer-directory `<name>/`                         |
+| Importer's `dependencies['pkg']`                                            | Lookup `(pkg, range)` against `packagesByKey` (workspace match preferred over registry match) | A compartment-map module record pointing at the selected version's compartment |
+| Importer's `dependencies` (transitive)                                      | The same lookup, per importer                                                                 | A per-compartment dependency map                                               |
+| Package contents (the `.tgz` unpacked, or workspace-member directory bytes) | `packagesByKey[key].treeRef`                                                                  | Compartment served by the archive-shaped `read` function from `<key>/`         |
+| Entry module                                                                | Caller-supplied `entry?` or `compartment-mapper`'s default entry resolution                   | Compartment-map entry compartment, served from the top-level mount snapshot    |
 
 The compartment-mapper already knows how to translate the
 right-hand side into the on-the-wire `CompartmentMap` shape (the
@@ -332,8 +332,8 @@ extension point this design adds to `compartment-mapper`.
 
 The mapper assumes the caller has snapshotted the entry mount
 before invocation, per the contract documented in
-[registry-capability](registry-capability.md) § *Mount snapshot
-vs live read*.
+[registry-capability](registry-capability.md) § _Mount snapshot
+vs live read_.
 For the common case where the caller has already passed a
 `readable-tree` (immutable), the snapshot step is a no-op; for
 the live-mount case, the integration layer in
@@ -343,7 +343,7 @@ calls `E(source).snapshot()` before reaching `mapSnapshot`.
 `mapSnapshot` also adds the hard retention link from the
 captured-formula-graph CAS contents that
 [registry-capability](registry-capability.md) §
-*Caching and retention* defines:
+_Caching and retention_ defines:
 the trio `{ compartmentMap, resolution, readPowers }` the lane
 returns, once captured into a formula by the integration layer,
 holds a `thisDiesIfThatDies` link from that formula into every
@@ -364,7 +364,7 @@ This lane lands as Phase 2 of the integration stack
 lands the JS reference `EndoRegistry`); the canonical
 dependency-ordered build plan (accepted 2026-07-10) is
 [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md)
-§ *Phased Implementation*:
+§ _Phased Implementation_:
 
 1. Add `packages/daemon/src/worker-import.js` exporting
    `makeMountReadPowers`.
@@ -417,7 +417,7 @@ The integration test that exercises `mapSnapshot` end-to-end
 (`importLocation` returning a working namespace) lands in the
 integration layer's Phase 2 entry (the worker dispatch); see
 [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md)
-§ *Phased implementation*.
+§ _Phased implementation_.
 
 ## Design Decisions
 
@@ -494,8 +494,8 @@ integration layer's Phase 2 entry (the worker dispatch); see
 - **Considered and rejected: a separate caching layer for
   `makeMountReadPowers` results keyed by `resolutionHash`.**
   Folded into the registry's caching scope per
-  [registry-capability](registry-capability.md) § *Caching and
-  retention*: the `ReadPowers` is a thin closure over
+  [registry-capability](registry-capability.md) § _Caching and
+  retention_: the `ReadPowers` is a thin closure over
   `(entryMount, registry, resolution)`, and the
   `resolutionHash` already pins the CAS trees the powers serve;
   re-constructing the closure on a cache miss is cheaper than
@@ -504,14 +504,14 @@ integration layer's Phase 2 entry (the worker dispatch); see
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|--------------|
-| [registry-capability](registry-capability.md) | Supplies the `EndoRegistry` capability and the `RegistryResolution` shape `mapSnapshot` consumes. |
-| [mvs-resolver](mvs-resolver.md) | Produces the resolution `mapSnapshot` walks.  The mapper is downstream of the resolver: by the time `mapSnapshot` runs, the MVS walk is complete and `packagesByKey` is final. |
-| [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | The integration-layer caller.  Calls `mapSnapshot` once per `makeFromPackage` invocation, between the registry resolve and the `importLocation` call. |
-| [daemon-mount](daemon-mount.md) | The entry mount input.  `mapSnapshot` reads through the snapshot the integration layer has already taken. |
-| [daemon-mount-capabilities](daemon-mount-capabilities.md) | The completed `EndoMount` surface (`readBytes`, `snapshot`, `EndoMountEntry`) that the mapper's `read` function calls into for the entry tree. |
-| [daemon-cas-management](daemon-cas-management.md) | The resolved package trees live in the CAS; the mapper's `read` function reads from them through the existing `cas-fetch` / `cas-fetch-from-tree` bus verbs. |
+| Design                                                                | Relationship                                                                                                                                                                  |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [registry-capability](registry-capability.md)                         | Supplies the `EndoRegistry` capability and the `RegistryResolution` shape `mapSnapshot` consumes.                                                                             |
+| [mvs-resolver](mvs-resolver.md)                                       | Produces the resolution `mapSnapshot` walks. The mapper is downstream of the resolver: by the time `mapSnapshot` runs, the MVS walk is complete and `packagesByKey` is final. |
+| [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | The integration-layer caller. Calls `mapSnapshot` once per `makeFromPackage` invocation, between the registry resolve and the `importLocation` call.                          |
+| [daemon-mount](daemon-mount.md)                                       | The entry mount input. `mapSnapshot` reads through the snapshot the integration layer has already taken.                                                                      |
+| [daemon-mount-capabilities](daemon-mount-capabilities.md)             | The completed `EndoMount` surface (`readBytes`, `snapshot`, `EndoMountEntry`) that the mapper's `read` function calls into for the entry tree.                                |
+| [daemon-cas-management](daemon-cas-management.md)                     | The resolved package trees live in the CAS; the mapper's `read` function reads from them through the existing `cas-fetch` / `cas-fetch-from-tree` bus verbs.                  |
 
 ## Prompt
 
@@ -538,8 +538,8 @@ integration layer's Phase 2 entry (the worker dispatch); see
 
 Sequencing pass 2026-07-10: accepted (Proposed to Not Started)
 together with the three sibling stack designs; workspace-root
-discovery is pinned to this layer (§ *Workspace-root discovery*
+discovery is pinned to this layer (§ _Workspace-root discovery_
 above) and the single-`resolve`-call contract is made explicit.
 Canonical build order:
 [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md)
-§ *Phased Implementation*.
+§ _Phased Implementation_.

@@ -3,8 +3,7 @@
 When web browsers first introduced `<script>` tags and JavaScript, earlier
 versions of the browser would show the script instead of running it.
 To facilitate the transition, JavaScript optionally tolerates so-called
-["HTML-like comments"](https://tc39.es/ecma262/#sec-html-like-comments
-) in its own grammar, where `<!--` and `-->` could be treated
+["HTML-like comments"](https://tc39.es/ecma262/#sec-html-like-comments) in its own grammar, where `<!--` and `-->` could be treated
 in a manner similar to `//`, as line comments extending to the end of the
 current line. Never mind that this treatment is incoherent compared to the
 original motivation, where HTML itself treats these as the open and close
@@ -13,9 +12,11 @@ of multiline block comments.
 A JavaScript module parsing must not recognize such an HTML-like comment.
 Only a JavaScript script (program) parsing may optionally recognize it. The
 script parsing of some platforms do and some do not. Code such as
+
 ```js
-a <!-- b
+a < !--b;
 ```
+
 might thus be valid under each interpretation but with two completely different
 meanings. For tooling there is therefore no behavior that is both consistent
 and correct without being specific to a particular JavaScript target engine.
@@ -33,7 +34,7 @@ code where these were intended to represent operators, you can preserve the
 meaning by inserting spaces:
 
 ```js
-a < ! --b
+a < !--b;
 ```
 
 In literal strings, rewrite your source so it still evaluates to the same
@@ -41,7 +42,7 @@ string.
 
 ```js
 // <!- SES forbids HTML comments, even in comments ->
-const commentStart = "<!" + "--";
+const commentStart = '<!' + '--';
 ```
 
 ## Automatically evading the HTML-like comment rejection

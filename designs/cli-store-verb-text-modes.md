@@ -1,11 +1,11 @@
 # CLI `store` verb: text/blob/tree axes
 
-| | |
-|---|---|
-| **Created** | 2026-05-08 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
-| **Source** | PR [#128](https://github.com/endojs/endo-but-for-bots/pull/128) inline review comment [discussion_r3205660244](https://github.com/endojs/endo-but-for-bots/pull/128#discussion_r3205660244) on `packages/cli/src/commands/write-text.js:15` |
+|             |                                                                                                                                                                                                                                             |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Created** | 2026-05-08                                                                                                                                                                                                                                  |
+| **Author**  | Kris Kowal (prompted)                                                                                                                                                                                                                       |
+| **Status**  | Proposed                                                                                                                                                                                                                                    |
+| **Source**  | PR [#128](https://github.com/endojs/endo-but-for-bots/pull/128) inline review comment [discussion_r3205660244](https://github.com/endojs/endo-but-for-bots/pull/128#discussion_r3205660244) on `packages/cli/src/commands/write-text.js:15` |
 
 ## What is the Problem Being Solved?
 
@@ -35,31 +35,31 @@ This design is a **reshape blocker** for PR #128.
 
 The verbs that put data into the daemon today:
 
-| Verb | Source | Sink representation | Pet name produced |
-|---|---|---|---|
-| `endo store -p <file> -n <name>` | local file | `readable-blob` (CAS) | `<name>` |
-| `endo store --stdin -n <name>` | stdin (binary) | `readable-blob` (CAS) | `<name>` |
-| `endo store --text <s> -n <name>` | argv string | passable string value | `<name>` |
-| `endo store --text-stdin -n <name>` | stdin (UTF-8) | passable string value | `<name>` |
-| `endo store --json <s> -n <name>` | argv JSON | passable structured value | `<name>` |
-| `endo store --json-stdin -n <name>` | stdin (UTF-8) | passable structured value | `<name>` |
-| `endo store --bigint <s> -n <name>` | argv string | passable bigint value | `<name>` |
-| `endo checkin <dir> -n <name>` | local directory | `readable-tree` (CAS) | `<name>` |
-| `endo checkin -z <zip> -n <name>` | local zip | `readable-tree` (CAS) | `<name>` |
-| `endo checkin -z --stdin -n <name>` | stdin zip | `readable-tree` (CAS) | `<name>` |
-| `endo write-text <name>` (PR #128) | stdin or `--text` | written through a mount via `writeText` | mutates a path |
-| `endo mkweblet <name>` | existing `readable-tree` | weblet | `--as` |
+| Verb                                | Source                   | Sink representation                     | Pet name produced |
+| ----------------------------------- | ------------------------ | --------------------------------------- | ----------------- |
+| `endo store -p <file> -n <name>`    | local file               | `readable-blob` (CAS)                   | `<name>`          |
+| `endo store --stdin -n <name>`      | stdin (binary)           | `readable-blob` (CAS)                   | `<name>`          |
+| `endo store --text <s> -n <name>`   | argv string              | passable string value                   | `<name>`          |
+| `endo store --text-stdin -n <name>` | stdin (UTF-8)            | passable string value                   | `<name>`          |
+| `endo store --json <s> -n <name>`   | argv JSON                | passable structured value               | `<name>`          |
+| `endo store --json-stdin -n <name>` | stdin (UTF-8)            | passable structured value               | `<name>`          |
+| `endo store --bigint <s> -n <name>` | argv string              | passable bigint value                   | `<name>`          |
+| `endo checkin <dir> -n <name>`      | local directory          | `readable-tree` (CAS)                   | `<name>`          |
+| `endo checkin -z <zip> -n <name>`   | local zip                | `readable-tree` (CAS)                   | `<name>`          |
+| `endo checkin -z --stdin -n <name>` | stdin zip                | `readable-tree` (CAS)                   | `<name>`          |
+| `endo write-text <name>` (PR #128)  | stdin or `--text`        | written through a mount via `writeText` | mutates a path    |
+| `endo mkweblet <name>`              | existing `readable-tree` | weblet                                  | `--as`            |
 
 The verbs that take data out:
 
-| Verb | Source representation | Sink |
-|---|---|---|
-| `endo cat <name>` | `readable-blob` or `readable-tree` leaf | stdout (raw bytes) |
-| `endo show <name>` | passable value | stdout (formatted) |
-| `endo checkout <name> <dir>` | `readable-tree` | local directory |
-| `endo checkout -z <name> <zip>` | `readable-tree` | local zip |
-| `endo checkout -z --stdout <name>` | `readable-tree` | stdout zip |
-| `endo read-text <name>` (PR #128) | path within a mount via `readText` | stdout (UTF-8) |
+| Verb                               | Source representation                   | Sink               |
+| ---------------------------------- | --------------------------------------- | ------------------ |
+| `endo cat <name>`                  | `readable-blob` or `readable-tree` leaf | stdout (raw bytes) |
+| `endo show <name>`                 | passable value                          | stdout (formatted) |
+| `endo checkout <name> <dir>`       | `readable-tree`                         | local directory    |
+| `endo checkout -z <name> <zip>`    | `readable-tree`                         | local zip          |
+| `endo checkout -z --stdout <name>` | `readable-tree`                         | stdout zip         |
+| `endo read-text <name>` (PR #128)  | path within a mount via `readText`      | stdout (UTF-8)     |
 
 ## The orthogonal axes
 
@@ -75,8 +75,8 @@ The verbs above mix three axes:
    inside a mutable mount (the case PR #128's `writeText` covers).
 
 The third axis is the one PR #128 introduced without naming.
-`endo store --text` puts a *string value* into the formula graph.
-`endo write-text` writes UTF-8 *bytes* through a mount's filesystem
+`endo store --text` puts a _string value_ into the formula graph.
+`endo write-text` writes UTF-8 _bytes_ through a mount's filesystem
 boundary.
 These are different operations against different addressing schemes,
 even though both look like "save some text".
@@ -333,8 +333,7 @@ Surprising and hard to script defensively.
    A user who wants the bytes of a UTF-8 file in the formula graph
    asks for `--blob -p ./README.md`; downstream consumers that
    need those bytes as a string decode UTF-8 at read time.
-   Per the maintainer's review on PR #153 ([comment 3213469481](
-   https://github.com/endojs/endo-but-for-bots/pull/153#discussion_r3213469481)):
+   Per the maintainer's review on PR #153 ([comment 3213469481](https://github.com/endojs/endo-but-for-bots/pull/153#discussion_r3213469481)):
    "Blobs are bytes."
 
 2. **`endo write` is the right name for the mount-path mutation
@@ -352,8 +351,7 @@ Surprising and hard to script defensively.
    The `edit` verb is designed in the sibling
    [`cli-edit-verb`](cli-edit-verb.md) (PR #162); this design does
    not prejudge its shape.
-   Per the maintainer's review on PR #153 ([comment 3213481202](
-   https://github.com/endojs/endo-but-for-bots/pull/153#discussion_r3213481202)):
+   Per the maintainer's review on PR #153 ([comment 3213481202](https://github.com/endojs/endo-but-for-bots/pull/153#discussion_r3213481202)):
    "Write is fine."
 
 3. **`endo store --tree` does not accept stdin in non-zip mode.**
@@ -416,15 +414,15 @@ CLI-side egress branch.
 - `endo store --tree --stdin` (without `-z`) is rejected with an
   error message pointing at `--zip --stdin`.
 - Mount-path round-trip for `endo write --text` and `endo read
-  --text` against an existing mount, exercising multi-segment
+--text` against an existing mount, exercising multi-segment
   pet-name paths.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
+| Design                                                  | Relationship                                                                                                                     |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | [`daemon-checkin-checkout`](daemon-checkin-checkout.md) | Defines `--tree` source/sink and zip framing; `endo store --tree` is the renamed `endo checkin` and inherits its design choices. |
-| [`daemon-mount`](daemon-mount.md) | Defines `EndoDirectory.writeText` and `readText`; `endo write`/`endo read` are CLI surface for those. |
+| [`daemon-mount`](daemon-mount.md)                       | Defines `EndoDirectory.writeText` and `readText`; `endo write`/`endo read` are CLI surface for those.                            |
 
 ## Reshape blocker for
 

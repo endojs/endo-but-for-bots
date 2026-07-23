@@ -1,12 +1,12 @@
 # EndoPi: Multi-Provider Registry and Subscription OAuth
 
-| | |
-|---|---|
-| **Created** | 2026-05-15 |
-| **Updated** | 2026-05-15 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed (partially satisfied) |
-| **Parent** | [endopi](endopi.md) |
+|             |                                |
+| ----------- | ------------------------------ |
+| **Created** | 2026-05-15                     |
+| **Updated** | 2026-05-15                     |
+| **Author**  | Kris Kowal (prompted)          |
+| **Status**  | Proposed (partially satisfied) |
+| **Parent**  | [endopi](endopi.md)            |
 
 ## Status
 
@@ -24,7 +24,7 @@ What this means for the milestone:
   `pi-ai`'s registry. Lal's static-dispatch refactor is still needed
   if Lal stays a parallel surface; the question is whether Lal should
   consolidate onto Genie's `pi-ai` dependency or keep its own
-  per-provider modules. Recorded under *Open questions* below.
+  per-provider modules. Recorded under _Open questions_ below.
 - **API-key providers (Phase 2).** Available via Genie today through
   `pi-ai`'s 30+ providers. The Phase-2 work for Lal becomes a question
   of "do we duplicate?" rather than "do we add?".
@@ -130,12 +130,12 @@ plumbing is missing. The registry above is the substrate.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|--------------|
-| [lal-fae-form-provisioning](lal-fae-form-provisioning.md) | Provides the provisioning surface for picking a provider |
-| [daemon-value-message](daemon-value-message.md) | Image payloads on user messages |
-| [endopi-extension-package-manifest](endopi-extension-package-manifest.md) | Lets new providers ship as packages |
-| [gateway-bearer-token-auth](gateway-bearer-token-auth.md) | OAuth-redirect endpoint for the daemon-only build |
+| Design                                                                    | Relationship                                             |
+| ------------------------------------------------------------------------- | -------------------------------------------------------- |
+| [lal-fae-form-provisioning](lal-fae-form-provisioning.md)                 | Provides the provisioning surface for picking a provider |
+| [daemon-value-message](daemon-value-message.md)                           | Image payloads on user messages                          |
+| [endopi-extension-package-manifest](endopi-extension-package-manifest.md) | Lets new providers ship as packages                      |
+| [gateway-bearer-token-auth](gateway-bearer-token-auth.md)                 | OAuth-redirect endpoint for the daemon-only build        |
 
 ## Out of scope
 
@@ -176,6 +176,6 @@ plumbing is missing. The registry above is the substrate.
 
 ## Prompt
 
-> Extracted from [endopi](endopi.md) § *Multi-provider LLM API*. The
+> Extracted from [endopi](endopi.md) § _Multi-provider LLM API_. The
 > registry shape is a refactor of existing Lal code; the subscription-
 > OAuth path is the new user-facing capability.

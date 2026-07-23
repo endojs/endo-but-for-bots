@@ -1,10 +1,10 @@
 # Endor Terminal User Interface
 
-| | |
-|---|---|
-| **Created** | 2026-04-23 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-04-23            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## What is the Problem Being Solved?
 
@@ -78,11 +78,11 @@ CLI-plus-browser:
 
 The ecosystem has consolidated around three choices:
 
-| Crate | Role | Tradeoffs |
-|-------|------|-----------|
-| [`ratatui`](https://ratatui.rs/) | Immediate-mode rendering and layout | De-facto successor to `tui-rs`. Active, well-documented, permissive license. Good widget library (Paragraph, List, Table, Chart, Tabs). |
-| [`crossterm`](https://docs.rs/crossterm/) | Backend — input, cursor, raw mode | Portable (Linux, macOS, Windows, WSL). Required for `endor` because we must not assume termios-only behavior. |
-| [`cursive`](https://docs.rs/cursive/) | Retained-mode widget toolkit | Higher-level but more opinionated. Harder to integrate async daemon streams. |
+| Crate                                     | Role                                | Tradeoffs                                                                                                                               |
+| ----------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| [`ratatui`](https://ratatui.rs/)          | Immediate-mode rendering and layout | De-facto successor to `tui-rs`. Active, well-documented, permissive license. Good widget library (Paragraph, List, Table, Chart, Tabs). |
+| [`crossterm`](https://docs.rs/crossterm/) | Backend — input, cursor, raw mode   | Portable (Linux, macOS, Windows, WSL). Required for `endor` because we must not assume termios-only behavior.                           |
+| [`cursive`](https://docs.rs/cursive/)     | Retained-mode widget toolkit        | Higher-level but more opinionated. Harder to integrate async daemon streams.                                                            |
 
 **Choice:** `ratatui` over `crossterm`, with `tokio` as the async
 runtime (already required by the `endor` daemon).
@@ -167,26 +167,26 @@ Exit conditions:
 
 The web Chat's feature surface, enumerated from `packages/chat/`:
 
-| Web concept | File(s) | TUI analogue |
-|-------------|---------|-------------|
-| Spaces gutter | `spaces-gutter.js` | Left rail (single character column) with per-space icon glyph and Alt+digit keybinds |
-| Per-space color scheme | `scheme-picker.js`, `chat-per-space-color-scheme.md` | Palette switch on space activation; same scheme names |
-| Inventory (pet list) | `inventory-component.js` | Collapsible tree panel, left side |
-| Profile breadcrumbs | `chat.js` `renderProfileBar` | Line under the inventory, `Home › child › grandchild` |
-| Conversation header | `channel-header.js` | Top status line of the transcript panel |
-| Inbox transcript | `inbox-component.js` | Scrollable transcript panel, keyed by message number |
-| Focus message mode | `chat-focus-message.md` | Modal `focus` state with arrow-key navigation over rendered lines |
-| Command bar | `chat-bar-component.js`, `chat-command-bar.md` | Bottom multi-line input with modeline; same state machine |
-| Pending commands region | `chat-pending-commands.md` | Mini-panel between transcript and command bar |
-| Value modal | `value-component.js`, `chat.js` | Full-screen overlay; `Esc` to dismiss |
-| Token autocomplete (`@`) | `token-autocomplete.js` | Popup list under the cursor, same `↑/↓/Enter/Esc` controls |
-| Command menu (`/`) | `command-selector.js` | Popup list with fuzzy filter |
-| Inline command forms | `inline-command-form.js`, `form-builder.js` | Form mode takes over the command bar region with labeled fields |
-| Eval form / editor | `eval-form.js`, `inline-eval.js` | `⌘Enter` opens a fullscreen editor buffer (see **Source editing** below) |
-| Blob viewer | `blob-viewer.js` | Full-screen pager (like `less`) |
-| Markdown render | `markdown-render.js` | Terminal Markdown via `termimad` or bespoke renderer |
-| Chime (audio) | `chime.js` | Terminal bell (toggleable) |
-| Share / invite modals | `share-modal.js`, etc. | Form-style overlays |
+| Web concept              | File(s)                                              | TUI analogue                                                                         |
+| ------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Spaces gutter            | `spaces-gutter.js`                                   | Left rail (single character column) with per-space icon glyph and Alt+digit keybinds |
+| Per-space color scheme   | `scheme-picker.js`, `chat-per-space-color-scheme.md` | Palette switch on space activation; same scheme names                                |
+| Inventory (pet list)     | `inventory-component.js`                             | Collapsible tree panel, left side                                                    |
+| Profile breadcrumbs      | `chat.js` `renderProfileBar`                         | Line under the inventory, `Home › child › grandchild`                                |
+| Conversation header      | `channel-header.js`                                  | Top status line of the transcript panel                                              |
+| Inbox transcript         | `inbox-component.js`                                 | Scrollable transcript panel, keyed by message number                                 |
+| Focus message mode       | `chat-focus-message.md`                              | Modal `focus` state with arrow-key navigation over rendered lines                    |
+| Command bar              | `chat-bar-component.js`, `chat-command-bar.md`       | Bottom multi-line input with modeline; same state machine                            |
+| Pending commands region  | `chat-pending-commands.md`                           | Mini-panel between transcript and command bar                                        |
+| Value modal              | `value-component.js`, `chat.js`                      | Full-screen overlay; `Esc` to dismiss                                                |
+| Token autocomplete (`@`) | `token-autocomplete.js`                              | Popup list under the cursor, same `↑/↓/Enter/Esc` controls                           |
+| Command menu (`/`)       | `command-selector.js`                                | Popup list with fuzzy filter                                                         |
+| Inline command forms     | `inline-command-form.js`, `form-builder.js`          | Form mode takes over the command bar region with labeled fields                      |
+| Eval form / editor       | `eval-form.js`, `inline-eval.js`                     | `⌘Enter` opens a fullscreen editor buffer (see **Source editing** below)             |
+| Blob viewer              | `blob-viewer.js`                                     | Full-screen pager (like `less`)                                                      |
+| Markdown render          | `markdown-render.js`                                 | Terminal Markdown via `termimad` or bespoke renderer                                 |
+| Chime (audio)            | `chime.js`                                           | Terminal bell (toggleable)                                                           |
+| Share / invite modals    | `share-modal.js`, etc.                               | Form-style overlays                                                                  |
 
 ### Panel layout
 
@@ -228,37 +228,37 @@ Modal, inspired by `tmux`/`htop`/`vim` but defaulting to emacs-friendly
 bindings so first-time users are not punished for not knowing modes.
 Modes are a small closed set:
 
-| Mode | Entered by | Exited by | Role |
-|------|-----------|-----------|------|
-| `normal` | startup, `Esc` from input | n/a | Keys are commands; no text entry |
-| `insert` | `i`, or typing any printable char in input | `Esc` | Command-bar text entry |
-| `focus` | `Ctrl+↑` from `insert` on empty input; or `f` from `normal` | `Esc`, `↓` past last | Navigate messages; dispatch against focus |
-| `modal` | any modal-opening action | `Esc` | Value inspection, form, blob viewer, etc. |
+| Mode     | Entered by                                                  | Exited by            | Role                                      |
+| -------- | ----------------------------------------------------------- | -------------------- | ----------------------------------------- |
+| `normal` | startup, `Esc` from input                                   | n/a                  | Keys are commands; no text entry          |
+| `insert` | `i`, or typing any printable char in input                  | `Esc`                | Command-bar text entry                    |
+| `focus`  | `Ctrl+↑` from `insert` on empty input; or `f` from `normal` | `Esc`, `↓` past last | Navigate messages; dispatch against focus |
+| `modal`  | any modal-opening action                                    | `Esc`                | Value inspection, form, blob viewer, etc. |
 
 Primary keybindings (global — except where noted):
 
-| Chord | Mode | Action |
-|-------|------|--------|
-| `Alt+1` … `Alt+9`, `Alt+0` | any | Switch to space N (home = 0) |
-| `Alt+s` | any | Open spaces picker (for >10 spaces) |
-| `Alt+i` | any | Toggle inventory |
-| `Alt+p` | any | Toggle pending commands panel (keeps recent even when empty) |
-| `Ctrl+L` | any | Redraw (also recovers from terminal corruption) |
-| `q` | normal | Quit |
-| `:` | normal | Ex-style command prompt (`:quit`, `:scheme dark`, `:reconnect`) |
-| `/` | insert | Open command menu in the command bar |
-| `@` | insert | Begin token autocomplete |
-| `Tab` | insert | Accept autocomplete suggestion |
-| `Enter` | insert | Send message or execute command |
-| `Ctrl+Enter` | insert (eval) | Expand to full-screen editor |
-| `Ctrl+↑` | insert (empty) | Enter focus mode |
-| `↑` / `↓` | focus | Move focused message |
-| `Enter` | focus | Inspect focused message / open value modal |
-| `d` | focus | Pre-fill `/dismiss N` in command bar |
-| `a` | focus | Pre-fill `/adopt N` |
-| `r` | focus | Pre-fill `/resolve N` / `/reply N` |
-| `g` / `G` | focus | Jump to first / last message |
-| `Esc` | any modal | Close modal |
+| Chord                      | Mode           | Action                                                          |
+| -------------------------- | -------------- | --------------------------------------------------------------- |
+| `Alt+1` … `Alt+9`, `Alt+0` | any            | Switch to space N (home = 0)                                    |
+| `Alt+s`                    | any            | Open spaces picker (for >10 spaces)                             |
+| `Alt+i`                    | any            | Toggle inventory                                                |
+| `Alt+p`                    | any            | Toggle pending commands panel (keeps recent even when empty)    |
+| `Ctrl+L`                   | any            | Redraw (also recovers from terminal corruption)                 |
+| `q`                        | normal         | Quit                                                            |
+| `:`                        | normal         | Ex-style command prompt (`:quit`, `:scheme dark`, `:reconnect`) |
+| `/`                        | insert         | Open command menu in the command bar                            |
+| `@`                        | insert         | Begin token autocomplete                                        |
+| `Tab`                      | insert         | Accept autocomplete suggestion                                  |
+| `Enter`                    | insert         | Send message or execute command                                 |
+| `Ctrl+Enter`               | insert (eval)  | Expand to full-screen editor                                    |
+| `Ctrl+↑`                   | insert (empty) | Enter focus mode                                                |
+| `↑` / `↓`                  | focus          | Move focused message                                            |
+| `Enter`                    | focus          | Inspect focused message / open value modal                      |
+| `d`                        | focus          | Pre-fill `/dismiss N` in command bar                            |
+| `a`                        | focus          | Pre-fill `/adopt N`                                             |
+| `r`                        | focus          | Pre-fill `/resolve N` / `/reply N`                              |
+| `g` / `G`                  | focus          | Jump to first / last message                                    |
+| `Esc`                      | any modal      | Close modal                                                     |
 
 All keybindings are loaded from `${ENDOR_CONFIG}/tui-keys.toml` at
 startup, with a frozen default.
@@ -275,13 +275,13 @@ the rendering medium differs.
 
 Example modelines:
 
-| State | Modeline |
-|-------|----------|
-| Empty send | `─ @ inspect or message · / commands · Space @lastRecipient ─` |
-| Token autocomplete | `─ ↑↓ nav · Tab select · : edge name · Esc cancel ─` |
-| Command menu | `─ type to filter · ↑↓ nav · Enter select · Esc cancel ─` |
-| Eval form | `─ @ endowment · Enter run · Ctrl+Enter editor · Esc cancel ─` |
-| Focus mode | `─ ↑↓ nav · Enter inspect · d dismiss · a adopt · r reply · Esc exit ─` |
+| State              | Modeline                                                                |
+| ------------------ | ----------------------------------------------------------------------- |
+| Empty send         | `─ @ inspect or message · / commands · Space @lastRecipient ─`          |
+| Token autocomplete | `─ ↑↓ nav · Tab select · : edge name · Esc cancel ─`                    |
+| Command menu       | `─ type to filter · ↑↓ nav · Enter select · Esc cancel ─`               |
+| Eval form          | `─ @ endowment · Enter run · Ctrl+Enter editor · Esc cancel ─`          |
+| Focus mode         | `─ ↑↓ nav · Enter inspect · d dismiss · a adopt · r reply · Esc exit ─` |
 
 ### Transcript rendering
 
@@ -399,13 +399,13 @@ lattice as the web modal:
 
 Keys:
 
-| Key | Action |
-|-----|--------|
-| `Esc` / `q` | Close |
-| `Tab` | Cycle title chips (pet names, message context) |
-| `n` | Name this value — opens a single-line prompt like `/adopt` |
-| `p` | Pin to inventory |
-| `s` | Step-into (only when value is an error or a worker handle) |
+| Key         | Action                                                     |
+| ----------- | ---------------------------------------------------------- |
+| `Esc` / `q` | Close                                                      |
+| `Tab`       | Cycle title chips (pet names, message context)             |
+| `n`         | Name this value — opens a single-line prompt like `/adopt` |
+| `p`         | Pin to inventory                                           |
+| `s`         | Step-into (only when value is an error or a worker handle) |
 
 ### Inventory
 
@@ -550,22 +550,22 @@ Within the debugger, panels are arranged as:
 Debugger-specific bindings override Chat bindings while the debugger
 view is focused:
 
-| Key | Action |
-|-----|--------|
-| `F5` / `c` | Continue (XS `go`) |
-| `F10` / `n` | Step over (XS `step-over`) |
-| `F11` / `s` | Step into (XS `step`) |
-| `Shift+F11` / `S` | Step out (XS `step-out`) |
-| `F9` | Toggle breakpoint on the current source line |
-| `p` | Pause — inject a `debugger;`-equivalent via `endor-bus-tui` `pause` verb |
-| `b` | Add conditional breakpoint (opens form) |
-| `↑` / `↓` | Move within the focused sub-panel |
-| `Tab` | Cycle focus: source → stack → locals → breakpoints → eval |
-| `Enter` (on locals row) | Expand / collapse |
-| `Enter` (on eval) | Evaluate in selected frame |
-| `k` / `x` | Kill selected worker (asks for confirmation) |
-| `a` | Attach / detach debugger on the selected worker |
-| `Esc` / `Alt+d` | Return to Chat view |
+| Key                     | Action                                                                   |
+| ----------------------- | ------------------------------------------------------------------------ |
+| `F5` / `c`              | Continue (XS `go`)                                                       |
+| `F10` / `n`             | Step over (XS `step-over`)                                               |
+| `F11` / `s`             | Step into (XS `step`)                                                    |
+| `Shift+F11` / `S`       | Step out (XS `step-out`)                                                 |
+| `F9`                    | Toggle breakpoint on the current source line                             |
+| `p`                     | Pause — inject a `debugger;`-equivalent via `endor-bus-tui` `pause` verb |
+| `b`                     | Add conditional breakpoint (opens form)                                  |
+| `↑` / `↓`               | Move within the focused sub-panel                                        |
+| `Tab`                   | Cycle focus: source → stack → locals → breakpoints → eval                |
+| `Enter` (on locals row) | Expand / collapse                                                        |
+| `Enter` (on eval)       | Evaluate in selected frame                                               |
+| `k` / `x`               | Kill selected worker (asks for confirmation)                             |
+| `a`                     | Attach / detach debugger on the selected worker                          |
+| `Esc` / `Alt+d`         | Return to Chat view                                                      |
 
 The debugger view is also reachable from Chat by inspecting a worker
 value (`Enter` on a `⚙` inventory item) and pressing `d` in the value
@@ -674,30 +674,30 @@ The verbs the TUI speaks are defined in
 [endor-bus-tui](endor-bus-tui.md).
 This section summarizes only what the TUI needs from that surface:
 
-| Verb (TUI → daemon) | Purpose |
-|---------------------|---------|
-| `space.list`, `space.watch` | Enumerate and observe spaces |
-| `profile.enter`, `profile.exit` | Space activation |
-| `inbox.follow` | Stream the active profile's messages |
-| `inventory.follow` | Stream name changes for the active profile |
-| `send` | Send a message (existing bus verb; TUI mirrors Chat) |
-| `command.submit` | Submit a slash command; result surfaces as a reply event |
-| `value.inspect` | Open a capability; returns type + rendering payload |
-| `worker.list`, `worker.watch` | Enumerate workers and their debug state |
-| `debug.attach`, `debug.detach`, `debug.claim` | Debug session control |
-| `debug.breakpoint.set`, `debug.breakpoint.clear` | Breakpoint management |
-| `debug.go`, `debug.step`, `debug.step-over`, `debug.step-out` | Execution control |
-| `debug.eval` | Evaluate an expression in the selected frame |
+| Verb (TUI → daemon)                                           | Purpose                                                  |
+| ------------------------------------------------------------- | -------------------------------------------------------- |
+| `space.list`, `space.watch`                                   | Enumerate and observe spaces                             |
+| `profile.enter`, `profile.exit`                               | Space activation                                         |
+| `inbox.follow`                                                | Stream the active profile's messages                     |
+| `inventory.follow`                                            | Stream name changes for the active profile               |
+| `send`                                                        | Send a message (existing bus verb; TUI mirrors Chat)     |
+| `command.submit`                                              | Submit a slash command; result surfaces as a reply event |
+| `value.inspect`                                               | Open a capability; returns type + rendering payload      |
+| `worker.list`, `worker.watch`                                 | Enumerate workers and their debug state                  |
+| `debug.attach`, `debug.detach`, `debug.claim`                 | Debug session control                                    |
+| `debug.breakpoint.set`, `debug.breakpoint.clear`              | Breakpoint management                                    |
+| `debug.go`, `debug.step`, `debug.step-over`, `debug.step-out` | Execution control                                        |
+| `debug.eval`                                                  | Evaluate an expression in the selected frame             |
 
-| Event (daemon → TUI) | Purpose |
-|----------------------|---------|
-| `message.added`, `message.dismissed`, `message.resolved` | Inbox events |
-| `inventory.added`, `inventory.removed` | Name events |
-| `command.pending`, `command.settled` | Pending-commands events |
-| `debug.stopped { worker, reason, frame, stack, locals }` | Worker paused |
-| `debug.resumed { worker }` | Worker running |
-| `debug.output { worker, stream, text }` | Console output |
-| `worker.state { handle, phase }` | Worker lifecycle changes |
+| Event (daemon → TUI)                                     | Purpose                  |
+| -------------------------------------------------------- | ------------------------ |
+| `message.added`, `message.dismissed`, `message.resolved` | Inbox events             |
+| `inventory.added`, `inventory.removed`                   | Name events              |
+| `command.pending`, `command.settled`                     | Pending-commands events  |
+| `debug.stopped { worker, reason, frame, stack, locals }` | Worker paused            |
+| `debug.resumed { worker }`                               | Worker running           |
+| `debug.output { worker, stream, text }`                  | Console output           |
+| `worker.state { handle, phase }`                         | Worker lifecycle changes |
 
 All TUI-bus traffic runs over the existing CBOR-envelope protocol
 already present in `go/engo/daemon/codec.go` and inherited by `endor`.
@@ -822,37 +822,37 @@ The TUI carries no persistent state the daemon does not also hold.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|-------------|
-| [endor-bus-tui](endor-bus-tui.md) | Defines bus verbs and events this TUI consumes; this design references that surface without duplicating it |
-| [chat-command-bar](chat-command-bar.md) | TUI command bar state machine mirrors the web command bar exactly |
-| [chat-focus-message](chat-focus-message.md) | TUI focus mode mirrors the web focus mode |
-| [chat-pending-commands](chat-pending-commands.md) | TUI pending region mirrors the web pending region |
-| [chat-color-schemes](chat-color-schemes.md) | TUI palettes adapted from web palettes |
-| [chat-per-space-color-scheme](chat-per-space-color-scheme.md) | TUI per-space themes |
-| [chat-spaces-home](chat-spaces-home.md) | Home space treatment carries over |
-| [chat-view-edit-commands](chat-view-edit-commands.md) | `/view` and `/edit` will back the TUI blob viewer and editor |
-| [workers-panel](workers-panel.md) | Worker metrics surface in the TUI debugger's worker-list column |
-| [daemon-value-message](daemon-value-message.md) | Value type used in transcript and modal rendering |
-| [daemon-mount](daemon-mount.md) | Debugger source resolution reads through mounts |
-| [daemon-agent-tools](daemon-agent-tools.md) | Tool-call messages are first-class transcript entries |
+| Design                                                        | Relationship                                                                                               |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| [endor-bus-tui](endor-bus-tui.md)                             | Defines bus verbs and events this TUI consumes; this design references that surface without duplicating it |
+| [chat-command-bar](chat-command-bar.md)                       | TUI command bar state machine mirrors the web command bar exactly                                          |
+| [chat-focus-message](chat-focus-message.md)                   | TUI focus mode mirrors the web focus mode                                                                  |
+| [chat-pending-commands](chat-pending-commands.md)             | TUI pending region mirrors the web pending region                                                          |
+| [chat-color-schemes](chat-color-schemes.md)                   | TUI palettes adapted from web palettes                                                                     |
+| [chat-per-space-color-scheme](chat-per-space-color-scheme.md) | TUI per-space themes                                                                                       |
+| [chat-spaces-home](chat-spaces-home.md)                       | Home space treatment carries over                                                                          |
+| [chat-view-edit-commands](chat-view-edit-commands.md)         | `/view` and `/edit` will back the TUI blob viewer and editor                                               |
+| [workers-panel](workers-panel.md)                             | Worker metrics surface in the TUI debugger's worker-list column                                            |
+| [daemon-value-message](daemon-value-message.md)               | Value type used in transcript and modal rendering                                                          |
+| [daemon-mount](daemon-mount.md)                               | Debugger source resolution reads through mounts                                                            |
+| [daemon-agent-tools](daemon-agent-tools.md)                   | Tool-call messages are first-class transcript entries                                                      |
 
 ## Known Gaps and TODOs
 
 - [ ] Decide bespoke vs. `termimad` Markdown renderer once
-  `chat-markdown-render.md` settles.
+      `chat-markdown-render.md` settles.
 - [ ] Research whether XS has a protocol verb for pause-on-request; if
-  not, we may need a small VM patch to implement `p` (manual pause).
+      not, we may need a small VM patch to implement `p` (manual pause).
 - [ ] Specify how the TUI displays sourcemaps when agents run bundled
-  (minified) code.
+      (minified) code.
 - [ ] Remote-TUI-through-daemon-over-TCP story: today the bus socket is
-  Unix-domain only; SSH suffices but there may be a case for exposing
-  the bus over TLS + bearer token (see `gateway-bearer-token-auth`).
+      Unix-domain only; SSH suffices but there may be a case for exposing
+      the bus over TLS + bearer token (see `gateway-bearer-token-auth`).
 - [ ] Terminal capability detection for truecolor vs. 256-color.
 - [ ] Clipboard handling on headless servers (`arboard` falls back to
-  OSC-52, which not all terminals support).
+      OSC-52, which not all terminals support).
 - [ ] Playwright-equivalent integration tests for the TUI
-  (`insta`-style snapshots of `ratatui::buffer::Buffer`).
+      (`insta`-style snapshots of `ratatui::buffer::Buffer`).
 
 ## Prompt
 
@@ -871,7 +871,6 @@ The TUI carries no persistent state the daemon does not also hold.
 >    concepts that need a TUI analogue and to propose a panel layout,
 >    keybinding scheme, and rendering model (lines vs. screens, re-draw
 >    strategy).
->
 > 2. **A stepping debugger for XS workers.**
 >    `endor` workers run Moddable XS (XS JavaScript engine).
 >    The TUI should expose a debugger that can attach to a worker, show

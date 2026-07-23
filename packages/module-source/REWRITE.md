@@ -1,9 +1,9 @@
 For each top level variable declaration, we make an entry
-from a variable name to the variable declaration path.  That allows
+from a variable name to the variable declaration path. That allows
 us to look up the path.scope.bindings[name] to see if constant === true.
 
 If anything from the declaration was exported, we change the declaration
-to `const`.  After, the rest of the rewrite introduces either:
+to `const`. After, the rest of the rewrite introduces either:
 
 ```js
 $h_once.name(name); // only if was const or let but constant === true
@@ -30,7 +30,10 @@ mv += 1;
 ## export const
 
 ```js
-export const { abc: abc2, nest: [def2] } = obj;
+export const {
+  abc: abc2,
+  nest: [def2],
+} = obj;
 ```
 
 ```js
@@ -42,7 +45,10 @@ const { abc: abc2, nest: [def2] } = obj; \
 ## export let
 
 ```js
-export let { abc: abc2, nest: [def2] } = obj;
+export let {
+  abc: abc2,
+  nest: [def2],
+} = obj;
 ```
 
 ```js
@@ -54,7 +60,10 @@ const { abc: $c_abc2, nest: [$c_def2] } = obj; \
 ## export var
 
 ```js
-export var { abc: abc2, nest: [def2] } = obj;
+export var {
+  abc: abc2,
+  nest: [def2],
+} = obj;
 ```
 
 ```js
@@ -94,5 +103,6 @@ export default XXX;
 to:
 
 ```js
-const {default: $c_default} = {default: (XXX)}; $h_once.default($c_default);
+const { default: $c_default } = { default: XXX };
+$h_once.default($c_default);
 ```

@@ -67,6 +67,7 @@ Each package that exports types uses a pair of files:
 Why: `.d.ts` files are not checked by `tsc` (we use `skipLibCheck: true`). Type definitions in `.d.ts` files silently pass even if they contain errors. Definitions in `.ts` files are checked.
 
 The entrypoint (`index.js`) re-exports from `types-index.js`:
+
 ```js
 // eslint-disable-next-line import/export
 export * from './types-index.js';
@@ -74,13 +75,13 @@ export * from './types-index.js';
 
 ### Where type definitions go
 
-| What | Where | Why |
-|------|-------|-----|
-| Interface types, data types | `src/types.ts` | Canonical type definitions |
-| Inferred/computed types | `src/type-from-pattern.ts` (or similar `.ts`) | Complex type logic, checked by tsc |
-| Value + namespace merges | Same `.ts` file as the namespace | TS requires both in one module for merging |
-| `declare function` overrides | `.ts` file alongside related types | Gets type-checked |
-| Re-exports only | `types-index.d.ts` | Pure index, no definitions |
+| What                         | Where                                         | Why                                        |
+| ---------------------------- | --------------------------------------------- | ------------------------------------------ |
+| Interface types, data types  | `src/types.ts`                                | Canonical type definitions                 |
+| Inferred/computed types      | `src/type-from-pattern.ts` (or similar `.ts`) | Complex type logic, checked by tsc         |
+| Value + namespace merges     | Same `.ts` file as the namespace              | TS requires both in one module for merging |
+| `declare function` overrides | `.ts` file alongside related types            | Gets type-checked                          |
+| Re-exports only              | `types-index.d.ts`                            | Pure index, no definitions                 |
 
 ### `emitDeclarationOnly`
 
@@ -89,6 +90,7 @@ The repo-wide `tsconfig-build-options.json` sets `emitDeclarationOnly: true`. `t
 ### Imports in `.js` files
 
 Use `/** @import */` JSDoc comments to import types without runtime module loading:
+
 ```js
 /** @import { Pattern, MatcherNamespace } from './types.js' */
 ```
@@ -121,11 +123,11 @@ downstream sites check-free.
 
 Exo methods receive a `this` context (via `ThisType<>`) that differs between single-facet and multi-facet exos:
 
-| API | `this.self` | `this.facets` | `this.state` |
-|-----|-------------|---------------|--------------|
-| `makeExo` | ✅ the exo instance | ❌ | ❌ (always `{}`) |
-| `defineExoClass` | ✅ the exo instance | ❌ | ✅ from `init()` |
-| `defineExoClassKit` | ❌ | ✅ all facets in cohort | ✅ from `init()` |
+| API                 | `this.self`         | `this.facets`           | `this.state`     |
+| ------------------- | ------------------- | ----------------------- | ---------------- |
+| `makeExo`           | ✅ the exo instance | ❌                      | ❌ (always `{}`) |
+| `defineExoClass`    | ✅ the exo instance | ❌                      | ✅ from `init()` |
+| `defineExoClassKit` | ❌                  | ✅ all facets in cohort | ✅ from `init()` |
 
 **Why no `self` on kits?** A kit has multiple facets (e.g. `public`, `admin`), each a separate remotable object. There is no single "self". Use `this.facets.facetName` to access any facet in the cohort.
 
@@ -336,11 +338,11 @@ inputs.
 
 ## Thunk modules
 
-A "thunk module" is a top-level `.js` file in a package whose only purpose is to re-export from one or more deeper files (e.g. `./src/foo.js`).  Thunk modules exist for two reasons:
+A "thunk module" is a top-level `.js` file in a package whose only purpose is to re-export from one or more deeper files (e.g. `./src/foo.js`). Thunk modules exist for two reasons:
 
-1. **`exports`-map portability.**  The `package.json` `"exports"` property is not supported by every Node.js version we still target.  A physical file at the path `consumers will import` is the fall-through resolution under the legacy directory-walk algorithm: `import '@endo/foo/bar.js'` resolves to `node_modules/@endo/foo/bar.js` when `exports` is unrecognized.  The `"main"` property by contrast is honored by every Node.js version, so a single primary entry point can point directly at `./src/foo.js` without a thunk.
+1. **`exports`-map portability.** The `package.json` `"exports"` property is not supported by every Node.js version we still target. A physical file at the path `consumers will import` is the fall-through resolution under the legacy directory-walk algorithm: `import '@endo/foo/bar.js'` resolves to `node_modules/@endo/foo/bar.js` when `exports` is unrecognized. The `"main"` property by contrast is honored by every Node.js version, so a single primary entry point can point directly at `./src/foo.js` without a thunk.
 
-2. **Public-interface filtering.**  When a `src/` file exports both public and internal symbols (e.g. test-only primitives needed for known-answer cross-checks), a top-level thunk module that re-exports only the public subset gives the package a stable public surface.  In-package tests can still reach internals via relative imports; external callers cannot.
+2. **Public-interface filtering.** When a `src/` file exports both public and internal symbols (e.g. test-only primitives needed for known-answer cross-checks), a top-level thunk module that re-exports only the public subset gives the package a stable public surface. In-package tests can still reach internals via relative imports; external callers cannot.
 
 When neither reason applies — a package has only one `exports` entry, OR the `src/` file already exports exactly the public surface — the thunk module is superfluous and can be deleted in favor of pointing `package.json` `"main"` (and `"exports"`) at `./src/foo.js` directly.
 

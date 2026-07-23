@@ -1,11 +1,11 @@
 # SturdyRefs in `@endo/pass-style` with `endor`-Syscall Retention
 
-| | |
-|---|---|
-| **Created** | 2026-06-23 |
-| **Updated** | 2026-06-26 |
-| **Author** | endolinbot (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-06-23            |
+| **Updated** | 2026-06-26            |
+| **Author**  | endolinbot (prompted) |
+| **Status**  | Not Started           |
 
 ## Summary
 
@@ -40,7 +40,7 @@ three needs that have to be solved together:
    locator (`peer + swiss-num`).
    The maintainer's directive first described it as "similar to a
    presence … registered with `HandledPromise`"; PR #521's review
-   corrected that (see *A SturdyRef is inert* below): a SturdyRef is an
+   corrected that (see _A SturdyRef is inert_ below): a SturdyRef is an
    inert data box, not a presence, and `@endo/eventual-send` is
    unchanged.
    The on-wire form is already specified in the OCapN spec
@@ -99,10 +99,10 @@ The maintainer surfaces two options:
   the retention beyond a single turn.
 
 The maintainer's broader framing:
-*"Not having to explicitly manage retention is a virtue of
+_"Not having to explicitly manage retention is a virtue of
 ocap-kernel, and revocation-by-deletion is the virtue of the
 daemon. We should strive to avoid taking the advantages of either
-approach with the disadvantages of the other."*
+approach with the disadvantages of the other."_
 The composition this design proposes is the subject of its own
 section below.
 
@@ -110,7 +110,7 @@ section below.
 
 ### The OCapN locator (parsed representation)
 
-Per the OCapN spec section *Sturdyref Locator* (held at
+Per the OCapN spec section _Sturdyref Locator_ (held at
 `kriscendobot/ocapn` commit `f7005c12`, the snapshot the journal
 indexes), a sturdyref carries a peer locator and a swiss number.
 The peer locator carries a designator, a transport (also called
@@ -126,8 +126,8 @@ as the `OcapnLocation` typedef in
 type OcapnLocation = {
   type: 'ocapn-peer';
   designator: string;
-  transport: string;       // legacy field
-  network?: string;        // replaces transport during migration
+  transport: string; // legacy field
+  network?: string; // replaces transport during migration
   hints: false | Record<string, string>;
 };
 ```
@@ -184,7 +184,7 @@ pair build on) discovered and the maintainer confirmed a correction:
 a SturdyRef is **not** a presence and is **not** registered with
 `HandledPromise`.
 It is an **inert, opaque, pass-by-copy data box** that carries only the
-off-band `(location, secret)` needed to *re-acquire* the live
+off-band `(location, secret)` needed to _re-acquire_ the live
 capability.
 `E(sturdyRef).foo()` is **not** a valid operation, and
 `@endo/eventual-send` needs **no change** for SturdyRefs.
@@ -199,8 +199,8 @@ const result = await E(presence).method(...args);
 ```
 
 `enlivenSturdyRef` is the closely-held OCapN-provided capability
-(described under *Boxing and unboxing* and *OCapN's closely-held
-capability* below): it reads the locator off-band, then for a local
+(described under _Boxing and unboxing_ and _OCapN's closely-held
+capability_ below): it reads the locator off-band, then for a local
 locator flows to the daemon's own formula store and for a remote
 locator dials the peer via `provideSession(location)` and
 `bootstrap.fetch(secret)`.
@@ -318,7 +318,7 @@ A new **worker-to-daemon syscall** therefore needs:
   `deliver` or via a dedicated response verb keyed by `nonce`).
 
 This design proposes two new worker-originating verbs:
-`retain` and `release` (described in *Endor syscall surface* below).
+`retain` and `release` (described in _Endor syscall surface_ below).
 
 ### Existing retention machinery
 
@@ -339,7 +339,7 @@ The pieces already in the daemon that this design composes with:
   bookkeeping.
 
 This design's claim is that a SturdyRef returned to a worker rides
-the *existing* residence-tracker machinery for as long as the worker
+the _existing_ residence-tracker machinery for as long as the worker
 holds the CapTP slot, and the new syscall extends that to longer
 lifetimes when the worker explicitly asks.
 
@@ -384,7 +384,9 @@ A new file `packages/pass-style/src/sturdyRef.js` adding:
 ```js
 export const SturdyRefHelper = harden({
   styleName: 'sturdyref',
-  canBeValid: (candidate, reject) => { /* tag-record check */ },
+  canBeValid: (candidate, reject) => {
+    /* tag-record check */
+  },
   assertValid: (candidate, passStyleOfRecur) => {
     // 1. tag-record is structurally a SturdyRef tag-record.
     // 2. The location passes a passable-location check
@@ -408,7 +410,7 @@ Method guards that want to accept a SturdyRef where they previously
 took a pet-name-path use a sum:
 
 ```js
-M.or(M.arrayOf(M.string()), M.string(), M.sturdyRef())
+M.or(M.arrayOf(M.string()), M.string(), M.sturdyRef());
 ```
 
 (or a named alias `M.petNamePathOrSturdyRef()`, defined once in
@@ -422,7 +424,7 @@ The mechanism is:
 - **On send (boxing).**
   The marshaler asks `passStyleOf(value)`.
   When the answer is `'sturdyref'`, the marshaler asks the
-  layer's *sturdyref dispatcher* for a wire representation.
+  layer's _sturdyref dispatcher_ for a wire representation.
   For OCapN, the dispatcher inspects the locator and either
   emits the `ocapn-sturdyref` tagged record (peer + swiss-num)
   directly (when the locator is to a peer the session can reach)
@@ -435,20 +437,20 @@ The mechanism is:
 - **On receive (unboxing).**
   The wire form (`ocapn-sturdyref(peer, swiss-num)` for OCapN, the
   equivalent for other layers) is handed to the layer's
-  sturdyref *unboxer*, which:
+  sturdyref _unboxer_, which:
   1. constructs a SturdyRef via `makeSturdyRef(parsedLocation)`,
   2. records `{ swissNum }` in the layer's side-table keyed by
      SturdyRef identity (the off-band `(location, secret)` map),
   3. returns the inert SturdyRef to the application.
-  No `HandledPromise` registration occurs: the SturdyRef is an inert
-  data box (see *A SturdyRef is inert*).
-  The application that wants the live capability calls
-  `enlivenSturdyRef(sturdyRef)` to obtain a presence and then `E()`s
-  the presence; the OCapN-provided `enlivenSturdyRef` is the only path
-  that reads the swiss number.
+     No `HandledPromise` registration occurs: the SturdyRef is an inert
+     data box (see _A SturdyRef is inert_).
+     The application that wants the live capability calls
+     `enlivenSturdyRef(sturdyRef)` to obtain a presence and then `E()`s
+     the presence; the OCapN-provided `enlivenSturdyRef` is the only path
+     that reads the swiss number.
 
 The closely-held capability OCapN supplies to the daemon is the
-*identity* of the layer's sturdyref dispatcher and enlivener.
+_identity_ of the layer's sturdyref dispatcher and enlivener.
 The capability provides two operations:
 
 - `associate(sturdyRef, location) -> swissNum?` (mint side):
@@ -466,23 +468,23 @@ Every daemon agent method whose signature today accepts
 `...petNamePath` (or `petNameOrPath: string | string[]`) gains an
 overload that accepts a SturdyRef in place of the pet-name-path:
 
-| Method | Today | After |
-|---|---|---|
-| `lookup(...path)` | `name -> value` | `name | sturdyRef -> value` |
-| `identify(...path)` | `name -> id` | `name | sturdyRef -> id` |
-| `locate(...path)` | `name -> locator` | `name | sturdyRef -> locator` |
-| `reverseLookup(value)` | `value -> name[]` | unchanged |
-| `reverseIdentify(id)` | `id -> name[]` | unchanged |
-| `reverseLocate(locator)` | `locator -> name[]` | unchanged |
-| `list(...path)` | `name -> name[]` | `name | sturdyRef -> name[]` |
-| `listIdentifiers(...path)` | unchanged on path side | sturdyRef allowed where leaf is a directory |
-| `listLocators(...path)` | unchanged | sturdyRef allowed |
-| `write(path, id)` | `(name, id) -> void` | unchanged (write target is still a pet-name) |
-| `writeLocator(path, locOrId)` | accepts locator or id | additionally accepts SturdyRef |
-| `remove(...path)` | `name -> void` | unchanged (removal is by name) |
-| `move(src, dst)` | both pet-name-paths | unchanged (rename is by name) |
-| `makeUnconfined(spec, opts)` | `petNamePaths: (string|string[])[]` | each entry may be a SturdyRef |
-| `evaluate(...)` | `petNamePaths` | each entry may be a SturdyRef |
+| Method                        | Today                  | After                                        |
+| ----------------------------- | ---------------------- | -------------------------------------------- | ----------------------------- |
+| `lookup(...path)`             | `name -> value`        | `name                                        | sturdyRef -> value`           |
+| `identify(...path)`           | `name -> id`           | `name                                        | sturdyRef -> id`              |
+| `locate(...path)`             | `name -> locator`      | `name                                        | sturdyRef -> locator`         |
+| `reverseLookup(value)`        | `value -> name[]`      | unchanged                                    |
+| `reverseIdentify(id)`         | `id -> name[]`         | unchanged                                    |
+| `reverseLocate(locator)`      | `locator -> name[]`    | unchanged                                    |
+| `list(...path)`               | `name -> name[]`       | `name                                        | sturdyRef -> name[]`          |
+| `listIdentifiers(...path)`    | unchanged on path side | sturdyRef allowed where leaf is a directory  |
+| `listLocators(...path)`       | unchanged              | sturdyRef allowed                            |
+| `write(path, id)`             | `(name, id) -> void`   | unchanged (write target is still a pet-name) |
+| `writeLocator(path, locOrId)` | accepts locator or id  | additionally accepts SturdyRef               |
+| `remove(...path)`             | `name -> void`         | unchanged (removal is by name)               |
+| `move(src, dst)`              | both pet-name-paths    | unchanged (rename is by name)                |
+| `makeUnconfined(spec, opts)`  | `petNamePaths: (string | string[])[]`                                 | each entry may be a SturdyRef |
+| `evaluate(...)`               | `petNamePaths`         | each entry may be a SturdyRef                |
 
 The internal flow at the facet boundary is:
 
@@ -531,7 +533,7 @@ default `deleteExport(slot)` also calls `residenceWatcher.release(...)`
 (see `packages/daemon/src/residence.js`, the `makeCapTPImportExportTables`
 wrapper).
 But `deleteExport` is not fired by the end of a turn.
-It fires on `CTP_DROP`, when the *importing* (worker) side drops its
+It fires on `CTP_DROP`, when the _importing_ (worker) side drops its
 last reference to the slot and CapTP propagates that drop back to the
 exporter (see `packages/captp/src/captp.js`, `CTP_DROP` around line 612
 and `releaseSlot` around line 438, whose comment reads "since GC told
@@ -545,12 +547,12 @@ daemon's `release` hook) alive until its own VM collects the value.
 
 This design therefore cannot rely on the slot dropping at turn end.
 Rule 1's "lives only for the duration of the current delivery's task"
-is a *contract* this design must enforce (the worker is told not to
+is a _contract_ this design must enforce (the worker is told not to
 stash the SturdyRef across turns, and Rule 3's syscall is the
 sanctioned way to extend retention), not a property the CapTP slot
 lifecycle delivers for free.
 The consequence for the determinism claim is reconciled in
-*Composition with the maintainer's framing* and the open questions
+_Composition with the maintainer's framing_ and the open questions
 below: the **implicit** (non-explicitly-retained) path inherits
 worker-VM GC timing, and only the **explicit** `retain` / `release`
 path is GC-timing-independent.
@@ -558,7 +560,7 @@ path is GC-timing-independent.
 **Rule 2 (the daemon retains ephemerally on the worker's behalf).**
 When the daemon hands a SturdyRef to a worker, the daemon also
 records, in `formulaGraph`, an internal retention edge labelled
-`ephemeral:<workerId>:<turn-id>` from the *worker*'s graph node
+`ephemeral:<workerId>:<turn-id>` from the _worker_'s graph node
 to the SturdyRef's underlying formula.
 This edge lives only as long as the turn.
 On turn end, the edge is removed.
@@ -574,7 +576,7 @@ has explicitly retained".
 **Rule 3 (the `retain` / `release` syscall extends retention).**
 A worker that wants to keep a SturdyRef alive across turns
 issues an `endor` syscall (next subsection).
-The syscall returns an opaque *retention handle* (a small
+The syscall returns an opaque _retention handle_ (a small
 integer, scoped to the worker).
 While the handle is held, the daemon maintains an explicit
 retention edge labelled `retained:<workerId>:<handle>` in
@@ -598,7 +600,7 @@ This composition has the property the maintainer asked for:
 
 - **The "no explicit retention management" virtue
   (ocap-kernel-style).**
-  *Within a turn*, the worker writes idiomatic JS and never
+  _Within a turn_, the worker writes idiomatic JS and never
   calls `retain` or `release`.
   The daemon's ephemeral retention is automatic.
   This is most of the day-to-day worker code.
@@ -642,7 +644,7 @@ The "disadvantage of each" the maintainer warned about:
   not pet names.
   The user's namespace is untouched.
 
-The disadvantage that *remains* and that this design accepts:
+The disadvantage that _remains_ and that this design accepts:
 the worker has to issue an explicit syscall to retain across
 turns.
 This is the conscious tradeoff.
@@ -762,7 +764,7 @@ not at a turn boundary.
 For a well-behaved worker that does not stash the SturdyRef, that
 drop happens soon after the turn, but the timing is worker-VM-GC
 driven (Rule 1 above).
-The `ephemeral:W:turn` edge models the *intended* turn-scoped
+The `ephemeral:W:turn` edge models the _intended_ turn-scoped
 lifetime; enforcing that lifetime against a misbehaving worker is the
 job of Rule 3's explicit syscall, not of the slot lifecycle.
 
@@ -815,13 +817,13 @@ The change lands in five cuts.
 Each cut is independently mergeable; the cuts share a
 chronological order but are not all in one PR.
 
-| Cut | Change | Risk |
-|---|---|---|
-| 1 | Add `'sturdyref'` to `@endo/pass-style` with `SturdyRefHelper`, `makeSturdyRef`, and a passing test suite. No daemon change. `@endo/ocapn` continues to use its `tagged`-with-WeakMap shim; nothing else has to migrate yet. | Low. Internal-only addition. |
-| 2 | `@endo/ocapn` migrates from `tagged`-with-WeakMap to the new pass-style category. `ocapnPassStyleOf` collapses to `passStyleOf`. Existing tests stay green. | Low. One package, well-covered. |
-| 3 | Daemon's existing pet-name-path-accepting methods grow the `M.or(M.petNamePath(), M.sturdyRef())` guard. Initially they reject `M.sturdyRef()` at the facet (returning a "not yet implemented" error), so the guard ships before the resolution does. | Low. Type-surface only. |
-| 4 | Daemon `revealSturdyRef` closely-held capability lands; the facets actually resolve SturdyRefs to formula identifiers and dispatch. Per-method tests prove `lookup`/`identify`/`locate`/`evaluate`/`makeUnconfined` all accept SturdyRefs. Existing pet-name-path-only callers are unaffected. | Medium. Touches every facet; per-method coverage matters. |
-| 5 | `endor` `retain` / `release` syscall lands. Supervisor exposes the new verbs. Worker-side helper `syscall.retain(slot)` / `syscall.release(handle)` ships in the worker bootstrap. Formula-graph gains `retained:`/`ephemeral:` labels with `listRetentionPaths` rendering them. | Medium-high. Crosses the SES boundary and adds bytes to the on-wire envelope verb set. |
+| Cut | Change                                                                                                                                                                                                                                                                                         | Risk                                                                                   |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| 1   | Add `'sturdyref'` to `@endo/pass-style` with `SturdyRefHelper`, `makeSturdyRef`, and a passing test suite. No daemon change. `@endo/ocapn` continues to use its `tagged`-with-WeakMap shim; nothing else has to migrate yet.                                                                   | Low. Internal-only addition.                                                           |
+| 2   | `@endo/ocapn` migrates from `tagged`-with-WeakMap to the new pass-style category. `ocapnPassStyleOf` collapses to `passStyleOf`. Existing tests stay green.                                                                                                                                    | Low. One package, well-covered.                                                        |
+| 3   | Daemon's existing pet-name-path-accepting methods grow the `M.or(M.petNamePath(), M.sturdyRef())` guard. Initially they reject `M.sturdyRef()` at the facet (returning a "not yet implemented" error), so the guard ships before the resolution does.                                          | Low. Type-surface only.                                                                |
+| 4   | Daemon `revealSturdyRef` closely-held capability lands; the facets actually resolve SturdyRefs to formula identifiers and dispatch. Per-method tests prove `lookup`/`identify`/`locate`/`evaluate`/`makeUnconfined` all accept SturdyRefs. Existing pet-name-path-only callers are unaffected. | Medium. Touches every facet; per-method coverage matters.                              |
+| 5   | `endor` `retain` / `release` syscall lands. Supervisor exposes the new verbs. Worker-side helper `syscall.retain(slot)` / `syscall.release(handle)` ships in the worker bootstrap. Formula-graph gains `retained:`/`ephemeral:` labels with `listRetentionPaths` rendering them.               | Medium-high. Crosses the SES boundary and adds bytes to the on-wire envelope verb set. |
 
 Existing formulas with petname-only retention are untouched: pet
 names continue to be retention roots; existing pet-name-path
@@ -872,7 +874,7 @@ This is documented in the worker SDK; the worker-side helper
 ought to `retain` before yielding the turn if it knows it needs
 cross-turn retention.
 
-#### Worker holds a SturdyRef *and* calls a daemon method that resolves it
+#### Worker holds a SturdyRef _and_ calls a daemon method that resolves it
 
 This is the central design payoff.
 The worker passes the SturdyRef as an argument; the facet
@@ -893,14 +895,14 @@ The maintainer's framing was that we should not take the
 disadvantages of either approach while seeking each's virtue.
 
 - **Implicit retention (ocap-kernel virtue).**
-  This design sources implicit retention from the *daemon's*
+  This design sources implicit retention from the _daemon's_
   ephemeral retention edge.
   For the common case (a worker is handed a SturdyRef in a
   turn and uses it in the same turn), no explicit retain/release
   is needed.
   The worker writes JS as if the daemon were holding the
   reference for it, because it is.
-  The honest caveat (see Rule 1): the *teardown* of that ephemeral
+  The honest caveat (see Rule 1): the _teardown_ of that ephemeral
   edge keys off the CapTP slot's `CTP_DROP`, which is worker-VM-GC
   driven, so the implicit path's release timing is not deterministic.
   The design relies on the contract that workers do not retain
@@ -929,11 +931,11 @@ This design does not add a `FinalizationRegistry` of its own, but it
 does not escape CapTP's existing import-GC machinery for the implicit
 path; the determinism win is confined to the explicit path.
 
-The disadvantage of the daemon that we explicitly *do not* take:
+The disadvantage of the daemon that we explicitly _do not_ take:
 the user's pet-name namespace is not polluted by retention.
 A worker can retain N formulas without minting N pet names.
 
-The disadvantage we *do* accept: the worker writes an explicit
+The disadvantage we _do_ accept: the worker writes an explicit
 syscall for cross-turn retention.
 This design's claim is that this is the right tradeoff because
 cross-turn retention is a long-lived choice the worker is
@@ -948,29 +950,29 @@ and uses `FinalizationRegistry` on the daemon side to observe
 worker-VM drop events.
 Concrete points where the two diverge:
 
-| Question | This design | Alternative (FinalizationRegistry) |
-|---|---|---|
-| Where does a worker hold a SturdyRef across turns? | The sanctioned way is a numeric *handle* from `retain`; the SturdyRef object itself is meant to be turn-scoped (its CapTP slot drops on `CTP_DROP` when the worker's VM collects it, not at a turn boundary). A worker that stashes the object instead keeps the slot alive, which is the implicit-path case below. | The worker holds the SturdyRef object itself, in a module-scope variable, set, weakmap, or similar. |
-| How does the daemon know the worker is still holding it? | The daemon's `formulaGraph` carries an explicit `retained:<worker>:<handle>` edge that the worker created via syscall. | The daemon registers the SturdyRef with a `FinalizationRegistry` on the worker side and observes the registry's drop callbacks over CapTP. |
-| How does the daemon know the worker no longer holds it? | Explicit path: the worker issues `release(handle)`, or the worker dies. Implicit path: CapTP `CTP_DROP` fires `deleteExport` when the worker VM collects the slot, same GC-driven signal the alternative uses. | The worker's VM eventually GCs the SturdyRef and the registry callback fires (whenever the VM runs GC). |
-| How long is "between worker stops holding and daemon notices"? | Explicit path: microseconds, bounded by the syscall round-trip. Implicit path: indefinite, bounded by the worker VM's GC scheduling (the same bound as the alternative). | Indefinite. Bounded only by the worker VM's GC scheduling. |
-| What does `listRetentionPaths` show? | Explicit edges keyed by `retained:<worker>:<handle>` and `ephemeral:<worker>:<turn>`. The user sees exactly what the worker explicitly retained. | An edge keyed by the worker. The "what does this worker hold" answer is approximate until the next GC pass. |
-| Cost of "no retention" code path | Zero. Workers that don't retain across turns issue no syscalls. | Each SturdyRef costs a FinalizationRegistry entry on creation, regardless of whether the worker keeps it. |
-| Cost of "retention" code path | One `retain` syscall, one eventual `release` syscall. | Zero explicit cost, paid back as GC observation overhead. |
-| Compatibility with `lockdown` discouragement of `FinalizationRegistry` | No `FinalizationRegistry` needed; the design works under arbitrary SES taming. | Requires `FinalizationRegistry` to be left available under `lockdown`, which is a posture this codebase has historically discouraged for determinism. |
-| What happens if the worker is buggy and forgets to release? | The `retained:` edge persists until worker termination; the user can mention the worker as the retention root and revoke. The bug shows up as an explicit retention path visible to the user. (A worker that buggily stashes the object without `retain` instead lands on the implicit path, where the edge persists until the worker VM GCs, the same failure shape as the alternative.) | Retention persists until the worker VM happens to GC; the user can mention the worker and revoke. The bug is invisible (looks like "the VM hasn't GC'd yet"). |
-| What happens if the worker is buggy and releases the wrong handle? | The wrong handle's retention drops. The right one stays alive. Each handle is independent. | Not applicable. |
-| `endor` protocol surface added | Two new verbs (`retain`, `release`) plus their responses. | Likely a new verb for the FinalizationRegistry drop notification, depending on how the alternative is structured. |
-| Worker SDK surface added | A `syscall.retain(slot)` / `syscall.release(handle)` pair, exposed only to worker-side capability code. | None on the SDK; `FinalizationRegistry` is the surface. |
-| Reincarnation behaviour | Reincarnated worker starts with no handles; the worker's `provideGuest`-style boot code re-acquires whatever it needs. | Reincarnated worker re-registers SturdyRefs with the registry on boot; same shape, but the registry callbacks are the audit trail. |
-| Revocation lag | Explicit path: bounded by syscall round-trip. Implicit path: bounded by worker GC, as in the alternative. | Bounded by worker GC. |
-| Posture | "The daemon owns retention; workers ask explicitly when they want extension." | "Workers own retention; the daemon observes via VM hooks." |
+| Question                                                               | This design                                                                                                                                                                                                                                                                                                                                                                               | Alternative (FinalizationRegistry)                                                                                                                            |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Where does a worker hold a SturdyRef across turns?                     | The sanctioned way is a numeric _handle_ from `retain`; the SturdyRef object itself is meant to be turn-scoped (its CapTP slot drops on `CTP_DROP` when the worker's VM collects it, not at a turn boundary). A worker that stashes the object instead keeps the slot alive, which is the implicit-path case below.                                                                       | The worker holds the SturdyRef object itself, in a module-scope variable, set, weakmap, or similar.                                                           |
+| How does the daemon know the worker is still holding it?               | The daemon's `formulaGraph` carries an explicit `retained:<worker>:<handle>` edge that the worker created via syscall.                                                                                                                                                                                                                                                                    | The daemon registers the SturdyRef with a `FinalizationRegistry` on the worker side and observes the registry's drop callbacks over CapTP.                    |
+| How does the daemon know the worker no longer holds it?                | Explicit path: the worker issues `release(handle)`, or the worker dies. Implicit path: CapTP `CTP_DROP` fires `deleteExport` when the worker VM collects the slot, same GC-driven signal the alternative uses.                                                                                                                                                                            | The worker's VM eventually GCs the SturdyRef and the registry callback fires (whenever the VM runs GC).                                                       |
+| How long is "between worker stops holding and daemon notices"?         | Explicit path: microseconds, bounded by the syscall round-trip. Implicit path: indefinite, bounded by the worker VM's GC scheduling (the same bound as the alternative).                                                                                                                                                                                                                  | Indefinite. Bounded only by the worker VM's GC scheduling.                                                                                                    |
+| What does `listRetentionPaths` show?                                   | Explicit edges keyed by `retained:<worker>:<handle>` and `ephemeral:<worker>:<turn>`. The user sees exactly what the worker explicitly retained.                                                                                                                                                                                                                                          | An edge keyed by the worker. The "what does this worker hold" answer is approximate until the next GC pass.                                                   |
+| Cost of "no retention" code path                                       | Zero. Workers that don't retain across turns issue no syscalls.                                                                                                                                                                                                                                                                                                                           | Each SturdyRef costs a FinalizationRegistry entry on creation, regardless of whether the worker keeps it.                                                     |
+| Cost of "retention" code path                                          | One `retain` syscall, one eventual `release` syscall.                                                                                                                                                                                                                                                                                                                                     | Zero explicit cost, paid back as GC observation overhead.                                                                                                     |
+| Compatibility with `lockdown` discouragement of `FinalizationRegistry` | No `FinalizationRegistry` needed; the design works under arbitrary SES taming.                                                                                                                                                                                                                                                                                                            | Requires `FinalizationRegistry` to be left available under `lockdown`, which is a posture this codebase has historically discouraged for determinism.         |
+| What happens if the worker is buggy and forgets to release?            | The `retained:` edge persists until worker termination; the user can mention the worker as the retention root and revoke. The bug shows up as an explicit retention path visible to the user. (A worker that buggily stashes the object without `retain` instead lands on the implicit path, where the edge persists until the worker VM GCs, the same failure shape as the alternative.) | Retention persists until the worker VM happens to GC; the user can mention the worker and revoke. The bug is invisible (looks like "the VM hasn't GC'd yet"). |
+| What happens if the worker is buggy and releases the wrong handle?     | The wrong handle's retention drops. The right one stays alive. Each handle is independent.                                                                                                                                                                                                                                                                                                | Not applicable.                                                                                                                                               |
+| `endor` protocol surface added                                         | Two new verbs (`retain`, `release`) plus their responses.                                                                                                                                                                                                                                                                                                                                 | Likely a new verb for the FinalizationRegistry drop notification, depending on how the alternative is structured.                                             |
+| Worker SDK surface added                                               | A `syscall.retain(slot)` / `syscall.release(handle)` pair, exposed only to worker-side capability code.                                                                                                                                                                                                                                                                                   | None on the SDK; `FinalizationRegistry` is the surface.                                                                                                       |
+| Reincarnation behaviour                                                | Reincarnated worker starts with no handles; the worker's `provideGuest`-style boot code re-acquires whatever it needs.                                                                                                                                                                                                                                                                    | Reincarnated worker re-registers SturdyRefs with the registry on boot; same shape, but the registry callbacks are the audit trail.                            |
+| Revocation lag                                                         | Explicit path: bounded by syscall round-trip. Implicit path: bounded by worker GC, as in the alternative.                                                                                                                                                                                                                                                                                 | Bounded by worker GC.                                                                                                                                         |
+| Posture                                                                | "The daemon owns retention; workers ask explicitly when they want extension."                                                                                                                                                                                                                                                                                                             | "Workers own retention; the daemon observes via VM hooks."                                                                                                    |
 
 The decision is therefore a posture choice between
-*explicit-and-narrow* (this design) and *implicit-and-wide* (the
+_explicit-and-narrow_ (this design) and _implicit-and-wide_ (the
 alternative).
 Both preserve the user's revocation-by-deletion agency.
-They differ in whether this design *adds* a `FinalizationRegistry`
+They differ in whether this design _adds_ a `FinalizationRegistry`
 (it does not) and in where the determinism win lands: this design buys
 GC-timing-independence only for the **explicit** retain/release path,
 while its implicit path rides CapTP's existing import-GC and so shares
@@ -1051,8 +1053,8 @@ Retention surface:
   surface is added for SturdyRefs (per #521).
 - `@endo/ocapn` no longer needs `ocapnPassStyleOf` for SturdyRefs.
 - Every daemon facet method that today accepts a pet-name-path
-  also accepts a SturdyRef (per the table in *Daemon: SturdyRef as
-  pet-name-path substitute*).
+  also accepts a SturdyRef (per the table in _Daemon: SturdyRef as
+  pet-name-path substitute_).
 - The `endor` envelope protocol gains two new worker-originating
   verbs, with documented payload and response shapes.
 - `formulaGraph` carries `ephemeral:<worker>:<turn>` and
@@ -1118,8 +1120,8 @@ Retention surface:
      `retain` / `release` path, does this design still beat the
      sibling (#511) FinalizationRegistry plan, or does the residual
      implicit-path GC dependence erase the margin?
-  (These are the central posture questions the maintainer's response
-  resolves; this design does not pre-decide them.)
+     (These are the central posture questions the maintainer's response
+     resolves; this design does not pre-decide them.)
 - Should the implicit ephemeral path be made deterministic to recover
   the original determinism claim?
   One option is for the daemon to **proactively** drop the export at a
@@ -1132,16 +1134,16 @@ Retention surface:
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| [daemon-locator-reference](daemon-locator-reference.md) | Source of the locator format and the `internalize`/`externalize` flow this design reuses. |
-| [daemon-locator-terminology](daemon-locator-terminology.md) | Source of the *Peer Key* / *Formula Address* terminology in flight. |
-| [daemon-retention-paths](daemon-retention-paths.md) | Source of the `listRetentionPaths` and `followRetentionPaths` surface this design extends with new edge labels. |
-| [daemon-cross-peer-gc](daemon-cross-peer-gc.md) | Establishes the `formulaGraph` retention edges this design composes with. |
-| [daemon-endor-architecture](daemon-endor-architecture.md) | Source of the `endor` envelope protocol this design extends with `retain` / `release`. |
-| [retention-path-notation](retention-path-notation.md) | Source of the edge-label notation `pet:<name>`, which this design extends with `ephemeral:<worker>:<turn>` and `retained:<worker>:<handle>`. |
-| (sibling, #511) | `design/sturdy-refs-via-finalization-registry` (the FinalizationRegistry plan competing with this one). |
-| #521 | `feat(pass-style): first-class 'sturdyref' pass-style; ocapn defers to it` — the in-flight implementation of the shared base problem (item 1), which established the inert-data-box correction both designs adopt. |
+| Design                                                      | Relationship                                                                                                                                                                                                       |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [daemon-locator-reference](daemon-locator-reference.md)     | Source of the locator format and the `internalize`/`externalize` flow this design reuses.                                                                                                                          |
+| [daemon-locator-terminology](daemon-locator-terminology.md) | Source of the _Peer Key_ / _Formula Address_ terminology in flight.                                                                                                                                                |
+| [daemon-retention-paths](daemon-retention-paths.md)         | Source of the `listRetentionPaths` and `followRetentionPaths` surface this design extends with new edge labels.                                                                                                    |
+| [daemon-cross-peer-gc](daemon-cross-peer-gc.md)             | Establishes the `formulaGraph` retention edges this design composes with.                                                                                                                                          |
+| [daemon-endor-architecture](daemon-endor-architecture.md)   | Source of the `endor` envelope protocol this design extends with `retain` / `release`.                                                                                                                             |
+| [retention-path-notation](retention-path-notation.md)       | Source of the edge-label notation `pet:<name>`, which this design extends with `ephemeral:<worker>:<turn>` and `retained:<worker>:<handle>`.                                                                       |
+| (sibling, #511)                                             | `design/sturdy-refs-via-finalization-registry` (the FinalizationRegistry plan competing with this one).                                                                                                            |
+| #521                                                        | `feat(pass-style): first-class 'sturdyref' pass-style; ocapn defers to it` — the in-flight implementation of the shared base problem (item 1), which established the inert-data-box correction both designs adopt. |
 
 ## Prompt
 

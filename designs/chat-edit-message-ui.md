@@ -1,11 +1,11 @@
 # Chat Edit-Message UI Affordances
 
-| | |
-|---|---|
-| **Created** | 2026-05-05 |
-| **Updated** | 2026-05-05 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-05-05            |
+| **Updated** | 2026-05-05            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## What is the Problem Being Solved?
 
@@ -44,8 +44,8 @@ A new entry in `command-registry.js`, dispatched through the existing
 inline command form (see [chat-command-bar](chat-command-bar.md) §
 "Inline Command Form"):
 
-| Field | Type | Notes |
-|---|---|---|
+| Field      | Type               | Notes                                 |
+| ---------- | ------------------ | ------------------------------------- |
 | `referent` | message identifier | Required. The outbox message to edit. |
 
 `/edit` takes a single argument: the referent of the message to edit.
@@ -82,8 +82,8 @@ keys against the focused message and lists `r d a g s` as the existing
 shortcut set.
 This design adds:
 
-| Key | Command | Description |
-|---|---|---|
+| Key | Command | Description                                                             |
+| --- | ------- | ----------------------------------------------------------------------- |
 | `e` | `/edit` | Edit the focused message (only when sender matches the current profile) |
 
 The dispatch path is identical to the other focus shortcuts:
@@ -187,14 +187,14 @@ cancel`).
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
+| Design                                                  | Relationship                                                                                                                                                              |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [daemon-message-streaming](daemon-message-streaming.md) | Provides the `editMessage` and `messageHistory` methods this UI calls. Implemented in [endojs/endo-but-for-bots#23](https://github.com/endojs/endo-but-for-bots/pull/23). |
-| [chat-command-bar](chat-command-bar.md) | `/edit` registers as an inline command form; reuses the message-referent and embedded-token field types. |
-| [chat-focus-message](chat-focus-message.md) | `e` is an additional focus-mode shortcut; identical dispatch shape. |
-| [chat-components](chat-components.md) | Reuses `send-form.js`, `message-picker.js`, `markdown-render.js`. |
-| [chat-markdown-render](chat-markdown-render.md) | Revision history rendering reuses the Markdown pipeline. |
-| [chat-view-edit-commands](chat-view-edit-commands.md) | Sibling design; competes for the `e` keybinding and the `/edit` slash-command name. See **Open questions**. |
+| [chat-command-bar](chat-command-bar.md)                 | `/edit` registers as an inline command form; reuses the message-referent and embedded-token field types.                                                                  |
+| [chat-focus-message](chat-focus-message.md)             | `e` is an additional focus-mode shortcut; identical dispatch shape.                                                                                                       |
+| [chat-components](chat-components.md)                   | Reuses `send-form.js`, `message-picker.js`, `markdown-render.js`.                                                                                                         |
+| [chat-markdown-render](chat-markdown-render.md)         | Revision history rendering reuses the Markdown pipeline.                                                                                                                  |
+| [chat-view-edit-commands](chat-view-edit-commands.md)   | Sibling design; competes for the `e` keybinding and the `/edit` slash-command name. See **Open questions**.                                                               |
 
 ## Design decisions
 

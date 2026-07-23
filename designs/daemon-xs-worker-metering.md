@@ -1,11 +1,11 @@
 # XS Worker Metering: Measurement, Quotas, and Rate Limiting
 
-| | |
-|---|---|
-| **Created** | 2026-04-17 |
-| **Updated** | 2026-04-17 |
-| **Author** | Kris (prompted) |
-| **Status** | **Complete** |
+|             |                 |
+| ----------- | --------------- |
+| **Created** | 2026-04-17      |
+| **Updated** | 2026-04-17      |
+| **Author**  | Kris (prompted) |
+| **Status**  | **Complete**    |
 
 ## Status
 
@@ -113,7 +113,7 @@ The upper 16 bits of `meterIndex` give the human-readable
 ### Metering callback
 
 `fxBeginMetering(the, callback, interval)` installs a callback
-that fires every *interval* increments.
+that fires every _interval_ increments.
 The callback receives the current `meterIndex >> 16` and returns
 a boolean: true = continue, false = abort with
 `XS_TOO_MUCH_COMPUTATION_EXIT`.
@@ -140,11 +140,11 @@ No safe Rust API exists on `Machine`.
 
 ### Three metering modes
 
-| Mode | Behavior |
-|------|----------|
-| **Measurement** | Steps counted per crank, accumulated in supervisor. No enforcement. Default for all workers. |
-| **Quota** | Worker has a step budget. Messages buffered until budget >= hard limit. Worker terminated if single crank exceeds hard limit. |
-| **Rate-limited** | Quota mode plus automatic budget accumulation over time at a configured rate, clamped by a burst ceiling. |
+| Mode             | Behavior                                                                                                                      |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **Measurement**  | Steps counted per crank, accumulated in supervisor. No enforcement. Default for all workers.                                  |
+| **Quota**        | Worker has a step budget. Messages buffered until budget >= hard limit. Worker terminated if single crank exceeds hard limit. |
+| **Rate-limited** | Quota mode plus automatic budget accumulation over time at a configured rate, clamped by a burst ceiling.                     |
 
 ### Layered architecture
 
@@ -255,6 +255,7 @@ limit.
 This is treated as a fatal condition: the worker is destroyed.
 
 Rationale:
+
 - A crank that exceeds the hard limit is either an infinite
   loop or a computation so expensive it shouldn't run.
 - The XS machine state after an abort is uncertain — promise
@@ -265,6 +266,7 @@ Rationale:
   snapshot if needed (suspend/resume infrastructure).
 
 For the worker thread, hitting the hard limit means:
+
 1. `XS_TOO_MUCH_COMPUTATION_EXIT` fires via `longjmp`.
 2. The worker sends a final `meter-report` with
    `outcome: "terminated"`.
@@ -287,6 +289,7 @@ fn should_deliver(&self, meter: &MeterState) -> bool {
 ```
 
 When a message arrives for a worker that lacks sufficient budget:
+
 - The message stays in the worker's inbox
   (`tokio::sync::mpsc` channel).
 - The routing loop skips this worker, similar to how it skips
@@ -315,6 +318,7 @@ payload: CBOR map {
 ```
 
 The supervisor uses this to:
+
 1. Subtract `steps` from `budget`.
 2. Add `steps` to `accumulated`.
 3. On `"terminated"`: clean up the worker.
@@ -377,6 +381,7 @@ The supervisor calls `refill()` before checking the admission
 gate.
 This is a lazy calculation — no timers needed.
 The budget is recomputed on demand when:
+
 - A new message arrives for the worker.
 - A `meter-query` verb is received.
 - The routing loop polls the worker's readiness.
@@ -428,11 +433,13 @@ Payloads are CBOR maps.
 Request the current metering state of a worker.
 
 Request:
+
 ```cbor
 { "handle": <worker_handle> }
 ```
 
 Response:
+
 ```cbor
 {
     "handle": <worker_handle>,
@@ -451,11 +458,13 @@ Reset the accumulated step counter to zero.
 Does not affect budget, quota, or rate limit.
 
 Request:
+
 ```cbor
 { "handle": <worker_handle> }
 ```
 
 Response:
+
 ```cbor
 { "handle": <worker_handle>, "accumulated": 0 }
 ```
@@ -466,6 +475,7 @@ Enable quota mode with a given hard limit and initial budget.
 Disables rate limiting if previously set.
 
 Request:
+
 ```cbor
 {
     "handle": <worker_handle>,
@@ -483,6 +493,7 @@ Sets the hard limit, rate, and burst ceiling.
 Budget begins accumulating immediately.
 
 Request:
+
 ```cbor
 {
     "handle": <worker_handle>,
@@ -500,6 +511,7 @@ Budget is clamped to `burst` in rate-limited mode, unclamped
 in quota mode.
 
 Request:
+
 ```cbor
 {
     "handle": <worker_handle>,
@@ -612,24 +624,25 @@ The worker thread is idle, blocked on `recv_raw_envelope`.
 ### Measurement-only mode (default)
 
 When `mode` is `Measurement`:
+
 - Metering callback always returns true (limit = 0 means
   no enforcement).
 - Steps are counted and reported after each crank.
 - The supervisor accumulates `accumulated` steps.
 - No admission gating, no budget tracking.
 - Zero overhead except for the metering callback (which
-  runs every *interval* steps and immediately returns true).
+  runs every _interval_ steps and immediately returns true).
 
 The metering interval can be set high (e.g., 10000) to
 minimize callback overhead in measurement-only mode.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|-------------|
-| `daemon-endor-architecture.md` | Parent: defines worker platforms |
-| `daemon-xs-worker-snapshot.md` | Sibling: suspend/resume must preserve meter state |
-| `daemon-rust-xs-performance.md` | Sibling: reactive pump loop integration |
+| Design                          | Relationship                                      |
+| ------------------------------- | ------------------------------------------------- |
+| `daemon-endor-architecture.md`  | Parent: defines worker platforms                  |
+| `daemon-xs-worker-snapshot.md`  | Sibling: suspend/resume must preserve meter state |
+| `daemon-rust-xs-performance.md` | Sibling: reactive pump loop integration           |
 
 ## Phased Implementation
 
@@ -748,7 +761,7 @@ Files: `rust/endo/xsnap/src/daemon_bootstrap.js`
    before returning to the steady-state rate.
 
 5. **Budget as pre-payment, not post-payment.**
-   The budget represents *available* steps, not a credit
+   The budget represents _available_ steps, not a credit
    limit.
    Steps are subtracted after each crank.
    Messages are only delivered when the budget can cover

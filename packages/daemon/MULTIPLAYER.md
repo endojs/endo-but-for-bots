@@ -408,15 +408,15 @@ The remote daemon may be unreachable. Check that:
 
 ## Chat Commands Reference
 
-| Command           | Description                                                |
-|-------------------|------------------------------------------------------------|
-| `/network`        | Enable TCP networking (module path + listen address)       |
-| `/network-iroh`   | Enable iroh networking (no open ports needed)              |
-| `/invite`         | Create an invitation for a peer (prints `endo://` locator) |
-| `/accept`         | Accept an invitation locator and name the peer             |
-| `/adopt`          | Adopt a value from a received message                      |
-| `/request`        | Send a request to a peer                                   |
-| `/resolve`        | Resolve a pending request with a value                     |
-| `/reject`         | Reject a pending request                                   |
-| `/show`           | Inspect a value (works for remote values too)              |
-| `/ls`             | List names in inventory                                    |
+| Command         | Description                                                |
+| --------------- | ---------------------------------------------------------- |
+| `/network`      | Enable TCP networking (module path + listen address)       |
+| `/network-iroh` | Enable iroh networking (no open ports needed)              |
+| `/invite`       | Create an invitation for a peer (prints `endo://` locator) |
+| `/accept`       | Accept an invitation locator and name the peer             |
+| `/adopt`        | Adopt a value from a received message                      |
+| `/request`      | Send a request to a peer                                   |
+| `/resolve`      | Resolve a pending request with a value                     |
+| `/reject`       | Reject a pending request                                   |
+| `/show`         | Inspect a value (works for remote values too)              |
+| `/ls`           | List names in inventory                                    |

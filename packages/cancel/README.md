@@ -52,8 +52,13 @@ If a parent cancellation token is provided, cancellation automatically propagate
 from the parent to the child:
 
 ```js
-const { cancelled: parentCancelled, cancel: cancelParent, isCancelled: parentIsCancelled } = makeCancelKit();
-const { cancelled: childCancelled, isCancelled: childIsCancelled } = makeCancelKit(parentCancelled, parentIsCancelled);
+const {
+  cancelled: parentCancelled,
+  cancel: cancelParent,
+  isCancelled: parentIsCancelled,
+} = makeCancelKit();
+const { cancelled: childCancelled, isCancelled: childIsCancelled } =
+  makeCancelKit(parentCancelled, parentIsCancelled);
 
 cancelParent(Error('Parent cancelled'));
 // childCancelled is now also cancelled
@@ -79,12 +84,16 @@ individual operation rejects, all pending operations are cancelled.
 import { allMap } from '@endo/cancel/all-map';
 import { toAbortSignal } from '@endo/cancel/to-abort';
 
-const results = await allMap(urls, async (url, index, cancelled, isCancelled) => {
-  const response = await fetch(url, {
-    signal: toAbortSignal(cancelled, isCancelled),
-  });
-  return response.json();
-}, parentCancelled);
+const results = await allMap(
+  urls,
+  async (url, index, cancelled, isCancelled) => {
+    const response = await fetch(url, {
+      signal: toAbortSignal(cancelled, isCancelled),
+    });
+    return response.json();
+  },
+  parentCancelled,
+);
 ```
 
 #### Parameters
@@ -108,12 +117,16 @@ When one job succeeds, all pending jobs are cancelled. Only rejects with
 import { anyMap } from '@endo/cancel/any-map';
 import { toAbortSignal } from '@endo/cancel/to-abort';
 
-const firstResult = await anyMap(mirrors, async (mirror, index, cancelled, isCancelled) => {
-  const response = await fetch(`${mirror}/data.json`, {
-    signal: toAbortSignal(cancelled, isCancelled),
-  });
-  return response.json();
-}, parentCancelled);
+const firstResult = await anyMap(
+  mirrors,
+  async (mirror, index, cancelled, isCancelled) => {
+    const response = await fetch(`${mirror}/data.json`, {
+      signal: toAbortSignal(cancelled, isCancelled),
+    });
+    return response.json();
+  },
+  parentCancelled,
+);
 ```
 
 #### Parameters
@@ -223,10 +236,14 @@ document.getElementById('cancel-btn').onclick = () => controller.abort();
 // Convert to cancellation kit for use with Endo APIs
 const { cancelled, isCancelled } = fromAbortSignal(controller.signal);
 
-const results = await allMap(items, async (item, index, innerCancelled) => {
-  // Process item with cancellation support
-  return processItem(item, innerCancelled);
-}, cancelled);
+const results = await allMap(
+  items,
+  async (item, index, innerCancelled) => {
+    // Process item with cancellation support
+    return processItem(item, innerCancelled);
+  },
+  cancelled,
+);
 ```
 
 #### Parameters
@@ -269,7 +286,7 @@ type CancellableCallback<T, R> = (
   value: T,
   index: number,
   cancelled: Cancelled,
-  isCancelled: IsCancelled
+  isCancelled: IsCancelled,
 ) => R | Promise<R>;
 ```
 
@@ -284,7 +301,8 @@ A `cancelled` promise that arrives over CapTP can recover a local synchronous
 `isCancelled` cache by passing it as the parent of a new cancel kit:
 
 ```js
-const { cancelled: localCancelled, isCancelled } = makeCancelKit(remoteCancelled);
+const { cancelled: localCancelled, isCancelled } =
+  makeCancelKit(remoteCancelled);
 ```
 
 ## Design Rationale

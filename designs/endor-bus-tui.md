@@ -1,10 +1,10 @@
 # Endor Bus TUI — Worker-Programmable Terminal UI
 
-| | |
-|---|---|
-| **Created** | 2026-04-23 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-04-23            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## What is the Problem Being Solved?
 
@@ -116,21 +116,21 @@ Request the current screen metadata.
 
 Request payload (map):
 
-| Key | Type | Meaning |
-|---|---|---|
-| (none) | — | No arguments |
+| Key    | Type | Meaning      |
+| ------ | ---- | ------------ |
+| (none) | —    | No arguments |
 
 Response payload (map):
 
-| Key | Type | Meaning |
-|---|---|---|
-| `screenId` | int | Daemon-assigned ID for the current screen |
-| `cols` | int | Terminal columns |
-| `rows` | int | Terminal rows |
-| `colorDepth` | int | 1, 4, 8, or 24 (monochrome, 16-color, 256-color, truecolor) |
-| `hasMouse` | bool | Mouse reporting available |
-| `hasFocus` | bool | Focus in/out reporting available |
-| `attached` | bool | User is currently attached to this screen |
+| Key          | Type | Meaning                                                     |
+| ------------ | ---- | ----------------------------------------------------------- |
+| `screenId`   | int  | Daemon-assigned ID for the current screen                   |
+| `cols`       | int  | Terminal columns                                            |
+| `rows`       | int  | Terminal rows                                               |
+| `colorDepth` | int  | 1, 4, 8, or 24 (monochrome, 16-color, 256-color, truecolor) |
+| `hasMouse`   | bool | Mouse reporting available                                   |
+| `hasFocus`   | bool | Focus in/out reporting available                            |
+| `attached`   | bool | User is currently attached to this screen                   |
 
 A worker may hold several screen IDs concurrently if it is contributing
 to multiple terminals (e.g., one TTY per attached user).
@@ -146,32 +146,32 @@ A region is a rectangle of character cells that accepts draw calls.
 
 Request payload:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `screenId` | int | Target screen ID |
-| `title` | text | Window title for the layout manager |
-| `role` | text | One of `chat`, `debugger`, `status`, `tool`, `form`, `log` |
-| `layoutHint` | map | See layout hint below |
-| `initialRegions` | array | Optional — initial regions to create atomically |
+| Key              | Type  | Meaning                                                    |
+| ---------------- | ----- | ---------------------------------------------------------- |
+| `screenId`       | int   | Target screen ID                                           |
+| `title`          | text  | Window title for the layout manager                        |
+| `role`           | text  | One of `chat`, `debugger`, `status`, `tool`, `form`, `log` |
+| `layoutHint`     | map   | See layout hint below                                      |
+| `initialRegions` | array | Optional — initial regions to create atomically            |
 
 The `layoutHint` map carries fields that the layout engine in
 `endor-tui.md` interprets:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `minCols` | int | Minimum acceptable width |
-| `minRows` | int | Minimum acceptable height |
-| `preferredCols` | int | Preferred width |
-| `preferredRows` | int | Preferred height |
-| `dock` | text | `top`, `bottom`, `left`, `right`, `fill`, or `float` |
-| `priority` | int | Eviction priority (higher stays) |
+| Key             | Type | Meaning                                              |
+| --------------- | ---- | ---------------------------------------------------- |
+| `minCols`       | int  | Minimum acceptable width                             |
+| `minRows`       | int  | Minimum acceptable height                            |
+| `preferredCols` | int  | Preferred width                                      |
+| `preferredRows` | int  | Preferred height                                     |
+| `dock`          | text | `top`, `bottom`, `left`, `right`, `fill`, or `float` |
+| `priority`      | int  | Eviction priority (higher stays)                     |
 
 Response payload:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `windowId` | int | Daemon-assigned ID for the window |
-| `regions` | array | Echoed region IDs if `initialRegions` was set |
+| Key        | Type  | Meaning                                       |
+| ---------- | ----- | --------------------------------------------- |
+| `windowId` | int   | Daemon-assigned ID for the window             |
+| `regions`  | array | Echoed region IDs if `initialRegions` was set |
 
 ##### `tui.configureWindow`
 
@@ -180,11 +180,11 @@ All fields are optional; only the supplied ones are applied.
 
 Request payload:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `windowId` | int | Target |
-| `title` | text | New title |
-| `layoutHint` | map | New layout hint (replaces, does not merge) |
+| Key          | Type | Meaning                                    |
+| ------------ | ---- | ------------------------------------------ |
+| `windowId`   | int  | Target                                     |
+| `title`      | text | New title                                  |
+| `layoutHint` | map  | New layout hint (replaces, does not merge) |
 
 Response: empty map.
 
@@ -195,9 +195,9 @@ All contained regions are implicitly destroyed.
 
 Request payload:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `windowId` | int | Target |
+| Key        | Type | Meaning |
+| ---------- | ---- | ------- |
+| `windowId` | int  | Target  |
 
 Response: empty map.
 
@@ -209,18 +209,18 @@ Regions within a window tile according to the window's layout policy
 
 Request payload:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `windowId` | int | Parent window |
-| `role` | text | `text`, `buffer`, `status`, `input`, `canvas` |
-| `layoutHint` | map | Same shape as window layout hint |
-| `scrollback` | int | For `buffer` regions, scrollback line capacity |
+| Key          | Type | Meaning                                        |
+| ------------ | ---- | ---------------------------------------------- |
+| `windowId`   | int  | Parent window                                  |
+| `role`       | text | `text`, `buffer`, `status`, `input`, `canvas`  |
+| `layoutHint` | map  | Same shape as window layout hint               |
+| `scrollback` | int  | For `buffer` regions, scrollback line capacity |
 
 Response payload:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `regionId` | int | Daemon-assigned ID |
+| Key        | Type | Meaning            |
+| ---------- | ---- | ------------------ |
+| `regionId` | int  | Daemon-assigned ID |
 
 ##### `tui.destroyRegion`
 
@@ -228,9 +228,9 @@ Surrender a single region without tearing down its window.
 
 Request payload:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `regionId` | int | Target |
+| Key        | Type | Meaning |
+| ---------- | ---- | ------- |
+| `regionId` | int  | Target  |
 
 Response: empty map.
 
@@ -239,7 +239,7 @@ Response: empty map.
 Drawing is intentionally high-level.
 The daemon owns cursor positioning, color reconciliation, and dirty-
 rect tracking.
-A worker submits *what* it wants the region to show, not the ANSI
+A worker submits _what_ it wants the region to show, not the ANSI
 sequences to get there.
 This keeps the bus protocol independent of the terminal's capabilities
 and lets the daemon's renderer choose the cheapest representation.
@@ -261,17 +261,17 @@ For `text` regions only.
 
 Request payload:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `regionId` | int | Target |
-| `runs` | array | Array of `{ text, attrs }` style runs |
+| Key        | Type  | Meaning                               |
+| ---------- | ----- | ------------------------------------- |
+| `regionId` | int   | Target                                |
+| `runs`     | array | Array of `{ text, attrs }` style runs |
 
 Each run has:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `text` | text | Content |
-| `attrs` | map | Style attributes (see **Style attributes**) |
+| Key     | Type | Meaning                                     |
+| ------- | ---- | ------------------------------------------- |
+| `text`  | text | Content                                     |
+| `attrs` | map  | Style attributes (see **Style attributes**) |
 
 Response: empty map.
 
@@ -283,17 +283,17 @@ to the region's configured capacity.
 
 Request payload:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `regionId` | int | Target |
-| `lines` | array | Array of lines, each an array of `{ text, attrs }` runs |
+| Key        | Type  | Meaning                                                 |
+| ---------- | ----- | ------------------------------------------------------- |
+| `regionId` | int   | Target                                                  |
+| `lines`    | array | Array of lines, each an array of `{ text, attrs }` runs |
 
 Response payload:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `firstLine` | int | Line number assigned to the first appended line |
-| `lastLine` | int | Line number of the last appended line |
+| Key         | Type | Meaning                                         |
+| ----------- | ---- | ----------------------------------------------- |
+| `firstLine` | int  | Line number assigned to the first appended line |
+| `lastLine`  | int  | Line number of the last appended line           |
 
 Line numbers are monotonically increasing and stable across redraws.
 They are the addressing scheme used by `tui.editLine` and
@@ -307,11 +307,11 @@ line.
 
 Request payload:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `regionId` | int | Target |
-| `lineNumber` | int | Line to replace |
-| `runs` | array | New styled runs |
+| Key          | Type  | Meaning         |
+| ------------ | ----- | --------------- |
+| `regionId`   | int   | Target          |
+| `lineNumber` | int   | Line to replace |
+| `runs`       | array | New styled runs |
 
 Response: empty map (or error if the line has scrolled out of the
 daemon-side scrollback).
@@ -320,11 +320,11 @@ daemon-side scrollback).
 
 Request payload:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `regionId` | int | Target |
-| `lineNumber` | int | Line to scroll into view (negative counts from tail) |
-| `anchor` | text | `top`, `middle`, `bottom` |
+| Key          | Type | Meaning                                              |
+| ------------ | ---- | ---------------------------------------------------- |
+| `regionId`   | int  | Target                                               |
+| `lineNumber` | int  | Line to scroll into view (negative counts from tail) |
+| `anchor`     | text | `top`, `middle`, `bottom`                            |
 
 Response: empty map.
 
@@ -335,14 +335,14 @@ Writes a rectangle of styled cells at an absolute position.
 
 Request payload:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `regionId` | int | Target |
-| `col` | int | Left edge (0-based) |
-| `row` | int | Top edge (0-based) |
-| `cols` | int | Width of the block in cells |
-| `rows` | int | Height of the block in cells |
-| `cells` | bytes | Packed cell data (see **Cell packing**) |
+| Key        | Type  | Meaning                                 |
+| ---------- | ----- | --------------------------------------- |
+| `regionId` | int   | Target                                  |
+| `col`      | int   | Left edge (0-based)                     |
+| `row`      | int   | Top edge (0-based)                      |
+| `cols`     | int   | Width of the block in cells             |
+| `rows`     | int   | Height of the block in cells            |
+| `cells`    | bytes | Packed cell data (see **Cell packing**) |
 
 Response: empty map.
 
@@ -350,9 +350,9 @@ Response: empty map.
 
 Request payload:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `regionId` | int | Target |
+| Key        | Type | Meaning |
+| ---------- | ---- | ------- |
+| `regionId` | int  | Target  |
 
 Response: empty map.
 
@@ -360,15 +360,15 @@ Response: empty map.
 
 The `attrs` map on every run carries a shallow set of named fields:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `fg` | int or text | Foreground color (palette index or `#rrggbb`) |
-| `bg` | int or text | Background color |
-| `bold` | bool | |
-| `italic` | bool | |
-| `underline` | bool | |
-| `reverse` | bool | |
-| `strike` | bool | |
+| Key         | Type        | Meaning                                       |
+| ----------- | ----------- | --------------------------------------------- |
+| `fg`        | int or text | Foreground color (palette index or `#rrggbb`) |
+| `bg`        | int or text | Background color                              |
+| `bold`      | bool        |                                               |
+| `italic`    | bool        |                                               |
+| `underline` | bool        |                                               |
+| `reverse`   | bool        |                                               |
+| `strike`    | bool        |                                               |
 
 Absent keys inherit the region's default attribute (which a worker
 sets through a `tui.setDefaultAttrs` verb; payload: `regionId` and
@@ -392,80 +392,80 @@ This keeps the wire representation compact for large grid updates.
 
 Request payload:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `regionId` | int | Region whose events to subscribe to |
-| `kinds` | array | Subset of `key`, `mouse`, `paste`, `focus`, `resize` |
+| Key        | Type  | Meaning                                              |
+| ---------- | ----- | ---------------------------------------------------- |
+| `regionId` | int   | Region whose events to subscribe to                  |
+| `kinds`    | array | Subset of `key`, `mouse`, `paste`, `focus`, `resize` |
 
 Response payload:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `subscriptionId` | int | Handle used to unsubscribe |
+| Key              | Type | Meaning                    |
+| ---------------- | ---- | -------------------------- |
+| `subscriptionId` | int  | Handle used to unsubscribe |
 
 After `tui.subscribeEvents` returns, the daemon may deliver envelopes
 addressed to the worker's handle with verb `tui.event` and nonce 0
 (fire-and-forget).
 The envelope payload is a map:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `subscriptionId` | int | Which subscription this event belongs to |
-| `regionId` | int | Region |
-| `kind` | text | `key`, `mouse`, `paste`, `focus`, `resize` |
-| `event` | map | Kind-specific event data (see below) |
+| Key              | Type | Meaning                                    |
+| ---------------- | ---- | ------------------------------------------ |
+| `subscriptionId` | int  | Which subscription this event belongs to   |
+| `regionId`       | int  | Region                                     |
+| `kind`           | text | `key`, `mouse`, `paste`, `focus`, `resize` |
+| `event`          | map  | Kind-specific event data (see below)       |
 
 ###### Key event
 
-| Key | Type | Meaning |
-|---|---|---|
-| `key` | text | Canonical key name (`a`, `Enter`, `Tab`, `F1`, `Up`, ...) |
-| `codepoint` | int | Unicode codepoint if printable, 0 otherwise |
-| `ctrl` | bool | |
-| `alt` | bool | |
-| `shift` | bool | |
-| `meta` | bool | |
+| Key         | Type | Meaning                                                   |
+| ----------- | ---- | --------------------------------------------------------- |
+| `key`       | text | Canonical key name (`a`, `Enter`, `Tab`, `F1`, `Up`, ...) |
+| `codepoint` | int  | Unicode codepoint if printable, 0 otherwise               |
+| `ctrl`      | bool |                                                           |
+| `alt`       | bool |                                                           |
+| `shift`     | bool |                                                           |
+| `meta`      | bool |                                                           |
 
 ###### Mouse event
 
-| Key | Type | Meaning |
-|---|---|---|
-| `col` | int | Column within the region (0-based) |
-| `row` | int | Row within the region (0-based) |
+| Key      | Type | Meaning                                                     |
+| -------- | ---- | ----------------------------------------------------------- |
+| `col`    | int  | Column within the region (0-based)                          |
+| `row`    | int  | Row within the region (0-based)                             |
 | `button` | text | `left`, `middle`, `right`, `wheel-up`, `wheel-down`, `none` |
-| `press` | text | `down`, `up`, `move`, `drag` |
-| `ctrl` | bool | |
-| `alt` | bool | |
-| `shift` | bool | |
+| `press`  | text | `down`, `up`, `move`, `drag`                                |
+| `ctrl`   | bool |                                                             |
+| `alt`    | bool |                                                             |
+| `shift`  | bool |                                                             |
 
 ###### Paste event
 
 Delivered for bracketed paste only.
 
-| Key | Type | Meaning |
-|---|---|---|
+| Key    | Type | Meaning                     |
+| ------ | ---- | --------------------------- |
 | `text` | text | The pasted text, unmodified |
 
 ###### Focus event
 
-| Key | Type | Meaning |
-|---|---|---|
+| Key       | Type | Meaning                           |
+| --------- | ---- | --------------------------------- |
 | `focused` | bool | Region now has focus / lost focus |
 
 ###### Resize event
 
-| Key | Type | Meaning |
-|---|---|---|
-| `cols` | int | New region column count |
-| `rows` | int | New region row count |
+| Key    | Type | Meaning                 |
+| ------ | ---- | ----------------------- |
+| `cols` | int  | New region column count |
+| `rows` | int  | New region row count    |
 
 ##### `tui.unsubscribeEvents`
 
 Request payload:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `subscriptionId` | int | Subscription to cancel |
+| Key              | Type | Meaning                |
+| ---------------- | ---- | ---------------------- |
+| `subscriptionId` | int  | Subscription to cancel |
 
 Response: empty map.
 
@@ -481,12 +481,12 @@ the terminal level rather than the region level).
 
 Payload:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `screenId` | int | |
-| `cols` | int | |
-| `rows` | int | |
-| `attached` | bool | |
+| Key        | Type | Meaning |
+| ---------- | ---- | ------- |
+| `screenId` | int  |         |
+| `cols`     | int  |         |
+| `rows`     | int  |         |
+| `attached` | bool |         |
 
 ##### `tui.windowRevoked`
 
@@ -496,10 +496,10 @@ window evicted it.
 
 Payload:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `windowId` | int | |
-| `reason` | text | `user-closed`, `evicted`, `screen-lost` |
+| Key        | Type | Meaning                                 |
+| ---------- | ---- | --------------------------------------- |
+| `windowId` | int  |                                         |
+| `reason`   | text | `user-closed`, `evicted`, `screen-lost` |
 
 After receiving `tui.windowRevoked`, all region IDs that belonged to
 the window are invalid and draw calls against them will return an
@@ -511,10 +511,10 @@ Any verb may return an error.
 Errors are delivered with verb `error` (existing convention in the
 envelope bus) and payload `{ code, message }`:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `code` | text | `no-such-window`, `no-such-region`, `wrong-role`, `window-revoked`, `screen-lost`, `bad-argument`, `too-large` |
-| `message` | text | Human-readable detail |
+| Key       | Type | Meaning                                                                                                        |
+| --------- | ---- | -------------------------------------------------------------------------------------------------------------- |
+| `code`    | text | `no-such-window`, `no-such-region`, `wrong-role`, `window-revoked`, `screen-lost`, `bad-argument`, `too-large` |
+| `message` | text | Human-readable detail                                                                                          |
 
 ### Layer 2: XS handle API
 
@@ -535,7 +535,9 @@ The module exports one function:
  * Returns undefined when no screen is attached.
  * @returns {Promise<TuiScreen | undefined>}
  */
-export const getScreen = async () => { /* ... */ };
+export const getScreen = async () => {
+  /* ... */
+};
 harden(getScreen);
 ```
 
@@ -556,13 +558,17 @@ const screen = {
    * @param {object} [opts.layoutHint]
    * @returns {Promise<TuiWindow>}
    */
-  createWindow: async ({ title, role, layoutHint }) => { /* ... */ },
+  createWindow: async ({ title, role, layoutHint }) => {
+    /* ... */
+  },
 
   /**
    * Observe screen-level changes (resize, detach).
    * @returns {AsyncIterable<{ cols: number, rows: number, attached: boolean }>}
    */
-  changes: () => { /* ... */ },
+  changes: () => {
+    /* ... */
+  },
 };
 ```
 
@@ -580,12 +586,18 @@ const window = {
    * @param {number} [opts.scrollback] // for buffer only
    * @returns {Promise<TuiRegion>}
    */
-  createRegion: async ({ role, layoutHint, scrollback }) => { /* ... */ },
+  createRegion: async ({ role, layoutHint, scrollback }) => {
+    /* ... */
+  },
 
   /** @param {{ title?: string, layoutHint?: object }} patch */
-  configure: async patch => { /* ... */ },
+  configure: async patch => {
+    /* ... */
+  },
 
-  close: async () => { /* ... */ },
+  close: async () => {
+    /* ... */
+  },
 
   /**
    * Resolves when the daemon revokes this window (user-closed, evicted).
@@ -605,36 +617,54 @@ const region = {
 
   // text role
   /** @param {StyledRun[]} runs */
-  setText: async runs => { /* ... */ },
+  setText: async runs => {
+    /* ... */
+  },
 
   // buffer role
   /**
    * @param {StyledRun[][]} lines
    * @returns {Promise<{ firstLine: number, lastLine: number }>}
    */
-  appendLines: async lines => { /* ... */ },
+  appendLines: async lines => {
+    /* ... */
+  },
   /** @param {number} lineNumber @param {StyledRun[]} runs */
-  editLine: async (lineNumber, runs) => { /* ... */ },
+  editLine: async (lineNumber, runs) => {
+    /* ... */
+  },
   /** @param {number} lineNumber @param {'top'|'middle'|'bottom'} anchor */
-  scrollTo: async (lineNumber, anchor) => { /* ... */ },
+  scrollTo: async (lineNumber, anchor) => {
+    /* ... */
+  },
 
   // canvas role
   /** @param {number} col @param {number} row @param {Cell[][]} grid */
-  drawCells: async (col, row, grid) => { /* ... */ },
+  drawCells: async (col, row, grid) => {
+    /* ... */
+  },
 
   // all roles
-  clear: async () => { /* ... */ },
+  clear: async () => {
+    /* ... */
+  },
   /** @param {{ attrs: StyleAttrs }} patch */
-  setDefaultAttrs: async patch => { /* ... */ },
+  setDefaultAttrs: async patch => {
+    /* ... */
+  },
 
   // events
   /**
    * @param {('key'|'mouse'|'paste'|'focus'|'resize')[]} kinds
    * @returns {AsyncIterable<TuiEvent>}
    */
-  events: kinds => { /* ... */ },
+  events: kinds => {
+    /* ... */
+  },
 
-  close: async () => { /* ... */ },
+  close: async () => {
+    /* ... */
+  },
 };
 ```
 
@@ -738,10 +768,7 @@ export const WindowInterface = M.interface('TuiWindow', {
     )
     .returns(M.promise()),
   configure: M.call(
-    M.splitRecord(
-      {},
-      { title: M.string(), layoutHint: LayoutHintShape },
-    ),
+    M.splitRecord({}, { title: M.string(), layoutHint: LayoutHintShape }),
   ).returns(M.promise()),
   close: M.call().returns(M.promise()),
   whenRevoked: M.call().returns(M.promise()),
@@ -756,12 +783,10 @@ export const RegionInterface = M.interface('TuiRegion', {
   // text role
   setText: M.call(M.arrayOf(StyledRunShape)).returns(M.promise()),
   // buffer role
-  appendLines: M.call(
-    M.arrayOf(M.arrayOf(StyledRunShape)),
-  ).returns(M.promise()),
-  editLine: M.call(M.number(), M.arrayOf(StyledRunShape)).returns(
+  appendLines: M.call(M.arrayOf(M.arrayOf(StyledRunShape))).returns(
     M.promise(),
   ),
+  editLine: M.call(M.number(), M.arrayOf(StyledRunShape)).returns(M.promise()),
   scrollTo: M.call(M.number(), M.string()).returns(M.promise()),
   // canvas role
   drawCells: M.call(
@@ -786,9 +811,9 @@ export const TextBufferInterface = M.interface('TuiTextBuffer', {
   help: M.call().returns(M.string()),
   region: M.call().returns(M.remotable()),
   append: M.call(M.arrayOf(StyledRunShape)).returns(M.promise()),
-  appendLines: M.call(
-    M.arrayOf(M.arrayOf(StyledRunShape)),
-  ).returns(M.promise()),
+  appendLines: M.call(M.arrayOf(M.arrayOf(StyledRunShape))).returns(
+    M.promise(),
+  ),
   editLast: M.call(M.arrayOf(StyledRunShape)).returns(M.promise()),
   clear: M.call().returns(M.promise()),
   close: M.call().returns(M.promise()),
@@ -853,9 +878,7 @@ export const make = async powers => {
     rows: () => screenHandle.rows,
     colorDepth: () => screenHandle.colorDepth,
     createWindow: async (spec, layoutHint) =>
-      wrapWindow(
-        await screenHandle.createWindow({ ...spec, layoutHint }),
-      ),
+      wrapWindow(await screenHandle.createWindow({ ...spec, layoutHint })),
     changes: () => /* iterator-ref around screenHandle.changes() */ {},
   });
 
@@ -877,11 +900,11 @@ cross-agent collaboration (two agents rendering into the same window)
 and keep the Screen private.
 The discoverable pet-name convention is:
 
-| Pet name | Exo type | Meaning |
-|---|---|---|
-| `@tui-screen` | `TuiScreen` | The worker's own screen handle |
-| `<name>-window` | `TuiWindow` | A window dedicated to the named agent |
-| `<name>-log` | `TuiTextBuffer` | A shared log buffer |
+| Pet name        | Exo type        | Meaning                               |
+| --------------- | --------------- | ------------------------------------- |
+| `@tui-screen`   | `TuiScreen`     | The worker's own screen handle        |
+| `<name>-window` | `TuiWindow`     | A window dedicated to the named agent |
+| `<name>-log`    | `TuiTextBuffer` | A shared log buffer                   |
 
 `@tui-screen` follows the `@`-prefixed reserved-name pattern (see
 `packages/daemon/src/pet-name.js`) and is provisioned by the endor
@@ -981,12 +1004,12 @@ state-centric-at-the-daemon.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| `endor-tui.md` | Host side of the same subsystem — defines the terminal owner, the Chat and debugger panes the daemon composes, and the attach/detach story. This document is the worker-facing complement. |
-| `daemon-engo-supervisor.md` | The CBOR envelope bus used here is the supervisor's envelope protocol. TUI verbs are layered on it. |
-| `daemon-value-message.md` | Exo handles can be shared between agents via `sendValue`, which is the cross-agent advertisement mechanism for TUI capabilities. |
-| `workers-panel.md` | The workers panel is itself a TUI consumer — it renders into a window obtained from the same screen Exo. |
+| Design                      | Relationship                                                                                                                                                                               |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `endor-tui.md`              | Host side of the same subsystem — defines the terminal owner, the Chat and debugger panes the daemon composes, and the attach/detach story. This document is the worker-facing complement. |
+| `daemon-engo-supervisor.md` | The CBOR envelope bus used here is the supervisor's envelope protocol. TUI verbs are layered on it.                                                                                        |
+| `daemon-value-message.md`   | Exo handles can be shared between agents via `sendValue`, which is the cross-agent advertisement mechanism for TUI capabilities.                                                           |
+| `workers-panel.md`          | The workers panel is itself a TUI consumer — it renders into a window obtained from the same screen Exo.                                                                                   |
 
 ## Phases
 

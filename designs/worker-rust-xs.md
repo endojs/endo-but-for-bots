@@ -1,10 +1,10 @@
 # Rust Worker with XS Engine
 
-| | |
-|---|---|
-| **Created** | 2026-03-23 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-03-23            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## What is the Problem Being Solved?
 
@@ -102,6 +102,7 @@ rust worker binary
 ```
 
 **`xs-embed`** is a Rust crate wrapping the XS C API:
+
 - `Machine` — XS execution context (the "virtual machine")
 - `Slot` — XS value handle
 - Host function registration via `xsNewHostFunction`
@@ -217,6 +218,7 @@ process itself.
 ### Data Transfer: Minimizing Copies
 
 The previous envelope-based design required:
+
 1. JS serializes request to CBOR
 2. CBOR written to pipe
 3. Rust reads pipe, deserializes CBOR
@@ -339,6 +341,7 @@ XS has limited debugging support compared to V8.
 This is the primary tradeoff of the XS choice.
 
 **Available:**
+
 - `xsbug` — Moddable's debugger, supports breakpoints, stepping,
   variable inspection.
   Connects via serial or TCP.
@@ -346,12 +349,14 @@ This is the primary tradeoff of the XS choice.
 - Structured error messages — XS provides stack traces.
 
 **Not available:**
+
 - Chrome DevTools Protocol — would require building an adapter.
 - Source maps — XS does not consume standard source maps.
   Pre-compiled bytecode archives lose source position info unless
   debug symbols are preserved at build time.
 
 **Mitigation:**
+
 - Build two worker variants: a debug build with `xsbug` support
   and source positions preserved, and a release build with
   pre-compiled bytecode.
@@ -361,11 +366,11 @@ This is the primary tradeoff of the XS choice.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|-------------|
-| [daemon-capability-bus](daemon-capability-bus.md) | Supervisor spawns Rust/XS workers via the same envelope protocol. |
-| [platform-fs](platform-fs.md) | `@endo/platform` types and interfaces implemented by cap-std host functions. |
-| [daemon-capability-filesystem](daemon-capability-filesystem.md) | Cap-std `Dir` handles provide the OS-level enforcement. |
+| Design                                                          | Relationship                                                                 |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| [daemon-capability-bus](daemon-capability-bus.md)               | Supervisor spawns Rust/XS workers via the same envelope protocol.            |
+| [platform-fs](platform-fs.md)                                   | `@endo/platform` types and interfaces implemented by cap-std host functions. |
+| [daemon-capability-filesystem](daemon-capability-filesystem.md) | Cap-std `Dir` handles provide the OS-level enforcement.                      |
 
 ## Implementation Phases
 
@@ -501,18 +506,18 @@ This is the primary tradeoff of the XS choice.
 ## Known Gaps
 
 - [ ] XS C API stability — verify that the compartment and
-  ModuleSource APIs are stable across XS releases.
+      ModuleSource APIs are stable across XS releases.
 - [ ] `@endo/captp` on XS — verify that CapTP's full protocol
-  (including HandledPromise) works under the `xs` condition.
+      (including HandledPromise) works under the `xs` condition.
 - [ ] `xsbug` TCP adapter — evaluate effort to connect `xsbug`
-  to the running worker for remote debugging.
+      to the running worker for remote debugging.
 - [ ] XS memory model — understand XS's garbage collector
-  behavior under sustained worker loads (many compartments
-  created and destroyed).
+      behavior under sustained worker loads (many compartments
+      created and destroyed).
 - [ ] Async I/O model — XS has a different event loop model
-  than Node.js.
-  Host functions that perform async I/O (network accept loops,
-  streaming reads) need a Tokio ↔ XS promise bridge.
+      than Node.js.
+      Host functions that perform async I/O (network accept loops,
+      streaming reads) need a Tokio ↔ XS promise bridge.
 
 ## Prompt
 

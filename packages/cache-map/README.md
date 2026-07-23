@@ -15,6 +15,7 @@ or [SIEVE](https://sievecache.com/)).
 ## Usage
 
 ### Weak Cache
+
 ```js
 import { makeCacheMapKit } from '@endo/cache-map';
 
@@ -41,6 +42,7 @@ assert.throws(() => weakCache.set('unweakable key', {}));
 ```
 
 ### Strong Cache
+
 ```js
 import { makeCacheMapKit } from '@endo/cache-map';
 

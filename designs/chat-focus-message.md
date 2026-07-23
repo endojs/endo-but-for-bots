@@ -1,11 +1,11 @@
 # Chat Focus Message Mode
 
-| | |
-|---|---|
-| **Created** | 2026-03-04 |
-| **Updated** | 2026-05-19 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+|                |                                             |
+| -------------- | ------------------------------------------- |
+| **Created**    | 2026-03-04                                  |
+| **Updated**    | 2026-05-19                                  |
+| **Author**     | Kris Kowal (prompted)                       |
+| **Status**     | **Complete**                                |
 | **Supersedes** | `designs/chat-reply-chain-visualization.md` |
 
 ## Status
@@ -46,6 +46,7 @@ reply chain — it simply pre-populates the `messageNumber` field when the
 user invokes a command from focus mode.
 
 **Goals:**
+
 1. Let users quickly act on messages without mouse interaction
 2. Pre-populate `messageNumber` fields for commands that need them
 3. Visualize reply-chain structure around the focused message
@@ -54,10 +55,12 @@ user invokes a command from focus mode.
 
 The user enters focus mode by pressing `⌘↑` (Cmd+ArrowUp on macOS,
 Ctrl+ArrowUp elsewhere) when:
+
 - The chat bar is in `send` mode
 - The input is empty
 
 On entry:
+
 - Mode changes to `'focus'`
 - The input is blurred
 - The last message in the inbox is highlighted (receives `.focused` class)
@@ -93,13 +96,13 @@ navigation action.
 Single-letter keys enter a command with the focused message number
 pre-filled:
 
-| Key | Command | Description |
-|-----|---------|-------------|
-| `r` | `/reply` | Reply to the focused message |
-| `d` | `/dismiss` | Dismiss the focused message |
-| `a` | `/adopt` | Adopt a value from the focused message |
-| `g` | `/grant` | Grant an eval-proposal |
-| `s` | `/submit` | Submit values for a form |
+| Key | Command    | Description                            |
+| --- | ---------- | -------------------------------------- |
+| `r` | `/reply`   | Reply to the focused message           |
+| `d` | `/dismiss` | Dismiss the focused message            |
+| `a` | `/adopt`   | Adopt a value from the focused message |
+| `g` | `/grant`   | Grant an eval-proposal                 |
+| `s` | `/submit`  | Submit values for a form               |
 
 These are the commands from `command-registry.js` that have a
 `messageNumber` field and are common enough to warrant a single-key
@@ -110,6 +113,7 @@ When a shortcut key is pressed, the inline command form opens with the
 (typically the message body).
 
 The modeline displays these as:
+
 ```
 <kbd>r</kbd> reply  <kbd>d</kbd> dismiss  <kbd>a</kbd> adopt  <kbd>g</kbd> grant  <kbd>s</kbd> submit  <kbd>Esc</kbd> back
 ```
@@ -117,6 +121,7 @@ The modeline displays these as:
 ## Exiting Focus Mode
 
 Pressing `Escape` exits focus mode:
+
 - Mode returns to `'send'`
 - The `.focused` class is removed from all messages
 - The `.focus-active` class is removed from the messages container
@@ -139,7 +144,7 @@ message:
 message upward. Each ancestor is added to the chain and un-indented.
 
 **Forward (descendants):** From the focused message (and each subsequent
-chain member), find the chronologically *last* reply. That reply joins
+chain member), find the chronologically _last_ reply. That reply joins
 the chain and the search continues from it.
 
 All messages not in the chain are indented by `4ex`.
@@ -150,12 +155,12 @@ Non-indented chain members are connected by a vertical line in the
 `2ex` gutter created by the indentation. Each envelope element gets a
 class based on its role:
 
-| Class | Line | Role |
-|-------|------|------|
-| `chain-start` | Bottom half | First chain member (connects downward) |
-| `chain-through` | Full height | Middle chain member (connects both ways) |
-| `chain-end` | Top half | Last chain member (connects upward) |
-| `chain-tee` | Full height + horizontal stub | Indented message replying to a chain member (gutter-connected) |
+| Class           | Line                          | Role                                                           |
+| --------------- | ----------------------------- | -------------------------------------------------------------- |
+| `chain-start`   | Bottom half                   | First chain member (connects downward)                         |
+| `chain-through` | Full height                   | Middle chain member (connects both ways)                       |
+| `chain-end`     | Top half                      | Last chain member (connects upward)                            |
+| `chain-tee`     | Full height + horizontal stub | Indented message replying to a chain member (gutter-connected) |
 
 Messages between consecutive chain members that are not tee-connected
 get `chain-through` so the primary line passes through them
@@ -201,6 +206,7 @@ continuously between messages.
 
 The focused message stays at its normal position (no indentation) and
 receives a ring highlight:
+
 ```css
 .focus-active .message-envelope.focused .message {
   box-shadow: 0 0 0 2px var(--accent-primary);
@@ -210,6 +216,7 @@ receives a ring highlight:
 ### Indented messages
 
 All non-chain messages are indented:
+
 ```css
 .focus-active .message-envelope.indented .message {
   margin-left: 4ex;
@@ -228,6 +235,7 @@ positions within their respective gutter spaces.
 
 Message envelopes carry three data attributes set during rendering
 in `inbox-component.js`:
+
 - `data-number` — the message number (used for command pre-fill)
 - `data-message-id` — the message's unique ID (used for chain traversal)
 - `data-reply-to` — the ID of the parent message (used for chain
@@ -241,6 +249,7 @@ matching field names in the prefill record are set as initial values.
 The `focus(skipFilled)` method advances past pre-filled fields.
 
 When a shortcut key is pressed in focus mode:
+
 1. Read `data-number` from the `.focused` envelope element
 2. Call `enterCommandMode(commandName, { messageNumber: number })`
 3. The inline form renders with the message number already filled in
@@ -248,12 +257,12 @@ When a shortcut key is pressed in focus mode:
 
 ## Key Files
 
-| File | Change |
-|------|--------|
-| `packages/chat/chat-bar-component.js` | Focus mode logic, keyboard handling, modeline, chain/connection algorithms |
-| `packages/chat/inline-command-form.js` | `prefill` parameter on `setCommand`, `skipFilled` on `focus` |
-| `packages/chat/inbox-component.js` | Envelope wrapping, `data-number`/`data-message-id`/`data-reply-to` |
-| `packages/chat/index.css` | Envelope, focus, chain line, and connection styles |
+| File                                   | Change                                                                     |
+| -------------------------------------- | -------------------------------------------------------------------------- |
+| `packages/chat/chat-bar-component.js`  | Focus mode logic, keyboard handling, modeline, chain/connection algorithms |
+| `packages/chat/inline-command-form.js` | `prefill` parameter on `setCommand`, `skipFilled` on `focus`               |
+| `packages/chat/inbox-component.js`     | Envelope wrapping, `data-number`/`data-message-id`/`data-reply-to`         |
+| `packages/chat/index.css`              | Envelope, focus, chain line, and connection styles                         |
 
 ## Out of Scope
 

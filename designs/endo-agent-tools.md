@@ -1,11 +1,11 @@
 # `@endo/agent-tools`: code-mode tools, adapters, and parked JSON wrappers
 
-| | |
-|---|---|
-| **Created** | 2026-06-03 |
-| **Updated** | 2026-07-15 |
-| **Author** | 0xpatrickdev (prompted) |
-| **Status** | In Progress |
+|             |                         |
+| ----------- | ----------------------- |
+| **Created** | 2026-06-03              |
+| **Updated** | 2026-07-15              |
+| **Author**  | 0xpatrickdev (prompted) |
+| **Status**  | In Progress             |
 
 ## Status
 
@@ -210,17 +210,17 @@ Two halves of one contract; neither stands alone.
 
 ## The confinement axis: how a tool's behavior is bound
 
-The retained JSON tool *record* is one shape regardless of what the tool does.
+The retained JSON tool _record_ is one shape regardless of what the tool does.
 What splits that parked surface is **what each tool's behavior is bound to**,
 and the axis is binary: a tool either closes over a `Spawner` holding the
 host's ambient authority (**unconfined**), or it closes over a
 `@endo/patterns` capability that holds no path and reaches no further than
 its grant (**confined**).
 
-| Confinement | Behavior closes over | Authority it holds | Attenuation is a... |
-|---|---|---|---|
-| **unconfined** (`Spawner`) | a `Spawner` plus policy closures, called with a path *string* | the host process's ambient authority; the path string is advice, not a boundary | **policy closure** (`rejectPatterns`, `rejectFlags`, `enforcePath`) vetoing the command before spawn |
-| **confined** (capability) | a `Filesystem`, an exo `Git`, and/or a bounded `GitRemote`, each holding **no path** | only what the granted caps reach: no path outside the `Filesystem` subtree, no raw `git` exec, no network except through `GitRemote` | **capability operation** (`readOnly()` returns a narrowed cap; an absent method, for example no `push` on a plain `Git`) |
+| Confinement                | Behavior closes over                                                                 | Authority it holds                                                                                                                   | Attenuation is a...                                                                                                      |
+| -------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| **unconfined** (`Spawner`) | a `Spawner` plus policy closures, called with a path _string_                        | the host process's ambient authority; the path string is advice, not a boundary                                                      | **policy closure** (`rejectPatterns`, `rejectFlags`, `enforcePath`) vetoing the command before spawn                     |
+| **confined** (capability)  | a `Filesystem`, an exo `Git`, and/or a bounded `GitRemote`, each holding **no path** | only what the granted caps reach: no path outside the `Filesystem` subtree, no raw `git` exec, no network except through `GitRemote` | **capability operation** (`readOnly()` returns a narrowed cap; an absent method, for example no `push` on a plain `Git`) |
 
 The unconfined side is genie today: a command tool over the `Spawner`
 seam, holding the process's ambient authority and attenuating by
@@ -233,7 +233,7 @@ JavaScript.
 The parked JSON tools provide a discrete, MCP-consumable shape over the
 same capabilities when a host needs that adapter boundary.
 `Filesystem` and `Git` can describe the same worktree: `Git.filesystemAt(ref)`
-*returns a `Filesystem`*, so history reads use a `Filesystem` that `Git`
+_returns a `Filesystem`_, so history reads use a `Filesystem` that `Git`
 produced; and `GitRemote` ([daemon-git-remotes](daemon-git-remotes.md)) is
 the bounded `pull` and `push` capability associated with that `Git`.
 A host can grant these capabilities together or separately according to the
@@ -317,7 +317,7 @@ wrong:
    The LLM passes a **petname string** the tool resolves via
    `E(powers).lookup(petname)` against the guest petstore, mapped to
    `{ type: 'string', description: 'petname of a ...' }`.
-   This is settled (see *Capability arguments are petnames* below): no
+   This is settled (see _Capability arguments are petnames_ below): no
    bespoke opaque handle, no in-memory cap map as a system of record.
 
 4. **descriptions, because matchers carry none.**
@@ -360,7 +360,7 @@ interface guards (`FilesystemInterface` plus the remotables it reaches:
 **Neither renderer is canonical**: interface guards are lossy as a type
 source (they carry no argument names and no prose), so the TypeScript path
 stays valuable where a hand-written `.d.ts` exists.
-Guard-canonical *derivation for git* was considered and is **tabled**: it
+Guard-canonical _derivation for git_ was considered and is **tabled**: it
 is unproven and would discard the more expressive hand-written TS.
 
 The **divergence gate is the load-bearing safety property**.
@@ -415,12 +415,12 @@ The levers split by confinement:
   and `diff` still work).
 
 So "read-only" means two different things: a flag the unconfined tools
-check, but a *different cap* the confined tools are handed.
+check, but a _different cap_ the confined tools are handed.
 Conflating them hides the least-authority payoff that the confined tool
 holds a cap, not a path.
-The attenuation *primitives* (the policy closures, the `Spawner` type, the
+The attenuation _primitives_ (the policy closures, the `Spawner` type, the
 `readOnly()` use, the `GitRemote` grant) live here; the attenuation
-*configuration* (which agent gets which cap at which attenuation) is
+_configuration_ (which agent gets which cap at which attenuation) is
 `agentry`'s `defineAgent` concern.
 
 ## Git authority tiers
@@ -472,7 +472,7 @@ structurally excludes push.
 ## Capability arguments are petnames
 
 A capability argument in the retained JSON layer (a git repo, a filesystem
-map, or any remotable the LLM must *name* rather than *spell out*) is carried
+map, or any remotable the LLM must _name_ rather than _spell out_) is carried
 on the wire as a **petname string** and resolved against the guest's own
 petstore.
 Code mode uses the same petnames as its endowment binding names.
@@ -514,7 +514,7 @@ Both end in a name in the guest petstore that `E(powers).lookup` resolves.
 The host passes `powers` at tool-set construction and each tool closes
 over it, the same way lal's `make(powers)` entry point receives `powers`
 once.
-A capref arg's value is a *string* (the petname); the held `powers` is
+A capref arg's value is a _string_ (the petname); the held `powers` is
 what turns that string into a live cap via `lookup`.
 At invoke time, before `mustMatch` sees the args, a `resolveArg` step
 replaces each capref string with `await E(powers).lookup(petname)`,
@@ -528,10 +528,10 @@ The retained JSON layer is a discrete, per-call mode for hosts that need
 that adapter boundary.
 Both resolve through the one guest petstore and differ only in granularity:
 
-| Mode | Granularity | In (arg to cap) | Out (cap to name) |
-|---|---|---|---|
-| **JSON tool mode (parked)** | per call | a capref arg's petname to `lookup` at the invoke boundary | a returned cap to `storeValue` to a petname |
-| **code mode** | per session | globals resolved by petname at `Compartment` setup, endowed once for the turn | a result stored under a `resultName` |
+| Mode                        | Granularity | In (arg to cap)                                                               | Out (cap to name)                           |
+| --------------------------- | ----------- | ----------------------------------------------------------------------------- | ------------------------------------------- |
+| **JSON tool mode (parked)** | per call    | a capref arg's petname to `lookup` at the invoke boundary                     | a returned cap to `storeValue` to a petname |
+| **code mode**               | per session | globals resolved by petname at `Compartment` setup, endowed once for the turn | a result stored under a `resultName`        |
 
 The petstore is the **system of record** in both modes; only the moment of
 resolution moves.
@@ -687,15 +687,15 @@ petname and path, re-endow next turn), not a new entry substrate.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|--------------|
-| [agentry-agent-builder](agentry-agent-builder.md) | Harness assembly design whose `defineAgent` builder consumes `@endo/agent-tools`, resolves models and credentials, selects presets, runs evals, and assembles the final system prompt. |
-| [endo-gateway-mcp](endo-gateway-mcp.md) | MCP adapter for the retained tool shape; the Gateway consumes each tool's `inputSchema` wire schema here. |
-| [daemon-agent-tools](daemon-agent-tools.md) | Capability-scoped workspace model with file tools, `Git`, and bounded `GitRemote` over one operator-provided workspace, recording the retained filesystem and command-tool shapes over those capabilities. |
-| [daemon-mount-capabilities](daemon-mount-capabilities.md) | The `EndoMount` surface (`readOnly()`, `entry(path)`) that backs the confined `Filesystem` binding via `mountAsFilesystem(mount)`. |
-| [daemon-git-remotes](daemon-git-remotes.md) | The bounded `GitRemote` (local `Git` plus authorized HTTPS transport plus non-extractable credential) supplying the push tier. A read-only `Git` cannot construct a `GitRemote`, so push authority is grant-gated. |
-| [endo-fs-backend-seam](endo-fs-backend-seam.md), [endo-fs-from-git](endo-fs-from-git.md) | The `Filesystem` substrate the file tools target (`mountAsFilesystem`, `Git.filesystemAt(ref)`, `readOnly()`) and the source of the inherited mount limits. |
-| [agent-tools-mount-fs-tools](agent-tools-mount-fs-tools.md) | **Superseded.** Its `makeMountReadTool` over raw `MountInterface.readText` is replaced by the `Filesystem` read tool reconciled onto the canonical `ToolRecord` in PR #523. The security framing carries over. |
+| Design                                                                                   | Relationship                                                                                                                                                                                                       |
+| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [agentry-agent-builder](agentry-agent-builder.md)                                        | Harness assembly design whose `defineAgent` builder consumes `@endo/agent-tools`, resolves models and credentials, selects presets, runs evals, and assembles the final system prompt.                             |
+| [endo-gateway-mcp](endo-gateway-mcp.md)                                                  | MCP adapter for the retained tool shape; the Gateway consumes each tool's `inputSchema` wire schema here.                                                                                                          |
+| [daemon-agent-tools](daemon-agent-tools.md)                                              | Capability-scoped workspace model with file tools, `Git`, and bounded `GitRemote` over one operator-provided workspace, recording the retained filesystem and command-tool shapes over those capabilities.         |
+| [daemon-mount-capabilities](daemon-mount-capabilities.md)                                | The `EndoMount` surface (`readOnly()`, `entry(path)`) that backs the confined `Filesystem` binding via `mountAsFilesystem(mount)`.                                                                                 |
+| [daemon-git-remotes](daemon-git-remotes.md)                                              | The bounded `GitRemote` (local `Git` plus authorized HTTPS transport plus non-extractable credential) supplying the push tier. A read-only `Git` cannot construct a `GitRemote`, so push authority is grant-gated. |
+| [endo-fs-backend-seam](endo-fs-backend-seam.md), [endo-fs-from-git](endo-fs-from-git.md) | The `Filesystem` substrate the file tools target (`mountAsFilesystem`, `Git.filesystemAt(ref)`, `readOnly()`) and the source of the inherited mount limits.                                                        |
+| [agent-tools-mount-fs-tools](agent-tools-mount-fs-tools.md)                              | **Superseded.** Its `makeMountReadTool` over raw `MountInterface.readText` is replaced by the `Filesystem` read tool reconciled onto the canonical `ToolRecord` in PR #523. The security framing carries over.     |
 
 ## Open Questions
 

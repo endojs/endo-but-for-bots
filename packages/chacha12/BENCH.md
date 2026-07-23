@@ -16,13 +16,13 @@ Two measurement campaigns, both on the same workstation:
 Both campaigns ran on the same machine, so the test-bed table applies
 to both unless a section below overrides it.
 
-| Field | Value                                            |
-| ----- | ------------------------------------------------ |
-| CPU   | AMD Ryzen AI MAX+ 395 w/ Radeon 8060S (32 vCPU)  |
-| RAM   | 128 GiB                                          |
-| OS    | Linux 6.14 (Ubuntu 24.04)                        |
-| Node  | 22.22.2                                          |
-| Arch  | x64                                              |
+| Field | Value                                           |
+| ----- | ----------------------------------------------- |
+| CPU   | AMD Ryzen AI MAX+ 395 w/ Radeon 8060S (32 vCPU) |
+| RAM   | 128 GiB                                         |
+| OS    | Linux 6.14 (Ubuntu 24.04)                       |
+| Node  | 22.22.2                                         |
+| Arch  | x64                                             |
 
 The test bed is a developer workstation, not an isolated performance
 lab.
@@ -166,28 +166,28 @@ block-boundary positions.
 
 ### Results: inner copy in isolation (median ns/call)
 
-| variant  | tiny n=1     | tiny n=4     | tiny n=16    | medium n=64  | large n=1024  | large n=4096   |
-|----------|-------------:|-------------:|-------------:|-------------:|--------------:|---------------:|
-| current  | 3.84 (1.00x) | 6.53 (1.00x) | 13.66 (1.00x)| 43.25 (1.00x)| 638.86 (1.00x)| 2504.28 (1.00x)|
-| duff8    | 5.04 (1.31x) | 8.43 (1.29x) | 11.00 (0.81x)| 30.03 (0.69x)| 407.45 (0.64x)| 1616.34 (0.65x)|
-| set      | 22.05 (5.74x)| 22.30 (3.41x)| 22.21 (1.63x)| 22.23 (0.51x)|  29.12 (0.05x)|   51.53 (0.02x)|
-| unroll4  | 5.22 (1.36x) | 6.36 (0.97x) | 12.59 (0.92x)| 39.34 (0.91x)| 581.74 (0.91x)| 2282.56 (0.91x)|
-| copywin  | 22.03 (5.74x)| 22.39 (3.43x)| 22.26 (1.63x)| 22.30 (0.52x)|  28.55 (0.04x)|   49.69 (0.02x)|
-| hybrid32 | 4.75 (1.24x) | 6.52 (1.00x) | 14.11 (1.03x)| 23.45 (0.54x)|  30.38 (0.05x)|   52.23 (0.02x)|
+| variant  |      tiny n=1 |      tiny n=4 |     tiny n=16 |   medium n=64 |   large n=1024 |    large n=4096 |
+| -------- | ------------: | ------------: | ------------: | ------------: | -------------: | --------------: |
+| current  |  3.84 (1.00x) |  6.53 (1.00x) | 13.66 (1.00x) | 43.25 (1.00x) | 638.86 (1.00x) | 2504.28 (1.00x) |
+| duff8    |  5.04 (1.31x) |  8.43 (1.29x) | 11.00 (0.81x) | 30.03 (0.69x) | 407.45 (0.64x) | 1616.34 (0.65x) |
+| set      | 22.05 (5.74x) | 22.30 (3.41x) | 22.21 (1.63x) | 22.23 (0.51x) |  29.12 (0.05x) |   51.53 (0.02x) |
+| unroll4  |  5.22 (1.36x) |  6.36 (0.97x) | 12.59 (0.92x) | 39.34 (0.91x) | 581.74 (0.91x) | 2282.56 (0.91x) |
+| copywin  | 22.03 (5.74x) | 22.39 (3.43x) | 22.26 (1.63x) | 22.30 (0.52x) |  28.55 (0.04x) |   49.69 (0.02x) |
+| hybrid32 |  4.75 (1.24x) |  6.52 (1.00x) | 14.11 (1.03x) | 23.45 (0.54x) |  30.38 (0.05x) |   52.23 (0.02x) |
 
 ### Results: integrated `fillRandomBytes` (median ns/call)
 
 This includes the surrounding `chacha12Block` / refill / offset
 bookkeeping, which is what callers actually pay.
 
-| variant  | tiny n=1      | tiny n=4      | tiny n=16     | medium n=64   | large n=1024     | large n=4096      |
-|----------|--------------:|--------------:|--------------:|--------------:|-----------------:|------------------:|
-| current  |  8.09 (1.00x) | 18.75 (1.00x) | 53.45 (1.00x) | 200.72 (1.00x)| 3158.74 (1.00x)  | 12775.90 (1.00x)  |
-| duff8    | 10.89 (1.35x) | 20.44 (1.09x) | 51.13 (0.96x) | 185.99 (0.93x)| 2986.53 (0.95x)  | 11858.69 (0.93x)  |
-| set      | 26.69 (3.30x) | 34.87 (1.86x) | 66.58 (1.25x) | 183.94 (0.92x)| 2935.79 (0.93x)  | 11776.74 (0.92x)  |
-| unroll4  |  9.62 (1.19x) | 18.70 (1.00x) | 52.56 (0.98x) | 196.21 (0.98x)| 3128.11 (0.99x)  | 12501.76 (0.98x)  |
-| copywin  | 26.48 (3.27x) | 34.71 (1.85x) | 66.08 (1.24x) | 182.93 (0.91x)| 2924.05 (0.93x)  | 11744.19 (0.92x)  |
-| hybrid32 |  9.27 (1.14x) | 18.58 (0.99x) | 53.59 (1.00x) | 184.24 (0.92x)| 2951.88 (0.93x)  | 11828.48 (0.93x)  |
+| variant  |      tiny n=1 |      tiny n=4 |     tiny n=16 |    medium n=64 |    large n=1024 |     large n=4096 |
+| -------- | ------------: | ------------: | ------------: | -------------: | --------------: | ---------------: |
+| current  |  8.09 (1.00x) | 18.75 (1.00x) | 53.45 (1.00x) | 200.72 (1.00x) | 3158.74 (1.00x) | 12775.90 (1.00x) |
+| duff8    | 10.89 (1.35x) | 20.44 (1.09x) | 51.13 (0.96x) | 185.99 (0.93x) | 2986.53 (0.95x) | 11858.69 (0.93x) |
+| set      | 26.69 (3.30x) | 34.87 (1.86x) | 66.58 (1.25x) | 183.94 (0.92x) | 2935.79 (0.93x) | 11776.74 (0.92x) |
+| unroll4  |  9.62 (1.19x) | 18.70 (1.00x) | 52.56 (0.98x) | 196.21 (0.98x) | 3128.11 (0.99x) | 12501.76 (0.98x) |
+| copywin  | 26.48 (3.27x) | 34.71 (1.85x) | 66.08 (1.24x) | 182.93 (0.91x) | 2924.05 (0.93x) | 11744.19 (0.92x) |
+| hybrid32 |  9.27 (1.14x) | 18.58 (0.99x) | 53.59 (1.00x) | 184.24 (0.92x) | 2951.88 (0.93x) | 11828.48 (0.93x) |
 
 ### Verdict
 
@@ -197,7 +197,7 @@ Two reasons.
 
 First, the inner-copy microbench numbers are spectacular for `set`
 (50x faster on n=4096) and impressive for Duff (1.55x faster on
-n=4096), but the *integrated* numbers, which is what real callers
+n=4096), but the _integrated_ numbers, which is what real callers
 pay, show only a 7-9% improvement on bulk fills.
 The byte-copy is not the bottleneck; `chacha12Block` (12 rounds of
 quarter-round arithmetic plus the LE write at the end) is.

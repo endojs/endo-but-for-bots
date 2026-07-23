@@ -1,14 +1,14 @@
 # Trust-On-First-Bind for Capability Policy Bindings
 
-| | |
-|---|---|
-| **Created** | 2026-05-08 |
-| **Updated** | 2026-05-10 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Reference |
-| **Source** | PR #144 inline comment [discussion_r3212479564](https://github.com/endojs/endo-but-for-bots/pull/144#discussion_r3212479564) on `.changeset/agent-tools-http-client.md` |
-| **Used by** | HTTP client controller+client design (PR #163, [`endoclaw-network-fetch`](endoclaw-network-fetch.md)); browser controller design ([`endoclaw-browser`](endoclaw-browser.md), expected consumer) |
-| **Addendum to** | [endoclaw-network-fetch](endoclaw-network-fetch.md) and the PR #144 HttpClient design revision (HttpController split) |
+|                 |                                                                                                                                                                                                 |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Created**     | 2026-05-08                                                                                                                                                                                      |
+| **Updated**     | 2026-05-10                                                                                                                                                                                      |
+| **Author**      | Kris Kowal (prompted)                                                                                                                                                                           |
+| **Status**      | Reference                                                                                                                                                                                       |
+| **Source**      | PR #144 inline comment [discussion_r3212479564](https://github.com/endojs/endo-but-for-bots/pull/144#discussion_r3212479564) on `.changeset/agent-tools-http-client.md`                         |
+| **Used by**     | HTTP client controller+client design (PR #163, [`endoclaw-network-fetch`](endoclaw-network-fetch.md)); browser controller design ([`endoclaw-browser`](endoclaw-browser.md), expected consumer) |
+| **Addendum to** | [endoclaw-network-fetch](endoclaw-network-fetch.md) and the PR #144 HttpClient design revision (HttpController split)                                                                           |
 
 ## What is the Problem Being Solved?
 
@@ -21,7 +21,7 @@ allowlist:
 
 - **Refuse** with a fault that the user has to resolve out of band (the
   agent stalls; the user opens a CLI and runs `endo http policy add
-  https://api.example.com`; the agent retries).
+https://api.example.com`; the agent retries).
 - **Auto-add and continue** (least intrusive at the moment, but the
   allowlist is no longer a host-controlled artifact, and it grows
   without review).
@@ -34,7 +34,7 @@ prompt for notification permission the first time a site requests
 one, and OS package managers ask before adding a new keyring.
 The proposed pattern, **trust-on-first-bind**, is TOFU specialised
 to a capability whose policy is itself a capability surface: the
-"first use" is the first attempt to *bind* a policy slot (an origin,
+"first use" is the first attempt to _bind_ a policy slot (an origin,
 a path, a command) at request time, and the pin is recorded into the
 controller's policy storage where it is later inspectable, revocable,
 and exportable.
@@ -92,7 +92,7 @@ The controller's `fetch`/`open`/`exec` entry point is
 shaped as:
 
 ```js
-const decideAndApply = async (target) => {
+const decideAndApply = async target => {
   const state = policy.get(target);
   if (state === 'Pinned-Allow') return proceed(target);
   if (state === 'Pinned-Deny' || state === 'Revoked') {
@@ -114,12 +114,12 @@ modes; see "Decision modes" below.
 The controller is constructed with a `policyMode` enum that selects
 the prompt implementation:
 
-| Mode | Prompt behaviour | Use case |
-|---|---|---|
-| `'strict'` | No prompt. Unknown targets raise a fault immediately. | Production daemons; the original behaviour PR #144 ships. |
-| `'tofu-prompt'` | Prompt the controller's holder (the user, an agent in interactive mode) and record the answer. | Interactive sessions; the developer wants the cap to grow as they work without restarting. |
-| `'tofu-auto'` | Auto-Pinned-Allow with audit-log entry and a reactive notification to the holder. | Trusted-environment internals; never the default for an HTTP client because it converts the allowlist into a write-once log. |
-| `'tofu-attenuator'` | Forward the decision to a separately-supplied attenuator capability. | The cap was minted with a policy attenuator (e.g. a "ask the user via Chat" exo); the controller does not know what the prompt UI looks like. |
+| Mode                | Prompt behaviour                                                                               | Use case                                                                                                                                      |
+| ------------------- | ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `'strict'`          | No prompt. Unknown targets raise a fault immediately.                                          | Production daemons; the original behaviour PR #144 ships.                                                                                     |
+| `'tofu-prompt'`     | Prompt the controller's holder (the user, an agent in interactive mode) and record the answer. | Interactive sessions; the developer wants the cap to grow as they work without restarting.                                                    |
+| `'tofu-auto'`       | Auto-Pinned-Allow with audit-log entry and a reactive notification to the holder.              | Trusted-environment internals; never the default for an HTTP client because it converts the allowlist into a write-once log.                  |
+| `'tofu-attenuator'` | Forward the decision to a separately-supplied attenuator capability.                           | The cap was minted with a policy attenuator (e.g. a "ask the user via Chat" exo); the controller does not know what the prompt UI looks like. |
 
 `'strict'` is the default.
 The PR #144 changeset describes only `'strict'`; this design adds the
@@ -163,14 +163,16 @@ interface HttpController {
   listBindings(): Array<{
     target: string;
     state: 'Pinned-Allow' | 'Pinned-Deny' | 'Revoked';
-    decidedAt: number;        // ms epoch
-    decidedBy: string;        // human identifier (user pet name, etc.)
+    decidedAt: number; // ms epoch
+    decidedBy: string; // human identifier (user pet name, etc.)
     decisionMode: 'strict' | 'tofu-prompt' | 'tofu-auto' | 'tofu-attenuator';
-    note?: string;            // optional reviewer comment
+    note?: string; // optional reviewer comment
   }>;
   revokeBinding(target: string): void;
   unpin(target: string): void; // demote to Unknown; next request re-prompts
-  setPolicyMode(mode: 'strict' | 'tofu-prompt' | 'tofu-auto' | 'tofu-attenuator'): void;
+  setPolicyMode(
+    mode: 'strict' | 'tofu-prompt' | 'tofu-auto' | 'tofu-attenuator',
+  ): void;
 }
 ```
 
@@ -216,7 +218,7 @@ Every state transition appends an entry to a per-controller audit log:
 
 ```ts
 type AuditEntry = {
-  at: number;             // ms epoch
+  at: number; // ms epoch
   target: string;
   fromState: 'Unknown' | 'Pinned-Allow' | 'Pinned-Deny' | 'Pending' | 'Revoked';
   toState: 'Pinned-Allow' | 'Pinned-Deny' | 'Pending' | 'Revoked' | 'Unknown';
@@ -263,7 +265,7 @@ bind contributes.
 ### Failure modes
 
 - **Holder rejects.** The request fails with `policy refused
-  <target>`; the requester can retry, in which case the pin is read
+<target>`; the requester can retry, in which case the pin is read
   from policy and the request fails again immediately.
   The requester is responsible for not retry-storming.
 - **Prompt times out.** The controller is constructed with a
@@ -379,14 +381,14 @@ here; documented as future work below.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| [endoclaw-network-fetch](endoclaw-network-fetch.md) | The originating motivation; HttpClient is the first surface that adopts trust-on-first-bind. |
-| PR #144 HttpController revision | The split between `HttpClient` and `HttpController` provides the policy facet that this design extends. The revision PR will be linked here once it opens. |
-| [endoclaw-browser](endoclaw-browser.md) | Same allowlist shape, same prompt-and-pin questions; should adopt this pattern. |
-| [daemon-agent-tools](daemon-agent-tools.md) | `Shell` command allowlists and `Git` repo gates are candidates; the same audit-and-revoke surface applies. |
-| [daemon-mount](daemon-mount.md) | Mount deny-patterns and allow-patterns are a policy surface; trust-on-first-bind for path opens is a future application. |
-| [daemon-form-request](daemon-form-request.md) | The prompt UI for `'tofu-prompt'` and `'tofu-attenuator'` in Chat reuses this. |
+| Design                                              | Relationship                                                                                                                                               |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [endoclaw-network-fetch](endoclaw-network-fetch.md) | The originating motivation; HttpClient is the first surface that adopts trust-on-first-bind.                                                               |
+| PR #144 HttpController revision                     | The split between `HttpClient` and `HttpController` provides the policy facet that this design extends. The revision PR will be linked here once it opens. |
+| [endoclaw-browser](endoclaw-browser.md)             | Same allowlist shape, same prompt-and-pin questions; should adopt this pattern.                                                                            |
+| [daemon-agent-tools](daemon-agent-tools.md)         | `Shell` command allowlists and `Git` repo gates are candidates; the same audit-and-revoke surface applies.                                                 |
+| [daemon-mount](daemon-mount.md)                     | Mount deny-patterns and allow-patterns are a policy surface; trust-on-first-bind for path opens is a future application.                                   |
+| [daemon-form-request](daemon-form-request.md)       | The prompt UI for `'tofu-prompt'` and `'tofu-attenuator'` in Chat reuses this.                                                                             |
 
 ## Test plan
 

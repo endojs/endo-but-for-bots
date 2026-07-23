@@ -1,11 +1,11 @@
 # Familiar Gateway Migration
 
-| | |
-|---|---|
-| **Created** | 2026-02-14 |
-| **Updated** | 2026-02-26 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Complete |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-14            |
+| **Updated** | 2026-02-26            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Complete              |
 
 ## Status
 

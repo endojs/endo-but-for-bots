@@ -1,10 +1,10 @@
 # Engo: Go Supervisor for Endo Daemon
 
-| | |
-|---|---|
-| **Date** | 2026-02-25 |
+|            |                       |
+| ---------- | --------------------- |
+| **Date**   | 2026-02-25            |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | Not Started           |
 
 ## What is the Problem Being Solved?
 
@@ -71,11 +71,11 @@ Engo does **not** replace the Endo daemon. The Endo daemon's architecture
 already anticipates multiple platform backends through its `-node.js` /
 `-node-powers.js` module convention. Engo introduces a new platform pair:
 
-| Platform | Daemon entry | Powers module | Worker entry | Worker powers |
-|----------|-------------|---------------|-------------|---------------|
-| Node.js  | `daemon-node.js` | `daemon-node-powers.js` | `worker-node.js` | `worker-node-powers.js` |
-| Go (engo) | `daemon-go.js` | `daemon-go-powers.js` | `worker-go.js` | `worker-go-powers.js` |
-| Web (future) | `daemon-web.js` | `daemon-web-powers.js` | — | — |
+| Platform     | Daemon entry     | Powers module           | Worker entry     | Worker powers           |
+| ------------ | ---------------- | ----------------------- | ---------------- | ----------------------- |
+| Node.js      | `daemon-node.js` | `daemon-node-powers.js` | `worker-node.js` | `worker-node-powers.js` |
+| Go (engo)    | `daemon-go.js`   | `daemon-go-powers.js`   | `worker-go.js`   | `worker-go-powers.js`   |
+| Web (future) | `daemon-web.js`  | `daemon-web-powers.js`  | —                | —                       |
 
 Initially, `daemon-go.js` and `daemon-go-powers.js` will be near-copies of
 their `-node` counterparts. The key difference is in `makeWorker`: instead
@@ -120,13 +120,13 @@ same envelope protocol on fd 3/4.
 
 #### Pipe layout
 
-| fd | Direction | Purpose |
-|----|-----------|---------|
-| 0  | inherited | stdin (unused, closed) |
-| 1  | inherited | stdout → supervisor log capture |
-| 2  | inherited | stderr → supervisor log capture |
-| 3  | child → parent | CBOR-framed envelopes from subprocess |
-| 4  | parent → child | CBOR-framed envelopes to subprocess |
+| fd  | Direction      | Purpose                               |
+| --- | -------------- | ------------------------------------- |
+| 0   | inherited      | stdin (unused, closed)                |
+| 1   | inherited      | stdout → supervisor log capture       |
+| 2   | inherited      | stderr → supervisor log capture       |
+| 3   | child → parent | CBOR-framed envelopes from subprocess |
+| 4   | parent → child | CBOR-framed envelopes to subprocess   |
 
 #### Envelope format
 
@@ -155,11 +155,11 @@ Each envelope is a CBOR array:
 Engo assigns handles to each subprocess it manages. All subprocesses are
 direct children of engo:
 
-| Handle | Entity | Notes |
-|--------|--------|-------|
-| 0 | Engo supervisor (control plane) | Always handle 0 |
-| 1 | Node.js daemon | First subprocess |
-| 2+ | Node.js workers | Spawned by engo on daemon request |
+| Handle | Entity                          | Notes                             |
+| ------ | ------------------------------- | --------------------------------- |
+| 0      | Engo supervisor (control plane) | Always handle 0                   |
+| 1      | Node.js daemon                  | First subprocess                  |
+| 2+     | Node.js workers                 | Spawned by engo on daemon request |
 
 ### Worker spawning
 
@@ -382,11 +382,11 @@ syscalls, one capability at a time.
 
 Candidates for migration, in suggested order:
 
-| Syscall | Replaces | Rationale |
-|---------|----------|-----------|
-| `fs.read` / `fs.write` | `node:fs` | Most impactful; enables Go-side caching and access control |
-| `net.listen` / `net.connect` | `node:net` | Enables Go-side socket management |
-| `crypto.random` / `crypto.hash` | `node:crypto` | Small surface, easy to verify |
+| Syscall                         | Replaces      | Rationale                                                  |
+| ------------------------------- | ------------- | ---------------------------------------------------------- |
+| `fs.read` / `fs.write`          | `node:fs`     | Most impactful; enables Go-side caching and access control |
+| `net.listen` / `net.connect`    | `node:net`    | Enables Go-side socket management                          |
+| `crypto.random` / `crypto.hash` | `node:crypto` | Small surface, easy to verify                              |
 
 Each syscall follows the pattern:
 

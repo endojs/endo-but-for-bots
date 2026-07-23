@@ -1,11 +1,11 @@
 # Chat Spaces Inbox Mode
 
-| | |
-|---|---|
-| **Created** | 2026-02-21 |
-| **Updated** | 2026-02-24 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Complete |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-21            |
+| **Updated** | 2026-02-24            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Complete              |
 
 ## Overview
 
@@ -14,6 +14,7 @@ This document describes the "inbox" mode for spaces - the primary interaction mo
 ## Context
 
 When a space is configured with `mode: 'inbox'`, selecting that space:
+
 1. Navigates to the space's `profilePath`
 2. Displays the inbox for that profile in the main content area
 3. Enables messaging to/from that agent
@@ -31,6 +32,7 @@ const inboxComponent = async ($parent, $end, powers) => {
 ```
 
 This component:
+
 - Follows the `followMessages()` async iterator from powers
 - Renders each message as it arrives
 - Supports sent/received message styling
@@ -82,7 +84,7 @@ const updateBadges = async () => {
 
       // Update badge
       const $badge = $container.querySelector(
-        `.space-item[data-space-id="${space.id}"] .space-badge`
+        `.space-item[data-space-id="${space.id}"] .space-badge`,
       );
       if ($badge) {
         $badge.textContent = String(unreadCount);
@@ -101,12 +103,14 @@ setInterval(updateBadges, 30000);
 ### Daemon Requirements
 
 Badge support would need:
+
 - `E(powers).getUnreadCount()` or similar API
 - Or: tracking "last seen" timestamp per-space client-side
 
 ## Message Context
 
 When in a space, the chat bar context shifts:
+
 - **Profile path** shown in breadcrumbs (already implemented)
 - **Send target** defaults to the space's agent
 - **Available commands** scoped to the space's capabilities
@@ -139,6 +143,7 @@ User types message in chat bar
 ## Files
 
 This mode uses existing components:
+
 - `packages/chat/src/chat.js` - `inboxComponent`, `bodyComponent`
 - `packages/chat/src/send-form.js` - Message sending
 - `packages/chat/src/ref-iterator.js` - Message iteration

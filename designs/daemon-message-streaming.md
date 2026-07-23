@@ -1,7 +1,7 @@
 # Daemon Message Streaming
 
 |             |                          |
-|-------------|--------------------------|
+| ----------- | ------------------------ |
 | **Created** | 2026-03-26               |
 | **Updated** | 2026-06-15               |
 | **Author**  | Joshua T Corbin (evoked) |
@@ -153,7 +153,7 @@ interiors for a not-done message.
  * @prop {string} date - ISO 8601 timestamp assigned when the revision was applied.
  * @prop {number} timestamp - Milliseconds since the Unix epoch, derived from `date`.
  */
-E(agent).messageHistory(messageNumber)
+E(agent).messageHistory(messageNumber);
 ```
 
 History is retained for the lifetime of the message (i.e. until the
@@ -165,13 +165,13 @@ path, is equivalent to the last entry in `messageHistory`.
 
 The phased use cases from the prior design collapse onto this surface:
 
-| Prior concept | Expressed as |
-|---|---|
-| `append(chunk)` | `editMessage(n, { strings: [soFar + chunk] }, { done: false })` |
-| `setPhase("thinking")` | An edit whose payload text is `"Thinking..."` with `done: false` |
-| `end()` | `editMessage(n, finalPayload, { done: true })` |
-| `abort(reason)` | `editMessage(n, { strings: [..., reason] }, { done: true })` — or a reply containing the error, if the partial content should be preserved verbatim |
-| Recipient live rendering | Poll-free: the existing message-follow path already notifies on envelope changes |
+| Prior concept            | Expressed as                                                                                                                                        |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `append(chunk)`          | `editMessage(n, { strings: [soFar + chunk] }, { done: false })`                                                                                     |
+| `setPhase("thinking")`   | An edit whose payload text is `"Thinking..."` with `done: false`                                                                                    |
+| `end()`                  | `editMessage(n, finalPayload, { done: true })`                                                                                                      |
+| `abort(reason)`          | `editMessage(n, { strings: [..., reason] }, { done: true })` — or a reply containing the error, if the partial content should be preserved verbatim |
+| Recipient live rendering | Poll-free: the existing message-follow path already notifies on envelope changes                                                                    |
 
 The sender decides chunk granularity.
 The mail subsystem does not need a debounce, buffer, or back-pressure
@@ -227,10 +227,10 @@ That is a caller concern, not a protocol concern.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| [daemon-value-message](daemon-value-message.md) | `editMessage` accepts any payload type in the message union, including `value`. No structural changes expected; this design just reuses the union. |
-| [daemon-commands-as-messages](daemon-commands-as-messages.md) | Command results can use `editMessage` to fill in output as it becomes available, superseding any ad-hoc "pending result" placeholder. |
+| Design                                                        | Relationship                                                                                                                                                                                                                               |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [daemon-value-message](daemon-value-message.md)               | `editMessage` accepts any payload type in the message union, including `value`. No structural changes expected; this design just reuses the union.                                                                                         |
+| [daemon-commands-as-messages](daemon-commands-as-messages.md) | Command results can use `editMessage` to fill in output as it becomes available, superseding any ad-hoc "pending result" placeholder.                                                                                                      |
 | [lal-reply-chain-transcripts](lal-reply-chain-transcripts.md) | Reply-chain transcripts include the current envelope of each ancestor. This design does not change what a transcript records; it simply means transcripts assembled before a message settles will show the latest revision at that moment. |
 
 ## Design Decisions

@@ -64,22 +64,33 @@ import 'ses';
 
 lockdown();
 
-console.log('intrinsics are frozen',
-    Object.isFrozen(Object.prototype));
+console.log('intrinsics are frozen', Object.isFrozen(Object.prototype));
 const compartment = new Compartment();
-console.log('intrinsics are the same inside compartments',
-    compartment.evaluate('[]') instanceof Array);
-console.log('the Function constructor is different, though',
-    compartment.evaluate('Function') !== Function);
-console.log('the Function.prototype is the same',
-    compartment.evaluate('Function') instanceof Function);
-console.log('new functions are stuck in the compartment',
-    compartment.evaluate(`new Function("return globalThis")()`)
-    === compartment.globalThis);
-console.log('the constructor on Function.prototype is not Function',
-    compartment.evaluate('Function.prototype.constructor !== Function'));
-console.log('the constructor on Function.prototype is not the real Function',
-    compartment.evaluate('Function.prototype.constructor') !== Function);
+console.log(
+  'intrinsics are the same inside compartments',
+  compartment.evaluate('[]') instanceof Array,
+);
+console.log(
+  'the Function constructor is different, though',
+  compartment.evaluate('Function') !== Function,
+);
+console.log(
+  'the Function.prototype is the same',
+  compartment.evaluate('Function') instanceof Function,
+);
+console.log(
+  'new functions are stuck in the compartment',
+  compartment.evaluate(`new Function("return globalThis")()`) ===
+    compartment.globalThis,
+);
+console.log(
+  'the constructor on Function.prototype is not Function',
+  compartment.evaluate('Function.prototype.constructor !== Function'),
+);
+console.log(
+  'the constructor on Function.prototype is not the real Function',
+  compartment.evaluate('Function.prototype.constructor') !== Function,
+);
 console.log(`it throws an error so compartments can't be escaped`);
 try {
   compartment.evaluate(`new Function.prototype.constructor()`);
@@ -122,7 +133,7 @@ and then execute a bundle in compartments.
 First, create a plugin to bundle up. This is `hello.js`.
 
 ```js
-console.log("Hello, World!");
+console.log('Hello, World!');
 ```
 
 ```

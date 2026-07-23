@@ -61,30 +61,57 @@ destructuring their method banks:
 ```js
 // Destructure directory methods
 const {
-  has, identify, locate, reverseLocate,
-  list, listIdentifiers, listLocators,
-  lookup, reverseLookup,
-  write, writeLocator, move, remove, copy,
+  has,
+  identify,
+  locate,
+  reverseLocate,
+  list,
+  listIdentifiers,
+  listLocators,
+  lookup,
+  reverseLookup,
+  write,
+  writeLocator,
+  move,
+  remove,
+  copy,
   makeDirectory,
 } = directory;
 
 // Destructure mailbox methods
 const {
-  listMessages, followMessages,
-  resolve, reject, adopt, dismiss,
-  request, send, deliver,
+  listMessages,
+  followMessages,
+  resolve,
+  reject,
+  adopt,
+  dismiss,
+  request,
+  send,
+  deliver,
 } = mailbox;
 
 // Compose into the agent's method bank
 const host = {
   // From directory
-  has, identify, locate, reverseLocate,
-  list, listIdentifiers, listLocators,
+  has,
+  identify,
+  locate,
+  reverseLocate,
+  list,
+  listIdentifiers,
+  listLocators,
   // From mailbox
-  listMessages, followMessages,
-  resolve, reject, adopt, dismiss,
+  listMessages,
+  followMessages,
+  resolve,
+  reject,
+  adopt,
+  dismiss,
   // Agent-specific
-  evaluate, provideGuest, invite,
+  evaluate,
+  provideGuest,
+  invite,
 };
 ```
 

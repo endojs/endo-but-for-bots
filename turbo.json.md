@@ -30,7 +30,7 @@ other.
 
 Turbo 2.9 reports a workspace-graph cycle as a non-fatal warning
 (`Circular package dependency detected: ...`) and the run proceeds.
-What is fatal is the *task-graph* cycle that `^build` then induces:
+What is fatal is the _task-graph_ cycle that `^build` then induces:
 once `build` depends on `^build`, the package-graph cycle becomes a
 cycle in the `build` task's dependency graph, and turbo refuses to
 compute a task graph with `Cyclic dependency detected` (non-zero
@@ -70,7 +70,7 @@ to the affected-set test runs only.
 
 With `dependsOn: ["build", "^build"]` on `test`, a package's `test`
 hash includes the upstream package's `build` hash.
-A change strictly inside an upstream package's *source* (without
+A change strictly inside an upstream package's _source_ (without
 changing its public surface) now correctly invalidates the downstream
 package's `test` cache, which matters for turbo's remote cache when
 that lands.

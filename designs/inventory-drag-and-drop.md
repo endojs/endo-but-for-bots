@@ -1,11 +1,11 @@
 # Inventory Drag and Drop
 
-| | |
-|---|---|
-| **Created** | 2026-02-14 |
-| **Updated** | 2026-02-24 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-14            |
+| **Updated** | 2026-02-24            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## What is the Problem Being Solved?
 
@@ -28,12 +28,12 @@ includes the pet name path as both `text/plain` and a custom
 
 ### Drop Targets
 
-| Target | Action | Daemon API Call |
-|--------|--------|-----------------|
-| Directory item (expandable) | Copy capability into directory | `E(agent).copy(sourcePath, [targetDir, itemName])` |
-| Agent/guest handle | Send capability to agent | `E(agent).send(targetAgent, strings, edgeNames, petNames)` |
-| PINS section (work item 003) | Pin the capability | `E(agent).pin(petName)` |
-| Trash/dismiss zone | Remove from inventory | `E(agent).remove(petName)` |
+| Target                       | Action                         | Daemon API Call                                            |
+| ---------------------------- | ------------------------------ | ---------------------------------------------------------- |
+| Directory item (expandable)  | Copy capability into directory | `E(agent).copy(sourcePath, [targetDir, itemName])`         |
+| Agent/guest handle           | Send capability to agent       | `E(agent).send(targetAgent, strings, edgeNames, petNames)` |
+| PINS section (work item 003) | Pin the capability             | `E(agent).pin(petName)`                                    |
+| Trash/dismiss zone           | Remove from inventory          | `E(agent).remove(petName)`                                 |
 
 ### Interaction Details
 
@@ -53,6 +53,7 @@ HTML5 Drag and Drop API (`draggable`, `dragstart`, `dragover`, `drop` events)
 rather than introducing a library dependency.
 
 All necessary daemon API methods already exist:
+
 - `E(agent).copy(sourcePath, targetPath)` — `packages/cli/src/commands/copy.js`
 - `E(agent).move(fromPath, toPath)` — `packages/cli/src/commands/move.js`
 - `E(agent).send(agentName, strings, edgeNames, petNames)` — `packages/cli/src/commands/send.js`

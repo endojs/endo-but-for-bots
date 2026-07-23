@@ -10,6 +10,7 @@ iterator/reader ref utilities to `@endo/exo-stream`.
 ### Old API (Removed)
 
 From `@endo/daemon/reader-ref.js` (REMOVED):
+
 - `makeIteratorRef(iterable)` to `FarRef<Reader<T>>` -
   Wrap local iterator as remote reference
 - `makeReaderRef(readable)` to `FarRef<Reader<string>>` -
@@ -17,6 +18,7 @@ From `@endo/daemon/reader-ref.js` (REMOVED):
   (now `PassableBytesReader`)
 
 From `@endo/daemon/ref-reader.js` (REMOVED):
+
 - `makeRefIterator(iteratorRef)` to `AsyncIterableIterator<T>` -
   Wrap remote iterator as local
 - `makeRefReader(readerRef)` to `AsyncIterableIterator<Uint8Array>` -
@@ -26,31 +28,31 @@ From `@endo/daemon/ref-reader.js` (REMOVED):
 
 #### Readers (data flows responder to initiator)
 
-| Old Function | New Function | Module | Notes |
-|---|---|---|---|
-| `makeIteratorRef(iterable)` | `readerFromIterator(iterable)` | `reader-from-iterator.js` | Returns `PassableReader` Exo with `stream()` method |
-| `makeRefIterator(iteratorRef)` | `iterateReader(readerRef)` | `iterate-reader.js` | Synchronous; returns `AsyncIterableIterator` |
+| Old Function                   | New Function                   | Module                    | Notes                                               |
+| ------------------------------ | ------------------------------ | ------------------------- | --------------------------------------------------- |
+| `makeIteratorRef(iterable)`    | `readerFromIterator(iterable)` | `reader-from-iterator.js` | Returns `PassableReader` Exo with `stream()` method |
+| `makeRefIterator(iteratorRef)` | `iterateReader(readerRef)`     | `iterate-reader.js`       | Synchronous; returns `AsyncIterableIterator`        |
 
 #### Writers (data flows initiator to responder)
 
-| New Function | Module | Notes |
-|---|---|---|
-| `writerFromIterator(iterator)` | `writer-from-iterator.js` | Returns `PassableWriter` Exo with `stream()` method |
-| `iterateWriter(writerRef, options?)` | `iterate-writer.js` | Returns a local writer iterator; use `next(value)` to send and `return()` to close |
+| New Function                         | Module                    | Notes                                                                              |
+| ------------------------------------ | ------------------------- | ---------------------------------------------------------------------------------- |
+| `writerFromIterator(iterator)`       | `writer-from-iterator.js` | Returns `PassableWriter` Exo with `stream()` method                                |
+| `iterateWriter(writerRef, options?)` | `iterate-writer.js`       | Returns a local writer iterator; use `next(value)` to send and `return()` to close |
 
 #### Bytes Readers (base64 encoding over CapTP)
 
-| Old Function | New Function | Module | Notes |
-|---|---|---|---|
-| `makeReaderRef(readable)` | `bytesReaderFromIterator(readable)` | `bytes-reader-from-iterator.js` | Returns `PassableBytesReader` with `streamBase64()` method |
-| `makeRefReader(readerRef)` | `iterateBytesReader(readerRef)` | `iterate-bytes-reader.js` | Synchronous; returns `AsyncIterableIterator<Uint8Array>` |
+| Old Function               | New Function                        | Module                          | Notes                                                      |
+| -------------------------- | ----------------------------------- | ------------------------------- | ---------------------------------------------------------- |
+| `makeReaderRef(readable)`  | `bytesReaderFromIterator(readable)` | `bytes-reader-from-iterator.js` | Returns `PassableBytesReader` with `streamBase64()` method |
+| `makeRefReader(readerRef)` | `iterateBytesReader(readerRef)`     | `iterate-bytes-reader.js`       | Synchronous; returns `AsyncIterableIterator<Uint8Array>`   |
 
 #### Bytes Writers (base64 encoding over CapTP)
 
-| New Function | Module | Notes |
-|---|---|---|
-| `bytesWriterFromIterator(iterator)` | `bytes-writer-from-iterator.js` | Returns `PassableBytesWriter` Exo with `streamBase64()` method |
-| `iterateBytesWriter(writerRef, options?)` | `iterate-bytes-writer.js` | Returns a local bytes writer iterator; use `next(chunk)` to send and `return()` to close |
+| New Function                              | Module                          | Notes                                                                                    |
+| ----------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------- |
+| `bytesWriterFromIterator(iterator)`       | `bytes-writer-from-iterator.js` | Returns `PassableBytesWriter` Exo with `streamBase64()` method                           |
+| `iterateBytesWriter(writerRef, options?)` | `iterate-bytes-writer.js`       | Returns a local bytes writer iterator; use `next(chunk)` to send and `return()` to close |
 
 ### Key Differences
 
@@ -64,6 +66,7 @@ From `@endo/daemon/ref-reader.js` (REMOVED):
 
 2. **Import paths**: No barrel exports; each function imported from
    its own module:
+
    ```javascript
    // Readers
    import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';

@@ -75,7 +75,7 @@ For form UIs we need:
 **Option A – Form schema separate from pattern**
 
 - Define a **form descriptor** type: `{ pattern: Pattern, fields?:
-  Array<{ key: string, label?: string, description?: string }> }` or a
+Array<{ key: string, label?: string, description?: string }> }` or a
   record of key → `{ label?, description? }`.
 - The pattern alone describes the valid shape; the descriptor adds UI
   hints.
@@ -88,11 +88,11 @@ For form UIs we need:
 **Option B – Extend patterns with optional metadata**
 
 - Add optional metadata to pattern constructors, e.g. `M.string({
-  label: 'Name', description: 'Your display name' })` or a wrapper
+label: 'Name', description: 'Your display name' })` or a wrapper
   `M.formField(M.string(), { label: 'Name' })`.
 - For capability slots: `M.promise(M.interface('Counter', {...}), {
-  description: 'A counter capability' })` or `M.remotable('Counter', {
-  description: '...' })`.
+description: 'A counter capability' })` or `M.remotable('Counter', {
+description: '...' })`.
 - Requires changes to `@endo/patterns` and a serialization story for the
   extended pattern (so that chat/CLI can render the form without having
   the live pattern object).
@@ -361,15 +361,15 @@ arrives in that handle's mailbox as a form-response message.
 
 ## 6. Pattern-to-UI mapping (summary)
 
-| Pattern / kind   | HTML-like input (chat)     | CLI                    | Passable value        |
-|------------------|----------------------------|------------------------|------------------------|
-| string           | `<input type="text">`      | Prompt line            | string                 |
-| number           | `<input type="number">`    | Prompt, parse number   | number                 |
-| boolean          | Checkbox / toggle          | Yes/no                 | boolean                |
-| bigint           | `<input type="text">`      | Prompt, parse bigint   | bigint                 |
-| record           | Fieldset, nested inputs    | Nested prompts         | copyRecord             |
-| array            | List + add/remove          | Repeat or comma-sep    | copyArray              |
-| capability       | Petname chip (`@name`)     | Pet name or path       | capability (promise)   |
+| Pattern / kind | HTML-like input (chat)  | CLI                  | Passable value       |
+| -------------- | ----------------------- | -------------------- | -------------------- |
+| string         | `<input type="text">`   | Prompt line          | string               |
+| number         | `<input type="number">` | Prompt, parse number | number               |
+| boolean        | Checkbox / toggle       | Yes/no               | boolean              |
+| bigint         | `<input type="text">`   | Prompt, parse bigint | bigint               |
+| record         | Fieldset, nested inputs | Nested prompts       | copyRecord           |
+| array          | List + add/remove       | Repeat or comma-sep  | copyArray            |
+| capability     | Petname chip (`@name`)  | Pet name or path     | capability (promise) |
 
 For **capability** slots, the value is always a reference (pet name or path
 resolved to a capability, or in the future an ad hoc identifier).

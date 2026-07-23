@@ -24,9 +24,7 @@ Extend a `plugin:@endo/CONFIG` in your `.eslintrc` configuration file. You can o
 
 ```json
 {
-    "extends": [
-        "plugin:@endo/recommended"
-    ]
+  "extends": ["plugin:@endo/recommended"]
 }
 ```
 
@@ -38,17 +36,16 @@ Extend a `plugin:@endo/CONFIG` in your `.eslintrc` configuration file. You can o
 - `strict` all of the above
 - `internal` rules only for packages within the Endo source repository
 
-
 You can configure individual rules you want to use under the rules section.
 
 ```json
 {
-    "rules": {
-        "@endo/rule-name": 2
-    }
+  "rules": {
+    "@endo/rule-name": 2
+  }
 }
 ```
 
 ## Supported Rules
 
-* Fill in provided rules here
+- Fill in provided rules here

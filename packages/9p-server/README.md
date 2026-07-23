@@ -70,27 +70,27 @@ wait for the first ack.
 
 ## 9P operations
 
-| Op | Status |
-|---|---|
-| Tversion | supported |
-| Tattach | supported |
-| Twalk (single + pipelined chain, `..` walks) | supported |
-| Tlopen | supported |
-| Tread | supported |
-| Treaddir | supported |
-| Tgetattr | supported |
-| Tsetattr | supported |
-| Tstatfs | supported |
-| Tlcreate | supported |
-| Twrite | supported |
-| Tmkdir | supported |
-| Tunlinkat | supported |
-| Trenameat | supported |
-| Tclunk | supported |
-| Tflush | supported |
-| Tlerror emission | supported |
-| Tauth | `Rlerror(ENOSYS)` |
-| Txattrwalk | `Rlerror(ENOSYS)` |
+| Op                                           | Status            |
+| -------------------------------------------- | ----------------- |
+| Tversion                                     | supported         |
+| Tattach                                      | supported         |
+| Twalk (single + pipelined chain, `..` walks) | supported         |
+| Tlopen                                       | supported         |
+| Tread                                        | supported         |
+| Treaddir                                     | supported         |
+| Tgetattr                                     | supported         |
+| Tsetattr                                     | supported         |
+| Tstatfs                                      | supported         |
+| Tlcreate                                     | supported         |
+| Twrite                                       | supported         |
+| Tmkdir                                       | supported         |
+| Tunlinkat                                    | supported         |
+| Trenameat                                    | supported         |
+| Tclunk                                       | supported         |
+| Tflush                                       | supported         |
+| Tlerror emission                             | supported         |
+| Tauth                                        | `Rlerror(ENOSYS)` |
+| Txattrwalk                                   | `Rlerror(ENOSYS)` |
 
 ## Mounting into the Linux kernel
 
@@ -98,21 +98,21 @@ wait for the first ack.
 projects a `Filesystem` cap (possibly a remote CapTP presence) into the
 host Linux kernel: it stands up `makeFsBridge9p` on a per-mount Unix
 socket and runs `mount -t 9p -o trans=unix,version=9p2000.L,…`. Its
-`make()` returns a *mounter* exo whose `mount(fs, mountPoint, options)`
+`make()` returns a _mounter_ exo whose `mount(fs, mountPoint, options)`
 returns a handle with `unmount()`; every live mount is torn down when
 the caplet's cancellation context fires.
 
 For an end-to-end walkthrough — fresh daemon, iroh networking, printing
 an invitation on the remote daemon, sharing a `Filesystem` cap, and
 mounting it on another machine — see [`DEMO.md`](./DEMO.md). That doc
-also sketches a proposed *auto-mount host* that mounts fs caps arriving
+also sketches a proposed _auto-mount host_ that mounts fs caps arriving
 in messages and replies with their mountpoint.
 
 ## Expected `Filesystem` compatibility
 
 > **Status: expected, not test-verified.** The tables below are derived
 > from reading [`src/server.js`](./src/server.js) and the
-> `@endo/platform/fs/extended` backends, *not* from integration tests.
+> `@endo/platform/fs/extended` backends, _not_ from integration tests.
 > The only path exercised by `test/server.test.js` today is the
 > in-memory backend. Treat the rest as the intended contract pending a
 > backend-parametrised test matrix (see "Known gaps").
@@ -122,30 +122,30 @@ in messages and replies with their mountpoint.
 The bridge consumes the `@endo/platform/fs/extended` `Filesystem` exo
 only. Other fs shapes reach it (or not) as follows:
 
-| fs object | Mountable | How |
-|---|---|---|
-| `makeNodeFilesystem({ rootPath })` | expected ✅ direct | highest fidelity (real stat / atomic rename / real fsync / ranged I/O) |
-| `makeInMemoryFilesystem()` | expected ✅ direct | ephemeral; vat-local timestamps |
-| `readOnly` / `compose` (CoW) / `chroot` / `bind` / `namespace` / `cached-fs` wrappers | expected ✅ direct | each returns a `Filesystem` |
-| daemon **`Mount`** (`packages/daemon/src/mount.js`) | expected ✅ via adapter | `mountAsFilesystem` (`from-mount`) |
-| daemon **`ReadableTree`** (immutable snapshot) | ❌ not yet | `from-readable-tree.js` is roadmap **F6, open** |
-| the other `@endo/platform/fs` interface (`File` / `Directory` / `SnapshotTree`) | ❌ | different contract; no adapter ships |
+| fs object                                                                             | Mountable               | How                                                                    |
+| ------------------------------------------------------------------------------------- | ----------------------- | ---------------------------------------------------------------------- |
+| `makeNodeFilesystem({ rootPath })`                                                    | expected ✅ direct      | highest fidelity (real stat / atomic rename / real fsync / ranged I/O) |
+| `makeInMemoryFilesystem()`                                                            | expected ✅ direct      | ephemeral; vat-local timestamps                                        |
+| `readOnly` / `compose` (CoW) / `chroot` / `bind` / `namespace` / `cached-fs` wrappers | expected ✅ direct      | each returns a `Filesystem`                                            |
+| daemon **`Mount`** (`packages/daemon/src/mount.js`)                                   | expected ✅ via adapter | `mountAsFilesystem` (`from-mount`)                                     |
+| daemon **`ReadableTree`** (immutable snapshot)                                        | ❌ not yet              | `from-readable-tree.js` is roadmap **F6, open**                        |
+| the other `@endo/platform/fs` interface (`File` / `Directory` / `SnapshotTree`)       | ❌                      | different contract; no adapter ships                                   |
 
 ### Behavior ceiling — expected for every backing
 
 These are limits of the 9P server plus the base `Filesystem`, so no
 choice of backing changes them:
 
-| 9P op / feature | Expected behavior | Source |
-|---|---|---|
-| `Tattach`, `Twalk`, `Tlopen`, `Tread`, `Twrite`, `Treaddir`, `Tmkdir`, `Tunlinkat`, `Trenameat`, `Tclunk`, `Tflush`, `Tstatfs` | supported | `src/server.js` dispatch |
-| `Tgetattr` | size + a/m/c/btime real; **mode synthesized** `0o755`/`0o644`, uid/gid `1000`, nlink `1` | `server.js:611` |
-| `Tsetattr` size / atime / mtime | forwarded to `setAttrs` | `server.js:901` |
-| `Tsetattr` mode / uid / gid (chmod / chown) | **silently ignored** | `server.js:886` (read off the wire, discarded) |
-| `Txattrwalk` (xattrs) | `ENOSYS` (vat-local `user.*` sidecar not exposed) | `server.js:264` |
-| `Tlock` / `Tgetlock` (byte-range locks) | not implemented | — |
-| `Tsymlink` / `Tmknod` (symlinks, device nodes) | not implemented (tree-shaped base) | — |
-| `Tauth` | `ENOSYS` (the cap is the authority; mount `access=any`) | `server.js:232` |
+| 9P op / feature                                                                                                                | Expected behavior                                                                        | Source                                         |
+| ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `Tattach`, `Twalk`, `Tlopen`, `Tread`, `Twrite`, `Treaddir`, `Tmkdir`, `Tunlinkat`, `Trenameat`, `Tclunk`, `Tflush`, `Tstatfs` | supported                                                                                | `src/server.js` dispatch                       |
+| `Tgetattr`                                                                                                                     | size + a/m/c/btime real; **mode synthesized** `0o755`/`0o644`, uid/gid `1000`, nlink `1` | `server.js:611`                                |
+| `Tsetattr` size / atime / mtime                                                                                                | forwarded to `setAttrs`                                                                  | `server.js:901`                                |
+| `Tsetattr` mode / uid / gid (chmod / chown)                                                                                    | **silently ignored**                                                                     | `server.js:886` (read off the wire, discarded) |
+| `Txattrwalk` (xattrs)                                                                                                          | `ENOSYS` (vat-local `user.*` sidecar not exposed)                                        | `server.js:264`                                |
+| `Tlock` / `Tgetlock` (byte-range locks)                                                                                        | not implemented                                                                          | —                                              |
+| `Tsymlink` / `Tmknod` (symlinks, device nodes)                                                                                 | not implemented (tree-shaped base)                                                       | —                                              |
+| `Tauth`                                                                                                                        | `ENOSYS` (the cap is the authority; mount `access=any`)                                  | `server.js:232`                                |
 
 `readOnly(fs)` additionally rejects every mutating op; the mounting
 process sees `EACCES`.
@@ -156,13 +156,13 @@ Driven by which optional `FsBackend` methods each implements
 (`getStat` / `fsync` / `rename` / range I/O); `wrapBackend` synthesizes
 the rest:
 
-| behavior | `node-fs` | `in-memory` | daemon `Mount` (`from-mount`) |
-|---|---|---|---|
-| `ls -l` timestamps | real disk (`getStat`) | vat-local | vat-local (no `getStat`) |
-| `rename` (`Trenameat`) | atomic (`fs.rename`) | atomic (Map swap) | via `Mount.move` |
-| `fsync` durability | real | no-op | no-op |
-| range `Tread`/`Twrite` | true ranged | true ranged | read-whole-then-slice / write-whole, O(filesize)×1.33 |
-| persistence | on disk | ephemeral | the Mount's backing store |
+| behavior               | `node-fs`             | `in-memory`       | daemon `Mount` (`from-mount`)                         |
+| ---------------------- | --------------------- | ----------------- | ----------------------------------------------------- |
+| `ls -l` timestamps     | real disk (`getStat`) | vat-local         | vat-local (no `getStat`)                              |
+| `rename` (`Trenameat`) | atomic (`fs.rename`)  | atomic (Map swap) | via `Mount.move`                                      |
+| `fsync` durability     | real                  | no-op             | no-op                                                 |
+| range `Tread`/`Twrite` | true ranged           | true ranged       | read-whole-then-slice / write-whole, O(filesize)×1.33 |
+| persistence            | on disk               | ephemeral         | the Mount's backing store                             |
 
 `PosixFs` (roadmap F15) would lift the ceiling — real mode/uid/gid,
 real `flock`/`fcntl`, native xattrs — but it is scaffolded only and

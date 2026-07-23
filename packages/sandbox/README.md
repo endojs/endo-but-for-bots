@@ -44,11 +44,11 @@ The bwrap driver shells out to external tools.
 `available: false` when a tool is missing, and `make()` then refuses
 the slice with a structured error rather than failing silently.
 
-| Tool      | Phase   | Tested version | Notes                              |
-| --------- | ------- | -------------- | ---------------------------------- |
-| `bwrap`   | 1       | 0.11.2         | <https://github.com/containers/bubblewrap> |
-| `pasta`   | 1 (TBD) | passt 2026_01  | Used for `network: 'private'` egress NAT |
-| `nft`     | 1 (TBD) | nftables 1.x   | Loads `src/net/private-egress.nft` inside the netns |
+| Tool    | Phase   | Tested version | Notes                                               |
+| ------- | ------- | -------------- | --------------------------------------------------- |
+| `bwrap` | 1       | 0.11.2         | <https://github.com/containers/bubblewrap>          |
+| `pasta` | 1 (TBD) | passt 2026_01  | Used for `network: 'private'` egress NAT            |
+| `nft`   | 1 (TBD) | nftables 1.x   | Loads `src/net/private-egress.nft` inside the netns |
 
 Kernel requirements:
 
@@ -59,12 +59,12 @@ Kernel requirements:
 - For `network: 'private'` to behave correctly: kernel ≥ 5.10 and
   the `nftables` kmod loaded.
 - For Phase 1.5 Landlock surfacing: kernel ≥ 5.13 with the
-  `landlock` LSM enabled.  The probe reads
+  `landlock` LSM enabled. The probe reads
   `/sys/kernel/security/lsm`; absent kernels still construct
   slices, just without the extra layer (the probe surfaces this
   via `slice.help()` and `BackendProbe.details.landlock`).
 - For Phase 1.5 cgroup v2 caps: rootless cgroup v2 with `Delegate=`
-  set on the user systemd unit.  On distros that do not enable
+  set on the user systemd unit. On distros that do not enable
   delegation by default, run `loginctl enable-linger $USER` and
   add a drop-in:
 
@@ -84,28 +84,28 @@ Older bwrap versions are untested.
 
 ## Operational prerequisites (Linux + podman driver, Phase 2)
 
-The podman driver shells out to a rootless `podman` binary.  The
+The podman driver shells out to a rootless `podman` binary. The
 driver `probe()` returns `available: false` when any of these is
 missing; `make()` then refuses the slice with a structured error.
 
-| Tool             | Phase | Tested version | Notes                                                                |
-| ---------------- | ----- | -------------- | -------------------------------------------------------------------- |
-| `podman`         | 2     | 5.8.x          | <https://podman.io>; rootful installs are rejected by the probe.     |
-| `crun` / `runc`  | 2     | 1.x            | OCI runtime that supports `podman exec`.  See "OCI runtime" below.   |
-| `slirp4netns`    | 2     | 1.x            | Default rootless network backend; required for `network: 'private'`. |
-| `pasta`          | 2     | passt 2026_01  | Used as the fallback when `slirp4netns` is absent.                   |
+| Tool            | Phase | Tested version | Notes                                                                |
+| --------------- | ----- | -------------- | -------------------------------------------------------------------- |
+| `podman`        | 2     | 5.8.x          | <https://podman.io>; rootful installs are rejected by the probe.     |
+| `crun` / `runc` | 2     | 1.x            | OCI runtime that supports `podman exec`. See "OCI runtime" below.    |
+| `slirp4netns`   | 2     | 1.x            | Default rootless network backend; required for `network: 'private'`. |
+| `pasta`         | 2     | passt 2026_01  | Used as the fallback when `slirp4netns` is absent.                   |
 
 Rootless prerequisites:
 
 - `/etc/subuid` and `/etc/subgid` ranges configured for the running
-  user.  `newuidmap` and `newgidmap` setuid helpers must be
+  user. `newuidmap` and `newgidmap` setuid helpers must be
   installed (`uidmap` package on Debian-derived distros).
 - `~/.local/share/containers/storage` is the user-private image
-  store podman writes to.  The driver `podman pull`s images on
+  store podman writes to. The driver `podman pull`s images on
   first use and otherwise leaves them alone; callers can prune the
   store with `podman image prune` outside the slice.
 - For `network: 'private'`: either `slirp4netns` or `pasta` must be
-  on PATH.  The driver auto-detects which one is present and
+  on PATH. The driver auto-detects which one is present and
   surfaces the choice via `slice.help()`'s `rootless-net:` row.
 
 ### OCI runtime
@@ -114,7 +114,7 @@ Rootless prerequisites:
 Some Bazzite / Universal Blue images default to `krun` (libkrun
 microVM) which does not implement `podman exec`; the driver detects
 that case at probe time and transparently switches to `crun` or
-`runc` so the slice's spawn surface keeps working.  The override is
+`runc` so the slice's spawn surface keeps working. The override is
 visible from `podman info --format '{{.Host.OCIRuntime.Name}}'` and
 in the `--runtime` flag the driver prepends to every podman call.
 The override is opt-out via `makePodmanDriver({ ociRuntime: 'krun' })`
@@ -141,7 +141,7 @@ cleanly — `listBackends()` simply returns
 `make()` rejects with `"no backend available"`.
 
 The `'auto'` selector picks the first available driver in
-registration order.  Bwrap is registered first, so callers asking
+registration order. Bwrap is registered first, so callers asking
 for OCI image rootfs must opt in via `make({ backend: 'podman',
 rootfs: { kind: 'oci', ref: 'docker.io/library/alpine:3.19' } })`.
 
@@ -218,12 +218,12 @@ keeps the documented list and the nft ruleset in lockstep.
 ### Host network profiles
 
 `host-loopback` / `host-lan` / `host-net` all share the host's
-network namespace via `bwrap --share-net`.  Per-profile filtering
+network namespace via `bwrap --share-net`. Per-profile filtering
 (drop everything except `127.0.0.0/8` / `::1` for `host-loopback`,
 drop public Internet for `host-lan`) is the **operator's**
 responsibility because rootless slices do not hold `CAP_NET_ADMIN`
 and therefore cannot install host-firewall rules from inside the
-slice.  The blocklist / allowlist used by these profiles is
+slice. The blocklist / allowlist used by these profiles is
 exported alongside `PRIVATE_BLOCKED_RANGES`:
 
 - `HOST_LOOPBACK_ALLOWED_RANGES` — operators install firewall rules
@@ -269,12 +269,12 @@ when the slice spec's `env` does not already include `PATH`.
 
 The default is constructed per-rootfs:
 
-| Rootfs       | Default `$PATH`                                                                                     |
-| ------------ | --------------------------------------------------------------------------------------------------- |
-| `host-bind`  | `/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin` plus operator-installed survivors    |
-| `mount`      | the subset of the canonical bin dirs that exist under the host rootfs, falling back to the default  |
-| `minimal`    | the canonical default                                                                               |
-| `oci`        | the image's `Config.Env` PATH (Phase 2 podman driver), falling back to the canonical default        |
+| Rootfs      | Default `$PATH`                                                                                    |
+| ----------- | -------------------------------------------------------------------------------------------------- |
+| `host-bind` | `/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin` plus operator-installed survivors   |
+| `mount`     | the subset of the canonical bin dirs that exist under the host rootfs, falling back to the default |
+| `minimal`   | the canonical default                                                                              |
+| `oci`       | the image's `Config.Env` PATH (Phase 2 podman driver), falling back to the canonical default       |
 
 The canonical default is sourced from
 [`src/drivers/path.js`](./src/drivers/path.js) and is shared between
@@ -330,7 +330,7 @@ bwrap driver uses for `host-bind`:
 
 The injection happens at `podman create` time as `-e PATH=…`, so the
 slice's effective `PATH` is observable from the host even when the
-image declared one of its own.  The chosen value and its source
+image declared one of its own. The chosen value and its source
 (`env` / `image` / `fallback`) are surfaced via the `slice.help()`
 "Hardening layers in effect" report:
 
@@ -353,9 +353,9 @@ inherits on top of bwrap's namespacing:
 - **Landlock** — kernel-feature probe in
   [`src/landlock.js`](./src/landlock.js) reads
   `/sys/kernel/security/lsm` to determine whether the LSM is
-  registered.  The probe outcome appears in
+  registered. The probe outcome appears in
   `BackendProbe.details.landlock` and in the per-slice
-  `slice.help()` "Hardening layers in effect" report.  Actual
+  `slice.help()` "Hardening layers in effect" report. Actual
   ruleset installation (a future patch) will run inside the
   slice's child after bwrap execs the slice's init.
 - **Resource caps** — `prlimit` wrappers around the bwrap exec set
@@ -369,7 +369,7 @@ inherits on top of bwrap's namespacing:
   taking out the host.
 - **cgroup v2 detection** — same module probes
   `/proc/self/cgroup` + `cgroup.controllers` so callers can tell
-  whether `pids.max` / `memory.max` / `cpu.max` are usable.  When
+  whether `pids.max` / `memory.max` / `cpu.max` are usable. When
   delegation is missing the slice still applies the `prlimit`
   caps; the help report calls out which controllers are absent so
   operators can fix the systemd unit.
@@ -383,7 +383,7 @@ The test suite covers:
 - [`test/daemon-smoke.test.js`](./test/daemon-smoke.test.js) —
   Phase 0 / 1 plugin entry-point smoke test.
 - [`test/bwrap.test.js`](./test/bwrap.test.js) — Phase 1 + 1.5
-  driver acceptance tests including the host-* network profiles,
+  driver acceptance tests including the host-\* network profiles,
   the prlimit nproc cap, and the slice runtime report rendered by
   `help()`.
   Each case probes `bwrap --version` first; if bwrap is unavailable
@@ -393,7 +393,7 @@ The test suite covers:
   Landlock probe, fully stubbed `fs` so it runs on any OS.
 - [`test/limits.test.js`](./test/limits.test.js) — Phase 1.5
   resource-cap helpers (`resolveLimits`, `assemblePrlimitArgv`,
-  cgroup v2 detection).  Stubbed `fs` so it runs on any OS.
+  cgroup v2 detection). Stubbed `fs` so it runs on any OS.
 - [`test/seccomp-fixture.test.js`](./test/seccomp-fixture.test.js)
   — Phase 1.5 fixture-hash regression test for the
   rebased seccomp profile.
@@ -406,7 +406,7 @@ The test suite covers:
   `'private'` interface inventory, `apk update` (skipped on
   air-gapped CI), boot-time orphan-container reap, and the
   rootless / rootless-net rows of the `slice.help()` runtime
-  report.  Each case skips gracefully when `podman` or the
+  report. Each case skips gracefully when `podman` or the
   `docker.io/library/alpine:3.19` image is not present.
 
 Run them with:
@@ -426,7 +426,7 @@ npx corepack yarn lint
 
 The bwrap test suite uses a stub `provideHostPath` that maps a stub
 `Mount` exo to a real tmpdir, so the backend-agnostic tests can
-exercise mount caps without standing up a full daemon.  The daemon
+exercise mount caps without standing up a full daemon. The daemon
 ships its own `provideHostPath` on `EndoHost`; the round-trip
 (`provideMount(path)` → `E(host).provideHostPath(cap)` returns the
 original path) is covered by
@@ -453,11 +453,11 @@ Items that landed:
 
 Items intentionally deferred:
 
-- **Full pasta + nftables wiring** for `network: 'private'`.  The
+- **Full pasta + nftables wiring** for `network: 'private'`. The
   egress filter is documented and the driver accepts the profile;
   the actual pasta subprocess + `nft -f` invocation lands
   alongside the genie workspace integration that needs it.
-- **In-slice Landlock ruleset installation.**  The probe is wired;
+- **In-slice Landlock ruleset installation.** The probe is wired;
   the call-site that runs `landlock_create_ruleset` inside the
   slice's child (after bwrap execs the slice's init) is a focused
   follow-up patch.
@@ -466,7 +466,7 @@ Items intentionally deferred:
   follow-up that needs the daemon's user systemd-unit Delegate=
   story to be settled first.
 - **Per-profile host firewall installation** for `host-loopback` /
-  `host-lan`.  These need `CAP_NET_ADMIN` outside the slice; the
+  `host-lan`. These need `CAP_NET_ADMIN` outside the slice; the
   README documents the operator-side responsibility.
 
 ## Phase 2 status notes
@@ -502,15 +502,15 @@ Items that landed:
 
 Items intentionally deferred:
 
-- **`skopeo`-backed OCI pulls** — Phase 7.  Today the driver
+- **`skopeo`-backed OCI pulls** — Phase 7. Today the driver
   shells out to `podman pull`, which is sufficient for local
   workstations and CI hosts that already trust the registry.
 - **In-slice `landlock_create_ruleset`** — same follow-up as the
-  bwrap driver.  Surface-level Landlock probing is bwrap-only;
+  bwrap driver. Surface-level Landlock probing is bwrap-only;
   the podman runtime applies its own LSM hooks already.
-- **`fork()`** — Phase 3.  The current stub matches the bwrap
+- **`fork()`** — Phase 3. The current stub matches the bwrap
   driver and rejects with the same `notImplemented` error.
-- **macOS / Windows** — bare-metal Linux only.  Containerization
+- **macOS / Windows** — bare-metal Linux only. Containerization
   on macOS and WSL2 on Windows are tracked as Phase 4–5.
 
 ## Next steps

@@ -1,11 +1,11 @@
 # Chat Spaces Gutter
 
-| | |
-|---|---|
-| **Created** | 2026-02-21 |
-| **Updated** | 2026-02-26 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Complete |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-21            |
+| **Updated** | 2026-02-26            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Complete              |
 
 ## Motivation
 
@@ -27,6 +27,7 @@ This friction discourages context-switching and forces users to finish one agent
 ### Component Style
 
 The implementation follows the existing Chat UI patterns:
+
 - **Template literals** for HTML/CSS
 - **Factory functions** returning API objects (`createSpacesGutter({ $container, powers, onNavigate })`)
 - **Direct DOM manipulation**
@@ -35,6 +36,7 @@ The implementation follows the existing Chat UI patterns:
 ### No Daemon Changes
 
 Spaces configuration uses **ordinary directory and value formulas** already supported by the daemon:
+
 - Host's pet-store already supports arbitrary directories via `E(host).write(['spaces', id], value)`
 - Values can be stored directly via `E(host).storeValue(JSON.stringify(spaceConfig))`
 - No new formula types, no new daemon APIs
@@ -49,6 +51,7 @@ The gutter is positioned at the absolute left edge:
 ```
 
 CSS variables:
+
 - `--gutter-width: 48px` - Width of the spaces gutter
 - Existing elements shifted right by `--gutter-width`
 
@@ -145,12 +148,14 @@ export const createSpacesGutter = ({
 ## Files
 
 ### Created
+
 - `packages/chat/spaces-gutter.js` - Gutter component factory
 - `packages/chat/add-space-modal.js` - Add space modal (new-agent and existing-profile flows)
 - `packages/chat/edit-space-modal.js` - Edit space modal (name, icon, scheme)
 - `packages/chat/scheme-picker.js` - Standalone color scheme picker component
 
 ### Modified
+
 - `packages/chat/chat.js`:
   - Import `createSpacesGutter`
   - Add `--gutter-width` CSS variable

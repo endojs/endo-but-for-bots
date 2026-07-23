@@ -1,11 +1,11 @@
 # Chat Slot Slash Commands
 
-| | |
-|---|---|
-| **Created** | 2026-04-23 |
-| **Updated** | 2026-05-06 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-04-23            |
+| **Updated** | 2026-05-06            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Proposed              |
 
 ## What is the Problem Being Solved?
 
@@ -90,12 +90,12 @@ These sequences are reserved for future escapes.
 
 Initial verb set:
 
-| Verb       | Argument            | Produces                                                |
-|------------|---------------------|---------------------------------------------------------|
-| `/js`      | single-line expr    | Evaluated expression in the default worker (`@main`).   Cmd-Enter (or Ctrl-Enter) expands the input to a Monaco popover for multi-line editing, mirroring the main command line. |
-| `/json`    | JSON literal        | Marshalled Passable from `JSON.parse(arg)`.             |
-| `/locator` | Endo locator URL    | Result of `E(powers).provideLocator(url)`.              |
-| `/ref`     | pet name path       | Explicit pet name path (pass-through; useful for clarity). |
+| Verb       | Argument         | Produces                                                                                                                                                                       |
+| ---------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/js`      | single-line expr | Evaluated expression in the default worker (`@main`). Cmd-Enter (or Ctrl-Enter) expands the input to a Monaco popover for multi-line editing, mirroring the main command line. |
+| `/json`    | JSON literal     | Marshalled Passable from `JSON.parse(arg)`.                                                                                                                                    |
+| `/locator` | Endo locator URL | Result of `E(powers).provideLocator(url)`.                                                                                                                                     |
+| `/ref`     | pet name path    | Explicit pet name path (pass-through; useful for clarity).                                                                                                                     |
 
 Verb registration is extensible; the initial set is chosen to cover
 the majority of observed "I just want to inline a small value" cases.
@@ -156,7 +156,7 @@ Each verb handler follows this shape:
 
 ```js
 /** @returns {Promise<{ id: FormulaIdentifier, release: ERef<Releaser> }>} */
-const handleJs = async (argument) => {
+const handleJs = async argument => {
   const { id, release } = await E(powers).makeRetainedValue({
     type: 'eval',
     source: argument,
@@ -171,7 +171,7 @@ const handleJs = async (argument) => {
 `makeRetainedValue` is a new method on `EndoHost` and `EndoGuest`
 that wraps the existing transient-pin code path but exposes the
 pin/unpin lifecycle to the caller explicitly.
-See *Daemon changes* below.
+See _Daemon changes_ below.
 
 The Chat UI holds the `release` capability on the slot model.
 It calls `E(release).release()` when:
@@ -227,8 +227,8 @@ The daemon's formulation persists the new formula to disk
 (per the daemon's "disk before graph" rule), at which point the
 dependency graph records a retention edge from the new formula
 to the previously-retained formula.
-Only then does Chat call `E(release).release()` (see *Release
-ordering* below).
+Only then does Chat call `E(release).release()` (see _Release
+ordering_ below).
 
 ### Daemon changes
 
@@ -240,7 +240,8 @@ Initial variants:
 
 ```ts
 type RetainedValueSpec =
-  | { type: 'eval';
+  | {
+      type: 'eval';
       source: string;
       codeNames: string[];
       endowments: (PetNamePath | FormulaIdentifier)[];
@@ -389,9 +390,9 @@ type SlotInputAPI = {
     | { kind: 'petName'; path: NamePath }
     | { kind: 'retained'; id: FormulaIdentifier; release: ERef<Releaser> }
     | undefined;
-  clear(): Promise<void>;  // calls release() if retained
+  clear(): Promise<void>; // calls release() if retained
   focus(): void;
-  dispose(): Promise<void>;  // releases any outstanding retained value
+  dispose(): Promise<void>; // releases any outstanding retained value
 };
 ```
 
@@ -451,12 +452,12 @@ releases are fired regardless of submit outcome: the form's
 **Modeline hints.**
 Per `chat-command-bar.md`, add slot-local modeline entries:
 
-| State             | Hint                                                    |
-|-------------------|---------------------------------------------------------|
-| `empty` (slot)    | `/ slash command · type pet name · ▾ pick from petnames` |
-| `slashCompose`    | `Enter evaluate · ⌘⏎ Monaco · Esc cancel · ⌫ remove verb` |
-| `evaluating`      | `running…`                                               |
-| `chipRetained`    | `⌫ clear slot · 👁 show value · Enter submit form`        |
+| State          | Hint                                                      |
+| -------------- | --------------------------------------------------------- |
+| `empty` (slot) | `/ slash command · type pet name · ▾ pick from petnames`  |
+| `slashCompose` | `Enter evaluate · ⌘⏎ Monaco · Esc cancel · ⌫ remove verb` |
+| `evaluating`   | `running…`                                                |
+| `chipRetained` | `⌫ clear slot · 👁 show value · Enter submit form`        |
 
 ### Interaction with pending commands and command bar
 
@@ -478,7 +479,7 @@ naturally reflects the composite operation.
   guest) and pins a formula that the caller is already authorised
   to produce via its existing `evaluate`/`storeValue`/`provideLocator`
   verbs.
-  The only added capability is the right to *delay* its
+  The only added capability is the right to _delay_ its
   collection until a `release` capability is invoked or until
   the captp connection severs.
   Object-capability confinement on the formula itself is
@@ -508,21 +509,21 @@ naturally reflects the composite operation.
   If the enclosing form is being sent to a remote peer (for
   example, a guest filling a slot on a form from a remote host),
   the retained formula is created in the guest's namespace.
-  The remote peer receives a *reference* to the resulting
+  The remote peer receives a _reference_ to the resulting
   capability, not the source.
   This is the same confinement posture as naming a value in the
   pet store and passing it by reference.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|-------------|
-| [daemon-form-request](daemon-form-request.md) | Forms with slots are the primary consumer; this design extends how slot values are supplied. |
-| [chat-command-bar](chat-command-bar.md) | Slash syntax and modeline conventions reused inside slots, including the Cmd-Enter Monaco expansion. |
-| [daemon-guest-eval-simplification](daemon-guest-eval-simplification.md) | `/js` inside a guest's slot relies on direct `formulateEval` without proposal review. |
-| [chat-pending-commands](chat-pending-commands.md) | Slot slash commands are *not* pending commands themselves; this design clarifies the boundary. |
-| [daemon-commands-as-messages](daemon-commands-as-messages.md) | If commands become messages, the outer form's message can absorb retained inputs as its formula inputs. |
-| [daemon-cross-peer-gc](daemon-cross-peer-gc.md) | Retained pins interact with the cross-peer GC protocol only through ordinary retention edges; no new cross-peer concerns. |
+| Design                                                                  | Relationship                                                                                                              |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| [daemon-form-request](daemon-form-request.md)                           | Forms with slots are the primary consumer; this design extends how slot values are supplied.                              |
+| [chat-command-bar](chat-command-bar.md)                                 | Slash syntax and modeline conventions reused inside slots, including the Cmd-Enter Monaco expansion.                      |
+| [daemon-guest-eval-simplification](daemon-guest-eval-simplification.md) | `/js` inside a guest's slot relies on direct `formulateEval` without proposal review.                                     |
+| [chat-pending-commands](chat-pending-commands.md)                       | Slot slash commands are _not_ pending commands themselves; this design clarifies the boundary.                            |
+| [daemon-commands-as-messages](daemon-commands-as-messages.md)           | If commands become messages, the outer form's message can absorb retained inputs as its formula inputs.                   |
+| [daemon-cross-peer-gc](daemon-cross-peer-gc.md)                         | Retained pins interact with the cross-peer GC protocol only through ordinary retention edges; no new cross-peer concerns. |
 
 ## Phased implementation
 
@@ -534,15 +535,15 @@ naturally reflects the composite operation.
    Unit tests: pin retention across an await; release triggers
    collection; retention through a second formula prevents
    collection after release; captp disconnect triggers release.
-   *Size: S-M (2 to 3 days), captp partition wiring being the
-   open variable.*
+   _Size: S-M (2 to 3 days), captp partition wiring being the
+   open variable._
 
 2. **Chat: extract `createSlotInput`.**
    Consolidate the current slot-input clones in `endow-modal.js`
    and `inbox-component.js` into one component.
    No behavioural change yet, just refactor with the existing
    pet-name-only semantics.
-   *Size: S (1 day).*
+   _Size: S (1 day)._
 
 3. **Chat: slash mode, `/js` verb, picker drop-down, show-value.**
    Add the state machine, the slash chip, the `/js` handler that
@@ -551,25 +552,25 @@ naturally reflects the composite operation.
    show-value affordance.
    Wire the release lifecycle to the form's submit/cancel/dispose.
    Add Cmd-Enter Monaco expansion mirroring the command bar.
-   *Size: M (3 to 4 days).*
+   _Size: M (3 to 4 days)._
 
 4. **Daemon + Chat: submission acceptance of formula IDs.**
    Extend `endow` bindings and `submit` values to accept formula
    IDs alongside pet names.
    Make Chat serialise retained slot values as formula IDs in
    the outbound payload.
-   *Size: S-M (1 to 2 days).*
+   _Size: S-M (1 to 2 days)._
 
 5. **Additional verbs.**
    Add `/json`, `/locator`, and `/ref`.
-   *Size: S (1 to 2 days).*
+   _Size: S (1 to 2 days)._
 
 Total: **M, roughly 1 week** for one developer.
 
 ## Design Decisions
 
 1. **Slot as the unit of transient retention, not the command.**
-   Transience belongs to the *use* of a value, not to the
+   Transience belongs to the _use_ of a value, not to the
    verb that produced it.
    `/js` in the command bar with `resultName` is persistent; the
    same `/js` inside a slot is transient because the slot's
@@ -638,7 +639,7 @@ Total: **M, roughly 1 week** for one developer.
       marshalled remotable).
       The simplest option is to leverage the existing marshalled
       Passable pipeline: the Chat UI resolves the retained ID
-      to its capability through `provide(id)` and hands *that*
+      to its capability through `provide(id)` and hands _that_
       capability to `submit`.
       Evaluate whether the additional round-trip is worth the
       uniformity.
@@ -646,8 +647,8 @@ Total: **M, roughly 1 week** for one developer.
       trigger Exo intrinsic release on disconnect.
       If the per-Exo cancellation promise is not yet exposed by
       `@endo/captp`, the implementation phase adds the minimum
-      surface required; see *Release Exo lifetime and captp
-      partition* above.
+      surface required; see _Release Exo lifetime and captp
+      partition_ above.
 - [ ] **Future consideration (out of scope for this design):**
       a `/view`-like read-only inspector inside a slot.
       The chip's "show value" button covers the immediate

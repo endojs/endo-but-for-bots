@@ -1,10 +1,10 @@
 # Hardened `URL` Vetted Shim
 
-| | |
-|---|---|
-| **Created** | 2026-05-04 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-05-04            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## What is the Problem Being Solved?
 
@@ -112,7 +112,7 @@ For these embeddings, an opt-in lockdown option collapses the split:
 ```js
 lockdown({
   // ... other options ...
-  urlBlobMethods: 'remove',  // default: 'keepOnInitialGlobal'
+  urlBlobMethods: 'remove', // default: 'keepOnInitialGlobal'
 });
 ```
 
@@ -159,23 +159,23 @@ require special treatment (★).
 
 #### `%URL%` (start compartment, bound to `globalThis.URL`)
 
-| Property | Disposition | Rationale |
-|---|---|---|
-| `prototype` | ✓ | Required for instances; the same identity as `%SharedURL%.prototype`. |
-| `parse` (static) | ✓ | Pure parsing returning a URL or `null`. |
-| `canParse` (static) | ✓ | Pure predicate. |
-| `createObjectURL` | ✓ | Ambient blob-registry authority; the start compartment may legitimately need it. |
-| `revokeObjectURL` | ✓ | Companion to `createObjectURL`. |
+| Property            | Disposition | Rationale                                                                        |
+| ------------------- | ----------- | -------------------------------------------------------------------------------- |
+| `prototype`         | ✓           | Required for instances; the same identity as `%SharedURL%.prototype`.            |
+| `parse` (static)    | ✓           | Pure parsing returning a URL or `null`.                                          |
+| `canParse` (static) | ✓           | Pure predicate.                                                                  |
+| `createObjectURL`   | ✓           | Ambient blob-registry authority; the start compartment may legitimately need it. |
+| `revokeObjectURL`   | ✓           | Companion to `createObjectURL`.                                                  |
 
 #### `%SharedURL%` (every shared compartment, bound to `globalThis.URL`)
 
-| Property | Disposition | Rationale |
-|---|---|---|
-| `prototype` | ✓ | Required for instances; the same identity as `%URL%.prototype`. |
-| `parse` (static) | ✓ | Pure parsing returning a URL or `null`. |
-| `canParse` (static) | ✓ | Pure predicate. |
-| `createObjectURL` | ✗ | Ambient blob-registry authority; not safe to share. |
-| `revokeObjectURL` | ✗ | Companion to `createObjectURL`. |
+| Property            | Disposition | Rationale                                                       |
+| ------------------- | ----------- | --------------------------------------------------------------- |
+| `prototype`         | ✓           | Required for instances; the same identity as `%URL%.prototype`. |
+| `parse` (static)    | ✓           | Pure parsing returning a URL or `null`.                         |
+| `canParse` (static) | ✓           | Pure predicate.                                                 |
+| `createObjectURL`   | ✗           | Ambient blob-registry authority; not safe to share.             |
+| `revokeObjectURL`   | ✗           | Companion to `createObjectURL`.                                 |
 
 When the lockdown opt-in `urlBlobMethods: 'remove'` is set, the
 start compartment's `URL` uses the `%SharedURL%` permits row
@@ -189,11 +189,11 @@ All are pure and powerless after the constructors are tamed.
 
 #### `URLSearchParams`
 
-| Property | Disposition | Rationale |
-|---|---|---|
-| `prototype` | ✓ | Required for instances. |
-| `prototype.append`, `delete`, `get`, `getAll`, `has`, `set`, `sort`, `toString`, `size` | ✓ | Pure operations on an own-data structure. |
-| `prototype.forEach`, `entries`, `keys`, `values`, `[Symbol.iterator]` | ★ | Pure, but each returns an instance of `%URLSearchParamsIteratorPrototype%`; see below. |
+| Property                                                                                | Disposition | Rationale                                                                              |
+| --------------------------------------------------------------------------------------- | ----------- | -------------------------------------------------------------------------------------- |
+| `prototype`                                                                             | ✓           | Required for instances.                                                                |
+| `prototype.append`, `delete`, `get`, `getAll`, `has`, `set`, `sort`, `toString`, `size` | ✓           | Pure operations on an own-data structure.                                              |
+| `prototype.forEach`, `entries`, `keys`, `values`, `[Symbol.iterator]`                   | ★           | Pure, but each returns an instance of `%URLSearchParamsIteratorPrototype%`; see below. |
 
 #### `%URLSearchParamsIteratorPrototype%` (the hidden one)
 
@@ -235,8 +235,9 @@ const sampleHiddenIntrinsics = globalObject => {
   const intrinsics = { __proto__: null };
   if (typeof globalObject.URLSearchParams === 'function') {
     const params = new globalObject.URLSearchParams();
-    intrinsics['%URLSearchParamsIteratorPrototype%'] =
-      Object.getPrototypeOf(params.entries());
+    intrinsics['%URLSearchParamsIteratorPrototype%'] = Object.getPrototypeOf(
+      params.entries(),
+    );
   }
   return intrinsics;
 };
@@ -345,7 +346,7 @@ Tests live under `packages/ses/test/`.
    `Object.isFrozen(URL)`, `Object.isFrozen(URL.prototype)`,
    `Object.isFrozen(URLSearchParams.prototype)`, and
    `Object.isFrozen(Object.getPrototypeOf(new
-   URLSearchParams().entries()))` are all `true`.
+URLSearchParams().entries()))` are all `true`.
 
 6. **Iterator-prototype tampering rejected.**
    `Object.getPrototypeOf(new URLSearchParams().entries()).next = () => {}`
@@ -407,10 +408,10 @@ Tests live under `packages/ses/test/`.
 
 These designs are similar in spirit, not blocking dependencies.
 
-| Design | Relationship |
-|---|---|
-| [base64-native-fallthrough](base64-native-fallthrough.md) | Same family of work: tame and dispatch to native intrinsics inside SES rather than re-implementing in JavaScript. |
-| [hex-package](hex-package.md) | Same family: ponyfill-shim pattern around a TC39 native. The URL shim is the SES-internal analogue of these external ponyfills. |
+| Design                                                    | Relationship                                                                                                                    |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| [base64-native-fallthrough](base64-native-fallthrough.md) | Same family of work: tame and dispatch to native intrinsics inside SES rather than re-implementing in JavaScript.               |
+| [hex-package](hex-package.md)                             | Same family: ponyfill-shim pattern around a TC39 native. The URL shim is the SES-internal analogue of these external ponyfills. |
 
 ## Phases
 
