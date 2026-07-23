@@ -35,9 +35,10 @@ export const blobFromBytes = bytesOrPromise => {
   const bytes = () =>
     Promise.resolve(bytesOrPromise).then(value => new Uint8Array(value));
   const rangeBytes = async (start, end) => {
+    if (typeof start !== 'bigint' || typeof end !== 'bigint') {
+      throw new Error('EINVAL: invalid range endpoints');
+    }
     if (
-      typeof start !== 'bigint' ||
-      typeof end !== 'bigint' ||
       start < 0n ||
       end < start ||
       end > BigInt(Number.MAX_SAFE_INTEGER) ||
@@ -53,12 +54,10 @@ export const blobFromBytes = bytesOrPromise => {
    * @param {number} endLine
    */
   const textRangeBytes = async (startLine, endLine) => {
-    if (
-      !Number.isSafeInteger(startLine) ||
-      !Number.isSafeInteger(endLine) ||
-      startLine < 0 ||
-      endLine < startLine
-    ) {
+    if (!Number.isSafeInteger(startLine) || !Number.isSafeInteger(endLine)) {
+      throw new Error('EINVAL: invalid line range endpoints');
+    }
+    if (startLine < 0 || endLine < startLine) {
       throw new Error('EINVAL: invalid line range endpoints');
     }
     const value = await bytes();
