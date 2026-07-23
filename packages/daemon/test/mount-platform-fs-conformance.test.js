@@ -141,6 +141,8 @@ const PLATFORM_READABLE_BLOB_METHODS = [
   'help',
   'getInfo',
   'fetch',
+  'range',
+  'textRange',
 ];
 
 /**
@@ -211,7 +213,13 @@ const ENDOMOUNT_EXTENSIONS = [
  * Mount-specific extensions beyond the platform File contract. `getInfo` /
  * `fetch` are the rich `BlobRef` range-I/O surface over the live file (§ C4).
  */
-const ENDOMOUNTFILE_EXTENSIONS = ['stat', 'getInfo', 'fetch'];
+const ENDOMOUNTFILE_EXTENSIONS = [
+  'stat',
+  'getInfo',
+  'fetch',
+  'range',
+  'textRange',
+];
 
 test('EndoMount diverges from PlatformDirectoryInterface by named extensions only', async t => {
   // The divergence is deliberate and named: callers who hold a plain
