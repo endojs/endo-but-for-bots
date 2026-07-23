@@ -6,7 +6,7 @@ import harden from '@endo/harden';
 
 import { makeMaybeRealPath } from '../fs/confinement.js';
 
-/** @import { SearchPowers } from '../fs/search.types.js' */
+/** @import { SearchPowers } from '../fs/search-types.js' */
 
 /**
  * Build the narrow read `powers` the search engine walks with, backed by

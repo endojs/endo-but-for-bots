@@ -48,7 +48,7 @@ import harden from '@endo/harden';
 
 import { isPathWithin, makeMaybeRealPath } from './confinement.js';
 
-/** @import { SearchPowers, Search, GlobOptions, GrepOptions, GrepMatch } from './search.types.js' */
+/** @import { SearchPowers, Search, GlobOptions, GrepOptions, GrepMatch } from './search-types.js' */
 
 /**
  * The default number of results carried in one batch. Chosen small so a future
@@ -533,7 +533,7 @@ harden(makeSearch);
  * read powers. This is the one seam through which a platform substitutes a
  * faster native walk; where absent, the JS engine *is* the implementation.
  *
- * @param {import('./search.types.js').SearchFilePowers} filePowers
+ * @param {import('./search-types.js').SearchFilePowers} filePowers
  * @returns {Search}
  */
 export const provideSearch = filePowers => {

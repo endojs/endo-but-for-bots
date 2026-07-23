@@ -56,7 +56,7 @@ import type {
 import type {
   Search as SourceSearch,
   SearchFilePowers as SourceSearchFilePowers,
-} from '../src/fs/search.types.js';
+} from '../src/fs/search-types.js';
 import type {
   DirEntry as SourceBackendDirEntry,
   FsBackend as SourceBackendFsBackend,

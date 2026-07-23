@@ -228,7 +228,7 @@ test('batch boundaries are not semantic: flattened output is invariant across ba
 test('provideSearch falls back to the JS engine and honors a native override', async t => {
   const { root } = buildMountFixture(t);
   const powers = makeNodeSearchPowers();
-  /** @type {import('../src/fs/search.types.js').SearchFilePowers} */
+  /** @type {import('../src/fs/search-types.js').SearchFilePowers} */
   const filePowers = {
     readDirectory: powers.readDirectory,
     isDirectory: powers.isDirectory,
