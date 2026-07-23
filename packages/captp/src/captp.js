@@ -16,6 +16,14 @@ import { makeTrap } from './trap.js';
 
 import { makeFinalizingMap } from './finalize.js';
 
+/**
+ * @typedef {
+ *   | [PropertyKey]
+ *   | [null, any[]]
+ *   | [PropertyKey, any[]]
+ * } DecodedMethod
+ */
+
 export { E };
 
 const WELL_KNOWN_SLOT_PROPERTIES = harden(['answerID', 'questionID', 'target']);
@@ -649,14 +657,9 @@ export const makeCapTP = (
       //   answers first; otherwise goes through unserializer
       const { questionID, target, trap } = obj;
 
-      const [prop, args] =
-        /**
-         * @type {
-         *   | [PropertyKey]
-         *   | [null, any[]]
-         *   | [PropertyKey, any[]]
-         * }
-         */ (unserialize(obj.method));
+      const [prop, args] = /** @type {DecodedMethod} */ (
+        unserialize(obj.method)
+      );
       let val;
       if (answers.has(target)) {
         val = answers.get(target);
