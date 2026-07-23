@@ -112,6 +112,8 @@ const PLATFORM_FILE_METHODS = [
   'streamBase64',
   'text',
   'json',
+  'range',
+  'textRange',
   'writeText',
   'writeBytes',
   'append',
@@ -130,7 +132,8 @@ const PLATFORM_READABLE_TREE_METHODS = [
 
 /**
  * Method names the rich `ReadableBlob` view exposes: the whole-value surface
- * plus the `BlobRef` range-I/O surface (`getInfo` / `fetch`). The mount-file
+ * plus the attenuation (`range` / `textRange`) and `BlobRef` range-I/O
+ * surface (`getInfo` / `fetch`). The mount-file
  * `readOnly()` view is a write-disabled face over a live file, so it carries
  * the range methods too. See designs/fs-interface-consolidation.md § C4.
  */
@@ -138,6 +141,8 @@ const PLATFORM_READABLE_BLOB_METHODS = [
   'streamBase64',
   'text',
   'json',
+  'range',
+  'textRange',
   'help',
   'getInfo',
   'fetch',
