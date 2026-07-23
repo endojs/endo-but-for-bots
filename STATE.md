@@ -56,6 +56,24 @@ The final packaging step owns the push and must remove this file first.
   - `4d0fcec59 fix(marshal): remove decoded value any leak (#840)` returns
     `unknown` from untyped CapData decoding, narrows trusted protocol consumers,
     aligns `AtomStyle` assignability checks, and opts in Marshal.
+  - `d9bb83faf test(exo): align deferred type contracts (#840)` aligns the
+    intentional PromiseLike and optional-argument contracts, verifies the
+    authored kit parameter on the public facet, and opts in Exo.
+  - `3b8e52a7f fixup! fix(marshal): remove decoded value any leak (#840)` adds
+    runtime refinements at Marshal test decode boundaries after the stricter
+    `unknown` result exposed them during package lint.
+- Load-bearing sabotage proved the new assertions fail for each corrected root
+  cause: invalid `AtomStyle` literals fail declaration compilation; reverting
+  the Patterns inference helpers produces 20 `tsd` failures; reverting Marshal
+  decoding to `any` fails its exact `unknown` assertion; and changing Exo's kit
+  annotation plus reverting the bare return overload fails both returned-facet
+  and vstorage assertions.
+- The final clean composite build completed in 23.152 seconds. The root shared
+  type-test task ran all nine opted-in suites successfully in 11.999 seconds
+  wall time (Turbo reported 11.17 seconds).
+- Runtime suites pass for Patterns (623 tests), Marshal (82 tests, one skipped),
+  Exo (29 tests, one skipped per lockdown configuration), and CapTP (24 tests
+  per lockdown configuration).
 
 ## Decisions
 
@@ -72,10 +90,8 @@ The final packaging step owns the push and must remove this file first.
 
 ## Pending work
 
-- Commit the coherent Exo fixture and package opt-in change with this refreshed
-  state.
-- Run all required type, lint, runtime, formatting, uniformity, freshness, and
-  diff gates; measure root `test:types` wall time.
+- Run final formatting, package lint, uniformity, composite freshness, docs,
+  diff, and pre-push gates after the Marshal test refinements.
 - Package the branch by removing `STATE.md`, confirming it is absent from the
   outgoing diff, committing that removal, and pushing with force-with-lease.
 
