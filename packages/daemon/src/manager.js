@@ -15,6 +15,7 @@ import { encodeBase64 } from '@endo/base64';
 import { mapReader } from '@endo/stream';
 import { bytesFromText } from '@endo/bytes/from-string.js';
 import { bytesToText } from '@endo/bytes/to-string.js';
+import { blobFromBytes } from '@endo/platform/blob';
 import {
   checkinTree as platformCheckinTree,
   snapshotTreeMethods,
@@ -1865,6 +1866,33 @@ const makeDaemonCore = async (
         );
         return bytesFromRange(bytes);
       },
+      async range(start, end) {
+        const startOffset = toSafeNumber(start, 'start');
+        const endOffset = toSafeNumber(end, 'end');
+        if (endOffset < startOffset) {
+          throw new Error('EINVAL: end must not precede start');
+        }
+        const bytes = await readRange(startOffset, endOffset - startOffset);
+        return blobFromBytes(bytes);
+      },
+      async textRange(startLine, endLine) {
+        const start = toSafeNumber(startLine, 'startLine');
+        const end = toSafeNumber(endLine, 'endLine');
+        if (end < start) {
+          throw new Error('EINVAL: endLine must not precede startLine');
+        }
+        const bytes = bytesFromText(await text());
+        const starts = [0];
+        for (let offset = 0; offset < bytes.length; offset += 1) {
+          if (bytes[offset] === 0x0a) starts.push(offset + 1);
+        }
+        return blobFromBytes(
+          bytes.slice(
+            starts[Math.min(start, starts.length - 1)],
+            end >= starts.length ? bytes.length : starts[end],
+          ),
+        );
+      },
       help: makeHelp(blobHelp),
     };
     return makeExo(
@@ -2241,6 +2269,33 @@ const makeDaemonCore = async (
               ? new Uint8Array(0)
               : bytes.subarray(off, end);
           return bytesFromRange(slice);
+        },
+        range: async (start, end) => {
+          const startOffset = toSafeNumber(start, 'start');
+          const endOffset = toSafeNumber(end, 'end');
+          if (endOffset < startOffset) {
+            throw new Error('EINVAL: end must not precede start');
+          }
+          return blobFromBytes(
+            bytes.slice(startOffset, Math.min(endOffset, bytes.length)),
+          );
+        },
+        textRange: async (startLine, endLine) => {
+          const start = toSafeNumber(startLine, 'startLine');
+          const end = toSafeNumber(endLine, 'endLine');
+          if (end < start) {
+            throw new Error('EINVAL: endLine must not precede startLine');
+          }
+          const starts = [0];
+          for (let offset = 0; offset < bytes.length; offset += 1) {
+            if (bytes[offset] === 0x0a) starts.push(offset + 1);
+          }
+          return blobFromBytes(
+            bytes.slice(
+              starts[Math.min(start, starts.length - 1)],
+              end >= starts.length ? bytes.length : starts[end],
+            ),
+          );
         },
       }),
     );

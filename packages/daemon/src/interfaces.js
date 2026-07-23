@@ -11,6 +11,7 @@ import {
   pathEntryMethodGuards,
   pathEntryIssuerMethodGuards,
   rangeReadMethodGuards,
+  readableBlobRangeMethodGuards,
   getInfoMethodGuard,
 } from '@endo/platform/fs/lite';
 import {
@@ -625,6 +626,7 @@ export const InspectorInterface = M.interface('EndoInspector', {
 export const BlobInterface = M.interface('EndoBlob', {
   ...readableBlobMethodGuards,
   ...rangeReadMethodGuards,
+  ...readableBlobRangeMethodGuards,
 });
 
 const PathSegmentsShape = M.arrayOf(M.string());
@@ -723,6 +725,7 @@ export const MountFileInterface = M.interface('EndoMountFile', {
   // (getInfo / fetch) over the live file, plus the mount-file write surface.
   ...readableBlobMethodGuards,
   ...rangeReadMethodGuards,
+  ...readableBlobRangeMethodGuards,
   writeText: M.call(M.string()).returns(M.promise()),
   append: M.call(M.string()).returns(M.promise()),
   writeBytes: M.call(M.remotable()).returns(M.promise()),

@@ -9,6 +9,7 @@ export {
   pathEntryIssuerMethodGuards,
   getInfoMethodGuard,
   rangeReadMethodGuards,
+  readableBlobRangeMethodGuards,
   PathEntryInterface,
   PathEntryIssuerInterface,
   rangeReadConvenienceMethodGuards,

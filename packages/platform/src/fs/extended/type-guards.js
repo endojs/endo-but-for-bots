@@ -301,6 +301,8 @@ export const BlobRefInterface = M.interface('BlobRef', {
   fetch: M.call(M.bigint(), M.bigint()).returns(
     M.eref(M.remotable('PassableBytesReader')),
   ),
+  range: M.call(M.bigint(), M.bigint()).returns(M.promise()),
+  textRange: M.call(M.number(), M.number()).returns(M.promise()),
   text: M.call().returns(M.promise()),
   json: M.call().returns(M.promise()),
   help: M.call().optional(M.string()).returns(M.string()),

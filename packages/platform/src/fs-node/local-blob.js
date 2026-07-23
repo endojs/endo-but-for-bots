@@ -15,6 +15,7 @@ import { makeNodeReader } from '@endo/stream-node';
 // content hash + size in one round-trip and read byte ranges without
 // streaming the whole file. See designs/fs-interface-consolidation.md § C4.
 import { ReadableBlobRangeReadInterface } from '../fs/interfaces.js';
+import { blobFromBytes } from '../blob.js';
 import { toSafeNumber } from '../fs/extended/shared/helpers.js';
 
 /** @import { ReadableBlobRangeRead } from '../fs/types.js' */
@@ -141,6 +142,35 @@ export const makeLocalBlob = filePath => {
       // observes the file's own line endings).
       const lines = text.split('\n');
       return lines.slice(start, end).join('\n');
+    },
+    async range(start, end) {
+      const startOffset = toSafeNumber(start, 'start');
+      const endOffset = toSafeNumber(end, 'end');
+      if (endOffset < startOffset)
+        throw new Error('EINVAL: end must not precede start');
+      return blobFromBytes(
+        readWindow(
+          filePath,
+          BigInt(startOffset),
+          BigInt(endOffset - startOffset),
+        ),
+      );
+    },
+    async textRange(startLine, endLine) {
+      const start = toSafeNumber(startLine, 'startLine');
+      const end = toSafeNumber(endLine, 'endLine');
+      if (end < start)
+        throw new Error('EINVAL: endLine must not precede startLine');
+      const bytes = await fs.promises.readFile(filePath);
+      const starts = [0];
+      for (let offset = 0; offset < bytes.length; offset += 1)
+        if (bytes[offset] === 0x0a) starts.push(offset + 1);
+      return blobFromBytes(
+        bytes.slice(
+          starts[Math.min(start, starts.length - 1)],
+          end >= starts.length ? bytes.length : starts[end],
+        ),
+      );
     },
     help: method =>
       method === undefined

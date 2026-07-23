@@ -12,6 +12,7 @@ import path from 'node:path';
 import { URL, fileURLToPath } from 'node:url';
 
 import { encodeBase64 } from '@endo/base64';
+import { blobFromBytes } from '@endo/platform/blob';
 import { q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
@@ -1946,6 +1947,37 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
           off >= bytes.length ? new Uint8Array(0) : bytes.subarray(off, end);
         return bytesReaderFromIterator(
           (slice.length > 0 ? [slice] : [])[Symbol.iterator](),
+        );
+      },
+
+      async range(start, end) {
+        const startOffset = toSafeNumber(start, 'start');
+        const endOffset = toSafeNumber(end, 'end');
+        if (endOffset < startOffset) {
+          throw new Error('EINVAL: end must not precede start');
+        }
+        const bytes = await readBlobBytes(blobOid);
+        return blobFromBytes(
+          bytes.slice(startOffset, Math.min(endOffset, bytes.length)),
+        );
+      },
+
+      async textRange(startLine, endLine) {
+        const start = toSafeNumber(startLine, 'startLine');
+        const end = toSafeNumber(endLine, 'endLine');
+        if (end < start) {
+          throw new Error('EINVAL: endLine must not precede startLine');
+        }
+        const bytes = await readBlobBytes(blobOid);
+        const starts = [0];
+        for (let offset = 0; offset < bytes.length; offset += 1) {
+          if (bytes[offset] === 0x0a) starts.push(offset + 1);
+        }
+        return blobFromBytes(
+          bytes.slice(
+            starts[Math.min(start, starts.length - 1)],
+            end >= starts.length ? bytes.length : starts[end],
+          ),
         );
       },
 
