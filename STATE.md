@@ -16,6 +16,10 @@ The final packaging step owns the push and must remove this file first.
 - Existing PR head: `9a1e1f039`.
 - The mandatory pre-follow-up rebase is a no-op because the PR head already
   contains the current base.
+- Installed the immutable dependency graph, ran `yarn clean`, and rebuilt all
+  declarations with `yarn build:types`.
+- Reproduced the posting-time baseline exactly: Exo has four diagnostics,
+  Marshal has three diagnostics, and Patterns has 24 diagnostics.
 - Commit map:
   - `10a01ca33 test(types): align opt-in tsd contracts` establishes the shared
     runner and opts in six existing suites.
@@ -31,8 +35,6 @@ The final packaging step owns the push and must remove this file first.
 
 ## Pending work
 
-- Install the checked-in dependency graph and reproduce the clean-build Exo,
-  Marshal, and Patterns baseline diagnostics.
 - Classify and repair the Exo diagnostics, prove changed coverage is
   load-bearing, and commit the coherent package change with refreshed state.
 - Classify and repair the Marshal diagnostics, prove changed coverage is
@@ -46,6 +48,8 @@ The final packaging step owns the push and must remove this file first.
 
 ## Hazards and verification
 
+- Baseline commands used the shared runner directly with `index.d.ts`: Exo and
+  Patterns used `test/*.test-d.ts`; Marshal used `src/*.test-d.ts`.
 - Exactness diagnostics can mask unwanted `any`; do not weaken assertions until
   source and emitted declarations show the inferred type is intentional.
 - A package with an unresolved contract remains excluded until a maintainer
