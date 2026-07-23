@@ -137,6 +137,8 @@ test('git blob declarations expose Exo methods without CAS backing helpers', t =
     'streamBase64',
     'text',
     'json',
+    'range',
+    'textRange',
     'help',
   ]);
   t.deepEqual(declaredTypeMembers(aux, 'GitReadableBlobRange'), [
