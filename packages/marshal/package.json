@@ -19,6 +19,7 @@
     "build": "exit 0",
     "test": "ses-ava",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
+    "test:types": "node ../../scripts/run-tsd.mjs --typings index.d.ts --files 'src/*.test-d.ts'",
     "test:xs": "exit 0",
     "pretty-fix": "prettier --write '**/*.js'",
     "pretty-check": "prettier --check '**/*.js'",

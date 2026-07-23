@@ -29,10 +29,21 @@ The final packaging step owns the push and must remove this file first.
   assertion itself.
 - A clean composite build followed by the focused Patterns shared-runner command
   is green.
+- Audited and repaired all three Marshal diagnostics. The two `AtomStyle`
+  literals are narrower expressions whose contract is assignability. The
+  `fromCapData` result was a genuine `any` leak: `CapData` does not encode its
+  decoded value type, so the public result is now `unknown` as the existing
+  fixture and original type-design commit intended.
+- Updated Marshal's `parse` declaration and the two CapTP protocol decode
+  boundaries that knowingly refine `fromCapData` output. A clean composite
+  build and the focused Marshal shared-runner command are green.
 - Commit map:
   - `10a01ca33 test(types): align opt-in tsd contracts` establishes the shared
     runner and opts in six existing suites.
   - `9a1e1f039 chore: update yarn.lock` records the shared runner dependency.
+  - `b5c94da10 fix(patterns): align inferred type contracts (#840)` removes
+    three inference defects, aligns stale fixture expectations, and opts the
+    Patterns suite into the shared runner.
 
 ## Decisions
 
@@ -49,10 +60,8 @@ The final packaging step owns the push and must remove this file first.
 
 ## Pending work
 
-- Commit the coherent Patterns source, fixture, and package opt-in change with
-  this refreshed state.
-- Classify and repair the Marshal diagnostics, prove changed coverage is
-  load-bearing, and commit the coherent package change with refreshed state.
+- Commit the coherent Marshal source, fixture, collateral consumer narrowing,
+  and package opt-in change with this refreshed state.
 - Classify and repair the Exo diagnostics, prove changed coverage is
   load-bearing, and commit the coherent package change with refreshed state.
 - Run all required type, lint, runtime, formatting, uniformity, freshness, and

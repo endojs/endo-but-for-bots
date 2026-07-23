@@ -1,11 +1,11 @@
 // eslint-disable-next-line import/no-extraneous-dependencies
-import { expectType } from 'tsd';
+import { expectAssignable, expectType } from 'tsd';
 
 import { Far, type AtomStyle, type RemotableObject } from '@endo/pass-style';
 import { makeMarshal } from './marshal.js';
 
-expectType<AtomStyle>('string');
-expectType<AtomStyle>('number');
+expectAssignable<AtomStyle>('string');
+expectAssignable<AtomStyle>('number');
 // @ts-expect-error
 expectType<AtomStyle>(1);
 // @ts-expect-error

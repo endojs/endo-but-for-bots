@@ -649,7 +649,11 @@ export const makeCapTP = (
       //   answers first; otherwise goes through unserializer
       const { questionID, target, trap } = obj;
 
-      const [prop, args] = unserialize(obj.method);
+      const [prop, args] = /** @type {
+        | [PropertyKey]
+        | [null, any[]]
+        | [PropertyKey, any[]]
+      } */ (unserialize(obj.method));
       let val;
       if (answers.has(target)) {
         val = answers.get(target);
@@ -715,7 +719,7 @@ export const makeCapTP = (
       // otherwise this is property access
       let hp;
       if (!args) {
-        hp = HandledPromise.get(val, prop);
+        hp = HandledPromise.get(val, /** @type {PropertyKey} */ (prop));
       } else if (prop === null) {
         hp = HandledPromise.applyFunction(val, args);
       } else {
@@ -742,7 +746,9 @@ export const makeCapTP = (
       const resultP = trapIteratorResultP.get(questionID);
       resultP || Fail`CTP_TRAP_ITERATE did not expect ${questionID}`;
 
-      const [method, args] = unserialize(serialized);
+      const [method, args] = /** @type {[string, any[]]} */ (
+        unserialize(serialized)
+      );
 
       const getNextResultP = async () => {
         const result = await resultP;
