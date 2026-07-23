@@ -17,6 +17,8 @@ export interface ReadableBlob {
   streamBase64: (synPromise: unknown) => Promise<unknown>;
   text: () => Promise<string>;
   json: () => Promise<any>;
+  range: (start: bigint, end: bigint) => Promise<ReadableBlob>;
+  textRange: (startLine: number, endLine: number) => Promise<ReadableBlob>;
   help: (method?: string) => string;
 }
 
