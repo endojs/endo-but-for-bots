@@ -1,12 +1,12 @@
 # cap-std-watch: capability-scoped directory watching
 
-| | |
-|---|---|
-| **Created** | 2026-07-18 |
-| **Updated** | 2026-07-19 |
-| **Author** | Kriscendo Bot (prompted by Kris Kowal) |
-| **Status** | Proposed |
-| **Tracks** | [endojs/endo-but-for-bots#606](https://github.com/endojs/endo-but-for-bots/issues/606) |
+|             |                                                                                        |
+| ----------- | -------------------------------------------------------------------------------------- |
+| **Created** | 2026-07-18                                                                             |
+| **Updated** | 2026-07-19                                                                             |
+| **Author**  | Kriscendo Bot (prompted by Kris Kowal)                                                 |
+| **Status**  | Proposed                                                                               |
+| **Tracks**  | [endojs/endo-but-for-bots#606](https://github.com/endojs/endo-but-for-bots/issues/606) |
 
 ## Prompt
 
@@ -24,7 +24,7 @@ then ends cleanly instead of delivering live add/remove/replace events.
 On the Node host (`manager-node-powers.js`, and the go supervisor via
 `worker-go-powers.js`) `watchDirectory` is backed by `fs.watch`.
 
-Issue #606 established *why* the stub is currently the honest answer: the
+Issue #606 established _why_ the stub is currently the honest answer: the
 Rust powers resolve every filesystem operation through a
 `cap_std::fs::Dir` capability, and cap-std deliberately exposes **no**
 watch surface, while the obvious off-the-shelf watcher — the `notify`
@@ -34,8 +34,8 @@ whole reason the stub exists.
 
 This document explores whether we can close that gap with **our own
 bindings** rather than a general-purpose watcher — a small
-`cap-std-watch` layer that watches a *directory the process already holds
-as a capability*, never a path it re-resolves from ambient authority.
+`cap-std-watch` layer that watches a _directory the process already holds
+as a capability_, never a path it re-resolves from ambient authority.
 The goal is a design and a feasibility verdict, not an implementation
 commitment.
 
@@ -46,7 +46,7 @@ both of which are **path-anchored**: you name a path string and the
 kernel re-traverses it from the ambient root/cwd. That is irreconcilable
 with cap-std.
 
-But the Rust powers do not hold *paths* — they hold **open directory
+But the Rust powers do not hold _paths_ — they hold **open directory
 capabilities**. In `rust/endo/xsnap/src/powers/fs.rs`, every directory
 lives in `DIR_MAP` as a `cap_std::fs::Dir`, and `cap_std::fs::Dir`
 implements `AsFd` / `AsRawFd` (Windows: `AsHandle` / `AsRawHandle`). So
@@ -59,12 +59,12 @@ watch?": **which OS watch primitives anchor on an already-open
 directory fd/handle** (capability-preserving) rather than on a path
 (ambient)? It turns out each of the three target platforms has one:
 
-| Platform | fd/handle-anchored primitive | Names the changed child? | Confinement |
-|---|---|---|---|
-| Linux | `fanotify_mark(fd, FAN_MARK_ADD, …, dirfd, NULL)` | Yes (`FAN_REPORT_DFID_NAME`) | Preserved — marks the dirfd, no path |
-| macOS/BSD | `kqueue` + `EVFILT_VNODE` on the dirfd | No — coarse "dir changed" only | Preserved — registers the fd |
-| Windows | `ReadDirectoryChangesW(HANDLE, …)` | Yes (`FILE_ACTION_*` + name) | Preserved — reads the handle |
-| any | poll + `Dir::read_dir` diff (fallback) | Yes (by diffing snapshots) | Preserved — uses the `Dir` cap |
+| Platform  | fd/handle-anchored primitive                      | Names the changed child?       | Confinement                          |
+| --------- | ------------------------------------------------- | ------------------------------ | ------------------------------------ |
+| Linux     | `fanotify_mark(fd, FAN_MARK_ADD, …, dirfd, NULL)` | Yes (`FAN_REPORT_DFID_NAME`)   | Preserved — marks the dirfd, no path |
+| macOS/BSD | `kqueue` + `EVFILT_VNODE` on the dirfd            | No — coarse "dir changed" only | Preserved — registers the fd         |
+| Windows   | `ReadDirectoryChangesW(HANDLE, …)`                | Yes (`FILE_ACTION_*` + name)   | Preserved — reads the handle         |
+| any       | poll + `Dir::read_dir` diff (fallback)            | Yes (by diffing snapshots)     | Preserved — uses the `Dir` cap       |
 
 `fanotify_mark` is the crucial correction to the #606 framing: unlike
 `inotify_add_watch`, it **is dirfd-relative**. Called with a `NULL`
@@ -102,7 +102,7 @@ unprivileged-fanotify path.
 
 ### The remaining Linux caveat is the sandbox, not the kernel
 
-The real obstruction for *our* deployment is one layer up: container
+The real obstruction for _our_ deployment is one layer up: container
 runtimes' default seccomp profiles. Docker's default profile still
 gates `fanotify_init` behind `CAP_SYS_ADMIN` even where the kernel would
 allow it unprivileged (moby/moby#49756). The garden fleet runs inside
@@ -110,13 +110,13 @@ such a container. So a fanotify backend must be written to **detect
 `EPERM`/`ENOSYS` at init and fall back**, and any deployment wanting live
 Rust/XS watches must either loosen the seccomp profile for
 `fanotify_init` or accept the fallback. This is a config knob, not a
-code impossibility — but it means fanotify cannot be the *only* backend.
+code impossibility — but it means fanotify cannot be the _only_ backend.
 
 ### macOS and Windows: the cross-platform story #606 did not cover
 
 Issue #606 is Linux-centric. The fd/handle-anchored angle generalizes:
 
-- **Windows** is, surprisingly, the *cleanest* capability-preserving
+- **Windows** is, surprisingly, the _cleanest_ capability-preserving
   case. `ReadDirectoryChangesW` takes an open directory **HANDLE** —
   exactly what cap-std holds — and reports child-level
   `FILE_ACTION_ADDED` / `REMOVED` / `RENAMED_OLD_NAME` /
@@ -125,7 +125,7 @@ Issue #606 is Linux-centric. The fd/handle-anchored angle generalizes:
 - **macOS / BSD** has no child-naming fd-anchored primitive. `kqueue`
   with `EVFILT_VNODE` registers on the **open dirfd** and fires
   `NOTE_WRITE` when the directory's entries change — but it only says
-  *"this directory changed"*, not which child. FSEvents does name
+  _"this directory changed"_, not which child. FSEvents does name
   children but is **path-anchored** (ambient), so it is off the table.
   The capability-preserving macOS design is therefore **coarse kqueue
   wakeup → re-`read_dir` the `Dir` → diff against the last snapshot** to
@@ -133,8 +133,8 @@ Issue #606 is Linux-centric. The fd/handle-anchored angle generalizes:
 
 The snapshot-diff step macOS needs is the same mechanism as the
 universal poll fallback, so it is not extra surface — it is the shared
-core that fanotify/`ReadDirectoryChangesW` merely *accelerate* by
-telling us *when* (and, where available, *what*) to diff.
+core that fanotify/`ReadDirectoryChangesW` merely _accelerate_ by
+telling us _when_ (and, where available, _what_) to diff.
 
 ## Proposed design
 
@@ -210,15 +210,15 @@ construction**: every backend is handed only `dir.as_fd()` /
 and never a path string it could re-resolve against ambient root/cwd.
 
 - **Linux fanotify**: `FAN_MARK_ADD` on the dirfd with `NULL` pathname
-  marks *that inode*; `FAN_REPORT_DFID_NAME` reports the child's name as
+  marks _that inode_; `FAN_REPORT_DFID_NAME` reports the child's name as
   a leaf component, not a resolvable ambient path. No `openat`/`readlink`
   escape is introduced.
 - **macOS kqueue / poll fallback**: only `Dir::read_dir` (already a
   sanctioned cap-std operation) and the registered fd are used.
-- **Windows**: `ReadDirectoryChangesW` reads events *from the handle*; it
+- **Windows**: `ReadDirectoryChangesW` reads events _from the handle_; it
   cannot observe anything outside the directory the handle authorizes.
 
-The one thing to *avoid* — and the reason to write our own bindings
+The one thing to _avoid_ — and the reason to write our own bindings
 rather than adopt `notify` — is the `/proc/self/fd/N` trick, which would
 recover an ambient path from the fd and reintroduce exactly the ambient
 authority cap-std removes. `cap-std-watch` must never do this;
@@ -236,8 +236,8 @@ authority beyond the `Dir` it is built from.
 - **Universal poll fallback + macOS kqueue-driven diff**: small,
   low-risk, and immediately unblocks live-ish watches on every platform
   including inside the current container (no seccomp change needed). This
-  alone upgrades the Rust/XS host from *snapshot-only* to *eventually
-  converging* and is the recommended first slice.
+  alone upgrades the Rust/XS host from _snapshot-only_ to _eventually
+  converging_ and is the recommended first slice.
 - **Linux fanotify backend**: medium effort (raw syscalls / a thin
   binding; parsing `fanotify_event_metadata` + `fanotify_event_info_fid`
   records), medium risk (kernel-version and seccomp variance). High
@@ -260,15 +260,15 @@ durable.
 
 1. **Pull vs push at the XS boundary — favor push / wake-on-change,
    behind one high-level watch abstraction.** The dominant trade-off is
-   *liveness and power* versus *implementation simplicity and
-   portability*: a registered XS callback / port (push) lets the process
+   _liveness and power_ versus _implementation simplicity and
+   portability_: a registered XS callback / port (push) lets the process
    stay asleep and wake only on change — lower power, timely updates —
    but is more platform-specific to bind and less portable; a
    `watchNext(timeout)` pull is trivial to bind and uniform across
    platforms but ties up a host call and cannot sleep. **Decision:**
    favor liveness — prefer true wake-on-change wherever the platform
    supports it (fanotify push on Linux, `ReadDirectoryChangesW` on
-   Windows). What must hold is that *every* platform satisfies the same
+   Windows). What must hold is that _every_ platform satisfies the same
    high-level watch abstraction by whatever means; a platform that can
    only offer poll/pull under the hood is acceptable **as long as it
    presents that same abstraction**, so the push-preferred design and the
@@ -278,7 +278,7 @@ durable.
    is to reuse the Node powers' existing debounce window for the fallback
    and the macOS diff, so cross-host behavior stays at parity.
 3. **Container seccomp — do both, and always degrade gracefully.**
-   Pursue *both* paths: loosen the container seccomp profile to allow
+   Pursue _both_ paths: loosen the container seccomp profile to allow
    unprivileged `fanotify_init` where the operator opts in (so the fleet
    gets true push events), **and** always ship the poll/diff fallback so
    a constrained environment — one that still gates `fanotify_init` —
@@ -294,7 +294,7 @@ durable.
 5. **Rename fidelity — keep the flattened contract; treat rename as a
    hidden optimization.** The public contract stays add/remove/replace;
    rename detail is hidden from the consumer. Trade-off: a `rename` kind
-   would carry *identity continuity* — the same inode moving lets a
+   would carry _identity continuity_ — the same inode moving lets a
    watcher preserve object state instead of tearing it down and rebuilding
    it — and the OS backends that can supply it do so cheaply (fanotify
    `FAN_MOVED_FROM`/`FAN_MOVED_TO`, Windows `RENAMED_OLD/NEW`). But not
@@ -304,7 +304,7 @@ durable.
    copy+delete with no continuity to surface. Forcing a `rename` kind into
    the public contract would therefore be uneven across platforms.
    **Decision:** hide the details behind the flattened model, and allow
-   the implementation to *optimize internally* where the platform (or an
+   the implementation to _optimize internally_ where the platform (or an
    aligned source/target filesystem) makes a true atomic move
    observable — surfacing it as a coherent replace rather than a new
    public `kind`.

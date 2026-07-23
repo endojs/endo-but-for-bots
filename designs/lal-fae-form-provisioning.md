@@ -1,11 +1,11 @@
 # Lal/Fae Form-Based Provisioning
 
-| | |
-|---|---|
-| **Created** | 2026-03-02 |
-| **Updated** | 2026-03-05 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-03-02            |
+| **Updated** | 2026-03-05            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | **Complete**          |
 
 ## What is the Problem Being Solved?
 
@@ -126,12 +126,12 @@ manager then follows its own inbox, watching for `value` messages whose
 
 ### Form Fields
 
-| Field | Label | Pattern | Required |
-|-------|-------|---------|----------|
-| `name` | Agent name | `M.string()` (default) | Yes |
-| `host` | API host | `M.string()` (default) | Yes |
-| `model` | Model name | `M.string()` (default) | Yes |
-| `authToken` | API auth token | `M.string()` (default) | Yes |
+| Field       | Label          | Pattern                | Required |
+| ----------- | -------------- | ---------------------- | -------- |
+| `name`      | Agent name     | `M.string()` (default) | Yes      |
+| `host`      | API host       | `M.string()` (default) | Yes      |
+| `model`     | Model name     | `M.string()` (default) | Yes      |
+| `authToken` | API auth token | `M.string()` (default) | Yes      |
 
 All fields use the default `M.string()` pattern. The agent validates
 non-empty values after receiving the submission. A future iteration could
@@ -164,7 +164,7 @@ configuration form. For each submission:
    });
    ```
 
-   Wait — the manager is a *guest*, not the host. Guests cannot call
+   Wait — the manager is a _guest_, not the host. Guests cannot call
    `provideGuest`. Only the host can create other guests. This is a key
    architectural constraint.
 
@@ -183,14 +183,14 @@ The manager sends an `evaluate` proposal to @host that calls `provideGuest`:
 
 ```js
 await E(powers).evaluate(
-  undefined,                                    // workerName
+  undefined, // workerName
   `E(AGENT).provideGuest(name, {               // source
     introducedNames: {},
     agentName: profileName,
   })`,
-  ['name', 'profileName', 'AGENT'],            // codeNames
-  [nameValue, profileNameValue, '@agent'],      // edgeNames
-  guestPetName,                                 // resultName
+  ['name', 'profileName', 'AGENT'], // codeNames
+  [nameValue, profileNameValue, '@agent'], // edgeNames
+  guestPetName, // resultName
 );
 ```
 
@@ -217,7 +217,7 @@ manager guest. The manager can then call `E(agent).provideGuest(...)` using
 the host reference.
 
 This is already the pattern used in `setup.js` today — the setup script
-*is* an unconfined caplet running with `--powers @agent`, and it calls
+_is_ an unconfined caplet running with `--powers @agent`, and it calls
 `E(agent).provideGuest(...)`. The agent caplet itself could receive @agent
 as an introduced name.
 
@@ -262,7 +262,11 @@ export const make = (guestPowers, context) => {
   const formSent = E(powers).form('@host', 'Add an agent', [
     { name: 'name', label: 'Agent name' },
     { name: 'host', label: 'API host', example: 'https://api.anthropic.com' },
-    { name: 'model', label: 'Model name', example: 'claude-sonnet-4-6-20250514' },
+    {
+      name: 'model',
+      label: 'Model name',
+      example: 'claude-sonnet-4-6-20250514',
+    },
     { name: 'authToken', label: 'API auth token' },
   ]);
 
@@ -299,19 +303,23 @@ export const make = (guestPowers, context) => {
 
       // Extract the submitted values.
       const values = await E(powers).adopt(
-        message.number, 'VALUE', `submission-${message.messageId}`,
-      );
-      const config = await E(powers).lookup(
+        message.number,
+        'VALUE',
         `submission-${message.messageId}`,
       );
+      const config = await E(powers).lookup(`submission-${message.messageId}`);
       // config: { name, host, model, authToken }
 
       const { name } = config;
 
       // Skip if a worker is already running for this name.
       if (activeWorkers.has(name)) {
-        await E(powers).reply(message.number,
-          [`Agent "${name}" already exists.`], [], []);
+        await E(powers).reply(
+          message.number,
+          [`Agent "${name}" already exists.`],
+          [],
+          [],
+        );
         continue;
       }
 
@@ -325,15 +333,17 @@ export const make = (guestPowers, context) => {
       const workerP = spawnWorkerLoop(name, guest, config);
       activeWorkers.set(name, workerP);
 
-      await E(powers).reply(message.number,
-        [`Agent "${name}" is now running.`], [], []);
+      await E(powers).reply(
+        message.number,
+        [`Agent "${name}" is now running.`],
+        [],
+        [],
+      );
     }
   };
 
   // Fire and forget.
-  runManager().catch(err =>
-    console.error('[manager] Fatal:', err.message),
-  );
+  runManager().catch(err => console.error('[manager] Fatal:', err.message));
 
   return makeExo('LalManager', LalManagerInterface, {
     help() {
@@ -493,6 +503,7 @@ resubmit the form.
 ### `agent.types.d.ts`
 
 - Add `WorkerConfig` type:
+
   ```ts
   export type WorkerConfig = {
     name: string;
@@ -704,10 +715,10 @@ worker.
 
 ## Files Modified
 
-| File | Change |
-|------|--------|
-| `packages/lal/setup.js` | Remove env vars, add `@agent` introduction |
-| `packages/lal/agent.js` | Extract worker loop, add manager logic, send form on startup |
-| `packages/lal/agent.types.d.ts` | Add `WorkerConfig`, remove `LalEnv` |
-| `packages/fae/setup.js` | Remove env vars, add `@agent` introduction |
-| `packages/fae/agent.js` | Extract worker loop, add manager logic, send form on startup |
+| File                            | Change                                                       |
+| ------------------------------- | ------------------------------------------------------------ |
+| `packages/lal/setup.js`         | Remove env vars, add `@agent` introduction                   |
+| `packages/lal/agent.js`         | Extract worker loop, add manager logic, send form on startup |
+| `packages/lal/agent.types.d.ts` | Add `WorkerConfig`, remove `LalEnv`                          |
+| `packages/fae/setup.js`         | Remove env vars, add `@agent` introduction                   |
+| `packages/fae/agent.js`         | Extract worker loop, add manager logic, send form on startup |

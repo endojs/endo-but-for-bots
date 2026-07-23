@@ -9,12 +9,12 @@ or another module is behaving like Lockdown.
 
 ## Mitigation
 
-* Remove all calls to Lockdown except one.
+- Remove all calls to Lockdown except one.
   Generally, the earliest call is the best, so removing the call from this
   error's stack trace should suffice, or at least reveal the next redundant
   Lockdown.
   Be sure not to remove all calls to Lockdown!
-* If you do find that the error persists even with a single call to Lockdown,
+- If you do find that the error persists even with a single call to Lockdown,
   there may be other copies of Lockdown initialized in the same realm (iframe,
   VM context) or another library interfering with Lockdown by modifying the
   primordial environment in a similar way to Lockdown, like freezing shared

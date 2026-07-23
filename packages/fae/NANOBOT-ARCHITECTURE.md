@@ -117,10 +117,10 @@ nanobot/
 `AgentLoop` in `agent/loop.py` is the central processing engine. It has two
 operating modes:
 
-| Mode | Entry point | Use case |
-|------|-------------|----------|
-| **Bus mode** | `run()` | Gateway server — blocks on `bus.consume_inbound()` in a loop |
-| **Direct mode** | `process_direct()` | CLI single-message or cron jobs — skips the bus |
+| Mode            | Entry point        | Use case                                                     |
+| --------------- | ------------------ | ------------------------------------------------------------ |
+| **Bus mode**    | `run()`            | Gateway server — blocks on `bus.consume_inbound()` in a loop |
+| **Direct mode** | `process_direct()` | CLI single-message or cron jobs — skips the bus              |
 
 Both modes converge on the same internal method: `_process_message()`.
 
@@ -301,12 +301,12 @@ a `text` block — following the OpenAI vision API format.
 
 Every tool extends `Tool` (ABC) and defines three properties + one method:
 
-| Property / Method | Purpose |
-|---|---|
-| `name` | Tool name used in function calls (`read_file`, `exec`, …) |
-| `description` | Human-readable description for the LLM |
-| `parameters` | JSON Schema dict for parameter validation |
-| `execute(**kwargs)` | Async execution, returns a string result |
+| Property / Method   | Purpose                                                   |
+| ------------------- | --------------------------------------------------------- |
+| `name`              | Tool name used in function calls (`read_file`, `exec`, …) |
+| `description`       | Human-readable description for the LLM                    |
+| `parameters`        | JSON Schema dict for parameter validation                 |
+| `execute(**kwargs)` | Async execution, returns a string result                  |
 
 The base class also provides `validate_params()` which recursively validates
 inputs against the JSON Schema before execution, and `to_schema()` which
@@ -325,18 +325,18 @@ serializes to OpenAI's function-calling format.
 
 Registered at `AgentLoop.__init__()`:
 
-| Tool | Description |
-|------|-------------|
-| `read_file` | Read file contents (optionally restricted to workspace) |
-| `write_file` | Create or overwrite files |
-| `edit_file` | Surgical string replacement in files |
-| `list_dir` | List directory contents |
-| `exec` | Execute shell commands with timeout |
-| `web_search` | Search the web via Brave Search API |
-| `web_fetch` | Fetch and extract readable content from URLs |
-| `message` | Send a message to a specific channel + chat_id |
-| `spawn` | Launch a background subagent for long tasks |
-| `cron` | Create / list / remove scheduled jobs |
+| Tool         | Description                                             |
+| ------------ | ------------------------------------------------------- |
+| `read_file`  | Read file contents (optionally restricted to workspace) |
+| `write_file` | Create or overwrite files                               |
+| `edit_file`  | Surgical string replacement in files                    |
+| `list_dir`   | List directory contents                                 |
+| `exec`       | Execute shell commands with timeout                     |
+| `web_search` | Search the web via Brave Search API                     |
+| `web_fetch`  | Fetch and extract readable content from URLs            |
+| `message`    | Send a message to a specific channel + chat_id          |
+| `spawn`      | Launch a background subagent for long tasks             |
+| `cron`       | Create / list / remove scheduled jobs                   |
 
 ### MCP Tool Bridge
 
@@ -558,7 +558,7 @@ To keep the system prompt compact, skills use a two-tier loading strategy:
 
 ```yaml
 ---
-description: "Search GitHub issues and PRs"
+description: 'Search GitHub issues and PRs'
 metadata: '{"nanobot": {"requires": {"bins": ["gh"], "env": ["GITHUB_TOKEN"]}}}'
 always: false
 ---

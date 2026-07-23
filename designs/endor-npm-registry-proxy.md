@@ -1,11 +1,11 @@
 # NPM Registry Proxy via CAS and Registry Table
 
-| | |
-|---|---|
-| **Created** | 2026-04-17 |
-| **Updated** | 2026-07-20 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-04-17            |
+| **Updated** | 2026-07-20            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | In Progress           |
 
 ## Status
 
@@ -35,7 +35,7 @@ All five phases implemented:
   coexist), and every selected package's `package.json` is read
   back out of its CAS tree to fold its `dependencies` into the
   requirement set. Exposed as `endor npm-resolve
-  [--registry <url>] <name[@range]>...`. A fully cached graph
+[--registry <url>] <name[@range]>...`. A fully cached graph
   resolves with zero network traffic — the registry table and
   CAS acting as the npm-registry proxy this design names.
 - **Phase 4 (assembly + execution)**: `rust/endo/src/assemble.rs`
@@ -210,13 +210,13 @@ semver conventions:
 
 #### Comparison with Go's MVS
 
-| Aspect | Go MVS | Endor MVS |
-|--------|--------|-----------|
-| Version format | semver | semver |
-| Selection rule | Greatest mentioned | Greatest mentioned minor within major |
+| Aspect                    | Go MVS                    | Endor MVS                                            |
+| ------------------------- | ------------------------- | ---------------------------------------------------- |
+| Version format            | semver                    | semver                                               |
+| Selection rule            | Greatest mentioned        | Greatest mentioned minor within major                |
 | Major version coexistence | Yes (import paths differ) | Yes (compartment map allows multiple major versions) |
-| Lock file | `go.sum` (verification) | Registry table (cache) |
-| Network fetch | On demand | On demand |
+| Lock file                 | `go.sum` (verification)   | Registry table (cache)                               |
+| Network fetch             | On demand                 | On demand                                            |
 
 The key difference is that Go's module paths embed the
 major version (`github.com/foo/bar/v2`), making major
@@ -349,10 +349,10 @@ The tree's children are the package's files, stored as blobs.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|-------------|
-| [daemon-cas-management](daemon-cas-management.md) | Requires: CAS blob/tree storage |
-| [endor-run-expanded](endor-run-expanded.md) | Integrates: Form 3 (entry-point) uses registry for dependency resolution |
+| Design                                            | Relationship                                                             |
+| ------------------------------------------------- | ------------------------------------------------------------------------ |
+| [daemon-cas-management](daemon-cas-management.md) | Requires: CAS blob/tree storage                                          |
+| [endor-run-expanded](endor-run-expanded.md)       | Integrates: Form 3 (entry-point) uses registry for dependency resolution |
 
 ## Implementation phases
 
@@ -474,7 +474,7 @@ The tree's children are the package's files, stored as blobs.
       error); ESM `import` of a CJS module binds only
       `default` (no cjs-module-lexer named-export synthesis) —
       deliberate but significant, since `import { named } from
-      'cjsPkg'` is the dominant ESM-consumes-CJS pattern;
+'cjsPkg'` is the dominant ESM-consumes-CJS pattern;
       `require('./dir')` completes through `dir/index.js(on)`
       but does not consult a nested `dir/package.json` `main`;
       `require.resolve`, `__filename`, and `__dirname` return

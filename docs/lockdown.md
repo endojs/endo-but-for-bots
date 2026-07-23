@@ -29,29 +29,29 @@ compatibility vs better tool compatibility.
 
 Each option is explained in its own section below.
 
-| option                           | default setting  | other settings                         | about |
-|----------------------------------|------------------|----------------------------------------|-------|
-| `regExpTaming`                   | `'safe'`         | `'unsafe'`                             | `RegExp.prototype.compile` ([details](#regexptaming-options)) |
-| `localeTaming`                   | `'safe'`         | `'unsafe'`                             | `toLocaleString`           ([details](#localetaming-options)) |
-| `consoleTaming`                  | `'safe'`         | `'unsafe'`                             | deep stacks and custom methods ([details](#consoletaming-options)) |
-| `errorTaming`                    | `'safe'`         | `'unsafe'` `'unsafe-debug'`            | `errorInstance.stack`      ([details](#errortaming-options)) |
-| `errorTrapping`                  | `'platform'`     | `'exit'` `'abort'` `'report'` `'none'` | handling of uncaught exceptions ([details](#errortrapping-options)) |
-| `reporting`                      | `'platform'`     | `'console'` `'none'`                   | where to report warnings ([details](#reporting-options))
-| `unhandledRejectionTrapping`     | `'report'`       | `'none'`                               | handling of finalized unhandled rejections ([details](#unhandledrejectiontrapping-options)) |
-| `evalTaming`                     | `'safe-eval'`    | `'unsafe-eval'` `'no-eval'`            | `eval` and `Function` of the start compartment ([details](#evaltaming-options)) |
-| `stackFiltering`                 | `'concise'`      | `'omit-frames'` `'shorten-paths'` `'verbose'`  | deep stacks signal/noise   ([details](#stackfiltering-options)) |
-| `overrideTaming`                 | `'moderate'`     | `'min'` or `'severe'`                  | override mistake antidote  ([details](#overridetaming-options)) |
-| `overrideDebug`                  | `[]`             | array of property names                | detect override mistake    ([details](#overridedebug-options)) |
-| `domainTaming`                   | `'safe'`         | `'unsafe'`                             | Node.js `domain` module    ([details](#domaintaming-options)) |
-| `legacyRegeneratorRuntimeTaming` | `'safe'`         | `'unsafe-ignore'`                      | regenerator-runtime ([details](#legacyregeneratorruntimetaming-options)) |
-| `__hardenTaming__`               | `'safe'`         | `'unsafe'`                             | Making `harden` no-op for performance in trusted environments ([details](#__hardentaming__-options)) |
+| option                           | default setting | other settings                                | about                                                                                                |
+| -------------------------------- | --------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `regExpTaming`                   | `'safe'`        | `'unsafe'`                                    | `RegExp.prototype.compile` ([details](#regexptaming-options))                                        |
+| `localeTaming`                   | `'safe'`        | `'unsafe'`                                    | `toLocaleString` ([details](#localetaming-options))                                                  |
+| `consoleTaming`                  | `'safe'`        | `'unsafe'`                                    | deep stacks and custom methods ([details](#consoletaming-options))                                   |
+| `errorTaming`                    | `'safe'`        | `'unsafe'` `'unsafe-debug'`                   | `errorInstance.stack` ([details](#errortaming-options))                                              |
+| `errorTrapping`                  | `'platform'`    | `'exit'` `'abort'` `'report'` `'none'`        | handling of uncaught exceptions ([details](#errortrapping-options))                                  |
+| `reporting`                      | `'platform'`    | `'console'` `'none'`                          | where to report warnings ([details](#reporting-options))                                             |
+| `unhandledRejectionTrapping`     | `'report'`      | `'none'`                                      | handling of finalized unhandled rejections ([details](#unhandledrejectiontrapping-options))          |
+| `evalTaming`                     | `'safe-eval'`   | `'unsafe-eval'` `'no-eval'`                   | `eval` and `Function` of the start compartment ([details](#evaltaming-options))                      |
+| `stackFiltering`                 | `'concise'`     | `'omit-frames'` `'shorten-paths'` `'verbose'` | deep stacks signal/noise ([details](#stackfiltering-options))                                        |
+| `overrideTaming`                 | `'moderate'`    | `'min'` or `'severe'`                         | override mistake antidote ([details](#overridetaming-options))                                       |
+| `overrideDebug`                  | `[]`            | array of property names                       | detect override mistake ([details](#overridedebug-options))                                          |
+| `domainTaming`                   | `'safe'`        | `'unsafe'`                                    | Node.js `domain` module ([details](#domaintaming-options))                                           |
+| `legacyRegeneratorRuntimeTaming` | `'safe'`        | `'unsafe-ignore'`                             | regenerator-runtime ([details](#legacyregeneratorruntimetaming-options))                             |
+| `__hardenTaming__`               | `'safe'`        | `'unsafe'`                                    | Making `harden` no-op for performance in trusted environments ([details](#__hardentaming__-options)) |
 
 In the absence of any of these options in lockdown arguments, lockdown will
 attempt to read these options from `process.env`, using the Node.js convention
 for threading environment variables into a JavaScript program.
 
 | option                           | environment variable                         | notes                 |
-|----------------------------------|----------------------------------------------|-----------------------|
+| -------------------------------- | -------------------------------------------- | --------------------- |
 | `regExpTaming`                   | `LOCKDOWN_REGEXP_TAMING`                     |                       |
 | `localeTaming`                   | `LOCKDOWN_LOCALE_TAMING`                     |                       |
 | `consoleTaming`                  | `LOCKDOWN_CONSOLE_TAMING`                    |                       |
@@ -79,7 +79,7 @@ new Compartment({
     ...Math,
     random: harden(makeRandom(seed)),
   }),
-})
+});
 ```
 
 ## `regExpTaming` Options
@@ -121,23 +121,24 @@ made by any `RegExp` instance&mdash;a bizarre form of non-local causality.
 These static methods are currently part of de facto
 JavaScript but not yet part of the standard. The
 [Legacy RegExp static methods](https://github.com/tc39/proposal-regexp-legacy-features)
-proposal would standardize them as *normative optional* and deletable, meaning
-   * A conforming JavaScript engine may omit them
-   * A shim may delete them and have the resulting state still conform
-     to the specification of an initial JavaScript state.
+proposal would standardize them as _normative optional_ and deletable, meaning
+
+- A conforming JavaScript engine may omit them
+- A shim may delete them and have the resulting state still conform
+  to the specification of an initial JavaScript state.
 
 All these legacy `RegExp` static methods are currently removed under all
 settings of the `regExpTaming` option.
 So far this has not caused any compatibility problems.
-If it does, then we may decide to support them, but *only* under the
-`'unsafe'` setting and *only* on the `RegExp`  constructor of the start
+If it does, then we may decide to support them, but _only_ under the
+`'unsafe'` setting and _only_ on the `RegExp` constructor of the start
 compartment. The `RegExp` constructor shared by other compartments will remain
 safe and powerless.
 
 ## `localeTaming` Options
 
 **Background**: In standard plain JavaScript, the builtin methods with
- "`Locale`" or "`locale`" in their name&mdash;`toLocaleString`,
+"`Locale`" or "`locale`" in their name&mdash;`toLocaleString`,
 `toLocaleDateString`, `toLocaleTimeString`, `toLocaleLowerCase`,
 `toLocaleUpperCase`, and `localeCompare`&mdash;have a global behavior that is
 not fully determined by the language spec, but rather varies with location and
@@ -179,7 +180,7 @@ is negligible.
 **Background**: Most JavaScript environments provide a `console` object on the
 global object with interesting information hiding properties. JavaScript code
 can use the `console` to send information to the console's logging output, but
-cannot see that output. The `console` is notionally a *write-only device*,
+cannot see that output. The `console` is notionally a _write-only device_,
 although its concrete implementation often goes beyond that to include invoking
 formatting methods on its arguments (which in the case of Node.js also provides
 object arguments that can form a [covert communications channel
@@ -281,6 +282,7 @@ of the eventual-send shim:
 
             at Object.test (packages/errors/test/deep-send.test.js:30:22)
             at packages/errors/test/deep-send.test.js:37:13
+
 </details>
 
 <details>
@@ -293,6 +295,7 @@ of the eventual-send shim:
         ℹ expected failure: Error {
             message: '"blue" is not (a number)',
           }
+
 </details>
 
 ## `errorTaming` Options
@@ -348,7 +351,7 @@ We would like to fix this while preserving safety, but have not yet done so.
 Instead, we introduce the `'unsafe-debug'` setting, which sacrifices
 more security to restore this pleasant Node behavior.
 Where `'safe'` and `'unsafe'` endangers only confidentiality, `'unsafe-debug'` also
-endangers intergrity. For development and debugging purposes ***only***,
+endangers intergrity. For development and debugging purposes **_only_**,
 this is usually the right tradeoff. But please don't use this setting in a
 production environment.
 
@@ -450,6 +453,7 @@ of the eventual-send shim:
 
           at Object.test (packages/errors/test/deep-send.test.js:30:22)
           at packages/errors/test/deep-send.test.js:37:13
+
 </details>
 
 <details>
@@ -475,6 +479,7 @@ of the eventual-send shim:
         Error#3: Event: 0.1
           at Object.test (packages/errors/test/deep-send.test.js:30:22)
           at packages/errors/test/deep-send.test.js:37:13
+
 </details>
 
 ## `errorTrapping` Options
@@ -597,7 +602,7 @@ LOCKDOWN_REPORTING=none
 
 **Background**: Same concerns as `errorTrapping`, but in addition, SES will
 attempt to install platform-specific finalized (rather than just same-turn)
-unhandled rejection trapping.  If that attempt fails, then the platform's
+unhandled rejection trapping. If that attempt fails, then the platform's
 default unhandled rejection behavior remains in effect.
 
 ```js
@@ -617,15 +622,15 @@ LOCKDOWN_UNHANDLED_REJECTION_TRAPPING=none
 ```
 
 On the web, the `window` event emitter has a trap for `unhandledrejection` and
-`rejectionhandled` events.  In the absence of a trap, the platform logs
+`rejectionhandled` events. In the absence of a trap, the platform logs
 rejections that were not handled in the same turn in which they were created to
-the debugger console and continues.  However, setting `errorTrapping` to
+the debugger console and continues. However, setting `errorTrapping` to
 `'exit'` or `'abort'` will cause the web equivalent of halting the page: the
 error will cause navigation to a blank page, immediately halting execution in
 the window.
 
 In Node.js, the `process` event emitter has a trap for `unhandledRejection` and
-`rejectionHandled`.  In the absence of a trap, the platform logs rejections that
+`rejectionHandled`. In the absence of a trap, the platform logs rejections that
 were not handled in the same turn in which they were created, and potentially a
 scary warning that says unhandled rejections may cause the process to exit in a
 future release.
@@ -647,8 +652,8 @@ To disallow `eval` in specific compartments, replace `eval` and the function
 constructors in the compartment.
 
 ```js
-const c = new Compartment()
-c.globalThis.eval = c.globalThis.Function = function() {
+const c = new Compartment();
+c.globalThis.eval = c.globalThis.Function = function () {
   throw new TypeError();
 };
 ```
@@ -702,8 +707,8 @@ Note: In the future when the Compartment global class is supported on Hermes aft
 Once Hermes engine supports direct eval, the `SES_DIRECT_EVAL` error will not longer prevent SES initializing with `'safe-eval'`.
 Currently there is an open feature request and open pull request targeting Static Hermes.
 
-* <https://github.com/facebook/hermes/issues/957>
-  * <https://github.com/facebook/hermes/pull/1515>
+- <https://github.com/facebook/hermes/issues/957>
+  - <https://github.com/facebook/hermes/pull/1515>
 
 You can also test and verify `lockdown` completing on this change by [building and running](https://github.com/facebook/hermes/blob/static_h/doc/BuildingAndRunning.md) Static Hermes on the following fork for example:
 <https://github.com/leotm/hermes/tree/ses-lockdown-test-static-hermes-compiler-vm>
@@ -711,12 +716,12 @@ You can also test and verify `lockdown` completing on this change by [building a
 Once Hermes engine supports direct eval and the `with` statement, `'safe-eval'` will work.
 Currently there is an open feature request and open pull request targeting Static Hermes.
 
-* <https://github.com/facebook/hermes/issues/1056>
-  * <https://github.com/facebook/hermes/pull/1571>
+- <https://github.com/facebook/hermes/issues/1056>
+  - <https://github.com/facebook/hermes/pull/1571>
 
-There is also an open alternate idea to sandbox `Compartment` *without* the `with` statement.
+There is also an open alternate idea to sandbox `Compartment` _without_ the `with` statement.
 
-* <https://github.com/endojs/endo/discussions/1944>
+- <https://github.com/endojs/endo/discussions/1944>
 
 If `lockdown` does not receive an `evalTaming` option, it will respect
 `process.env.LOCKDOWN_EVAL_TAMING`.
@@ -783,6 +788,7 @@ option and the platform error behavior.
 Examples from
 [deep-send.test.js](https://github.com/endojs/endo/blob/master/packages/errors/test/deep-send.test.js)
 of the eventual-send shim:
+
 <details>
   <summary>Expand for { stackFiltering: 'concise' } log output</summary>
 
@@ -809,6 +815,7 @@ of the eventual-send shim:
 
             at Object.test (packages/errors/test/deep-send.test.js:30:22)
             at packages/errors/test/deep-send.test.js:37:13
+
 </details>
 
 <details>
@@ -837,6 +844,7 @@ of the eventual-send shim:
 
             at Object.test (file:///Users/markmiller/src/ongithub/endojs/endo/packages/errors/test/deep-send.test.js:30:22)
             at file:///Users/markmiller/src/ongithub/endojs/endo/packages/errors/test/deep-send.test.js:37:13
+
 </details>
 
 <details>
@@ -901,6 +909,7 @@ of the eventual-send shim:
             at async Promise.all (index 0)
             at async file:///Users/markmiller/src/ongithub/endojs/endo/node_modules/ava/lib/runner.js:515:21
             at async Runner.start (file:///Users/markmiller/src/ongithub/endojs/endo/node_modules/ava/lib/runner.js:523:15)
+
 </details>
 
 <details>
@@ -965,6 +974,7 @@ of the eventual-send shim:
             at async Promise.all (index 0)
             at async file:///Users/markmiller/src/ongithub/endojs/endo/node_modules/ava/lib/runner.js:515:21
             at async Runner.start (file:///Users/markmiller/src/ongithub/endojs/endo/node_modules/ava/lib/runner.js:523:15)
+
 </details>
 
 ## `overrideTaming` Options
@@ -991,7 +1001,7 @@ we become compatible with more legacy code, but at the price of a significantly
 worse debugging experience. Expand the "Expand for..." items at the end of this
 section for screenshots showing the different experiences.
 
-Enablements have a further debugging cost. When single stepping *into* code,
+Enablements have a further debugging cost. When single stepping _into_ code,
 we now step into every access to an enabled property. Every read steps into
 the enabling getter. This adds yet more noise to the debugging experience.
 
@@ -1023,7 +1033,7 @@ be fairly minimal, but we expand it as needed, when we
 encounter code which should run under SES but is prevented from doing so
 by the override mistake. As we encouter these we list them in the comments
 next to each enablement. This process has rapidly converged. We rarely come
-across any more such cases. ***If you find one, please file an issue.*** Thanks.
+across any more such cases. **_If you find one, please file an issue._** Thanks.
 
 The `'min'` enablements setting serves two purposes: it enables a pleasant
 debugging experience in VSCode, and it helps ensure that new code does not
@@ -1045,19 +1055,22 @@ by our override mitigation.
 <details>
   <summary>Expand for { overrideTaming: 'moderate' } vscode inspector display</summary>
 
-  ![overrideTaming: 'moderate' vscode inspector display](images/override-taming-moderate-inspector.png)
+![overrideTaming: 'moderate' vscode inspector display](images/override-taming-moderate-inspector.png)
+
 </details>
 
 <details>
   <summary>Expand for { overrideTaming: 'min' } vscode inspector display</summary>
 
 ![overrideTaming: 'min' vscode inspector display](images/override-taming-min-inspector.png)
+
 </details>
 
 <details>
   <summary>Expand for { overrideTaming: 'severe' } vscode inspector display</summary>
 
 ![overrideTaming: 'severe' vscode inspector display](images/override-taming-star-inspector.png)
+
 </details>
 
 ## `overrideDebug` Options
@@ -1066,7 +1079,7 @@ To help diagnose problems with the [Property Override Mistake][POM], you can
 set this option to a list of properties that will print diagnostic information
 when their override enablement is triggered.
 
-  [POM]: https://github.com/endojs/endo/discussions/1855
+[POM]: https://github.com/endojs/endo/discussions/1855
 
 For example, to find the client code that causes a `constructor` property override
 mistake, set the options as follows:
@@ -1101,7 +1114,7 @@ node ...
 Then, when some script deep in the require stack does:
 
 ```js
-function MyConstructor() { }
+function MyConstructor() {}
 MyConstructor.prototype.constructor = XXX;
 ```
 
@@ -1168,7 +1181,9 @@ lockdown(); // legacyRegeneratorRuntimeTaming defaults to 'safe'
 lockdown({ legacyRegeneratorRuntimeTaming: 'safe' }); // do nothing
 // vs
 lockdown({ legacyRegeneratorRuntimeTaming: 'unsafe-ignore' }); // try fix compatibility with regenerator-runtime
-Iterator.prototype[Symbol.iterator] = function() { return this } // this assignment fails without throwing with unsafe-ignore
+Iterator.prototype[Symbol.iterator] = function () {
+  return this;
+}; // this assignment fails without throwing with unsafe-ignore
 ```
 
 ## `__hardenTaming__` Options
@@ -1226,8 +1241,8 @@ and eventually remove this option.
 
 # Limitations
 
-Compartments isolate the *authority* and *intrinsics* available to guest code,
-but every compartment in a realm shares the same JavaScript *agent*.
+Compartments isolate the _authority_ and _intrinsics_ available to guest code,
+but every compartment in a realm shares the same JavaScript _agent_.
 In engine terms, that is a single thread of execution and a single heap.
 The following limitations are intrinsic to running JavaScript in one agent and
 are not threats a `Compartment` can mitigate.
@@ -1271,8 +1286,8 @@ allocation failure at an arbitrary point in unrelated code.
 The failure can surface inside an unrelated synchronous call, including a
 call into an object exported from another compartment.
 The victim object may then be left in a partially updated state.
-The result is an *integrity* compromise (broken invariants on otherwise
-trusted objects) on top of the *availability* compromise (the agent or
+The result is an _integrity_ compromise (broken invariants on otherwise
+trusted objects) on top of the _availability_ compromise (the agent or
 process may exit).
 Hosts that need to defend exported objects against this class of attack
 should run untrusted guests in a separate agent (such as a worker or

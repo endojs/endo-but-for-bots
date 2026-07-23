@@ -1,11 +1,11 @@
 # SQLite Host Methods for Endo Rust (XS)
 
-| | |
-|---|---|
-| **Created** | 2026-04-14 |
-| **Updated** | 2026-04-16 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+|                |                                |
+| -------------- | ------------------------------ |
+| **Created**    | 2026-04-14                     |
+| **Updated**    | 2026-04-16                     |
+| **Author**     | Kris Kowal (prompted)          |
+| **Status**     | **Complete**                   |
 | **Supersedes** | designs/daemon-endor-sqlite.md |
 
 ## Status
@@ -55,13 +55,13 @@ backend interchangeably.
 The key constraint is that all values returned by the SQLite
 bindings must be passable — expressible by Endo's marshalling.
 
-| SQLite type | JS type | Notes |
-|-------------|---------|-------|
-| NULL | `null` | |
-| INTEGER | `bigint` | Always bigint, even for small values |
-| REAL | `number` | JS float64 |
-| TEXT | `string` | |
-| BLOB | `Uint8Array` | Binary data |
+| SQLite type | JS type      | Notes                                |
+| ----------- | ------------ | ------------------------------------ |
+| NULL        | `null`       |                                      |
+| INTEGER     | `bigint`     | Always bigint, even for small values |
+| REAL        | `number`     | JS float64                           |
+| TEXT        | `string`     |                                      |
+| BLOB        | `Uint8Array` | Binary data                          |
 
 ### Implications
 
@@ -138,14 +138,14 @@ values to callers.
 Typed values that JSON cannot represent natively use tagged
 encodings in the FFI envelope:
 
-| JS type | FFI JSON encoding | Rust conversion |
-|---------|-------------------|-----------------|
-| `null` | `null` | NULL |
-| `boolean` | `true` / `false` | INTEGER (1 / 0) |
-| `number` | number | REAL |
-| `string` | string | TEXT |
-| `bigint` | `{"$bigint": "123"}` | INTEGER |
-| `Uint8Array` | `{"$bytes": "<base64>"}` | BLOB |
+| JS type      | FFI JSON encoding        | Rust conversion |
+| ------------ | ------------------------ | --------------- |
+| `null`       | `null`                   | NULL            |
+| `boolean`    | `true` / `false`         | INTEGER (1 / 0) |
+| `number`     | number                   | REAL            |
+| `string`     | string                   | TEXT            |
+| `bigint`     | `{"$bigint": "123"}`     | INTEGER         |
+| `Uint8Array` | `{"$bytes": "<base64>"}` | BLOB            |
 
 The `$bigint` and `$bytes` tags are internal to the FFI layer.
 The JS `encodeParams` helper converts `bigint` and `Uint8Array`
@@ -160,13 +160,13 @@ Rows are returned as JSON strings from Rust to JS.
 - `stmtAll` → JSON array of objects
 - `stmtRun` → `'{"changes": "<bigint>", "lastInsertRowid": "<bigint>"}'`
 
-| SQLite type | FFI JSON encoding | JS wrapper conversion |
-|-------------|-------------------|-----------------------|
-| NULL | `null` | `null` |
-| INTEGER | `{"$bigint": "<string>"}` | `BigInt(value)` |
-| REAL | number | `number` (passthrough) |
-| TEXT | string | `string` (passthrough) |
-| BLOB | `{"$bytes": "<base64>"}` | `Uint8Array` via base64 decode |
+| SQLite type | FFI JSON encoding         | JS wrapper conversion          |
+| ----------- | ------------------------- | ------------------------------ |
+| NULL        | `null`                    | `null`                         |
+| INTEGER     | `{"$bigint": "<string>"}` | `BigInt(value)`                |
+| REAL        | number                    | `number` (passthrough)         |
+| TEXT        | string                    | `string` (passthrough)         |
+| BLOB        | `{"$bytes": "<base64>"}`  | `Uint8Array` via base64 decode |
 
 The JS wrapper's `decodeRow` helper walks each row object and
 converts tagged values back to native `bigint` and `Uint8Array`.
@@ -185,17 +185,17 @@ Path `":memory:"` opens an in-memory database.
 
 9 functions, registered in `powers/sqlite.rs`:
 
-| Rust function | Registration name | argc | JS signature | Return |
-|---|---|---|---|---|
-| `host_sqlite_open` | `sqliteOpen` | 1 | `sqliteOpen(path)` | handle (number) or `"Error: ..."` |
-| `host_sqlite_close` | `sqliteClose` | 1 | `sqliteClose(dbH)` | undefined |
-| `host_sqlite_exec` | `sqliteExec` | 2 | `sqliteExec(dbH, sql)` | undefined or `"Error: ..."` |
-| `host_sqlite_prepare` | `sqlitePrepare` | 2 | `sqlitePrepare(dbH, sql)` | handle (number) or `"Error: ..."` |
-| `host_sqlite_stmt_run` | `sqliteStmtRun` | 2 | `sqliteStmtRun(stmtH, paramsJson)` | JSON `{changes, lastInsertRowid}` |
-| `host_sqlite_stmt_get` | `sqliteStmtGet` | 2 | `sqliteStmtGet(stmtH, paramsJson)` | JSON object, `"null"`, or error |
-| `host_sqlite_stmt_all` | `sqliteStmtAll` | 2 | `sqliteStmtAll(stmtH, paramsJson)` | JSON array or error |
-| `host_sqlite_stmt_columns` | `sqliteStmtColumns` | 1 | `sqliteStmtColumns(stmtH)` | JSON array of `{name, type}` |
-| `host_sqlite_stmt_finalize` | `sqliteStmtFinalize` | 1 | `sqliteStmtFinalize(stmtH)` | undefined |
+| Rust function               | Registration name    | argc | JS signature                       | Return                            |
+| --------------------------- | -------------------- | ---- | ---------------------------------- | --------------------------------- |
+| `host_sqlite_open`          | `sqliteOpen`         | 1    | `sqliteOpen(path)`                 | handle (number) or `"Error: ..."` |
+| `host_sqlite_close`         | `sqliteClose`        | 1    | `sqliteClose(dbH)`                 | undefined                         |
+| `host_sqlite_exec`          | `sqliteExec`         | 2    | `sqliteExec(dbH, sql)`             | undefined or `"Error: ..."`       |
+| `host_sqlite_prepare`       | `sqlitePrepare`      | 2    | `sqlitePrepare(dbH, sql)`          | handle (number) or `"Error: ..."` |
+| `host_sqlite_stmt_run`      | `sqliteStmtRun`      | 2    | `sqliteStmtRun(stmtH, paramsJson)` | JSON `{changes, lastInsertRowid}` |
+| `host_sqlite_stmt_get`      | `sqliteStmtGet`      | 2    | `sqliteStmtGet(stmtH, paramsJson)` | JSON object, `"null"`, or error   |
+| `host_sqlite_stmt_all`      | `sqliteStmtAll`      | 2    | `sqliteStmtAll(stmtH, paramsJson)` | JSON array or error               |
+| `host_sqlite_stmt_columns`  | `sqliteStmtColumns`  | 1    | `sqliteStmtColumns(stmtH)`         | JSON array of `{name, type}`      |
+| `host_sqlite_stmt_finalize` | `sqliteStmtFinalize` | 1    | `sqliteStmtFinalize(stmtH)`        | undefined                         |
 
 Registration follows the existing pattern:
 
@@ -308,11 +308,7 @@ const encodeValue = value => {
  * {$bytes: base64} → Uint8Array.
  */
 const decodeValue = value => {
-  if (
-    typeof value === 'object' &&
-    value !== null &&
-    !Array.isArray(value)
-  ) {
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
     if ('$bigint' in value) {
       return BigInt(value.$bigint);
     }
@@ -338,10 +334,7 @@ const decodeRow = row => {
 export const makeXsSqlitePowers = () => {
   const openDatabase = path => {
     const dbHandle = hostSqliteOpen(path);
-    if (
-      typeof dbHandle === 'string' &&
-      dbHandle.startsWith('Error: ')
-    ) {
+    if (typeof dbHandle === 'string' && dbHandle.startsWith('Error: ')) {
       throw new Error(dbHandle.slice(7));
     }
     let isOpen = true;
@@ -355,20 +348,14 @@ export const makeXsSqlitePowers = () => {
 
     const exec = sql => {
       const result = hostSqliteExec(dbHandle, sql);
-      if (
-        typeof result === 'string' &&
-        result.startsWith('Error: ')
-      ) {
+      if (typeof result === 'string' && result.startsWith('Error: ')) {
         throw new Error(result.slice(7));
       }
     };
 
     const prepare = sql => {
       const stmtHandle = hostSqlitePrepare(dbHandle, sql);
-      if (
-        typeof stmtHandle === 'string' &&
-        stmtHandle.startsWith('Error: ')
-      ) {
+      if (typeof stmtHandle === 'string' && stmtHandle.startsWith('Error: ')) {
         throw new Error(stmtHandle.slice(7));
       }
 
@@ -392,19 +379,13 @@ export const makeXsSqlitePowers = () => {
       };
 
       const assertOk = result => {
-        if (
-          typeof result === 'string' &&
-          result.startsWith('Error: ')
-        ) {
+        if (typeof result === 'string' && result.startsWith('Error: ')) {
           throw new Error(result.slice(7));
         }
       };
 
       const run = (...params) => {
-        const result = hostSqliteStmtRun(
-          stmtHandle,
-          encodeParams(params),
-        );
+        const result = hostSqliteStmtRun(stmtHandle, encodeParams(params));
         assertOk(result);
         const parsed = JSON.parse(result);
         return harden({
@@ -414,10 +395,7 @@ export const makeXsSqlitePowers = () => {
       };
 
       const get = (...params) => {
-        const result = hostSqliteStmtGet(
-          stmtHandle,
-          encodeParams(params),
-        );
+        const result = hostSqliteStmtGet(stmtHandle, encodeParams(params));
         assertOk(result);
         const parsed = JSON.parse(result);
         if (parsed === null) {
@@ -427,10 +405,7 @@ export const makeXsSqlitePowers = () => {
       };
 
       const all = (...params) => {
-        const result = hostSqliteStmtAll(
-          stmtHandle,
-          encodeParams(params),
-        );
+        const result = hostSqliteStmtAll(stmtHandle, encodeParams(params));
         assertOk(result);
         const parsed = JSON.parse(result);
         return harden(parsed.map(decodeRow));
@@ -469,28 +444,17 @@ harden(makeXsSqlitePowers);
 Added to `packages/daemon/src/types.d.ts`:
 
 ```typescript
-export type SqliteValue =
-  | null
-  | bigint
-  | number
-  | string
-  | Uint8Array;
+export type SqliteValue = null | bigint | number | string | Uint8Array;
 
-export type SqliteParams =
-  | SqliteValue[]
-  | [Record<string, SqliteValue>];
+export type SqliteParams = SqliteValue[] | [Record<string, SqliteValue>];
 
 export type StatementSync = {
   run(...params: SqliteParams): {
     changes: bigint;
     lastInsertRowid: bigint;
   };
-  get(
-    ...params: SqliteParams
-  ): Record<string, SqliteValue> | undefined;
-  all(
-    ...params: SqliteParams
-  ): Array<Record<string, SqliteValue>>;
+  get(...params: SqliteParams): Record<string, SqliteValue> | undefined;
+  all(...params: SqliteParams): Array<Record<string, SqliteValue>>;
   columns(): Array<{ name: string; type: string | null }>;
   finalize(): void;
 };
@@ -555,15 +519,15 @@ These can be added as follow-up work:
 
 ## Files to create or modify
 
-| File | Change |
-|---|---|
-| `rust/endo/xsnap/src/powers/sqlite.rs` | **New.** DB_MAP, STMT_MAP, 9 host functions, JSON param/row conversion with `$bigint`/`$bytes` tags, `register()`. |
-| `rust/endo/xsnap/src/powers/mod.rs` | Add `pub mod sqlite;` |
-| `rust/endo/xsnap/src/lib.rs` | Add `powers::sqlite::register(self);` in power registration |
-| `rust/endo/xsnap/Cargo.toml` | Add `rusqlite` dependency |
-| `rust/endo/xsnap/src/host_aliases.js` | Add 9 sqlite alias entries |
-| `packages/daemon/src/bus-daemon-rust-xs-powers.js` | Add `makeXsSqlitePowers()` factory and export |
-| `packages/daemon/src/types.d.ts` | Add `SqlitePowers`, `DatabaseSync`, `StatementSync` types |
+| File                                               | Change                                                                                                             |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `rust/endo/xsnap/src/powers/sqlite.rs`             | **New.** DB_MAP, STMT_MAP, 9 host functions, JSON param/row conversion with `$bigint`/`$bytes` tags, `register()`. |
+| `rust/endo/xsnap/src/powers/mod.rs`                | Add `pub mod sqlite;`                                                                                              |
+| `rust/endo/xsnap/src/lib.rs`                       | Add `powers::sqlite::register(self);` in power registration                                                        |
+| `rust/endo/xsnap/Cargo.toml`                       | Add `rusqlite` dependency                                                                                          |
+| `rust/endo/xsnap/src/host_aliases.js`              | Add 9 sqlite alias entries                                                                                         |
+| `packages/daemon/src/bus-daemon-rust-xs-powers.js` | Add `makeXsSqlitePowers()` factory and export                                                                      |
+| `packages/daemon/src/types.d.ts`                   | Add `SqlitePowers`, `DatabaseSync`, `StatementSync` types                                                          |
 
 ## Implementation phases
 

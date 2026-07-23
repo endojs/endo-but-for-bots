@@ -1,11 +1,11 @@
 # Capability Bus: The Endo Daemon as Message Router
 
-| | |
-|---|---|
-| **Created** | 2026-02-25 |
-| **Updated** | 2026-04-11 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-25            |
+| **Updated** | 2026-04-11            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | In Progress           |
 
 ## Status
 
@@ -21,17 +21,18 @@ worker, or standalone archive runner by subcommand.
 In this document, the **daemon** is the long-running top-level
 process that owns the PID file and Unix socket, routes envelopes
 between its children, and enforces the sync-call spawn tree — the
-daemon *is* the capability bus. It runs no JavaScript itself.
+daemon _is_ the capability bus. It runs no JavaScript itself.
 
 The **manager** is the privileged child of the daemon that
 bootstraps the pet-name store, formula graph, host agent, and CapTP
 multiplexer. Historically this role was played exclusively by the
 Node.js script `bus-daemon-node.js`; today it can also be played by
 an XS-hosted bundle running inside `endor manager -e xs`. The name
-"manager" reflects that this child *manages* the pet-name and
+"manager" reflects that this child _manages_ the pet-name and
 formula graph state on behalf of the daemon and its workers.
 
 Key files:
+
 - `packages/daemon/src/bus-daemon-node.js` — Node.js manager entry
   point (the "bus" prefix refers to the capability bus protocol
   these files participate in, not to a child named "bus")
@@ -52,7 +53,7 @@ The bus modules were originally duplicated per daemon language
 (`daemon-go.js`, `daemon-rust.js`, etc.) and have been unified into a
 single `bus-` prefixed set, since the capability bus protocol is
 language-agnostic. The `bus-` file prefix denotes participation in
-the protocol, not a role; the daemon *is* the bus, and these files
+the protocol, not a role; the daemon _is_ the bus, and these files
 describe the wire format that the manager, workers, and the daemon
 all speak.
 
@@ -127,11 +128,11 @@ through its `-node.js` / `-node-powers.js` module convention. The bus
 introduces a new platform pair, where the role formerly played by the
 in-process "daemon" JS is now played by a manager child subprocess:
 
-| Platform | Manager entry | Powers module | Worker entry | Worker powers |
-|----------|--------------|---------------|-------------|---------------|
-| Node.js (in-process) | `daemon-node.js` | `daemon-node-powers.js` | `worker-node.js` | `worker-node-powers.js` |
-| Bus (Node manager) | `bus-daemon-node.js` | `bus-daemon-node-powers.js` | `bus-worker-node.js` | `bus-worker-node-powers.js` |
-| Bus (XS manager) | `bus-daemon-rust-xs.js` | — | `bus-worker-xs.js` | — |
+| Platform             | Manager entry           | Powers module               | Worker entry         | Worker powers               |
+| -------------------- | ----------------------- | --------------------------- | -------------------- | --------------------------- |
+| Node.js (in-process) | `daemon-node.js`        | `daemon-node-powers.js`     | `worker-node.js`     | `worker-node-powers.js`     |
+| Bus (Node manager)   | `bus-daemon-node.js`    | `bus-daemon-node-powers.js` | `bus-worker-node.js` | `bus-worker-node-powers.js` |
+| Bus (XS manager)     | `bus-daemon-rust-xs.js` | —                           | `bus-worker-xs.js`   | —                           |
 
 `bus-daemon-node.js` and `bus-daemon-node-powers.js` are derivatives of
 their `-node` counterparts and implement the manager role over the
@@ -185,13 +186,13 @@ daemon using the same envelope protocol on fd 3/4.
 
 #### Pipe layout
 
-| fd | Direction | Purpose |
-|----|-----------|---------|
-| 0  | inherited | stdin (unused, closed) |
-| 1  | inherited | stdout → daemon log capture |
-| 2  | inherited | stderr → daemon log capture |
-| 3  | child → parent | CBOR-framed envelopes from subprocess |
-| 4  | parent → child | CBOR-framed envelopes to subprocess |
+| fd  | Direction      | Purpose                               |
+| --- | -------------- | ------------------------------------- |
+| 0   | inherited      | stdin (unused, closed)                |
+| 1   | inherited      | stdout → daemon log capture           |
+| 2   | inherited      | stderr → daemon log capture           |
+| 3   | child → parent | CBOR-framed envelopes from subprocess |
+| 4   | parent → child | CBOR-framed envelopes to subprocess   |
 
 #### Envelope format
 
@@ -224,11 +225,11 @@ Each envelope is a CBOR array:
 The daemon assigns handles to each subprocess it manages. All
 subprocesses are direct children of the daemon:
 
-| Handle | Entity | Notes |
-|--------|--------|-------|
-| 0 | Daemon (control plane) | Always handle 0 |
-| 1 | Manager child | First subprocess |
-| 2+ | Workers | Spawned by the daemon on manager request |
+| Handle | Entity                 | Notes                                    |
+| ------ | ---------------------- | ---------------------------------------- |
+| 0      | Daemon (control plane) | Always handle 0                          |
+| 1      | Manager child          | First subprocess                         |
+| 2+     | Workers                | Spawned by the daemon on manager request |
 
 ### Worker spawning
 
@@ -277,7 +278,7 @@ same reader/writer interface. The envelope framing adds the handle
 routing needed for the daemon to deliver messages to the correct
 subprocess.
 
-### The bus-*.js modules
+### The bus-\*.js modules
 
 #### bus-daemon-node.js
 
@@ -440,11 +441,11 @@ syscalls, one capability at a time.
 
 Candidates for migration, in suggested order:
 
-| Syscall | Replaces | Rationale |
-|---------|----------|-----------|
-| `fs.read` / `fs.write` | `node:fs` | Most impactful; enables daemon-side caching and access control |
-| `net.listen` / `net.connect` | `node:net` | Enables daemon-side socket management |
-| `crypto.random` / `crypto.hash` | `node:crypto` | Small surface, easy to verify |
+| Syscall                         | Replaces      | Rationale                                                      |
+| ------------------------------- | ------------- | -------------------------------------------------------------- |
+| `fs.read` / `fs.write`          | `node:fs`     | Most impactful; enables daemon-side caching and access control |
+| `net.listen` / `net.connect`    | `node:net`    | Enables daemon-side socket management                          |
+| `crypto.random` / `crypto.hash` | `node:crypto` | Small surface, easy to verify                                  |
 
 Each syscall follows the pattern:
 

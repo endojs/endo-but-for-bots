@@ -1,10 +1,10 @@
 # Familiar Deep-Link Peer Invitations
 
-| | |
-|---|---|
-| **Created** | 2026-06-01 |
-| **Author** | Aaron (prompted) |
-| **Status** | Proposed |
+|             |                  |
+| ----------- | ---------------- |
+| **Created** | 2026-06-01       |
+| **Author**  | Aaron (prompted) |
+| **Status**  | Proposed         |
 
 ## What is the Problem Being Solved?
 
@@ -14,7 +14,7 @@ Today the daemon already has the machinery to mint and accept a peer
 invitation — `host.invite(guestName)` produces a locator string and
 `host.accept(locator, petName)` parses it, registers the remote node's
 addresses via `addPeerInfo`, and binds a local pet name — but there is no
-way to *deliver* that locator through the operating system into a running
+way to _deliver_ that locator through the operating system into a running
 Familiar and turn it into a guided, consent-gated flow.
 
 The missing pieces are entirely in the shell and the Chat UI:
@@ -23,7 +23,7 @@ The missing pieces are entirely in the shell and the Chat UI:
    (e.g. `endo://`), so clicking an invite link in a browser, chat app, or
    email does nothing.
 2. **A confirmation screen.** Accepting a peer is a trust decision. The user
-   must see *who* they are about to add (a key fingerprint and any
+   must see _who_ they are about to add (a key fingerprint and any
    self-asserted label) and explicitly approve.
 3. **A naming prompt.** The peer must be bound under a **pet name** chosen by
    the recipient — the locator cannot dictate the local name, and the user
@@ -34,13 +34,13 @@ the existing daemon `invite`/`accept` surface.
 
 ## Background: what already exists
 
-| Capability | Location | Status |
-|---|---|---|
-| Locator format `endo://{nodeKey}/?id=…&type=invitation&at=host:port` | `packages/daemon/src/locator.js` | Complete |
-| `host.invite(guestName)` → `Invitation` exo with `locate()` | `packages/daemon/src/host.js` | Complete |
-| `host.accept(invitationLocator, guestName)` → parse, `addPeerInfo`, bind pet name | `packages/daemon/src/host.js` | Complete |
-| OCapN-Noise transport (mutual Ed25519, IK handshake) | `packages/ocapn-noise`, [`ocapn-noise-network`](ocapn-noise-network.md) | Complete (PR #137) |
-| Privileged custom scheme registration in Electron (`localhttp://`) | `packages/familiar/src/protocol-handler.js` | Complete (template) |
+| Capability                                                                        | Location                                                                | Status              |
+| --------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------- |
+| Locator format `endo://{nodeKey}/?id=…&type=invitation&at=host:port`              | `packages/daemon/src/locator.js`                                        | Complete            |
+| `host.invite(guestName)` → `Invitation` exo with `locate()`                       | `packages/daemon/src/host.js`                                           | Complete            |
+| `host.accept(invitationLocator, guestName)` → parse, `addPeerInfo`, bind pet name | `packages/daemon/src/host.js`                                           | Complete            |
+| OCapN-Noise transport (mutual Ed25519, IK handshake)                              | `packages/ocapn-noise`, [`ocapn-noise-network`](ocapn-noise-network.md) | Complete (PR #137)  |
+| Privileged custom scheme registration in Electron (`localhttp://`)                | `packages/familiar/src/protocol-handler.js`                             | Complete (template) |
 
 The `localhttp://` handler is the working reference for how to register and
 service a custom scheme in the Familiar main process.
@@ -88,7 +88,7 @@ The renderer receives an `endo:invite` IPC message and opens a modal:
   untrusted `label` clearly marked as self-asserted, and the connection hints
   (`at` addresses).
 - **Name field:** "What should we call this peer?" — required, validated as a
-  pet name, defaulted to a *suggestion* derived from `label` or the
+  pet name, defaulted to a _suggestion_ derived from `label` or the
   fingerprint that the user must confirm or replace.
 - **Actions:** Accept / Decline. Accept calls
   `E(host).accept(reconstructedLocator, petName)` over the existing CapTP
@@ -101,13 +101,13 @@ rendered as inert text, never as markup or actionable controls.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| [ocapn-noise-network](ocapn-noise-network.md) | Provides the secure transport the accepted peer connects over. |
+| Design                                                            | Relationship                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [ocapn-noise-network](ocapn-noise-network.md)                     | Provides the secure transport the accepted peer connects over.                                                                                                                                                                                                                                                                                                                                                                                                             |
 | [daemon-agent-network-identity](daemon-agent-network-identity.md) | Per-agent keypairs / network registration that make the `nodeKey` in the link meaningful; soft prerequisite. In-flight as per-agent `@transports`: design `ocapn-daemon-integration.md` ([PR #138](https://github.com/endojs/endo-but-for-bots/pull/138) · [raw](https://github.com/endojs/endo-but-for-bots/raw/refs/heads/design/ocapn-daemon-integration/designs/ocapn-daemon-integration.md)), prototype [#262](https://github.com/endojs/endo-but-for-bots/pull/262). |
-| [trust-on-first-bind](trust-on-first-bind.md) | Reference for the prompt-and-pin consent pattern the confirmation screen instantiates. |
-| [familiar-localhttp-protocol](familiar-localhttp-protocol.md) | Working template for privileged custom-scheme registration in Electron. |
-| [app-sharing-milestone](app-sharing-milestone.md) | Parent milestone; this is the "connect peers" pillar. |
+| [trust-on-first-bind](trust-on-first-bind.md)                     | Reference for the prompt-and-pin consent pattern the confirmation screen instantiates.                                                                                                                                                                                                                                                                                                                                                                                     |
+| [familiar-localhttp-protocol](familiar-localhttp-protocol.md)     | Working template for privileged custom-scheme registration in Electron.                                                                                                                                                                                                                                                                                                                                                                                                    |
+| [app-sharing-milestone](app-sharing-milestone.md)                 | Parent milestone; this is the "connect peers" pillar.                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 **Related in-flight PRs:** locator scheme v2 with `@`-delimited connection hints
 ([#178](https://github.com/endojs/endo-but-for-bots/pull/178)) is the basis for
@@ -134,7 +134,7 @@ deep-link / confirmation-screen PR exists yet — this design is net-new.
    capability use goes through the same audited preload bridge as the rest of
    Chat.
 2. **The locator cannot name the peer.** The pet name is always the
-   recipient's choice. The link may *suggest* via `label`, but the suggestion
+   recipient's choice. The link may _suggest_ via `label`, but the suggestion
    is untrusted and confirmable.
 3. **Reuse the existing locator string verbatim.** The link is a thin
    `endo://` envelope around the daemon's own locator query params so there is

@@ -1,15 +1,15 @@
 # Inter-Package Plain Re-Exports
 
-| | |
-|---|---|
-| **Created** | 2026-06-27 |
-| **Author** | Mark S. Miller (prompted) |
-| **Status** | Not Started |
-| **Source** | endojs/endo-but-for-bots#543 |
+|             |                              |
+| ----------- | ---------------------------- |
+| **Created** | 2026-06-27                   |
+| **Author**  | Mark S. Miller (prompted)    |
+| **Status**  | Not Started                  |
+| **Source**  | endojs/endo-but-for-bots#543 |
 
 ## Summary
 
-Issue #543 establishes a rule for *cross-package* imports:
+Issue #543 establishes a rule for _cross-package_ imports:
 a name should be imported from the package that originally exports it,
 never from another package that merely re-exports it unchanged.
 That issue calls such a pass-through a **plain re-export**:
@@ -37,7 +37,7 @@ convenience of re-exporting names that originate in other packages.
 Such packages were a real convenience back when much code was written in
 pre-IDE editors where remembering and typing the originating package name was a
 cost.
-Today, with IDEs and AI assistance, a plain re-exporter is an *anti*-convenience:
+Today, with IDEs and AI assistance, a plain re-exporter is an _anti_-convenience:
 it presents tooling and authors with a pointless choice of which package to
 import a name from.
 
@@ -116,14 +116,14 @@ in others.
 ## Relationship to the intra-package design (#544)
 
 This inter-package rule and the intra-package rule in #544 share #543's
-vocabulary (*plain re-export*) and the same staging shape (repoint and deprecate
+vocabulary (_plain re-export_) and the same staging shape (repoint and deprecate
 first, then remove), but they operate at different granularities and are
 decoupled:
 
-- This design governs import *edges between packages*: the unit removed is a
+- This design governs import _edges between packages_: the unit removed is a
   package (or package export) that exists only to re-export another package's
   names.
-- The #544 design governs import *edges between modules within one package*: the
+- The #544 design governs import _edges between modules within one package_: the
   unit removed is an internal pass-through module or a barrel reach-back.
 
 Neither blocks nor depends on the other; they can land and be reviewed

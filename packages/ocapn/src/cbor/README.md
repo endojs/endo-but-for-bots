@@ -45,7 +45,11 @@ pattern and the `OcapnCodec` interface.
 ### Driving the reader / writer directly
 
 ```js
-import { makeCborWriter, makeCborReader, cborToDiagnostic } from '@endo/ocapn/cbor';
+import {
+  makeCborWriter,
+  makeCborReader,
+  cborToDiagnostic,
+} from '@endo/ocapn/cbor';
 
 // Encoding
 const writer = makeCborWriter();
@@ -70,13 +74,13 @@ reader.exitList();
 
 ## Key Differences from Syrup
 
-| Aspect | Syrup | CBOR |
-|--------|-------|------|
-| Format | Text-based delimiters | Binary length prefixes |
-| Integers | ASCII digits with sign | Tag 2/3 bignums |
-| Symbols | `len'content` | Tag 280 + text |
-| Records | `<selector body>` | Tag 27 + array |
-| Parsers | Custom only | Standard CBOR libraries |
+| Aspect   | Syrup                  | CBOR                    |
+| -------- | ---------------------- | ----------------------- |
+| Format   | Text-based delimiters  | Binary length prefixes  |
+| Integers | ASCII digits with sign | Tag 2/3 bignums         |
+| Symbols  | `len'content`          | Tag 280 + text          |
+| Records  | `<selector body>`      | Tag 27 + array          |
+| Parsers  | Custom only            | Standard CBOR libraries |
 
 ## Diagnostic Notation Codec
 
@@ -90,7 +94,7 @@ with the binary CBOR codec:
 This is useful for:
 
 - Writing test cases in readable form
-- Debugging encoding issues  
+- Debugging encoding issues
 - Validating interoperability with other implementations
 
 ```javascript
@@ -108,7 +112,11 @@ const value = decode('280("method")');
 Or use the convenience re-exports from the main index:
 
 ```javascript
-import { diagnosticEncode, diagnosticDecode, cborToDiagnostic } from './index.js';
+import {
+  diagnosticEncode,
+  diagnosticDecode,
+  cborToDiagnostic,
+} from './index.js';
 ```
 
 ## Testing
@@ -129,5 +137,3 @@ yarn test test/cbor/
 ## Specification
 
 See `docs/cbor-encoding.md` for the complete encoding specification.
-
-

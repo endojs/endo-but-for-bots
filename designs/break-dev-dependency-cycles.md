@@ -1,12 +1,12 @@
 # Break devDependency Cycles via Synthetic Test Packages
 
-| | |
-|---|---|
-| **Created** | 2026-05-11 |
-| **Updated** | 2026-05-18 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
-| **Refs** | [PR #121](https://github.com/endojs/endo-but-for-bots/pull/121), [Issue #116](https://github.com/endojs/endo-but-for-bots/issues/116) |
+|             |                                                                                                                                       |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| **Created** | 2026-05-11                                                                                                                            |
+| **Updated** | 2026-05-18                                                                                                                            |
+| **Author**  | Kris Kowal (prompted)                                                                                                                 |
+| **Status**  | In Progress                                                                                                                           |
+| **Refs**    | [PR #121](https://github.com/endojs/endo-but-for-bots/pull/121), [Issue #116](https://github.com/endojs/endo-but-for-bots/issues/116) |
 
 ## Status
 
@@ -43,7 +43,7 @@ master is staged as PR
   Cuts 2-5 landed within a 4-day burst.
 - Design phase: 2026-05-10 → 2026-05-11 (2 days). Initial design
   commit `68b48fd67` 2026-05-11 (`design(workspace): break
-  devDependency cycles via synthetic test packages (per #121)`); the
+devDependency cycles via synthetic test packages (per #121)`); the
   PR #206 merge commit `1842c074c` is dated 2026-05-10 (review
   iteration captured in same-day fixup chain `ea0933857`,
   `84c03cf33`, `686de4e94`, `fddfcae8b`, `9a30ff80b`).
@@ -229,9 +229,9 @@ packages/ses-test/package.json:
 Files to move:
 
 - `packages/ses/test/{import,import-hook,import-now-hook,
-  import-non-esm,import-cjs,module-source,module-map,module-map-hook,
-  module-map-hook-legacy,module-map-legacy,import-hook-legacy,
-  import-now-hook-legacy,compartment-transforms}.test.js`
+import-non-esm,import-cjs,module-source,module-map,module-map-hook,
+module-map-hook-legacy,module-map-legacy,import-hook-legacy,
+import-now-hook-legacy,compartment-transforms}.test.js`
   and supporting `_import-commons.js` (13 test files using
   `@endo/module-source`).
 - `packages/ses/test262/*.js` (5 files driving `@endo/test262-runner`)
@@ -462,21 +462,21 @@ Per cycle, the sequence is the same:
    marking each touched source package as `patch` (the synthetic
    packages are `private` and need no changeset).
 5. After all five cuts land, flip `turbo.json` from `dependsOn:
-   ["build"]` to `^build` for `test` and `lint`, and update
+["build"]` to `^build` for `test` and `lint`, and update
    `turbo.json.md` to record that the cycle is gone.
 
 The five cuts are independent; they can land in five separate PRs in
 any order.
 Recommended order (smallest to largest):
 
-| # | Cut | Estimated diff | Synthetic package |
-|---|-----|----------------|-------------------|
-| 1 | Cut 3 (delete unused `@endo/zip` devDeps) | ~5 lines | none |
-| 2 | Cut 4 (`@endo/harden-test`) | ~50 lines | `@endo/harden-test` |
-| 3 | Cut 2 (`@endo/hex-test`) | ~30 lines | `@endo/hex-test` |
-| 4 | Cut 5 (`@endo/eventual-send-test`) | ~150 lines | `@endo/eventual-send-test` |
-| 5 | Cut 1 (`@endo/ses-test`) | ~600 lines | `@endo/ses-test` |
-| 6 | turbo.json: switch to `^build` | ~10 lines | none |
+| #   | Cut                                       | Estimated diff | Synthetic package          |
+| --- | ----------------------------------------- | -------------- | -------------------------- |
+| 1   | Cut 3 (delete unused `@endo/zip` devDeps) | ~5 lines       | none                       |
+| 2   | Cut 4 (`@endo/harden-test`)               | ~50 lines      | `@endo/harden-test`        |
+| 3   | Cut 2 (`@endo/hex-test`)                  | ~30 lines      | `@endo/hex-test`           |
+| 4   | Cut 5 (`@endo/eventual-send-test`)        | ~150 lines     | `@endo/eventual-send-test` |
+| 5   | Cut 1 (`@endo/ses-test`)                  | ~600 lines     | `@endo/ses-test`           |
+| 6   | turbo.json: switch to `^build`            | ~10 lines      | none                       |
 
 After PR 5 the SCC collapses to size 0 in the combined graph; the
 final PR makes the change visible to turbo.
@@ -537,7 +537,7 @@ cycle-forming devDeps.
 They are not pure test helpers; they are full SES installers and AVA
 wrappers that are also legitimately consumed at runtime by downstream
 packages.
-The synthetic-package approach moves the *consumers* (the tests
+The synthetic-package approach moves the _consumers_ (the tests
 themselves), not the helpers, which preserves the helpers' public
 surface.
 Each `<subsystem>-test` package keeps its own copy of any small

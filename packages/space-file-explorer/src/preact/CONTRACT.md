@@ -88,12 +88,12 @@ classes and DOM nesting.
   `deleteEntryAction`/`moveEntry`.
 
 - **TreeView** `{ activeSource, expandedDirs, treeChildren, treeLoadingDirs,
-  treeCurrentDir, selectedFile, actions }`. Source: `renderTree` +
+treeCurrentDir, selectedFile, actions }`. Source: `renderTree` +
   `renderTreeNode` (L2260–2322), recursive. Maps row events to
   `actions.toggleTreeDir`/`openFile`/`openGitEntry`/mutations.
 
 - **EntryRow** `{ entry, parentPath, selected, readOnly, depth, expanded,
-  onOpen, onRename, onDelete, onMove }` — **purely presentational**, raises
+onOpen, onRename, onDelete, onMove }` — **purely presentational**, raises
   semantic callbacks; holds no actions/powers. `onOpen(entry)` = primary
   activation (parent decides drill/toggle/openFile/openGit). `onRename(entry)`,
   `onDelete(entry)`, `onMove(fromParent, name, toParent, type)` for DnD.
@@ -103,8 +103,8 @@ classes and DOM nesting.
 
 - **Viewer** `{ state, activeSource, actions }`. Source: `renderViewer`
   (L2524–2661). Reads `viewerCollapsed/viewerWidth/viewerMode/layerDiff/
-  viewerLoading/selectedFile/editing` and `activeSource.readOnly`. `canEdit =
-  activeSource && !readOnly && !selectedFile.binary && !selectedFile.truncated`.
+viewerLoading/selectedFile/editing` and `activeSource.readOnly`. `canEdit =
+activeSource && !readOnly && !selectedFile.binary && !selectedFile.truncated`.
   Lazily `colorize(text, language)` from `@endo/monaco-wrapper` for code/diff
   highlighting (await + guard against navigation, as the original does). Calls
   `setViewerCollapsed`, `setEditing`, `saveSelectedFile`, `setViewerWidth`
@@ -135,7 +135,7 @@ faithfully:
   so identity is stable.
 - `features` from the three `ENDO_FS_*_MODULE_URL` constants.
 - **Watchers** → a `useEffect` keyed on `[activeSourceId, viewMode,
-  <serialized visible-dir keys>]`: subscribe newly-visible dirs via
+<serialized visible-dir keys>]`: subscribe newly-visible dirs via
   `subscribeChanges`, debounce a silent `liveRefresh` (200ms), return an
   unsubscribe that cancels watchers + clears the timer. (Mirror
   `reconcileWatchers`/`scheduleLiveRefresh`/`clearWatchers`/`liveRefresh`.)

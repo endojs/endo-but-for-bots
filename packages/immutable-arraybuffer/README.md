@@ -1,6 +1,6 @@
 # `@endo/immutable-arraybuffer`
 
-This `@endo/immutable-arraybuffer` package provides a shim for a proposed new JavaScript feature: *Immutable ArrayBuffers*.
+This `@endo/immutable-arraybuffer` package provides a shim for a proposed new JavaScript feature: _Immutable ArrayBuffers_.
 A shim modifies the existing JavaScript primordials as needed to most closely emulate the feature as proposed.
 Importing `@endo/immutable-arraybuffer/shim.js` will cause these changes.
 
@@ -10,14 +10,16 @@ Below, we use the term "buffer" to refer informally to an instance of an `ArrayB
 
 Prior proposals [In-Place Resizable and Growable `ArrayBuffer`s](https://github.com/tc39/proposal-resizablearraybuffer) and [ArrayBuffer.prototype.transfer and friends](https://github.com/tc39/proposal-arraybuffer-transfer) have both reached stage 4, and so are now an official part of JavaScript.
 Altogether, `ArrayBuffer.prototype` now has the following methods:
+
 - `transfer(newByteLength?: number) :ArrayBuffer` -- move the contents of the original buffer to a new buffer, detach the original buffer, and return the new buffer.
-The new buffer will be as resizable as the original was.
+  The new buffer will be as resizable as the original was.
 - `transferToFixedLength(newByteLength?: number) :ArrayBuffer` -- like `transfer` but the new buffer is not resizable.
 - `resize(newByteLength: number) :void` -- change the size of this buffer if possible, or throw otherwise.
 - `slice(start?: number, end?: number) :ArrayBuffer` -- Return a new buffer whose initial contents are a copy of that region of the original buffer.
-The original buffer is unmodified.
+  The original buffer is unmodified.
 
 and the following read-only accessor properties
+
 - `detached: boolean` -- is this buffer detached, or are its contents still available from this buffer object?
 - `resizable: boolean` -- can this buffer be resized, or is it fixed-length?
 - `byteLength: number` -- how big are the current contents of this buffer?
@@ -39,15 +41,17 @@ Likewise, to reflect an OCapN byte-array well into the JavaScript language, we n
 There currently are none.
 A frozen `Uint8Array` would provide exactly the low-level machinery we need.
 
-## Overview of the *Immutable ArrayBuffer* Proposal
+## Overview of the _Immutable ArrayBuffer_ Proposal
 
-The *Immutable ArrayBuffer* proposal introduces additional methods and read-only accessor properties to `ArrayBuffer.prototype` that fit naturally into those explained above.
+The _Immutable ArrayBuffer_ proposal introduces additional methods and read-only accessor properties to `ArrayBuffer.prototype` that fit naturally into those explained above.
 Just as a buffer can be resizable or not, or detached or not, this proposal enables buffers to be immutable or not.
 Just as `transferToFixedSize` moves the contents of a original buffer into a newly created non-resizable buffer, this proposal provides a transfer operation that moves the contents of an original original buffer into a newly created immutable buffer.
 Altogether, this proposal only adds to `ArrayBuffer.prototype` one method
+
 - `transferToImmutable() :ArrayBuffer` -- move the contents of the original buffer into a new immutable buffer, detach the original buffer, and return the new buffer.
 
 and one read-only accessor
+
 - `immutable: boolean` -- is this buffer immutable, or can its contents be changed?
 
 An immutable buffer cannot be detached or resized.
@@ -66,18 +70,19 @@ The Immutable ArrayBuffer proposal has reached stage 3; at that threshold an ear
 
 ## Caveats
 
-The *Immutable ArrayBuffer* shim falls short of the proposal in the following ways
+The _Immutable ArrayBuffer_ shim falls short of the proposal in the following ways
+
 - The shim relies on the underlying platform having either `structuredClone` or `ArrayBuffer.prototype.transfer`.
-See [Platform support for `transferToImmutable`](#platform-support-for-transfertoimmutable) below for the per-engine version thresholds and the guidance on when feature-testing is necessary.
-Without either, the shim still shims `ArrayBuffer.prototype.sliceToImmutable` but omits `ArrayBuffer.prototype.transferToImmutable`.
+  See [Platform support for `transferToImmutable`](#platform-support-for-transfertoimmutable) below for the per-engine version thresholds and the guidance on when feature-testing is necessary.
+  Without either, the shim still shims `ArrayBuffer.prototype.sliceToImmutable` but omits `ArrayBuffer.prototype.transferToImmutable`.
 - The shim's emulated immutable buffers are not real `ArrayBuffer` exotic objects.
-If they were, the shim would not be able to protect them from being written.
-Even though they implement the full proposed `ArrayBuffer` API, they cannot be plug-compatible: they cannot be used as the backing stores of `DataView`s or `TypedArray`s.
-Perhaps follow-on shims might modify `DataView` and `TypedArray` to emulate that as well, but that is hard and beyond the ambition of this shim.
+  If they were, the shim would not be able to protect them from being written.
+  Even though they implement the full proposed `ArrayBuffer` API, they cannot be plug-compatible: they cannot be used as the backing stores of `DataView`s or `TypedArray`s.
+  Perhaps follow-on shims might modify `DataView` and `TypedArray` to emulate that as well, but that is hard and beyond the ambition of this shim.
 - Unlike genuine `ArrayBuffer` or `SharedArrayBuffer` exotic objects, the shim's emulated immutable buffers cannot be cloned or transfered between JS threads.
-- This is a plain *JavaScript* shim, not by itself a *Hardened JavaScript* polyfill/shim.
-Thus, the objects and function it creates are not hardened by this shim itself.
-Rather, the ses-shim is expected to import this, and then treat the resulting objects as if they were additional primordials, to be hardened during `lockdown`'s harden phase.
+- This is a plain _JavaScript_ shim, not by itself a _Hardened JavaScript_ polyfill/shim.
+  Thus, the objects and function it creates are not hardened by this shim itself.
+  Rather, the ses-shim is expected to import this, and then treat the resulting objects as if they were additional primordials, to be hardened during `lockdown`'s harden phase.
 
 ## Platform support for `transferToImmutable`
 
@@ -90,26 +95,26 @@ A cell marked **either** means the platform has both `structuredClone` and `Arra
 
 ### Engines
 
-| Engine | First version with `structuredClone` | First version with `ArrayBuffer.prototype.transfer` | Status as of shipping today |
-| --- | --- | --- | --- |
-| V8 (Chromium) | 9.8 (with Chrome 98, Feb 2022) | 11.4 (with Chrome 114, May 2023) | **either** |
-| SpiderMonkey (Firefox) | shipped with Firefox 94 (Nov 2021) | shipped with Firefox 122 (Jan 2024) | **either** |
-| JavaScriptCore (WebKit) | shipped with Safari 15.4 (Mar 2022) | shipped with Safari 17.4 (Mar 2024) | **either** |
-| Hermes | not implemented | not implemented | **deficient** |
+| Engine                  | First version with `structuredClone` | First version with `ArrayBuffer.prototype.transfer` | Status as of shipping today |
+| ----------------------- | ------------------------------------ | --------------------------------------------------- | --------------------------- |
+| V8 (Chromium)           | 9.8 (with Chrome 98, Feb 2022)       | 11.4 (with Chrome 114, May 2023)                    | **either**                  |
+| SpiderMonkey (Firefox)  | shipped with Firefox 94 (Nov 2021)   | shipped with Firefox 122 (Jan 2024)                 | **either**                  |
+| JavaScriptCore (WebKit) | shipped with Safari 15.4 (Mar 2022)  | shipped with Safari 17.4 (Mar 2024)                 | **either**                  |
+| Hermes                  | not implemented                      | not implemented                                     | **deficient**               |
 
 The `structuredClone` global is a Web/HTML platform feature exposed to script through the engine's host environment; the dates above are for the host build that first exposed it.
 `ArrayBuffer.prototype.transfer` is a TC39 language feature (ES2024) implemented in the engine itself.
 
 ### Runtimes and browsers
 
-| Runtime / browser | First version with `structuredClone` | First version with `ArrayBuffer.prototype.transfer` | Status as of shipping today |
-| --- | --- | --- | --- |
-| Node.js | 17.0.0 (Oct 2021) | 21.0.0 (Oct 2023) | **either** on Node 21 and later; **structuredClone only** on Node 17 through 20; **deficient** on Node 16 and earlier |
-| Deno | 1.14 (Sep 2021) | 1.33 (May 2023) | **either** on Deno 1.33 and later |
-| Chrome / Edge | 98 (Feb 2022) | 114 (May 2023) | **either** on Chrome 114 and later; **structuredClone only** on Chrome 98 through 113 |
-| Firefox | 94 (Nov 2021) | 122 (Jan 2024) | **either** on Firefox 122 and later; **structuredClone only** on Firefox 94 through 121 |
-| Safari | 15.4 (Mar 2022) | 17.4 (Mar 2024) | **either** on Safari 17.4 and later; **structuredClone only** on Safari 15.4 through 17.3 |
-| React Native (Hermes) | not implemented | not implemented | **deficient** |
+| Runtime / browser     | First version with `structuredClone` | First version with `ArrayBuffer.prototype.transfer` | Status as of shipping today                                                                                           |
+| --------------------- | ------------------------------------ | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Node.js               | 17.0.0 (Oct 2021)                    | 21.0.0 (Oct 2023)                                   | **either** on Node 21 and later; **structuredClone only** on Node 17 through 20; **deficient** on Node 16 and earlier |
+| Deno                  | 1.14 (Sep 2021)                      | 1.33 (May 2023)                                     | **either** on Deno 1.33 and later                                                                                     |
+| Chrome / Edge         | 98 (Feb 2022)                        | 114 (May 2023)                                      | **either** on Chrome 114 and later; **structuredClone only** on Chrome 98 through 113                                 |
+| Firefox               | 94 (Nov 2021)                        | 122 (Jan 2024)                                      | **either** on Firefox 122 and later; **structuredClone only** on Firefox 94 through 121                               |
+| Safari                | 15.4 (Mar 2022)                      | 17.4 (Mar 2024)                                     | **either** on Safari 17.4 and later; **structuredClone only** on Safari 15.4 through 17.3                             |
+| React Native (Hermes) | not implemented                      | not implemented                                     | **deficient**                                                                                                         |
 
 Node 22 (active LTS at the time of writing) and Node 24 (current) both have `ArrayBuffer.prototype.transfer` and use the preferred path.
 Node 18 and Node 20 reach the structured-clone fallback path; both are past or near end-of-life under the Node release schedule.

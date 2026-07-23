@@ -1,13 +1,14 @@
 # `@endo/endo-fs` from-git Adapter
 
-| | |
-|---|---|
-| **Created** | 2026-05-28 |
-| **Updated** | 2026-05-28 |
-| **Author** | kumavis (prompted) |
-| **Status** | In Progress |
+|             |                    |
+| ----------- | ------------------ |
+| **Created** | 2026-05-28         |
+| **Updated** | 2026-05-28         |
+| **Author**  | kumavis (prompted) |
+| **Status**  | In Progress        |
 
 > **Read after:**
+>
 > - [daemon-git-capability](daemon-git-capability.md) — the `Git` cap this design extends with one method.
 > - [endo-fs-backend-seam](endo-fs-backend-seam.md) — the `FsBackend` + `wrapBackend(...)` architecture this adapter targets.
 > - The `@endo/endo-fs` `README.md` and `DESIGN.md` — the `Filesystem` / `Directory` / `File` / `OpenFile` shape this adapts to.
@@ -58,7 +59,7 @@ It is sufficient for compartment-mapper imports and other generic tree consumers
 - no `BlobRef` — no path into `@endo/endo-fs`'s CAS-backed read cache (`withCachedReads`);
 - no `Cursor` paginated listing — large directories materialize their full entry list per call;
 - no `brands()` — cannot participate in `compose` / `bind` cycle detection;
-- the `from-mount.js` adapter (Mount → endo-fs) uses path-hashed QIDs and `version: 0n`, which is a sound choice for a *live* worktree but a worse fit for an immutable historical tree where the natural QID source is the OID itself.
+- the `from-mount.js` adapter (Mount → endo-fs) uses path-hashed QIDs and `version: 0n`, which is a sound choice for a _live_ worktree but a worse fit for an immutable historical tree where the natural QID source is the OID itself.
 
 The `@endo/endo-fs` README already names the gap:
 
@@ -142,6 +143,7 @@ Blob bytes are NOT cached at this layer; callers that want a CAS-backed cache co
 
 > **Superseded by the `## Status` section.**
 > The shipped implementation delegates QID and `BlobRef` synthesis to `wrapBackend`, so:
+>
 > - `qid.pathId` is the path hash from `synthQid(path, kind)`, not the git OID.
 > - `BlobRef.getInfo()` reports `algorithm: 'sha256'` (SHA-256 of the captured bytes), not `git-sha1`; the git OID is not exposed through the `BlobRef` shape.
 >
@@ -274,10 +276,10 @@ Pair `Git.filesystemAt(ref)` with `Git.resolveTree(ref)` / `lsTree(treeOid)` fro
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
+| Design                                            | Relationship                                                                               |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | [daemon-git-capability](daemon-git-capability.md) | The `EndoGit` capability this method lives on; the backend primitives are also wired here. |
-| [platform-fs](platform-fs.md) | Parallel read-surface vocabulary in `@endo/platform`. Not consumed; named for orientation. |
+| [platform-fs](platform-fs.md)                     | Parallel read-surface vocabulary in `@endo/platform`. Not consumed; named for orientation. |
 
 The daemon package takes a new dependency on `@endo/endo-fs` to import its interface guards (`FilesystemInterface`, `DirectoryInterface`, etc.) and shared helpers.
 

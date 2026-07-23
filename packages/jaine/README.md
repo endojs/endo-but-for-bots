@@ -88,15 +88,14 @@ She reads configuration from environment variables at setup time.
 
 ### LLM provider
 
-The main provider is used for the composer and executor (Layers 2 and
-3) -- the expensive, high-quality calls.
+The main provider is used for the composer and executor (Layers 2 and 3) -- the expensive, high-quality calls.
 
-| Variable | Default | Description |
-|---|---|---|
-| `ENDO_LLM_HOST` | `http://localhost:11434/v1` | LLM API base URL |
-| `ENDO_LLM_MODEL` | `qwen3` | Model name |
-| `ENDO_LLM_AUTH_TOKEN` | `ollama` | API key / auth token |
-| `ENDO_LLM_NAME` | `default` | Named provider config |
+| Variable              | Default                     | Description           |
+| --------------------- | --------------------------- | --------------------- |
+| `ENDO_LLM_HOST`       | `http://localhost:11434/v1` | LLM API base URL      |
+| `ENDO_LLM_MODEL`      | `qwen3`                     | Model name            |
+| `ENDO_LLM_AUTH_TOKEN` | `ollama`                    | API key / auth token  |
+| `ENDO_LLM_NAME`       | `default`                   | Named provider config |
 
 ### Fast provider (optional)
 
@@ -104,11 +103,11 @@ The fast provider is used for the router (Layer 1) -- quick, cheap
 decisions like "should I reply to this message?"
 If not configured, the router uses the main provider.
 
-| Variable | Default | Description |
-|---|---|---|
-| `ENDO_LLM_FAST_MODEL` | *(none -- required to enable)* | Fast model name |
-| `ENDO_LLM_FAST_HOST` | falls back to `ENDO_LLM_HOST` | API base URL |
-| `ENDO_LLM_FAST_AUTH_TOKEN` | falls back to `ENDO_LLM_AUTH_TOKEN` | API key |
+| Variable                   | Default                             | Description     |
+| -------------------------- | ----------------------------------- | --------------- |
+| `ENDO_LLM_FAST_MODEL`      | _(none -- required to enable)_      | Fast model name |
+| `ENDO_LLM_FAST_HOST`       | falls back to `ENDO_LLM_HOST`       | API base URL    |
+| `ENDO_LLM_FAST_AUTH_TOKEN` | falls back to `ENDO_LLM_AUTH_TOKEN` | API key         |
 
 Since host and auth token default to the main provider's values, you
 typically only need to set `ENDO_LLM_FAST_MODEL`.
@@ -173,14 +172,14 @@ conflicts.
 
 ## File overview
 
-| File | Role |
-|---|---|
-| `agent.js` | Factory entry point + `spawnWorkerLoop` orchestrator |
-| `router.js` | Layer 1: inbox rules + LLM channel routing |
-| `composer.js` | Layer 2: response generation with `delegate()` |
-| `executor.js` | Layer 3: full tool set, agentic loop |
-| `driver.js` | Thin caplet that reads config and starts the loop |
-| `setup.js` | Auto-provisioning for `ENDO_EXTRA` / `endo run` |
-| `jaine-factory-setup.js` | Manual factory creation (used by reload) |
-| `logger.js` | File-backed logger (`logs/jaine.log`) |
-| `reload.sh` | Dev iteration script |
+| File                     | Role                                                 |
+| ------------------------ | ---------------------------------------------------- |
+| `agent.js`               | Factory entry point + `spawnWorkerLoop` orchestrator |
+| `router.js`              | Layer 1: inbox rules + LLM channel routing           |
+| `composer.js`            | Layer 2: response generation with `delegate()`       |
+| `executor.js`            | Layer 3: full tool set, agentic loop                 |
+| `driver.js`              | Thin caplet that reads config and starts the loop    |
+| `setup.js`               | Auto-provisioning for `ENDO_EXTRA` / `endo run`      |
+| `jaine-factory-setup.js` | Manual factory creation (used by reload)             |
+| `logger.js`              | File-backed logger (`logs/jaine.log`)                |
+| `reload.sh`              | Dev iteration script                                 |

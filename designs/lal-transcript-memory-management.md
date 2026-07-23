@@ -1,11 +1,11 @@
 # Lal Transcript Memory Management
 
-| | |
-|---|---|
-| **Created** | 2026-03-05 |
-| **Updated** | 2026-03-05 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-03-05            |
+| **Updated** | 2026-03-05            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## What is the Problem Being Solved?
 
@@ -118,12 +118,12 @@ producing a partial transcript.
 
 ## Decisions
 
-| Aspect | Decision |
-|--------|----------|
-| Node lifetime | Persists for the lifetime of the agent |
+| Aspect                | Decision                                      |
+| --------------------- | --------------------------------------------- |
+| Node lifetime         | Persists for the lifetime of the agent        |
 | Relationship to inbox | Independent; nodes outlive dismissed messages |
-| Missing node handling | Error, not silent truncation |
-| Storage cleanup | User-initiated (discard agent or export) |
+| Missing node handling | Error, not silent truncation                  |
+| Storage cleanup       | User-initiated (discard agent or export)      |
 
 ## Out of Scope
 

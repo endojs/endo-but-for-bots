@@ -1,11 +1,11 @@
 # OCapN TCP-for-Test Extraction
 
-| | |
-|---|---|
-| **Created** | 2026-02-14 |
-| **Updated** | 2026-02-24 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-14            |
+| **Updated** | 2026-02-24            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## What is the Problem Being Solved?
 
@@ -93,13 +93,13 @@ Each network should implement its own crossed-hellos strategy.
 
 ### Affected Files
 
-| File | Change |
-|------|--------|
-| `packages/ocapn/src/client/handshake.js` | Extract into tcp-for-test or delete |
-| `packages/ocapn/src/client/index.js` | Remove handshake calls from `establishSession` |
+| File                                            | Change                                                     |
+| ----------------------------------------------- | ---------------------------------------------------------- |
+| `packages/ocapn/src/client/handshake.js`        | Extract into tcp-for-test or delete                        |
+| `packages/ocapn/src/client/index.js`            | Remove handshake calls from `establishSession`             |
 | `packages/ocapn/src/netlayers/tcp-test-only.js` | Absorb handshake logic; implement `OcapnNetwork.connect()` |
-| `packages/ocapn/src/client/types.js` | Define `NetworkSession` type |
-| `packages/ocapn/test/` | Update test utilities to work with new session interface |
+| `packages/ocapn/src/client/types.js`            | Define `NetworkSession` type                               |
+| `packages/ocapn/test/`                          | Update test utilities to work with new session interface   |
 
 ### Dependency
 

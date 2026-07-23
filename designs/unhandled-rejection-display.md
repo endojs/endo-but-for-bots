@@ -1,12 +1,12 @@
 # Unhandled-Rejection Display for CapTP Disconnect Reasons
 
-| | |
-|---|---|
-| **Created** | 2026-05-10 |
-| **Updated** | 2026-05-18 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
-| **Source** | [endojs/endo-but-for-bots#171](https://github.com/endojs/endo-but-for-bots/issues/171), repro test PR [#174](https://github.com/endojs/endo-but-for-bots/pull/174) |
+|             |                                                                                                                                                                    |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Created** | 2026-05-10                                                                                                                                                         |
+| **Updated** | 2026-05-18                                                                                                                                                         |
+| **Author**  | Kris Kowal (prompted)                                                                                                                                              |
+| **Status**  | **Complete**                                                                                                                                                       |
+| **Source**  | [endojs/endo-but-for-bots#171](https://github.com/endojs/endo-but-for-bots/issues/171), repro test PR [#174](https://github.com/endojs/endo-but-for-bots/pull/174) |
 
 ## Status
 
@@ -155,8 +155,11 @@ const renderRejection = reason => {
     typeof reason === 'object' &&
     /** @type {any} */ (reason)['@@error'] === true
   ) {
-    const { name = 'Error', message = '', stack = '' } =
-      /** @type {any} */ (reason);
+    const {
+      name = 'Error',
+      message = '',
+      stack = '',
+    } = /** @type {any} */ (reason);
     return `${name}: ${message}\n${stack}`;
   }
   if (isPassable(reason)) {
@@ -177,10 +180,10 @@ strip them to `{}` or render them as `[object Object]`.
 
 ### Where the change goes
 
-| File | Change |
-|---|---|
-| `packages/daemon/src/connection.js` | Update `messageToBytes` to encode Error reasons; replace inline `defaultOnReject` with the new `renderRejection` helper. |
-| `packages/daemon/src/connection.js` (new export) | Export `renderRejection` so other diagnostic sites in the daemon can use the same formatter. |
+| File                                                    | Change                                                                                                                                        |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/daemon/src/connection.js`                     | Update `messageToBytes` to encode Error reasons; replace inline `defaultOnReject` with the new `renderRejection` helper.                      |
+| `packages/daemon/src/connection.js` (new export)        | Export `renderRejection` so other diagnostic sites in the daemon can use the same formatter.                                                  |
 | `packages/daemon/test/disconnect-error-display.test.js` | Already in place from PR [#174](https://github.com/endojs/endo-but-for-bots/pull/174); the implementation PR adds further coverage as needed. |
 
 The `renderRejection` helper lives next to `messageToBytes` because the two
@@ -299,7 +302,7 @@ Additional tests the implementation PR should add:
    Currently the trap lives in the daemon, but `@endo/captp` itself defines
    `onReject` as a callback option (`packages/captp/src/captp.js` line 267)
    with a default that does `console.error('CapTP', ourId, 'exception:',
-   err)`.
+err)`.
    That default has the same `{}` rendering bug for any captp consumer that
    does not provide a custom `onReject`.
    The implementation PR should consider lifting the helper into `@endo/captp`

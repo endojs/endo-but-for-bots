@@ -1,16 +1,16 @@
 # Endo Content Locators (Magnet URNs)
 
-| | |
-|---|---|
-| **Created** | 2026-07-10 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-07-10            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## What is the Problem Being Solved?
 
 An Endo **locator** ([daemon-locator-reference](daemon-locator-reference.md)) is
-a URL that identifies a **formula** on the Endo network and says *how to reach
-the peer that hosts it*. Its connection hints, the `@`-delimited path components
+a URL that identifies a **formula** on the Endo network and says _how to reach
+the peer that hosts it_. Its connection hints, the `@`-delimited path components
 after the formula address, are ephemeral transport addresses. They are not
 stored with the formula: they are looked up fresh from the network layer each
 time a locator is produced for sharing, so a peer that changes networks (Wi-Fi
@@ -31,15 +31,15 @@ Many transfers do not want those constraints. A recipient may hold only a short
 string, not a live capability. The bytes may be large, cacheable, mirrorable, or
 swarmable, and belong on a data plane built for bulk transfer (HTTP, Git over
 HTTP, BitTorrent) rather than on the CapTP control channel. This is exactly the
-split [daemon-git-remotes](daemon-git-remotes.md) already draws for git: *CapTP
+split [daemon-git-remotes](daemon-git-remotes.md) already draws for git: _CapTP
 carries control-plane authority while packfile bytes travel on a bounded HTTPS
-data plane outside CapTP messages*. This design generalizes that split to any
+data plane outside CapTP messages_. This design generalizes that split to any
 readable.
 
 A **content locator** is the content-side analogue of a locator: a string that
 identifies a readable-blob or readable-tree **by its content**, independent of
-where it lives, and carries **data-plane connection hints** that say *how to
-fetch the bytes out of band*. Just as a locator's transport hints come from
+where it lives, and carries **data-plane connection hints** that say _how to
+fetch the bytes out of band_. Just as a locator's transport hints come from
 `@nets` and depend on configuration, a content locator's data-plane hints come
 from the content analogue of `@nets` and depend on configuration: which back
 planes the agent's **Gateway** is currently vending. Content locators are the
@@ -54,16 +54,16 @@ The content locator mirrors the transport locator point for point. The durable
 part names identity; the ephemeral part carries configuration-dependent hints
 looked up fresh at share time.
 
-| Axis | Transport locator (existing) | Content locator (this design) |
-|---|---|---|
-| Identifies | a **formula** (who / which / what kind) | **content** (a readable-blob or readable-tree, by hash) |
-| Scheme | `endo://` URL (names a **location**: a peer) | `magnet:` URN (names **content**, location-independent) |
-| Durable identity | `peerKey` + `formulaAddress` + `type` | SHA-256 content address (`xt`) |
-| Ephemeral hints | transport addresses (`@`-delimited path) | data-plane sources (`ws` / `xs` / `as` / `tr`) |
-| Hints depend on | `@nets` (`NETS`) advertised transports | `@planes` vended data planes (see below) |
-| Hints resolved | fresh at `locate`, via `getAllNetworkAddresses` | fresh at `locateContent`, via `getAllContentSources` |
-| Empty-config result | locator with no connection hints | content locator with `xt` only, no sources |
-| Verified against | Ed25519 keypair at OCapN-Noise handshake | the `xt` hash, after the bytes arrive |
+| Axis                | Transport locator (existing)                    | Content locator (this design)                           |
+| ------------------- | ----------------------------------------------- | ------------------------------------------------------- |
+| Identifies          | a **formula** (who / which / what kind)         | **content** (a readable-blob or readable-tree, by hash) |
+| Scheme              | `endo://` URL (names a **location**: a peer)    | `magnet:` URN (names **content**, location-independent) |
+| Durable identity    | `peerKey` + `formulaAddress` + `type`           | SHA-256 content address (`xt`)                          |
+| Ephemeral hints     | transport addresses (`@`-delimited path)        | data-plane sources (`ws` / `xs` / `as` / `tr`)          |
+| Hints depend on     | `@nets` (`NETS`) advertised transports          | `@planes` vended data planes (see below)                |
+| Hints resolved      | fresh at `locate`, via `getAllNetworkAddresses` | fresh at `locateContent`, via `getAllContentSources`    |
+| Empty-config result | locator with no connection hints                | content locator with `xt` only, no sources              |
+| Verified against    | Ed25519 keypair at OCapN-Noise handshake        | the `xt` hash, after the bytes arrive                   |
 
 A locator is a **URL** because it names a location (a peer to contact). A content
 locator is a **URN** because it names content by hash regardless of location.
@@ -77,12 +77,12 @@ magnet:?xt=urn:endo-blob:{sha256hex}&dn={displayName}&xl={byteLength}&ws={source
 magnet:?xt=urn:endo-tree:{sha256hex}&dn={displayName}&ws={source}
 ```
 
-| Parameter | Role | Analogue |
-|---|---|---|
-| `xt` | **exact topic**: the durable content identity. `urn:endo-blob:{hash}` for a readable-blob, `urn:endo-tree:{hash}` for a readable-tree. The hash is the SHA-256 content address the CAS already keys on (`store-sha256/`, [daemon-cas-management](daemon-cas-management.md)). | the `formulaAddress` + `type` of a locator |
-| `dn` | display name (descriptive only) | none |
-| `xl` | exact length in bytes (descriptive only) | none |
-| `ws` / `xs` / `as` / `tr` | **data-plane connection hints**, each `<plane-prefix>:<plane-payload>`, one per acquisition source | the `@`-delimited `at` hints of a locator |
+| Parameter                 | Role                                                                                                                                                                                                                                                                         | Analogue                                   |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `xt`                      | **exact topic**: the durable content identity. `urn:endo-blob:{hash}` for a readable-blob, `urn:endo-tree:{hash}` for a readable-tree. The hash is the SHA-256 content address the CAS already keys on (`store-sha256/`, [daemon-cas-management](daemon-cas-management.md)). | the `formulaAddress` + `type` of a locator |
+| `dn`                      | display name (descriptive only)                                                                                                                                                                                                                                              | none                                       |
+| `xl`                      | exact length in bytes (descriptive only)                                                                                                                                                                                                                                     | none                                       |
+| `ws` / `xs` / `as` / `tr` | **data-plane connection hints**, each `<plane-prefix>:<plane-payload>`, one per acquisition source                                                                                                                                                                           | the `@`-delimited `at` hints of a locator  |
 
 The standard magnet letters are reused deliberately: `ws` (**web seed**, BEP 19)
 is a direct HTTP URL to the bytes; `as` (acceptable source) is a fallback web
@@ -107,14 +107,14 @@ name-resolution family (`identify` / `locate` / `lookup`,
 Content-locate methods are defined once in `directory.js` and carried up through
 `host.js` / `guest.js` by destructuring, the same shape as `writeLocator`.
 
-| Method | Signature | Description |
-|---|---|---|
-| `locateContent(...path)` | `name → contentLocator` | Resolve a pet name for a readable-blob or readable-tree to a content locator (magnet URN). Rejects if the named formula is not content-bearing. |
-| `listContent(...path)` | `name → Record<name, contentLocator>` | Content analogue of `listLocators`, for a directory of content-bearing formulas. |
-| `storeContent(...path)` | `name → contentLocator` | The explicit publish verb behind `locateContent`'s resolution: mint the per-plane sharing capabilities over the agent's `@planes`, ask each vended plane to begin serving the named readable, and return the content locator carrying the freshly vended source hints. (Exact store-side semantics are elaborated at implementation; recorded here as the maintainer-confirmed member of the method family.) |
-| `loadContent(contentLocator)` | `contentLocator → ReadableBlob \| ReadableTree` | Fetch the content over the first reachable advertised data plane, **verifying every byte against `xt`**, and return the readable as a **new local content-addressed formula** (copy semantics, matching `checkin`). Falls back across sources; falls back to in-band CapTP if a capability to the origin is also held. |
-| `reverseLocateContent(contentLocator)` | `contentLocator → name[]` | Find pet names whose content matches a content locator's `xt` hash. |
-| `internalizeContentLocator(contentLocator)` | `contentLocator → { hash, kind, sources }` | Parse and validate a content locator: extract the content hash and kind, and forward the source hints to the fetch layer (analogue of `internalizeLocator` forwarding transport hints to `addPeerInfo`). |
+| Method                                      | Signature                                       | Description                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `locateContent(...path)`                    | `name → contentLocator`                         | Resolve a pet name for a readable-blob or readable-tree to a content locator (magnet URN). Rejects if the named formula is not content-bearing.                                                                                                                                                                                                                                                              |
+| `listContent(...path)`                      | `name → Record<name, contentLocator>`           | Content analogue of `listLocators`, for a directory of content-bearing formulas.                                                                                                                                                                                                                                                                                                                             |
+| `storeContent(...path)`                     | `name → contentLocator`                         | The explicit publish verb behind `locateContent`'s resolution: mint the per-plane sharing capabilities over the agent's `@planes`, ask each vended plane to begin serving the named readable, and return the content locator carrying the freshly vended source hints. (Exact store-side semantics are elaborated at implementation; recorded here as the maintainer-confirmed member of the method family.) |
+| `loadContent(contentLocator)`               | `contentLocator → ReadableBlob \| ReadableTree` | Fetch the content over the first reachable advertised data plane, **verifying every byte against `xt`**, and return the readable as a **new local content-addressed formula** (copy semantics, matching `checkin`). Falls back across sources; falls back to in-band CapTP if a capability to the origin is also held.                                                                                       |
+| `reverseLocateContent(contentLocator)`      | `contentLocator → name[]`                       | Find pet names whose content matches a content locator's `xt` hash.                                                                                                                                                                                                                                                                                                                                          |
+| `internalizeContentLocator(contentLocator)` | `contentLocator → { hash, kind, sources }`      | Parse and validate a content locator: extract the content hash and kind, and forward the source hints to the fetch layer (analogue of `internalizeLocator` forwarding transport hints to `addPeerInfo`).                                                                                                                                                                                                     |
 
 Only content-bearing formulas can be content-located: a readable-blob, a
 readable-tree, and the structurally-compatible read surfaces from
@@ -143,7 +143,7 @@ back-plane and report the reachable source URL for it.
 `NETS` is for reachability:
 
 - **What content I can serve, and how to fetch it** = the `@planes` contents
-  (advertised data planes), the content analogue of *how to reach me* = `NETS`.
+  (advertised data planes), the content analogue of _how to reach me_ = `NETS`.
 - A content-locate call resolves `getAllContentSources(planesDirectoryId, hash)`
   the way `locate` resolves `getAllNetworkAddresses(networksDirectoryId)`: it
   asks each vended data plane for a source hint for this hash and appends the
@@ -151,7 +151,7 @@ back-plane and report the reachable source URL for it.
 - A newly incarnated agent's `@planes` starts **empty** and its creator may
   populate it, mirroring the empty-`NETS` default. An empty `@planes` produces
   content locators with `xt` only, the persona-privacy analogue: the agent
-  proves what the content *is* without advertising any place to get it.
+  proves what the content _is_ without advertising any place to get it.
 
 Two agents on one daemon can present entirely different content footprints (one
 public-HTTP-mirrored, one serve-nothing) while sharing the underlying process,
@@ -173,13 +173,19 @@ interface ContentDataPlane {
   // Ask this plane (via its @planes sharing capability) to begin serving the
   // content and return the source hint(s) to append to a content locator.
   // Returns [] if this plane cannot serve the given content right now.
-  source(hash: string, kind: 'blob' | 'tree', share: DataPlaneShare):
-    Promise<ContentSourceHint[]>;
+  source(
+    hash: string,
+    kind: 'blob' | 'tree',
+    share: DataPlaneShare,
+  ): Promise<ContentSourceHint[]>;
 
   // Fetch bytes for the content from a source hint. The caller verifies the
   // stream against `hash`; a plane never returns unverified content as trusted.
-  fetch(hint: ContentSourceHint, hash: string, kind: 'blob' | 'tree'):
-    Promise<ReadableBlob | ReadableTree>;
+  fetch(
+    hint: ContentSourceHint,
+    hash: string,
+    kind: 'blob' | 'tree',
+  ): Promise<ReadableBlob | ReadableTree>;
 }
 
 type ContentSourceHint = { plane: string; payload: string };
@@ -207,7 +213,7 @@ the minimal end-to-end proof for three reasons:
    for a blob the agent holds is the smallest possible new surface on machinery
    that is built.
 2. **The hash maps directly to the route.** A readable-blob's identity already
-   *is* its SHA-256 content address, so the `xt` hash and the URL path are the
+   _is_ its SHA-256 content address, so the `xt` hash and the URL path are the
    same string. No new addressing scheme is introduced.
 3. **It exercises the whole frame** (registry, `@planes`, Gateway vend,
    verifying fetch) with the least machinery, so the second and third planes
@@ -258,7 +264,7 @@ locators. An agent with no Gateway, or a Gateway vending no planes, produces
 `xt`-only content locators.
 
 Minting a sharing capability is the agent's **explicit** act. Holding a content
-locator lets the recipient *fetch and verify* specific content; it conveys **no**
+locator lets the recipient _fetch and verify_ specific content; it conveys **no**
 authority over the agent or its formulas. The `xt` hash is a
 read-capability-by-content (whoever has the bytes and the hash can check them),
 not an object capability.
@@ -268,13 +274,13 @@ not an object capability.
 Content locators sit beside, not on top of, the existing in-band transfer, and
 the boundary is explicit:
 
-| | In-band (existing) | Out-of-band content locator (this design) |
-|---|---|---|
-| Carrier | bytes inside CapTP messages | bytes on a separate data plane (HTTP / Git / BitTorrent) |
-| Needs | a live CapTP session **and** a capability to the readable | only the content-locator string; no capability, no live session |
-| CapTP role | control **and** data plane | control plane only (mint sharing cap, return URN); no bytes |
-| Good when | peer-to-peer copy over an open connection | large / cacheable / mirrorable / swarmable payloads, or recipient holds only a string |
-| Fallback | (is the fallback) | `loadContent` falls back to in-band CapTP if a capability and session are also held |
+|            | In-band (existing)                                        | Out-of-band content locator (this design)                                             |
+| ---------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Carrier    | bytes inside CapTP messages                               | bytes on a separate data plane (HTTP / Git / BitTorrent)                              |
+| Needs      | a live CapTP session **and** a capability to the readable | only the content-locator string; no capability, no live session                       |
+| CapTP role | control **and** data plane                                | control plane only (mint sharing cap, return URN); no bytes                           |
+| Good when  | peer-to-peer copy over an open connection                 | large / cacheable / mirrorable / swarmable payloads, or recipient holds only a string |
+| Fallback   | (is the fallback)                                         | `loadContent` falls back to in-band CapTP if a capability and session are also held   |
 
 The two compose. `loadContent` prefers advertised data planes and falls back to
 in-band CapTP; conversely a content locator works when no CapTP capability was
@@ -284,15 +290,15 @@ generalized from packfiles to any readable.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| [daemon-locator-reference](daemon-locator-reference.md) | The transport-locator format this mirrors; `externalizeId` / `internalizeLocator` and the ephemeral-hints discipline are the templates for the content-side duality. |
-| [daemon-agent-network-identity](daemon-agent-network-identity.md) | `@nets` (`NETS`) and `getAllNetworkAddresses`, the model `@planes` / `getAllContentSources` copies. |
-| [daemon-cas-management](daemon-cas-management.md) | The SHA-256 content-addressed store whose hash is the `xt` identity and the verification target. |
-| [platform-fs](platform-fs.md) | `ReadableBlob` / `ReadableTree` read surfaces that content locators name and that `loadContent` returns. |
-| [daemon-checkin-checkout](daemon-checkin-checkout.md) | The in-band CapTP transfer this complements; the boundary is drawn in § Relationship to in-band CapTP transfer. |
-| [daemon-web-gateway](daemon-web-gateway.md) / [gateway-package](gateway-package.md) | The Gateway that vends reachable sockets and holds the content-addressed static-asset cache the HTTP plane serves from. |
-| [daemon-git-capability](daemon-git-capability.md) / [daemon-git-remotes](daemon-git-remotes.md) | The control-plane-on-CapTP / data-plane-on-HTTP split this generalizes; the `git archive` bulk path is a tree carrier and the Git-over-HTTP follow-up's substrate. |
+| Design                                                                                          | Relationship                                                                                                                                                         |
+| ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [daemon-locator-reference](daemon-locator-reference.md)                                         | The transport-locator format this mirrors; `externalizeId` / `internalizeLocator` and the ephemeral-hints discipline are the templates for the content-side duality. |
+| [daemon-agent-network-identity](daemon-agent-network-identity.md)                               | `@nets` (`NETS`) and `getAllNetworkAddresses`, the model `@planes` / `getAllContentSources` copies.                                                                  |
+| [daemon-cas-management](daemon-cas-management.md)                                               | The SHA-256 content-addressed store whose hash is the `xt` identity and the verification target.                                                                     |
+| [platform-fs](platform-fs.md)                                                                   | `ReadableBlob` / `ReadableTree` read surfaces that content locators name and that `loadContent` returns.                                                             |
+| [daemon-checkin-checkout](daemon-checkin-checkout.md)                                           | The in-band CapTP transfer this complements; the boundary is drawn in § Relationship to in-band CapTP transfer.                                                      |
+| [daemon-web-gateway](daemon-web-gateway.md) / [gateway-package](gateway-package.md)             | The Gateway that vends reachable sockets and holds the content-addressed static-asset cache the HTTP plane serves from.                                              |
+| [daemon-git-capability](daemon-git-capability.md) / [daemon-git-remotes](daemon-git-remotes.md) | The control-plane-on-CapTP / data-plane-on-HTTP split this generalizes; the `git archive` bulk path is a tree carrier and the Git-over-HTTP follow-up's substrate.   |
 
 ## Phased implementation
 
@@ -336,7 +342,7 @@ generalized from packfiles to any readable.
    the content-side of the anonymizing-persona property.
 5. **Every plane is an untrusted data plane; `xt` is the trust root.** Bytes are
    verified against the hash before use, so mirrors, CDNs, and swarms need to be
-   *available*, not *trusted*. Wrong sources fall through.
+   _available_, not _trusted_. Wrong sources fall through.
 6. **Control plane on CapTP, data plane off it.** CapTP mints the sharing
    capability and carries the URN; the payload bytes travel on HTTP/Git/BitTorrent,
    generalizing the [daemon-git-remotes](daemon-git-remotes.md) split.
@@ -364,9 +370,9 @@ generalized from packfiles to any readable.
     canonical serialization, at which point cross-agent hash agreement is
     re-established under the new scheme.
 12. **Hint integrity/expiry is a reserved configuration surface, deferred.**
-    Content-hash verification already covers *correctness*, so no signed or
+    Content-hash verification already covers _correctness_, so no signed or
     time-bounded hint is required for safety today. A configuration surface for
-    hint integrity/expiry (the *availability and abuse* dimension of the vended
+    hint integrity/expiry (the _availability and abuse_ dimension of the vended
     socket — e.g. a signed or time-bounded `ws` URL) is explicitly reserved and
     deferred rather than designed now.
 
@@ -407,7 +413,7 @@ originally surfaced have been answered by the maintainer and moved into
 > Propose an extension to the Endo agent interface and implementations that would
 > introduce support for obtaining a **magnet URL** for the named, identified, or
 > located **readable-blob or readable-tree**. In the way the presentation of an
-> Endo *locator* may have connection hints that depend on the configuration of the
+> Endo _locator_ may have connection hints that depend on the configuration of the
 > agent, an Endo **content locator (magnet URN)** may have connection hints that
 > depend on configuration. Consider the analogue of `@nets` for an agent's content
 > locators. We already support in-band transfer mechanisms for copying or

@@ -1,22 +1,22 @@
 # Shared Canonical CBOR Primitives (`@endo/cbor`)
 
-| | |
-|---|---|
-| **Created** | 2026-07-12 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-07-12            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Proposed              |
 
 ## What is the Problem Being Solved?
 
 The repository now carries three parallel JavaScript implementations
 of the same canonical CBOR subset, plus a Rust twin:
 
-| Implementation | Lines | Subset |
-|---|---|---|
-| `packages/slots/src/cbor.js` (PR [#124](https://github.com/endojs/endo-but-for-bots/pull/124), `slot-machine` branch) | ~245 | uint, byte string, definite array, null; minimal-length heads |
-| `packages/ocapn/src/cbor/encode.js` + `decode.js` | ~1300 | the same head grammar plus text strings, maps, tags 2/3/27/280/55799, floats, simple values |
-| `packages/daemon/src/envelope.js` (`cborAppendHead` and kin) | ~130 of 389 | uint, negint, byte string, text string, definite array; minimal-length heads |
-| `rust/endo/slots/src/wire/codec.rs` (PR #124) | ~60 | the slots subset, byte-identical with `packages/slots/src/cbor.js` |
+| Implementation                                                                                                        | Lines       | Subset                                                                                      |
+| --------------------------------------------------------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------- |
+| `packages/slots/src/cbor.js` (PR [#124](https://github.com/endojs/endo-but-for-bots/pull/124), `slot-machine` branch) | ~245        | uint, byte string, definite array, null; minimal-length heads                               |
+| `packages/ocapn/src/cbor/encode.js` + `decode.js`                                                                     | ~1300       | the same head grammar plus text strings, maps, tags 2/3/27/280/55799, floats, simple values |
+| `packages/daemon/src/envelope.js` (`cborAppendHead` and kin)                                                          | ~130 of 389 | uint, negint, byte string, text string, definite array; minimal-length heads                |
+| `rust/endo/slots/src/wire/codec.rs` (PR #124)                                                                         | ~60         | the slots subset, byte-identical with `packages/slots/src/cbor.js`                          |
 
 Each of the three JavaScript files re-implements the identical core:
 write a CBOR head (major type in the top three bits, argument in the
@@ -80,7 +80,7 @@ primitives for one CBOR item; the framing sibling landed as
 `@endo/cbor-frame` — proposed as `@endo/cbors` in
 [cbors.md](cbors.md), implemented under the explicit `-frame` suffix in
 [PR #288](https://github.com/endojs/endo-but-for-bots/pull/288) — and
-names a *stream* of length-prefixed byte strings on the wire. The two
+names a _stream_ of length-prefixed byte strings on the wire. The two
 packages are complements, not competitors: `@endo/cbor-frame` frames
 opaque payload bytes, `@endo/cbor` encodes and decodes the bytes inside
 a frame. The `-frame` suffix keeps the two names from colliding.
@@ -165,7 +165,7 @@ exactly. The ocapn decoder currently reads arguments as bigints and
 converts to `Number` at every use site; in practice every argument it
 handles (byte lengths capped by message-size limits, tag numbers up
 to 55799) fits comfortably in a number, and OCapN integers themselves
-travel as tag-2/3 bignums whose *payload* is a byte string, decoded
+travel as tag-2/3 bignums whose _payload_ is a byte string, decoded
 by `readBignum` into a bigint. An 8-byte head whose value exceeds
 `Number.MAX_SAFE_INTEGER` throws a clear range error, exactly as the
 slots reader does today. Bignum values (`writeBignum`, `readBignum`)
@@ -227,13 +227,13 @@ small local fallback as the escape hatch.
 
 ### What moves, what stays
 
-| Site | Moves to `@endo/cbor` | Stays behind |
-|---|---|---|
-| `packages/slots/src/cbor.js` | The whole file (its API is a subset of the shared surface, same names) | `payload.js`, `descriptor.js` verb and descriptor shapes; the interop tests, retargeted |
-| `packages/ocapn/src/cbor/encode.js` | `writeTypeByte`, `writeTypeAndLength`, `writeTag`, `bigintToMinimalBytes`, `writeBytestring`, `writeString`, `writeBoolean`, `writeInteger` (as `writeBignum`), `writeFloat64` | `CborWriter` class (structure stack, record labels, `OcapnWriter` interface), `makeCborWriter`'s tagged-value helper, tag-number constants used by the codec layer |
-| `packages/ocapn/src/cbor/decode.js` | `parseTypeByte`, `readArgument` (as `readHead`), `readBytestring`, `readString`, `readBoolean`, `bytesToBigint`, `readTag`, `readInteger` (as `readBignum`), `readFloat64` | `CborReader` class, `peekType` type-hinting, immutability conversion, diagnostic-notation codec |
-| `packages/daemon/src/envelope.js` (optional) | `cborAppendHead`, `cborAppendInt`, `cborAppendBytes`, and the matching read side | Envelope framing and the `[handle, verb, payload, nonce]` protocol shape |
-| `rust/endo/slots/src/wire/codec.rs` | Nothing (Rust stays put) | Everything; parity is enforced by shared test vectors |
+| Site                                         | Moves to `@endo/cbor`                                                                                                                                                          | Stays behind                                                                                                                                                       |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `packages/slots/src/cbor.js`                 | The whole file (its API is a subset of the shared surface, same names)                                                                                                         | `payload.js`, `descriptor.js` verb and descriptor shapes; the interop tests, retargeted                                                                            |
+| `packages/ocapn/src/cbor/encode.js`          | `writeTypeByte`, `writeTypeAndLength`, `writeTag`, `bigintToMinimalBytes`, `writeBytestring`, `writeString`, `writeBoolean`, `writeInteger` (as `writeBignum`), `writeFloat64` | `CborWriter` class (structure stack, record labels, `OcapnWriter` interface), `makeCborWriter`'s tagged-value helper, tag-number constants used by the codec layer |
+| `packages/ocapn/src/cbor/decode.js`          | `parseTypeByte`, `readArgument` (as `readHead`), `readBytestring`, `readString`, `readBoolean`, `bytesToBigint`, `readTag`, `readInteger` (as `readBignum`), `readFloat64`     | `CborReader` class, `peekType` type-hinting, immutability conversion, diagnostic-notation codec                                                                    |
+| `packages/daemon/src/envelope.js` (optional) | `cborAppendHead`, `cborAppendInt`, `cborAppendBytes`, and the matching read side                                                                                               | Envelope framing and the `[handle, verb, payload, nonce]` protocol shape                                                                                           |
+| `rust/endo/slots/src/wire/codec.rs`          | Nothing (Rust stays put)                                                                                                                                                       | Everything; parity is enforced by shared test vectors                                                                                                              |
 
 ## Migration Path
 
@@ -275,15 +275,15 @@ slots package can adopt `@endo/cbor` before merge and shed its
 
 ## Relationship to existing packages
 
-| Package | Role |
-|---|---|
-| `@endo/cbor` (this design) | Encodes and decodes single CBOR items; the primitive layer |
-| [`@endo/cbor-frame`](cbors.md) (impl PR #288; proposed as `@endo/cbors`) | Frames a stream of length-prefixed CBOR byte strings; payload bytes are opaque |
-| [`@endo/syrup-frame`](ocapn-tcp-syrups-framing.md) (landed on `llm`; proposed as `@endo/syrups`) | The Syrup-grammar framing sibling |
-| `@endo/netstring` | The netstring-grammar framing sibling |
-| `packages/ocapn` | OCapN protocol codec; becomes a consumer |
-| `packages/slots` (PR #124) | Slot-machine wire protocol; becomes a consumer |
-| `packages/daemon` (`envelope.js`) | Engo bus envelope protocol; candidate consumer |
+| Package                                                                                          | Role                                                                           |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `@endo/cbor` (this design)                                                                       | Encodes and decodes single CBOR items; the primitive layer                     |
+| [`@endo/cbor-frame`](cbors.md) (impl PR #288; proposed as `@endo/cbors`)                         | Frames a stream of length-prefixed CBOR byte strings; payload bytes are opaque |
+| [`@endo/syrup-frame`](ocapn-tcp-syrups-framing.md) (landed on `llm`; proposed as `@endo/syrups`) | The Syrup-grammar framing sibling                                              |
+| `@endo/netstring`                                                                                | The netstring-grammar framing sibling                                          |
+| `packages/ocapn`                                                                                 | OCapN protocol codec; becomes a consumer                                       |
+| `packages/slots` (PR #124)                                                                       | Slot-machine wire protocol; becomes a consumer                                 |
+| `packages/daemon` (`envelope.js`)                                                                | Engo bus envelope protocol; candidate consumer                                 |
 
 ## Test Plan
 

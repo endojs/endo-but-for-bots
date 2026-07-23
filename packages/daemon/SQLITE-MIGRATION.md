@@ -8,12 +8,14 @@ language implementations (e.g., Go/engo).
 ## Motivation
 
 The daemon previously stored all state as individual files:
+
 - One JSON file per formula (`statePath/formulas/AB/0001.json`)
 - One file per pet name (`statePath/pet-store/AB/0001/myname`)
 - One JSON file per synced store entry
   (`statePath/synced-pet-store/AB/0001/names/foo.json`)
 
 This worked but had limitations:
+
 - No transactional atomicity (formula writes were not even
   atomic — there was a TODO for write-then-rename)
 - O(n) startup scan to rebuild the in-memory formula graph
@@ -83,6 +85,7 @@ Used for future schema migrations.
 
 Key-value store for daemon-level state.
 Current keys:
+
 - `root_nonce` — 64-char hex, the root entropy for deriving
   deterministic formula numbers.
 - `public_key` — 64-char hex, Ed25519 public key (node ID).
@@ -94,6 +97,7 @@ Previously stored as `{statePath}/nonce` and
 ### `formula`
 
 One row per formula.
+
 - `number` — 64-char hex formula number
   (previously the `{head}{tail}` portion of the path
   `formulas/{head}/{tail}.json`).
@@ -104,6 +108,7 @@ One row per formula.
 ### `pet_store_entry`
 
 Pet name to formula ID mappings.
+
 - `store_number` — formula number of the pet store.
 - `store_type` — one of `pet-store`, `mailbox-store`,
   `known-peers-store`.
@@ -118,6 +123,7 @@ containing the formula ID as text.
 ### `synced_store_entry`
 
 CRDT entries for synced (cross-daemon) pet stores.
+
 - `store_number` — formula number of the synced store.
 - `name` — the pet name string.
 - `locator` — the locator URL string, or NULL for tombstones.
@@ -130,6 +136,7 @@ Previously stored as individual JSON files:
 ### `synced_store_meta`
 
 Metadata for synced pet stores.
+
 - `store_number` — formula number of the synced store.
 - `local_clock` — current Lamport clock value.
 - `remote_acked_clock` — highest clock value acknowledged by
@@ -154,6 +161,7 @@ Worker state (`{statePath}/worker/`) and ephemeral state
 
 The daemon still maintains in-memory data structures for
 fast lookups and pub/sub:
+
 - `formulaForId: Map<FormulaIdentifier, Formula>` — loaded
   on demand from SQLite, not pre-loaded at startup.
 - Pet store bidirectional multimaps — loaded from SQLite when
@@ -177,6 +185,7 @@ to maintain the existing interface.
 ### Go
 
 For a Go implementation:
+
 - Use `modernc.org/sqlite` (pure Go) or `github.com/mattn/go-sqlite3`
   (CGo).
 - The schema is standard SQL — use the exact DDL above.

@@ -39,14 +39,14 @@ storage hooks through the `evaluate` rename.
 
 ## Layout
 
-| Path | Purpose |
-| --- | --- |
-| `src/tool.js` | Provider-independent `makeTool` and `ToolRecord`. |
-| `src/json-tools/` | Parked JSON wrappers for Git, mounts, filesystem, shell, and HTTP. |
-| `src/code-mode/` | Evaluation tool, Compartment host, daemon host, and declaration formatting. |
-| `src/code-mode-globals/` | Per-capability global descriptor factories. |
-| `src/adapters/` | Pi and SmallCaps bridges; MCP, Codex, and Claude Code shapes are planned. |
-| `generated/code-mode-globals/` | Checked-in generated declaration artifacts. |
+| Path                           | Purpose                                                                     |
+| ------------------------------ | --------------------------------------------------------------------------- |
+| `src/tool.js`                  | Provider-independent `makeTool` and `ToolRecord`.                           |
+| `src/json-tools/`              | Parked JSON wrappers for Git, mounts, filesystem, shell, and HTTP.          |
+| `src/code-mode/`               | Evaluation tool, Compartment host, daemon host, and declaration formatting. |
+| `src/code-mode-globals/`       | Per-capability global descriptor factories.                                 |
+| `src/adapters/`                | Pi and SmallCaps bridges; MCP, Codex, and Claude Code shapes are planned.   |
+| `generated/code-mode-globals/` | Checked-in generated declaration artifacts.                                 |
 
 The code-generation extractors currently read the checked-in
 `packages/exo-git/src/types.ts` and the platform filesystem guards through raw

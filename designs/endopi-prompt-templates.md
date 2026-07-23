@@ -1,19 +1,19 @@
 # EndoPi: Prompt Templates
 
-| | |
-|---|---|
-| **Created** | 2026-05-15 |
-| **Updated** | 2026-05-15 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
-| **Parent** | [endopi](endopi.md) |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-05-15            |
+| **Updated** | 2026-05-15            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Proposed              |
+| **Parent**  | [endopi](endopi.md)   |
 
 ## Motivation
 
 Reusable user-prompt scaffolds (a "code review" prompt, a "write a
 PR description" prompt, a "summarize this thread" prompt) are a basic
 ergonomic affordance every modern coding harness offers. Pi calls them
-*prompt templates*: a markdown file with optional `{{var}}` placeholders,
+_prompt templates_: a markdown file with optional `{{var}}` placeholders,
 expanded into the editor when the user types `/templatename`.
 
 Endo's Chat UI has a command bar but no template expansion. This is a
@@ -32,6 +32,7 @@ A template file:
 
 ```markdown
 <!-- ~/.pi/agent/prompts/review.md -->
+
 Review this code for bugs, security issues, and performance problems.
 Focus on: {{focus}}
 ```
@@ -57,7 +58,7 @@ scans a parallel set of paths for `*.md` files:
 Templates appear in the autocomplete list under `/`. Selecting one
 expands the template body into the editor; the agent loop does not run
 until the user presses Enter. This matches Pi's UX: a template is
-*editor expansion*, not *agent invocation*.
+_editor expansion_, not _agent invocation_.
 
 The variable-prompt UI (when arguments are missing) reuses the Chat UI's
 existing form-rendering surface from
@@ -71,11 +72,11 @@ processes any slash command in a user message.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|--------------|
-| [chat-slot-slash-commands](chat-slot-slash-commands.md) | Sibling slash-command infrastructure |
-| [endopi-skills-markdown-format](endopi-skills-markdown-format.md) | Shares the discovery walker |
-| [lal-fae-form-provisioning](lal-fae-form-provisioning.md) | Variable-prompt UI |
+| Design                                                            | Relationship                         |
+| ----------------------------------------------------------------- | ------------------------------------ |
+| [chat-slot-slash-commands](chat-slot-slash-commands.md)           | Sibling slash-command infrastructure |
+| [endopi-skills-markdown-format](endopi-skills-markdown-format.md) | Shares the discovery walker          |
+| [lal-fae-form-provisioning](lal-fae-form-provisioning.md)         | Variable-prompt UI                   |
 
 ## Phased implementation
 
@@ -99,6 +100,6 @@ processes any slash command in a user message.
 
 ## Prompt
 
-> Extracted from [endopi](endopi.md) § *Prompt templates*. Small,
+> Extracted from [endopi](endopi.md) § _Prompt templates_. Small,
 > self-contained, low-risk; useful before larger workflow features
 > land.

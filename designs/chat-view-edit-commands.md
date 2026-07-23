@@ -1,11 +1,11 @@
 # Chat /view and /edit Commands
 
-| | |
-|---|---|
-| **Created** | 2026-03-21 |
-| **Updated** | 2026-05-19 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-03-21            |
+| **Updated** | 2026-05-19            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | **Complete**          |
 
 ## Status
 
@@ -39,7 +39,7 @@ pipeline described here.
 ## What is the Problem Being Solved?
 
 The Chat UI can display values and navigate directory trees in the
-inventory panel, but there is no way to *view* or *edit* the content
+inventory panel, but there is no way to _view_ or _edit_ the content
 of blobs from within Chat.
 Users who want to read a file must use the CLI (`endo cat`) or check
 it out to the local filesystem.
@@ -56,10 +56,10 @@ without leaving the conversation.
 
 ### Commands
 
-| Command | Mode | Fields | Effect |
-|---------|------|--------|--------|
+| Command | Mode  | Fields        | Effect                                                  |
+| ------- | ----- | ------------- | ------------------------------------------------------- |
 | `/view` | Modal | `petNamePath` | Opens a read-only viewer for the blob at the given path |
-| `/edit` | Modal | `petNamePath` | Opens a Monaco editor for the blob at the given path |
+| `/edit` | Modal | `petNamePath` | Opens a Monaco editor for the blob at the given path    |
 
 Both commands accept a pet name path that resolves to a blob
 (a `ReadableBlob`, `SnapshotBlob`, or a blob entry within a
@@ -74,12 +74,12 @@ profile's namespace and subsequent segments navigate into trees.
 read-only.
 The viewer selects a rendering mode based on content type:
 
-| Content type | Renderer |
-|--------------|----------|
-| Plain text, source code | Monaco editor in read-only mode |
-| Markdown | Synchronized two-panel layout (source + rendered preview) |
-| JSON | Monaco with JSON language mode, read-only |
-| Images (future) | `<img>` element from base64 stream |
+| Content type            | Renderer                                                  |
+| ----------------------- | --------------------------------------------------------- |
+| Plain text, source code | Monaco editor in read-only mode                           |
+| Markdown                | Synchronized two-panel layout (source + rendered preview) |
+| JSON                    | Monaco with JSON language mode, read-only                 |
+| Images (future)         | `<img>` element from base64 stream                        |
 
 Content type is inferred from the pet name path's extension
 (`.md`, `.js`, `.json`, etc.) or, when available, from metadata
@@ -102,6 +102,7 @@ The editor supports saving changes back to the blob:
    The original blob is unchanged (content-addressed immutability).
 
 The editor panel includes:
+
 - A header showing the pet name path and a content type indicator.
 - A save button (or `Cmd/Ctrl+S` shortcut) that writes changes.
 - A close button that warns on unsaved changes.
@@ -206,13 +207,13 @@ directory entry that resolves to a blob.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|-------------|
-| [chat-command-bar](chat-command-bar.md) | Command registration and modal dispatch |
-| [chat-markdown-render](chat-markdown-render.md) | Markdown rendering pipeline reused for preview |
-| [chat-focus-message](chat-focus-message.md) | Focus mode shortcut integration |
-| [daemon-mount](daemon-mount.md) | Writable directory entries for `/edit` save |
-| [daemon-checkin-checkout](daemon-checkin-checkout.md) | `ReadableTree` blob access patterns |
+| Design                                                | Relationship                                   |
+| ----------------------------------------------------- | ---------------------------------------------- |
+| [chat-command-bar](chat-command-bar.md)               | Command registration and modal dispatch        |
+| [chat-markdown-render](chat-markdown-render.md)       | Markdown rendering pipeline reused for preview |
+| [chat-focus-message](chat-focus-message.md)           | Focus mode shortcut integration                |
+| [daemon-mount](daemon-mount.md)                       | Writable directory entries for `/edit` save    |
+| [daemon-checkin-checkout](daemon-checkin-checkout.md) | `ReadableTree` blob access patterns            |
 
 ## Design Decisions
 

@@ -1,11 +1,11 @@
 # Familiar Daemon Bundling
 
-| | |
-|---|---|
-| **Created** | 2026-02-14 |
-| **Updated** | 2026-03-05 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-14            |
+| **Updated** | 2026-03-05            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | **Complete**          |
 
 ## What is the Problem Being Solved?
 
@@ -17,6 +17,7 @@ a self-contained artifact that can be spawned with a bundled Node.js executable
 on the user's platform.
 
 The daemon must be packaged such that:
+
 1. It can run with a standalone Node.js binary (not the monorepo).
 2. All `@endo/*` dependencies are bundled or co-located.
 3. Worker processes can be spawned from the bundle.
@@ -41,6 +42,7 @@ esbuild packages/daemon/src/daemon-node.js \
 ```
 
 **Challenges:**
+
 - The daemon uses dynamic `import()` for workers
   (`packages/daemon/src/worker.js`), weblets, and guest code. These cannot be
   statically bundled because they load user-provided code at runtime.
@@ -50,6 +52,7 @@ esbuild packages/daemon/src/daemon-node.js \
   (`packages/ocapn-noise/gen/ocapn-noise.wasm`) needs to be co-located.
 
 **Mitigations:**
+
 - Worker entry points and the SES shim can be bundled as separate artifacts
   alongside the main daemon bundle.
 - The main bundle includes everything except dynamically loaded user code.
@@ -78,6 +81,7 @@ const workerPath = new URL('./endo-worker.cjs', import.meta.url).pathname;
 ### Node.js executable
 
 Familiar ships a platform-specific Node.js binary:
+
 - macOS: `node` for arm64 and/or x86_64
 - Linux: `node` for x86_64, arm64
 - Windows: `node.exe` for x86_64

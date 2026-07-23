@@ -4,6 +4,7 @@
 
 `@endo/genie` is a Claw-like AI Agent framework designed for the Endo hardened JavaScript project.
 It provides a complete system for building autonomous agents with:
+
 - Modular tool system with security constraints
 - Memory integration for persistent knowledge
 - Heartbeat-based task execution
@@ -17,6 +18,7 @@ It provides a complete system for building autonomous agents with:
 #### 1. System Builder (`system/index.js`)
 
 The central orchestrator that builds complete system prompts for LLMs by combining:
+
 - **Identity & Soul**: User-provided persona and internal truths
 - **Memory Context**: Workspace and project knowledge
 - **Tools**: Available tool implementations
@@ -25,6 +27,7 @@ The central orchestrator that builds complete system prompts for LLMs by combini
 **Entry Point**: `systemBuilder(options)` - Returns complete system prompt string
 
 **File Structure**:
+
 ```
 src/system/
 ├── index.js                    # Main builder
@@ -38,6 +41,7 @@ src/system/
 Extensible tool system with built-in security:
 
 **Available Tools**:
+
 - `memory_get` - Fetch specific lines from memory files
 - `memory_search` - Semantic search over memory files
 - `readFile` - Read file contents with offset/limit
@@ -48,6 +52,7 @@ Extensible tool system with built-in security:
 - `bash` - Execute shell commands with validation
 
 **Security Features**:
+
 - Path traversal prevention
 - Code injection prevention
 - Dangerous command detection
@@ -57,6 +62,7 @@ Extensible tool system with built-in security:
 #### 3. Heartbeat Runner (`heartbeat/index.js`)
 
 Autonomous task executor:
+
 - Loads heartbeat tasks from `HEARTBEAT.md`
 - Parses and validates task descriptions
 - Executes tasks based on keywords
@@ -65,6 +71,7 @@ Autonomous task executor:
 #### 4. Security Module (`security.js`)
 
 Security utilities:
+
 - System prompt suffix generation
 - Policy enforcement
 - Parameter validation
@@ -76,7 +83,7 @@ binds the agent's `bash` / `exec` / `git` tools to a confined POSIX
 slice minted by [`@endo/sandbox`](../sandbox/README.md).
 The slice is the v1 integration point for
 [`PLAN/endo_posix_sandbox.md`](../../PLAN/endo_posix_sandbox.md):
-the agent's *workspace* lives inside the slice, but the agent
+the agent's _workspace_ lives inside the slice, but the agent
 process itself continues to run inside the daemon worker.
 
 **Capabilities the genie guest receives**
@@ -84,10 +91,10 @@ process itself continues to run inside the daemon worker.
 `setup.js` mints two host-side capabilities and introduces them into
 the genie guest under fixed pet names:
 
-| Pet name (in guest) | Capability        | Origin                                                 |
-| ------------------- | ----------------- | ------------------------------------------------------ |
-| `workspace`         | `Mount` cap       | `E(host).provideMount(GENIE_WORKSPACE, 'workspace-mount')` |
-| `sandboxes`         | `SandboxFactory`  | `E(host).makeUnconfined('@main', '@endo/sandbox/agent.js', { powersName: '@agent' })` |
+| Pet name (in guest) | Capability       | Origin                                                                                |
+| ------------------- | ---------------- | ------------------------------------------------------------------------------------- |
+| `workspace`         | `Mount` cap      | `E(host).provideMount(GENIE_WORKSPACE, 'workspace-mount')`                            |
+| `sandboxes`         | `SandboxFactory` | `E(host).makeUnconfined('@main', '@endo/sandbox/agent.js', { powersName: '@agent' })` |
 
 Both lookups are guarded with structured-error fallbacks so a partial
 rollout (factory present but no workspace mount, or vice versa)
@@ -107,7 +114,7 @@ The slice integration introduced a `Spawner` seam
   `dev-repl.js` and by `main.js` when no factory is present.
 - `makeSandboxSpawner({ handle })` — forwards every spawn to
   `E(handle).spawn(argv, opts)`; used by `main.js` when a slice was
-  minted.  The adapter normalises `shell: true` to a literal
+  minted. The adapter normalises `shell: true` to a literal
   `['/bin/sh', '-c', joined]` invocation since the slice has no
   "shell" knob.
 
@@ -124,8 +131,8 @@ web tools never see this seam — they continue to run daemon-side.
 3. `spawnAgent` validates `backend` / `network` form fields, probes
    the factory's `listBackends()`, then calls
    `E(sandboxFactory).make({ rootfs: { kind: 'host-bind' },
-   mounts: [{ cap: workspaceMount, innerPath: '/workspace',
-   mode: 'rw' }], network, cwd: '/workspace', backend })`.
+mounts: [{ cap: workspaceMount, innerPath: '/workspace',
+mode: 'rw' }], network, cwd: '/workspace', backend })`.
 4. The returned `SandboxHandle` is GC-pinned by the agent's closure
    capture for the agent's lifetime.
 5. The agent's `cancelledP` triggers `E(slice).dispose()` so the
@@ -154,6 +161,7 @@ and `bash sed -i` from the slice both target one file on disk.
 ### 1. Security-First
 
 All tools implement:
+
 - Input validation
 - Path traversal prevention
 - Code injection prevention

@@ -13,11 +13,13 @@ capabilities. There are two kinds of name:
 ## Browsing Your Inventory
 
 List everything:
+
 ```
 /ls
 ```
 
 List a subdirectory:
+
 ```
 /ls my-directory
 ```
@@ -26,11 +28,13 @@ List a subdirectory:
 
 View the contents of a blob, file, or JSON value inline in
 the chat window:
+
 ```
 /view my-config
 ```
 
 Open an inline editor to modify a value in place:
+
 ```
 /edit my-config
 ```
@@ -41,6 +45,7 @@ lets you change and save. Both are Chat-only features with
 no direct CLI equivalent.
 
 You can also browse mounted directories this way:
+
 ```
 /view project-dir/README.md
 /edit project-dir/src/config.json
@@ -57,6 +62,7 @@ real directory on disk:
 
 Now `project-dir` is a live capability. Browse and edit its
 contents with `/ls`, `/view`, and `/edit`:
+
 ```
 /ls project-dir
 /view project-dir/README.md
@@ -64,11 +70,13 @@ contents with `/ls`, `/view`, and `/edit`:
 ```
 
 Or give it to an agent:
+
 ```
 @lal Here is @project-dir — please review the code.
 ```
 
 For a daemon-managed scratch directory:
+
 ```
 /mktmp -n scratch
 ```
@@ -84,11 +92,13 @@ endo checkin ./my-docs -n docs
 ```
 
 Check it back out later:
+
 ```
 endo checkout docs ./restored-docs
 ```
 
 Once checked in, you can browse the snapshot in Chat:
+
 ```
 /ls docs
 /view docs/README.md
@@ -103,6 +113,7 @@ Once checked in, you can browse the snapshot in Chat:
 ```
 
 Move into a subdirectory:
+
 ```
 /mv my-tool projects/my-tool
 ```
@@ -128,6 +139,7 @@ loses access.
 
 Returns a locator URL that can be shared with peers on other
 machines. The other party adopts it:
+
 ```
 /adopt-locator <locator> -n their-name
 ```

@@ -5,8 +5,8 @@ The package is intentionally Node-free and portable across SES realms — it kno
 
 - `makeGit({ mount, backend, lineageOf }, { readOnly, allowHistoryRewrite })` — the Git exo factory; the default construction returns `WritableEndoGit`; `{ readOnly: true }` returns `ReadOnlyEndoGit`; `backend` is any object satisfying the `GitBackend` protocol (`@endo/git` provides the Node-side implementation).
 - `makeGitRemote({ git, credential, name, policy })` — remote-git companion (fetch / pull / push) bound to a credential cap.
-- `makeBasicCredential`, `makeBearerCredential`, `makeUnavailableGitCredential` — credential capabilities.  Each carries a host-private `GitCredentialController` accessible via `getGitCredentialController(cred)`.
-- `makeGitFsBackend({ backend, treeOid })` — `FsBackend` adapter for an immutable git tree.  Composes with `@endo/endo-fs` `wrapBackend(...)`.
+- `makeBasicCredential`, `makeBearerCredential`, `makeUnavailableGitCredential` — credential capabilities. Each carries a host-private `GitCredentialController` accessible via `getGitCredentialController(cred)`.
+- `makeGitFsBackend({ backend, treeOid })` — `FsBackend` adapter for an immutable git tree. Composes with `@endo/endo-fs` `wrapBackend(...)`.
 - Interface guards: `GitInterface`, `GitRemoteInterface`, `GitRemoteControllerInterface`, `GitCredentialControllerInterface`, `BasicCredentialInterface`, `BearerCredentialInterface`.
 
 Sister packages:

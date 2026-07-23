@@ -10,17 +10,21 @@ a form that SES can use to emulate and confine JavaScript modules (ESMs, the
 import 'ses';
 import { ModuleSource } from '@endo/module-source';
 
-const c1 = new Compartment({}, {}, {
-  name: "first compartment",
-  resolveHook: (moduleSpecifier, moduleReferrer) => {
-    return resolve(moduleSpecifier, moduleReferrer);
+const c1 = new Compartment(
+  {},
+  {},
+  {
+    name: 'first compartment',
+    resolveHook: (moduleSpecifier, moduleReferrer) => {
+      return resolve(moduleSpecifier, moduleReferrer);
+    },
+    importHook: async moduleSpecifier => {
+      const moduleLocation = locate(moduleSpecifier);
+      const moduleText = await retrieve(moduleLocation);
+      return new ModuleSource(moduleText, moduleLocation);
+    },
   },
-  importHook: async moduleSpecifier => {
-    const moduleLocation = locate(moduleSpecifier);
-    const moduleText = await retrieve(moduleLocation);
-    return new ModuleSource(moduleText, moduleLocation);
-  },
-});
+);
 ```
 
 ## Source maps
@@ -69,7 +73,7 @@ including:
 Such that the receiver can store the source map somewhere as a side-effect.
 
 Note: the `sourceMapHook` is synchronous and returns `void`.
-Exceptions thrown by the hook will propagate up through the constructor.  If
+Exceptions thrown by the hook will propagate up through the constructor. If
 the hook returns a promise, it will be dropped and rejections will go uncaught.
 If the hook must do async work, these should be queued up as a job that the
 caller can later await.

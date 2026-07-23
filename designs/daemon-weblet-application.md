@@ -1,11 +1,11 @@
 # Weblet Applications from Zip Archives
 
-| | |
-|---|---|
-| **Created** | 2026-02-25 |
-| **Updated** | 2026-02-25 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-25            |
+| **Updated** | 2026-02-25            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## What is the Problem Being Solved?
 
@@ -138,10 +138,7 @@ const lookup = petNamePath => {
     throw new TypeError(`Unknown name: ${q(headName)}`);
   }
   const value = provide(entries[headName]);
-  return tailNames.reduce(
-    (hub, name) => E(hub).lookup(name),
-    value,
-  );
+  return tailNames.reduce((hub, name) => E(hub).lookup(name), value);
 };
 ```
 

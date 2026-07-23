@@ -6,7 +6,7 @@ binaries. This document describes the contract between the supervisor binary
 subprocess, and the test harness.
 
 On the Rust side, the daemon is a single binary named `endor` that
-dispatches to its role by subcommand. The daemon *is* the capability bus:
+dispatches to its role by subcommand. The daemon _is_ the capability bus:
 it routes envelopes between its children. The same executable also hosts
 the supervised child modes (`manager`, `worker`, `run`) so that the daemon
 can self-exec its manager child via `std::env::current_exe()` instead of
@@ -19,7 +19,7 @@ from **capability management**. The daemon (the capability bus) manages
 process lifecycles and routes envelopes between its children. A manager
 child handles CapTP connections, the formula graph, the pet-name store,
 and persistence — it is the "root" capability process, even though it is
-*a* child of the daemon, not the daemon itself. They communicate over a
+_a_ child of the daemon, not the daemon itself. They communicate over a
 CBOR-framed envelope protocol on inherited file descriptors. The legacy
 Node.js daemon plays the manager role when an XS manager child is not
 enabled.
@@ -48,23 +48,23 @@ enabled.
 
 The daemon binary MUST support these subcommands:
 
-| Command  | Description |
-|----------|-------------|
+| Command  | Description                                   |
+| -------- | --------------------------------------------- |
 | `daemon` | Run the daemon (capability bus) in foreground |
-| `start`  | Spawn the daemon in a detached session |
-| `stop`   | Gracefully stop a running daemon |
-| `ping`   | Verify daemon responsiveness |
+| `start`  | Spawn the daemon in a detached session        |
+| `stop`   | Gracefully stop a running daemon              |
+| `ping`   | Verify daemon responsiveness                  |
 
 The unified Rust `endor` binary additionally supports child-facing
 subcommands. These are invoked by the daemon via self-exec
 (`current_exe()`); they are not meant to be run directly by end users,
 but the vocabulary is documented for completeness:
 
-| Command   | Description |
-|-----------|-------------|
+| Command   | Description                                                                            |
+| --------- | -------------------------------------------------------------------------------------- |
 | `manager` | Run as the supervised manager child (pet-name store, formula graph, CapTP multiplexer) |
-| `worker`  | Run as a supervised worker child |
-| `run`     | Load and execute a compartment-map archive standalone |
+| `worker`  | Run as a supervised worker child                                                       |
+| `run`     | Load and execute a compartment-map archive standalone                                  |
 
 Every child-facing subcommand accepts an optional `-e <engine>` /
 `--engine=<engine>` flag that selects which engine runs in the
@@ -124,25 +124,25 @@ All configuration is passed via environment variables. When `ENDO_STATE_PATH`
 is set, the supervisor MUST use environment variables for all paths. Otherwise,
 platform-appropriate defaults apply.
 
-| Variable | Description | Default (Linux) |
-|----------|-------------|-----------------|
-| `ENDO_STATE_PATH` | Durable state directory | `~/.local/state/endo` |
-| `ENDO_EPHEMERAL_STATE_PATH` | Ephemeral state (PID files) | `/tmp/endo-$USER` |
-| `ENDO_SOCK_PATH` | Unix domain socket path | `/tmp/endo-$USER/captp0.sock` |
-| `ENDO_CACHE_PATH` | Cache directory | `~/.cache/endo` |
-| `ENDO_DAEMON_PATH` | Path to Node.js daemon script | (required) |
-| `ENDO_NODE_PATH` | Path to Node.js executable | `node` via `$PATH` |
-| `ENDO_MANAGER_XS` | If set, run the manager child as an XS subprocess instead of the legacy Node.js daemon | unset |
-| `ENDO_XS_BIN` | Optional override for the XS manager binary. When unset, `endor` self-execs via `current_exe()`. | unset |
-| `ENDO_TRACE` | Enable trace logging | unset |
+| Variable                    | Description                                                                                      | Default (Linux)               |
+| --------------------------- | ------------------------------------------------------------------------------------------------ | ----------------------------- |
+| `ENDO_STATE_PATH`           | Durable state directory                                                                          | `~/.local/state/endo`         |
+| `ENDO_EPHEMERAL_STATE_PATH` | Ephemeral state (PID files)                                                                      | `/tmp/endo-$USER`             |
+| `ENDO_SOCK_PATH`            | Unix domain socket path                                                                          | `/tmp/endo-$USER/captp0.sock` |
+| `ENDO_CACHE_PATH`           | Cache directory                                                                                  | `~/.cache/endo`               |
+| `ENDO_DAEMON_PATH`          | Path to Node.js daemon script                                                                    | (required)                    |
+| `ENDO_NODE_PATH`            | Path to Node.js executable                                                                       | `node` via `$PATH`            |
+| `ENDO_MANAGER_XS`           | If set, run the manager child as an XS subprocess instead of the legacy Node.js daemon           | unset                         |
+| `ENDO_XS_BIN`               | Optional override for the XS manager binary. When unset, `endor` self-execs via `current_exe()`. | unset                         |
+| `ENDO_TRACE`                | Enable trace logging                                                                             | unset                         |
 
 ### 2.1 Derived Paths
 
-| Path | Location |
-|------|----------|
-| Log file | `$ENDO_STATE_PATH/endo.log` |
-| PID file | `$ENDO_EPHEMERAL_STATE_PATH/endo.pid` |
-| Root file | `$ENDO_STATE_PATH/root` |
+| Path            | Location                                       |
+| --------------- | ---------------------------------------------- |
+| Log file        | `$ENDO_STATE_PATH/endo.log`                    |
+| PID file        | `$ENDO_EPHEMERAL_STATE_PATH/endo.pid`          |
+| Root file       | `$ENDO_STATE_PATH/root`                        |
 | Formula storage | `$ENDO_STATE_PATH/formulas/{head}/{tail}.json` |
 
 ## 3. Startup Sequence
@@ -182,6 +182,7 @@ The daemon spawns the (Node.js or XS) manager child with:
 - **Environment**: Inherited from supervisor (includes all `ENDO_*` variables).
 
 After spawning, the daemon MUST:
+
 1. Close the child-side pipe ends in the parent process.
 2. Allocate a handle for the manager (typically handle 1).
 3. Send an `init` envelope to the manager (see §5.3).
@@ -217,6 +218,7 @@ envelopes over inherited file descriptors.
 ### 5.1 Pipe Layout
 
 For every subprocess (daemon or worker):
+
 - **fd 3**: Child writes to supervisor (child → parent)
 - **fd 4**: Child reads from supervisor (parent → child)
 
@@ -234,6 +236,7 @@ Each envelope is wrapped in a CBOR byte string (major type 2):
 ```
 
 The outer framing uses standard CBOR byte string encoding:
+
 - `0x40..0x57` for payloads 0–23 bytes
 - `0x58 <1-byte len>` for 24–255 bytes
 - `0x59 <2-byte len>` for 256–65535 bytes
@@ -247,12 +250,12 @@ An envelope is a CBOR array of 3 or 4 elements:
 [handle, verb, payload, nonce?]
 ```
 
-| Field | CBOR Type | Description |
-|-------|-----------|-------------|
-| `handle` | unsigned int | Target/source handle. 0 = supervisor control plane. |
-| `verb` | text string | Operation type (see below). |
-| `payload` | byte string | Verb-specific data. May be empty (`0x40`). |
-| `nonce` | unsigned int | Optional. >0 for request/response matching. 0 or absent for fire-and-forget. |
+| Field     | CBOR Type    | Description                                                                  |
+| --------- | ------------ | ---------------------------------------------------------------------------- |
+| `handle`  | unsigned int | Target/source handle. 0 = supervisor control plane.                          |
+| `verb`    | text string  | Operation type (see below).                                                  |
+| `payload` | byte string  | Verb-specific data. May be empty (`0x40`).                                   |
+| `nonce`   | unsigned int | Optional. >0 for request/response matching. 0 or absent for fire-and-forget. |
 
 ### 5.4 Verbs
 
@@ -393,6 +396,7 @@ enqueued in the target's mailbox for the write goroutine to send.
 ### 6.2 Sync-Call Validation
 
 To prevent deadlocks, synchronous calls (nonce > 0) are only allowed:
+
 - To ancestors in the spawn tree (a worker may sync-call its parent).
 - To handle 0 (the control plane).
 
@@ -484,6 +488,7 @@ When invoked by the test harness:
 ### 10.1 Required Environment Variables for Testing
 
 The test harness always sets:
+
 - `ENDO_STATE_PATH`
 - `ENDO_EPHEMERAL_STATE_PATH`
 - `ENDO_SOCK_PATH`
@@ -509,10 +514,10 @@ The Node.js daemon may set additional environment variables (like
 
 ## 12. Signal Handling
 
-| Signal  | Behavior |
-|---------|----------|
-| SIGINT  | Initiate graceful shutdown |
-| SIGTERM | Initiate graceful shutdown |
+| Signal  | Behavior                      |
+| ------- | ----------------------------- |
+| SIGINT  | Initiate graceful shutdown    |
+| SIGTERM | Initiate graceful shutdown    |
 | SIGHUP  | Reopen the log file (see §14) |
 
 The supervisor installs handlers for SIGINT and SIGTERM and cancels the root

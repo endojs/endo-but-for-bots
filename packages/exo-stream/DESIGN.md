@@ -63,33 +63,33 @@ mirrored in data flow direction.
 
 ### Reader Modules
 
-| Module | Function | Role |
-|--------|----------|------|
-| `reader-pump.js` | `makeReaderPump(iterator, options?)` | Core responder pump. Pulls from local iterator, produces ack data chain. |
-| `reader-from-iterator.js` | `readerFromIterator(iterator, options?)` | Responder: wraps local iterator as `PassableReader` Exo. |
-| `iterate-reader.js` | `iterateReader(readerRef, options?)` | Initiator: converts remote `PassableReader` to local `AsyncIterableIterator`. |
+| Module                    | Function                                 | Role                                                                          |
+| ------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------- |
+| `reader-pump.js`          | `makeReaderPump(iterator, options?)`     | Core responder pump. Pulls from local iterator, produces ack data chain.      |
+| `reader-from-iterator.js` | `readerFromIterator(iterator, options?)` | Responder: wraps local iterator as `PassableReader` Exo.                      |
+| `iterate-reader.js`       | `iterateReader(readerRef, options?)`     | Initiator: converts remote `PassableReader` to local `AsyncIterableIterator`. |
 
 ### Writer Modules
 
-| Module | Function | Role |
-|--------|----------|------|
-| `writer-pump.js` | `makeWriterPump(iterator, options?)` | Core responder pump. Pushes received data to local sink iterator, produces ack flow-control chain. |
-| `writer-from-iterator.js` | `writerFromIterator(iterator, options?)` | Responder: wraps local sink iterator as `PassableWriter` Exo. |
-| `iterate-writer.js` | `iterateWriter(writerRef, options?)` | Initiator: returns a local writer iterator that sends values via `next(value)`. |
+| Module                    | Function                                 | Role                                                                                               |
+| ------------------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `writer-pump.js`          | `makeWriterPump(iterator, options?)`     | Core responder pump. Pushes received data to local sink iterator, produces ack flow-control chain. |
+| `writer-from-iterator.js` | `writerFromIterator(iterator, options?)` | Responder: wraps local sink iterator as `PassableWriter` Exo.                                      |
+| `iterate-writer.js`       | `iterateWriter(writerRef, options?)`     | Initiator: returns a local writer iterator that sends values via `next(value)`.                    |
 
 ### Bytes Reader Modules
 
-| Module | Function | Role |
-|--------|----------|------|
-| `bytes-reader-from-iterator.js` | `bytesReaderFromIterator(bytesIterator, options?)` | Responder: wraps `AsyncIterator<Uint8Array>` as `PassableBytesReader` Exo (base64 encoding). |
-| `iterate-bytes-reader.js` | `iterateBytesReader(bytesReaderRef, options?)` | Initiator: converts remote `PassableBytesReader` to local `AsyncIterableIterator<Uint8Array>` (base64 decoding). |
+| Module                          | Function                                           | Role                                                                                                             |
+| ------------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `bytes-reader-from-iterator.js` | `bytesReaderFromIterator(bytesIterator, options?)` | Responder: wraps `AsyncIterator<Uint8Array>` as `PassableBytesReader` Exo (base64 encoding).                     |
+| `iterate-bytes-reader.js`       | `iterateBytesReader(bytesReaderRef, options?)`     | Initiator: converts remote `PassableBytesReader` to local `AsyncIterableIterator<Uint8Array>` (base64 decoding). |
 
 ### Bytes Writer Modules
 
-| Module | Function | Role |
-|--------|----------|------|
-| `bytes-writer-from-iterator.js` | `bytesWriterFromIterator(iterator, options?)` | Responder: wraps local sink iterator as `PassableBytesWriter` Exo (base64 decoding on receive). |
-| `iterate-bytes-writer.js` | `iterateBytesWriter(bytesWriterRef, options?)` | Initiator: returns a local bytes writer iterator that sends `Uint8Array` via `next(value)`. |
+| Module                          | Function                                       | Role                                                                                            |
+| ------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `bytes-writer-from-iterator.js` | `bytesWriterFromIterator(iterator, options?)`  | Responder: wraps local sink iterator as `PassableBytesWriter` Exo (base64 decoding on receive). |
+| `iterate-bytes-writer.js`       | `iterateBytesWriter(bytesWriterRef, options?)` | Initiator: returns a local bytes writer iterator that sends `Uint8Array` via `next(value)`.     |
 
 ## Protocol Flow
 
@@ -222,10 +222,10 @@ We use `E.get()` to pipeline property access on the promise, avoiding this:
 
 ```javascript
 // We pipeline through the promise:
-let nodePromise = E(streamRef).stream(synHead);  // No await yet
+let nodePromise = E(streamRef).stream(synHead); // No await yet
 // ...later in next():
-const value = await E.get(node).value;           // Pipeline property access
-nodePromise = node.promise;                      // Get next node
+const value = await E.get(node).value; // Pipeline property access
+nodePromise = node.promise; // Get next node
 ```
 
 This allows the initiator to immediately start resolving synchronization nodes

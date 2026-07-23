@@ -82,17 +82,17 @@ Every browser/audio API Floot uses, and where it lives after the rewrite.
 All of these stay in the **host wrapper** (`floot-component.js`), never in the
 confined view.
 
-| API / global | Used for | Home |
-| --- | --- | --- |
-| `navigator.mediaDevices.getUserMedia` | open the mic (16 kHz mono) | host audio controller |
-| `MediaStream` / `MediaStreamTrack.stop()` | mic lifecycle / teardown | host audio controller |
-| `AudioContext` (mic) + `AnalyserNode` | RMS for noise-floor VAD | host audio controller |
-| `ScriptProcessorNode` (or `AudioWorklet`) | capture PCM frames to stream to STT | host audio controller |
-| `requestAnimationFrame` | VAD sampling loop | host audio controller |
-| `AudioContext` (playback) + `AudioBufferSourceNode` | play streamed s16le PCM TTS chunks | host audio controller |
-| `window.setTimeout` / `clearTimeout` | pause-grace endpointer, replay timers | host audio controller |
-| `document.createElement` / mount node | the `renderConfined` mount target | host wrapper |
-| `window.confirm` | delete-session confirmation | host wrapper (or a confined modal — preferred) |
+| API / global                                        | Used for                              | Home                                           |
+| --------------------------------------------------- | ------------------------------------- | ---------------------------------------------- |
+| `navigator.mediaDevices.getUserMedia`               | open the mic (16 kHz mono)            | host audio controller                          |
+| `MediaStream` / `MediaStreamTrack.stop()`           | mic lifecycle / teardown              | host audio controller                          |
+| `AudioContext` (mic) + `AnalyserNode`               | RMS for noise-floor VAD               | host audio controller                          |
+| `ScriptProcessorNode` (or `AudioWorklet`)           | capture PCM frames to stream to STT   | host audio controller                          |
+| `requestAnimationFrame`                             | VAD sampling loop                     | host audio controller                          |
+| `AudioContext` (playback) + `AudioBufferSourceNode` | play streamed s16le PCM TTS chunks    | host audio controller                          |
+| `window.setTimeout` / `clearTimeout`                | pause-grace endpointer, replay timers | host audio controller                          |
+| `document.createElement` / mount node               | the `renderConfined` mount target     | host wrapper                                   |
+| `window.confirm`                                    | delete-session confirmation           | host wrapper (or a confined modal — preferred) |
 
 The host wrapper exposes these to the confined view only as **callbacks and
 pure-data state** on the controller (see the contract below).
@@ -246,10 +246,10 @@ wrapper) and remove now-dead helpers.
 
 1. **Scaffold `@endo/space-floot`** — done (`63bcd511`): package, `floot.css`,
    `FlootApp` scaffold.
-2a. **Confined view layer** — done (`8ed55669`): the pure `FlootApp` +
+   2a. **Confined view layer** — done (`8ed55669`): the pure `FlootApp` +
    sub-components (`SessionSidebar`, `MessageList`, `ComposeBar`,
    `SettingsPanel`, `types.js`), authored against the controller contract.
-2b/3. **Host controller + swap** — done: `packages/chat/floot-component.js` is
+   2b/3. **Host controller + swap** — done: `packages/chat/floot-component.js` is
    now a thin host wrapper that owns the CapTP resolution, the module-level
    background-turn registry, the mic/VAD engine, and TTS playback, and exposes
    them to the view as a single `controller` (pure-data `getState()` snapshots
@@ -261,7 +261,7 @@ wrapper) and remove now-dead helpers.
    signature and `() => cleanup` return. Verified by `node --check`, the chat
    `vite build`, and `tsc`/eslint clean on the wrapper (apart from two
    pre-existing patterns shared with the original file).
-4. **`floot/` provisioning + auto-detect** — done (`e0aa258a`):
+2. **`floot/` provisioning + auto-detect** — done (`e0aa258a`):
    `floot-factory-setup.js` / `voice-setup.js` provision every object under a
    `floot/` directory (factory at the well-known `floot/controller`, pinned;
    `floot/llm-provider`, `floot/stt`, `floot/tts`) via the daemon's path-array
@@ -269,11 +269,11 @@ wrapper) and remove now-dead helpers.
    `floot/controller` (else probes entries via `__getMethodNames__()` for
    `createSession`/`listSessions`) and pre-fills the controller path + STT/TTS
    fields; manual entry still works.
-5. **Remove the standalone Voice space** — done (`49965722`): deleted
+3. **Remove the standalone Voice space** — done (`49965722`): deleted
    `voice-component.js`, its dispatch/import, and every `'voice'` mode reference
    in `chat.js` / `spaces-gutter.js` / `add-space-modal.js`. Transcription lives
    only in Floot's settings panel.
-6. **`makeExo` backend fix** — done (`56f93aa4`): the FlootSession facet and the
+4. **`makeExo` backend fix** — done (`56f93aa4`): the FlootSession facet and the
    STT/TTS caplets are `makeExo` + `M.interface()` (guards +
    `__getMethodNames__()`); internal channel returns hardened and the
    `setOnClose` call-order documented.

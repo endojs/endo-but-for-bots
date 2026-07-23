@@ -1,11 +1,11 @@
 # Daemon Worker `importLocation` from EndoMount
 
-| | |
-|---|---|
-| **Created** | 2026-05-22 |
-| **Updated** | 2026-07-10 |
-| **Author** | endolinbot (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-05-22            |
+| **Updated** | 2026-07-10            |
+| **Author**  | endolinbot (prompted) |
+| **Status**  | Not Started           |
 
 ## Summary
 
@@ -19,12 +19,12 @@ daemon-side capability surface.
 
 The four layers, each a sibling design:
 
-| Layer | Doc | Concern |
-|-------|-----|---------|
-| Capability | [registry-capability](registry-capability.md) | `EndoRegistry` shape, `@registry` slot, lifetime |
-| Algorithm | [mvs-resolver](mvs-resolver.md) | MVS walk, lockfile stance, who walks the graph |
-| Mapper | [snapshot-mapper](snapshot-mapper.md) | `mapSnapshot`, `makeMountReadPowers`, archive-precedent layout |
-| Integration | this | `makeFromPackage`, worker dispatch, CLI, XS bridging |
+| Layer       | Doc                                           | Concern                                                        |
+| ----------- | --------------------------------------------- | -------------------------------------------------------------- |
+| Capability  | [registry-capability](registry-capability.md) | `EndoRegistry` shape, `@registry` slot, lifetime               |
+| Algorithm   | [mvs-resolver](mvs-resolver.md)               | MVS walk, lockfile stance, who walks the graph                 |
+| Mapper      | [snapshot-mapper](snapshot-mapper.md)         | `mapSnapshot`, `makeMountReadPowers`, archive-precedent layout |
+| Integration | this                                          | `makeFromPackage`, worker dispatch, CLI, XS bridging           |
 
 Dependencies declared in `package.json` are resolved by the JS
 reference implementation of MVS specified in
@@ -53,7 +53,7 @@ mount-rooted programs without `npm install` and without a
 
 ## What is the Problem Being Solved?
 
-The daemon today has three paths from a *source shape* to a
+The daemon today has three paths from a _source shape_ to a
 running caplet:
 
 1. **`makeArchive`** consumes a ZIP whose root has a
@@ -177,7 +177,7 @@ This design is a **sibling** of
   `endor archive` pass has materialized the compartment map.
 - `makeFromPackage` (this integration layer) reads a tree whose
   root is `package.json`.
-  Its modules are *not* resolved; the daemon drives resolution
+  Its modules are _not_ resolved; the daemon drives resolution
   through the [registry-capability](registry-capability.md)
   before the worker runs.
   Each resolved dependency lands in the CAS as a
@@ -189,8 +189,8 @@ The two cases converge inside `compartment-mapper`: in both, the
 worker calls `importLocation` with a `ReadPowers` whose `read`
 function understands the archive-precedent layout of a top-level
 `compartment-map.json` plus peer directories named by package
-(see [snapshot-mapper](snapshot-mapper.md) § *Synthesized
-layout*).
+(see [snapshot-mapper](snapshot-mapper.md) § _Synthesized
+layout_).
 The difference is whether the package graph arrives pre-walked
 (`makeFromTree`) or has to be walked at start time
 (`makeFromPackage`).
@@ -260,7 +260,7 @@ registry capability.
 
 `options.registry` defaults to a host-scoped `@registry` special
 name; see [registry-capability](registry-capability.md) §
-*Host special name* for the slot's shape and migration policy.
+_Host special name_ for the slot's shape and migration policy.
 
 `options.offline` mirrors `--offline` from
 [endor-npm-registry-proxy](endor-npm-registry-proxy.md): with it
@@ -301,9 +301,9 @@ type MakeFromPackageFormula = {
   type: 'make-from-package';
   worker: FormulaIdentifier;
   powers: FormulaIdentifier;
-  source: FormulaIdentifier;     // EndoMount or readable-tree
-  registry: FormulaIdentifier;   // EndoRegistry
-  entry?: string;                // relative module specifier
+  source: FormulaIdentifier; // EndoMount or readable-tree
+  registry: FormulaIdentifier; // EndoRegistry
+  entry?: string; // relative module specifier
   env?: Record<string, string>;
   offline?: boolean;
   cancelWithWorker?: FormulaIdentifier;
@@ -324,9 +324,7 @@ the synthesized `ReadPowers`, and the `CompartmentMap`, then run
 `importLocation`.
 
 ```js
-makeFromPackage: async (
-  sourceP, registryP, contextP, options,
-) => {
+makeFromPackage: async (sourceP, registryP, contextP, options) => {
   const { entry, env, offline } = options;
   const source = await sourceP;
   const registry = await registryP;
@@ -354,21 +352,16 @@ makeFromPackage: async (
   // mvs-resolver.md § Anti-design steers), so conditions thread
   // through importLocation here.
   const { importLocation } = await import('@endo/compartment-mapper');
-  const { defaultParserForLanguage } = await import(
-    '@endo/compartment-mapper/import-parsers.js'
-  );
+  const { defaultParserForLanguage } =
+    await import('@endo/compartment-mapper/import-parsers.js');
   const entrySpecifier = entry || compartmentMap.entry.module;
 
-  const { namespace } = await importLocation(
-    readPowers,
-    entrySpecifier,
-    {
-      globals: endowments,
-      parserForLanguage: defaultParserForLanguage,
-      compartmentMap,
-      conditions: options.conditions,
-    },
-  );
+  const { namespace } = await importLocation(readPowers, entrySpecifier, {
+    globals: endowments,
+    parserForLanguage: defaultParserForLanguage,
+    compartmentMap,
+    conditions: options.conditions,
+  });
 
   return namespace.make(/* powersP */ undefined, contextP, { env });
 };
@@ -376,15 +369,15 @@ makeFromPackage: async (
 
 Workspace-root discovery (the walk up from the entry package
 directory described in [mvs-resolver](mvs-resolver.md)
-§ *Workspace resolution*) happens inside `mapSnapshot`, which
+§ _Workspace resolution_) happens inside `mapSnapshot`, which
 holds the snapshot tree; the integration layer does not perform
 it and does not thread a `workspaceRoot` option of its own.
-See [snapshot-mapper](snapshot-mapper.md) § *Workspace-root
-discovery* for the assignment.
+See [snapshot-mapper](snapshot-mapper.md) § _Workspace-root
+discovery_ for the assignment.
 
 The XS worker's `daemon facet` gains the same method but routes
 the `read` function through the supervisor's CAS bindings (see
-*XS bridging* below).
+_XS bridging_ below).
 
 ### CLI shape
 
@@ -400,13 +393,13 @@ endo run <mount-pet-name> --registry @private-npm
 `endo run` detects the source form by inspecting the mount root
 once:
 
-- Has `compartment-map.json`?  Use `makeFromTree`.
-- Has `package.json`?  Use `makeFromPackage`.
-- Has neither?  Reject with a clean error pointing at both.
+- Has `compartment-map.json`? Use `makeFromTree`.
+- Has `package.json`? Use `makeFromPackage`.
+- Has neither? Reject with a clean error pointing at both.
 
 This is the same `selectRootShape` discrimination the worker
 performs internally, and mirrors the Rust-side detection logic
-in [endor-run-expanded](endor-run-expanded.md) § *Input forms*.
+in [endor-run-expanded](endor-run-expanded.md) § _Input forms_.
 
 ### XS bridging
 
@@ -425,7 +418,7 @@ Two viable paths, ordered by readiness:
    rather than through `compartment-mapper`'s Node-only loader.
 2. **Long-term: XS-hosted compartment-mapper.**
    Per [endor-run-expanded](endor-run-expanded.md) §
-   *Compartment mapper implementation* option B, bundle the
+   _Compartment mapper implementation_ option B, bundle the
    mapper for XS execution and have the Rust supervisor satisfy
    its `ReadFn` from CAS.
    This is the same path the Rust-side `endor run` is taking;
@@ -502,24 +495,24 @@ its § Phase 1 and § Phase 5, [mvs-resolver](mvs-resolver.md)
 lands inside Phase 1, and [snapshot-mapper](snapshot-mapper.md)
 lands as Phase 2; all three point at the numbering below.
 
-| Phase | Owning design | Deliverable | Builds on |
-|-------|---------------|-------------|-----------|
-| 1 | [registry-capability](registry-capability.md) + [mvs-resolver](mvs-resolver.md) | `packages/daemon/src/registry.js` (MVS walk + `RegistryTable` + tarball fetch), `EndoRegistry` exo, `RegistryFormula`, required `HostFormula.registry` + migration pass, `@registry` special name | Landed substrate only: CAS bus verbs, `EndoMount` (`packages/daemon/src/mount.js`) |
-| 2 | [snapshot-mapper](snapshot-mapper.md) + this design | `makeMountReadPowers`, `mapSnapshot`, the `compartment-mapper` package-descriptor-walker extension point; worker-facet `makeFromPackage` dispatch + `MakeFromPackageFormula` | Phase 1 (`resolve` produces the `RegistryResolution` the mapper consumes) |
-| 3 | this design | `EndoHost.makeFromPackage`, `EndoHost.makeFromMount`, CLI `endo run <mount>` / `endo make <mount>`, `--offline` / `--registry` flags | Phase 2 (worker dispatch is what the host method reaches) |
-| 4 | this design | Live-mount snapshot-before-import + `thisDiesIfThatDies` lifetime coupling + retention-link tests | Phase 3; `EndoMount.snapshot()` (already landed in `packages/daemon/src/mount.js`) |
-| 5 | [registry-capability](registry-capability.md) | Rust-backed `EndoRegistry` drop-in over [endor-npm-registry-proxy](endor-npm-registry-proxy.md) | Phase 1 shape; the Rust daemon lane (separate lane, not on the JS critical path) |
-| 6 | this design (deferred) | XS-hosted compartment-mapper | Out-of-tree [endor-run-expanded](endor-run-expanded.md) § Phase 4 / 5 work |
+| Phase | Owning design                                                                   | Deliverable                                                                                                                                                                                       | Builds on                                                                          |
+| ----- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| 1     | [registry-capability](registry-capability.md) + [mvs-resolver](mvs-resolver.md) | `packages/daemon/src/registry.js` (MVS walk + `RegistryTable` + tarball fetch), `EndoRegistry` exo, `RegistryFormula`, required `HostFormula.registry` + migration pass, `@registry` special name | Landed substrate only: CAS bus verbs, `EndoMount` (`packages/daemon/src/mount.js`) |
+| 2     | [snapshot-mapper](snapshot-mapper.md) + this design                             | `makeMountReadPowers`, `mapSnapshot`, the `compartment-mapper` package-descriptor-walker extension point; worker-facet `makeFromPackage` dispatch + `MakeFromPackageFormula`                      | Phase 1 (`resolve` produces the `RegistryResolution` the mapper consumes)          |
+| 3     | this design                                                                     | `EndoHost.makeFromPackage`, `EndoHost.makeFromMount`, CLI `endo run <mount>` / `endo make <mount>`, `--offline` / `--registry` flags                                                              | Phase 2 (worker dispatch is what the host method reaches)                          |
+| 4     | this design                                                                     | Live-mount snapshot-before-import + `thisDiesIfThatDies` lifetime coupling + retention-link tests                                                                                                 | Phase 3; `EndoMount.snapshot()` (already landed in `packages/daemon/src/mount.js`) |
+| 5     | [registry-capability](registry-capability.md)                                   | Rust-backed `EndoRegistry` drop-in over [endor-npm-registry-proxy](endor-npm-registry-proxy.md)                                                                                                   | Phase 1 shape; the Rust daemon lane (separate lane, not on the JS critical path)   |
+| 6     | this design (deferred)                                                          | XS-hosted compartment-mapper                                                                                                                                                                      | Out-of-tree [endor-run-expanded](endor-run-expanded.md) § Phase 4 / 5 work         |
 
 Phases 1 through 4 are the serial critical path.
 The job's exit criterion (a worker can `importLocation` an
 npm-style package tree from a mount) is reached in stages, and
-the stages differ by the *kind* of source, not just the caller.
+the stages differ by the _kind_ of source, not just the caller.
 Phase 2 satisfies it for a worker-facet caller against a
 pre-snapshotted `readable-tree` source; Phase 3 delivers the
 end-user surface (`endo run <mount>`) against that same
 pre-snapshotted or otherwise-immutable source; Phase 4 delivers
-it against a *live* `EndoMount`, which is where the
+it against a _live_ `EndoMount`, which is where the
 snapshot-before-import step and the `thisDiesIfThatDies` lifetime
 coupling a mutable mount requires actually land.
 The full "from a live mount" criterion is therefore satisfied at
@@ -527,7 +520,7 @@ The full "from a live mount" criterion is therefore satisfied at
 already an immutable snapshot.
 Phases 5 and 6 are parallel-lane follow-ups that gate nothing in
 the JS lane.
-Unlike Phases 1 through 4, they *do* build on designs outside
+Unlike Phases 1 through 4, they _do_ build on designs outside
 this stack (Phase 5 on [endor-npm-registry-proxy](endor-npm-registry-proxy.md),
 Phase 6 on [endor-run-expanded](endor-run-expanded.md) § Phase 4 / 5),
 which is why they run as parallel lanes rather than on the serial
@@ -547,8 +540,8 @@ its predecessor lands.
 Each phase ends with at least one passing daemon integration test
 (`packages/daemon/test/endo.test.js`).
 The phases below stitch the three preceding layers' phases into
-the integration-layer entry; see each layer's *Phased
-implementation* section for the per-layer test surface.
+the integration-layer entry; see each layer's _Phased
+implementation_ section for the per-layer test surface.
 
 ### Phase 1: Registry capability (delegated)
 
@@ -556,12 +549,12 @@ Land [registry-capability](registry-capability.md) § Phase 1: the
 JS reference `EndoRegistry`, `RegistryFormula`, the `@registry`
 host special name, and the host-formula migration pass.
 The MVS algorithm that backs `resolve` lands here too, per
-[mvs-resolver](mvs-resolver.md) § *Phased implementation*.
+[mvs-resolver](mvs-resolver.md) § _Phased implementation_.
 
 ### Phase 2: `mapSnapshot` and worker dispatch
 
-Land [snapshot-mapper](snapshot-mapper.md) § *Phased
-implementation*: `packages/daemon/src/worker-import.js`
+Land [snapshot-mapper](snapshot-mapper.md) § _Phased
+implementation_: `packages/daemon/src/worker-import.js`
 (`makeMountReadPowers`), `packages/daemon/src/map-snapshot.js`
 (`mapSnapshot`), and the small `compartment-mapper` extension
 point.
@@ -608,8 +601,8 @@ Integration tests at this phase:
      table.
    - `endo run <mount> --offline` with a missing dependency fails
      cleanly (`RegistryOfflineError`; see
-     [registry-capability](registry-capability.md) § *Failure
-     surface*).
+     [registry-capability](registry-capability.md) § _Failure
+     surface_).
 
 ### Phase 4: Snapshot-before-import
 
@@ -627,7 +620,7 @@ Integration tests at this phase:
      `thisDiesIfThatDies` dependency releases).
      The test confirms the lifetime claim under
      [registry-capability](registry-capability.md) §
-     *Mount snapshot vs live read* is enforced, not just
+     _Mount snapshot vs live read_ is enforced, not just
      documented.
 
 ### Phase 5: Rust-backed `EndoRegistry` (drop-in)
@@ -711,39 +704,39 @@ test lands with the Rust-side phase.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|--------------|
-| [registry-capability](registry-capability.md) | The capability layer this integration consumes.  `EndoRegistry`, the `@registry` host special name, the snapshot-vs-live-read contract, the host-formula migration pass, and the failure surface are defined there. |
-| [mvs-resolver](mvs-resolver.md) | The algorithm layer.  The integration layer drives `EndoRegistry.resolve` exactly once per `makeFromPackage` invocation; the algorithm's eager-single-pass shape is what makes the per-import bus-roundtrip-free path possible. |
-| [snapshot-mapper](snapshot-mapper.md) | The mapper layer.  The integration layer calls `mapSnapshot` between the snapshot step and the `importLocation` call; the returned `{ compartmentMap, resolution, readPowers }` trio is the integration's interface to the worker. |
-| [daemon-make-archive](daemon-make-archive.md) | Sibling of § Phase 7 (`makeFromTree`).  `makeFromTree` handles `compartment-map.json`-rooted trees; `makeFromPackage` handles `package.json`-rooted trees.  Both end at `compartment-mapper`'s `importLocation` / `parseArchive`. |
-| [endor-run-expanded](endor-run-expanded.md) | The Rust-side analogue.  Both sides converge on the same `EndoRegistry` capability shape and the same `RegistryResolution` content-addressing.  The Rust side and the JS side are independent implementations (separate lanes); the JS side does not depend on the Rust side being present. |
-| [endor-npm-registry-proxy](endor-npm-registry-proxy.md) | The Rust-side resolver mirror.  Phase 5 drops it in as a second `EndoRegistry` backend. |
-| [daemon-mount](daemon-mount.md) | `makeFromPackage` consumes an `EndoMount` as its primary source shape.  The snapshot-before-import step uses `EndoMount.snapshot()` from § *Snapshot*. |
-| [daemon-mount-capabilities](daemon-mount-capabilities.md) | Uses the completed `EndoMount` surface: `readBytes`, `snapshot`, and the `EndoMountEntry` overload on `lookup`. |
-| [daemon-cas-management](daemon-cas-management.md) | The resolved package trees live in the CAS; the worker reads from them through the existing `cas-fetch` / `cas-fetch-from-tree` bus verbs. |
-| [filesystem-watchers](filesystem-watchers.md) | Future integration point.  A watcher on the entry mount's `package.json` could trigger re-resolution; out of scope here, and each implementation lane (Rust and JS) manages its own watch/re-resolve loop independently. |
-| [inventory-cancel-and-liveness](inventory-cancel-and-liveness.md) | `thisDiesIfThatDies` underwrites the caplet-snapshot lifetime coupling tested in Phase 4. |
+| Design                                                            | Relationship                                                                                                                                                                                                                                                                              |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [registry-capability](registry-capability.md)                     | The capability layer this integration consumes. `EndoRegistry`, the `@registry` host special name, the snapshot-vs-live-read contract, the host-formula migration pass, and the failure surface are defined there.                                                                        |
+| [mvs-resolver](mvs-resolver.md)                                   | The algorithm layer. The integration layer drives `EndoRegistry.resolve` exactly once per `makeFromPackage` invocation; the algorithm's eager-single-pass shape is what makes the per-import bus-roundtrip-free path possible.                                                            |
+| [snapshot-mapper](snapshot-mapper.md)                             | The mapper layer. The integration layer calls `mapSnapshot` between the snapshot step and the `importLocation` call; the returned `{ compartmentMap, resolution, readPowers }` trio is the integration's interface to the worker.                                                         |
+| [daemon-make-archive](daemon-make-archive.md)                     | Sibling of § Phase 7 (`makeFromTree`). `makeFromTree` handles `compartment-map.json`-rooted trees; `makeFromPackage` handles `package.json`-rooted trees. Both end at `compartment-mapper`'s `importLocation` / `parseArchive`.                                                           |
+| [endor-run-expanded](endor-run-expanded.md)                       | The Rust-side analogue. Both sides converge on the same `EndoRegistry` capability shape and the same `RegistryResolution` content-addressing. The Rust side and the JS side are independent implementations (separate lanes); the JS side does not depend on the Rust side being present. |
+| [endor-npm-registry-proxy](endor-npm-registry-proxy.md)           | The Rust-side resolver mirror. Phase 5 drops it in as a second `EndoRegistry` backend.                                                                                                                                                                                                    |
+| [daemon-mount](daemon-mount.md)                                   | `makeFromPackage` consumes an `EndoMount` as its primary source shape. The snapshot-before-import step uses `EndoMount.snapshot()` from § _Snapshot_.                                                                                                                                     |
+| [daemon-mount-capabilities](daemon-mount-capabilities.md)         | Uses the completed `EndoMount` surface: `readBytes`, `snapshot`, and the `EndoMountEntry` overload on `lookup`.                                                                                                                                                                           |
+| [daemon-cas-management](daemon-cas-management.md)                 | The resolved package trees live in the CAS; the worker reads from them through the existing `cas-fetch` / `cas-fetch-from-tree` bus verbs.                                                                                                                                                |
+| [filesystem-watchers](filesystem-watchers.md)                     | Future integration point. A watcher on the entry mount's `package.json` could trigger re-resolution; out of scope here, and each implementation lane (Rust and JS) manages its own watch/re-resolve loop independently.                                                                   |
+| [inventory-cancel-and-liveness](inventory-cancel-and-liveness.md) | `thisDiesIfThatDies` underwrites the caplet-snapshot lifetime coupling tested in Phase 4.                                                                                                                                                                                                 |
 
 ## Prompt
 
 > Author the missing daemon-worker design that ties Compartment
 > Mapper's `importLocation`-style entry to an `EndoMount`
 > read-source with the existing Rust-side npm-registry-proxy +
-> Go-like MVS resolver exposed as a daemon capability.  Single
+> Go-like MVS resolver exposed as a daemon capability. Single
 > design file at `designs/<slug>.md` (suggested slug:
 > `daemon-worker-import-from-mount`; designer picks the final
-> name).  Decide whether the design supersedes
+> name). Decide whether the design supersedes
 > `daemon-make-archive.md` § Phase 7 in whole or sits as a
 > sibling that extends it; in the supersede case, add a
 > `Superseded by:` row to `daemon-make-archive.md` in the same
-> PR.  Sync `designs/README.md` (new row, milestone, dependency
+> PR. Sync `designs/README.md` (new row, milestone, dependency
 > edges to the four prior designs and to
 > `daemon-make-archive.md`'s phase-7 box, size estimate).
 
-Decomposed 2026-06-02 per kriskowal CHANGES_REQUESTED on
+Decomposed 2026-06-02 per kriskowal CHANGES*REQUESTED on
 `endojs/endo-but-for-bots#358` into the four-layer stack named in
-the *Where This Sits Among Existing Designs* section above; this
+the \_Where This Sits Among Existing Designs* section above; this
 file is repurposed as the integration layer.
 
 Round-2 update 2026-06-02 reflects the snapshot-mapper layout
@@ -753,14 +746,14 @@ peer directories named by package), the corresponding
 `(compartmentKey, modulePath)` signature, and the threading of
 conditional `exports` through `importLocation` rather than
 through the dependency-graph walk per
-[mvs-resolver](mvs-resolver.md) § *Anti-design steers*.
+[mvs-resolver](mvs-resolver.md) § _Anti-design steers_.
 
 Sequencing pass 2026-07-10 (maintainer-directed reconciliation):
 the four stack designs are accepted together (Proposed to Not
-Started), the *Phased Implementation* preamble above becomes the
+Started), the _Phased Implementation_ preamble above becomes the
 canonical dependency-ordered build plan for the stack,
 workspace-root discovery is assigned to the mapper layer, the
 workspace-member entry shape is pinned in
 [registry-capability](registry-capability.md)
-§ *Capability shape*, and Phase 2's readable-tree fixture stance
+§ _Capability shape_, and Phase 2's readable-tree fixture stance
 vs Phase 4's live-mount snapshot is made explicit.

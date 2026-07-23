@@ -1,11 +1,11 @@
 # Formula Inspector
 
-| | |
-|---|---|
-| **Created** | 2026-02-14 |
-| **Updated** | 2026-06-13 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-14            |
+| **Updated** | 2026-06-13            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | In Progress           |
 
 ## Status
 
@@ -62,8 +62,8 @@ interface EndoHost {
 }
 
 type FormulaRecord = {
-  type: FormulaType;                          // 'eval' | 'lookup' | 'guest' | ...
-  number: string;                             // the 64-char formula number
+  type: FormulaType; // 'eval' | 'lookup' | 'guest' | ...
+  number: string; // the 64-char formula number
   properties: Record<string, FormulaProperty>;
 };
 
@@ -111,7 +111,7 @@ endo inspect <name-or-identifier> [--identifier] [--json]
 - Default output is human-readable: formula type as a header, then one row per property, with reference-properties rendered as the property name plus the target identifier in a dim style.
 - `--json` emits the raw `FormulaRecord` for scripting.
 
-`inspect` was chosen over the alternatives the maintainer offered (`examine`, `formula`) for parallelism with `formula-inspector.md`'s original `endo inspect` proposal (this document's prior name) and with the *Pop the bonnet* metaphor in the existing concept page.
+`inspect` was chosen over the alternatives the maintainer offered (`examine`, `formula`) for parallelism with `formula-inspector.md`'s original `endo inspect` proposal (this document's prior name) and with the _Pop the bonnet_ metaphor in the existing concept page.
 The current CLI (`packages/cli/src/endo.js`) carries 41 verbs (`run`, `make`, `inbox`, `request`, `resolve`, ..., `log`, `ping`); none of `inspect`, `examine`, or `formula` is taken, so the choice is unconstrained by collision.
 The parallel to `endo paths` (from `daemon-retention-paths.md`) and `endo locate` keeps the single-word noun-style-verb shape consistent.
 
@@ -121,12 +121,12 @@ The Chat UI grows one surface for inspecting a value's formula: a back face on t
 
 The Value modal grows a fourth action alongside the existing three (Close, Save, Enter Profile per [`chat-command-bar.md`](chat-command-bar.md) § Modal Actions).
 
-| Action | Keyboard | Manual |
-|--------|----------|--------|
-| Close | `Escape` (front face) | Click × or backdrop |
-| Save | `Enter` (in name field) | Click Save button |
-| Enter Profile | `Shift+P` (proposed) | Click "Enter Profile" |
-| **Flip to Formula / Flip to Value** | **`F`** | **Click the gear icon in the modal header (front face) or the "Show value" button in the back face header** |
+| Action                              | Keyboard                | Manual                                                                                                      |
+| ----------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Close                               | `Escape` (front face)   | Click × or backdrop                                                                                         |
+| Save                                | `Enter` (in name field) | Click Save button                                                                                           |
+| Enter Profile                       | `Shift+P` (proposed)    | Click "Enter Profile"                                                                                       |
+| **Flip to Formula / Flip to Value** | **`F`**                 | **Click the gear icon in the modal header (front face) or the "Show value" button in the back face header** |
 
 `F` is reachable from both faces.
 On the front face it flips to the back; on the back face it flips to the front.
@@ -170,45 +170,45 @@ Edits to a per-type layout land in the registry and the back face picks them up.
 
 The back face is divided into a fixed header (formula-type badge, title, help text, formula identifier) and a scrollable property list.
 The property list shape is the same across all formula types: an ordered list of rows, each row a `<dt>label</dt><dd>value-or-reference-button</dd>` pair.
-Per-type variations differ only in *which* properties are listed and in the per-property classifier (see § Literal-vs-reference resolution).
+Per-type variations differ only in _which_ properties are listed and in the per-property classifier (see § Literal-vs-reference resolution).
 
 The catalog covers all 33 formula types currently in [`packages/daemon/src/formula-type.js`](../packages/daemon/src/formula-type.js).
 
-| Formula type | Header text | Properties (label → render) |
-|---|---|---|
-| `eval` | "Evaluation": code run inside a worker | `source` literal (code block, monospace), `endowments` record (list-of-references, one button per binding labeled by codeName), `worker` reference |
-| `lookup` | "Lookup": name traversal | `hub` reference, `path` literal (array of names rendered as breadcrumbs) |
-| `guest` | "Guest": sub-agent of a host | `hostAgent` reference, `hostHandle` reference |
-| `host` | "Host": agent identity | `handle`, `hostHandle`, `keypair`, `worker`, `inspector`, `petStore`, `mailboxStore`, `mailHub`, `endo`, `networks`, `pins` (all references) |
-| `directory` | "Directory": naming hub | `petStore` reference |
-| `pet-store` | "Pet store": name-to-id table | (no daemon-side metadata; show empty state "No formula properties; this is a leaf store.") |
-| `mailbox-store` | "Mailbox store" | (empty state, as `pet-store`) |
-| `mail-hub` | "Mail hub": inbox-and-outbox facet | `store` reference |
-| `message` | "Message" | (empty state until message-side metadata lands; the formula itself carries `from`, `to`, `replyTo`; treat as references when present) |
-| `make-bundle` | "Make-bundle": unconfined code loaded from a bundle | `bundle` reference, `powers` reference, `worker` reference |
-| `make-unconfined` | "Make-unconfined": unconfined code loaded from a specifier | `specifier` literal (string), `powers` reference, `worker` reference |
-| `make-archive` | "Make-archive": code loaded from an archive | `archive` reference, `powers` reference, `worker` reference |
-| `make-from-tree` | "Make-from-tree": code loaded from a tree | `tree` reference, `powers` reference, `worker` reference |
-| `peer` | "Peer": remote node | `node` literal (hex), `addresses` literal (list of locator URLs) |
-| `mount` | "Mount": filesystem capability | `path` literal (filesystem path), per [`daemon-mount.md`](daemon-mount.md) (additional fields surface as the formula stabilizes) |
-| `scratch-mount` | "Scratch mount": daemon-managed scratch directory | (same as `mount`; the `path` is daemon-managed) |
-| `git` / `git-credential` / `git-remote` | "Git" / "Git credential" / "Git remote" | (per [`daemon-git-capability.md`](daemon-git-capability.md); enumerate after that design lands) |
-| `channel` | "Channel": thread substrate | (per [`daemon-message-streaming.md`](daemon-message-streaming.md); enumerate after that design lands) |
-| `readable-blob` | "Readable blob": immutable bytes | (empty state; the blob is content-addressed and has no retained references) |
-| `readable-tree` | "Readable tree": immutable snapshot | (empty state today; tree-side metadata can surface here when defined) |
-| `promise` | "Promise": pending result | `store` reference, status (pending / fulfilled / rejected), plus the next-value or rejection-reason affordance (see § Promise-formula view) |
-| `resolver` | "Resolver": write-half of a promise | `store` reference |
-| `worker` | "Worker": execution sandbox | (empty state; the worker is a leaf) |
-| `handle` | "Handle": receive-half of an agent | (empty state) |
-| `keypair` | "Keypair": Ed25519 key material | `publicKey` literal (hex). The private key is **not** displayed; the row shows "Private key not displayed" in its place. |
-| `endo` | "Endo bootstrap" | (lists root references when the formula is loaded; deferred to follow-up) |
-| `invitation` | "Invitation" | `hostAgent` reference, `hostHandle` reference, `guestName` literal |
-| `pet-inspector` | "Pet inspector" | `petStore` reference |
-| `least-authority` | "Least authority" | (empty state) |
-| `known-peers-store` | "Known peers store" | (empty state) |
-| `loopback-network` | "Loopback network" | (empty state) |
-| `marshal` | "Marshal" | (per the formula; enumerate when first encountered) |
-| `timer` | "Timer" | `intervalMs` literal, `label` literal |
+| Formula type                            | Header text                                                | Properties (label → render)                                                                                                                        |
+| --------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `eval`                                  | "Evaluation": code run inside a worker                     | `source` literal (code block, monospace), `endowments` record (list-of-references, one button per binding labeled by codeName), `worker` reference |
+| `lookup`                                | "Lookup": name traversal                                   | `hub` reference, `path` literal (array of names rendered as breadcrumbs)                                                                           |
+| `guest`                                 | "Guest": sub-agent of a host                               | `hostAgent` reference, `hostHandle` reference                                                                                                      |
+| `host`                                  | "Host": agent identity                                     | `handle`, `hostHandle`, `keypair`, `worker`, `inspector`, `petStore`, `mailboxStore`, `mailHub`, `endo`, `networks`, `pins` (all references)       |
+| `directory`                             | "Directory": naming hub                                    | `petStore` reference                                                                                                                               |
+| `pet-store`                             | "Pet store": name-to-id table                              | (no daemon-side metadata; show empty state "No formula properties; this is a leaf store.")                                                         |
+| `mailbox-store`                         | "Mailbox store"                                            | (empty state, as `pet-store`)                                                                                                                      |
+| `mail-hub`                              | "Mail hub": inbox-and-outbox facet                         | `store` reference                                                                                                                                  |
+| `message`                               | "Message"                                                  | (empty state until message-side metadata lands; the formula itself carries `from`, `to`, `replyTo`; treat as references when present)              |
+| `make-bundle`                           | "Make-bundle": unconfined code loaded from a bundle        | `bundle` reference, `powers` reference, `worker` reference                                                                                         |
+| `make-unconfined`                       | "Make-unconfined": unconfined code loaded from a specifier | `specifier` literal (string), `powers` reference, `worker` reference                                                                               |
+| `make-archive`                          | "Make-archive": code loaded from an archive                | `archive` reference, `powers` reference, `worker` reference                                                                                        |
+| `make-from-tree`                        | "Make-from-tree": code loaded from a tree                  | `tree` reference, `powers` reference, `worker` reference                                                                                           |
+| `peer`                                  | "Peer": remote node                                        | `node` literal (hex), `addresses` literal (list of locator URLs)                                                                                   |
+| `mount`                                 | "Mount": filesystem capability                             | `path` literal (filesystem path), per [`daemon-mount.md`](daemon-mount.md) (additional fields surface as the formula stabilizes)                   |
+| `scratch-mount`                         | "Scratch mount": daemon-managed scratch directory          | (same as `mount`; the `path` is daemon-managed)                                                                                                    |
+| `git` / `git-credential` / `git-remote` | "Git" / "Git credential" / "Git remote"                    | (per [`daemon-git-capability.md`](daemon-git-capability.md); enumerate after that design lands)                                                    |
+| `channel`                               | "Channel": thread substrate                                | (per [`daemon-message-streaming.md`](daemon-message-streaming.md); enumerate after that design lands)                                              |
+| `readable-blob`                         | "Readable blob": immutable bytes                           | (empty state; the blob is content-addressed and has no retained references)                                                                        |
+| `readable-tree`                         | "Readable tree": immutable snapshot                        | (empty state today; tree-side metadata can surface here when defined)                                                                              |
+| `promise`                               | "Promise": pending result                                  | `store` reference, status (pending / fulfilled / rejected), plus the next-value or rejection-reason affordance (see § Promise-formula view)        |
+| `resolver`                              | "Resolver": write-half of a promise                        | `store` reference                                                                                                                                  |
+| `worker`                                | "Worker": execution sandbox                                | (empty state; the worker is a leaf)                                                                                                                |
+| `handle`                                | "Handle": receive-half of an agent                         | (empty state)                                                                                                                                      |
+| `keypair`                               | "Keypair": Ed25519 key material                            | `publicKey` literal (hex). The private key is **not** displayed; the row shows "Private key not displayed" in its place.                           |
+| `endo`                                  | "Endo bootstrap"                                           | (lists root references when the formula is loaded; deferred to follow-up)                                                                          |
+| `invitation`                            | "Invitation"                                               | `hostAgent` reference, `hostHandle` reference, `guestName` literal                                                                                 |
+| `pet-inspector`                         | "Pet inspector"                                            | `petStore` reference                                                                                                                               |
+| `least-authority`                       | "Least authority"                                          | (empty state)                                                                                                                                      |
+| `known-peers-store`                     | "Known peers store"                                        | (empty state)                                                                                                                                      |
+| `loopback-network`                      | "Loopback network"                                         | (empty state)                                                                                                                                      |
+| `marshal`                               | "Marshal"                                                  | (per the formula; enumerate when first encountered)                                                                                                |
+| `timer`                                 | "Timer"                                                    | `intervalMs` literal, `label` literal                                                                                                              |
 
 Where the table says "(empty state)" the back face still renders the header (badge, type name, help text, formula identifier) and an explicit empty-state message so the user sees the type but is not led to expect missing data.
 
@@ -231,11 +231,11 @@ flowchart LR
 The daemon returns formula-identifier strings (`{64-char number}:{64-char node}` per [`daemon-256-bit-identifiers.md`](daemon-256-bit-identifiers.md)) for properties that retain other formulas, plain JS values for literals, and records (key→identifier maps) for list-of-references properties.
 
 **The reference button is labeled by the property name in the formula schema, not by the target's pet name.**
-For an `eval` formula, the row whose value is the formula's `worker` is rendered as a button reading "worker", *not* "@my-worker" (the worker often has no pet name in the user's store).
+For an `eval` formula, the row whose value is the formula's `worker` is rendered as a button reading "worker", _not_ "@my-worker" (the worker often has no pet name in the user's store).
 For the `endowments` record (a `Record<codeName, formula-identifier>`), each binding becomes a button labeled by its codeName (the name the eval's source code uses), not by the source pet name nor by the target's pet name.
 This rule keeps the back face truthful: the formula's property names are what the formula carries; pet names are user-side decorations that may or may not exist.
 
-When the click target *does* have one or more pet names in the user's store, the front face the modal lands on still shows those pet name chips (per [`chat-command-bar.md`](chat-command-bar.md) § Value States).
+When the click target _does_ have one or more pet names in the user's store, the front face the modal lands on still shows those pet name chips (per [`chat-command-bar.md`](chat-command-bar.md) § Value States).
 The back face's button label and the front face's title can therefore differ; that is intentional.
 
 ### Promise-formula view
@@ -243,11 +243,11 @@ The back face's button label and the front face's title can therefore differ; th
 `promise` and `resolver` formulas have additional state beyond the static `store` reference.
 The back face for a `promise` formula renders one of three affordances depending on the promise's status, integrated with the error-tracing facility in [`docs/error-tracing-design.md`](../docs/error-tracing-design.md).
 
-| Status | Affordance | Behavior |
-|---|---|---|
-| **Pending** | "View next value" button | Subscribes to the promise via the `store` reference (the substrate where the eventual value lands) and re-renders on resolution. The subscription is per-modal-session; closing the modal drops it. |
-| **Fulfilled** | Reference button labeled "value" | Points at the resolved value's formula identifier. Clicking flips the modal to that value's front face, with the existing reference-button discipline. |
-| **Rejected** | Rejection reason as a literal, plus a "View trace" button | The rejection reason renders as a literal in a dim style. If the rejection carries an `errorId` annotation (per `docs/error-tracing-design.md` § Correlation key), the "View trace" button fetches `E(host).traces().lookup(errorId)` on demand and renders the resulting `TraceReport` (causal `causes` chain, plus `related` window) below the rejection reason. |
+| Status        | Affordance                                                | Behavior                                                                                                                                                                                                                                                                                                                                                           |
+| ------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Pending**   | "View next value" button                                  | Subscribes to the promise via the `store` reference (the substrate where the eventual value lands) and re-renders on resolution. The subscription is per-modal-session; closing the modal drops it.                                                                                                                                                                |
+| **Fulfilled** | Reference button labeled "value"                          | Points at the resolved value's formula identifier. Clicking flips the modal to that value's front face, with the existing reference-button discipline.                                                                                                                                                                                                             |
+| **Rejected**  | Rejection reason as a literal, plus a "View trace" button | The rejection reason renders as a literal in a dim style. If the rejection carries an `errorId` annotation (per `docs/error-tracing-design.md` § Correlation key), the "View trace" button fetches `E(host).traces().lookup(errorId)` on demand and renders the resulting `TraceReport` (causal `causes` chain, plus `related` window) below the rejection reason. |
 
 The promise subscription on pending uses the same `store`-reference shape the existing `daemon-message-streaming.md` channel substrate uses; the implementation reuses whatever streaming substrate is shipped by that design rather than introducing a new subscription mechanism.
 
@@ -256,7 +256,7 @@ This keeps the back face cheap for the common case (a rejection the user does no
 
 ### Back-to-value navigation
 
-**The design uses the *stack* model**: Back returns to the prior face/value.
+**The design uses the _stack_ model**: Back returns to the prior face/value.
 The modal grows a back-button (`Backspace` keyboard, `←` glyph manual) that pops the most recent entry off a stack maintained internally to the modal session.
 The stack lives until the modal is closed; closing clears it.
 
@@ -294,9 +294,9 @@ The Chat client consumes two surfaces.
    ```
    The Chat client caches the `type` per pet name as it streams.
    When the user opens the modal, the type is already on the client side; no extra round-trip is needed to pick the right back-face layout.
-   This is the *additive-shape* discipline from `inventory-grouping-by-type.md` (old consumers that destructure only `add` / `remove` are unaffected).
+   This is the _additive-shape_ discipline from `inventory-grouping-by-type.md` (old consumers that destructure only `add` / `remove` are unaffected).
 2. **`E(host).getFormula(identifier)`** for the per-type properties.
-   This is called *lazily* on first flip-to-back per modal session.
+   This is called _lazily_ on first flip-to-back per modal session.
    The result (literal values plus formula-identifier references) is cached for the session so subsequent flips back-and-forth are cheap.
    The cache is per-modal-session, not global.
 
@@ -327,7 +327,7 @@ sequenceDiagram
 The per-type layouts are a small registry in the Chat client.
 
 - A new file `packages/chat/formula-view-component.js` (sibling of `packages/chat/value-component.js`) renders the modal back face.
-- A registry `packages/chat/formula-view-registry.js` maps formula type → `{ header, helpText, propertyList }` per the *Formula-view layout taxonomy* table.
+- A registry `packages/chat/formula-view-registry.js` maps formula type → `{ header, helpText, propertyList }` per the _Formula-view layout taxonomy_ table.
 - `packages/chat/value-component.js` grows the flip control, the back-face mount point, and the back-stack.
 - The inventory-row gear icon (rendered in `packages/chat/inventory-component.js` per [`chat-components.md`](chat-components.md) § Inventory panel) opens the Value modal already flipped to the back face for the row's value.
 - CSS variables added: `--card-flip-duration`, `--card-flip-easing`; the reduced-motion rule overrides duration to `0ms` and disables the rotation.
@@ -341,22 +341,22 @@ The per-type layouts are a small registry in the Chat client.
 
 ## Options Considered
 
-| Option | Decision | Rationale |
-|---|---|---|
-| **Daemon surface**: keep `@info` (extend) versus replace with host method `getFormula` | **Host method `getFormula`** | `@info` forces composed paths through a name hub and exposes the inspector to any agent that resolves `@info`; the redesign aligns the inspector with the host-only authority shape used by `daemon-retention-paths` and the `traces` facet from `docs/error-tracing-design.md`. Considered and rejected: *deprecation alias (`@info` redirects onto `getFormula` for one release)*. Reason: a redirect re-encodes the same composition burden in a different surface; the test rewrite is cheap. |
-| **CLI verb**: `inspect` versus `examine` versus `formula` | **`inspect`** | Parallel to the existing `endo inspect` proposal in this document's prior draft; parallel to the *Pop the bonnet* metaphor in the concept page; parallel to the single-word noun-style-verb shape of `endo paths`, `endo locate`, `endo show`. |
-| **Chat surface count**: dedicated inspector panel plus modal back face versus single modal back face | **Single modal back face** | The modal back face is the everyday-inspection moment (one flip, no context switch); an inventory-row gear icon reaches it directly so the power-user entry point is preserved without a separate panel. Considered and rejected: *dedicated inspector panel with read/edit toggle and retention-paths embed*. Reason: kriskowal review 2026-06-13: "We only need one surface. ... While one formula captures state, we do not need these to be user editable at this stage of development." |
-| **Navigation model**: stack versus replace | **Stack** | Preserves entry-point context across the reference walk; matches user expectation from browser-back; bounded only by user clicks. Considered and rejected: *replace*. Reason: loses context after one click. Maintainer ack 2026-06-12: "Stack model sounds good to me." |
-| **Cycle handling**: leave-as-is versus de-duplicate | **Leave as-is (principle of least surprise)** | The user's mental model of stack depth matches their click count; coalescing A → B → A into one frame back to A is an invisible behavior that diverges from that mental model. Maintainer ruling 2026-06-12: "Principle of least surprise: do not unwind cycles. The user has a mental model of how many layers they have gone down that we should not meddle with." |
-| **Reference-button label**: property name versus target pet name | **Property name** | The property name is on the formula and always present; the target's pet name is a user-side decoration that may or may not exist. Labeling by property name keeps the back face truthful and consistent across users. |
-| **Escape on back face**: flip-to-front versus close-modal | **Flip-to-front** | Matches `chat-invariants.md` § Escape Consistency. Two Escapes from the back face closes the modal, consistent with the modal-stack metaphor. |
-| **Promise rendering**: status-aware (subscribe + error-tracing) versus static `store` reference | **Status-aware** | A `promise` formula's interesting content is its eventual value (or rejection); a static `store` reference reveals only the substrate. The subscribe-and-button-to-view-next-value pattern matches kriskowal's directive 2026-06-12 and the error-tracing integration uses the existing `EndoHost.traces()` facet rather than introducing a new error surface. |
+| Option                                                                                               | Decision                                      | Rationale                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ---------------------------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Daemon surface**: keep `@info` (extend) versus replace with host method `getFormula`               | **Host method `getFormula`**                  | `@info` forces composed paths through a name hub and exposes the inspector to any agent that resolves `@info`; the redesign aligns the inspector with the host-only authority shape used by `daemon-retention-paths` and the `traces` facet from `docs/error-tracing-design.md`. Considered and rejected: _deprecation alias (`@info` redirects onto `getFormula` for one release)_. Reason: a redirect re-encodes the same composition burden in a different surface; the test rewrite is cheap. |
+| **CLI verb**: `inspect` versus `examine` versus `formula`                                            | **`inspect`**                                 | Parallel to the existing `endo inspect` proposal in this document's prior draft; parallel to the _Pop the bonnet_ metaphor in the concept page; parallel to the single-word noun-style-verb shape of `endo paths`, `endo locate`, `endo show`.                                                                                                                                                                                                                                                    |
+| **Chat surface count**: dedicated inspector panel plus modal back face versus single modal back face | **Single modal back face**                    | The modal back face is the everyday-inspection moment (one flip, no context switch); an inventory-row gear icon reaches it directly so the power-user entry point is preserved without a separate panel. Considered and rejected: _dedicated inspector panel with read/edit toggle and retention-paths embed_. Reason: kriskowal review 2026-06-13: "We only need one surface. ... While one formula captures state, we do not need these to be user editable at this stage of development."      |
+| **Navigation model**: stack versus replace                                                           | **Stack**                                     | Preserves entry-point context across the reference walk; matches user expectation from browser-back; bounded only by user clicks. Considered and rejected: _replace_. Reason: loses context after one click. Maintainer ack 2026-06-12: "Stack model sounds good to me."                                                                                                                                                                                                                          |
+| **Cycle handling**: leave-as-is versus de-duplicate                                                  | **Leave as-is (principle of least surprise)** | The user's mental model of stack depth matches their click count; coalescing A → B → A into one frame back to A is an invisible behavior that diverges from that mental model. Maintainer ruling 2026-06-12: "Principle of least surprise: do not unwind cycles. The user has a mental model of how many layers they have gone down that we should not meddle with."                                                                                                                              |
+| **Reference-button label**: property name versus target pet name                                     | **Property name**                             | The property name is on the formula and always present; the target's pet name is a user-side decoration that may or may not exist. Labeling by property name keeps the back face truthful and consistent across users.                                                                                                                                                                                                                                                                            |
+| **Escape on back face**: flip-to-front versus close-modal                                            | **Flip-to-front**                             | Matches `chat-invariants.md` § Escape Consistency. Two Escapes from the back face closes the modal, consistent with the modal-stack metaphor.                                                                                                                                                                                                                                                                                                                                                     |
+| **Promise rendering**: status-aware (subscribe + error-tracing) versus static `store` reference      | **Status-aware**                              | A `promise` formula's interesting content is its eventual value (or rejection); a static `store` reference reveals only the substrate. The subscribe-and-button-to-view-next-value pattern matches kriskowal's directive 2026-06-12 and the error-tracing integration uses the existing `EndoHost.traces()` facet rather than introducing a new error surface.                                                                                                                                    |
 
 ## Security Considerations
 
 - **Surface visibility**: The Formula Inspector reveals the formula's retained references and literals to the owning host.
   `getFormula` is host-only; guests do not have access (mirroring the precedent in `daemon-retention-paths.md` and `docs/error-tracing-design.md`).
-- **Keypair caveat**: For `keypair` formulas, the back face displays the *public* key only.
+- **Keypair caveat**: For `keypair` formulas, the back face displays the _public_ key only.
   The private key is on the formula JSON (per [`daemon-256-bit-identifiers.md`](daemon-256-bit-identifiers.md) § Per-Agent Keypairs) but **must not** be rendered; the `keypair` row explicitly omits the `privateKey` property and shows a "Private key not displayed" note in its place.
 - **Cross-peer locators**: `getFormula(identifier)` accepts only local formula identifiers, not cross-peer locators.
   Cross-peer formula content is the remote host's concern; surfacing it would require a CapTP round-trip that this design does not propose.
@@ -398,15 +398,15 @@ Exercise what is implemented.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
+| Design                                     | Relationship                                                                                                                |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
 | `inventory-grouping-by-type` (Not Started) | Supplies the `followNameChanges` `type` field so the modal back face can pick the right layout without an extra round-trip. |
-| `docs/error-tracing-design.md` (Reference) | Supplies the `EndoHost.traces()` facet that the rejected-promise view uses to fetch causal traces on demand. |
-| `daemon-message-streaming` (In Progress) | Supplies the substrate the pending-promise subscription rides on for the "View next value" affordance. |
-| `chat-command-bar` (Active) | The Value modal lives here; the `F` flip key and the modeline hint extend its modal-action vocabulary. |
-| `chat-components` (Complete) | The inventory row's gear icon (opening the modal flipped to the back face) is a new chat-components-style affordance. |
-| `chat-invariants` (Complete) | The `Escape` flip-to-front behavior is governed by the Escape Consistency rule. |
-| `daemon-256-bit-identifiers` (Complete) | Supplies the formula-identifier string shape and the per-agent keypair structure. |
+| `docs/error-tracing-design.md` (Reference) | Supplies the `EndoHost.traces()` facet that the rejected-promise view uses to fetch causal traces on demand.                |
+| `daemon-message-streaming` (In Progress)   | Supplies the substrate the pending-promise subscription rides on for the "View next value" affordance.                      |
+| `chat-command-bar` (Active)                | The Value modal lives here; the `F` flip key and the modeline hint extend its modal-action vocabulary.                      |
+| `chat-components` (Complete)               | The inventory row's gear icon (opening the modal flipped to the back face) is a new chat-components-style affordance.       |
+| `chat-invariants` (Complete)               | The `Escape` flip-to-front behavior is governed by the Escape Consistency rule.                                             |
+| `daemon-256-bit-identifiers` (Complete)    | Supplies the formula-identifier string shape and the per-agent keypair structure.                                           |
 
 ## Open Questions
 

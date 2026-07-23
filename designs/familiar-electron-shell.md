@@ -1,11 +1,11 @@
 # Familiar Electron Shell
 
-| | |
-|---|---|
-| **Created** | 2026-02-14 |
-| **Updated** | 2026-02-26 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Complete |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-14            |
+| **Updated** | 2026-02-26            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Complete              |
 
 ## Status
 
@@ -46,6 +46,7 @@ daemon, Chat UI, and Node.js runtime — into a native desktop application that
 non-developer users can install and run.
 
 The Familiar must:
+
 1. Carry a platform-specific Node.js executable and the bundled daemon.
 2. Manage the daemon lifecycle (start, restart, purge).
 3. Serve Chat as the primary UI in the Electron window.
@@ -80,6 +81,7 @@ packages/familiar/
 The `daemon-manager.js` module manages the daemon process:
 
 **Start:**
+
 1. Check if a daemon is already running by probing the Unix socket
    (`~/.local/state/endo/daemon.sock` or platform equivalent via `@endo/where`).
 2. If a daemon is running, connect to it. Do not spawn a second daemon. The
@@ -102,10 +104,12 @@ process even if the Familiar window is closed. This matches the CLI behavior
 where `endo start` spawns a persistent daemon.
 
 **Restart:**
+
 - Connect to the existing daemon and send a shutdown signal, then spawn a new
   one. Exposed as a menu action or Chat command.
 
 **Purge (dangerous):**
+
 - Stop the daemon, delete the state directory (`~/.local/state/endo/`), and
   optionally restart. Requires confirmation dialog. Exposed as a menu action.
 
@@ -125,7 +129,7 @@ The `electron-main.js` sets up:
 Register `localhttp://` as a privileged protocol in Electron:
 
 ```js
-protocol.handle('localhttp', async (request) => {
+protocol.handle('localhttp', async request => {
   // Parse: localhttp://<weblet-id>/path
   const url = new URL(request.url);
   const webletId = url.hostname;
@@ -175,6 +179,7 @@ logic are needed — it connects to `ws://127.0.0.1:<port>/` with the injected
 port and agent ID.
 
 The Familiar provides these values to Chat:
+
 - Via query parameters: `http://localhost:<port>/?endoPort=<port>&endoId=<id>`
 - Or via Electron's `preload.js` injecting `window.ENDO_PORT` and
   `window.ENDO_ID`.
@@ -183,12 +188,12 @@ The Familiar provides these values to Chat:
 
 The Familiar must handle these scenarios:
 
-| Scenario | Behavior |
-|----------|----------|
-| No daemon running | Spawn bundled daemon |
-| CLI-started daemon running | Connect to it (compatible) |
-| Older daemon version running | Warn user, offer restart |
-| Familiar-started daemon running | Connect to it |
+| Scenario                              | Behavior                         |
+| ------------------------------------- | -------------------------------- |
+| No daemon running                     | Spawn bundled daemon             |
+| CLI-started daemon running            | Connect to it (compatible)       |
+| Older daemon version running          | Warn user, offer restart         |
+| Familiar-started daemon running       | Connect to it                    |
 | Daemon crashes while Familiar is open | Detect disconnect, offer restart |
 
 Detection: probe the Unix socket path. If a connection succeeds and
@@ -197,6 +202,7 @@ Detection: probe the Unix socket path. If a connection succeeds and
 ### Electron packaging
 
 Use `electron-builder` or `electron-forge` to produce platform installers:
+
 - macOS: `.dmg` with signed `.app` bundle
 - Linux: `.AppImage` or `.deb`
 - Windows: `.exe` installer via NSIS or `.msi`

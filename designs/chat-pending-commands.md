@@ -1,11 +1,11 @@
 # Chat Pending Commands Region
 
-| | |
-|---|---|
-| **Created** | 2026-03-11 |
-| **Updated** | 2026-05-19 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-03-11            |
+| **Updated** | 2026-05-19            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | In Progress           |
 
 ## Status
 
@@ -51,7 +51,7 @@ This creates two problems:
    message disappears, an adopted value appears in the pet store). If the
    command fails, an error flash appears briefly and is gone.
 
-The inbox transcript shows inbound messages — things sent *to* the user. It
+The inbox transcript shows inbound messages — things sent _to_ the user. It
 does not show outbound commands the user issued. The result is an asymmetric
 record: you see what others said to you but not what you did.
 
@@ -64,7 +64,7 @@ above the command bar and below the message list. This region displays:
 
 - Each pending command as a compact card showing the command name and its
   arguments (e.g., `dismiss #5`, `adopt #3:edge → myname`, `eval …`).
-- An indeterminate progress indicator *per card*, not on the send button.
+- An indeterminate progress indicator _per card_, not on the send button.
 - The time elapsed since submission.
 
 When a command settles:
@@ -116,7 +116,7 @@ own card in the pending region.
 Commands are independent daemon operations. The daemon already handles
 concurrent `E()` calls correctly — `dismiss`, `adopt`, and `resolve`
 operate on different message numbers and do not interfere. `evaluate` runs
-in an isolated worker. The only ordering concern is *user intent*: if a
+in an isolated worker. The only ordering concern is _user intent_: if a
 user adopts edge `foo` from message 3 and then renames `foo`, the rename
 must happen after adoption completes. The pending region makes this
 ordering visible — the user can see that adoption is still in flight.
@@ -158,9 +158,9 @@ is deferred.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|-------------|
-| [chat-command-bar](chat-command-bar.md) | Command bar states and modeline that this design modifies |
+| Design                                                        | Relationship                                                       |
+| ------------------------------------------------------------- | ------------------------------------------------------------------ |
+| [chat-command-bar](chat-command-bar.md)                       | Command bar states and modeline that this design modifies          |
 | [daemon-commands-as-messages](daemon-commands-as-messages.md) | Deeper daemon-level solution that would subsume the pending region |
 
 ## Affected Packages

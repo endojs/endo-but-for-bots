@@ -1,11 +1,11 @@
 # Chat Inventory Create Menu
 
-| | |
-|---|---|
-| **Created** | 2026-06-02 |
-| **Updated** | 2026-06-14 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-06-02            |
+| **Updated** | 2026-06-14            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## What is the Problem Being Solved?
 
@@ -46,9 +46,9 @@ Out of scope:
 
 The `+` button sits at the top of the inventory panel ([chat-components § Inventory Panel](chat-components.md)), not on the spaces gutter.
 
-The spaces gutter already has a `+` button ([chat-spaces-gutter § User Interactions](chat-spaces-gutter.md) item 3) that opens a dialog to add a new *space* (a bookmark into the capability graph, pointing at an existing guest).
+The spaces gutter already has a `+` button ([chat-spaces-gutter § User Interactions](chat-spaces-gutter.md) item 3) that opens a dialog to add a new _space_ (a bookmark into the capability graph, pointing at an existing guest).
 That affordance is about navigation, not creation: it picks an item that already exists and pins it to the gutter.
-The new affordance is about *minting* a fresh item under the current profile, which is what the inventory shows.
+The new affordance is about _minting_ a fresh item under the current profile, which is what the inventory shows.
 Separating the two prevents the gutter `+` from drifting into a multi-purpose menu and keeps each `+` action one click from its target surface.
 
 The button is rendered as a header row in the inventory panel, immediately above the first name, styled consistently with the inventory item rows (dashed border, `+` glyph, hover affordance).
@@ -94,9 +94,9 @@ Backed by `E(powers).provideMount(absolutePath, petName)` (per [daemon-mount § 
 
 Create-flow fields:
 
-| Field | Source | Validation |
-|---|---|---|
-| Pet name | text | non-empty; not already in scope; not a reserved special name |
+| Field     | Source                                   | Validation                                                     |
+| --------- | ---------------------------------------- | -------------------------------------------------------------- |
+| Pet name  | text                                     | non-empty; not already in scope; not a reserved special name   |
 | Host path | host filesystem picker, or text fallback | resolves; is a directory; not a symlink leading out of `$HOME` |
 
 The host-filesystem picker is a future enhancement.
@@ -113,9 +113,9 @@ The host directory is allocated under the daemon's `statePath`.
 
 Create-flow fields:
 
-| Field | Source | Validation |
-|---|---|---|
-| Pet name | text | non-empty; not already in scope; not a reserved special name |
+| Field    | Source | Validation                                                   |
+| -------- | ------ | ------------------------------------------------------------ |
+| Pet name | text   | non-empty; not already in scope; not a reserved special name |
 
 Lifecycle:
 A scratch mount lives as long as its pet name is reachable.
@@ -126,14 +126,14 @@ The Chat UI does not surface "delete this scratch space" beyond the existing inv
 
 A primitive, list, or record stored as a value formula ([daemon-value-message § Message formula persistence](daemon-value-message.md)).
 The primitives `null`, booleans, numbers, bigints, strings, symbols are accepted, as are lists and records of primitives.
-Remotable references are *not* accepted from this surface: they require a source capability, which the inventory create flow does not produce.
+Remotable references are _not_ accepted from this surface: they require a source capability, which the inventory create flow does not produce.
 
 Create-flow fields:
 
-| Field | Source | Validation |
-|---|---|---|
-| Pet name | text | non-empty; not already in scope; not a reserved special name |
-| Value | text area, parsed as SmallCaps | passes `@endo/marshal` parse; resolves to a passable value |
+| Field    | Source                         | Validation                                                   |
+| -------- | ------------------------------ | ------------------------------------------------------------ |
+| Pet name | text                           | non-empty; not already in scope; not a reserved special name |
+| Value    | text area, parsed as SmallCaps | passes `@endo/marshal` parse; resolves to a passable value   |
 
 On submit, the form parses the SmallCaps text via `@endo/marshal`'s `decodeFromSmallcaps`, calls `E(powers).storeValue(marshalledText)`, and writes the resulting formula under the chosen pet name.
 The Monaco editor wrapper ([chat-components § Eval Components](chat-components.md) `monaco-wrapper.js`) is reused for the value text area so the same syntax-highlighting and parse-feedback users already see in the eval form covers the value-create flow.
@@ -172,7 +172,7 @@ That design already covers:
 - value-message reply semantics
 - guest provisioning via the manager's `@agent` introduction
 
-What that flow does *not* cover, and what this design adds, is the Chat-UI surface that:
+What that flow does _not_ cover, and what this design adds, is the Chat-UI surface that:
 
 1. picks the harness (Lal / Fae / Genie),
 2. picks the inference source by name (not by URL),
@@ -206,11 +206,11 @@ Each pane is a step the user can navigate forward and back (per the keyboard-man
 A radio-group list of available harnesses.
 Today the harnesses are separate; the maintainer has named convergence on "a unified Endo agent harness" as a future direction, so the UI surfaces this as a transitional choice:
 
-| Harness | Source package | Notes |
-|---|---|---|
-| Lal | [`packages/lal/`](../packages/lal/) | Reply-chain transcripts; static tools. |
-| Fae | [`packages/fae/`](../packages/fae/) | Flat transcripts; dynamic tool discovery. |
-| Genie | [`packages/genie/`](../packages/genie/) | Sandboxed workspace; tool set tuned for agentic coding via `@mariozechner/pi-ai`. |
+| Harness | Source package                          | Notes                                                                             |
+| ------- | --------------------------------------- | --------------------------------------------------------------------------------- |
+| Lal     | [`packages/lal/`](../packages/lal/)     | Reply-chain transcripts; static tools.                                            |
+| Fae     | [`packages/fae/`](../packages/fae/)     | Flat transcripts; dynamic tool discovery.                                         |
+| Genie   | [`packages/genie/`](../packages/genie/) | Sandboxed workspace; tool set tuned for agentic coding via `@mariozechner/pi-ai`. |
 
 Discovery:
 The list is sourced from the introduced names in the current host's namespace.
@@ -223,7 +223,7 @@ The note links to the open question section.
 
 ### Pane 2: Inference source selection
 
-The user picks a *provider* by name and (within the chosen provider) a *model*.
+The user picks a _provider_ by name and (within the chosen provider) a _model_.
 URLs and per-provider configuration details are not surfaced.
 
 Provider registry:
@@ -232,13 +232,13 @@ Each registry entry carries `name`, `apiStyle`, `authShape`, and a `listModels()
 
 The maintainer's four named providers, mapped onto registry entries (with one variant for remote Ollama):
 
-| Provider | Registry name | `authShape` | First-class flow |
-|---|---|---|---|
-| Anthropic | `anthropic` | `apiKey` (Pro/Max OAuth in a later phase per endopi § Phases 3-4) | API-key paste; OAuth when shipped |
-| OpenAI | `openai` | `apiKey` (Plus/Pro OAuth in a later phase) | API-key paste; OAuth when shipped |
-| Ollama (local) | `ollama` | `none` | Auto-detect localhost:11434; query supported models including not-yet-downloaded; offer download |
-| Ollama Remote | `ollama-remote` | `none` (default) or `apiKey` (per-host bearer) | Reveal custom host field; otherwise as Ollama local |
-| OpenRouter | `openrouter` | `apiKey` plus optional `referer` / `appName` | API-key paste; advanced disclosure for HTTP-Referer and X-Title attribution fields |
+| Provider       | Registry name   | `authShape`                                                       | First-class flow                                                                                 |
+| -------------- | --------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Anthropic      | `anthropic`     | `apiKey` (Pro/Max OAuth in a later phase per endopi § Phases 3-4) | API-key paste; OAuth when shipped                                                                |
+| OpenAI         | `openai`        | `apiKey` (Plus/Pro OAuth in a later phase)                        | API-key paste; OAuth when shipped                                                                |
+| Ollama (local) | `ollama`        | `none`                                                            | Auto-detect localhost:11434; query supported models including not-yet-downloaded; offer download |
+| Ollama Remote  | `ollama-remote` | `none` (default) or `apiKey` (per-host bearer)                    | Reveal custom host field; otherwise as Ollama local                                              |
+| OpenRouter     | `openrouter`    | `apiKey` plus optional `referer` / `appName`                      | API-key paste; advanced disclosure for HTTP-Referer and X-Title attribution fields               |
 
 The UI shape:
 
@@ -279,14 +279,14 @@ Hiding the URL:
 The registry entry holds the canonical base URL per provider.
 For Anthropic, OpenAI, and OpenRouter the URL is the provider's documented public endpoint.
 For Ollama (local) the registry entry's default is `http://127.0.0.1:11434`; the create-agent UI auto-fills it.
-For users running Ollama on a remote machine, *Ollama Remote* is a distinct provider entry in the registry (not an "Advanced" disclosure on the local row) so the URL field surfaces only when the user explicitly picks that variant.
+For users running Ollama on a remote machine, _Ollama Remote_ is a distinct provider entry in the registry (not an "Advanced" disclosure on the local row) so the URL field surfaces only when the user explicitly picks that variant.
 The framing on the UI reads "Ollama Remote (running on another machine)" rather than naming a URL, keeping the maintainer's "without having to know the details of how they are configured" discipline.
 OpenRouter's per-request attribution headers (HTTP-Referer, X-Title) sit behind a small "Attribution (optional)" disclosure on the OpenRouter row; the defaults are an Endo-identifying referer and the user's chosen pet name, and the disclosure exists for users who want explicit control over the attribution OpenRouter exposes to upstream providers.
 
 Model discovery:
 Once a provider is picked, the UI calls the registry entry's `listModels()` and renders the returned list.
 For providers that require an API key before model listing (Anthropic, OpenAI, OpenRouter), the API-key paste happens first; for Ollama (local or remote), model listing works without auth.
-The Ollama registry entry's `listModels()` returns *both* the locally-installed models (from `/api/tags`) *and* the supported models the user could pull (from the curated catalog in `pi-ai`'s Ollama adaptor, per [endopi-provider-registry-and-oauth § buildOllamaModel masquerade](endopi-provider-registry-and-oauth.md)).
+The Ollama registry entry's `listModels()` returns _both_ the locally-installed models (from `/api/tags`) _and_ the supported models the user could pull (from the curated catalog in `pi-ai`'s Ollama adaptor, per [endopi-provider-registry-and-oauth § buildOllamaModel masquerade](endopi-provider-registry-and-oauth.md)).
 The picker renders both kinds in one list with a visible state badge ("local" vs "not downloaded").
 Pre-known model lists are cached in the registry as a fallback so the picker is responsive even when the network is slow.
 
@@ -310,44 +310,44 @@ The pane enumerates the nine rows of the capability bank as described in [daemon
 Filesystem is shippable today via the mount-create composition; the other eight rows ship as documented placeholders that surface the architectural direction without offering a half-implemented control.
 The system is extensible: as each row's substrate design lands, the pane gains a working control without changing pane 3's shape or surrounding panes.
 
-| Row | Substrate | Today | Future |
-|---|---|---|---|
-| `@main` worker | [familiar-bundled-agents § Specials](familiar-bundled-agents.md) | Omitted by default. The agent already runs on `@main`; an explicit row would imply a per-tool / per-tier worker choice the unified harness has not yet exposed. | Becomes selectable when the unified harness lands and a per-tool / per-tier worker shape is offered. |
-| `@fs` (filesystem) | [daemon-mount](daemon-mount.md), [daemon-mount-capabilities](daemon-mount-capabilities.md) | Omitted by default; opt-in selects either a *scratch* mount ([daemon-mount § `ScratchMount`](daemon-mount.md)) or a *snapshot* of an existing mount, or picks an existing mount-cap from the inventory, or "create new" which inlines the [§ Filesystem mount](#1-filesystem-mount) flow. When coupled with `@main`, the pair backs a posix sandbox: the `@fs` mount becomes the filesystem the worker on `@main` sees as its root. | Per [daemon-mount-capabilities](daemon-mount-capabilities.md) when capability VFS lands; the row's value type changes from "one mount cap" to "a composed VFS namespace". |
-| Process execution (`@node`) | [daemon-capability-bank § Process execution](daemon-capability-bank.md), [daemon-mount-capabilities § Phase 4](daemon-mount-capabilities.md) | Omitted by default; opt-in not recommended outside a posix-sandboxed `@fs` + `@main` composition. A child-process / shell capability without a confinement story is a foot-gun for new users. | Per the OS-sandbox direction in [daemon-capability-bank § Process execution](daemon-capability-bank.md); sandboxed by default once the substrate ships. |
-| Network | [daemon-capability-bank § Network](daemon-capability-bank.md), `endoclaw-network-fetch` | Omitted by default; documented placeholder. | Bound to a denial-pattern-attenuated fetch endowment with a per-origin allow / deny shape per the capability bank's principle 4. |
-| Git operations | [daemon-git-capability](daemon-git-capability.md), [daemon-git-remotes](daemon-git-remotes.md) | Omitted by default; documented placeholder. The git trio (`daemon-git-capability`, `daemon-git-remotes`, `daemon-git-next-steps`) is in flight; pane 3's row activates once the canonical `@git` endowment shape lands. | Composed with `@fs` (workspace) and optionally `@network` (remotes); ASKPASS injection per the substrate's credential-injection mechanism. |
-| Environment variables | [daemon-capability-bank § Environment variables](daemon-capability-bank.md) | Omitted by default; documented placeholder. | A per-key attenuation map (`KEY → value | <prompt>`); the agent only sees the keys the user explicitly grants. |
-| Credential store | [endopi-provider-registry-and-oauth § Encrypted-at-rest credentials](endopi-provider-registry-and-oauth.md) and the sibling design at [§ Open Questions](#open-questions) | Omitted by default; documented placeholder. The wizard's own provider-credential paste (pane 2) lands in the root host agent pet store with encryption per the sibling design; the *Credential store* endowment is for *other agents* sharing the credential set. | A per-provider attenuation that lets a delegate agent draw on a subset of the user's credentials without re-pasting. |
-| User I/O | [daemon-capability-bank § User I/O](daemon-capability-bank.md) | Omitted by default; documented placeholder. The agent's reply chain already routes through Chat; an explicit User-I/O endowment is for *other* surfaces (Electron notifications, the Familiar tray icon) per `endoclaw-notifications`. | Bound to the Electron Notification API per the existing notifications design. |
-| Timer | [daemon-capability-bank § Timer](daemon-capability-bank.md), `endoclaw-timer` | Omitted by default; documented placeholder. | Bound to the daemon's existing timer formula; rate-limited per the capability bank's principle 4 (denial patterns). |
-| Delegates | [daemon-capability-bank § Delegates](daemon-capability-bank.md) | Omitted by default; documented placeholder. A *delegate* row endows the new agent with the right to *create* further agents (recursive attenuation per capability-bank principle 2). | A picker over the user's other host agents and a quota shape per the capability bank's principle 4. |
+| Row                         | Substrate                                                                                                                                                                 | Today                                                                                                                                                                                                                                                                                                                                                                                                                               | Future                                                                                                                                                                    |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `@main` worker              | [familiar-bundled-agents § Specials](familiar-bundled-agents.md)                                                                                                          | Omitted by default. The agent already runs on `@main`; an explicit row would imply a per-tool / per-tier worker choice the unified harness has not yet exposed.                                                                                                                                                                                                                                                                     | Becomes selectable when the unified harness lands and a per-tool / per-tier worker shape is offered.                                                                      |
+| `@fs` (filesystem)          | [daemon-mount](daemon-mount.md), [daemon-mount-capabilities](daemon-mount-capabilities.md)                                                                                | Omitted by default; opt-in selects either a _scratch_ mount ([daemon-mount § `ScratchMount`](daemon-mount.md)) or a _snapshot_ of an existing mount, or picks an existing mount-cap from the inventory, or "create new" which inlines the [§ Filesystem mount](#1-filesystem-mount) flow. When coupled with `@main`, the pair backs a posix sandbox: the `@fs` mount becomes the filesystem the worker on `@main` sees as its root. | Per [daemon-mount-capabilities](daemon-mount-capabilities.md) when capability VFS lands; the row's value type changes from "one mount cap" to "a composed VFS namespace". |
+| Process execution (`@node`) | [daemon-capability-bank § Process execution](daemon-capability-bank.md), [daemon-mount-capabilities § Phase 4](daemon-mount-capabilities.md)                              | Omitted by default; opt-in not recommended outside a posix-sandboxed `@fs` + `@main` composition. A child-process / shell capability without a confinement story is a foot-gun for new users.                                                                                                                                                                                                                                       | Per the OS-sandbox direction in [daemon-capability-bank § Process execution](daemon-capability-bank.md); sandboxed by default once the substrate ships.                   |
+| Network                     | [daemon-capability-bank § Network](daemon-capability-bank.md), `endoclaw-network-fetch`                                                                                   | Omitted by default; documented placeholder.                                                                                                                                                                                                                                                                                                                                                                                         | Bound to a denial-pattern-attenuated fetch endowment with a per-origin allow / deny shape per the capability bank's principle 4.                                          |
+| Git operations              | [daemon-git-capability](daemon-git-capability.md), [daemon-git-remotes](daemon-git-remotes.md)                                                                            | Omitted by default; documented placeholder. The git trio (`daemon-git-capability`, `daemon-git-remotes`, `daemon-git-next-steps`) is in flight; pane 3's row activates once the canonical `@git` endowment shape lands.                                                                                                                                                                                                             | Composed with `@fs` (workspace) and optionally `@network` (remotes); ASKPASS injection per the substrate's credential-injection mechanism.                                |
+| Environment variables       | [daemon-capability-bank § Environment variables](daemon-capability-bank.md)                                                                                               | Omitted by default; documented placeholder.                                                                                                                                                                                                                                                                                                                                                                                         | A per-key attenuation map (`KEY → value                                                                                                                                   | <prompt>`); the agent only sees the keys the user explicitly grants. |
+| Credential store            | [endopi-provider-registry-and-oauth § Encrypted-at-rest credentials](endopi-provider-registry-and-oauth.md) and the sibling design at [§ Open Questions](#open-questions) | Omitted by default; documented placeholder. The wizard's own provider-credential paste (pane 2) lands in the root host agent pet store with encryption per the sibling design; the _Credential store_ endowment is for _other agents_ sharing the credential set.                                                                                                                                                                   | A per-provider attenuation that lets a delegate agent draw on a subset of the user's credentials without re-pasting.                                                      |
+| User I/O                    | [daemon-capability-bank § User I/O](daemon-capability-bank.md)                                                                                                            | Omitted by default; documented placeholder. The agent's reply chain already routes through Chat; an explicit User-I/O endowment is for _other_ surfaces (Electron notifications, the Familiar tray icon) per `endoclaw-notifications`.                                                                                                                                                                                              | Bound to the Electron Notification API per the existing notifications design.                                                                                             |
+| Timer                       | [daemon-capability-bank § Timer](daemon-capability-bank.md), `endoclaw-timer`                                                                                             | Omitted by default; documented placeholder.                                                                                                                                                                                                                                                                                                                                                                                         | Bound to the daemon's existing timer formula; rate-limited per the capability bank's principle 4 (denial patterns).                                                       |
+| Delegates                   | [daemon-capability-bank § Delegates](daemon-capability-bank.md)                                                                                                           | Omitted by default; documented placeholder. A _delegate_ row endows the new agent with the right to _create_ further agents (recursive attenuation per capability-bank principle 2).                                                                                                                                                                                                                                                | A picker over the user's other host agents and a quota shape per the capability bank's principle 4.                                                                       |
 
 Today's minimum:
 Only the `@fs` row offers a working control today; opt-in selects scratch, snapshot, or an existing mount-cap.
 The other eight rows are documented placeholders.
-The default for every row is *omitted*: capability-bank principle 4 (the absence of a capability is the safer default) governs the wizard.
+The default for every row is _omitted_: capability-bank principle 4 (the absence of a capability is the safer default) governs the wizard.
 
 Posix sandbox composition:
 The `@fs` and `@main` rows can be coupled to back a posix sandbox without a new endowment type.
 When both are picked together, the wizard offers a "make this a posix sandbox" checkbox that wires the `@fs` mount as the worker's filesystem root.
 This is the same composition the maintainer named on inline 289 ("the `@fs` and `@main` bindings can be coupled for a posix sandbox"); pane 3 surfaces it as a checkbox rather than a third endowment type.
 
-The endowment selection is rendered as the third pane of the wizard rather than as a sub-pane of harness selection, because the same endowment shape applies regardless of harness; the harness affects what the agent *does* with the endowment, not what the endowment is.
+The endowment selection is rendered as the third pane of the wizard rather than as a sub-pane of harness selection, because the same endowment shape applies regardless of harness; the harness affects what the agent _does_ with the endowment, not what the endowment is.
 
 ### Submit: Routing to the manager's form
 
-When the user clicks Submit on pane 3, the Chat UI does *not* speak to a new daemon API.
+When the user clicks Submit on pane 3, the Chat UI does _not_ speak to a new daemon API.
 It does what the user would do manually: it submits the chosen harness's outstanding configuration form.
 
 The submitted values map onto the form fields the manager already accepts ([lal-fae-form-provisioning § Form Fields](lal-fae-form-provisioning.md)):
 
-| Wizard input | Form field |
-|---|---|
-| Pet name | `name` |
-| Provider base URL (from registry entry) | `host` |
-| Picked model | `model` |
-| API key paste (or OAuth token, future) | `authToken` |
+| Wizard input                                    | Form field        |
+| ----------------------------------------------- | ----------------- |
+| Pet name                                        | `name`            |
+| Provider base URL (from registry entry)         | `host`            |
+| Picked model                                    | `model`           |
+| API key paste (or OAuth token, future)          | `authToken`       |
 | Endowments (the cap-pet-names picked in pane 3) | `introducedNames` |
 
 The endowment delivery:
@@ -366,11 +366,11 @@ The newly created agent appears in the inventory under its chosen pet name, with
 [endo-gateway-mcp § Affordance 1: create an agent](endo-gateway-mcp.md) (merged today) also names a "+ Add agent" Chat-UI surface that "routes to the existing form".
 That design's affordance is a single button on the spaces gutter that opens the manager's form directly.
 
-Reconciling: this design's create-agent flow is the *parent affordance* into which `endo-gateway-mcp`'s "+ Add agent" plugs.
+Reconciling: this design's create-agent flow is the _parent affordance_ into which `endo-gateway-mcp`'s "+ Add agent" plugs.
 Specifically:
 
 - The maintainer's framing in this design's prompt names a richer flow (provider selection without URLs, endowment selection, harness selection) than `endo-gateway-mcp`'s one-button route.
-- The richer flow renders the manager's form *plus* the harness pane *plus* the provider pane *plus* the endowment pane, then submits the form on the user's behalf with the assembled values.
+- The richer flow renders the manager's form _plus_ the harness pane _plus_ the provider pane _plus_ the endowment pane, then submits the form on the user's behalf with the assembled values.
 - `endo-gateway-mcp`'s "Affordance 1" is satisfied by this design: a `+ Add agent` entry exists; clicking it opens this design's three-pane wizard rather than the manager's bare form.
   The wizard fills in the form on the user's behalf, so the manager's form-handling code path (the substrate `endo-gateway-mcp` depends on) does not change.
 
@@ -391,13 +391,13 @@ The design records this as a future enhancement rather than coupling the flows n
 
 Chat absorbs the provisioning entry point.
 The daemon-side substrate stays: the form ([daemon-form-request](daemon-form-request.md)), the value-message reply ([daemon-value-message](daemon-value-message.md)), the `@agent` introduction, the manager loop, the worker spawn, and the inbox-as-durable-config-store property all persist.
-What moves out of the daemon is the *role of the daemon as the provisioning entry point*: provisioning becomes a dependency of the Chat application, not a dependency of the daemon.
+What moves out of the daemon is the _role of the daemon as the provisioning entry point_: provisioning becomes a dependency of the Chat application, not a dependency of the daemon.
 Chat installs the provisioning capabilities on the root host agent and replays the inbox on first launch so the durability property is preserved.
 This is the maintainer's directive on inline 363 ("my intention is that this should replace lal fae form provisioning. Provisioning becomes a dependency of the Chat application but not a dependency of the daemon. This requires Chat to install the provisioning capabilities in the root host agent").
 
 ### Root host agent as a special place
 
-The maintainer's inline 363 also names a *user / user-profile* split on top of the root host agent:
+The maintainer's inline 363 also names a _user / user-profile_ split on top of the root host agent:
 
 > Chat should arrange for a user host agent, named like `user` and `user-profile`, then treat that as the primary user, to hide capabilities like the agent provisioner from the UX. We can add an `@root` endowment to all Endo hosts so the user can enter from below.
 
@@ -428,41 +428,41 @@ That design's status is "Proposed (partially satisfied)" via Genie's existing de
 
 ### Dependencies summary
 
-| Design | Relationship |
-|---|---|
-| [chat-spaces-gutter](chat-spaces-gutter.md) | Sibling affordance; placement reference. The inventory `+` is distinct from the gutter `+`. |
-| [chat-spaces-home](chat-spaces-home.md) | Sibling; provides the per-space view the created agent will appear in. |
-| [chat-components](chat-components.md) | Hosting surface; the inventory panel and modal-component conventions. |
-| [chat-invariants](chat-invariants.md) | Keyboard / mouse parity, modeline completeness, autocomplete navigation rules apply to the pop-over menu and the modal panes. |
-| [daemon-form-request](daemon-form-request.md) | Substrate for the manager's configuration form (already implemented). |
-| [daemon-value-message](daemon-value-message.md) | Substrate for the manager's reply. |
-| [daemon-mount-capabilities](daemon-mount-capabilities.md) | Substrate for the `@fs` endowment and the filesystem-mount item type. |
-| [daemon-capability-filesystem](daemon-capability-filesystem.md) | Reference for the future VFS direction the `@fs` endowment grows into. |
-| [daemon-capability-bus](daemon-capability-bus.md) | Reference for the passable / structured value item types. |
-| [familiar-bundled-agents](familiar-bundled-agents.md) | Names `@lal`, `@fae`, and (future) `@genie` as the discoverable harnesses; precedent (`@apps` Specials entry) for the future `@root` endowment. |
-| [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md) | Substrate for pane 2's provider list, per-provider auth shape, encrypted-at-rest credential discipline, and Ollama-model discovery via the `pi-ai` adaptor. |
-| [lal-fae-form-provisioning](lal-fae-form-provisioning.md) | Substrate (daemon-side) for the manager's form, value-message reply, and `provideGuest({ introducedNames })` shape; Chat absorbs the provisioning entry point on top per Design Decision 7. |
-| [endo-gateway-mcp](endo-gateway-mcp.md) | Adjacent design whose "+ Add agent" affordance plugs into this design's wizard. |
-| [daemon-capability-bank](daemon-capability-bank.md) | Roster source for pane 3's nine endowment rows and the six design principles the wizard cites. |
-| [daemon-mount](daemon-mount.md) | Substrate for the `@fs` row's *scratch* and *snapshot* alternatives, and for the posix-sandbox composition with `@main`. |
-| [d256](d256.md) | Per-agent keypairs and the special-name idiom on hosts and guests (`@self`, `@host`, `@agent`, `@keypair`, `@main`, `@endo`); precedent for the future `@root` special name. |
-| [chat-spaces-gutter](chat-spaces-gutter.md) (already cited above) | The "typed namespace over the untyped pet-store" precedent the root host agent's pet store follows. |
+| Design                                                                      | Relationship                                                                                                                                                                                |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [chat-spaces-gutter](chat-spaces-gutter.md)                                 | Sibling affordance; placement reference. The inventory `+` is distinct from the gutter `+`.                                                                                                 |
+| [chat-spaces-home](chat-spaces-home.md)                                     | Sibling; provides the per-space view the created agent will appear in.                                                                                                                      |
+| [chat-components](chat-components.md)                                       | Hosting surface; the inventory panel and modal-component conventions.                                                                                                                       |
+| [chat-invariants](chat-invariants.md)                                       | Keyboard / mouse parity, modeline completeness, autocomplete navigation rules apply to the pop-over menu and the modal panes.                                                               |
+| [daemon-form-request](daemon-form-request.md)                               | Substrate for the manager's configuration form (already implemented).                                                                                                                       |
+| [daemon-value-message](daemon-value-message.md)                             | Substrate for the manager's reply.                                                                                                                                                          |
+| [daemon-mount-capabilities](daemon-mount-capabilities.md)                   | Substrate for the `@fs` endowment and the filesystem-mount item type.                                                                                                                       |
+| [daemon-capability-filesystem](daemon-capability-filesystem.md)             | Reference for the future VFS direction the `@fs` endowment grows into.                                                                                                                      |
+| [daemon-capability-bus](daemon-capability-bus.md)                           | Reference for the passable / structured value item types.                                                                                                                                   |
+| [familiar-bundled-agents](familiar-bundled-agents.md)                       | Names `@lal`, `@fae`, and (future) `@genie` as the discoverable harnesses; precedent (`@apps` Specials entry) for the future `@root` endowment.                                             |
+| [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md) | Substrate for pane 2's provider list, per-provider auth shape, encrypted-at-rest credential discipline, and Ollama-model discovery via the `pi-ai` adaptor.                                 |
+| [lal-fae-form-provisioning](lal-fae-form-provisioning.md)                   | Substrate (daemon-side) for the manager's form, value-message reply, and `provideGuest({ introducedNames })` shape; Chat absorbs the provisioning entry point on top per Design Decision 7. |
+| [endo-gateway-mcp](endo-gateway-mcp.md)                                     | Adjacent design whose "+ Add agent" affordance plugs into this design's wizard.                                                                                                             |
+| [daemon-capability-bank](daemon-capability-bank.md)                         | Roster source for pane 3's nine endowment rows and the six design principles the wizard cites.                                                                                              |
+| [daemon-mount](daemon-mount.md)                                             | Substrate for the `@fs` row's _scratch_ and _snapshot_ alternatives, and for the posix-sandbox composition with `@main`.                                                                    |
+| [d256](d256.md)                                                             | Per-agent keypairs and the special-name idiom on hosts and guests (`@self`, `@host`, `@agent`, `@keypair`, `@main`, `@endo`); precedent for the future `@root` special name.                |
+| [chat-spaces-gutter](chat-spaces-gutter.md) (already cited above)           | The "typed namespace over the untyped pet-store" precedent the root host agent's pet store follows.                                                                                         |
 
 ## Files Expected to Be Modified
 
-| File | Change |
-|---|---|
-| `packages/chat/inventory-component.js` | Render the `+` header row; wire to the create menu. |
-| `packages/chat/create-menu.js` | New: the pop-over menu factory. |
-| `packages/chat/create-mount-modal.js` | New: the filesystem-mount modal. |
-| `packages/chat/create-scratch-modal.js` | New: the scratch-space modal. |
-| `packages/chat/create-passable-modal.js` | New: the passable-value modal (Monaco-backed). |
-| `packages/chat/create-structured-modal.js` | New: the structured-value modal (pattern + per-field). |
-| `packages/chat/create-agent-modal.js` | New: the three-pane new-agent wizard. |
+| File                                        | Change                                                        |
+| ------------------------------------------- | ------------------------------------------------------------- |
+| `packages/chat/inventory-component.js`      | Render the `+` header row; wire to the create menu.           |
+| `packages/chat/create-menu.js`              | New: the pop-over menu factory.                               |
+| `packages/chat/create-mount-modal.js`       | New: the filesystem-mount modal.                              |
+| `packages/chat/create-scratch-modal.js`     | New: the scratch-space modal.                                 |
+| `packages/chat/create-passable-modal.js`    | New: the passable-value modal (Monaco-backed).                |
+| `packages/chat/create-structured-modal.js`  | New: the structured-value modal (pattern + per-field).        |
+| `packages/chat/create-agent-modal.js`       | New: the three-pane new-agent wizard.                         |
 | `packages/chat/provider-registry-client.js` | New: client-side proxy for the daemon-side provider registry. |
-| `packages/chat/index.css` | Styles for the menu and the new modals. |
-| `packages/chat/command-registry.js` | Add `/create` slash command for keyboard access. |
-| `packages/chat/chat.js` | Wire the new components into the inventory panel. |
+| `packages/chat/index.css`                   | Styles for the menu and the new modals.                       |
+| `packages/chat/command-registry.js`         | Add `/create` slash command for keyboard access.              |
+| `packages/chat/chat.js`                     | Wire the new components into the inventory panel.             |
 
 No daemon-side changes are anticipated for the create-menu itself.
 The provider-registry and endowment-form-field follow-ups (in [§ Open Questions](#open-questions)) are independent designs.
@@ -505,7 +505,7 @@ When [endopi-provider-registry-and-oauth § Phases 3-4](endopi-provider-registry
 1. **Inventory header, not gutter header.**
    The gutter `+` is a navigation affordance (pin existing); the inventory `+` is a creation affordance (mint new).
    Separating them keeps each `+` action one click from its target surface and prevents either menu from drifting into a multi-purpose mega-menu.
-   The `+` sits at the *top* of the inventory rather than the bottom so it is visible without scrolling once the inventory grows past one screen; per the maintainer's PR #404 directive.
+   The `+` sits at the _top_ of the inventory rather than the bottom so it is visible without scrolling once the inventory grows past one screen; per the maintainer's PR #404 directive.
 
 2. **Pop-over for type pick, modal for parameter entry.**
    The type pick is a single-choice; pop-over is the lightweight affordance.
@@ -530,8 +530,8 @@ When [endopi-provider-registry-and-oauth § Phases 3-4](endopi-provider-registry
 
 7. **Chat absorbs the provisioning entry point; daemon-side substrate stays.**
    Per the maintainer's directive on inline 363, Chat installs the provisioning capabilities in the root host agent and becomes the entry point for new-agent provisioning.
-   The lal-fae *daemon-side substrate* persists: the form ([daemon-form-request](daemon-form-request.md)), the value-message reply ([daemon-value-message](daemon-value-message.md)), the `@agent` introduction, the manager loop, the worker spawn, and the inbox-as-durable-config-store property all stay.
-   What retires is the daemon's role as the *provisioning entry point*: the CLI flow and the standalone-setup flow continue to work against the substrate, but the canonical user-facing entry point is Chat.
+   The lal-fae _daemon-side substrate_ persists: the form ([daemon-form-request](daemon-form-request.md)), the value-message reply ([daemon-value-message](daemon-value-message.md)), the `@agent` introduction, the manager loop, the worker spawn, and the inbox-as-durable-config-store property all stay.
+   What retires is the daemon's role as the _provisioning entry point_: the CLI flow and the standalone-setup flow continue to work against the substrate, but the canonical user-facing entry point is Chat.
    Chat replays the inbox on first launch so the durability property is preserved.
 
 8. **No new daemon API for the menu itself.**
@@ -543,7 +543,7 @@ When [endopi-provider-registry-and-oauth § Phases 3-4](endopi-provider-registry
 1. **Provider credentials live in the root host agent pet store, encrypted at rest.**
    The maintainer's inline 477 directive ("Let's use the root host agent pet store. Please dispatch a designer to ensure formulas are encrypted at rest") routes provider credentials (pasted API keys, future OAuth tokens) into the root host agent's pet store under a typed sub-namespace, with formula encryption at rest matching the discipline in [endopi-provider-registry-and-oauth § Encrypted-at-rest credentials](endopi-provider-registry-and-oauth.md).
    The encryption shape itself (key derivation, per-formula vs. per-store) is the subject of a sibling designer dispatch authored separately under the slug `chat-inventory-encrypted-formulas` (see [§ Sibling designer dispatches](#sibling-designer-dispatches)).
-   This design's pane 2 commits to *where* credentials land (the root host pet store, under Chat's typed namespace); the sibling design owns *how* they are encrypted.
+   This design's pane 2 commits to _where_ credentials land (the root host pet store, under Chat's typed namespace); the sibling design owns _how_ they are encrypted.
 
 2. **Provider-key recovery and rotation: deferred to a sibling design.**
    The recovery problem parallels the public-key recovery gap in `gateway-key-recovery.md`.
@@ -554,11 +554,11 @@ When [endopi-provider-registry-and-oauth § Phases 3-4](endopi-provider-registry
 
 3. **Ollama Remote as a distinct provider; local row stays clean.**
    The auto-detect-localhost path is the default for the Ollama (local) registry entry.
-   A user pointing at a remote Ollama daemon picks the *Ollama Remote* provider entry, which surfaces a host field as a first-class control (not an Advanced disclosure on the local row).
+   A user pointing at a remote Ollama daemon picks the _Ollama Remote_ provider entry, which surfaces a host field as a first-class control (not an Advanced disclosure on the local row).
    The framing on the UI reads "Ollama Remote (running on another machine)" rather than naming a URL, matching the maintainer's "without having to know the details of how they are configured" framing.
 
 4. **Endowment delivery: `provideGuest({ introducedNames })` is the field.**
-   *Resolved.*
+   _Resolved._
    Per inline 495, the existing `introducedNames` parameter on `provideGuest` is the endowment-delivery substrate; pane 3's picked endowments thread through directly.
    No follow-up `introduce` call and no new form field are required.
    The earlier framing here (a hypothetical `lal-fae-form-provisioning-endowments.md` sibling) is retired; the manager's existing form-submission handler passes `introducedNames` through unmodified.
@@ -569,7 +569,7 @@ When [endopi-provider-registry-and-oauth § Phases 3-4](endopi-provider-registry
    The maintainer's inline 499 ("Agreed.") confirms the transitional framing on pane 1; no further change here.
 
 6. **Root host agent, user-host split, and the `@root` endowment: sibling design.**
-   Per the maintainer's inline 363 directive, a separate designer dispatch authors the design that names the *user / user-profile* split on top of the root host agent and the `@root` endowment registered alongside the other special names per [d256 § Per-agent keypairs](d256.md).
+   Per the maintainer's inline 363 directive, a separate designer dispatch authors the design that names the _user / user-profile_ split on top of the root host agent and the `@root` endowment registered alongside the other special names per [d256 § Per-agent keypairs](d256.md).
    This design's contribution is the encoding of the directive (in [§ Root host agent as a special place](#root-host-agent-as-a-special-place) above) and the cascade for how Chat installs provisioning capabilities on the root and exposes user-facing surfaces through the user host.
    The sibling design owns the full shape (`@root` as a Specials entry analogous to `@apps`, the `user` / `user-profile` formula shapes, the lazy-vs-eager bootstrap question; see [familiar-bundled-agents § Three-option powers analysis](familiar-bundled-agents.md) for the parallel rubric).
 
@@ -588,10 +588,10 @@ When [endopi-provider-registry-and-oauth § Phases 3-4](endopi-provider-registry
 
 The maintainer's review directives on this PR explicitly call for three separate designer dispatches to author the work that this design touches but does not own:
 
-| Trigger | Slug (proposed) | Owner of authorization |
-|---|---|---|
-| Inline 477 (root host pet store + encrypted at rest) | `chat-inventory-encrypted-formulas` | Maintainer; the slug is the designer's proposal pending confirmation |
-| Inline 484 (provider-key recovery and rotation) | (to be named by the maintainer) | Maintainer; the scope (key recovery only, or also rotation and the gateway-key-recovery parallel?) is the maintainer's call |
+| Trigger                                                    | Slug (proposed)                                                               | Owner of authorization                                                                                                                                      |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Inline 477 (root host pet store + encrypted at rest)       | `chat-inventory-encrypted-formulas`                                           | Maintainer; the slug is the designer's proposal pending confirmation                                                                                        |
+| Inline 484 (provider-key recovery and rotation)            | (to be named by the maintainer)                                               | Maintainer; the scope (key recovery only, or also rotation and the gateway-key-recovery parallel?) is the maintainer's call                                 |
 | Inline 363 (`@root` endowment + user / user-profile split) | (to be named by the maintainer; candidate: `endo-root-special-and-user-host`) | Maintainer; the design composes [d256](d256.md), [familiar-bundled-agents](familiar-bundled-agents.md), and the root-host-pet-store directive on inline 477 |
 
 This design does not author the three sibling designs in its own diff; doing so would inflate the PR beyond the maintainer's intended scope.

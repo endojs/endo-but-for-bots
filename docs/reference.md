@@ -7,7 +7,7 @@ category: Reference
 # Endo and HardenedJS (SES) Programming Reference
 
 This document describes how `ses` creates a
-[HardenedJS](https://hardenedjs.org) mode for safe JavaScript.  It is very much
+[HardenedJS](https://hardenedjs.org) mode for safe JavaScript. It is very much
 a "how to do something" document, with little explanation about why and how
 something was implemented or other background information. For that, see the
 more comprehensive [Endo and HardenedJS Programming Guide](./guide.md).
@@ -17,13 +17,13 @@ more comprehensive [Endo and HardenedJS Programming Guide](./guide.md).
 The SES shim transforms ordinary JavaScript environments into HardenedJS environments.
 
 On Node.js you can import or require `ses` in either CommonJS or ECMAScript
-modules, then call `lockdown()`. This is a *shim*. It mutates the environment
+modules, then call `lockdown()`. This is a _shim_. It mutates the environment
 in place so any code running after the shim can assume it’s running in a
 HardenedJS environment. This includes the globals `lockdown()`, `harden()`,
 `Compartment`, and so on. For example:
 
 ```js
-require("ses");
+require('ses');
 lockdown();
 ```
 
@@ -44,6 +44,7 @@ import './ses-code-after-lockdown.js';
 ```
 
 The Endo project includes packages that do just this:
+
 - `@endo/lockdown` calls lockdown and threads certain environment options.
 - `@endo/init` also sets up [eventual
   send](../packages/eventual-send/README.md) and a more completed Endo
@@ -75,6 +76,7 @@ preserves the invariants of the OCap security model.
 ## Removed by HardenedJS summary
 
 The following are missing or unusable under HardenedJS:
+
 - Most [Node.js-specific global objects](https://nodejs.org/dist/latest-v14.x/docs/api/globals.html)
 - All [Node.js built-in modules](https://nodejs.org/dist/latest-v14.x/docs/api/) such as `http` and
   `crypto`.
@@ -86,6 +88,7 @@ The following are missing or unusable under HardenedJS:
 ## Added/Changed by HardenedJS summary
 
 HardenedJS adds the following to JavaScript or changes them significantly:
+
 - `lockdown()`
 - `harden()`
 - `Compartment`
@@ -104,7 +107,8 @@ Compartments give complete control over what powerful objects exist for client c
 
 ## `repairIntrinsics(options)`
 
-`repairIntrinsics()` *tames* some objects, such as:
+`repairIntrinsics()` _tames_ some objects, such as:
+
 - Regular expressions
   - A tamed RexExp does not have the deprecated compile method.
 - Locale methods
@@ -120,13 +124,14 @@ program can subvert their methods (preventing some man in the middle attacks).
 Also, no program can use them to pass notes to parties that haven't been
 expressly introduced (preventing some covert communication channels).
 
-`hardenIntrinsics()` *freezes* all JavaScript defined objects accessible to any program in the realm. The frozen
+`hardenIntrinsics()` _freezes_ all JavaScript defined objects accessible to any program in the realm. The frozen
 accessible objects include but are not limited to:
+
 - `[].__proto__` the array prototype, equivalent to `Array.prototype` in a pristine JavaScript environment.
 - `{}.__proto__` the `Object.prototype`
 - `(() => {}).__proto__` the `Function.prototype`
 - `(async () => {}).__proto__` the prototype of all asynchronous functions, and has no alias
-   in the global scope of a pristine JavaScript environment.
+  in the global scope of a pristine JavaScript environment.
 - The properties of any accessible object
 
 ## `lockdown()` and `harden()`
@@ -135,7 +140,7 @@ accessible objects include but are not limited to:
 properties cannot be changed. You can only interact with frozen objects through
 their methods. Their differences are what objects you use them on, and when you use them.
 
-`lockdown()` **must** be called first. It hardens JavaScript's built-in *primordials*
+`lockdown()` **must** be called first. It hardens JavaScript's built-in _primordials_
 (implicitly shared global objects) and enables `harden()`. Calling `harden()`
 before `lockdown()` executes throws an error.
 
@@ -149,6 +154,7 @@ after `lockdown()`was called.
 
 All three of these safety-relevant options default to `'safe'` if omitted
 from a call to `lockdown()`. Their other possible value is `'unsafe'`.
+
 - `regExpTaming`
 - `localeTaming`
 - `consoleTaming`
@@ -156,6 +162,7 @@ from a call to `lockdown()`. Their other possible value is `'unsafe'`.
 In addition, `errorTaming` defaults to `'safe'` but can be set to `'unsafe'`
 or `'unsafe-debug'`, as explained at
 [`errorTaming` Options](./lockdown.md#errortaming-options).
+
 - `errorTaming`
 
 The tradeoff is safety vs compatibility with existing code. However, much legacy
@@ -239,6 +246,7 @@ lockdown({ regExpTaming: 'unsafe' }); // Disables all RegExp.*() methods except 
 The default `'safe'` setting replaces each method listed below with their
 corresponding non-locale-specific method. For example, `Object.prototype.toLocaleString()`
 becomes another name for `Object.prototype.toString()`.
+
 - `toLocaleString`
 - `toLocaleDateString`
 - `toLocaleTimeString`
@@ -304,7 +312,7 @@ line-numbers into TypeScript sources are always 1, since the TypeScript compiler
 compiles into a single line of JavaScript. For TypeScript on Node on v8,
 the setting `'unsafe-debug'` sacrifices more security to restore the
 normal Node behavior of providing accurate positions into the TypeScript source.
-The `'unsafe-debug'` setting should be used ***for development only***, when
+The `'unsafe-debug'` setting should be used **_for development only_**, when
 this is usually the right tradeoff. Please do not use it in production.
 
 ```js
@@ -366,6 +374,7 @@ encounter code which should run under HardenedJS but can't due to
 the [override mistake](https://web.archive.org/web/20141230041441/http://wiki.ecmascript.org/doku.php?id=strawman:fixing_override_mistake),
 
 The `'min'` setting serves two purposes:
+
 - It enables a pleasant VSCode debugging experience.
 - It helps ensure new code does not depend on anything more than enabled legacy code.
 
@@ -373,7 +382,7 @@ All Agoric-authored code is compatible with both settings, but
 Agoric currently still pulls in some third party dependencies only compatible
 with the `'moderate'` setting.
 
- ```js
+```js
 lockdown(); // overrideTaming defaults to 'moderate'
 // or
 lockdown({ overrideTaming: 'moderate' }); // Moderate mitigations for legacy compat

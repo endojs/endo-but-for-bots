@@ -18,7 +18,7 @@ We want a transport with two properties in particular:
 
 1. **Dial keys, not IPs.**
    A peer should be reachable by its public key alone.
-   The caller names *who* it wants to talk to, and the transport finds a
+   The caller names _who_ it wants to talk to, and the transport finds a
    path — direct when possible, relayed when not — without the caller ever
    handling an IP address or worrying about NAT.
 
@@ -55,13 +55,13 @@ Each transport implements the `EndoNetwork` interface
 
 ```ts
 interface EndoNetwork {
-  supports: (network: string) => boolean;       // matches a URL protocol
-  addresses: () => Array<string>;               // self-addresses to publish
+  supports: (network: string) => boolean; // matches a URL protocol
+  addresses: () => Array<string>; // self-addresses to publish
   connect: (address: string, ctx) => Promise<EndoGateway>;
 }
 ```
 
-A transport is an *unconfined* caplet exporting `make(powers, context)`.
+A transport is an _unconfined_ caplet exporting `make(powers, context)`.
 It is installed with `makeUnconfined` and then moved under `@nets/<name>`,
 where the daemon discovers it at boot (see `setup-iroh.js`).
 From its `powers` a transport gets:
@@ -110,12 +110,12 @@ Mirroring the `libp2p` transport's URL-with-hints form, an iroh address is:
 iroh+captp0:///<nodeId>?relay=<relayUrl>&addr=<directAddr1>&addr=<directAddr2>
 ```
 
-- The case-sensitive `NodeId` lives in the URL *pathname* (URL hostnames are
+- The case-sensitive `NodeId` lives in the URL _pathname_ (URL hostnames are
   lowercased; the iroh `NodeId` base32 is lowercase today, but pathname
   placement matches the `libp2p` precedent and is robust to that changing).
 - `relay` carries the node's home relay URL, and each `addr` carries a known
   direct socket address.
-  These are *hints*: a fresh peer can dial by `NodeId` alone and let
+  These are _hints_: a fresh peer can dial by `NodeId` alone and let
   discovery do the work, but published hints let a dialer skip the discovery
   round-trip.
   Loopback/private addresses are excluded from published hints, as in the
@@ -138,16 +138,22 @@ For CapTP we use exactly one bidi stream per connection.
 **Outbound** (`connect(address, ctx)`):
 
 ```js
-const nodeAddr = parseIrohAddress(address);          // { nodeId, relayUrl, addresses }
-const addr = new EndpointAddr(                        // 1.0 dials an EndpointAddr
+const nodeAddr = parseIrohAddress(address); // { nodeId, relayUrl, addresses }
+const addr = new EndpointAddr( // 1.0 dials an EndpointAddr
   EndpointId.fromString(nodeAddr.nodeId),
   nodeAddr.relayUrl,
   nodeAddr.addresses,
 );
-const conn = await endpoint.connect(addr, ALPN);      // QUIC, TLS-authenticated
-const bi = await conn.openBi();                       // { send, recv }
+const conn = await endpoint.connect(addr, ALPN); // QUIC, TLS-authenticated
+const bi = await conn.openBi(); // { send, recv }
 const { reader, writer, closed } = adaptIrohStream(bi, conn);
-const { getBootstrap } = makeNetstringCapTP('Endo', writer, reader, cancelled, localGateway);
+const { getBootstrap } = makeNetstringCapTP(
+  'Endo',
+  writer,
+  reader,
+  cancelled,
+  localGateway,
+);
 return E(getBootstrap()).hello(localNodeId, localGateway, canceller, cancelled);
 ```
 
@@ -165,7 +171,7 @@ const endpoint = await Endpoint.bind({ secretKey, alpns: [ALPN] });
 const acceptLoop = async () => {
   for (;;) {
     const incoming = await endpoint.acceptNext();
-    if (!incoming) return;                  // endpoint closed
+    if (!incoming) return; // endpoint closed
     handleIncoming(incoming).catch(logAndIgnore); // isolate per-connection errors
   }
 };
@@ -241,7 +247,7 @@ such sessions alive and detects a genuinely dead peer:
   interval (60 s), so a single dropped beat is tolerated.
   If a peer that has been heartbeating falls silent for a full window, the
   session is presumed dead.
-- **Lazy arming.** The watchdog is armed by the peer's *first* inbound
+- **Lazy arming.** The watchdog is armed by the peer's _first_ inbound
   datagram, not at connection start.
   A peer that never heartbeats — an older daemon without this module — is left
   to iroh's QUIC idle timeout instead of being torn down at 60 s, so the
@@ -261,15 +267,15 @@ This is the crux of the "dial keys" property and deserves care.
 ### What the keys are
 
 - An Endo `NodeNumber` is a 64-hex-character string that **is** the daemon's
-  root Ed25519 public key (`types.d.ts`: *"A 64-character hex string
-  (Ed25519 public key) identifying a node"*).
+  root Ed25519 public key (`types.d.ts`: _"A 64-character hex string
+  (Ed25519 public key) identifying a node"_).
   The matching private key is held by the daemon core; caplets are given a
-  `sign()` *capability* (`daemon.js`: `sign: hexBytes => …signBytes…`), not
+  `sign()` _capability_ (`daemon.js`: `sign: hexBytes => …signBytes…`), not
   raw private key bytes.
 - An iroh `NodeId` is **also** a 32-byte Ed25519 public key, and an iroh node
   is constructed from a 32-byte Ed25519 secret.
 
-So in principle the two identities can be made *the same key*: if iroh's
+So in principle the two identities can be made _the same key_: if iroh's
 secret were the daemon's root Ed25519 private key, then iroh `NodeId` would
 equal the Endo `NodeNumber`, and "dial the key" would mean dialing the node's
 real Endo identity, authenticated end-to-end by QUIC TLS. That is the ideal.
@@ -286,7 +292,7 @@ secretKey = Array.from(fromHex(localNodeId).slice(0, 32)); // 32-byte seed
 
 This yields a stable iroh `NodeId` across restarts and is consistent with
 the precedent already in the tree.
-The resulting iroh `NodeId` is a *transport-layer* identity, distinct from
+The resulting iroh `NodeId` is a _transport-layer_ identity, distinct from
 but deterministically tied to the Endo `NodeNumber`, and it is published in
 the address (like the `libp2p` peer id).
 At the transport layer this fully delivers the two requested properties:
@@ -295,11 +301,11 @@ encrypted.
 
 ### Known limitation and the principled end-state
 
-Because `NodeNumber` is a *public* value (it appears in formula identifiers
+Because `NodeNumber` is a _public_ value (it appears in formula identifiers
 and `endo://` URLs), deriving the transport key from it as a seed means the
 transport key is itself derivable by anyone who knows the `NodeNumber`.
 The `libp2p` transport has the same property today.
-Consequently the iroh `NodeId` here authenticates *a* deterministic
+Consequently the iroh `NodeId` here authenticates _a_ deterministic
 transport key, not exclusive possession of the node's root secret, and an
 accept-side check of the form "does the claimed `NodeNumber` derive to the
 QUIC-authenticated key" would add no security under this scheme (an
@@ -427,18 +433,21 @@ const bi = await conn.openBi();
 await bi.send.writeAll(Array.from(enc.encode('ping')));
 await bi.send.finish();
 const out = await bi.recv.readExact(4);
-console.log('SUCCESS:', dec.decode(Uint8Array.from(out)), '— dialed by key across networks');
+console.log(
+  'SUCCESS:',
+  dec.decode(Uint8Array.from(out)),
+  '— dialed by key across networks',
+);
 await client.close();
 ```
 
-Note: the Endo daemon path does not exercise *pure* discovery by default,
+Note: the Endo daemon path does not exercise _pure_ discovery by default,
 because invitation locators embed the relay/address hints alongside the key,
 so connections succeed via the hints before discovery is needed. To force
 the discovery path end-to-end, strip an accepted address down to a bare
 `iroh+captp0:///<nodeId>` (no query string) before connecting.
 
 ## Open questions
-
 
 1. Pursue the real-key binding (§ Identity) in this milestone or as a
    follow-up?

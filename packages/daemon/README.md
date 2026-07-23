@@ -40,7 +40,7 @@ ENDO_ADDR=127.0.0.1:9000 endo start
 ### Remote access
 
 By default the gateway only accepts WebSocket connections from localhost
-(`127.0.0.1`, `::1`, `::ffff:127.0.0.1`).  Connections from any other
+(`127.0.0.1`, `::1`, `::ffff:127.0.0.1`). Connections from any other
 client IP are closed with `"Only local connections allowed"`.
 
 To accept connections from non-localhost clients (for example, over a VPN or
@@ -67,8 +67,8 @@ ENDO_ADDR=0.0.0.0:8920 \
   endo start
 ```
 
-Both IPv4 and IPv6 CIDRs are supported.  A bare address without a `/prefix`
-is treated as a host route (`/32` for IPv4, `/128` for IPv6).  Invalid
+Both IPv4 and IPv6 CIDRs are supported. A bare address without a `/prefix`
+is treated as a host route (`/32` for IPv4, `/128` for IPv6). Invalid
 entries are silently ignored.
 
 IPv4-mapped IPv6 addresses (`::ffff:10.1.2.3`) are normalized before
@@ -77,15 +77,15 @@ arrive as `::ffff:10.x.x.x`.
 
 #### Common CIDR examples
 
-| Range | Description |
-|---|---|
-| `10.0.0.0/8` | RFC 1918 private (Class A) |
-| `172.16.0.0/12` | RFC 1918 private (Class B) |
-| `192.168.0.0/16` | RFC 1918 private (Class C) |
-| `100.64.0.0/10` | CGNAT / Tailscale |
-| `fd00::/8` | IPv6 unique local addresses |
+| Range            | Description                 |
+| ---------------- | --------------------------- |
+| `10.0.0.0/8`     | RFC 1918 private (Class A)  |
+| `172.16.0.0/12`  | RFC 1918 private (Class B)  |
+| `192.168.0.0/16` | RFC 1918 private (Class C)  |
+| `100.64.0.0/10`  | CGNAT / Tailscale           |
+| `fd00::/8`       | IPv6 unique local addresses |
 
 > **Security note:** These options control which client IPs may establish a
-> WebSocket connection to the gateway.  They do not add authentication or
-> encryption.  Use a VPN or other transport-layer protection when exposing
+> WebSocket connection to the gateway. They do not add authentication or
+> encryption. Use a VPN or other transport-layer protection when exposing
 > the gateway beyond localhost.

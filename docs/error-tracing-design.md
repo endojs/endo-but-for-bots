@@ -163,8 +163,7 @@ the worker emits an error.
 Specifically, the worker installs a `marshalSaveError` callback on
 its CapTP connection's marshal options.
 That callback runs synchronously after `annotateError(err, X\`Sent
-as ${errorId}\`)` and before the encoded message is handed to
-`send`, so by the time the CapTP frame leaves the worker the
+as ${errorId}\`)`and before the encoded message is handed to`send`, so by the time the CapTP frame leaves the worker the
 matching trace record is already in flight to the daemon.
 
 The push uses a new method `reportTrace(record)` on
@@ -296,7 +295,7 @@ The daemon's outbound CapTP (the connection to the CLI) installs a
    that the worker's marshal already attached).
 2. Look up the matching record in the aggregate.
    If present, register `alias({ workerId, errorId: workerErrorId,
-   forwardedErrorId: clientFacingErrorId })` and return.
+forwardedErrorId: clientFacingErrorId })` and return.
 3. If absent, that means the worker push is in flight or the error
    originated in the daemon itself.
    Record a daemon-local trace stub so the CLI's `lookup` will at
@@ -319,13 +318,18 @@ A new capability is added to `EndoHost`, reached by
 ```js
 export const TracesInterface = M.interface('EndoTraces', {
   help: M.call().optional(M.string()).returns(M.string()),
-  lookup: M.call(M.string()).returns(M.promise()),     // TraceReport | undefined
+  lookup: M.call(M.string()).returns(M.promise()), // TraceReport | undefined
   recent: M.call()
-    .optional(M.splitRecord({}, {
-      workerId: IdShape,
-      limit: M.number(),
-    }))
-    .returns(M.promise()),                              // Array<TraceReport>
+    .optional(
+      M.splitRecord(
+        {},
+        {
+          workerId: IdShape,
+          limit: M.number(),
+        },
+      ),
+    )
+    .returns(M.promise()), // Array<TraceReport>
   clear: M.call().optional(IdShape).returns(M.promise()),
 });
 ```

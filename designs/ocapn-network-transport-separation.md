@@ -1,11 +1,11 @@
 # OCapN Network/Transport Separation
 
-| | |
-|---|---|
-| **Created** | 2026-02-14 |
-| **Updated** | 2026-02-24 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-14            |
+| **Updated** | 2026-02-24            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | In Progress           |
 
 ## What is the Problem Being Solved?
 
@@ -117,15 +117,15 @@ The OCapN core's responsibility becomes:
 
 ### Affected Files
 
-| File | Change |
-|------|--------|
-| `packages/ocapn/src/client/index.js` | Replace netlayer registration with network registration |
-| `packages/ocapn/src/client/handshake.js` | Extract into tcp-for-test; remove from core |
-| `packages/ocapn/src/client/types.js` | New `OcapnNetwork` type; rename `NetLayer` |
-| `packages/ocapn/src/codecs/components.js` | `transport` → `network` in OcapnLocation codec |
-| `packages/ocapn/src/client/util.js` | Update URI serialization |
-| `packages/ocapn/src/netlayers/tcp-test-only.js` | Adapt to new network interface |
-| `packages/ocapn/test/` | Update all test utilities |
+| File                                            | Change                                                  |
+| ----------------------------------------------- | ------------------------------------------------------- |
+| `packages/ocapn/src/client/index.js`            | Replace netlayer registration with network registration |
+| `packages/ocapn/src/client/handshake.js`        | Extract into tcp-for-test; remove from core             |
+| `packages/ocapn/src/client/types.js`            | New `OcapnNetwork` type; rename `NetLayer`              |
+| `packages/ocapn/src/codecs/components.js`       | `transport` → `network` in OcapnLocation codec          |
+| `packages/ocapn/src/client/util.js`             | Update URI serialization                                |
+| `packages/ocapn/src/netlayers/tcp-test-only.js` | Adapt to new network interface                          |
+| `packages/ocapn/test/`                          | Update all test utilities                               |
 
 ## Security Considerations
 

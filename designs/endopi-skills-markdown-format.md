@@ -1,19 +1,19 @@
 # EndoPi: Markdown Skill Format (agentskills.io)
 
-| | |
-|---|---|
-| **Created** | 2026-05-15 |
-| **Updated** | 2026-05-15 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
-| **Parent** | [endopi](endopi.md) |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-05-15            |
+| **Updated** | 2026-05-15            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Proposed              |
+| **Parent**  | [endopi](endopi.md)   |
 
 ## Motivation
 
 The Endo design [endoclaw-skill-registry](endoclaw-skill-registry.md)
 covers the daemon-side surface: skills are pet names in an EndoDirectory,
 discovered via `list` and resolved via `lookup`. What it does not cover
-is the *on-disk authoring* shape: a directory with a `SKILL.md` file at
+is the _on-disk authoring_ shape: a directory with a `SKILL.md` file at
 its root, frontmatter declaring the skill's name and description,
 free-form markdown body, optional helper scripts and reference docs
 alongside.
@@ -106,9 +106,9 @@ its own.
 
 ### Integration with the daemon-side registry
 
-The on-disk shape is the *authoring* surface. The
+The on-disk shape is the _authoring_ surface. The
 [endoclaw-skill-registry](endoclaw-skill-registry.md) EndoDirectory is
-the *granting* surface. The bridge: a guest module that, given a
+the _granting_ surface. The bridge: a guest module that, given a
 filesystem path to a skill directory, registers the skill as a daemon
 formula and adds it to the agent's `skills/` EndoDirectory.
 
@@ -139,11 +139,11 @@ same in reverse: a setting (or default) instructs the agent to scan
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|--------------|
-| [endoclaw-skill-registry](endoclaw-skill-registry.md) | Daemon-side complement (skills as EndoDirectory) |
-| [endopi-extension-package-manifest](endopi-extension-package-manifest.md) | Skills shippable as packages |
-| [lal-fae-form-provisioning](lal-fae-form-provisioning.md) | Skill grants part of provisioning |
+| Design                                                                    | Relationship                                     |
+| ------------------------------------------------------------------------- | ------------------------------------------------ |
+| [endoclaw-skill-registry](endoclaw-skill-registry.md)                     | Daemon-side complement (skills as EndoDirectory) |
+| [endopi-extension-package-manifest](endopi-extension-package-manifest.md) | Skills shippable as packages                     |
+| [lal-fae-form-provisioning](lal-fae-form-provisioning.md)                 | Skill grants part of provisioning                |
 
 ## Open questions
 
@@ -167,6 +167,6 @@ same in reverse: a setting (or default) instructs the agent to scan
 
 ## Prompt
 
-> Extracted from [endopi](endopi.md) § *Skills system*. Bridges the
+> Extracted from [endopi](endopi.md) § _Skills system_. Bridges the
 > daemon-side skill registry to the on-disk authoring format the
 > broader coding-agent ecosystem has standardized on.

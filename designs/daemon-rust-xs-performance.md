@@ -1,11 +1,11 @@
 # Rust+XS Daemon Performance: Bugs, Fixes, and Benchmark Results
 
-| | |
-|---|---|
-| **Created** | 2026-04-16 |
-| **Updated** | 2026-04-17 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Active |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-04-16            |
+| **Updated** | 2026-04-17            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Active                |
 
 ## Summary
 
@@ -62,6 +62,7 @@ The extra `+1` came from a misreading of the XS macros (confusing
 `mxArgv` with `mxThis`).
 
 Files fixed (every `frame.sub(2)` → `frame.sub(1)`, etc.):
+
 - `xsnap/src/worker_io.rs` — `arg_str`, `host_issue_command`,
   `host_send_raw_frame`, `host_import_archive`,
   `host_base64_encode`, `host_decode_utf8`
@@ -218,6 +219,7 @@ loop {
 ```
 
 This has zero sleep, zero polling, and correctly handles:
+
 - Microtask chains (multiple `fxRunPromiseJobs` turns)
 - Inbound envelopes arriving during JS execution
 - Outbound messages triggering new promise resolution
@@ -257,10 +259,10 @@ Worker inbox (tokio::sync::mpsc unbounded)
   `[handle: uint, verb: text, payload: bytes, nonce: uint]`
 - **Inner payload for CapTP**: JSON-encoded CapTP messages
   (`JSON.stringify` → `TextEncoder.encode` on send;
-   `TextDecoder.decode` → `JSON.parse` on receive)
+  `TextDecoder.decode` → `JSON.parse` on receive)
 - **Inner payload for control**: CBOR maps
   (e.g., spawn: `{platform, command, args}`;
-   listen-path: `{path}`)
+  listen-path: `{path}`)
 
 Both requests and responses use the same encoding — there is no
 asymmetry between directions.
@@ -269,17 +271,17 @@ asymmetry between directions.
 
 ### Before fixes (with 1ms sleep)
 
-| Operation         | Node.js | Rust+XS | Rust+Node |
-|-------------------|---------|---------|-----------|
-| ping              |  0.3ms  |  5.8ms  |   5.4ms   |
-| provideWorker     |  5.3ms  | 54.0ms  |  55.6ms   |
-| eval_cold         | 100.6ms | 80.6ms  | 132.6ms   |
-| eval_warm         |  2.0ms  | 44.7ms  |  43.7ms   |
-| eval_string_result|  1.6ms  | 45.9ms  |  45.9ms   |
-| list              |  0.4ms  |  8.6ms  |   8.7ms   |
-| storeValue_lookup |  0.8ms  | 47.9ms  |  49.0ms   |
-| cancel_worker     |  3.9ms  | 90.8ms  |  92.4ms   |
-| cancel_reprovision| 173.0ms | 260.5ms | 349.4ms   |
+| Operation          | Node.js | Rust+XS | Rust+Node |
+| ------------------ | ------- | ------- | --------- |
+| ping               | 0.3ms   | 5.8ms   | 5.4ms     |
+| provideWorker      | 5.3ms   | 54.0ms  | 55.6ms    |
+| eval_cold          | 100.6ms | 80.6ms  | 132.6ms   |
+| eval_warm          | 2.0ms   | 44.7ms  | 43.7ms    |
+| eval_string_result | 1.6ms   | 45.9ms  | 45.9ms    |
+| list               | 0.4ms   | 8.6ms   | 8.7ms     |
+| storeValue_lookup  | 0.8ms   | 47.9ms  | 49.0ms    |
+| cancel_worker      | 3.9ms   | 90.8ms  | 92.4ms    |
+| cancel_reprovision | 173.0ms | 260.5ms | 349.4ms   |
 
 The Rust+XS and Rust+Node columns being nearly identical
 confirmed the bottleneck was in the manager's message bus, not
@@ -289,17 +291,17 @@ in the worker platform.
 
 Run 2026-04-17 on the current working copy:
 
-| Operation         | Node.js | Rust+XS | Rust+Node | Speedup |
-|-------------------|---------|---------|-----------|---------|
-| ping              |  0.3ms  |  0.6ms  |   0.6ms   |   9.7x  |
-| provideWorker     |  4.3ms  |  6.5ms  |   6.2ms   |   8.3x  |
-| eval_cold         | 89.3ms  | 49.1ms  | 101.0ms   |   1.6x  |
-| eval_warm         |  1.7ms  |  2.5ms  |   3.0ms   |  17.9x  |
-| eval_string_result|  1.8ms  |  3.9ms  |   3.5ms   |  11.8x  |
-| list              |  0.4ms  |  1.1ms  |   1.0ms   |   7.8x  |
-| storeValue_lookup |  1.0ms  |  1.8ms  |   2.2ms   |  26.6x  |
-| cancel_worker     |  3.9ms  |  8.0ms  |  16.0ms   |  11.4x  |
-| cancel_reprovision| 175.7ms | 100.7ms | 177.8ms   |   2.6x  |
+| Operation          | Node.js | Rust+XS | Rust+Node | Speedup |
+| ------------------ | ------- | ------- | --------- | ------- |
+| ping               | 0.3ms   | 0.6ms   | 0.6ms     | 9.7x    |
+| provideWorker      | 4.3ms   | 6.5ms   | 6.2ms     | 8.3x    |
+| eval_cold          | 89.3ms  | 49.1ms  | 101.0ms   | 1.6x    |
+| eval_warm          | 1.7ms   | 2.5ms   | 3.0ms     | 17.9x   |
+| eval_string_result | 1.8ms   | 3.9ms   | 3.5ms     | 11.8x   |
+| list               | 0.4ms   | 1.1ms   | 1.0ms     | 7.8x    |
+| storeValue_lookup  | 1.0ms   | 1.8ms   | 2.2ms     | 26.6x   |
+| cancel_worker      | 3.9ms   | 8.0ms   | 16.0ms    | 11.4x   |
+| cancel_reprovision | 175.7ms | 100.7ms | 177.8ms   | 2.6x    |
 
 Speedup column is Rust+XS before/after (comparing the "before
 fixes" table above against these numbers).
@@ -343,6 +345,7 @@ would eliminate this overhead.
 
 The in-process XS manager communicates with the supervisor through
 two bridge tasks:
+
 - Inbound: `tokio::spawn` async task reads from supervisor inbox,
   pushes to `std::sync::mpsc`
 - Outbound: `tokio::task::spawn_blocking` reads from
@@ -394,19 +397,19 @@ prints a comparison table.
 
 ## Key Files
 
-| File | Role |
-|------|------|
-| `rust/endo/xsnap/src/lib.rs` | XS machine, reactive pump loop |
-| `rust/endo/xsnap/src/worker_io.rs` | Host function helpers, transport trait |
-| `rust/endo/xsnap/src/powers/*.rs` | Host function implementations |
-| `rust/endo/xsnap/xsnap-platform.c` | XS platform layer (fxHasPendingJobs, fxQueuePromiseJobs) |
-| `rust/endo/src/inproc.rs` | In-process XS manager bridge |
-| `rust/endo/src/supervisor.rs` | Message routing |
-| `rust/endo/src/endo.rs` | Daemon entry, control message handlers |
-| `rust/endo/xsnap/src/daemon_bootstrap.js` | Bundled JS daemon manager (~36k lines) |
-| `packages/daemon/src/envelope.js` | CBOR envelope codec (JS) |
-| `packages/daemon/src/connection.js` | CapTP message serialization (JSON) |
-| `packages/daemon/test/bench-daemon.js` | Benchmark harness |
+| File                                      | Role                                                     |
+| ----------------------------------------- | -------------------------------------------------------- |
+| `rust/endo/xsnap/src/lib.rs`              | XS machine, reactive pump loop                           |
+| `rust/endo/xsnap/src/worker_io.rs`        | Host function helpers, transport trait                   |
+| `rust/endo/xsnap/src/powers/*.rs`         | Host function implementations                            |
+| `rust/endo/xsnap/xsnap-platform.c`        | XS platform layer (fxHasPendingJobs, fxQueuePromiseJobs) |
+| `rust/endo/src/inproc.rs`                 | In-process XS manager bridge                             |
+| `rust/endo/src/supervisor.rs`             | Message routing                                          |
+| `rust/endo/src/endo.rs`                   | Daemon entry, control message handlers                   |
+| `rust/endo/xsnap/src/daemon_bootstrap.js` | Bundled JS daemon manager (~36k lines)                   |
+| `packages/daemon/src/envelope.js`         | CBOR envelope codec (JS)                                 |
+| `packages/daemon/src/connection.js`       | CapTP message serialization (JSON)                       |
+| `packages/daemon/test/bench-daemon.js`    | Benchmark harness                                        |
 
 ## Working Copy Inventory
 
@@ -417,11 +420,11 @@ This section serves as a map so the next agent can orient quickly.
 
 ### Related design documents
 
-| Document | Covers |
-|----------|--------|
-| [daemon-endor-architecture](daemon-endor-architecture.md) | Overall Rust daemon architecture, supervisor, routing, control verbs, worker platforms, engine dispatch |
-| [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | XS heap snapshot FFI, suspend/resume protocol, CAS storage |
-| [daemon-rust-xs-performance](daemon-rust-xs-performance.md) | This document — benchmarks, bug fixes, reactive pump |
+| Document                                                    | Covers                                                                                                  |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| [daemon-endor-architecture](daemon-endor-architecture.md)   | Overall Rust daemon architecture, supervisor, routing, control verbs, worker platforms, engine dispatch |
+| [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md)   | XS heap snapshot FFI, suspend/resume protocol, CAS storage                                              |
+| [daemon-rust-xs-performance](daemon-rust-xs-performance.md) | This document — benchmarks, bug fixes, reactive pump                                                    |
 
 ### 1. XS host function argument fix (bug fix)
 
@@ -430,14 +433,14 @@ instead of `frame.sub(1 + i)` to access argument `i`.
 
 **Files changed:**
 
-| File | What changed |
-|------|-------------|
-| `xsnap/src/worker_io.rs` | `arg_str` offset; 5 direct `frame.sub` sites |
-| `xsnap/src/powers/fs.rs` | `arg_bytes`, `arg_dir_token`, `resolve_dir`, all direct access |
-| `xsnap/src/powers/crypto.rs` | 4 handle/data slot accesses |
-| `xsnap/src/powers/sqlite.rs` | 8 occurrences |
-| `xsnap/src/powers/process.rs` | `host_join_path` argc reading (frame ID field) |
-| `xsnap/src/lib.rs` | 2 test host functions |
+| File                          | What changed                                                   |
+| ----------------------------- | -------------------------------------------------------------- |
+| `xsnap/src/worker_io.rs`      | `arg_str` offset; 5 direct `frame.sub` sites                   |
+| `xsnap/src/powers/fs.rs`      | `arg_bytes`, `arg_dir_token`, `resolve_dir`, all direct access |
+| `xsnap/src/powers/crypto.rs`  | 4 handle/data slot accesses                                    |
+| `xsnap/src/powers/sqlite.rs`  | 8 occurrences                                                  |
+| `xsnap/src/powers/process.rs` | `host_join_path` argc reading (frame ID field)                 |
+| `xsnap/src/lib.rs`            | 2 test host functions                                          |
 
 **Status:** complete, tested via daemon startup + benchmarks.
 
@@ -465,17 +468,17 @@ daemon dispatches based on it.
 Partially implements the plan in
 `~/.claude/plans/splendid-coalescing-adleman.md`.
 
-| File | What changed |
-|------|-------------|
-| `src/types.rs` | `WorkerInfo` gained `platform: String` field |
-| `src/codec.rs` | `decode_spawn_request` returns `(platform, cmd, args)`; `encode_spawn_request` takes platform; `decode_listen_path_request` and `decode_suspend_request` added; CBOR map encoding; 4 unit tests |
-| `src/engine.rs` | `Engine::Process` → `Engine::Separate{platform}` + `Engine::Shared`; `engine_for_spawn_request` dispatches on platform string; unit tests |
-| `src/endo.rs` | `handle_control_message` takes `cas_dir`; `listen` verb → `listen-path` (CBOR payload); `listening` → `listening-path`; spawn dispatches `Engine::Shared` to `inproc::spawn_shared_worker`; `suspend`/`suspended` control verbs; `handle_resume` function; `wire_worker_tasks` gains `init_verb`/`init_payload` params |
-| `src/inproc.rs` | `spawn_shared_worker` added (thin wrapper around `spawn_inproc_xs_peer`) |
-| `src/proc.rs` | `spawn_process` takes `platform` param; `wire_worker_tasks` takes `init_verb`/`init_payload` |
-| `src/supervisor.rs` | `SuspendedWorker` struct; `mark_suspended`/`is_suspended`/`take_suspended`; `RoutingCallbacks` struct with `on_control`/`on_resume`; `start_routing` accepts callbacks; routing detects suspended handles; `workers_write` accessor; platform in `workers_snapshot` |
-| `src/socket.rs` | Minor (4 lines) |
-| `xsnap/src/daemon_bootstrap.js` | `kind` → `platform` rename (~15 sites); `defaultPlatform` from env var; `encodeSpawnPayload` takes platform; `makeWorker` resolves platform to command/args; `listen` → `listen-path` with CBOR payload; `listening` → `listening-path` |
+| File                            | What changed                                                                                                                                                                                                                                                                                                           |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/types.rs`                  | `WorkerInfo` gained `platform: String` field                                                                                                                                                                                                                                                                           |
+| `src/codec.rs`                  | `decode_spawn_request` returns `(platform, cmd, args)`; `encode_spawn_request` takes platform; `decode_listen_path_request` and `decode_suspend_request` added; CBOR map encoding; 4 unit tests                                                                                                                        |
+| `src/engine.rs`                 | `Engine::Process` → `Engine::Separate{platform}` + `Engine::Shared`; `engine_for_spawn_request` dispatches on platform string; unit tests                                                                                                                                                                              |
+| `src/endo.rs`                   | `handle_control_message` takes `cas_dir`; `listen` verb → `listen-path` (CBOR payload); `listening` → `listening-path`; spawn dispatches `Engine::Shared` to `inproc::spawn_shared_worker`; `suspend`/`suspended` control verbs; `handle_resume` function; `wire_worker_tasks` gains `init_verb`/`init_payload` params |
+| `src/inproc.rs`                 | `spawn_shared_worker` added (thin wrapper around `spawn_inproc_xs_peer`)                                                                                                                                                                                                                                               |
+| `src/proc.rs`                   | `spawn_process` takes `platform` param; `wire_worker_tasks` takes `init_verb`/`init_payload`                                                                                                                                                                                                                           |
+| `src/supervisor.rs`             | `SuspendedWorker` struct; `mark_suspended`/`is_suspended`/`take_suspended`; `RoutingCallbacks` struct with `on_control`/`on_resume`; `start_routing` accepts callbacks; routing detects suspended handles; `workers_write` accessor; platform in `workers_snapshot`                                                    |
+| `src/socket.rs`                 | Minor (4 lines)                                                                                                                                                                                                                                                                                                        |
+| `xsnap/src/daemon_bootstrap.js` | `kind` → `platform` rename (~15 sites); `defaultPlatform` from env var; `encodeSpawnPayload` takes platform; `makeWorker` resolves platform to command/args; `listen` → `listen-path` with CBOR payload; `listening` → `listening-path`                                                                                |
 
 **Status:** Platform dispatch working for `"separate"` and
 `"node"`.
@@ -484,6 +487,7 @@ Partially implements the plan in
 end-to-end yet.
 
 **Remaining (from the plan):**
+
 - Integration test for shared (in-process) workers.
 - Platform-aware resume (currently `handle_resume` always uses
   in-process restore; need to branch on `info.platform` for
@@ -495,17 +499,17 @@ end-to-end yet.
 
 **Design doc:** [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md)
 
-| File | What changed |
-|------|-------------|
-| `xsnap/src/ffi.rs` | `XsSnapshot` struct, `XsSnapshotReadFn`/`XsSnapshotWriteFn` types, `fxWriteSnapshot`/`fxReadSnapshot`/`fx_harden` FFI declarations |
-| `xsnap/src/lib.rs` | `Machine::write_snapshot`/`from_snapshot` (in-memory); `Machine::write_snapshot_to_file`/`from_snapshot_file` (streaming); `Machine::suspend`/`resume`; `Machine::suspend_to_cas`/`resume_from_cas` (CAS integration); `SuspendData` struct; `worker_snapshot_callbacks`; `SnapshotError` type; `handle_suspend` in worker event loop; `run_xs_worker_inproc` entry point; `InitResult::Restore` handling; 9 unit tests |
-| `xsnap/src/worker_io.rs` | `InitResult` enum (`Init`/`Restore`); both transport impls updated; `init_handshake` returns `InitResult` |
-| `xsnap/xsnap-platform.c` | `fxCollectHostCallbacks` function for snapshot callback discovery |
-| `xsnap/src/powers/modules.rs` | `CALLBACKS` const for snapshot table |
-| `xsnap/src/powers/process.rs` | `CALLBACKS` const for snapshot table |
-| `xsnap/src/powers/crypto.rs` | (offset fixes only) |
-| `xsnap/src/powers/fs.rs` | (offset fixes only) |
-| `xsnap/src/powers/sqlite.rs` | (offset fixes only) |
+| File                          | What changed                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `xsnap/src/ffi.rs`            | `XsSnapshot` struct, `XsSnapshotReadFn`/`XsSnapshotWriteFn` types, `fxWriteSnapshot`/`fxReadSnapshot`/`fx_harden` FFI declarations                                                                                                                                                                                                                                                                                      |
+| `xsnap/src/lib.rs`            | `Machine::write_snapshot`/`from_snapshot` (in-memory); `Machine::write_snapshot_to_file`/`from_snapshot_file` (streaming); `Machine::suspend`/`resume`; `Machine::suspend_to_cas`/`resume_from_cas` (CAS integration); `SuspendData` struct; `worker_snapshot_callbacks`; `SnapshotError` type; `handle_suspend` in worker event loop; `run_xs_worker_inproc` entry point; `InitResult::Restore` handling; 9 unit tests |
+| `xsnap/src/worker_io.rs`      | `InitResult` enum (`Init`/`Restore`); both transport impls updated; `init_handshake` returns `InitResult`                                                                                                                                                                                                                                                                                                               |
+| `xsnap/xsnap-platform.c`      | `fxCollectHostCallbacks` function for snapshot callback discovery                                                                                                                                                                                                                                                                                                                                                       |
+| `xsnap/src/powers/modules.rs` | `CALLBACKS` const for snapshot table                                                                                                                                                                                                                                                                                                                                                                                    |
+| `xsnap/src/powers/process.rs` | `CALLBACKS` const for snapshot table                                                                                                                                                                                                                                                                                                                                                                                    |
+| `xsnap/src/powers/crypto.rs`  | (offset fixes only)                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `xsnap/src/powers/fs.rs`      | (offset fixes only)                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `xsnap/src/powers/sqlite.rs`  | (offset fixes only)                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 **Status:** Phase 1 (Rust snapshot FFI) complete.
 Phase 2 (supervisor suspend/resume) done except for integration
@@ -542,14 +546,14 @@ See "XS Block-Scoping Bug" section above.
 
 ### 8. Miscellaneous
 
-| File | What |
-|------|------|
-| `Cargo.lock` | Dependency updates (344 lines) |
-| `rust/endo/Cargo.toml` | New dependencies for snapshot/bench support |
-| `xsnap/Cargo.toml` | New dependencies |
-| `designs/README.md` | Added new design doc entries |
-| `designs/daemon-endo-rust-sqlite.md` | Status updates |
-| `rust/endo/benches/codec.rs` | Criterion benchmark for codec (untracked) |
+| File                                   | What                                          |
+| -------------------------------------- | --------------------------------------------- |
+| `Cargo.lock`                           | Dependency updates (344 lines)                |
+| `rust/endo/Cargo.toml`                 | New dependencies for snapshot/bench support   |
+| `xsnap/Cargo.toml`                     | New dependencies                              |
+| `designs/README.md`                    | Added new design doc entries                  |
+| `designs/daemon-endo-rust-sqlite.md`   | Status updates                                |
+| `rust/endo/benches/codec.rs`           | Criterion benchmark for codec (untracked)     |
 | `rust/endo/xsnap/benches/transport.rs` | Criterion benchmark for transport (untracked) |
 | `rust/endo/xsnap/benches/xs_engine.rs` | Criterion benchmark for XS engine (untracked) |
 

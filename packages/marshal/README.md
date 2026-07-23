@@ -30,7 +30,7 @@ import '@endo/init';
 import { makeMarshal } from '@endo/marshal';
 
 const m = makeMarshal();
-const o = harden({a: 1});
+const o = harden({ a: 1 });
 const s = m.toCapData(o);
 console.log(s);
 // { body: '{"a":1}', slots: [] }
@@ -78,7 +78,9 @@ import '@endo/init';
 import { makeMarshal } from '@endo/marshal';
 
 // Smallcaps encoding.
-const m1 = makeMarshal(undefined, undefined, { serializeBodyFormat: 'smallcaps' });
+const m1 = makeMarshal(undefined, undefined, {
+  serializeBodyFormat: 'smallcaps',
+});
 console.log(m1.toCapData(NaN));
 // { body: '#"#NaN"', slots: [] }
 
@@ -140,7 +142,9 @@ const convertValToSlot = obj => {
 const p = harden(Promise.resolve());
 
 // Smallcaps encoding.
-const m1 = makeMarshal(convertValToSlot, undefined, { serializeBodyFormat: 'smallcaps' });
+const m1 = makeMarshal(convertValToSlot, undefined, {
+  serializeBodyFormat: 'smallcaps',
+});
 m1.toCapData(p);
 // { body: '#"&0"', slots: [ 'id1:a' ] }
 
@@ -162,7 +166,7 @@ built on the marshal encoding of passable data. They can serve as direct
 substitutes for `JSON.stringify` and `JSON.parse`, respectively, with the
 following differences:
 
-* Compared to JSON, marshal's `stringify` is both more tolerant and less tolerant
+- Compared to JSON, marshal's `stringify` is both more tolerant and less tolerant
   of what data it accepts. It is more tolerant in that it will encode `NaN`,
   `Infinity`, `-Infinity`, bigints, and `undefined`. It is less tolerant in that
   it accepts only pass-by-copy data according to the semantics of our distributed
@@ -171,8 +175,8 @@ following differences:
   from `Object.prototype`, and have only enumerable string-named data properties.
   `JSON.stringify` handles unserializable data by skipping it, but marshal's
   `stringify` rejects it by throwing an error.
-* The JSON functions have parameters for customizing serialization and
-  deserialization, for example with a *replacer* or *reviver*. The marshal-based
+- The JSON functions have parameters for customizing serialization and
+  deserialization, for example with a _replacer_ or _reviver_. The marshal-based
   alternatives do not.
 
 The full marshal package will serialize `Passable` objects containing

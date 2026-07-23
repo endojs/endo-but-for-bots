@@ -88,6 +88,7 @@ const createMockPowers = (overrides = {}) => ({
 ### Test Scenarios
 
 **Send Message Flow**
+
 - Type `@recipient hello world`
 - Press Enter or click Send
 - Verify `send()` called with correct arguments
@@ -95,23 +96,27 @@ const createMockPowers = (overrides = {}) => ({
 - Verify error displayed on failure
 
 **Send with Multiple Tokens**
+
 - Type `@alice please meet @bob`
 - Verify message strings and pet names extracted correctly
 - Verify edge names default to pet names
 
 **Adopt Value Flow**
+
 - Render message with adoptable token
 - Hover over token to show popup
 - Enter pet name and click Adopt
 - Verify `adopt()` called with message number, edge name, pet name
 
 **Dismiss Message Flow**
+
 - Render message with dismiss button
 - Click Dismiss
 - Verify `dismiss()` called
 - Verify message removed from DOM
 
 **Error Handling**
+
 - Send without recipient token shows error
 - Failed send displays error message
 - Failed adopt displays error on message
@@ -129,29 +134,34 @@ Full browser tests against a test daemon instance.
 ### Scenarios
 
 **Basic Load**
+
 - Chat UI renders without errors
 - Command line is focused
 - Pet names load in autocomplete
 
 **Send to Self**
+
 - Type `@SELF hello`
 - Press Enter
 - Message appears in transcript
 - Message styled as sent (blue)
 
 **Receive Message**
+
 - Send message from another guest
 - Message appears in transcript
 - Message styled as received (sender shown)
 - Adoption controls work
 
 **Token Autocomplete E2E**
+
 - Type `@` and verify menu appears
 - Type partial name and verify filtering
 - Use arrow keys and Enter to select
 - Verify token inserted with space
 
 **Keyboard Navigation**
+
 - Tab through interactive elements
 - Enter submits from command line
 - Escape closes menus
@@ -185,21 +195,25 @@ packages/chat/
 ## 6. Implementation Phases
 
 ### Phase 1: Unit Test Foundation
+
 - Extract pure functions to testable modules
 - Add unit tests for `relativeTime`, `parseMessage`
 - Ensure tests run in SES environment
 
 ### Phase 2: Component Test Infrastructure
+
 - Set up jsdom/happy-dom environment
 - Create mock powers factory
 - Add tests for token autocomplete
 
 ### Phase 3: Integration Tests
+
 - Test `chatBarComponent` with mocks
 - Test `inboxComponent` message rendering
 - Cover error paths
 
 ### Phase 4: E2E Tests (Optional)
+
 - Playwright setup
 - Test daemon fixture
 - Critical path coverage

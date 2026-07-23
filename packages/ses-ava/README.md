@@ -1,7 +1,8 @@
 # `@endo/ses-ava`
 
-*SES-AVA* wraps AVA `test` functions and initializes the SES-shim with options
+_SES-AVA_ wraps AVA `test` functions and initializes the SES-shim with options
 suitable for debugging tests. This includes logging errors to the console with
+
 - deep stacks of prior turns
 - unredacted stack traces
 - unredacted error messages
@@ -12,11 +13,15 @@ To use this module, in your AVA test files, replace
 import 'ses'; // or however you initialize the SES-shim
 import test from 'ava';
 ```
+
 with
+
 ```js
 import test from '@endo/ses-ava/prepare-endo.js';
 ```
+
 and add
+
 ```json
   "devDependencies": {
     // ...
@@ -24,6 +29,7 @@ and add
     // ...
   },
 ```
+
 specifically to "devDependencies". @endo/ses-ava itself depends on AVA as
 a regular dependency, so it you include @endo/ses-ava as a regular
 dependency, bundlers might bundle your code with all of AVA.
@@ -64,11 +70,11 @@ For example, the `lockdown` configuration might look like:
 ```js
 export default {
   require: ['@endo/ses-ava/prepare-endo-config.js'],
-  nodeArguments: ['-C', 'ses-ava:endo']
+  nodeArguments: ['-C', 'ses-ava:endo'],
 };
 ```
 
-This relies on SES-AVA  to initialize an
+This relies on SES-AVA to initialize an
 Endo environment, including the SES shims and Eventual Send shim, and also
 register the SES-AVA wrapped `test` declarator, which can unredact error
 messages produced by the Assert shim from SES.
@@ -88,7 +94,7 @@ Then, in `package.json`, we can use `ses-ava` instead of `ava`.
   },
   "avaConfigs": {
     "lockdown": "test/_ava-lockdown.config.mjs",
-    "unsafe": "test/_ava-lockdown-unsafe.config.mjs",
+    "unsafe": "test/_ava-lockdown-unsafe.config.mjs"
   }
 }
 ```

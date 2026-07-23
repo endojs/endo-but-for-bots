@@ -1,11 +1,11 @@
 # Rename dismiss-all to clear
 
-| | |
-|---|---|
-| **Created** | 2026-03-03 |
-| **Updated** | 2026-05-19 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** (PR [#93](https://github.com/endojs/endo-but-for-bots/pull/93), merged 2026-05-06) |
+|             |                                                                                                 |
+| ----------- | ----------------------------------------------------------------------------------------------- |
+| **Created** | 2026-03-03                                                                                      |
+| **Updated** | 2026-05-19                                                                                      |
+| **Author**  | Kris Kowal (prompted)                                                                           |
+| **Status**  | **Complete** (PR [#93](https://github.com/endojs/endo-but-for-bots/pull/93), merged 2026-05-06) |
 
 ## Status
 

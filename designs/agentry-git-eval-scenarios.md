@@ -1,11 +1,11 @@
 # `@endo/agentry` Git Eval Scenarios
 
-| | |
-|---|---|
-| **Created** | 2026-07-08 |
-| **Updated** | 2026-07-17 |
-| **Author** | 0xpatrickdev (prompted) |
-| **Status** | Not Started |
+|             |                         |
+| ----------- | ----------------------- |
+| **Created** | 2026-07-08              |
+| **Updated** | 2026-07-17              |
+| **Author**  | 0xpatrickdev (prompted) |
+| **Status**  | Not Started             |
 
 ## What is the Problem Being Solved?
 
@@ -17,11 +17,11 @@ as much as signal.
 This design trims the set to three canonical scenarios distilled from a
 recovered rebase session:
 
-| Scenario | Role in the set | Status |
-|---|---|---|
-| Existing `stage-and-commit` | Minimal smoke floor for git code mode | Keep |
-| `conflict-rebase` | Feasible conflict leg for rebase | Buildable with today's API by reworking PR [#526](https://github.com/endojs/endo-but-for-bots/pull/526) in place |
-| `stack-surgery` | Involved centerpiece covering stack cleanup | Fixture and scorer land now behind a pending live row by reworking PR [#626](https://github.com/endojs/endo-but-for-bots/pull/626) in place; agent-side verbs blocked on [agentry-git-verb-gaps](agentry-git-verb-gaps.md) |
+| Scenario                    | Role in the set                             | Status                                                                                                                                                                                                                     |
+| --------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Existing `stage-and-commit` | Minimal smoke floor for git code mode       | Keep                                                                                                                                                                                                                       |
+| `conflict-rebase`           | Feasible conflict leg for rebase            | Buildable with today's API by reworking PR [#526](https://github.com/endojs/endo-but-for-bots/pull/526) in place                                                                                                           |
+| `stack-surgery`             | Involved centerpiece covering stack cleanup | Fixture and scorer land now behind a pending live row by reworking PR [#626](https://github.com/endojs/endo-but-for-bots/pull/626) in place; agent-side verbs blocked on [agentry-git-verb-gaps](agentry-git-verb-gaps.md) |
 
 This omits separate clean-rebase and multi-file edit rows on purpose. The
 maintainer's 2026-06-25 CHANGES_REQUESTED review on PR #526 asked for fewer,
@@ -48,27 +48,27 @@ exact historical commit ids.
 "JSON tools" means the curated JSON-safe slice in
 `packages/agent-tools/src/json-tools/git.js`.
 
-| Workflow need | EndoGit | Code mode | JSON tools | Notes |
-|---|---|---|---|---|
-| Inspect status | ✅ | ✅ | ❌ | JSON tools defer non-empty status rows until capref/result support exists. |
-| Inspect diff | ✅ | ✅ | ✅ | Text diff is JSON-safe. |
-| Inspect history | ✅ | ✅ | 🟡 | JSON tools expose `log` and `show`, but not `revParse`. |
-| List/current branch | ✅ | ✅ | ✅ | `branches()` and `currentBranch()`. |
-| Switch branches | ✅ | ✅ | 🟡 | JSON tools expose `switchBranch`, not detached checkout. |
-| Create/delete/rename branch | ✅ | ✅ | 🟡 | JSON tools expose create only. |
-| Stage paths | ✅ | ✅ | ❌ | Requires `EndoMountEntry` handles from `status()` or workspace traversal. |
-| Unstage/restore paths | ✅ | ✅ | ❌ | Requires entry handles. |
-| Commit | ✅ | ✅ | ✅ | Plain `commit(message)`. |
-| Commit amend | ❌ | ❌ | ❌ | Needed by `stack-surgery`. |
-| Reword commit | ❌ | ❌ | ❌ | Needed by `stack-surgery`. |
-| Cherry-pick | ❌ | ❌ | ❌ | Needed by `stack-surgery`. |
-| Merge | ✅ | ✅ | ❌ | `merge(ref, options)`. |
-| Rebase start/continue/abort/skip | ✅ | ✅ | ❌ | Enough for `conflict-rebase`. |
-| Rebase autosquash | ❌ | ❌ | ❌ | Needed by `stack-surgery`. |
-| Conflict side selection | ❌ | ❌ | ❌ | The agent can resolve by writing final file contents today, but cannot ask Git for ours/theirs checkout. |
-| Stash dirty work | ✅ | ✅ | ❌ | Not required by the canonical set. |
-| Pull/fetch/push | 🟡 Remote only | ❌ No local binding | ❌ | `GitRemote`, not the local `Git` code-mode binding. |
-| Historical read | ✅ | ✅ | ❌ | `tree(ref)` and `filesystemAt(ref)`. |
+| Workflow need                    | EndoGit        | Code mode           | JSON tools | Notes                                                                                                    |
+| -------------------------------- | -------------- | ------------------- | ---------- | -------------------------------------------------------------------------------------------------------- |
+| Inspect status                   | ✅             | ✅                  | ❌         | JSON tools defer non-empty status rows until capref/result support exists.                               |
+| Inspect diff                     | ✅             | ✅                  | ✅         | Text diff is JSON-safe.                                                                                  |
+| Inspect history                  | ✅             | ✅                  | 🟡         | JSON tools expose `log` and `show`, but not `revParse`.                                                  |
+| List/current branch              | ✅             | ✅                  | ✅         | `branches()` and `currentBranch()`.                                                                      |
+| Switch branches                  | ✅             | ✅                  | 🟡         | JSON tools expose `switchBranch`, not detached checkout.                                                 |
+| Create/delete/rename branch      | ✅             | ✅                  | 🟡         | JSON tools expose create only.                                                                           |
+| Stage paths                      | ✅             | ✅                  | ❌         | Requires `EndoMountEntry` handles from `status()` or workspace traversal.                                |
+| Unstage/restore paths            | ✅             | ✅                  | ❌         | Requires entry handles.                                                                                  |
+| Commit                           | ✅             | ✅                  | ✅         | Plain `commit(message)`.                                                                                 |
+| Commit amend                     | ❌             | ❌                  | ❌         | Needed by `stack-surgery`.                                                                               |
+| Reword commit                    | ❌             | ❌                  | ❌         | Needed by `stack-surgery`.                                                                               |
+| Cherry-pick                      | ❌             | ❌                  | ❌         | Needed by `stack-surgery`.                                                                               |
+| Merge                            | ✅             | ✅                  | ❌         | `merge(ref, options)`.                                                                                   |
+| Rebase start/continue/abort/skip | ✅             | ✅                  | ❌         | Enough for `conflict-rebase`.                                                                            |
+| Rebase autosquash                | ❌             | ❌                  | ❌         | Needed by `stack-surgery`.                                                                               |
+| Conflict side selection          | ❌             | ❌                  | ❌         | The agent can resolve by writing final file contents today, but cannot ask Git for ours/theirs checkout. |
+| Stash dirty work                 | ✅             | ✅                  | ❌         | Not required by the canonical set.                                                                       |
+| Pull/fetch/push                  | 🟡 Remote only | ❌ No local binding | ❌         | `GitRemote`, not the local `Git` code-mode binding.                                                      |
+| Historical read                  | ✅             | ✅                  | ❌         | `tree(ref)` and `filesystemAt(ref)`.                                                                     |
 
 ## Anticipated Needs: Bounded Reads
 
@@ -95,13 +95,13 @@ the worst outcome for context cost once the condition matrix multiplies runs.
 
 The repository already has pieces of the right convention:
 
-| Surface | Today | Gap |
-|---|---|---|
-| JSON-tool `mountReadText` | Truncates at a configurable `maxChars` and appends an explicit truncation marker. | The convention exists in one tool only. |
-| `OpenFile.read(offset, length)` | Byte-ranged low-level open-file read | Line-blind, with no end-of-file or truncation signal; separate from the public `ReadableBlob` methods below. |
-| `Cursor.read(limit)` | Returns `{ entries, atEnd }`. | Right result shape, directory listings only. |
-| `git.log(options)` | Bounds by `maxCount`. | Bounds row count, not output size. |
-| `git.diff()`, `git.show()`, `stashShow()` | Unbounded strings. | No bounding option at all. |
+| Surface                                   | Today                                                                             | Gap                                                                                                          |
+| ----------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| JSON-tool `mountReadText`                 | Truncates at a configurable `maxChars` and appends an explicit truncation marker. | The convention exists in one tool only.                                                                      |
+| `OpenFile.read(offset, length)`           | Byte-ranged low-level open-file read                                              | Line-blind, with no end-of-file or truncation signal; separate from the public `ReadableBlob` methods below. |
+| `Cursor.read(limit)`                      | Returns `{ entries, atEnd }`.                                                     | Right result shape, directory listings only.                                                                 |
+| `git.log(options)`                        | Bounds by `maxCount`.                                                             | Bounds row count, not output size.                                                                           |
+| `git.diff()`, `git.show()`, `stashShow()` | Unbounded strings.                                                                | No bounding option at all.                                                                                   |
 
 The concrete filesystem/blob realization of this sed-like affordance is the
 range-read surface described in
@@ -223,18 +223,18 @@ Expected final state:
 
 Required affordances:
 
-| Available today | How the scenario uses it |
-|---|---|
-| `currentBranch()`, `branches()`, `log()`, `show()`, `diff()` | Inspect branch shape and conflict context. |
-| `switchBranch()` | Move between fixture branches if the agent chooses. |
-| `rebase({ mode: 'start', upstream })` | Start the replay onto `integration`. |
-| Workspace read/write | Write the resolved `app.txt` contents directly. |
-| `status()` and `add(entries)` | Find and stage conflicted/resolved entries. |
-| `rebase({ mode: 'continue' })` | Continue after staging the resolution. |
+| Available today                                              | How the scenario uses it                            |
+| ------------------------------------------------------------ | --------------------------------------------------- |
+| `currentBranch()`, `branches()`, `log()`, `show()`, `diff()` | Inspect branch shape and conflict context.          |
+| `switchBranch()`                                             | Move between fixture branches if the agent chooses. |
+| `rebase({ mode: 'start', upstream })`                        | Start the replay onto `integration`.                |
+| Workspace read/write                                         | Write the resolved `app.txt` contents directly.     |
+| `status()` and `add(entries)`                                | Find and stage conflicted/resolved entries.         |
+| `rebase({ mode: 'continue' })`                               | Continue after staging the resolution.              |
 
-| Blocked on API | Reason |
-|---|---|
-| None | This scenario should be buildable without adding Git verbs. |
+| Blocked on API | Reason                                                      |
+| -------------- | ----------------------------------------------------------- |
+| None           | This scenario should be buildable without adding Git verbs. |
 
 Scoring notes:
 
@@ -297,21 +297,21 @@ Expected final state:
 
 Required affordances:
 
-| Available today | How the scenario uses it |
-|---|---|
-| `status()`, `diff()`, `log()`, `show()`, `revParse()` | Inspect current stack, confirm the target commits, and score final shape. |
-| `filesystemAt(ref)` and workspace read/write | Compare historical and final file contents, and resolve conflict files by content. |
-| `createBranch(name, { startPoint, switchAfterCreate: true })` | Start the replacement branch at the parent of the mixed commit. |
-| `add(entries)` and `commit(message)` | Rebuild the two per-domain commits from historical reads and workspace writes. |
-| `rebase({ mode: 'continue' | 'abort' | 'skip' })` | Continue or recover from an in-progress rebase once a richer rebase start exists. |
+| Available today                                               | How the scenario uses it                                                           |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------- |
+| `status()`, `diff()`, `log()`, `show()`, `revParse()`         | Inspect current stack, confirm the target commits, and score final shape.          |
+| `filesystemAt(ref)` and workspace read/write                  | Compare historical and final file contents, and resolve conflict files by content. |
+| `createBranch(name, { startPoint, switchAfterCreate: true })` | Start the replacement branch at the parent of the mixed commit.                    |
+| `add(entries)` and `commit(message)`                          | Rebuild the two per-domain commits from historical reads and workspace writes.     |
+| `rebase({ mode: 'continue'                                    | 'abort'                                                                            | 'skip' })` | Continue or recover from an in-progress rebase once a richer rebase start exists. |
 
-| Blocked on API | Reason |
-|---|---|
-| `cherryPick(ref, options?)` | Replay the two side-branch commits. |
-| `commit(message, { amend: true })` | Fold staged changes into an existing commit. |
-| `reword(ref, message)` | Rename one commit while preserving its tree. |
+| Blocked on API                                          | Reason                                                                 |
+| ------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `cherryPick(ref, options?)`                             | Replay the two side-branch commits.                                    |
+| `commit(message, { amend: true })`                      | Fold staged changes into an existing commit.                           |
+| `reword(ref, message)`                                  | Rename one commit while preserving its tree.                           |
 | `rebase({ mode: 'start', upstream, autosquash: true })` | Fold `fixup!` commits, surfacing conflicts as structured rebase state. |
-| `checkoutConflict(entries, 'ours' \| 'theirs')` | Conflict-side selection without broad checkout. |
+| `checkoutConflict(entries, 'ours' \| 'theirs')`         | Conflict-side selection without broad checkout.                        |
 
 ### Commit split without reset
 
@@ -357,12 +357,12 @@ Keep the scenario set small:
 
 ## Adjacent Eval Lanes
 
-| Lane | Boundary |
-|---|---|
+| Lane                       | Boundary                                                                                                                                                                                                                                                                                                          |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Package-manager capability | `yarn`/`npm` install and test verification stay in a separate capability and eval lane. The recovered session ran roughly 57 yarn build, lint, and test commands, so verification is half the real workflow, but it brings process execution, network access, and lockfile policy rather than local git mutation. |
-| Git remotes | `GitRemote` exists, but has no code-mode local binding. Fetch, pull, push, and clone scenarios are a future lane, and publish or force-push policy stays out of this harness. |
-| CI / PR-provider triage | Provider diagnosis remains excluded from this harness because it mixes repository state with forge state, checks APIs, and maintainer workflow policy. |
-| Line-numbered search | Line-numbered search is already named under "Anticipated Needs: Bounded Reads" as a separate tool design. It feeds ranged reads but is not itself a git scenario. |
+| Git remotes                | `GitRemote` exists, but has no code-mode local binding. Fetch, pull, push, and clone scenarios are a future lane, and publish or force-push policy stays out of this harness.                                                                                                                                     |
+| CI / PR-provider triage    | Provider diagnosis remains excluded from this harness because it mixes repository state with forge state, checks APIs, and maintainer workflow policy.                                                                                                                                                            |
+| Line-numbered search       | Line-numbered search is already named under "Anticipated Needs: Bounded Reads" as a separate tool design. It feeds ranged reads but is not itself a git scenario.                                                                                                                                                 |
 
 ## Test Plan
 
@@ -380,15 +380,15 @@ Keep the scenario set small:
 
 ## Dependencies
 
-| Dependency | Relationship |
-|---|---|
-| [agentry-agent-builder](agentry-agent-builder.md) | Defines the code-mode agent builder and git-loop preset the eval harness runs. |
-| [endo-agent-tools](endo-agent-tools.md) | Defines the confined tool/capability model and the JSON-tool slice. |
-| [daemon-git-capability](daemon-git-capability.md) | Defines the underlying `Git` capability vocabulary. |
-| [agentry-git-verb-gaps](agentry-git-verb-gaps.md) | In flight on PR [#611](https://github.com/endojs/endo-but-for-bots/pull/611); defines the five agent-side verbs `stack-surgery` needs. |
-| PR [#526](https://github.com/endojs/endo-but-for-bots/pull/526) | Reworked in place into `conflict-rebase`. |
-| PR [#626](https://github.com/endojs/endo-but-for-bots/pull/626) | Reworked in place into the `stack-surgery` fixture/scorer pending row. |
-| PR [#627](https://github.com/endojs/endo-but-for-bots/pull/627) | Condition matrix that makes scenario count costly. |
+| Dependency                                                      | Relationship                                                                                                                           |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| [agentry-agent-builder](agentry-agent-builder.md)               | Defines the code-mode agent builder and git-loop preset the eval harness runs.                                                         |
+| [endo-agent-tools](endo-agent-tools.md)                         | Defines the confined tool/capability model and the JSON-tool slice.                                                                    |
+| [daemon-git-capability](daemon-git-capability.md)               | Defines the underlying `Git` capability vocabulary.                                                                                    |
+| [agentry-git-verb-gaps](agentry-git-verb-gaps.md)               | In flight on PR [#611](https://github.com/endojs/endo-but-for-bots/pull/611); defines the five agent-side verbs `stack-surgery` needs. |
+| PR [#526](https://github.com/endojs/endo-but-for-bots/pull/526) | Reworked in place into `conflict-rebase`.                                                                                              |
+| PR [#626](https://github.com/endojs/endo-but-for-bots/pull/626) | Reworked in place into the `stack-surgery` fixture/scorer pending row.                                                                 |
+| PR [#627](https://github.com/endojs/endo-but-for-bots/pull/627) | Condition matrix that makes scenario count costly.                                                                                     |
 
 ## Open Questions
 

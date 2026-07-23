@@ -1,4 +1,3 @@
-
 # Install Endo
 
 One day, this will be as simple as:
@@ -32,7 +31,7 @@ export const make = () => {
         counter += 1;
         return counter;
       },
-    }
+    },
   );
 };
 ```
@@ -116,7 +115,7 @@ export const make = powers => {
   const counter = E(powers).request(
     '@host',
     'a counter, suitable for doubling',
-    'my-counter'
+    'my-counter',
   );
   return makeExo(
     'Doubler',
@@ -126,7 +125,7 @@ export const make = powers => {
         const n = await E(counter).incr();
         return n * 2;
       },
-    }
+    },
   );
 };
 ```

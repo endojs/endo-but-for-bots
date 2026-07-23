@@ -1,12 +1,12 @@
 # Chat Design Invariants and Principles
 
-| | |
-|---|---|
-| **Created** | 2026-03-02 |
-| **Updated** | 2026-03-02 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
-| **Source** | Extracted from `packages/chat/DESIGN.md` |
+|             |                                          |
+| ----------- | ---------------------------------------- |
+| **Created** | 2026-03-02                               |
+| **Updated** | 2026-03-02                               |
+| **Author**  | Kris Kowal (prompted)                    |
+| **Status**  | **Complete**                             |
+| **Source**  | Extracted from `packages/chat/DESIGN.md` |
 
 ## Overview
 
@@ -38,6 +38,7 @@ that is a bug.
 Users should never be forced to use the keyboard.
 Every operation achievable via keyboard shortcuts must also be achievable
 through:
+
 - Clickable buttons
 - Menu items
 - Direct manipulation (drag, click)
@@ -47,6 +48,7 @@ through:
 **The current UI mode and available actions MUST be visually apparent.**
 
 Users should always know:
+
 - What mode they're in (send, selecting, inline command, etc.)
 - What actions are available
 - What will happen when they press Enter

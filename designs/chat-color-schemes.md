@@ -1,11 +1,11 @@
 # Chat Color Schemes
 
-| | |
-|---|---|
-| **Created** | 2026-02-26 |
-| **Updated** | 2026-02-26 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Complete |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-26            |
+| **Updated** | 2026-02-26            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Complete              |
 
 ## Motivation
 
@@ -26,24 +26,24 @@ inconsistent with the broader Endo project's visual identity on endojs.org.
 
 The stylesheet already defines semantic custom properties for the light theme:
 
-| Variable | Value | Semantic Role |
-|----------|-------|---------------|
-| `--bg-primary` | `#ffffff` | Main content background |
-| `--bg-secondary` | `#f8f9fa` | Chat bar, headers, hints |
-| `--bg-sidebar` | `#f1f3f5` | Inventory sidebar background |
-| `--bg-hover` | `#e9ecef` | Hover state backgrounds |
-| `--bg-active` | `#dee2e6` | Active/pressed backgrounds, gutter |
-| `--text-primary` | `#212529` | Primary body text |
-| `--text-secondary` | `#495057` | Secondary labels, descriptions |
-| `--text-muted` | `#868e96` | Placeholders, hints, separators |
-| `--accent-primary` | `#228be6` | Links, focus rings, interactive elements |
-| `--accent-hover` | `#1c7ed6` | Accent hover state |
-| `--accent-light` | `#e7f5ff` | Accent backgrounds, token chips, focus glow |
-| `--border-color` | `#dee2e6` | Primary borders |
-| `--border-light` | `#e9ecef` | Subtle borders between sections |
-| `--shadow-sm` | `0 1px 2px rgba(0,0,0,0.05)` | Subtle elevation |
-| `--shadow-md` | `0 4px 6px rgba(0,0,0,0.07)` | Medium elevation |
-| `--shadow-lg` | `0 10px 25px rgba(0,0,0,0.1)` | Modals, dropdowns |
+| Variable           | Value                         | Semantic Role                               |
+| ------------------ | ----------------------------- | ------------------------------------------- |
+| `--bg-primary`     | `#ffffff`                     | Main content background                     |
+| `--bg-secondary`   | `#f8f9fa`                     | Chat bar, headers, hints                    |
+| `--bg-sidebar`     | `#f1f3f5`                     | Inventory sidebar background                |
+| `--bg-hover`       | `#e9ecef`                     | Hover state backgrounds                     |
+| `--bg-active`      | `#dee2e6`                     | Active/pressed backgrounds, gutter          |
+| `--text-primary`   | `#212529`                     | Primary body text                           |
+| `--text-secondary` | `#495057`                     | Secondary labels, descriptions              |
+| `--text-muted`     | `#868e96`                     | Placeholders, hints, separators             |
+| `--accent-primary` | `#228be6`                     | Links, focus rings, interactive elements    |
+| `--accent-hover`   | `#1c7ed6`                     | Accent hover state                          |
+| `--accent-light`   | `#e7f5ff`                     | Accent backgrounds, token chips, focus glow |
+| `--border-color`   | `#dee2e6`                     | Primary borders                             |
+| `--border-light`   | `#e9ecef`                     | Subtle borders between sections             |
+| `--shadow-sm`      | `0 1px 2px rgba(0,0,0,0.05)`  | Subtle elevation                            |
+| `--shadow-md`      | `0 4px 6px rgba(0,0,0,0.07)`  | Medium elevation                            |
+| `--shadow-lg`      | `0 10px 25px rgba(0,0,0,0.1)` | Modals, dropdowns                           |
 
 ### Hardcoded Colors Requiring Parameterization
 
@@ -53,18 +53,18 @@ These fall into the following semantic categories:
 
 #### Error / Danger (reds)
 
-| Hardcoded Value | Occurrences | Usage |
-|-----------------|-------------|-------|
-| `#e03131` | 5 | Badge backgrounds, delete menu text, error borders |
-| `#c92a2a` | 5 | Error tooltip backgrounds, error arrow |
-| `#e53e3e` | 3 | Dismiss button, eval error text |
-| `#dc2626` | 2 | Rejected status badge, rejection reason |
-| `#b91c1c` | 1 | Reject button hover |
-| `#fff5f5` | 1 | Error background tint |
-| `#ffc9c9` | 1 | Error border tint |
-| `#fca5a5` | 1 | Rejection reason in sent messages |
-| `rgba(224,49,49,0.1)` | 2 | Delete hover, error background |
-| `rgba(224,49,49,0.3)` | 1 | Error border |
+| Hardcoded Value       | Occurrences | Usage                                              |
+| --------------------- | ----------- | -------------------------------------------------- |
+| `#e03131`             | 5           | Badge backgrounds, delete menu text, error borders |
+| `#c92a2a`             | 5           | Error tooltip backgrounds, error arrow             |
+| `#e53e3e`             | 3           | Dismiss button, eval error text                    |
+| `#dc2626`             | 2           | Rejected status badge, rejection reason            |
+| `#b91c1c`             | 1           | Reject button hover                                |
+| `#fff5f5`             | 1           | Error background tint                              |
+| `#ffc9c9`             | 1           | Error border tint                                  |
+| `#fca5a5`             | 1           | Rejection reason in sent messages                  |
+| `rgba(224,49,49,0.1)` | 2           | Delete hover, error background                     |
+| `rgba(224,49,49,0.3)` | 1           | Error border                                       |
 
 **Proposed variables:**
 
@@ -75,10 +75,10 @@ These fall into the following semantic categories:
 
 #### Success (greens)
 
-| Hardcoded Value | Occurrences | Usage |
-|-----------------|-------------|-------|
-| `#059669` | 2 | Granted status, grant button hover |
-| `#37b24d` | 2 | Selected message badge, bigint syntax |
+| Hardcoded Value | Occurrences | Usage                                 |
+| --------------- | ----------- | ------------------------------------- |
+| `#059669`       | 2           | Granted status, grant button hover    |
+| `#37b24d`       | 2           | Selected message badge, bigint syntax |
 
 **Proposed variables:**
 
@@ -90,17 +90,17 @@ These fall into the following semantic categories:
 Messages define their own local custom properties (`--bubble-*`),
 but these are set to hardcoded values:
 
-| Variable | Received | Sent |
-|----------|----------|------|
-| `--bubble-fg` | (inherits `--text-primary`) | `#ffffff` |
-| `--bubble-bg` | (inherits `--bg-secondary`) | `#3b82f6` |
-| `--bubble-border` | (inherits `--border-light`) | `#2563eb` |
-| `--bubble-muted` | (inherits `--text-muted`) | `rgba(255,255,255,0.7)` |
-| `--bubble-chip-fg` | `#ffffff` | `#ffffff` |
-| `--bubble-chip-bg` | `#3b82f6` | `rgba(255,255,255,0.2)` |
-| `--bubble-code-bg` | `#e9ecef` | `rgba(255,255,255,0.9)` |
-| `--bubble-code-fg` | `#24292f` | `#24292f` |
-| `--bubble-code-inline-bg` | `rgba(0,0,0,0.08)` | `rgba(255,255,255,0.2)` |
+| Variable                  | Received                    | Sent                    |
+| ------------------------- | --------------------------- | ----------------------- |
+| `--bubble-fg`             | (inherits `--text-primary`) | `#ffffff`               |
+| `--bubble-bg`             | (inherits `--bg-secondary`) | `#3b82f6`               |
+| `--bubble-border`         | (inherits `--border-light`) | `#2563eb`               |
+| `--bubble-muted`          | (inherits `--text-muted`)   | `rgba(255,255,255,0.7)` |
+| `--bubble-chip-fg`        | `#ffffff`                   | `#ffffff`               |
+| `--bubble-chip-bg`        | `#3b82f6`                   | `rgba(255,255,255,0.2)` |
+| `--bubble-code-bg`        | `#e9ecef`                   | `rgba(255,255,255,0.9)` |
+| `--bubble-code-fg`        | `#24292f`                   | `#24292f`               |
+| `--bubble-code-inline-bg` | `rgba(0,0,0,0.08)`          | `rgba(255,255,255,0.2)` |
 
 **Proposed:** Move the received-message defaults into `:root` as
 scheme-aware custom properties.
@@ -109,14 +109,14 @@ designed to work on a saturated blue background regardless of scheme.
 
 #### Code Syntax Highlighting
 
-| Hardcoded Value | Usage |
-|-----------------|-------|
-| `#cf222e` | Keywords |
-| `#0a3069` | Strings |
-| `#6e7781` | Comments |
-| `#0550ae` | Numbers |
-| `#e9ecef` | Code fence background |
-| `#24292f` | Code fence text |
+| Hardcoded Value | Usage                 |
+| --------------- | --------------------- |
+| `#cf222e`       | Keywords              |
+| `#0a3069`       | Strings               |
+| `#6e7781`       | Comments              |
+| `#0550ae`       | Numbers               |
+| `#e9ecef`       | Code fence background |
+| `#24292f`       | Code fence text       |
 
 **Proposed variables:**
 
@@ -129,10 +129,10 @@ designed to work on a saturated blue background regardless of scheme.
 
 #### Tooltips and Popups
 
-| Hardcoded Value | Usage |
-|-----------------|-------|
-| `#2d3748` | Tooltip/popup background |
-| `#f7fafc` | Tooltip text |
+| Hardcoded Value | Usage                    |
+| --------------- | ------------------------ |
+| `#2d3748`       | Tooltip/popup background |
+| `#f7fafc`       | Tooltip text             |
 
 **Proposed variables:**
 
@@ -141,20 +141,20 @@ designed to work on a saturated blue background regardless of scheme.
 
 #### Badges and Indicators
 
-| Hardcoded Value | Usage |
-|-----------------|-------|
-| `#000000` | Message number badge, shortcut badge bg |
-| `#ffffff` | Badge text |
+| Hardcoded Value | Usage                                   |
+| --------------- | --------------------------------------- |
+| `#000000`       | Message number badge, shortcut badge bg |
+| `#ffffff`       | Badge text                              |
 
 **Proposed:** Use `--tooltip-bg` / `--tooltip-fg` for these
 (same visual role: small overlays on contrasting backgrounds).
 
 #### Backdrops
 
-| Hardcoded Value | Occurrences | Usage |
-|-----------------|-------------|-------|
-| `rgba(0,0,0,0.4)` | 3 | Modal backdrops |
-| `rgba(0,0,0,0.5)` | 2 | Eval/counter-proposal backdrops |
+| Hardcoded Value   | Occurrences | Usage                           |
+| ----------------- | ----------- | ------------------------------- |
+| `rgba(0,0,0,0.4)` | 3           | Modal backdrops                 |
+| `rgba(0,0,0,0.5)` | 2           | Eval/counter-proposal backdrops |
 
 **Proposed variable:**
 
@@ -162,10 +162,10 @@ designed to work on a saturated blue background regardless of scheme.
 
 #### Button Colors
 
-| Hardcoded Value | Usage |
-|-----------------|-------|
-| `#3b82f6` | Grant proposal from-badge fallback |
-| `#2563eb` | Show-result button hover |
+| Hardcoded Value | Usage                              |
+| --------------- | ---------------------------------- |
+| `#3b82f6`       | Grant proposal from-badge fallback |
+| `#2563eb`       | Show-result button hover           |
 
 **Proposed:** Use `--accent-primary` and `--accent-hover` which already
 serve this role.
@@ -253,7 +253,7 @@ The dark scheme is derived from the endojs.org brand palette:
 
     /* Accent - brand burgundy from endojs.org */
     --accent-primary: #d4455a;
-    --accent-hover: #BB2D40;
+    --accent-hover: #bb2d40;
     --accent-light: rgba(187, 45, 64, 0.15);
 
     /* Borders */
@@ -302,15 +302,15 @@ The dark scheme is derived from the endojs.org brand palette:
 
 ### Color Rationale
 
-| Role | Light | Dark | Rationale |
-|------|-------|------|-----------|
-| Accent | `#228be6` (blue) | `#d4455a` (burgundy) | Brand color from endojs.org links (`#BB2D40`), lightened for dark bg contrast |
-| Code strings | `#0a3069` | `#fb923c` | Orange from endojs.org brand gradient |
-| Code keywords | `#cf222e` | `#f87171` | Coral from endojs.org brand gradient |
-| Code numbers | `#0550ae` | `#60a5fa` | Lightened blue for contrast |
-| Backgrounds | Cool grays | Warm dark grays | Warm tones complement the burgundy/coral accent palette |
-| Danger | Various reds | `#f87171` | Uses the brand coral; lighter reds read better on dark |
-| Tooltips | Dark on light | Light on dark | Inverted for contrast in each scheme |
+| Role          | Light            | Dark                 | Rationale                                                                     |
+| ------------- | ---------------- | -------------------- | ----------------------------------------------------------------------------- |
+| Accent        | `#228be6` (blue) | `#d4455a` (burgundy) | Brand color from endojs.org links (`#BB2D40`), lightened for dark bg contrast |
+| Code strings  | `#0a3069`        | `#fb923c`            | Orange from endojs.org brand gradient                                         |
+| Code keywords | `#cf222e`        | `#f87171`            | Coral from endojs.org brand gradient                                          |
+| Code numbers  | `#0550ae`        | `#60a5fa`            | Lightened blue for contrast                                                   |
+| Backgrounds   | Cool grays       | Warm dark grays      | Warm tones complement the burgundy/coral accent palette                       |
+| Danger        | Various reds     | `#f87171`            | Uses the brand coral; lighter reds read better on dark                        |
+| Tooltips      | Dark on light    | Light on dark        | Inverted for contrast in each scheme                                          |
 
 ### Sent Message Bubbles
 
@@ -320,7 +320,7 @@ In dark mode, this should shift to use the brand burgundy accent:
 ```css
 @media (prefers-color-scheme: dark) {
   .message.sent {
-    --bubble-bg: #BB2D40;
+    --bubble-bg: #bb2d40;
     --bubble-border: #9e2436;
     --bubble-chip-bg: rgba(255, 255, 255, 0.2);
   }

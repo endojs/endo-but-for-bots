@@ -10,12 +10,14 @@ and storeIdentifier() or storeLocator() to store new references.
 ## help(methodName?) -> string
 
 Get documentation for this interface or a specific method.
+
 - help() returns an overview of the interface
 - help("lookup") returns documentation for the lookup method
 
 ## has(...petNamePath) -> Promise<boolean>
 
 Check if a pet name exists in this directory.
+
 - has("counter") checks if "counter" exists
 - has("subdir", "value") checks if "value" exists in subdirectory "subdir"
 
@@ -44,6 +46,7 @@ Use with for-await-of to receive updates.
 ## list(...petNamePath?) -> Promise<string[]>
 
 List all pet names in this directory or a subdirectory.
+
 - list() returns names in this directory
 - list("subdir") returns names in the subdirectory "subdir"
 
@@ -61,9 +64,10 @@ Use with for-await-of to receive updates.
 ## lookup(petNameOrPath) -> Promise<any>
 
 Resolve a pet name or path to its value.
+
 - lookup("counter") gets the value named "counter"
 - lookup(["subdir", "value"]) gets "value" from subdirectory "subdir"
-Throws if the name doesn't exist.
+  Throws if the name doesn't exist.
 
 ## reverseLookup(value) -> Promise<string[]>
 
@@ -73,16 +77,18 @@ Useful for discovering what names exist for an object you have.
 ## storeIdentifier(petNameOrPath, formulaId) -> Promise<void>
 
 Store a formula identifier with a pet name.
+
 - storeIdentifier("my-name", id) stores id as "my-name"
 - storeIdentifier(["subdir", "name"], id) stores in a subdirectory
-Overwrites any existing value at that name.
+  Overwrites any existing value at that name.
 
 ## storeLocator(petNameOrPath, locator) -> Promise<void>
 
 Store an endo:// locator with a pet name.
+
 - storeLocator("my-name", locator) stores locator as "my-name"
 - storeLocator(["subdir", "name"], locator) stores in a subdirectory
-The locator must be an endo:// URL. Overwrites any existing value.
+  The locator must be an endo:// URL. Overwrites any existing value.
 
 ## remove(...petNamePath) -> Promise<void>
 
@@ -92,9 +98,10 @@ The underlying value is not deleted, just the name mapping.
 ## move(fromPath, toPath) -> Promise<void>
 
 Move/rename a reference from one name to another.
+
 - move(["old-name"], ["new-name"]) renames within this directory
 - move(["a"], ["subdir", "b"]) moves to a subdirectory
-The original name is removed after the move.
+  The original name is removed after the move.
 
 ## copy(fromPath, toPath) -> Promise<void>
 
@@ -150,26 +157,29 @@ Each message has: number, date, from, to, type, and content.
 Subscribe to incoming messages.
 First yields existing messages, then yields new ones as they arrive.
 Use with for-await-of:
-  for await (const message of E(guest).followMessages()) { ... }
+for await (const message of E(guest).followMessages()) { ... }
 
 ## resolve(messageNumber, petNameOrPath) -> Promise<void>
 
 Respond to a request message by providing a named value.
+
 - resolve(0, "my-counter") responds to message 0 with the value named "my-counter"
-The requester receives the resolved value.
+  The requester receives the resolved value.
 
 ## reject(messageNumber, reason?) -> Promise<void>
 
 Decline a request message.
+
 - reject(0) declines message 0
 - reject(0, "Not available") declines with a reason
-The requester receives an error.
+  The requester receives an error.
 
 ## adopt(messageNumber, edgeName, petName) -> Promise<void>
 
 Adopt a value from an incoming package message, giving it a pet name.
+
 - adopt(0, "gift", "my-new-thing") takes "gift" from message 0, names it "my-new-thing"
-Edge names are the labels the sender attached to values in the package.
+  Edge names are the labels the sender attached to values in the package.
 
 ## dismiss(messageNumber) -> Promise<void>
 
@@ -183,19 +193,21 @@ Remove all messages from the inbox.
 ## request(recipientName, description, responseName?) -> Promise<any>
 
 Send a request to another agent asking for a capability.
+
 - request("@host", "a counter") asks @host for "a counter"
 - request("@host", "a counter", "my-counter") also stores the response as "my-counter"
-The recipient sees your request and can resolve or reject it.
+  The recipient sees your request and can resolve or reject it.
 
 ## send(recipientName, strings, edgeNames, petNames) -> Promise<void>
 
 Send a package message with values to another agent.
+
 - strings: Text fragments that form the message
 - edgeNames: Labels for the values being sent
 - petNames: Names of values to include
 
 Example: send("@host", ["Here is ", " for you"], ["gift"], ["my-counter"])
-  Sends: "Here is @gift for you" where @gift refers to "my-counter"
+Sends: "Here is @gift for you" where @gift refers to "my-counter"
 
 ## storeValue(value, petNameOrPath) -> Promise<void>
 
@@ -219,11 +231,13 @@ Typically not called directly by users.
 # EndoGuest - A confined agent with directory and mail capabilities.
 
 A guest can:
+
 - Manage pet names for values (directory operations)
 - Send and receive messages (mail operations)
 - Request capabilities from its host
 
 Special names available:
+
 - @self: This guest's own handle
 - @host: The host that created this guest
 - @agent: This guest's formula identifier
@@ -233,6 +247,7 @@ Use help("methodName") for details on specific methods.
 ## help(methodName?) -> string
 
 Get documentation for this interface or a specific method.
+
 - help() returns an overview of the guest capabilities
 - help("request") returns documentation for the request method
 - help("send") returns documentation for send method
@@ -271,17 +286,19 @@ Example: form("@host", "Configure settings", [{ name: "name", label: "Your name"
 ## storeBlob(readerRef, petName?) -> Promise<EndoReadable>
 
 Store binary data as a blob with a pet name.
+
 - readerRef: An async iterator yielding base64-encoded strings
 - petName: Name to store the blob under
-Returns a readable blob reference.
+  Returns a readable blob reference.
 
 ## storeValue(value, petNameOrPath) -> Promise<void>
 
 Store a passable value (number, string, array, record, etc.) in your directory.
+
 - storeValue(42, "answer") stores the number 42 as "answer"
 - storeValue({x: 1, y: 2}, "point") stores a record as "point"
 - storeValue(["a", "b"], ["subdir", "items"]) stores in a subdirectory
-Values must be passable (no functions or non-transferable objects).
+  Values must be passable (no functions or non-transferable objects).
 
 ## submit(messageNumber, values) -> Promise<void>
 
@@ -326,6 +343,7 @@ Example: writeText(["my-mount", "output.txt"], "hello")
 # EndoHost - A privileged agent with full Endo capabilities.
 
 A host has all guest capabilities plus:
+
 - Create workers for running code
 - Evaluate JavaScript code
 - Create confined guests
@@ -338,32 +356,37 @@ Use help("methodName") for details on specific methods.
 ## help(methodName?) -> string
 
 Get documentation for this interface or a specific method.
+
 - help() returns an overview of the host capabilities
 - help("evaluate") returns documentation for code evaluation
 
 ## storeBlob(readerRef, petName) -> Promise<EndoReadable>
 
 Store binary data as a blob with a pet name.
+
 - readerRef: An async iterator yielding base64-encoded strings
 - petName: Name to store the blob under
-Returns a readable blob reference.
+  Returns a readable blob reference.
 
 ## storeValue(value, petNameOrPath) -> Promise<void>
 
 Store a passable value (number, string, array, record, etc.) with a name.
+
 - storeValue(42, "answer") stores the number 42
 - storeValue({x: 1, y: 2}, "point") stores a record
 
 ## provideGuest(petName?, options?) -> Promise<EndoGuest>
 
 Create or retrieve a confined guest agent.
+
 - provideGuest() creates an anonymous guest
 - provideGuest("my-guest") creates/retrieves a named guest
-Options: { introducedNames: { guestName: hostName } }
+  Options: { introducedNames: { guestName: hostName } }
 
 ## provideHost(petName?, options?) -> Promise<EndoHost>
 
 Create or retrieve another host agent.
+
 - provideHost() creates an anonymous host
 - provideHost("my-host") creates/retrieves a named host
 
@@ -375,6 +398,7 @@ Workers are isolated JavaScript environments.
 ## evaluate(workerName, source, codeNames, petNames, resultName?) -> Promise<any>
 
 Evaluate JavaScript code in a worker with named endowments.
+
 - workerName: Worker to use (undefined for new worker)
 - source: JavaScript code string
 - codeNames: Names visible in the code
@@ -382,11 +406,12 @@ Evaluate JavaScript code in a worker with named endowments.
 - resultName: Optional name to store the result
 
 Example: evaluate(undefined, "x + y", ["x", "y"], ["a", "b"], ["result"])
-  Runs "x + y" where x=lookup("a"), y=lookup("b"), stores result as "result"
+Runs "x + y" where x=lookup("a"), y=lookup("b"), stores result as "result"
 
 ## makeUnconfined(workerName, specifier, options?) -> Promise<any>
 
 Load and instantiate an unconfined module (has access to Node.js APIs).
+
 - workerName: Worker to use (undefined for new worker)
 - specifier: Module path or URL
 - options: Optional object with:
@@ -401,6 +426,7 @@ The module's make(powers, context, { env }) function is called.
 Instantiate a module from a source-only ZIP archive (a
 `compartment-map.json` plus modules in their original mjs/cjs
 sources, with no precompiled module formats).
+
 - workerName: Worker to use (undefined for new worker)
 - archiveName: Pet name of the readable blob holding the archive
 - options: Optional object with:
@@ -410,7 +436,7 @@ sources, with no precompiled module formats).
 
 The module's make(powers, context, { env }) function is called.
 The archive bytes are streamed to the worker and parsed via
-`@endo/compartment-mapper`'s `parseArchive`.  The Rust supervisor's
+`@endo/compartment-mapper`'s `parseArchive`. The Rust supervisor's
 workers read the same archive content directly from the CAS.
 
 ## cancel(petNameOrPath, reason?) -> Promise<void>

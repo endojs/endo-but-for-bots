@@ -1,11 +1,11 @@
 # Daemon Agent Tools (Claw-like Capabilities)
 
-| | |
-|---|---|
-| **Created** | 2026-03-02 |
-| **Updated** | 2026-07-15 |
-| **Author** | Kris Kowal, endolinbot (prompted) |
-| **Status** | In Progress |
+|             |                                   |
+| ----------- | --------------------------------- |
+| **Created** | 2026-03-02                        |
+| **Updated** | 2026-07-15                        |
+| **Author**  | Kris Kowal, endolinbot (prompted) |
+| **Status**  | In Progress                       |
 
 ## Status
 
@@ -93,20 +93,20 @@ What this document owns is the remainder:
 
 ## Tool Groups, Reconciled
 
-| Group | 2026-03 sketch | Reconciled backing | Status |
-|---|---|---|---|
-| Filesystem | `Dir` from [daemon-capability-filesystem](daemon-capability-filesystem.md) | `Filesystem` (`@endo/platform/fs/extended`) via `mountAsFilesystem(mount)` for the live worktree and `Git.filesystemAt(ref)` for history | read tool landed (#523); list / edit / stat landed (#614) |
-| Shell | `makeShell({ cwd, allowedCommands, … })` from a raw path | `Shell` capability derived from a writable `EndoMount`, executing through the `Spawner` seam (§ Shell Capability) | capability + `makeShellTool` landed (#615, host-spawner engine); sandbox engine (Phase 2c) remaining |
-| Git (local) | `Git` exo over a repository path string | `Git` over `EndoMount` via `provideGit(mountCap, petName)` ([daemon-git-capability](daemon-git-capability.md)) | capability landed (#364); tools landed (`makeGitTool`); mount-bridged `status` / `add` landed (#616) |
-| Git (remote) | deliberately omitted ("network access is a separate capability") | `GitRemote` = `Git` + bounded HTTPS transport + non-extractable credential ([daemon-git-remotes](daemon-git-remotes.md)) | capability landed (#365, #368); `makeGitRemoteTool` remaining |
-| Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3) | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); `provideHttpClient` daemon wiring and `makeHttpTool` remaining |
-| Search | `grep` / `glob` on `Dir` | interim: `Filesystem` walks plus the Shell group's allowlisted `grep`; a capability-backed search substrate is an open question | not started |
+| Group          | 2026-03 sketch                                                             | Reconciled backing                                                                                                                                                       | Status                                                                                               |
+| -------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| Filesystem     | `Dir` from [daemon-capability-filesystem](daemon-capability-filesystem.md) | `Filesystem` (`@endo/platform/fs/extended`) via `mountAsFilesystem(mount)` for the live worktree and `Git.filesystemAt(ref)` for history                                 | read tool landed (#523); list / edit / stat landed (#614)                                            |
+| Shell          | `makeShell({ cwd, allowedCommands, … })` from a raw path                   | `Shell` capability derived from a writable `EndoMount`, executing through the `Spawner` seam (§ Shell Capability)                                                        | capability + `makeShellTool` landed (#615, host-spawner engine); sandbox engine (Phase 2c) remaining |
+| Git (local)    | `Git` exo over a repository path string                                    | `Git` over `EndoMount` via `provideGit(mountCap, petName)` ([daemon-git-capability](daemon-git-capability.md))                                                           | capability landed (#364); tools landed (`makeGitTool`); mount-bridged `status` / `add` landed (#616) |
+| Git (remote)   | deliberately omitted ("network access is a separate capability")           | `GitRemote` = `Git` + bounded HTTPS transport + non-extractable credential ([daemon-git-remotes](daemon-git-remotes.md))                                                 | capability landed (#365, #368); `makeGitRemoteTool` remaining                                        |
+| Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3)             | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); `provideHttpClient` daemon wiring and `makeHttpTool` remaining             |
+| Search         | `grep` / `glob` on `Dir`                                                   | interim: `Filesystem` walks plus the Shell group's allowlisted `grep`; a capability-backed search substrate is an open question                                          | not started                                                                                          |
 
 Three properties of the reconciled map, each a correction to the sketch:
 
 - **One filesystem cap reads worktree and history.** The sketch's `Dir`
   could only see live files. `mountAsFilesystem(mount)` and
-  `Git.filesystemAt(ref)` present the *same* `Filesystem` shape, so the
+  `Git.filesystemAt(ref)` present the _same_ `Filesystem` shape, so the
   same read / list / stat tools serve both, and `readOnly()` / `chroot`
   are uniform attenuations
   ([endo-agent-tools](endo-agent-tools.md) § Filesystem-targeted file
@@ -264,9 +264,9 @@ interface genie already ships (`packages/genie/src/tools/spawner.js`):
 `DriverProcess` from `@endo/sandbox/types.d.ts`. Two engines exist in
 tree today:
 
-| Engine | Where | Confinement |
-|---|---|---|
-| host spawner | `makeHostSpawner` (genie) wrapping `child_process.spawn` | none beyond the policy closures; the child holds host-process ambient authority |
+| Engine          | Where                                                      | Confinement                                                                                                                                                                    |
+| --------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| host spawner    | `makeHostSpawner` (genie) wrapping `child_process.spawn`   | none beyond the policy closures; the child holds host-process ambient authority                                                                                                |
 | sandbox spawner | `makeSandboxSpawner` (genie) over an `@endo/sandbox` slice | kernel-level: bwrap namespace, `network: 'none'` default, worktree bind-mounted as the writable upper layer ([endo-posix-sandbox](endo-posix-sandbox.md), In Progress Phase 3) |
 
 The engine is chosen host-side at `provideShell` time and is invisible
@@ -290,8 +290,8 @@ not, and this reconciliation states the boundary truthfully, adopting
 the confinement-axis vocabulary of
 [endo-agent-tools](endo-agent-tools.md) § The confinement axis:
 
-- Under the **host engine**, the `Shell` capability bounds *which
-  commands start* and *with what env, cwd, timeout, and output budget* —
+- Under the **host engine**, the `Shell` capability bounds _which
+  commands start_ and _with what env, cwd, timeout, and output budget_ —
   but a started child is an ordinary host process. `grep` from the
   allowlist can read `~/.ssh` if the OS user can. The policy closures
   are a veto on the command string, "advice, not a boundary".
@@ -339,7 +339,7 @@ await E(faePowers).storeIdentifier('repoShell', shellId);
 
 Tool composition is conditional on the grant: a tool group is composed
 into the agent's catalog only when the caller holds the backing
-capability, so an ungranted group is *absent from the catalog*, not
+capability, so an ungranted group is _absent from the catalog_, not
 present-but-failing (the sketch's "agent tool discovery" idea, now
 realized as the `extra`-array composition and the build-time `scope`
 filtering of [endo-agent-tools](endo-agent-tools.md)). Capability
@@ -387,77 +387,77 @@ sandbox shell engine (Phase 2c), and the Phase 4 worked loop.
 ### Phase 0: Substrate (landed — record only)
 
 - [x] `EndoMount` completion — descriptors, snapshot, `provideHostPath`
-  ([daemon-mount-capabilities](daemon-mount-capabilities.md), all phases).
+      ([daemon-mount-capabilities](daemon-mount-capabilities.md), all phases).
 - [x] Local `Git` over `EndoMount` (#364; hardening #371; archive #367).
 - [x] `GitRemote` + controllers (#365); fd-pipe askpass (#368).
 - [x] `Git.filesystemAt(ref)` ([endo-fs-from-git](endo-fs-from-git.md)).
 - [x] `@endo/agent-tools` with `makeTool`, `makeGitTool`,
-  `makeMountReadTool` on the canonical `ToolRecord` (#523); code-mode
-  declaration renderer (#524).
+      `makeMountReadTool` on the canonical `ToolRecord` (#523); code-mode
+      declaration renderer (#524).
 
 ### Phase 1: Complete the file-tool set — landed (#614)
 
 - [x] `list`, `edit` (write), and `stat` tools over the `Filesystem`
-  interface, as separate makers so a read-only deployment composes only
-  the read slice ([endo-agent-tools](endo-agent-tools.md)
-  § Filesystem-targeted file tools is normative for shapes and names).
-  Landed as `makeMountListTool` / `makeMountEditTool` / `makeMountStatTool`
-  plus the composite `makeMountFsTools` in
-  `packages/agent-tools/src/json-tools/fs.js`.
+      interface, as separate makers so a read-only deployment composes only
+      the read slice ([endo-agent-tools](endo-agent-tools.md)
+      § Filesystem-targeted file tools is normative for shapes and names).
+      Landed as `makeMountListTool` / `makeMountEditTool` / `makeMountStatTool`
+      plus the composite `makeMountFsTools` in
+      `packages/agent-tools/src/json-tools/fs.js`.
 - [x] A read-only `Filesystem` never advertises an edit tool
-  (build-time filtering, matching `makeGitTool`'s `isGitReadOnly`
-  precedent). `makeMountFsTools` drops the `scope:'write'` edit tool when
-  the backing is `readOnly()`.
+      (build-time filtering, matching `makeGitTool`'s `isGitReadOnly`
+      precedent). `makeMountFsTools` drops the `scope:'write'` edit tool when
+      the backing is `readOnly()`.
 - [x] Tests over a real `makeNodeFilesystem` plus a daemon-backed `Mount`
-  (no hand-rolled petstore stubs). `test/mount-fs-tools.test.js` runs
-  every behavior against both backings; resolution is by mount-relative
-  path authenticated at the boundary, per the § Granting petname rule
-  (paths are not petnamed).
+      (no hand-rolled petstore stubs). `test/mount-fs-tools.test.js` runs
+      every behavior against both backings; resolution is by mount-relative
+      path authenticated at the boundary, per the § Granting petname rule
+      (paths are not petnamed).
 
 ### Phase 2: Shell capability and command tools — 2a / 2b landed (#615)
 
 - [x] 2a — the daemon `shell` formula and `provideShell` per § Shell
-  Capability: writable-mount derivation via `provideHostPath`,
-  formula-owned policy, host-spawner engine, hardening tests
-  (allowlist enforcement, env sanitization — assert no host env
-  leakage, argv-only spawn, timeout kill, output-cap truncation,
-  read-only-mount rejection, restart reconstitution with identical
-  policy, `inspect()` reveals no host path). Landed as the `'shell'`
-  formula plus `host.provideShell`, the `@endo/exo-shell` engine, and
-  the `@endo/host-spawner` spawner; hardening asserted across
-  `packages/daemon/test/shell.test.js` and `packages/exo-shell/test/`.
+      Capability: writable-mount derivation via `provideHostPath`,
+      formula-owned policy, host-spawner engine, hardening tests
+      (allowlist enforcement, env sanitization — assert no host env
+      leakage, argv-only spawn, timeout kill, output-cap truncation,
+      read-only-mount rejection, restart reconstitution with identical
+      policy, `inspect()` reveals no host path). Landed as the `'shell'`
+      formula plus `host.provideShell`, the `@endo/exo-shell` engine, and
+      the `@endo/host-spawner` spawner; hardening asserted across
+      `packages/daemon/test/shell.test.js` and `packages/exo-shell/test/`.
 - [x] 2b — `makeShellTool` in `@endo/agent-tools`: `ToolRecord` plus
-  hand-authored wire schema and divergence gate; port genie's policy
-  closures (`rejectPatterns`, `rejectFlags`) as policy inputs. Landed in
-  `packages/agent-tools/src/json-tools/shell.js` (`exec` / `inspect` records,
-  schema ⟷ guard divergence gate, `makeAdvisoryVeto`).
+      hand-authored wire schema and divergence gate; port genie's policy
+      closures (`rejectPatterns`, `rejectFlags`) as policy inputs. Landed in
+      `packages/agent-tools/src/json-tools/shell.js` (`exec` / `inspect` records,
+      schema ⟷ guard divergence gate, `makeAdvisoryVeto`).
 - [ ] 2c — the sandbox-spawner engine behind a `provideShell` option,
-  gated on [endo-posix-sandbox](endo-posix-sandbox.md) phase progress.
-  Optional for the M3 exit; required before granting shells to
-  less-trusted agents (§ The honest boundary). The `@endo/host-spawner`
-  `Spawner` interface is shaped to accept a sandbox `DriverProcess`
-  adapter, but only the host `child_process` engine ships today.
+      gated on [endo-posix-sandbox](endo-posix-sandbox.md) phase progress.
+      Optional for the M3 exit; required before granting shells to
+      less-trusted agents (§ The honest boundary). The `@endo/host-spawner`
+      `Spawner` interface is shaped to accept a sandbox `DriverProcess`
+      adapter, but only the host `child_process` engine ships today.
 
 ### Phase 3: Push tier — not started
 
 - [ ] `makeGitRemoteTool(remoteCap)` per
-  [endo-agent-tools](endo-agent-tools.md) § Git authority tiers:
-  `fetch` / `pull` / `push` tools whose bounds come entirely from the
-  granted `GitRemote`; no policy re-statement in the tool layer.
+      [endo-agent-tools](endo-agent-tools.md) § Git authority tiers:
+      `fetch` / `pull` / `push` tools whose bounds come entirely from the
+      granted `GitRemote`; no policy re-statement in the tool layer.
 
 ### Phase 3.5: Local mount-bridged git tools — landed (#616)
 
 - [x] `makeGitMountTools(gitCap)` in `packages/agent-tools/src/json-tools/git-mount.js`:
-  `status` and `add` tools over the *local* `Git` capability, bridging
-  live `EndoMountEntry` remotables across the JSON wire where `makeGitTool`
-  could not carry live-capability signatures. Network operations stay
-  excluded; the push tier remains the separately granted `GitRemote`
-  (Phase 3).
+      `status` and `add` tools over the _local_ `Git` capability, bridging
+      live `EndoMountEntry` remotables across the JSON wire where `makeGitTool`
+      could not carry live-capability signatures. Network operations stay
+      excluded; the push tier remains the separately granted `GitRemote`
+      (Phase 3).
 - [ ] Revisit petname-backed results when a git or file tool returns a
-  live capability rather than high-cardinality path data. Today file and
-  path arguments stay as boundary-authenticated relative strings; #424
-  petname persistence has not landed, and remains the future direction
-  for cap-bearing results.
+      live capability rather than high-cardinality path data. Today file and
+      path arguments stay as boundary-authenticated relative strings; #424
+      petname persistence has not landed, and remains the future direction
+      for cap-bearing results.
 
 ### Phase 3.6: Network (HTTP) tier
 
@@ -479,22 +479,22 @@ document's scope.
   superseded outright and its CLI intent survives as the `endo http` eventual
   surface sketched there.
 - [ ] `makeHttpTool` in `@endo/agent-tools`: `ToolRecord` plus
-  hand-authored wire schema and divergence gate, mirroring `makeGitTool`
-  / `makeShellTool`; bounds come entirely from the granted `HttpClient`
-  ([endo-fetch](endo-fetch.md) Phase 3 tracks the binding against the
-  plugin-provisioned client).
+      hand-authored wire schema and divergence gate, mirroring `makeGitTool`
+      / `makeShellTool`; bounds come entirely from the granted `HttpClient`
+      ([endo-fetch](endo-fetch.md) Phase 3 tracks the binding against the
+      plugin-provisioned client).
 
 ### Phase 4: Provisioning and the worked loop
 
 - [ ] Wire the § Granting and Provisioning flow end to end for one
-  agent harness (lal front-loaded binding first; fae's `adopt` accretion
-  follows).
+      agent harness (lal front-loaded binding first; fae's `adopt` accretion
+      follows).
 - [ ] Run the worked reference flow of
-  [daemon-git-next-steps](daemon-git-next-steps.md) § Open Work as the
-  acceptance test: branch → edit via file tools → status / diff / commit
-  via git tools → push via the remote tool → inspect the pushed ref via
-  `filesystemAt` — with a shell-tool build step (`npm test`) in the
-  middle. That single pass demonstrates the M3 pillar.
+      [daemon-git-next-steps](daemon-git-next-steps.md) § Open Work as the
+      acceptance test: branch → edit via file tools → status / diff / commit
+      via git tools → push via the remote tool → inspect the pushed ref via
+      `filesystemAt` — with a shell-tool build step (`npm test`) in the
+      middle. That single pass demonstrates the M3 pillar.
 
 ### Phase 5: Commit-metadata history verbs (agentry eval lane)
 
@@ -505,18 +505,18 @@ the `stack-surgery` scenario in `designs/agentry-git-eval-scenarios.md` (draft
 PR #636, branch `design/agentry-git-eval-scenarios`).
 
 - [x] `commit({ amend })` and `reword(ref, message)` across the local Git and
-  code-mode surfaces: exo + `GitInterface` guard + `GitBackend` + native impl +
-  code-mode regen (`packages/agent-tools/generated/code-mode-globals/git-declarations.js`).
-  The default
-  JSON tool inventory retains only new-commit creation; an explicit
-  `makeGitHistoryTool` maker exposes amend and reword when a host deliberately
-  grants history-rewrite authority.
+      code-mode surfaces: exo + `GitInterface` guard + `GitBackend` + native impl +
+      code-mode regen (`packages/agent-tools/generated/code-mode-globals/git-declarations.js`).
+      The default
+      JSON tool inventory retains only new-commit creation; an explicit
+      `makeGitHistoryTool` maker exposes amend and reword when a host deliberately
+      grants history-rewrite authority.
 - [ ] Extend the `473b718b3` contract test (branch
-  `docs/agentry-git-rebase-evals`) so the exo type, `GitInterface`,
-  `packages/exo-git/src/types.js`, `types.d.ts`, and the generated
-  code-mode declarations cannot drift.
+      `docs/agentry-git-rebase-evals`) so the exo type, `GitInterface`,
+      `packages/exo-git/src/types.js`, `types.d.ts`, and the generated
+      code-mode declarations cannot drift.
 - [x] Tests: read-only rejection for each mutator; non-interactive editor
-  behavior, branch attachment, and merge-topology preservation for reword.
+      behavior, branch attachment, and merge-topology preservation for reword.
 
 ### Phase 6: Stack-replay and conflict resolution (agentry eval lane)
 
@@ -526,34 +526,34 @@ is the `stack-surgery` scenario in `designs/agentry-git-eval-scenarios.md`
 (draft PR #636, branch `design/agentry-git-eval-scenarios`).
 
 - [ ] `cherryPick(ref, options?)` and `rebase({ autosquash })` for
-  `mode: 'start'` across all surfaces, including JSON (cherryPick ref +
-  options; autosquash-start as a structured op; control modes stay
-  code-mode-only).
+      `mode: 'start'` across all surfaces, including JSON (cherryPick ref +
+      options; autosquash-start as a structured op; control modes stay
+      code-mode-only).
 - [ ] `checkoutConflict(entries, side)` across all surfaces:
-  `entriesToRepoPaths` lineage + `ours`/`theirs` index-stage; JSON as
-  `checkoutConflict({ paths, side })` resolving strings to authenticated
-  `EndoMountEntry` values (the capability method stays entry-based).
+      `entriesToRepoPaths` lineage + `ours`/`theirs` index-stage; JSON as
+      `checkoutConflict({ paths, side })` resolving strings to authenticated
+      `EndoMountEntry` values (the capability method stays entry-based).
 - [ ] Tests: read-only rejection per mutator, autosquash-flag validation,
-  conflict-side path lineage, conflict-stop for cherryPick.
+      conflict-side path lineage, conflict-stop for cherryPick.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| [daemon-mount-capabilities](daemon-mount-capabilities.md) | Root authority: `EndoMount`, `EndoMountEntry`, `provideHostPath` (the shell's cwd bridge). Complete. |
-| [daemon-git-capability](daemon-git-capability.md) | Local `Git` capability and `filesystemAt` historical read. |
-| [daemon-git-remotes](daemon-git-remotes.md) | `GitRemote` backing the push tier. |
-| [endo-agent-tools](endo-agent-tools.md) | Normative tool surface (`ToolRecord`, wire schemas, attenuation levers, petnames); this document feeds it the Shell capability and the build order. |
-| [agentry-agent-builder](agentry-agent-builder.md) | Consumer: `defineAgent` composes the tool groups per agent. |
-| [endo-fs-backend-seam](endo-fs-backend-seam.md), [endo-fs-from-git](endo-fs-from-git.md) | The `Filesystem` substrate file tools target. |
-| [endoclaw-network-fetch](endoclaw-network-fetch.md) | The network-fetch capability shape (`HttpClient` / `HttpClientControl`) this document's HTTP tier realizes; landed via `@endo/exo-http-client` (#566). |
-| [http-confine](http-confine.md) | The shared confinement core (`@endo/http-confine`) the HTTP capability — and the `endo http` CLI track — sit on; `provideHttpClient` must adopt it, not re-implement it. |
-| [cli-http-client](cli-http-client.md) | Records the controller + client split decision that superseded (in part) the original single-formula endoclaw-network-fetch shape; the parallel `endo http` daemon/CLI track. |
-| [trust-on-first-bind](trust-on-first-bind.md) | TOFU policy for allowlist-bearing caps; the `makeTrustOnFirstBindPolicyAdapter` the HTTP capability composes. |
-| [endo-posix-sandbox](endo-posix-sandbox.md) | Kernel-confinement engine for the Shell (Phase 2c). Supersedes the sketch's [daemon-os-sandbox-plugin](daemon-os-sandbox-plugin.md) dependency. |
-| [daemon-git-next-steps](daemon-git-next-steps.md) | The version-controlled-filesystem-loop milestone Phase 4 demonstrates. |
-| [lal-fae-form-provisioning](lal-fae-form-provisioning.md) | Provisioning UI shape for capability grants. |
-| [daemon-capability-filesystem](daemon-capability-filesystem.md) | Historical `Dir` / `File` sketch (Reference); superseded for this surface by the mount trio and `Filesystem`. |
+| Design                                                                                   | Relationship                                                                                                                                                                  |
+| ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [daemon-mount-capabilities](daemon-mount-capabilities.md)                                | Root authority: `EndoMount`, `EndoMountEntry`, `provideHostPath` (the shell's cwd bridge). Complete.                                                                          |
+| [daemon-git-capability](daemon-git-capability.md)                                        | Local `Git` capability and `filesystemAt` historical read.                                                                                                                    |
+| [daemon-git-remotes](daemon-git-remotes.md)                                              | `GitRemote` backing the push tier.                                                                                                                                            |
+| [endo-agent-tools](endo-agent-tools.md)                                                  | Normative tool surface (`ToolRecord`, wire schemas, attenuation levers, petnames); this document feeds it the Shell capability and the build order.                           |
+| [agentry-agent-builder](agentry-agent-builder.md)                                        | Consumer: `defineAgent` composes the tool groups per agent.                                                                                                                   |
+| [endo-fs-backend-seam](endo-fs-backend-seam.md), [endo-fs-from-git](endo-fs-from-git.md) | The `Filesystem` substrate file tools target.                                                                                                                                 |
+| [endoclaw-network-fetch](endoclaw-network-fetch.md)                                      | The network-fetch capability shape (`HttpClient` / `HttpClientControl`) this document's HTTP tier realizes; landed via `@endo/exo-http-client` (#566).                        |
+| [http-confine](http-confine.md)                                                          | The shared confinement core (`@endo/http-confine`) the HTTP capability — and the `endo http` CLI track — sit on; `provideHttpClient` must adopt it, not re-implement it.      |
+| [cli-http-client](cli-http-client.md)                                                    | Records the controller + client split decision that superseded (in part) the original single-formula endoclaw-network-fetch shape; the parallel `endo http` daemon/CLI track. |
+| [trust-on-first-bind](trust-on-first-bind.md)                                            | TOFU policy for allowlist-bearing caps; the `makeTrustOnFirstBindPolicyAdapter` the HTTP capability composes.                                                                 |
+| [endo-posix-sandbox](endo-posix-sandbox.md)                                              | Kernel-confinement engine for the Shell (Phase 2c). Supersedes the sketch's [daemon-os-sandbox-plugin](daemon-os-sandbox-plugin.md) dependency.                               |
+| [daemon-git-next-steps](daemon-git-next-steps.md)                                        | The version-controlled-filesystem-loop milestone Phase 4 demonstrates.                                                                                                        |
+| [lal-fae-form-provisioning](lal-fae-form-provisioning.md)                                | Provisioning UI shape for capability grants.                                                                                                                                  |
+| [daemon-capability-filesystem](daemon-capability-filesystem.md)                          | Historical `Dir` / `File` sketch (Reference); superseded for this surface by the mount trio and `Filesystem`.                                                                 |
 
 ## Design Decisions
 

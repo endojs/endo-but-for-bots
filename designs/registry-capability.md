@@ -1,11 +1,11 @@
 # EndoRegistry Capability and `@registry` Host Special Name
 
-| | |
-|---|---|
-| **Created** | 2026-06-02 |
-| **Updated** | 2026-07-10 |
-| **Author** | endolinbot (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-06-02            |
+| **Updated** | 2026-07-10            |
+| **Author**  | endolinbot (prompted) |
+| **Status**  | Not Started           |
 
 ## Summary
 
@@ -42,7 +42,7 @@ backend resolved a given request.
 4. A bounded-growth CAS retention story: cached registry contents
    are evictable, but anything reachable from a captured formula
    graph holds a hard retention link that prevents eviction (see
-   § *Caching and retention* below).
+   § _Caching and retention_ below).
 
 ## Non-Goals
 
@@ -66,12 +66,12 @@ backend resolved a given request.
 This is the **capability layer** of the daemon-worker
 `importLocation` stack:
 
-| Layer | Doc | Concern |
-|-------|-----|---------|
-| Capability | this | `EndoRegistry` shape, `@registry` slot, lifetime |
-| Algorithm | [mvs-resolver](mvs-resolver.md) | MVS walk, lockfile stance, who walks the graph |
-| Mapper | [snapshot-mapper](snapshot-mapper.md) | `mapSnapshot`, `makeMountReadPowers`, `endo-mount:` scheme |
-| Integration | [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | `makeFromPackage`, worker dispatch, CLI, XS bridging |
+| Layer       | Doc                                                                   | Concern                                                    |
+| ----------- | --------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Capability  | this                                                                  | `EndoRegistry` shape, `@registry` slot, lifetime           |
+| Algorithm   | [mvs-resolver](mvs-resolver.md)                                       | MVS walk, lockfile stance, who walks the graph             |
+| Mapper      | [snapshot-mapper](snapshot-mapper.md)                                 | `mapSnapshot`, `makeMountReadPowers`, `endo-mount:` scheme |
+| Integration | [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | `makeFromPackage`, worker dispatch, CLI, XS bridging       |
 
 ## Capability shape
 
@@ -98,7 +98,7 @@ interface EndoRegistry {
       // specifier resolution per `mvs-resolver.md` § Workspace
       // resolution.
       workspaceRoot?: {
-        root: string | EndoMount;    // the workspace-root tree handle
+        root: string | EndoMount; // the workspace-root tree handle
         // package name -> that member's subtree (glob-expansion result)
         members: Record<string, EndoReadableTree>;
       };
@@ -108,17 +108,11 @@ interface EndoRegistry {
   // Fetch a single resolved package by (name, version) and
   // return the readable-tree pet capability for its contents.
   // Idempotent: calling twice returns the same tree.
-  fetch(
-    name: string,
-    version: string,
-  ): Promise<EndoReadableTree>;
+  fetch(name: string, version: string): Promise<EndoReadableTree>;
 
   // Look up the cached resolution without fetching (returns
   // undefined if the package is not yet in the table).
-  lookup(
-    name: string,
-    version: string,
-  ): Promise<EndoReadableTree | undefined>;
+  lookup(name: string, version: string): Promise<EndoReadableTree | undefined>;
 
   // List the installed packages (for diagnostics; bounded).
   list(prefix?: string): Promise<Array<{ name: string; version: string }>>;
@@ -138,20 +132,23 @@ type RegistryResolution = {
   // (`ses@1.0.0`, `ses@2.3.4`); the `compartment-mapper`
   // package descriptor walk binds each import site to the
   // right entry.
-  packagesByKey: Record<string, {
-    name: string;
-    version: string;
-    treeRef: EndoReadableTree;   // CAS readable-tree capability
-    integrity: string;            // npm `dist.integrity`, retained
-                                  // for cross-check against
-                                  // upstream registry attestations
-                                  // (not used to verify treeRef;
-                                  // treeRef's content-address
-                                  // already proves the bytes)
-  }>;
+  packagesByKey: Record<
+    string,
+    {
+      name: string;
+      version: string;
+      treeRef: EndoReadableTree; // CAS readable-tree capability
+      integrity: string; // npm `dist.integrity`, retained
+      // for cross-check against
+      // upstream registry attestations
+      // (not used to verify treeRef;
+      // treeRef's content-address
+      // already proves the bytes)
+    }
+  >;
   // Convenience: the canonical key list, ordered for stable
   // hashing.
-  keys: string[];                  // e.g. ['@endo/patterns@1.2.1', 'ses@1.0.0']
+  keys: string[]; // e.g. ['@endo/patterns@1.2.1', 'ses@1.0.0']
   // The resolution itself is content-addressed for cache reuse;
   // computed by hashing `keys` and their integrity strings.
   resolutionHash: string;
@@ -160,11 +157,11 @@ type RegistryResolution = {
 
 **Workspace-member entries.**
 When the resolution was produced with a `workspaceRoot` (per
-[mvs-resolver](mvs-resolver.md) § *Workspace resolution*),
+[mvs-resolver](mvs-resolver.md) § _Workspace resolution_),
 workspace members appear in `packagesByKey` under their **bare
 package name** with no version segment (`lib-b`,
 `@endo/patterns`), matching the versionless peer-directory rule
-in [snapshot-mapper](snapshot-mapper.md) § *Synthesized layout*.
+in [snapshot-mapper](snapshot-mapper.md) § _Synthesized layout_.
 A workspace entry carries `{ name, version, treeRef,
 workspace: true }` and **no `integrity` field**: its `treeRef`
 is the member's subtree of the entry snapshot, not a
@@ -175,7 +172,7 @@ to cross-check.
 consumer distinguishes a workspace member from a registry entry
 by testing that boolean flag and nothing else.
 The bare-name key shape and the absence of `integrity` are
-*derived* consequences of the same fact, not co-equal switches to
+_derived_ consequences of the same fact, not co-equal switches to
 branch on; in particular a consumer must **not** parse the key
 (`key.split('@')` is ambiguous because scoped names such as
 `@endo/patterns` already carry an `@`, so a bare-name key and an
@@ -229,7 +226,7 @@ error tagged by failure class, so callers can distinguish:
 A mid-resolve restart or bus disconnect surfaces as
 `RegistryNetworkError`; the caller may retry.
 This mirrors the named cancellation surface in
-[daemon-make-archive](daemon-make-archive.md) § *Cancellation handling*
+[daemon-make-archive](daemon-make-archive.md) § _Cancellation handling_
 rather than leaving the failure modes implicit in the `Promise`
 rejection.
 
@@ -261,13 +258,13 @@ host carries a required `registry` field that points to an
 ```ts
 type HostFormula = {
   // existing fields ...
-  registry: FormulaIdentifier;   // new, required; powers @registry
+  registry: FormulaIdentifier; // new, required; powers @registry
 };
 ```
 
 `E(host).lookup('@registry')` returns the host-scoped registry
 capability.
-Guests do *not* see `@registry` by default; a host that wants to
+Guests do _not_ see `@registry` by default; a host that wants to
 grant a guest access to the registry must do so through the
 usual capability-passing patterns.
 
@@ -326,7 +323,7 @@ For a running caplet, the questions are:
   construction; the modules are compiled into the worker's
   compartment and re-read only on explicit reload (which is not
   a path this stack exposes).
-- Does the worker see file mutations *during* the
+- Does the worker see file mutations _during_ the
   `importLocation` walk?
   Possibly, depending on timing; to avoid this we snapshot the
   entry tree before resolution begins.
@@ -336,7 +333,7 @@ const entrySnapshot = await E(source).snapshot();
 ```
 
 This produces an immutable `readable-tree` (per
-[daemon-mount](daemon-mount.md) § *Snapshot* and
+[daemon-mount](daemon-mount.md) § _Snapshot_ and
 [daemon-mount-capabilities](daemon-mount-capabilities.md) § Phase 7)
 that the synthesized `ReadPowers` reads against.
 The live mount keeps mutating; the running caplet sees the
@@ -346,7 +343,7 @@ The snapshot is a `thisDiesIfThatDies` dependency of the caplet
 (a lifetime-coupling primitive that releases the dependency when
 the dependent caplet ends; see
 [inventory-cancel-and-liveness](inventory-cancel-and-liveness.md)
-§ *Lifetime coupling* for the definition), so the CAS trees the
+§ _Lifetime coupling_ for the definition), so the CAS trees the
 snapshot holds are released when the caplet ends.
 This mirrors the snapshot-before-stage pattern in
 [daemon-make-archive](daemon-make-archive.md) § Phase 8
@@ -414,8 +411,8 @@ cut, which leans entirely on the CAS's eviction discipline.
 
 **Hard retention link from the formula graph.**
 The snapshot mapper (see
-[snapshot-mapper](snapshot-mapper.md) § *Mount snapshot before
-the mapper runs*) adds a `thisDiesIfThatDies` retention link
+[snapshot-mapper](snapshot-mapper.md) § _Mount snapshot before
+the mapper runs_) adds a `thisDiesIfThatDies` retention link
 from each `(compartmentMap, resolutionHash, entrySnapshotHash)`
 formula it produces into the CAS trees that resolution names.
 The link is a CAS-pinning capability the formula graph holds for
@@ -440,7 +437,7 @@ the network and offline-mode misses; eviction-driven re-fetch
 that succeeds is silent (the caller cannot tell), and
 eviction-driven re-fetch that fails surfaces as
 `RegistryNetworkError` or `RegistryOfflineError` per the rules
-already in § *Failure surface*.
+already in § _Failure surface_.
 No new error class is needed for eviction; the existing
 classification by causation still holds.
 
@@ -477,7 +474,7 @@ classification by causation still holds.
      (caller cannot distinguish hit from miss).
    - **Hard retention link pins captured contents.**
      Resolve a small fixture into a `(compartmentMap, resolutionHash,
-     entrySnapshotHash)` formula, drop direct references to the
+entrySnapshotHash)` formula, drop direct references to the
      `treeRef`s, force a CAS eviction pass, observe the captured
      trees are still present (the formula graph's retention link
      held them) and `fetch(name, version)` returns the same
@@ -492,7 +489,7 @@ ties the phases together with phase-numbered cross-references.
 The canonical dependency-ordered build plan for the whole stack
 (accepted 2026-07-10) is
 [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md)
-§ *Phased Implementation*; this document's Phase 1 and Phase 5
+§ _Phased Implementation_; this document's Phase 1 and Phase 5
 are that plan's phases 1 and 5.
 
 ### Phase 5: Rust-backed `EndoRegistry` (drop-in)
@@ -500,7 +497,7 @@ are that plan's phases 1 and 5.
 When the Rust-hosted daemon ships, add a second `EndoRegistry`
 backend that delegates to
 [endor-npm-registry-proxy](endor-npm-registry-proxy.md) via the
-bus verbs in § *Integration with `endor run`*.
+bus verbs in § _Integration with `endor run`_.
 The capability shape is unchanged; only the backend selection at
 host formulation time differs.
 Tests for the Rust backend mirror the JS-side suite to confirm
@@ -569,19 +566,19 @@ parity between the lanes.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|--------------|
-| [mvs-resolver](mvs-resolver.md) | Defines the algorithm `EndoRegistry.resolve` runs.  The capability shape here is what wraps the algorithm. |
-| [snapshot-mapper](snapshot-mapper.md) | The mapper consumes a `RegistryResolution` (this design's output) and synthesizes the `ReadPowers` the worker uses. |
-| [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | The integration-layer caller.  Invokes `EndoRegistry.resolve` once during `makeFromPackage` setup; reads CAS trees by hash thereafter. |
-| [endor-npm-registry-proxy](endor-npm-registry-proxy.md) | The Rust-side backend.  Drop-in for the Phase 5 Rust-hosted-daemon path; produces structurally identical `RegistryResolution` outputs. |
-| [daemon-make-archive](daemon-make-archive.md) | The `@node` precedent for a required host special name; the migration shape this design follows for `@registry`. |
-| [daemon-mount](daemon-mount.md) | `snapshot()` semantics for the entry mount; the capability assumes the caller has snapshotted before calling `resolve`. |
-| [daemon-mount-capabilities](daemon-mount-capabilities.md) | The completed `EndoMount` surface used by the snapshot step. |
-| [daemon-cas-management](daemon-cas-management.md) | The resolved package trees live in the CAS; the resolver writes to the CAS through the existing bus verbs.  The CAS is the underlying eviction surface that bounds registry-cache growth. |
-| [daemon-content-store-gc](daemon-content-store-gc.md) | The CAS's eviction pass; the registry leans on it for byte-level bounded growth rather than implementing its own. |
-| [retention-path-notation](retention-path-notation.md) | The captured-formula-graph retention model the registry's hard retention link extends to registry-resolved packages. |
-| [inventory-cancel-and-liveness](inventory-cancel-and-liveness.md) | `thisDiesIfThatDies` is the lifetime-coupling primitive that releases the snapshot's CAS trees when the caplet ends.  The same primitive backs the hard retention link from a captured formula into the CAS trees it names. |
+| Design                                                                | Relationship                                                                                                                                                                                                               |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [mvs-resolver](mvs-resolver.md)                                       | Defines the algorithm `EndoRegistry.resolve` runs. The capability shape here is what wraps the algorithm.                                                                                                                  |
+| [snapshot-mapper](snapshot-mapper.md)                                 | The mapper consumes a `RegistryResolution` (this design's output) and synthesizes the `ReadPowers` the worker uses.                                                                                                        |
+| [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | The integration-layer caller. Invokes `EndoRegistry.resolve` once during `makeFromPackage` setup; reads CAS trees by hash thereafter.                                                                                      |
+| [endor-npm-registry-proxy](endor-npm-registry-proxy.md)               | The Rust-side backend. Drop-in for the Phase 5 Rust-hosted-daemon path; produces structurally identical `RegistryResolution` outputs.                                                                                      |
+| [daemon-make-archive](daemon-make-archive.md)                         | The `@node` precedent for a required host special name; the migration shape this design follows for `@registry`.                                                                                                           |
+| [daemon-mount](daemon-mount.md)                                       | `snapshot()` semantics for the entry mount; the capability assumes the caller has snapshotted before calling `resolve`.                                                                                                    |
+| [daemon-mount-capabilities](daemon-mount-capabilities.md)             | The completed `EndoMount` surface used by the snapshot step.                                                                                                                                                               |
+| [daemon-cas-management](daemon-cas-management.md)                     | The resolved package trees live in the CAS; the resolver writes to the CAS through the existing bus verbs. The CAS is the underlying eviction surface that bounds registry-cache growth.                                   |
+| [daemon-content-store-gc](daemon-content-store-gc.md)                 | The CAS's eviction pass; the registry leans on it for byte-level bounded growth rather than implementing its own.                                                                                                          |
+| [retention-path-notation](retention-path-notation.md)                 | The captured-formula-graph retention model the registry's hard retention link extends to registry-resolved packages.                                                                                                       |
+| [inventory-cancel-and-liveness](inventory-cancel-and-liveness.md)     | `thisDiesIfThatDies` is the lifetime-coupling primitive that releases the snapshot's CAS trees when the caplet ends. The same primitive backs the hard retention link from a captured formula into the CAS trees it names. |
 
 ## Prompt
 
@@ -609,4 +606,4 @@ above (bare-name key, `workspace: true`, no `integrity`, hash
 contribution via the member subtree's content hash).
 Canonical build order:
 [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md)
-§ *Phased Implementation*.
+§ _Phased Implementation_.

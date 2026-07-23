@@ -1,11 +1,11 @@
 # HTTP Confinement Core
 
-| | |
-|---|---|
-| **Created** | 2026-07-08 |
-| **Updated** | 2026-07-08 |
-| **Author** | Codex |
-| **Status** | Proposed |
+|             |                                                                                            |
+| ----------- | ------------------------------------------------------------------------------------------ |
+| **Created** | 2026-07-08                                                                                 |
+| **Updated** | 2026-07-08                                                                                 |
+| **Author**  | Codex                                                                                      |
+| **Status**  | Proposed                                                                                   |
 | **Used by** | [endoclaw-network-fetch](endoclaw-network-fetch.md), [cli-http-client](cli-http-client.md) |
 
 ## Summary

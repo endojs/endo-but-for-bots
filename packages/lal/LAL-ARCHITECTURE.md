@@ -188,38 +188,42 @@ A single `switch` statement dispatches tool calls to `E(powers)` methods:
 ```javascript
 const executeTool = async (name, args) => {
   switch (name) {
-    case 'help':     return E(powers).help(args.methodName);
-    case 'list':     return E(powers).list(...args.petNamePath);
-    case 'lookup':   return E(powers).lookup(args.petNameOrPath);
+    case 'help':
+      return E(powers).help(args.methodName);
+    case 'list':
+      return E(powers).list(...args.petNamePath);
+    case 'lookup':
+      return E(powers).lookup(args.petNameOrPath);
     case 'evaluate': /* direct code execution */
     // ...
-    default: throw new Error(`Unknown tool: ${name}`);
+    default:
+      throw new Error(`Unknown tool: ${name}`);
   }
 };
 ```
 
 ### Available Tools
 
-| Category | Tool | Description |
-|----------|------|-------------|
-| **Self-documentation** | `help` | Get documentation for guest capabilities |
-| **Directory** | `has` | Check if a petname exists |
-| | `list` | List petnames in directory or subdirectory |
-| | `lookup` | Resolve a petname to its value |
-| | `remove` | Remove a petname |
-| | `move` | Rename/move a reference |
-| | `copy` | Copy a reference to a new name |
-| | `makeDirectory` | Create a subdirectory |
-| **Mail** | `listMessages` | List inbox messages |
-| | `send` | Send a package message with capabilities |
-| | `adopt` | Adopt a value from a message |
-| | `dismiss` | Remove a message from inbox |
-| | `request` | Request a capability from another agent |
-| | `resolve` | Respond to a request with a value |
-| | `reject` | Decline a request |
-| **Identity** | `identify` | Get the formula ID for a petname |
-| **Inspection** | `inspectCapability` | Call `help()` on a capability |
-| **Evaluation** | `evaluate` | Evaluate code directly |
+| Category               | Tool                | Description                                |
+| ---------------------- | ------------------- | ------------------------------------------ |
+| **Self-documentation** | `help`              | Get documentation for guest capabilities   |
+| **Directory**          | `has`               | Check if a petname exists                  |
+|                        | `list`              | List petnames in directory or subdirectory |
+|                        | `lookup`            | Resolve a petname to its value             |
+|                        | `remove`            | Remove a petname                           |
+|                        | `move`              | Rename/move a reference                    |
+|                        | `copy`              | Copy a reference to a new name             |
+|                        | `makeDirectory`     | Create a subdirectory                      |
+| **Mail**               | `listMessages`      | List inbox messages                        |
+|                        | `send`              | Send a package message with capabilities   |
+|                        | `adopt`             | Adopt a value from a message               |
+|                        | `dismiss`           | Remove a message from inbox                |
+|                        | `request`           | Request a capability from another agent    |
+|                        | `resolve`           | Respond to a request with a value          |
+|                        | `reject`            | Decline a request                          |
+| **Identity**           | `identify`          | Get the formula ID for a petname           |
+| **Inspection**         | `inspectCapability` | Call `help()` on a capability              |
+| **Evaluation**         | `evaluate`          | Evaluate code directly                     |
 
 ### SmallCaps Decoding
 
@@ -232,12 +236,12 @@ const decodeSmallcaps = jsonString =>
 
 This handles Endo-specific types:
 
-| Type | SmallCaps | JavaScript |
-|------|-----------|------------|
-| BigInt | `"+5"` | `5n` |
+| Type      | SmallCaps      | JavaScript  |
+| --------- | -------------- | ----------- |
+| BigInt    | `"+5"`         | `5n`        |
 | undefined | `"#undefined"` | `undefined` |
-| Infinity | `"#Infinity"` | `Infinity` |
-| NaN | `"#NaN"` | `NaN` |
+| Infinity  | `"#Infinity"`  | `Infinity`  |
+| NaN       | `"#NaN"`       | `NaN`       |
 
 ---
 
@@ -318,13 +322,13 @@ const messageIterator = makeRefIterator(E(powers).followMessages());
 
 Messages arrive as `InboxMessage` (alias for `StampedMessage`) objects with:
 
-| Field | Description |
-|-------|-------------|
-| `from` | Formula ID of the sender |
-| `number` | Message sequence number (BigInt) |
-| `type` | `"package"`, `"request"`, etc. |
-| `strings` | Text parts (for package messages) |
-| `names` | Edge names for attached capabilities |
+| Field     | Description                          |
+| --------- | ------------------------------------ |
+| `from`    | Formula ID of the sender             |
+| `number`  | Message sequence number (BigInt)     |
+| `type`    | `"package"`, `"request"`, etc.       |
+| `strings` | Text parts (for package messages)    |
+| `names`   | Edge names for attached capabilities |
 
 ### Outbound Messages
 
@@ -372,11 +376,11 @@ Fae via `@endo/lal/providers/index.js`.
 
 Based on the `LAL_HOST` environment variable:
 
-| Host URL pattern | Provider | SDK | Default model |
-|------------------|----------|-----|---------------|
+| Host URL pattern         | Provider                | SDK                 | Default model              |
+| ------------------------ | ----------------------- | ------------------- | -------------------------- |
 | Contains `anthropic.com` | `makeAnthropicProvider` | `@anthropic-ai/sdk` | `claude-opus-4-5-20251101` |
-| Contains `/v1` | `makeLlamaCppProvider` | `openai` | `qwen3` |
-| Other | `makeOllamaProvider` | `ollama` | `qwen3` |
+| Contains `/v1`           | `makeLlamaCppProvider`  | `openai`            | `qwen3`                    |
+| Other                    | `makeOllamaProvider`    | `ollama`            | `qwen3`                    |
 
 ### Provider Interface
 
@@ -391,30 +395,33 @@ common structure.
 ### Provider Implementations
 
 **Anthropic** (`anthropic.js`):
+
 - Converts tools to Anthropic's `input_schema` format
 - Splits system prompt from messages (Anthropic API requires separate `system`)
 - Maps tool results to `tool_result` content blocks
 - Detects and re-throws authentication errors with clear messages
 
 **llama.cpp** (`llamacpp.js`):
+
 - Uses the OpenAI SDK pointed at a custom `baseURL`
 - Supports `LAL_MAX_MESSAGES` for transcript truncation
 - Supports `LAL_MAX_TOKENS` for completion length
 
 **Ollama** (`ollama.js`):
+
 - Uses the native `ollama` npm package
 - Converts messages and tools to Ollama's format
 - Generates synthetic tool call IDs (`ollama_tool_${timestamp}_${index}`)
 
 ### Configuration
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `LAL_HOST` | API base URL | `http://localhost:11434` |
-| `LAL_MODEL` | Model name | `qwen3` or `claude-opus-4-5-20251101` |
-| `LAL_AUTH_TOKEN` | API key | (optional for local) |
-| `LAL_MAX_TOKENS` | Max completion tokens (llama.cpp only) | `4096` |
-| `LAL_MAX_MESSAGES` | Truncate to last N messages (llama.cpp only) | (none) |
+| Variable           | Description                                  | Default                               |
+| ------------------ | -------------------------------------------- | ------------------------------------- |
+| `LAL_HOST`         | API base URL                                 | `http://localhost:11434`              |
+| `LAL_MODEL`        | Model name                                   | `qwen3` or `claude-opus-4-5-20251101` |
+| `LAL_AUTH_TOKEN`   | API key                                      | (optional for local)                  |
+| `LAL_MAX_TOKENS`   | Max completion tokens (llama.cpp only)       | `4096`                                |
+| `LAL_MAX_MESSAGES` | Truncate to last N messages (llama.cpp only) | (none)                                |
 
 ---
 
@@ -462,16 +469,16 @@ so it can be read on re-incarnation without needing `process.env`.
 Lal has a dedicated TypeScript type definition file (`agent.types.d.ts`) that
 defines all the core types:
 
-| Type | Description |
-|------|-------------|
-| `GuestPowers` | Alias for `EndoGuest` from `@endo/daemon` |
-| `Tool` | OpenAI function-calling tool schema |
-| `ToolCall` | Tool call from LLM response |
-| `ChatMessage` | Message in the transcript |
-| `ToolResult` | Tool execution result |
-| `ToolCallArgs` | Union of all possible tool arguments |
-| `LalEnv` | Environment variable configuration |
-| `LalContext` | Cancellation support context |
+| Type           | Description                               |
+| -------------- | ----------------------------------------- |
+| `GuestPowers`  | Alias for `EndoGuest` from `@endo/daemon` |
+| `Tool`         | OpenAI function-calling tool schema       |
+| `ToolCall`     | Tool call from LLM response               |
+| `ChatMessage`  | Message in the transcript                 |
+| `ToolResult`   | Tool execution result                     |
+| `ToolCallArgs` | Union of all possible tool arguments      |
+| `LalEnv`       | Environment variable configuration        |
+| `LalContext`   | Cancellation support context              |
 
 ---
 

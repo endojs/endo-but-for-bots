@@ -1,11 +1,11 @@
 # Platform range reads and recursive tree listing
 
-| | |
-|---|---|
-| **Created** | 2026-07-12 |
-| **Updated** | 2026-07-12 |
-| **Author** | endolinbot (prompted by kriskowal) |
-| **Status** | In Progress |
+|             |                                    |
+| ----------- | ---------------------------------- |
+| **Created** | 2026-07-12                         |
+| **Updated** | 2026-07-12                         |
+| **Author**  | endolinbot (prompted by kriskowal) |
+| **Status**  | In Progress                        |
 
 ## Motivation
 
@@ -41,7 +41,7 @@ carried:
 - On trees: `has` / `list` / `lookup` — where `list` is **shallow** (immediate
   child names only).
 
-So the primitives existed, but the *ergonomic whole-value* forms an agent
+So the primitives existed, but the _ergonomic whole-value_ forms an agent
 toolkit wants did not: a recursive listing, a byte range returned as a plain
 `Uint8Array`, and a line range returned as text. These three are what genie /
 lal / fae each re-invented.
@@ -116,7 +116,7 @@ The new methods are added as their own method-guard records and their own
 pre-assembled interfaces, **not** folded into the shared `readableBlob*` /
 `readableTree*` records that every implementer spreads. That containment is
 deliberate: an exo's interface guard must match its behavior exactly, so adding
-a method to a *shared* record would force every daemon / git / mount implementer
+a method to a _shared_ record would force every daemon / git / mount implementer
 that spreads it to implement the method at once (the wide blast radius
 [fs-interface-consolidation.md](fs-interface-consolidation.md) sequences
 carefully around).
@@ -126,14 +126,14 @@ Instead:
 - `rangeReadConvenienceMethodGuards = { rangeRead, rangeReadText }` and
   `recursiveListMethodGuards = { listTree }` are new exported records.
 - `ReadableBlobRangeReadInterface` = `readableBlob` + `rangeRead`(getInfo/fetch)
-  + the conveniences. A **tree implies recursion**, so `listTree` needs no
-  separate "recursive tree" variant: it is spread onto the plain
-  `ReadableTreeInterface` (the platform's own tree interface, tagged
-  `'ReadableTree'`) directly. Because that interface is *not* the shared
-  `readableTreeMethodGuards` record — which the daemon's own `EndoReadableTree`,
-  git, and mount tree exos spread — those implementers are still unaffected; the
-  containment is preserved by keeping `listTree` off the shared record, not by
-  minting a parallel interface.
+  - the conveniences. A **tree implies recursion**, so `listTree` needs no
+    separate "recursive tree" variant: it is spread onto the plain
+    `ReadableTreeInterface` (the platform's own tree interface, tagged
+    `'ReadableTree'`) directly. Because that interface is _not_ the shared
+    `readableTreeMethodGuards` record — which the daemon's own `EndoReadableTree`,
+    git, and mount tree exos spread — those implementers are still unaffected; the
+    containment is preserved by keeping `listTree` off the shared record, not by
+    minting a parallel interface.
 - The platform's own `LocalBlob` / `LocalTree` adopt the richer interfaces now.
   The daemon / git / mount blob and tree exos keep their current leaner
   interfaces and are unaffected; adopting the conveniences there is a follow-up.
@@ -155,7 +155,7 @@ the distinct interface tags only keep diagnostics unambiguous.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
+| Design                                                         | Relationship                                                                                                        |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | [fs-interface-consolidation.md](fs-interface-consolidation.md) | Owns the readable-blob / readable-tree surfaces and the `getInfo` / `fetch` primitives these conveniences build on. |
-| [platform-fs.md](platform-fs.md) | Owns the platform `lite` vocabulary the new records join. |
+| [platform-fs.md](platform-fs.md)                               | Owns the platform `lite` vocabulary the new records join.                                                           |

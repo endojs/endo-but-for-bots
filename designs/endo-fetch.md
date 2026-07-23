@@ -1,13 +1,13 @@
 # `@endo/fetch` and `@endo/confined-fetch`: Outbound HTTP Plugins
 
-| | |
-|---|---|
-| **Created** | 2026-07-13 |
-| **Updated** | 2026-07-15 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|                |                                                                                                                     |
+| -------------- | ------------------------------------------------------------------------------------------------------------------- |
+| **Created**    | 2026-07-13                                                                                                          |
+| **Updated**    | 2026-07-15                                                                                                          |
+| **Author**     | Kris Kowal (prompted)                                                                                               |
+| **Status**     | Not Started                                                                                                         |
 | **Supersedes** | [endoclaw-network-fetch](endoclaw-network-fetch.md) (provisioning; the capability shape is landed and carries over) |
-| **Parent** | [endoclaw](endoclaw.md) |
+| **Parent**     | [endoclaw](endoclaw.md)                                                                                             |
 
 ## What is the Problem Being Solved?
 
@@ -62,7 +62,9 @@ flowchart LR
 `@endo/fetch` exports the standard unconfined-caplet maker:
 
 ```js
-export const make = (powers, context, { env }) => { /* returns Fetch */ };
+export const make = (powers, context, { env }) => {
+  /* returns Fetch */
+};
 ```
 
 It adapts the unconfined worker's ambient `fetch` into a passable `Fetch`
@@ -133,14 +135,14 @@ surface remain normative where referenced.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| [http-confine](http-confine.md) | Pure confinement core under the facets |
-| [trust-on-first-bind](trust-on-first-bind.md) | Policy machine whose bindings the confined plugin persists |
-| [endo-reminder](endo-reminder.md) | Precedent for VFS state and integration-owned revival |
-| [platform-fs](platform-fs.md), [fs-interface-reconciliation](fs-interface-reconciliation.md) | State-directory API and tree verbs |
-| [daemon-agent-tools](daemon-agent-tools.md) | `makeHttpTool` consumes the granted confined client |
-| [endoclaw-oauth](endoclaw-oauth.md) | Consumes a granted `HttpClient`, never the base `Fetch` |
+| Design                                                                                       | Relationship                                               |
+| -------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| [http-confine](http-confine.md)                                                              | Pure confinement core under the facets                     |
+| [trust-on-first-bind](trust-on-first-bind.md)                                                | Policy machine whose bindings the confined plugin persists |
+| [endo-reminder](endo-reminder.md)                                                            | Precedent for VFS state and integration-owned revival      |
+| [platform-fs](platform-fs.md), [fs-interface-reconciliation](fs-interface-reconciliation.md) | State-directory API and tree verbs                         |
+| [daemon-agent-tools](daemon-agent-tools.md)                                                  | `makeHttpTool` consumes the granted confined client        |
+| [endoclaw-oauth](endoclaw-oauth.md)                                                          | Consumes a granted `HttpClient`, never the base `Fetch`    |
 
 ## Implementation Phases
 

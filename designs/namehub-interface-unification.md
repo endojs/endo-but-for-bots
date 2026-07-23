@@ -1,12 +1,12 @@
 # NameHub Interface Unification for `EndoMount`
 
-| | |
-|---|---|
-| **Created** | 2026-05-07 |
-| **Updated** | 2026-05-07 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Accepted, not yet implemented |
-| **Source** | PR #115 inline review comment on Open Question #6 |
+|             |                                                   |
+| ----------- | ------------------------------------------------- |
+| **Created** | 2026-05-07                                        |
+| **Updated** | 2026-05-07                                        |
+| **Author**  | Kris Kowal (prompted)                             |
+| **Status**  | Accepted, not yet implemented                     |
+| **Source**  | PR #115 inline review comment on Open Question #6 |
 
 ## What is the Problem Being Solved?
 
@@ -92,29 +92,29 @@ Out of scope:
 
 ### `NameHubInterface` versus `MountInterface`
 
-| Method | `NameHubInterface` | `MountInterface` | Notes |
-|---|---|---|---|
-| `help` | (via `DirectoryInterface`) | yes | trivial |
-| `has` | yes | yes | shape compatible |
-| `list` | yes | yes | shape compatible |
-| `lookup` | yes | yes | shape compatible; throwing wrapper |
-| `maybeLookup` | yes | added by this design | primitive; `lookup` is derived |
-| `identify` | yes | no | requires a notion of "identifier for a file" |
-| `locate` | yes | no | requires `identify` plus locator construction |
-| `reverseLocate` | yes | no | requires a way to map locators back to mount paths |
-| `reverseLookup` | yes | no | requires identity comparison across mount entries |
-| `listIdentifiers` | yes | no | derived from `identify` |
-| `listLocators` | yes | no | derived from `locate` |
-| `followNameChanges` | yes | added by sibling design | shape compatible after sibling lands |
-| `followLocatorNameChanges` | yes | no | requires `reverseLocate` plus the locator-stream contract |
-| `storeIdentifier` | yes | no | requires "identifier" as a write target |
-| `storeLocator` | yes | no | requires locator-as-write-target |
-| `remove` | yes | yes | shape compatible |
-| `move` | yes | yes | semantics differ (see below) |
-| `copy` | yes | no | mount has no copy, by design |
-| `readText`, `maybeReadText`, `writeText` | no (delegated to mount via `DirectoryInterface`) | yes | mount-only |
-| `makeDirectory` | no (in `DirectoryInterface`) | yes | mount-only |
-| `readOnly`, `snapshot` | no | yes | mount-only |
+| Method                                   | `NameHubInterface`                               | `MountInterface`        | Notes                                                     |
+| ---------------------------------------- | ------------------------------------------------ | ----------------------- | --------------------------------------------------------- |
+| `help`                                   | (via `DirectoryInterface`)                       | yes                     | trivial                                                   |
+| `has`                                    | yes                                              | yes                     | shape compatible                                          |
+| `list`                                   | yes                                              | yes                     | shape compatible                                          |
+| `lookup`                                 | yes                                              | yes                     | shape compatible; throwing wrapper                        |
+| `maybeLookup`                            | yes                                              | added by this design    | primitive; `lookup` is derived                            |
+| `identify`                               | yes                                              | no                      | requires a notion of "identifier for a file"              |
+| `locate`                                 | yes                                              | no                      | requires `identify` plus locator construction             |
+| `reverseLocate`                          | yes                                              | no                      | requires a way to map locators back to mount paths        |
+| `reverseLookup`                          | yes                                              | no                      | requires identity comparison across mount entries         |
+| `listIdentifiers`                        | yes                                              | no                      | derived from `identify`                                   |
+| `listLocators`                           | yes                                              | no                      | derived from `locate`                                     |
+| `followNameChanges`                      | yes                                              | added by sibling design | shape compatible after sibling lands                      |
+| `followLocatorNameChanges`               | yes                                              | no                      | requires `reverseLocate` plus the locator-stream contract |
+| `storeIdentifier`                        | yes                                              | no                      | requires "identifier" as a write target                   |
+| `storeLocator`                           | yes                                              | no                      | requires locator-as-write-target                          |
+| `remove`                                 | yes                                              | yes                     | shape compatible                                          |
+| `move`                                   | yes                                              | yes                     | semantics differ (see below)                              |
+| `copy`                                   | yes                                              | no                      | mount has no copy, by design                              |
+| `readText`, `maybeReadText`, `writeText` | no (delegated to mount via `DirectoryInterface`) | yes                     | mount-only                                                |
+| `makeDirectory`                          | no (in `DirectoryInterface`)                     | yes                     | mount-only                                                |
+| `readOnly`, `snapshot`                   | no                                               | yes                     | mount-only                                                |
 
 Two columns make `EndoMount` stand apart:
 
@@ -214,17 +214,14 @@ The proposal is to introduce a **narrower interface**,
 intersection of `NameHub` and `EndoMount`:
 
 ```js
-export const ReadableNameHubInterface = M.interface(
-  'EndoReadableNameHub',
-  {
-    help: M.call().optional(M.string()).returns(M.string()),
-    has: M.call().rest(NamePathShape).returns(M.promise()),
-    list: M.call().rest(NamePathShape).returns(M.promise()),
-    lookup: M.call(NameOrPathShape).returns(M.promise()),
-    maybeLookup: M.call(NameOrPathShape).returns(M.promise()),
-    followNameChanges: M.call().returns(M.remotable()),
-  },
-);
+export const ReadableNameHubInterface = M.interface('EndoReadableNameHub', {
+  help: M.call().optional(M.string()).returns(M.string()),
+  has: M.call().rest(NamePathShape).returns(M.promise()),
+  list: M.call().rest(NamePathShape).returns(M.promise()),
+  lookup: M.call(NameOrPathShape).returns(M.promise()),
+  maybeLookup: M.call(NameOrPathShape).returns(M.promise()),
+  followNameChanges: M.call().returns(M.remotable()),
+});
 ```
 
 `maybeLookup` is the primitive; `lookup` is a thin throwing
@@ -357,7 +354,7 @@ CLI, and any future consumer.
   The narrowing is implicit and the interface graph stays flat.
 - Con: every consumer that walks a hub re-implements the branch.
   The inventory tree's `if (methods.includes('followNameChanges'))
-  … else if (methods.includes('list'))` is the canonical instance,
+… else if (methods.includes('list'))` is the canonical instance,
   and a second consumer would copy it.
 - Con: the project's CapTP-introspection convention
   (`__getMethodNames__` for capability discovery) becomes
@@ -601,12 +598,12 @@ shape that the implementation is expected to take.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|--------------|
-| [filesystem-watchers](filesystem-watchers.md) | Sibling.  Adds `followNameChanges` to `EndoMount` and recommends this design as the next step. |
-| [daemon-mount](daemon-mount.md) | Defines `EndoMount` and `MountInterface`; this design proposes refactoring `MountInterface`. |
+| Design                                                      | Relationship                                                                                                              |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| [filesystem-watchers](filesystem-watchers.md)               | Sibling. Adds `followNameChanges` to `EndoMount` and recommends this design as the next step.                             |
+| [daemon-mount](daemon-mount.md)                             | Defines `EndoMount` and `MountInterface`; this design proposes refactoring `MountInterface`.                              |
 | [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md) | Defines the formula identifier surface that `identify` returns; relevant if the full-`NameHub` alternative is ever taken. |
-| [daemon-content-store-gc](daemon-content-store-gc.md) | If mount entries gain locators, GC must reap mount-entry formulas; this design defers that question. |
+| [daemon-content-store-gc](daemon-content-store-gc.md)       | If mount entries gain locators, GC must reap mount-entry formulas; this design defers that question.                      |
 
 ## Prompt
 
@@ -615,9 +612,9 @@ shape that the implementation is expected to take.
 > **`NameHub` interface unification.** Should `EndoMount` adopt
 > the broader `NameHubInterface` (which includes `identify`,
 > `locate`, `reverseLocate`, etc.) so the same hub-walking code
-> in `chat-spaces-gutter` works against both?  This is a larger
+> in `chat-spaces-gutter` works against both? This is a larger
 > refactor than the watcher addition and crosses into mount
-> identity semantics.  Recommendation: keep this design focused
+> identity semantics. Recommendation: keep this design focused
 > on parity for `followNameChanges`; track hub-interface
 > unification under a sibling design.
 >

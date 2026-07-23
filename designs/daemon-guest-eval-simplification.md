@@ -1,12 +1,12 @@
 # Daemon Guest Eval Simplification
 
-| | |
-|---|---|
-| **Created** | 2026-03-21 |
-| **Updated** | 2026-05-04 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Implemented** |
-| **PR** | #92 |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-03-21            |
+| **Updated** | 2026-05-04            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | **Implemented**       |
+| **PR**      | #92                   |
 
 ## Status
 
@@ -43,7 +43,7 @@ There are three configurations for agent authority over code evaluation:
 1. **No eval** — the agent advises on code but cannot execute it.
    Mark Miller proposed this model early in Endo Familiar's development:
    reasoning about capability composition is tractable, so agents should
-   be able to *advise* on code without running it.
+   be able to _advise_ on code without running it.
    This remains useful for advisory-only roles.
 
 2. **Eval with approval** — the agent proposes code, the user reviews
@@ -135,26 +135,26 @@ resolution (the guest's own, not the host's).
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|-------------|
-| [daemon-agent-tools](daemon-agent-tools.md) | Simplifies the tool surface — eval covers many tool patterns |
-| [daemon-capability-bank](daemon-capability-bank.md) | Capability composition model that makes direct eval safe |
-| [lal-fae-form-provisioning](lal-fae-form-provisioning.md) | Agents already use direct eval via this design |
+| Design                                                    | Relationship                                                 |
+| --------------------------------------------------------- | ------------------------------------------------------------ |
+| [daemon-agent-tools](daemon-agent-tools.md)               | Simplifies the tool surface — eval covers many tool patterns |
+| [daemon-capability-bank](daemon-capability-bank.md)       | Capability composition model that makes direct eval safe     |
+| [lal-fae-form-provisioning](lal-fae-form-provisioning.md) | Agents already use direct eval via this design               |
 
 ## Prompt
 
 > Early in Endo Familiar's development, the hypothesis was that AI
 > agents should not be able to execute arbitrary code with their
 > capabilities, since reasoning about capability composition is
-> tractable.  Mark Miller proposed agents could *advise* on code without
-> executing it.  In practice, the proposal/approval handshake for eval
-> fatigues users.  The more useful configuration is one where agents
+> tractable. Mark Miller proposed agents could _advise_ on code without
+> executing it. In practice, the proposal/approval handshake for eval
+> fatigues users. The more useful configuration is one where agents
 > evaluate code freely, constrained only by which capabilities they can
-> reach.  `evaluate` is a "tool of tools" — having it drastically
+> reach. `evaluate` is a "tool of tools" — having it drastically
 > reduces the need for special-purpose tools.
 >
 > Design the simplification: EndoGuest and EndoAgent should have
 > identical evaluate behavior — direct execution in a worker the agent
 > can access (like `@main`), constrained only by the agent's reachable
-> capabilities.  Remove the eval-proposal message flow
+> capabilities. Remove the eval-proposal message flow
 > (proposer/reviewer/grant/counter) from EndoGuest entirely.

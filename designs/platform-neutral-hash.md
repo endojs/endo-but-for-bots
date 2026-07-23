@@ -1,10 +1,10 @@
 # Platform-neutral SHA-256 (`@endo/sha256`) to unblock the XS daemon bundle
 
-| | |
-|---|---|
-| **Created** | 2026-07-22 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-07-22            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## Problem
 
@@ -34,14 +34,14 @@ in the bundle graph, which blocks `test:rust` and full endor daemon integration
 A survey of every `createHash(...)` and `node:crypto` importer in the tree
 (excluding tests) establishes the real surface:
 
-| Site | Algorithm | Shape | On XS bundle path? |
-|---|---|---|---|
-| `platform/.../shared/blobref.js` | sha256 | one-shot, `bytes → raw digest` | **Yes — the blocker** |
-| `git/src/native-git-backend.js` (×2) | sha256 | one-shot, `bytes → raw digest` | Only until git is made injectable (see below) |
-| `platform/src/fs-node/content-store-powers.js` | sha256 | streaming `makeSha256().update/digestHex` | No — `fs-node` is excluded |
-| `platform/src/fs-node/local-blob.js` | sha256 | one-shot | No — `fs-node` excluded |
-| `daemon/src/manager-node-powers.js` | sha256 | streaming (injected power) | No — Node-only, excluded |
-| `check-bundle/index.js`, `compartment-mapper/src/node-powers.js` | **sha512** | streaming | No — not on daemon graph / `compartment-mapper` excluded |
+| Site                                                             | Algorithm  | Shape                                     | On XS bundle path?                                       |
+| ---------------------------------------------------------------- | ---------- | ----------------------------------------- | -------------------------------------------------------- |
+| `platform/.../shared/blobref.js`                                 | sha256     | one-shot, `bytes → raw digest`            | **Yes — the blocker**                                    |
+| `git/src/native-git-backend.js` (×2)                             | sha256     | one-shot, `bytes → raw digest`            | Only until git is made injectable (see below)            |
+| `platform/src/fs-node/content-store-powers.js`                   | sha256     | streaming `makeSha256().update/digestHex` | No — `fs-node` is excluded                               |
+| `platform/src/fs-node/local-blob.js`                             | sha256     | one-shot                                  | No — `fs-node` excluded                                  |
+| `daemon/src/manager-node-powers.js`                              | sha256     | streaming (injected power)                | No — Node-only, excluded                                 |
+| `check-bundle/index.js`, `compartment-mapper/src/node-powers.js` | **sha512** | streaming                                 | No — not on daemon graph / `compartment-mapper` excluded |
 
 Two conclusions drive the whole design:
 
@@ -50,19 +50,19 @@ Two conclusions drive the whole design:
    `compartment-mapper`, both off the XS daemon bundle graph, so **no
    `@endo/sha512` is required now.** (Leave the naming room for one later; do not
    build it.)
-2. **Streaming SHA-256 is already solved and is *not* a bundler blocker.** The
+2. **Streaming SHA-256 is already solved and is _not_ a bundler blocker.** The
    runtime `CryptoPowers` on the XS daemon — `makeXsCryptoPowers` in
-   `bus-manager-rust-xs-powers.js` — is *injected* and already backed by Rust
+   `bus-manager-rust-xs-powers.js` — is _injected_ and already backed by Rust
    host functions (`hostSha256Init` → `hostSha256UpdateBytes` →
    `hostSha256Finish`). The bundler never sees `node:crypto` for those, because
-   nothing *statically imports* it. The blocker is specifically the
+   nothing _statically imports_ it. The blocker is specifically the
    **module-scope static import** in modules that hash inline instead of
    receiving an injected power — today just `blobref.js` (and `native-git-backend`
    secondarily).
 
-So the fix is narrow: replace the *static* `node:crypto` import in `blobref.js`
+So the fix is narrow: replace the _static_ `node:crypto` import in `blobref.js`
 with a static import of a small platform-neutral package whose **xs** condition
-resolves — through conditional exports the bundler *does* honor — to a module
+resolves — through conditional exports the bundler _does_ honor — to a module
 backed by the host SHA-256 that already exists.
 
 ## Package: `@endo/sha256`
@@ -78,7 +78,9 @@ prefix — it exports plain functions, not passable interfaces over CapTP.
  * @param {Uint8Array} bytes
  * @returns {Uint8Array}  // length 32
  */
-export const sha256 = bytes => { /* ... */ };
+export const sha256 = bytes => {
+  /* ... */
+};
 
 /**
  * Bring-your-own-buffer variant: write the 32-byte digest into `out`
@@ -89,7 +91,9 @@ export const sha256 = bytes => { /* ... */ };
  * @param {number} [offset=0]
  * @returns {number}
  */
-export const sha256Into = (out, bytes, offset = 0) => { /* ... */ };
+export const sha256Into = (out, bytes, offset = 0) => {
+  /* ... */
+};
 ```
 
 - **Byte types:** input and output are `Uint8Array` — never Node `Buffer`,
@@ -100,7 +104,7 @@ export const sha256Into = (out, bytes, offset = 0) => { /* ... */ };
   (`encodeBase64(hashBytes)`). Keeping the primitive in raw bytes avoids baking
   an encoding into the package and keeps it one FFI round-trip on XS.
 - **Synchronous:** the contract is sync because the sole in-graph consumer
-  (`makeBlobRefExo`) computes the hash sync at construction. See *Open questions*
+  (`makeBlobRefExo`) computes the hash sync at construction. See _Open questions_
   for the WebCrypto tension this creates.
 - **Errors:** non-`Uint8Array` input throws `TypeError`; `sha256Into` with an
   undersized buffer throws `RangeError`. No silent coercion.
@@ -120,10 +124,10 @@ export const sha256Into = (out, bytes, offset = 0) => { /* ... */ };
       "xs": "./src/sha256-xs.js",
       "browser": "./src/sha256-browser.js",
       "node": "./src/sha256-node.js",
-      "default": "./src/sha256-browser.js"
+      "default": "./src/sha256-browser.js",
     },
-    "./package.json": "./package.json"
-  }
+    "./package.json": "./package.json",
+  },
 }
 ```
 
@@ -160,13 +164,13 @@ strictly required**; `sha256-xs.js` composes the existing streaming triple.
 **Existing surface** (declared in `packages/daemon/src/bus-xs-host-globals.d.ts`,
 registered from `rust/endo/xsnap/src/powers/crypto.rs` via `CALLBACKS`):
 
-| Global | Rust fn | Signature | Notes |
-|---|---|---|---|
-| `hostSha256` | `host_sha256` | `(utf8String) → hexString` | **String input — NOT binary-safe; do not use for blob bytes** |
-| `hostSha256Init` | `host_sha256_init` | `() → handle:number` | opens an incremental hasher |
-| `hostSha256UpdateBytes` | `host_sha256_update_bytes` | `(handle, Uint8Array) → undefined` | binary fast path |
-| `hostSha256Update` | `host_sha256_update` | `(handle, utf8String) → undefined` | text path |
-| `hostSha256Finish` | `host_sha256_finish` | `(handle) → hexString` | consumes the handle |
+| Global                  | Rust fn                    | Signature                          | Notes                                                         |
+| ----------------------- | -------------------------- | ---------------------------------- | ------------------------------------------------------------- |
+| `hostSha256`            | `host_sha256`              | `(utf8String) → hexString`         | **String input — NOT binary-safe; do not use for blob bytes** |
+| `hostSha256Init`        | `host_sha256_init`         | `() → handle:number`               | opens an incremental hasher                                   |
+| `hostSha256UpdateBytes` | `host_sha256_update_bytes` | `(handle, Uint8Array) → undefined` | binary fast path                                              |
+| `hostSha256Update`      | `host_sha256_update`       | `(handle, utf8String) → undefined` | text path                                                     |
+| `hostSha256Finish`      | `host_sha256_finish`       | `(handle) → hexString`             | consumes the handle                                           |
 
 The critical constraint: the one-shot `hostSha256` takes a **UTF-8 string** and
 hashes its bytes, so it corrupts any input byte `> 0x7F`. It is unusable for
@@ -189,7 +193,8 @@ export const sha256 = bytes => {
 
 export const sha256Into = (out, bytes, offset = 0) => {
   const d = sha256(bytes);
-  if (out.length - offset < 32) throw RangeError('sha256Into: output too small');
+  if (out.length - offset < 32)
+    throw RangeError('sha256Into: output too small');
   out.set(d, offset);
   return 32;
 };
@@ -246,7 +251,7 @@ assert against `node:crypto`.
 
 **The git backend is a separate lever, not part of this package's critical
 path.** `rust/endo/README.md` records that `@endo/git`'s `makeNativeGitBackend`
-(imported eagerly in `daemon.js`) is *also* a bundle blocker, but its fix is to
+(imported eagerly in `daemon.js`) is _also_ a bundle blocker, but its fix is to
 make the git backend **injectable** (as `better-sqlite3` already is) and add it to
 `EXCLUDED_PACKAGES` — `native-git-backend.js` also uses `child_process` to spawn
 `git`, which cannot run under XS regardless. So git leaves the XS bundle graph by
@@ -261,17 +266,17 @@ filed against `endojs/endo-but-for-bots`), **not** a prerequisite for generating
    `sha256-browser.js` (lift `node-crypto-shim.js`'s pure-JS core), `sha256-node.js`,
    `sha256-xs.js` (streaming-triple composition). Unit tests cross-check all
    three against `node:crypto` vectors. **This alone unblocks the bundle** once
-   step 2 lands. *First buildable increment.*
+   step 2 lands. _First buildable increment._
 2. **Point `blobref.js` at `@endo/sha256`;** add the dependency; run
    `blobref.test.js` / `local-blob.test.js`.
 3. **Regenerate the bundle:** `node
-   packages/daemon/scripts/bundle-bus-daemon-rust-xs.mjs` now passes the
+packages/daemon/scripts/bundle-bus-daemon-rust-xs.mjs` now passes the
    blobref/`fs/extended` leg. (Resolve the `@endo/git` exclusion in parallel per
    the README; the two are independent legs of the same "no `node:` builtins in
    the graph" fix.) Then `yarn --cwd packages/daemon test:rust`.
 4. **Fold `packages/chat/node-crypto-shim.js` into `@endo/sha256`** — chat
    re-exports the browser build; delete the duplicate pure-JS SHA-256.
-5. *(Deferred, optional)* Add `host_sha256_bytes` Rust host function + prefer it
+5. _(Deferred, optional)_ Add `host_sha256_bytes` Rust host function + prefer it
    in `sha256-xs.js`; migrate `native-git-backend.js`'s two sites.
 
 The follow-on implementation wants the **dedicated builder** the topic-11 xs2rust
@@ -283,7 +288,7 @@ press has been recommending, not the hourly press.
   Rejected: `makeBlobRefExo` is a synchronous exo factory called in synchronous
   contexts across three `Filesystem` implementations; threading a power through
   every call site is a far larger, more invasive change than a static-import swap
-  — and the injected-power path is already covered for the *streaming* consumers.
+  — and the injected-power path is already covered for the _streaming_ consumers.
 - **Extend `EXCLUDED_PACKAGES` to drop `fs/extended`.** Rejected: unlike
   `fs-node`, the daemon's blob handling actually executes `makeBlobRefExo` at
   runtime, so it cannot be elided from the compartment graph.
@@ -312,5 +317,5 @@ press has been recommending, not the hourly press.
 - **`native-git-backend.js` migration scope.** Fold its two `createHash` sites
   into `@endo/sha256` in the same arc, or leave them until the git-injectability
   work lands? (They exit the XS bundle by exclusion regardless.)
-</content>
-</invoke>
+  </content>
+  </invoke>

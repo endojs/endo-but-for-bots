@@ -16,6 +16,7 @@ how to group or otherwise organize it, and so hesitates to call this a "Guide"
 or "Reference" documentation.
 
 In fact this document will mostly grow by:
+
 1. pasting in notes and snippets of chat conversation
 2. telling an LLM-empowered-agent to rework it
 3. then later reviewing or refining its progress
@@ -37,7 +38,7 @@ that simultaneously serves two purposes:
 
 **Key Principles of Capabilities:**
 
-- **Reference as Authority**: A capability represents the *right* to perform an
+- **Reference as Authority**: A capability represents the _right_ to perform an
   operation, not the ability to perform it. The capability holder can execute
   the protected operations, but cannot access the object's implementation.
 - **Pass-by-reference**: Capabilities use pass-by-reference semantics—the
@@ -53,11 +54,12 @@ that simultaneously serves two purposes:
 **Capabilities vs Standard JavaScript Objects:**
 
 - **Standard objects** are generic containers that can have any methods attached
-- **Capabilities** are objects with *restricted* behavior determined by interface guards
-- Capabilities encode *which operations are valid*, but restrict *how they're used*
+- **Capabilities** are objects with _restricted_ behavior determined by interface guards
+- Capabilities encode _which operations are valid_, but restrict _how they're used_
 
 In Endo's implementation, a **remotable object** (created with `Far()` or
 `exo`) is a capability because:
+
 - It can be passed across vat boundaries (Same or different machines) via CapTP
 - Its behavior is protected by interface guards that validate inputs and prevent unauthorized access
 - Its internal state cannot be accessed or modified by unauthorized code
@@ -97,17 +99,20 @@ They persist only so long as the window is open.
 ## Gateway
 
 Hosts:
+
 - Weblets of HTTP
 - CapTP over WS
 - `localhttp://` in familiar mode
 
 **Weblet 2 modes:**
+
 - Gateway provides demi-secure port hosting
 - Familiar is more secure via `localhttp://`
 
 ## Formula
 
 A JSON spec for an object constructor:
+
 - a readable blob is one of the most primitive types
 - notably program source code gets stored in a blob
 - evaluating a JS string in the presence of various dependencies
@@ -117,10 +122,12 @@ A JSON spec for an object constructor:
 ## Graceful Teardown
 
 Design tensions with timely revocation. Need to ensure that:
+
 - Some stuff cleans up
 - Don't leave a hole open for something to go rogue
 
 **Considerations:**
+
 - Some workers might not get an opportunity to cleanup
 - Workers should be immediately isolated with the closure of open sessions
 - This puts them in a "weird hell" where the only thing they can do is teardown,
@@ -131,8 +138,10 @@ Design tensions with timely revocation. Need to ensure that:
 # Notes Circa Endo Sync 2026-03-11
 
 Josh
+
 > also I'm 80% confident that I'll be taking some hedge trimmers to the entire
 > cli's commander saga:
+>
 > - break things up into topic sections: stop making me read about message,
 >   values, and pets, when I'm just trying to scan for "How Does Daemon
 >   Operate" commands
@@ -151,6 +160,7 @@ Josh
 > time, and is quite a large elephant... but a folk can dream 😉
 
 Kris
+
 > Might be a thing now. We were held back for a long time because Node.js REPL
 > entrains "domains", which are like oil and water when it comes to running
 > under lockdown.
@@ -159,11 +169,13 @@ Kris
 > not ideal.
 
 Kris
+
 > Adding subcommand sections to the CLI help would be welcome as long as they
 > don't deepen the ergonomics unnecessarily. Like "endo ls" not "endo inventory
 > ls" plz.
 
 Kris
+
 > Yeah, I haven't even really settled on a conceptual framework for graceful
 > teardown because there are design tensions with timely revocation. We just
 > need to ensure that some stuff cleans up, but also don't want to leave a hole
@@ -173,7 +185,7 @@ Kris
 > they can do is teardown, and everything they touch remotely throws an async
 > error.
 >
-> If we do add a REPL, it does mean we have CLI, REPL, *and* Chat to keep in
+> If we do add a REPL, it does mean we have CLI, REPL, _and_ Chat to keep in
 > sync when the command vocabulary evolves. I don't think we can get down to
 > just 1, but staying at 2 until the vocabulary settles has been prudent so
 > far.
@@ -185,6 +197,7 @@ Kris
 > parser" bunny hole.
 
 Kris
+
 > The vernacular is still squishy. So, don’t think of this explanation as a
 > defense of the names, just an inventory of the concepts that (maybe) don’t
 > even need names.
@@ -198,6 +211,7 @@ Kris
 > Neither caplet nor runlet is a Worker.
 
 Kris
+
 > Pressing enter on this a bit late:
 >
 > - A worklet is a caplet that runs in a Worker. Workers can be co-tenant but

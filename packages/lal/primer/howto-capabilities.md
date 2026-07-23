@@ -44,6 +44,7 @@ any text content without leaving the conversation.
 The most common pattern: mount a directory, then send it.
 
 1. Mount a filesystem path:
+
    ```
    /mount /Users/me/project -n project-dir
    ```
@@ -81,6 +82,7 @@ Please propose code that creates a read-only view of it.
 ```
 
 The agent uses `define()` to propose code with named slots:
+
 ```
 define("E(dir).readOnly()", {
   "dir": {"label": "The directory to attenuate"}
@@ -101,11 +103,13 @@ result, which you can then share:
 ## Sharing Capabilities Across Networks
 
 Generate a shareable locator:
+
 ```
 /share my-value
 ```
 
 The other party on another machine adopts it:
+
 ```
 /adopt-locator <locator> -n their-name
 ```
@@ -124,6 +128,7 @@ and view its contents in Chat:
 ```
 
 To check out the tree to disk, use the CLI:
+
 ```
 endo checkout my-tree ./local-dir
 ```

@@ -1,12 +1,12 @@
 # `@endo/reminder`: A Message Scheduler Plugin
 
-| | |
-|---|---|
-| **Created** | 2026-07-10 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|                |                                     |
+| -------------- | ----------------------------------- |
+| **Created**    | 2026-07-10                          |
+| **Author**     | Kris Kowal (prompted)               |
+| **Status**     | Not Started                         |
 | **Supersedes** | [endoclaw-timer](endoclaw-timer.md) |
-| **Parent** | [endoclaw](endoclaw.md) |
+| **Parent**     | [endoclaw](endoclaw.md)             |
 
 ## What is the Problem Being Solved?
 
@@ -33,7 +33,7 @@ review of #609 (2026-07-10) redirected the packaging on four points:
    particular integration** (the Familiar app, the online Gateway), with less
    coupling to the lowest parts of the daemon.
 
-This design redrafts the feature on those terms. The scheduling *behavior*
+This design redrafts the feature on those terms. The scheduling _behavior_
 carries over from the superseded design; the packaging, persistence, revival
 story, and naming change.
 
@@ -54,19 +54,19 @@ does not restate them.
 ### Message-scheduler framing and vocabulary
 
 `@endo/reminder` is documented everywhere as a **message scheduler**: it
-produces messages on various schedules, and nothing else. Policy about *what
-to do* on a schedule belongs to the recipient. The vocabulary map from the
+produces messages on various schedules, and nothing else. Policy about _what
+to do_ on a schedule belongs to the recipient. The vocabulary map from the
 superseded design:
 
-| Superseded term | This design |
-|---|---|
-| interval scheduler (formula) | reminder service (plugin caplet) |
-| interval | **reminder** (one scheduled message stream) |
-| tick | **reminder message** (one delivery) |
-| `IntervalScheduler` facet | `ReminderScheduler` facet |
-| `IntervalControl` facet | `ReminderControl` facet |
-| `TickResponse` | `ReminderResponse` |
-| `makeIntervalSchedulerCmd` host command | none (provisioned via `makeUnconfined`) |
+| Superseded term                         | This design                                 |
+| --------------------------------------- | ------------------------------------------- |
+| interval scheduler (formula)            | reminder service (plugin caplet)            |
+| interval                                | **reminder** (one scheduled message stream) |
+| tick                                    | **reminder message** (one delivery)         |
+| `IntervalScheduler` facet               | `ReminderScheduler` facet                   |
+| `IntervalControl` facet                 | `ReminderControl` facet                     |
+| `TickResponse`                          | `ReminderResponse`                          |
+| `makeIntervalSchedulerCmd` host command | none (provisioned via `makeUnconfined`)     |
 
 ### Package and plugin shape
 
@@ -77,7 +77,9 @@ maker-table entry. The plugin module exports the standard unconfined-caplet
 maker:
 
 ```js
-export const make = (powers, context, { env }) => { /* returns the reminder service */ };
+export const make = (powers, context, { env }) => {
+  /* returns the reminder service */
+};
 ```
 
 provisioned by any host through the existing generic pathway:
@@ -134,7 +136,7 @@ the unconfined worker has them ambiently.
 The two-facet caretaker split (§Package and plugin shape) is also the
 delegation seam. An agent holds capabilities and may hand them to a subagent (a
 guest it makes); pure object-capability discipline means it can delegate **only
-handles it already holds**, and can only *narrow* their authority, never widen
+handles it already holds**, and can only _narrow_ their authority, never widen
 it. Three modes span the review's requirements — from sharing one live
 scheduler, through attenuated handles, to formulating an entirely independent
 yet revocable scheduler — and each is ordinary capability passing over the
@@ -144,7 +146,7 @@ plugin's existing facets, adding no new plugin surface (design decision 17).
 holds a `ReminderScheduler` gives a subagent scheduling authority by passing a
 capability it already has, choosing how much:
 
-- the whole `ReminderScheduler` → the subagent *shares* the parent's one
+- the whole `ReminderScheduler` → the subagent _shares_ the parent's one
   scheduler and store; the subagent's reminders count against the parent's
   `maxActive` and stay visible to the parent through `list()`;
 - a single `Reminder` handle → the subagent may `setPeriod` / `cancel` / `info`
@@ -154,35 +156,35 @@ capability it already has, choosing how much:
   own, without disturbing its own direct access.
 
 Mode A does not grant independence: one scheduler, one store, one shared budget.
-Revoking a *shared* handle uses a parent-held caretaker wrapper (the daemon's
+Revoking a _shared_ handle uses a parent-held caretaker wrapper (the daemon's
 generic caretaker over the forwarded facet), **not** `ReminderControl.revoke`,
 which would also kill the parent's own use.
 
 **Mode B — an independent, revocable scheduler for a subagent.** For genuine
 independence the parent does not share its scheduler; it **provisions a fresh
 one bound to the subagent as recipient, and keeps the control facet.** The
-parent plays the *integration* role that §Powers assigns to whoever provisions
+parent plays the _integration_ role that §Powers assigns to whoever provisions
 the service:
 
-1. **Attenuate the powers.** Compose a child `powers` namehub holding *only* the
+1. **Attenuate the powers.** Compose a child `powers` namehub holding _only_ the
    two names the plugin resolves (§Powers items 1–2): `reminder-store` bound to a
    **subdirectory** of the parent's own store, and `reminder-recipient` bound to
    the subagent. Both are handles the parent already holds, narrowed — the child
    can name no store and no recipient the parent could not, which is exactly
-   *delegate only handles you hold*.
+   _delegate only handles you hold_.
 2. **Provision a fresh service** against that attenuated powers (recipe below),
    yielding the `ReminderScheduler` / `ReminderControl` facet pair.
 3. **Split the pair.** Hand the subagent **only `ReminderScheduler`**; **retain
    `ReminderControl`.**
 
-The result is *independent* — its own store subdirectory, its own `config.json`
+The result is _independent_ — its own store subdirectory, its own `config.json`
 limits, its own recipient, so the child's reminders never touch the parent's
-scheduler, store, or `maxActive` budget — and *revocable*, because the parent
+scheduler, store, or `maxActive` budget — and _revocable_, because the parent
 holds `ReminderControl`: `revoke()` permanently kills the child's scheduler
 (carried decision 5 semantics), `pause` / `resume` suspend it, and deleting the
 child's store subdirectory plus unpinning decommissions it durably (mirroring
 §Wake-on-restart's "unpinning decommissions"). "Independent but revocable" is
-precisely *the parent is the child's integration.* This also upholds
+precisely _the parent is the child's integration._ This also upholds
 one-scheduler-per-recipient (decision 5): each subagent is a distinct recipient,
 so each gets its own scheduler with no aliasing.
 
@@ -204,17 +206,24 @@ export const provisionSubagentReminder = async (
 ) => {
   // 1. Attenuate: a child powers namehub holding only the two names the plugin
   //    resolves — each a handle the parent already holds, narrowed, never widened.
-  const store = await E(powers).lookup('reminder-store');       // parent's VFS store dir
+  const store = await E(powers).lookup('reminder-store'); // parent's VFS store dir
   const childStore = await E(store).makeDirectory(storeSubdir); // the child's own subtree
   // makeChildPowers is the daemon's existing pet-name-namehub (or guest)
   // creation — no new primitive; it returns an empty namehub the parent populates.
-  const childPowers = await makeChildPowers(powers, `reminder-powers/${storeSubdir}`);
+  const childPowers = await makeChildPowers(
+    powers,
+    `reminder-powers/${storeSubdir}`,
+  );
   await E(childPowers).write(['reminder-store'], childStore);
   await E(childPowers).write(['reminder-recipient'], subagent);
   // 2. Provision a FRESH scheduler against the attenuated powers.
   return E(powers).makeUnconfined(
-    `reminder-worker/${storeSubdir}`, '@endo/reminder',
-    { powersName: `reminder-powers/${storeSubdir}`, env: { maxActive, minPeriodMs } },
+    `reminder-worker/${storeSubdir}`,
+    '@endo/reminder',
+    {
+      powersName: `reminder-powers/${storeSubdir}`,
+      env: { maxActive, minPeriodMs },
+    },
   );
 };
 ```
@@ -253,7 +262,7 @@ reminder-store/
 
 Each reminder's `<id>` is a **random hex** value from the injected id generator
 carried over from #609, not a content-address of its parameters: a fresh id
-avoids collisions and lets an agent register the *same* schedule more than once,
+avoids collisions and lets an agent register the _same_ schedule more than once,
 each duplicate its own independently cancellable reminder (design decision 18).
 
 Writes use write-then-`move` within the store directory for atomic
@@ -343,7 +352,7 @@ Recovery inside `make()` is the superseded design's startup-recovery
 procedure, with "formula fields" replaced by `config.json`: skip arming when
 paused; otherwise apply each active reminder's `catchUpPolicy` to the ticks
 missed while down (`coalesce` into one message annotated per its `annotation`
-field, or `skip`), persist, re-arm — see *Per-reminder behavior* above.
+field, or `skip`), persist, re-arm — see _Per-reminder behavior_ above.
 
 ### What becomes of PR #609
 
@@ -355,7 +364,7 @@ field, or `skip`), persist, re-arm — see *Per-reminder behavior* above.
   `types.d.ts`, `host.js`, `interfaces.js`) drops entirely, as do the
   `endo interval` CLI commands; the generic `endo make-unconfined` pathway
   suffices to provision the plugin. A dedicated CLI verb is a follow-up, whose
-  target shape is sketched below (*Eventual user surface*) so the plugin's
+  target shape is sketched below (_Eventual user surface_) so the plugin's
   facets are designed to support it rather than retrofitted.
 - The #609 test suite ports onto the in-memory VFS backing.
 - PR #609 itself is superseded by this design; its disposition (close, or
@@ -368,7 +377,7 @@ exported facets support it by design rather than being retrofitted. Two
 candidate surfaces, both portable from #165's fully-specified ergonomics:
 
 - an **`endo reminder`** family — `endo reminder add <recipient> --every
-  <period> [--message ...] [--catch-up skip|coalesce]`, `endo reminder list`,
+<period> [--message ...] [--catch-up skip|coalesce]`, `endo reminder list`,
   `endo reminder pause|resume|cancel <id>` — mapping one-to-one onto
   `ReminderScheduler` / `ReminderControl`; or
 - **`endo send --every <period>` / `--at <time>` / `--on <schedule>`**, folding
@@ -380,25 +389,25 @@ plus the `ReminderControl` limits — with the per-reminder `opts`
 (`catchUpPolicy`, `annotation`, `backoff`) surfaced as flags and the reminder
 `label` supplied positionally or defaulted from `--message`. Two dimensions the
 CLI sketch adds are deliberately **not** per-reminder facet arguments, and the
-follow-up owns them: the `<recipient>` selects *which* scheduler (one is bound
+follow-up owns them: the `<recipient>` selects _which_ scheduler (one is bound
 per recipient at provisioning, §Powers), so the CLI routes to the right service
 rather than passing a recipient into `makeReminder`; and a hosted CLI needs a
 discovery path to reach each recipient's scheduler. The follow-up wires a CLI
-onto these facets and adds no new *scheduling* capability, but it does own the
+onto these facets and adds no new _scheduling_ capability, but it does own the
 scheduler-selection and discovery surface the facets alone do not express.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| [endoclaw](endoclaw.md) | Parent capability taxonomy |
-| [endoclaw-timer](endoclaw-timer.md) | Superseded; its behavioral sections remain normative by reference |
-| [platform-fs](platform-fs.md) | The virtual file system providing the durable store |
-| [daemon-guest-eval-simplification](daemon-guest-eval-simplification.md) | The `agent.evaluate` authority bound underpinning subagent delegation (§Delegation and attenuation) |
-| [fs-interface-reconciliation](fs-interface-reconciliation.md) | The reconciled writable-tree verbs the store contract names |
-| [endoclaw-proactive-messages](endoclaw-proactive-messages.md) | Depends on this design (composes scheduled messages with data capabilities and `send()`) |
-| [familiar-daemon-bundling](familiar-daemon-bundling.md), [gateway-package](gateway-package.md) | Candidate future owners of the live-reference retention (user-driven via README for now, design decision 10) |
-| SturdyRef modelling (agent provide/accept surface [#695](https://github.com/endojs/endo-but-for-bots/pull/695), cross-peer bridge [#697](https://github.com/endojs/endo-but-for-bots/pull/697) with cuts [#698](https://github.com/endojs/endo-but-for-bots/pull/698)–[#704](https://github.com/endojs/endo-but-for-bots/pull/704), on-demand enlivenment [#539](https://github.com/endojs/endo-but-for-bots/pull/539); substrate [#521](https://github.com/endojs/endo-but-for-bots/pull/521)/[#541](https://github.com/endojs/endo-but-for-bots/pull/541)) | Gates only the Phase 4 `send` + `storeValue` delivery upgrade; the Phase 2 subscriber-capability baseline is ungated (see *Gating dependency: SturdyRef modelling*) |
+| Design                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Relationship                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [endoclaw](endoclaw.md)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Parent capability taxonomy                                                                                                                                          |
+| [endoclaw-timer](endoclaw-timer.md)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Superseded; its behavioral sections remain normative by reference                                                                                                   |
+| [platform-fs](platform-fs.md)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The virtual file system providing the durable store                                                                                                                 |
+| [daemon-guest-eval-simplification](daemon-guest-eval-simplification.md)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | The `agent.evaluate` authority bound underpinning subagent delegation (§Delegation and attenuation)                                                                 |
+| [fs-interface-reconciliation](fs-interface-reconciliation.md)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The reconciled writable-tree verbs the store contract names                                                                                                         |
+| [endoclaw-proactive-messages](endoclaw-proactive-messages.md)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Depends on this design (composes scheduled messages with data capabilities and `send()`)                                                                            |
+| [familiar-daemon-bundling](familiar-daemon-bundling.md), [gateway-package](gateway-package.md)                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Candidate future owners of the live-reference retention (user-driven via README for now, design decision 10)                                                        |
+| SturdyRef modelling (agent provide/accept surface [#695](https://github.com/endojs/endo-but-for-bots/pull/695), cross-peer bridge [#697](https://github.com/endojs/endo-but-for-bots/pull/697) with cuts [#698](https://github.com/endojs/endo-but-for-bots/pull/698)–[#704](https://github.com/endojs/endo-but-for-bots/pull/704), on-demand enlivenment [#539](https://github.com/endojs/endo-but-for-bots/pull/539); substrate [#521](https://github.com/endojs/endo-but-for-bots/pull/521)/[#541](https://github.com/endojs/endo-but-for-bots/pull/541)) | Gates only the Phase 4 `send` + `storeValue` delivery upgrade; the Phase 2 subscriber-capability baseline is ungated (see _Gating dependency: SturdyRef modelling_) |
 
 ## Implementation Phases
 
@@ -413,7 +422,7 @@ test suite running on `makeInMemoryFilesystem`.
 Reminder-message delivery by eventual-send to the subscriber capability
 (§Powers, item 2) with the one-shot `ReminderResponse` attached, firing timeout
 with auto-resolve, and jittered exponential backoff on reschedule (see
-*Per-reminder behavior*). Delivery in this phase is the **ungated baseline**: an
+_Per-reminder behavior_). Delivery in this phase is the **ungated baseline**: an
 eventual-send to a **subscriber capability resolved by name through `powers`**
 (design decision 11), which retains no durable capability and therefore needs no
 SturdyRef modelling. This is the critical path, and it does not block on unmerged
@@ -431,7 +440,7 @@ An upgrade that routes delivery through the powers' `send` verb, the service
 retaining the one-shot `ReminderResponse` (and any data capabilities) via
 `storeValue` (design decision 12), buying the mailbox's persistence and replay
 over the Phase 2 baseline. This phase — and only this phase — is gated on
-SturdyRef progress (see *Gating dependency: SturdyRef modelling*); Phases 1–3
+SturdyRef progress (see _Gating dependency: SturdyRef modelling_); Phases 1–3
 ship without it.
 
 ## Design Decisions
@@ -493,7 +502,7 @@ ship without it.
     service retains the one-shot `ReminderResponse` (and any data capabilities)
     via `storeValue`, which holds durable values anonymously under a single
     name. That path buys the mailbox's persistence and replay but is **gated on
-    SturdyRef progress** (see *Gating dependency: SturdyRef modelling*); it
+    SturdyRef progress** (see _Gating dependency: SturdyRef modelling_); it
     layers over the Phase 2 subscriber-capability baseline rather than replacing
     it. (Formerly decision 11, resolving open question 3.)
 13. **No recovery index; O(N) directory scan at this cardinality.** This design
@@ -503,22 +512,22 @@ ship without it.
 14. **Named catch-up policies, per reminder (`coalesce` default, `skip`
     offered).** This design review (2026-07-12): ported from #165's
     catch-up vocabulary; `backfill` / `batch` / `suspend` reserved as named
-    future values. See *Per-reminder behavior*.
+    future values. See _Per-reminder behavior_.
 15. **Coalesced-message annotation is specified: count by default, timestamps
     optionally.** This design review (2026-07-12): #682 said "a single catch-up
     message" without stating what it conveys; #165's aggregation section is
-    ported. See *Per-reminder behavior*.
+    ported. See _Per-reminder behavior_.
 16. **Backoff parameters named and persisted, with full jitter.** This design
     review (2026-07-12): `initialMs` / `maxMs` / `multiplier` / `jitterFraction`
     plus persisted `consecutiveFailures`, ported from #165; full jitter guards
-    against a co-fail thundering herd. See *Per-reminder behavior*.
+    against a co-fail thundering herd. See _Per-reminder behavior_.
 17. **Agent→subagent delegation is capability passing over the existing facets,
     not new plugin surface.** This design review (2026-07-14): an agent shares
     scheduling authority with a subagent in one of three ways — pass a held
     `ReminderScheduler` / `Reminder` handle (Mode A, shared), pass an
-    attenuating forwarder (Mode A, narrowed), or provision a *fresh* scheduler
+    attenuating forwarder (Mode A, narrowed), or provision a _fresh_ scheduler
     bound to the subagent as recipient while retaining `ReminderControl` (Mode
-    B, independent + revocable). The two-facet caretaker split already *is* the
+    B, independent + revocable). The two-facet caretaker split already _is_ the
     attenuation seam: provisioning-for-a-subagent makes the parent that child's
     integration, so `ReminderControl.revoke` / `pause` is the revocation lever
     and the child's store subdirectory + `maxActive` are its independence.
@@ -536,7 +545,7 @@ ship without it.
     parameters onto one id, whereas the design must let an agent register the
     same schedule more than once and have each be its own independently
     cancellable reminder. Resolves the id-scheme open question, retiring the
-    last entry in the former *Open Questions* section.
+    last entry in the former _Open Questions_ section.
 
 ## Gating dependency: SturdyRef modelling
 
@@ -552,20 +561,20 @@ provide/accept agent surface and a cross-peer bridge that, taken together,
 cover both requirements at the design level. State of the SturdyRef work in
 this repo:
 
-| Design / PR | State | Relationship |
-|---|---|---|
-| [#539](https://github.com/endojs/endo-but-for-bots/pull/539) design: on-demand enlivenment via the closely-held OCapN network capability | open (draft) | Foundation: `'sturdyref'` pass-style + OCapN boxing + read-side pet-name-path substitute + on-demand enlivenment |
-| [#695](https://github.com/endojs/endo-but-for-bots/pull/695) design: agent provide/accept surface + guest token | open (draft) | Adds the agent-facing **provide** verbs (`makeRefToken` shared, `makeSturdyRef` host-only, `storeRef` for durable naming) and the write/send-side **accept** admission on the mail verbs (`send`/`reply`/`resolve`); settles the confined-guest token tier |
-| [#697](https://github.com/endojs/endo-but-for-bots/pull/697) design: cross-peer bridge, wire codec, foreign-locator internalization, three-party handoff | open (draft) | Expands #539's local pipeline cross-peer; specifies the daemon **mint-and-export** of a durable, revocable wire-tier SturdyRef over a persistent swiss-num store |
-| [#521](https://github.com/endojs/endo-but-for-bots/pull/521) feat(pass-style): first-class `'sturdyref'` pass-style; ocapn defers | open (draft) | Pass-style + `@endo/ocapn` implementation slice |
-| [#541](https://github.com/endojs/endo-but-for-bots/pull/541) feat(daemon): SturdyRef read-side threading at the facet boundary | open (draft) | Daemon read-side threading (`lookup`/`identify`/`locate`/`evaluate`); write/send guards left untouched here, added by #695's mail-accept cut |
-| [#698](https://github.com/endojs/endo-but-for-bots/pull/698)–[#704](https://github.com/endojs/endo-but-for-bots/pull/704) the #697 bridge cuts (esp. [#701](https://github.com/endojs/endo-but-for-bots/pull/701) mint + export over a swiss-num store) | open (draft) | Six independently mergeable implementation cuts of #697; #701 gives the daemon the exporter role (`host.sturdyRefs().provideSturdyRef`, revocable by forgetting) |
+| Design / PR                                                                                                                                                                                                                                             | State        | Relationship                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [#539](https://github.com/endojs/endo-but-for-bots/pull/539) design: on-demand enlivenment via the closely-held OCapN network capability                                                                                                                | open (draft) | Foundation: `'sturdyref'` pass-style + OCapN boxing + read-side pet-name-path substitute + on-demand enlivenment                                                                                                                                           |
+| [#695](https://github.com/endojs/endo-but-for-bots/pull/695) design: agent provide/accept surface + guest token                                                                                                                                         | open (draft) | Adds the agent-facing **provide** verbs (`makeRefToken` shared, `makeSturdyRef` host-only, `storeRef` for durable naming) and the write/send-side **accept** admission on the mail verbs (`send`/`reply`/`resolve`); settles the confined-guest token tier |
+| [#697](https://github.com/endojs/endo-but-for-bots/pull/697) design: cross-peer bridge, wire codec, foreign-locator internalization, three-party handoff                                                                                                | open (draft) | Expands #539's local pipeline cross-peer; specifies the daemon **mint-and-export** of a durable, revocable wire-tier SturdyRef over a persistent swiss-num store                                                                                           |
+| [#521](https://github.com/endojs/endo-but-for-bots/pull/521) feat(pass-style): first-class `'sturdyref'` pass-style; ocapn defers                                                                                                                       | open (draft) | Pass-style + `@endo/ocapn` implementation slice                                                                                                                                                                                                            |
+| [#541](https://github.com/endojs/endo-but-for-bots/pull/541) feat(daemon): SturdyRef read-side threading at the facet boundary                                                                                                                          | open (draft) | Daemon read-side threading (`lookup`/`identify`/`locate`/`evaluate`); write/send guards left untouched here, added by #695's mail-accept cut                                                                                                               |
+| [#698](https://github.com/endojs/endo-but-for-bots/pull/698)–[#704](https://github.com/endojs/endo-but-for-bots/pull/704) the #697 bridge cuts (esp. [#701](https://github.com/endojs/endo-but-for-bots/pull/701) mint + export over a swiss-num store) | open (draft) | Six independently mergeable implementation cuts of #697; #701 gives the daemon the exporter role (`host.sturdyRefs().provideSturdyRef`, revocable by forgetting)                                                                                           |
 
-*(The origin design [#510](https://github.com/endojs/endo-but-for-bots/pull/510)
+_(The origin design [#510](https://github.com/endojs/endo-but-for-bots/pull/510)
 merged and its `endor`-syscall retention direction was abandoned;
 [#511](https://github.com/endojs/endo-but-for-bots/pull/511)'s competing
 `FinalizationRegistry` retention framing is withdrawn per #539. Both are
-superseded by the #539/#695/#697 line above.)*
+superseded by the #539/#695/#697 line above.)_
 
 **Covered** by the above, at the design level — both of the maintainer's two
 requirements now have a home:
@@ -573,7 +582,7 @@ requirements now have a home:
 - **Requirement (b), obtaining a SturdyRef for a durable value the reminder
   holds under `storeValue`, by-value or by-name, without knowing its
   identifier or locator.** #695's **provide** surface mints a reference for a
-  durable value the holder already has: `makeRefToken` (a *shared* facet verb,
+  durable value the holder already has: `makeRefToken` (a _shared_ facet verb,
   so reachable by the reminder's confined-guest `powers`) hands back a fresh,
   unlinkable `SturdyRefToken`; `makeSturdyRef` (host-only) hands back a
   location-bearing wire SturdyRef; `storeRef` names one durably. #697/#701 back
@@ -606,7 +615,7 @@ cuts the reminder rides are merged:
    agent — the token tier + `storeRef` + mail admission from #695 suffice
    without the wire bridge.
 
-One genuinely open *modelling* question remains (not merely unmerged code):
+One genuinely open _modelling_ question remains (not merely unmerged code):
 #539's enlivened-presence lifetime — worker-held presence teardown on session
 loss — which #697 narrows for the daemon side but does not resolve. It does not
 block the reminder's same-daemon path.

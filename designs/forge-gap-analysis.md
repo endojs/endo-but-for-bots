@@ -1,11 +1,11 @@
 # Gap Analysis: antoinezambelli/forge vs. Endo
 
-| | |
-|---|---|
-| **Created** | 2026-05-20 |
-| **Author** | endolinbot (prompted) |
-| **Status** | Reference |
-| **Source** | Maintainer directive 2026-05-20 ("dispatch a designer to clone and develop a deep understanding of the design of https://github.com/antoinezambelli/forge and produce a gap analysis for Endo") |
+|             |                                                                                                                                                                                                 |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Created** | 2026-05-20                                                                                                                                                                                      |
+| **Author**  | endolinbot (prompted)                                                                                                                                                                           |
+| **Status**  | Reference                                                                                                                                                                                       |
+| **Source**  | Maintainer directive 2026-05-20 ("dispatch a designer to clone and develop a deep understanding of the design of https://github.com/antoinezambelli/forge and produce a gap analysis for Endo") |
 
 ## Summary
 
@@ -138,22 +138,22 @@ Forge uses Python's native asyncio for streaming and concurrency.
 
 ## The overlap map
 
-| Forge primitive | Closest endo analogue | Divergence |
-|---|---|---|
-| `ToolSpec` (Pydantic schema) | `@endo/patterns` `M.interface()` guards, `@endo/exo` method schemas | Forge schemas target an LLM JSON-Schema wire format; endo schemas target runtime CapTP invocation. |
-| `ToolDef` (spec + callable + prereqs) | Tool helpers in `packages/genie/src/tools/` and `packages/fae/setup-tools.js` | Forge tools are bare callables; endo tools are caplets (or methods on caplets) with capability scoping. |
-| `Workflow` (declarative loop config) | The hand-rolled loop in `packages/lal/agent.js` (`runAgenticLoop`, line 1336) and the worker loop in `packages/fae/driver.js` (`spawnWorkerLoop`) | Endo's loops are imperative and bespoke per package; forge's is declarative and parameterized. |
-| `WorkflowRunner.run()` | `runAgenticLoop` in `@endo/lal`; `spawnWorkerLoop` in `@endo/fae` | Forge separates loop control from message storage; endo's lal merges them with transcript-tree persistence. |
-| `LLMClient` protocol (Ollama, Llamafile, Anthropic) | `@endo/lal` providers under `packages/lal/providers/` | Endo has two providers today (anthropic, llama.cpp/OpenAI-compatible); forge has three first-class backends with a fourth (Llamafile) prompt-injected. |
-| `Message` + `MessageMeta` (typed, compaction-aware) | LAL `ChatMessage` (informal dict); FAE transcript records | Endo's lal stores plain dicts; forge's typed metadata enables compaction by message-kind priority. |
-| `ContextManager` + `TieredCompact` | `LAL_MAX_MESSAGES` truncation (`packages/lal/README.md`) | Endo's compaction is "keep last N messages"; forge's is type-aware and reasoning-preserving across three phases. |
-| `StepTracker` + `StepEnforcer` | No analogue | Endo's loop is reactive (one inbound message → one outbound); no notion of required steps before termination. |
-| `ResponseValidator` + rescue parse | `extractToolCallsFromContent` in `packages/lal/agent.js:944` | Endo rescues tool calls from `<tool_call>...</tool_call>` text; forge's pipeline is structured and emits a retry nudge with attempt counter on failure. |
-| `ErrorTracker` (retry + tool-error budgets) | No analogue | Endo's loop has no explicit retry budget; failures propagate. |
-| `SlotWorker` (priority queue + preemption) | `@endo/fae` factory pattern (sub-guests per agent) | Endo serializes via factory creation and CapTP message-passing; forge serializes one inference slot across competing workflows in-process. |
-| HTTP proxy (`python -m forge.proxy`) | `@endo/daemon`'s HTTP gateway (`packages/daemon`); the `gateway-package` design | Forge's proxy is OpenAI-shape passthrough with guardrails; endo's gateway is a capability gateway carrying OCapN/CapTP. |
-| Pydantic dynamic-model build (`ToolSpec.from_json_schema`) | `@endo/patterns` pattern compilation | Forge converts JSON Schema → Pydantic at runtime to validate LLM tool-call args; endo has nothing equivalent in the agent stack. |
-| `ToolDef.prerequisites` | No analogue in lal/fae/genie | Endo's tools have no declarative dependency graph; the LLM is expected to call things in a sensible order. |
+| Forge primitive                                            | Closest endo analogue                                                                                                                             | Divergence                                                                                                                                              |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ToolSpec` (Pydantic schema)                               | `@endo/patterns` `M.interface()` guards, `@endo/exo` method schemas                                                                               | Forge schemas target an LLM JSON-Schema wire format; endo schemas target runtime CapTP invocation.                                                      |
+| `ToolDef` (spec + callable + prereqs)                      | Tool helpers in `packages/genie/src/tools/` and `packages/fae/setup-tools.js`                                                                     | Forge tools are bare callables; endo tools are caplets (or methods on caplets) with capability scoping.                                                 |
+| `Workflow` (declarative loop config)                       | The hand-rolled loop in `packages/lal/agent.js` (`runAgenticLoop`, line 1336) and the worker loop in `packages/fae/driver.js` (`spawnWorkerLoop`) | Endo's loops are imperative and bespoke per package; forge's is declarative and parameterized.                                                          |
+| `WorkflowRunner.run()`                                     | `runAgenticLoop` in `@endo/lal`; `spawnWorkerLoop` in `@endo/fae`                                                                                 | Forge separates loop control from message storage; endo's lal merges them with transcript-tree persistence.                                             |
+| `LLMClient` protocol (Ollama, Llamafile, Anthropic)        | `@endo/lal` providers under `packages/lal/providers/`                                                                                             | Endo has two providers today (anthropic, llama.cpp/OpenAI-compatible); forge has three first-class backends with a fourth (Llamafile) prompt-injected.  |
+| `Message` + `MessageMeta` (typed, compaction-aware)        | LAL `ChatMessage` (informal dict); FAE transcript records                                                                                         | Endo's lal stores plain dicts; forge's typed metadata enables compaction by message-kind priority.                                                      |
+| `ContextManager` + `TieredCompact`                         | `LAL_MAX_MESSAGES` truncation (`packages/lal/README.md`)                                                                                          | Endo's compaction is "keep last N messages"; forge's is type-aware and reasoning-preserving across three phases.                                        |
+| `StepTracker` + `StepEnforcer`                             | No analogue                                                                                                                                       | Endo's loop is reactive (one inbound message → one outbound); no notion of required steps before termination.                                           |
+| `ResponseValidator` + rescue parse                         | `extractToolCallsFromContent` in `packages/lal/agent.js:944`                                                                                      | Endo rescues tool calls from `<tool_call>...</tool_call>` text; forge's pipeline is structured and emits a retry nudge with attempt counter on failure. |
+| `ErrorTracker` (retry + tool-error budgets)                | No analogue                                                                                                                                       | Endo's loop has no explicit retry budget; failures propagate.                                                                                           |
+| `SlotWorker` (priority queue + preemption)                 | `@endo/fae` factory pattern (sub-guests per agent)                                                                                                | Endo serializes via factory creation and CapTP message-passing; forge serializes one inference slot across competing workflows in-process.              |
+| HTTP proxy (`python -m forge.proxy`)                       | `@endo/daemon`'s HTTP gateway (`packages/daemon`); the `gateway-package` design                                                                   | Forge's proxy is OpenAI-shape passthrough with guardrails; endo's gateway is a capability gateway carrying OCapN/CapTP.                                 |
+| Pydantic dynamic-model build (`ToolSpec.from_json_schema`) | `@endo/patterns` pattern compilation                                                                                                              | Forge converts JSON Schema → Pydantic at runtime to validate LLM tool-call args; endo has nothing equivalent in the agent stack.                        |
+| `ToolDef.prerequisites`                                    | No analogue in lal/fae/genie                                                                                                                      | Endo's tools have no declarative dependency graph; the LLM is expected to call things in a sensible order.                                              |
 
 ## What forge does that endo doesn't
 
@@ -252,8 +252,8 @@ early, an escalating nudge (tier 1/2/3) is injected, and a fourth
 attempt raises `StepEnforcementError`.
 
 The principle, documented in `docs/ARCHITECTURE.md` § "Design Principles"
-#3, is that *what the model remembers* (message history, subject to
-compaction) and *what the runner enforces* (step completion) are
+#3, is that _what the model remembers_ (message history, subject to
+compaction) and _what the runner enforces_ (step completion) are
 different.
 Compaction may drop a tool result; the step-completion fact survives.
 
@@ -432,6 +432,7 @@ A tool callable executes with the runner's full Python privileges.
 
 Endo's trust model is **object-capability throughout**, with three
 overlapping enforcement boundaries:
+
 - The SES realm boundary (`@endo/init` + `lockdown()`).
 - The Compartment boundary (per-module isolation, explicit
   endowments).
@@ -462,7 +463,7 @@ schema) and replace `callable` with a method invocation on a caplet:
 That mapping is straightforward but it is a renaming and a binding
 change, not a copy-paste.
 
-There is no point at which forge's design *contradicts* endo's; the
+There is no point at which forge's design _contradicts_ endo's; the
 clash is one of scope, not of philosophy.
 
 ## Recommendations
@@ -593,8 +594,8 @@ trust model that no module ports cleanly without adaptation.
   `src/forge/core/slot_worker.py`, `src/forge/proxy/proxy.py`.
 - Documentation: `docs/ARCHITECTURE.md`, `docs/WORKFLOW.md`,
   `docs/USER_GUIDE.md`, `docs/decisions/*.md`.
-- Paper: Zambelli, A. *Forge: A Reliability Layer for Self-Hosted
-  LLM Tool-Calling.* https://doi.org/10.1145/3786335.3813193.
+- Paper: Zambelli, A. _Forge: A Reliability Layer for Self-Hosted
+  LLM Tool-Calling._ https://doi.org/10.1145/3786335.3813193.
 - Stats at read: 542 stars, 26 forks, 4 open issues, MIT, last push
   2026-05-19.
 

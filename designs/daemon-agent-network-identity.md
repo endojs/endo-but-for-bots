@@ -1,12 +1,12 @@
 # Daemon Agent Network Identity
 
-| | |
-|---|---|
-| **Created** | 2026-03-02 |
-| **Updated** | 2026-03-02 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
-| **Updated** | 2026-03-18 |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-03-02            |
+| **Updated** | 2026-03-02            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | In Progress           |
+| **Updated** | 2026-03-18            |
 
 ## What is the Problem Being Solved?
 
@@ -20,11 +20,11 @@ However, the keypairs are not yet fully integrated. Four pieces of work
 connect per-agent keypairs to the network layer and to the formula identifier
 system:
 
-1. **~~Locator construction with agent keys.~~** *(Done)* Each agent now
+1. **~~Locator construction with agent keys.~~** _(Done)_ Each agent now
    stamps outgoing locators with its own Ed25519 public key. Two agents on
    the same daemon produce different locators for the same underlying formula.
 
-2. **~~LOCAL_NODE for formula storage.~~** *(Done)* Locally-stored formula
+2. **~~LOCAL_NODE for formula storage.~~** _(Done)_ Locally-stored formula
    identifiers use `LOCAL_NODE` (`'0'.repeat(64)`) as the node component.
    The daemon maintains a `localKeys` registry of all agent public keys;
    `isLocalKey` recognizes any of them. `externalizeId` replaces LOCAL_NODE
@@ -66,7 +66,10 @@ negotiate connections on behalf of any persona.
 ```typescript
 interface EndoNetwork {
   // ... existing methods ...
-  registerAgentKey(publicKey: string, agentId: FormulaIdentifier): Promise<void>;
+  registerAgentKey(
+    publicKey: string,
+    agentId: FormulaIdentifier,
+  ): Promise<void>;
   unregisterAgentKey(publicKey: string): Promise<void>;
 }
 ```
@@ -120,7 +123,7 @@ appear as connection hints in locators produced by that agent's `locate()`,
 interface GuestFormula {
   type: 'guest';
   // ... existing fields ...
-  networks: FormulaIdentifier;  // NEW: per-guest networks directory
+  networks: FormulaIdentifier; // NEW: per-guest networks directory
 }
 
 // HostFormula already has networks — no change needed.
@@ -155,11 +158,11 @@ each agent's NETS directory determines which transports it advertises.
 
 ```typescript
 type AgentConnectionHints = {
-  publicKey: string;                // 64-char hex Ed25519 public key
-  requireRelay?: boolean;           // force connections through relay
-  allowDirectConnect?: boolean;     // accept direct inbound connections
-  preferredTransports?: string[];   // ordered list of transport preferences
-  relayAddresses?: string[];        // specific relay nodes to use
+  publicKey: string; // 64-char hex Ed25519 public key
+  requireRelay?: boolean; // force connections through relay
+  allowDirectConnect?: boolean; // accept direct inbound connections
+  preferredTransports?: string[]; // ordered list of transport preferences
+  relayAddresses?: string[]; // specific relay nodes to use
 };
 ```
 
@@ -170,7 +173,7 @@ agent's keypair is the ultimate identity.
 ### Locator Construction with Agent Keys
 
 When an agent constructs a locator for external consumption, it should use
-*its own* public key as the peer/node component, not `localNodeNumber`. This
+_its own_ public key as the peer/node component, not `localNodeNumber`. This
 means the same local formula can appear under different locators depending on
 which agent is sharing it.
 

@@ -98,7 +98,7 @@ await pump(writer, reader);
 Async generator functions are very useful for making reader adapters.
 
 ```js
-async function *double(reader) {
+async function* double(reader) {
   for await (const value of reader) {
     yield value * 2;
   }
@@ -117,7 +117,7 @@ The `prime` function compensates for this by sending a primer to the generator
 once.
 
 ```js
-async function *logGenerator() {
+async function* logGenerator() {
   for (;;) {
     console.log(yield);
   }

@@ -1,12 +1,12 @@
 # EndoClaw: Proactive Agent Messages
 
-| | |
-|---|---|
-| **Created** | 2026-03-03 |
-| **Updated** | 2026-03-03 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
-| **Parent** | [endoclaw](endoclaw.md) |
+|             |                         |
+| ----------- | ----------------------- |
+| **Created** | 2026-03-03              |
+| **Updated** | 2026-03-03              |
+| **Author**  | Kris Kowal (prompted)   |
+| **Status**  | Not Started             |
+| **Parent**  | [endoclaw](endoclaw.md) |
 
 ## Summary
 
@@ -19,7 +19,7 @@ reminders, and alerts.
 ## Pattern
 
 ```js
-const setup = async (powers) => {
+const setup = async powers => {
   const timer = await E(powers).lookup('timer');
   const gmail = await E(powers).lookup('gmail');
   const host = await E(powers).lookup('@host');

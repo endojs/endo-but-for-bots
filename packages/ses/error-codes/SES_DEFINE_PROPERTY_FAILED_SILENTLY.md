@@ -21,7 +21,7 @@ JavaScript code. The Global Window Object is a specification fiction used to
 explain the browser's peculiar behavior. The "global" properties that are
 aliased to a global scope are explained as "actually" being properties of
 the Global Window Object. The Window Proxy Object forwards all internal
-operations, including `[[DefineProperty]]`, to its *current* Global Window
+operations, including `[[DefineProperty]]`, to its _current_ Global Window
 Object. If that browser frame is navigated, for example by clicking a link
 in that frame's document, the Window Proxy Object remains the same, but
 forwards to a distinct Global Window Object associated with the post-navigation
@@ -40,8 +40,8 @@ Object.defineProperty(window, 'foo', { value: 8, configurable: false });
 
 Note that `window` above is a browser Window Proxy Object.
 If this call were to succeed, it would obligate the Window Proxy Object to carry
-around this `foo` property forever, even after being navigated. *But that is
-not what browsers do on navigation.* Since browsers are unwilling to
+around this `foo` property forever, even after being navigated. _But that is
+not what browsers do on navigation._ Since browsers are unwilling to
 live up to the implied stability commitment, they must not make the implied
 stability commitment in the first place. The clean solution would be for the
 call above to fail by throwing a `TypeError`, which the official spec allows.
@@ -52,18 +52,19 @@ This silent failure did not seem to bother anything else.
 
 # The Carve Out
 
-So the proposal is to allow `defineProperty` *only on a browser and only when
-operating on a window object* to report failure by returning `false` rather
+So the proposal is to allow `defineProperty` _only on a browser and only when
+operating on a window object_ to report failure by returning `false` rather
 than throwing.
 
 Needless to say, this silent failure is a security hazard, because it allows
 code to proceed on paths assuming success even though the property in question
 has not been set. To avoid this hazard, the SES `commons.js` module exports
 a better behaved `defineProperty` function that wraps the original. It normally
-acts *exactly* like `Object.defineProperty`. But when `Object.defineProperty`
+acts _exactly_ like `Object.defineProperty`. But when `Object.defineProperty`
 reports failure by returning `false` (or indeed anything but its first
 argument), then the exported `defineProperty` instead throws a `TypeError` such
 as
+
 ```
 TypeError: Please report that the original defineProperty silently failed to set "foo". (SES_DEFINE_PROPERTY_FAILED_SILENTLY)
 ```

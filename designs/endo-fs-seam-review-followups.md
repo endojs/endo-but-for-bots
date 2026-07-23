@@ -1,11 +1,11 @@
 # Code review feedback — endo-fs backend seam refactor (PR #373)
 
-| | |
-|---|---|
-| **Source** | Critical design review (sub-agent, 2026-05-28) |
-| **Branch** | `claude/keen-bell-W1acD` |
-| **Status** | **Complete** — every category addressed; second-pass review surfaced additional items captured below. |
-| **Updated** | 2026-05-28 |
+|             |                                                                                                       |
+| ----------- | ----------------------------------------------------------------------------------------------------- |
+| **Source**  | Critical design review (sub-agent, 2026-05-28)                                                        |
+| **Branch**  | `claude/keen-bell-W1acD`                                                                              |
+| **Status**  | **Complete** — every category addressed; second-pass review surfaced additional items captured below. |
+| **Updated** | 2026-05-28                                                                                            |
 
 This document captures the findings from a critical post-merge design
 review of the FsBackend seam refactor. It is the working list for the
@@ -60,10 +60,10 @@ follow-up cleanup pass; entries are checked off as fixes land.
 
 - `wrap-backend.js` "Legacy" methods (`getQid`, `getAttrs`,
   `setAttrs`, `xattrs`, `mkdir`, `unlink`) are not actually legacy:
-  they are the *only* methods declared in `NodeBaseMethods` and
+  they are the _only_ methods declared in `NodeBaseMethods` and
   `DirectoryInterface`.
 - The "new" methods (`getStat`, `setStat`, `makeDirectory`, `remove`)
-  leak through *only* because of `sloppy: true`. The situation is
+  leak through _only_ because of `sloppy: true`. The situation is
   the inverse of what the comments imply: the interface formally
   guarantees the legacy names; the new names are unguarded.
 - `setStat` and `setAttrs` are 30-line near-verbatim copies of each
@@ -103,7 +103,7 @@ follow-up cleanup pass; entries are checked off as fixes land.
   1. (preferred) Add the new methods to the interface declarations
      and drop `sloppy: true`. Use a versioned `M.interface` if
      forward-compat is needed (newer extends older).
-  2. Keep `sloppy: true` only on the *evolving* interfaces
+  2. Keep `sloppy: true` only on the _evolving_ interfaces
      (Filesystem, Directory, File) and tighten the others (Cursor,
      OpenFile, Xattrs, NodeWatcher) which are not evolving.
   3. Replace with explicit method-list union: declare both old and
@@ -117,7 +117,7 @@ follow-up cleanup pass; entries are checked off as fixes land.
   `makeNodeFilesystem({rootPath})` call in the same vat, loses
   every xattr ever set.
 - For mtime/atime, `getStat()` returns the wrap-backend's vat-local
-  mtime (initialized to "now" on first observation), *not* the real
+  mtime (initialized to "now" on first observation), _not_ the real
   disk mtime. An external `touch file` won't be visible. A fresh
   `makeNodeFilesystem({rootPath})` over a populated disk reports
   made-up timestamps.
@@ -145,7 +145,7 @@ follow-up cleanup pass; entries are checked off as fixes land.
 
 ### 4c. `dirPaths` WeakMap is keyed by ephemeral exo identities — cleanup (latent bug)
 
-- The WeakMap stores the path *at construction time*; if the
+- The WeakMap stores the path _at construction time_; if the
   directory is renamed, entries continue to refer to the old path.
 - The wrap-backend mints a fresh Directory exo on every `lookup`
   (line 1057), so the WeakMap is keyed by ephemeral identities;
@@ -225,7 +225,7 @@ follow-up cleanup pass; entries are checked off as fixes land.
 - The `let`-then-assign-arrow shape works and is fine.
 - `prefer-const` flags the declaration, not the assignment. The
   `eslint-disable-next-line prefer-const` comments are placed
-  before the *assignments* (lines 766, 979) — wrong target.
+  before the _assignments_ (lines 766, 979) — wrong target.
 - **Fix**: either (preferred) extract the bodies into top-of-module
   helper function declarations taking a `ctx` object, or just
   delete the dead `eslint-disable` lines at the assignment sites.
@@ -405,69 +405,69 @@ Items 1–9 landed in three follow-up commits on
 `claude/keen-bell-W1acD`:
 
 - ✅ **1. (correctness) Add `backend.getStat?`** — landed in
-   commit `0774bb2c`. wrap-backend's `readStatNow` prefers
-   the backend's value. node-fs implements via `fs.stat`;
-   in-memory deliberately omits (its mtime/atime are the
-   vat-local table's). (#4a, #8a)
+  commit `0774bb2c`. wrap-backend's `readStatNow` prefers
+  the backend's value. node-fs implements via `fs.stat`;
+  in-memory deliberately omits (its mtime/atime are the
+  vat-local table's). (#4a, #8a)
 - ✅ **2. (correctness) Stat/xattr cleanup on rename/remove**
-   — landed in `0774bb2c`. New `cleanupTables(path)` and
-   `transplantTables(src, dst)` helpers in wrap-backend; called
-   from `Directory.remove` / `Directory.unlink` / `Directory.rename`.
-   Three regression tests pin the behavior. (#4b)
+  — landed in `0774bb2c`. New `cleanupTables(path)` and
+  `transplantTables(src, dst)` helpers in wrap-backend; called
+  from `Directory.remove` / `Directory.unlink` / `Directory.rename`.
+  Three regression tests pin the behavior. (#4b)
 - ✅ **3. (cleanup) from-mount `list()` re-raise non-ENOENT**
-   — landed in `0774bb2c`. (#9e, #11a)
+  — landed in `0774bb2c`. (#9e, #11a)
 - ✅ **4. (cleanup) Add `statfs` to FsBackend typedef** —
-   landed in `0774bb2c`. (#1a)
+  landed in `0774bb2c`. (#1a)
 - ✅ **5. (cleanup) Remove dead `hash?`** — landed in `0774bb2c`.
-   Stripped from FsBackend, probeCapabilities, node-fs-backend.
-   Reintroduce when a real `File.contentHash()` porcelain wants it.
-   (#1b)
+  Stripped from FsBackend, probeCapabilities, node-fs-backend.
+  Reintroduce when a real `File.contentHash()` porcelain wants it.
+  (#1b)
 - ✅ **6. (design) Reshape PosixFs** — landed in `0774bb2c`.
-   `synthesizePosixFs` removed entirely (was misleading);
-   `PosixFsInterface` kept as a shape declaration for future
-   backing-specific impls. Test that pinned the bad synth
-   behavior deleted. (#6)
+  `synthesizePosixFs` removed entirely (was misleading);
+  `PosixFsInterface` kept as a shape declaration for future
+  backing-specific impls. Test that pinned the bad synth
+  behavior deleted. (#6)
 - ✅ **7. (design) Tighten interface guards** — landed in
-   commit `b93e3eab`. `getStat` / `setStat` / `makeDirectory` /
-   `remove` formally declared in `NodeBaseMethods` /
-   `DirectoryInterface`. `sloppy: true` dropped from the
-   non-evolving interfaces (Cursor, OpenFile, Xattrs, Lock,
-   NodeWatcher); retained on the evolving Filesystem / Directory /
-   File where consumers add per-feature methods (e.g. compose's
-   whiteout listing). (#2b, #3a)
+  commit `b93e3eab`. `getStat` / `setStat` / `makeDirectory` /
+  `remove` formally declared in `NodeBaseMethods` /
+  `DirectoryInterface`. `sloppy: true` dropped from the
+  non-evolving interfaces (Cursor, OpenFile, Xattrs, Lock,
+  NodeWatcher); retained on the evolving Filesystem / Directory /
+  File where consumers add per-feature methods (e.g. compose's
+  whiteout listing). (#2b, #3a)
 - ✅ **8. (design) Deduplicate the legacy block** — landed in
-   `b93e3eab`. wrap-backend factors `readFileStat` /
-   `applyStatPatch` / `applyDirectoryStatPatch` helpers; both
-   narrow (`getStat`/`setStat`) and legacy
-   (`getAttrs`/`setAttrs`) bodies call into one place. (#2a)
+  `b93e3eab`. wrap-backend factors `readFileStat` /
+  `applyStatPatch` / `applyDirectoryStatPatch` helpers; both
+  narrow (`getStat`/`setStat`) and legacy
+  (`getAttrs`/`setAttrs`) bodies call into one place. (#2a)
 - ✅ **9. (cleanup) Doc reconciliation pass** — landed in
-   commit `f73e61a1`. Body of designs/endo-fs-backend-seam.md
-   updated to describe the shipped dual-shape outcome rather
-   than the original delete-everything plan. 9P wire-mapping
-   table corrected. "Alternatives considered" note added for
-   the Uint8Array deviation. (#5a, #12a, #12b)
+  commit `f73e61a1`. Body of designs/endo-fs-backend-seam.md
+  updated to describe the shipped dual-shape outcome rather
+  than the original delete-everything plan. 9P wire-mapping
+  table corrected. "Alternatives considered" note added for
+  the Uint8Array deviation. (#5a, #12a, #12b)
 - ✅ **12. (cleanup) `eslint-disable prefer-const` placement**
-   — landed in `b93e3eab`. Comments now sit at the assignment
-   sites where the rule fires, with clarifying notes about
-   the mutual-recursion forward-ref pattern. (#7a)
+  — landed in `b93e3eab`. Comments now sit at the assignment
+  sites where the rule fires, with clarifying notes about
+  the mutual-recursion forward-ref pattern. (#7a)
 
 - ✅ **10. (cleanup) Test improvements** — landed in commit
-   `0e042eb1`. `test/wrap-backend-fixes.test.js` now opts into
-   `@ts-check` (was `@ts-nocheck`). The watcher pump regression
-   test drops its `Promise.race` with a manual setTimeout in
-   favor of ava's `t.timeout(2000)` and asserts on stream-done
-   semantics (both first and second next() returning done) rather
-   than racing a timer. (#9a, #9b, #9g)
+  `0e042eb1`. `test/wrap-backend-fixes.test.js` now opts into
+  `@ts-check` (was `@ts-nocheck`). The watcher pump regression
+  test drops its `Promise.race` with a manual setTimeout in
+  favor of ava's `t.timeout(2000)` and asserts on stream-done
+  semantics (both first and second next() returning done) rather
+  than racing a timer. (#9a, #9b, #9g)
 - ✅ **11. (cleanup) Extract Cursor / NodeWatcher / Qid / Xattrs /
-   stat-table modules** — landed in `0e042eb1`. wrap-backend.js
-   shrinks from 1306 to 872 lines; the six extracted modules
-   under `shared/` (qid, stat-table, path-tables, xattrs-exo,
-   cursor-exo, watcher-exo) carry the orthogonal concerns. The
-   forward-ref `makeFileExo` / `makeDirectoryExo` shape stays
-   because they're the actual coupling — they close over the
-   common factories. (#10a)
+  stat-table modules** — landed in `0e042eb1`. wrap-backend.js
+  shrinks from 1306 to 872 lines; the six extracted modules
+  under `shared/` (qid, stat-table, path-tables, xattrs-exo,
+  cursor-exo, watcher-exo) carry the orthogonal concerns. The
+  forward-ref `makeFileExo` / `makeDirectoryExo` shape stays
+  because they're the actual coupling — they close over the
+  common factories. (#10a)
 - ✅ **Second-pass review items** — landed in the cleanup commit
-   below this one.
+  below this one.
   - `File.read` / `File.write` porcelain now forwarded by
     `compose.js`, `readonly.js`, and `cached-fs.js`. The
     readonly wrapper denies `write` with EACCES; compose
@@ -497,13 +497,13 @@ Items 1–9 landed in three follow-up commits on
     above `const` declarations removed; kept only at the
     actual assignment sites where the rule fires.
 - **Future: `File.contentHash()` porcelain** — would justify
-   bringing `hash?` back to the FsBackend optionals.
+  bringing `hash?` back to the FsBackend optionals.
 - **Future: deprecate the legacy method aliases** — once 9p-server
-   and other consumers migrate to the narrow shape, `mkdir` /
-   `unlink` / `getAttrs` / `setAttrs` / `getQid` / `xattrs` can be
-   removed from the public interface guards. The Xattrs sub-cap
-   moves to the future PosixFs companion at that point too.
+  and other consumers migrate to the narrow shape, `mkdir` /
+  `unlink` / `getAttrs` / `setAttrs` / `getQid` / `xattrs` can be
+  removed from the public interface guards. The Xattrs sub-cap
+  moves to the future PosixFs companion at that point too.
 - **Future: real backing-specific PosixFs** — `makeNodeFsPosixCap`
-   reads/writes disk-truthful `mode`/`uid`/`gid`. The
-   `PosixFsInterface` declaration is the contract that impl will
-   satisfy.
+  reads/writes disk-truthful `mode`/`uid`/`gid`. The
+  `PosixFsInterface` declaration is the contract that impl will
+  satisfy.

@@ -1,11 +1,11 @@
 # Daemon Content Store Garbage Collection
 
-| | |
-|---|---|
-| **Created** | 2026-03-20 |
-| **Updated** | 2026-05-18 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-03-20            |
+| **Updated** | 2026-05-18            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | **Complete**          |
 
 ## Status
 
@@ -37,9 +37,9 @@ header lagged.
 ## What is the Problem Being Solved?
 
 The daemon's content-addressed store (`{statePath}/store-sha256/`) grows
-monotonically.  Files are written when `readable-blob` and
+monotonically. Files are written when `readable-blob` and
 `readable-tree` formulas are created, but **never pruned** when those
-formulas are garbage-collected.  The formula GC pass deletes formula JSON
+formulas are garbage-collected. The formula GC pass deletes formula JSON
 from `/formulas/` but does not consult the `content` hash field to
 determine whether the corresponding file in `/store-sha256/` is still
 referenced by any living formula.
@@ -72,7 +72,7 @@ here.
 ### Content store
 
 `makeContentStore()` in `daemon-node-powers.js` exposes three methods:
-`store()`, `fetch()`, `has()`.  There is no `remove()`, no retention
+`store()`, `fetch()`, `has()`. There is no `remove()`, no retention
 tracking, and no integration with the formula GC pass.
 
 ### Formula GC
@@ -90,7 +90,7 @@ It does **not** handle content-store files or scratch-mount directories.
 ### Reference counting problem
 
 Multiple formulas can reference the same SHA-256 hash (content
-deduplication).  A simple "delete content when formula is collected"
+deduplication). A simple "delete content when formula is collected"
 strategy would break if two `readable-blob` formulas share the same
 content hash and only one is collected.
 
@@ -101,13 +101,13 @@ content hash and only one is collected.
 During the GC sweep, after identifying the set of formulas to collect:
 
 1. **Scan collected formulas** for `readable-blob` and `readable-tree`
-   types.  Collect their `content` hashes into a candidate set.
+   types. Collect their `content` hashes into a candidate set.
 2. **Scan surviving formulas** for any that reference the same hashes.
    Remove those hashes from the candidate set.
 3. **Delete orphaned content files** — for each hash remaining in the
    candidate set, remove `{statePath}/store-sha256/{hash}`.
 
-This is a sweep-time reference count, not a persistent counter.  It
+This is a sweep-time reference count, not a persistent counter. It
 avoids the complexity of maintaining a durable refcount table and is
 consistent with the existing mark-and-sweep approach.
 
@@ -126,7 +126,7 @@ directories have a 1:1 relationship with their formula (no sharing).
 
 Both cleanup steps hook into the existing `collectIfDirty()` function
 in `daemon.js`, after the formula JSON is deleted and before the
-collection pass completes.  The content-store sweep runs once per GC
+collection pass completes. The content-store sweep runs once per GC
 pass (not per formula), operating on the batch of collected formulas.
 
 ### Content store API extension
@@ -142,18 +142,18 @@ const remove = async hash => {
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|-------------|
-| [daemon-mount](daemon-mount.md) | Scratch-mount directory cleanup is defined here |
-| [daemon-cross-peer-gc](daemon-cross-peer-gc.md) | Orthogonal — that design covers cross-peer formula GC; this covers local storage cleanup |
-| [daemon-checkin-checkout](daemon-checkin-checkout.md) | `endo checkin` creates `readable-tree` formulas that reference the content store |
+| Design                                                | Relationship                                                                             |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| [daemon-mount](daemon-mount.md)                       | Scratch-mount directory cleanup is defined here                                          |
+| [daemon-cross-peer-gc](daemon-cross-peer-gc.md)       | Orthogonal — that design covers cross-peer formula GC; this covers local storage cleanup |
+| [daemon-checkin-checkout](daemon-checkin-checkout.md) | `endo checkin` creates `readable-tree` formulas that reference the content store         |
 
 ## Prompt
 
 > Extract content-addressed store and scratch-mount directory garbage
-> collection into a standalone design.  The content store
+> collection into a standalone design. The content store
 > (`store-sha256/`) has no cleanup mechanism — files accumulate when
 > `readable-blob` and `readable-tree` formulas are collected.
 > Scratch-mount directories (`mounts/{formulaNumber}`) similarly persist
-> after formula GC.  Design a sweep-time reference-counting approach
+> after formula GC. Design a sweep-time reference-counting approach
 > integrated into the existing `collectIfDirty()` pass.

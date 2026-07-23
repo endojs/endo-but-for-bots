@@ -1,11 +1,11 @@
 # `edit` verb: hash-anchored line-based patches for AI agents
 
-| | |
-|---|---|
-| **Created** | 2026-05-08 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
-| **Source** | PR [#153](https://github.com/endojs/endo-but-for-bots/pull/153) inline review comment [discussion_r3212462309](https://github.com/endojs/endo-but-for-bots/pull/153#discussion_r3212462309) on `designs/cli-store-verb-text-modes.md:403` |
+|             |                                                                                                                                                                                                                                           |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Created** | 2026-05-08                                                                                                                                                                                                                                |
+| **Author**  | Kris Kowal (prompted)                                                                                                                                                                                                                     |
+| **Status**  | Proposed                                                                                                                                                                                                                                  |
+| **Source**  | PR [#153](https://github.com/endojs/endo-but-for-bots/pull/153) inline review comment [discussion_r3212462309](https://github.com/endojs/endo-but-for-bots/pull/153#discussion_r3212462309) on `designs/cli-store-verb-text-modes.md:403` |
 
 ## What is the Problem Being Solved?
 
@@ -112,15 +112,15 @@ prepend
 
 Operations supported across known implementations:
 
-| Operation | Shape | Effect |
-|---|---|---|
-| `replace` | one anchor + payload | replace one line with N lines |
+| Operation       | Shape                 | Effect                               |
+| --------------- | --------------------- | ------------------------------------ |
+| `replace`       | one anchor + payload  | replace one line with N lines        |
 | `replace-range` | two anchors + payload | replace inclusive range with N lines |
-| `delete` | one or two anchors | drop one line or an inclusive range |
-| `insert-after` | one anchor + payload | insert N lines after the anchor |
-| `insert-before` | one anchor + payload | insert N lines before the anchor |
-| `prepend` | no anchor + payload | insert at the file's first line |
-| `append` | no anchor + payload | insert at the file's last line |
+| `delete`        | one or two anchors    | drop one line or an inclusive range  |
+| `insert-after`  | one anchor + payload  | insert N lines after the anchor      |
+| `insert-before` | one anchor + payload  | insert N lines before the anchor     |
+| `prepend`       | no anchor + payload   | insert at the file's first line      |
+| `append`        | no anchor + payload   | insert at the file's last line       |
 
 ### Why this works for AI agents
 
@@ -161,7 +161,7 @@ lands on:
  * @param {EditOptions} [options]
  * @returns {Promise<EditResult>}
  */
-E(guest).edit(directoryRef, path, patch, options)
+E(guest).edit(directoryRef, path, patch, options);
 ```
 
 The `patch` argument is a structured envelope (the canonical
@@ -494,10 +494,16 @@ JSON directly:
 {
   "expectedFileHash": "7c1b...",
   "ops": [
-    { "op": "replace", "anchor": { "line": 5, "hash": "f1" },
-      "payload": ["  const { agent, store } = powers;"] },
-    { "op": "insert-after", "anchor": { "line": 20, "hash": "dd" },
-      "payload": ["  // diagnostic", "  console.error('starting');"] }
+    {
+      "op": "replace",
+      "anchor": { "line": 5, "hash": "f1" },
+      "payload": ["  const { agent, store } = powers;"]
+    },
+    {
+      "op": "insert-after",
+      "anchor": { "line": 20, "hash": "dd" },
+      "payload": ["  // diagnostic", "  console.error('starting');"]
+    }
   ]
 }
 ```
@@ -701,7 +707,7 @@ v1 does not introduce a sixth `EditFailure` reason; a future
 The cap is configurable per mount via a constructor option:
 
 ```js
-makeMount(directory, { maxEditFileSize: 64 * 1024 * 1024 })
+makeMount(directory, { maxEditFileSize: 64 * 1024 * 1024 });
 ```
 
 The default of 16 MiB is large enough for every source file in
@@ -758,7 +764,7 @@ the hash algorithm is part of the wire contract.
 - **Anchor-width selection on validate.** The patch's anchor hashes
   carry a width (the length of the hex string).
   Each anchor in a patch declares its own width; the validator
-  recomputes the live line's CRC at the *patch's* declared width
+  recomputes the live line's CRC at the _patch's_ declared width
   for the comparison.
   This means a patch authored against a small (≤4096 lines)
   rendering of a file remains valid even after the file grows past
@@ -767,7 +773,7 @@ the hash algorithm is part of the wire contract.
   still validates).
   The mismatch report includes both widths
   (`{ hashExpected: 'a3', hashActualAtPatchWidth: 'b7',
-  hashActualAtFileWidth: 'b73c' }`) so an agent that hand-edits
+hashActualAtFileWidth: 'b73c' }`) so an agent that hand-edits
   the patch can see the file's current native width.
 
 ### Single algorithm: CRC32
@@ -928,7 +934,7 @@ The daemon-side API extends `EndoGuest` (the per-agent capability
 exposed to tool-calls) with a single new method:
 
 ```js
-E(guest).edit(directoryRef, path, patch, options)
+E(guest).edit(directoryRef, path, patch, options);
 ```
 
 The implementation acquires a mount-internal lock on the target
@@ -1028,7 +1034,7 @@ The daemon-side API gains a batch surface:
  * @param {EditOptions} [options]
  * @returns {Promise<EditBatchResult>}
  */
-E(guest).editBatch(entries, options)
+E(guest).editBatch(entries, options);
 ```
 
 The daemon acquires locks on every targeted mount in a deterministic
@@ -1063,15 +1069,15 @@ single-path surface satisfies the observed agent workflows.
 The daemon-side API returns structured `EditFailure` values; the CLI
 maps these to exit codes for shell-script consumption.
 
-| Exit code | Failure `reason` | Diagnostic |
-|---|---|---|
-| 0 | success | (no output by default; `--verbose` shows op count and `fileHashAfter`) |
-| 1 | `patch-syntax` | line number in patch + offending header |
-| 2 | `hash-mismatch` | per-anchor table: requested, live, context |
-| 3 | `file-rev-mismatch` | requested SHA-256 vs `fileHashActual`; the agent should re-read |
-| 4 | `ambiguous-reapply` | the anchor and the candidate line numbers found |
-| 5 | `path-not-found` | mount path + cause |
-| 6 | `permission-denied` | mount name |
+| Exit code | Failure `reason`    | Diagnostic                                                             |
+| --------- | ------------------- | ---------------------------------------------------------------------- |
+| 0         | success             | (no output by default; `--verbose` shows op count and `fileHashAfter`) |
+| 1         | `patch-syntax`      | line number in patch + offending header                                |
+| 2         | `hash-mismatch`     | per-anchor table: requested, live, context                             |
+| 3         | `file-rev-mismatch` | requested SHA-256 vs `fileHashActual`; the agent should re-read        |
+| 4         | `ambiguous-reapply` | the anchor and the candidate line numbers found                        |
+| 5         | `path-not-found`    | mount path + cause                                                     |
+| 6         | `permission-denied` | mount name                                                             |
 
 All CLI diagnostics go to stderr per the project's diagnostic
 discipline.
@@ -1223,46 +1229,46 @@ point to the new normative section.
    tiebreaker (`insert-after` > `insert-before` > `replace` /
    `delete`); two `replace L` ops in one patch is `patch-syntax`.
    See "Splice contract / Anchor uniqueness within a patch".
-6. **`expectedFileHash` for the empty / absent file.**
+5. **`expectedFileHash` for the empty / absent file.**
    Resolved: empty file uses SHA-256 of the empty byte string
    (`e3b0c44…`); absent files always fail with `path-not-found`;
    `edit` does not implicitly create files.
    See "Splice contract / Empty and absent files".
-7. **Lock granularity.**
+6. **Lock granularity.**
    Resolved: per-`EndoMount`-instance, not per-file and not
    per-OS-path; sub-mounts share the parent's lock; two
    independent `provideMount` calls have independent locks
    (CAS is the safety net).
    See "Splice contract / Lock granularity".
-8. **Permission-error taxonomy.**
+7. **Permission-error taxonomy.**
    Resolved: filesystem `EACCES` and mount-policy read-only both
    map to `permission-denied`; other OS errors (`EIO`, `ENOSPC`,
    `EROFS`, `EBUSY`) propagate as thrown errors.
    See the `EditFailure` typedef and the prose immediately
    following it.
-10. **File mode bits / ownership / xattr.**
-    Resolved (mode bits and ownership): truncate-and-rewrite
-    preserves them; xattrs are not preserved in v1.
-    A future `{ atomicRename: true }` and `{ preserveXattr: true }`
-    can extend this.
-    See "Splice contract / File mode bits and metadata".
-11. **CapTP boundary revalidation.**
-    Resolved: the wire shape is plain JSON; the mount re-runs
-    `validateEditPatch` on entry; callers cannot rely on
-    hardened envelopes round-tripping with identity.
-    See the prose under "Patch envelope shape".
-12. **Anchor hash-width mismatch behavior.**
+8. **File mode bits / ownership / xattr.**
+   Resolved (mode bits and ownership): truncate-and-rewrite
+   preserves them; xattrs are not preserved in v1.
+   A future `{ atomicRename: true }` and `{ preserveXattr: true }`
+   can extend this.
+   See "Splice contract / File mode bits and metadata".
+9. **CapTP boundary revalidation.**
+   Resolved: the wire shape is plain JSON; the mount re-runs
+   `validateEditPatch` on entry; callers cannot rely on
+   hardened envelopes round-tripping with identity.
+   See the prose under "Patch envelope shape".
+10. **Anchor hash-width mismatch behavior.**
     Resolved: validator recomputes the live line at the patch's
     declared width for the comparison; mismatch report includes
     both the patch-width and the file-native-width hash.
     See the `AnchorMismatch` typedef and "Hash algorithm
     specification / Anchor-width selection on validate".
-13. **`directoryRef` shape.**
+11. **`directoryRef` shape.**
     Resolved: `directoryRef` must satisfy `EndoDirectory`;
     non-mount or non-edit-capable refs return structured
     `path-not-found`, not a CapTP no-such-method error.
     See "Daemon-side API / `directoryRef` contract".
-14. **`EndoDirectory` does not currently expose `edit`.**
+12. **`EndoDirectory` does not currently expose `edit`.**
     Resolved: `edit` is added to the `EndoDirectory` interface;
     `EndoGuest.edit(directoryRef, …)` is sugar that delegates
     to `E(directoryRef).edit(…)`.
@@ -1292,7 +1298,7 @@ proposed answer is the section noted.
    Asks: confirm the nearest-distance + lower-first tiebreaker,
    confirm the ±20 default, confirm the configurability.
 
-9. **No file-size cap.**
+6. **No file-size cap.**
    Best-guess proposal: 16 MiB default, configurable per mount
    via `{ maxEditFileSize }`; over-cap fails as `patch-syntax`
    (compromise to avoid a sixth `EditFailure` reason in v1).
@@ -1339,19 +1345,19 @@ re-deriving the design:
   trailing whitespace, empty lines, lines that are only whitespace,
   Unicode (multi-byte) lines.
 - Round-trip integration test: read a file via `endo read --text
-  --enum --hashline`, parse the output to extract anchors, apply a
+--enum --hashline`, parse the output to extract anchors, apply a
   patch via `E(guest).edit(...)`, read back and assert content.
 - CAS test (file-level): read a file at SHA-256 H1, modify it
   externally, attempt to apply a patch with `expectedFileHash: H1`,
   assert the result is `failure: { reason: 'file-rev-mismatch',
-  fileHashActual: H2 }`.
+fileHashActual: H2 }`.
 - CAS test (per-line): read a file at SHA-256 H1, modify a single
   line, attempt to apply a patch with `expectedFileHash: H1` and an
   anchor on the modified line, assert the result is `failure: {
-  reason: 'hash-mismatch', mismatches: [...] }`.
+reason: 'hash-mismatch', mismatches: [...] }`.
 - Reapply test: insert two unrelated lines above an anchor (without
   changing `expectedFileHash`), run `E(guest).edit(..., { reapply:
-  true })`, assert the operation relocates correctly (single-
+true })`, assert the operation relocates correctly (single-
   candidate case) and aborts (multi-candidate case).
 - Multi-op atomicity: a patch with three operations, the middle one
   having a stale per-line anchor, must leave the file unmodified.
@@ -1367,11 +1373,11 @@ re-deriving the design:
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
+| Design                                                      | Relationship                                                                                                                                                                                                                                                                       |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`cli-store-verb-text-modes`](cli-store-verb-text-modes.md) | Sibling. Defines `endo read --text` / `endo write --text` and the mount-path resolution model `endo edit` reuses. `endo edit` is the delta form; `endo write` is the whole-file form. The `--enum` and `--hashline` annotation flags on `endo read` belong in this sibling design. |
-| [`daemon-mount`](daemon-mount.md) | Defines `EndoMount.readText` / `writeText`, the daemon primitives `E(guest).edit` builds on. Adds the new `EndoGuest.edit` capability and the mount-internal lock the splice acquires. |
-| [`chat-view-edit-commands`](chat-view-edit-commands.md) | Future Chat UI integration: `/apply-patch` would share the patch parser and the `E(guest).edit` API. |
+| [`daemon-mount`](daemon-mount.md)                           | Defines `EndoMount.readText` / `writeText`, the daemon primitives `E(guest).edit` builds on. Adds the new `EndoGuest.edit` capability and the mount-internal lock the splice acquires.                                                                                             |
+| [`chat-view-edit-commands`](chat-view-edit-commands.md)     | Future Chat UI integration: `/apply-patch` would share the patch parser and the `E(guest).edit` API.                                                                                                                                                                               |
 
 ## Reshape sibling for
 

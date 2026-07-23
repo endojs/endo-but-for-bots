@@ -1,12 +1,12 @@
 # EndoClaw: Voice Input
 
-| | |
-|---|---|
-| **Created** | 2026-03-03 |
-| **Updated** | 2026-03-03 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
-| **Parent** | [endoclaw](endoclaw.md) |
+|             |                         |
+| ----------- | ----------------------- |
+| **Created** | 2026-03-03              |
+| **Updated** | 2026-03-03              |
+| **Author**  | Kris Kowal (prompted)   |
+| **Status**  | Not Started             |
+| **Parent**  | [endoclaw](endoclaw.md) |
 
 ## Summary
 

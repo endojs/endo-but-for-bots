@@ -11,7 +11,6 @@ stream, using async iterators of Uint8Arrays.
 By convention, these may be ranges of a ring buffer, so a stream owns a byte
 range it receives from `next` until the next time it calls `next`.
 
-
 [Netstrings][] <br>
 D. J. Bernstein, <djb@pobox.com> <br>
 1997-02-01

@@ -1,10 +1,10 @@
 # Removed Weblet Implementation Reference
 
-| | |
-|---|---|
-| **Created** | 2026-03-24 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Reference |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-03-24            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Reference             |
 
 This document preserves the design of the weblet feature that was removed to
 make room for its successor. It is intended as a reference for anyone
@@ -14,16 +14,16 @@ rebuilding this functionality. For the forward-looking design, see
 
 ## Removed Files
 
-| File | Role |
-|------|------|
-| `packages/daemon/src/web-server-node.js` | Unified HTTP/WebSocket server and weblet factory |
-| `packages/daemon/src/web-server-node-powers.js` | HTTP server powers (port binding, WebSocket upgrade) |
-| `packages/daemon/src/web-page.js` | Browser-side bootstrap (CapTP client, bundle executor) |
-| `packages/daemon/src/interfaces/web.js` | `WebPageControllerInterface` Exo interface |
-| `packages/daemon/src/serve-private-port-http.js` | Alternate private-port HTTP server (dead code) |
-| `packages/cli/src/commands/install.js` | CLI handler for `endo install` |
-| `packages/cli/src/commands/open.js` | CLI handler for `endo open` |
-| `packages/cli/demo/cat.js` | Demo weblet (permission management UI, ~1065 lines) |
+| File                                             | Role                                                   |
+| ------------------------------------------------ | ------------------------------------------------------ |
+| `packages/daemon/src/web-server-node.js`         | Unified HTTP/WebSocket server and weblet factory       |
+| `packages/daemon/src/web-server-node-powers.js`  | HTTP server powers (port binding, WebSocket upgrade)   |
+| `packages/daemon/src/web-page.js`                | Browser-side bootstrap (CapTP client, bundle executor) |
+| `packages/daemon/src/interfaces/web.js`          | `WebPageControllerInterface` Exo interface             |
+| `packages/daemon/src/serve-private-port-http.js` | Alternate private-port HTTP server (dead code)         |
+| `packages/cli/src/commands/install.js`           | CLI handler for `endo install`                         |
+| `packages/cli/src/commands/open.js`              | CLI handler for `endo open`                            |
+| `packages/cli/demo/cat.js`                       | Demo weblet (permission management UI, ~1065 lines)    |
 
 The `@apps` special formula was removed from `packages/daemon/src/daemon-node.js`.
 The `specials` mechanism in `makeDaemon` is preserved (defaults to `{}`).
@@ -59,15 +59,15 @@ The weblet system had four layers:
 
 **Arguments and options:**
 
-| Argument/Option | Description |
-|-----------------|-------------|
-| `[filePath]` | Path to JavaScript source file |
-| `-l,--listen,--port <number>` | HTTP port for the weblet (required) |
-| `-b,--bundle <bundle>` | Name of a pre-stored bundle |
-| `-p,--powers <endowment>` | Powers to grant: a pet name, `@none`, `@self`, or `@endo` |
-| `-n,--name <name>` | Pet name for the resulting weblet (required) |
-| `-o,--open` | Open the weblet in the browser after creation |
-| `-a,--as <agent>` | Pose as a named agent |
+| Argument/Option               | Description                                               |
+| ----------------------------- | --------------------------------------------------------- |
+| `[filePath]`                  | Path to JavaScript source file                            |
+| `-l,--listen,--port <number>` | HTTP port for the weblet (required)                       |
+| `-b,--bundle <bundle>`        | Name of a pre-stored bundle                               |
+| `-p,--powers <endowment>`     | Powers to grant: a pet name, `@none`, `@self`, or `@endo` |
+| `-n,--name <name>`            | Pet name for the resulting weblet (required)              |
+| `-o,--open`                   | Open the weblet in the browser after creation             |
+| `-a,--as <agent>`             | Pose as a named agent                                     |
 
 **Flow:**
 
@@ -89,7 +89,7 @@ The weblet system had four layers:
      ['apps', 'bundle', 'powers'],
      ['@apps', bundleName, powersName],
      parsePetNamePath(webletName),
-   )
+   );
    ```
 
    The `$id` and `$cancelled` variables are injected by the daemon's eval
@@ -183,11 +183,21 @@ object.
 **CapTP session helper:**
 
 ```js
-const openCapTPSession = (name, frameWriter, frameReader, sessionCancelled, bootstrap) => {
+const openCapTPSession = (
+  name,
+  frameWriter,
+  frameReader,
+  sessionCancelled,
+  bootstrap,
+) => {
   const messageWriter = mapWriter(frameWriter, messageToBytes);
   const messageReader = mapReader(frameReader, bytesToMessage);
   const { closed, getBootstrap } = makeMessageCapTP(
-    name, messageWriter, messageReader, sessionCancelled, bootstrap,
+    name,
+    messageWriter,
+    messageReader,
+    sessionCancelled,
+    bootstrap,
   );
   const remoteBootstrap = getBootstrap();
   E.sendOnly(remoteBootstrap).ping();
@@ -217,13 +227,13 @@ Called as `E(apps).makeWeblet(bundle, powers, port, id, cancelled)`.
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `webletBundle` | object | Bundle with a `.json()` method returning the bundle string |
-| `webletPowers` | object | Capabilities to pass to the application |
-| `requestedPort` | number or undefined | Dedicated port, or undefined for unified server |
-| `webletId` | string | Formula identifier for this weblet |
-| `webletCancelled` | Promise\<never\> | Rejects when the weblet is cancelled |
+| Parameter         | Type                | Description                                                |
+| ----------------- | ------------------- | ---------------------------------------------------------- |
+| `webletBundle`    | object              | Bundle with a `.json()` method returning the bundle string |
+| `webletPowers`    | object              | Capabilities to pass to the application                    |
+| `requestedPort`   | number or undefined | Dedicated port, or undefined for unified server            |
+| `webletId`        | string              | Formula identifier for this weblet                         |
+| `webletCancelled` | Promise\<never\>    | Rejects when the weblet is cancelled                       |
 
 **Access token:** First 32 characters of the weblet's formula ID.
 
@@ -241,7 +251,7 @@ Called as `E(apps).makeWeblet(bundle, powers, port, id, cancelled)`.
 **HTTP handler (`respond`):**
 
 - `GET /{prefix}/` returned a minimal HTML page with `<script
-  src="bootstrap.js"></script>`.
+src="bootstrap.js"></script>`.
 - `GET /{prefix}/bootstrap.js` returned the pre-built `web-page.js` bundle.
 - Everything else returned 404.
 
@@ -263,7 +273,7 @@ Far('Weblet', {
     // Unified:   `localhttp://${accessToken}`
   },
   stopped: () => stopped,
-})
+});
 ```
 
 ### 6. Browser Bootstrap: `web-page.js`
@@ -339,10 +349,12 @@ It was an earlier iteration of the weblet server that served the daemon's
 own management UI on a private port.
 
 It served:
+
 - `GET /` — a minimal HTML page loading `bootstrap.js`.
 - `GET /bootstrap.js` — fetched via `E(endoBootstrap).webPageJs()`.
 
 On WebSocket connections, it:
+
 1. Parsed the `Host` header for `{formulaNumber}.endo.localhost:{port}`.
 2. Validated the port number matched.
 3. Called `E(endoBootstrap).importAndEndowInWebPage(webBootstrap, formulaNumber)`
@@ -361,6 +373,7 @@ A ~1065-line demonstration weblet implementing a permission management UI
 - Showed DOM manipulation patterns compatible with the weblet endowment set.
 
 Usage:
+
 ```
 endo install cat.js --powers @agent --listen 8920 --name cat
 endo open cat

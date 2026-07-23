@@ -30,15 +30,15 @@ package is installed and on `PATH` via its `bin` entry).
 The TUI takes over the terminal (alt screen) and opens on the main
 menu. Keys:
 
-| Key            | Effect                                                        |
-| -------------- | ------------------------------------------------------------- |
-| `↑` `↓`        | Move the menu / list cursor                                   |
-| `Enter`        | Activate the highlighted item / submit the current input      |
-| `1`–`5`        | Quick-pick the corresponding menu item                        |
-| `Esc`          | Cancel name / URI / room-name input and return to the menu    |
-| `d`            | (Recent-list) delete the highlighted entry                    |
-| `Ctrl+L`       | Toggle the diagnostic log panel (hidden by default)           |
-| `Ctrl+C`       | From chat: leave the room. From menu: quit.                   |
+| Key      | Effect                                                     |
+| -------- | ---------------------------------------------------------- |
+| `↑` `↓`  | Move the menu / list cursor                                |
+| `Enter`  | Activate the highlighted item / submit the current input   |
+| `1`–`5`  | Quick-pick the corresponding menu item                     |
+| `Esc`    | Cancel name / URI / room-name input and return to the menu |
+| `d`      | (Recent-list) delete the highlighted entry                 |
+| `Ctrl+L` | Toggle the diagnostic log panel (hidden by default)        |
+| `Ctrl+C` | From chat: leave the room. From menu: quit.                |
 
 Pasting a sturdyref URI works in the URI input phase — most terminals
 emit the whole pasted blob as a single keystroke event, including the
@@ -67,7 +67,7 @@ A few caveats:
 
 - The URI is single-use: closing the TUI tears down the websocket
   server, and the next session generates a fresh ephemeral port and
-  swissnum. Hosted joins are deliberately *not* added to the
+  swissnum. Hosted joins are deliberately _not_ added to the
   persistent recent-rooms list for that reason.
 - The default `127.0.0.1:<random-port>` bind is reachable only from
   this machine. To share off-host, see "Hosting publicly" below.
@@ -80,11 +80,11 @@ When deploying as a server (or on a LAN box you want peers to dial
 into), point the websocket netlayer at a real interface and tell it
 the URL to advertise:
 
-| Variable                  | Default            | Effect                                                                                                                                                              |
-| ------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GOBLIN_CHAT_HOST_BIND`   | `127.0.0.1`        | Network interface the websocket server listens on. Set to `0.0.0.0` (or a specific NIC IP) to accept off-host connections.                                          |
-| `GOBLIN_CHAT_HOST_PORT`   | `0` (ephemeral)    | TCP port the websocket server listens on. Pin to a stable number when running behind a firewall / port-forward so the URI doesn't change between restarts.          |
-| `GOBLIN_CHAT_HOST_URL`    | `ws://<bind>:<port>` | URL announced to peers in the sturdyref's `hints.url`. Override when the externally reachable URL differs from the bind address — e.g. behind a TLS-terminating reverse proxy (`wss://chat.example.com`), or when the public hostname/port differs from the bind. |
+| Variable                | Default              | Effect                                                                                                                                                                                                                                                            |
+| ----------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GOBLIN_CHAT_HOST_BIND` | `127.0.0.1`          | Network interface the websocket server listens on. Set to `0.0.0.0` (or a specific NIC IP) to accept off-host connections.                                                                                                                                        |
+| `GOBLIN_CHAT_HOST_PORT` | `0` (ephemeral)      | TCP port the websocket server listens on. Pin to a stable number when running behind a firewall / port-forward so the URI doesn't change between restarts.                                                                                                        |
+| `GOBLIN_CHAT_HOST_URL`  | `ws://<bind>:<port>` | URL announced to peers in the sturdyref's `hints.url`. Override when the externally reachable URL differs from the bind address — e.g. behind a TLS-terminating reverse proxy (`wss://chat.example.com`), or when the public hostname/port differs from the bind. |
 
 Typical deployment shapes:
 
@@ -166,15 +166,15 @@ file logging entirely.
 
 ## Environment knobs
 
-| Variable                  | Default              | Effect                                                                       |
-| ------------------------- | -------------------- | ---------------------------------------------------------------------------- |
-| `GOBLIN_CHAT_NAME`        | `goblin-chatter`     | Initial display name (overridden by stored).                                 |
-| `OCAPN_CAPTP_VERSION`     | `1.0`                | Handshake CapTP version.                                                     |
-| `GOBLIN_CHAT_STATE_FILE`  | platform default     | Path to the persisted state JSON.                                            |
-| `GOBLIN_CHAT_LOG_FILE`    | auto-named in CWD    | Path to per-session log; `''` disables.                                      |
-| `GOBLIN_CHAT_HOST_BIND`   | `127.0.0.1`          | Hosted-chat websocket bind interface; set to `0.0.0.0` to listen publicly.   |
-| `GOBLIN_CHAT_HOST_PORT`   | `0` (ephemeral)      | Hosted-chat websocket bind port; pin for stable, firewall-friendly URIs.     |
-| `GOBLIN_CHAT_HOST_URL`    | `ws://<bind>:<port>` | URL announced in `hints.url`; override behind a TLS-terminating proxy/NAT.   |
+| Variable                 | Default              | Effect                                                                     |
+| ------------------------ | -------------------- | -------------------------------------------------------------------------- |
+| `GOBLIN_CHAT_NAME`       | `goblin-chatter`     | Initial display name (overridden by stored).                               |
+| `OCAPN_CAPTP_VERSION`    | `1.0`                | Handshake CapTP version.                                                   |
+| `GOBLIN_CHAT_STATE_FILE` | platform default     | Path to the persisted state JSON.                                          |
+| `GOBLIN_CHAT_LOG_FILE`   | auto-named in CWD    | Path to per-session log; `''` disables.                                    |
+| `GOBLIN_CHAT_HOST_BIND`  | `127.0.0.1`          | Hosted-chat websocket bind interface; set to `0.0.0.0` to listen publicly. |
+| `GOBLIN_CHAT_HOST_PORT`  | `0` (ephemeral)      | Hosted-chat websocket bind port; pin for stable, firewall-friendly URIs.   |
+| `GOBLIN_CHAT_HOST_URL`   | `ws://<bind>:<port>` | URL announced in `hints.url`; override behind a TLS-terminating proxy/NAT. |
 
 See ["Hosting publicly"](#hosting-publicly) below for full details on
 the host-side variables.
@@ -182,7 +182,11 @@ the host-side variables.
 ## Programmatic surface
 
 ```js
-import { makeChatroom, makeUserControllerPair, parseLocator } from '@endo/goblin-chat';
+import {
+  makeChatroom,
+  makeUserControllerPair,
+  parseLocator,
+} from '@endo/goblin-chat';
 ```
 
 The same protocol pieces back the [Guile interop
@@ -221,7 +225,7 @@ src/
 `index.js` deliberately includes `import '@endo/init';` — that
 transitively performs SES lockdown, which `@endo/eventual-send` and
 `@endo/marshal` need at module evaluation time. The library entry
-`api.js` does *not* lock down on import, so embedders that already
+`api.js` does _not_ lock down on import, so embedders that already
 manage their own SES initialisation can `import { ... } from
 '@endo/goblin-chat'` without surprise side effects.
 
@@ -243,7 +247,7 @@ comments in `src/backend.js`:
   an `'unsubscribe` selector that the controller-only methods table
   doesn't define, so calling it errors.
 - `^finalize-subscription` backfill iterates over the subscribers
-  *after* inserting the new user, so the joiner sees a
+  _after_ inserting the new user, so the joiner sees a
   `user-joined(self)` echo as the last item of the backfill.
 
 The TUI's observer absorbs the self-echoes transparently.

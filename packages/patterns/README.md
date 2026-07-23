@@ -11,6 +11,7 @@ This is the validation layer above [@endo/pass-style](../pass-style/README.md),
 enabling you to check that data matches expected shapes before using it.
 
 Patterns enable:
+
 - **Data validation**: Check that values match expected types and structures
 - **Interface contracts**: Describe method signatures with InterfaceGuards
 - **Copy collections**: CopySet, CopyBag, CopyMap for passable data structures
@@ -24,8 +25,8 @@ import { M, mustMatch } from '@endo/patterns';
 const specimen = harden({ foo: 3, bar: 4 });
 
 const pattern = M.splitRecord(
-  { foo: M.number() },                        // required properties
-  { bar: M.string(), baz: M.number() }       // optional properties
+  { foo: M.number() }, // required properties
+  { bar: M.string(), baz: M.number() }, // optional properties
 );
 
 mustMatch(specimen, pattern);
@@ -45,19 +46,19 @@ several categories:
 Match specific JavaScript types:
 
 ```javascript
-M.any()           // Matches any passable
-M.undefined()     // Matches undefined
-M.null()          // Matches null
-M.boolean()       // Matches true or false
-M.number()        // Matches any number (including NaN, Infinity)
-M.bigint()        // Matches any bigint
-M.string()        // Matches any string
-M.symbol()        // Matches registered/well-known symbols
+M.any(); // Matches any passable
+M.undefined(); // Matches undefined
+M.null(); // Matches null
+M.boolean(); // Matches true or false
+M.number(); // Matches any number (including NaN, Infinity)
+M.bigint(); // Matches any bigint
+M.string(); // Matches any string
+M.symbol(); // Matches registered/well-known symbols
 
 // Constrained primitives
-M.nat()           // Non-negative bigint
-M.gte(5)          // Number >= 5
-M.lte(100)        // Number <= 100
+M.nat(); // Non-negative bigint
+M.gte(5); // Number >= 5
+M.lte(100); // Number <= 100
 ```
 
 ### Container Matchers
@@ -65,20 +66,20 @@ M.lte(100)        // Number <= 100
 Match copyArray, copyRecord, and other structures:
 
 ```javascript
-M.array()         // Any CopyArray
-M.record()        // Any CopyRecord
-M.set()           // Any CopySet
-M.bag()           // Any CopyBag
-M.map()           // Any CopyMap
+M.array(); // Any CopyArray
+M.record(); // Any CopyRecord
+M.set(); // Any CopySet
+M.bag(); // Any CopyBag
+M.map(); // Any CopyMap
 
 // With constraints
-M.array({ maxSize: 10 })          // Array with at most 10 elements
-M.string({ maxSize: 100 })        // String with at most 100 characters
+M.array({ maxSize: 10 }); // Array with at most 10 elements
+M.string({ maxSize: 100 }); // String with at most 100 characters
 
 // Structured content
-M.arrayOf(M.number())             // Array of numbers only
-M.recordOf(M.string(), M.number()) // Record with string keys, number values
-M.setOf(M.string())               // Set of strings only
+M.arrayOf(M.number()); // Array of numbers only
+M.recordOf(M.string(), M.number()); // Record with string keys, number values
+M.setOf(M.string()); // Set of strings only
 ```
 
 ### Structured Matchers
@@ -88,22 +89,22 @@ Match specific shapes:
 ```javascript
 // Split patterns: required, optional, rest
 M.splitArray(
-  [M.string(), M.number()],      // required elements
-  [M.boolean()],                  // optional elements
-  M.any()                         // rest elements
-)
+  [M.string(), M.number()], // required elements
+  [M.boolean()], // optional elements
+  M.any(), // rest elements
+);
 
 M.splitRecord(
-  { name: M.string() },           // required properties
-  { age: M.number() },            // optional properties
-  M.any()                         // rest properties
-)
+  { name: M.string() }, // required properties
+  { age: M.number() }, // optional properties
+  M.any(), // rest properties
+);
 
 // Partial matches
-M.partial({ name: M.string() })  // Has at least 'name' property
+M.partial({ name: M.string() }); // Has at least 'name' property
 
 // Split auto-detects array vs record
-M.split({ x: M.number() }, M.any())
+M.split({ x: M.number() }, M.any());
 ```
 
 ### Logical Operators
@@ -111,10 +112,10 @@ M.split({ x: M.number() }, M.any())
 Combine matchers:
 
 ```javascript
-M.and(M.number(), M.gte(0), M.lte(100))   // 0 <= n <= 100
-M.or(M.string(), M.number())               // String or number
-M.not(M.undefined())                       // Anything except undefined
-M.opt(M.string())                          // undefined or string (optional)
+M.and(M.number(), M.gte(0), M.lte(100)); // 0 <= n <= 100
+M.or(M.string(), M.number()); // String or number
+M.not(M.undefined()); // Anything except undefined
+M.opt(M.string()); // undefined or string (optional)
 ```
 
 ### Comparison Matchers
@@ -122,26 +123,26 @@ M.opt(M.string())                          // undefined or string (optional)
 Match values relative to a key:
 
 ```javascript
-M.eq('hello')     // Equal to 'hello'
-M.neq(0)          // Not equal to 0
-M.lt(10)          // Less than 10
-M.lte(100)        // Less than or equal to 100
-M.gte(0)          // Greater than or equal to 0
-M.gt(-1)          // Greater than -1
+M.eq('hello'); // Equal to 'hello'
+M.neq(0); // Not equal to 0
+M.lt(10); // Less than 10
+M.lte(100); // Less than or equal to 100
+M.gte(0); // Greater than or equal to 0
+M.gt(-1); // Greater than -1
 ```
 
 ### Special Matchers
 
 ```javascript
-M.remotable()           // Any remotable object
-M.remotable('Counter')  // Remotable with specific label
-M.error()               // Any error
-M.promise()             // Any promise
-M.eref(M.number())      // Number or promise for number (eventual reference)
-M.kind('copyArray')     // Specific pass style
-M.pattern()             // Any valid pattern
-M.key()                 // Any valid Key
-M.scalar()              // Any primitive or remotable
+M.remotable(); // Any remotable object
+M.remotable('Counter'); // Remotable with specific label
+M.error(); // Any error
+M.promise(); // Any promise
+M.eref(M.number()); // Number or promise for number (eventual reference)
+M.kind('copyArray'); // Specific pass style
+M.pattern(); // Any valid pattern
+M.key(); // Any valid Key
+M.scalar(); // Any primitive or remotable
 ```
 
 ## Pattern Matching
@@ -153,8 +154,8 @@ Returns `true` if the specimen matches the pattern, `false` otherwise:
 ```javascript
 import { M, matches } from '@endo/patterns';
 
-matches(42, M.number());                    // true
-matches('hello', M.number());               // false
+matches(42, M.number()); // true
+matches('hello', M.number()); // false
 matches([1, 2, 3], M.arrayOf(M.number())); // true
 ```
 
@@ -194,7 +195,7 @@ const colors = makeCopySet(['red', 'blue', 'green']);
 
 // Pattern for sets
 const ColorSet = M.setOf(M.string());
-mustMatch(colors, ColorSet);  // passes
+mustMatch(colors, ColorSet); // passes
 ```
 
 **Why not use JavaScript Set?**
@@ -211,7 +212,7 @@ import { makeCopyBag } from '@endo/patterns';
 const inventory = makeCopyBag([
   ['apples', 5n],
   ['oranges', 3n],
-  ['apples', 2n]   // counts are combined
+  ['apples', 2n], // counts are combined
 ]);
 
 // Result: [['apples', 7n], ['oranges', 3n]]
@@ -229,7 +230,7 @@ import { makeCopyMap } from '@endo/patterns';
 
 const balances = makeCopyMap([
   ['alice', 100],
-  ['bob', 50]
+  ['bob', 50],
 ]);
 
 // Keys are sorted in rank order
@@ -244,6 +245,7 @@ mustMatch(balances, BalancesPattern);
 
 **Why not use plain objects?**
 CopyMap supports:
+
 - Any Key as a key (objects, remotables, not just strings)
 - Efficient key comparison using `compareKeys()`
 - Subset relationships for partial ordering
@@ -269,7 +271,7 @@ const CounterI = M.interface('Counter', {
   add: M.call(M.number()).rest(M.number()).returns(M.number()),
 
   // Async method (awaits arguments)
-  asyncOp: M.callWhen(M.string()).returns(M.string())
+  asyncOp: M.callWhen(M.string()).returns(M.string()),
 });
 ```
 
@@ -277,19 +279,19 @@ const CounterI = M.interface('Counter', {
 
 ```javascript
 // Basic call: call(required args...)
-M.call(M.string(), M.number())
+M.call(M.string(), M.number());
 
 // With optional args
-M.call(M.string()).optional(M.number())
+M.call(M.string()).optional(M.number());
 
 // With rest args
-M.call(M.string()).rest(M.any())
+M.call(M.string()).rest(M.any());
 
 // Specify return type
-M.call(M.string()).returns(M.number())
+M.call(M.string()).returns(M.number());
 
 // Async method (awaits promise args)
-M.callWhen(M.remotable()).returns(M.string())
+M.callWhen(M.remotable()).returns(M.string());
 ```
 
 ### Integration with Exo
@@ -301,18 +303,18 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
 const CounterI = M.interface('Counter', {
-  increment: M.call(M.number()).returns(M.number())
+  increment: M.call(M.number()).returns(M.number()),
 });
 
 const counter = makeExo('Counter', CounterI, {
   increment(n) {
     // n is guaranteed to be a number by the guard
-    return count += n;
-  }
+    return (count += n);
+  },
 });
 
-counter.increment(5);      // OK
-counter.increment('5');    // throws: Must be a number
+counter.increment(5); // OK
+counter.increment('5'); // throws: Must be a number
 ```
 
 This is the foundation of defensive programming in Endo: guards validate inputs
@@ -329,19 +331,20 @@ Tests if two Keys are equal using distributed equality semantics:
 ```javascript
 import { keyEQ } from '@endo/patterns';
 
-keyEQ('hello', 'hello');        // true
-keyEQ(42, 42);                  // true
-keyEQ([1, 2], [1, 2]);          // true (compares content)
+keyEQ('hello', 'hello'); // true
+keyEQ(42, 42); // true
+keyEQ([1, 2], [1, 2]); // true (compares content)
 
 const r1 = Far('Obj', {});
 const r2 = Far('Obj', {});
-keyEQ(r1, r1);                  // true (same remotable)
-keyEQ(r1, r2);                  // false (different remotables)
+keyEQ(r1, r1); // true (same remotable)
+keyEQ(r1, r2); // false (different remotables)
 ```
 
 ### compareKeys(key1, key2)
 
 Returns a comparison result implementing a **partial order**:
+
 - `0`: Keys are equal
 - `-1`: key1 < key2
 - `1`: key1 > key2
@@ -350,18 +353,18 @@ Returns a comparison result implementing a **partial order**:
 ```javascript
 import { compareKeys, keyLT, keyGT } from '@endo/patterns';
 
-compareKeys('a', 'b');          // -1
-compareKeys(5, 5);              // 0
-compareKeys(10, 3);             // 1
+compareKeys('a', 'b'); // -1
+compareKeys(5, 5); // 0
+compareKeys(10, 3); // 1
 
 // Convenience functions
-keyLT('a', 'b');                // true
-keyGT(10, 3);                   // true
+keyLT('a', 'b'); // true
+keyGT(10, 3); // true
 
 // Incomparable keys
 const r1 = Far('A', {});
 const r2 = Far('B', {});
-compareKeys(r1, r2);            // NaN (different remotables)
+compareKeys(r1, r2); // NaN (different remotables)
 ```
 
 **Why partial order?**
@@ -410,6 +413,7 @@ eventual-send.
 ## Deep Dives
 
 For implementation details:
+
 - [marshal vs patterns abstraction levels](./docs/marshal-vs-patterns-level.md)
   \- kindOf vs passStyleOf vs typeof
 - [Type definitions](./src/types.ts) - Complete TypeScript type definitions

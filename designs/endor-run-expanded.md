@@ -1,11 +1,11 @@
 # Expanded `endor run`: Archives, Directories, and Entry Points
 
-| | |
-|---|---|
-| **Created** | 2026-04-17 |
-| **Updated** | 2026-04-17 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-04-17            |
+| **Updated** | 2026-04-17            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | In Progress           |
 
 ## Status
 
@@ -168,6 +168,7 @@ For `endor run`, three options:
 Implement module resolution and dependency walking in Rust.
 This avoids depending on Node.js for the build step.
 The mapper needs:
+
 - A JavaScript parser for `import`/`require` extraction
   (or a simpler regex-based heuristic for static imports).
 - `package.json` reading and `exports`/`main` resolution.
@@ -211,6 +212,7 @@ pub fn load_archive_from_cas(
 ```
 
 This:
+
 1. Fetches the root tree from the CAS.
 2. Reads `compartment-map.json` from the tree.
 3. For each module in the compartment map, records its
@@ -246,11 +248,11 @@ undesirable (e.g., read-only filesystems).
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|-------------|
-| [daemon-cas-management](daemon-cas-management.md) | Requires: ContentStore for blob/tree storage, retain/release |
-| [endor-npm-registry-proxy](endor-npm-registry-proxy.md) | Enables: Form 3 package resolution without node_modules |
-| [daemon-endor-architecture](daemon-endor-architecture.md) | Extends: `endor run` becomes CAS-aware |
+| Design                                                    | Relationship                                                 |
+| --------------------------------------------------------- | ------------------------------------------------------------ |
+| [daemon-cas-management](daemon-cas-management.md)         | Requires: ContentStore for blob/tree storage, retain/release |
+| [endor-npm-registry-proxy](endor-npm-registry-proxy.md)   | Enables: Form 3 package resolution without node_modules      |
+| [daemon-endor-architecture](daemon-endor-architecture.md) | Extends: `endor run` becomes CAS-aware                       |
 
 ## Implementation phases
 
@@ -349,6 +351,7 @@ undesirable (e.g., read-only filesystems).
 > enabling the child process to load modules from the CAS by
 > root hash and path. Then, generalize `endor run` such that
 > it can absorb an application in any of these ways:
+>
 > 1. by presenting a zip
 > 2. by presenting a directory with the content in the same
 >    shape as the zip, including compartment-map.json

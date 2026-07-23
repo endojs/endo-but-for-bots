@@ -1,17 +1,18 @@
 # Chat Reply Chain Visualization
 
-| | |
-|---|---|
-| **Created** | 2026-02-23 |
-| **Updated** | 2026-02-28 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Deprecated — see `designs/chat-focus-message.md` |
+|             |                                                  |
+| ----------- | ------------------------------------------------ |
+| **Created** | 2026-02-23                                       |
+| **Updated** | 2026-02-28                                       |
+| **Author**  | Kris Kowal (prompted)                            |
+| **Status**  | Deprecated — see `designs/chat-focus-message.md` |
 
 ## Motivation
 
 Messages in the chat inbox can be replies to other messages, forming tree-like conversation structures. Currently, all messages are displayed in a flat chronological list, making it difficult to follow branching conversations or understand the context of a reply without manually scrolling to find the parent message.
 
 **Goals:**
+
 1. Visually indicate reply relationships between messages
 2. Use indentation to show conversation structure
 3. Draw connecting lines from each message to its parent
@@ -34,6 +35,7 @@ Messages already have a `replyTo` field (or similar) indicating the parent messa
 ```
 
 The reply relationships form a forest (multiple trees), where:
+
 - Root messages have no `replyTo`
 - Each message has at most one parent
 - A parent can have multiple children (branching)
@@ -55,6 +57,7 @@ Rather than visualizing all reply relationships, we use a **spotlight model** fo
 From the MOI, we draw lines in two directions:
 
 **Upward (to parent):**
+
 - Draw a line from the MOI to the message it replies to
 - The parent message is not indented
 
@@ -62,7 +65,7 @@ From the MOI, we draw lines in two directions:
 
 - **Single reply:** Draw a line to the reply. The reply is not indented. Indent all intermediate messages (messages between MOI and its reply in chronological order).
 
-- **Multiple replies:** Draw a line to the chronologically *last* reply (not indented). Draw branch lines to each other reply. Indent all intermediate messages.
+- **Multiple replies:** Draw a line to the chronologically _last_ reply (not indented). Draw branch lines to each other reply. Indent all intermediate messages.
 
 **No other lines:** Reply relationships not involving the MOI are not visualized.
 
@@ -85,6 +88,7 @@ Lines run along the **left gutter** of the message buffer. The main vertical lin
 ```
 
 **Key visual elements:**
+
 - **Vertical line**: Straight line down the left edge, connecting flush-left messages
 - **Flush-left messages**: Parent, MOI, and last reply are all at indent level 0, directly on the line
 - **Branch nodules**: Horizontal stubs (├────○) extending right from the main line to indented replies
@@ -122,12 +126,16 @@ const computeLayout = (messages, moiId) => {
 
     // Last reply is not indented
     layout.set(lastReply.id, { indent: 0, lines: [] });
-    layout.get(moiId).lines.push({ to: lastReply.id, direction: 'down', primary: true });
+    layout
+      .get(moiId)
+      .lines.push({ to: lastReply.id, direction: 'down', primary: true });
 
     // Other replies are branches
     for (const reply of replies.slice(0, -1)) {
       layout.set(reply.id, { indent: 1, lines: [] });
-      layout.get(moiId).lines.push({ to: reply.id, direction: 'down', primary: false });
+      layout
+        .get(moiId)
+        .lines.push({ to: reply.id, direction: 'down', primary: false });
     }
 
     // Intermediate messages (between MOI and last reply, not replies themselves)
@@ -167,7 +175,7 @@ const computeLayout = (messages, moiId) => {
 let moiId = messages[messages.length - 1]?.id;
 
 // On new message arrival
-const onMessageReceived = (newMessage) => {
+const onMessageReceived = newMessage => {
   if (scrollPinned) {
     moiId = newMessage.id;
     recomputeLayout();
@@ -175,7 +183,7 @@ const onMessageReceived = (newMessage) => {
 };
 
 // On click
-const onMessageClick = (messageId) => {
+const onMessageClick = messageId => {
   moiId = messageId;
   recomputeLayout();
 };
@@ -222,13 +230,13 @@ The vertical line in the gutter connects the three flush-left messages (Parent, 
 
 Each message in the layout contributes line segments based on its role:
 
-| Role | Line segment |
-|------|--------------|
-| Parent | `├` or `│` (continue down) |
-| MOI | `├` (continue down to replies) |
+| Role         | Line segment                      |
+| ------------ | --------------------------------- |
+| Parent       | `├` or `│` (continue down)        |
+| MOI          | `├` (continue down to replies)    |
 | Intermediate | `│` (pass-through, no connection) |
-| Branch reply | `├──○` (nodule extending right) |
-| Last reply | `└` (terminus) |
+| Branch reply | `├──○` (nodule extending right)   |
+| Last reply   | `└` (terminus)                    |
 
 ### CSS Implementation (Recommended)
 
@@ -241,7 +249,7 @@ Since lines are gutter-local, CSS pseudo-elements work well:
   --indent-width: 2ex;
 }
 
-[data-theme="dark"] {
+[data-theme='dark'] {
   --reply-line-color: #6b7280;
 }
 
@@ -252,7 +260,7 @@ Since lines are gutter-local, CSS pseudo-elements work well:
 }
 
 /* Vertical line segment - continues through message */
-.message[data-line="continue"] .message-gutter::before {
+.message[data-line='continue'] .message-gutter::before {
   content: '';
   position: absolute;
   left: calc(var(--indent-width) / 2 - var(--reply-line-width) / 2);
@@ -263,7 +271,7 @@ Since lines are gutter-local, CSS pseudo-elements work well:
 }
 
 /* Vertical line segment - terminates at message center */
-.message[data-line="end"] .message-gutter::before {
+.message[data-line='end'] .message-gutter::before {
   content: '';
   position: absolute;
   left: calc(var(--indent-width) / 2 - var(--reply-line-width) / 2);
@@ -274,7 +282,7 @@ Since lines are gutter-local, CSS pseudo-elements work well:
 }
 
 /* Horizontal branch to indented reply */
-.message[data-line="branch"] .message-gutter::after {
+.message[data-line='branch'] .message-gutter::after {
   content: '';
   position: absolute;
   left: calc(var(--indent-width) / 2);
@@ -290,6 +298,7 @@ Since lines are gutter-local, CSS pseudo-elements work well:
 An SVG could draw all line segments at once, but since segments are simple verticals and horizontals in a fixed gutter column, CSS is simpler and requires no position recalculation.
 
 SVG may be useful if:
+
 - Lines need animation (drawing effect)
 - Complex styling (gradients, glow effects)
 - Line needs to span across virtualized/recycled message elements
@@ -299,11 +308,12 @@ SVG may be useful if:
 **Thickness:** 2px
 
 **Color:** A muted grey that provides sufficient contrast in both light and dark modes without being visually loud. Example:
+
 ```css
 :root {
   --reply-line-color: #9ca3af; /* gray-400, works in light mode */
 }
-[data-theme="dark"] {
+[data-theme='dark'] {
   --reply-line-color: #6b7280; /* gray-500, works in dark mode */
 }
 ```
@@ -338,7 +348,7 @@ MOI             ─┤
 Last Reply      ─┘
 ```
 
-This approach eliminates the need for complex alignment heuristics - the MOI selection *is* the alignment decision.
+This approach eliminates the need for complex alignment heuristics - the MOI selection _is_ the alignment decision.
 
 ## Interactive Selection
 
@@ -360,10 +370,12 @@ The current MOI does not need special visual indication beyond its position in t
 Use the existing scroll pinning logic in the chat UI.
 
 When scroll is pinned to the bottom:
+
 - New messages automatically become the MOI
 - This is the default "follow along" mode for active conversations
 
 When scroll is unpinned (user scrolled up):
+
 - New messages do NOT change the MOI
 - User maintains focus on the message they're reading
 - MOI changes only on explicit click
@@ -373,6 +385,7 @@ When scroll is unpinned (user scrolled up):
 ### Virtualization
 
 For long conversations (hundreds of messages):
+
 - Only render messages in viewport + buffer
 - Update lines only for visible messages
 - Placeholder heights for off-screen messages
@@ -399,6 +412,7 @@ Provide navigation cues through named anchors and visually-hidden links:
 ```
 
 The "in reply to" link is:
+
 - Visually hidden (using `.visually-hidden` / `.sr-only` CSS)
 - Audible to screen readers
 - Provides keyboard-accessible navigation to the parent message
@@ -418,30 +432,36 @@ The MOI algorithm keeps visual design minimal:
 ## Implementation Phases
 
 ### Phase 1: MOI State Management ✅
+
 - Track current message-of-interest ID
 - Detect scroll pinning
 - Update MOI on new message arrival (when pinned)
 - Reset MOI on page load
 
 ### Phase 2: Layout Computation ✅
+
 - Implement `computeLayout()` algorithm
 - Identify parent, replies, intermediate messages
 - Assign indent levels
 
 ### Phase 3: Indentation Rendering ✅
+
 - Apply CSS margin/padding based on computed indent
 
 ### Phase 4: Line Drawing ✅
+
 - CSS pseudo-elements for gutter lines (chose CSS over SVG)
 - Vertical through-line (`continue`), terminus (`end`), branch fork (`branch`)
 - Primary line to last reply
 - Branch lines to earlier replies
 
 ### Phase 5: Click Interaction ✅
+
 - Click handler to change MOI
 - Recompute layout and redraw
 
 ### Phase 6: Polish
+
 - Smooth animations on MOI change
 - Line updates on scroll/resize
 - Accessibility (ARIA, keyboard nav)
@@ -449,53 +469,63 @@ The MOI algorithm keeps visual design minimal:
 ## Alternatives Considered
 
 ### Flat List with Thread Indicators
+
 Instead of indentation, show a small "in reply to: [preview]" chip on each reply. Click to scroll to parent.
+
 - Simpler layout
 - Loses visual structure
 
 ### Separate Thread View
+
 Clicking a thread opens a dedicated panel/modal showing just that thread.
+
 - Cleaner main view
 - Context switch required
 
 ### GitHub-style Collapsed Threads
+
 Show only root messages by default; expand to see replies inline.
+
 - Compact
 - Requires more clicks to read
 
 ### Slack-style Thread Panel
+
 Replies open in a side panel.
+
 - Main channel stays uncluttered
 - Replies are second-class citizens
 
 ## Files
 
 ### Created
+
 - `packages/chat/moi-layout.js` - Pure `computeLayout(messages, moiId)` algorithm, returns `Map<id, { indent, lineType }>`
 - `packages/chat/reply-lines.css` - CSS gutter lines via pseudo-elements (replaced planned `reply-lines.js` SVG approach)
 - `packages/chat/test/unit/moi-layout.test.js` - 13 unit tests for layout algorithm
 
 ### Modified
+
 - `packages/chat/inbox-component.js` - MOI state tracking, `applyLayout()`, gutter elements, click handler, dismiss cleanup
 - `packages/chat/index.html` - Added `<link>` for `reply-lines.css`
 
 ## Decisions Made
 
-| Aspect | Decision |
-|--------|----------|
-| Indent unit | ~2ex |
-| MOI indication | None needed |
-| Clickable indication | None needed |
-| Scroll pinning | Use existing logic |
-| Line thickness | 2px |
-| Line color | Muted grey, light/dark mode aware |
-| Nodule styling | Simple junction, no ornament |
-| Off-screen parents | Render lines regardless |
-| Grey color (light mode) | `#9ca3af` (Tailwind gray-400) |
-| Grey color (dark mode) | `#6b7280` (Tailwind gray-500) |
-| Gutter width | 2ex (same as indent unit; line centered within) |
-| Animation on MOI change | Instant (no transition) |
-| Line rendering | CSS pseudo-elements (not SVG) |
+| Aspect                  | Decision                                        |
+| ----------------------- | ----------------------------------------------- |
+| Indent unit             | ~2ex                                            |
+| MOI indication          | None needed                                     |
+| Clickable indication    | None needed                                     |
+| Scroll pinning          | Use existing logic                              |
+| Line thickness          | 2px                                             |
+| Line color              | Muted grey, light/dark mode aware               |
+| Nodule styling          | Simple junction, no ornament                    |
+| Off-screen parents      | Render lines regardless                         |
+| Grey color (light mode) | `#9ca3af` (Tailwind gray-400)                   |
+| Grey color (dark mode)  | `#6b7280` (Tailwind gray-500)                   |
+| Gutter width            | 2ex (same as indent unit; line centered within) |
+| Animation on MOI change | Instant (no transition)                         |
+| Line rendering          | CSS pseudo-elements (not SVG)                   |
 
 ## Out of Scope
 

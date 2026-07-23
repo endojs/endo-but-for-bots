@@ -1,4 +1,3 @@
-
 ## Status
 
 **Partially implemented.** The Familiar-side infrastructure is in place:
@@ -247,10 +246,7 @@ Use Electron's `will-navigate` event on the `webContents` and
 // Chat loads from file:// (production) or http://127.0.0.1:vitePort (dev).
 // Both are allowed origins. localhttp:// weblet origins are also allowed
 // (they are confined by CSP and sandbox, not by the navigation delegate).
-const allowedProtocols = new Set([
-  'file:',
-  'localhttp:',
-]);
+const allowedProtocols = new Set(['file:', 'localhttp:']);
 
 // Intercept in-window navigation (e.g., clicking a link, JS location change)
 win.webContents.on('will-navigate', (event, navigationUrl) => {
@@ -378,7 +374,7 @@ app.configureHostResolver({
 });
 ```
 
-In `secure` mode, Chromium will *only* use the configured DoH servers and
+In `secure` mode, Chromium will _only_ use the configured DoH servers and
 will not fall back to the system DNS resolver. Since
 `https://invalid.localhost/dns-query` is unreachable, all DNS resolution
 fails. This is acceptable because:
@@ -392,8 +388,10 @@ fails. This is acceptable because:
 
 ```js
 // Disable DNS prefetching explicitly
-app.commandLine.appendSwitch('disable-features',
-  'DnsOverHttpsUpgrade,AsyncDns');
+app.commandLine.appendSwitch(
+  'disable-features',
+  'DnsOverHttpsUpgrade,AsyncDns',
+);
 app.commandLine.appendSwitch('no-pings');
 // Map all hostnames to NOTFOUND, except literal IPs which bypass the resolver
 app.commandLine.appendSwitch(
@@ -423,8 +421,10 @@ command-line flags:
 
 ```js
 app.commandLine.appendSwitch('disable-features', 'WebRtcHideLocalIpsWithMdns');
-app.commandLine.appendSwitch('force-webrtc-ip-handling-policy',
-  'disable_non_proxied_udp');
+app.commandLine.appendSwitch(
+  'force-webrtc-ip-handling-policy',
+  'disable_non_proxied_udp',
+);
 ```
 
 Additionally, use `session.defaultSession.setPermissionRequestHandler` to deny
@@ -477,7 +477,7 @@ const verifyExfiltrationDefenses = async () => {
     // Resolution succeeded unexpectedly — DNS is leaking.
     warnings.push(
       'DNS resolution succeeded unexpectedly. ' +
-      'DNS-based exfiltration may be possible.',
+        'DNS-based exfiltration may be possible.',
     );
   } catch {
     // Expected: resolution should fail.
@@ -487,7 +487,7 @@ const verifyExfiltrationDefenses = async () => {
   if (!app.commandLine.hasSwitch('host-resolver-rules')) {
     warnings.push(
       'host-resolver-rules flag not set. ' +
-      'DNS prefetch may not be fully blocked.',
+        'DNS prefetch may not be fully blocked.',
     );
   }
 
@@ -510,7 +510,8 @@ contextBridge.exposeInMainWorld('familiar', {
   // ... existing methods ...
   onSecurityWarnings: callback =>
     ipcRenderer.on('familiar:security-warnings', (_event, warnings) =>
-      callback(warnings)),
+      callback(warnings),
+    ),
 });
 
 // In electron-main.js, after verification:
@@ -523,7 +524,7 @@ if (warnings.length > 0) {
 #### Research needed
 
 - Verify that `app.configureHostResolver` with an unreachable DoH server
-  prevents *all* DNS queries (including prefetch, speculative connects, and
+  prevents _all_ DNS queries (including prefetch, speculative connects, and
   OCSP checks) in Electron's network stack.
 - Confirm that literal IP addresses (`127.0.0.1`) bypass the
   `--host-resolver-rules` MAP and the DoH path entirely.

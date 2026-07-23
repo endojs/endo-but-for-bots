@@ -1,6 +1,6 @@
 # Drop the pseudo-prototype: collapse the immutable-ArrayBuffer lib onto `ArrayBuffer.prototype`
 
-This design captures the *drop-the-pony* redesign erights proposed
+This design captures the _drop-the-pony_ redesign erights proposed
 on the experiment branch's predecessor pull request (referenced in
 the comment whose identifier appears in the project log).
 The package keeps its split between a self-contained library layer (today's pony layer)
@@ -11,13 +11,13 @@ does with those exports, not the package's split-into-two-layers shape.
 
 ## Status
 
-| Field    | Value                                                                                       |
-| -------- | ------------------------------------------------------------------------------------------- |
-| Created  | 2026-06-09                                                                                  |
-| Authors  | erights (original framing), kriscendobot (write-up)                                         |
-| Status   | Proposed                                                                                    |
+| Field    | Value                                                                                                            |
+| -------- | ---------------------------------------------------------------------------------------------------------------- |
+| Created  | 2026-06-09                                                                                                       |
+| Authors  | erights (original framing), kriscendobot (write-up)                                                              |
+| Status   | Proposed                                                                                                         |
 | Affects  | `packages/immutable-arraybuffer/`, `packages/ses/src/permits.js`, `packages/ses/src/get-anonymous-intrinsics.js` |
-| Replaces | The intermediate `%ImmutableArrayBufferPrototype%` intrinsic introduced by the cycle-201 shim |
+| Replaces | The intermediate `%ImmutableArrayBufferPrototype%` intrinsic introduced by the cycle-201 shim                    |
 
 ## Problem
 
@@ -50,7 +50,7 @@ the proposal as natively implemented:
   Code that reads the package's README has to learn two surfaces:
   the ponyfill (functions that take a buffer argument) and the shim
   (methods on the genuine prototype).
-  The two surfaces also disagree about the *call shape* of the same operation:
+  The two surfaces also disagree about the _call shape_ of the same operation:
   `sliceBufferToImmutable(buf, start, end)` versus
   `buf.sliceToImmutable(start, end)`.
 
@@ -59,7 +59,7 @@ The library layer stops exporting ponyfill functions and instead exports a recor
 The shim copies that record's own-properties onto `ArrayBuffer.prototype` and
 `%TypedArrayPrototype%` (the parallel TypedArray side lands on
 `%TypedArrayPrototype%` once the freezable TypedArray work merges; see
-*Out of scope* for this design's relationship to that work).
+_Out of scope_ for this design's relationship to that work).
 Emulated immutable buffers are still created by the lib (they still need a
 distinct identity so a brand-check WeakMap can recognise them), but
 they no longer have a distinct prototype: their `__proto__` is
@@ -67,7 +67,7 @@ they no longer have a distinct prototype: their `__proto__` is
 that prototype (the genuine ones plus the shim-installed ones)
 discriminate on whether `this` is in the brand-check WeakMap.
 
-The discriminator is the *amplifier-with-this-fallthrough* pattern: a
+The discriminator is the _amplifier-with-this-fallthrough_ pattern: a
 brand-check function that returns the underlying genuine buffer if the
 receiver is in the WeakMap, and returns the receiver itself otherwise.
 The predecessor experiment branch already uses this pattern for
@@ -85,31 +85,31 @@ Every occurrence of "pony" in `packages/immutable-arraybuffer/`
 filenames, identifiers, exported symbols, JSDoc, test titles, and
 README prose becomes "lib".
 
-| Before                                                       | After                                                       |
-| ------------------------------------------------------------ | ----------------------------------------------------------- |
-| `src/immutable-arraybuffer-pony.js`                          | `src/immutable-arraybuffer-lib.js`                          |
-| `test/immutable-arraybuffer-pony-slice.test.js`              | `test/immutable-arraybuffer-lib-slice.test.js`              |
-| `test/immutable-arraybuffer-pony-transfer.test.js`           | `test/immutable-arraybuffer-lib-transfer.test.js`           |
-| `index.js`: `export * from './src/immutable-arraybuffer-pony.js';` | `export * from './src/immutable-arraybuffer-lib.js';` (but see *Move 3* for whether `index.js` is reachable as a public export) |
-| README heading `## The Ponyfill`                             | `## The Lib Layer`                                          |
-| README prose "the ponyfill and shim"                         | "the lib layer and shim"                                    |
-| Test title `'Immutable ArrayBuffer ponyfill installed and not hardened'` | `'Immutable ArrayBuffer lib installed and not hardened'` |
+| Before                                                                   | After                                                                                                                           |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `src/immutable-arraybuffer-pony.js`                                      | `src/immutable-arraybuffer-lib.js`                                                                                              |
+| `test/immutable-arraybuffer-pony-slice.test.js`                          | `test/immutable-arraybuffer-lib-slice.test.js`                                                                                  |
+| `test/immutable-arraybuffer-pony-transfer.test.js`                       | `test/immutable-arraybuffer-lib-transfer.test.js`                                                                               |
+| `index.js`: `export * from './src/immutable-arraybuffer-pony.js';`       | `export * from './src/immutable-arraybuffer-lib.js';` (but see _Move 3_ for whether `index.js` is reachable as a public export) |
+| README heading `## The Ponyfill`                                         | `## The Lib Layer`                                                                                                              |
+| README prose "the ponyfill and shim"                                     | "the lib layer and shim"                                                                                                        |
+| Test title `'Immutable ArrayBuffer ponyfill installed and not hardened'` | `'Immutable ArrayBuffer lib installed and not hardened'`                                                                        |
 
 Identifiers internal to the lib file that contain "ponyfill" or "pony"
 in their JSDoc are rewritten.
 The exported symbol names (`isBufferImmutable`, `sliceBufferToImmutable`,
-`optTransferBufferToImmutable`) are *not* themselves renamed in this
-move because they are already lib-neutral; see *Move 3* for whether
+`optTransferBufferToImmutable`) are _not_ themselves renamed in this
+move because they are already lib-neutral; see _Move 3_ for whether
 they remain exported at all.
 
 In `packages/bytes/src/to-immutable.js`, the JSDoc reference to "the
 ponyfill" is rewritten to "the lib layer", with the caveat that this
-file's import may be retired entirely under *Move 3's* premise-2
+file's import may be retired entirely under _Move 3's_ premise-2
 question.
 
 The historical `CHANGELOG.md:18` entry ("sliceToImmutable Hermes
-ponyfill and shim") is left as a historical artifact (see *Open
-questions* for the call).
+ponyfill and shim") is left as a historical artifact (see _Open
+questions_ for the call).
 Historical changelog text describes what was shipped at the time and is
 not retroactively rewritten when terminology moves.
 
@@ -225,7 +225,7 @@ The `immutable` getter returns `true` for emulated immutables and
 semantics, but expressed as a method on the prototype rather than as a
 free function).
 
-The `[toStringTag]` slot is *not* installed on `ArrayBuffer.prototype`
+The `[toStringTag]` slot is _not_ installed on `ArrayBuffer.prototype`
 by the shim.
 The genuine `ArrayBuffer.prototype` already has
 `[toStringTag] = 'ArrayBuffer'`, and overwriting it to
@@ -246,7 +246,7 @@ instead kills 13 ocapn codec test cases.
 The implementation restores the
 `[Symbol.toStringTag] = 'ImmutableArrayBuffer'` slot as an own property
 on each emulated immutable buffer (installed via `defineProperty` in
-`makeImmutableArrayBufferInternal`), *not* on the shared prototype.
+`makeImmutableArrayBufferInternal`), _not_ on the shared prototype.
 Genuine ArrayBuffers continue to inherit `'ArrayBuffer'` from the
 prototype; emulated immutables carry their own
 `'ImmutableArrayBuffer'` slot.
@@ -266,7 +266,7 @@ The lib's `sliceBufferToImmutable` and `transferBufferToImmutable`
 free functions still exist internally to support the prototype record:
 `sliceToImmutable` and `transferToImmutable` in the prototype record
 call them.
-They are no longer part of the package's public surface (see *Move 3*).
+They are no longer part of the package's public surface (see _Move 3_).
 
 ### Move 3: Pseudo-prototype becomes a property record; package becomes side-effect-only
 
@@ -305,14 +305,14 @@ on `ArrayBuffer.prototype`.
 
 The exact public exports after the redesign:
 
-| Export                                          | Status                                                                                       |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `./shim.js`                                     | Keep. Side-effect import that installs the lib property record onto `ArrayBuffer.prototype`. |
-| `./package.json`                                | Keep. Standard package-metadata export.                                                      |
-| `.` (`index.js`)                                | Remove. The file is deleted; the `.` entry in `exports` is removed.                          |
-| `isBufferImmutable`                             | Remove. Callers use `ArrayBuffer.prototype.immutable` (the accessor the shim installs).      |
-| `sliceBufferToImmutable`                        | Remove. Callers use `buffer.sliceToImmutable(...)`.                                          |
-| `optTransferBufferToImmutable`                  | Remove. Callers use `buffer.transferToImmutable(...)`.                                       |
+| Export                         | Status                                                                                       |
+| ------------------------------ | -------------------------------------------------------------------------------------------- |
+| `./shim.js`                    | Keep. Side-effect import that installs the lib property record onto `ArrayBuffer.prototype`. |
+| `./package.json`               | Keep. Standard package-metadata export.                                                      |
+| `.` (`index.js`)               | Remove. The file is deleted; the `.` entry in `exports` is removed.                          |
+| `isBufferImmutable`            | Remove. Callers use `ArrayBuffer.prototype.immutable` (the accessor the shim installs).      |
+| `sliceBufferToImmutable`       | Remove. Callers use `buffer.sliceToImmutable(...)`.                                          |
+| `optTransferBufferToImmutable` | Remove. Callers use `buffer.transferToImmutable(...)`.                                       |
 
 The internal helpers `sliceBufferToImmutable` and
 `transferBufferToImmutable` still exist inside the lib file (the
@@ -470,12 +470,12 @@ New tests cover the amplifier-with-this-fallthrough behaviour
 explicitly:
 
 - `genuine ArrayBuffer.prototype.slice on a genuine buffer behaves
-  unchanged` (the post-shim `slice` is the override; the test asserts
+unchanged` (the post-shim `slice` is the override; the test asserts
   it delegates to the captured genuine `slice` on fallthrough).
 - `genuine ArrayBuffer.prototype.resize on a genuine resizable buffer
-  behaves unchanged` (same shape, for the resizable proposal).
+behaves unchanged` (same shape, for the resizable proposal).
 - `genuine ArrayBuffer.prototype.transfer on a genuine buffer behaves
-  unchanged`.
+unchanged`.
 - `emulated immutable.resize throws TypeError` (the brand-check
   discriminates on WeakMap membership).
 - `Object.prototype.toString.call(immuAB) === '[object ImmutableArrayBuffer]'`
@@ -489,7 +489,7 @@ integration test) extends with the shim-install-onto-genuine-prototype
 assertions:
 
 - After `import './shim.js';`, `'sliceToImmutable' in
-  ArrayBuffer.prototype === true`.
+ArrayBuffer.prototype === true`.
 - If `'sliceToImmutable' in ArrayBuffer.prototype` is already true
   before the shim loads (a prior installation, native or shim), the
   shim install is a no-op and the prior installation's `sliceToImmutable`,
@@ -561,7 +561,7 @@ builder from making a defensible choice.
 - **`packages/ses/DESIGN.md` companion file.**
   The ses-side changes (permits entry deletion, intrinsics sampling
   deletion) are small enough that this design captures them in
-  *Move 5* and does not warrant a separate `packages/ses/DESIGN.md`.
+  _Move 5_ and does not warrant a separate `packages/ses/DESIGN.md`.
   If `packages/ses/` later accumulates DESIGN.md sections for other
   architectural threads, the permits-removal note can be folded in
   there at that time.

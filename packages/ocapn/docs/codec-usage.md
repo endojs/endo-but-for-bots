@@ -171,4 +171,3 @@ failures are easy to locate:
 ```js
 const writer = codec.makeWriter({ name: 'outbound op:deliver' });
 ```
-

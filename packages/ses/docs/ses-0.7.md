@@ -36,7 +36,7 @@ Here are the issues resolved with SES 0.7
 - Added test262 runner packages:
   - Declarative test selection.
   - Used by many packages.
-- Migrated from `tape` to `tap`: 
+- Migrated from `tape` to `tap`:
   - Better count of test skipped.
   - More stable for large test runs (no tests silently dropped).
   - Parallelization.

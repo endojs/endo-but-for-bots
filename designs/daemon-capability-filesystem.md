@@ -1,11 +1,11 @@
 # Filesystem Capability: Ideas and Directions
 
-| | |
-|---|---|
-| **Created** | 2026-02-15 |
-| **Updated** | 2026-05-19 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Reference |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-15            |
+| **Updated** | 2026-05-19            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Reference             |
 
 ## Status
 
@@ -44,14 +44,14 @@ proposal.
   forward-looking vehicles.
 
 This document collects ideas for a filesystem capability that Endo could
-provide to AI agent guests.  It is not a finished design — it is a bag
+provide to AI agent guests. It is not a finished design — it is a bag
 of ideas at varying levels of maturity, drawn from Endo's existing VFS
 sketch (`docs/virtual-filesystem-design.md`), the OS sandbox plugin
 design (`daemon-os-sandbox-plugin.md`), and the ocap patterns that
 Endo already uses for its pet-name directory.
 
 Some of these ideas are near-term and concrete (a physical-backend Dir
-that wraps a host directory).  Others are speculative (git tree backends,
+that wraps a host directory). Others are speculative (git tree backends,
 materialization for sandbox integration, CAS-backed immutable trees).
 The intent is to lay out the design space so that contributors can
 propose concrete steps toward realizing parts of this vision
@@ -59,7 +59,7 @@ incrementally — picking one facet, writing a focused design for it, and
 building it without waiting for the whole picture to solidify.
 
 If you see an idea here that interests you, consider writing a concrete
-design document for it.  Good candidates for a first step include:
+design document for it. Good candidates for a first step include:
 
 - A minimal physical-backend Dir/File with caretaker control, sufficient
   to grant a guest read-write access to a single project directory.
@@ -73,7 +73,7 @@ design document for it.  Good candidates for a first step include:
 
 AI coding agents need to read and write files in a project directory.
 Today, agents either receive ambient filesystem access (the host OS
-user's full permissions) or no filesystem access at all.  Ambient access
+user's full permissions) or no filesystem access at all. Ambient access
 lets a prompt-injected agent read credentials (`~/.ssh/id_rsa`,
 `~/.aws/credentials`), poison configuration (`~/.bashrc`, `.git/hooks`),
 or exfiltrate source code — attacks demonstrated at 84% success rates
@@ -94,7 +94,7 @@ concrete capabilities for AI agent use cases.
 
 ### Layered architecture
 
-The system could be organized into three layers.  Each layer is
+The system could be organized into three layers. Each layer is
 independently useful and could be built incrementally.
 
 ```
@@ -116,33 +116,33 @@ independently useful and could be built incrementally.
 └───────────┴─────────────┴───────────────────┘
 ```
 
-**VFS Namespace.**  The host constructs a virtual filesystem by mounting
-backends at paths within the namespace.  This is where `mount` lives —
+**VFS Namespace.** The host constructs a virtual filesystem by mounting
+backends at paths within the namespace. This is where `mount` lives —
 it attaches a backend subtree to a virtual path, following the same
-semantics as the VFS design sketch.  The namespace is a chroot jail:
+semantics as the VFS design sketch. The namespace is a chroot jail:
 the guest sees a single unified tree and cannot distinguish which
 backend serves which path.
 
-**Backends.**  Each backend provides storage behind the `Dir`/`File`
-interface.  The guest-facing interface is identical regardless of
+**Backends.** Each backend provides storage behind the `Dir`/`File`
+interface. The guest-facing interface is identical regardless of
 backend — the same `Dir` and `File` methods work whether the backing
 is a physical directory, a git tree, or an in-memory store.
 
-**Dir / File.**  The guest-facing capabilities.  Obtained from the VFS
-namespace via `root()` or by navigating into subdirectories.  These are
+**Dir / File.** The guest-facing capabilities. Obtained from the VFS
+namespace via `root()` or by navigating into subdirectories. These are
 the only capabilities the guest holds.
 
 ### Backend types
 
-Several backend types could serve the Dir/File interface.  A physical
+Several backend types could serve the Dir/File interface. A physical
 backend is the obvious starting point; the others are more speculative
 but illustrate the design space.
 
 #### Physical backend
 
-The simplest and most immediately useful backend.  Wraps a host OS
+The simplest and most immediately useful backend. Wraps a host OS
 directory, mapping read and write operations to real filesystem calls
-via the daemon's `FilePowers`.  This backend's key advantage is
+via the daemon's `FilePowers`. This backend's key advantage is
 **interoperability with OS-level sandboxing**: a physically-backed VFS
 can be passed to the OS sandbox plugin (`daemon-os-sandbox-plugin.md`)
 as a filesystem endowment, letting sandboxed native processes access
@@ -155,8 +155,8 @@ const projectBackend = physicalBackend('/home/user/project');
 #### Git tree backend
 
 Exposes a git tree-ish (commit, branch, tag) as a read-only directory
-tree.  Writes create a new tree object (or work against a temporary
-index) without touching the working directory.  This lets an agent
+tree. Writes create a new tree object (or work against a temporary
+index) without touching the working directory. This lets an agent
 read source at a specific revision, diff across commits, or
 experiment with changes without modifying the physical checkout.
 
@@ -167,9 +167,9 @@ const prBackend = gitTreeBackend('/home/user/project/.git', 'feature/foo');
 
 #### Memory backend
 
-Ephemeral in-memory storage.  Useful for scratch space, temporary
-results, and experimentation.  Contents are lost when the VFS is
-discarded.  Writes are cheap and cannot affect the physical system.
+Ephemeral in-memory storage. Useful for scratch space, temporary
+results, and experimentation. Contents are lost when the VFS is
+discarded. Writes are cheap and cannot affect the physical system.
 
 ```js
 const scratchBackend = memoryBackend();
@@ -177,8 +177,8 @@ const scratchBackend = memoryBackend();
 
 #### CAS backend
 
-Content-addressed storage.  Inherently read-only (content is immutable
-once stored).  Useful for caching build artifacts, sharing immutable
+Content-addressed storage. Inherently read-only (content is immutable
+once stored). Useful for caching build artifacts, sharing immutable
 datasets, and providing reproducible inputs.
 
 ```js
@@ -188,14 +188,14 @@ const artifactsBackend = casBackend(contentAddressStore);
 ### VFS namespace construction
 
 The VFS namespace is the analogue of a chroot jail or a build
-sandbox's input tree.  The host constructs it by mounting backends at
-paths.  Each mount can be independently attenuated (read-only,
-size-limited, etc.) at the backend level.  The namespace itself is a
+sandbox's input tree. The host constructs it by mounting backends at
+paths. Each mount can be independently attenuated (read-only,
+size-limited, etc.) at the backend level. The namespace itself is a
 host-only capability — the guest receives only the `Dir` obtained
 from `root()`.
 
-How exactly the namespace API should look is an open question.  The
-VFS design sketch uses `vfs.mount(pathArray, backend)`.  One
+How exactly the namespace API should look is an open question. The
+VFS design sketch uses `vfs.mount(pathArray, backend)`. One
 possible shape:
 
 ```js
@@ -205,9 +205,7 @@ const vfs = makeVirtualFs({ policy: rootedPolicy });
 vfs.mount(['project'], physicalBackend('/home/user/project'));
 
 // Git main branch — read-only reference copy
-vfs.mount(['ref', 'main'], gitTreeBackend(
-  '/home/user/project/.git', 'main',
-));
+vfs.mount(['ref', 'main'], gitTreeBackend('/home/user/project/.git', 'main'));
 
 // Scratch space — ephemeral, no physical footprint
 vfs.mount(['tmp'], memoryBackend());
@@ -245,7 +243,7 @@ sandbox plugin in a powerful way.
 
 A VFS backed entirely by non-physical backends (git trees, memory, CAS)
 cannot be passed directly to an OS sandbox, since sandboxed native
-processes need real filesystem paths.  **Materialization** would bridge
+processes need real filesystem paths. **Materialization** would bridge
 this gap: the VFS (or a subtree of it) is checked out to temporary
 physical storage, the sandboxed process runs against that checkout, and
 changes
@@ -266,15 +264,15 @@ await syncBack();
 ```
 
 This is the same trick Bazel uses: a build step sees only the
-dependencies explicitly mounted into its sandbox.  If a dependency is
+dependencies explicitly mounted into its sandbox. If a dependency is
 not declared, it is not mounted, and the build step cannot see it —
-the absence is enforced structurally, not by policy.  A VFS namespace
+the absence is enforced structurally, not by policy. A VFS namespace
 with selective mounts achieves the same property: an agent or
 subprocess sees exactly the files that were mounted, nothing more.
 
 ### Dir and File capabilities
 
-`Dir` and `File` are the guest-facing capabilities.  Of all the ideas
+`Dir` and `File` are the guest-facing capabilities. Of all the ideas
 in this document, these are the most concrete and the best candidate
 for a first implementation — a Dir backed by a single physical
 directory would be immediately useful for granting project access to
@@ -282,18 +280,18 @@ an agent guest.
 
 #### Overview
 
-- **`Dir`** — directory capability.  Exposes methods to list, read,
-  write, and navigate.  Can only reach descendants of its root.
-- **`File`** — file capability.  Can attenuate itself to read-only or
+- **`Dir`** — directory capability. Exposes methods to list, read,
+  write, and navigate. Can only reach descendants of its root.
+- **`File`** — file capability. Can attenuate itself to read-only or
   revocable forms.
 - **`DirControl`** / **`FileControl`** — caretaker facets the host
-  holds.  Can toggle readability and writability, or revoke entirely,
+  holds. Can toggle readability and writability, or revoke entirely,
   without the guest's cooperation.
 
 The guest never holds a "filesystem service configured with a
-descriptor."  It holds a `Dir` rooted at a specific location.  It
+descriptor." It holds a `Dir` rooted at a specific location. It
 cannot name paths outside that root because no method on `Dir` returns
-a reference to a parent.  This is structural confinement — the security
+a reference to a parent. This is structural confinement — the security
 property follows from the object graph, not from a denylist.
 
 #### Capability flow
@@ -332,16 +330,16 @@ GUEST
 #### Recursive attenuation
 
 Attenuation happens by calling methods that each narrow in a single
-dimension.  These methods return new capabilities and compose by
+dimension. These methods return new capabilities and compose by
 chaining:
 
-- **`readOnly()`** — removes write authority.  Returns a `Dir` (or
+- **`readOnly()`** — removes write authority. Returns a `Dir` (or
   `File`) that supports all read operations but rejects writes.
-- **`subDir(path)`** — scopes to a subtree.  Takes a `/`-separated
+- **`subDir(path)`** — scopes to a subtree. Takes a `/`-separated
   relative path and returns a new `Dir` re-rooted at that location.
   The recipient cannot navigate above the new root.
 
-Both methods are available on every `Dir`.  A guest can further
+Both methods are available on every `Dir`. A guest can further
 attenuate capabilities it holds (attenuation is always safe), and a
 host uses them when constructing grants.
 
@@ -363,13 +361,13 @@ const readme = await E(rootDir).openFile('README.md');
 const readOnlyReadme = await E(readme).readOnly();
 ```
 
-Each result is a complete, self-contained capability.  The recipient
+Each result is a complete, self-contained capability. The recipient
 cannot navigate upward from `srcDir` to reach `rootDir`, nor can they
 recover write authority from `readOnlyDir`.
 
 `openDir(name)` remains a distinct navigation method — it takes a
 single path segment and returns the child directory for traversal
-within a session.  `subDir(path)` is the attenuation method — it
+within a session. `subDir(path)` is the attenuation method — it
 takes a multi-segment path and creates a new confined root.
 
 #### Caretaker separation
@@ -397,7 +395,7 @@ The guest cannot discover, access, or influence the control facet.
 #### Defense-in-depth deny patterns (optional)
 
 As a secondary safety net, the physical backend may apply hardcoded deny
-patterns to catch mistakes in VFS construction.  These are not the
+patterns to catch mistakes in VFS construction. These are not the
 primary confinement mechanism — structural confinement via selective
 mounting is — but they provide an additional layer if a host accidentally
 mounts a directory that contains sensitive files:
@@ -416,7 +414,7 @@ mounts a directory that contains sensitive files:
 ```
 
 These patterns are enforced at the backend level, not in the `Dir` or
-`File` exos, so they cannot be circumvented by the guest.  They are
+`File` exos, so they cannot be circumvented by the guest. They are
 configurable by the host and can be disabled when the host explicitly
 intends to expose such paths (e.g., a credential management agent).
 
@@ -431,11 +429,7 @@ const PathSegment = M.string();
 const NodeStatShape = M.splitRecord(
   {
     name: M.string(),
-    type: M.or(
-      M.literal('file'),
-      M.literal('directory'),
-      M.literal('symlink'),
-    ),
+    type: M.or(M.literal('file'), M.literal('directory'), M.literal('symlink')),
   },
   {
     sizeBytes: M.number(),
@@ -485,9 +479,7 @@ const DirControlI = M.interface('DirControl', {
   setWritable: M.call(M.boolean()).returns(M.undefined()),
   getWritable: M.call().returns(M.boolean()),
   revoke: M.call().returns(M.undefined()),
-  getChild: M.call(PathSegment).returns(
-    M.promise(M.remotable('NodeControl')),
-  ),
+  getChild: M.call(PathSegment).returns(M.promise(M.remotable('NodeControl'))),
   help: M.call().returns(M.string()),
 });
 
@@ -505,19 +497,23 @@ const RevokerI = M.interface('Revoker', {
 });
 
 const VfsI = M.interface('VirtualFs', {
-  mount: M.call(M.arrayOf(M.string()), M.remotable('Backend'))
-    .returns(M.promise(M.undefined())),
+  mount: M.call(M.arrayOf(M.string()), M.remotable('Backend')).returns(
+    M.promise(M.undefined()),
+  ),
   root: M.call().returns(
     M.splitRecord({
       dir: M.remotable('Dir'),
       control: M.remotable('DirControl'),
     }),
   ),
-  materialize: M.call(M.arrayOf(M.string()))
-    .returns(M.promise(M.splitRecord({
-      physicalPath: M.string(),
-      syncBack: M.remotable('SyncBack'),
-    }))),
+  materialize: M.call(M.arrayOf(M.string())).returns(
+    M.promise(
+      M.splitRecord({
+        physicalPath: M.string(),
+        syncBack: M.remotable('SyncBack'),
+      }),
+    ),
+  ),
   help: M.call().returns(M.string()),
 });
 ```
@@ -535,11 +531,11 @@ interface through two mechanisms:
    construct valid calls without guessing.
 
 The `help()` text is written for an LLM that has never seen this
-capability before.  It explains what the capability does, enumerates
+capability before. It explains what the capability does, enumerates
 every method, and gives concrete example invocations.
 
-Note: the guest sees only `Dir` and `File`.  It does not see the `Vfs`
-interface, backend types, or control facets.  The LLM needs to
+Note: the guest sees only `Dir` and `File`. It does not see the `Vfs`
+interface, backend types, or control facets. The LLM needs to
 understand only the Dir/File methods to use the filesystem.
 
 ### help() text
@@ -684,7 +680,7 @@ Methods:
 
 ### Granting examples
 
-These illustrate how the pieces might compose.  The API shapes are
+These illustrate how the pieces might compose. The API shapes are
 suggestive, not settled.
 
 #### Grant read-write access to a project VFS
@@ -726,7 +722,10 @@ E(host).grant(guestName, 'fs', readOnlySrc);
 // is mounted, so undeclared dependencies are structurally invisible.
 const buildVfs = makeVirtualFs({ policy: rootedPolicy });
 buildVfs.mount(['src'], physicalBackend('/home/user/project/packages/foo/src'));
-buildVfs.mount(['deps', 'bar'], physicalBackend('/home/user/project/packages/bar'));
+buildVfs.mount(
+  ['deps', 'bar'],
+  physicalBackend('/home/user/project/packages/bar'),
+);
 buildVfs.mount(['out'], memoryBackend());
 
 const { dir: buildDir } = buildVfs.root();
@@ -784,19 +783,19 @@ E(rootControl).revoke();
 Any concrete design should build on these existing pieces rather than
 introducing parallel abstractions.
 
-**Pet-name directory (`packages/daemon/src/directory.js`).**  The existing
+**Pet-name directory (`packages/daemon/src/directory.js`).** The existing
 `EndoDirectory` is a capability for the daemon's pet-name store — it maps
-names to formula identifiers, not to files.  The filesystem `Dir` is a
+names to formula identifiers, not to files. The filesystem `Dir` is a
 separate capability that maps names to file and directory nodes backed by
-a storage backend.  Both follow the same structural pattern (you navigate
+a storage backend. Both follow the same structural pattern (you navigate
 by name, you cannot go up), but they serve different purposes and live at
-different layers.  A pet-name directory might contain a reference to a
+different layers. A pet-name directory might contain a reference to a
 filesystem `Dir` as one of its entries.
 
 **Virtual filesystem design sketch (`docs/virtual-filesystem-design.md`).**
-The ideas here build on that sketch.  The `Dir`, `File`, `DirControl`,
+The ideas here build on that sketch. The `Dir`, `File`, `DirControl`,
 and `FileControl` interfaces are refinements of the `DirI`, `FileI`,
-`FsControlI`, and `NodeControlI` interfaces defined there.  The key
+`FsControlI`, and `NodeControlI` interfaces defined there. The key
 additions explored in this document are:
 
 - `readOnly()` and `subDir(path)` on `Dir` as constituent single-
@@ -812,20 +811,20 @@ additions explored in this document are:
 - Agent-facing granting patterns and examples
 - Defense-in-depth deny patterns as a backend-level concern
 
-**`FilePowers` (`packages/daemon/src/types.d.ts`).**  The daemon's
+**`FilePowers` (`packages/daemon/src/types.d.ts`).** The daemon's
 internal `FilePowers` type provides raw path-based file operations
 (`readFileText(path)`, `writeFileText(path, text)`, etc.) used by the
-daemon itself.  These are ambient-authority operations — any code with
-`FilePowers` can read or write any path.  The filesystem capability
+daemon itself. These are ambient-authority operations — any code with
+`FilePowers` can read or write any path. The filesystem capability
 described here wraps and confines these powers: the physical backend
 uses `FilePowers` internally, but the `Dir` and `File` facets exposed
 to guests restrict access to the mounted subtree.
 
-**OS sandbox plugin (`daemon-os-sandbox-plugin.md`).**  The sandbox
+**OS sandbox plugin (`daemon-os-sandbox-plugin.md`).** The sandbox
 plugin accepts filesystem endowments as host paths with access modes.
 Physically-backed VFS subtrees can be passed directly as sandbox
-endowments.  Non-physical subtrees (git tree, memory, CAS) must be
-materialized to temporary physical storage first.  The materialization
+endowments. Non-physical subtrees (git tree, memory, CAS) must be
+materialized to temporary physical storage first. The materialization
 API bridges this gap.
 
 ### Packages that would likely be affected
@@ -852,63 +851,63 @@ API bridges this gap.
 
 ## Security Considerations
 
-Any concrete design should address these concerns.  They are listed
+Any concrete design should address these concerns. They are listed
 here as a checklist for future design authors.
 
-- **Structural confinement is the primary defense.**  A guest holding a
+- **Structural confinement is the primary defense.** A guest holding a
   `Dir` rooted at a VFS namespace cannot access paths outside that
   namespace because no method on `Dir` returns a reference to a parent
-  or sibling.  There is no path string the guest can construct that
+  or sibling. There is no path string the guest can construct that
   reaches outside the root — the capability model makes such access
   structurally impossible, not merely denied by policy.
 
-- **Selective mounting is the Bazel property.**  The VFS namespace
-  contains only what the host explicitly mounts.  Undeclared
+- **Selective mounting is the Bazel property.** The VFS namespace
+  contains only what the host explicitly mounts. Undeclared
   dependencies are not denied by policy — they are absent from the
-  namespace entirely.  A guest cannot access `/home/user/.ssh` if no
+  namespace entirely. A guest cannot access `/home/user/.ssh` if no
   mount exposes it, regardless of what the physical filesystem contains.
 
-- **Symlink escape.**  Symbolic links within a physically-backed subtree
-  that resolve outside the mount boundary must not be followed.  The
+- **Symlink escape.** Symbolic links within a physically-backed subtree
+  that resolve outside the mount boundary must not be followed. The
   physical backend must resolve symlinks and check that the target is
-  within the mount boundary before returning a node.  Non-physical
+  within the mount boundary before returning a node. Non-physical
   backends (git tree, memory, CAS) store links as opaque targets and
   resolve them within their own namespace, so escape is not possible.
 
-- **Path traversal in entry names.**  The `PathSegment` type must reject
-  names containing `/`, `\`, `..`, or the null byte.  These checks occur
+- **Path traversal in entry names.** The `PathSegment` type must reject
+  names containing `/`, `\`, `..`, or the null byte. These checks occur
   in the `Dir` exo, not just in the backend, so they are enforced even
-  for in-memory or CAS-backed filesystems.  `subDir(path)` splits on
+  for in-memory or CAS-backed filesystems. `subDir(path)` splits on
   `/`, validates each resulting segment, and resolves eagerly — the
   returned `Dir` holds a direct reference to the resolved subtree, so
   TOCTOU races between scoping and use are avoided.
 
-- **Caretaker revocation is immediate.**  When a control facet calls
+- **Caretaker revocation is immediate.** When a control facet calls
   `revoke()`, the corresponding capability must become immediately
-  inoperative.  In-flight operations may complete, but no new operations
-  are accepted.  This requires a shared revocation flag between the
+  inoperative. In-flight operations may complete, but no new operations
+  are accepted. This requires a shared revocation flag between the
   capability and its control facet.
 
-- **Attenuation is irreversible.**  A read-only `Dir` obtained via
-  `readOnly()` cannot be upgraded to read-write by the guest.  A `Dir`
-  obtained via `subDir("src")` cannot navigate above `src/`.  Each
+- **Attenuation is irreversible.** A read-only `Dir` obtained via
+  `readOnly()` cannot be upgraded to read-write by the guest. A `Dir`
+  obtained via `subDir("src")` cannot navigate above `src/`. Each
   narrowing is one-way — the guest cannot recover authority that was
   removed.
 
-- **Materialization is a controlled rights expansion.**  Converting a
+- **Materialization is a controlled rights expansion.** Converting a
   non-physical VFS subtree to temporary physical storage creates real
-  files that a sandboxed process can access.  The materialized path
+  files that a sandboxed process can access. The materialized path
   must be confined (e.g., under a temp directory with restrictive
   permissions), and `syncBack` must validate that changes are within
   the materialized scope before writing them back to the VFS.
 
-- **Defense-in-depth deny patterns catch granting mistakes.**  If a host
+- **Defense-in-depth deny patterns catch granting mistakes.** If a host
   accidentally mounts `$HOME` instead of `$HOME/project`, the physical
   backend's deny patterns for `.ssh`, `.aws`, `.env`, etc. provide a
-  secondary barrier.  Non-physical backends do not need these patterns
+  secondary barrier. Non-physical backends do not need these patterns
   since they contain only explicitly placed content.
 
-- **Backend isolation.**  The physical backend holds ambient `FilePowers`.
+- **Backend isolation.** The physical backend holds ambient `FilePowers`.
   It must never expose these powers through any `Dir` or `File` method.
   The backend is part of the trusted computing base; the `Dir` and `File`
   exos are not.
@@ -918,19 +917,19 @@ here as a checklist for future design authors.
 These are questions that a concrete design for any facet of this
 vision should address.
 
-- What is the right backend interface?  The VFS sketch leaves this
-  largely implicit.  A concrete backend interface would make it
+- What is the right backend interface? The VFS sketch leaves this
+  largely implicit. A concrete backend interface would make it
   possible to implement and test backends independently.
 - Should `glob()` live on `Dir` or be a separate utility that takes a
-  `Dir`?  Glob is expensive and its semantics (streaming vs bounded,
+  `Dir`? Glob is expensive and its semantics (streaming vs bounded,
   cross-mount behavior) may warrant separate treatment.
 - How should the VFS handle mounts that overlap or shadow each other?
   The sketch is silent on this.
 - What are the atomicity semantics for writes that cross mount
   boundaries (e.g., moving a file from a physical mount to a memory
   mount)?
-- How should materialization handle large subtrees?  Streaming?
-  Bounded size?  Lazy materialization on first access?
+- How should materialization handle large subtrees? Streaming?
+  Bounded size? Lazy materialization on first access?
 - Is `subDir(path)` the right name and signature for scope attenuation?
   Alternatives include `chroot(path)`, `scope(path)`, or overloading
   `openDir` to accept multi-segment paths.
@@ -939,20 +938,20 @@ vision should address.
 
 ## Notes for Implementers
 
-**Scaling.**  Dir and File capabilities are lightweight exos wrapping
+**Scaling.** Dir and File capabilities are lightweight exos wrapping
 a backend reference and a permissions record — thousands can coexist.
 Revocation uses a shared boolean flag (O(1) check per operation).
 Git tree backends read from packfiles; performance depends on
-repository size.  Materialization copies to temp storage proportional
+repository size. Materialization copies to temp storage proportional
 to subtree size.
 
-**Compatibility.**  Dir and File should be plain Endo exos serializable
-over OCapN.  Backends are pluggable — new types can be added without
-changing the Dir/File interface.  The interface should align with the
+**Compatibility.** Dir and File should be plain Endo exos serializable
+over OCapN. Backends are pluggable — new types can be added without
+changing the Dir/File interface. The interface should align with the
 VFS design sketch so backends are interchangeable.
 
-**Upgrade path.**  New methods can be added to Dir or File as optional
-extensions.  Incompatible changes should introduce new types (e.g.,
+**Upgrade path.** New methods can be added to Dir or File as optional
+extensions. Incompatible changes should introduce new types (e.g.,
 `DirV2`) rather than modifying existing interfaces.
 
 ## References

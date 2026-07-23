@@ -29,6 +29,7 @@ When interacting through a guest persona and sending an evaluate message,
 pressing Enter does not return the command line to its initial state.
 
 To investigate:
+
 1. How does a guest persona send an evaluate message vs a host?
 2. What is the counter-proposal workflow - when a guest sends `/js`, does it
    become a proposal that needs approval?
@@ -38,6 +39,7 @@ To investigate:
    reset state?
 
 Relevant files:
+
 - `packages/chat/chat-bar-component.js` - command line state management
 - `packages/chat/inline-eval.js` - inline eval form
 - `packages/daemon/src/guest.js` - guest persona behavior
@@ -45,6 +47,7 @@ Relevant files:
 - `packages/daemon/src/mail.js` - message/evaluate handling
 
 Reproduction:
+
 1. Enter a host profile
 2. Create a guest (`/mkguest`)
 3. Enter the guest profile (`/enter guest-name`)

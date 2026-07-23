@@ -1,11 +1,11 @@
 # `@endo/agentry`: the `defineAgent` agent-builder
 
-| | |
-|---|---|
-| **Created** | 2026-06-03 |
-| **Updated** | 2026-06-25 |
-| **Author** | 0xpatrickdev (prompted) |
-| **Status** | In Progress |
+|             |                         |
+| ----------- | ----------------------- |
+| **Created** | 2026-06-03              |
+| **Updated** | 2026-06-25              |
+| **Author**  | 0xpatrickdev (prompted) |
+| **Status**  | In Progress             |
 
 ## Status
 
@@ -65,8 +65,8 @@ hand-assembling a harness.
 
 The builder follows the exo `define*` / `make*` spirit
 ([exo-taxonomy](https://github.com/endojs/endo/blob/master/packages/exo/docs/exo-taxonomy.md)):
-a powerless *definition* describes what all instances share, and a powered
-*make* binds an instance to its specific powers.
+a powerless _definition_ describes what all instances share, and a powered
+_make_ binds an instance to its specific powers.
 As shipped in #517 the two stages live in **one call**, not two exports.
 
 `defineAgent(config)` returns a **maker function**.
@@ -77,14 +77,14 @@ Calling the returned maker with a powers handle is the powered stage: it binds
 the granted `Filesystem`, the credential resolver, and the powered tool surface,
 and constructs the live pi-agent-core `Agent`.
 
-| Stage | Where it lives | Holds | Carries no |
-|---|---|---|---|
-| definition (powerless) | the maker's closure, produced by `defineAgent(config)` | the resolved `Model`, the `instructions` system prompt, and the powerless model-facing `toolSchemas` | caps (no `Filesystem`, no credential, no powered tool closure) |
-| make (powered) | calling the returned maker `(options?) => Agent` | the definition **plus** the granted powers: the powered tool closures, the `Credentials` seam, and the per-construction overrides | (nothing: this is the powerful stage) |
+| Stage                  | Where it lives                                         | Holds                                                                                                                             | Carries no                                                     |
+| ---------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| definition (powerless) | the maker's closure, produced by `defineAgent(config)` | the resolved `Model`, the `instructions` system prompt, and the powerless model-facing `toolSchemas`                              | caps (no `Filesystem`, no credential, no powered tool closure) |
+| make (powered)         | calling the returned maker `(options?) => Agent`       | the definition **plus** the granted powers: the powered tool closures, the `Credentials` seam, and the per-construction overrides | (nothing: this is the powerful stage)                          |
 
-So `defineAgent(config)` is agent *definition*: a powerless closure safe to
+So `defineAgent(config)` is agent _definition_: a powerless closure safe to
 hold and call many times.
-Calling its maker is agent *creation*: it empowers that definition into a
+Calling its maker is agent _creation_: it empowers that definition into a
 runnable agent for one operator, one workspace, one credential set.
 A maker can be called many times to build many agents.
 
@@ -106,8 +106,8 @@ SmallCaps marshal.
 This design **grows** that package with a new `defineAgent` module; it
 does not create a new package.
 The synergy is direct: the builder's agents are exactly what the optimizer
-and eval harness exercise (see *Relationship to the eval and optimizer
-package* below).
+and eval harness exercise (see _Relationship to the eval and optimizer
+package_ below).
 
 **The pi harness contract** (verified against `@earendil-works/pi-ai`
 v0.79.0, the version `packages/agentry/package.json` pins as `^0.79.0` after
@@ -153,7 +153,7 @@ and a web endpoint as rival interaction modes; that multi-interface export
 framing is out of scope.
 
 Discrete `arg0`-style tools (the method-guard `makeTool` records the
-sibling design specifies) are **still kept** as a *distinct second mode*:
+sibling design specifies) are **still kept** as a _distinct second mode_:
 the surface an MCP client consumes and the fallback for a model that
 cannot or should not write code.
 This is a different concern from the multi-interface export idea above.
@@ -199,7 +199,7 @@ flowchart TD
    Confinement (loading pi into a fresh Endo `Compartment` via
    `importLocation` per
    [PR #297](https://github.com/endojs/endo-but-for-bots/pull/297)) is the
-path the code-mode `evaluate` tool follows for the **guest code** it runs,
+   path the code-mode `evaluate` tool follows for the **guest code** it runs,
    not a wrapper `defineAgent` puts around the pi loop itself.
 
 2. **Model resolution, in the definition.**
@@ -245,18 +245,18 @@ They map cleanly today, but nothing pinned the correspondence, so they
 could drift as the harness lands.
 This design pins it.
 
-| pi session tree | daemon mail model | the correspondence |
-|---|---|---|
-| `parentId` | `replyTo` (`packages/daemon/src/mail.js`) | the sole branch axis |
-| active leaf | a message's latest revision: `done: true` is settled, the last entry of `revisionsByNumber.get(messageNumber)` is the current envelope | which node is live |
-| `/fork`, `/clone` | `reply(messageNumber, ...)`, producing a sibling subtree, never `editMessage` | how a branch grows |
+| pi session tree   | daemon mail model                                                                                                                      | the correspondence   |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| `parentId`        | `replyTo` (`packages/daemon/src/mail.js`)                                                                                              | the sole branch axis |
+| active leaf       | a message's latest revision: `done: true` is settled, the last entry of `revisionsByNumber.get(messageNumber)` is the current envelope | which node is live   |
+| `/fork`, `/clone` | `reply(messageNumber, ...)`, producing a sibling subtree, never `editMessage`                                                          | how a branch grows   |
 
 The reply-to tree carried `messageId` / `replyTo` from the start, and
 the conversation-tree adapter (`packages/conversation-tree`) already
 bridges daemon `replyTo` to a tree node's `parentId`.
 What [#125](https://github.com/endojs/endo-but-for-bots/pull/125) added
 (`editMessage`, `messageHistory`, and the `done` flag, stored per
-message number in `revisionsByNumber`) is a *second, orthogonal* history
+message number in `revisionsByNumber`) is a _second, orthogonal_ history
 axis: linear, per-message-number, layered on top of the reply-to tree.
 Nothing in the harness reconciled which revision was current when a
 reply branched off a node, which is exactly where the two axes could
@@ -289,10 +289,13 @@ import { defineAgent } from '@endo/agentry';
 // 1. definition: powerless closure. No provider block, no prompts.system;
 //    the model carries the provider and `instructions` is the system prompt.
 const makeMyAgent = defineAgent({
-  model: 'sonnet',                        // profile id | "provider/modelId" | concrete pi-ai Model
+  model: 'sonnet', // profile id | "provider/modelId" | concrete pi-ai Model
   instructions: 'You are a helpful agent.',
-  tools: [/* powerless model-facing AgentTools */],
-  endow(definition, options) {            // optional: derive powered tools + key from live powers
+  tools: [
+    /* powerless model-facing AgentTools */
+  ],
+  endow(definition, options) {
+    // optional: derive powered tools + key from live powers
     return { tools: powerBoundTools(options.powers), getApiKey };
   },
 });
@@ -322,7 +325,10 @@ primary), and #517 ships it as two concrete presets exported from
 `@endo/agentry/code-mode`, each a thin specialization of `defineAgent`:
 
 ```ts
-import { makeCodeModeAgent, makeCodeModeGitLoopAgent } from '@endo/agentry/code-mode';
+import {
+  makeCodeModeAgent,
+  makeCodeModeGitLoopAgent,
+} from '@endo/agentry/code-mode';
 
 // makeCodeModeAgent: an agent whose sole tool is evaluate(js), evaluated in a
 // Compartment endowed with the configured lexical powers.
@@ -369,10 +375,10 @@ bigints alone**, with both halves living in `@endo/agent-tools` today (the
 wire-shape naming and the inbound decode in the Pi adapter), not in a
 define-time `prepareArguments` recipe assembled by `defineAgent`:
 
-| Direction | What it does |
-|---|---|
-| **encode** (tool result outbound) | A bigint is named `{ type: 'string', pattern: '^[+-]?\\d+$' }`, never `{ type: 'integer' }`. A plain string whose first character is in the reserved range is escaped by prefixing `!` (a phone-number literal `"+15551234567"` goes over as `"!+15551234567"`). The description tells the model to emit values in this form. |
-| **decode** (model-emitted call inbound, before `mustMatch`) | `coerceBigintArgs` coerces a `^[+-]?\d+$` string into a `BigInt` (narrow: only declared `bigintArgs` fields); `unescapeHilbertHotel` drops a leading `!` whose second character is in the reserved range; the LLM-JSON fixups (null to undefined, one JSON-string-parse retry) run in the same pass. |
+| Direction                                                   | What it does                                                                                                                                                                                                                                                                                                                  |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **encode** (tool result outbound)                           | A bigint is named `{ type: 'string', pattern: '^[+-]?\\d+$' }`, never `{ type: 'integer' }`. A plain string whose first character is in the reserved range is escaped by prefixing `!` (a phone-number literal `"+15551234567"` goes over as `"!+15551234567"`). The description tells the model to emit values in this form. |
+| **decode** (model-emitted call inbound, before `mustMatch`) | `coerceBigintArgs` coerces a `^[+-]?\d+$` string into a `BigInt` (narrow: only declared `bigintArgs` fields); `unescapeHilbertHotel` drops a leading `!` whose second character is in the reserved range; the LLM-JSON fixups (null to undefined, one JSON-string-parse retry) run in the same pass.                          |
 
 The bigint half closes the JSON-number ambiguity the review flagged: the
 full SmallCaps marshal would silently reinterpret any LLM string with a
@@ -401,7 +407,7 @@ emits.
 `JSON.stringify` cannot: it throws on a bigint and mangles the
 reserved-range and `undefined` cases, re-opening on the display side the
 ambiguity the inbound contract closes on the args side.
-Live caps in a result are *named* (a petname via `storeValue`), not
+Live caps in a result are _named_ (a petname via `storeValue`), not
 marshalled.
 
 ## The deriver call site (the discrete-tool path; aspirational)
@@ -424,8 +430,9 @@ const agentToolRecipe = {
   name: tool.name,
   label: tool.name,
   description: tool.summary,
-  parameters: tool.parameters,          // the wire schema: TypeBox TSchema = MCP inputSchema
-  prepareArguments(args) {              // the symmetric SmallCaps decode, before mustMatch
+  parameters: tool.parameters, // the wire schema: TypeBox TSchema = MCP inputSchema
+  prepareArguments(args) {
+    // the symmetric SmallCaps decode, before mustMatch
     const a = coerceBigintArgs(args, tool.bigintArgs);
     const b = unescapeHilbertHotel(a, tool.stringArgs);
     return fixupLlmJson(b);
@@ -433,7 +440,10 @@ const agentToolRecipe = {
   execute: powersBoundExecute(tool, /* the make stage fills in: */ undefined),
 };
 // at make: closes execute over the granted Filesystem, Spawner, ...
-const agentTool = { ...agentToolRecipe, execute: powersBoundExecute(tool, powers) };
+const agentTool = {
+  ...agentToolRecipe,
+  execute: powersBoundExecute(tool, powers),
+};
 ```
 
 `parameters` is both wire targets at once (the TypeBox `TSchema` pi sends
@@ -466,7 +476,7 @@ pass**.
    fae.
 
 4. **`adoptableTools` is the cache-friendly forward path.**
-   Adoption in fae grants an *already-existing* capability whose interface
+   Adoption in fae grants an _already-existing_ capability whose interface
    exists before adoption.
    Declaring the **adoptable set at define time** lets the schemas sit
    latent in the prefix from turn 1, so adoption flips a tool from
@@ -494,7 +504,7 @@ The forward edge this design names and stops at is the **eval-vs-optimize**
 distinction, drawn by the git code-mode eval harness
 (`packages/agentry/src/eval/README.md`):
 
-- **Eval** measures a *fixed* agent by **outcome assertion**: run a
+- **Eval** measures a _fixed_ agent by **outcome assertion**: run a
   scenario, then judge pass or fail by reading the repository's actual
   final state through the live `git` capability and checking it against the
   target.
@@ -503,7 +513,7 @@ distinction, drawn by the git code-mode eval harness
   `evaluate`, so the pi-agent trace sees one opaque call, not the individual
   git operations), and accepts any alternate-but-correct path.
   Eval **ships first**.
-- **Optimize** searches for a *better* agent: GEPA or `ax`-style
+- **Optimize** searches for a _better_ agent: GEPA or `ax`-style
   prompt-tuning loops that mutate the system prompt and select on a score.
   It answers "what prompt works best?", consumes an eval as its objective,
   and is **deferred**.
@@ -516,8 +526,8 @@ Everything past that line (the prompt-search loop) is out of scope here.
 ## Connection to #404 and #370
 
 The #404 agent-creation wizard's three panes map onto the definition and the
-powers: Pane 1 picks which harness's *definition* is in play, Pane 2 supplies
-the provider *power* (credential), Pane 3 supplies the endowment *powers*
+powers: Pane 1 picks which harness's _definition_ is in play, Pane 2 supplies
+the provider _power_ (credential), Pane 3 supplies the endowment _powers_
 (workspace `Filesystem`, sandbox `Spawner`).
 The wizard holds the per-harness maker from module load and its
 **Submit calls the maker** (the powered stage), not `defineAgent` (which it
@@ -547,10 +557,10 @@ that seam is named.
   functions-of-cap: `fs => readOnly(fs)`, `(fs, path) => fs.subroot(path)`, an
   exec command tool with `rejectPatterns(DANGEROUS_PATTERNS)`).
   The shipped seam where this could plug in later is the `endow(definition,
-  options)` hook: it already derives the powered tool surface from live powers
+options)` hook: it already derives the powered tool surface from live powers
   at make time, so an attenuation layer would compose there.
   (The code-mode preset today carries a coarser `gitMode: 'readOnly' |
-  'readWrite'` selector, enforced by the exo guard, not a declarative
+'readWrite'` selector, enforced by the exo guard, not a declarative
   per-tool attenuation config.)
 
 - **Define-time wire-schema derivation.**
@@ -583,7 +593,7 @@ that seam is named.
 1. **`defineAgent` is a declarative builder, not a per-harness `agent.js`.**
    Model, instructions, and tool surface are config, not hand-assembled
    wiring.
-   (Shipped #517. Declarative tool *selection* and *attenuation* are
+   (Shipped #517. Declarative tool _selection_ and _attenuation_ are
    aspirational; see § Aspirational surface.)
 
 2. **`defineAgent` is a single call returning a maker, not a `defineAgent` /
@@ -591,15 +601,15 @@ that seam is named.
    Shipped as #517. The powerless definition is the maker's closure; calling
    the maker with a powers handle is the powered stage.
    The first draft's two-export `defineAgent(template)` / `makeAgent(template,
-   powers)` factorization is **not** what shipped, though it keeps the exo
+powers)` factorization is **not** what shipped, though it keeps the exo
    `define*` / `make*` spirit (powerless definition, powered make).
    One maker builds many agents cheaply.
 
-3. **The builder is where the wire schema becomes real.** *(Aspirational.)*
+3. **The builder is where the wire schema becomes real.** _(Aspirational.)_
    The proposal that `defineAgent` fills `Tool.parameters` and MCP
    `inputSchema` at define time is the discrete-tool path, **not** shipped in
-#517; the shipped code-mode presets carry one evaluate tool whose SmallCaps
-wrapping lives in `@endo/agent-tools` (`adapters/smallcaps.js`).
+   #517; the shipped code-mode presets carry one evaluate tool whose SmallCaps
+   wrapping lives in `@endo/agent-tools` (`adapters/smallcaps.js`).
    See § Aspirational surface.
 
 4. **The symmetric SmallCaps decode plus LLM-JSON fixups.**
@@ -608,14 +618,14 @@ wrapping lives in `@endo/agent-tools` (`adapters/smallcaps.js`).
    (string-encoded bigint plus escape on outbound collisions) and the inbound
    decode runs `coerceBigintArgs` plus `unescapeHilbertHotel` plus the fixups.
    Neither half stands alone.
-(Shipped via `@endo/agent-tools`'s `toPiAgentTool` plus the SmallCaps renderer, not a
+   (Shipped via `@endo/agent-tools`'s `toPiAgentTool` plus the SmallCaps renderer, not a
    define-time `prepareArguments` recipe assembled by `defineAgent`.)
 
 5. **A new module in the #308 package, not a new package.**
    `@endo/agentry` already exists as the optimizer and eval package;
    `defineAgent` grows it. (Shipped #517.)
 
-6. **Per-harness preset bundles.** *(Aspirational, in part.)*
+6. **Per-harness preset bundles.** _(Aspirational, in part.)_
    The first draft proposed each harness exporting its own
    `define<Name>Agent` / `make<Name>Agent` pair reconstructing lal and genie.
    What shipped in #517 is the two code-mode presets (`makeCodeModeAgent`,
@@ -624,7 +634,7 @@ wrapping lives in `@endo/agent-tools` (`adapters/smallcaps.js`).
    `defineFaeAgent` is deferred (Design Decision 10).
 
 7. **Attenuation policies declared here; primitives in `agent-tools`;
-   applied to caps at make.** *(Aspirational; see § Aspirational surface.)*
+   applied to caps at make.** _(Aspirational; see § Aspirational surface.)_
 
 8. **No `harness` abstraction.**
    One loop (pi-agent-core), so no `harness` enum.
@@ -665,19 +675,19 @@ wrapping lives in `@endo/agent-tools` (`adapters/smallcaps.js`).
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|--------------|
-| [endo-agent-tools](endo-agent-tools.md) | **Consumed.** Sibling. The code-mode preset builds its evaluate tool with `@endo/agent-tools`, passes it through `toPiAgentTool`, and uses the SmallCaps renderer from `adapters/smallcaps.js`. The aspirational discrete-tool path would also select its `makeTool` tools and use its wire schemas (§ Aspirational surface). |
-| [PR #297](https://github.com/endojs/endo-but-for-bots/pull/297) | **Confinement enabler.** Fixes the module-resolution bugs that prevented pi from loading through `@endo/compartment-mapper`'s `importLocation`, so code-mode guest code loads into a confined Endo `Compartment`. |
-| [PR #290](https://github.com/endojs/endo-but-for-bots/pull/290) | **The merged pi harness.** lal's loop now drives `@earendil-works/pi-agent-core`; `defineAgent`'s maker composes the same loop. The session-tree to mail mapping pins their correspondence (§ Mapping pi's session tree to the daemon mail model). |
-| [PR #517](https://github.com/endojs/endo-but-for-bots/pull/517) | **The shipped core.** `defineAgent` plus the two code-mode presets (`makeCodeModeAgent`, `makeCodeModeGitLoopAgent`). The single-call maker shape this design is reconciled to. |
-| [PR #422](https://github.com/endojs/endo-but-for-bots/pull/422) | **The pi-ai pin.** Bumped `@earendil-works/pi-ai` / `@earendil-works/pi-agent-core` to `^0.79.0`, the version the contract is now verified against. |
-| [PR #125](https://github.com/endojs/endo-but-for-bots/pull/125) | **The revision-log axis.** Added `editMessage` / `messageHistory` / `done` (`revisionsByNumber` in `packages/daemon/src/mail.js`), the intra-node history axis the mapping invariant keeps from forking. |
-| [endo-gateway-mcp](endo-gateway-mcp.md) | The Gateway's MCP termination forwards the MCP `inputSchema` the aspirational discrete-tool path fills to an external MCP client. |
-| [daemon-agent-tools](daemon-agent-tools.md) | The capability-scoped tool model. The aspirational `attenuate` config would realize the capability-scoping half; the dynamic-discovery half is deferred with fae-on-pi (Design Decision 10, Open Question 2). |
-| [endo-fs-backend-seam](endo-fs-backend-seam.md), [endo-fs-from-git](endo-fs-from-git.md) | The `Filesystem` substrate the builder wires in as the code-mode `workspace` power for the #370 loop. |
-| `chat-inventory-create-menu` (PR #404, forward-ref) | The agent-creation wizard whose three panes map onto the definition and the powers; Submit calls the maker. |
-| PR #370 (forward-ref) | The version-controlled-filesystem loop the builder wires the `workspace` / `git` powers into. |
+| Design                                                                                   | Relationship                                                                                                                                                                                                                                                                                                                  |
+| ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [endo-agent-tools](endo-agent-tools.md)                                                  | **Consumed.** Sibling. The code-mode preset builds its evaluate tool with `@endo/agent-tools`, passes it through `toPiAgentTool`, and uses the SmallCaps renderer from `adapters/smallcaps.js`. The aspirational discrete-tool path would also select its `makeTool` tools and use its wire schemas (§ Aspirational surface). |
+| [PR #297](https://github.com/endojs/endo-but-for-bots/pull/297)                          | **Confinement enabler.** Fixes the module-resolution bugs that prevented pi from loading through `@endo/compartment-mapper`'s `importLocation`, so code-mode guest code loads into a confined Endo `Compartment`.                                                                                                             |
+| [PR #290](https://github.com/endojs/endo-but-for-bots/pull/290)                          | **The merged pi harness.** lal's loop now drives `@earendil-works/pi-agent-core`; `defineAgent`'s maker composes the same loop. The session-tree to mail mapping pins their correspondence (§ Mapping pi's session tree to the daemon mail model).                                                                            |
+| [PR #517](https://github.com/endojs/endo-but-for-bots/pull/517)                          | **The shipped core.** `defineAgent` plus the two code-mode presets (`makeCodeModeAgent`, `makeCodeModeGitLoopAgent`). The single-call maker shape this design is reconciled to.                                                                                                                                               |
+| [PR #422](https://github.com/endojs/endo-but-for-bots/pull/422)                          | **The pi-ai pin.** Bumped `@earendil-works/pi-ai` / `@earendil-works/pi-agent-core` to `^0.79.0`, the version the contract is now verified against.                                                                                                                                                                           |
+| [PR #125](https://github.com/endojs/endo-but-for-bots/pull/125)                          | **The revision-log axis.** Added `editMessage` / `messageHistory` / `done` (`revisionsByNumber` in `packages/daemon/src/mail.js`), the intra-node history axis the mapping invariant keeps from forking.                                                                                                                      |
+| [endo-gateway-mcp](endo-gateway-mcp.md)                                                  | The Gateway's MCP termination forwards the MCP `inputSchema` the aspirational discrete-tool path fills to an external MCP client.                                                                                                                                                                                             |
+| [daemon-agent-tools](daemon-agent-tools.md)                                              | The capability-scoped tool model. The aspirational `attenuate` config would realize the capability-scoping half; the dynamic-discovery half is deferred with fae-on-pi (Design Decision 10, Open Question 2).                                                                                                                 |
+| [endo-fs-backend-seam](endo-fs-backend-seam.md), [endo-fs-from-git](endo-fs-from-git.md) | The `Filesystem` substrate the builder wires in as the code-mode `workspace` power for the #370 loop.                                                                                                                                                                                                                         |
+| `chat-inventory-create-menu` (PR #404, forward-ref)                                      | The agent-creation wizard whose three panes map onto the definition and the powers; Submit calls the maker.                                                                                                                                                                                                                   |
+| PR #370 (forward-ref)                                                                    | The version-controlled-filesystem loop the builder wires the `workspace` / `git` powers into.                                                                                                                                                                                                                                 |
 
 ## Open Questions
 

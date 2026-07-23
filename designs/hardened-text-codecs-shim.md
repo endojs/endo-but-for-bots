@@ -1,10 +1,10 @@
 # Hardened `TextEncoder` / `TextDecoder` Vetted Shim
 
-| | |
-|---|---|
-| **Created** | 2026-05-04 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-05-04            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## What is the Problem Being Solved?
 
@@ -49,14 +49,14 @@ compartment.
 
 ### Permits table
 
-| Constructor | Property | Disposition | Rationale |
-|---|---|---|---|
-| `TextEncoder` | `prototype` | ✓ | Required for instances. |
-| `TextEncoder` | `prototype.encode`, `encodeInto` | ✓ | Pure. |
-| `TextEncoder` | `prototype.encoding` | ✓ | Pure (always `'utf-8'`). |
-| `TextDecoder` | `prototype` | ✓ | Required for instances. |
-| `TextDecoder` | `prototype.decode` | ✓ | Pure. |
-| `TextDecoder` | `prototype.encoding`, `fatal`, `ignoreBOM` | ✓ | Pure. |
+| Constructor   | Property                                   | Disposition | Rationale                |
+| ------------- | ------------------------------------------ | ----------- | ------------------------ |
+| `TextEncoder` | `prototype`                                | ✓           | Required for instances.  |
+| `TextEncoder` | `prototype.encode`, `encodeInto`           | ✓           | Pure.                    |
+| `TextEncoder` | `prototype.encoding`                       | ✓           | Pure (always `'utf-8'`). |
+| `TextDecoder` | `prototype`                                | ✓           | Required for instances.  |
+| `TextDecoder` | `prototype.decode`                         | ✓           | Pure.                    |
+| `TextDecoder` | `prototype.encoding`, `fatal`, `ignoreBOM` | ✓           | Pure.                    |
 
 These constructors return `Uint8Array` (already a permitted
 intrinsic) or `string`.
@@ -102,7 +102,7 @@ Tests live under `packages/ses/test/`.
    The `TextEncoder` from the start compartment and from any
    post-lockdown compartment are the same object
    (`startCompartment.globalThis.TextEncoder ===
-   compartment.globalThis.TextEncoder`).
+compartment.globalThis.TextEncoder`).
 
 3. **Frozen.**
    `Object.isFrozen(TextEncoder)`,
@@ -112,7 +112,7 @@ Tests live under `packages/ses/test/`.
 
 4. **Round-trip semantics preserved.**
    `new TextDecoder().decode(new TextEncoder().encode('hello')) ===
-   'hello'`.
+'hello'`.
    This guards against accidental over-pruning.
 
 5. **Host without the codecs.**
@@ -138,10 +138,10 @@ Tests live under `packages/ses/test/`.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| [hardened-url-shim](hardened-url-shim.md) | Sibling design split from the same source issue.  Both add a vetted host-provided constructor to SES permits.  The two sets of permits are independent and may land in either order. |
-| [base64-native-fallthrough](base64-native-fallthrough.md) | Same family of work: tame and dispatch to native intrinsics inside SES rather than re-implementing in JavaScript.  Independent. |
+| Design                                                    | Relationship                                                                                                                                                                       |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [hardened-url-shim](hardened-url-shim.md)                 | Sibling design split from the same source issue. Both add a vetted host-provided constructor to SES permits. The two sets of permits are independent and may land in either order. |
+| [base64-native-fallthrough](base64-native-fallthrough.md) | Same family of work: tame and dispatch to native intrinsics inside SES rather than re-implementing in JavaScript. Independent.                                                     |
 
 ## Phases
 

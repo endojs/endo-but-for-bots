@@ -1,11 +1,11 @@
 # Familiar Bundled Agents
 
-| | |
-|---|---|
-| **Created** | 2026-03-02 |
-| **Updated** | 2026-03-05 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-03-02            |
+| **Updated** | 2026-03-05            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | **Complete**          |
 
 ## What is the Problem Being Solved?
 
@@ -36,12 +36,12 @@ problems:
 The Familiar's `scripts/bundle.mjs` uses esbuild to produce four CJS bundles
 from daemon source:
 
-| Bundle | Source | Role |
-|--------|--------|------|
-| `endo-daemon.cjs` | `daemon/src/daemon-node.js` | Main daemon process |
-| `endo-worker.cjs` | `daemon/src/web-server-node.js` | Gateway web server |
-| `worker-node.cjs` | `daemon/src/worker-node.js` | Worker subprocess |
-| `endo-cli.cjs` | `cli/bin/endo.cjs` | CLI for stop/purge |
+| Bundle            | Source                          | Role                |
+| ----------------- | ------------------------------- | ------------------- |
+| `endo-daemon.cjs` | `daemon/src/daemon-node.js`     | Main daemon process |
+| `endo-worker.cjs` | `daemon/src/web-server-node.js` | Gateway web server  |
+| `worker-node.cjs` | `daemon/src/worker-node.js`     | Worker subprocess   |
+| `endo-cli.cjs`    | `cli/bin/endo.cjs`              | CLI for stop/purge  |
 
 Plus one compartment-mapper bundle (`web-page-bundle.js`) for the Chat UI's
 web page.
@@ -91,6 +91,7 @@ await makeDaemon(powers, daemonLabel, cancel, cancelled, {
 ```
 
 The `Specials` type is:
+
 ```ts
 type Specials = {
   [specialName: string]: (builtins: Builtins) => Formula;
@@ -109,8 +110,8 @@ This is the same mechanism we will use for bundled agents.
 
 Add two new esbuild entries to `scripts/bundle.mjs`:
 
-| Bundle | Source | Role |
-|--------|--------|------|
+| Bundle         | Source                  | Role             |
+| -------------- | ----------------------- | ---------------- |
 | `endo-lal.cjs` | `packages/lal/agent.js` | Lal agent caplet |
 | `endo-fae.cjs` | `packages/fae/agent.js` | Fae agent caplet |
 
@@ -137,11 +138,11 @@ await build({
 Neither Lal nor Fae has native binary dependencies. All three LLM provider
 SDKs are pure JavaScript HTTP clients:
 
-| Package | Type | Notes |
-|---------|------|-------|
+| Package             | Type    | Notes                                   |
+| ------------------- | ------- | --------------------------------------- |
 | `@anthropic-ai/sdk` | Pure JS | HTTP client using `fetch` / `node:http` |
-| `openai` | Pure JS | HTTP client using `fetch` / `node:http` |
-| `ollama` | Pure JS | HTTP client using `fetch` / `node:http` |
+| `openai`            | Pure JS | HTTP client using `fetch` / `node:http` |
+| `ollama`            | Pure JS | HTTP client using `fetch` / `node:http` |
 
 The `@endo/*` workspace packages (`@endo/exo`, `@endo/marshal`,
 `@endo/patterns`, `@endo/eventual-send`, `@endo/errors`, etc.) are also
@@ -250,7 +251,7 @@ bootstrap). Its first act is to create its own guest profile and then operate
 under that guest's powers:
 
 ```js
-export const make = async (endoPowers) => {
+export const make = async endoPowers => {
   const host = await E(endoPowers).host();
   const guest = await E(host).provideGuest('lal', {
     introducedNames: {},
@@ -319,6 +320,7 @@ operation that requires looking up @host, which the agent can do from either
 @endo or guest powers.
 
 The brief bootstrap window with full authority is acceptable because:
+
 1. The agent code is bundled and shipped by us, not user-provided.
 2. The @apps formula already has this pattern and has worked without issues.
 3. The agent voluntarily drops to guest-level authority immediately.
@@ -371,7 +373,7 @@ export const make = async (powers, context, options = {}) => {
   const { env } = options;
 
   let guestPowers;
-  if (typeof powers.host === 'function' || await hasHostMethod(powers)) {
+  if (typeof powers.host === 'function' || (await hasHostMethod(powers))) {
     // Running as a special formula with @endo powers.
     // Self-provision: create guest profile and switch to guest powers.
     const host = await E(powers).host();
@@ -513,10 +515,10 @@ incarnated and their workers resume from persisted state.
 
 ```js
 // In daemon-node.js, after the host is ready:
-if (process.env.ENDO_LAL_PATH && await E(host).has('@lal')) {
+if (process.env.ENDO_LAL_PATH && (await E(host).has('@lal'))) {
   await E(host).lookup('@lal');
 }
-if (process.env.ENDO_FAE_PATH && await E(host).has('@fae')) {
+if (process.env.ENDO_FAE_PATH && (await E(host).has('@fae'))) {
   await E(host).lookup('@fae');
 }
 ```
@@ -563,15 +565,15 @@ This mirrors the existing @apps pattern.
 
 ## Files Modified
 
-| File | Change |
-|------|--------|
-| `packages/familiar/scripts/bundle.mjs` | Add `endo-lal.cjs` and `endo-fae.cjs` esbuild entries |
-| `packages/familiar/src/resource-paths.js` | Add `endoLalPath`, `endoFaePath` |
-| `packages/familiar/src/daemon-manager.js` | Pass `ENDO_LAL_PATH`, `ENDO_FAE_PATH` env vars |
-| `packages/daemon/src/daemon-node.js` | Register @lal/@fae special formulas; auto-incarnate on startup |
-| `packages/daemon/src/types.d.ts` | No changes (Specials type is already generic) |
-| `packages/lal/agent.js` | Detect @endo powers and self-provision (or coordinate with form-provisioning) |
-| `packages/fae/agent.js` | Same as lal/agent.js |
+| File                                      | Change                                                                        |
+| ----------------------------------------- | ----------------------------------------------------------------------------- |
+| `packages/familiar/scripts/bundle.mjs`    | Add `endo-lal.cjs` and `endo-fae.cjs` esbuild entries                         |
+| `packages/familiar/src/resource-paths.js` | Add `endoLalPath`, `endoFaePath`                                              |
+| `packages/familiar/src/daemon-manager.js` | Pass `ENDO_LAL_PATH`, `ENDO_FAE_PATH` env vars                                |
+| `packages/daemon/src/daemon-node.js`      | Register @lal/@fae special formulas; auto-incarnate on startup                |
+| `packages/daemon/src/types.d.ts`          | No changes (Specials type is already generic)                                 |
+| `packages/lal/agent.js`                   | Detect @endo powers and self-provision (or coordinate with form-provisioning) |
+| `packages/fae/agent.js`                   | Same as lal/agent.js                                                          |
 
 ## Design Decisions
 

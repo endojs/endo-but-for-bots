@@ -15,7 +15,7 @@ const bundle = await rollup({
   ),
   treeshake: false,
   plugins: [resolve({ preferBuiltins: true }), commonjs()],
-  output: {entryFileNames: '[name].mjs'}
+  output: { entryFileNames: '[name].mjs' },
 });
 
 await bundle.write({

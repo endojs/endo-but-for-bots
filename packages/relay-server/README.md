@@ -25,12 +25,14 @@ node packages/relay-server/src/index.js --port 8943 --domain relay.example.com
 ```
 
 Options:
+
 - `--port` -- port to listen on (default: `8943`)
 - `--domain` -- domain name bound into challenge signatures (default: `localhost`)
 
 The `--domain` must match what connecting daemons are configured with, since it's included in the signed challenge data to prevent cross-relay replay attacks.
 
 A health endpoint is available at `GET /health`:
+
 ```json
 { "status": "ok", "peers": 2, "connections": 3 }
 ```
@@ -88,15 +90,15 @@ The client signs `UTF8(domain) || nonce`, binding the signature to this specific
 
 ### Multiplexed channels
 
-| Byte | Name        | Direction | Payload                              |
-| ---- | ----------- | --------- | ------------------------------------ |
-| 0x10 | OPEN        | C→S       | channelId (4B) + targetNodeId (32B)  |
-| 0x11 | INCOMING    | S→C       | channelId (4B) + fromNodeId (32B)    |
-| 0x12 | OPENED      | S→C       | channelId (4B)                       |
-| 0x13 | OPEN_FAILED | S→C       | channelId (4B) + reason (UTF-8)      |
-| 0x14 | DATA        | bidi      | channelId (4B) + payload (opaque)    |
-| 0x15 | CLOSE       | bidi      | channelId (4B)                       |
-| 0x16 | PEER_GONE   | S→C       | channelId (4B)                       |
+| Byte | Name        | Direction | Payload                             |
+| ---- | ----------- | --------- | ----------------------------------- |
+| 0x10 | OPEN        | C→S       | channelId (4B) + targetNodeId (32B) |
+| 0x11 | INCOMING    | S→C       | channelId (4B) + fromNodeId (32B)   |
+| 0x12 | OPENED      | S→C       | channelId (4B)                      |
+| 0x13 | OPEN_FAILED | S→C       | channelId (4B) + reason (UTF-8)     |
+| 0x14 | DATA        | bidi      | channelId (4B) + payload (opaque)   |
+| 0x15 | CLOSE       | bidi      | channelId (4B)                      |
+| 0x16 | PEER_GONE   | S→C       | channelId (4B)                      |
 
 Keepalive: WebSocket-level ping/pong (30s interval, 10s timeout).
 

@@ -89,6 +89,7 @@ Or use Playwright's webServer config to auto-start.
 ## Test Isolation
 
 Each test should:
+
 1. Navigate to a fresh page
 2. Set up necessary mock data via the test harness
 3. Clean up after itself
@@ -96,6 +97,7 @@ Each test should:
 ## Mock Data
 
 The test harness exposes methods to:
+
 - Set up mock pet names for autocomplete
 - Simulate daemon responses
 - Inject test values

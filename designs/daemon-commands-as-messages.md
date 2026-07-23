@@ -1,14 +1,14 @@
 # Daemon Commands as Messages
 
-| | |
-|---|---|
-| **Created** | 2026-03-11 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-03-11            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## What is the Problem Being Solved?
 
-The daemon's mail system records only inbound messages — things sent *to*
+The daemon's mail system records only inbound messages — things sent _to_
 a user or agent. When a user issues a command (`dismiss`, `adopt`,
 `resolve`, `evaluate`, `send`), the operation executes as a promise that
 settles and vanishes. There is no durable record in `followMessages()` that
@@ -137,19 +137,19 @@ received, what was done, and what happened.
 
 ### Which operations become commands
 
-| Operation | Currently | As command message |
-|-----------|-----------|-------------------|
-| `dismiss` | Promise, no trace | `command` + confirmation reply |
-| `adopt` | Promise, no trace | `command` + confirmation reply |
-| `resolve` | Promise, settles remote | `command` + confirmation reply |
-| `reject` | Promise, settles remote | `command` + confirmation reply |
-| `evaluate` | `eval-proposal` pair | `command` + value reply (subsumes eval-proposal) |
-| `request` | Outbound message to recipient | `command` + value reply when settled |
-| `send` | Outbound message to recipient | `command` + confirmation reply |
-| `grant` | Promise, no trace | `command` + confirmation reply |
+| Operation  | Currently                     | As command message                               |
+| ---------- | ----------------------------- | ------------------------------------------------ |
+| `dismiss`  | Promise, no trace             | `command` + confirmation reply                   |
+| `adopt`    | Promise, no trace             | `command` + confirmation reply                   |
+| `resolve`  | Promise, settles remote       | `command` + confirmation reply                   |
+| `reject`   | Promise, settles remote       | `command` + confirmation reply                   |
+| `evaluate` | `eval-proposal` pair          | `command` + value reply (subsumes eval-proposal) |
+| `request`  | Outbound message to recipient | `command` + value reply when settled             |
+| `send`     | Outbound message to recipient | `command` + confirmation reply                   |
+| `grant`    | Promise, no trace             | `command` + confirmation reply                   |
 
 For `request` and `send`, the outbound message to the recipient continues
-to work as today. The `command` message is an *additional* record in the
+to work as today. The `command` message is an _additional_ record in the
 sender's own inbox.
 
 For `evaluate`, the existing `eval-proposal-proposer` /
@@ -217,14 +217,14 @@ a built-in audit mechanism without a separate logging system.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|-------------|
-| [chat-pending-commands](chat-pending-commands.md) | UI-only predecessor; subsumes its pending region |
-| [chat-command-bar](chat-command-bar.md) | Command bar that dispatches commands |
-| [daemon-form-request](daemon-form-request.md) | Existing form → value-reply pattern this extends |
-| [daemon-value-message](daemon-value-message.md) | Value reply mechanism reused for command results |
-| [daemon-agent-tools](daemon-agent-tools.md) | Agent tool invocations use the same command logging |
-| [daemon-capability-bank](daemon-capability-bank.md) | Audit trail for capability-confined operations |
+| Design                                              | Relationship                                        |
+| --------------------------------------------------- | --------------------------------------------------- |
+| [chat-pending-commands](chat-pending-commands.md)   | UI-only predecessor; subsumes its pending region    |
+| [chat-command-bar](chat-command-bar.md)             | Command bar that dispatches commands                |
+| [daemon-form-request](daemon-form-request.md)       | Existing form → value-reply pattern this extends    |
+| [daemon-value-message](daemon-value-message.md)     | Value reply mechanism reused for command results    |
+| [daemon-agent-tools](daemon-agent-tools.md)         | Agent tool invocations use the same command logging |
+| [daemon-capability-bank](daemon-capability-bank.md) | Audit trail for capability-confined operations      |
 
 ## Affected Packages
 

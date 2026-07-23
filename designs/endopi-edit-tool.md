@@ -1,12 +1,12 @@
 # EndoPi: LLM-Friendly Edit Tool
 
-| | |
-|---|---|
-| **Created** | 2026-05-15 |
-| **Updated** | 2026-07-10 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
-| **Parent** | [endopi](endopi.md) |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-05-15            |
+| **Updated** | 2026-07-10            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | In Progress           |
+| **Parent**  | [endopi](endopi.md)   |
 
 > **Implementation note (2026-07-10).** The exact-string-replacement core has
 > landed for both the Lal and Fae agents. The algorithm — unique-match
@@ -40,13 +40,13 @@ whole-file writes. Whole-file `write` either truncates unintended
 content or forces the model to re-emit the entire file, which is
 token-expensive and error-prone for large files. The dominant solution
 across modern coding harnesses (Claude Code, Codex, Pi, Cursor) is an
-*edit* tool with two arguments: `oldText` (a unique snippet to replace)
+_edit_ tool with two arguments: `oldText` (a unique snippet to replace)
 and `newText` (the replacement), with optional batching of multiple
 edits per call.
 
 Endo's [daemon-agent-tools](daemon-agent-tools.md) design lists
 `readFile` and `writeFile` but no edit-by-replacement primitive. The
-[cli-edit-verb](cli-edit-verb.md) design addresses the *human-on-CLI*
+[cli-edit-verb](cli-edit-verb.md) design addresses the _human-on-CLI_
 case (hashline patches) but is not the shape LLMs use today.
 
 ## Design
@@ -59,14 +59,14 @@ modeled on Pi's `coding-agent/src/core/tools/edit.ts`.
 ```js
 const editSchema = M.interface('EditTool', {
   edit: M.callWhen(
-    M.string(),                     // file pet name / path within Dir
+    M.string(), // file pet name / path within Dir
     M.arrayOf(
       M.splitRecord({
-        oldText: M.string(),        // unique match
+        oldText: M.string(), // unique match
         newText: M.string(),
       }),
     ),
-  ).returns(M.record()),            // { applied, diff, conflicts }
+  ).returns(M.record()), // { applied, diff, conflicts }
 });
 ```
 
@@ -115,15 +115,15 @@ read-modify-write across multiple awaits without holding a lock.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|--------------|
-| [daemon-capability-filesystem](daemon-capability-filesystem.md) | Provides `File` capability |
-| [daemon-agent-tools](daemon-agent-tools.md) | Sibling tool surface (read, write, exec) |
-| [cli-edit-verb](cli-edit-verb.md) | Different consumer (human, hashlines), shares helper code |
+| Design                                                          | Relationship                                              |
+| --------------------------------------------------------------- | --------------------------------------------------------- |
+| [daemon-capability-filesystem](daemon-capability-filesystem.md) | Provides `File` capability                                |
+| [daemon-agent-tools](daemon-agent-tools.md)                     | Sibling tool surface (read, write, exec)                  |
+| [cli-edit-verb](cli-edit-verb.md)                               | Different consumer (human, hashlines), shares helper code |
 
 ## Open questions
 
-- Should `edit` accept a single `(oldText, newText)` pair *or* an array
+- Should `edit` accept a single `(oldText, newText)` pair _or_ an array
   of pairs? Pi accepts both shapes (`oldText`/`newText` for one,
   `edits[]` for many). Following Pi reduces friction for migrating
   prompts; the alternative is two separate tools (`edit`, `multi-edit`).
@@ -140,7 +140,7 @@ read-modify-write across multiple awaits without holding a lock.
 
 ## Prompt
 
-> Extracted from [endopi](endopi.md) § *Built-in tool core*. Bridge the
+> Extracted from [endopi](endopi.md) § _Built-in tool core_. Bridge the
 > gap between Endo's `daemon-agent-tools` (which has read/write/exec but
 > no edit) and Pi's structured-replacement edit primitive that modern
 > coding LLMs expect.

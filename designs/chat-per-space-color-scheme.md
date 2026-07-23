@@ -1,11 +1,11 @@
 # Chat Per-Space Color Scheme
 
-| | |
-|---|---|
-| **Created** | 2026-02-26 |
-| **Updated** | 2026-02-26 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Complete |
+|                |                                             |
+| -------------- | ------------------------------------------- |
+| **Created**    | 2026-02-26                                  |
+| **Updated**    | 2026-02-26                                  |
+| **Author**     | Kris Kowal (prompted)                       |
+| **Status**     | Complete                                    |
 | **Depends on** | [chat-color-schemes](chat-color-schemes.md) |
 
 ## Motivation
@@ -72,7 +72,7 @@ When a space is selected, the scheme is applied by setting a `data-scheme`
 attribute on the document element:
 
 ```js
-const applyScheme = (scheme) => {
+const applyScheme = scheme => {
   if (scheme === 'auto' || scheme === undefined) {
     document.documentElement.removeAttribute('data-scheme');
   } else {
@@ -88,13 +88,13 @@ attribute selector (for explicit override):
 ```css
 /* System preference (auto) */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-scheme="light"]) {
+  :root:not([data-scheme='light']) {
     /* dark values */
   }
 }
 
 /* Explicit dark override */
-:root[data-scheme="dark"] {
+:root[data-scheme='dark'] {
   /* dark values */
 }
 ```
@@ -138,6 +138,7 @@ scheme's colors, giving a visual preview of each option:
 - Cancelling the modal restores the original scheme via `restoreScheme()`.
 
 The component API (hardened):
+
 - `getValue()` → current `ColorScheme` value
 - `setValue(scheme)` → update selection programmatically
 - `onChange(callback)` → register change listener
@@ -168,7 +169,13 @@ Existing space configs without a `scheme` field are valid.
 `validateSpaceConfig` treats a missing or unrecognized `scheme` as `'auto'`:
 
 ```js
-const validSchemes = ['auto', 'light', 'dark', 'high-contrast-light', 'high-contrast-dark'];
+const validSchemes = [
+  'auto',
+  'light',
+  'dark',
+  'high-contrast-light',
+  'high-contrast-dark',
+];
 const scheme =
   typeof obj.scheme === 'string' && validSchemes.includes(obj.scheme)
     ? obj.scheme

@@ -128,8 +128,8 @@ approach is to just hash both sides and compare the hashes). Our vulnerable
 function guess(guessedCode) {
   guessedCode = `${guessedCode}`; // force into a String
   setAttackerGuess(guessedCode);
-  for (let i=0; i < 10; i++) {
-    if (secretCode.slice(i, i+1) !== guessedCode.slice(i, i+1)) {
+  for (let i = 0; i < 10; i++) {
+    if (secretCode.slice(i, i + 1) !== guessedCode.slice(i, i + 1)) {
       return false;
     }
     delayMS(10);
@@ -157,33 +157,33 @@ delay each pass until the UI had a chance to be updated, with something like
 this:
 
 ```js
-      program = `(${program})`; // turn it into an expression
-      const attacker = SES.confine(program, { guess: guess, log: attackerLog });
-      const attackGen = attacker(); // build the generator
-      function nextGuess() {
-        // give the attacker another chance to run
-        if (attackGen.next().done) {
-          return; // attacker gave up, so stop asking
-        }
-        // now let the UI refresh before we call attacker again
-        refreshUI().then(nextGuess);
-      }
-      nextGuess();
+program = `(${program})`; // turn it into an expression
+const attacker = SES.confine(program, { guess: guess, log: attackerLog });
+const attackGen = attacker(); // build the generator
+function nextGuess() {
+  // give the attacker another chance to run
+  if (attackGen.next().done) {
+    return; // attacker gave up, so stop asking
+  }
+  // now let the UI refresh before we call attacker again
+  refreshUI().then(nextGuess);
+}
+nextGuess();
 ```
 
 (some additional lines exist to stop the loop if/when the attacker gets the
 code right).
 
-
 ## Taming Date and Date.now
 
 The original standard `Date` constructor provides three ways to obtain the
 current time:
-   * `new Date()` -- calling it as a constructor (with `new`) but
-     with no arguments, returns a date instance representing the current time.
-   * `Date(...)` -- calling it as a function (without `new`) no matter what
-     the arguments may be, returns a string representing the current time.
-   * `Date.now()` -- returns the number of milliseconds since the Unix Epoch
+
+- `new Date()` -- calling it as a constructor (with `new`) but
+  with no arguments, returns a date instance representing the current time.
+- `Date(...)` -- calling it as a function (without `new`) no matter what
+  the arguments may be, returns a string representing the current time.
+- `Date.now()` -- returns the number of milliseconds since the Unix Epoch
 
 Because this original `Date` constructor provides the magical I/O power,
 let's call it the "powerful" `Date` constructor. SES leaves this powerful `Date`
@@ -212,14 +212,14 @@ Gruss, and Mangard) enumerates a variety of surprising clocks that might be
 available to Javascript code. They all depend upon forms of non-determinism,
 such as:
 
-* shared-state mutability: a `WebWorker` writes sequential integers to a
+- shared-state mutability: a `WebWorker` writes sequential integers to a
   shared `ArrayBuffer` as fast as it can, while a second thread simply
   reads from that location when desired
-* platform-provided UI features: initiate a CSS animation and monitor its
+- platform-provided UI features: initiate a CSS animation and monitor its
   progress
-* message-passing: two separate frames exchange `postMessage` calls and
+- message-passing: two separate frames exchange `postMessage` calls and
   compare their arrival order with ones sent to themselves
-* explicit platform features: the `performance.now()` call offers
+- explicit platform features: the `performance.now()` call offers
   microsecond-level timing
 
 SES omits all platform features, which removes all the timers listed in this

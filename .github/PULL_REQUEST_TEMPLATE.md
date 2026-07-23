@@ -21,7 +21,7 @@ Refs: #XXXX
 
 ### Documentation Considerations
 
-> Give our docs folks some hints about what needs to be described to downstream users.  Backwards compatibility: what happens to existing data or deployments when this code is shipped? Do we need to instruct users to do something to upgrade their saved data? If there is no upgrade path possible, how bad will that be for users?
+> Give our docs folks some hints about what needs to be described to downstream users. Backwards compatibility: what happens to existing data or deployments when this code is shipped? Do we need to instruct users to do something to upgrade their saved data? If there is no upgrade path possible, how bad will that be for users?
 
 ### Testing Considerations
 

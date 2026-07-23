@@ -1,11 +1,11 @@
 # Debug Worker Restart
 
-| | |
-|---|---|
-| **Created** | 2026-04-17 |
-| **Updated** | 2026-04-17 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-04-17            |
+| **Updated** | 2026-04-17            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## What is the Problem Being Solved?
 
@@ -102,12 +102,12 @@ existing verbs:
 
 #### New control verb: `debug-resume`
 
-| Field | Value |
-|-------|-------|
-| handle | 0 (control) |
-| verb | `"debug-resume"` |
+| Field   | Value                                   |
+| ------- | --------------------------------------- |
+| handle  | 0 (control)                             |
+| verb    | `"debug-resume"`                        |
 | payload | CBOR map: `{"handle": <worker_handle>}` |
-| nonce | request nonce |
+| nonce   | request nonce                           |
 
 The supervisor handles this identically to a normal resume
 triggered by message delivery to a suspended worker, except:
@@ -131,12 +131,12 @@ resume logic.
 The supervisor gains a `debug_flags: HashSet<Handle>` that
 is checked during resume.
 
-| Field | Value |
-|-------|-------|
-| handle | 0 (control) |
-| verb | `"debug-flag"` |
+| Field   | Value                                   |
+| ------- | --------------------------------------- |
+| handle  | 0 (control)                             |
+| verb    | `"debug-flag"`                          |
 | payload | CBOR map: `{"handle": <worker_handle>}` |
-| nonce | 0 |
+| nonce   | 0                                       |
 
 No response needed — the flag is fire-and-forget.
 The subsequent resume (triggered by the first message to the
@@ -200,9 +200,7 @@ const debugWorker = async petNameOrPath => {
   // Resolve the pet name to a worker formula.
   const workerId = await E(directory).identify(...namePath);
   if (workerId === undefined) {
-    throw new TypeError(
-      `Unknown pet name: ${q(petNameOrPath)}`,
-    );
+    throw new TypeError(`Unknown pet name: ${q(petNameOrPath)}`);
   }
 
   // Get the worker's bus handle.
@@ -298,11 +296,11 @@ used from Chat/Familiar.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|-------------|
+| Design                                                    | Relationship                                                   |
+| --------------------------------------------------------- | -------------------------------------------------------------- |
 | [daemon-xs-worker-debugger](daemon-xs-worker-debugger.md) | Requires: debug infrastructure, `Debugger` exo, `DebugSession` |
-| [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | Requires: suspend/resume via CAS snapshots |
-| [daemon-xs-worker-metering](daemon-xs-worker-metering.md) | Composes: meter state preserved across debug restart |
+| [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | Requires: suspend/resume via CAS snapshots                     |
+| [daemon-xs-worker-metering](daemon-xs-worker-metering.md) | Composes: meter state preserved across debug restart           |
 
 ## Implementation phases
 

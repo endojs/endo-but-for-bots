@@ -1,10 +1,10 @@
 # `@endo/exo-google-sheets` package: Google Sheets connector
 
-| | |
-|---|---|
-| **Created** | 2026-07-06 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-07-06            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Proposed              |
 
 ## Summary
 
@@ -107,11 +107,11 @@ never the reverse. This mirrors the `readOnly()` discipline of
 [daemon-mount-capabilities](daemon-mount-capabilities.md), extended so that
 read and write authority can be separated all the way down.
 
-- **Scope axis (coarse → fine).** A *group of spreadsheets* (the account
-  surface, a `SheetsService`) narrows to a *single spreadsheet*, which narrows
-  to a *single sheet/tab* (`sheet(title)`), which narrows to a *range within a
-  sheet* (`range('A1:C10')`). Root-level account authority exists and is
-  narrowed *electively*; the coarse handle is never derivable from a fine one.
+- **Scope axis (coarse → fine).** A _group of spreadsheets_ (the account
+  surface, a `SheetsService`) narrows to a _single spreadsheet_, which narrows
+  to a _single sheet/tab_ (`sheet(title)`), which narrows to a _range within a
+  sheet_ (`range('A1:C10')`). Root-level account authority exists and is
+  narrowed _electively_; the coarse handle is never derivable from a fine one.
 - **Permission axis (read ⇄ write, mutually exclusive slices).** A read-write
   facet attenuates to `readOnly()` (observe, never mutate), `appendOnly()` (a
   blind producer that can add rows but neither read nor overwrite), or
@@ -140,14 +140,14 @@ type SheetInfo = {
   columnCount: number;
 };
 
-type SpreadsheetInfo = { spreadsheetId: string, title: string };
+type SpreadsheetInfo = { spreadsheetId: string; title: string };
 
 // COARSE: a group of spreadsheets — the account surface, narrowed electively.
 interface SheetsService {
   // Root-level read authority over the account's spreadsheets (Drive-backed).
   list(): Promise<SpreadsheetInfo[]>;
-  open(spreadsheetId: string): Spreadsheet;   // narrow to one document (read)
-  allow(spreadsheetIds: string[]): SheetsService;  // narrow the visible group
+  open(spreadsheetId: string): Spreadsheet; // narrow to one document (read)
+  allow(spreadsheetIds: string[]): SheetsService; // narrow the visible group
   help(): string;
 }
 
@@ -155,7 +155,7 @@ interface SheetsServiceWriter /* extends SheetsService */ {
   // Root-level read-write authority. Never the default grant.
   open(spreadsheetId: string): SpreadsheetWriter;
   create(title: string): Promise<SpreadsheetWriter>;
-  readOnly(): SheetsService;                  // narrow the whole group to read
+  readOnly(): SheetsService; // narrow the whole group to read
 }
 
 // FINE: per-spreadsheet facets.
@@ -163,9 +163,9 @@ interface Spreadsheet {
   // Read-only facet. Default grant.
   title(): Promise<string>;
   sheets(): Promise<SheetInfo[]>;
-  sheet(title: string): Spreadsheet;          // narrow scope to one tab
-  range(a1: string): Spreadsheet;             // narrow scope to one range
-  read(range: string): Promise<CellValue[][]>;          // A1 notation
+  sheet(title: string): Spreadsheet; // narrow scope to one tab
+  range(a1: string): Spreadsheet; // narrow scope to one range
+  read(range: string): Promise<CellValue[][]>; // A1 notation
   readBatch(ranges: string[]): Promise<CellValue[][][]>;
   readRecords(range: string): Promise<Record<string, CellValue>[]>;
   follow(range: string): AsyncIterableIterator<RangeChange>;
@@ -175,17 +175,18 @@ interface Spreadsheet {
 interface SpreadsheetWriter /* extends Spreadsheet */ {
   // Read-write facet. Separate, narrower-audience grant.
   write(range: string, values: CellValue[][]): Promise<UpdateResult>;
-  writeBatch(updates: { range: string, values: CellValue[][] }[]):
-    Promise<UpdateResult[]>;
+  writeBatch(
+    updates: { range: string; values: CellValue[][] }[],
+  ): Promise<UpdateResult[]>;
   append(range: string, rows: CellValue[][]): Promise<AppendResult>;
   clear(range: string): Promise<void>;
   // Permission-axis attenuators — narrow, never widen:
-  readOnly(): Spreadsheet;                    // observe, never mutate
-  appendOnly(): SpreadsheetAppender;          // add rows, no read, no overwrite
-  writeOnly(): SpreadsheetWriteOnly;          // overwrite, no read-back
+  readOnly(): Spreadsheet; // observe, never mutate
+  appendOnly(): SpreadsheetAppender; // add rows, no read, no overwrite
+  writeOnly(): SpreadsheetWriteOnly; // overwrite, no read-back
   // Scope-axis attenuators:
-  sheet(title: string): SpreadsheetWriter;    // tab-scoped writer
-  range(a1: string): SpreadsheetWriter;       // range-scoped writer
+  sheet(title: string): SpreadsheetWriter; // tab-scoped writer
+  range(a1: string): SpreadsheetWriter; // range-scoped writer
 }
 
 interface SpreadsheetAppender {
@@ -216,8 +217,8 @@ interface SpreadsheetStructure {
 
 interface SpreadsheetControl {
   // Host-side caretaker. Never granted to guests.
-  setAllowedSheets(titles: string[] | null): void;  // null = all tabs
-  setAllowedRanges(a1: string[] | null): void;       // null = whole tab(s)
+  setAllowedSheets(titles: string[] | null): void; // null = all tabs
+  setAllowedRanges(a1: string[] | null): void; // null = whole tab(s)
   setReadOnly(flag: boolean): void;
   setMaxCellsPerRead(n: number): void;
   setPollIntervalMs(ms: number): void;
@@ -225,9 +226,9 @@ interface SpreadsheetControl {
   help(): string;
 }
 
-type UpdateResult = { updatedRange: string, updatedCells: number };
-type AppendResult = { updatedRange: string, appendedRows: number };
-type RangeChange = { range: string, values: CellValue[][], revision: string };
+type UpdateResult = { updatedRange: string; updatedCells: number };
+type AppendResult = { updatedRange: string; appendedRows: number };
+type RangeChange = { range: string; values: CellValue[][]; revision: string };
 ```
 
 ### Mapping Sheets values onto passables
@@ -269,7 +270,7 @@ emergency brake over already-granted writers, on top of revocation.
 The permission axis is a lattice, not a two-state switch, because different
 parties often need to touch one sheet without holding each other's authority:
 
-- **`appendOnly()`** yields a `SpreadsheetAppender` — a *blind producer* that
+- **`appendOnly()`** yields a `SpreadsheetAppender` — a _blind producer_ that
   can add rows but can neither read existing contents nor overwrite them. This
   is the write end of a **Google Sheet used as a queue**: a producer holds an
   appender, a consumer holds a `readOnly()` (or `follow()`) view, and neither
@@ -327,7 +328,7 @@ exactly what [endoclaw-webhooks](endoclaw-webhooks.md) provides (gateway
 webhook routes delivered as inbox messages), so push is deferred as a phase
 that plugs in behind the same `follow` contract once webhooks land, rather
 than a reason to block v1 (Open Question 2). Notably, Drive watch events say
-*that* a file changed, not *what* changed, so even the push implementation
+_that_ a file changed, not _what_ changed, so even the push implementation
 polls the changed range to produce the event payload; push only replaces the
 timer.
 
@@ -365,31 +366,31 @@ package split keeps them from tangling:
 
 **Not this design** (cross-references so the reader is not confused):
 [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md)
-is OAuth to *LLM providers* for inference subscriptions, and the
+is OAuth to _LLM providers_ for inference subscriptions, and the
 `gateway-oauth-bonding` gap (tracked in the [README](README.md) M5 bucket) is
-bonding an OAuth *login identity* to a public-key identity. Both are
-identity-and-billing plumbing; this design is an agent *using* an external
+bonding an OAuth _login identity_ to a public-key identity. Both are
+identity-and-billing plumbing; this design is an agent _using_ an external
 service through a credential it cannot see.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|-------------|
-| [endoclaw-oauth](endoclaw-oauth.md) | **Depends on.** The credential-capability layer; the injected fetch power is an `OAuth` exo's fetch. Not yet implemented; Phase 1-2 can develop against a stub fetch power in parallel. |
-| [endoclaw-network-fetch](endoclaw-network-fetch.md) | **Depends on (transitively).** The origin-allowlist substrate under the OAuth exo. |
-| [exo-zip-package](exo-zip-package.md) | **Precedent.** The `exo-` wrapper over a plain backing library; naming and layering mirrored here. |
-| [daemon-mount-capabilities](daemon-mount-capabilities.md) | **Precedent.** Facet attenuation (`readOnly()`), strings-as-selectors range confinement, caretaker control. |
-| [endoclaw-webhooks](endoclaw-webhooks.md) | **Future.** Push-based `follow` rides gateway webhook endpoints once they exist (Phase 5). |
+| Design                                                    | Relationship                                                                                                                                                                            |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [endoclaw-oauth](endoclaw-oauth.md)                       | **Depends on.** The credential-capability layer; the injected fetch power is an `OAuth` exo's fetch. Not yet implemented; Phase 1-2 can develop against a stub fetch power in parallel. |
+| [endoclaw-network-fetch](endoclaw-network-fetch.md)       | **Depends on (transitively).** The origin-allowlist substrate under the OAuth exo.                                                                                                      |
+| [exo-zip-package](exo-zip-package.md)                     | **Precedent.** The `exo-` wrapper over a plain backing library; naming and layering mirrored here.                                                                                      |
+| [daemon-mount-capabilities](daemon-mount-capabilities.md) | **Precedent.** Facet attenuation (`readOnly()`), strings-as-selectors range confinement, caretaker control.                                                                             |
+| [endoclaw-webhooks](endoclaw-webhooks.md)                 | **Future.** Push-based `follow` rides gateway webhook endpoints once they exist (Phase 5).                                                                                              |
 
 ## Implementation Phases
 
 1. **`@endo/google-sheets` client (S-M).** `makeSheetsClient(fetchPower,
-   opts)`: A1-range encode/validate helpers, `spreadsheets.get`, values
+opts)`: A1-range encode/validate helpers, `spreadsheets.get`, values
    get/batchGet/update/append/clear, `UNFORMATTED_VALUE` default, serial-date
    helpers, structured error mapping. Tested entirely against a stub fetch
    with recorded Sheets API fixtures; no network, no OAuth.
 2. **`@endo/exo-google-sheets` facets (S-M).** `makeExoSpreadsheet(client,
-   opts)` minting the per-spreadsheet lattice with interface guards:
+opts)` minting the per-spreadsheet lattice with interface guards:
    `Spreadsheet`/`SpreadsheetWriter`/`SpreadsheetControl` plus the
    `readOnly()`/`appendOnly()`/`writeOnly()` permission attenuators and the
    `sheet()`/`range()` scope attenuators; range confinement; token-bucket
@@ -427,8 +428,8 @@ block on any unimplemented dependency; the OAuth exo is stubbed as a bare
    a token, so there is nothing to audit for leaks and nothing to reinvent.
 3. **A full coarse-to-fine scope lattice.** Grants run from a group of
    spreadsheets (`SheetsService`, root account authority) → one spreadsheet →
-   one tab (`sheet`) → one range (`range`). Root-level authority *exists* and
-   is narrowed *electively* rather than being synthesized bottom-up: this is
+   one tab (`sheet`) → one range (`range`). Root-level authority _exists_ and
+   is narrowed _electively_ rather than being synthesized bottom-up: this is
    the ocap-correct direction (hold broad, hand out narrow), and it keeps the
    common per-spreadsheet grant as just one rung of the same ladder rather than
    a special case (resolves Open Question 3).
@@ -452,11 +453,11 @@ block on any unimplemented dependency; the OAuth exo is stubbed as a bare
    spends it carries its own governor, adjustable from the control facet.
 8. **The smallest abstraction is read + append + notify; everything else
    layers on it.** Reframed as layering: the irreducible core an agent needs is
-   *read access* and *change notification* (`follow`), plus *append* for the
+   _read access_ and _change notification_ (`follow`), plus _append_ for the
    queue case. Records (`readRecords`), batching, and structural edits are
    strictly higher layers computed or dispatched over that core, so they can be
    added without disturbing it. The `SheetsService` group facet, in turn, is a
-   thin listing-and-minting layer *above* the per-spreadsheet exo. Providing
+   thin listing-and-minting layer _above_ the per-spreadsheet exo. Providing
    the read/append/notify core as first-class primitives up front (rather than
    only through a records sugar) is deliberate: a higher schema abstraction
    could otherwise hide optimizations available when a consumer touches the
@@ -464,7 +465,7 @@ block on any unimplemented dependency; the OAuth exo is stubbed as a bare
 
 ## Resolved Questions (framed as layering)
 
-Reframed per review as *layering* questions — for each surface, what is the
+Reframed per review as _layering_ questions — for each surface, what is the
 smallest abstraction out of which it can be built, and which layer should own
 it. The irreducible core is **read access + change notification + append**
 (Design Decision 8); every item below is either that core or a layer over it.
@@ -475,20 +476,20 @@ it. The irreducible core is **read access + change notification + append**
    writer in the same attenuation lattice, minted separately and never implied
    by write authority. The `batchUpdate` request surface is enormous, so v1
    ships the values-and-append core with `SpreadsheetStructure` reserved and
-   its detailed op set enumerated in a follow-up; the *shape* is settled now
-   ("do the whole thing"), the *op catalog* is the only deferral. The
+   its detailed op set enumerated in a follow-up; the _shape_ is settled now
+   ("do the whole thing"), the _op catalog_ is the only deferral. The
    read/append/write **granularity** half of this question is resolved by the
    `readOnly()`/`appendOnly()`/`writeOnly()` facets (Design Decision 4).
 2. **Push notification is its own design.** The channel-renewal bookkeeping
    (channels expire, must be re-armed, deliver to a public URL) is shared by
-   all Drive-family watchers and deserves its own treatment, so push is *not* a
+   all Drive-family watchers and deserves its own treatment, so push is _not_ a
    mode of this package. Polling ships v1 behind the `follow` contract; a
    **follow-up designer job for Google Sheet pubsub** (Drive `files.watch` over
    [endoclaw-webhooks](endoclaw-webhooks.md)) is posted alongside this review.
 3. **`SheetsService` root authority is in scope, as the coarse rung.** Yes — a
    Drive-backed group facet that lists and mints per-spreadsheet exos belongs
    here as the coarsest rung of the scope lattice (Design Decision 3). It is
-   the ocap-correct place to *start* authority and narrow electively, not a
+   the ocap-correct place to _start_ authority and narrow electively, not a
    separate document; the per-spreadsheet grant is the same ladder one rung
    down. It is an optional grant, so hosts that only ever want one document
    never mint it.
@@ -496,11 +497,11 @@ it. The irreducible core is **read access + change notification + append**
    smallest abstraction is `read`/`follow`/`append` on raw rectangles; records
    (`readRecords`, and any writing dual `appendRecords`/`updateRecordsWhere`)
    are schema sugar — header mapping and row identity — that layers on top.
-   Task queues are a central concern, so the *core* primitives that a queue
+   Task queues are a central concern, so the _core_ primitives that a queue
    needs (append + follow) are provided up front as first-class methods rather
    than only through a records abstraction, because a schema layer could
    otherwise hide optimizations available when a consumer touches the
-   Drive/Sheets API shape directly. The records *writing* duals stay a
+   Drive/Sheets API shape directly. The records _writing_ duals stay a
    consumer-library concern (or a later thin layer) and are out of v1 scope.
 5. **First-mint OAuth flow is settled by the OAuth design.** Which flow the
    host runs (browser redirect against a localhost callback vs. device-code

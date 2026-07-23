@@ -1,11 +1,11 @@
 # Familiar Unified Weblet Server
 
-| | |
-|---|---|
-| **Created** | 2026-02-14 |
-| **Updated** | 2026-05-06 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-14            |
+| **Updated** | 2026-05-06            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | In Progress           |
 
 ## Status
 
@@ -56,10 +56,10 @@ authentication, which the gateway currently lacks.
 
 ### Dependencies added
 
-| Design | Relationship |
-|--------|-------------|
-| [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | The gateway needs a network-level abstraction for session establishment and authentication, not bare WebSocket. |
-| [ocapn-noise-network](ocapn-noise-network.md) | Noise Protocol would provide per-session confidentiality over the shared gateway port, enabling secure multiplexing. |
+| Design                                                                      | Relationship                                                                                                         |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | The gateway needs a network-level abstraction for session establishment and authentication, not bare WebSocket.      |
+| [ocapn-noise-network](ocapn-noise-network.md)                               | Noise Protocol would provide per-session confidentiality over the shared gateway port, enabling secure multiplexing. |
 
 ### Implemented
 
@@ -157,15 +157,19 @@ server.on('request', (req, res) => {
 ### Weblet location format
 
 Weblet locations change from:
+
 ```
 http://127.0.0.1:<random-port>/<access-token>/
 ```
+
 to:
+
 ```
 http://<weblet-id>.localhost:<gateway-port>/
 ```
 
 Or, when accessed through Familiar's custom protocol:
+
 ```
 localhttp://<weblet-id>/
 ```
@@ -189,12 +193,14 @@ when the unified server is not available.
 ### Changes to `makeWeblet`
 
 The `makeWeblet` function in `packages/daemon/src/web-server-node.js` currently:
+
 1. Receives a bundle, powers, and port.
 2. Creates HTTP + WebSocket handlers.
 3. Calls `servePortHttp` to bind a port.
 4. Returns a `Weblet` far reference with `getLocation()`.
 
 After this change:
+
 1. Receives a bundle, powers, and a **server registrar** (instead of a port).
 2. Creates HTTP + WebSocket handlers (same as today).
 3. Registers handlers with the unified server under a virtual hostname.

@@ -1,10 +1,10 @@
 # Daemon Web Gateway
 
-| | |
-|---|---|
-| **Created** | 2026-03-11 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-03-11            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | **Complete**          |
 
 ## Status
 
@@ -117,7 +117,13 @@ instead of creating a `GatewayBootstrap`.
 The gateway exposes a `makeWeblet` method to the daemon:
 
 ```js
-makeWeblet(webletBundle, webletPowers, requestedPort, webletId, webletCancelled)
+makeWeblet(
+  webletBundle,
+  webletPowers,
+  requestedPort,
+  webletId,
+  webletCancelled,
+);
 // Returns: Far('Weblet', { getLocation, stopped })
 ```
 
@@ -130,11 +136,11 @@ weblet's URL — either `localhttp://<accessToken>` in unified mode or
 
 Access control is configured via environment variables:
 
-| Mode | Configuration | Allowed clients |
-|------|--------------|----------------|
-| Localhost only (default) | `ENDO_GATEWAY` unset or `''` | `127.0.0.1`, `::1`, `::ffff:127.0.0.1` |
-| Remote | `ENDO_GATEWAY=remote` | All IPs (logs TLS warning) |
-| CIDR allowlist | `ENDO_GATEWAY_ALLOWED_CIDRS='10.0.0.0/8,fd00::/8'` | Localhost + listed ranges |
+| Mode                     | Configuration                                      | Allowed clients                        |
+| ------------------------ | -------------------------------------------------- | -------------------------------------- |
+| Localhost only (default) | `ENDO_GATEWAY` unset or `''`                       | `127.0.0.1`, `::1`, `::ffff:127.0.0.1` |
+| Remote                   | `ENDO_GATEWAY=remote`                              | All IPs (logs TLS warning)             |
+| CIDR allowlist           | `ENDO_GATEWAY_ALLOWED_CIDRS='10.0.0.0/8,fd00::/8'` | Localhost + listed ranges              |
 
 The CIDR parser (`cidr.js`) handles IPv4, IPv6, and IPv4-mapped IPv6
 address normalization.
@@ -155,13 +161,13 @@ netstrings instead of WebSocket frames.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|-------------|
-| [familiar-gateway-migration](familiar-gateway-migration.md) | Moved gateway into daemon as built-in service |
-| [familiar-unified-weblet-server](familiar-unified-weblet-server.md) | Virtual-host routing for weblets on shared port |
-| [familiar-electron-shell](familiar-electron-shell.md) | Familiar's `localhttp://` protocol handler and daemon lifecycle |
-| [gateway-bearer-token-auth](gateway-bearer-token-auth.md) | Agent ID as bearer token, rate limiting, CIDR filtering |
-| [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md) | 256-bit formula IDs used as access tokens |
+| Design                                                              | Relationship                                                    |
+| ------------------------------------------------------------------- | --------------------------------------------------------------- |
+| [familiar-gateway-migration](familiar-gateway-migration.md)         | Moved gateway into daemon as built-in service                   |
+| [familiar-unified-weblet-server](familiar-unified-weblet-server.md) | Virtual-host routing for weblets on shared port                 |
+| [familiar-electron-shell](familiar-electron-shell.md)               | Familiar's `localhttp://` protocol handler and daemon lifecycle |
+| [gateway-bearer-token-auth](gateway-bearer-token-auth.md)           | Agent ID as bearer token, rate limiting, CIDR filtering         |
+| [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md)         | 256-bit formula IDs used as access tokens                       |
 
 ## Affected Packages
 

@@ -1,11 +1,11 @@
 # Daemon 256-bit Identifiers
 
-| | |
-|---|---|
-| **Created** | 2026-02-24 |
-| **Updated** | 2026-02-24 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Complete |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-24            |
+| **Updated** | 2026-02-24            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Complete              |
 
 ## What is the Problem Being Solved?
 
@@ -16,12 +16,12 @@ Ed25519 public keys (256-bit / 64-character hex) for peer identification.
 
 Original state:
 
-| Component          | Size     | Encoding       | Source                      |
-|--------------------|----------|----------------|------------------------------|
-| Node/Peer ID       | 512 bits | 128-char hex   | SHA-512(rootNonce + "node") |
-| Formula Number     | 512 bits | 128-char hex   | Random or SHA-512           |
-| Formula Identifier | 257 chars| `{number}:{node}` | Composite                |
-| Content Address    | 512 bits | 128-char hex   | SHA-512(content)            |
+| Component          | Size      | Encoding          | Source                      |
+| ------------------ | --------- | ----------------- | --------------------------- |
+| Node/Peer ID       | 512 bits  | 128-char hex      | SHA-512(rootNonce + "node") |
+| Formula Number     | 512 bits  | 128-char hex      | Random or SHA-512           |
+| Formula Identifier | 257 chars | `{number}:{node}` | Composite                   |
+| Content Address    | 512 bits  | 128-char hex      | SHA-512(content)            |
 
 Problems with the original approach:
 
@@ -39,12 +39,12 @@ Problems with the original approach:
 
 All core identifier migration work and per-agent keypairs are complete.
 
-| Component          | Size     | Encoding     | Source                  |
-|--------------------|----------|--------------|--------------------------|
-| Node/Peer ID       | 256 bits | 64-char hex  | Ed25519 public key      |
-| Formula Number     | 256 bits | 64-char hex  | Random or SHA-256       |
-| Formula Identifier | 129 chars| `{number}:{node}` | Composite          |
-| Content Address    | 256 bits | 64-char hex  | SHA-256(content)        |
+| Component          | Size      | Encoding          | Source             |
+| ------------------ | --------- | ----------------- | ------------------ |
+| Node/Peer ID       | 256 bits  | 64-char hex       | Ed25519 public key |
+| Formula Number     | 256 bits  | 64-char hex       | Random or SHA-256  |
+| Formula Identifier | 129 chars | `{number}:{node}` | Composite          |
+| Content Address    | 256 bits  | 64-char hex       | SHA-256(content)   |
 
 ### What Was Done
 
@@ -57,8 +57,7 @@ The daemon generates a **root keypair** at first start, stored at
 
 ```js
 // daemon.js — daemon initialization
-const { keypair: rootKeypair } =
-  await persistencePowers.provideRootKeypair();
+const { keypair: rootKeypair } = await persistencePowers.provideRootKeypair();
 const localNodeNumber = Array.from(rootKeypair.publicKey, byte =>
   byte.toString(16).padStart(2, '0'),
 ).join('');
@@ -98,7 +97,7 @@ export type Sha256 = {
 };
 
 export type Ed25519Keypair = {
-  publicKey: Uint8Array;  // 32 bytes
+  publicKey: Uint8Array; // 32 bytes
   privateKey: Uint8Array; // 32 bytes (seed)
 };
 
@@ -109,7 +108,7 @@ export type CryptoPowers = {
 };
 ```
 
-Key *persistence* is not a crypto concern — it belongs in
+Key _persistence_ is not a crypto concern — it belongs in
 `DaemonicPersistencePowers`. `CryptoPowers` only generates keypairs; the
 caller is responsible for storing them via the persistence layer.
 
@@ -164,8 +163,8 @@ agent is formulated, and the agent can look up its own keypair via the
 ```typescript
 type KeypairFormula = {
   type: 'keypair';
-  publicKey: string;   // 64-char hex Ed25519 public key
-  privateKey: string;  // 64-char hex Ed25519 private key (seed)
+  publicKey: string; // 64-char hex Ed25519 public key
+  privateKey: string; // 64-char hex Ed25519 private key (seed)
 };
 ```
 
@@ -233,7 +232,11 @@ const formulateKeypair = async () => {
     byte.toString(16).padStart(2, '0'),
   ).join('');
   const keypairFormulaNumber = await randomHex256();
-  const formula = { type: 'keypair', publicKey: publicKeyHex, privateKey: privateKeyHex };
+  const formula = {
+    type: 'keypair',
+    publicKey: publicKeyHex,
+    privateKey: privateKeyHex,
+  };
   const { id: keypairId } = await formulate(keypairFormulaNumber, formula);
   return { keypairId };
 };

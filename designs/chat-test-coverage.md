@@ -1,12 +1,12 @@
 # Chat Test Coverage
 
-| | |
-|---|---|
-| **Created** | 2026-03-02 |
-| **Updated** | 2026-03-02 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
-| **Source** | Extracted from `packages/chat/DESIGN.md` |
+|             |                                          |
+| ----------- | ---------------------------------------- |
+| **Created** | 2026-03-02                               |
+| **Updated** | 2026-03-02                               |
+| **Author**  | Kris Kowal (prompted)                    |
+| **Status**  | **Complete**                             |
+| **Source**  | Extracted from `packages/chat/DESIGN.md` |
 
 ## Test Organization
 
@@ -78,6 +78,7 @@ test/e2e/
 ```
 
 **Token Autocomplete Tests** cover:
+
 - Menu visibility (`@` opens menu, `@@` escapes, Escape/Backspace closes)
 - Filtering (case-insensitive, "No matches" display)
 - Navigation (ArrowUp/Down, wrap-around)
@@ -88,6 +89,7 @@ test/e2e/
 - Edge cases (`@` not triggered after alphanumeric)
 
 **Monaco Editor Tests** cover:
+
 - Loading (iframe loads, editor focused)
 - Content (typing updates, initial value)
 - Keyboard shortcuts (Cmd+Enter submit, Escape, Cmd+E add endowment)
@@ -100,29 +102,29 @@ the postMessage protocol without requiring a browser.
 
 ## Test Count by Module
 
-| Module | Tests | Coverage |
-|--------|-------|----------|
-| command-registry | 16 | Complete - all utilities |
-| command-executor | 32 | Complete - all 20+ commands |
-| message-parse | 20 | Complete - parsing edge cases |
-| ref-iterator | 8 | Complete - async iteration |
-| time-formatters | 16 | Complete - formatting utilities |
-| markdown-render | 27 | Complete - parsing and rendering |
-| value-render | 36 | Complete - all pass-style types |
-| mock-powers | 10 | Complete - mock verification |
-| send-form | 4 | Partial - state management only |
-| petname-path-autocomplete | 17 | Complete - API, navigation, selection |
-| petname-paths-autocomplete | 20 | Complete - chips, callbacks, navigation |
-| inline-command-form | 24 | Complete - rendering, validation, submission |
-| monaco-wrapper | 1 | Protocol documentation (skipped tests document API) |
-| form-request-inbox | 3 | Complete - form rendering, submission, settlement |
-| spaces-gutter-home | 5 | Complete - context menu, modal, config persistence |
-| **Unit/Component Total** | **244** | |
+| Module                     | Tests   | Coverage                                            |
+| -------------------------- | ------- | --------------------------------------------------- |
+| command-registry           | 16      | Complete - all utilities                            |
+| command-executor           | 32      | Complete - all 20+ commands                         |
+| message-parse              | 20      | Complete - parsing edge cases                       |
+| ref-iterator               | 8       | Complete - async iteration                          |
+| time-formatters            | 16      | Complete - formatting utilities                     |
+| markdown-render            | 27      | Complete - parsing and rendering                    |
+| value-render               | 36      | Complete - all pass-style types                     |
+| mock-powers                | 10      | Complete - mock verification                        |
+| send-form                  | 4       | Partial - state management only                     |
+| petname-path-autocomplete  | 17      | Complete - API, navigation, selection               |
+| petname-paths-autocomplete | 20      | Complete - chips, callbacks, navigation             |
+| inline-command-form        | 24      | Complete - rendering, validation, submission        |
+| monaco-wrapper             | 1       | Protocol documentation (skipped tests document API) |
+| form-request-inbox         | 3       | Complete - form rendering, submission, settlement   |
+| spaces-gutter-home         | 5       | Complete - context menu, modal, config persistence  |
+| **Unit/Component Total**   | **244** |                                                     |
 
 ## E2E Test Count (Playwright)
 
-| Spec File | Tests | Coverage |
-|-----------|-------|----------|
-| token-autocomplete.spec.ts | 25 | Menu, filtering, navigation, selection, edge names |
-| monaco-editor.spec.ts | 14 | Loading, content, shortcuts, protocol |
-| **E2E Total** | **39** | |
+| Spec File                  | Tests  | Coverage                                           |
+| -------------------------- | ------ | -------------------------------------------------- |
+| token-autocomplete.spec.ts | 25     | Menu, filtering, navigation, selection, edge names |
+| monaco-editor.spec.ts      | 14     | Loading, content, shortcuts, protocol              |
+| **E2E Total**              | **39** |                                                    |

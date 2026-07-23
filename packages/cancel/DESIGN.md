@@ -22,6 +22,7 @@ We envision the eventual addition of `Promise.withCanceller` that returns
 instead `cancelled` and `cancel`.
 
 The `isCancelled` function returns:
+
 - `false` - cancellation has not been requested
 - `true` - cancellation has been requested
 
@@ -56,8 +57,13 @@ the same reason. If `parentIsCancelled` is provided and returns true at
 creation time, the child is synchronously cancelled:
 
 ```js
-const { cancelled: parentCancelled, cancel: cancelParent, isCancelled: parentIsCancelled } = makeCancelKit();
-const { cancelled: childCancelled, isCancelled: childIsCancelled } = makeCancelKit(parentCancelled, parentIsCancelled);
+const {
+  cancelled: parentCancelled,
+  cancel: cancelParent,
+  isCancelled: parentIsCancelled,
+} = makeCancelKit();
+const { cancelled: childCancelled, isCancelled: childIsCancelled } =
+  makeCancelKit(parentCancelled, parentIsCancelled);
 
 cancelParent(Error('Operation aborted'));
 // childCancelled is now also cancelled
@@ -94,9 +100,13 @@ all of the operations are cancelled.
 ```js
 import { allMap } from '@endo/cancel/all-map';
 
-return allMap(values, (value, index, cancelled, isCancelled) => {
-  // Transform value, checking isCancelled() as needed
-}, externalCancelled);
+return allMap(
+  values,
+  (value, index, cancelled, isCancelled) => {
+    // Transform value, checking isCancelled() as needed
+  },
+  externalCancelled,
+);
 ```
 
 ### `anyMap`
@@ -108,9 +118,13 @@ jobs reject.
 ```js
 import { anyMap } from '@endo/cancel/any-map';
 
-return anyMap(values, (value, index, cancelled, isCancelled) => {
-  // Race to produce a result
-}, externalCancelled);
+return anyMap(
+  values,
+  (value, index, cancelled, isCancelled) => {
+    // Race to produce a result
+  },
+  externalCancelled,
+);
 ```
 
 ### `delay`
@@ -139,6 +153,7 @@ await delay(1000, parentCancelled);
 #### Design Rationale for delay
 
 The `parentCancelled` token is expected to be a `Cancelled` that either:
+
 - Never settles (no cancellation requested)
 - Rejects (cancellation requested)
 
@@ -164,7 +179,8 @@ A recipient of a remote `cancelled` promise can recover a local synchronous
 `isCancelled` cache by using it as the parent of a new cancel kit:
 
 ```js
-const { cancelled: localCancelled, isCancelled } = makeCancelKit(remoteCancelled);
+const { cancelled: localCancelled, isCancelled } =
+  makeCancelKit(remoteCancelled);
 ```
 
 The child kit's `isCancelled` will begin returning `true` once the remote
@@ -246,13 +262,13 @@ of `AbortSignal`.
 The web's `AbortSignal` and Endo's `Cancelled` serve similar purposes but
 have different characteristics:
 
-| Feature | AbortSignal | Cancelled |
-|---------|-------------|-----------|
-| Sync observation | `.aborted` | `isCancelled()` |
+| Feature           | AbortSignal   | Cancelled         |
+| ----------------- | ------------- | ----------------- |
+| Sync observation  | `.aborted`    | `isCancelled()`   |
 | Async observation | `abort` event | Promise rejection |
-| Reason access | `.reason` | Via rejection |
-| Hardened | No | Yes |
-| CapTP compatible | No | Yes |
+| Reason access     | `.reason`     | Via rejection     |
+| Hardened          | No            | Yes               |
+| CapTP compatible  | No            | Yes               |
 
 The conversion utilities bridge these two worlds:
 

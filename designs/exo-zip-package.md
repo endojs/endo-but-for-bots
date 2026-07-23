@@ -1,11 +1,11 @@
 # `@endo/exo-zip` package
 
-| | |
-|---|---|
-| **Created** | 2026-05-08 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed (split into two packages on PR #160) |
-| **Source** | PR #128 inline review comment ([discussion_r3205653903](https://github.com/endojs/endo-but-for-bots/pull/128#discussion_r3205653903)) |
+|             |                                                                                                                                       |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| **Created** | 2026-05-08                                                                                                                            |
+| **Author**  | Kris Kowal (prompted)                                                                                                                 |
+| **Status**  | Proposed (split into two packages on PR #160)                                                                                         |
+| **Source**  | PR #128 inline review comment ([discussion_r3205653903](https://github.com/endojs/endo-but-for-bots/pull/128#discussion_r3205653903)) |
 
 ## Amendment 2026-05-10: package split
 
@@ -76,7 +76,7 @@ I flagged this on `packages/cli/src/commands/checkin.js:36`:
 The intermediate filesystem representation has three costs:
 
 1. It requires creating a temporary directory, registering a `try /
-   finally` cleanup, and recovering from partial-extraction failure.
+finally` cleanup, and recovering from partial-extraction failure.
 2. It doubles the I/O: every byte is written to disk and immediately
    re-read by the tree walker.
 3. It conflates two concerns inside `checkin.js`: the zip-decoding
@@ -208,9 +208,11 @@ The blob exo's `streamBase64()` returns a one-shot `ReaderRef` that
 yields a single base64-encoded chunk:
 
 ```js
-const bytes = zipReader.read(fullPath);          // Uint8Array
+const bytes = zipReader.read(fullPath); // Uint8Array
 const base64 = uint8ArrayToBase64(bytes);
-async function* once() { yield base64; }
+async function* once() {
+  yield base64;
+}
 return makeReaderRef(once());
 ```
 
@@ -334,10 +336,10 @@ in `packages/daemon/test/` (or `packages/cli/test/`) will cover the
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|-------------|
-| [daemon-weblet-application](daemon-weblet-application.md) | **Depends on.** Defines the `readable-tree` formula type and its `ReadableTreeInterface` shape that `makeExoZip` conforms to. |
-| [daemon-checkin-checkout](daemon-checkin-checkout.md) | **Depends on (consumer).** The `checkin -z` algorithm is the primary caller of `makeExoZip`. The `checkout -z` algorithm walks the readable-tree inline against an in-memory `ZipWriter`; the walker stays in the CLI until a second consumer justifies extraction. |
+| Design                                                    | Relationship                                                                                                                                                                                                                                                        |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [daemon-weblet-application](daemon-weblet-application.md) | **Depends on.** Defines the `readable-tree` formula type and its `ReadableTreeInterface` shape that `makeExoZip` conforms to.                                                                                                                                       |
+| [daemon-checkin-checkout](daemon-checkin-checkout.md)     | **Depends on (consumer).** The `checkin -z` algorithm is the primary caller of `makeExoZip`. The `checkout -z` algorithm walks the readable-tree inline against an in-memory `ZipWriter`; the walker stays in the CLI until a second consumer justifies extraction. |
 
 **Reshape blocker for:** PR #128 (`checkin.js`).
 The PR's current `checkin.js` extracts to a temp directory; reshape
@@ -430,7 +432,7 @@ substance against the new package.
    Accepting a stream would let very large archives skip the
    buffering step in principle, but `@endo/zip` requires the full
    bytes to parse the central directory anyway, and a stream alone
-   is not enough: lazy zip access needs a *seekable* stream concept,
+   is not enough: lazy zip access needs a _seekable_ stream concept,
    which the project does not yet define.
    Streaming zip support is deferred until that concept exists, at
    which point `makeExoZip` can grow an overload without breaking
@@ -464,7 +466,7 @@ Their resolutions are folded into the design body above:
 
 3. **Walker location (`writeZipFromTree`).**
    Resolution: walker stays inline at the consumer (`checkout.js`)
-   for now (Decision 4 and the *Symmetric write path* section).
+   for now (Decision 4 and the _Symmetric write path_ section).
    Future home is a lite helper module under `@endo/platform` (or a
    sibling pure-JavaScript helper package).
    As I put it: "inline is fine until we find multiple uses".

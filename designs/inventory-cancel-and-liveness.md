@@ -1,11 +1,11 @@
 # Inventory Liveness Indicator and Cancel
 
-| | |
-|---|---|
-| **Created** | 2026-02-14 |
-| **Updated** | 2026-03-13 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-14            |
+| **Updated** | 2026-03-13            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## What is the Problem Being Solved?
 
@@ -32,13 +32,13 @@ The liveness indicator and cancel button are a single element: a circular
 button (12–14px diameter) whose fill color shows the incarnation state.
 Clicking it cancels the incarnation. One element, two functions.
 
-| State | Fill | Meaning |
-|-------|------|---------|
-| Live | Green | Incarnation exists and is running |
-| Settled | Blue | Promise resolved to a durable value |
-| Pending | Amber, pulsing | Promise not yet settled |
-| Not incarnated | Gray | Formula exists but not currently provided |
-| Cancelled | Hollow (border only) | Incarnation was cancelled |
+| State          | Fill                 | Meaning                                   |
+| -------------- | -------------------- | ----------------------------------------- |
+| Live           | Green                | Incarnation exists and is running         |
+| Settled        | Blue                 | Promise resolved to a durable value       |
+| Pending        | Amber, pulsing       | Promise not yet settled                   |
+| Not incarnated | Gray                 | Formula exists but not currently provided |
+| Cancelled      | Hollow (border only) | Incarnation was cancelled                 |
 
 The button is always visible (it is the indicator). A tooltip on hover
 shows the state in text ("Live", "Pending", "Not incarnated", "Cancelled").
@@ -260,8 +260,8 @@ watched set.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|-------------|
+| Design                                              | Relationship                                    |
+| --------------------------------------------------- | ----------------------------------------------- |
 | [daemon-capability-bank](daemon-capability-bank.md) | Capability lifecycle observable via the watcher |
 
 ## Affected Packages
@@ -280,7 +280,7 @@ watched set.
 
 ## Design Decisions
 
-1. **One button, two functions.** The cancel button *is* the indicator.
+1. **One button, two functions.** The cancel button _is_ the indicator.
    This keeps the row compact while ensuring the most important status
    information (is this thing alive?) is always visible. The remove button
    (×) remains separate because deletion and cancellation are distinct

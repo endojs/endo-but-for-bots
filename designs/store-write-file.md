@@ -1,11 +1,11 @@
 # `endo store` drives `writeFile` on ordinary `EndoDirectory`
 
-| | |
-|---|---|
-| **Created** | 2026-07-15 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
-| **Source** | Follow-up requested in [endojs/endo-but-for-bots#658 comment](https://github.com/endojs/endo-but-for-bots/pull/658#issuecomment-4977137707) |
+|             |                                                                                                                                             |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Created** | 2026-07-15                                                                                                                                  |
+| **Author**  | Kris Kowal (prompted)                                                                                                                       |
+| **Status**  | Not Started                                                                                                                                 |
+| **Source**  | Follow-up requested in [endojs/endo-but-for-bots#658 comment](https://github.com/endojs/endo-but-for-bots/pull/658#issuecomment-4977137707) |
 
 ## What is the Problem Being Solved?
 
@@ -51,7 +51,8 @@ const writeText = async (petNameOrPath, content) => {
     const readerRef = bytesReaderFromIterator([bytes]);
     const tasks = makeDeferredTasks();
     tasks.push(identifiers =>
-      storeIdentifier(namePath, identifiers.readableBlobId));
+      storeIdentifier(namePath, identifiers.readableBlobId),
+    );
     await formulateReadableBlob(readerRef, tasks);
     return;
   }
@@ -87,7 +88,7 @@ Behavior, mirroring `writeText`:
 
 - **Single-segment name** (`['photo']`): formulate a `readable-blob` from
   `readerRef` and bind the pet name via `storeIdentifier(namePath,
-  readableBlobId)`. This is exactly the `storeBlob` code path
+readableBlobId)`. This is exactly the `storeBlob` code path
   (`formulateReadableBlob(readerRef, tasks)` with a deferred
   `storeIdentifier` task); `storeBlob` becomes a thin caller of the same
   primitive rather than a parallel implementation.
@@ -192,7 +193,7 @@ flowchart LR
 - **`packages/daemon/src/help-text-data.js`**: add help text for
   `writeFile` (and regenerate `help.md`).
 - **`packages/daemon/src/types.d.ts`**: add `writeFile(petNamePath: string
-  | string[], readerRef: ERef<PassableBytesReader>): Promise<void>` to the
+| string[], readerRef: ERef<PassableBytesReader>): Promise<void>` to the
   `EndoDirectory` (and agent) interfaces.
 
 ## Behavior and error cases
@@ -244,11 +245,11 @@ flowchart LR
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| [daemon-mount](daemon-mount.md) | Provides the mount exo whose new `writeFile` facade delegates to its existing generic `write`; PR #658 (Phase 6) is the precipitating change. |
+| Design                                                    | Relationship                                                                                                                                                      |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [daemon-mount](daemon-mount.md)                           | Provides the mount exo whose new `writeFile` facade delegates to its existing generic `write`; PR #658 (Phase 6) is the precipitating change.                     |
 | [cli-store-verb-text-modes](cli-store-verb-text-modes.md) | Names the same blob-vs-value axis; the reshaped `--blob` source mode is the CLI surface that would drive `writeFile`. Align the two before CLI-flag changes land. |
-| [daemon-content-store-gc](daemon-content-store-gc.md) | Governs GC of the superseded blob when a single-segment name is rewritten. |
+| [daemon-content-store-gc](daemon-content-store-gc.md)     | Governs GC of the superseded blob when a single-segment name is rewritten.                                                                                        |
 
 ## Verification plan
 
@@ -267,12 +268,12 @@ flowchart LR
   path, and read the resulting `readable-blob` back. This proves the
   tail-hub recursion does not assume that every tail is a mount.
 - **CLI end-to-end.** Spin up an isolated daemon; assert `endo store
-  --path <bin> --name x` then `endo cat x` round-trips bytes, and that
+--path <bin> --name x` then `endo cat x` round-trips bytes, and that
   `endo store --stdin --name <mount>/sub/file` writes into the mount
   (cross-checked against the backing filesystem). Assert value modes still
   route to `storeValue` unchanged.
 - **Grep-completeness check.** After implementation, `grep -rn writeText
-  packages/daemon/src` and confirm a matching `writeFile` at each
+packages/daemon/src` and confirm a matching `writeFile` at each
   touchpoint listed above (the mirror set is the completeness invariant).
 
 ## Open questions

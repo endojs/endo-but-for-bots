@@ -1,10 +1,10 @@
 # Familiar App UI Hosting (Partial Sandbox)
 
-| | |
-|---|---|
-| **Created** | 2026-06-01 |
-| **Author** | Aaron (prompted) |
-| **Status** | Proposed |
+|             |                  |
+| ----------- | ---------------- |
+| **Created** | 2026-06-01       |
+| **Author**  | Aaron (prompted) |
+| **Status**  | Proposed         |
 
 ## What is the Problem Being Solved?
 
@@ -27,11 +27,11 @@ documents:
 What those documents do not yet pin down is the **app-specific** layer this
 milestone needs:
 
-1. A **UI manifest** on the app handle saying *what* to serve (entry HTML, the
-   `readable-tree` of assets) and *how much* to sandbox it.
+1. A **UI manifest** on the app handle saying _what_ to serve (entry HTML, the
+   `readable-tree` of assets) and _how much_ to sandbox it.
 2. A small **sandbox-level policy** so an author can choose the confinement
    tier appropriate to their app.
-3. The **CapTP wiring** from the sandboxed UI back to *that app's* exo
+3. The **CapTP wiring** from the sandboxed UI back to _that app's_ exo
    specifically (not ambient daemon authority), so a cloned or referenced app's
    UI is bound to the right instance with the right powers.
 
@@ -40,14 +40,14 @@ to the three documents above.
 
 ## Background: what already exists
 
-| Capability | Location | Status |
-|---|---|---|
-| `localhttp://<weblet-id>/` privileged scheme, per-app origin isolation | `packages/familiar/src/protocol-handler.js` | Complete |
-| CSP injection per response (`connect-src 'self'`, `object-src 'none'`, `frame-src 'self'`, …) | `packages/familiar/src/protocol-handler.js` | Complete |
-| Navigation guards / exfiltration defenses | `packages/familiar/electron-main.js`, `src/exfiltration-defense.js` | Complete (partial) |
-| Unified weblet server routing | [familiar-unified-weblet-server](familiar-unified-weblet-server.md) | In Progress |
-| Chat iframe weblet pane | [familiar-chat-weblet-hosting](familiar-chat-weblet-hosting.md) | Not Started |
-| Serve `readable-tree` files + powers over CapTP | [daemon-weblet-application](daemon-weblet-application.md) | Not Started |
+| Capability                                                                                    | Location                                                            | Status             |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------ |
+| `localhttp://<weblet-id>/` privileged scheme, per-app origin isolation                        | `packages/familiar/src/protocol-handler.js`                         | Complete           |
+| CSP injection per response (`connect-src 'self'`, `object-src 'none'`, `frame-src 'self'`, …) | `packages/familiar/src/protocol-handler.js`                         | Complete           |
+| Navigation guards / exfiltration defenses                                                     | `packages/familiar/electron-main.js`, `src/exfiltration-defense.js` | Complete (partial) |
+| Unified weblet server routing                                                                 | [familiar-unified-weblet-server](familiar-unified-weblet-server.md) | In Progress        |
+| Chat iframe weblet pane                                                                       | [familiar-chat-weblet-hosting](familiar-chat-weblet-hosting.md)     | Not Started        |
+| Serve `readable-tree` files + powers over CapTP                                               | [daemon-weblet-application](daemon-weblet-application.md)           | Not Started        |
 
 Per-app origin isolation and CSP are the strong parts that already ship. The
 gap is the app-facing manifest, the sandbox tiers, and binding the UI's CapTP
@@ -70,11 +70,11 @@ ui: {
 
 ### Sandbox tiers
 
-| Tier | Origin | CSP `connect-src` | CapTP to app exo | Use |
-|---|---|---|---|---|
-| `isolated` | unique `localhttp://<id>` | `'none'` | no | Pure presentational UI; no back-channel. |
-| `connected` (default) | unique `localhttp://<id>` | `'self'` | yes, **only** to its own exo | The normal case: app UI drives its own backing capability. |
-| `trusted` | unique `localhttp://<id>` | `'self'` + author-declared origins | yes | Author opts into extra reach (e.g. an allowlisted API), surfaced to the user at install. |
+| Tier                  | Origin                    | CSP `connect-src`                  | CapTP to app exo             | Use                                                                                      |
+| --------------------- | ------------------------- | ---------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------- |
+| `isolated`            | unique `localhttp://<id>` | `'none'`                           | no                           | Pure presentational UI; no back-channel.                                                 |
+| `connected` (default) | unique `localhttp://<id>` | `'self'`                           | yes, **only** to its own exo | The normal case: app UI drives its own backing capability.                               |
+| `trusted`             | unique `localhttp://<id>` | `'self'` + author-declared origins | yes                          | Author opts into extra reach (e.g. an allowlisted API), surfaced to the user at install. |
 
 Every tier keeps the per-app unique origin and the `object-src 'none'` /
 `form-action 'self'` baseline from the existing protocol handler. Tiers only
@@ -88,7 +88,7 @@ app instance's exo**, carrying only the powers the app was run with
 (`run.powers` from the app handle). This matters for the two share modes:
 
 - A **referenced** app's UI bridges back to the author's running exo.
-- A **cloned** app's UI bridges to the recipient's *local* exo, under the
+- A **cloned** app's UI bridges to the recipient's _local_ exo, under the
   recipient's powers.
 
 Transport is `MessagePort` for the in-Chat iframe (preferred, no network
@@ -106,14 +106,14 @@ untrusted third parties.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| [familiar-unified-weblet-server](familiar-unified-weblet-server.md) | Provides the virtual-host HTTP routing this serves over. |
-| [familiar-chat-weblet-hosting](familiar-chat-weblet-hosting.md) | Provides the in-Chat iframe pane and chrome/guest barrier. |
-| [daemon-weblet-application](daemon-weblet-application.md) | Provides readable-tree file serving + CapTP-over-MessagePort/WebSocket. |
-| [familiar-localhttp-protocol](familiar-localhttp-protocol.md) | The per-app origin + CSP mechanism the tiers build on. |
-| [endo-app-sharing](endo-app-sharing.md) | Owns the app handle whose `ui` manifest this consumes. |
-| [app-sharing-milestone](app-sharing-milestone.md) | Parent milestone; this is the "partially sandboxed UI" pillar. |
+| Design                                                              | Relationship                                                            |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| [familiar-unified-weblet-server](familiar-unified-weblet-server.md) | Provides the virtual-host HTTP routing this serves over.                |
+| [familiar-chat-weblet-hosting](familiar-chat-weblet-hosting.md)     | Provides the in-Chat iframe pane and chrome/guest barrier.              |
+| [daemon-weblet-application](daemon-weblet-application.md)           | Provides readable-tree file serving + CapTP-over-MessagePort/WebSocket. |
+| [familiar-localhttp-protocol](familiar-localhttp-protocol.md)       | The per-app origin + CSP mechanism the tiers build on.                  |
+| [endo-app-sharing](endo-app-sharing.md)                             | Owns the app handle whose `ui` manifest this consumes.                  |
+| [app-sharing-milestone](app-sharing-milestone.md)                   | Parent milestone; this is the "partially sandboxed UI" pillar.          |
 
 ## Phased Implementation
 

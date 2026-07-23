@@ -1,11 +1,11 @@
 # @endo/gateway Package
 
-| | |
-|---|---|
-| **Created** | 2026-05-22 |
-| **Updated** | 2026-06-29 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+|                |                                                                       |
+| -------------- | --------------------------------------------------------------------- |
+| **Created**    | 2026-05-22                                                            |
+| **Updated**    | 2026-06-29                                                            |
+| **Author**     | Kris Kowal (prompted)                                                 |
+| **Status**     | Proposed                                                              |
 | **Supersedes** | endo-gateway (removed 2026-05-29; material folded into this document) |
 
 ## What is the Problem Being Solved?
@@ -98,10 +98,10 @@ The package's public surface is a single factory:
 import { make } from '@endo/gateway';
 
 const gateway = await make({
-  powers,            // filesystem, net, crypto, time
-  config,            // see Configuration Model below
-  hostAgent,         // optional: per-user host this gateway serves
-  trustedProxy,      // optional: HTTPS-terminating proxy contract
+  powers, // filesystem, net, crypto, time
+  config, // see Configuration Model below
+  hostAgent, // optional: per-user host this gateway serves
+  trustedProxy, // optional: HTTPS-terminating proxy contract
 });
 
 await E(gateway).start();
@@ -304,8 +304,8 @@ packaging in feature 10 wires it into each platform's manager.
 - **macOS**: launchd `LaunchDaemon` plist under
   `/Library/LaunchDaemons/`, runtime directory under `/var/run/`.
   Installed by the macOS distribution of the Endo binary or by the
-  Familiar app's installer (see Feature 5's *Familiar app packaging
-  impact* subsection below).
+  Familiar app's installer (see Feature 5's _Familiar app packaging
+  impact_ subsection below).
 - **Windows**: Windows Service registered with `sc.exe` or via the
   Service Control Manager API, named-pipe bootstrap channel at
   `\\.\pipe\endo-gateway` (the Windows analogue of the UDS bootstrap
@@ -467,8 +467,8 @@ following shape:
 interface WebletFormula {
   type: 'weblet';
   /** Content tree to serve as static assets. */
-  contentRoot: FormulaIdentifier;       // readable-tree per
-                                        // daemon-weblet-application.md
+  contentRoot: FormulaIdentifier; // readable-tree per
+  // daemon-weblet-application.md
   /** Optional per-extension MIME-type overrides. */
   mimeTypes?: Record<string, string>;
   /** Optional SSR-route handler. */
@@ -492,7 +492,7 @@ user's `@apps` NameHub; the gateway routes by the bound
 
 ```js
 // On a host agent:
-await E(agent).lookup('@apps');           // → AppsNameHub
+await E(agent).lookup('@apps'); // → AppsNameHub
 await E(apps).bind('chat', chatWebletId);
 await E(apps).bind('inbox', inboxWebletId);
 // Gateway now routes Host: <chatWebletId> and Host: <inboxWebletId>
@@ -615,7 +615,7 @@ Today the formula identifier is permanent; rotating it requires
 re-issuing every saved Git remote URL.
 This is the same as `gateway-bearer-token-auth.md`'s "token
 secrecy" warning and inherits the Pass-Invariant-Eq follow-up
-recorded under *Open Questions* below (carried forward from the
+recorded under _Open Questions_ below (carried forward from the
 superseded `endo-gateway` design).
 Surfaced rather than answered.
 
@@ -648,9 +648,9 @@ interface GatewayBootstrap {
 
   /** Register a relay for an OCapN public key. */
   registerRelay(args: {
-    publicKey: Uint8Array;            // Ed25519 public key
-    proofOfPossession: Uint8Array;    // signature over a fresh nonce
-    relayTarget: UserDaemonHandle;    // where to forward sessions
+    publicKey: Uint8Array; // Ed25519 public key
+    proofOfPossession: Uint8Array; // signature over a fresh nonce
+    relayTarget: UserDaemonHandle; // where to forward sessions
   }): Promise<RelayRegistration>;
 
   /**
@@ -662,7 +662,7 @@ interface GatewayBootstrap {
   register(args: {
     publicKey: Uint8Array;
     proofOfPossession: Uint8Array;
-    daemon: UserDaemon;               // exo the gateway calls back into
+    daemon: UserDaemon; // exo the gateway calls back into
   }): Promise<Registration>;
 
   /** Get the gateway's bind address. */
@@ -683,8 +683,8 @@ interface Registration {
    * contentTreeRoot) in its sqlite formula table.
    */
   publishWeblet(descriptor: {
-    webletId: string;                 // gateway-assigned identifier
-    contentTreeRoot: string;          // SHA-256 hex of the CAS tree root
+    webletId: string; // gateway-assigned identifier
+    contentTreeRoot: string; // SHA-256 hex of the CAS tree root
     hasWebSocket: boolean;
   }): Promise<void>;
 
@@ -719,7 +719,7 @@ interface UserDaemon {
       method: string;
       path: string;
       headers: ReadonlyArray<readonly [string, string]>;
-      body: Uint8Array;             // streamed above an inline threshold
+      body: Uint8Array; // streamed above an inline threshold
     },
   ): Promise<{
     status: number;
@@ -733,7 +733,9 @@ interface UserDaemon {
    */
   handleWebSocketUpgrade(
     webletId: string,
-    request: { /* same shape as handleHttp's request */ },
+    request: {
+      /* same shape as handleHttp's request */
+    },
   ): Promise<{
     onMessage(frame: Uint8Array): void;
     onClose(code: number, reason: string): void;
@@ -774,7 +776,7 @@ proof-of-possession step gates which-public-keys-may-register.
 
 Heartbeat cadence and the inline-body threshold for the streaming
 relay are tuned in the implementation PR; sensible starting values
-are 30s heartbeat (see *Liveness* under the *Lifecycle* section
+are 30s heartbeat (see _Liveness_ under the _Lifecycle_ section
 above) and a 64 KiB inline-body threshold (above which bodies are
 streamed as `daemon-message-streaming` chunks rather than passed
 inline).
@@ -789,8 +791,7 @@ embeds `@endo/gateway` and stands it up on an OS-assigned port
 bound to `127.0.0.1:0`.
 The Familiar's `localhttp://` protocol handler
 ([`familiar-localhttp-protocol`](familiar-localhttp-protocol.md))
-then proxies through the OS-assigned port instead of the default
-8920.
+then proxies through the OS-assigned port instead of the default 8920.
 
 The Familiar reads the gateway's actual port after bind:
 
@@ -878,7 +879,7 @@ Familiar's bundled-fallback gateway):
   system gateway is installed, and lets the system gateway take
   over transparently when one is.
 - **Electron architecture constraints**: the gateway is launched
-  in the Electron main process (see *Cross-platform service shape*
+  in the Electron main process (see _Cross-platform service shape_
   above).
   Per `project/AGENTS.md` § Familiar architecture constraints, the
   Electron main process must not import `@endo/init` or `ses`; the
@@ -975,29 +976,35 @@ key.
 ```ts
 interface GatewayAdmin {
   /** List currently-registered relay public keys. */
-  listRegistrations(): Promise<ReadonlyArray<{
-    publicKey: Uint8Array;
-    target: UserDaemonHandle;
-    registeredAt: number;
-  }>>;
+  listRegistrations(): Promise<
+    ReadonlyArray<{
+      publicKey: Uint8Array;
+      target: UserDaemonHandle;
+      registeredAt: number;
+    }>
+  >;
 
   /** Deregister a relay. */
   deregisterRelay(publicKey: Uint8Array): Promise<void>;
 
   /** Inspect virtual-host bindings. */
-  listVirtualHosts(): Promise<ReadonlyArray<{
-    hostname: string;
-    weblet: FormulaIdentifier;
-    owner: UserDaemonHandle;
-  }>>;
+  listVirtualHosts(): Promise<
+    ReadonlyArray<{
+      hostname: string;
+      weblet: FormulaIdentifier;
+      owner: UserDaemonHandle;
+    }>
+  >;
 
   /** Read per-account resource balances. */
-  getResourceBalances(): Promise<ReadonlyArray<{
-    account: AccountId;
-    compute: number;
-    storage: number;
-    network: number;
-  }>>;
+  getResourceBalances(): Promise<
+    ReadonlyArray<{
+      account: AccountId;
+      compute: number;
+      storage: number;
+      network: number;
+    }>
+  >;
 }
 ```
 
@@ -1146,12 +1153,12 @@ else.
 
 **Per-distribution packaging:**
 
-| Package | Service manager | Notes |
-|---------|-----------------|-------|
-| `.deb` (Debian, Ubuntu) | systemd unit `endo-gateway.service` | `debian/postinst` creates the service user and directories. |
-| `.rpm` (RHEL, Fedora) | systemd unit `endo-gateway.service` | `%pre` creates user, `%post` enables service. |
-| PKGBUILD (Arch) | systemd unit `endo-gateway.service` | `pkgbuild.install` does post-install. |
-| Dockerfile | `endo-gateway` as PID 1 | Container runtime is the service manager; restart policy `unless-stopped`. |
+| Package                 | Service manager                     | Notes                                                                      |
+| ----------------------- | ----------------------------------- | -------------------------------------------------------------------------- |
+| `.deb` (Debian, Ubuntu) | systemd unit `endo-gateway.service` | `debian/postinst` creates the service user and directories.                |
+| `.rpm` (RHEL, Fedora)   | systemd unit `endo-gateway.service` | `%pre` creates user, `%post` enables service.                              |
+| PKGBUILD (Arch)         | systemd unit `endo-gateway.service` | `pkgbuild.install` does post-install.                                      |
+| Dockerfile              | `endo-gateway` as PID 1             | Container runtime is the service manager; restart policy `unless-stopped`. |
 
 The systemd unit:
 
@@ -1269,18 +1276,18 @@ The gateway reads configuration in three layers (later wins):
 Each of the ten features is gated by a configuration flag.
 The defaults match the system-service deployment:
 
-| Feature | Flag | System-service default | Familiar default |
-|---------|------|------------------------|------------------|
-| 1. Chat hosting + payments | `chat.enabled` | true | true |
-| 2. Virtual hosting | `vhost.enabled` | true | true |
-| 3. Git over HTTP | `git.enabled` | true | false |
-| 4. UDS bootstrap | `uds.enabled` | true | false |
-| 5. Familiar-bundled | (variant) | n/a | n/a |
-| 6. CapTP relay | `relay.enabled` | false (opt-in) | false |
-| 7. Admin daemon | `admin.enabled` | true (UDS-only) | false |
-| 8. `/ocapn-cbor-np` WS | `ocapn.enabled` | true | true |
-| 9. HTTPS proxy compat | `proxy.trustedCidrs` | [] (none) | n/a |
-| 10. OS packaging | (build) | n/a | n/a |
+| Feature                    | Flag                 | System-service default | Familiar default |
+| -------------------------- | -------------------- | ---------------------- | ---------------- |
+| 1. Chat hosting + payments | `chat.enabled`       | true                   | true             |
+| 2. Virtual hosting         | `vhost.enabled`      | true                   | true             |
+| 3. Git over HTTP           | `git.enabled`        | true                   | false            |
+| 4. UDS bootstrap           | `uds.enabled`        | true                   | false            |
+| 5. Familiar-bundled        | (variant)            | n/a                    | n/a              |
+| 6. CapTP relay             | `relay.enabled`      | false (opt-in)         | false            |
+| 7. Admin daemon            | `admin.enabled`      | true (UDS-only)        | false            |
+| 8. `/ocapn-cbor-np` WS     | `ocapn.enabled`      | true                   | true             |
+| 9. HTTPS proxy compat      | `proxy.trustedCidrs` | [] (none)              | n/a              |
+| 10. OS packaging           | (build)              | n/a                    | n/a              |
 
 ### Dependencies between features
 
@@ -1299,33 +1306,33 @@ startup; a misconfiguration (e.g., `relay.enabled` with
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|--------------|
-| [daemon-web-gateway](daemon-web-gateway.md) | The current in-daemon HTTP+WS server, which this package extracts and generalizes. The daemon's `@apps` formula transitions from inline `web-server-node.js` to a `@endo/gateway` import. |
-| [daemon-weblet-application](daemon-weblet-application.md) | Provides the `readable-tree-weblet` formula type the new Weblet formula generalizes (feature 2). The gateway's content-tree serving reuses the `readable-tree` traversal. |
-| [weblet-next](weblet-next.md) | Reference doc for the removed weblet feature; the new design's feature 2 picks up the `@webs`-style NameHub idea sketched there. |
-| [familiar-unified-weblet-server](familiar-unified-weblet-server.md) | The multi-user / per-session-confidentiality concerns flagged in the 2026-04-17 revision are addressed by this package's feature 8 (Noise in-band) and feature 4 (UDS for local-vs-remote attestation). |
-| [familiar-gateway-migration](familiar-gateway-migration.md) | The current daemon-side gateway location; this package is the next move (out of daemon, into its own package). |
-| [familiar-chat-weblet-hosting](familiar-chat-weblet-hosting.md) | Chat-as-weblet hosting; the new design's feature 1 hosts Chat through feature 2's virtual-hosting machinery. |
-| [familiar-localhttp-protocol](familiar-localhttp-protocol.md) | The Familiar's `localhttp://` scheme; feature 5 (Familiar-bundled fallback) reuses the existing protocol handler to proxy to the OS-assigned port. |
-| [familiar-bundled-agents](familiar-bundled-agents.md) | Bundle shape; the Familiar's gateway-bundling follows the same esbuild pattern. |
-| [familiar-daemon-bundling](familiar-daemon-bundling.md) | The esbuild infrastructure the gateway bundle joins. |
-| [familiar-electron-shell](familiar-electron-shell.md) | The Familiar's existing daemon-management code; feature 5 adds gateway lifecycle alongside the daemon lifecycle. |
-| [gateway-bearer-token-auth](gateway-bearer-token-auth.md) | The formula-identifier-as-bearer-token scheme. Feature 3 reuses it for Git HTTP auth; the rate-limit and CIDR-allowlist machinery is hoisted into the gateway's request-handling layer. |
-| [ocapn-noise-network](ocapn-noise-network.md) | Provides the Noise protocol netlayer the `/ocapn-cbor-np` endpoint (feature 8) and the public relay (feature 6) use. The `np` network identifier is the "np" in the path name. |
-| [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md) | The handshake-pattern review feeds the relay's session-establishment shape; the gateway uses whichever pattern (XX, IK, XK) that review settles on. |
-| [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | Justifies "no TLS, Noise in-band": OCapN's transport is separated from its semantics, so the network layer (Noise) owns confidentiality and the gateway's HTTP/WS transport owns only framing. |
-| [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md) | The Ed25519 public keys that identify OCapN nodes are the keys the gateway's relay table is indexed by, and the formula-identifier bearer tokens (feature 3) are the same 256-bit hex strings. |
-| [ocapn-tcp-syrups-framing](ocapn-tcp-syrups-framing.md) | Sibling framing pattern (netstring-around-syrup on TCP); the `/ocapn-cbor-np` design (feature 8) is the WS-around-CBOR analog. |
-| [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | The `op:start-session` extraction; the relay (feature 6) inherits the post-extraction OCapN-Noise session shape. |
-| [daemon-docker-selfhost](daemon-docker-selfhost.md) | The docker-self-host story needs to be revised on top of this design; PR [#134](https://github.com/endojs/endo-but-for-bots/pull/134) is paused pending. Feature 10's container shape (one image, gateway as PID 1, sidecar user-daemon containers sharing a tmpfs volume for the UDS bootstrap) is the target. |
-| [daemon-cas-management](daemon-cas-management.md) | Reused for the gateway's content-addressed read-through cache of weblet assets, served directly from the HTTP path. Per-tenant isolation in the gateway-side cache is Open Question 5. |
-| [daemon-message-streaming](daemon-message-streaming.md) | Streaming chunked HTTP request / response bodies through the relay above the 64 KiB inline threshold named under Feature 4. |
-| [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) | The gateway holds its weblet-formula table in the same sqlite shape as the per-user daemon. |
-| [daemon-checkin-checkout](daemon-checkin-checkout.md) | A host-scoped variant ("publish this `readable-tree` to the gateway's CAS cache so all user daemons can serve weblets from it without per-user re-ingest") is a possible future write path; the read path is already served by Feature 2's Host-header → sqlite-formula → CAS routing. |
-| [daemon-agent-network-identity](daemon-agent-network-identity.md) | Public-key rotation story; the Pass-Invariant-Eq follow-up under Open Question 4. |
-| [exo-zip-package](exo-zip-package.md) | Format option for the weblet content archive the gateway caches. |
-| [`packages/where`](../packages/where/index.js) | Needs gateway-side path functions (`whereEndoGatewayState`, `whereEndoGatewayEphemeralState`, `whereEndoGatewayRegistrarSock`, `whereEndoGatewayCache`) to mux per-mode config trees alongside the existing per-user functions (`whereEndoState`, `whereEndoEphemeralState`, `whereEndoSock`, `whereEndoCache`). |
+| Design                                                                      | Relationship                                                                                                                                                                                                                                                                                                     |
+| --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [daemon-web-gateway](daemon-web-gateway.md)                                 | The current in-daemon HTTP+WS server, which this package extracts and generalizes. The daemon's `@apps` formula transitions from inline `web-server-node.js` to a `@endo/gateway` import.                                                                                                                        |
+| [daemon-weblet-application](daemon-weblet-application.md)                   | Provides the `readable-tree-weblet` formula type the new Weblet formula generalizes (feature 2). The gateway's content-tree serving reuses the `readable-tree` traversal.                                                                                                                                        |
+| [weblet-next](weblet-next.md)                                               | Reference doc for the removed weblet feature; the new design's feature 2 picks up the `@webs`-style NameHub idea sketched there.                                                                                                                                                                                 |
+| [familiar-unified-weblet-server](familiar-unified-weblet-server.md)         | The multi-user / per-session-confidentiality concerns flagged in the 2026-04-17 revision are addressed by this package's feature 8 (Noise in-band) and feature 4 (UDS for local-vs-remote attestation).                                                                                                          |
+| [familiar-gateway-migration](familiar-gateway-migration.md)                 | The current daemon-side gateway location; this package is the next move (out of daemon, into its own package).                                                                                                                                                                                                   |
+| [familiar-chat-weblet-hosting](familiar-chat-weblet-hosting.md)             | Chat-as-weblet hosting; the new design's feature 1 hosts Chat through feature 2's virtual-hosting machinery.                                                                                                                                                                                                     |
+| [familiar-localhttp-protocol](familiar-localhttp-protocol.md)               | The Familiar's `localhttp://` scheme; feature 5 (Familiar-bundled fallback) reuses the existing protocol handler to proxy to the OS-assigned port.                                                                                                                                                               |
+| [familiar-bundled-agents](familiar-bundled-agents.md)                       | Bundle shape; the Familiar's gateway-bundling follows the same esbuild pattern.                                                                                                                                                                                                                                  |
+| [familiar-daemon-bundling](familiar-daemon-bundling.md)                     | The esbuild infrastructure the gateway bundle joins.                                                                                                                                                                                                                                                             |
+| [familiar-electron-shell](familiar-electron-shell.md)                       | The Familiar's existing daemon-management code; feature 5 adds gateway lifecycle alongside the daemon lifecycle.                                                                                                                                                                                                 |
+| [gateway-bearer-token-auth](gateway-bearer-token-auth.md)                   | The formula-identifier-as-bearer-token scheme. Feature 3 reuses it for Git HTTP auth; the rate-limit and CIDR-allowlist machinery is hoisted into the gateway's request-handling layer.                                                                                                                          |
+| [ocapn-noise-network](ocapn-noise-network.md)                               | Provides the Noise protocol netlayer the `/ocapn-cbor-np` endpoint (feature 8) and the public relay (feature 6) use. The `np` network identifier is the "np" in the path name.                                                                                                                                   |
+| [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md)     | The handshake-pattern review feeds the relay's session-establishment shape; the gateway uses whichever pattern (XX, IK, XK) that review settles on.                                                                                                                                                              |
+| [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | Justifies "no TLS, Noise in-band": OCapN's transport is separated from its semantics, so the network layer (Noise) owns confidentiality and the gateway's HTTP/WS transport owns only framing.                                                                                                                   |
+| [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md)                 | The Ed25519 public keys that identify OCapN nodes are the keys the gateway's relay table is indexed by, and the formula-identifier bearer tokens (feature 3) are the same 256-bit hex strings.                                                                                                                   |
+| [ocapn-tcp-syrups-framing](ocapn-tcp-syrups-framing.md)                     | Sibling framing pattern (netstring-around-syrup on TCP); the `/ocapn-cbor-np` design (feature 8) is the WS-around-CBOR analog.                                                                                                                                                                                   |
+| [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md)           | The `op:start-session` extraction; the relay (feature 6) inherits the post-extraction OCapN-Noise session shape.                                                                                                                                                                                                 |
+| [daemon-docker-selfhost](daemon-docker-selfhost.md)                         | The docker-self-host story needs to be revised on top of this design; PR [#134](https://github.com/endojs/endo-but-for-bots/pull/134) is paused pending. Feature 10's container shape (one image, gateway as PID 1, sidecar user-daemon containers sharing a tmpfs volume for the UDS bootstrap) is the target.  |
+| [daemon-cas-management](daemon-cas-management.md)                           | Reused for the gateway's content-addressed read-through cache of weblet assets, served directly from the HTTP path. Per-tenant isolation in the gateway-side cache is Open Question 5.                                                                                                                           |
+| [daemon-message-streaming](daemon-message-streaming.md)                     | Streaming chunked HTTP request / response bodies through the relay above the 64 KiB inline threshold named under Feature 4.                                                                                                                                                                                      |
+| [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md)                       | The gateway holds its weblet-formula table in the same sqlite shape as the per-user daemon.                                                                                                                                                                                                                      |
+| [daemon-checkin-checkout](daemon-checkin-checkout.md)                       | A host-scoped variant ("publish this `readable-tree` to the gateway's CAS cache so all user daemons can serve weblets from it without per-user re-ingest") is a possible future write path; the read path is already served by Feature 2's Host-header → sqlite-formula → CAS routing.                           |
+| [daemon-agent-network-identity](daemon-agent-network-identity.md)           | Public-key rotation story; the Pass-Invariant-Eq follow-up under Open Question 4.                                                                                                                                                                                                                                |
+| [exo-zip-package](exo-zip-package.md)                                       | Format option for the weblet content archive the gateway caches.                                                                                                                                                                                                                                                 |
+| [`packages/where`](../packages/where/index.js)                              | Needs gateway-side path functions (`whereEndoGatewayState`, `whereEndoGatewayEphemeralState`, `whereEndoGatewayRegistrarSock`, `whereEndoGatewayCache`) to mux per-mode config trees alongside the existing per-user functions (`whereEndoState`, `whereEndoEphemeralState`, `whereEndoSock`, `whereEndoCache`). |
 
 ## Phased Implementation
 
@@ -1407,8 +1414,8 @@ Phases 3 and 4 are independently order-able once Phase 2 is in.
    The gateway has no certificate management, no ACME client,
    no cipher-suite configuration.
    This is the same decision the superseded `endo-gateway` design
-   recorded under its *Cryptographic Protocol* section, folded into
-   the present design's *Feature 9* and *Design Decision 5*.
+   recorded under its _Cryptographic Protocol_ section, folded into
+   the present design's _Feature 9_ and _Design Decision 5_.
 
 6. **The gateway and daemon are separate processes, not separate
    binaries.**

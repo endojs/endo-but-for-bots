@@ -44,6 +44,7 @@ subsequent back-and-forth.
 
 **Dismiss stale messages**: Clean up your inbox to reduce
 clutter:
+
 ```
 /dismiss 5
 /clear

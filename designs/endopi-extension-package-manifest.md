@@ -1,12 +1,12 @@
 # EndoPi: Extension Package Manifest
 
-| | |
-|---|---|
-| **Created** | 2026-05-15 |
-| **Updated** | 2026-05-15 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
-| **Parent** | [endopi](endopi.md) |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-05-15            |
+| **Updated** | 2026-05-15            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Proposed              |
+| **Parent**  | [endopi](endopi.md)   |
 
 ## Motivation
 
@@ -21,7 +21,7 @@ Skills, prompt templates, and themes (once
 [endopi-skills-markdown-format](endopi-skills-markdown-format.md) and
 [endopi-prompt-templates](endopi-prompt-templates.md) land) have no
 distribution channel. The gap is not the daemon-side substrate (which
-is already strong) but the *packaging convention* that lets one author
+is already strong) but the _packaging convention_ that lets one author
 ship a coordinated set of resources.
 
 ## Design
@@ -83,8 +83,8 @@ Endo's response: each resource kind has its own confinement.
 - **Guests** run under SES with only the capabilities the user grants
   at provisioning time. Package authors do not get to ask for new
   capabilities silently.
-- **Skills** are markdown files. Their power is to *instruct* the
-  agent, not to *do* anything directly; the agent's own capabilities
+- **Skills** are markdown files. Their power is to _instruct_ the
+  agent, not to _do_ anything directly; the agent's own capabilities
   bound what skill instructions can effect.
 - **Prompts** are pure text expansion. No capability surface at all.
 - **Providers** ship code that talks to an LLM endpoint. The provider
@@ -92,7 +92,7 @@ Endo's response: each resource kind has its own confinement.
   outbound HTTP capability per
   [endoclaw-network-fetch](endoclaw-network-fetch.md).
 
-A package install is therefore *safer than `endo install` is today*
+A package install is therefore _safer than `endo install` is today_
 because the new resource kinds (skill, prompt) carry no execution
 authority, and the existing one (guest) is unchanged.
 
@@ -108,12 +108,12 @@ uninstalling, mirroring Pi's `pi config`.
 
 ## Dependencies
 
-| Design | Relationship |
-|--------|--------------|
-| [endopi-skills-markdown-format](endopi-skills-markdown-format.md) | Consumer of `skills/` |
-| [endopi-prompt-templates](endopi-prompt-templates.md) | Consumer of `prompts/` |
-| [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md) | Consumer of `providers/` |
-| [endoclaw-skill-registry](endoclaw-skill-registry.md) | Daemon-side counterpart for skills |
+| Design                                                                      | Relationship                       |
+| --------------------------------------------------------------------------- | ---------------------------------- |
+| [endopi-skills-markdown-format](endopi-skills-markdown-format.md)           | Consumer of `skills/`              |
+| [endopi-prompt-templates](endopi-prompt-templates.md)                       | Consumer of `prompts/`             |
+| [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md) | Consumer of `providers/`           |
+| [endoclaw-skill-registry](endoclaw-skill-registry.md)                       | Daemon-side counterpart for skills |
 
 ## Phased implementation
 
@@ -143,7 +143,7 @@ uninstalling, mirroring Pi's `pi config`.
 
 ## Prompt
 
-> Extracted from [endopi](endopi.md) § *Extension model*. The ergonomic
+> Extracted from [endopi](endopi.md) § _Extension model_. The ergonomic
 > piece of Pi's plug-in model worth importing without giving up Endo's
 > confinement. One `package.json` keyword, one install command,
 > multiple resource kinds.

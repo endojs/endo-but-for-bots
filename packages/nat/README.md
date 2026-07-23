@@ -1,4 +1,5 @@
 # Nat
+
 [![Build Status][circleci-svg]][circleci-url]
 [![dependency status][deps-svg]][deps-url]
 [![dev dependency status][dev-deps-svg]][dev-deps-url]
@@ -6,7 +7,7 @@
 
 Numbers in a programming language are meaningful because we take them to
 represent abstract mathematical numbers. JavaScript has two data types
-representing numbers, *JS numbers* (IEEE 64 bit floating point) and *bigints*
+representing numbers, _JS numbers_ (IEEE 64 bit floating point) and _bigints_
 (arbitrary precision integers). Not all abstact mathematical
 numbers are representable by these data types, and not all values of one of
 these data types represent mathematical numbers (The JS number type's `NaN`,
@@ -14,21 +15,22 @@ these data types represent mathematical numbers (The JS number type's `NaN`,
 its floating point data type, we'll always say "mathematical number" when
 that's what we mean.
 
-This package is concerned with the mathematical *natural numbers*, the non-negative
+This package is concerned with the mathematical _natural numbers_, the non-negative
 integers. All of these can be safely represented as bigints, given enough
 memory. Some of these can be represented as JS numbers, and a smaller set can
-*safely* be represented as JS numbers, given a specific notion of safety.
+_safely_ be represented as JS numbers, given a specific notion of safety.
 
 A skippable detail about floating point:
-  * The JavaScript expression `2**70` evaluates to a JS number that exactly
+
+- The JavaScript expression `2**70` evaluates to a JS number that exactly
   represents the mathematical number you expect. However, the JavaScript
   expression `2**70+1 === 2**70` evaluates to `true` because this JS number is
   outside the contiguous range of integers that the JS number type can
-  represent *unambiguously*.
+  represent _unambiguously_.
   The contiguous range of exactly representable integers is
   `-(2**53)` to `2**53`. However, `2**53+1 === 2**53` is `true`, demonstrating
   that other integers will round to `2**53`. The JavaScript standard defines
-  the [*safe* JS numbers](https://tc39.es/ecma262/#sec-number.issafeinteger)
+  the [_safe_ JS numbers](https://tc39.es/ecma262/#sec-number.issafeinteger)
   to be the JS numbers that represent mathematical integers and lie in the
   range `-(2**53-1)` to `2**53-1` . The JS safe natural numbers are the
   non-negative subset of that, between `0` and `2**53-1`. No other integers
@@ -47,8 +49,8 @@ This package exports two functions, `isNat(allegedNum)` and `Nat(allegedNum)`.
 isNat(3); // true
 isNat(3n); // true
 isNat('3'); // false
-isNat(2**70); // false
-isNat(2n**70n); // true
+isNat(2 ** 70); // false
+isNat(2n ** 70n); // true
 isNat(-3n); // false
 isNat(3.1); // false
 ```
@@ -57,7 +59,7 @@ The `isNat` function is a predicate that accepts any input and returns `true`
 iff that input safely represents a natural number, i.e., if it is a non-negative
 bigint or it is a non-negative JS number safely representing an integer. To the
 extent that we consider this abstract notion of mathematical natural number a
-type, `isNat` is a *type tester* of possible representations of this type.
+type, `isNat` is a _type tester_ of possible representations of this type.
 
 ## Nat(allegedNum: bigint | number) => bigint
 
@@ -104,7 +106,6 @@ primitive integer within the range of continguously and unambiguously
 representable non-negative integers.
 
 For more, see the [discussion in TC39 notes](https://github.com/rwaldron/tc39-notes/blob/master/es6/2013-07/july-25.md#59-semantics-and-bounds-of-numberisinteger-and-numbermax_integer)
-
 
 [circleci-svg]: https://circleci.com/gh/Agoric/nat.svg?style=svg
 [circleci-url]: https://circleci.com/gh/Agoric/nat

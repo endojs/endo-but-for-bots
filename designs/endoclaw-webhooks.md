@@ -1,12 +1,12 @@
 # EndoClaw: Webhook Gateway
 
-| | |
-|---|---|
-| **Created** | 2026-03-03 |
-| **Updated** | 2026-03-03 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
-| **Parent** | [endoclaw](endoclaw.md) |
+|             |                         |
+| ----------- | ----------------------- |
+| **Created** | 2026-03-03              |
+| **Updated** | 2026-03-03              |
+| **Author**  | Kris Kowal (prompted)   |
+| **Status**  | Not Started             |
+| **Parent**  | [endoclaw](endoclaw.md) |
 
 ## Summary
 
@@ -20,8 +20,8 @@ notifications, IoT events) without polling.
 
 ```ts
 interface WebhookEndpoint {
-  url(): string;       // full URL of this webhook
-  secret(): string;    // HMAC secret for signature verification
+  url(): string; // full URL of this webhook
+  secret(): string; // HMAC secret for signature verification
   disable(): void;
   enable(): void;
   help(): string;
@@ -30,7 +30,7 @@ interface WebhookEndpoint {
 interface WebhookControl {
   setMaxPayloadBytes(n: number): void;
   setRateLimit(requestsPerMinute: number): void;
-  revoke(): void;     // permanently deletes the endpoint
+  revoke(): void; // permanently deletes the endpoint
   help(): string;
 }
 ```

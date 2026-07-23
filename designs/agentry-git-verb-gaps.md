@@ -1,10 +1,10 @@
 # Agentry Git Verb Gaps
 
-| | |
-|---|---|
-| **Created** | 2026-07-08 |
-| **Author** | 0xpatrickdev (prompted) |
-| **Status** | Proposed |
+|             |                         |
+| ----------- | ----------------------- |
+| **Created** | 2026-07-08              |
+| **Author**  | 0xpatrickdev (prompted) |
+| **Status**  | Proposed                |
 
 ## What is the Problem Being Solved?
 
@@ -25,13 +25,13 @@ acceptance contract for these verbs.
 
 ## In Scope
 
-| Workflow need | EndoGit shape | Code-mode shape | JSON tool slice |
-|---|---|---|---|
-| Commit amend | extend `commit(message, options?)` with `{ amend?: true }` | generated from the `EndoGit` type | expose through explicit `makeGitHistoryTool` |
-| Cherry-pick | `cherryPick(ref, options?)` | generated from the `EndoGit` type | include with string or structured ref plus JSON options |
-| Reword commit | `reword(ref, message)` | generated from the `EndoGit` type | expose through explicit `makeGitHistoryTool` using a JSON-safe ref |
-| Rebase autosquash | extend `rebase(input)` with `{ autosquash?: boolean }` for `mode: 'start'` | generated from the `EndoGit` type | include the `mode: 'start'` autosquash case |
-| Conflict-side selection | `checkoutConflict(entries, side)` with `side: 'ours' \| 'theirs'` | generated from the `EndoGit` type | include as `paths: string[]`, resolved to entries by the tool |
+| Workflow need           | EndoGit shape                                                              | Code-mode shape                   | JSON tool slice                                                    |
+| ----------------------- | -------------------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------ |
+| Commit amend            | extend `commit(message, options?)` with `{ amend?: true }`                 | generated from the `EndoGit` type | expose through explicit `makeGitHistoryTool`                       |
+| Cherry-pick             | `cherryPick(ref, options?)`                                                | generated from the `EndoGit` type | include with string or structured ref plus JSON options            |
+| Reword commit           | `reword(ref, message)`                                                     | generated from the `EndoGit` type | expose through explicit `makeGitHistoryTool` using a JSON-safe ref |
+| Rebase autosquash       | extend `rebase(input)` with `{ autosquash?: boolean }` for `mode: 'start'` | generated from the `EndoGit` type | include the `mode: 'start'` autosquash case                        |
+| Conflict-side selection | `checkoutConflict(entries, side)` with `side: 'ours' \| 'theirs'`          | generated from the `EndoGit` type | include as `paths: string[]`, resolved to entries by the tool      |
 
 Out of scope: broad `reset`, interactive todo editing, path checkout from an
 arbitrary commit, remote force-with-lease representation, and JSON exposure for
@@ -58,10 +58,16 @@ type GitRebaseInput = {
 
 type EndoGit = {
   commit(message: string, options?: GitCommitOptions): Promise<GitCommit>;
-  cherryPick(ref: GitRef | string, options?: GitCherryPickOptions): Promise<string>;
+  cherryPick(
+    ref: GitRef | string,
+    options?: GitCherryPickOptions,
+  ): Promise<string>;
   reword(ref: GitRef | string, message: string): Promise<GitCommit>;
   rebase(input: GitRebaseInput): Promise<string>;
-  checkoutConflict(entries: EndoMountEntry[], side: GitConflictSide): Promise<void>;
+  checkoutConflict(
+    entries: EndoMountEntry[],
+    side: GitConflictSide,
+  ): Promise<void>;
 };
 ```
 
@@ -201,13 +207,13 @@ unless it carries Git's full footgun honestly.
 
 ## Out-of-Scope Disposition
 
-| Exclusion | Disposition | Reason |
-|---|---|---|
-| Broad `reset` | Explicitly not planned for this eval lane. | The narrow workflow surface already covers unstage, worktree discard, branch movement, and history cleanup without one overloaded destructive verb. |
-| Interactive todo editing | Explicitly not planned. | It would expose arbitrary sequencing (`edit`, `drop`, `exec`, reorder) and recreate the shell/editor surface this capability layer avoids. |
-| Path checkout from an arbitrary commit | Deferred. | The existing historical read surface plus named `restore` cover current eval needs; a future design can add a structured operation if an eval needs exact path checkout semantics. |
-| Remote force-with-lease representation | Deferred to `GitRemote`, not local `Git`. | Push policy belongs on the bounded remote capability so endpoint, refspec, and force-push checks stay together. |
-| JSON tools for `rebase` control modes | Deferred until capref/result persistence and loop ergonomics are settled. | `continue`, `abort`, and `skip` are usually follow-up steps in a conflict-resolution loop, while autosquash start is a single JSON-safe operation. |
+| Exclusion                              | Disposition                                                               | Reason                                                                                                                                                                             |
+| -------------------------------------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Broad `reset`                          | Explicitly not planned for this eval lane.                                | The narrow workflow surface already covers unstage, worktree discard, branch movement, and history cleanup without one overloaded destructive verb.                                |
+| Interactive todo editing               | Explicitly not planned.                                                   | It would expose arbitrary sequencing (`edit`, `drop`, `exec`, reorder) and recreate the shell/editor surface this capability layer avoids.                                         |
+| Path checkout from an arbitrary commit | Deferred.                                                                 | The existing historical read surface plus named `restore` cover current eval needs; a future design can add a structured operation if an eval needs exact path checkout semantics. |
+| Remote force-with-lease representation | Deferred to `GitRemote`, not local `Git`.                                 | Push policy belongs on the bounded remote capability so endpoint, refspec, and force-push checks stay together.                                                                    |
+| JSON tools for `rebase` control modes  | Deferred until capref/result persistence and loop ergonomics are settled. | `continue`, `abort`, and `skip` are usually follow-up steps in a conflict-resolution loop, while autosquash start is a single JSON-safe operation.                                 |
 
 ## Authority Analysis
 
@@ -234,12 +240,12 @@ inspect history but must not rewrite it.
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| [daemon-agent-tools](daemon-agent-tools.md) | Parent capability-to-tool map this design stacks on. |
-| [daemon-git-capability](daemon-git-capability.md) | Owns the local `Git` capability and native backend hardening envelope. |
-| [endo-agent-tools](endo-agent-tools.md) | Owns the generated code-mode declaration path and curated JSON tool surface. |
-| [agentry-agent-builder](agentry-agent-builder.md) | First consumer through the code-mode git-loop eval harness. |
+| Design                                            | Relationship                                                                 |
+| ------------------------------------------------- | ---------------------------------------------------------------------------- |
+| [daemon-agent-tools](daemon-agent-tools.md)       | Parent capability-to-tool map this design stacks on.                         |
+| [daemon-git-capability](daemon-git-capability.md) | Owns the local `Git` capability and native backend hardening envelope.       |
+| [endo-agent-tools](endo-agent-tools.md)           | Owns the generated code-mode declaration path and curated JSON tool surface. |
+| [agentry-agent-builder](agentry-agent-builder.md) | First consumer through the code-mode git-loop eval harness.                  |
 
 ## Prompt
 

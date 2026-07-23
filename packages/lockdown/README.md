@@ -7,7 +7,7 @@ The `@endo/lockdown` package simply ensures that SES has both initialized
 and locked down the environment.
 
 ```js
-import '@endo/lockdown'
+import '@endo/lockdown';
 import 'hardened-modules...';
 ```
 

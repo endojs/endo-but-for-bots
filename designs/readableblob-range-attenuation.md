@@ -1,11 +1,11 @@
 # ReadableBlob Range Attenuation
 
-| | |
-|---|---|
-| **Created** | 2026-07-22 |
-| **Updated** | 2026-07-22 |
-| **Author** | kriscendobot (prompted) |
-| **Status** | Proposed |
+|             |                         |
+| ----------- | ----------------------- |
+| **Created** | 2026-07-22              |
+| **Updated** | 2026-07-22              |
+| **Author**  | kriscendobot (prompted) |
+| **Status**  | Proposed                |
 
 ## Problem
 
@@ -149,14 +149,14 @@ The implementation owner must inventory these range-specific definitions and
 callers before editing. The list is intentionally separated from unrelated
 HTTP, Git-transport, and content-store methods also named `fetch`:
 
-| Area | Definitions or callers to update |
-|---|---|
-| Shared lite contract | `packages/platform/src/fs/interfaces.js`, `types.d.ts`, `index.js`, and `packages/exo-git/src/types.ts` |
-| Implementations | `packages/platform/src/fs-node/local-blob.js`; `packages/platform/src/fs/extended/shared/blobref.js`; `packages/daemon/src/manager.js` (`makeReadableBlob`, `makeBytesBlob`); `packages/daemon/src/mount.js` (`makeMountFileExo`, `makeReadableBlobView`); `packages/git/src/native-git-backend.js` |
-| Extended guard and consumers | `packages/platform/src/fs/extended/type-guards.js`, `cas.js`, and `cached-fs.js` |
-| Daemon guard, declarations, and help | `packages/daemon/src/interfaces.js`, `types.d.ts`, `help-text-data.js`, and `help.md` |
-| Existing range tests | `packages/platform/test/{local-blob,blobref,node-fs,optimal-querying}.test.js`; `packages/daemon/test/{endo,mount,git}.test.js`; the mount conformance tests |
-| Design and API prose | `designs/{fs-interface-consolidation,platform-range-and-tree-reads,agentry-git-eval-scenarios,endo-fs-from-git,fs-interface-reconciliation,registry-capability,snapshot-mapper}.md`, `designs/README.md`, and `packages/platform/src/fs/extended/DESIGN.md` |
+| Area                                 | Definitions or callers to update                                                                                                                                                                                                                                                                    |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shared lite contract                 | `packages/platform/src/fs/interfaces.js`, `types.d.ts`, `index.js`, and `packages/exo-git/src/types.ts`                                                                                                                                                                                             |
+| Implementations                      | `packages/platform/src/fs-node/local-blob.js`; `packages/platform/src/fs/extended/shared/blobref.js`; `packages/daemon/src/manager.js` (`makeReadableBlob`, `makeBytesBlob`); `packages/daemon/src/mount.js` (`makeMountFileExo`, `makeReadableBlobView`); `packages/git/src/native-git-backend.js` |
+| Extended guard and consumers         | `packages/platform/src/fs/extended/type-guards.js`, `cas.js`, and `cached-fs.js`                                                                                                                                                                                                                    |
+| Daemon guard, declarations, and help | `packages/daemon/src/interfaces.js`, `types.d.ts`, `help-text-data.js`, and `help.md`                                                                                                                                                                                                               |
+| Existing range tests                 | `packages/platform/test/{local-blob,blobref,node-fs,optimal-querying}.test.js`; `packages/daemon/test/{endo,mount,git}.test.js`; the mount conformance tests                                                                                                                                        |
+| Design and API prose                 | `designs/{fs-interface-consolidation,platform-range-and-tree-reads,agentry-git-eval-scenarios,endo-fs-from-git,fs-interface-reconciliation,registry-capability,snapshot-mapper}.md`, `designs/README.md`, and `packages/platform/src/fs/extended/DESIGN.md`                                         |
 
 1. Add a shared attenuation maker and tests for byte composition, empty and
    EOF-clamped selections, revocation/liveness, `getInfo` on selected content,

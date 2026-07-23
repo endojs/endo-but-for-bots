@@ -1,11 +1,11 @@
 # Lal Reply Chain Transcripts
 
-| | |
-|---|---|
-| **Created** | 2026-02-26 |
-| **Updated** | 2026-03-05 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-26            |
+| **Updated** | 2026-03-05            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | **Complete**          |
 
 ## Motivation
 
@@ -139,7 +139,7 @@ limit the in-memory set.
  * @param {string} messageId
  * @returns {Promise<TranscriptNode | undefined>}
  */
-const getNode = async (messageId) => {
+const getNode = async messageId => {
   let node = nodeCache.get(messageId);
   if (node !== undefined) return node;
 
@@ -156,7 +156,7 @@ const getNode = async (messageId) => {
  * Store a transcript node both in cache and durable storage.
  * @param {TranscriptNode} node
  */
-const putNode = async (node) => {
+const putNode = async node => {
   nodeCache.set(node.messageId, node);
   const petName = `transcript-${node.messageId}`;
   await E(powers).storeValue(harden(node), petName);
@@ -281,7 +281,7 @@ Actually, a cleaner design: each agentic loop iteration produces a node
 that contains both the user message and the assistant's response(s) and
 tool calls. The outbound `messageId` becomes the identity of that node
 (replacing the inbound `messageId`). This way the node is keyed by the
-message that the *next* reply will reference:
+message that the _next_ reply will reference:
 
 ```
 on message(inboxMessage):
@@ -502,25 +502,25 @@ infrastructure exists.
 
 ## Decisions Made
 
-| Aspect | Decision |
-|--------|----------|
-| Transcript structure | Linked chain of nodes, not full array copies |
-| Node identity | Keyed by `messageId` |
-| Branching | New node pointing to same parent; shared prefix stored once |
-| Durable storage | `storeValue()` under `transcript-<messageId>` pet names |
-| Reply tool | New `reply` tool calling `E(powers).reply()` |
-| Own-message handling | Create alias entries, not skip |
-| Depth communication | Text prefix `[depth:N]` in first string fragment |
-| Outbound messageId | Captured via `followMessages()`, no daemon changes |
+| Aspect               | Decision                                                    |
+| -------------------- | ----------------------------------------------------------- |
+| Transcript structure | Linked chain of nodes, not full array copies                |
+| Node identity        | Keyed by `messageId`                                        |
+| Branching            | New node pointing to same parent; shared prefix stored once |
+| Durable storage      | `storeValue()` under `transcript-<messageId>` pet names     |
+| Reply tool           | New `reply` tool calling `E(powers).reply()`                |
+| Own-message handling | Create alias entries, not skip                              |
+| Depth communication  | Text prefix `[depth:N]` in first string fragment            |
+| Outbound messageId   | Captured via `followMessages()`, no daemon changes          |
 
 ## Tentative Decisions (may adjust during implementation)
 
-| Aspect | Tentative Decision |
-|--------|-------------------|
-| In-memory cache | Unbounded initially; add LRU eviction in Phase 5 |
-| Transcript assembly | Walk chain and `flat()` on every LLM call |
-| Node granularity | One node per inbound message + its agentic loop output |
-| Alias storage | Duplicate node under both inbound and outbound messageIds |
+| Aspect              | Tentative Decision                                        |
+| ------------------- | --------------------------------------------------------- |
+| In-memory cache     | Unbounded initially; add LRU eviction in Phase 5          |
+| Transcript assembly | Walk chain and `flat()` on every LLM call                 |
+| Node granularity    | One node per inbound message + its agentic loop output    |
+| Alias storage       | Duplicate node under both inbound and outbound messageIds |
 
 ## Out of Scope
 

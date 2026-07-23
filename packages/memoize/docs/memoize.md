@@ -1,9 +1,9 @@
-
 # Memoization Safety
 
 Let's examime the contingent safety properties of the `memoize` function
 implemented by the `memoize.js` module, whose implementation at the time of
 this writing is
+
 ```js
 /**
  * @template {WeakKey} A
@@ -43,13 +43,13 @@ the non-contingent semantics of this code.
 
 ## Base semantics
 
-***Hardened JS***: Even the supposedly non-contingent base semantics does
+**_Hardened JS_**: Even the supposedly non-contingent base semantics does
 depend on a key assumption: That the primordial intrinsics still conform to
 the JavaScript spec. In particular, that `WeakMap` is a conforming WeakMap
 constructor, and that `memo.has`, `memo.get`, `memo.set`, and `memo.delete`
 call WeakMap methods that conform to the JavaScript spec. Hardened JS
 `lockdown()` locks these down, so if this assumption was not violated before
-`lockdown()` then it ***cannot*** be violated, even maliciously, after
+`lockdown()` then it **_cannot_** be violated, even maliciously, after
 `lockdown()`.
 
 Given a function `fn`, the call `memoize(fn)` returns a `fn`-like function, `memoFn`.
@@ -65,14 +65,15 @@ All further calls `memoFn(arg)` with the same
 without calling `fn`.
 
 Otherwise:
-   * If `arg` is not a valid WeakMap key, then `memoFn(arg)` throws without any
-     effect.
-   * If `arg` is  a valid WeakMap key, but `fn(arg)` throws, then `memoFn(arg)`
-     propagates the error without any further effect beyond that performed by
-     the `fn(arg)` call.
+
+- If `arg` is not a valid WeakMap key, then `memoFn(arg)` throws without any
+  effect.
+- If `arg` is a valid WeakMap key, but `fn(arg)` throws, then `memoFn(arg)`
+  propagates the error without any further effect beyond that performed by
+  the `fn(arg)` call.
 
 Notice that throws from `fn(arg)` are not memoized, but rejected promises
-returned by `fn(arg)` ***are*** memoized.
+returned by `fn(arg)` **_are_** memoized.
 
 ## Defensiveness
 
@@ -86,21 +87,23 @@ code calling `memoize(fn)`.
 If the following requirements are met, then the memoizing by `memoFn` is
 not observable. IOW, under these circumstances, `memoize` is not observably
 different from
+
 ```js
 export const memoize = fn => arg => fn(arg);
 harden(memoize);
 ```
 
 The unobservability requirements are
-   * The function `fn` is transitively immutable and powerless, i.e.,
-     it contains no mutable state or ability to cause effects.
-   * Even if `arg` is mutable, when `fn(arg)` returns a result rather
-     than throwing, it has not caused any effects. Thus, on any `arg`
-     that `fn` cannot examine without causing effects, `fn(arg)` must throw.
-     Note that `arg` may be a proxy, making this requirement hard to meet.
-   * For those cases where `fn(arg)` does not throw, it must be
-     reproducible in the sense that `fn(arg)` must always return
-     exactly the same result for the same `arg`.
+
+- The function `fn` is transitively immutable and powerless, i.e.,
+  it contains no mutable state or ability to cause effects.
+- Even if `arg` is mutable, when `fn(arg)` returns a result rather
+  than throwing, it has not caused any effects. Thus, on any `arg`
+  that `fn` cannot examine without causing effects, `fn(arg)` must throw.
+  Note that `arg` may be a proxy, making this requirement hard to meet.
+- For those cases where `fn(arg)` does not throw, it must be
+  reproducible in the sense that `fn(arg)` must always return
+  exactly the same result for the same `arg`.
 
 ## Preserving Isolation
 
@@ -120,19 +123,20 @@ communications channel?
 
 If the following requirements are met, then `memoFn` is also not
 a communication channel.
-   * As above, `fn` itself must be transitively immutable and powerless.
-   * As above, if `fn(arg)` returns a result rather than throwing,
-     then it must not have caused any effects.
-   * For those cases where `fn(arg)` does not throw, if must be
-     deterministic in the sense that, for a given `arg`, for every object
-     in the result,
-      * the object is transitively immutable and powerless.
-      * that object is equivalent aside from object identity.
-      * Either the object always has the same identity for all
-        `fn(arg)` calls, as with reproducibility, or it has a fresh identity
-        per call, as with fresh allocation by the call. This weaker
-        guarantee is "determinism", which we define to allow
-        such always-fresh but otherwise equivalent.
+
+- As above, `fn` itself must be transitively immutable and powerless.
+- As above, if `fn(arg)` returns a result rather than throwing,
+  then it must not have caused any effects.
+- For those cases where `fn(arg)` does not throw, if must be
+  deterministic in the sense that, for a given `arg`, for every object
+  in the result,
+  - the object is transitively immutable and powerless.
+  - that object is equivalent aside from object identity.
+  - Either the object always has the same identity for all
+    `fn(arg)` calls, as with reproducibility, or it has a fresh identity
+    per call, as with fresh allocation by the call. This weaker
+    guarantee is "determinism", which we define to allow
+    such always-fresh but otherwise equivalent.
 
 Allowing fresh identities within the result would be adequate for `fn` not
 to be a communications channel, even if those fresh objects were mutable,
@@ -159,9 +163,10 @@ validation checks are expensive, we would often like to memoize their results.
 
 For example, the function `passStyleOf` from the package `@endo/pass-style`
 internally uses a memo for a huge efficiency gain, but is nevertheless
-   * defensive
-   * unobservable
-   * not a communications channel
+
+- defensive
+- unobservable
+- not a communications channel
 
 The `passStyleOf` function does accept primitives as well as valid WeakMap keys,
 so `passStyleOf` itself is not the `memoFn` memoizing function.
@@ -171,6 +176,6 @@ and only memoizes its internal algorithm for the WeakMap-key cases.
 ## Caution
 
 We do not currently have the tooling to check or enforce the above requirements.
-That's why we phrase this as *contingent safety*. The `memoize` function
+That's why we phrase this as _contingent safety_. The `memoize` function
 only guarantees this if-then safety property, but it cannot tell if the
 condition part was satisfied. When it is not, the guarantees do not follow.

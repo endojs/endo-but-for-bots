@@ -40,7 +40,7 @@ read from the formula `env`:
 | `stdout`         | no       | `'pipe'` (default) or `'ignore'` (discard to /dev/null, no host buffering)       |
 | `stderr`         | no       | `'pipe'` (default) or `'ignore'` (discard to /dev/null, no host buffering)       |
 | `processEnv`     | no       | a JSON object of extra environment variables, layered on the child's base env    |
-| `extraEnvKeys`   | no       | a JSON array of worker env var names to pass through (without full inherit)       |
+| `extraEnvKeys`   | no       | a JSON array of worker env var names to pass through (without full inherit)      |
 | `inheritEnv`     | no       | `'true'` to inherit the worker's full environment; default is a safe allowlist   |
 | `timeoutMs`      | no       | a positive integer; terminate the child if it has not exited within this many ms |
 | `maxOutputBytes` | no       | a positive integer; terminate the child once combined stdout + stderr exceeds it |
@@ -125,15 +125,15 @@ build the command line yourself when you opt into a shell.
 
 ## The `ShellProcess` interface
 
-| method            | returns                       | notes                                                  |
-| ----------------- | ----------------------------- | ------------------------------------------------------ |
-| `stdin()`         | `PassableBytesWriter`         | `return()` closes (EOFs) the child's stdin             |
-| `stdout()`        | `PassableBytesReader`         | memoized — one consumer per pipe                       |
-| `stderr()`        | `PassableBytesReader`         | memoized                                               |
-| `exit()`          | `Promise<{ code, signal }>`   | resolves once the process terminates (see note below)  |
-| `kill(signal?)`   | `boolean`                     | default `SIGTERM`; reports whether the signal was sent |
-| `pid()`           | `number \| undefined`         | the OS process id                                      |
-| `help()`          | `string`                      |                                                        |
+| method          | returns                     | notes                                                  |
+| --------------- | --------------------------- | ------------------------------------------------------ |
+| `stdin()`       | `PassableBytesWriter`       | `return()` closes (EOFs) the child's stdin             |
+| `stdout()`      | `PassableBytesReader`       | memoized — one consumer per pipe                       |
+| `stderr()`      | `PassableBytesReader`       | memoized                                               |
+| `exit()`        | `Promise<{ code, signal }>` | resolves once the process terminates (see note below)  |
+| `kill(signal?)` | `boolean`                   | default `SIGTERM`; reports whether the signal was sent |
+| `pid()`         | `number \| undefined`       | the OS process id                                      |
+| `help()`        | `string`                    |                                                        |
 
 On a normal exit `code` is the numeric exit status and `signal` is `null`;
 on a signalled termination `code` is `null` and `signal` is the signal

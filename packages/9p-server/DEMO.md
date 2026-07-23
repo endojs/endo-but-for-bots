@@ -4,7 +4,7 @@ This walks through projecting a `Filesystem` capability held by one Endo
 daemon into the Linux kernel of another machine, dialed over iroh
 (peer-to-peer, no open ports). The `Filesystem` cap travels
 `server → laptop` over CapTP; the 9P bridge and the kernel `mount` run on
-`laptop` (the machine whose kernel mounts), holding a *remote presence*
+`laptop` (the machine whose kernel mounts), holding a _remote presence_
 of the server's cap.
 
 > Status: this is a recorded runbook, **not** an automated test. The
@@ -69,7 +69,7 @@ optional `@number0/iroh` native binding.
 > ```
 >
 > **Same-host only:** when both daemons share one machine, set
-> `ENDO_IROH_PUBLISH_PRIVATE=1` in each daemon's environment *before*
+> `ENDO_IROH_PUBLISH_PRIVATE=1` in each daemon's environment _before_
 > `endo start` so the iroh endpoint advertises its loopback/private
 > address (otherwise the locator only carries the public/relay path,
 > which two co-located peers can't usefully use). See the caveat in
@@ -154,7 +154,7 @@ whether you pass `NINEP_SUDO=1`:
 **Privileged / root daemon (verified path — containers, dev VMs).** If
 the daemon (hence its caplet workers) already runs as root with
 `CAP_SYS_ADMIN` — e.g. a `--privileged` container — install the caplet
-*without* `NINEP_SUDO`; it then calls `mount` / `umount` directly:
+_without_ `NINEP_SUDO`; it then calls `mount` / `umount` directly:
 
 ```bash
 laptop$ yarn exec endo make --UNCONFINED \
@@ -206,7 +206,7 @@ laptop$ yarn exec endo cancel fs-mounter                    # or: tear down all 
 ## Verified single-host run
 
 The Part A / B flow above targets two machines over iroh. To exercise the
-*entire* pipeline on one box — and to sidestep two environment issues
+_entire_ pipeline on one box — and to sidestep two environment issues
 found while doing so — this variant runs both daemons locally and carries
 CapTP over a **loopback-TCP** transport instead of iroh. Everything else
 (the `node-fs` export, invite/accept, send/adopt, the mount caplet, the
@@ -317,7 +317,7 @@ only. `setup-tcp.js` is the same companion script from
 locator advertises an address the dialing peer can reach.
 
 > Cross-version note: this was exercised between two daemons on
-> *different branches* over `tcp+netstring+json+captp0` — the handshake
+> _different branches_ over `tcp+netstring+json+captp0` — the handshake
 > and locator format are compatible across the versions tried here.
 
 ## Useful information
@@ -376,7 +376,7 @@ Behavior, per inbound message:
    default options (read-only? network profile? lazy unmount?).
 3. **On success**, reply to the sender with the mountpoint (and, if
    useful, the socket path) — `E(powers).reply(msgNumber, 'mounted at
-   ${mountPoint}')`.
+${mountPoint}')`.
 4. **On failure**, reply with the structured error the mount caplet
    already surfaces (`mount` stderr, EBUSY, privilege, etc.).
 
@@ -395,5 +395,5 @@ Lifecycle and config:
 
 Open questions: how to name/clean up mountpoints across daemon restarts
 (the handles are not persisted); whether to auto-`adopt` the cap or mount
-it transiently; and whether the reply should hand back an *unmount*
+it transiently; and whether the reply should hand back an _unmount_
 capability so the sender can release it remotely.

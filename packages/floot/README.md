@@ -20,13 +20,13 @@ objects up by pet-name and streams to/from them.
 Everything below must be present on the machine running the Endo daemon (the
 caplets are unconfined and spawn these as subprocesses).
 
-| Dependency | Used by | Notes |
-| --- | --- | --- |
-| Endo daemon + `endo` CLI | everything | Built from this monorepo (`yarn build`); start with `endo start`. |
-| `ANTHROPIC_API_KEY` | factory | Anthropic API key for the LLM. Passed via a capability handle, never stored in caplet env. |
-| [`uv`](https://docs.astral.sh/uv/) | `floot-stt` | Runs `voice/moonshine_daemon.py`, which is PEP-723 self-contained — `uv` installs `moonshine-voice` and downloads the model on first run. No project Python env needed. |
-| [`piper`](https://github.com/rhasspy/piper) binary | `floot-tts` | Standalone TTS engine. Point `FLOOT_TTS_BINARY` at it (default `piper` on PATH). |
-| A piper voice model | `floot-tts` | A `<voice>.onnx` plus its companion `<voice>.onnx.json` (the `.json` supplies `audio.sample_rate`). `FLOOT_TTS_MODEL` is the absolute path to the `.onnx`. |
+| Dependency                                         | Used by     | Notes                                                                                                                                                                   |
+| -------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Endo daemon + `endo` CLI                           | everything  | Built from this monorepo (`yarn build`); start with `endo start`.                                                                                                       |
+| `ANTHROPIC_API_KEY`                                | factory     | Anthropic API key for the LLM. Passed via a capability handle, never stored in caplet env.                                                                              |
+| [`uv`](https://docs.astral.sh/uv/)                 | `floot-stt` | Runs `voice/moonshine_daemon.py`, which is PEP-723 self-contained — `uv` installs `moonshine-voice` and downloads the model on first run. No project Python env needed. |
+| [`piper`](https://github.com/rhasspy/piper) binary | `floot-tts` | Standalone TTS engine. Point `FLOOT_TTS_BINARY` at it (default `piper` on PATH).                                                                                        |
+| A piper voice model                                | `floot-tts` | A `<voice>.onnx` plus its companion `<voice>.onnx.json` (the `.json` supplies `audio.sample_rate`). `FLOOT_TTS_MODEL` is the absolute path to the `.onnx`.              |
 
 ### Getting a piper voice
 

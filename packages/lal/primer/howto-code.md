@@ -23,6 +23,7 @@ proposes code with named slots; you choose which capabilities
 to bind.
 
 **Step 1** — The agent calls `define()`:
+
 ```
 define("E(db).get('users')", {
   "db": {"label": "A database to query"}
@@ -36,6 +37,7 @@ bind `db` to `my-database`) and click Submit.
 
 You can also use the `/endow` command to open a full modal
 for reviewing the code and filling in bindings:
+
 ```
 /endow 5
 ```
@@ -58,11 +60,13 @@ shows the source alongside the binding form.
 
 Program files run from the terminal — there is no Chat
 equivalent:
+
 ```
 endo run ./my-script.js --powers @agent
 ```
 
 With `--UNCONFINED` for full host access:
+
 ```
 endo run --UNCONFINED ./setup.js --powers @agent
 ```
@@ -83,17 +87,19 @@ Workers are isolated execution contexts:
 - `harden(obj)` — Freeze an object for safe sharing
 
 Endowments are lexical bindings — each code name becomes a
-variable in scope. The *completion value* (the last expression)
+variable in scope. The _completion value_ (the last expression)
 becomes the result, so make sure the final expression
 evaluates to whatever you want to produce.
 
 Top-level `await` is not supported. For single async calls,
 the promise itself is the completion value:
+
 ```
 E(counter).increment()
 ```
 
 For multiple async steps, use an async IIFE:
+
 ```
 (async () => {
   const val = await E(counter).getValue();
@@ -106,6 +112,7 @@ For multiple async steps, use an async IIFE:
 ### 1. Simple value transformation
 
 Evaluate code that transforms an existing capability:
+
 ```
 /js E(counter).getValue()
 ```
@@ -125,6 +132,7 @@ Name the result and share it with others.
 ### 3. Wrapping for attenuation
 
 Create a read-only view by wrapping a read-write capability:
+
 ```
 /js makeExo('ReadOnly', M.interface('ReadOnly', {
   get: M.call(M.string()).returns(M.any()),

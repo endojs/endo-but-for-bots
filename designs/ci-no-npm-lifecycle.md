@@ -1,11 +1,11 @@
 # CI: No npm Lifecycle Scripts
 
-| | |
-|---|---|
-| **Created** | 2026-04-23 |
-| **Updated** | 2026-05-18 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-04-23            |
+| **Updated** | 2026-05-18            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | **Complete**          |
 
 ## Status
 
@@ -126,9 +126,9 @@ Three things to notice:
 2. The two allowlisted native addons are rebuilt in a named step using
    `yarn allow-scripts run`.
    This is the same mechanism `packages/familiar/scripts/make-distributables.mjs`
-   already uses locally — see its comment *"Yarn's enableScripts:false
+   already uses locally — see its comment _"Yarn's enableScripts:false
    prevents automatic node-gyp builds, build them on demand since Yarn's
-   enableScripts:false skips implicit..."*.
+   enableScripts:false skips implicit..."_.
 3. Build artifacts come from an explicit `yarn build` (or
    `yarn workspace <x> build`, `yarn workspace <x> bundle`) — never
    from an implicit `prepack` side effect of `yarn install`.
@@ -163,18 +163,18 @@ Actions log as its own step.
 
 Every workflow in `.github/workflows/` at time of writing:
 
-| Workflow | Install command | Status |
-|---|---|---|
-| `ci.yml` (lint, test, cover, test262, test-hermes, test-async-hooks, test-xs, check-action-pins, test-ocapn-python) | `yarn install --immutable` | OK — inherits `enableScripts: false`; set env var explicitly |
-| `ci.yml` (viable-release) | `yarn install --immutable` followed by explicit `yarn pack` and explicit `yarn lerna run prepack` | OK — already the model for this design |
-| `release.yml` | `yarn` (bare) | Change to `yarn install --immutable` and add env var |
-| `familiar-release.yml` (build-artifacts, make) | `yarn install --immutable` then named `yarn workspace @endo/chat build`, `yarn workspace @endo/familiar bundle`, `yarn workspace @endo/familiar make` | OK — exemplary; add env var for defense in depth |
-| `browser-test.yml` | Root: `yarn install` (bare); `browser-test/`: `npm ci --ignore-scripts` | Root bare `yarn install` inherits repo config; tighten to `--immutable` and add env var.  `browser-test/` is already correct and `browser-test/.npmrc` sets `ignore-scripts=true` |
-| `depcheck.yml` | No dependency install — runs `scripts/check-dependency-cycles.sh` and `sudo apt install graphviz` | OK — no change needed |
-| `typedoc-gh-pages.yml` | `yarn install` (bare) | Change to `yarn install --immutable` and add env var |
-| `update-action-pins.yml` | `yarn install --immutable` | OK — add env var |
-| `update-action-pins-major.yml` | `yarn install --immutable` | OK — add env var |
-| `claude.yml`, `claude-code-review.yml` | No Node install; uses `anthropics/claude-code-action` | OK — no change needed |
+| Workflow                                                                                                            | Install command                                                                                                                                       | Status                                                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ci.yml` (lint, test, cover, test262, test-hermes, test-async-hooks, test-xs, check-action-pins, test-ocapn-python) | `yarn install --immutable`                                                                                                                            | OK — inherits `enableScripts: false`; set env var explicitly                                                                                                                     |
+| `ci.yml` (viable-release)                                                                                           | `yarn install --immutable` followed by explicit `yarn pack` and explicit `yarn lerna run prepack`                                                     | OK — already the model for this design                                                                                                                                           |
+| `release.yml`                                                                                                       | `yarn` (bare)                                                                                                                                         | Change to `yarn install --immutable` and add env var                                                                                                                             |
+| `familiar-release.yml` (build-artifacts, make)                                                                      | `yarn install --immutable` then named `yarn workspace @endo/chat build`, `yarn workspace @endo/familiar bundle`, `yarn workspace @endo/familiar make` | OK — exemplary; add env var for defense in depth                                                                                                                                 |
+| `browser-test.yml`                                                                                                  | Root: `yarn install` (bare); `browser-test/`: `npm ci --ignore-scripts`                                                                               | Root bare `yarn install` inherits repo config; tighten to `--immutable` and add env var. `browser-test/` is already correct and `browser-test/.npmrc` sets `ignore-scripts=true` |
+| `depcheck.yml`                                                                                                      | No dependency install — runs `scripts/check-dependency-cycles.sh` and `sudo apt install graphviz`                                                     | OK — no change needed                                                                                                                                                            |
+| `typedoc-gh-pages.yml`                                                                                              | `yarn install` (bare)                                                                                                                                 | Change to `yarn install --immutable` and add env var                                                                                                                             |
+| `update-action-pins.yml`                                                                                            | `yarn install --immutable`                                                                                                                            | OK — add env var                                                                                                                                                                 |
+| `update-action-pins-major.yml`                                                                                      | `yarn install --immutable`                                                                                                                            | OK — add env var                                                                                                                                                                 |
+| `claude.yml`, `claude-code-review.yml`                                                                              | No Node install; uses `anthropics/claude-code-action`                                                                                                 | OK — no change needed                                                                                                                                                            |
 
 No workflow currently relies on an implicit lifecycle script to produce
 its build output.
@@ -268,7 +268,7 @@ the layered defense.
 4. **No attempt to forbid `prepack` in workspace `package.json`s.**
    `prepack` is the correct hook for building typedefs before pack, and
    it runs under human control (via `yarn pack` or `yarn lerna run
-   prepack`) as an explicit workflow step.
+prepack`) as an explicit workflow step.
    The property we want is "CI never calls it implicitly via
    `yarn install`," which is achieved by `enableScripts: false`, not by
    renaming the script.
@@ -276,7 +276,7 @@ the layered defense.
 5. **The `browser-test/` directory uses npm, not yarn.**
    It has its own `package-lock.json`, its own `.npmrc` with
    `ignore-scripts=true`, and the workflow already runs `npm ci
-   --ignore-scripts`.
+--ignore-scripts`.
    This is the correct pattern for the npm side and does not need to
    change.
 
@@ -297,7 +297,7 @@ single lint script.
       `depcheck.yml`, `typedoc-gh-pages.yml`,
       `update-action-pins.yml`, `update-action-pins-major.yml`.
 - [ ] Replace bare `yarn` / `yarn install` with `yarn install
-      --immutable` in `release.yml`, `browser-test.yml`, and
+--immutable` in `release.yml`, `browser-test.yml`, and
       `typedoc-gh-pages.yml`.
 - [ ] Audit whether any test job actually exercises
       `@ipshipyard/node-datachannel` or `better-sqlite3` at test time

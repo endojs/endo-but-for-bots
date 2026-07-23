@@ -1,11 +1,11 @@
 # endo-fs FsBackend seam + Mount alignment + p9 readiness
 
-| | |
-|---|---|
-| **Created** | 2026-05-28 |
-| **Updated** | 2026-05-28 |
-| **Author** | Aaron Kumavis (prompted) |
-| **Status** | **Complete** |
+|             |                          |
+| ----------- | ------------------------ |
+| **Created** | 2026-05-28               |
+| **Updated** | 2026-05-28               |
+| **Author**  | Aaron Kumavis (prompted) |
+| **Status**  | **Complete**             |
 
 ## Status
 
@@ -59,7 +59,7 @@ rather than ENOSYS.
 make the migration test-clean, wrap-backend gained:
 
 - A vat-local xattr table with a real Xattrs exo (sidecar storage
-  for user.* metadata).
+  for user.\* metadata).
 - A vat-local per-path stat table for mtime/atime/ctime/btime so
   getStat / getAttrs return non-zero timestamps.
 - `validateStatPatch` / `narrowStatPatch` — POSIX-only fields rejected
@@ -357,7 +357,7 @@ Concretely:
 - Mutations fire `'changed'` events on the node via the wrap-backend
   local event bus.
 - The `FsBackend` protocol has **no** `getXattr?/setXattr?/listXattrs?/
-  removeXattr?` methods. Backings that have native disk xattrs would
+removeXattr?` methods. Backings that have native disk xattrs would
   surface them via a future backing-specific `PosixFs` impl that reads
   real disk metadata; the base sidecar is purely vat-local.
 
@@ -372,7 +372,7 @@ behavior.
 
 **Final shape (deviated from the original plan).** The original
 plan called for removing `Attrs` / `Qid` / `getAttrs` / `setAttrs`
-entirely. In implementation we kept the legacy method *names* on
+entirely. In implementation we kept the legacy method _names_ on
 the public `NodeBaseMethods` alongside the new narrow `getStat` /
 `setStat` so existing consumers (9p-server, compose.js, readonly.js,
 cached-fs.js) don't break. The narrow shape becomes the authoritative
@@ -385,7 +385,7 @@ Concretely (as shipped):
   `getStat` / `setStat` (narrow) and `getAttrs` / `setAttrs` /
   `getQid` / `xattrs` (legacy / wide).
 - Narrow `setStat` / `setAttrs` only accept `{ size?, mtime?,
-  atime? }`. POSIX-only fields (`mode`, `uid`, `gid`, `ctime`,
+atime? }`. POSIX-only fields (`mode`, `uid`, `gid`, `ctime`,
   `btime`) throw a clear EINVAL via the shared `validateStatPatch`.
 - `wrap-backend.js` ships one `readFileStat` and one
   `applyStatPatch` body that both wide and narrow methods call into,
@@ -395,13 +395,13 @@ Concretely (as shipped):
 - `Qid.pathId` is synthesized from a stable FNV-1a hash of the
   joined path. Real inode-shaped identity moves to PosixFs.
 - The base backend has no `stat`/`identity` — but `getStat?` is
-  an *optional* backend method that wrap-backend prefers over its
+  an _optional_ backend method that wrap-backend prefers over its
   vat-local table when present. node-fs implements it via
   `fs.stat`, so a `getStat` call on a node-fs `Filesystem` returns
   the real disk mtime, not the moment the vat first looked.
 
 The future PosixFs cap (F15) layers on top of a base `Filesystem`
-and exposes the *full* POSIX shape including `mode`/`uid`/`gid` and
+and exposes the _full_ POSIX shape including `mode`/`uid`/`gid` and
 real-OS-locks-and-xattrs primitives.
 
 ### Locks (real OS-level)
@@ -433,26 +433,26 @@ For 9P2000 (basic, no Linux extensions) the bridge needs only the base
 `Filesystem` exo. For 9P2000.L (the typical Linux mount target) the
 bridge holds a `Filesystem` cap **and** a `PosixFs` cap.
 
-| 9P op | Cap(s) the bridge calls | Wire-facing exo method |
-|---|---|---|
-| `Tattach` | `Filesystem` | `.root` accessor |
-| `Twalk` | `Filesystem` | `walk(root, names)` porcelain — E-pipelined; one CapTP batch |
-| `Topen` | `Filesystem` | `File.open({read, write})` |
-| `Tcreate` | `Filesystem` | `Directory.makeFile/makeDirectory` + `File.open({create, write})` (E-pipelined) |
-| `Tread` | `Filesystem` | `OpenFile.read(offset, length) → PassableBytesReader` — single-RTT under E-pipelining |
-| `Twrite` | `Filesystem` | `OpenFile.write(offset) → PassableBytesWriter` — single-RTT under E-pipelining |
-| `Tclunk` | `Filesystem` | `OpenFile.close()` |
-| `Tremove` | `Filesystem` | `Directory.remove(name)` |
-| `Treaddir` | `Filesystem` | `Cursor.read(limit?) → { entries, atEnd }` — bounded page per RTT |
-| `Tstat` (9P2000) | `Filesystem` (cap interface tag) + `PosixFs` (size/mtime if needed) | — / `posixFs.attrs(node)` |
-| `Tstat` (9P2000.L extended) | `PosixFs` | `posixFs.attrs(node) → PosixAttrs` |
-| `Twstat` size/mtime/atime | `Filesystem` | `Node.setStat({ size?, mtime?, atime? })` → `backend.setStat?` |
-| `Twstat` mode/uid/gid (9P2000.L) | `PosixFs` | `posixFs.setAttrs(node, patch)` |
-| `Trename` (9P2000.L) | `Filesystem` | `Directory.rename(name, newName)` |
-| `Tflock` / `Tgetlock` (9P2000.L) | `PosixFs` (real OS locks) **or** `Filesystem` (vat-local advisory) | `posixFs.flock(node, opts) → Lock` / `OpenFile.lock(opts) → Lock` |
-| `Tgetattr` / `Tsetattr` (9P2000.L) | `PosixFs` | `posixFs.attrs` / `posixFs.setAttrs` |
-| `Txattrwalk` / `Txattrcreate` (9P2000.L) | `PosixFs` | `posixFs.xattrs(node) → Xattrs` |
-| `Tlink` / `Tsymlink` / `Treadlink` | `PosixFs` (deferred) | — |
+| 9P op                                    | Cap(s) the bridge calls                                             | Wire-facing exo method                                                                |
+| ---------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `Tattach`                                | `Filesystem`                                                        | `.root` accessor                                                                      |
+| `Twalk`                                  | `Filesystem`                                                        | `walk(root, names)` porcelain — E-pipelined; one CapTP batch                          |
+| `Topen`                                  | `Filesystem`                                                        | `File.open({read, write})`                                                            |
+| `Tcreate`                                | `Filesystem`                                                        | `Directory.makeFile/makeDirectory` + `File.open({create, write})` (E-pipelined)       |
+| `Tread`                                  | `Filesystem`                                                        | `OpenFile.read(offset, length) → PassableBytesReader` — single-RTT under E-pipelining |
+| `Twrite`                                 | `Filesystem`                                                        | `OpenFile.write(offset) → PassableBytesWriter` — single-RTT under E-pipelining        |
+| `Tclunk`                                 | `Filesystem`                                                        | `OpenFile.close()`                                                                    |
+| `Tremove`                                | `Filesystem`                                                        | `Directory.remove(name)`                                                              |
+| `Treaddir`                               | `Filesystem`                                                        | `Cursor.read(limit?) → { entries, atEnd }` — bounded page per RTT                     |
+| `Tstat` (9P2000)                         | `Filesystem` (cap interface tag) + `PosixFs` (size/mtime if needed) | — / `posixFs.attrs(node)`                                                             |
+| `Tstat` (9P2000.L extended)              | `PosixFs`                                                           | `posixFs.attrs(node) → PosixAttrs`                                                    |
+| `Twstat` size/mtime/atime                | `Filesystem`                                                        | `Node.setStat({ size?, mtime?, atime? })` → `backend.setStat?`                        |
+| `Twstat` mode/uid/gid (9P2000.L)         | `PosixFs`                                                           | `posixFs.setAttrs(node, patch)`                                                       |
+| `Trename` (9P2000.L)                     | `Filesystem`                                                        | `Directory.rename(name, newName)`                                                     |
+| `Tflock` / `Tgetlock` (9P2000.L)         | `PosixFs` (real OS locks) **or** `Filesystem` (vat-local advisory)  | `posixFs.flock(node, opts) → Lock` / `OpenFile.lock(opts) → Lock`                     |
+| `Tgetattr` / `Tsetattr` (9P2000.L)       | `PosixFs`                                                           | `posixFs.attrs` / `posixFs.setAttrs`                                                  |
+| `Txattrwalk` / `Txattrcreate` (9P2000.L) | `PosixFs`                                                           | `posixFs.xattrs(node) → Xattrs`                                                       |
+| `Tlink` / `Tsymlink` / `Treadlink`       | `PosixFs` (deferred)                                                | —                                                                                     |
 
 **Wire-shape changes** to the existing `Filesystem` exo surface
 (as shipped):
@@ -540,8 +540,12 @@ Bytes-only; no text/JSON.
 export const walk = (root, path) =>
   path.reduce((dir, name) => E(dir).lookup(name), root);
 
-export const collectBytes = async reader => { /* ... */ };
-export const collectStream = async reader => { /* ... */ };
+export const collectBytes = async reader => {
+  /* ... */
+};
+export const collectStream = async reader => {
+  /* ... */
+};
 ```
 
 These work against any `Filesystem` exo — they don't know or care that
@@ -554,6 +558,7 @@ Big-bang would be ~2000 lines of churn in one go. Incremental:
 ### PR 1 — `FsBackend` design + `wrapBackend` skeleton
 
 Adds:
+
 - `src/backend-types.js` — JSDoc typedefs for `FsBackend` and capability
   shape. Reference-only; no runtime.
 - `src/wrap-backend.js` — full implementation of all exos on top of the
@@ -720,7 +725,7 @@ After PR 4, the package is on the new architecture end-to-end.
 
 1. **Conformance suite passes for all backends.**
    `cd packages/endo-fs && npx ava test/wrap-backend.test.js
-   test/in-memory.test.js test/node-fs.test.js test/from-mount.test.js`.
+test/in-memory.test.js test/node-fs.test.js test/from-mount.test.js`.
    Every existing test passes unchanged (the rename + new methods are
    additive at the consumer level).
 
@@ -748,10 +753,10 @@ After PR 4, the package is on the new architecture end-to-end.
 5. **Pipelining property retained.** `test/helpers.test.js` (carried
    over from prior plan) uses the harness from
    `test/pipelined-rtt.test.js` to assert that `await E(await walk(root,
-   ['a','b','c'])).read()` produces exactly one CapTP batch.
+['a','b','c'])).read()` produces exactly one CapTP batch.
 
 6. **Rename sweep — both shapes available.** `git grep -nE
-   '\b(unlink|mkdir)\b' packages/endo-fs/` still returns hits because
+'\b(unlink|mkdir)\b' packages/endo-fs/` still returns hits because
    the legacy method names stay declared alongside the new names
    (`remove` / `makeDirectory`). A future deprecation pass removes
    the legacy aliases once all consumers (notably 9p-server) switch.

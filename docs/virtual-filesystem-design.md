@@ -34,12 +34,12 @@ explicitly.
 
 ## Terminology
 
-- A *node* is a directory, file, or symbolic link.
-- A *backend* is a storage provider like an OS filesystem, CAS store, or
+- A _node_ is a directory, file, or symbolic link.
+- A _backend_ is a storage provider like an OS filesystem, CAS store, or
   in-memory store.
-- A *mount* attaches a backend subtree to a virtual path.
-- A *policy* governs traversal, resolution, and reachability.
-- A *controller* is a caretaker facet that can modify node permissions.
+- A _mount_ attaches a backend subtree to a virtual path.
+- A _policy_ governs traversal, resolution, and reachability.
+- A _controller_ is a caretaker facet that can modify node permissions.
 
 ## High-Level Structure
 
@@ -70,20 +70,16 @@ const FsI = M.interface('Filesystem', {
   attenuate: M.call(
     M.splitRecord(
       { policy: M.remotable('Policy') },
-      { read: M.boolean(), write: M.boolean(), subtree: M.remotable('Dir') }
-    )
+      { read: M.boolean(), write: M.boolean(), subtree: M.remotable('Dir') },
+    ),
   ).returns(M.remotable('Filesystem')),
   mount: M.call(Path, M.remotable('Mount')).returns(),
-  copy: M.call(
+  copy: M.call(M.remotable('Node'), M.remotable('Dir'), M.string()).returns(
     M.remotable('Node'),
-    M.remotable('Dir'),
-    M.string()
-  ).returns(M.remotable('Node')),
-  move: M.call(
+  ),
+  move: M.call(M.remotable('Node'), M.remotable('Dir'), M.string()).returns(
     M.remotable('Node'),
-    M.remotable('Dir'),
-    M.string()
-  ).returns(M.remotable('Node')),
+  ),
   stat: M.call(M.remotable('Node')).returns(M.copyRecord()),
 });
 

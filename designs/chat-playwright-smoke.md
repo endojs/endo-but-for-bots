@@ -1,11 +1,11 @@
 # Chat Playwright Build-and-Load Smoke
 
-| | |
-|---|---|
-| **Created** | 2026-05-06 |
-| **Updated** | 2026-05-18 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-05-06            |
+| **Updated** | 2026-05-18            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | **Complete**          |
 
 ## Status
 
@@ -91,7 +91,7 @@ Two acceptable approaches, in preference order:
    serves `packages/chat/dist`.
    Playwright supports an array of `webServer` entries.
    The serve command can be `npx http-server packages/chat/dist -p
-   3001 -c-1 --silent` if `http-server` is added as a dev dependency
+3001 -c-1 --silent` if `http-server` is added as a dev dependency
    to `browser-test/`, or a tiny static file server in
    `browser-test/chat-server.js` mirroring `browser-test/server.js`.
 2. If the first approach proves awkward (`http-server` adds a
@@ -188,13 +188,13 @@ exercising deeper behavior.
 
 ## Dependencies
 
-| Dependency | Relationship |
-|---|---|
-| `.github/workflows/browser-test.yml` (job `browser-tests`) | The existing CI job this design extends. |
-| `browser-test/playwright.config.js` and `browser-test/server.js` | The existing Playwright + static-server infrastructure the new spec reuses. |
-| `packages/chat/` | The application under test. The smoke depends on `vite build` producing `dist/index.html` and on the entry point's "Gateway not configured" fallback path. |
-| `chat-test-coverage.md` (Complete) | Sibling design covering the broader unit, component, and e2e test surface inside `packages/chat/test/`. This smoke is intentionally narrower (build-and-load only); the full e2e suite is out of scope. |
-| `@playwright/test` | Already a dev dependency of `browser-test/` and of `packages/chat/`. No new dependency needed. |
+| Dependency                                                       | Relationship                                                                                                                                                                                            |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.github/workflows/browser-test.yml` (job `browser-tests`)       | The existing CI job this design extends.                                                                                                                                                                |
+| `browser-test/playwright.config.js` and `browser-test/server.js` | The existing Playwright + static-server infrastructure the new spec reuses.                                                                                                                             |
+| `packages/chat/`                                                 | The application under test. The smoke depends on `vite build` producing `dist/index.html` and on the entry point's "Gateway not configured" fallback path.                                              |
+| `chat-test-coverage.md` (Complete)                               | Sibling design covering the broader unit, component, and e2e test surface inside `packages/chat/test/`. This smoke is intentionally narrower (build-and-load only); the full e2e suite is out of scope. |
+| `@playwright/test`                                               | Already a dev dependency of `browser-test/` and of `packages/chat/`. No new dependency needed.                                                                                                          |
 
 ## Test Plan
 
@@ -203,7 +203,7 @@ regressions in the Chat bundle.
 Two verification steps prove this once implemented:
 
 1. With the smoke in place on a clean tree, the spec passes: `cd
-   browser-test && npx playwright test tests/chat.spec.js`.
+browser-test && npx playwright test tests/chat.spec.js`.
 2. Inject a deliberate regression (rename a top-level import in
    `packages/chat/main.js` to a missing module; rebuild; rerun the
    spec) and confirm the spec fails with a `pageerror` or a missing

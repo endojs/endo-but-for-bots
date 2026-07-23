@@ -1,12 +1,12 @@
 # EndoClaw: Channel Bridges
 
-| | |
-|---|---|
-| **Created** | 2026-03-03 |
-| **Updated** | 2026-03-03 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
-| **Parent** | [endoclaw](endoclaw.md) |
+|             |                         |
+| ----------- | ----------------------- |
+| **Created** | 2026-03-03              |
+| **Updated** | 2026-03-03              |
+| **Author**  | Kris Kowal (prompted)   |
+| **Status**  | Not Started             |
+| **Parent**  | [endoclaw](endoclaw.md) |
 
 ## Summary
 
@@ -36,7 +36,7 @@ const bot = new Chat({
   state: createMemoryState(), // or Redis
 });
 
-bot.onNewMention(async (thread) => {
+bot.onNewMention(async thread => {
   await thread.subscribe();
   // Forward to Endo agent inbox
 });
@@ -49,15 +49,15 @@ bot.onSubscribedMessage(async (thread, message) => {
 
 ### Available adapters
 
-| Package | Platform | Features |
-|---------|----------|----------|
-| `@chat-adapter/slack` | Slack | Mentions, reactions, cards (Block Kit), modals, streaming, DMs, files |
-| `@chat-adapter/teams` | Microsoft Teams | Mentions, cards (Adaptive Cards), DMs |
-| `@chat-adapter/discord` | Discord | Mentions, reactions, cards, DMs |
-| `@chat-adapter/telegram` | Telegram | Mentions, reactions, DMs |
-| `@chat-adapter/gchat` | Google Chat | Mentions, reactions, cards, DMs |
-| `@chat-adapter/github` | GitHub | Mentions, reactions (issues/PRs) |
-| `@chat-adapter/linear` | Linear | Mentions, reactions (issues) |
+| Package                  | Platform        | Features                                                              |
+| ------------------------ | --------------- | --------------------------------------------------------------------- |
+| `@chat-adapter/slack`    | Slack           | Mentions, reactions, cards (Block Kit), modals, streaming, DMs, files |
+| `@chat-adapter/teams`    | Microsoft Teams | Mentions, cards (Adaptive Cards), DMs                                 |
+| `@chat-adapter/discord`  | Discord         | Mentions, reactions, cards, DMs                                       |
+| `@chat-adapter/telegram` | Telegram        | Mentions, reactions, DMs                                              |
+| `@chat-adapter/gchat`    | Google Chat     | Mentions, reactions, cards, DMs                                       |
+| `@chat-adapter/github`   | GitHub          | Mentions, reactions (issues/PRs)                                      |
+| `@chat-adapter/linear`   | Linear          | Mentions, reactions (issues)                                          |
 
 ### Key SDK features
 
@@ -100,12 +100,12 @@ The bridge plugin is a standard Endo guest module (`make(powers)`) that:
 
 ### Message mapping
 
-| Endo Message | Platform Rendering |
-|--------------|--------------------|
-| `package` (text + refs) | Text message; refs rendered as names |
-| `form` (fields) | JSX card with input fields (Slack/Teams/Discord) or text prompt (Telegram/GitHub) |
-| `value` (reply with value) | Text summary + Chat UI link for inspection |
-| `request` (promise) | Text notification; resolution posted as reply |
+| Endo Message               | Platform Rendering                                                                |
+| -------------------------- | --------------------------------------------------------------------------------- |
+| `package` (text + refs)    | Text message; refs rendered as names                                              |
+| `form` (fields)            | JSX card with input fields (Slack/Teams/Discord) or text prompt (Telegram/GitHub) |
+| `value` (reply with value) | Text summary + Chat UI link for inspection                                        |
+| `request` (promise)        | Text notification; resolution posted as reply                                     |
 
 ### Form bridging
 
@@ -113,7 +113,7 @@ The `chat` SDK's JSX card system maps well to Endo's form fields:
 
 ```tsx
 // Endo form fields → platform card
-const renderForm = (fields) => (
+const renderForm = fields => (
   <Card>
     <Section>
       {fields.map(f => (

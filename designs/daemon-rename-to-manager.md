@@ -1,11 +1,11 @@
 # Rename `daemon.js` to `manager.js` (and `Daemon`/`Mignonic` to `Manager`/`Worker`)
 
-| | |
-|---|---|
-| **Created** | 2026-05-04 |
-| **Updated** | 2026-05-05 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-05-04            |
+| **Updated** | 2026-05-05            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | Not Started           |
 
 ## What is the Problem Being Solved?
 
@@ -23,7 +23,7 @@ in two distinct ways:
    (`endor daemon`'s default), where there is no separate OS process
    for the JS at all.
 2. As a Node.js child of `endor` under `ENDO_MANAGER_NODE=1`, where
-   the JS is supervised by Rust and is plainly *not* the daemon.
+   the JS is supervised by Rust and is plainly _not_ the daemon.
 
 In both cases the Rust side is the daemon and the supervisor.
 The JS side is the orchestration layer that the supervisor hosts.
@@ -136,28 +136,28 @@ wrong.
 Substituting `Manager` preserves the descriptive payload and removes
 the OS-process implication.
 
-| Current | Proposed |
-|---|---|
-| `makeDaemon` | `makeManager` |
-| `DaemonCore`, `DaemonCoreExternal` | `ManagerCore`, `ManagerCoreExternal` |
-| `DaemonicPowers` | `ManagerPowers` |
-| `DaemonicPersistencePowers` | `ManagerPersistencePowers` |
-| `DaemonicControlPowers` | `ManagerControlPowers` |
-| `DaemonicGoPowers` | `ManagerGoPowers` |
-| `makeDaemonicPersistencePowers` | `makeManagerPersistencePowers` |
-| `makeDaemonicGoPowers` | `makeManagerGoPowers` |
-| `DaemonDatabase`, `DaemonDatabaseImpl` | `ManagerDatabase`, `ManagerDatabaseImpl` |
-| `makeDaemonDatabase` | `makeManagerDatabase` |
-| `DaemonFacet`, `DaemonFacets` | `ManagerFacet`, `ManagerFacets` |
-| `DaemonFacetForWorker` (and its `Interface`) | `ManagerFacetForWorker` |
-| `DaemonWorkerFacet` | `ManagerWorkerFacet` |
-| `WorkerDaemonFacet` | `WorkerManagerFacet` |
-| `DaemonInterface` | `ManagerInterface` |
-| `DaemonNode`, `DaemonProcess` | `ManagerNode`, `ManagerProcess` |
-| `makeDaemonFacetForWorker` | `makeManagerFacetForWorker` |
-| `daemonWorkerFacet` (variable) | `managerWorkerFacet` |
-| `workerDaemonFacet` (variable) | `workerManagerFacet` |
-| `EndoDaemonFacetForWorker` (exo tag) | `EndoManagerFacetForWorker` |
+| Current                                      | Proposed                                 |
+| -------------------------------------------- | ---------------------------------------- |
+| `makeDaemon`                                 | `makeManager`                            |
+| `DaemonCore`, `DaemonCoreExternal`           | `ManagerCore`, `ManagerCoreExternal`     |
+| `DaemonicPowers`                             | `ManagerPowers`                          |
+| `DaemonicPersistencePowers`                  | `ManagerPersistencePowers`               |
+| `DaemonicControlPowers`                      | `ManagerControlPowers`                   |
+| `DaemonicGoPowers`                           | `ManagerGoPowers`                        |
+| `makeDaemonicPersistencePowers`              | `makeManagerPersistencePowers`           |
+| `makeDaemonicGoPowers`                       | `makeManagerGoPowers`                    |
+| `DaemonDatabase`, `DaemonDatabaseImpl`       | `ManagerDatabase`, `ManagerDatabaseImpl` |
+| `makeDaemonDatabase`                         | `makeManagerDatabase`                    |
+| `DaemonFacet`, `DaemonFacets`                | `ManagerFacet`, `ManagerFacets`          |
+| `DaemonFacetForWorker` (and its `Interface`) | `ManagerFacetForWorker`                  |
+| `DaemonWorkerFacet`                          | `ManagerWorkerFacet`                     |
+| `WorkerDaemonFacet`                          | `WorkerManagerFacet`                     |
+| `DaemonInterface`                            | `ManagerInterface`                       |
+| `DaemonNode`, `DaemonProcess`                | `ManagerNode`, `ManagerProcess`          |
+| `makeDaemonFacetForWorker`                   | `makeManagerFacetForWorker`              |
+| `daemonWorkerFacet` (variable)               | `managerWorkerFacet`                     |
+| `workerDaemonFacet` (variable)               | `workerManagerFacet`                     |
+| `EndoDaemonFacetForWorker` (exo tag)         | `EndoManagerFacetForWorker`              |
 
 The `Daemonic` adjective collapses to plain `Manager`; there is no
 need for `Manageric` or `Managerial`.
@@ -188,20 +188,20 @@ imports third.
 
 ### File renames (`packages/daemon/src/`)
 
-| Current | Proposed |
-|---|---|
-| `daemon.js` | `manager.js` |
-| `daemon-node.js` | `manager-node.js` |
-| `daemon-node-powers.js` | `manager-node-powers.js` |
-| `daemon-go.js` | `manager-go.js` |
-| `daemon-go-powers.js` | `manager-go-powers.js` |
-| `daemon-database.js` | `manager-database.js` |
-| `daemon-database-node.js` | `manager-database-node.js` |
+| Current                        | Proposed                        |
+| ------------------------------ | ------------------------------- |
+| `daemon.js`                    | `manager.js`                    |
+| `daemon-node.js`               | `manager-node.js`               |
+| `daemon-node-powers.js`        | `manager-node-powers.js`        |
+| `daemon-go.js`                 | `manager-go.js`                 |
+| `daemon-go-powers.js`          | `manager-go-powers.js`          |
+| `daemon-database.js`           | `manager-database.js`           |
+| `daemon-database-node.js`      | `manager-database-node.js`      |
 | `daemon-persistence-powers.js` | `manager-persistence-powers.js` |
-| `daemon-webextension.js` | `manager-webextension.js` |
-| `bus-daemon-node.js` | `bus-manager-node.js` |
-| `bus-daemon-node-powers.js` | `bus-manager-node-powers.js` |
-| `bus-daemon-rust-xs.js` | `bus-manager-rust-xs.js` |
+| `daemon-webextension.js`       | `manager-webextension.js`       |
+| `bus-daemon-node.js`           | `bus-manager-node.js`           |
+| `bus-daemon-node-powers.js`    | `bus-manager-node-powers.js`    |
+| `bus-daemon-rust-xs.js`        | `bus-manager-rust-xs.js`        |
 | `bus-daemon-rust-xs-powers.js` | `bus-manager-rust-xs-powers.js` |
 
 `packages/daemon/test/bench-daemon.js` keeps its name; it benchmarks
@@ -225,8 +225,8 @@ In `daemon.js` (becoming `manager.js`):
   `daemonLabel` -> `managerWorkerFacet`, `workerManagerFacet`,
   `managerLabel`.
 - JSDoc `@import { ... DaemonCore, DaemonCoreExternal,
-  DaemonicPowers ... }` -> `... ManagerCore, ManagerCoreExternal,
-  ManagerPowers ...`.
+DaemonicPowers ... }` -> `... ManagerCore, ManagerCoreExternal,
+ManagerPowers ...`.
 
 In `types.d.ts`:
 

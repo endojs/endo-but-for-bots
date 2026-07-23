@@ -1,11 +1,11 @@
 # OCapN-Noise Network
 
-| | |
-|---|---|
-| **Created** | 2026-02-14 |
-| **Updated** | 2026-05-18 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+|             |                       |
+| ----------- | --------------------- |
+| **Created** | 2026-02-14            |
+| **Updated** | 2026-05-18            |
+| **Author**  | Kris Kowal (prompted) |
+| **Status**  | **Complete**          |
 
 ## Status
 
@@ -104,12 +104,12 @@ subsequent encrypted messaging.
 
 Connection hints encode transport information with a scheme prefix:
 
-| Hint Key | Example Value | Meaning |
-|----------|---------------|---------|
-| `ws:host` | `example.com` | WebSocket host |
-| `ws:port` | `443` | WebSocket port |
-| `tcp:host` | `127.0.0.1` | TCP host |
-| `tcp:port` | `9000` | TCP port |
+| Hint Key   | Example Value | Meaning        |
+| ---------- | ------------- | -------------- |
+| `ws:host`  | `example.com` | WebSocket host |
+| `ws:port`  | `443`         | WebSocket port |
+| `tcp:host` | `127.0.0.1`   | TCP host       |
+| `tcp:port` | `9000`        | TCP port       |
 
 When connecting, the network iterates available transports and selects one
 matching the hint prefixes. If multiple transports match, try them in order
@@ -158,7 +158,9 @@ const makeOcapnNoiseNetwork = async ({ signingKeys, transports, handlers }) => {
       // e. Return NetworkSession with encrypted write/read
     },
 
-    shutdown() { /* close all listeners and connections */ },
+    shutdown() {
+      /* close all listeners and connections */
+    },
   });
 };
 ```
@@ -180,6 +182,7 @@ The Noise handshake replaces `op:start-session` entirely:
    messages are encrypted.
 
 No `op:start-session` is sent. The Noise handshake provides:
+
 - Mutual authentication (both parties prove possession of their Ed25519 keys).
 - Key agreement (ephemeral x25519 keys negotiated by Noise).
 - Encryption (ChaCha20-Poly1305 from the Noise session).

@@ -18,7 +18,9 @@ const { client, control } = makeHttpClientAndControl({
   maxResponseBytes: 65536,
 });
 
-const response = await E(client).fetch('https://api.github.com/repos/endojs/endo');
+const response = await E(client).fetch(
+  'https://api.github.com/repos/endojs/endo',
+);
 const text = await E(response).text();
 
 await E(control).setMaxRequestsPerMinute(10);
@@ -60,7 +62,7 @@ interface HttpClientControl {
   revokeBinding(origin: string): void;
   unpin(origin: string): void;
   setPolicyMode(mode: PolicyMode): void;
-  listAuditEntries(options?: { since?: number, limit?: number }): AuditEntry[];
+  listAuditEntries(options?: { since?: number; limit?: number }): AuditEntry[];
   help(): string;
 }
 ```
