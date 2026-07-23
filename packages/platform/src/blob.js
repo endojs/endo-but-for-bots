@@ -48,6 +48,10 @@ export const blobFromBytes = bytesOrPromise => {
     const value = await bytes();
     return value.slice(Number(start), Math.min(Number(end), value.length));
   };
+  /**
+   * @param {number} startLine
+   * @param {number} endLine
+   */
   const textRangeBytes = async (startLine, endLine) => {
     if (
       !Number.isSafeInteger(startLine) ||
