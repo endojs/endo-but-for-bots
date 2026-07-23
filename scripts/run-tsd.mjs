@@ -58,7 +58,7 @@ if (process.exitCode === undefined && typingsFile) {
     await access(path.resolve(cwd, typingsFile));
   } catch {
     console.error(
-      `Missing declaration entry ${typingsFile}. Run yarn build:types from the repository root first.`,
+      `Missing declaration entry ${typingsFile}; run yarn build:types from the repository root first.`,
     );
     process.exitCode = 1;
   }
