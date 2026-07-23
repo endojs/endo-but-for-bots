@@ -9,6 +9,8 @@ import { q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { makePromiseKit } from '@endo/promise-kit';
 import { encodeBase64 } from '@endo/base64';
+import { bytesFromText } from '@endo/bytes/from-string.js';
+import { blobFromBytes } from '@endo/platform/blob';
 import { mapReader } from '@endo/stream';
 import {
   ReadableBlobRangeInterface,
@@ -1550,6 +1552,46 @@ const makeMountFileExo = (
       return bytesFromRange(bytes);
     },
 
+    async range(start, end) {
+      await null;
+      assertLive();
+      await assertConfined(filePath, confinementRoot, filePowers);
+      const startOffset = toSafeNumber(start, 'start');
+      const endOffset = toSafeNumber(end, 'end');
+      if (endOffset < startOffset) {
+        throw new Error('EINVAL: end must not precede start');
+      }
+      return blobFromBytes(
+        filePowers.readFileRange(
+          filePath,
+          startOffset,
+          endOffset - startOffset,
+        ),
+      );
+    },
+
+    async textRange(startLine, endLine) {
+      await null;
+      assertLive();
+      await assertConfined(filePath, confinementRoot, filePowers);
+      const start = toSafeNumber(startLine, 'startLine');
+      const end = toSafeNumber(endLine, 'endLine');
+      if (end < start) {
+        throw new Error('EINVAL: endLine must not precede startLine');
+      }
+      const bytes = bytesFromText(await filePowers.readFileText(filePath));
+      const starts = [0];
+      for (let offset = 0; offset < bytes.length; offset += 1) {
+        if (bytes[offset] === 0x0a) starts.push(offset + 1);
+      }
+      return blobFromBytes(
+        bytes.slice(
+          starts[Math.min(start, starts.length - 1)],
+          end >= starts.length ? bytes.length : starts[end],
+        ),
+      );
+    },
+
     async snapshot() {
       assertLive();
       if (snapshotFile === undefined) {
@@ -1611,6 +1653,12 @@ const makeReadableBlobView = readOnlyFile => {
      */
     async fetch(offset, length) {
       return E(readOnlyFile).fetch(offset, length);
+    },
+    async range(start, end) {
+      return E(readOnlyFile).range(start, end);
+    },
+    async textRange(startLine, endLine) {
+      return E(readOnlyFile).textRange(startLine, endLine);
     },
     help(method) {
       return method === undefined

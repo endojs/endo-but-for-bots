@@ -176,6 +176,7 @@ harden(ReadableBlobInterface);
 export const ReadableBlobRangeInterface = M.interface('ReadableBlobRange', {
   ...readableBlobMethodGuards,
   ...rangeReadMethodGuards,
+  ...readableBlobRangeMethodGuards,
 });
 harden(ReadableBlobRangeInterface);
 
