@@ -143,6 +143,30 @@ export const main = async hostAgent => {
 
   const flootDir = env.ENDO_FLOOT_DIR || env.FLOOT_DIR || 'floot';
   if (await E(hostAgent).has(flootDir, 'controller-profile')) {
+    // Bind the host-global static asset server into the factory's own profile so
+    // its bounded per-session `publishWorkspace` tool can serve new-project
+    // workspaces. The factory (agent.js) resolves `asset-server` from its own
+    // powers (controller-profile), not the host root, so — like the provisioner
+    // below — it must be copied in. We run after endo-fs-asset-server/setup.js in
+    // ENDO_EXTRA, which re-mints `asset-server` against the current release each
+    // start, so re-copying here (remove + copy) keeps the factory pointed at the
+    // fresh capability across restarts and release pruning.
+    const assetServerName = env.ENDO_FLOOT_ASSET_SERVER || 'asset-server';
+    if (await E(hostAgent).has(assetServerName)) {
+      const flootAssetPath = [flootDir, 'controller-profile', assetServerName];
+      if (await E(hostAgent).has(...flootAssetPath)) {
+        await E(hostAgent).remove(...flootAssetPath);
+      }
+      await E(hostAgent).copy([assetServerName], flootAssetPath);
+      console.log(
+        `Bound "${assetServerName}" into "${flootDir}/controller-profile".`,
+      );
+    } else {
+      console.warn(
+        `Asset server "${assetServerName}" is absent; new-project publishing will be disabled.`,
+      );
+    }
+
     const flootProvisionerPath = [
       flootDir,
       'controller-profile',
