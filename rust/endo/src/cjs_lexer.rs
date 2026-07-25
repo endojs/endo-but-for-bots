@@ -682,6 +682,7 @@ mod tests {
         assert!(!detect_esm_syntax("module.exports = { a: 1 };\n"));
         assert!(!detect_esm_syntax("const m = require('m');\nexports.f = () => m;\n"));
         assert!(!detect_esm_syntax("import('lazy').then(ns => ns.go());\n"));
+        assert!(!detect_esm_syntax("const module = import('lazy');\n"));
         assert!(!detect_esm_syntax("foo.import = 1;\nbar.export = 2;\n"));
         assert!(!detect_esm_syntax("var o = { import: 1, export: 2 };\n"));
         assert!(!detect_esm_syntax("// import x from 'y';\n/* export default 1; */\n"));
