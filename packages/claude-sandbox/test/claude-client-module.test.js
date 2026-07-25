@@ -174,6 +174,7 @@ test('first send() mounts the workspace, registers a Mount cap, and mints the sl
     HOME: '/tmp/claude-home',
     XDG_CONFIG_HOME: '/tmp/claude-home/.config',
     CLAUDE_CONFIG_DIR: '/tmp/claude-home/.claude',
+    IS_SANDBOX: '1',
   });
 });
 

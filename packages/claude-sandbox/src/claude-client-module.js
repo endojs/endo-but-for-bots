@@ -308,6 +308,10 @@ export const make = (powers, context, contextWrapper = {}) => {
       HOME: '/tmp/claude-home',
       XDG_CONFIG_HOME: '/tmp/claude-home/.config',
       CLAUDE_CONFIG_DIR: '/tmp/claude-home/.claude',
+      // Claude refuses bypass-permissions mode for uid 0 unless the caller
+      // attests that the process is already inside a sandbox. This process is
+      // root only inside a rootless Podman user namespace.
+      IS_SANDBOX: '1',
     }),
     initialPrompt,
   });

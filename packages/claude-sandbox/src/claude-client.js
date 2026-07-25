@@ -334,6 +334,10 @@ export const makeClaudeClient = ({
       // `stream-json` print mode requires --verbose to emit the full
       // per-event stream rather than only the final result.
       '--verbose',
+      // This client always runs inside an Endo-confined rootless Podman slice.
+      // There is no interactive permission channel in print mode, so let the
+      // CLI execute its agentic tool loop within that OS-level boundary.
+      '--dangerously-skip-permissions',
     ];
     const useModel = opts.model || model;
     if (useModel) {
