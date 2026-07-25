@@ -30,14 +30,17 @@ the daemon-xs-worker-snapshot suspend/resume substrate, durable host
 exports for system resources, and durable OCapN sessions layered on
 ocapn-noise-session-reconnect; prototype and tests landed with the
 design),
-[endor-git-bindings](endor-git-bindings.md) (added 2026-07-15; a
-daemon-private, local-only `GitCas` boundary in M11 (Rust Daemon
+[endor-git-bindings](endor-git-bindings.md) (added 2026-07-15,
+revised 2026-07-25 per review for the cross-compilation requirement;
+a daemon-private, local-only `GitCas` boundary in M11 (Rust Daemon
 `endor`) for in-process Git object and compare-and-swap ref
-operations over vendored libgit2, deliberately distinct from Endor's
-SHA-256 `ContentStore`; the local-only artifact excludes transport
-features, while a `gix` parity and distribution evaluation is the
-strategic follow-up; summary table, M11 row, dependency graph,
-estimate, totals, and timeline synced),
+operations over the pure-Rust `gix` implementation — chosen so every
+release target cross-compiles without a per-target C toolchain —
+deliberately distinct from Endor's SHA-256 `ContentStore`; the
+local-only artifact excludes transport features, and vendored
+libgit2 (per-target toolchain or hash-pinned prebuilt artifacts) is
+the documented contingency; summary table, M11 row, dependency
+graph, estimate, totals, and timeline synced),
 [cbor-codec](cbor-codec.md) (added 2026-07-12; shared canonical-CBOR
 primitive codec `@endo/cbor` at `packages/cbor/`: hardened functional
 write/read primitives for the RFC 8949 subset that slot-machine
@@ -1083,7 +1086,7 @@ user interface move to Rust.
 
 | Design | Status | Notes |
 |--------|--------|-------|
-| endor-git-bindings | Proposed | Daemon-private local Git object/ref storage over vendored libgit2; the local-only baseline excludes network transports and keeps Git object IDs distinct from `ContentStore` SHA-256 roots. |
+| endor-git-bindings | Proposed | Daemon-private local Git object/ref storage over pure-Rust `gix` (cross-compiles with no per-target C toolchain; vendored libgit2 is the documented contingency); the local-only baseline excludes network transports and keeps Git object IDs distinct from `ContentStore` SHA-256 roots. |
 | endor-tui | Not Started | TUI entry point for `endor`: Chat UI in terminal idiom, and an integrated stepping debugger for XS workers (XS `mxDebug` protocol) |
 | endor-bus-tui | Not Started | Bus-protocol verbs for worker-owned TUI regions, XS handle API, Exo/CapTP wrapper |
 | endor-native-zip-xs | Proposed | Raw-DEFLATE host functions selected by `@endo/zip` under `-C xs`, with bounded inflation and snapshot ABI update |
@@ -1396,7 +1399,7 @@ have been remapped: 0 → 1, ½ → 2, 1 → 3, 2 → 4, 3 → 7, 4 → 9,
 | endoclaw-browser | M-L | 1.5 weeks | 10 | Playwright-backed, origin-confined; smallest cut in PR #106 |
 | endoclaw-channel-bridges | M | 4-5 days | 10 | Vercel `chat` SDK adapters |
 | endoclaw-skill-registry | S-M | 3 days | 10 | Skills directory with capability declarations; PR #105 open |
-| endor-git-bindings | M | 4-5 days | 11 | `GitCas` trait and vendored-libgit2 local backend, Endor-tree adapter, corruption/quarantine coverage, and a `gix` parity/distribution spike. HTTPS and SSH are separately designed follow-ups. |
+| endor-git-bindings | M | 4-5 days | 11 | `GitCas` trait and pure-Rust `gix` local backend, Endor-tree adapter, corruption/quarantine coverage, and a cross-compilation release check; vendored libgit2 is the documented contingency. HTTPS and SSH are separately designed follow-ups. |
 | endor-tui | XL | 5-8 weeks | 11 | Rust TUI: ratatui/crossterm, concept-map of every Chat component, XS `mxDebug` debugger integration (XL bumped 1.3x) |
 | endor-bus-tui | XL | 4-7 weeks | 11 | Bus-verb spec, XS handle API, Exo/CapTP wrapper; cross-worker layout composition (XL bumped 1.3x) |
 | endor-native-zip-xs | S-M | 2-3 days | 11 | Pure-Rust raw-DEFLATE host functions, `@endo/zip` `xs` conditional exports, bounded inflation, and XS snapshot callback-table migration |
