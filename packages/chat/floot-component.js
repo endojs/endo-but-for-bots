@@ -490,17 +490,22 @@ export const flootComponent = (
    *   meta?: { mail?: { from?: string } },
    *   name?: string, args?: string, result?: string | null }} HistoryMessage
    * @typedef {{ id: string, title: string, createdAt: number, presetId: string,
-   *   model: string, messages: HistoryMessage[], facet: any, loaded: boolean }}
+   *   runtime: string, model: string, messages: HistoryMessage[], facet: any,
+   *   loaded: boolean }}
    *   FlootSession
    * @typedef {{ id: string, title: string, description: string }} FlootPreset
    * @typedef {{ id: string, title: string, description: string,
    *   default: boolean }} FlootModel
+   * @typedef {{ id: string, title: string, description: string,
+   *   default: boolean }} FlootRuntime
    */
 
   /** @type {FlootPreset[]} */
   let presets = [];
   /** @type {FlootModel[]} */
   let models = [];
+  /** @type {FlootRuntime[]} */
+  let runtimes = [];
   /** @type {FlootSession[]} */
   let sessions = [];
   /** @type {string | null} */
@@ -606,12 +611,14 @@ export const flootComponent = (
    * @param {string} [title]
    * @param {string} [presetId]
    * @param {string} [model]
+   * @param {string} [runtime]
    */
-  const createSession = async (title, presetId, model) => {
+  const createSession = async (title, presetId, model, runtime) => {
     const facet = await E(factory).createSession(
       title || DEFAULT_TITLE,
       presetId,
       model,
+      runtime,
     );
     const info = await E(facet).getInfo();
     /** @type {FlootSession} */
@@ -620,6 +627,7 @@ export const flootComponent = (
       title: info.title || DEFAULT_TITLE,
       createdAt: info.createdAt || Date.now(),
       presetId: info.presetId || DEFAULT_PRESET_ID,
+      runtime: info.runtime || '',
       model: info.model || '',
       messages: [],
       facet,
@@ -682,6 +690,7 @@ export const flootComponent = (
         title: s.title,
         createdAt: s.createdAt,
         presetId: s.presetId,
+        runtime: s.runtime,
         model: s.model,
         status: liveTurnFor(s.id)
           ? /** @type {const} */ ('streaming')
@@ -700,6 +709,12 @@ export const flootComponent = (
         title: m.title,
         description: m.description,
         default: m.default,
+      })),
+      runtimes: runtimes.map(r => ({
+        id: r.id,
+        title: r.title,
+        description: r.description,
+        default: r.default,
       })),
       messages: allMessages.map(toViewMessage),
       streamingText: liveTurn ? liveTurn.streamingText : '',
@@ -979,10 +994,11 @@ export const flootComponent = (
   /**
    * @param {string} [presetId]
    * @param {string} [model]
+   * @param {string} [runtime]
    */
-  const newSession = (presetId, model) => {
+  const newSession = (presetId, model, runtime) => {
     if (busy) return;
-    createSession(undefined, presetId, model)
+    createSession(undefined, presetId, model, runtime)
       .then(() => {
         stick = true;
         notify();
@@ -1545,8 +1561,9 @@ export const flootComponent = (
     newSession(
       /** @type {string | undefined} */ presetId,
       /** @type {string | undefined} */ model,
+      /** @type {string | undefined} */ runtime,
     ) {
-      newSession(presetId, model);
+      newSession(presetId, model, runtime);
     },
     renameSession(/** @type {string} */ id, /** @type {string} */ title) {
       renameSession(id, title);
@@ -1681,15 +1698,19 @@ export const flootComponent = (
   // default session if the factory has none, then repaint the active history.
   (async () => {
     try {
-      const [metas, presetList, modelList] = await Promise.all([
+      const [metas, presetList, modelList, runtimeList] = await Promise.all([
         E(factory).listSessions(),
         E(factory)
           .listPresets()
           .catch(() => []),
         E(factory).listModels(),
+        E(factory)
+          .listRuntimes()
+          .catch(() => []),
       ]);
       presets = presetList;
       models = modelList;
+      runtimes = runtimeList;
       sessions = [...metas]
         .sort(
           (/** @type {any} */ a, /** @type {any} */ b) =>
@@ -1700,6 +1721,7 @@ export const flootComponent = (
           title: m.title || DEFAULT_TITLE,
           createdAt: m.createdAt || 0,
           presetId: m.presetId || DEFAULT_PRESET_ID,
+          runtime: m.runtime || '',
           model: m.model || '',
           messages: [],
           facet: null,

@@ -25,6 +25,7 @@ export {};
  *   title: string,
  *   createdAt: number,
  *   presetId: string,
+ *   runtime?: string,
  *   model?: string,
  *   status?: 'idle' | 'streaming' | 'error',
  *   messageCount?: number,
@@ -45,6 +46,18 @@ export {};
  *   description?: string,
  *   default?: boolean,
  * }} FlootModel
+ */
+
+/**
+ * A runtime selectable for a new session — the execution backend that carries
+ * the conversation (`claude-cli` sandbox vs `claude-api`). Independent of the
+ * chosen model. `default` marks the runtime an unpinned session runs.
+ * @typedef {{
+ *   id: string,
+ *   title: string,
+ *   description?: string,
+ *   default?: boolean,
+ * }} FlootRuntime
  */
 
 /**
@@ -91,6 +104,7 @@ export {};
  *   activeSessionId: string | null,
  *   presets: FlootPreset[],
  *   models: FlootModel[],
+ *   runtimes: FlootRuntime[],
  *   messages: FlootMessage[],
  *   streamingText: string,
  *   phase: string,
@@ -112,7 +126,7 @@ export {};
  * @property {(text?: string) => void} send
  * @property {() => void} stop
  * @property {(id: string) => void} selectSession
- * @property {(presetId?: string, model?: string) => void} newSession
+ * @property {(presetId?: string, model?: string, runtime?: string) => void} newSession
  * @property {(id: string, title: string) => void} renameSession
  * @property {(id: string) => void} deleteSession
  * @property {() => void} toggleMic

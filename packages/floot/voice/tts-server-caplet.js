@@ -270,7 +270,6 @@ const pump = async (piper, textReader, writer) => {
     for await (const value of iterateReader(textReader, { buffer: 4 })) {
       if (value.type === 'delta') {
         for (const s of chunker.push(value.text)) queue.push(s);
-        // eslint-disable-next-line no-await-in-loop
         await drain();
       } else if (value.type === 'end') {
         break;

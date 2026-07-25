@@ -17,6 +17,9 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import os from 'node:os';
+import nodePath from 'node:path';
+import { rm } from 'node:fs/promises';
 
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
@@ -28,20 +31,14 @@ import {
   makeEndoPetstoreBackend,
 } from '@endo/conversation-tree';
 import { discoverTools, executeTool } from '@endo/fae/src/tools.js';
-import {
-  makeExecTool,
-  makeListPetnamesTool,
-  makeLookupTool,
-  makeStoreTool,
-  makeRemoveTool,
-  makeAdoptTool,
-  makeSendTool,
-  makeReplyTool,
-} from '@endo/fae/src/tool-makers.js';
 
 import { createStreamingProvider } from './providers/index.js';
 import { runClaudeTurn } from './src/claude-turn.js';
 import { makeReplyChannel } from './src/stream.js';
+import { makeFlootLocalTools } from './src/tool-registry.js';
+import { makeMcpBridge } from './src/mcp-bridge.js';
+import { startMcpSocketServer } from './src/mcp-socket-server.js';
+import { makePublishTool } from './src/publish-tool.js';
 
 // Cap the tool-call loop so a misbehaving model can't spin forever before it
 // produces a spoken reply. This is a *safety* ceiling, not a work budget: real
@@ -224,7 +221,7 @@ export const makeClaudeClientResolver = (powers, env = {}) => {
   const provisionerName =
     env.FLOOT_CLAUDE_PROVISIONER || 'claude-session-provisioner';
 
-  const get = id => {
+  const get = (id, provisionOptions) => {
     let clientP = clients.get(id);
     if (!clientP) {
       const perSession = `${base}-${id}`;
@@ -234,7 +231,12 @@ export const makeClaudeClientResolver = (powers, env = {}) => {
         }
         if (await E(powers).has(provisionerName)) {
           const provisioner = await E(powers).lookup(provisionerName);
-          await E(provisioner).provision(id);
+          // Forward per-session provision options (e.g. the Endo tool bridge
+          // MCP socket mount) to the provisioner caplet.
+          await E(provisioner).provision(
+            id,
+            provisionOptions ? harden({ ...provisionOptions }) : undefined,
+          );
           if (await E(powers).has(perSession)) {
             return E(powers).lookup(perSession);
           }
@@ -287,11 +289,12 @@ harden(makeClaudeClientResolver);
 
 const FlootFactoryInterface = M.interface('FlootFactory', {
   createSession: M.callWhen()
-    .optional(M.string(), M.string(), M.string())
+    .optional(M.string(), M.string(), M.string(), M.string())
     .returns(M.remotable()),
   listSessions: M.callWhen().returns(M.arrayOf(M.record())),
   listPresets: M.callWhen().returns(M.arrayOf(M.record())),
   listModels: M.callWhen().returns(M.arrayOf(M.record())),
+  listRuntimes: M.callWhen().returns(M.arrayOf(M.record())),
   getSession: M.callWhen(M.string()).returns(M.remotable()),
   renameSession: M.callWhen(M.string(), M.string()).returns(M.undefined()),
   deleteSession: M.callWhen(M.string()).returns(M.undefined()),
@@ -378,7 +381,13 @@ capability. Use it via exec:
   \`add\`: \`const st = await E(workspace).status(); await E(workspace).add(st.map(s => s.entry))\`.
   Then \`E(workspace).commit(message)\` records them.
 Build what the user asks for in the workspace, committing as you reach working
-states. Speak short, plain summaries of what you did — never read code aloud.`;
+states. Speak short, plain summaries of what you did — never read code aloud.
+
+To share your work, call the publishWorkspace tool. It serves the current
+workspace as a static website and returns an unguessable capability URL that
+opens in a new browser tab (great for an index.html). Re-run publishWorkspace
+after you change files to refresh what it serves, and give the user the URL it
+returns.`;
 
 // "Full control" persona: the base voice persona plus a reference to the daemon
 // host itself ("endo") and the framing that this is dangerous, high-trust
@@ -463,42 +472,93 @@ const getPreset = id =>
     PRESETS.find(p => p.id === DEFAULT_PRESET_ID)
   );
 
-// Catalog of models selectable for a new session. A session that does not pin
-// one of these follows the factory's configured default model (the `model` in
-// the `llm-provider` config, or the provider's own fallback). Ids are passed
-// verbatim to the provider, so they must be valid for the configured backend —
-// these are the Anthropic ids used by the default provider.
+// Catalog of Anthropic models selectable for a session, ordered faster/lighter
+// to stronger. Ids are passed verbatim to the API provider AND to `claude
+// --model` in the CLI sandbox, so they must be valid Anthropic model ids. The
+// runtime (CLI vs API) is an INDEPENDENT choice (see RUNTIMES) — either runtime
+// can run any of these models.
 const MODELS = [
   {
-    id: 'claude-opus-4-8',
-    title: 'Claude Opus 4.8',
-    description: 'Most capable — best for hard reasoning and agentic work.',
+    id: 'claude-haiku-4-5-20251001',
+    title: 'Claude Haiku 4.5',
+    description: 'Fastest and lightest — best for quick, simple turns.',
   },
   {
     id: 'claude-sonnet-4-6',
     title: 'Claude Sonnet 4.6',
-    description: 'Balanced speed and capability — a good default.',
+    description: 'Balanced speed and capability.',
   },
   {
-    id: 'claude-haiku-4-5-20251001',
-    title: 'Claude Haiku 4.5',
-    description: 'Fastest and cheapest — best for quick, simple turns.',
+    id: 'claude-sonnet-5',
+    title: 'Claude Sonnet 5',
+    description: 'Stronger reasoning at Sonnet-class latency.',
   },
+  {
+    id: 'claude-opus-4-8',
+    title: 'Claude Opus 4.8',
+    description: 'High capability for hard reasoning and agentic work.',
+  },
+  {
+    id: 'claude-opus-5',
+    title: 'Claude Opus 5',
+    description: 'Most capable — deepest reasoning and longest-horizon work.',
+  },
+];
+// Runtime for a session: how the model runs, independent of which model.
+//  - claude-cli: a sandboxed Claude Code session (@endo/claude-sandbox) that
+//    runs its own agentic tool loop in a container over a projected workspace,
+//    with Endo tools bridged in over MCP.
+//  - claude-api: the streaming Anthropic API provider with Floot's own tool
+//    loop.
+const RUNTIMES = [
   {
     id: 'claude-cli',
     title: 'Claude Code CLI (sandbox)',
     description:
-      'A sandboxed Claude Code session (@endo/claude-sandbox) — the CLI runs ' +
-      'its own tools inside the container over a 9P-projected workspace.',
+      'Runs Claude Code in an isolated sandbox with its own tools over a ' +
+      'workspace; Endo tools are bridged in.',
+  },
+  {
+    id: 'claude-api',
+    title: 'Claude API',
+    description: 'Streams from the Anthropic API with Floot’s tool loop.',
   },
 ];
-// Not an LLM id: sessions pinned to this entry route through a ClaudeClient
-// capability (@endo/claude-sandbox) instead of the streaming API provider.
-const CLAUDE_CLI_MODEL_ID = 'claude-cli';
-// Mirrors createStreamingProvider's fallback so the UI's notion of "default"
-// agrees with what an unpinned session actually runs.
-const DEFAULT_MODEL_ID = 'claude-sonnet-4-6';
+const CLAUDE_CLI_RUNTIME_ID = 'claude-cli';
+const CLAUDE_API_RUNTIME_ID = 'claude-api';
+const DEFAULT_RUNTIME_ID = CLAUDE_CLI_RUNTIME_ID;
+// New sessions default to Claude CLI + the latest Haiku (fast/light).
+const DEFAULT_MODEL_ID = 'claude-haiku-4-5-20251001';
+// Legacy: sessions created before runtime/model were separated pinned this
+// pseudo-model to select the CLI runtime.
+const LEGACY_CLI_MODEL_ID = 'claude-cli';
 const isKnownModel = id => MODELS.some(m => m.id === id);
+const isKnownRuntime = id => RUNTIMES.some(r => r.id === id);
+
+/**
+ * Resolve a registry entry's runtime, migrating older entries. An explicit
+ * `runtime` wins; otherwise a legacy `model: "claude-cli"` means the CLI
+ * runtime and anything else (a real model or none) is an API session.
+ *
+ * @param {{ runtime?: string, model?: string } | undefined} entry
+ * @returns {string}
+ */
+const runtimeOf = entry => {
+  if (entry?.runtime && isKnownRuntime(entry.runtime)) return entry.runtime;
+  if (entry?.model === LEGACY_CLI_MODEL_ID) return CLAUDE_CLI_RUNTIME_ID;
+  return CLAUDE_API_RUNTIME_ID;
+};
+
+/**
+ * Resolve a registry entry's Anthropic model id, or undefined to follow the
+ * runtime's default. The legacy `claude-cli` pseudo-model is not a real model,
+ * so it maps to undefined.
+ *
+ * @param {{ model?: string } | undefined} entry
+ * @returns {string | undefined}
+ */
+const modelOf = entry =>
+  entry?.model && isKnownModel(entry.model) ? entry.model : undefined;
 
 /**
  * Provision a preset's objects into a session guest's petstore, referenced ONLY
@@ -629,7 +689,7 @@ const provisionPresetObjects = async (
  * @param {Promise<object> | object | undefined} _context
  * @param {ProviderConstructorConfig | InjectedProviderConfig | ClaudeClientConfig} providerConfig
  * @param {string} [systemPrompt]
- * @param {{ maxToolRounds?: number }} [options]
+ * @param {{ maxToolRounds?: number, extraTools?: Record<string, any> }} [options]
  * @returns {Promise<{
  *   converse: (
  *     input: string | object,
@@ -709,53 +769,21 @@ export const makeStreamingAgent = async (
 
   // Built-in tools bound to this agent's guest powers — the dynamic surface for
   // working with the daemon and petstore. `exec` is the most general (arbitrary
-  // JS with `powers`); the rest are explicit petstore operations. Caplet tools
-  // dropped into the guest's `tools/` directory are discovered on top of these
-  // each turn (see discoverTools), so the toolset can grow at runtime.
+  // JS with `powers`); the rest are explicit petstore/mail operations. Caplet
+  // tools dropped into the guest's `tools/` directory are discovered on top of
+  // these each turn (see discoverTools), so the toolset can grow at runtime.
+  // The same set backs the CLI-session MCP bridge (src/mcp-bridge.js), so a
+  // Claude Code session sees exactly this authority (see src/tool-registry.js).
   /** @type {Map<string, any>} */
-  const localTools = new Map();
-  localTools.set('exec', makeExecTool(powers));
-  localTools.set('list', makeListPetnamesTool(powers));
-  localTools.set('lookup', makeLookupTool(powers));
-  localTools.set('store', makeStoreTool(powers));
-  localTools.set('remove', makeRemoveTool(powers));
-  // Mail: discover incoming messages and adopt objects attached to them into
-  // this session's petstore. adopt needs a message number + edge name, which
-  // listMessages surfaces. fae's listMessages tool returns raw records whose
-  // `number` is a BigInt and so don't stringify for the model — format a
-  // readable summary (number, sender, text, edge names) here instead.
-  localTools.set(
-    'listMessages',
-    harden({
-      schema: () =>
-        harden({
-          type: 'function',
-          function: {
-            name: 'listMessages',
-            description:
-              'List messages in your inbox. Each entry has its number, sender, ' +
-              'type, text, and the edge names of any attached objects. Use an ' +
-              'edge name together with the message number to adopt an object.',
-            parameters: { type: 'object', properties: {}, required: [] },
-          },
-        }),
-      execute: async () => {
-        const msgs = await E(powers).listMessages();
-        const summary = (Array.isArray(msgs) ? msgs : []).map(m => ({
-          number: Number(m.number),
-          from: m.from,
-          type: m.type,
-          text: Array.isArray(m.strings) ? m.strings.join('') : undefined,
-          edgeNames: Array.isArray(m.names) ? m.names : [],
-        }));
-        return JSON.stringify(summary, null, 2);
-      },
-      help: () => 'List inbox messages with their numbers and edge names.',
-    }),
-  );
-  localTools.set('adopt', makeAdoptTool(powers));
-  localTools.set('send', makeSendTool(powers));
-  localTools.set('reply', makeReplyTool(powers));
+  const localTools = makeFlootLocalTools(powers);
+  // Session-scoped extra tools supplied by the factory (e.g. a bounded
+  // workspace publisher for new-project sessions). Merged over the built-ins so
+  // they are discoverable on the API path exactly as they are on the CLI path.
+  if (options.extraTools) {
+    for (const [name, tool] of Object.entries(options.extraTools)) {
+      localTools.set(name, tool);
+    }
+  }
 
   // One session = one guest = one linear conversation. The guest's petstore
   // holds a conversation-tree root and a linear branch beneath it. We cache the
@@ -928,12 +956,14 @@ export const makeStreamingAgent = async (
         turnOutput += roundUsage.outputTokens || 0;
       }
 
-      const rm = message || { role: 'assistant', content: streamed };
-      const toolCalls = Array.isArray(rm.tool_calls) ? rm.tool_calls : [];
+      const responseMsg = message || { role: 'assistant', content: streamed };
+      const toolCalls = Array.isArray(responseMsg.tool_calls)
+        ? responseMsg.tool_calls
+        : [];
 
       if (toolCalls.length === 0) {
-        finalContent = rm.content || streamed;
-        const finalNode = await tree.addNode(leafId, [rm]);
+        finalContent = responseMsg.content || streamed;
+        const finalNode = await tree.addNode(leafId, [responseMsg]);
         leafId = finalNode.id;
         answered = true;
         break;
@@ -1007,7 +1037,7 @@ export const makeStreamingAgent = async (
       const toolResults = await Promise.all(normalizedToolCalls.map(runOne));
 
       const stepNode = await tree.addNode(leafId, [
-        { ...rm, tool_calls: normalizedToolCalls },
+        { ...responseMsg, tool_calls: normalizedToolCalls },
         ...toolResults,
       ]);
       leafId = stepNode.id;
@@ -1282,6 +1312,136 @@ export const make = (hostPowers, _context, { env } = {}) => {
       send: (prompt, opts) => E(client).send(prompt, opts),
     });
 
+  // Per-session MCP tool bridges (Claude CLI sessions only). Each serves that
+  // session guest's Endo tools — the SAME capability-bounded set an API-backed
+  // session gets — over a Unix socket bind-mounted read-only into the sandbox
+  // slice, so the CLI's own tool loop can call them. Only JSON crosses the
+  // socket; the guest capabilities never leave this worker. Servers are
+  // worker-local (rebuilt each boot); the socket directory path is stable per
+  // session so the persisted client formula's read-only mount keeps resolving.
+  const mcpBaseDir =
+    env?.FLOOT_MCP_DIR || nodePath.join(os.tmpdir(), 'floot-mcp');
+  const mcpSocketDirFor = id => nodePath.join(mcpBaseDir, id);
+  /** @type {Map<string, { close: () => Promise<void>, socketDir: string }>} */
+  const mcpServers = new Map();
+  const ensureMcpServer = async (id, sessionGuest, extraTools = {}) => {
+    const socketDir = mcpSocketDirFor(id);
+    // Rebuild on each getAgent (idempotent across a boot): close any prior
+    // listener so we never leak one, then bind a fresh server to the current
+    // session guest's live tool surface.
+    const existing = mcpServers.get(id);
+    if (existing) {
+      await existing.close().catch(() => {});
+      mcpServers.delete(id);
+    }
+    const localTools = makeFlootLocalTools(sessionGuest);
+    for (const [name, tool] of Object.entries(extraTools)) {
+      localTools.set(name, tool);
+    }
+    const bridge = makeMcpBridge({
+      discover: () => discoverTools(sessionGuest, localTools),
+      name: 'endo-floot',
+      version: '0.1.0',
+    });
+    const server = await startMcpSocketServer({ socketDir, bridge });
+    mcpServers.set(id, { close: server.close, socketDir });
+    return harden({
+      socketDir: server.socketDir,
+      innerDir: server.innerDir,
+      configPath: server.innerConfigPath,
+    });
+  };
+  const stopMcpServer = async id => {
+    const server = mcpServers.get(id);
+    if (server) {
+      mcpServers.delete(id);
+      await server.close().catch(() => {});
+    }
+    // Remove the socket directory whether or not a listener was running this
+    // boot (a deleted session that was never opened still left one on disk at
+    // its stable path when it last ran).
+    await rm(mcpSocketDirFor(id), { recursive: true, force: true }).catch(
+      () => {},
+    );
+  };
+
+  // Shared static asset server (host-global; provisioned by setup). Resolved
+  // once and cached. Absent hosts simply run without the publisher.
+  const assetServerName = env?.FLOOT_ASSET_SERVER || 'asset-server';
+  /** @type {Promise<any> | undefined} */
+  let assetServerP;
+  const getAssetServer = () => {
+    if (assetServerP === undefined) {
+      assetServerP = (async () => {
+        if (await E(powers).has(assetServerName)) {
+          return E(powers).lookup(assetServerName);
+        }
+        return undefined;
+      })().catch(() => {
+        assetServerP = undefined;
+        return undefined;
+      });
+    }
+    return assetServerP;
+  };
+
+  // Per-session bounded workspace publishers (new-project sessions only). Held
+  // so the served mount can be revoked when the session is rebuilt or deleted.
+  /** @type {Map<string, { revoke: () => Promise<void> }>} */
+  const publishers = new Map();
+  // Build the session-scoped extra tools for a session: a bounded workspace
+  // publisher for new-project sessions when an asset server is available. The
+  // same map backs both the API tool loop and the CLI MCP bridge.
+  const buildExtraTools = async (id, sessionGuest, presetId) => {
+    // Revoke and drop any prior publisher for this session before rebuilding
+    // (a fresh getAgent replaces the tool instance).
+    const priorPublisher = publishers.get(id);
+    if (priorPublisher) {
+      publishers.delete(id);
+      await priorPublisher.revoke().catch(() => {});
+    }
+    if (presetId !== 'new-project') return {};
+    const assetServer = await getAssetServer();
+    if (!assetServer) return {};
+    const publishTool = makePublishTool({
+      assetServer,
+      getWorkspace: async () => {
+        if (await E(sessionGuest).has('workspace')) {
+          return E(sessionGuest).lookup('workspace');
+        }
+        return undefined;
+      },
+    });
+    publishers.set(id, { revoke: publishTool.revoke });
+    return { publishWorkspace: publishTool };
+  };
+  const stopPublisher = async id => {
+    const publisher = publishers.get(id);
+    if (publisher) {
+      publishers.delete(id);
+      await publisher.revoke().catch(() => {});
+    }
+  };
+
+  // Resolve the host directory backing a new-project session's git workspace,
+  // so a Claude CLI session can mount that exact worktree at /workspace (rather
+  // than a second, unrelated filesystem). Returns undefined when there is no
+  // git workspace or its path cannot be resolved — the session then falls back
+  // to an isolated plain workspace.
+  const resolveSharedWorkspaceDir = async sessionGuest => {
+    try {
+      if (!(await E(sessionGuest).has('workspace'))) return undefined;
+      const workspace = await E(sessionGuest).lookup('workspace');
+      // eslint-disable-next-line no-underscore-dangle
+      const methods = await E(workspace).__getMethodNames__();
+      if (!methods.includes('worktree')) return undefined;
+      const worktree = await E(workspace).worktree();
+      return await E(powers).provideHostPath(worktree);
+    } catch {
+      return undefined;
+    }
+  };
+
   // One streaming provider per model. Sessions that don't pin a model share the
   // entry under the empty-string key (the factory's configured default model).
   /** @type {Map<string, Promise<any>>} */
@@ -1398,20 +1558,77 @@ export const make = (hostPowers, _context, { env } = {}) => {
             err instanceof Error ? err.message : String(err),
           );
         }
-        // Build (or reuse) the backend for this session's pinned model; an
-        // unpinned session follows the factory's configured default. The
-        // claude-cli pseudo-model routes through a ClaudeClient capability
-        // instead of a streaming API provider.
-        const agentConfig =
-          entry?.model === CLAUDE_CLI_MODEL_ID
-            ? { claudeClient: makeSendOnlyClient(await getClaudeClient(id)) }
-            : { provider: await getProvider(entry?.model) };
+        // Session-scoped extra tools (e.g. the bounded workspace publisher for
+        // new-project sessions). The same set is threaded into the API tool
+        // loop and the CLI MCP bridge so both runtimes see identical authority.
+        let extraTools = {};
+        try {
+          extraTools = await buildExtraTools(
+            id,
+            sessionGuest,
+            entry?.presetId || DEFAULT_PRESET_ID,
+          );
+        } catch (err) {
+          console.warn(
+            `[floot-factory] could not build extra tools for session ${id}:`,
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+        // Runtime (CLI vs API) and model are independent, resolved with
+        // backward-compatible migration of older entries (see runtimeOf/modelOf).
+        // The CLI runtime routes through a ClaudeClient capability and gets a
+        // per-session MCP tool bridge so its own tool loop shares this guest's
+        // Endo authority; the API runtime uses the streaming provider with
+        // Floot's own tool loop. Either runtime honors the selected model.
+        const runtime = runtimeOf(entry);
+        const model = modelOf(entry);
+        let agentConfig;
+        if (runtime === CLAUDE_CLI_RUNTIME_ID) {
+          // The tool bridge is best-effort: if the socket server fails to
+          // start, the CLI session still runs (just without Endo tools) rather
+          // than failing to open at all.
+          let mcp;
+          try {
+            mcp = await ensureMcpServer(id, sessionGuest, extraTools);
+          } catch (err) {
+            console.warn(
+              `[floot-factory] MCP tool bridge unavailable for session ${id}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
+          // A new-project CLI session mounts its git worktree at /workspace so
+          // Claude's file tools, the adopted `workspace` cap, and the publisher
+          // all operate on the same files. Other CLI sessions use an isolated
+          // plain workspace.
+          let workspaceDir;
+          if ((entry?.presetId || DEFAULT_PRESET_ID) === 'new-project') {
+            workspaceDir = await resolveSharedWorkspaceDir(sessionGuest);
+          }
+          const provisionOptions = {
+            ...(mcp ? { mcp } : {}),
+            ...(workspaceDir ? { workspaceDir } : {}),
+            ...(model ? { model } : {}),
+          };
+          agentConfig = {
+            claudeClient: makeSendOnlyClient(
+              await getClaudeClient(
+                id,
+                Object.keys(provisionOptions).length
+                  ? provisionOptions
+                  : undefined,
+              ),
+            ),
+          };
+        } else {
+          agentConfig = { provider: await getProvider(model) };
+        }
         const agent = await makeStreamingAgent(
           sessionGuest,
           undefined,
           agentConfig,
           sessionPrompt,
-          { maxToolRounds },
+          { maxToolRounds, extraTools },
         );
         // Each session is addressable by mail: start following its inbox.
         agent.startInbox();
@@ -1441,7 +1658,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
             title: entry?.title || '',
             createdAt: entry?.createdAt || 0,
             presetId: entry?.presetId || DEFAULT_PRESET_ID,
-            model: entry?.model || '',
+            runtime: runtimeOf(entry),
+            model: modelOf(entry) || '',
           });
         },
         /**
@@ -1569,25 +1787,31 @@ export const make = (hostPowers, _context, { env } = {}) => {
     /**
      * @param {string} [title]
      * @param {string} [presetId]
-     * @param {string} [model]
+     * @param {string} [model] - one of listModels() ids; defaults to the
+     *   catalog default (latest Haiku).
+     * @param {string} [runtime] - "claude-cli" or "claude-api"; defaults to CLI.
      * @returns {Promise<object>} an opaque session facet
      */
-    async createSession(title, presetId, model) {
+    async createSession(title, presetId, model, runtime) {
       await loadRegistry();
       const preset = getPreset(presetId || DEFAULT_PRESET_ID);
       const id = newSessionId();
-      // Snapshot the preset's id and prompt so later catalog edits don't change
-      // a live session. The object set is re-read from the catalog by id in
-      // getAgent (objects are provisioned once, idempotently). A model is pinned
-      // only when the caller chose a known one; otherwise the session follows
-      // the factory's configured default model.
+      // Runtime and model are independent and always pinned at creation: the
+      // runtime defaults to CLI, the model to the catalog default (latest
+      // Haiku). Snapshot the preset's id and prompt so later catalog edits
+      // don't change a live session.
+      const chosenRuntime = isKnownRuntime(runtime)
+        ? runtime
+        : DEFAULT_RUNTIME_ID;
+      const chosenModel = isKnownModel(model) ? model : DEFAULT_MODEL_ID;
       const entry = harden({
         id,
         title: title || 'New chat',
         createdAt: Date.now(),
         presetId: preset.id,
         systemPrompt: preset.systemPrompt,
-        ...(isKnownModel(model) ? { model } : {}),
+        runtime: chosenRuntime,
+        model: chosenModel,
       });
       /** @type {any[]} */ (registry).push(entry);
       await saveRegistry();
@@ -1596,25 +1820,25 @@ export const make = (hostPowers, _context, { env } = {}) => {
       // preset objects are provisioned up front.
       getAgent(id).catch(() => {});
       console.error(
-        `[floot-factory] Created session "${id}" (preset "${preset.id}"${
-          entry.model ? `, model "${entry.model}"` : ''
-        })`,
+        `[floot-factory] Created session "${id}" (preset "${preset.id}", ` +
+          `runtime "${chosenRuntime}", model "${chosenModel}")`,
       );
       return getFacet(id);
     },
 
     /**
-     * @returns {Promise<Array<{ id: string, title: string, createdAt: number, presetId: string, model: string }>>}
+     * @returns {Promise<Array<{ id: string, title: string, createdAt: number, presetId: string, runtime: string, model: string }>>}
      */
     async listSessions() {
       await loadRegistry();
       return harden(
-        (registry || []).map(({ id, title, createdAt, presetId, model }) => ({
-          id,
-          title,
-          createdAt,
-          presetId: presetId || DEFAULT_PRESET_ID,
-          model: model || '',
+        (registry || []).map(entry => ({
+          id: entry.id,
+          title: entry.title,
+          createdAt: entry.createdAt,
+          presetId: entry.presetId || DEFAULT_PRESET_ID,
+          runtime: runtimeOf(entry),
+          model: modelOf(entry) || '',
         })),
       );
     },
@@ -1633,28 +1857,35 @@ export const make = (hostPowers, _context, { env } = {}) => {
     },
 
     /**
-     * The selectable models for a new session. `default` marks the model an
-     * unpinned session runs (the factory's configured model, or the conventional
-     * fallback when that is unset or not in the catalog).
+     * The selectable models for a new session (faster/lighter → stronger).
+     * `default` marks the pre-selected model (latest Haiku).
      *
      * @returns {Promise<Array<{ id: string, title: string, description: string, default: boolean }>>}
      */
     async listModels() {
-      let defaultModel = '';
-      try {
-        const cfg = await getProviderConfig();
-        defaultModel = (cfg && cfg.model) || '';
-      } catch {
-        // Provider config not resolvable yet — fall back to the conventional
-        // default so the picker still has a sensible pre-selection.
-      }
-      if (!isKnownModel(defaultModel)) defaultModel = DEFAULT_MODEL_ID;
       return harden(
         MODELS.map(({ id, title, description }) => ({
           id,
           title,
           description,
-          default: id === defaultModel,
+          default: id === DEFAULT_MODEL_ID,
+        })),
+      );
+    },
+
+    /**
+     * The selectable runtimes for a new session. `default` marks the
+     * pre-selected runtime (Claude CLI).
+     *
+     * @returns {Promise<Array<{ id: string, title: string, description: string, default: boolean }>>}
+     */
+    async listRuntimes() {
+      return harden(
+        RUNTIMES.map(({ id, title, description }) => ({
+          id,
+          title,
+          description,
+          default: id === DEFAULT_RUNTIME_ID,
         })),
       );
     },
@@ -1703,6 +1934,26 @@ export const make = (hostPowers, _context, { env } = {}) => {
           }`,
         );
       }
+      // Stop this session's MCP tool bridge and remove its socket directory.
+      try {
+        await stopMcpServer(id);
+      } catch (error) {
+        console.warn(
+          `[floot-factory] could not stop MCP bridge for ${id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+      // Revoke any published workspace URL for this session.
+      try {
+        await stopPublisher(id);
+      } catch (error) {
+        console.warn(
+          `[floot-factory] could not revoke publisher for ${id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
       // Best-effort removal of the backing session guest's persistence (both
       // the handle and the controlling agent petnames).
       try {
@@ -1728,17 +1979,19 @@ export const make = (hostPowers, _context, { env } = {}) => {
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: owns all chat sessions. createSession(title?, presetId?, model?) -> session facet; listSessions() -> [{id,title,createdAt,presetId,model}]; listPresets() -> [{id,title,description}]; listModels() -> [{id,title,description,default}]; getSession(id) -> facet; renameSession(id,title); deleteSession(id). A session facet exposes converse(input) (streaming reply reader), getHistory(), and getInfo().';
+        return 'Floot factory: owns all chat sessions. createSession(title?, presetId?, model?, runtime?) -> session facet; listSessions() -> [{id,title,createdAt,presetId,runtime,model}]; listPresets() -> [{id,title,description}]; listModels() -> [{id,title,description,default}]; listRuntimes() -> [{id,title,description,default}]; getSession(id) -> facet; renameSession(id,title); deleteSession(id). A session facet exposes converse(input) (streaming reply reader), getHistory(), and getInfo().';
       }
       const docs = {
         createSession:
-          'createSession(title?, presetId?, model?) — Create a new session (its own guest/petstore) seeded by a preset (default "general"), optionally pinning a model from listModels() (default: the factory\'s configured model), and return an opaque session facet.',
+          'createSession(title?, presetId?, model?, runtime?) — Create a new session (its own guest/petstore) seeded by a preset (default "general"), pinning a model from listModels() (default: latest Haiku) and a runtime from listRuntimes() (default: Claude CLI), and return an opaque session facet.',
         listSessions:
-          'listSessions() — Return metadata [{id, title, createdAt, presetId, model}] for all sessions.',
+          'listSessions() — Return metadata [{id, title, createdAt, presetId, runtime, model}] for all sessions.',
         listPresets:
           'listPresets() — Return the available session presets [{id, title, description}].',
         listModels:
           'listModels() — Return the selectable models [{id, title, description, default}] for new sessions.',
+        listRuntimes:
+          'listRuntimes() — Return the selectable runtimes [{id, title, description, default}] for new sessions.',
         getSession: 'getSession(id) — Return the session facet for an id.',
         renameSession: 'renameSession(id, title) — Rename a session.',
         deleteSession:

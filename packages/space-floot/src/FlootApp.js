@@ -10,7 +10,7 @@ import { ComposeBar } from './ComposeBar.js';
 import { SettingsPanel } from './SettingsPanel.js';
 
 /** @import { VNode } from 'preact' */
-/** @import { FlootController, FlootPreset, FlootModel, FlootSafeEvent } from './types.js' */
+/** @import { FlootController, FlootPreset, FlootModel, FlootRuntime, FlootSafeEvent } from './types.js' */
 
 // Floot voice-assistant space as a PURE confined Preact component. The host
 // (packages/chat/floot-component.js) owns the imperative engine — mic capture,
@@ -38,16 +38,21 @@ const formatTokens = (/** @type {number} */ n) => {
  * @param {{
  *   presets: FlootPreset[],
  *   models: FlootModel[],
- *   onPick: (id: string, model: string) => void,
+ *   runtimes: FlootRuntime[],
+ *   onPick: (id: string, model: string, runtime: string) => void,
  *   onClose: () => void,
  * }} props
  * @returns {VNode}
  */
-const PresetModal = ({ presets, models, onPick, onClose }) => {
-  // Pre-select the factory's default model (falling back to the first listed),
-  // so picking a preset alone still creates a session with a sensible model.
-  const preferred = models.find(m => m.default) || models[0];
-  const [model, setModel] = useState(preferred ? preferred.id : '');
+const PresetModal = ({ presets, models, runtimes, onPick, onClose }) => {
+  // Pre-select the default model and runtime (falling back to the first listed),
+  // so picking a preset alone still creates a sensible session.
+  const preferredModel = models.find(m => m.default) || models[0];
+  const preferredRuntime = runtimes.find(r => r.default) || runtimes[0];
+  const [model, setModel] = useState(preferredModel ? preferredModel.id : '');
+  const [runtime, setRuntime] = useState(
+    preferredRuntime ? preferredRuntime.id : '',
+  );
   return h(
     'div',
     { class: 'floot-modal-backdrop', onClick: onClose },
@@ -59,6 +64,34 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
         onClick: (/** @type {FlootSafeEvent} */ e) => e.stopPropagation(),
       },
       h('div', { class: 'floot-modal-title' }, 'Start a new session'),
+      // Runtime toggle (CLI vs API) — a segmented control, CLI preselected.
+      runtimes.length
+        ? h(
+            'div',
+            { class: 'floot-modal-field' },
+            h('span', { class: 'floot-modal-label' }, 'Runtime'),
+            h(
+              'div',
+              { class: 'floot-runtime-toggle' },
+              runtimes.map(r =>
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    key: r.id,
+                    class: `floot-runtime-option${
+                      r.id === runtime ? ' selected' : ''
+                    }`,
+                    'aria-pressed': r.id === runtime ? 'true' : 'false',
+                    title: r.description || '',
+                    onClick: () => setRuntime(r.id),
+                  },
+                  r.title,
+                ),
+              ),
+            ),
+          )
+        : null,
       models.length
         ? h(
             'label',
@@ -92,7 +125,7 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
               type: 'button',
               key: p.id,
               class: 'floot-preset-card',
-              onClick: () => onPick(p.id, model),
+              onClick: () => onPick(p.id, model, runtime),
             },
             h('div', { class: 'floot-preset-name' }, p.title),
             h('div', { class: 'floot-preset-desc' }, p.description || ''),
@@ -119,16 +152,27 @@ export const FlootApp = ({ controller }) => {
   // over the same snapshot, so it needs no controller/host plumbing.
   const [debug, setDebug] = useState(false);
 
-  const { sessions, activeSessionId, presets, models, usage, status } = state;
+  const {
+    sessions,
+    activeSessionId,
+    presets,
+    models,
+    runtimes,
+    usage,
+    status,
+  } = state;
   const active = sessions.find(s => s.id === activeSessionId);
 
   const onNew = () => {
-    // Skip the modal only when there is nothing to choose — a single preset and
-    // no model alternatives. Multiple models alone still warrant the picker.
-    if (presets.length <= 1 && models.length <= 1) {
+    // Skip the modal only when there is nothing to choose — a single preset,
+    // no model alternatives, and no runtime choice. Multiple models or runtimes
+    // alone still warrant the picker.
+    if (presets.length <= 1 && models.length <= 1 && runtimes.length <= 1) {
+      const defaultRuntime = runtimes.find(r => r.default) || runtimes[0];
       controller.newSession(
         presets[0] ? presets[0].id : undefined,
         models[0] ? models[0].id : undefined,
+        defaultRuntime ? defaultRuntime.id : undefined,
       );
       setDrawerOpen(false);
     } else {
@@ -138,10 +182,11 @@ export const FlootApp = ({ controller }) => {
   const pickPreset = (
     /** @type {string} */ id,
     /** @type {string} */ model,
+    /** @type {string} */ runtime,
   ) => {
     setModalOpen(false);
     setDrawerOpen(false);
-    controller.newSession(id, model);
+    controller.newSession(id, model, runtime);
   };
 
   const commitTitle = () => {
@@ -252,6 +297,7 @@ export const FlootApp = ({ controller }) => {
       ? h(PresetModal, {
           presets,
           models,
+          runtimes,
           onPick: pickPreset,
           onClose: () => setModalOpen(false),
         })

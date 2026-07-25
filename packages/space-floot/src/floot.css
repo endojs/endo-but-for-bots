@@ -698,6 +698,29 @@
   outline: none;
   border-color: var(--fl-accent);
 }
+.floot-runtime-toggle {
+  display: flex;
+  gap: 0.35rem;
+  background: var(--fl-surface2);
+  border: 1px solid var(--fl-border);
+  border-radius: 8px;
+  padding: 0.25rem;
+}
+.floot-runtime-option {
+  flex: 1;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 0.4rem 0.55rem;
+  color: var(--fl-text-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.floot-runtime-option.selected {
+  background: var(--fl-accent);
+  color: #fff;
+}
 .floot-preset-list {
   display: flex;
   flex-direction: column;
