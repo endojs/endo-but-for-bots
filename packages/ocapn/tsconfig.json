@@ -6,6 +6,7 @@
   "include": [
     "*.js",
     "src/**/*.js",
+    "src/ambient-sturdyref.types.d.ts",
     "test"
   ]
 }
