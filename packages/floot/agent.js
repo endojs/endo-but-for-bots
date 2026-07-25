@@ -1368,21 +1368,25 @@ export const make = (hostPowers, _context, { env } = {}) => {
   // Shared static asset server (host-global; provisioned by setup). Resolved
   // once and cached. Absent hosts simply run without the publisher.
   const assetServerName = env?.FLOOT_ASSET_SERVER || 'asset-server';
-  /** @type {Promise<any> | undefined} */
-  let assetServerP;
-  const getAssetServer = () => {
-    if (assetServerP === undefined) {
-      assetServerP = (async () => {
-        if (await E(powers).has(assetServerName)) {
-          return E(powers).lookup(assetServerName);
-        }
-        return undefined;
-      })().catch(() => {
-        assetServerP = undefined;
-        return undefined;
-      });
+  // Cache only a SUCCESSFUL resolution. The asset server is bound into this
+  // factory's profile by hosted setup that runs LATE in ENDO_EXTRA (after the
+  // factory itself is provisioned/revived), so the first lookup can legitimately
+  // miss on a fresh boot. Caching that miss would disable new-project publishing
+  // for the whole incarnation, so we retry on each call until it appears and
+  // only then memoize.
+  /** @type {any} */
+  let cachedAssetServer;
+  const getAssetServer = async () => {
+    if (cachedAssetServer) return cachedAssetServer;
+    try {
+      if (await E(powers).has(assetServerName)) {
+        cachedAssetServer = await E(powers).lookup(assetServerName);
+        return cachedAssetServer;
+      }
+    } catch {
+      // Not resolvable yet (e.g. bound later this boot); retry next call.
     }
-    return assetServerP;
+    return undefined;
   };
 
   // Per-session bounded workspace publishers (new-project sessions only). Held
