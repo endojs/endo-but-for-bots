@@ -30,6 +30,14 @@
       "types": "./types.d.ts",
       "default": "./index.js"
     },
+    "./buffer": {
+      "types": "./buffer.d.ts",
+      "default": "./buffer.js"
+    },
+    "./buffer/unbounded": {
+      "types": "./unbounded-buffer.d.ts",
+      "default": "./unbounded-buffer.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {

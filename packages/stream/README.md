@@ -73,6 +73,37 @@ which promises settle.
 A stream is consequently a pair of queues that transport iteration results,
 one to send messages forward and another to receive acknowledgements.
 
+## Buffer
+
+For a one-way, unbounded buffer without backpressure, import `makeBuffer` from
+`@endo/stream/buffer`. It returns a `{ spring, sink }` pair. The spring is the
+producer-facing generator subset: `next(value)`, `return(value)`, and
+`throw(error)` enqueue values or terminal iterations without waiting. The sink
+is the consumer-facing async iterator subset: `next()` returns the next
+iteration promise.
+
+```js
+import { makeBuffer } from '@endo/stream/buffer';
+
+const { spring, sink } = makeBuffer();
+spring.next('one');
+spring.return('done');
+
+console.log(await sink.next()); // { value: 'one', done: false }
+console.log(await sink.next()); // { value: 'done', done: true }
+```
+
+The unbounded implementation lives in its own
+`@endo/stream/buffer/unbounded` module and uses `makeQueue`, the asynchronous
+promise queue. This is the no-acknowledgement portion of the coherent design
+space described in [A General Theory of Reactivity](https://kriskowal.com/gtor/):
+the spring pushes generator iterations and the sink pulls them later.
+
+A bounded buffer is deliberately not implemented. It needs a separate,
+synchronous ring-buffer module with pre-allocated storage, head and tail
+offsets, refusal behavior, and bulk flushing. That substantially different
+abstraction must not be hidden behind the promise-queue implementation.
+
 ## Pump
 
 The `pump` function pumps iterations from a reader to a writer.
