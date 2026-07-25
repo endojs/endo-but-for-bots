@@ -3201,6 +3201,7 @@ __metadata:
   resolution: "@endo/space-floot@workspace:packages/space-floot"
   dependencies:
     "@endo/harden": "workspace:^"
+    ava: "catalog:dev"
     eslint: "catalog:dev"
     preact: "npm:^10.29.2"
   languageName: unknown
