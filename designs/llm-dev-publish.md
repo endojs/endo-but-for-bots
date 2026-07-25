@@ -131,18 +131,58 @@ finishes any missing promotion without producing new versions.
 
 The job has `contents: read` and the smallest npm publication authority that
 the registry permits.
-Prefer npm trusted publishing through GitHub Actions OIDC (`id-token: write`)
-for each published `@endo/*` package.
-If the registry setup cannot yet use trusted publishing, use a repository
-secret scoped to npm publishing only, and remove it after trusted publishers
-are configured.
+Publication uses npm trusted publishing through GitHub Actions OIDC
+(`id-token: write`) for each published `@endo/*` package.
+If the registry setup cannot yet use trusted publishing for a given package,
+use a repository secret scoped to npm publishing only, treat it as a temporary
+higher-risk measure, and remove it once that package's trusted publisher is
+configured.
 No GitHub write permission, `GITHUB_TOKEN` publication, tag creation, or
 Changesets action is part of this workflow.
+
+npm does not offer an authorization scope that restricts a credential to a
+single dist-tag or version prefix.
+Both granular access tokens and trusted publishing grant write access at
+package granularity, and write access permits publishing any version and
+moving any dist-tag, including `latest`.
+A fallback publish token therefore cannot be constrained to the `dev` tag
+alone, which is why it is only a temporary bridge to trusted publishing.
+The durable scope limit comes instead from trusted publishing binding publish
+authority to one specific workflow file rather than to a reusable secret:
+only `publish-dev.yml` can publish these packages, and that workflow by
+construction publishes SemVer prerelease versions and touches only the `dev`
+dist-tag.
+Because every published version is a prerelease and every `npm publish` passes
+an explicit `--tag`, npm never moves `latest`.
+Abusing this authority to publish a mainline or `latest` version would require
+modifying the workflow file itself on the protected `llm` branch, which keeps a
+prompt injection in ordinary repository content from escalating into a supply
+chain attack.
 
 The workflow retains the existing defense-in-depth install settings:
 `YARN_ENABLE_SCRIPTS=false` and `npm_config_ignore_scripts=true`.
 It runs `corepack enable`, `yarn install --immutable`, and the existing
 publish smoke test against a local registry before authenticating to npm.
+
+### Trusted publishing setup
+
+Configuring trusted publishers requires npm account authority that only the
+maintainers hold; a workflow cannot grant itself this access.
+For each public `@endo/*` package the maintainers:
+
+1. Open the package's Settings on npmjs.com and add a trusted publisher for
+   this GitHub repository, naming the workflow file `publish-dev.yml` and, if
+   used, the deployment environment the job runs in.
+2. Remove any long-lived automation token that still carries publish access to
+   the package once its trusted publisher works, so the workflow binding is the
+   only automated publication path.
+3. Keep any account or organization publishing-access policy that blocks
+   mainline publication from automation in place, consistent with the goal that
+   automation in this repository cannot publish mainline or `latest` versions.
+
+Until a package has a working trusted publisher, its dev publication either
+skips that package or uses the temporary publish-only token described above,
+which is removed as soon as trusted publishing is in place.
 
 ### Failure handling and observability
 
@@ -184,11 +224,21 @@ The workflow summary and retained manifest provide the exact recovery input.
 - Force-push away a queued commit and confirm that its run exits before npm
   authentication or publication.
 
-## Open questions
+## Resolved decisions
 
-- Should the public dist-tag be exactly `dev`, or should consumers select a
-  named channel such as `llm-dev`?
-- Does every currently public workspace belong in this channel, or should the
-  first rollout use a maintained allowlist of packages?
-- Can all public `@endo/*` packages be configured for npm trusted publishing,
-  or is a temporary automation token required for a subset?
+These questions were resolved in review of this design.
+
+- The public dist-tag is exactly `dev`. Consumers install `@endo/<pkg>@dev`;
+  there is no separate named channel such as `llm-dev`. Renaming the `llm`
+  branch to `dev` is desirable but is tracked separately from this design.
+- Every non-private workspace that is published generally is published as a
+  `dev`-tagged prerelease. The rollout does not use a maintained allowlist; the
+  publishable set is the same set of non-private `@endo/*` workspaces that the
+  production release path publishes.
+- npm trusted publishing is the intended credential path, arranged by the
+  maintainers, and deliberately scope-limited so that automation in this
+  repository cannot publish mainline or `latest` versions. The mechanism and
+  its limits are described under Credentials and permissions and Trusted
+  publishing setup above, including the fact that npm has no dist-tag-scoped
+  credential, so the workflow-file binding of trusted publishing is what
+  prevents an escalation from prompt injection to a supply chain attack.
