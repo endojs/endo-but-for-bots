@@ -32,7 +32,8 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
@@ -41,8 +42,16 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 // streams), so it is guarded with `M.call`. Guards are permissive — the daemon
 // path is not runtime-tested here.
 const TtsServerInterface = M.interface('TtsServer', {
-  synthesize: M.call(M.any()).returns(M.remotable()),
+  synthesize: M.call(M.any()).optional(M.record()).returns(M.remotable()),
+  getConfiguration: M.call().returns(M.record()),
   help: M.call().returns(M.string()),
+});
+
+const PIPER_DEFAULTS = harden({
+  speed: 1,
+  noiseScale: 0.667,
+  noiseW: 0.8,
+  sentenceSilence: 0.2,
 });
 
 // ── Minimal sentence chunker (plain JS port of sentence-chunker.ts) ──────────
@@ -141,7 +150,15 @@ const makeAudioChannel = onClose => {
 };
 
 // ── Minimal piper driver (plain JS port of PiperTTSStream.synthesize) ────────
-const makePiper = ({ binary, modelPath, speed, sampleRate }) => {
+const makePiper = ({
+  binary,
+  modelPath,
+  speed,
+  noiseScale,
+  noiseW,
+  sentenceSilence,
+  sampleRate,
+}) => {
   const active = new Set();
   let aborted = false;
 
@@ -161,6 +178,12 @@ const makePiper = ({ binary, modelPath, speed, sampleRate }) => {
           '--output-raw',
           '--length-scale',
           String(1 / speed),
+          '--noise-scale',
+          String(noiseScale),
+          '--noise-w',
+          String(noiseW),
+          '--sentence-silence',
+          String(sentenceSilence),
         ],
         { stdio: ['pipe', 'pipe', 'ignore'] },
       );
@@ -273,7 +296,7 @@ export const make = async (_powers, context, { env = {} } = {}) => {
   // Speed drives piper's --length-scale (1/speed), so a non-positive or
   // non-finite value yields a nonsensical scale and piper fails obscurely.
   // Reject it up front with a capability-level error instead.
-  let speed = 1.0;
+  let speed = PIPER_DEFAULTS.speed;
   if (env.FLOOT_TTS_SPEED !== undefined && env.FLOOT_TTS_SPEED !== '') {
     const parsed = Number(env.FLOOT_TTS_SPEED);
     if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -284,14 +307,76 @@ export const make = async (_powers, context, { env = {} } = {}) => {
     speed = parsed;
   }
 
-  // Parse the voice's sample rate once; every chunk uses it for the wire event.
-  const config = JSON.parse(readFileSync(`${modelPath}.json`, 'utf-8'));
-  const sampleRate = config?.audio?.sample_rate;
-  if (typeof sampleRate !== 'number' || sampleRate <= 0) {
-    throw new Error(
-      `piper voice config ${modelPath}.json missing audio.sample_rate`,
+  const modelDir = dirname(modelPath);
+  const defaultVoice = basename(modelPath, '.onnx');
+  /** @type {Map<string, { id: string, name: string, modelPath: string, sampleRate: number }>} */
+  const voicesById = new Map();
+  /** @param {string} path */
+  const addVoice = path => {
+    const id = basename(path, '.onnx');
+    const configPath = `${path}.json`;
+    if (!existsSync(path) || !existsSync(configPath)) return;
+    const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+    const sampleRate = config?.audio?.sample_rate;
+    if (typeof sampleRate !== 'number' || sampleRate <= 0) {
+      throw new Error(
+        `piper voice config ${configPath} missing audio.sample_rate`,
+      );
+    }
+    voicesById.set(
+      id,
+      harden({
+        id,
+        name: id.replace(/[_-]+/g, ' '),
+        modelPath: path,
+        sampleRate,
+      }),
     );
+  };
+  for (const name of readdirSync(modelDir).sort()) {
+    if (name.endsWith('.onnx')) addVoice(join(modelDir, name));
   }
+  addVoice(modelPath);
+  if (!voicesById.has(defaultVoice)) {
+    throw new Error(`Piper default voice is not readable: ${modelPath}`);
+  }
+
+  const ranges = harden({
+    speed: harden({ min: 0.25, max: 4, step: 0.05 }),
+    noiseScale: harden({ min: 0, max: 2, step: 0.05 }),
+    noiseW: harden({ min: 0, max: 2, step: 0.05 }),
+    sentenceSilence: harden({ min: 0, max: 5, step: 0.05 }),
+  });
+  const defaults = harden({
+    voice: defaultVoice,
+    speed,
+    noiseScale: PIPER_DEFAULTS.noiseScale,
+    noiseW: PIPER_DEFAULTS.noiseW,
+    sentenceSilence: PIPER_DEFAULTS.sentenceSilence,
+  });
+  const configuration = harden({
+    voices: [...voicesById.values()].map(({ id, name }) =>
+      harden({ id, name }),
+    ),
+    defaults,
+    ranges,
+  });
+
+  /**
+   * @param {Record<string, unknown>} options
+   * @param {'speed' | 'noiseScale' | 'noiseW' | 'sentenceSilence'} name
+   */
+  const numberOption = (options, name) => {
+    const value =
+      options[name] === undefined ? defaults[name] : Number(options[name]);
+    const range = ranges[name];
+    if (!Number.isFinite(value) || value < range.min || value > range.max) {
+      throw new Error(
+        `TTS ${name} must be between ${range.min} and ${range.max}, got "${options[name]}".`,
+      );
+    }
+    return value;
+  };
 
   // Abort any in-flight piper subprocesses when the caplet is cancelled (the
   // formula is removed or re-provisioned), so they don't leak.
@@ -306,8 +391,22 @@ export const make = async (_powers, context, { env = {} } = {}) => {
   }
 
   return makeExo('TtsServer', TtsServerInterface, {
-    synthesize: textReader => {
-      const piper = makePiper({ binary, modelPath, speed, sampleRate });
+    synthesize: (textReader, options = {}) => {
+      const voiceId =
+        options.voice === undefined ? defaultVoice : `${options.voice}`;
+      const voice = voicesById.get(voiceId);
+      if (!voice) {
+        throw new Error(`Unknown TTS voice "${voiceId}".`);
+      }
+      const piper = makePiper({
+        binary,
+        modelPath: voice.modelPath,
+        speed: numberOption(options, 'speed'),
+        noiseScale: numberOption(options, 'noiseScale'),
+        noiseW: numberOption(options, 'noiseW'),
+        sentenceSilence: numberOption(options, 'sentenceSilence'),
+        sampleRate: voice.sampleRate,
+      });
       pipers.add(piper);
       // If the consumer stops pulling (replay interrupted), abort piper so it
       // doesn't keep synthesizing sentences no one will receive.
@@ -317,8 +416,9 @@ export const make = async (_powers, context, { env = {} } = {}) => {
       pump(piper, textReader, writer).finally(() => pipers.delete(piper));
       return reader;
     },
+    getConfiguration: () => configuration,
     help: () =>
-      'TtsServer: synthesize(textReader) -> audioReader; streams raw s16le PCM bytes (one event per sentence) as piper renders the reply.',
+      'TtsServer: synthesize(textReader, options?) -> audioReader; getConfiguration() lists voices, defaults, and supported Piper controls.',
   });
 };
 harden(make);

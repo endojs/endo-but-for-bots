@@ -21,6 +21,7 @@ import { promisify } from 'node:util';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
+import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import {
   makeConversationTree,
@@ -117,6 +118,46 @@ const makeBufferingWriter = () => {
   return { writer, done };
 };
 
+/**
+ * Fan reply text out inside the daemon: one branch remains the normal UI reply
+ * wire and the other is the append-only text stream consumed by TTS.
+ *
+ * @param {any} replyWriter
+ */
+const makeSpeechWriter = replyWriter => {
+  const { push, reader: textReader } = makeBufferedReader();
+  let settled = false;
+  const settleText = event => {
+    if (settled) return;
+    settled = true;
+    push(event);
+  };
+  const writer = harden({
+    setPhase: phase => replyWriter.setPhase(phase),
+    delta: text => {
+      push(harden({ type: 'delta', text: `${text}` }));
+      replyWriter.delta(text);
+    },
+    final: text => replyWriter.final(text),
+    toolCall: call => replyWriter.toolCall(call),
+    toolResult: result => replyWriter.toolResult(result),
+    usage: totals => replyWriter.usage(totals),
+    end: () => {
+      settleText(harden({ type: 'end' }));
+      replyWriter.end();
+    },
+    abort: reason => {
+      settleText(harden({ type: 'abort', reason: `${reason}` }));
+      replyWriter.abort(reason);
+    },
+  });
+  return harden({
+    writer,
+    textReader,
+    abort: reason => settleText(harden({ type: 'abort', reason: `${reason}` })),
+  });
+};
+
 const FlootFactoryInterface = M.interface('FlootFactory', {
   createSession: M.callWhen()
     .optional(M.string(), M.string(), M.string())
@@ -137,6 +178,9 @@ const FlootFactoryInterface = M.interface('FlootFactory', {
 const FlootSessionInterface = M.interface('FlootSession', {
   getInfo: M.callWhen().returns(M.record()),
   converse: M.call(M.any()).returns(M.remotable()),
+  converseWithSpeech: M.call(M.any(), M.any())
+    .optional(M.record())
+    .returns(M.any()),
   getHistory: M.callWhen().returns(M.any()),
   getUsage: M.callWhen().returns(M.any()),
   help: M.call().returns(M.string()),
@@ -1329,6 +1373,54 @@ export const make = (hostPowers, _context, { env } = {}) => {
           })();
           return reader;
         },
+        /**
+         * Start a turn with a daemon-side TTS branch. The browser passes the
+         * selected TTS capability and receives independent reply/audio readers;
+         * reply text never has to cross into the browser and back for speech.
+         *
+         * @param {string | object} input
+         * @param {any} ttsServer
+         * @param {Record<string, unknown>} [ttsOptions]
+         * @returns {{ replyReader: object, audioReader: Promise<object> }}
+         */
+        converseWithSpeech(input, ttsServer, ttsOptions = {}) {
+          const controller = new AbortController();
+          const { writer: replyWriter, reader: replyReader } = makeReplyChannel(
+            () => controller.abort(),
+          );
+          const speech = makeSpeechWriter(replyWriter);
+          controller.signal.addEventListener(
+            'abort',
+            () => speech.abort('reply stopped'),
+            { once: true },
+          );
+          const audioReader = E(ttsServer).synthesize(
+            speech.textReader,
+            harden({ ...ttsOptions }),
+          );
+          audioReader.catch(error => {
+            speech.abort(
+              error instanceof Error ? error.message : String(error),
+            );
+          });
+          (async () => {
+            try {
+              const agent = await getAgent(id);
+              await agent.converse(
+                input,
+                speech.writer,
+                undefined,
+                controller.signal,
+              );
+            } catch (error) {
+              if (controller.signal.aborted) return;
+              speech.writer.abort(
+                error instanceof Error ? error.message : String(error),
+              );
+            }
+          })();
+          return harden({ replyReader, audioReader });
+        },
         async getHistory() {
           const agent = await getAgent(id);
           return agent.getHistory();
@@ -1338,7 +1430,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           return agent.getUsage();
         },
         help() {
-          return 'Floot session: converse(input) returns a streaming reply reader; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getInfo() returns { id, title, createdAt }.';
+          return 'Floot session: converse(input) returns a streaming reply reader; converseWithSpeech(input, tts, options?) returns independent reply/audio streams with daemon-side text fan-out; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getInfo() returns { id, title, createdAt }.';
         },
       });
       facets.set(id, facet);

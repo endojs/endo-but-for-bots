@@ -73,6 +73,11 @@ export const makeClaudeEventTranslator = writer => {
   let errorReason;
   /** @type {{ inputTokens: number, outputTokens: number } | undefined} */
   let usage;
+  // With `--include-partial-messages`, text arrives first as Anthropic
+  // content-block deltas and is repeated in the following complete assistant
+  // event. Track whether this message was already emitted so the UI/TTS branches
+  // receive each character exactly once.
+  let streamedCurrentAssistant = false;
 
   const handle = event => {
     if (!event || typeof event !== 'object') return;
@@ -83,13 +88,29 @@ export const makeClaudeEventTranslator = writer => {
         if (event.subtype === 'init') w.setPhase('claude session starting');
         break;
       }
+      case 'stream_event': {
+        const streamEvent = event.event;
+        if (
+          streamEvent?.type === 'content_block_delta' &&
+          streamEvent.delta?.type === 'text_delta' &&
+          streamEvent.delta.text
+        ) {
+          const text = `${streamEvent.delta.text}`;
+          streamed += text;
+          streamedCurrentAssistant = true;
+          w.delta(text);
+        }
+        break;
+      }
       case 'assistant': {
         const blocks = event.message?.content;
         if (!Array.isArray(blocks)) break;
         for (const block of blocks) {
           if (block?.type === 'text' && block.text) {
-            streamed += `${block.text}`;
-            w.delta(`${block.text}`);
+            if (!streamedCurrentAssistant) {
+              streamed += `${block.text}`;
+              w.delta(`${block.text}`);
+            }
           } else if (block?.type === 'tool_use') {
             const id = `${block.id || ''}`;
             const name = `${block.name || 'tool'}`;
@@ -97,6 +118,7 @@ export const makeClaudeEventTranslator = writer => {
             w.toolCall({ id, name, args: JSON.stringify(block.input ?? {}) });
           }
         }
+        streamedCurrentAssistant = false;
         break;
       }
       case 'user': {
