@@ -4,7 +4,7 @@
 |---|---|
 | **Created** | 2026-07-25 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | Not Started — gated on [`#600`](https://github.com/endojs/endo-but-for-bots/pull/600) (maintainer directive 2026-07-25; see *Contingent on the in-flight XS-to-Rust port*) |
 
 ## What is the Problem Being Solved?
 
@@ -32,6 +32,37 @@ Every packaging decision below is shaped by that fact: artifact production is
 pure-Rust `cross`/`zig` cross-compilation, and crates.io publication must ship
 the vendored C sources because a git submodule cannot travel in a crate
 tarball.
+
+> **Contingent on the in-flight XS-to-Rust port — wait for #600.**
+> [`endojs/endo-but-for-bots#600`](https://github.com/endojs/endo-but-for-bots/pull/600)
+> (`xs2rust-endor-engine`) is porting the XS engine to a memory-safe Rust crate
+> precisely to **liberate `xsnap` of its C-toolchain dependency**. If it lands,
+> the `xsnap` half of the constraint above dissolves — no `c/moddable`
+> submodule, no XS vendoring, and pure-Rust `cross`/`zig` cross-compilation
+> becomes viable for that source. **The C-toolchain-per-target shape of this
+> design is therefore the pre-#600 baseline, not a permanent given.** Per the
+> maintainer directive on this PR (2026-07-25), packaging should wait for #600
+> to resolve before committing to the native-runner matrix, because #600
+> decides whether the target end-state is C-toolchain cross-compilation or
+> pure-Rust cross. Two C dependencies are **not** removed by #600 alone and are
+> tracked separately: `rusqlite`'s bundled SQLite C (see
+> [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) for the pure-Rust
+> storage direction) and the choice of git library (next).
+
+> **Coupled decision — the git backend's C dependency.** Endor's git capability
+> ([daemon-git-capability](daemon-git-capability.md),
+> [daemon-git-remotes](daemon-git-remotes.md)) ships a native-`git` subprocess
+> backend today, but both designs leave room for a Rust-native backend, and its
+> crate choice carries the **same** C-toolchain question the maintainer flags: a
+> **libgit2-binding crate (`git2`)** links the C `libgit2` and reintroduces a
+> per-target C toolchain, whereas a **pure-Rust crate (`gitoxide`/`gix`)** does
+> not. While `xsnap` and `rusqlite` already force a C toolchain, `git2`'s C is
+> effectively "free"; once #600 removes the XS C dependency, the git-library
+> choice becomes a **deciding** factor in whether `endor` can be a pure-Rust
+> cross-compiled artifact. It should therefore be made against the same
+> "keep `endor` pure-Rust-cross" criterion, not in isolation. This design only
+> records the coupling; the choice itself belongs to the git-backend design
+> once #600's direction is settled.
 
 ### Prior art followed
 
@@ -219,9 +250,14 @@ installed package version.
 | [daemon-endor-architecture](daemon-endor-architecture.md) | The binary this design packages. Packaging can start once it builds on Tier-1. |
 | [endor-native-zip-xs](endor-native-zip-xs.md) | Adds Rust host functions to the same binary; no packaging change. |
 | [endor-tui](endor-tui.md), [endor-bus-tui](endor-bus-tui.md) | Ship inside the same `endor` binary; no separate artifact. |
+| [`endojs/endo-but-for-bots#600`](https://github.com/endojs/endo-but-for-bots/pull/600) (`xs2rust-endor-engine`) | **Directive-gating.** Removes `xsnap`'s C-toolchain dependency; decides C-toolchain-cross vs. pure-Rust-cross as this design's target end-state. Maintainer directed waiting for it (2026-07-25). |
+| [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) | The remaining `rusqlite` SQLite-C dependency; its resolution is the second half of a fully pure-Rust `endor`. |
+| [daemon-git-capability](daemon-git-capability.md), [daemon-git-remotes](daemon-git-remotes.md) | A future Rust-native git backend's crate choice (`git2` libgit2-bindings vs. pure-Rust `gitoxide`/`gix`) shares the same C-toolchain question; couple it to #600's outcome. |
 
-No blocking edges: packaging proceeds independently once `endor` compiles on
-the Tier-1 matrix.
+The C-toolchain-required baseline can proceed once `endor` compiles on the
+Tier-1 matrix, but the maintainer has directed **waiting for #600** (2026-07-25)
+before committing to the native-runner matrix, since #600 determines whether the
+end-state is C-toolchain cross-compilation or a pure-Rust cross build.
 
 ## Phased Implementation
 
@@ -261,6 +297,21 @@ the Tier-1 matrix.
 
 ## Known Gaps and Open Questions
 
+- **C-toolchain vs. pure-Rust target end-state (gating, per maintainer):** wait
+  for [`#600`](https://github.com/endojs/endo-but-for-bots/pull/600)
+  (`xs2rust-endor-engine`) to decide. If it lands, `xsnap` needs no C toolchain
+  and no XS vendoring, opening pure-Rust `cross`/`zig`; the native-runner matrix,
+  the `vendor-xs.sh` step, and the "needs a C compiler" caveats all become
+  conditional. Re-scope this design once #600's direction is settled.
+- **git library C dependency (coupled decision):** a future Rust-native git
+  backend (see [daemon-git-capability](daemon-git-capability.md),
+  [daemon-git-remotes](daemon-git-remotes.md)) should pick between a `git2`
+  (libgit2, C) and a `gitoxide`/`gix` (pure-Rust) crate with the
+  keep-`endor`-pure-Rust-cross goal in view — post-#600 this becomes the
+  deciding factor rather than a free rider on an existing C toolchain.
+- **Residual SQLite C:** even post-#600, `rusqlite`'s bundled SQLite compiles C;
+  a fully pure-Rust `endor` also needs [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md)
+  (or a pure-Rust SQLite crate) resolved.
 - **Crate name:** publish as `endor` (rename the `endo` workspace crate to
   match the binary) or keep `endo` and document `cargo install endo --bin
   endor`? Are `endo` / `endor` available on crates.io? (`lukehoban/endo-rust`
