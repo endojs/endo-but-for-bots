@@ -117,7 +117,15 @@ non-Node branch, and the event-emitter surface (`on`, `once`,
 listener grants no authority. The rest of Node's `process`
 surface (`stdout`, `exit`, signals, `hrtime`) stays absent;
 packages touching it fail with the same clean undefined read
-as before.
+as before. Ambiguous `.js` files —
+no `"type"` field in the package manifest, the shape of every
+quick-start entry — get Node-style **module-syntax detection**
+(`rust/endo/src/cjs_lexer.rs` `detect_esm_syntax`): a top-level
+`import`/`export` declaration classifies the file as ESM, so an
+`import`-bearing entry runs instead of dying in the CJS wrapper
+with `SyntaxError: invalid import`; dynamic `import()` and
+keyword mentions in strings/comments/nested scopes do not flip a
+real CJS file.
 
 ## What is the Problem Being Solved?
 
