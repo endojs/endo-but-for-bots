@@ -29,13 +29,21 @@
     "build": "exit 0",
     "lint": "yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix",
-    "lint:eslint": "eslint '**/*.js'"
+    "lint:eslint": "eslint '**/*.js'",
+    "test": "ava"
   },
   "dependencies": {
     "@endo/harden": "workspace:^",
     "preact": "^10.29.2"
   },
   "devDependencies": {
+    "ava": "catalog:dev",
     "eslint": "catalog:dev"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.*"
+    ],
+    "timeout": "2m"
   }
 }

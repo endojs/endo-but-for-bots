@@ -10,6 +10,60 @@ import { h } from 'preact';
 // rows. Pure view — `messages` and `streamingText` come from the host
 // controller's snapshot; nothing here touches the DOM or audio.
 
+// Match http(s) URLs. Deliberately narrow (only http/https) so nothing else in
+// a reply can become a live link, and so a published capability URL renders as
+// a safe, clickable anchor.
+const URL_RE = /(https?:\/\/[^\s]+)/g;
+
+/**
+ * Split a plain-text reply into an array of Preact children where each http(s)
+ * URL becomes an `<a target="_blank" rel="noopener noreferrer">` and everything
+ * else stays a text node (Preact escapes text children, so non-URL content is
+ * never interpreted as markup).
+ *
+ * @param {string} text
+ * @returns {Array<string | VNode>}
+ */
+export const linkify = text => {
+  const source = `${text || ''}`;
+  if (!source) return [source];
+  /** @type {Array<string | VNode>} */
+  const parts = [];
+  let last = 0;
+  for (const match of source.matchAll(URL_RE)) {
+    const start = /** @type {number} */ (match.index);
+    let url = match[0];
+    // Trailing sentence punctuation is almost never part of the URL; keep it as
+    // adjacent text so "see https://x/y." doesn't linkify the period.
+    let trailing = '';
+    const trail = /[.,;:!?)\]}'"]+$/.exec(url);
+    if (trail) {
+      trailing = trail[0];
+      url = url.slice(0, url.length - trailing.length);
+    }
+    if (start > last) parts.push(source.slice(last, start));
+    if (url) {
+      parts.push(
+        h(
+          'a',
+          {
+            href: url,
+            target: '_blank',
+            rel: 'noopener noreferrer',
+            class: 'floot-link',
+          },
+          url,
+        ),
+      );
+    }
+    if (trailing) parts.push(trailing);
+    last = start + match[0].length;
+  }
+  if (last < source.length) parts.push(source.slice(last));
+  return parts.length ? parts : [source];
+};
+harden(linkify);
+
 const ToolBlock = (
   /** @type {string} */ key,
   /** @type {string} */ name,
@@ -47,7 +101,7 @@ const Bubble = ({ msg, canReplay, onReplay, replaying }) => {
         h('span', { class: 'token message-token' }, `@${mailFrom}`),
       )
     : null;
-  const bubble = h('div', { class: 'floot-msg' }, text);
+  const bubble = h('div', { class: 'floot-msg' }, ...linkify(text));
   // A finished assistant message offers a replay button when TTS is wired.
   if (msg.role === 'assistant' && canReplay && text.trim()) {
     return h(
@@ -183,7 +237,7 @@ export const MessageList = ({ state, controller, debug = false }) => {
       h(
         'div',
         { key: 'streaming', class: 'floot-msg-row assistant' },
-        h('div', { class: 'floot-msg streaming' }, streamingText),
+        h('div', { class: 'floot-msg streaming' }, ...linkify(streamingText)),
       ),
     );
   } else if (busy) {
