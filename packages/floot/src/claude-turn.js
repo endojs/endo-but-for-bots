@@ -78,6 +78,15 @@ export const makeClaudeEventTranslator = writer => {
   // event. Track whether this message was already emitted so the UI/TTS branches
   // receive each character exactly once.
   let streamedCurrentAssistant = false;
+  // `system/init` is only a startup phase. Clear it as soon as Claude emits a
+  // substantive event so the UI does not keep saying "session starting" while
+  // the model is already responding or using a tool.
+  let starting = false;
+  const leaveStarting = phase => {
+    if (!starting) return;
+    starting = false;
+    w.setPhase(phase);
+  };
 
   const handle = event => {
     if (!event || typeof event !== 'object') return;
@@ -85,7 +94,10 @@ export const makeClaudeEventTranslator = writer => {
       case 'system': {
         // Lifecycle diagnostics (subtype 'init' etc.) — surface as a phase so
         // the UI shows sandbox startup instead of dead air.
-        if (event.subtype === 'init') w.setPhase('claude session starting');
+        if (event.subtype === 'init') {
+          starting = true;
+          w.setPhase('claude session starting');
+        }
         break;
       }
       case 'stream_event': {
@@ -96,6 +108,7 @@ export const makeClaudeEventTranslator = writer => {
           streamEvent.delta.text
         ) {
           const text = `${streamEvent.delta.text}`;
+          leaveStarting('responding');
           streamed += text;
           streamedCurrentAssistant = true;
           w.delta(text);
@@ -107,11 +120,13 @@ export const makeClaudeEventTranslator = writer => {
         if (!Array.isArray(blocks)) break;
         for (const block of blocks) {
           if (block?.type === 'text' && block.text) {
+            leaveStarting('responding');
             if (!streamedCurrentAssistant) {
               streamed += `${block.text}`;
               w.delta(`${block.text}`);
             }
           } else if (block?.type === 'tool_use') {
+            leaveStarting('using tools');
             const id = `${block.id || ''}`;
             const name = `${block.name || 'tool'}`;
             toolNames.set(id, name);
@@ -127,6 +142,7 @@ export const makeClaudeEventTranslator = writer => {
         if (!Array.isArray(blocks)) break;
         for (const block of blocks) {
           if (block?.type === 'tool_result') {
+            leaveStarting('thinking');
             const id = `${block.tool_use_id || ''}`;
             w.toolResult({
               id,

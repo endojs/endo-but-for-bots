@@ -86,6 +86,7 @@ test('translator maps stream-json events onto the reply wire', async t => {
 
   t.deepEqual(log, [
     { kind: 'phase', payload: 'claude session starting' },
+    { kind: 'phase', payload: 'responding' },
     { kind: 'delta', payload: 'Let me check. ' },
     {
       kind: 'tool_call',
