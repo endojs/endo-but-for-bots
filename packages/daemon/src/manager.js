@@ -716,7 +716,10 @@ const makeDaemonCore = async (
           ['mailHub', formula.mailHub],
           ['endo', formula.endo],
           ['networks', formula.networks],
-          ['planes', formula.planes],
+          // Formulas persisted before content data planes landed have no
+          // `planes` field. Alias their existing per-agent directory so they
+          // remain bootable; newly formulated agents get a distinct directory.
+          ['planes', formula.planes ?? formula.networks],
           ['pins', formula.pins],
         ];
       case 'guest':
@@ -729,7 +732,7 @@ const makeDaemonCore = async (
           ['mailHub', formula.mailHub],
           ['worker', formula.worker],
           ['networks', formula.networks],
-          ['planes', formula.planes],
+          ['planes', formula.planes ?? formula.networks],
         ];
       case 'marshal':
         return (formula.slots ?? []).map((s, i) => [`slot${i}`, s]);
@@ -3508,7 +3511,7 @@ const makeDaemonCore = async (
         registry: registryId,
         endo: endoId,
         networks: networksId,
-        planes: planesId,
+        planes: planesId = networksId,
         pins: pinsId,
       } = formula;
 
@@ -3577,7 +3580,7 @@ const makeDaemonCore = async (
         mailHub: mailHubId,
         worker: workerId,
         networks: networksDirectoryId,
-        planes: planesDirectoryId,
+        planes: planesDirectoryId = networksDirectoryId,
       } = formula;
 
       if (mailHubId === undefined) {

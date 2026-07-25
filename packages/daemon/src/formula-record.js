@@ -111,7 +111,7 @@ export const makeFormulaRecord = (formula, number, options = {}) => {
       };
       properties.planes = {
         kind: 'reference',
-        identifier: formula.planes,
+        identifier: formula.planes ?? formula.networks,
       };
       properties.pins = { kind: 'reference', identifier: formula.pins };
       break;
