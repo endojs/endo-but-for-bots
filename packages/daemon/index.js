@@ -89,7 +89,11 @@ const allowEnvPass = key => {
     keepStdEnv.has(key) ||
     key.startsWith('ENDO_') ||
     key.startsWith('LOCKDOWN_') ||
-    key.startsWith('XDG_')
+    key.startsWith('XDG_') ||
+    key.startsWith('CLAUDE_') ||
+    key.startsWith('NINEP_') ||
+    key === 'CONTAINER_HOST' ||
+    key === 'CONTAINERS_CONF'
   );
 };
 
