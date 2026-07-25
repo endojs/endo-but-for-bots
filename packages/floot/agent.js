@@ -835,14 +835,37 @@ export const makeStreamingAgent = async (
     if (claudeClient) {
       // Claude-CLI turn: one send to the ClaudeClient capability. The CLI runs
       // its own agentic loop in the sandbox (tools, continuity via the
-      // workspace), so the provider tool loop below is bypassed; the persisted
-      // history keeps only the user turn and the final assistant text.
+      // workspace), so the provider tool loop below is bypassed. Preserve its
+      // streamed tool activity in the conversation tree so getHistory() can
+      // reconstruct the same call/result cards after a refresh.
       writer.setPhase('thinking');
-      const { finalContent: replyText, usage: turnUsage } = await runClaudeTurn(
-        { client: claudeClient, text, writer, signal },
-      );
+      const {
+        finalContent: replyText,
+        usage: turnUsage,
+        toolCalls,
+      } = await runClaudeTurn({ client: claudeClient, text, writer, signal });
       if (signal?.aborted) return;
-      const finalNode = await tree.addNode(userNode.id, [
+      let replyParentId = userNode.id;
+      if (toolCalls.length > 0) {
+        const toolNode = await tree.addNode(replyParentId, [
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: toolCalls.map(call => ({
+              id: call.id,
+              type: 'function',
+              function: { name: call.name, arguments: call.args },
+            })),
+          },
+          ...toolCalls.map(call => ({
+            role: 'tool',
+            tool_call_id: call.id,
+            content: call.result ?? '',
+          })),
+        ]);
+        replyParentId = toolNode.id;
+      }
+      const finalNode = await tree.addNode(replyParentId, [
         { role: 'assistant', content: replyText },
       ]);
       cachedLeaf = finalNode.id;

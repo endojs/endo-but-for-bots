@@ -102,6 +102,14 @@ test('translator maps stream-json events onto the reply wire', async t => {
     finalText: 'Checked the file: done.',
     usage: { inputTokens: 11, outputTokens: 7 },
     errorReason: undefined,
+    toolCalls: [
+      {
+        id: 'toolu_1',
+        name: 'Read',
+        args: '{"path":"a"}',
+        result: 'file contents',
+      },
+    ],
   });
 });
 
@@ -150,6 +158,7 @@ test('translator falls back to streamed text without a result summary', async t 
     finalText: 'Hello world',
     usage: undefined,
     errorReason: undefined,
+    toolCalls: [],
   });
 });
 

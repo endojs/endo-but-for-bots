@@ -93,7 +93,29 @@ test('a claude-cli turn persists history and folds usage', async t => {
   t.is(turns.length, 1);
   turns[0].push({
     type: 'assistant',
-    message: { content: [{ type: 'text', text: 'building' }] },
+    message: {
+      content: [
+        { type: 'text', text: 'building' },
+        {
+          type: 'tool_use',
+          id: 'toolu_write',
+          name: 'Write',
+          input: { file_path: '/workspace/index.html' },
+        },
+      ],
+    },
+  });
+  turns[0].push({
+    type: 'user',
+    message: {
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'toolu_write',
+          content: 'wrote index.html',
+        },
+      ],
+    },
   });
   turns[0].push({
     type: 'result',
@@ -107,7 +129,7 @@ test('a claude-cli turn persists history and folds usage', async t => {
   const events = await replyP;
   t.deepEqual(
     events.map(e => e.type),
-    ['phase', 'delta', 'usage', 'final', 'end'],
+    ['phase', 'delta', 'tool_call', 'tool_result', 'usage', 'final', 'end'],
     'the reply wire carries the same shape as an API-backed turn',
   );
   t.deepEqual(events.at(-2), { type: 'final', text: 'Built the thing.' });
@@ -119,14 +141,16 @@ test('a claude-cli turn persists history and folds usage', async t => {
   });
 
   const history = await agent.getHistory();
-  t.deepEqual(
-    history.map(m => [m.role, m.content]),
-    [
-      ['user', 'build the thing'],
-      ['assistant', 'Built the thing.'],
-    ],
-    'the CLI turn is persisted like any other',
-  );
+  t.deepEqual(history, [
+    { role: 'user', content: 'build the thing' },
+    {
+      role: 'tool',
+      name: 'Write',
+      args: '{"file_path":"/workspace/index.html"}',
+      result: 'wrote index.html',
+    },
+    { role: 'assistant', content: 'Built the thing.' },
+  ]);
   t.deepEqual(await agent.getUsage(), {
     inputTokens: 20,
     outputTokens: 5,

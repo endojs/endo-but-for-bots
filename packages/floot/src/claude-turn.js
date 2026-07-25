@@ -54,6 +54,12 @@ const renderToolResultText = content => {
  *     finalText: string,
  *     usage: { inputTokens: number, outputTokens: number } | undefined,
  *     errorReason: string | undefined,
+ *     toolCalls: Array<{
+ *       id: string,
+ *       name: string,
+ *       args: string,
+ *       result: string | null,
+ *     }>,
  *   },
  * }}
  */
@@ -63,6 +69,10 @@ export const makeClaudeEventTranslator = writer => {
   // tool_use's name so the paired result can be labeled for the UI.
   /** @type {Map<string, string>} */
   const toolNames = new Map();
+  /** @type {Array<{ id: string, name: string, args: string, result: string | null }>} */
+  const toolCalls = [];
+  /** @type {Map<string, { id: string, name: string, args: string, result: string | null }>} */
+  const toolCallById = new Map();
   // Text streamed across assistant events. The `result` event's summary text
   // takes precedence when present (it is the CLI's own notion of the final
   // answer for the turn).
@@ -129,8 +139,18 @@ export const makeClaudeEventTranslator = writer => {
             leaveStarting('using tools');
             const id = `${block.id || ''}`;
             const name = `${block.name || 'tool'}`;
+            const args = JSON.stringify(block.input ?? {});
             toolNames.set(id, name);
-            w.toolCall({ id, name, args: JSON.stringify(block.input ?? {}) });
+            const prior = toolCallById.get(id);
+            if (prior) {
+              prior.name = name;
+              prior.args = args;
+            } else {
+              const call = { id, name, args, result: null };
+              toolCalls.push(call);
+              toolCallById.set(id, call);
+            }
+            w.toolCall({ id, name, args });
           }
         }
         streamedCurrentAssistant = false;
@@ -144,10 +164,20 @@ export const makeClaudeEventTranslator = writer => {
           if (block?.type === 'tool_result') {
             leaveStarting('thinking');
             const id = `${block.tool_use_id || ''}`;
+            const name = toolNames.get(id) || 'tool';
+            const result = renderToolResultText(block.content);
+            const call = toolCallById.get(id);
+            if (call) {
+              call.result = result;
+            } else {
+              const orphan = { id, name, args: '{}', result };
+              toolCalls.push(orphan);
+              toolCallById.set(id, orphan);
+            }
             w.toolResult({
               id,
-              name: toolNames.get(id) || 'tool',
-              result: renderToolResultText(block.content),
+              name,
+              result,
             });
           }
         }
@@ -186,6 +216,7 @@ export const makeClaudeEventTranslator = writer => {
       finalText: resultText !== undefined ? resultText : streamed,
       usage,
       errorReason,
+      toolCalls: toolCalls.map(call => harden({ ...call })),
     });
 
   return harden({ handle, finish });
@@ -212,6 +243,12 @@ harden(makeClaudeEventTranslator);
  * @returns {Promise<{
  *   finalContent: string,
  *   usage: { inputTokens: number, outputTokens: number } | undefined,
+ *   toolCalls: Array<{
+ *     id: string,
+ *     name: string,
+ *     args: string,
+ *     result: string | null,
+ *   }>,
  * }>}
  */
 export const runClaudeTurn = async ({
@@ -247,13 +284,13 @@ export const runClaudeTurn = async ({
   } finally {
     if (signal) signal.removeEventListener('abort', onAbort);
   }
-  const { finalText, usage, errorReason } = translator.finish();
+  const { finalText, usage, errorReason, toolCalls } = translator.finish();
   if (errorReason !== undefined && !signal?.aborted) {
     // The CLI reported a failed turn. Raise it so the caller aborts the reply
     // wire rather than persisting a partial turn as a successful answer — the
     // same outcome the API path produces when a provider call throws.
     throw Error(`claude turn failed: ${errorReason}`);
   }
-  return harden({ finalContent: finalText, usage });
+  return harden({ finalContent: finalText, usage, toolCalls });
 };
 harden(runClaudeTurn);
