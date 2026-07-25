@@ -41,6 +41,21 @@ test('makeFormulaRecord default fallthrough returns empty-properties record', t 
   t.deepEqual(record.properties, {});
 });
 
+test('legacy host formulas use networks as their planes directory', t => {
+  const formula = /** @type {Formula} */ (
+    /** @type {unknown} */ ({
+      type: 'host',
+      networks: 'network-directory-id',
+    })
+  );
+
+  const record = makeFormulaRecord(formula, aNumber);
+  t.deepEqual(record.properties.planes, {
+    kind: 'reference',
+    identifier: 'network-directory-id',
+  });
+});
+
 test('makeFormulaRecord surfaces a mount formula path and readOnly', t => {
   const formula = /** @type {Formula} */ (
     /** @type {unknown} */ ({
