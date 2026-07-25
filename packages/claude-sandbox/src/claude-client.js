@@ -180,6 +180,12 @@ const defaultStderrIterable = proc =>
  * @property {string} [rootfsLabel] - Human-readable rootfs label
  *   (diagnostic).
  * @property {string} [model] - Default `--model` for every send.
+ * @property {string} [mcpConfigPath] - Slice-internal path to an MCP
+ *   config file (see the floot package's mcp-socket-server). When set,
+ *   every spawn passes `--mcp-config` (with this path) and
+ *   `--strict-mcp-config`, wiring the CLI to the session's Endo tool
+ *   bridge over a mounted Unix socket and ignoring any ambient
+ *   project/user MCP config.
  * @property {Record<string, string>} [env] - Extra per-spawn env
  *   merged on top of the slice's env. The slice's env already carries
  *   the credential, so this is normally empty.
@@ -215,6 +221,7 @@ export const makeClaudeClient = ({
   backend,
   rootfsLabel = '',
   model,
+  mcpConfigPath,
   env = {},
   initialPrompt,
   makeStdoutIterable = defaultStdoutIterable,
@@ -339,6 +346,11 @@ export const makeClaudeClient = ({
       // CLI execute its agentic tool loop within that OS-level boundary.
       '--dangerously-skip-permissions',
     ];
+    if (mcpConfigPath) {
+      // Wire the session's Endo tool bridge (mounted Unix socket) and ignore
+      // any project/user .mcp.json so only these capability-bounded tools load.
+      argv.push('--mcp-config', mcpConfigPath, '--strict-mcp-config');
+    }
     const useModel = opts.model || model;
     if (useModel) {
       argv.push('--model', useModel);

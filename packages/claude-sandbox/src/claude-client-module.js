@@ -158,6 +158,13 @@ export const make = (powers, context, contextWrapper = {}) => {
   const network = env.NETWORK || 'private';
   const model = env.MODEL || undefined;
   const initialPrompt = env.INITIAL_PROMPT || undefined;
+  // Optional Endo tool bridge (see @endo/floot). When the factory provisioned
+  // one, MCP_CONFIG_PATH is the slice-internal path to its mcp.json and
+  // MCP_INNER_DIR is where the bridge's socket directory bind-mounts (read-only).
+  // The Mount cap itself is bundled by reference into the session powers, so the
+  // client never resolves a host name for it.
+  const mcpConfigPath = env.MCP_CONFIG_PATH || undefined;
+  const mcpInnerDir = env.MCP_INNER_DIR || '/endo-mcp';
 
   // Parse (and validate) the rootfs synchronously so a bad value fails
   // at construction rather than on first use.
@@ -243,16 +250,25 @@ export const make = (powers, context, contextWrapper = {}) => {
         workspaceMountPoint,
         workspacePetName,
       );
+      // The Endo tool bridge's socket directory, if this session has one, bound
+      // read-only so the CLI's stdio relay can reach the host-side MCP server.
+      const mcpCap = mcpConfigPath
+        ? (await E(sessionPowers).mcpMount()) || null
+        : null;
+      const mounts = [
+        {
+          cap: workspaceCap,
+          innerPath: workspacePath,
+          mode: 'rw',
+        },
+        ...(mcpCap
+          ? [{ cap: mcpCap, innerPath: mcpInnerDir, mode: 'ro' }]
+          : []),
+      ];
       const slice = await E(sandboxFactory).make(
         harden({
           rootfs: parsedRootfs,
-          mounts: [
-            {
-              cap: workspaceCap,
-              innerPath: workspacePath,
-              mode: 'rw',
-            },
-          ],
+          mounts,
           network,
           env: credentialEnv,
           cwd: workspacePath,
@@ -301,6 +317,7 @@ export const make = (powers, context, contextWrapper = {}) => {
     backend,
     rootfsLabel: rootfsLabel(parsedRootfs),
     model,
+    mcpConfigPath,
     // The OCI root is intentionally read-only. Claude Code and its Bash tool
     // still need per-session config/state, so keep both HOME and the explicit
     // Claude config directory on the slice's writable tmpfs.

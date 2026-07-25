@@ -20,7 +20,7 @@ const nodeFsModuleSpecifier = new URL(
 const ClaudeSessionProvisionerInterface = M.interface(
   'ClaudeSessionProvisioner',
   {
-    provision: M.callWhen(M.string()).returns(M.string()),
+    provision: M.callWhen(M.string()).optional(M.record()).returns(M.string()),
     remove: M.callWhen(M.string()).returns(M.undefined()),
     help: M.call().returns(M.string()),
   },
@@ -95,7 +95,15 @@ export const makeClaudeSessionProvisioner = (
     });
   };
 
-  const provisionOne = async sessionId => {
+  /**
+   * @param {string} sessionId
+   * @param {{
+   *   mcp?: { socketDir: string, innerDir?: string, configPath: string },
+   *   workspaceDir?: string,
+   *   model?: string,
+   * }} [options]
+   */
+  const provisionOne = async (sessionId, options = {}) => {
     const { clientName, clientPath, filesystemName, workspaceDir } =
       namesFor(sessionId);
     if (await E(hostAgent).has(...clientPath)) return clientName;
@@ -104,7 +112,13 @@ export const makeClaudeSessionProvisioner = (
     if (await E(hostAgent).has(filesystemName)) {
       await E(hostAgent).remove(filesystemName);
     }
-    await makeFilesystem(filesystemName, workspaceDir);
+    // An override roots the session's workspace filesystem at an existing host
+    // directory (e.g. a new-project git worktree) instead of the private
+    // per-session scratch dir, so the CLI and the guest's workspace cap share
+    // files. remove() still only deletes the private default path, never the
+    // shared worktree (owned by the git/scratch mount's daemon GC).
+    const filesystemDir = options.workspaceDir || workspaceDir;
+    await makeFilesystem(filesystemName, filesystemDir);
     await provisionSession(
       hostAgent,
       {
@@ -114,6 +128,10 @@ export const makeClaudeSessionProvisioner = (
         rootfs,
         network,
         sandboxNamespace,
+        // Forward the Endo tool bridge socket mount when the caller supplied one.
+        ...(options.mcp ? { mcp: options.mcp } : {}),
+        // Pin the CLI to the session's selected Anthropic model.
+        ...(options.model ? { model: options.model } : {}),
       },
       {
         resultName: clientPath,
@@ -132,10 +150,10 @@ export const makeClaudeSessionProvisioner = (
     'ClaudeSessionProvisioner',
     ClaudeSessionProvisionerInterface,
     {
-      async provision(sessionId) {
+      async provision(sessionId, options = {}) {
         let result = inFlight.get(sessionId);
         if (!result) {
-          result = provisionOne(sessionId).finally(() => {
+          result = provisionOne(sessionId, options).finally(() => {
             inFlight.delete(sessionId);
           });
           inFlight.set(sessionId, result);

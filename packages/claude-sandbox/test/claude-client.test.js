@@ -179,6 +179,27 @@ test('send() spawns claude -p with stream-json and yields parsed events', async 
   t.false(argv.includes('--continue'));
 });
 
+test('an mcpConfigPath adds --mcp-config and --strict-mcp-config', async t => {
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      mcpConfigPath: '/endo-mcp/mcp.json',
+    }),
+  );
+  await drain(await client.send('do a thing'));
+  const { argv } = fake.spawned[0];
+  t.true(argv.includes('--mcp-config'));
+  t.is(argv[argv.indexOf('--mcp-config') + 1], '/endo-mcp/mcp.json');
+  t.true(argv.includes('--strict-mcp-config'));
+});
+
+test('without an mcpConfigPath no MCP flags are passed', async t => {
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+  await drain(await client.send('do a thing'));
+  t.false(fake.spawned[0].argv.includes('--mcp-config'));
+});
+
 test('send() adds --continue after the first turn and forwards --model', async t => {
   const fake = makeFakeSlice([[], []]);
   const client = makeClaudeClient(

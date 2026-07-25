@@ -55,6 +55,8 @@ const makeMockHost = ({
   // Override the Filesystem cap the powers hands back; `null` simulates a
   // session whose filesystem could not be resolved.
   filesystem,
+  // The Endo tool bridge Mount cap; `null` means the session has no bridge.
+  mcpMountCap = null,
 } = {}) => {
   const mountCalls = [];
   const provideMountCalls = [];
@@ -108,11 +110,17 @@ const makeMockHost = ({
     async removeMount() {
       removeMountCount += 1;
     },
+    // The Endo tool bridge Mount cap bundled by reference (null unless the
+    // session was provisioned with one).
+    async mcpMount() {
+      return mcpMountCap;
+    },
   };
 
   return {
     powers,
     fsCap,
+    mcpMountCap,
     mountCalls,
     provideMountCalls,
     sliceFactoryCalls,
@@ -176,6 +184,38 @@ test('first send() mounts the workspace, registers a Mount cap, and mints the sl
     CLAUDE_CONFIG_DIR: '/tmp/claude-home/.claude',
     IS_SANDBOX: '1',
   });
+});
+
+test('an MCP bridge mounts the socket dir read-only and passes --mcp-config', async t => {
+  const mcpMountCap = { kind: 'mcp-mount' };
+  const host = makeMockHost({ mcpMountCap });
+  const client = make(host.powers, undefined, {
+    env: baseEnv({
+      MCP_CONFIG_PATH: '/endo-mcp/mcp.json',
+      MCP_INNER_DIR: '/endo-mcp',
+    }),
+  });
+  await drain(await client.send('hello'));
+
+  const { mounts } = host.sliceFactoryCalls[0];
+  // Workspace mount first, then the read-only MCP bridge mount.
+  t.is(mounts.length, 2);
+  t.is(mounts[1].cap, mcpMountCap);
+  t.is(mounts[1].innerPath, '/endo-mcp');
+  t.is(mounts[1].mode, 'ro');
+
+  const { argv } = host.spawnCalls[0];
+  t.true(argv.includes('--mcp-config'));
+  t.is(argv[argv.indexOf('--mcp-config') + 1], '/endo-mcp/mcp.json');
+  t.true(argv.includes('--strict-mcp-config'));
+});
+
+test('without an MCP config the client mounts only the workspace', async t => {
+  const host = makeMockHost({ mcpMountCap: { kind: 'mcp-mount' } });
+  const client = make(host.powers, undefined, { env: baseEnv() });
+  await drain(await client.send('hello'));
+  t.is(host.sliceFactoryCalls[0].mounts.length, 1);
+  t.false(host.spawnCalls[0].argv.includes('--mcp-config'));
 });
 
 test('provisioning is memoized across sends', async t => {

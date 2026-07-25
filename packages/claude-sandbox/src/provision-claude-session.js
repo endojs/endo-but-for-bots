@@ -31,12 +31,15 @@ let sessionCounter = 0;
  * @param {string} mountPoint
  * @param {string} mountName
  * @param {boolean} hasCredentials
+ * @param {boolean} [hasMcpMount] - whether an `mcpMount` cap is bundled by
+ *   reference into the powers (the Endo tool bridge socket directory).
  * @returns {string}
  */
 export const buildSessionPowersSource = (
   mountPoint,
   mountName,
   hasCredentials,
+  hasMcpMount = false,
 ) => `makeExo(
   'ClaudeSessionPowers',
   M.interface('ClaudeSessionPowers', {
@@ -44,6 +47,7 @@ export const buildSessionPowersSource = (
     fsMounter: M.call().returns(M.any()),
     filesystem: M.call().returns(M.any()),
     credentials: M.call().returns(M.any()),
+    mcpMount: M.call().returns(M.any()),
     provideMount: M.call(M.string(), M.string()).returns(M.promise()),
     removeMount: M.call().returns(M.promise()),
     help: M.call().returns(M.string()),
@@ -53,6 +57,7 @@ export const buildSessionPowersSource = (
     fsMounter: () => fsMounter,
     filesystem: () => filesystem,
     credentials: () => ${hasCredentials ? 'credentials' : 'null'},
+    mcpMount: () => ${hasMcpMount ? 'mcpMount' : 'null'},
     provideMount: (path, name) => {
       if (path !== ${JSON.stringify(mountPoint)}) {
         throw Error('claude-sandbox session powers: provideMount restricted to this session workspace mountpoint');
@@ -64,7 +69,7 @@ export const buildSessionPowersSource = (
     },
     removeMount: () => E(agent).remove(${JSON.stringify(mountName)}),
     help: () =>
-      'Per-session claude-sandbox powers: sandboxFactory/fsMounter/filesystem/credentials accessors + provideMount/removeMount bounded to this session workspace. No lookup.',
+      'Per-session claude-sandbox powers: sandboxFactory/fsMounter/filesystem/credentials/mcpMount accessors + provideMount/removeMount bounded to this session workspace. No lookup.',
   },
 )`;
 
@@ -126,6 +131,10 @@ export const resolveSandboxConfig = (formulaEnv = {}) => ({
  * @param {string} [spec.initialPrompt]
  * @param {string} [spec.sandboxNamespace]
  * @param {Record<string, string>} [spec.formulaEnv]
+ * @param {{ socketDir: string, innerDir?: string, configPath: string }} [spec.mcp]
+ *   - Endo tool bridge: bind `socketDir` read-only at `innerDir` (default
+ *   `/endo-mcp`) inside the slice and point Claude at `configPath` (the
+ *   slice-internal mcp.json). Provided by @endo/floot's per-session MCP server.
  * @param {{ resultName?: string|string[], removeNames?: (string|string[])[] }} [opts]
  */
 export const provisionClaudeSession = async (
@@ -143,6 +152,7 @@ export const provisionClaudeSession = async (
     initialPrompt = '',
     sandboxNamespace: specNamespace,
     formulaEnv = {},
+    mcp = null,
   } = spec;
 
   const {
@@ -193,12 +203,35 @@ export const provisionClaudeSession = async (
       codeNames.push('credentials');
       petNames.push(credentialsName);
     }
+
+    // Optional Endo tool bridge: register the bridge's socket directory as a
+    // read-only Mount cap and bundle it (by reference) into the session powers.
+    // Its formula persists via the powers reference (like `powersName`), so we
+    // drop the temporary host pet name after the client is minted.
+    let mcpConfigPath = '';
+    let mcpInnerDir = '';
+    const hasMcpMount = Boolean(mcp && mcp.socketDir && mcp.configPath);
+    if (hasMcpMount) {
+      const mcpMountName = `claude-${sessionId}-mcp`;
+      mcpInnerDir = /** @type {any} */ (mcp).innerDir || '/endo-mcp';
+      mcpConfigPath = /** @type {any} */ (mcp).configPath;
+      await E(hostAgent).provideMount(
+        /** @type {any} */ (mcp).socketDir,
+        mcpMountName,
+        harden({ readOnly: true }),
+      );
+      toCleanup = [mcpMountName, ...toCleanup];
+      codeNames.push('mcpMount');
+      petNames.push(mcpMountName);
+    }
+
     await E(hostAgent).evaluate(
       '@main',
       buildSessionPowersSource(
         hostMountPoint,
         workspacePetName,
         Boolean(credentialsName),
+        hasMcpMount,
       ),
       harden(codeNames),
       harden(petNames),
@@ -220,6 +253,9 @@ export const provisionClaudeSession = async (
         DEFAULT_IMAGE: defaultImage ?? '',
         MODEL: model,
         INITIAL_PROMPT: initialPrompt,
+        ...(hasMcpMount
+          ? { MCP_CONFIG_PATH: mcpConfigPath, MCP_INNER_DIR: mcpInnerDir }
+          : {}),
       }),
     };
     if (resultName !== undefined) {
