@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-06 |
-| **Updated** | 2026-07-24 |
+| **Updated** | 2026-07-25 |
 | **Author** | endolinbot (prompted by kumavis review on PR #486) |
 | **Status** | **Complete** |
 | **Source** | Review 4633245769 on endojs/endo-but-for-bots PR #486, inline threads on `packages/claude-sandbox/src/buffered-channel.js` |
@@ -93,6 +93,23 @@ const { push, reader, close, isClosed, setOnClose } = makeBufferedReader({
   readPattern,    // optional M pattern for pushed events (per-wire vocabulary)
 });
 ```
+
+`makeBufferedReader` is the producer-side constructor for this particular
+channel, not an adapter around an existing iterator. It creates both the
+imperative producer controls (`push`, `close`, and `setOnClose`) and the
+passable `reader` endpoint. `readerFromIterator` instead adapts a local,
+pull-driven async iterator to the ordinary backpressured responder protocol;
+`iterateReader` adapts that protocol's remote reader back to a local consumer.
+Neither existing adapter has an imperative producer input or an independently
+live consumer-close signal.
+
+The name is therefore descriptive rather than aesthetic: the produced reader
+is buffered by a producer that may run ahead, and the returned kit owns the
+associated lifetime controls. Its buffer is intentionally unbounded for the
+life of an unfinished channel, subject to process memory. `push` never waits
+for consumer credit. A bound would need an explicit drop or coalesce policy,
+since using the existing backpressured pipe would block stdout ingestion and
+would fail to promptly cancel an idle producer.
 
 `reader` is an exo carrying the exo-stream responder protocol under one
 interface guard (`BufferedReaderInterface`, defined once in exo-stream's
@@ -288,8 +305,10 @@ re-pointed), and claude-sandbox's copy deleted (`runTurn` re-pointed,
    `exo-` prefix rule). The purely local push-iterator half could live in
    `@endo/stream`, but splitting one small module across two packages buys
    nothing today (open question 2).
-3. **Keep the `makeBufferedReader` name and kit shape.** Minimizes churn at
-   five producer call sites and keeps the diff reviewable. The `name`
+3. **Keep the `makeBufferedReader` name and kit shape.** It names the
+   push-fed, unbounded channel and its lifetime controls, rather than serving
+   as an aesthetic wrapper for the iterator adapters. It also minimizes churn
+   at five producer call sites and keeps the diff reviewable. The `name`
    parameter is dropped: the interface guard is shared, and per-wire typing
    moves to the optional `readPattern`.
 4. **Dual surface during migration.** Landing the protocol flip and the
