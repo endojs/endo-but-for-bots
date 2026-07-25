@@ -7489,6 +7489,10 @@ test('readLog follow discovers new logs and settles on disconnect', async t => {
     () => 'settled',
     () => 'settled',
   );
+  // Attach the cancellation handler before tearing down CapTP. The client
+  // connection has derived promises that reject during teardown, and this
+  // keeps the expected disconnect from being reported as unhandled.
+  cancelled.catch(() => {});
   cancel(Error('readLog follow new-log test done'));
   t.is(await pending, 'settled');
 });
