@@ -54,12 +54,7 @@ export type GitIndexStatus =
   | 'conflicted';
 
 export type GitWorktreeStatus =
-  | 'clean'
-  | 'modified'
-  | 'deleted'
-  | 'untracked'
-  | 'ignored'
-  | 'conflicted';
+  'clean' | 'modified' | 'deleted' | 'untracked' | 'ignored' | 'conflicted';
 
 export type GitStatusEntry = {
   entry: PathEntry;

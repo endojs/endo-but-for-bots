@@ -320,7 +320,7 @@ const makeReflector = options => {
     });
 
     // eslint-disable-next-line no-plusplus
-    for (let attempt = 0, limit = 3; !gate.done() && attempt++ < limit; ) {
+    for (let attempt = 0, limit = 3; !gate.done() && attempt++ < limit;) {
       // Clear any in-flight "doing" state left over from a retry round.
       gate.reset();
       try {

@@ -193,7 +193,7 @@ export const buildGenieTools = ({
           const first = args.filter(arg => !arg.startsWith('-'))[0];
           return !(
             // ban network-touching commands ; TODO moar
-            (first && ['push', 'pull', 'fetch'].includes(first))
+            first && ['push', 'pull', 'fetch'].includes(first)
           );
         },
       ],
