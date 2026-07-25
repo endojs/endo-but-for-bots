@@ -27,10 +27,22 @@ export const makeUnboundedBuffer = () => {
   /** @type {AsyncQueue<IteratorResult<T, TReturn>>} */
   const queue = makeQueue();
 
+  // The buffer is fire-and-forget: the sink may pull an iteration long after
+  // the spring enqueued it, so a rejected iteration promise (a throw, or a next
+  // whose value promise rejects) must not float unhandled in the interim. An
+  // unhandled rejection raises a process-level unhandledRejection, fatal under
+  // Node's default. Attaching an inert catch marks the queued promise handled;
+  // makeQueue.get chains its own then off the same promise, so the sink still
+  // observes the rejection when it eventually reads.
+  const enqueue = iteration => {
+    iteration.catch(() => {});
+    queue.put(iteration);
+  };
+
   const spring = harden({
     /** @param {T | Promise<T>} value */
     next(value) {
-      queue.put(
+      enqueue(
         Promise.resolve(value).then(resolvedValue =>
           freeze({ value: resolvedValue, done: false }),
         ),
@@ -38,7 +50,7 @@ export const makeUnboundedBuffer = () => {
     },
     /** @param {TReturn | Promise<TReturn>} value */
     return(value) {
-      queue.put(
+      enqueue(
         Promise.resolve(value).then(resolvedValue =>
           freeze({ value: resolvedValue, done: true }),
         ),
@@ -46,7 +58,7 @@ export const makeUnboundedBuffer = () => {
     },
     /** @param {Error} error */
     throw(error) {
-      queue.put(harden(Promise.reject(error)));
+      enqueue(harden(Promise.reject(error)));
     },
   });
 

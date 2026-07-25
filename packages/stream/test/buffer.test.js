@@ -42,6 +42,36 @@ test('buffer transports return and throw terminal operations', async t => {
   await t.throwsAsync(failingSink.next(), { message: 'failed' });
 });
 
+test('buffer does not leak an unhandled rejection when a throw outruns the sink', async t => {
+  const { spring, sink } = makeBuffer();
+
+  /** @type {Array<string | undefined>} */
+  const unhandled = [];
+  /** @param {unknown} reason */
+  const onUnhandled = reason => {
+    unhandled.push(reason instanceof Error ? reason.message : String(reason));
+  };
+  process.on('unhandledRejection', onUnhandled);
+
+  // The producer errors before the consumer has pulled — the buffer's stated
+  // fire-and-forget premise. The rejected iteration must not surface as a
+  // process-level unhandledRejection in the window before the sink reads.
+  spring.throw(Error('unconsumed'));
+
+  // Leave a real timer tick unconsumed so an unhandled rejection would be
+  // detected and reported before we read.
+  await new Promise(resolve => setTimeout(resolve, 10));
+  process.off('unhandledRejection', onUnhandled);
+
+  t.false(
+    unhandled.includes('unconsumed'),
+    'an unconsumed throw must not surface as an unhandled rejection',
+  );
+
+  // The sink still observes the rejection when it eventually reads.
+  await t.throwsAsync(sink.next(), { message: 'unconsumed' });
+});
+
 test('buffer sink supports async iteration', async t => {
   const { spring, sink } = makeUnboundedBuffer();
   spring.next('one');
