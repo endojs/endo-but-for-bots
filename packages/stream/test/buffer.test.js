@@ -70,6 +70,24 @@ test('buffer does not leak an unhandled rejection when a throw outruns the sink'
 
   // The sink still observes the rejection when it eventually reads.
   await t.throwsAsync(sink.next(), { message: 'unconsumed' });
+
+  // A next() whose value promise rejects takes the same enqueue path and must
+  // likewise not leak before the sink reads.
+  const rejecting = makeBuffer();
+  const seen = /** @type {Array<string>} */ ([]);
+  /** @param {unknown} reason */
+  const record = reason => {
+    seen.push(reason instanceof Error ? reason.message : String(reason));
+  };
+  process.on('unhandledRejection', record);
+  rejecting.spring.next(Promise.reject(Error('rejected-value')));
+  await new Promise(resolve => setTimeout(resolve, 10));
+  process.off('unhandledRejection', record);
+  t.false(
+    seen.includes('rejected-value'),
+    'a rejecting next value must not surface as an unhandled rejection',
+  );
+  await t.throwsAsync(rejecting.sink.next(), { message: 'rejected-value' });
 });
 
 test('buffer sink supports async iteration', async t => {
