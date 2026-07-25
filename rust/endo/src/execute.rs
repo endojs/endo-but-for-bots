@@ -813,6 +813,57 @@ mod tests {
         xsnap::run_xs_archive_loaded(&archive).expect("console endowment lets the run complete");
     }
 
+    /// Both `process`-endowment tests read or set the process-wide
+    /// `NODE_ENV`; cargo runs tests on parallel threads, so they
+    /// serialize on this lock.
+    static NODE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Real npm code universally gates on `process.env.NODE_ENV`
+    /// (react's `index.js` is exactly `if (process.env.NODE_ENV ===
+    /// 'production') …`), so the run machine endows a minimal frozen
+    /// `process`: `NODE_ENV` mirrors the host's and defaults to
+    /// `production`, the shim is deep-frozen (shared across
+    /// compartments — mutability would be a side channel), and
+    /// `nextTick` schedules a real microtask. One test rather than
+    /// three because it mutates the process-wide `NODE_ENV`.
+    #[test]
+    fn process_global_is_endowed_in_the_run_machine() {
+        let _env = NODE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("NODE_ENV");
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+        let map_hash = single_module_map(
+            &cas,
+            "if (typeof process !== 'object') throw new Error('no process');\n\
+             if (process.env.NODE_ENV !== 'production') {\n\
+                 throw new Error(`default NODE_ENV: ${process.env.NODE_ENV}`);\n\
+             }\n\
+             if (!Object.isFrozen(process) || !Object.isFrozen(process.env)) {\n\
+                 throw new Error('process shim must be frozen');\n\
+             }\n\
+             const order = [];\n\
+             process.nextTick((tag) => order.push(tag), 'tick');\n\
+             await Promise.resolve().then(() => Promise.resolve());\n\
+             if (order[0] !== 'tick') throw new Error('nextTick did not run as a microtask');\n\
+             export const done = true;\n",
+        );
+        let archive = load_assembled_archive(&cas, &map_hash).unwrap();
+        xsnap::run_xs_archive_loaded(&archive).expect("process endowment default");
+
+        std::env::set_var("NODE_ENV", "staging");
+        let map_hash = single_module_map(
+            &cas,
+            "if (process.env.NODE_ENV !== 'staging') {\n\
+                 throw new Error(`host NODE_ENV not mirrored: ${process.env.NODE_ENV}`);\n\
+             }\n\
+             export const done = true;\n",
+        );
+        let archive = load_assembled_archive(&cas, &map_hash).unwrap();
+        let result = xsnap::run_xs_archive_loaded(&archive);
+        std::env::remove_var("NODE_ENV");
+        result.expect("process endowment mirrors host NODE_ENV");
+    }
+
     /// A throw in the program being run (here a ReferenceError) must
     /// come back as `Err` from the runner, not SIGSEGV the process.
     #[test]
@@ -1162,6 +1213,70 @@ mod tests {
         let archive = load_assembled_archive(&cas, &run.compartment_map_hash).unwrap();
         xsnap::run_xs_archive_loaded(&archive)
             .expect("XS execution of the CommonJS require graph");
+    }
+
+    /// A CJS package gating on `process.env.NODE_ENV` — react's
+    /// published `index.js` shape — sees the endowed `process`
+    /// through its compartment global and takes the production
+    /// branch.
+    #[test]
+    fn cjs_module_sees_process_env_in_xs() {
+        let tar = make_tarball(&[
+            (
+                "package/package.json",
+                br#"{"name":"gated","version":"1.0.0","main":"index.js"}"#,
+            ),
+            (
+                "package/index.js",
+                b"'use strict';\n\
+                  if (process.env.NODE_ENV === 'production') {\n\
+                      module.exports = require('./prod.js');\n\
+                  } else {\n\
+                      module.exports = require('./dev.js');\n\
+                  }\n",
+            ),
+            ("package/prod.js", b"module.exports = { mode: 'prod' };\n"),
+            (
+                "package/dev.js",
+                b"require('missing-dev-only-dep');\nmodule.exports = { mode: 'dev' };\n",
+            ),
+        ]);
+        let http = MockHttp::new()
+            .respond(
+                "https://registry.npmjs.org/gated",
+                registry_meta("gated", &["1.0.0"]),
+            )
+            .respond(&tarball_url("gated", "1.0.0"), tar);
+
+        let _env = NODE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("NODE_ENV");
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+        let registry = RegistryTable::open_in_memory().unwrap();
+        let app = tempfile::tempdir().unwrap();
+        fs::write(
+            app.path().join("package.json"),
+            r#"{"name":"app","type":"module","dependencies":{"gated":"^1.0.0"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            app.path().join("main.js"),
+            "import gated from 'gated';\n\
+             if (gated.mode !== 'prod') throw new Error(`bad mode: ${gated.mode}`);\n",
+        )
+        .unwrap();
+        let run = assemble_entry(
+            &http,
+            &cas,
+            &registry,
+            DEFAULT_REGISTRY,
+            &app.path().join("main.js"),
+        )
+        .unwrap();
+
+        let archive = load_assembled_archive(&cas, &run.compartment_map_hash).unwrap();
+        xsnap::run_xs_archive_loaded(&archive)
+            .expect("CJS module sees process.env and takes the production branch");
     }
 
     /// ESM named imports of a CJS package link through the facade's

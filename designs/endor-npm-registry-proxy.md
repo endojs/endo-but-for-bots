@@ -451,6 +451,23 @@ The tree's children are the package's files, stored as blobs.
       does not execute arbitrary install scripts).
 - [ ] Binary packages (`.node` native modules) — not
       supported in XS.
+- [x] The `process` global: npm ecosystem code universally gates on
+      `process.env.NODE_ENV` (react's published `index.js` is exactly
+      `if (process.env.NODE_ENV === 'production') …`; graphql,
+      react-redux, and the react family all carry the same gate), and
+      without it real packages died at `get process: undefined
+      variable` before their first export. The run machine now endows
+      a minimal frozen `process` (browser-bundler-shim shape) in the
+      archive endowments: `env.NODE_ENV` mirrors the host's and
+      defaults to `production` so packages take their production
+      paths; `nextTick` schedules a real microtask; `argv`, `title`,
+      `platform: 'linux'`, `version`/`versions`, `cwd()`, and no-op
+      event-emitter methods round out the probe surface. The shim —
+      including `env` — is deep-frozen (one object shared across
+      compartments; mutability would be an inter-compartment side
+      channel), and everything genuinely process-like (`exit`,
+      `chdir`, real `argv`, streams) is deliberately absent, failing
+      with a clean error in the confined runtime.
 - [x] Top-level `await` in the entry module (or any module in
       the graph): the standalone runners now import the entry
       through the asynchronous `Compartment.prototype.import`
