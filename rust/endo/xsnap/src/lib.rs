@@ -285,7 +285,7 @@ impl Machine {
         unsafe {
             loop {
                 fxRunPromiseJobs(self.raw);
-                if ffi::fxHasPendingJobs() == 0 {
+                if ffi::fxHasPendingJobs(self.raw) == 0 {
                     break;
                 }
             }
@@ -1691,7 +1691,7 @@ pub fn run_xs_program(
                             break;
                         }
                     }
-                    if unsafe { ffi::fxHasPendingJobs() } == 0 {
+                    if unsafe { ffi::fxHasPendingJobs(machine.raw) } == 0 {
                         break;
                     }
                 }
@@ -1732,7 +1732,7 @@ pub fn run_xs_program(
                 // No envelopes and no ready promise jobs. Check if
                 // any new jobs were queued during envelope handling
                 // (e.g., by sendRawFrame callbacks).
-                if unsafe { ffi::fxHasPendingJobs() } != 0 {
+                if unsafe { ffi::fxHasPendingJobs(machine.raw) } != 0 {
                     continue;
                 }
 
