@@ -74,6 +74,14 @@ export {};
  *   thresholdPct?: number,
  *   transcript?: string,
  *   replayingText?: string,
+ *   ttsSettings?: {
+ *     voice: string, speed: number, noiseScale: number, noiseW: number,
+ *     sentenceSilence: number,
+ *   },
+ *   ttsConfiguration?: {
+ *     voices: Array<{ id: string, name: string }>,
+ *     ranges: Record<string, { min: number, max: number, step: number }>,
+ *   },
  * }} FlootVoiceState
  */
 
@@ -109,6 +117,8 @@ export {};
  * @property {(id: string) => void} deleteSession
  * @property {() => void} toggleMic
  * @property {() => void} toggleTts
+ * @property {(name: 'voice' | 'speed' | 'noiseScale' | 'noiseW' |
+ *   'sentenceSilence', value: string | number) => void} setTtsSetting
  * @property {(text: string) => void} replayMessage
  * @property {() => void} toggleSettings
  * @property {(text: string) => void} setInput

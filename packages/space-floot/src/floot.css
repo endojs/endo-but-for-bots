@@ -765,6 +765,38 @@
   letter-spacing: 0.04em;
   color: var(--fl-text-muted);
 }
+.floot-settings-select,
+.floot-settings-toggle {
+  min-height: 2rem;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--fl-border);
+  border-radius: 6px;
+  background: var(--fl-surface2);
+  color: var(--fl-text);
+}
+.floot-settings-toggle {
+  text-align: left;
+  cursor: pointer;
+}
+.floot-settings-toggle.on {
+  border-color: var(--fl-accent);
+  color: var(--fl-accent);
+}
+.floot-tts-range {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 3.5rem;
+  align-items: center;
+  gap: 0.65rem;
+}
+.floot-tts-range input {
+  width: 100%;
+  accent-color: var(--fl-accent);
+}
+.floot-tts-range output {
+  color: var(--fl-text-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
 
 @media (max-width: 640px) {
   .floot-sidebar {

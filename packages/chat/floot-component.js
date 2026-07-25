@@ -457,6 +457,32 @@ export const flootComponent = (
   // Spoken replies on by default when a TTS object is wired; toggled by the
   // speaker button. Replay buttons work regardless of this live-speech setting.
   let ttsEnabled = hasTts;
+  /**
+   * @typedef {{
+   *   voice: string, speed: number, noiseScale: number, noiseW: number,
+   *   sentenceSilence: number,
+   * }} TtsSettings
+   */
+  /**
+   * @typedef {'speed' | 'noiseScale' | 'noiseW' | 'sentenceSilence'}
+   *   NumericTtsSetting
+   */
+  /** @type {TtsSettings} */
+  let ttsSettings = {
+    voice: '',
+    speed: 1,
+    noiseScale: 0.667,
+    noiseW: 0.8,
+    sentenceSilence: 0.2,
+  };
+  /**
+   * @type {{
+   *   voices: Array<{ id: string, name: string }>,
+   *   ranges: Record<string, { min: number, max: number, step: number }>,
+   * }}
+   */
+  let ttsConfiguration = { voices: [], ranges: {} };
+  const ttsStorageKey = `floot-tts:${(ttsPath || []).join('/')}`;
 
   // ── View-model state (read by getState, mutated by the host engine) ─────────
   /**
@@ -515,6 +541,21 @@ export const flootComponent = (
     status = s;
     notify();
   };
+  const saveTtsSettings = () => {
+    try {
+      window.localStorage.setItem(ttsStorageKey, JSON.stringify(ttsSettings));
+    } catch {
+      // Storage may be unavailable in a private or embedded browser context.
+    }
+  };
+  const currentTtsOptions = () =>
+    harden({
+      ...(ttsSettings.voice ? { voice: ttsSettings.voice } : {}),
+      speed: ttsSettings.speed,
+      noiseScale: ttsSettings.noiseScale,
+      noiseW: ttsSettings.noiseW,
+      sentenceSilence: ttsSettings.sentenceSilence,
+    });
 
   const getActiveSession = () =>
     sessions.find(s => s.id === activeSessionId) || null;
@@ -683,6 +724,11 @@ export const flootComponent = (
         thresholdPct: PCT(meterThreshold),
         transcript: voiceTranscript,
         replayingText,
+        ttsSettings: { ...ttsSettings },
+        ttsConfiguration: {
+          voices: ttsConfiguration.voices.map(voice => ({ ...voice })),
+          ranges: { ...ttsConfiguration.ranges },
+        },
       },
       objects: {
         controller: profilePath.join('/'),
@@ -710,11 +756,6 @@ export const flootComponent = (
   /** @type {Promise<void> | null} */
   let turnPromise = null;
 
-  // The text feed driving live spoken replies for the current turn (null when
-  // TTS is off or idle). Aborting it ends synthesis; stopTts() halts playback.
-  /** @type {ReturnType<typeof makeTextFeed> | null} */
-  let turnTtsFeed = null;
-
   // Cancel the in-flight turn (Stop button or voice barge-in). Returns a promise
   // that resolves once the turn has fully unwound.
   const cancelTurn = () => {
@@ -723,7 +764,6 @@ export const flootComponent = (
     // Stop button: explicitly tear the turn down (unlike leaving the space,
     // which lets it keep running in the background).
     if (activeTurn) activeTurn.stop();
-    if (turnTtsFeed) turnTtsFeed.abort();
     stopTts(); // also silences any spoken reply in progress
     return turnPromise || Promise.resolve();
   };
@@ -734,10 +774,6 @@ export const flootComponent = (
   // is queued after it (submitChain waits on the running turn).
   const softBargeIn = () => {
     if (!busy) return;
-    if (turnTtsFeed) {
-      turnTtsFeed.abort();
-      turnTtsFeed = null;
-    }
     stopTts();
     setStatus('continuing in background…');
   };
@@ -749,17 +785,13 @@ export const flootComponent = (
   /**
    * @param {FlootTurn} turn
    * @param {FlootSession} session
-   * @param {boolean} [speakLive] feed reply deltas to TTS
    * @returns {Promise<void>}
    */
-  const attachTurnView = (turn, session, speakLive = false) => {
+  const attachTurnView = (turn, session) => {
     busy = true;
     turnCancelled = false;
     activeTurn = turn;
     sessionStatus.delete(session.id);
-    // On reattach the bubble already shows what streamed before; only speak text
-    // that arrives from here on.
-    let lastSpoken = turn.streamingText.length;
     setStatus(`${turn.phase || 'thinking'}…`);
     if (turn.usage) usage = turn.usage;
     notify();
@@ -784,17 +816,8 @@ export const flootComponent = (
         // busy guard normally blocks switching mid-turn).
         if (activeSessionId !== turn.sessionId) return;
         if (ev.type === 'delta' || ev.type === 'final') {
-          if (
-            speakLive &&
-            turnTtsFeed &&
-            turn.streamingText.length > lastSpoken
-          ) {
-            turnTtsFeed.delta(turn.streamingText.slice(lastSpoken));
-            lastSpoken = turn.streamingText.length;
-          }
           notify();
         } else if (ev.type === 'tool_call') {
-          lastSpoken = 0;
           notify();
         } else if (ev.type === 'tool_result') {
           notify();
@@ -808,11 +831,6 @@ export const flootComponent = (
           notify();
         } else if (ev.type === 'done') {
           const stopped = turnCancelled;
-          if (turnTtsFeed) {
-            if (turn.error) turnTtsFeed.abort();
-            else turnTtsFeed.end();
-            turnTtsFeed = null;
-          }
           if (turn.error) {
             sessionStatus.set(turn.sessionId, 'error');
             status = `error: ${turn.error}`;
@@ -854,18 +872,27 @@ export const flootComponent = (
     }
     notify();
 
-    // Speak the reply as it streams: feed deltas to the TTS object and play the
-    // returned audio stream. Sentence-by-sentence, so audio starts mid-reply.
+    // The session performs the text fan-out inside the daemon. The browser gets
+    // one reader for display and one audio-only reader for autoplay; reply text
+    // never makes a browser round trip to reach TTS.
     const speakLive = ttsEnabled && Boolean(ttsServer);
+    let reader;
     if (speakLive) {
-      turnTtsFeed = makeTextFeed();
-      playAudioStream(E(ttsServer).synthesize(turnTtsFeed.reader));
+      prepareTts();
+      const streams = await E(facetFor(session)).converseWithSpeech(
+        text,
+        ttsServer,
+        currentTtsOptions(),
+      );
+      reader = streams.replyReader;
+      playAudioStream(streams.audioReader);
+    } else {
+      reader = E(facetFor(session)).converse(text);
     }
     // Start the turn in the background — it owns the reply reader and keeps
     // running if this space is left — then render it through the shared view.
-    const reader = E(facetFor(session)).converse(text);
     const turn = startFlootTurn(turnKey(session.id), session.id, reader);
-    await attachTurnView(turn, session, speakLive);
+    await attachTurnView(turn, session);
   };
 
   // Serialize submissions so an auto-sent voice utterance can't overlap a typed
@@ -1321,6 +1348,17 @@ export const flootComponent = (
   let ttsNextStart = 0;
   let ttsSpeaking = false;
 
+  // Create/resume the audio context synchronously from the user's Send gesture.
+  // Browsers otherwise reject autoplay if the first resume happens only after a
+  // remote capability round trip.
+  const prepareTts = () => {
+    if (!ttsCtx) ttsCtx = new AudioContext();
+    if (ttsCtx.state === 'suspended') {
+      return ttsCtx.resume().catch(() => {});
+    }
+    return Promise.resolve();
+  };
+
   const stopTts = () => {
     ttsPlaybackId += 1;
     for (const src of ttsSources) {
@@ -1388,14 +1426,8 @@ export const flootComponent = (
   // when the stream ends or playback is superseded by a newer stopTts().
   const playAudioStream = async (/** @type {any} */ audioReader) => {
     if (!ttsServer) return;
-    if (!ttsCtx) ttsCtx = new AudioContext();
-    if (ttsCtx.state === 'suspended') {
-      try {
-        await ttsCtx.resume();
-      } catch {
-        // best effort
-      }
-    }
+    await prepareTts();
+    if (!ttsCtx) return;
     // Begin a fresh session: bump the token and adopt this reader.
     stopTts();
     const myId = ttsPlaybackId;
@@ -1430,7 +1462,9 @@ export const flootComponent = (
     feed.end();
     replayingText = text;
     notify();
-    playAudioStream(E(ttsServer).synthesize(feed.reader)).finally(() => {
+    playAudioStream(
+      E(ttsServer).synthesize(feed.reader, currentTtsOptions()),
+    ).finally(() => {
       if (replayingText === text) {
         replayingText = '';
         notify();
@@ -1442,12 +1476,23 @@ export const flootComponent = (
   const toggleTts = () => {
     ttsEnabled = !ttsEnabled;
     if (!ttsEnabled) {
-      if (turnTtsFeed) {
-        turnTtsFeed.abort();
-        turnTtsFeed = null;
-      }
       stopTts();
     }
+    notify();
+  };
+
+  const setTtsSetting = (
+    /** @type {keyof TtsSettings} */ name,
+    /** @type {string | number} */ raw,
+  ) => {
+    if (name === 'voice') {
+      ttsSettings = { ...ttsSettings, voice: `${raw}` };
+    } else {
+      const value = Number(raw);
+      if (!Number.isFinite(value)) return;
+      ttsSettings = { ...ttsSettings, [name]: value };
+    }
+    saveTtsSettings();
     notify();
   };
 
@@ -1485,6 +1530,12 @@ export const flootComponent = (
     },
     toggleTts() {
       toggleTts();
+    },
+    setTtsSetting(
+      /** @type {keyof TtsSettings} */ name,
+      /** @type {string | number} */ value,
+    ) {
+      setTtsSetting(name, value);
     },
     replayMessage(/** @type {string} */ text) {
       replayMessage(text);
@@ -1536,6 +1587,65 @@ export const flootComponent = (
     characterData: true,
   });
 
+  if (ttsServer) {
+    E(ttsServer)
+      .getConfiguration()
+      .then(config => {
+        const voices = Array.isArray(config?.voices) ? config.voices : [];
+        const defaults = config?.defaults || {};
+        const ranges = config?.ranges || {};
+        /** @type {Record<string, unknown>} */
+        let saved = {};
+        try {
+          const raw = window.localStorage.getItem(ttsStorageKey);
+          if (raw) saved = JSON.parse(raw);
+        } catch {
+          // Ignore unavailable storage and malformed old settings.
+        }
+        const voiceIds = new Set(voices.map(voice => voice.id));
+        const voice = `${saved.voice || defaults.voice || ''}`;
+        /** @type {TtsSettings} */
+        const next = {
+          voice: voiceIds.has(voice)
+            ? voice
+            : `${defaults.voice || voices[0]?.id || ''}`,
+          speed: Number(saved.speed ?? defaults.speed ?? ttsSettings.speed),
+          noiseScale: Number(
+            saved.noiseScale ?? defaults.noiseScale ?? ttsSettings.noiseScale,
+          ),
+          noiseW: Number(saved.noiseW ?? defaults.noiseW ?? ttsSettings.noiseW),
+          sentenceSilence: Number(
+            saved.sentenceSilence ??
+              defaults.sentenceSilence ??
+              ttsSettings.sentenceSilence,
+          ),
+        };
+        /** @type {NumericTtsSetting[]} */
+        const numericSettings = [
+          'speed',
+          'noiseScale',
+          'noiseW',
+          'sentenceSilence',
+        ];
+        for (const name of numericSettings) {
+          const range = ranges[name];
+          const value = next[name];
+          if (
+            !Number.isFinite(value) ||
+            (range && (value < Number(range.min) || value > Number(range.max)))
+          ) {
+            next[name] = Number(defaults[name]);
+          }
+        }
+        ttsSettings = next;
+        ttsConfiguration = { voices, ranges };
+        notify();
+      })
+      .catch(() => {
+        // Older/swapped TTS capabilities can still synthesize with defaults.
+      });
+  }
+
   // ── Initial load ─────────────────────────────────────────────────────────────
   // Load the session list from the factory (most-recent first), seeding a
   // default session if the factory has none, then repaint the active history.
@@ -1583,10 +1693,6 @@ export const flootComponent = (
     // (don't return the reader, which would abort the agent). The turn finishes
     // and persists; a later remount reattaches or falls back to history.
     if (detachActiveTurnView) detachActiveTurnView();
-    if (turnTtsFeed) {
-      turnTtsFeed.abort();
-      turnTtsFeed = null;
-    }
     stopMic();
     stopTts();
     if (ttsCtx) {

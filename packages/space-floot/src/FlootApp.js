@@ -243,7 +243,7 @@ export const FlootApp = ({ controller }) => {
       { class: 'floot-main' },
       header,
       state.settingsOpen
-        ? h(SettingsPanel, { state })
+        ? h(SettingsPanel, { state, controller })
         : h(MessageList, { state, controller, debug }),
       statusBar,
       h(ComposeBar, { state, controller }),
