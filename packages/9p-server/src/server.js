@@ -105,6 +105,8 @@ const errnoOf = e => {
  *   socket: import('node:net').Socket,
  *   onClose?: () => void,
  *   cancelled?: Promise<unknown>,
+ *   uid?: number,
+ *   gid?: number,
  * }} opts
  *
  * `cancelled`: settlement (resolve or reject) is the cancellation
@@ -119,6 +121,8 @@ export const serveConnection = ({
   socket,
   onClose,
   cancelled = new Promise(() => {}),
+  uid = 1000,
+  gid = 1000,
 }) => {
   /** @type {Map<number, Fid>} */
   const fids = new Map();
@@ -640,8 +644,11 @@ export const serveConnection = ({
       const isDir = f.qid.type === 'directory';
       const mode = (isDir ? S.IFDIR : S.IFREG) | (isDir ? 0o755 : 0o644);
       w.u32(mode);
-      w.u32(1000); // uid — base FS has no concept; default for guest mount.
-      w.u32(1000); // gid
+      // The capability filesystem has no POSIX ownership. The bridge supplies
+      // the mounter worker's identity so a rootless container sees its mapped
+      // root user as the owner of a writable projection.
+      w.u32(uid);
+      w.u32(gid);
       // nlink: directories have >= 2 (`.` plus the parent's entry);
       // reporting 1 confuses `find`'s link-count traversal optimisation.
       // The base FS exposes no real link count, so synthesise 2/1.

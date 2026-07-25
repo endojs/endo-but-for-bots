@@ -301,6 +301,14 @@ export const make = (powers, context, contextWrapper = {}) => {
     backend,
     rootfsLabel: rootfsLabel(parsedRootfs),
     model,
+    // The OCI root is intentionally read-only. Claude Code and its Bash tool
+    // still need per-session config/state, so keep both HOME and the explicit
+    // Claude config directory on the slice's writable tmpfs.
+    env: harden({
+      HOME: '/tmp/claude-home',
+      XDG_CONFIG_HOME: '/tmp/claude-home/.config',
+      CLAUDE_CONFIG_DIR: '/tmp/claude-home/.claude',
+    }),
     initialPrompt,
   });
 

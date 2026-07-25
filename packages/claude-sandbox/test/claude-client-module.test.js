@@ -17,8 +17,10 @@ import { make, makeCancellationKit } from '../src/claude-client-module.js';
 
 const makeFakeSlice = () => {
   let disposed = false;
+  const spawnCalls = [];
   const slice = {
     async spawn(argv, opts) {
+      spawnCalls.push({ argv: [...argv], opts });
       return {
         argv: [...argv],
         opts,
@@ -35,7 +37,7 @@ const makeFakeSlice = () => {
       disposed = true;
     },
   };
-  return { slice, isDisposed: () => disposed };
+  return { slice, spawnCalls, isDisposed: () => disposed };
 };
 
 /**
@@ -114,6 +116,7 @@ const makeMockHost = ({
     mountCalls,
     provideMountCalls,
     sliceFactoryCalls,
+    spawnCalls: fake.spawnCalls,
     isUnmounted: () => unmounted,
     isDisposed: () => fake.isDisposed(),
     removeMountCount: () => removeMountCount,
@@ -167,6 +170,11 @@ test('first send() mounts the workspace, registers a Mount cap, and mints the sl
   t.is(opts.mounts[0].innerPath, '/workspace');
   // No credential named → no secret env.
   t.deepEqual(opts.env, {});
+  t.deepEqual(host.spawnCalls[0].opts.env, {
+    HOME: '/tmp/claude-home',
+    XDG_CONFIG_HOME: '/tmp/claude-home/.config',
+    CLAUDE_CONFIG_DIR: '/tmp/claude-home/.claude',
+  });
 });
 
 test('provisioning is memoized across sends', async t => {
