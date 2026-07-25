@@ -54,6 +54,17 @@ const PIPER_DEFAULTS = harden({
   sentenceSilence: 0.2,
 });
 
+/** @param {string} id */
+const voiceDisplayName = id => {
+  const match = /^(en_[A-Z]{2})-(.+)-(low|medium|high)$/.exec(id);
+  if (!match) return id.replace(/[_-]+/g, ' ');
+  const [, locale, speaker, quality] = match;
+  let localeName = locale.replace('_', ' ');
+  if (locale === 'en_US') localeName = 'English (US)';
+  if (locale === 'en_GB') localeName = 'English (UK / Europe)';
+  return `${localeName} — ${speaker.replace(/_/g, ' ')} (${quality})`;
+};
+
 // ── Minimal sentence chunker (plain JS port of sentence-chunker.ts) ──────────
 const MIN_CHUNK_LENGTH = 10;
 const ABBREVIATIONS = harden(
@@ -327,7 +338,7 @@ export const make = async (_powers, context, { env = {} } = {}) => {
       id,
       harden({
         id,
-        name: id.replace(/[_-]+/g, ' '),
+        name: voiceDisplayName(id),
         modelPath: path,
         sampleRate,
       }),

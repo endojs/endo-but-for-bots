@@ -885,7 +885,7 @@ export const flootComponent = (
         currentTtsOptions(),
       );
       reader = streams.replyReader;
-      playAudioStream(streams.audioReader);
+      playAudioStream(streams.audioReader, streams.speechController);
     } else {
       reader = E(facetFor(session)).converse(text);
     }
@@ -1345,6 +1345,9 @@ export const flootComponent = (
   // caplet's onClose and aborts piper mid-utterance).
   /** @type {any} */
   let ttsActiveStream = null;
+  /** @type {any} */
+  let ttsSpeechController = null;
+  let ttsRestartId = 0;
   let ttsNextStart = 0;
   let ttsSpeaking = false;
 
@@ -1360,6 +1363,7 @@ export const flootComponent = (
   };
 
   const stopTts = () => {
+    ttsRestartId += 1;
     ttsPlaybackId += 1;
     for (const src of ttsSources) {
       try {
@@ -1377,6 +1381,7 @@ export const flootComponent = (
       ttsActiveStream.return().catch(() => {});
       ttsActiveStream = null;
     }
+    ttsSpeechController = null;
     if (ttsSpeaking) {
       ttsSpeaking = false;
       notify();
@@ -1417,6 +1422,7 @@ export const flootComponent = (
       ttsSources = ttsSources.filter(s => s !== src);
       if (!ttsSources.length && ttsSpeaking) {
         ttsSpeaking = false;
+        if (!ttsActiveStream) ttsSpeechController = null;
         notify();
       }
     };
@@ -1424,12 +1430,16 @@ export const flootComponent = (
 
   // Pull synthesized audio from a TTS stream and play it back in order. Resolves
   // when the stream ends or playback is superseded by a newer stopTts().
-  const playAudioStream = async (/** @type {any} */ audioReader) => {
+  const playAudioStream = async (
+    /** @type {any} */ audioReader,
+    /** @type {any} */ speechController = null,
+  ) => {
     if (!ttsServer) return;
     await prepareTts();
     if (!ttsCtx) return;
     // Begin a fresh session: bump the token and adopt this reader.
     stopTts();
+    ttsSpeechController = speechController;
     const myId = ttsPlaybackId;
     const audio = iterateReader(audioReader, { buffer: 4 });
     ttsActiveStream = audio;
@@ -1449,6 +1459,7 @@ export const flootComponent = (
     } finally {
       if (myId === ttsPlaybackId && ttsActiveStream === audio) {
         ttsActiveStream = null;
+        if (!ttsSources.length) ttsSpeechController = null;
       }
     }
   };
@@ -1494,6 +1505,25 @@ export const flootComponent = (
     }
     saveTtsSettings();
     notify();
+    const speechController = ttsSpeechController;
+    if (speechController && (ttsSpeaking || ttsActiveStream)) {
+      ttsRestartId += 1;
+      const restartId = ttsRestartId;
+      E(speechController)
+        .restart(currentTtsOptions())
+        .then(audioReader => {
+          if (restartId !== ttsRestartId) {
+            iterateReader(audioReader)
+              .return()
+              .catch(() => {});
+            return;
+          }
+          playAudioStream(audioReader, speechController);
+        })
+        .catch(() => {
+          // Keep the text reply alive if changing a speech option fails.
+        });
+    }
   };
 
   // ── Controller (the view's only handle on the host engine) ───────────────────

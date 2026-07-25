@@ -2,16 +2,16 @@
 /* global process */
 // endo run --UNCONFINED setup-hosted.js --powers @agent
 //
-// Single-machine hosted provisioning: mint ClaudeCredentials and a shared
-// ClaudeClient without inbox forms. Intended for ENDO_EXTRA on a hosted
-// daemon alongside setup-host.js and setup-peer.js.
+// Single-machine hosted provisioning: mint ClaudeCredentials and a bounded
+// provisioner that creates one ClaudeClient per Floot session without inbox
+// forms. Intended for ENDO_EXTRA alongside setup-host.js and setup-peer.js.
 //
 // Reads (first match wins):
 //   ENDO_FLOOT_AUTH_TOKEN / ANTHROPIC_API_KEY / FLOOT_AUTH_TOKEN — API key
 //   ENDO_CLAUDE_CREDS_NAME (default claude-creds)
 //   ENDO_CLAUDE_CLIENT_NAME (default claude-client)
-//   ENDO_CLAUDE_WORKSPACE_NAME (default claude-workspace)
-//   ENDO_CLAUDE_WORKSPACE_DIR — host path (default CLAUDE_SANDBOX workspace)
+//   ENDO_CLAUDE_PROVISIONER_NAME (default claude-session-provisioner)
+//   ENDO_CLAUDE_WORKSPACE_DIR — base host path for per-session workspaces
 //   CLAUDE_SANDBOX_IMAGE / ENDO_CLAUDE_SANDBOX_IMAGE — OCI rootfs
 //
 // Idempotent: skips caps that already exist.
@@ -23,17 +23,15 @@ import path from 'node:path';
 import { E } from '@endo/eventual-send';
 import { makeError, X, q } from '@endo/errors';
 
-import { provisionClaudeSession } from './src/provision-claude-session.js';
-
 /** @import { EndoHost } from '@endo/daemon' */
-
-const nodeFsModuleSpecifier = new URL(
-  '../platform/src/fs/extended/node-fs-module.js',
-  import.meta.url,
-).href;
 
 const credentialsModuleSpecifier = new URL(
   './src/claude-credentials-module.js',
+  import.meta.url,
+).href;
+
+const sessionProvisionerModuleSpecifier = new URL(
+  './src/claude-session-provisioner.js',
   import.meta.url,
 ).href;
 
@@ -108,10 +106,8 @@ export const main = async hostAgent => {
     env.ENDO_CLAUDE_CREDS_NAME || env.CLAUDE_CREDS_NAME || 'claude-creds';
   const clientName =
     env.ENDO_CLAUDE_CLIENT_NAME || env.CLAUDE_CLIENT_NAME || 'claude-client';
-  const workspaceName =
-    env.ENDO_CLAUDE_WORKSPACE_NAME ||
-    env.CLAUDE_WORKSPACE_NAME ||
-    'claude-workspace';
+  const provisionerName =
+    env.ENDO_CLAUDE_PROVISIONER_NAME || 'claude-session-provisioner';
   const workspaceDir =
     env.ENDO_CLAUDE_WORKSPACE_DIR ||
     env.CLAUDE_SANDBOX_WORKSPACE_DIR ||
@@ -143,62 +139,56 @@ export const main = async hostAgent => {
   }
 
   await provisionCredentials(hostAgent, { name: credsName, apiKey });
+  await mkdir(workspaceDir, { recursive: true });
 
-  if (!(await E(hostAgent).has(workspaceName))) {
-    await mkdir(workspaceDir, { recursive: true });
-    await E(hostAgent).makeUnconfined('@main', nodeFsModuleSpecifier, {
-      powersName: '@none',
-      resultName: workspaceName,
-      env: harden({ ENDO_FS_ROOT: workspaceDir }),
-    });
-    console.log(`Minted Filesystem "${workspaceName}" at ${workspaceDir}.`);
-  } else {
-    console.log(`Filesystem "${workspaceName}" already exists — skipping.`);
-  }
-
-  if (!(await E(hostAgent).has(clientName))) {
-    const { sessionId, hostMountPoint, rootfsLabel } =
-      await provisionClaudeSession(
-        hostAgent,
-        {
-          name: clientName,
-          filesystemName: workspaceName,
-          credentialsName: credsName,
-          rootfs,
-          network: 'private',
-          sandboxNamespace: 'claude-sandbox',
-        },
-        { resultName: clientName },
-      );
-    console.log(
-      `Minted ClaudeClient "${clientName}" (session ${sessionId}, workspace ${hostMountPoint}, rootfs ${rootfsLabel}).`,
-    );
-  } else {
-    console.log(`ClaudeClient "${clientName}" already exists — skipping.`);
-  }
-
-  // Floot's factory caplet runs with its controller profile as powers, so the
-  // host-rooted client must also be named in that profile for `claude-cli`
-  // sessions to resolve it. Rebind on every setup run in case either formula
-  // was reincarnated or replaced by a deployment.
   const flootDir = env.ENDO_FLOOT_DIR || env.FLOOT_DIR || 'floot';
   if (await E(hostAgent).has(flootDir, 'controller-profile')) {
-    const flootClientPath = [flootDir, 'controller-profile', clientName];
-    if (await E(hostAgent).has(...flootClientPath)) {
-      await E(hostAgent).remove(...flootClientPath);
+    const flootProvisionerPath = [
+      flootDir,
+      'controller-profile',
+      provisionerName,
+    ];
+    if (await E(hostAgent).has(...flootProvisionerPath)) {
+      await E(hostAgent).remove(...flootProvisionerPath);
     }
-    await E(hostAgent).copy([clientName], flootClientPath);
+    if (await E(hostAgent).has(provisionerName)) {
+      await E(hostAgent).remove(provisionerName);
+    }
+    await E(hostAgent).makeUnconfined(
+      '@main',
+      sessionProvisionerModuleSpecifier,
+      {
+        powersName: '@agent',
+        resultName: provisionerName,
+        env: harden({
+          FLOOT_DIR: flootDir,
+          CLAUDE_CLIENT_NAME: clientName,
+          CLAUDE_CREDS_NAME: credsName,
+          CLAUDE_WORKSPACE_BASE_DIR: workspaceDir,
+          CLAUDE_SANDBOX_IMAGE: rootfs,
+        }),
+      },
+    );
+    await E(hostAgent).copy([provisionerName], flootProvisionerPath);
+
+    // Remove the legacy shared binding. The root name is retained so existing
+    // single-session/manual users are not disrupted, but hosted Floot now
+    // always asks the provisioner for an isolated per-session client.
+    const legacyClientPath = [flootDir, 'controller-profile', clientName];
+    if (await E(hostAgent).has(...legacyClientPath)) {
+      await E(hostAgent).remove(...legacyClientPath);
+    }
     console.log(
-      `Bound ClaudeClient "${clientName}" into "${flootDir}/controller-profile".`,
+      `Bound "${provisionerName}" into "${flootDir}/controller-profile".`,
     );
   } else {
     console.warn(
-      `Floot controller profile "${flootDir}/controller-profile" is absent; skipping ClaudeClient binding.`,
+      `Floot controller profile "${flootDir}/controller-profile" is absent; skipping Claude provisioner binding.`,
     );
   }
 
   console.log(
-    `Hosted Claude sandbox ready. Floot sessions pinned to claude-cli will bind "${clientName}".`,
+    `Hosted Claude sandbox ready. Floot sessions pinned to claude-cli will provision "${clientName}-<session-id>".`,
   );
 };
 harden(main);

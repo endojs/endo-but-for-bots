@@ -119,44 +119,171 @@ const makeBufferingWriter = () => {
 };
 
 /**
+ * A daemon-side speech branch can be restarted with new synthesis options.
+ * The accumulated text and all future deltas stay inside the daemon.
+ */
+const SpeechControllerInterface = M.interface('FlootSpeechController', {
+  restart: M.callWhen().optional(M.record()).returns(M.remotable()),
+});
+
+/**
  * Fan reply text out inside the daemon: one branch remains the normal UI reply
- * wire and the other is the append-only text stream consumed by TTS.
+ * wire and a replaceable text stream is consumed by TTS.
  *
  * @param {any} replyWriter
+ * @param {any} ttsServer
+ * @param {Record<string, unknown>} initialOptions
  */
-const makeSpeechWriter = replyWriter => {
-  const { push, reader: textReader } = makeBufferedReader();
-  let settled = false;
+export const makeSpeechWriter = (replyWriter, ttsServer, initialOptions) => {
+  let text = '';
+  /** @type {{ type: 'end' } | { type: 'abort', reason: string } | undefined} */
+  let terminal;
+  let channel = makeBufferedReader();
+
   const settleText = event => {
-    if (settled) return;
-    settled = true;
-    push(event);
+    if (terminal) return;
+    terminal = event;
+    channel.push(harden(event));
   };
+
+  const synthesize = options =>
+    E(ttsServer).synthesize(channel.reader, harden({ ...options }));
+
+  const speechController = makeExo(
+    'FlootSpeechController',
+    SpeechControllerInterface,
+    {
+      async restart(options = {}) {
+        if (!terminal) {
+          channel.push(
+            harden({ type: 'abort', reason: 'speech settings changed' }),
+          );
+        }
+        channel = makeBufferedReader();
+        if (text) {
+          channel.push(harden({ type: 'delta', text }));
+        }
+        if (terminal) {
+          channel.push(harden(terminal));
+        }
+        return synthesize(options);
+      },
+    },
+  );
+
   const writer = harden({
     setPhase: phase => replyWriter.setPhase(phase),
-    delta: text => {
-      push(harden({ type: 'delta', text: `${text}` }));
-      replyWriter.delta(text);
+    delta: delta => {
+      const chunk = `${delta}`;
+      text += chunk;
+      channel.push(harden({ type: 'delta', text: chunk }));
+      replyWriter.delta(delta);
     },
-    final: text => replyWriter.final(text),
+    final: finalText => {
+      // A backend may provide only a final value and no deltas.
+      if (!text && finalText) {
+        text = `${finalText}`;
+        channel.push(harden({ type: 'delta', text }));
+      }
+      replyWriter.final(finalText);
+    },
     toolCall: call => replyWriter.toolCall(call),
     toolResult: result => replyWriter.toolResult(result),
     usage: totals => replyWriter.usage(totals),
     end: () => {
-      settleText(harden({ type: 'end' }));
+      settleText({ type: 'end' });
       replyWriter.end();
     },
     abort: reason => {
-      settleText(harden({ type: 'abort', reason: `${reason}` }));
+      settleText({ type: 'abort', reason: `${reason}` });
       replyWriter.abort(reason);
     },
   });
   return harden({
     writer,
-    textReader,
-    abort: reason => settleText(harden({ type: 'abort', reason: `${reason}` })),
+    audioReader: synthesize(initialOptions),
+    speechController,
+    abort: reason => settleText({ type: 'abort', reason: `${reason}` }),
   });
 };
+harden(makeSpeechWriter);
+
+/**
+ * Resolve one ClaudeClient per Floot session. Hosted profiles carry a bounded
+ * provisioner; local/manual profiles may still use one exclusive shared client.
+ *
+ * @param {any} powers
+ * @param {Record<string, string>} [env]
+ */
+export const makeClaudeClientResolver = (powers, env = {}) => {
+  /** @type {Map<string, Promise<any>>} */
+  const clients = new Map();
+  /** @type {string | undefined} */
+  let sharedClaimedBy;
+  const base = env.FLOOT_CLAUDE_CLIENT || 'claude-client';
+  const provisionerName =
+    env.FLOOT_CLAUDE_PROVISIONER || 'claude-session-provisioner';
+
+  const get = id => {
+    let clientP = clients.get(id);
+    if (!clientP) {
+      const perSession = `${base}-${id}`;
+      clientP = (async () => {
+        if (await E(powers).has(perSession)) {
+          return E(powers).lookup(perSession);
+        }
+        if (await E(powers).has(provisionerName)) {
+          const provisioner = await E(powers).lookup(provisionerName);
+          await E(provisioner).provision(id);
+          if (await E(powers).has(perSession)) {
+            return E(powers).lookup(perSession);
+          }
+          throw new Error(
+            `floot: Claude provisioner "${provisionerName}" did not store "${perSession}".`,
+          );
+        }
+        if (sharedClaimedBy !== undefined && sharedClaimedBy !== id) {
+          throw new Error(
+            `floot: session ${id} cannot use the shared ClaudeClient "${base}" —` +
+              ` session ${sharedClaimedBy} already holds it, and a client` +
+              ` carries one CLI conversation and workspace. Provision` +
+              ` "${perSession}" with @endo/claude-sandbox for this session.`,
+          );
+        }
+        if (!(await E(powers).has(base))) {
+          throw new Error(
+            `floot: no ClaudeClient capability for session ${id} — provision` +
+              ` "${perSession}" (or "${base}" for a single-session setup) with` +
+              ` @endo/claude-sandbox, or set FLOOT_CLAUDE_CLIENT.`,
+          );
+        }
+        const shared = await E(powers).lookup(base);
+        sharedClaimedBy = id;
+        return shared;
+      })().catch(error => {
+        clients.delete(id);
+        throw error;
+      });
+      clients.set(id, clientP);
+    }
+    return clientP;
+  };
+
+  const remove = async id => {
+    clients.delete(id);
+    if (sharedClaimedBy === id) sharedClaimedBy = undefined;
+    const perSession = `${base}-${id}`;
+    if (await E(powers).has(provisionerName)) {
+      const provisioner = await E(powers).lookup(provisionerName);
+      await E(provisioner).remove(id);
+    } else if (await E(powers).has(perSession)) {
+      await E(powers).remove(perSession);
+    }
+  };
+
+  return harden({ get, remove });
+};
+harden(makeClaudeClientResolver);
 
 const FlootFactoryInterface = M.interface('FlootFactory', {
   createSession: M.callWhen()
@@ -1120,63 +1247,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
     return providerConfigP;
   };
 
-  // The ClaudeClient capability backing `claude-cli` sessions, resolved lazily
-  // from the factory host's petstore (FLOOT_CLAUDE_CLIENT names it; default
-  // "claude-client"). Provisioned separately by @endo/claude-sandbox's setup —
-  // sessions pinned to claude-cli fail with a clear error until it exists.
-  // A ClaudeClient is a *session-scoped* capability, not a shared service: it
-  // carries one CLI conversation (every turn after the first runs
-  // `claude -p --continue`), one projected workspace, and one turn queue. Two
-  // floot sessions sharing one client would therefore read and overwrite each
-  // other's conversation and files, and serialize behind each other — breaking
-  // the one-session-one-guest isolation the rest of this factory maintains.
-  //
-  // So each session binds its own client, looked up as `<base>-<sessionId>`.
-  // The bare `<base>` name is accepted as a fallback for a single-session
-  // setup, but is claimed exclusively: a second session asking for it fails
-  // loudly rather than silently sharing a conversation.
-  /** @type {Map<string, Promise<any>>} */
-  const claudeClients = new Map();
-  /** @type {string | undefined} */
-  let sharedClientClaimedBy;
-  const getClaudeClient = id => {
-    let clientP = claudeClients.get(id);
-    if (!clientP) {
-      const base = env?.FLOOT_CLAUDE_CLIENT || 'claude-client';
-      const perSession = `${base}-${id}`;
-      clientP = (async () => {
-        if (await E(powers).has(perSession)) {
-          return E(powers).lookup(perSession);
-        }
-        if (
-          sharedClientClaimedBy !== undefined &&
-          sharedClientClaimedBy !== id
-        ) {
-          throw new Error(
-            `floot: session ${id} cannot use the shared ClaudeClient "${base}" —` +
-              ` session ${sharedClientClaimedBy} already holds it, and a client` +
-              ` carries one CLI conversation and workspace. Provision` +
-              ` "${perSession}" with @endo/claude-sandbox for this session.`,
-          );
-        }
-        if (!(await E(powers).has(base))) {
-          throw new Error(
-            `floot: no ClaudeClient capability for session ${id} — provision` +
-              ` "${perSession}" (or "${base}" for a single-session setup) with` +
-              ` @endo/claude-sandbox, or set FLOOT_CLAUDE_CLIENT.`,
-          );
-        }
-        const shared = await E(powers).lookup(base);
-        sharedClientClaimedBy = id;
-        return shared;
-      })().catch(error => {
-        claudeClients.delete(id);
-        throw error;
-      });
-      claudeClients.set(id, clientP);
-    }
-    return clientP;
-  };
+  const claudeClientResolver = makeClaudeClientResolver(powers, env);
+  const getClaudeClient = claudeClientResolver.get;
 
   // Hand a session only the authority its turns need. A session runs prompts;
   // it has no business interrupting or terminating the sandbox session out
@@ -1381,23 +1453,28 @@ export const make = (hostPowers, _context, { env } = {}) => {
          * @param {string | object} input
          * @param {any} ttsServer
          * @param {Record<string, unknown>} [ttsOptions]
-         * @returns {{ replyReader: object, audioReader: Promise<object> }}
+         * @returns {{
+         *   replyReader: object,
+         *   audioReader: Promise<object>,
+         *   speechController: object,
+         * }}
          */
         converseWithSpeech(input, ttsServer, ttsOptions = {}) {
           const controller = new AbortController();
           const { writer: replyWriter, reader: replyReader } = makeReplyChannel(
             () => controller.abort(),
           );
-          const speech = makeSpeechWriter(replyWriter);
+          const speech = makeSpeechWriter(
+            replyWriter,
+            ttsServer,
+            harden({ ...ttsOptions }),
+          );
           controller.signal.addEventListener(
             'abort',
             () => speech.abort('reply stopped'),
             { once: true },
           );
-          const audioReader = E(ttsServer).synthesize(
-            speech.textReader,
-            harden({ ...ttsOptions }),
-          );
+          const { audioReader } = speech;
           audioReader.catch(error => {
             speech.abort(
               error instanceof Error ? error.message : String(error),
@@ -1419,7 +1496,11 @@ export const make = (hostPowers, _context, { env } = {}) => {
               );
             }
           })();
-          return harden({ replyReader, audioReader });
+          return harden({
+            replyReader,
+            audioReader,
+            speechController: speech.speechController,
+          });
         },
         async getHistory() {
           const agent = await getAgent(id);
@@ -1430,7 +1511,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           return agent.getUsage();
         },
         help() {
-          return 'Floot session: converse(input) returns a streaming reply reader; converseWithSpeech(input, tts, options?) returns independent reply/audio streams with daemon-side text fan-out; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getInfo() returns { id, title, createdAt }.';
+          return 'Floot session: converse(input) returns a streaming reply reader; converseWithSpeech(input, tts, options?) returns independent reply/audio streams plus a speech controller that can restart synthesis with new options; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getInfo() returns { id, title, createdAt }.';
         },
       });
       facets.set(id, facet);
@@ -1590,6 +1671,15 @@ export const make = (hostPowers, _context, { env } = {}) => {
       await saveRegistry();
       agents.delete(id);
       facets.delete(id);
+      try {
+        await claudeClientResolver.remove(id);
+      } catch (error) {
+        console.warn(
+          `[floot-factory] could not remove Claude client for ${id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
       // Best-effort removal of the backing session guest's persistence (both
       // the handle and the controlling agent petnames).
       try {
