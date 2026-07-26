@@ -1392,6 +1392,7 @@ __metadata:
     "@endo/exo-shell": "workspace:^"
     "@endo/far": "workspace:^"
     "@endo/git": "workspace:^"
+    "@endo/harden": "workspace:^"
     "@endo/host-spawner": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/marshal": "workspace:^"
@@ -2322,6 +2323,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/fae@workspace:packages/fae"
   dependencies:
+    "@endo/agent-tools": "workspace:^"
     "@endo/agentry": "workspace:^"
     "@endo/cli": "workspace:^"
     "@endo/conversation-tree": "workspace:^"
@@ -2727,6 +2729,7 @@ __metadata:
     "@endo/init": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/marshal": "workspace:^"
+    "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/platform": "workspace:^"
     "@endo/promise-kit": "workspace:^"

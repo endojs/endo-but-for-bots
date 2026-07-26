@@ -29,11 +29,11 @@ import {
 // A SturdyRef is the first-class `'sturdyRef'` pass-style category
 // (packages/pass-style). `M.kind('sturdyRef')` admits any properly
 // constructed SturdyRef and rejects every other passable. A SturdyRef
-// may appear anywhere a pet-name-path may on the **read** side of the
-// daemon's agent surface (lookup / identify / locate / list /
-// listIdentifiers / listLocators / evaluate slots); the facet resolves
+// may appear only at the authority-reviewed positions on the daemon's agent
+// surface: lookup, maybeLookup, list, and evaluate slots. The facet resolves
 // it to a formula identifier via the daemon's closely-held resolution
-// capability before the existing pet-name-path code path runs. See
+// capability before the existing pet-name-path code path runs. `list` returns
+// only local pet names, not identifiers or locators. See
 // designs/sturdy-refs-ocapn-enlivenment.md § "Daemon: SturdyRef as
 // pet-name-path substitute" (cut 3) and § "Migration / staged adoption".
 // `M.sturdyRef()` in `@endo/patterns` is a deferred follow-up (blocked on
@@ -41,7 +41,8 @@ import {
 // the structural recognizer used here in its place.
 const SturdyRefShape = M.kind('sturdyRef');
 
-// The read-side sum: a single pet-name, a pet-name-path, or a SturdyRef.
+// The admitted lookup sum: a single pet-name, a pet-name-path, or a
+// SturdyRef.
 const NameOrPathOrSturdyRefShape = M.or(NameOrPathShape, SturdyRefShape);
 
 // The rest-arg equivalent for `.rest(NamePathShape)` methods, whose
@@ -54,8 +55,8 @@ const NamePathOrSturdyRefRestShape = M.or(
   M.arrayOf(M.or(NameShape, SturdyRefShape)),
 );
 
-// Each entry of a slots / petNamePaths array may itself be a SturdyRef
-// in place of a pet-name-path (evaluate, makeUnconfined).
+// Each entry of an evaluate slots array may itself be a SturdyRef in place of
+// a pet-name-path.
 const NamesOrPathsOrSturdyRefsShape = M.arrayOf(NameOrPathOrSturdyRefShape);
 
 // Edge names for message edges (same pattern as Name)
@@ -133,24 +134,20 @@ export const ReadableNameHubInterface = M.interface('ReadableNameHub', {
 // reader).
 export const nameHubMethodGuards = harden({
   ...readableNameHubMethodGuards,
-  // Read-side widening (cut 3): a SturdyRef may stand in for the
-  // pet-name-path argument of the daemon's read methods. These override
-  // the corresponding entries from `readableNameHubMethodGuards` (whose
-  // pet-name-only shape stays the portable, non-daemon contract). Write
-  // and reverse methods are intentionally NOT widened.
+  // A SturdyRef may stand in only for the authority-reviewed lookup and list
+  // inputs. These override the corresponding entries from
+  // `readableNameHubMethodGuards` (whose pet-name-only shape stays the
+  // portable, non-daemon contract). Identifier, locator, mutation, and
+  // reverse methods are intentionally not widened.
   lookup: M.call(NameOrPathOrSturdyRefShape).returns(M.promise()),
   maybeLookup: M.call(NameOrPathOrSturdyRefShape).returns(M.any()),
   list: M.call().rest(NamePathOrSturdyRefRestShape).returns(M.promise()),
-  identify: M.call().rest(NamePathOrSturdyRefRestShape).returns(M.promise()),
-  locate: M.call().rest(NamePathOrSturdyRefRestShape).returns(M.promise()),
+  identify: M.call().rest(NamePathShape).returns(M.promise()),
+  locate: M.call().rest(NamePathShape).returns(M.promise()),
   reverseLocate: M.call(LocatorShape).returns(M.promise()),
   followLocatorNameChanges: M.call(LocatorShape).returns(M.remotable()),
-  listIdentifiers: M.call()
-    .rest(NamePathOrSturdyRefRestShape)
-    .returns(M.promise()),
-  listLocators: M.call()
-    .rest(NamePathOrSturdyRefRestShape)
-    .returns(M.promise()),
+  listIdentifiers: M.call().rest(NamePathShape).returns(M.promise()),
+  listLocators: M.call().rest(NamePathShape).returns(M.promise()),
   followNameChanges: M.call().returns(M.remotable()),
   reverseLookup: M.call(M.any()).returns(M.promise()),
   storeIdentifier: M.call(NameOrPathShape, IdShape).returns(M.promise()),

@@ -166,12 +166,6 @@ export const makeDirectoryMaker = ({
 
     /** @type {EndoDirectory['identify']} */
     const identify = async (...petNamePath) => {
-      if (petNamePath.length === 1 && isSturdyRef(petNamePath[0])) {
-        return resolveSturdyRefToIdWith(
-          petNamePath[0],
-          internalizeForeignSturdyRef,
-        );
-      }
       assertNames(petNamePath);
       if (petNamePath.length === 1) {
         const petName = petNamePath[0];
@@ -185,11 +179,7 @@ export const makeDirectoryMaker = ({
 
     /** @type {EndoDirectory['locate']} */
     const locate = async (...petNamePath) => {
-      // `identify` handles a single-SturdyRef call; only assert names for
-      // the pet-name-path form.
-      if (!(petNamePath.length === 1 && isSturdyRef(petNamePath[0]))) {
-        assertNames(petNamePath);
-      }
+      assertNames(petNamePath);
       const id = await identify(...petNamePath);
       if (id === undefined) {
         return undefined;
@@ -247,12 +237,6 @@ export const makeDirectoryMaker = ({
 
     /** @type {EndoDirectory['listIdentifiers']} */
     const listIdentifiers = async (...petNamePath) => {
-      if (petNamePath.length === 1 && isSturdyRef(petNamePath[0])) {
-        // Resolve the SturdyRef to a directory hub and delegate, so the
-        // per-name identify runs in the resolved hub's namespace.
-        const hub = /** @type {NameHub} */ (await lookup(petNamePath[0]));
-        return E(hub).listIdentifiers();
-      }
       assertNames(petNamePath);
       const names = await list(...petNamePath);
       const identities = new Set();
@@ -269,10 +253,6 @@ export const makeDirectoryMaker = ({
 
     /** @type {EndoDirectory['listLocators']} */
     const listLocators = async (...petNamePath) => {
-      if (petNamePath.length === 1 && isSturdyRef(petNamePath[0])) {
-        const hub = /** @type {NameHub} */ (await lookup(petNamePath[0]));
-        return E(hub).listLocators();
-      }
       assertNames(petNamePath);
       if (petNamePath.length === 0) {
         const names = await controller.list();
