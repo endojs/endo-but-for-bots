@@ -19,8 +19,12 @@ const makeEscrow = () => {
 test('renders a sturdyref as a fresh opaque handle and redeems only that handle', t => {
   const escrow = makeEscrow();
   const sturdyRef = makeSturdyRef();
-  const first = escrow.render(harden({ ref: sturdyRef }));
-  const second = escrow.render(harden({ ref: sturdyRef }));
+  const first = /** @type {{ ref: string }} */ (
+    escrow.render(harden({ ref: sturdyRef }))
+  );
+  const second = /** @type {{ ref: string }} */ (
+    escrow.render(harden({ ref: sturdyRef }))
+  );
 
   t.regex(first.ref, /^sturdyref:[0-9a-f]{32}$/);
   t.not(first.ref, second.ref, 'two grants are unlinkable in the transcript');

@@ -60,8 +60,11 @@ test('confinement: evaluation slots admit a sturdyref but naming slots do not', 
     matches(sturdyRef, evaluate.argGuards[0]),
     'the worker naming slot cannot turn a sturdyref into naming authority',
   );
+  const resultNameGuards = evaluate.optionalArgGuards;
+  t.truthy(resultNameGuards, 'evaluate has a result-name guard');
+  if (resultNameGuards === undefined) return;
   t.false(
-    matches(sturdyRef, evaluate.optionalArgGuards[0]),
+    matches(sturdyRef, resultNameGuards[0]),
     'the result-name slot remains a pet name',
   );
 });
