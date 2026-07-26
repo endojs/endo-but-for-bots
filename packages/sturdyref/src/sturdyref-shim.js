@@ -142,8 +142,14 @@ const isSturdyRefNamespace = candidate => {
  * @returns {SturdyRefNamespace}
  */
 export const selectSturdyRef = () => {
-  // eslint-disable-next-line no-restricted-globals
-  const { SturdyRef: existing } = globalThis;
+  // Read through a cast rather than the ambient `shim.types.d.ts` global
+  // declaration: a dependent package's program (as typedoc builds one per
+  // package) compiles this source without that ambient file in scope.
+  const { SturdyRef: existing } =
+    // eslint-disable-next-line no-restricted-globals
+    /** @type {{ SturdyRef?: SturdyRefNamespace }} */ (
+      /** @type {unknown} */ (globalThis)
+    );
   if (existing !== undefined) {
     if (!isSturdyRefNamespace(existing)) {
       throw new Error(
