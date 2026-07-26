@@ -8,6 +8,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makeLocalTree } from '@endo/platform/fs/node';
 
 import { makePiAgent } from '@endo/agentry/harness';
+import { makeSturdyRefEscrow } from '@endo/agent-tools';
 
 import { systemPrompt } from './prompts/system.js';
 import { tools } from './tools/index.js';
@@ -90,9 +91,12 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
   //       security-notes wrapping is applied), and
   //   (c) the per-tool parameter schema lives at the tool boundary,
   //       which lets `@endo/patterns` validation guard inbound args.
-  const executeTool = makeExecuteTool(powers);
+  // This table exists only for this live transcript. It deliberately does not
+  // retain SturdyRefs across a worker restart or turn boundary.
+  const sturdyRefEscrow = makeSturdyRefEscrow();
+  const executeTool = makeExecuteTool(powers, sturdyRefEscrow);
   const agentTools = tools.map(({ name, summary }) =>
-    toAgentTool(name, summary, executeTool),
+    toAgentTool(name, summary, executeTool, sturdyRefEscrow),
   );
 
   const resolvedModel = await resolveModel(model);

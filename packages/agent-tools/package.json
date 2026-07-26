@@ -85,6 +85,10 @@
       "types": "./src/adapters/mcp.js",
       "default": "./src/adapters/mcp.js"
     },
+    "./sturdyref-escrow.js": {
+      "types": "./src/sturdyref-escrow.js",
+      "default": "./src/sturdyref-escrow.js"
+    },
     "./generated/code-mode-globals/git-declarations.js": {
       "types": "./generated/code-mode-globals/git-declarations.js",
       "default": "./generated/code-mode-globals/git-declarations.js"

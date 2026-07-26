@@ -7,6 +7,7 @@ import { E } from '@endo/eventual-send';
 import { passableAsJustin, makeMarshal } from '@endo/marshal';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { createProvider } from '@endo/lal/providers/index.js';
+import { makeSturdyRefEscrow } from '@endo/agent-tools';
 import {
   makeConversationTree,
   makeEndoPetstoreBackend,
@@ -170,6 +171,9 @@ export const spawnWorkerLoop = async (
 
   const effectivePrompt = systemPrompt || guestSystemPrompt;
   const tree = makeConversationTree(makeEndoPetstoreBackend(powers));
+  // This table is process-local presentation escrow, not cross-turn
+  // retention. The daemon remains the only SturdyRef resolver.
+  const sturdyRefEscrow = makeSturdyRefEscrow();
 
   /**
    * Find or create the root node that carries the system prompt.
@@ -273,7 +277,11 @@ export const spawnWorkerLoop = async (
 
       let result;
       try {
-        result = await executeTool(name, args, toolMap);
+        result = await executeTool(
+          name,
+          /** @type {Record<string, unknown>} */ (sturdyRefEscrow.redeem(args)),
+          toolMap,
+        );
         console.log(`[tool] ${name} -> ${passableAsJustin(result, false)}`);
       } catch (error) {
         const errorMessage =
@@ -284,7 +292,7 @@ export const spawnWorkerLoop = async (
 
       results.push({
         role: 'tool',
-        content: passableAsJustin(result, false),
+        content: passableAsJustin(sturdyRefEscrow.render(result), false),
         tool_call_id: /** @type {any} */ (toolCall).id,
       });
     }

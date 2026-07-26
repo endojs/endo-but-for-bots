@@ -126,7 +126,7 @@ const decodeToolArgs = (name, rawArgs) => {
  * @param {any} powers - Guest powers
  * @returns {(name: string, args: ToolCallArgs) => Promise<unknown>}
  */
-export const makeExecuteTool = powers => {
+export const makeExecuteTool = (powers, sturdyRefEscrow = undefined) => {
   const executeTool = async (name, rawArgs) => {
     // Pi delivers tool args as an already-JSON-parsed plain object.
     // Decode via the rigorous SmallCaps codec: `"+N"` → BigInt, `"!<s>"` →
@@ -135,7 +135,14 @@ export const makeExecuteTool = powers => {
     // malformed args record fails fast with a structured error instead of
     // cascading into a confusing E(powers).<method>() failure mid-dispatch.
     const argsRecord = /** @type {Record<string, unknown>} */ (rawArgs ?? {});
-    const args = /** @type {ToolCallArgs} */ (decodeToolArgs(name, argsRecord));
+    const decodedArgs = decodeToolArgs(name, argsRecord);
+    // A guessed handle fails before this dispatcher sends anything to a daemon
+    // facet. Non-handle text remains ordinary untrusted text.
+    const args = /** @type {ToolCallArgs} */ (
+      sturdyRefEscrow === undefined
+        ? decodedArgs
+        : sturdyRefEscrow.redeem(decodedArgs)
+    );
     switch (name) {
       // Self-documentation
       case 'help': {
@@ -458,7 +465,7 @@ harden(makeExecuteTool);
  * @param {(name: string, args: any) => Promise<any>} executeTool
  * @returns {AgentTool<any>}
  */
-export function toAgentTool(name, summary, executeTool) {
+export function toAgentTool(name, summary, executeTool, sturdyRefEscrow) {
   return {
     name,
     label: name,
@@ -471,7 +478,9 @@ export function toAgentTool(name, summary, executeTool) {
       // inbound messageNumber fields) and strings starting with special
       // chars as `"!<s>"`. Plain strings pass through unwrapped. The encoder is
       // the shared `toolResultToSmallcaps` from `@endo/agent-tools/adapters/smallcaps.js`.
-      const text = toolResultToSmallcaps(result);
+      const rendered =
+        sturdyRefEscrow === undefined ? result : sturdyRefEscrow.render(result);
+      const text = toolResultToSmallcaps(rendered);
       /** @type {AgentToolResult<any>} */
       const toolResult = {
         content: [{ type: 'text', text }],

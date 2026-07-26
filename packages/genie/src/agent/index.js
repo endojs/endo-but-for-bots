@@ -18,6 +18,7 @@
 /** @import { Api, KnownProvider, Model, Provider } from '@earendil-works/pi-ai' */
 
 import harden from '@endo/harden';
+import { makeSturdyRefEscrow } from '@endo/agent-tools';
 
 import { Agent as PiAgent } from '@earendil-works/pi-agent-core';
 import { getModel, getProviders } from '@earendil-works/pi-ai/compat';
@@ -275,7 +276,7 @@ const mayJSONify = val => (typeof val === 'string' ? val : JSON.stringify(val));
  * @param {(name: string, args: any) => Promise<any>} execTool
  * @returns {AgentTool<any>}
  */
-function toAgentTool(spec, execTool) {
+function toAgentTool(spec, execTool, sturdyRefEscrow) {
   return {
     name: spec.name,
     label: spec.name,
@@ -286,10 +287,12 @@ function toAgentTool(spec, execTool) {
       additionalProperties: true,
     },
     execute: async (_toolCallId, params, _signal, _onUpdate) => {
-      const result = await execTool(spec.name, params);
+      // Reject an unknown opaque handle before calling the tool implementation.
+      const result = await execTool(spec.name, sturdyRefEscrow.redeem(params));
+      const rendered = sturdyRefEscrow.render(result);
       /** @type {AgentToolResult<any>} */
       const toolResult = {
-        content: [{ type: 'text', text: mayJSONify(result) }],
+        content: [{ type: 'text', text: mayJSONify(rendered) }],
         details: result,
       };
       return toolResult;
@@ -372,7 +375,10 @@ export async function makePiAgent(options = {}) {
 
   // Get tool list and convert to AgentTool format.
   const finalToolList = Array.from(listTools());
-  const agentTools = finalToolList.map(spec => toAgentTool(spec, execTool));
+  const sturdyRefEscrow = makeSturdyRefEscrow();
+  const agentTools = finalToolList.map(spec =>
+    toAgentTool(spec, execTool, sturdyRefEscrow),
+  );
 
   // When using an Ollama model, supply a getApiKey callback so that
   // pi-agent-core receives the key without us mutating OPENAI_API_KEY.
