@@ -39,7 +39,11 @@ export const makeSturdyRefEscrow = (options = {}) => {
       ) {
         throw new Error('sturdyref escrow requires crypto.getRandomValues');
       }
-      return crypto.getRandomValues(bytes);
+      // Use an ArrayBuffer-backed temporary because the Web Crypto declaration
+      // does not accept a Uint8Array whose backing type may be SharedArrayBuffer.
+      const random = crypto.getRandomValues(new Uint8Array(bytes.byteLength));
+      bytes.set(random);
+      return bytes;
     },
   } = options;
   /** @type {Map<string, object>} */
