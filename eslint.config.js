@@ -328,6 +328,8 @@ export default defineConfig(
       'packages/hardened262/tmp/',
       'packages/chat/test/**/probe.mjs',
       'packages/chat/test/**/run.mjs',
+      'packages/daemon/demo/',
+      'packages/daemon/deploy/',
       'packages/daemon/scripts/*.mjs',
       'packages/exo-git/scripts/*.mjs',
       'packages/thixotrope/dist-xs/',
