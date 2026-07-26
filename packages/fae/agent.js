@@ -5,6 +5,7 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 import { passableAsJustin, makeMarshal } from '@endo/marshal';
+import { makeSturdyRefEscrow } from '@endo/agent-tools/sturdyref-escrow.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import {
   makeConversationTree,
@@ -288,6 +289,7 @@ export const spawnWorkerLoop = async (
   };
 
   const rootNodeIdP = getOrCreateRoot();
+  const sturdyRefEscrow = makeSturdyRefEscrow();
 
   // Built-in tools: petname ops + mail (no filesystem tools for guest)
   /** @type {Map<string, object>} */
@@ -358,21 +360,40 @@ export const spawnWorkerLoop = async (
       const { name, arguments: argsRaw } = /** @type {any} */ (toolCall)
         .function;
 
-      /** @type {Record<string, unknown>} */
-      let args;
-      try {
-        const jsonString =
-          typeof argsRaw === 'string' ? argsRaw : JSON.stringify(argsRaw);
-        args = decodeSmallcaps(jsonString);
-      } catch {
-        // Smallcaps decoding failed — try plain JSON parse
+      const decodedArgs = (() => {
         try {
           const jsonString =
             typeof argsRaw === 'string' ? argsRaw : JSON.stringify(argsRaw);
-          args = JSON.parse(jsonString);
+          return decodeSmallcaps(jsonString);
         } catch {
-          args = {};
+          // Smallcaps decoding failed — try plain JSON parse.
+          try {
+            const jsonString =
+              typeof argsRaw === 'string' ? argsRaw : JSON.stringify(argsRaw);
+            return JSON.parse(jsonString);
+          } catch {
+            return {};
+          }
         }
+      })();
+      /** @type {Record<string, unknown> | undefined} */
+      let args;
+      try {
+        // Unknown handles must reject before dispatch, not fall back to an
+        // empty argument record that could reach a daemon facet.
+        args = /** @type {Record<string, unknown>} */ (
+          sturdyRefEscrow.redeem(decodedArgs)
+        );
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        results.push({
+          role: 'tool',
+          content: passableAsJustin(harden({ error: errorMessage }), false),
+          tool_call_id: /** @type {any} */ (toolCall).id,
+        });
+        // eslint-disable-next-line no-continue
+        continue;
       }
 
       console.log(`[tool] ${name}(${passableAsJustin(harden(args), false)})`);
@@ -381,17 +402,18 @@ export const spawnWorkerLoop = async (
       let result;
       try {
         result = await executeTool(name, args, toolMap);
-        console.log(`[tool] ${name} -> ${passableAsJustin(result, false)}`);
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : String(error);
         result = harden({ error: errorMessage });
         console.error(`[tool] ${name} error: ${errorMessage}`);
       }
+      const rendered = sturdyRefEscrow.render(result);
+      console.log(`[tool] ${name} -> ${passableAsJustin(rendered, false)}`);
 
       results.push({
         role: 'tool',
-        content: passableAsJustin(result, false),
+        content: passableAsJustin(rendered, false),
         tool_call_id: /** @type {any} */ (toolCall).id,
       });
     }
@@ -627,11 +649,11 @@ export const spawnWorkerLoop = async (
       //  1. If replyTo matches a node in the tree, branch from there
       //  2. Otherwise continue from the last leaf (preserves context)
       let parentId = lastLeafId;
-      if (typeof replyTo === 'string') {
-        const existingNode = await tree.getNode(replyTo);
-        if (existingNode !== null) {
-          parentId = replyTo;
-        }
+        if (typeof replyTo === 'string') {
+          const existingNode = await tree.getNode(replyTo);
+          if (existingNode !== null) {
+            parentId = replyTo;
+          }
       }
 
       const userNode = await tree.addNode(
@@ -645,6 +667,7 @@ export const spawnWorkerLoop = async (
         { messageId },
       );
 
+      sturdyRefEscrow.clear();
       try {
         replyTracker.sent = false;
         const outcome = await runAgenticLoop(toolSchemas, toolMap, userNode.id);
@@ -688,6 +711,10 @@ export const spawnWorkerLoop = async (
           [],
           [],
         );
+      } finally {
+        // Tool handles belong only to this inbox turn, even if the model loop
+        // rejects before a final reply.
+        sturdyRefEscrow.clear();
       }
     };
 

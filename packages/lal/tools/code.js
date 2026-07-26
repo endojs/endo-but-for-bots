@@ -29,7 +29,7 @@ export const codeToolDefs = harden([
       {
         workerName: M.or(M.string(), M.undefined()),
         codeNames: M.arrayOf(M.string()),
-        edgeNames: M.arrayOf(M.string()),
+        edgeNames: M.arrayOf(M.or(M.string(), M.kind('sturdyRef'))),
       },
     ),
   },
