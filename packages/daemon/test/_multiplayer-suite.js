@@ -1,5 +1,4 @@
 // @ts-check
-/* global process, setTimeout */
 
 import os from 'os';
 import url from 'url';
