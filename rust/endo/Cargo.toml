@@ -33,6 +33,7 @@ ironhorse-engine = ['ironhorse-vm', 'ironhorse-compile', 'ironhorse-snapshot', '
 base64 = "0.22"
 endo_iroh = { path = "../endo_iroh" }
 flate2 = "1"
+gix = { version = "0.85", default-features = false, features = ["parallel", "sha1", "sha256"] }
 hex = "0.4"
 libc = "0.2"
 rusqlite = { version = "0.31", features = ["bundled"] }
