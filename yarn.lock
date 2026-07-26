@@ -1999,6 +1999,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/fae@workspace:packages/fae"
   dependencies:
+    "@endo/agent-tools": "workspace:^"
     "@endo/agentry": "workspace:^"
     "@endo/cli": "workspace:^"
     "@endo/conversation-tree": "workspace:^"
@@ -2103,6 +2104,7 @@ __metadata:
   dependencies:
     "@earendil-works/pi-agent-core": "npm:^0.80.3"
     "@earendil-works/pi-ai": "npm:^0.80.3"
+    "@endo/agent-tools": "workspace:^"
     "@endo/cli": "workspace:^"
     "@endo/daemon": "workspace:^"
     "@endo/errors": "workspace:^"
