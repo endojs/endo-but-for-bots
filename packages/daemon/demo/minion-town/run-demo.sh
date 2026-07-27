@@ -22,7 +22,7 @@ DAEMON_PKG="$(cd "$HERE/../.." && pwd)"   # packages/daemon
 LOC=/tmp/minion-ocapn-location.json
 
 echo "=== [1/3] fetch daemon location from minion.town via SSM ==="
-"$HERE/ssm.sh" 'cat /opt/endo/ocapn-demo-location.json' \
+"$HERE/ssm.sh" 'cat /opt/ocapn-demo/ocapn-demo-location.json' \
   | sed -n '/### STDOUT:/,/### STDERR:/p' | grep -vE '^### ' | sed '/^$/d' > "$LOC"
 cat "$LOC"
 

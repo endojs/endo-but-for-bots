@@ -44,17 +44,15 @@ The demo exercises the **exact session layer the Pet Daemon's
 
 ## How the daemon reached the host
 
-1. `git clone --depth 1 --branch claude/endo-daemon-ocapn-ws-FkmHO
-   https://github.com/endojs/endo-but-for-bots.git /opt/endo` (public HTTPS; the
-   Noise WASM ships prebuilt in-tree under `packages/ocapn-noise/gen/`, so the
-   aarch64 host needs no native build).
-2. `corepack yarn install` (yarn 4.13.0, `nodeLinker: pnpm`) — ~50s, no native
-   compilation.
-3. `ocapn-ws-server.mjs` copied to `/opt/endo/packages/daemon/demo/` so ESM
-   bare-specifier resolution finds `@endo/*` and `ws` via that package's pnpm
-   `node_modules`.
-4. Installed + started as `endo-ocapn-daemon.service` — listens on
-   `127.0.0.1:8930`, writes `/opt/endo/ocapn-demo-location.json`.
+The toy service runs from the same `endo-pet-daemon:ocapn-ws` docker image that
+serves the full Pet Daemon on the host (built from this stack's branch; deps and
+the prebuilt Noise WASM ship in-image, so the aarch64 host needs no native
+build or checkout). `endo-ocapn-daemon.service` is a `docker run` wrapper:
+container `endo-ocapn-toy` runs `demo/minion-town/ocapn-ws-server.mjs`, publishes
+loopback `127.0.0.1:8930`, and writes its `OcapnLocation` JSON to the
+bind-mounted `/opt/ocapn-demo/ocapn-demo-location.json`. (An earlier iteration
+ran from a `/opt/endo` git checkout; that clone is gone and nothing depends on
+it anymore — the docker unit is self-contained.)
 
 ## The Caddy route
 
@@ -63,9 +61,10 @@ existing `minion.town, www.minion.town { … }` site in
 `/etc/caddy/conf.d/minion-town.caddy` (see `ocapn-demo.caddy`) — a `handle`, not
 a second site block, because Caddy rejects duplicate site addresses. It is
 **not** behind the oauth2-proxy `forward_auth` gate (OCapN-over-Noise
-self-authenticates). Applied with `caddy validate` before `systemctl reload
-caddy`; a `.bak-ocapn` backup allows rollback. `caddy` / `oauth2-proxy` /
-`minion-mcp` were untouched.
+self-authenticates). The `/ocapn*` routes now live durably in the
+`kriscendobot/minion.town` repo's Caddyfile (its CD renders `deploy/aws/caddy/`
+onto the box wholesale, so any box-local route would be clobbered on the next
+push to main). `caddy` / `oauth2-proxy` / `minion-mcp` were untouched.
 
 ## Reproduce
 
@@ -100,6 +99,6 @@ GARDEN_AWS_HOME=/home/<bot>/garden \
   overwrites just the `ws:url` transport hint and the handshake still binds to
   the right server. Validated locally: with a deliberately-wrong hint and no
   override the dial fails; with the override it succeeds.
-- **Loopback port 8930**, swissnum `greeter`, box-local Caddy file (durable
-  route in the `kriscendobot/minion.town` repo deferred — "a box-local file is
-  fine for the demo").
+- **Loopback port 8930**, swissnum `greeter`. The Caddy route started as a
+  box-local file and has since been landed durably in the
+  `kriscendobot/minion.town` repo (its CD would clobber a box-local route).
