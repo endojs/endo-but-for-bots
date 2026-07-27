@@ -2,7 +2,17 @@
   "name": "@endo/google-sheets",
   "version": "0.1.0",
   "description": "Portable client for the Google Sheets REST API",
+  "author": "Endo contributors",
   "license": "Apache-2.0",
+  "homepage": "https://github.com/endojs/endo/blob/master/packages/google-sheets/README.md",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/google-sheets"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
   "type": "module",
   "main": "./index.js",
   "module": "./index.js",
