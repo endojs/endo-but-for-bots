@@ -213,6 +213,15 @@ pub fn load_archive_base64(data: &str) -> io::Result<LoadedArchive> {
 /// conditions only when the first pass finds nothing, rather than
 /// activating both conditions in one pass and letting object order
 /// pick a build the consumer cannot use.
+///
+/// The optional machine global `__archiveExtraConditions` (an array
+/// of condition names, set by `endor run --conditions`) is active in
+/// EVERY pass alongside that pass's module-flavor condition, the way
+/// a bundler activates `browser` beside `import`/`require`: within a
+/// pass, object key order decides among the active conditions, so a
+/// package listing `browser` before its flavor keys hands over its
+/// browser build. Absent the global, resolution is exactly the
+/// two-condition behaviour above.
 const EXPORTS_RESOLVER_JS: &str = r#"
 // Return the canonical registry key for a specifier in a
 // compartment, applying Node's .js / /index.js completion, or
@@ -388,9 +397,10 @@ function __resolveExports(compName, subpath, condsOrder) {
         return canon;
     }
     var order = condsOrder || ['import', 'require'];
+    var extra = globalThis.__archiveExtraConditions || [];
     var target;
     for (var oi = 0; oi < order.length && target === undefined; oi++) {
-        target = __matchExports(exp, subpath, [order[oi]]);
+        target = __matchExports(exp, subpath, [order[oi]].concat(extra));
     }
     if (target === undefined || target === null) {
         throw new Error(
@@ -951,7 +961,7 @@ fn escape_js_string(s: &str) -> String {
 }
 
 /// JSON-encode a string value (with quotes).
-fn json_encode_string(s: &str) -> String {
+pub(crate) fn json_encode_string(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
 }
 

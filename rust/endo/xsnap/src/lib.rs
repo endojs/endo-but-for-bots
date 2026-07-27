@@ -1920,10 +1920,93 @@ pub fn run_xs_archive(archive_path: &std::path::Path) -> Result<(), XsnapError> 
     )
 }
 
+/// The globals visible inside archive Compartments, shared by the
+/// standalone runner and the daemon's archive install path so the
+/// two surfaces cannot drift apart.
+///
+/// `console` is what npm code actually calls: log/info/debug go to
+/// the process stdout so a program's output is separable from the
+/// runner's stderr diagnostics; warn/error ride the trace channel
+/// (stderr). `crypto` is the web-platform subset a package's
+/// `browser` build reaches for — `getRandomValues` and `randomUUID`
+/// — a standard veneer over the already-endowed `randomHex256` host
+/// function, so it grants no authority the compartment did not
+/// already hold. `crypto.subtle` is deliberately absent.
+const ARCHIVE_ENDOWMENTS_JS: &str = "globalThis.__archiveEndowments = { \
+    print: trace, trace, \
+    console: (function () { \
+        var format = function (args) { \
+            var parts = []; \
+            for (var i = 0; i < args.length; i++) { \
+                var a = args[i]; \
+                if (typeof a === 'string') { parts.push(a); continue; } \
+                var s; \
+                try { s = JSON.stringify(a); } catch (e) { s = undefined; } \
+                parts.push(s === undefined ? String(a) : s); \
+            } \
+            return parts.join(' '); \
+        }; \
+        var out = function () { stdoutLine(format(arguments)); }; \
+        var err = function () { trace(format(arguments)); }; \
+        return { log: out, info: out, debug: out, trace: out, warn: err, error: err }; \
+    })(), \
+    crypto: Object.freeze((function () { \
+        var getRandomValues = function (view) { \
+            if (!ArrayBuffer.isView(view)) { \
+                throw new TypeError( \
+                    'crypto.getRandomValues: argument must be an ArrayBuffer view'); \
+            } \
+            var bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength); \
+            var i = 0; \
+            while (i < bytes.length) { \
+                var hex = randomHex256(); \
+                for (var j = 0; j < 64 && i < bytes.length; j += 2, i += 1) { \
+                    bytes[i] = parseInt(hex.slice(j, j + 2), 16); \
+                } \
+            } \
+            return view; \
+        }; \
+        var randomUUID = function () { \
+            var b = getRandomValues(new Uint8Array(16)); \
+            b[6] = (b[6] & 15) | 64; \
+            b[8] = (b[8] & 63) | 128; \
+            var text = ''; \
+            for (var i = 0; i < 16; i++) { \
+                text += (b[i] + 256).toString(16).slice(1); \
+                if (i === 3 || i === 5 || i === 7 || i === 9) text += '-'; \
+            } \
+            return text; \
+        }; \
+        return { getRandomValues: getRandomValues, randomUUID: randomUUID }; \
+    })()), \
+    readFileText, writeFileText, readDir, mkdir, \
+    remove, rename, exists, isDir, readLink, \
+    openReader, read, closeReader, \
+    openWriter, write, closeWriter, \
+    openDir, closeDir, symlink, link, \
+    sha256, sha256Init, sha256Update, sha256Finish, \
+    randomHex256, ed25519Keygen, ed25519Sign, \
+    getPid, getEnv, joinPath, realPath \
+};";
+
 /// Run a pre-loaded archive (e.g., loaded from CAS).
 ///
 /// Same as `run_xs_archive` but skips the ZIP parsing step.
 pub fn run_xs_archive_loaded(loaded: &archive::LoadedArchive) -> Result<(), XsnapError> {
+    run_xs_archive_loaded_with_conditions(loaded, &[])
+}
+
+/// Run a pre-loaded archive with extra export-map conditions active
+/// (the `endor run --conditions` surface). Each name is set into the
+/// machine global `__archiveExtraConditions`, which the archive
+/// exports resolver activates in every resolution pass beside that
+/// pass's module-flavor condition — the way a bundler activates
+/// `browser` beside `import`/`require`. An empty slice is exactly
+/// `run_xs_archive_loaded`.
+pub fn run_xs_archive_loaded_with_conditions(
+    loaded: &archive::LoadedArchive,
+    conditions: &[String],
+) -> Result<(), XsnapError> {
     eprintln!("endor[run]: from pre-loaded archive");
     ensure_shared_cluster();
 
@@ -1942,6 +2025,16 @@ pub fn run_xs_archive_loaded(loaded: &archive::LoadedArchive) -> Result<(), Xsna
         "__archiveEndowments.URL = globalThis.URL; \
          __archiveEndowments.URLSearchParams = globalThis.URLSearchParams;",
     );
+    if !conditions.is_empty() {
+        let encoded: Vec<String> = conditions
+            .iter()
+            .map(|c| archive::json_encode_string(c))
+            .collect();
+        machine.eval(&format!(
+            "globalThis.__archiveExtraConditions = [{}];",
+            encoded.join(", ")
+        ));
+    }
 
     if !archive::install_archive_async(&machine, loaded) {
         return Err(XsnapError::Archive(
