@@ -1,5 +1,12 @@
 const DEFAULT_BASE_URL = 'https://sheets.googleapis.com/v4';
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+// Google Sheets represents dates as "serial numbers": the whole part counts
+// days since the epoch of December 30, 1899, following the Lotus 1-2-3 / Excel
+// "1900 date system" (which includes the fictitious February 29, 1900). See the
+// SERIAL_NUMBER definition in the Sheets API DateTimeRenderOption reference:
+// https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets/DateTimeRenderOption
+// 25569 is the number of days from that epoch to the Unix epoch of
+// January 1, 1970, so subtracting it converts a Sheets serial to Unix days.
 const SHEETS_EPOCH_OFFSET = 25_569;
 
 /** @param {number} serial */
