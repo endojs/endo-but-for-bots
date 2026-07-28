@@ -303,6 +303,11 @@ body {
   background: var(--bg-hover);
 }
 
+.context-menu-item.checked {
+  color: var(--accent, var(--text-primary));
+  font-weight: 600;
+}
+
 .context-menu-item.context-menu-delete {
   color: var(--danger);
 }

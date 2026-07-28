@@ -53,6 +53,9 @@ const KNOWN_MODES = new Set([
  * @property {string[]} [audioPath] - pet-name path to an audio object (floot mic input)
  * @property {string[]} [ttsPath] - pet-name path to a text-to-speech object (floot spoken replies)
  * @property {string[]} [workflowPath] - pet-name path to a workflow service (workflow space)
+ * @property {string} [defaultSpaceId] - system-wide default space to open on
+ *   load. Only meaningful on the home config (spaces/0), where it is a global
+ *   preference shared by everyone; '' or absent means "open Home".
  */
 
 /**
@@ -114,6 +117,8 @@ harden(pathsEqual);
  * @property {string} name
  * @property {string} icon
  * @property {boolean} isHome
+ * @property {boolean} isDeviceDefault - the per-device default (this browser)
+ * @property {boolean} isSystemDefault - the system-wide default (everyone)
  * @property {number} [shortcut] - 1..9 Cmd-shortcut number, if any
  */
 
@@ -128,6 +133,8 @@ harden(pathsEqual);
  * @property {string} spaceId
  * @property {string} name
  * @property {boolean} isHome
+ * @property {boolean} isDeviceDefault
+ * @property {boolean} isSystemDefault
  * @property {number} x
  * @property {number} y
  */
@@ -140,6 +147,8 @@ harden(pathsEqual);
  * @property {(id: string) => void} selectSpace
  * @property {(id: string) => void} editSpace
  * @property {(id: string) => void} deleteSpace
+ * @property {(id: string, on: boolean) => void} setDeviceDefault
+ * @property {(id: string, on: boolean) => void} setSystemDefault
  * @property {() => void} addSpace
  */
 
@@ -192,8 +201,17 @@ harden(SpaceItem);
  * @param {() => void} props.onClose
  * @param {(id: string) => void} props.onEdit
  * @param {(id: string) => void} props.onDelete
+ * @param {(id: string, on: boolean) => void} props.onSetDeviceDefault
+ * @param {(id: string, on: boolean) => void} props.onSetSystemDefault
  */
-const SpaceContextMenu = ({ menu, onClose, onEdit, onDelete }) =>
+const SpaceContextMenu = ({
+  menu,
+  onClose,
+  onEdit,
+  onDelete,
+  onSetDeviceDefault,
+  onSetSystemDefault,
+}) =>
   h(
     Fragment,
     null,
@@ -216,6 +234,52 @@ const SpaceContextMenu = ({ menu, onClose, onEdit, onDelete }) =>
         onClick: e => e.stopPropagation(),
       },
       h('div', { class: 'context-menu-title' }, menu.name),
+      h(
+        'button',
+        {
+          class: `context-menu-item${menu.isDeviceDefault ? ' checked' : ''}`,
+          'data-action': 'default-device',
+          onClick: () => {
+            onClose();
+            onSetDeviceDefault(menu.spaceId, !menu.isDeviceDefault);
+          },
+        },
+        h(
+          'span',
+          { class: 'context-menu-icon' },
+          menu.isDeviceDefault ? '✓' : '📌',
+        ),
+        h(
+          'span',
+          null,
+          menu.isDeviceDefault
+            ? 'Default on this device'
+            : 'Set default on this device',
+        ),
+      ),
+      h(
+        'button',
+        {
+          class: `context-menu-item${menu.isSystemDefault ? ' checked' : ''}`,
+          'data-action': 'default-system',
+          onClick: () => {
+            onClose();
+            onSetSystemDefault(menu.spaceId, !menu.isSystemDefault);
+          },
+        },
+        h(
+          'span',
+          { class: 'context-menu-icon' },
+          menu.isSystemDefault ? '✓' : '🌐',
+        ),
+        h(
+          'span',
+          null,
+          menu.isSystemDefault
+            ? 'Default for everyone'
+            : 'Set default for everyone',
+        ),
+      ),
       h(
         'button',
         {
@@ -284,6 +348,8 @@ const SpacesGutterView = ({ controller }) => {
       spaceId: space.id,
       name: space.name,
       isHome: space.isHome,
+      isDeviceDefault: space.isDeviceDefault,
+      isSystemDefault: space.isSystemDefault,
       x,
       y,
     });
@@ -323,6 +389,8 @@ const SpacesGutterView = ({ controller }) => {
           onClose: () => setMenu(null),
           onEdit: controller.editSpace,
           onDelete: controller.deleteSpace,
+          onSetDeviceDefault: controller.setDeviceDefault,
+          onSetSystemDefault: controller.setSystemDefault,
         })
       : null,
   );
@@ -353,6 +421,22 @@ export const createSpacesGutter = ({
   let homeSpaceConfig = HOME_SPACE_DEFAULTS;
   /** @type {string} */
   let activeSpaceId = 'home'; // Will be updated after loading spaces
+  // Whether the one-time "open the default space on load" has run, so a later
+  // API-triggered refresh() (e.g. reconnect) never yanks the user elsewhere.
+  let appliedInitialDefault = false;
+
+  // Per-device default space (this browser). Overrides the system-wide default
+  // (stored on the home config). '' means "no per-device preference".
+  const DEVICE_DEFAULT_KEY = 'chat-default-space';
+  const loadDeviceDefaultSpaceId = () => {
+    try {
+      return window.localStorage.getItem(DEVICE_DEFAULT_KEY) || '';
+    } catch {
+      return '';
+    }
+  };
+  let deviceDefaultSpaceId = loadDeviceDefaultSpaceId();
+  const systemDefaultSpaceId = () => homeSpaceConfig.defaultSpaceId || '';
 
   /**
    * Get spaces as sorted array.
@@ -521,7 +605,7 @@ export const createSpacesGutter = ({
    * Update an existing space's configuration.
    *
    * @param {string} id
-   * @param {Partial<Pick<SpaceConfig, 'name' | 'icon' | 'scheme' | 'viewMode'>>} updates
+   * @param {Partial<Pick<SpaceConfig, 'name' | 'icon' | 'scheme' | 'viewMode' | 'defaultSpaceId'>>} updates
    * @returns {Promise<void>}
    */
   const updateSpace = async (id, updates) => {
@@ -626,6 +710,60 @@ export const createSpacesGutter = ({
   };
 
   /**
+   * Set (or clear) the per-device default space. Persisted in localStorage, so
+   * it is scoped to this browser and overrides the system-wide default.
+   *
+   * @param {string} id
+   * @param {boolean} on
+   */
+  const setDeviceDefaultSpace = (id, on) => {
+    deviceDefaultSpaceId = on ? id : '';
+    try {
+      if (deviceDefaultSpaceId) {
+        window.localStorage.setItem(DEVICE_DEFAULT_KEY, deviceDefaultSpaceId);
+      } else {
+        window.localStorage.removeItem(DEVICE_DEFAULT_KEY);
+      }
+    } catch {
+      // localStorage unavailable (private mode); the in-memory value still
+      // drives this session's view.
+    }
+    pushState();
+  };
+
+  /**
+   * Set (or clear) the system-wide default space. Persisted on the home config
+   * (spaces/0) so it is shared across everyone and every device; the per-device
+   * default, when set, still wins on load.
+   *
+   * @param {string} id
+   * @param {boolean} on
+   */
+  const setSystemDefaultSpace = (id, on) => {
+    updateSpace('home', { defaultSpaceId: on ? id : '' }).catch(
+      window.reportError,
+    );
+  };
+
+  /**
+   * Open the configured default space on first load — the per-device default
+   * (this browser) if set, otherwise the system-wide default. Runs once, and
+   * only when the app opened at Home, so an explicit deep-link is never
+   * overridden.
+   */
+  const applyInitialDefaultSpace = () => {
+    if (appliedInitialDefault) return;
+    appliedInitialDefault = true;
+    // Only redirect a plain Home open; a deep-linked path stays put.
+    if (currentProfilePath.length !== 0) return;
+    const target = deviceDefaultSpaceId || systemDefaultSpaceId();
+    // '' and 'home' both mean "stay on Home", which is where we already are.
+    if (!target || target === 'home') return;
+    if (!spacesMap.has(target)) return; // stale / since-removed
+    selectSpace(target);
+  };
+
+  /**
    * Build the pure-data snapshot the confined view renders from. Home is always
    * first; user spaces follow in numeric id order. The 1-indexed Cmd-shortcut
    * (⌘1=home, ⌘2=first user space, …) is attached for the first nine items.
@@ -634,6 +772,7 @@ export const createSpacesGutter = ({
    */
   const buildViewState = () => {
     const allSpaces = [homeSpaceConfig, ...getSpacesArray()];
+    const systemDefault = systemDefaultSpaceId();
     return {
       activeSpaceId,
       spaces: allSpaces.map((space, index) => {
@@ -644,6 +783,8 @@ export const createSpacesGutter = ({
           name: space.name,
           icon: space.icon,
           isHome: space.id === 'home',
+          isDeviceDefault: space.id === deviceDefaultSpaceId,
+          isSystemDefault: space.id === systemDefault,
         };
         if (shortcutNum >= 1 && shortcutNum <= 9) {
           view.shortcut = shortcutNum;
@@ -675,6 +816,8 @@ export const createSpacesGutter = ({
     deleteSpace: id => {
       removeSpace(id).catch(window.reportError);
     },
+    setDeviceDefault: setDeviceDefaultSpace,
+    setSystemDefault: setSystemDefaultSpace,
     addSpace: () => showAddSpaceDialog(),
   };
 
@@ -897,6 +1040,9 @@ export const createSpacesGutter = ({
     ) {
       result.ttsPath = obj.ttsPath;
     }
+    if (typeof obj.defaultSpaceId === 'string') {
+      result.defaultSpaceId = obj.defaultSpaceId;
+    }
     if (
       Array.isArray(obj.workflowPath) &&
       obj.workflowPath.every(p => typeof p === 'string')
@@ -955,6 +1101,9 @@ export const createSpacesGutter = ({
           ...HOME_SPACE_DEFAULTS,
           icon: config.icon,
           scheme: config.scheme,
+          ...(config.defaultSpaceId
+            ? { defaultSpaceId: config.defaultSpaceId }
+            : {}),
         });
         if (activeSpaceId === 'home') {
           applyScheme(homeSpaceConfig.scheme);
@@ -1056,11 +1205,15 @@ export const createSpacesGutter = ({
           loadSpaceConfig(id).then(config => {
             if (config) {
               if (id === '0') {
-                // Space 0 is the home config — merge icon/scheme only
+                // Space 0 is the home config — merge icon/scheme plus the
+                // system-wide default-space preference.
                 homeSpaceConfig = harden({
                   ...HOME_SPACE_DEFAULTS,
                   icon: config.icon,
                   scheme: config.scheme,
+                  ...(config.defaultSpaceId
+                    ? { defaultSpaceId: config.defaultSpaceId }
+                    : {}),
                 });
               } else {
                 spacesMap.set(id, config);
@@ -1145,8 +1298,9 @@ export const createSpacesGutter = ({
   // Mount the confined view once; subsequent repaints go through pushState().
   renderConfined(h(SpacesGutterView, { controller }), $container);
 
-  // Load spaces and start watching
+  // Load spaces, open the configured default space (once), then start watching.
   refresh()
+    .then(() => applyInitialDefaultSpace())
     .then(() => watchSpaces())
     .catch(window.reportError);
 
