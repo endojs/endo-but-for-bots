@@ -218,10 +218,11 @@ interface SpreadsheetControl {
   // Host-side caretaker. Never granted to guests.
   setAllowedSheets(titles: string[] | null): void;  // null = all tabs
   setAllowedRanges(a1: string[] | null): void;       // null = whole tab(s)
-  setReadOnly(flag: boolean): void;
   setMaxCellsPerRead(n: number): void;
   setPollIntervalMs(ms: number): void;
-  revoke(): void;
+  setMaxRequestsPerMinute(n: number): void;
+  revokeWrites(): void;  // sever append+overwrite; reads survive
+  revoke(): void;        // sever everything
   help(): string;
 }
 
@@ -263,8 +264,16 @@ host mints `{ spreadsheet, writer, control }` once; it typically grants
 `spreadsheet` by pet name (`budget`) and withholds `writer` unless the use
 case demands it (`budget-writer`). `writer.readOnly()` lets an agent that
 holds write authority delegate a read-only view onward, mirroring
-`EndoMount.readOnly()`. `control.setReadOnly(true)` is the caretaker's
-emergency brake over already-granted writers, on top of revocation.
+`EndoMount.readOnly()`. `control.revokeWrites()` is the caretaker's emergency
+brake over already-granted writers: it severs the revocable forwarder the
+append and overwrite facets reach the client through, leaving outstanding
+readers working. It is deliberately not a `setReadOnly(flag)` the host can
+toggle back — a boolean guarding a write path means the writer still *holds*
+write authority and is merely being asked not to use it, so a missed check
+anywhere reinstates it. Withholding or severing the authority is the whole
+enforcement; there is no mode for code to consult (see the attenuation
+discipline in [pola-io](https://www.npmjs.com/package/@agoric/pola-io), whose
+`FileRW.readOnly()` likewise mints a `FileRd` rather than setting a flag).
 
 The permission axis is a lattice, not a two-state switch, because different
 parties often need to touch one sheet without holding each other's authority:
