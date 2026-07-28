@@ -1,6 +1,6 @@
 // @ts-check
 /// <reference path="./bus-xs-host-globals.d.ts" />
-/* global globalThis, hostGetDaemonHandle */
+/* global hostGetDaemonHandle */
 
 /**
  * XS worker bootstrap.
