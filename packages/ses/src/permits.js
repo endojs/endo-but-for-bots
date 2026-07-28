@@ -1664,6 +1664,34 @@ export const permitted = {
     '@@species': getter,
     // https://github.com/tc39/proposal-promise-try
     try: fn,
+    // Peer bank for the @endo/eventual-send package, anticipating the
+    // TC39 Promise.delegate proposal. Each function is installed
+    // (configurable: false, writable: false) by
+    // `@endo/eventual-send/shim.js` (eager) or by the package's main
+    // entry on first use of the corresponding lexical ponyfill thunk
+    // (lazy). Each slot value is a callable function. The nested
+    // `RegisteredSymbol(HandledPromise)` slot also exposes a
+    // constructor-shaped surface for back-compat. Strictly parallel to
+    // `Object[Symbol.for('harden')]` permitted at line 519.
+    'RegisteredSymbol(delegate)': fn,
+    'RegisteredSymbol(applyFunction)': fn,
+    'RegisteredSymbol(applyFunctionSendOnly)': fn,
+    'RegisteredSymbol(applyMethod)': fn,
+    'RegisteredSymbol(applyMethodSendOnly)': fn,
+    'RegisteredSymbol(get)': fn,
+    'RegisteredSymbol(getSendOnly)': fn,
+    'RegisteredSymbol(resolve)': fn,
+    'RegisteredSymbol(HandledPromise)': {
+      '[[Proto]]': 'Promise',
+      applyFunction: fn,
+      applyFunctionSendOnly: fn,
+      applyMethod: fn,
+      applyMethodSendOnly: fn,
+      get: fn,
+      getSendOnly: fn,
+      prototype: '%PromisePrototype%',
+      resolve: fn,
+    },
   },
 
   '%PromisePrototype%': {
