@@ -50,14 +50,22 @@ export const ComposeBar = ({ state, controller }) => {
             type: 'button',
             class: `floot-mic${voice.micActive ? ' listening' : ''}${
               voice.speaking ? ' recording' : ''
-            }`,
+            }${voice.micError ? ' error' : ''}`,
             'aria-label': voice.micActive
               ? 'Stop listening'
               : 'Start listening',
+            title: voice.micError || undefined,
             onClick: () => controller.toggleMic(),
           },
           '🎤',
         )
+      : null;
+
+  // Persistent, actionable guidance when the browser/OS denied the mic — the
+  // transient status line isn't enough for a fix that spans app + OS settings.
+  const micHint =
+    voice && voice.micError
+      ? h('div', { class: 'floot-mic-hint', role: 'alert' }, voice.micError)
       : null;
 
   const speakerButton =
@@ -80,6 +88,7 @@ export const ComposeBar = ({ state, controller }) => {
     Fragment,
     null,
     voice && voice.hasMic ? VadMeter(voice) : null,
+    micHint,
     h(
       'div',
       { class: 'floot-compose' },

@@ -40,11 +40,13 @@ export const SettingsPanel = ({ state, controller }) => {
     ? [
         Row(
           'Mic',
-          v.micActive
-            ? v.speaking
-              ? 'listening (speaking)'
-              : 'listening'
-            : 'off',
+          v.micError
+            ? v.micError
+            : v.micActive
+              ? v.speaking
+                ? 'listening (speaking)'
+                : 'listening'
+              : 'off',
         ),
         Row('Live transcript', v.transcript || '—'),
         Row(

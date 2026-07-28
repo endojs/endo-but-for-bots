@@ -467,6 +467,16 @@
   background: var(--fl-text);
 }
 
+.floot-mic-hint {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--fl-red);
+  background: var(--fl-surface);
+  border-top: 1px solid var(--fl-border);
+  flex-shrink: 0;
+}
+
 .floot-compose {
   display: flex;
   gap: 0.5rem;
@@ -548,6 +558,10 @@
   border-color: var(--fl-green);
   color: var(--fl-green);
   animation: floot-mic-pulse 1.5s ease infinite;
+}
+.floot-mic.error {
+  border-color: var(--fl-red);
+  color: var(--fl-red);
 }
 @keyframes floot-mic-pulse {
   0%,

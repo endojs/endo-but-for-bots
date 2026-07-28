@@ -87,6 +87,7 @@ export {};
  *   thresholdPct?: number,
  *   transcript?: string,
  *   replayingText?: string,
+ *   micError?: string,
  *   ttsSettings?: {
  *     voice: string, speed: number, noiseScale: number, noiseW: number,
  *     sentenceSilence: number,
