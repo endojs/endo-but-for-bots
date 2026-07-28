@@ -233,6 +233,37 @@ test('the model option reaches the client', async t => {
   t.deepEqual(options, [{ model: 'claude-opus-4-8' }]);
 });
 
+test('the systemPrompt option reaches the client', async t => {
+  const { writer } = makeRecordingWriter();
+  const { client, push, options } = makeFakeClient();
+  const turn = runClaudeTurn({
+    client,
+    text: 'hi',
+    writer,
+    systemPrompt: 'You are Floot.',
+  });
+  push({ type: 'end' });
+  await turn;
+  t.deepEqual(options, [{ systemPrompt: 'You are Floot.' }]);
+});
+
+test('model and systemPrompt are forwarded together', async t => {
+  const { writer } = makeRecordingWriter();
+  const { client, push, options } = makeFakeClient();
+  const turn = runClaudeTurn({
+    client,
+    text: 'hi',
+    writer,
+    model: 'claude-opus-4-8',
+    systemPrompt: 'You are Floot.',
+  });
+  push({ type: 'end' });
+  await turn;
+  t.deepEqual(options, [
+    { model: 'claude-opus-4-8', systemPrompt: 'You are Floot.' },
+  ]);
+});
+
 test('aborting the signal closes the reader and kills the turn', async t => {
   const { writer } = makeRecordingWriter();
   const { client, push, killed } = makeFakeClient();

@@ -233,6 +233,41 @@ test('send() adds --continue after the first turn and forwards --model', async t
   }
 });
 
+test('a constructor systemPrompt adds --append-system-prompt to every spawn', async t => {
+  const fake = makeFakeSlice([[], []]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), { systemPrompt: 'You are Floot.' }),
+  );
+
+  await drain(await client.send('first'));
+  await drain(await client.send('second'));
+
+  t.is(fake.spawned.length, 2);
+  for (const proc of fake.spawned) {
+    const i = proc.argv.indexOf('--append-system-prompt');
+    t.true(i !== -1, 'argv carries --append-system-prompt');
+    t.is(proc.argv[i + 1], 'You are Floot.');
+  }
+});
+
+test('a per-turn systemPrompt overrides the constructor default', async t => {
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), { systemPrompt: 'default persona' }),
+  );
+  await drain(await client.send('hi', { systemPrompt: 'turn persona' }));
+  const { argv } = fake.spawned[0];
+  const i = argv.indexOf('--append-system-prompt');
+  t.is(argv[i + 1], 'turn persona');
+});
+
+test('without a systemPrompt no --append-system-prompt is passed', async t => {
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+  await drain(await client.send('do a thing'));
+  t.false(fake.spawned[0].argv.includes('--append-system-prompt'));
+});
+
 test('overlapping sends queue and run in order (serialized)', async t => {
   const fake = makeFakeSlice([[], []]);
   const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));

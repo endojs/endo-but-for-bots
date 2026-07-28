@@ -185,6 +185,11 @@ const defaultStderrIterable = proc =>
  * @property {string} [rootfsLabel] - Human-readable rootfs label
  *   (diagnostic).
  * @property {string} [model] - Default `--model` for every send.
+ * @property {string} [systemPrompt] - Default system prompt appended to
+ *   every spawn via `--append-system-prompt`, so the CLI's own agent loop
+ *   runs under the caller's persona/instructions in addition to Claude
+ *   Code's built-in prompt. Overridable per turn via `send(prompt, {
+ *   systemPrompt })`. Omitted argv when neither is set.
  * @property {boolean} [resumePriorConversation] - Seed
  *   `conversationStarted` so the very first `send()` passes `--continue`.
  *   Set by `claude-client-module.js` when a reincarnated session's
@@ -233,6 +238,7 @@ export const makeClaudeClient = ({
   backend,
   rootfsLabel = '',
   model,
+  systemPrompt,
   mcpConfigPath,
   env = {},
   initialPrompt,
@@ -372,6 +378,15 @@ export const makeClaudeClient = ({
     if (useModel) {
       argv.push('--model', useModel);
     }
+    // Append the caller's persona/instructions to Claude Code's built-in
+    // system prompt so the CLI's own agent loop honors them (the CLI never
+    // sees the conversation-tree system message the API path injects). Sent
+    // on every spawn — each `claude -p` is a fresh process — so a resumed
+    // (`--continue`) turn keeps the same persona as the first.
+    const useSystemPrompt = opts.systemPrompt || systemPrompt;
+    if (useSystemPrompt) {
+      argv.push('--append-system-prompt', String(useSystemPrompt));
+    }
     if (conversationStarted) {
       argv.push('--continue');
     }
@@ -401,7 +416,7 @@ export const makeClaudeClient = ({
    * queued when closed bails before it spawns.
    *
    * @param {string} prompt
-   * @param {{ model?: string }} [opts]
+   * @param {{ model?: string, systemPrompt?: string }} [opts]
    * @returns {object} reply reader
    */
   const runTurn = (prompt, opts = {}) => {
@@ -536,7 +551,10 @@ export const makeClaudeClient = ({
      * `{ type: 'abort', reason }`). Closing the reader aborts the turn.
      *
      * @param {string} prompt
-     * @param {object} [opts]
+     * @param {{ model?: string, systemPrompt?: string }} [opts] - Per-turn
+     *   overrides: `model` for `--model`, `systemPrompt` for
+     *   `--append-system-prompt` (each falls back to the constructor
+     *   default when omitted).
      */
     async send(prompt, opts = {}) {
       guardLive();

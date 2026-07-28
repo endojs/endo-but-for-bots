@@ -240,6 +240,9 @@ harden(makeClaudeEventTranslator);
  * @param {object} options.writer - makeReplyChannel writer.
  * @param {AbortSignal} [options.signal]
  * @param {string} [options.model] - Optional model override for this turn.
+ * @param {string} [options.systemPrompt] - Optional session system prompt to
+ *   append to Claude Code's built-in prompt (via `--append-system-prompt`), so
+ *   the CLI runtime runs under the same persona the API runtime gets.
  * @returns {Promise<{
  *   finalContent: string,
  *   usage: { inputTokens: number, outputTokens: number } | undefined,
@@ -257,9 +260,16 @@ export const runClaudeTurn = async ({
   writer,
   signal,
   model,
+  systemPrompt,
 }) => {
   const translator = makeClaudeEventTranslator(writer);
-  const reader = await E(client).send(text, model ? { model } : {});
+  const reader = await E(client).send(
+    text,
+    harden({
+      ...(model ? { model } : {}),
+      ...(systemPrompt ? { systemPrompt } : {}),
+    }),
+  );
   const iterator = iterateReader(/** @type {any} */ (reader));
   const onAbort = () => {
     // Close the CLI reader: the responder's close watcher fires its onClose,

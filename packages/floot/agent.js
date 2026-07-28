@@ -422,6 +422,14 @@ Operating the daemon — reach the host in exec with
   \`E(endo).provideWorker(name)\` mints a worker.
 - \`E(endo).cancel(name)\` tears a capability down — destructive, so confirm first.
 
+Networks live on the host, not on you. Your OWN guest network directory
+(\`E(powers).lookup('@nets')\`) is a separate, empty directory — reading it will
+mislead you into thinking no transports exist. The daemon's transports live under
+the host's \`@nets\`: \`const nets = await E(endo).lookup('@nets'); await E(nets).list()\`
+lists them (e.g. \`iroh\`, \`loop\`), and \`E(nets).lookup('iroh')\` reaches a specific
+one. Use these when a task involves connecting to, inviting, or accepting remote
+peers.
+
 Your petstore also contains "endo-src" — a READ-ONLY mount of the Endo
 codebase you run inside. Use it to understand the capabilities you operate
 before acting through "endo". In exec, look it up and read from it:
@@ -873,7 +881,15 @@ export const makeStreamingAgent = async (
         finalContent: replyText,
         usage: turnUsage,
         toolCalls,
-      } = await runClaudeTurn({ client: claudeClient, text, writer, signal });
+      } = await runClaudeTurn({
+        client: claudeClient,
+        text,
+        writer,
+        signal,
+        // Give the CLI runtime the same session persona/instructions the API
+        // runtime gets (the CLI never sees the tree's system message).
+        systemPrompt: effectivePrompt,
+      });
       if (signal?.aborted) return;
       let replyParentId = userNode.id;
       if (toolCalls.length > 0) {
