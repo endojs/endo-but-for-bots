@@ -448,6 +448,11 @@ const getConfigDirectoryName = (testTitle, testConfigIndex) => {
  */
 const prepareConfig = async (t, { gcEnabled = true } = {}) => {
   const { cancelled, cancel } = makeCancelKit();
+  // Every test intentionally rejects this cancellation token during teardown.
+  // Observe it before handing it to the daemon clients, since on Node 22 the
+  // clients can derive and reject teardown promises in the same turn as
+  // cancellation. Attaching this only in afterEach is too late for that race.
+  cancelled.catch(() => {});
   const config = {
     ...makeConfig('tmp', getConfigDirectoryName(t.title, t.context.length)),
     gcEnabled,
