@@ -1340,15 +1340,49 @@ export const flootComponent = (
       const name = /** @type {Error} */ (err).name;
       const message = /** @type {Error} */ (err).message;
       if (name === 'NotAllowedError' || name === 'SecurityError') {
-        // The classic "denied with no prompt" case — usually the site is set to
-        // block the mic, or (on mobile) the browser app itself lacks the OS
-        // microphone permission, so it can't even ask.
-        micError =
-          'Microphone blocked. Allow it for this site (tap the address-bar ' +
-          'lock → Permissions → Microphone → Allow), then make sure the ' +
-          'browser app has microphone permission in your device settings ' +
-          '(e.g. Android: Settings → Apps → your browser → Permissions → ' +
-          'Microphone). Tap 🎤 again to retry.';
+        // Distinguish a *site*-level block from an *OS*-level one. If the
+        // browser reports the site permission as 'denied', the fix is in the
+        // browser's site settings. If it's still 'prompt'/'granted' yet
+        // getUserMedia was rejected without a dialog, the browser tried to ask
+        // but the OS withheld the mic from the browser app (or a system-wide
+        // mic switch is off) — this is the "set to Ask, yet no prompt" case.
+        let permState = '';
+        try {
+          const status = await navigator.permissions?.query?.(
+            /** @type {any} */ ({ name: 'microphone' }),
+          );
+          permState = status?.state || '';
+        } catch {
+          // Permissions API unsupported, or 'microphone' isn't a known name on
+          // this browser — leave permState empty and give generic guidance.
+        }
+        // A home-screen install (PWA/WebAPK, or a Chrome shortcut) has its own
+        // app entry, so its mic permission lives under that app in Android
+        // settings — not necessarily under the browser the user thinks of.
+        const standalone =
+          (typeof window !== 'undefined' &&
+            !!window.matchMedia?.('(display-mode: standalone)')?.matches) ||
+          /** @type {any} */ (navigator).standalone === true;
+        const appNote = standalone
+          ? ' (This is installed to your home screen, so its microphone ' +
+            'permission is under that installed app in Android Settings → ' +
+            'Apps, which may differ from the browser.)'
+          : '';
+        if (permState === 'denied') {
+          micError =
+            'Microphone blocked for this site. Tap the address-bar lock → ' +
+            'Permissions → Microphone → Allow (or “Reset permissions”), ' +
+            'reload, then tap 🎤 again.' +
+            appNote;
+        } else {
+          micError =
+            'The browser tried to ask for the microphone but got no answer, ' +
+            'so the block is at the phone’s OS level. Enable Android Settings ' +
+            '→ Apps → (your browser) → Permissions → Microphone, and turn on ' +
+            'the system “Microphone access” switch (swipe down → Privacy / ' +
+            'Quick Settings). Then tap 🎤 again.' +
+            appNote;
+        }
       } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
         micError = 'No microphone was found on this device.';
       } else if (name === 'NotReadableError') {
