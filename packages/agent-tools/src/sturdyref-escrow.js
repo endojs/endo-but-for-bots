@@ -3,6 +3,7 @@
 
 /** @import { SturdyRef } from '@endo/pass-style' */
 
+import harden from '@endo/harden';
 import { isSturdyRef } from '@endo/pass-style';
 
 const handlePrefix = 'sturdyref:';

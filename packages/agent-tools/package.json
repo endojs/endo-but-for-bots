@@ -125,6 +125,7 @@
     "@endo/exo-http-client": "workspace:^",
     "@endo/exo-shell": "workspace:^",
     "@endo/far": "workspace:^",
+    "@endo/harden": "workspace:^",
     "@endo/marshal": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
