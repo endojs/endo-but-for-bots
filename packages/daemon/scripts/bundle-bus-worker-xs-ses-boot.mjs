@@ -9,8 +9,11 @@
  *   `HandledPromise` shim on `globalThis`.
  *
  * Mirrors `bundle-bus-daemon-rust-xs.mjs` and
- * `bundle-bus-worker-xs.mjs`: same compartment-mapper pipeline,
- * same Node-only excluded packages.
+ * `bundle-bus-worker-xs.mjs`: same compartment-mapper pipeline, and
+ * likewise no package exclusion list — module retention follows the
+ * entry point's import graph, so a package whose modules are never
+ * reached costs nothing.  Steer retention with `exports` / `imports`
+ * conditions if that ever changes.
  *
  * Usage: node packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.mjs
  */
@@ -26,27 +29,11 @@ const readPowers = makeReadPowers({ fs, url, crypto, path });
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const outDir = path.resolve(__dirname, '../../../rust/endo/xsnap/src');
 
-// Node-only packages excluded from the XS ses-boot bundle.
-const EXCLUDED_PACKAGES = new Set(['@endo/init', '@endo/lockdown', 'ses']);
-
 const entryUrl = url.pathToFileURL(
   path.resolve(__dirname, '../src/bus-worker-xs-ses-boot.js'),
 ).href;
 
-const bundle = await makeBundle(readPowers, entryUrl, {
-  packageDependenciesHook: ({ canonicalName, dependencies }) => {
-    const filtered = new Set(
-      [...dependencies].filter(dep => !EXCLUDED_PACKAGES.has(dep)),
-    );
-    if (filtered.size !== dependencies.size) {
-      const removed = [...dependencies].filter(d => !filtered.has(d));
-      console.log(
-        `  ${canonicalName}: excluded ${removed.length} Node-only dep(s): ${removed.join(', ')}`,
-      );
-    }
-    return { dependencies: filtered };
-  },
-});
+const bundle = await makeBundle(readPowers, entryUrl, {});
 const outPath = path.join(outDir, 'ses_boot.js');
 fs.writeFileSync(outPath, bundle);
 console.log(`Wrote ${outPath} (${bundle.length} bytes)`);
