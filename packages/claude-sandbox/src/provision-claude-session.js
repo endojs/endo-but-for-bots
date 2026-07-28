@@ -14,11 +14,11 @@ import nodePath from 'node:path';
 import { E } from '@endo/eventual-send';
 
 import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
+import { toCurrentSpecifier } from './current-specifier.js';
 
-const clientModuleSpecifier = new URL(
-  './claude-client-module.js',
-  import.meta.url,
-).href;
+const clientModuleSpecifier = toCurrentSpecifier(
+  new URL('./claude-client-module.js', import.meta.url).href,
+);
 
 const SANDBOX_WORKSPACE_PATH = '/workspace';
 

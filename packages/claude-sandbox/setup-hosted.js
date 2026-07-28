@@ -23,17 +23,17 @@ import path from 'node:path';
 import { E } from '@endo/eventual-send';
 import { makeError, X, q } from '@endo/errors';
 
+import { toCurrentSpecifier } from './src/current-specifier.js';
+
 /** @import { EndoHost } from '@endo/daemon' */
 
-const credentialsModuleSpecifier = new URL(
-  './src/claude-credentials-module.js',
-  import.meta.url,
-).href;
+const credentialsModuleSpecifier = toCurrentSpecifier(
+  new URL('./src/claude-credentials-module.js', import.meta.url).href,
+);
 
-const sessionProvisionerModuleSpecifier = new URL(
-  './src/claude-session-provisioner.js',
-  import.meta.url,
-).href;
+const sessionProvisionerModuleSpecifier = toCurrentSpecifier(
+  new URL('./src/claude-session-provisioner.js', import.meta.url).href,
+);
 
 const CREDENTIAL_KINDS = harden(['apiKey', 'oauthToken']);
 

@@ -11,11 +11,12 @@ import { makeError, q, X } from '@endo/errors';
 import { M } from '@endo/patterns';
 
 import { provisionClaudeSession } from './provision-claude-session.js';
+import { toCurrentSpecifier } from './current-specifier.js';
 
-const nodeFsModuleSpecifier = new URL(
-  '../../platform/src/fs/extended/node-fs-module.js',
-  import.meta.url,
-).href;
+const nodeFsModuleSpecifier = toCurrentSpecifier(
+  new URL('../../platform/src/fs/extended/node-fs-module.js', import.meta.url)
+    .href,
+);
 
 const ClaudeSessionProvisionerInterface = M.interface(
   'ClaudeSessionProvisioner',

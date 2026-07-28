@@ -24,6 +24,8 @@ import { readFileSync } from 'node:fs';
 import { E } from '@endo/eventual-send';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 
+import { toCurrentSpecifier } from './src/current-specifier.js';
+
 // On-disk markdown describing the directory's objects, copied into a
 // `<dir>/readme.md` blob at provision time (easy to edit; `.md` lets the chat
 // UI render it).
@@ -32,10 +34,9 @@ const readmeUrl = new URL(
   import.meta.url,
 );
 
-const factoryCapletSpecifier = new URL(
-  'src/claude-credentials-factory.js',
-  import.meta.url,
-).href;
+const factoryCapletSpecifier = toCurrentSpecifier(
+  new URL('src/claude-credentials-factory.js', import.meta.url).href,
+);
 
 const DEFAULT_FACTORY_NAME = 'claude-credentials';
 

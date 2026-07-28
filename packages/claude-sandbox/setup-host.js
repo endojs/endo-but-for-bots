@@ -24,15 +24,16 @@
 import { E } from '@endo/eventual-send';
 
 import { main as provisionSandboxFactory } from './factory.js';
+import { toCurrentSpecifier } from './src/current-specifier.js';
 
 /** @import { EndoHost } from '@endo/daemon' */
 
-const sandboxSpecifier = new URL('../sandbox/src/agent.js', import.meta.url)
-  .href;
-const mountCapletSpecifier = new URL(
-  '../9p-server/mount-caplet.js',
-  import.meta.url,
-).href;
+const sandboxSpecifier = toCurrentSpecifier(
+  new URL('../sandbox/src/agent.js', import.meta.url).href,
+);
+const mountCapletSpecifier = toCurrentSpecifier(
+  new URL('../9p-server/mount-caplet.js', import.meta.url).href,
+);
 
 // Kept in sync with factory.js's default and the caplet's SANDBOX_NAMESPACE.
 const SANDBOX_DIR = 'claude-sandbox';

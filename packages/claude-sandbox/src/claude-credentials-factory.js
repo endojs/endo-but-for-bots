@@ -60,6 +60,8 @@ import { E } from '@endo/eventual-send';
 import { makeError, X, q } from '@endo/errors';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
+import { toCurrentSpecifier } from './current-specifier.js';
+
 /** @import { FarRef } from '@endo/eventual-send' */
 
 /**
@@ -94,10 +96,9 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
  * @property {(readerRef: any) => AsyncIterator<any>} [iterateMessages]
  */
 
-const CREDENTIALS_MODULE_SPECIFIER = new URL(
-  './claude-credentials-module.js',
-  import.meta.url,
-).href;
+const CREDENTIALS_MODULE_SPECIFIER = toCurrentSpecifier(
+  new URL('./claude-credentials-module.js', import.meta.url).href,
+);
 
 const FactoryInterface = M.interface('ClaudeCredentialsFactory', {
   help: M.call().optional(M.string()).returns(M.string()),
