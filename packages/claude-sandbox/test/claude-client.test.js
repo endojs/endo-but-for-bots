@@ -179,6 +179,21 @@ test('send() spawns claude -p with stream-json and yields parsed events', async 
   t.false(argv.includes('--continue'));
 });
 
+test('resumePriorConversation makes the first send use --continue', async t => {
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), { resumePriorConversation: true }),
+  );
+  await drain(await client.send('after restart'));
+  t.is(fake.spawned.length, 1);
+  // A session reincarnated after a daemon restart, whose persistent config dir
+  // already held a transcript, resumes it on its very first post-restart turn
+  // rather than forking a fresh, context-free conversation.
+  t.true(fake.spawned[0].argv.includes('--continue'));
+  const status = await client.status();
+  t.true(status.conversationStarted);
+});
+
 test('an mcpConfigPath adds --mcp-config and --strict-mcp-config', async t => {
   const fake = makeFakeSlice([[]]);
   const client = makeClaudeClient(

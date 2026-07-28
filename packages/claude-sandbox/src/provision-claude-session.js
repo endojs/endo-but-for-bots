@@ -21,6 +21,10 @@ const clientModuleSpecifier = toCurrentSpecifier(
 );
 
 const SANDBOX_WORKSPACE_PATH = '/workspace';
+// Slice-internal mount path for the persistent Claude config dir (also
+// CLAUDE_CONFIG_DIR). Deliberately outside /workspace so the transcript never
+// leaks into a new-project git worktree or a `publishWorkspace` static site.
+const SANDBOX_CONFIG_PATH = '/claude-config';
 
 const ALLOWED_NETWORKS = harden(['none', 'private']);
 
@@ -28,24 +32,30 @@ const ALLOWED_NETWORKS = harden(['none', 'private']);
 let sessionCounter = 0;
 
 /**
- * @param {string} mountPoint
- * @param {string} mountName
+ * @param {Array<{ mountPoint: string, mountName: string }>} mounts - The
+ *   (mountPoint, mountName) pairs this session may `provideMount`/`removeMount`.
+ *   Always the workspace; plus the persistent Claude config dir when one was
+ *   provisioned.
  * @param {boolean} hasCredentials
  * @param {boolean} [hasMcpMount] - whether an `mcpMount` cap is bundled by
  *   reference into the powers (the Endo tool bridge socket directory).
+ * @param {boolean} [hasConfigFilesystem] - whether a dedicated persistent
+ *   config `Filesystem` cap is bundled by reference (enables cross-restart
+ *   conversation persistence).
  * @returns {string}
  */
 export const buildSessionPowersSource = (
-  mountPoint,
-  mountName,
+  mounts,
   hasCredentials,
   hasMcpMount = false,
+  hasConfigFilesystem = false,
 ) => `makeExo(
   'ClaudeSessionPowers',
   M.interface('ClaudeSessionPowers', {
     sandboxFactory: M.call().returns(M.any()),
     fsMounter: M.call().returns(M.any()),
     filesystem: M.call().returns(M.any()),
+    configFilesystem: M.call().returns(M.any()),
     credentials: M.call().returns(M.any()),
     mcpMount: M.call().returns(M.any()),
     provideMount: M.call(M.string(), M.string()).returns(M.promise()),
@@ -56,20 +66,26 @@ export const buildSessionPowersSource = (
     sandboxFactory: () => sandboxFactory,
     fsMounter: () => fsMounter,
     filesystem: () => filesystem,
+    configFilesystem: () => ${hasConfigFilesystem ? 'configFilesystem' : 'null'},
     credentials: () => ${hasCredentials ? 'credentials' : 'null'},
     mcpMount: () => ${hasMcpMount ? 'mcpMount' : 'null'},
     provideMount: (path, name) => {
-      if (path !== ${JSON.stringify(mountPoint)}) {
-        throw Error('claude-sandbox session powers: provideMount restricted to this session workspace mountpoint');
-      }
-      if (name !== ${JSON.stringify(mountName)}) {
-        throw Error('claude-sandbox session powers: provideMount restricted to this session workspace Mount name');
+      const allowed = ${JSON.stringify(
+        mounts.map(m => [m.mountPoint, m.mountName]),
+      )};
+      if (!allowed.some(pair => pair[0] === path && pair[1] === name)) {
+        throw Error('claude-sandbox session powers: provideMount restricted to this session mountpoints');
       }
       return E(agent).provideMount(path, name);
     },
-    removeMount: () => E(agent).remove(${JSON.stringify(mountName)}),
+    removeMount: () =>
+      Promise.allSettled(
+        ${JSON.stringify(
+          mounts.map(m => m.mountName),
+        )}.map(name => E(agent).remove(name)),
+      ),
     help: () =>
-      'Per-session claude-sandbox powers: sandboxFactory/fsMounter/filesystem/credentials/mcpMount accessors + provideMount/removeMount bounded to this session workspace. No lookup.',
+      'Per-session claude-sandbox powers: sandboxFactory/fsMounter/filesystem/configFilesystem/credentials/mcpMount accessors + provideMount/removeMount bounded to this session mounts. No lookup.',
   },
 )`;
 
@@ -124,6 +140,13 @@ export const resolveSandboxConfig = (formulaEnv = {}) => ({
  * @param {object} spec
  * @param {string} spec.name
  * @param {string|string[]} spec.filesystemName
+ * @param {string|string[]} [spec.configFilesystemName] - A dedicated
+ *   persistent `Filesystem` cap for the Claude config dir. When present, the
+ *   client mounts it at `/claude-config` and points CLAUDE_CONFIG_DIR there, so
+ *   the conversation transcript survives daemon restarts.
+ * @param {string} [spec.configHostDir] - Plain host backing directory of
+ *   `configFilesystemName`, forwarded to the client so it can detect a
+ *   pre-restart transcript and resume it.
  * @param {string|string[]|null} [spec.credentialsName]
  * @param {string} [spec.rootfs]
  * @param {string} [spec.network]
@@ -145,6 +168,8 @@ export const provisionClaudeSession = async (
   const {
     name,
     filesystemName,
+    configFilesystemName = null,
+    configHostDir = '',
     credentialsName = null,
     rootfs: rootfsValue = '',
     network = 'private',
@@ -190,6 +215,18 @@ export const provisionClaudeSession = async (
     );
     const workspacePetName = `claude-${sessionId}-workspace`;
 
+    // Dedicated persistent Claude config dir (holds the conversation
+    // transcript). A separate filesystem + mount from the workspace, so the
+    // transcript never lands in a new-project git worktree or a published
+    // static site. Absent for legacy callers that pass no config filesystem.
+    const hasConfigFilesystem = Boolean(configFilesystemName);
+    const configMountPoint = hasConfigFilesystem
+      ? nodePath.join(mountBaseDir, `claude-config-${sessionId}`)
+      : '';
+    const configPetName = hasConfigFilesystem
+      ? `claude-${sessionId}-config`
+      : '';
+
     const powersName = `claude-${sessionId}-powers`;
     toCleanup = [powersName, ...removeNames];
     const codeNames = ['agent', 'sandboxFactory', 'fsMounter', 'filesystem'];
@@ -199,6 +236,10 @@ export const provisionClaudeSession = async (
       underNamespace(sandboxNamespace, fsMounterName),
       filesystemName,
     ];
+    if (hasConfigFilesystem) {
+      codeNames.push('configFilesystem');
+      petNames.push(/** @type {string | string[]} */ (configFilesystemName));
+    }
     if (credentialsName) {
       codeNames.push('credentials');
       petNames.push(credentialsName);
@@ -225,13 +266,20 @@ export const provisionClaudeSession = async (
       petNames.push(mcpMountName);
     }
 
+    const mountList = [
+      { mountPoint: hostMountPoint, mountName: workspacePetName },
+      ...(hasConfigFilesystem
+        ? [{ mountPoint: configMountPoint, mountName: configPetName }]
+        : []),
+    ];
+
     await E(hostAgent).evaluate(
       '@main',
       buildSessionPowersSource(
-        hostMountPoint,
-        workspacePetName,
+        mountList,
         Boolean(credentialsName),
         hasMcpMount,
+        hasConfigFilesystem,
       ),
       harden(codeNames),
       harden(petNames),
@@ -253,6 +301,14 @@ export const provisionClaudeSession = async (
         DEFAULT_IMAGE: defaultImage ?? '',
         MODEL: model,
         INITIAL_PROMPT: initialPrompt,
+        ...(hasConfigFilesystem
+          ? {
+              CONFIG_MOUNT_POINT: configMountPoint,
+              CONFIG_PET_NAME: configPetName,
+              CLAUDE_CONFIG_INNER_DIR: SANDBOX_CONFIG_PATH,
+              CLAUDE_CONFIG_HOST_DIR: configHostDir,
+            }
+          : {}),
         ...(hasMcpMount
           ? { MCP_CONFIG_PATH: mcpConfigPath, MCP_INNER_DIR: mcpInnerDir }
           : {}),

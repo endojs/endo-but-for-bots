@@ -9,9 +9,14 @@
  * `claude -p <prompt> --output-format stream-json` process inside the
  * slice. Turns **queue** on an internal chain so two processes never
  * race the same workspace conversation; `--continue` on every turn
- * after the first resumes the conversation persisted in the workspace,
- * letting a sequence of `send()` calls build on each other (no
- * long-lived stdin plumbing).
+ * after the first resumes the conversation persisted in the session's
+ * Claude config dir (a dedicated per-session mount that survives daemon
+ * restarts — see `claude-client-module.js`), letting a sequence of
+ * `send()` calls build on each other (no long-lived stdin plumbing).
+ * A client reincarnated after a restart is constructed with
+ * `resumePriorConversation: true` when that config dir already holds a
+ * transcript, so its very first post-restart turn resumes instead of
+ * forking a fresh, context-free conversation.
  *
  * `send()` returns a **buffered reply reader** immediately (consume it
  * with `makeRefIterator`): it yields the parsed stream-json events, then
@@ -162,7 +167,7 @@ const defaultStderrIterable = proc =>
  * @property {{ unmount: () => Promise<void> }} [mountHandle] - Host-side
  *   9P mount handle for the workspace. Unmounted on `terminate()`.
  *   Omitted when the workspace was bound by some other means (tests).
- * @property {() => Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void>, removeMount?: () => Promise<void> }>} [provision]
+ * @property {() => Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, configMountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void>, removeMount?: () => Promise<void> }>} [provision]
  *   - Lazy workspace provisioner. When present, `slice` / `mountHandle`
  *   are ignored and the slice + mount are created on first use (the
  *   first `send()` or `initialPrompt`), memoized thereafter. This is
@@ -180,6 +185,13 @@ const defaultStderrIterable = proc =>
  * @property {string} [rootfsLabel] - Human-readable rootfs label
  *   (diagnostic).
  * @property {string} [model] - Default `--model` for every send.
+ * @property {boolean} [resumePriorConversation] - Seed
+ *   `conversationStarted` so the very first `send()` passes `--continue`.
+ *   Set by `claude-client-module.js` when a reincarnated session's
+ *   persistent Claude config dir already holds a transcript, so a
+ *   post-restart turn resumes the pre-restart conversation instead of
+ *   starting a fresh, context-free one. Defaults to `false` (a brand-new
+ *   session has nothing to resume).
  * @property {string} [mcpConfigPath] - Slice-internal path to an MCP
  *   config file (see the floot package's mcp-socket-server). When set,
  *   every spawn passes `--mcp-config` (with this path) and
@@ -224,6 +236,7 @@ export const makeClaudeClient = ({
   mcpConfigPath,
   env = {},
   initialPrompt,
+  resumePriorConversation = false,
   makeStdoutIterable = defaultStdoutIterable,
   makeStderrIterable = defaultStderrIterable,
   stderrReadLimit = 16_384,
@@ -254,10 +267,14 @@ export const makeClaudeClient = ({
     }
   };
   let terminated = false;
-  // `--continue` resumes the most recent conversation; the first turn
-  // has nothing to resume, so it is omitted until one prompt has been
-  // dispatched.
-  let conversationStarted = false;
+  // `--continue` resumes the most recent conversation persisted in the
+  // session's Claude config dir. A brand-new session has nothing to
+  // resume, so `--continue` is omitted until one prompt has been
+  // dispatched. A session reincarnated after a daemon restart, whose
+  // persistent config dir already holds a transcript, is constructed with
+  // `resumePriorConversation: true` so its first post-restart turn
+  // resumes the pre-restart conversation rather than forking a fresh one.
+  let conversationStarted = resumePriorConversation;
   /** @type {ProcessHandle | null} */
   let inFlight = null;
   // Closes the reply channel of the most recent turn (queued or running).
@@ -582,7 +599,7 @@ export const makeClaudeClient = ({
       if (provisioned === undefined) {
         return;
       }
-      /** @type {{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void>, removeMount?: () => Promise<void> } | undefined} */
+      /** @type {{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, configMountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void>, removeMount?: () => Promise<void> } | undefined} */
       let resolved;
       try {
         resolved = await provisioned;
@@ -598,6 +615,17 @@ export const makeClaudeClient = ({
       if (resolved.mountHandle) {
         try {
           await E(resolved.mountHandle).unmount();
+        } catch {
+          // best-effort; the mount caplet also unmounts on teardown
+        }
+      }
+      // The persistent Claude config dir is a second host-side 9P mount; it
+      // must be released too. Its backing directory survives (that is the
+      // whole point — the transcript persists for the next revival); only the
+      // live mount is torn down.
+      if (resolved.configMountHandle) {
+        try {
+          await E(resolved.configMountHandle).unmount();
         } catch {
           // best-effort; the mount caplet also unmounts on teardown
         }

@@ -34,6 +34,16 @@
  *                         under.
  *   WORKSPACE_PATH        Slice-internal workspace path (default
  *                         `/workspace`).
+ *   CONFIG_MOUNT_POINT    Host path the persistent Claude config 9P mount
+ *                         lives at (present only when a dedicated config
+ *                         filesystem was provisioned; its presence enables
+ *                         cross-restart conversation persistence).
+ *   CONFIG_PET_NAME       Pet name for the config Mount cap.
+ *   CLAUDE_CONFIG_INNER_DIR Slice-internal mount path for the config dir
+ *                         (default `/claude-config`); also CLAUDE_CONFIG_DIR.
+ *   CLAUDE_CONFIG_HOST_DIR Plain host backing directory of the config
+ *                         filesystem, read directly at construction to detect
+ *                         a pre-restart transcript worth resuming.
  *   BACKEND               Sandbox backend (default `podman`).
  *   NETWORK               Sandbox network profile (default `private`).
  *   CLAUDE_ROOTFS         Raw `rootfs` form value (may be empty).
@@ -53,6 +63,9 @@
  *
  * @module
  */
+
+import { existsSync, readdirSync } from 'node:fs';
+import nodePath from 'node:path';
 
 import { E } from '@endo/eventual-send';
 import { makeError, q, X } from '@endo/errors';
@@ -166,6 +179,37 @@ export const make = (powers, context, contextWrapper = {}) => {
   const mcpConfigPath = env.MCP_CONFIG_PATH || undefined;
   const mcpInnerDir = env.MCP_INNER_DIR || '/endo-mcp';
 
+  // Persistent per-session Claude config dir. When the factory provisioned a
+  // dedicated config filesystem (new sessions do), CONFIG_MOUNT_POINT /
+  // CONFIG_PET_NAME are set and the client mounts it rw at CLAUDE_CONFIG_INNER_DIR
+  // and points CLAUDE_CONFIG_DIR there, so the CLI's conversation transcript
+  // lands on a host directory that outlives the container. Absent (older
+  // sessions minted before this mount existed), the config dir stays on the
+  // ephemeral tmpfs and conversations do not survive a daemon restart.
+  const configMountPoint = env.CONFIG_MOUNT_POINT || '';
+  const configPetName = env.CONFIG_PET_NAME || '';
+  const configInnerDir = env.CLAUDE_CONFIG_INNER_DIR || '/claude-config';
+  const configHostDir = env.CLAUDE_CONFIG_HOST_DIR || '';
+  const persistConfig = Boolean(configMountPoint && configPetName);
+
+  // A session reincarnated after a daemon restart whose persistent config dir
+  // already holds a transcript must resume it on the first post-restart turn,
+  // not fork a fresh, context-free conversation (the reported bug). Detect that
+  // here — at construction, before any mount — by reading the config dir's
+  // plain host backing directory directly: Claude Code persists a conversation
+  // under `<config>/projects/<encoded-cwd>/*.jsonl`, so any project entry means
+  // at least one turn already ran for this session.
+  let resumePriorConversation = false;
+  if (persistConfig && configHostDir) {
+    try {
+      const projectsDir = nodePath.join(configHostDir, 'projects');
+      resumePriorConversation =
+        existsSync(projectsDir) && readdirSync(projectsDir).length > 0;
+    } catch {
+      // Unreadable backing dir (first run, races): treat as a fresh session.
+    }
+  }
+
   // Parse (and validate) the rootfs synchronously so a bad value fails
   // at construction rather than on first use.
   const parsedRootfs = parseRootfs(env.CLAUDE_ROOTFS, {
@@ -206,6 +250,8 @@ export const make = (powers, context, contextWrapper = {}) => {
     // revoke the issued credential grant — rather than leak it.
     /** @type {any} */
     let mountHandle = null;
+    /** @type {any} */
+    let configMountHandle = null;
     try {
       // Materialise the credential immediately before it flows into the
       // slice env. The cap may live on a remote peer; the host only ever
@@ -250,6 +296,31 @@ export const make = (powers, context, contextWrapper = {}) => {
         workspaceMountPoint,
         workspacePetName,
       );
+      // The persistent Claude config dir, mounted rw at `configInnerDir`. It is
+      // a *separate* filesystem from the workspace, so the CLI's transcript
+      // never pollutes a new-project git worktree nor gets served by
+      // `publishWorkspace`. Its backing directory outlives the container, so
+      // the conversation survives a daemon restart. Only new sessions carry
+      // CONFIG_MOUNT_POINT; older ones keep the ephemeral tmpfs config dir.
+      /** @type {any} */
+      let configCap = null;
+      if (persistConfig) {
+        const configFs = await E(sessionPowers).configFilesystem();
+        if (!configFs) {
+          throw makeError(
+            X`claude-sandbox: no config Filesystem cap was provided`,
+          );
+        }
+        configMountHandle = await E(fsMounter).mount(
+          configFs,
+          configMountPoint,
+          harden({ lazyUnmount: true }),
+        );
+        configCap = await E(sessionPowers).provideMount(
+          configMountPoint,
+          configPetName,
+        );
+      }
       // The Endo tool bridge's socket directory, if this session has one, bound
       // read-only so the CLI's stdio relay can reach the host-side MCP server.
       const mcpCap = mcpConfigPath
@@ -261,6 +332,9 @@ export const make = (powers, context, contextWrapper = {}) => {
           innerPath: workspacePath,
           mode: 'rw',
         },
+        ...(configCap
+          ? [{ cap: configCap, innerPath: configInnerDir, mode: 'rw' }]
+          : []),
         ...(mcpCap
           ? [{ cap: mcpCap, innerPath: mcpInnerDir, mode: 'ro' }]
           : []),
@@ -278,16 +352,25 @@ export const make = (powers, context, contextWrapper = {}) => {
       return harden({
         slice,
         mountHandle,
+        configMountHandle,
         revoke: revokeCredential,
-        // Reclaim the workspace Mount pet name that `provideMount` registered
-        // at the host root, so a torn-down session leaves no live Mount
-        // formula behind. Scoped to this session's name by the powers cap.
+        // Reclaim the Mount pet names that `provideMount` registered at the
+        // host root (workspace and, when present, config), so a torn-down
+        // session leaves no live Mount formula behind. `removeMount()` drops
+        // every mount name the powers cap allows for this session.
         removeMount: () => E(sessionPowers).removeMount(),
       });
     } catch (error) {
       if (mountHandle) {
         try {
           await E(mountHandle).unmount();
+        } catch {
+          // best-effort
+        }
+      }
+      if (configMountHandle) {
+        try {
+          await E(configMountHandle).unmount();
         } catch {
           // best-effort
         }
@@ -319,18 +402,24 @@ export const make = (powers, context, contextWrapper = {}) => {
     model,
     mcpConfigPath,
     // The OCI root is intentionally read-only. Claude Code and its Bash tool
-    // still need per-session config/state, so keep both HOME and the explicit
-    // Claude config directory on the slice's writable tmpfs.
+    // still need per-session config/state, so HOME stays on the slice's
+    // writable tmpfs. CLAUDE_CONFIG_DIR — which holds the conversation
+    // transcript — points at the persistent config mount when one was
+    // provisioned (so history survives daemon restarts), falling back to the
+    // ephemeral tmpfs for older sessions minted before that mount existed.
     env: harden({
       HOME: '/tmp/claude-home',
       XDG_CONFIG_HOME: '/tmp/claude-home/.config',
-      CLAUDE_CONFIG_DIR: '/tmp/claude-home/.claude',
+      CLAUDE_CONFIG_DIR: persistConfig
+        ? configInnerDir
+        : '/tmp/claude-home/.claude',
       // Claude refuses bypass-permissions mode for uid 0 unless the caller
       // attests that the process is already inside a sandbox. This process is
       // root only inside a rootless Podman user namespace.
       IS_SANDBOX: '1',
     }),
     initialPrompt,
+    resumePriorConversation,
   });
 
   // Tear down on cancellation/collection. `cancel` is transient (the

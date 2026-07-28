@@ -133,8 +133,19 @@ never-used session cancels for free.
 
 - **`cancel`** (explicit `E(host).cancel(name)`, **and every daemon shutdown**)
   is _transient_: the formula stays on disk and **reincarnates**, re-provisioning
-  a fresh container on the next `send()` (the workspace and conversation persist
-  in the `Filesystem` cap; `claude --continue` resumes).
+  a fresh container on the next `send()`. The workspace persists in its
+  `Filesystem` cap, and the **conversation transcript persists in a *dedicated*
+  config `Filesystem` cap** mounted at `/claude-config` (pointed at by
+  `CLAUDE_CONFIG_DIR`) — separate from `/workspace` so the transcript never
+  lands in a new-project git worktree or a `publishWorkspace` static site, and
+  crucially _outside_ the container's ephemeral tmpfs so it survives a restart.
+  On reincarnation the client reads that config dir's host backing directory,
+  and if it already holds a transcript, seeds `resumePriorConversation` so the
+  first post-restart turn passes `claude --continue` and resumes the pre-restart
+  conversation rather than forking a fresh, context-free one. (Older sessions
+  minted before the config mount existed carry no `CONFIG_MOUNT_POINT`, keep the
+  tmpfs config dir, and therefore still lose history across a restart until
+  re-provisioned.)
 - **`remove`/collection** additionally **deletes** the formula. Because teardown
   is wired to the same `whenCancelled` signal, removal is a clean delete with no
   leftover container or mount — _"remove == delete, no further cleanup."_
@@ -446,10 +457,11 @@ formula **owns its slice and mount**:
 lazily from its `env` on first use — looking up the `sandbox-factory` /
 `fs-mounter` / `Filesystem` / `ClaudeCredentials` caps by pet name, mounting the
 workspace, registering the Mount cap, and minting the slice.
-On reincarnation it re-mounts and re-mints a fresh container; the workspace and
-the conversation persist in the `Filesystem` cap, and the (possibly
-peer-hosted) credential is re-materialised at spawn time — so no secret ever
-enters the formula `env`.
+On reincarnation it re-mounts and re-mints a fresh container; the workspace
+persists in its `Filesystem` cap and the conversation transcript persists in a
+dedicated config `Filesystem` cap mounted at `/claude-config` (see § Teardown
+for the cross-restart resume path), and the (possibly peer-hosted) credential is
+re-materialised at spawn time — so no secret ever enters the formula `env`.
 
 The per-session client worker runs as the attenuated `sandbox-powers` cap, not
 `@agent` — see [§8 Least authority for the client worker](#8-least-authority-for-the-client-worker--fixed).

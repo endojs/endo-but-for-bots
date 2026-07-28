@@ -49,10 +49,36 @@ const makeRecordingHost = () => {
 };
 
 test('buildSessionPowersSource exposes an mcpMount accessor only when requested', t => {
-  const withMcp = buildSessionPowersSource('/mnt', 'ws', false, true);
+  const mounts = [{ mountPoint: '/mnt', mountName: 'ws' }];
+  const withMcp = buildSessionPowersSource(mounts, false, true);
   t.true(withMcp.includes('mcpMount: () => mcpMount'));
-  const withoutMcp = buildSessionPowersSource('/mnt', 'ws', false, false);
+  const withoutMcp = buildSessionPowersSource(mounts, false, false);
   t.true(withoutMcp.includes('mcpMount: () => null'));
+});
+
+test('buildSessionPowersSource exposes a configFilesystem accessor + config mount only when requested', t => {
+  const withConfig = buildSessionPowersSource(
+    [
+      { mountPoint: '/mnt', mountName: 'ws' },
+      { mountPoint: '/cfg', mountName: 'cfg' },
+    ],
+    false,
+    false,
+    true,
+  );
+  t.true(withConfig.includes('configFilesystem: () => configFilesystem'));
+  // provideMount now allows both the workspace and the config mountpoints.
+  t.true(withConfig.includes('/cfg'));
+  t.true(withConfig.includes('"cfg"'));
+
+  const withoutConfig = buildSessionPowersSource(
+    [{ mountPoint: '/mnt', mountName: 'ws' }],
+    false,
+    false,
+    false,
+  );
+  t.true(withoutConfig.includes('configFilesystem: () => null'));
+  t.false(withoutConfig.includes('/cfg'));
 });
 
 test('provisionClaudeSession wires the MCP bridge mount, powers ref, and env', async t => {
@@ -89,6 +115,55 @@ test('provisionClaudeSession wires the MCP bridge mount, powers ref, and env', a
   const clientEnv = rec.makeUnconfinedCalls[0].env;
   t.is(clientEnv.MCP_CONFIG_PATH, '/endo-mcp/mcp.json');
   t.is(clientEnv.MCP_INNER_DIR, '/endo-mcp');
+});
+
+test('provisionClaudeSession wires a persistent config filesystem, powers ref, and env', async t => {
+  const rec = makeRecordingHost();
+  await provisionClaudeSession(
+    rec.host,
+    {
+      name: 'claude-client-session-c',
+      filesystemName: 'claude-workspace-session-c',
+      configFilesystemName: 'claude-config-session-c',
+      configHostDir: '/var/lib/endo/claude-configs/session-c',
+      rootfs: 'oci:test',
+    },
+    { resultName: ['floot', 'controller-profile', 'claude-client-session-c'] },
+  );
+
+  // The powers eval references the config filesystem cap and hands it back.
+  const evalCall = rec.evaluateCalls[0];
+  t.true(evalCall.codeNames.includes('configFilesystem'));
+  t.true(evalCall.petNames.includes('claude-config-session-c'));
+  t.true(evalCall.source.includes('configFilesystem: () => configFilesystem'));
+
+  // The client formula env carries the slice-internal + host config paths that
+  // let it mount the config dir and detect a pre-restart transcript.
+  const clientEnv = rec.makeUnconfinedCalls[0].env;
+  t.is(clientEnv.CLAUDE_CONFIG_INNER_DIR, '/claude-config');
+  t.is(
+    clientEnv.CLAUDE_CONFIG_HOST_DIR,
+    '/var/lib/endo/claude-configs/session-c',
+  );
+  t.truthy(clientEnv.CONFIG_MOUNT_POINT);
+  t.truthy(clientEnv.CONFIG_PET_NAME);
+});
+
+test('provisionClaudeSession omits config wiring when no config filesystem is given', async t => {
+  const rec = makeRecordingHost();
+  await provisionClaudeSession(
+    rec.host,
+    {
+      name: 'claude-client-session-d',
+      filesystemName: 'claude-workspace-session-d',
+      rootfs: 'oci:test',
+    },
+    { resultName: ['floot', 'controller-profile', 'claude-client-session-d'] },
+  );
+  t.false(rec.evaluateCalls[0].codeNames.includes('configFilesystem'));
+  t.true(rec.evaluateCalls[0].source.includes('configFilesystem: () => null'));
+  t.is(rec.makeUnconfinedCalls[0].env.CONFIG_MOUNT_POINT, undefined);
+  t.is(rec.makeUnconfinedCalls[0].env.CLAUDE_CONFIG_HOST_DIR, undefined);
 });
 
 test('provisionClaudeSession omits MCP wiring when no bridge is given', async t => {

@@ -3,6 +3,9 @@
 
 import '@endo/init';
 import test from 'ava';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import nodePath from 'node:path';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { make, makeCancellationKit } from '../src/claude-client-module.js';
@@ -57,6 +60,9 @@ const makeMockHost = ({
   filesystem,
   // The Endo tool bridge Mount cap; `null` means the session has no bridge.
   mcpMountCap = null,
+  // The dedicated persistent Claude config Filesystem cap; `null` means the
+  // session was provisioned without one (older sessions / no CONFIG_* env).
+  configFsCap = null,
 } = {}) => {
   const mountCalls = [];
   const provideMountCalls = [];
@@ -98,6 +104,9 @@ const makeMockHost = ({
     },
     async filesystem() {
       return fsCap;
+    },
+    async configFilesystem() {
+      return configFsCap;
     },
     async credentials() {
       return credCap;
@@ -216,6 +225,92 @@ test('without an MCP config the client mounts only the workspace', async t => {
   await drain(await client.send('hello'));
   t.is(host.sliceFactoryCalls[0].mounts.length, 1);
   t.false(host.spawnCalls[0].argv.includes('--mcp-config'));
+});
+
+test('without a config mount CLAUDE_CONFIG_DIR stays on the ephemeral tmpfs', async t => {
+  // Older sessions (no CONFIG_* env) never call configFilesystem() and keep the
+  // pre-persistence config location, so they remain functional after deploy.
+  const host = makeMockHost();
+  const client = make(host.powers, undefined, { env: baseEnv() });
+  await drain(await client.send('hello'));
+  t.is(host.mountCalls.length, 1);
+  t.is(
+    host.spawnCalls[0].opts.env.CLAUDE_CONFIG_DIR,
+    '/tmp/claude-home/.claude',
+  );
+});
+
+test('a config mount persists CLAUDE_CONFIG_DIR and resumes a prior transcript', async t => {
+  // A fake config backing dir that already holds a Claude transcript, as it
+  // would after a pre-restart turn.
+  const configHostDir = await mkdtemp(nodePath.join(os.tmpdir(), 'claude-cfg-'));
+  t.teardown(() => rm(configHostDir, { recursive: true, force: true }));
+  const projectDir = nodePath.join(configHostDir, 'projects', '-workspace');
+  await mkdir(projectDir, { recursive: true });
+  await writeFile(nodePath.join(projectDir, 'session.jsonl'), '{"type":"user"}\n');
+
+  const host = makeMockHost({ configFsCap: { kind: 'fake-config-fs' } });
+  const client = make(host.powers, undefined, {
+    env: baseEnv({
+      CONFIG_MOUNT_POINT: '/tmp/claude-config-my-claude-abc',
+      CONFIG_PET_NAME: 'claude-my-claude-abc-config',
+      CLAUDE_CONFIG_INNER_DIR: '/claude-config',
+      CLAUDE_CONFIG_HOST_DIR: configHostDir,
+    }),
+  });
+  await drain(await client.send('after restart'));
+
+  // Both the workspace and the config dir were mounted, and the config mount
+  // was added to the slice at /claude-config, rw.
+  t.is(host.mountCalls.length, 2);
+  const configMount = host.sliceFactoryCalls[0].mounts.find(
+    m => m.innerPath === '/claude-config',
+  );
+  t.truthy(configMount);
+  t.is(configMount.mode, 'rw');
+
+  // CLAUDE_CONFIG_DIR points at the persistent mount, not the ephemeral tmpfs.
+  t.is(host.spawnCalls[0].opts.env.CLAUDE_CONFIG_DIR, '/claude-config');
+
+  // The pre-restart transcript is detected, so the first turn resumes.
+  t.true(host.spawnCalls[0].argv.includes('--continue'));
+});
+
+test('a config mount with an empty config dir starts a fresh conversation', async t => {
+  const configHostDir = await mkdtemp(nodePath.join(os.tmpdir(), 'claude-cfg-'));
+  t.teardown(() => rm(configHostDir, { recursive: true, force: true }));
+
+  const host = makeMockHost({ configFsCap: { kind: 'fake-config-fs' } });
+  const client = make(host.powers, undefined, {
+    env: baseEnv({
+      CONFIG_MOUNT_POINT: '/tmp/claude-config-my-claude-abc',
+      CONFIG_PET_NAME: 'claude-my-claude-abc-config',
+      CLAUDE_CONFIG_INNER_DIR: '/claude-config',
+      CLAUDE_CONFIG_HOST_DIR: configHostDir,
+    }),
+  });
+  await drain(await client.send('hello'));
+  t.is(host.spawnCalls[0].opts.env.CLAUDE_CONFIG_DIR, '/claude-config');
+  // No prior transcript → no resume on the first turn.
+  t.false(host.spawnCalls[0].argv.includes('--continue'));
+});
+
+test('CONFIG_MOUNT_POINT set but no config cap aborts the turn', async t => {
+  // persistConfig is true (CONFIG_* present) but powers.configFilesystem()
+  // resolves null — a provisioning bug. Surface it loudly rather than silently
+  // dropping persistence.
+  const host = makeMockHost({ configFsCap: null });
+  const client = make(host.powers, undefined, {
+    env: baseEnv({
+      CONFIG_MOUNT_POINT: '/tmp/claude-config-my-claude-abc',
+      CONFIG_PET_NAME: 'claude-my-claude-abc-config',
+      CLAUDE_CONFIG_INNER_DIR: '/claude-config',
+    }),
+  });
+  const events = await drain(await client.send('hello'));
+  const last = events[events.length - 1];
+  t.is(last.type, 'abort');
+  t.regex(last.reason, /no config Filesystem cap/);
 });
 
 test('provisioning is memoized across sends', async t => {

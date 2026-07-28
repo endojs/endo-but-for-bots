@@ -46,6 +46,7 @@ const assertSessionId = sessionId => {
  *   clientBase: string,
  *   credentialsName: string,
  *   workspaceBaseDir: string,
+ *   configBaseDir?: string,
  *   rootfs: string,
  *   network?: string,
  *   sandboxNamespace?: string,
@@ -66,6 +67,10 @@ export const makeClaudeSessionProvisioner = (
     clientBase,
     credentialsName,
     workspaceBaseDir,
+    // Per-session Claude config dirs live in a sibling of the workspace base by
+    // default, so the persistent conversation transcript is stored apart from
+    // the user-facing workspace (never a git worktree, never published).
+    configBaseDir = path.join(path.dirname(workspaceBaseDir), 'claude-configs'),
     rootfs,
     network = 'private',
     sandboxNamespace = 'claude-sandbox',
@@ -93,6 +98,8 @@ export const makeClaudeSessionProvisioner = (
       clientPath: harden([flootDir, 'controller-profile', clientName]),
       filesystemName: `claude-workspace-${sessionId}`,
       workspaceDir: path.join(workspaceBaseDir, sessionId),
+      configFilesystemName: `claude-config-${sessionId}`,
+      configDir: path.join(configBaseDir, sessionId),
     });
   };
 
@@ -105,13 +112,22 @@ export const makeClaudeSessionProvisioner = (
    * }} [options]
    */
   const provisionOne = async (sessionId, options = {}) => {
-    const { clientName, clientPath, filesystemName, workspaceDir } =
-      namesFor(sessionId);
+    const {
+      clientName,
+      clientPath,
+      filesystemName,
+      workspaceDir,
+      configFilesystemName,
+      configDir,
+    } = namesFor(sessionId);
     if (await E(hostAgent).has(...clientPath)) return clientName;
 
-    // A prior interrupted attempt may have left only the temporary pet name.
+    // A prior interrupted attempt may have left only the temporary pet names.
     if (await E(hostAgent).has(filesystemName)) {
       await E(hostAgent).remove(filesystemName);
+    }
+    if (await E(hostAgent).has(configFilesystemName)) {
+      await E(hostAgent).remove(configFilesystemName);
     }
     // An override roots the session's workspace filesystem at an existing host
     // directory (e.g. a new-project git worktree) instead of the private
@@ -120,11 +136,17 @@ export const makeClaudeSessionProvisioner = (
     // shared worktree (owned by the git/scratch mount's daemon GC).
     const filesystemDir = options.workspaceDir || workspaceDir;
     await makeFilesystem(filesystemName, filesystemDir);
+    // The Claude config dir is ALWAYS the private per-session path, never the
+    // workspace override — the conversation transcript must stay out of a
+    // shared/published workspace, and it must persist across daemon restarts.
+    await makeFilesystem(configFilesystemName, configDir);
     await provisionSession(
       hostAgent,
       {
         name: clientName,
         filesystemName,
+        configFilesystemName,
+        configHostDir: configDir,
         credentialsName,
         rootfs,
         network,
@@ -136,7 +158,7 @@ export const makeClaudeSessionProvisioner = (
       },
       {
         resultName: clientPath,
-        removeNames: [filesystemName],
+        removeNames: [filesystemName, configFilesystemName],
       },
     );
     if (!(await E(hostAgent).has(...clientPath))) {
@@ -162,8 +184,13 @@ export const makeClaudeSessionProvisioner = (
         return result;
       },
       async remove(sessionId) {
-        const { clientPath, filesystemName, workspaceDir } =
-          namesFor(sessionId);
+        const {
+          clientPath,
+          filesystemName,
+          workspaceDir,
+          configFilesystemName,
+          configDir,
+        } = namesFor(sessionId);
         await inFlight.get(sessionId)?.catch(() => {});
         if (await E(hostAgent).has(...clientPath)) {
           await E(hostAgent).remove(...clientPath);
@@ -171,7 +198,13 @@ export const makeClaudeSessionProvisioner = (
         if (await E(hostAgent).has(filesystemName)) {
           await E(hostAgent).remove(filesystemName);
         }
+        if (await E(hostAgent).has(configFilesystemName)) {
+          await E(hostAgent).remove(configFilesystemName);
+        }
         await removeDirectory(workspaceDir, { recursive: true, force: true });
+        // The config dir is always the private per-session path, so it is safe
+        // to delete outright (it is never a shared workspace/worktree).
+        await removeDirectory(configDir, { recursive: true, force: true });
       },
       help: () =>
         'ClaudeSessionProvisioner: provision(flootSessionId) creates one isolated ClaudeClient and workspace; remove(flootSessionId) tears them down.',
@@ -199,6 +232,10 @@ export const make = (hostAgent, _context, { env = {} } = {}) => {
     env.CLAUDE_WORKSPACE_BASE_DIR ||
     process.env.ENDO_CLAUDE_WORKSPACE_DIR ||
     path.join(os.homedir(), 'claude-workspaces');
+  const configBaseDir =
+    env.CLAUDE_CONFIG_BASE_DIR ||
+    process.env.ENDO_CLAUDE_CONFIG_DIR ||
+    path.join(path.dirname(workspaceBaseDir), 'claude-configs');
   const rootfs =
     env.CLAUDE_SANDBOX_IMAGE ||
     process.env.CLAUDE_SANDBOX_IMAGE ||
@@ -209,6 +246,7 @@ export const make = (hostAgent, _context, { env = {} } = {}) => {
     clientBase,
     credentialsName,
     workspaceBaseDir,
+    configBaseDir,
     rootfs,
   });
 };

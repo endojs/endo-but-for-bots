@@ -63,10 +63,16 @@ test('provisions and removes one isolated client per Floot session', async t => 
   ]);
   t.is(first, 'claude-client-session-a');
   t.is(second, first);
+  // Two filesystems: the user-facing workspace and the dedicated persistent
+  // Claude config dir (a sibling of the workspace base by default).
   t.deepEqual(filesystemCalls, [
     {
       name: 'claude-workspace-session-a',
       directory: '/workspaces/session-a',
+    },
+    {
+      name: 'claude-config-session-a',
+      directory: '/claude-configs/session-a',
     },
   ]);
   t.is(provisionCalls.length, 1);
@@ -75,13 +81,22 @@ test('provisions and removes one isolated client per Floot session', async t => 
     'controller-profile',
     'claude-client-session-a',
   ]);
+  // The config filesystem is forwarded so the client can mount it and detect a
+  // pre-restart transcript.
+  t.is(provisionCalls[0].spec.configFilesystemName, 'claude-config-session-a');
+  t.is(provisionCalls[0].spec.configHostDir, '/claude-configs/session-a');
   t.true(names.has('floot/controller-profile/claude-client-session-a'));
 
   await E(provisioner).remove('session-a');
   t.false(names.has('floot/controller-profile/claude-client-session-a'));
+  // Both the workspace and the (always-private) config dir are deleted.
   t.deepEqual(removedDirectories, [
     {
       directory: '/workspaces/session-a',
+      options: { recursive: true, force: true },
+    },
+    {
+      directory: '/claude-configs/session-a',
       options: { recursive: true, force: true },
     },
   ]);
@@ -178,19 +193,28 @@ test('a workspaceDir override roots the filesystem at a shared worktree', async 
     harden({ workspaceDir: '/git/worktrees/session-c' }),
   );
   // The workspace filesystem is rooted at the shared worktree, not the private
-  // per-session scratch directory.
+  // per-session scratch directory. The config dir is ALWAYS the private path,
+  // so the transcript never lands in the shared worktree.
   t.deepEqual(filesystemCalls, [
     {
       name: 'claude-workspace-session-c',
       directory: '/git/worktrees/session-c',
     },
+    {
+      name: 'claude-config-session-c',
+      directory: '/claude-configs/session-c',
+    },
   ]);
 
-  // remove() only deletes the private default path, never the shared worktree.
+  // remove() only deletes the private default paths, never the shared worktree.
   await E(provisioner).remove('session-c');
   t.deepEqual(removedDirectories, [
     {
       directory: '/workspaces/session-c',
+      options: { recursive: true, force: true },
+    },
+    {
+      directory: '/claude-configs/session-c',
       options: { recursive: true, force: true },
     },
   ]);
