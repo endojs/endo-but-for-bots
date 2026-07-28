@@ -29,14 +29,13 @@ import { Fail, q } from '@endo/errors';
  *    retention are the daemon's formula graph. Only the daemon can add a
  *    formula type.
  *
- * 2. The store's I/O is synchronous, and that is load-bearing rather than
- *    incidental. Entry rows move through the daemon's in-process
- *    `better-sqlite3` handle, so `collectWeakEntries` can delete the rows for
- *    a collected weak key and report the retention edges to remove before the
- *    collecting turn completes, and a restart can rebuild each store's index
- *    and per-slot refcounts before the exo is handed out. The daemon's
- *    boundary to anything outside it is asynchronous, so a store beyond that
- *    boundary could not keep either guarantee.
+ * 2. The store's I/O is synchronous. Entry rows move through the daemon's
+ *    in-process `better-sqlite3` handle, so `collectWeakEntries` can delete
+ *    the rows for a collected weak key and report the retention edges to
+ *    remove before the collecting turn completes, and a restart can rebuild
+ *    each store's index and per-slot refcounts before the exo is handed out.
+ *    The daemon's boundary to anything outside it is asynchronous, so a store
+ *    beyond that boundary could not keep either guarantee.
  *
  * Discussion: https://github.com/endojs/endo-but-for-bots/pull/825
  */
