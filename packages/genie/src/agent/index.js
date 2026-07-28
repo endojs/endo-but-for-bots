@@ -18,7 +18,11 @@
 /** @import { Api, KnownProvider, Model, Provider } from '@earendil-works/pi-ai' */
 
 import harden from '@endo/harden';
-import { makeSturdyRefEscrow } from '@endo/agent-tools';
+// The narrow subpath, not the package barrel: the barrel drags in the whole tool
+// catalog (git, shell, http, filesystem), whose transitive dependencies assume a
+// locked-down realm, and genie also runs under a shims-only test configuration
+// that never calls lockdown().
+import { makeSturdyRefEscrow } from '@endo/agent-tools/sturdyref-escrow.js';
 
 import { Agent as PiAgent } from '@earendil-works/pi-agent-core';
 import { getModel, getProviders } from '@earendil-works/pi-ai/compat';
