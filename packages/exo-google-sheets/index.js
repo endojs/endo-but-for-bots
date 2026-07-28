@@ -2,7 +2,9 @@
 
 export {
   makeExoSpreadsheet,
-  SpreadsheetInterface,
-  SpreadsheetWriterInterface,
+  SpreadsheetAppenderInterface,
   SpreadsheetControlInterface,
+  SpreadsheetInterface,
+  SpreadsheetWriteOnlyInterface,
+  SpreadsheetWriterInterface,
 } from './src/exo-google-sheets.js';
