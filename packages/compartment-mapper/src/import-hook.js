@@ -104,6 +104,17 @@ const resolveLocation = (rel, abs) =>
 const getImportsFromRecord = record =>
   (has(record, 'record') ? record.record.imports : record.imports) || [];
 
+// Specifiers that appear only as static-string-literal arguments of dynamic
+// `import(...)` call sites. They are traced and archived like ordinary imports
+// but, unlike static imports, a missing target must defer to a runtime error
+// rather than fail archive construction (so an optional dynamic import in a
+// try/catch behaves identically whether imported live or from an archive).
+function getDynamicImportsFromRecord(record) {
+  const concreteRecord = has(record, 'record') ? record.record : record;
+  // eslint-disable-next-line no-underscore-dangle
+  return concreteRecord.__dynamicImports__ || [];
+}
+
 // Node.js default resolution allows for an incomplement specifier that does not include a suffix.
 // https://nodejs.org/api/modules.html#all-together
 const nodejsConventionSearchSuffixes = [
@@ -510,10 +521,19 @@ function* chooseModuleDescriptor(
       );
 
       if (!shouldDeferError(parser)) {
+        const dynamicImportSpecifiers = new Set(
+          getDynamicImportsFromRecord(record),
+        );
         for (const importSpecifier of getImportsFromRecord(record)) {
-          strictlyRequiredForCompartment(packageLocation).add(
-            resolve(importSpecifier, moduleSpecifier),
-          );
+          // Dynamic-import targets are deferrable: a missing one must surface
+          // as a catchable runtime error, not a hard archive-construction
+          // failure, mirroring the live import path. Only static imports are
+          // strictly required.
+          if (!dynamicImportSpecifiers.has(importSpecifier)) {
+            strictlyRequiredForCompartment(packageLocation).add(
+              resolve(importSpecifier, moduleSpecifier),
+            );
+          }
         }
       }
 

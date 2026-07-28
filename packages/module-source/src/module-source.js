@@ -67,6 +67,7 @@ export function ModuleSource(source, opts = {}) {
   this.__fixedExportMap__ = record.__fixedExportMap__;
   this.__needsImport__ = record.__needsImport__;
   this.__needsImportMeta__ = record.__needsImportMeta__;
+  this.__dynamicImports__ = record.__dynamicImports__;
   freeze(this);
 }
 

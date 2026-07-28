@@ -50,6 +50,13 @@ export const createSourceOptions = overrides => ({
   importSources: Object.create(null),
   importDecls: [],
   dynamicImport: { present: false },
+  /**
+   * Specifiers seen as static string-literal arguments of dynamic `import(...)`
+   * call sites, collected as a null-prototype set. Surfaced on the module
+   * source record so the compartment-mapper archive trace can discover and
+   * capture modules reachable only via dynamic import.
+   */
+  dynamicImportSources: Object.create(null),
   importMeta: { present: false },
   ...(overrides ?? {}),
 });

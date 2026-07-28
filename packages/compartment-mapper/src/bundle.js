@@ -210,18 +210,32 @@ const sortedModules = (
       }
       const { record, parser, bytes, sourceDirname } = source;
       if (record) {
-        const { imports = [], reexports = [] } =
-          /** @type {PrecompiledStaticModuleInterface} */ (record);
+        const {
+          imports = [],
+          reexports = [],
+          // eslint-disable-next-line no-underscore-dangle
+          __dynamicImports__: dynamicImports = [],
+        } = /** @type {PrecompiledStaticModuleInterface & { __dynamicImports__?: string[] }} */ (
+          record
+        );
+        // Specifiers reached only via a dynamic `import()` are captured in the
+        // compartment map for archives, but a bundle does not wire dynamic
+        // import, so they must not be statically linked into the bundle graph
+        // (doing so would emit a functor import for a binding the functor never
+        // declares, and would fail outright on a missing/optional target).
+        const dynamicImportSet = new Set(dynamicImports);
         const resolvedImports = Object.create(null);
         for (const importSpecifier of [...imports, ...reexports]) {
           // If we ever support another module resolution algorithm, that
           // should be indicated in the compartment descriptor by name and the
           // corresponding behavior selected here.
-          const resolvedSpecifier = resolve(importSpecifier, moduleSpecifier);
-          resolvedImports[importSpecifier] = recur(
-            compartmentName,
-            resolvedSpecifier,
-          );
+          if (!dynamicImportSet.has(importSpecifier)) {
+            const resolvedSpecifier = resolve(importSpecifier, moduleSpecifier);
+            resolvedImports[importSpecifier] = recur(
+              compartmentName,
+              resolvedSpecifier,
+            );
+          }
         }
 
         modules.push({

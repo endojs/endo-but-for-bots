@@ -130,5 +130,14 @@ export const buildModuleRecord = (sourceOptions, functorSource) => {
     __reexportMap__: freeze(sourceOptions.reexportMap),
     __needsImport__: sourceOptions.dynamicImport.present,
     __needsImportMeta__: sourceOptions.importMeta.present,
+    // Specifiers reached *only* via a static-string-literal dynamic `import()`.
+    // A specifier that is also a static import or re-export (i.e. present in
+    // `importSources`) is excluded: it is a genuine static dependency and must
+    // remain strictly required, not deferrable.
+    __dynamicImports__: freeze(
+      [...keys(sourceOptions.dynamicImportSources)].filter(
+        specifier => !(specifier in sourceOptions.importSources),
+      ),
+    ),
   });
 };

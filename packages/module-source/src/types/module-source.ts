@@ -22,6 +22,12 @@ export type ModuleSourceRecord = Readonly<
      * Support for dynamic `import()` in ESM
      */
     __needsImportMeta__: boolean;
+    /**
+     * Static-string-literal specifiers seen in dynamic `import(...)` call
+     * sites. Surfaced so the compartment-mapper archive trace can discover and
+     * capture modules reachable only via dynamic import.
+     */
+    __dynamicImports__: string[];
   }
 >;
 
@@ -76,6 +82,7 @@ export interface TransformSourceParams
   importSources: Record<string, any>;
   importDecls: string[];
   dynamicImport: { present: boolean };
+  dynamicImportSources: Record<string, true>;
   importMeta: { present: boolean };
   sourceMapHook?: SourceMapHook;
 
