@@ -16,6 +16,31 @@ import { Fail, q } from '@endo/errors';
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { Pattern } from '@endo/patterns' */
 
+/*
+ * Why this module lives in `@endo/daemon` rather than in a package of its own.
+ *
+ * Nothing here imports a daemon-internal module at runtime, and every daemon
+ * seam arrives through the injected `powers` below, so the dependency
+ * direction alone would permit a move. Two properties of the contract do not:
+ *
+ * 1. A store *is* a formula. `collection-store` is a member of the closed
+ *    formula-type set in `formula-type.js`, decoded by `formula-record.js`
+ *    and instantiated by `manager.js`; a store's identity, durability, and
+ *    retention are the daemon's formula graph. Only the daemon can add a
+ *    formula type.
+ *
+ * 2. The store's I/O is synchronous, and that is load-bearing rather than
+ *    incidental. Entry rows move through the daemon's in-process
+ *    `better-sqlite3` handle, so `collectWeakEntries` can delete the rows for
+ *    a collected weak key and report the retention edges to remove before the
+ *    collecting turn completes, and a restart can rebuild each store's index
+ *    and per-slot refcounts before the exo is handed out. The daemon's
+ *    boundary to anything outside it is asynchronous, so a store beyond that
+ *    boundary could not keep either guarantee.
+ *
+ * Discussion: https://github.com/endojs/endo-but-for-bots/pull/825
+ */
+
 /**
  * The interface guard for a strong `MapStore`. Mirrors the `@agoric/store`
  * `MapStore` method surface and its throw semantics. Phase 1 admits scalar
