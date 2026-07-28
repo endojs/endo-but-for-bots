@@ -813,6 +813,30 @@ mod tests {
         xsnap::run_xs_archive_loaded(&archive).expect("console endowment lets the run complete");
     }
 
+    /// Real npm code constructs URLs (normalize-url, node-fetch
+    /// shims, registry clients); the runner endows the WHATWG
+    /// URL/URLSearchParams veneer in archive compartments, with the
+    /// searchParams mutation reflected back into the URL.
+    #[test]
+    fn url_globals_are_endowed_in_the_run_machine() {
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+        let map_hash = single_module_map(
+            &cas,
+            "const u = new URL('../up?b=2&a=1', 'https://example.com/a/b/c');\n\
+             u.searchParams.sort();\n\
+             if (u.href !== 'https://example.com/a/up?a=1&b=2') {\n\
+               throw new Error('unexpected href: ' + u.href);\n\
+             }\n\
+             if (new URLSearchParams('x=%C3%A9').get('x') !== '\\u00e9') {\n\
+               throw new Error('unexpected form-urlencoded decode');\n\
+             }\n\
+             export const done = true;\n",
+        );
+        let archive = load_assembled_archive(&cas, &map_hash).unwrap();
+        xsnap::run_xs_archive_loaded(&archive).expect("URL endowment lets the run complete");
+    }
+
     /// A throw in the program being run (here a ReferenceError) must
     /// come back as `Err` from the runner, not SIGSEGV the process.
     #[test]
