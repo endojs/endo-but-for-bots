@@ -897,6 +897,68 @@ pub const HOST_ALIASES: &str = include_str!("host_aliases.js");
 /// declared in `ffi.rs` but never called). The realm runs on
 /// unrepaired intrinsics and `polyfills.js`'s deep-freeze `harden`.
 /// Tracked in `designs/worker-rust-xs.md` § Known Gaps.
+
+/// Web-platform text endowments for archive compartments, appended
+/// to `globalThis.__archiveEndowments` as a separate statement after
+/// the base endowments object: the machine's `TextEncoder` and
+/// `TextDecoder` globals (native-backed where installed, otherwise
+/// the `POLYFILLS` pure-JS pair — evaluate `POLYFILLS` first on
+/// machines that skip the SES bootstrap), plus pure-JS `atob` and
+/// `btoa`. npm packages' browser and dual builds lean on these; all
+/// four are pure byte/string transforms carrying no new authority.
+pub const ARCHIVE_TEXT_ENDOWMENTS_JS: &str = r#"
+(function () {
+    var E = globalThis.__archiveEndowments;
+    E.TextEncoder = globalThis.TextEncoder;
+    E.TextDecoder = globalThis.TextDecoder;
+    var ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    E.btoa = function btoa(data) {
+        var s = String(data);
+        var out = '';
+        for (var i = 0; i < s.length; i += 3) {
+            for (var k = i; k < i + 3 && k < s.length; k++) {
+                if (s.charCodeAt(k) > 255) {
+                    var eb = new Error('btoa: character beyond U+00FF at index ' + k);
+                    eb.name = 'InvalidCharacterError';
+                    throw eb;
+                }
+            }
+            var n = (s.charCodeAt(i) << 16)
+                | ((i + 1 < s.length ? s.charCodeAt(i + 1) : 0) << 8)
+                | (i + 2 < s.length ? s.charCodeAt(i + 2) : 0);
+            out += ALPHABET[(n >> 18) & 63];
+            out += ALPHABET[(n >> 12) & 63];
+            out += i + 1 < s.length ? ALPHABET[(n >> 6) & 63] : '=';
+            out += i + 2 < s.length ? ALPHABET[n & 63] : '=';
+        }
+        return out;
+    };
+    E.atob = function atob(data) {
+        var s = String(data).replace(/[\t\n\f\r ]+/g, '');
+        if (s.length % 4 === 0) {
+            s = s.replace(/==?$/, '');
+        }
+        if (s.length % 4 === 1 || /[^A-Za-z0-9+\/]/.test(s)) {
+            var ea = new Error('atob: invalid base64');
+            ea.name = 'InvalidCharacterError';
+            throw ea;
+        }
+        var out = '';
+        var buffer = 0;
+        var bits = 0;
+        for (var i = 0; i < s.length; i++) {
+            buffer = (buffer << 6) | ALPHABET.indexOf(s[i]);
+            bits += 6;
+            if (bits >= 8) {
+                bits -= 8;
+                out += String.fromCharCode((buffer >> bits) & 255);
+            }
+        }
+        return out;
+    };
+})();
+"#;
+
 pub const SES_BOOT: &str = include_str!("ses_boot.js");
 
 /// The bundled worker JavaScript. Self-executing IIFE that installs
@@ -1720,6 +1782,7 @@ pub fn run_xs_program(
                     "__archiveEndowments.URL = globalThis.URL; \
                      __archiveEndowments.URLSearchParams = globalThis.URLSearchParams;",
                 );
+                machine.eval(ARCHIVE_TEXT_ENDOWMENTS_JS);
                 let cursor = std::io::Cursor::new(bytes);
                 let archive = archive::load_archive(cursor)
                     .map_err(|e| XsnapError::Archive(format!("cannot read archive: {e}")))?;
@@ -1963,7 +2026,14 @@ pub fn run_xs_archive_loaded(loaded: &archive::LoadedArchive) -> Result<(), Xsna
     machine.register_worker_io();
     register_host_powers(&machine);
 
-    // Provide archive endowments (shared with the supervised path).
+    // This path skips the SES bootstrap, so evaluate the polyfills
+    // here (typeof-guarded, so a machine with native codecs keeps
+    // them) to guarantee the TextEncoder/TextDecoder globals the
+    // text endowments below hand into archive compartments.
+    machine.eval(POLYFILLS);
+
+    // Provide archive endowments (shared with the supervised path),
+    // then append the web-platform text codecs.
     machine.eval(ARCHIVE_ENDOWMENTS_JS);
     // URL/URLSearchParams ride the host's WHATWG parser; a separate
     // statement to keep the endowments blob's conflict surface small.
@@ -1972,6 +2042,8 @@ pub fn run_xs_archive_loaded(loaded: &archive::LoadedArchive) -> Result<(), Xsna
         "__archiveEndowments.URL = globalThis.URL; \
          __archiveEndowments.URLSearchParams = globalThis.URLSearchParams;",
     );
+    machine.eval(ARCHIVE_TEXT_ENDOWMENTS_JS);
+
     if !archive::install_archive_async(&machine, loaded) {
         return Err(XsnapError::Archive(
             "archive installation failed".to_string(),
@@ -2587,6 +2659,41 @@ mod tests {
                 "host global should not be modified by guest compartment"),
             other => panic!("expected 'original', got {:?}", js_value_debug(&other)),
         }
+    }
+
+    #[test]
+    fn archive_text_endowments_provide_codecs() {
+        // The archive text endowments hand compartments working
+        // TextEncoder/TextDecoder (the POLYFILLS pair on a machine
+        // without native codecs) plus pure-JS atob/btoa with browser
+        // error semantics (InvalidCharacterError) and
+        // forgiving-base64 whitespace handling.
+        let machine = new_machine();
+        machine.eval(POLYFILLS);
+        machine.eval("globalThis.__archiveEndowments = {};");
+        machine.eval(ARCHIVE_TEXT_ENDOWMENTS_JS);
+        let verdict = machine
+            .eval_to_string(
+                "(function () { \
+                    var E = globalThis.__archiveEndowments; \
+                    var enc = new E.TextEncoder().encode('h\\u00e9\\u2603'); \
+                    var dec = new E.TextDecoder().decode(enc); \
+                    if (dec !== 'h\\u00e9\\u2603') return 'decode mismatch: ' + dec; \
+                    if (E.btoa('hello') !== 'aGVsbG8=') return 'btoa: ' + E.btoa('hello'); \
+                    if (E.btoa('he') !== 'aGU=') return 'btoa pad: ' + E.btoa('he'); \
+                    if (E.atob('aGVsbG8=') !== 'hello') return 'atob: ' + E.atob('aGVsbG8='); \
+                    if (E.atob(' aGVs\\nbG8= ') !== 'hello') return 'forgiving atob failed'; \
+                    var threw = false; \
+                    try { E.atob('a'); } catch (e) { threw = e.name === 'InvalidCharacterError'; } \
+                    if (!threw) return 'atob length-1 rest must throw InvalidCharacterError'; \
+                    var threw2 = false; \
+                    try { E.btoa('\\u0100'); } catch (e) { threw2 = e.name === 'InvalidCharacterError'; } \
+                    if (!threw2) return 'btoa beyond U+00FF must throw InvalidCharacterError'; \
+                    return 'ok'; \
+                })()",
+            )
+            .unwrap();
+        assert_eq!(verdict, "ok");
     }
 
     #[test]

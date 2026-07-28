@@ -127,6 +127,23 @@ with `SyntaxError: invalid import`; dynamic `import()` and
 keyword mentions in strings/comments/nested scopes do not flip a
 real CJS file.
 
+Dual-build packages (the `@noble/hashes` shape — a CommonJS
+root with an `esm/` build under a nested `package.json`
+carrying `"type": "module"`) execute: `.js` module flavor
+follows Node's nearest-`package.json` rule rather than the
+package root alone, every compartment carries a
+**self-reference edge** so a module may import its own package
+by name (`import { crypto } from '@noble/hashes/crypto'`
+inside `@noble/hashes`, routed through its own exports map),
+and archive compartments are endowed with **`TextEncoder`,
+`TextDecoder`, `atob`, and `btoa`** (pure byte/string
+transforms — no new authority; WHATWG-lite: the decoder is
+UTF-8-only and lenient, with no `fatal`/`ignoreBOM`/streaming
+and no `encodeInto`). Evidence: `endor run` of an entry over
+`@noble/hashes@^1.4.0` fetches 1.8.0 cold, prints the correct
+`sha256('abc')` digest via the ESM build (whose `utf8ToBytes`
+needs `TextEncoder`), and replays green under `--offline`.
+
 ## What is the Problem Being Solved?
 
 `endor run entry.js` should be able to resolve, fetch, and
@@ -581,9 +598,24 @@ The tree's children are the package's files, stored as blobs.
       possible browser condition, remains deferred to the existing
       JavaScript `compartment-mapper` implementation rather than
       duplicating that resolver in Rust. Still open within this lane:
-      `TextEncoder`/`TextDecoder`, `crypto.subtle`, `atob`/`btoa`/
-      `URL`, and `Intl` (an engine-surface matter for the xs2rust
-      arc, not this proxy).
+      `crypto.subtle` and `Intl` (an engine-surface matter for the
+      xs2rust arc, not this proxy).
+- [x] Dual-build packages: `.js` module flavor honors the
+      nearest `package.json` `type` (Node's rule), so a nested
+      `esm/package.json` with `"type": "module"` over a
+      CommonJS root parses each half correctly.
+- [x] Package self-reference: every compartment carries an
+      edge for its own package name, so `import pkg from
+      '<own-name>/subpath'` resolves through the package's own
+      exports map, as Node permits. (Lenience note: Node gates
+      self-reference on an `exports` field; the archive
+      resolver also falls back to `main`/`index.js`.)
+- [x] Web text globals as archive endowments: `TextEncoder`,
+      `TextDecoder`, `atob`, `btoa` — pure transforms, no new
+      authority. WHATWG-lite: the decoder is UTF-8-only and
+      lenient (no `fatal`/`ignoreBOM`/streaming), the encoder
+      has no `encodeInto`; `crypto.subtle` and similar web
+      globals remain open.
 - [x] Top-level `await` in the entry module (or any module in
       the graph): the standalone runners now import the entry
       through the asynchronous `Compartment.prototype.import`
