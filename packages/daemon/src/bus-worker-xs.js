@@ -130,34 +130,64 @@ const workerFacet = makeExo(
       return compartment.evaluate(source);
     },
 
+    // The three `make*` methods below are the XS worker's remaining
+    // gap against the Node worker (`./worker.js`).  `evaluate` is the
+    // only entry point the bootstrap restored by this change needs;
+    // closing the rest is planned and tracked as an explicit item in
+    // `designs/worker-rust-xs.md` § Known Gaps, which names the route
+    // for each.  Until then each rejects with a message that says so,
+    // rather than failing obscurely deeper in the guest.
+
     /**
+     * Planned: mirror `./worker.js`'s `makeArchive` — drain the
+     * readable, then `parseArchive` + `application.import`.  Blocked
+     * on `@endo/compartment-mapper`'s archive parser running under the
+     * `xs` condition (its Node-only parser set must not be retained).
+     *
      * @param {unknown} _readableP
      * @param {unknown} _powersP
      * @param {unknown} _contextP
      * @param {Record<string, string>} _env
      */
     makeArchive: async (_readableP, _powersP, _contextP, _env) => {
-      throw new Error('makeArchive not yet implemented in XS worker');
+      throw new Error(
+        'makeArchive not yet implemented in XS worker; see designs/worker-rust-xs.md § Known Gaps',
+      );
     },
 
     /**
+     * Planned: mirror `./worker.js`'s `makeFromTree` — walk the tree's
+     * `compartment-map.json`, pack a ZIP, reuse the `makeArchive`
+     * path.  Follows `makeArchive` and additionally needs
+     * `@endo/zip`'s writer under XS.
+     *
      * @param {unknown} _treeP
      * @param {unknown} _powersP
      * @param {unknown} _contextP
      * @param {Record<string, string>} _env
      */
     makeFromTree: async (_treeP, _powersP, _contextP, _env) => {
-      throw new Error('makeFromTree not yet implemented in XS worker');
+      throw new Error(
+        'makeFromTree not yet implemented in XS worker; see designs/worker-rust-xs.md § Known Gaps',
+      );
     },
 
     /**
+     * Planned: the Node worker's `makeUnconfined` is a dynamic
+     * `import()` of a host path, which XS has no equivalent for.  The
+     * XS route is a host function that reads the module source via
+     * cap-std and compiles it as a `ModuleSource`
+     * (`designs/worker-rust-xs.md` § Module Loading, item 3).
+     *
      * @param {string} _specifier
      * @param {unknown} _powersP
      * @param {unknown} _contextP
      * @param {Record<string, string>} _env
      */
     makeUnconfined: async (_specifier, _powersP, _contextP, _env) => {
-      throw new Error('makeUnconfined not yet implemented in XS worker');
+      throw new Error(
+        'makeUnconfined not yet implemented in XS worker; see designs/worker-rust-xs.md § Known Gaps',
+      );
     },
   },
 );
