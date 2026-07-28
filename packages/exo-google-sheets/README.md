@@ -6,7 +6,7 @@ The default `spreadsheet` facet reads only.
 The separately minted `writer` facet can delegate read-only, append-only, and write-only facets, each of which can narrow to one tab or A1 range.
 The host retains `control` to constrain scopes, adjust limits and polling, sever write authority (`revokeWrites()`), or revoke every facet (`revoke()`).
 
-`follow(range)` is a polling async iterator.
+`follow(range)` is a polling async iterator, and it polls on a timer the host granted rather than an ambient one — pass `{ setTimeout }` to supply it, or `{ setTimeout: null }` to hand out facets that can read but cannot poll.
 Push/webhook delivery, `SheetsService`, and `SpreadsheetStructure` are deliberately deferred.
 
 ## How the attenuation is arranged
@@ -20,6 +20,15 @@ built out of, rather than from conditions inside its methods.
 | `src/powers.js` | The three authority classes — read, append, overwrite — each made from only the client operations it needs, plus the host policy and the revocable forwarders. |
 | `src/facets.js` | The exos. Each maker takes power objects and no client, so `makeReader` provably cannot write. |
 | `src/exo-google-sheets.js` | The one place a whole client is held: it takes the client apart and hands each power maker its share. |
+
+Ambient authority is arranged the same way. `src/a1.js`, `src/powers.js`, and
+`src/facets.js` name no global at all — the clock the request throttle refills
+on and the timer `follow()` polls on both arrive as parameters, so a facet can
+wait only because it was granted the ability to. `src/exo-google-sheets.js` is
+the sole module that reads `Date.now` and `globalThis.setTimeout`, and only as
+the defaults for `{ now, setTimeout }`; it is already the module entitled to a
+live network client, so it is the honest place to be unconfined. Under a taming
+or a test clock, pass your own and nothing below can reach past it.
 
 Two consequences worth stating plainly:
 

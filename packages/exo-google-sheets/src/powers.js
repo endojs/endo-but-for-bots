@@ -23,6 +23,11 @@
  * The host's policy — allowed tabs and ranges, the size and rate caps — is
  * enforced here, at the single place authority crosses out to a facet, so no
  * facet method can reach the client without passing it.
+ *
+ * Like `facets.js`, this module reaches for no global.  The two temporal
+ * authorities it needs — a clock to refill the token bucket, a timer to wait
+ * out a poll interval — arrive as parameters, so `exo-google-sheets.js` is
+ * the only module in the package that touches ambient authority at all.
  */
 
 import harden from '@endo/harden';
@@ -72,9 +77,21 @@ const DEFAULT_MAX_REQUESTS_PER_MINUTE = 60;
  * `limits` to a reader is not a way to smuggle write authority back in, and
  * `controls` (which can *widen* the allowlists) is kept off that path.
  *
- * @param {{ maxRequestsPerMinute?: number, maxCellsPerRead?: number, pollIntervalMs?: number }} [options]
+ * The token bucket needs to know how much time has passed, so the clock is a
+ * required parameter rather than an ambient `Date.now`.  It stays inside the
+ * closure — no power and no facet is handed the clock — and a host with a
+ * taming, or a test with a fake clock, supplies its own.
+ *
+ * @param {object} options
+ * @param {() => number} options.now A monotonic-enough clock in milliseconds.
+ * @param {number} [options.maxRequestsPerMinute]
+ * @param {number} [options.maxCellsPerRead]
+ * @param {number} [options.pollIntervalMs]
  */
-export const makePolicy = (options = {}) => {
+export const makePolicy = options => {
+  const { now } = options;
+  if (typeof now !== 'function')
+    throw new TypeError('A clock is required to bound request rate');
   /** @type {Set<string> | null} */
   let allowedSheets = null;
   /** @type {string[] | null} */
@@ -84,15 +101,15 @@ export const makePolicy = (options = {}) => {
   let maxRequestsPerMinute =
     options.maxRequestsPerMinute || DEFAULT_MAX_REQUESTS_PER_MINUTE;
   let tokens = maxRequestsPerMinute;
-  let lastRefill = Date.now();
+  let lastRefill = now();
 
   const charge = () => {
-    const now = Date.now();
+    const instant = now();
     tokens = Math.min(
       maxRequestsPerMinute,
-      tokens + ((now - lastRefill) * maxRequestsPerMinute) / 60_000,
+      tokens + ((instant - lastRefill) * maxRequestsPerMinute) / 60_000,
     );
-    lastRefill = now;
+    lastRefill = instant;
     if (tokens < 1) throw new Error('Spreadsheet request throttle exceeded');
     tokens -= 1;
   };
@@ -228,21 +245,29 @@ harden(makeCaretaker);
 
 /**
  * Powers to read a designated part of a spreadsheet, and nothing else.  The
- * parameters are the whole authority: two getters, a caretaker, and the caps.
- * No overwrite, append, or clear operation is in scope, so no reader built
- * over these powers can perform one.
+ * parameters are the whole authority: two getters, a caretaker, the caps, and
+ * a timer.  No overwrite, append, or clear operation is in scope, so no reader
+ * built over these powers can perform one.
+ *
+ * `delay` is the scheduling authority `follow()` polls on.  It is granted the
+ * same way the getters are — a host that omits it hands out a reader that can
+ * read but cannot wait, and so cannot poll.  How *long* each wait is stays
+ * with the policy rather than the timer, so `control.setPollIntervalMs()`
+ * still takes effect on the next poll of a follow already in flight.
  *
  * @param {object} authority
  * @param {(range: string) => Promise<any>} authority.getValues
  * @param {(options: object) => Promise<any>} authority.getSpreadsheet
  * @param {ReturnType<typeof makeCaretaker>} authority.access
  * @param {ReturnType<typeof makePolicy>['limits']} authority.limits
+ * @param {(ms: number) => Promise<void>} [authority.delay]
  */
 export const makeReadPowers = ({
   getValues,
   getSpreadsheet,
   access,
   limits,
+  delay,
 }) => {
   /** @param {Scope} scope */
   const at = scope =>
@@ -263,7 +288,12 @@ export const makeReadPowers = ({
         const result = await getValues(access.admit(selector, scope));
         return limits.boundCells(result.values || []);
       },
-      pollIntervalMs: () => limits.pollIntervalMs(),
+      /** Wait one poll interval, as the host currently sets it. */
+      pollDelay: () => {
+        if (typeof delay !== 'function')
+          throw new Error('Spreadsheet was granted no timer to poll on');
+        return delay(limits.pollIntervalMs());
+      },
     });
   const root = at({});
   return root;

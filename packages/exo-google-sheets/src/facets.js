@@ -1,5 +1,4 @@
 // @ts-check
-/* global setTimeout */
 
 /**
  * The passable facets.
@@ -10,6 +9,13 @@
  * its body is needed to establish that.  The facets hold no conditions about
  * what they are allowed to do, because they were only ever given what they are
  * allowed to do.
+ *
+ * That claim is only worth as much as this module's freedom from ambient
+ * authority, so this module reaches for no global.  Waiting between polls is a
+ * scheduling authority like any other — the ability to run later is not
+ * something a confined facet should be able to help itself to — so the follower
+ * awaits `powers.pollDelay()` rather than an ambient `setTimeout`, and a host
+ * that hands out no timer gets facets that cannot schedule.
  */
 
 import harden from '@endo/harden';
@@ -43,6 +49,9 @@ const SHEET_FIELDS = harden({
  * host's current allowlists, and a range the host later disallows stops
  * yielding rather than continuing on a stale decision.
  *
+ * The wait between polls is `powers.pollDelay()`, an authority the host
+ * granted, and its length remains the host's to change mid-follow.
+ *
  * @param {ReadPowers} powers
  * @param {string} selector
  */
@@ -69,9 +78,7 @@ const makeFollower = (powers, selector) => {
           };
         }
         // eslint-disable-next-line no-await-in-loop
-        await new Promise(resolve =>
-          setTimeout(resolve, powers.pollIntervalMs()),
-        );
+        await powers.pollDelay();
       }
       return { done: true, value: undefined };
     },

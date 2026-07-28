@@ -10,6 +10,13 @@
  * That is the whole design: attenuate once, near the entry point, and pass the
  * smaller thing along, rather than passing the client around with rules about
  * how to use it.
+ *
+ * The same rule governs the two temporal authorities, which is why they are
+ * named here and nowhere else: a clock for the token bucket and a timer for
+ * `follow()`'s polling.  Both default to the host's globals, because this is
+ * the module already entitled to a live network client and so already the
+ * unconfined one; a caller that has tamed or wants to fake either passes it in
+ * (`{ now, setTimeout }`), and no module below can reach past what it is given.
  */
 
 import harden from '@endo/harden';
@@ -45,13 +52,35 @@ export {
  * the facets reach the client through, and cannot be undone.
  *
  * @param {any} client A `@endo/google-sheets` client.
- * @param {{ maxRequestsPerMinute?: number, maxCellsPerRead?: number, pollIntervalMs?: number }} [options]
+ * @param {object} [options]
+ * @param {number} [options.maxRequestsPerMinute]
+ * @param {number} [options.maxCellsPerRead]
+ * @param {number} [options.pollIntervalMs]
+ * @param {() => number} [options.now] Clock for the request throttle.
+ * @param {((callback: () => void, ms: number) => unknown) | null} [options.setTimeout]
+ *   Timer `follow()` polls on; `null` grants none, leaving reads working and
+ *   polling unavailable.
  */
 export const makeExoSpreadsheet = (client, options = {}) => {
   if (!client || !client.values || !client.spreadsheets)
     throw new TypeError('A Sheets client is required');
 
-  const policy = makePolicy(options);
+  const {
+    now = () => Date.now(),
+    setTimeout = globalThis.setTimeout,
+    ...limitOptions
+  } = options;
+  const policy = makePolicy({ ...limitOptions, now });
+
+  // The delay is minted here, from the timer, so `powers.js` and `facets.js`
+  // receive the authority to wait rather than the means to schedule.  A host
+  // whose platform has no timer still gets working reads; only `follow()`
+  // fails, and it says why.
+  const delay =
+    typeof setTimeout === 'function'
+      ? /** @param {number} ms */
+        ms => new Promise(resolve => setTimeout(() => resolve(undefined), ms))
+      : undefined;
 
   // Two caretakers, so read authority and mutating authority can be revoked
   // independently.  They share the policy — one allowlist, one token bucket —
@@ -67,6 +96,7 @@ export const makeExoSpreadsheet = (client, options = {}) => {
     getSpreadsheet: fields => client.spreadsheets.get(fields),
     access: readAccess,
     limits: policy.limits,
+    delay,
   });
   const append = makeAppendPowers({
     appendValues: (range, rows) => client.values.append(range, rows),

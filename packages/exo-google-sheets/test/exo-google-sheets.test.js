@@ -154,6 +154,64 @@ test('revoke stops metadata reads too', async t => {
   await t.throwsAsync(spreadsheet.read('Tasks!A1:B2'), { message: /revoked/ });
 });
 
+test('follow() polls on a granted timer, never an ambient one', async t => {
+  const client = makeClient();
+  const waits = [];
+  const { spreadsheet, control } = makeExoSpreadsheet(client, {
+    pollIntervalMs: 5000,
+    // The whole point: the modules under the boundary hold no timer of their
+    // own, so every wait the follower takes is visible here.  Editing the
+    // sheet from inside the first wait is what makes the second poll differ.
+    setTimeout: (callback, ms) => {
+      waits.push(ms);
+      if (waits.length === 1) {
+        client.values.update('Tasks!A1:B2', [
+          ['name', 'done'],
+          ['two', true],
+        ]);
+      }
+      callback();
+      return undefined;
+    },
+  });
+  const follower = spreadsheet.follow('Tasks!A1:B2');
+  const first = await follower.next();
+  t.deepEqual(first.value.values, [
+    ['name', 'done'],
+    ['one', false],
+  ]);
+  // The first yield is the initial contents, reached without waiting.
+  t.deepEqual(waits, []);
+  // The interval remains the host's to change mid-follow, and the wait takes
+  // the new one — the granted timer carries no interval of its own.
+  control.setPollIntervalMs(7000);
+  const second = await follower.next();
+  t.deepEqual(second.value.values, [
+    ['name', 'done'],
+    ['two', true],
+  ]);
+  t.deepEqual(waits, [7000]);
+  t.deepEqual(await follower.return(), { done: true, value: undefined });
+});
+
+test('a host that grants no timer grants no polling', async t => {
+  await null;
+  const client = makeClient();
+  const { spreadsheet } = makeExoSpreadsheet(client, {
+    pollIntervalMs: 0,
+    setTimeout: null,
+  });
+  // Reads still work; only the authority to wait is missing, and the follower
+  // says so rather than reaching for a global.
+  t.deepEqual(await spreadsheet.read('Tasks!A1:B2'), [
+    ['name', 'done'],
+    ['one', false],
+  ]);
+  const follower = spreadsheet.follow('Tasks!A1:B2');
+  await follower.next();
+  await t.throwsAsync(follower.next(), { message: /no timer/ });
+});
+
 test('the throttle bounds every request, metadata included', async t => {
   const client = makeClient();
   const { spreadsheet } = makeExoSpreadsheet(client, {
