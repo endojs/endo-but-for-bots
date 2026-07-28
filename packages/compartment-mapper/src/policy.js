@@ -523,7 +523,6 @@ const attenuateVirtualModuleSource = async ({
         const ns = {};
         moduleSource.execute(ns, compartment, resolvedImports);
         const attenuated = attenuate(ns);
-        moduleExports.default = attenuated;
         assign(moduleExports, attenuated);
       },
     }),
