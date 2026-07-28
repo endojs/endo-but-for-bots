@@ -54,6 +54,40 @@ test('import all from module', async t => {
   t.is(namespace.default.b, 20);
 });
 
+test('module namespace exotic object enumerates exports in sorted order', async t => {
+  t.plan(1);
+
+  const makeImportHook = makeNodeImporter({
+    'https://example.com/zed.js': `
+      export const zeta = 1;
+      export const alpha = 2;
+      export let mu = 3;
+      export const beta = 4;
+    `,
+    'https://example.com/main.js': `
+      import * as ns from './zed.js';
+      export default ns;
+    `,
+  });
+
+  const compartment = new Compartment({
+    resolveHook: resolveNode,
+    importHook: makeImportHook('https://example.com'),
+    __noNamespaceBox__: true,
+    __options__: true,
+  });
+
+  const namespace = await compartment.import('./main.js');
+
+  t.deepEqual(Reflect.ownKeys(namespace.default), [
+    'alpha',
+    'beta',
+    'mu',
+    'zeta',
+    Symbol.toStringTag,
+  ]);
+});
+
 test('import named exports from me', async t => {
   t.plan(2);
 

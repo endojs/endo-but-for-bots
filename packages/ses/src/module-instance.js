@@ -19,6 +19,7 @@ import {
   keys,
   mapGet,
   weakmapGet,
+  reflectDeleteProperty,
   reflectHas,
   assign,
 } from './commons.js';
@@ -260,14 +261,13 @@ export const makeModuleInstance = (
 
     // Define on exportsTarget eagerly so cross-module reads through the
     // namespace import (`'*'` notifier) see the TDZ-aware getter even before
-    // imports() completes its sort-and-define pass. The late pass below
-    // redefines with the identical descriptor as a no-op, preserving the
-    // ECMA-262 sorted enumeration order.
-    defineProperty(
-      exportsTarget,
-      fixedExportName,
-      exportsProps[fixedExportName],
-    );
+    // imports() completes its sort-and-define pass. Keep this descriptor
+    // configurable so the late pass can delete and re-define it in sorted
+    // order before freezing the namespace.
+    defineProperty(exportsTarget, fixedExportName, {
+      ...exportsProps[fixedExportName],
+      configurable: true,
+    });
 
     notifiers[fixedExportName] = fixedGetNotify.notify;
   });
@@ -359,13 +359,13 @@ export const makeModuleInstance = (
 
       // Define on exportsTarget eagerly so cross-module reads through the
       // namespace import see the TDZ-aware getter before imports() completes
-      // its sort-and-define pass. The late pass below redefines with the
-      // identical descriptor as a no-op, preserving sorted enumeration order.
-      defineProperty(
-        exportsTarget,
-        liveExportName,
-        exportsProps[liveExportName],
-      );
+      // its sort-and-define pass. Keep this descriptor configurable so the
+      // late pass can delete and re-define it in sorted order before freezing
+      // the namespace.
+      defineProperty(exportsTarget, liveExportName, {
+        ...exportsProps[liveExportName],
+        configurable: true,
+      });
 
       notifiers[liveExportName] = liveGetNotify.notify;
     },
@@ -440,9 +440,13 @@ export const makeModuleInstance = (
       configurable: false,
     };
     // Define on exportsTarget eagerly so cross-module namespace reads see
-    // the TDZ-aware getter before imports() completes; the late pass below
-    // redefines with the identical descriptor as a no-op.
-    defineProperty(exportsTarget, exportName, exportsProps[exportName]);
+    // the TDZ-aware getter before imports() completes. Keep this descriptor
+    // configurable so the late pass can delete and re-define it in sorted
+    // order before freezing the namespace.
+    defineProperty(exportsTarget, exportName, {
+      ...exportsProps[exportName],
+      configurable: true,
+    });
   };
 
   // Per the calling convention for the moduleFunctor generated from
@@ -523,9 +527,10 @@ export const makeModuleInstance = (
     // since all properties of the exports namespace must be keyed by a string
     // and the string must correspond to a valid identifier, sorting these
     // properties works for this specific case.
-    arrayForEach(arraySort(keys(exportsProps)), k =>
-      defineProperty(exportsTarget, k, exportsProps[k]),
-    );
+    arrayForEach(arraySort(keys(exportsProps)), k => {
+      reflectDeleteProperty(exportsTarget, k);
+      defineProperty(exportsTarget, k, exportsProps[k]);
+    });
 
     freeze(exportsTarget);
     activate();
