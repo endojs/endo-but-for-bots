@@ -40,7 +40,11 @@ export const SpreadsheetInterface = M.interface('Spreadsheet', {
     M.arrayOf(CellValuesShape),
   ),
   readRecords: M.callWhen(M.string()).returns(M.arrayOf(M.record())),
-  follow: M.call(M.string()).returns(M.any()),
+  // A local async iterator, not a remotable: it carries a `Symbol.asyncIterator`
+  // so `for await` works, and symbol-keyed properties are exactly what a
+  // remotable may not have.  `M.raw()` says so out loud — `M.any()` here would
+  // reject every call, since a result checked as Passable cannot be one.
+  follow: M.call(M.string()).returns(M.raw()),
   help: M.call().returns(M.string()),
 });
 
@@ -60,7 +64,11 @@ export const SpreadsheetWriterInterface = M.interface('SpreadsheetWriter', {
     M.arrayOf(CellValuesShape),
   ),
   readRecords: M.callWhen(M.string()).returns(M.arrayOf(M.record())),
-  follow: M.call(M.string()).returns(M.any()),
+  // A local async iterator, not a remotable: it carries a `Symbol.asyncIterator`
+  // so `for await` works, and symbol-keyed properties are exactly what a
+  // remotable may not have.  `M.raw()` says so out loud — `M.any()` here would
+  // reject every call, since a result checked as Passable cannot be one.
+  follow: M.call(M.string()).returns(M.raw()),
   help: M.call().returns(M.string()),
   write: M.callWhen(M.string(), CellValuesShape).returns(M.record()),
   writeBatch: M.callWhen(M.arrayOf(UpdateShape)).returns(M.arrayOf(M.record())),
