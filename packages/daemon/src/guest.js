@@ -406,6 +406,40 @@ export const makeGuestMaker = ({
       return /** @type {any} */ (value);
     };
 
+    /** @type {EndoGuest['makeSortedMapStore']} */
+    const makeSortedMapStore = async petName => {
+      const { namePath } = petNamePathFrom(petName);
+      /** @type {DeferredTasks<CollectionStoreDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        E(directory).storeIdentifier(namePath, identifiers.collectionStoreId),
+      );
+      const { id, value } = await formulateCollectionStore(
+        'sorted-map',
+        tasks,
+        pinTransient,
+      );
+      await unpinTransient(id);
+      return /** @type {any} */ (value);
+    };
+
+    /** @type {EndoGuest['makeSortedSetStore']} */
+    const makeSortedSetStore = async petName => {
+      const { namePath } = petNamePathFrom(petName);
+      /** @type {DeferredTasks<CollectionStoreDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        E(directory).storeIdentifier(namePath, identifiers.collectionStoreId),
+      );
+      const { id, value } = await formulateCollectionStore(
+        'sorted-set',
+        tasks,
+        pinTransient,
+      );
+      await unpinTransient(id);
+      return /** @type {any} */ (value);
+    };
+
     /** @type {EndoGuest} */
     const guest = {
       // Directory
@@ -463,6 +497,8 @@ export const makeGuestMaker = ({
       makeSetStore,
       makeWeakMapStore,
       makeWeakSetStore,
+      makeSortedMapStore,
+      makeSortedSetStore,
       submit,
       sendValue,
     };

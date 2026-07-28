@@ -16,8 +16,10 @@ import { promisify as nodePromisify } from 'util';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 import { makeExo } from '@endo/exo';
+import { makeEncodePassable } from '@endo/marshal';
 import {
   M,
+  compareKeys,
   makeCopyMap,
   getCopyMapEntries,
   makeCopySet,
@@ -446,6 +448,11 @@ const getConfigDirectoryName = (testTitle, testConfigIndex) => {
  */
 const prepareConfig = async (t, { gcEnabled = true } = {}) => {
   const { cancelled, cancel } = makeCancelKit();
+  // Every test intentionally rejects this cancellation token during teardown.
+  // Observe it before handing it to the daemon clients, since on Node 22 the
+  // clients can derive and reject teardown promises in the same turn as
+  // cancellation. Attaching this only in afterEach is too late for that race.
+  cancelled.catch(() => {});
   const config = {
     ...makeConfig('tmp', getConfigDirectoryName(t.title, t.context.length)),
     gcEnabled,
@@ -7587,4 +7594,110 @@ test('minimal ERTP issuer kit conserves Amount across restart on WeakMapStore', 
     ),
     2,
   );
+});
+
+// -- Persistent sorted collection stores (collection-store, Phase 4) --
+
+test('SortedMapStore orders arbitrary keys and filters bounded pattern scans', async t => {
+  const { config, host } = await prepareHost(t);
+  const map = await E(host).makeSortedMapStore('sorted-map');
+  const keys = [
+    harden({ z: 1 }),
+    harden([1, 'x']),
+    3n,
+    'alpha',
+    'beta',
+    'gamma',
+  ];
+  await E(map).init(keys[0], 'value-0');
+  await E(map).init(keys[1], 'value-1');
+  await E(map).init(keys[2], 'value-2');
+  await E(map).init(keys[3], 'value-3');
+  await E(map).init(keys[4], 'value-4');
+  await E(map).init(keys[5], 'value-5');
+
+  const expectedOrder = [...keys].sort(compareKeys);
+  t.deepEqual(await E(map).keys(), expectedOrder);
+  t.deepEqual(await E(map).keys(M.string(), { start: 'beta', end: 'gamma' }), [
+    'beta',
+    'gamma',
+  ]);
+  t.deepEqual(
+    await E(map).keys(M.string(), {
+      start: 'beta',
+      end: 'gamma',
+      startInclusive: false,
+      endInclusive: false,
+    }),
+    [],
+  );
+  t.deepEqual(
+    await E(map).values(M.string(), { start: 'beta', end: 'gamma' }),
+    ['value-4', 'value-5'],
+  );
+  t.deepEqual(
+    await E(map).entries(M.string(), { start: 'beta', end: 'gamma' }),
+    [
+      ['beta', 'value-4'],
+      ['gamma', 'value-5'],
+    ],
+  );
+
+  // The rank range must seek through the composite store/rank index, rather
+  // than scanning every row and sorting in JavaScript.
+  const storeId = await E(host).identify('sorted-map');
+  const encode = makeEncodePassable();
+  const plan = openTestDb(config.statePath)
+    .db.prepare(
+      'EXPLAIN QUERY PLAN SELECT key_rank FROM collection_store_entry WHERE store_number = ? AND key_rank >= ? AND key_rank < ? ORDER BY key_rank',
+    )
+    .all(parseId(storeId).number, encode('beta'), `${encode('gamma')}~`);
+  const detail = plan.map(row => row.detail).join('\n');
+  t.regex(detail, /SEARCH collection_store_entry USING (?:COVERING )?INDEX/);
+  t.false(detail.includes('SCAN collection_store_entry'));
+});
+
+test('SortedMapStore persists its rank-ordered scans across restart', async t => {
+  const { cancelled, config, host } = await prepareHost(t);
+  const map = await E(host).makeSortedMapStore('sorted-map');
+  await E(map).init('delta', 4);
+  await E(map).init('beta', 2);
+  await E(map).init('gamma', 3);
+
+  await restart(config);
+  const { host: hostAfter } = await makeHost(config, cancelled);
+  const mapAfter = await E(hostAfter).lookup(['sorted-map']);
+  t.deepEqual(
+    await E(mapAfter).entries(M.string(), { start: 'beta', end: 'gamma' }),
+    [
+      ['beta', 2],
+      ['delta', 4],
+      ['gamma', 3],
+    ],
+  );
+});
+
+test('SortedSetStore supports ordered bounded scans and restart persistence', async t => {
+  const { cancelled, config, host } = await prepareHost(t);
+  const set = await E(host).makeSortedSetStore('sorted-set');
+  await E(set).add('delta');
+  await E(set).add('beta');
+  await E(set).add('gamma');
+  await E(set).add(3n);
+
+  t.deepEqual(
+    await E(set).keys(M.string(), {
+      start: 'beta',
+      end: 'gamma',
+      endInclusive: false,
+    }),
+    ['beta', 'delta'],
+  );
+  t.deepEqual(await E(set).entries(M.string()), ['beta', 'delta', 'gamma']);
+
+  await restart(config);
+  const { host: hostAfter } = await makeHost(config, cancelled);
+  const setAfter = await E(hostAfter).lookup(['sorted-set']);
+  t.deepEqual(await E(setAfter).keys(M.string()), ['beta', 'delta', 'gamma']);
+  t.true(await E(setAfter).has(3n));
 });

@@ -286,6 +286,33 @@ export interface SetStore<K = unknown> {
   snapshot(): Promise<unknown>;
 }
 
+/** Optional passable-key limits for an ordered sorted-store scan. */
+export type SortedStoreBounds<K = unknown> = {
+  start?: K;
+  end?: K;
+  startInclusive?: boolean;
+  endInclusive?: boolean;
+};
+
+/** A durable MapStore with indexed passable-rank scans. */
+export interface SortedMapStore<K = unknown, V = unknown> extends MapStore<
+  K,
+  V
+> {
+  keys(pattern?: unknown, bounds?: SortedStoreBounds<K>): Promise<K[]>;
+  values(pattern?: unknown, bounds?: SortedStoreBounds<K>): Promise<V[]>;
+  entries(
+    pattern?: unknown,
+    bounds?: SortedStoreBounds<K>,
+  ): Promise<Array<[K, V]>>;
+}
+
+/** A durable SetStore with indexed passable-rank scans. */
+export interface SortedSetStore<K = unknown> extends SetStore<K> {
+  keys(pattern?: unknown, bounds?: SortedStoreBounds<K>): Promise<K[]>;
+  entries(pattern?: unknown, bounds?: SortedStoreBounds<K>): Promise<K[]>;
+}
+
 /** A non-enumerable MapStore whose remotable keys are not retained. */
 export interface WeakMapStore<K = object, V = unknown> {
   has(key: K): Promise<boolean>;
@@ -574,12 +601,12 @@ export type MailboxStoreFormula = {
  * A durable, incrementally-mutable passable collection (the daemon-native
  * analogue of `@agoric/store`). The formula carries only the collection
  * `kind`; its entries live in the `collection_store_entry` SQLite table keyed
- * by this formula's number. Phases 1-2 implement the strong `MapStore` and
- * `SetStore`; the remaining kinds land in later phases.
+ * by this formula's number. Sorted kinds use the same body representation but
+ * scan their `makeEncodePassable` rank encoding through SQLite.
  */
 export type CollectionStoreFormula = {
   type: 'collection-store';
-  kind: 'map' | 'set' | 'weak-map' | 'weak-set';
+  kind: 'map' | 'set' | 'weak-map' | 'weak-set' | 'sorted-map' | 'sorted-set';
 };
 
 export type MailHubFormula = {
@@ -1518,6 +1545,12 @@ export interface EndoGuest extends EndoAgent {
   makeSetStore(petName: string | string[]): Promise<FarRef<SetStore>>;
   makeWeakMapStore(petName: string | string[]): Promise<FarRef<WeakMapStore>>;
   makeWeakSetStore(petName: string | string[]): Promise<FarRef<WeakSetStore>>;
+  makeSortedMapStore(
+    petName: string | string[],
+  ): Promise<FarRef<SortedMapStore>>;
+  makeSortedSetStore(
+    petName: string | string[],
+  ): Promise<FarRef<SortedSetStore>>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
   sendValue: Mail['sendValue'];
 }
@@ -1548,6 +1581,12 @@ export interface EndoHost extends EndoAgent {
   makeSetStore(petName: string | string[]): Promise<FarRef<SetStore>>;
   makeWeakMapStore(petName: string | string[]): Promise<FarRef<WeakMapStore>>;
   makeWeakSetStore(petName: string | string[]): Promise<FarRef<WeakSetStore>>;
+  makeSortedMapStore(
+    petName: string | string[],
+  ): Promise<FarRef<SortedMapStore>>;
+  makeSortedSetStore(
+    petName: string | string[],
+  ): Promise<FarRef<SortedSetStore>>;
   storeTree(remoteTree: unknown, petName: string | string[]): Promise<unknown>;
   provideMount(
     path: string,
@@ -2309,6 +2348,17 @@ export type DaemonicPersistencePowers = {
     valueBody: string | null;
     valueSlots: string | null;
   }>;
+  listCollectionEntriesInRange: (
+    storeNumber: string,
+    startRank: string,
+    endRank: string,
+  ) => Array<{
+    keyRank: string;
+    keyBody: string;
+    keySlots: string;
+    valueBody: string | null;
+    valueSlots: string | null;
+  }>;
   countCollectionEntries: (storeNumber: string) => number;
   deleteAllCollectionEntries: (storeNumber: string) => void;
   writeCollectionWeakKey: (
@@ -2544,7 +2594,14 @@ export interface DaemonCore {
     kind: CollectionStoreFormula['kind'],
     deferredTasks: DeferredTasks<CollectionStoreDeferredTaskParams>,
     pin?: (id: FormulaIdentifier) => void,
-  ) => FormulateResult<MapStore | SetStore | WeakMapStore | WeakSetStore>;
+  ) => FormulateResult<
+    | MapStore
+    | SetStore
+    | WeakMapStore
+    | WeakSetStore
+    | SortedMapStore
+    | SortedSetStore
+  >;
 
   formulatePromise: (
     pinTransient?: (id: FormulaIdentifier) => void,

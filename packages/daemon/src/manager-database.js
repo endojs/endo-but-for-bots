@@ -46,6 +46,7 @@ import { q } from '@endo/errors';
  * @property {(storeNumber: string, keyRank: string) => boolean} hasCollectionEntry
  * @property {(storeNumber: string, keyRank: string) => void} deleteCollectionEntry
  * @property {(storeNumber: string) => Array<{keyRank: string, keyBody: string, keySlots: string, valueBody: string | null, valueSlots: string | null}>} listCollectionEntries
+ * @property {(storeNumber: string, startRank: string, endRank: string) => Array<{keyRank: string, keyBody: string, keySlots: string, valueBody: string | null, valueSlots: string | null}>} listCollectionEntriesInRange
  * @property {(storeNumber: string) => number} countCollectionEntries
  * @property {(storeNumber: string) => void} deleteAllCollectionEntries
  * @property {(keyFormulaNumber: string, storeNumber: string, keyRank: string) => void} writeCollectionWeakKey
@@ -118,7 +119,7 @@ const SCHEMA_SQL = `
 
   CREATE TABLE IF NOT EXISTS collection_store_entry (
     store_number TEXT NOT NULL,
-    key_rank TEXT NOT NULL,
+    key_rank TEXT COLLATE BINARY NOT NULL,
     key_body TEXT NOT NULL,
     key_slots TEXT NOT NULL,
     value_body TEXT,
@@ -127,7 +128,7 @@ const SCHEMA_SQL = `
   );
 
   CREATE INDEX IF NOT EXISTS collection_store_entry_rank
-    ON collection_store_entry (store_number, key_rank);
+    ON collection_store_entry (store_number, key_rank COLLATE BINARY);
 
   CREATE TABLE IF NOT EXISTS collection_store_weak_key (
     key_formula_number TEXT NOT NULL,
@@ -292,6 +293,9 @@ export const makeDaemonDatabase = (config, options) => {
   );
   const stmtListCollectionEntries = db.prepare(
     'SELECT key_rank AS keyRank, key_body AS keyBody, key_slots AS keySlots, value_body AS valueBody, value_slots AS valueSlots FROM collection_store_entry WHERE store_number = ? ORDER BY key_rank',
+  );
+  const stmtListCollectionEntriesInRange = db.prepare(
+    'SELECT key_rank AS keyRank, key_body AS keyBody, key_slots AS keySlots, value_body AS valueBody, value_slots AS valueSlots FROM collection_store_entry WHERE store_number = ? AND key_rank >= ? AND key_rank < ? ORDER BY key_rank',
   );
   const stmtCountCollectionEntries = db.prepare(
     'SELECT COUNT(*) AS count FROM collection_store_entry WHERE store_number = ?',
@@ -700,6 +704,21 @@ export const makeDaemonDatabase = (config, options) => {
   };
 
   /**
+   * Read an ordered half-open rank interval. The composite store/rank index
+   * makes this a range seek followed only by candidate rows.
+   *
+   * @param {string} storeNumber
+   * @param {string} startRank
+   * @param {string} endRank
+   * @returns {Array<{keyRank: string, keyBody: string, keySlots: string, valueBody: string | null, valueSlots: string | null}>}
+   */
+  const listCollectionEntriesInRange = (storeNumber, startRank, endRank) => {
+    return /** @type {Array<{keyRank: string, keyBody: string, keySlots: string, valueBody: string | null, valueSlots: string | null}>} */ (
+      stmtListCollectionEntriesInRange.all(storeNumber, startRank, endRank)
+    );
+  };
+
+  /**
    * @param {string} storeNumber
    * @returns {number}
    */
@@ -809,6 +828,7 @@ export const makeDaemonDatabase = (config, options) => {
     hasCollectionEntry,
     deleteCollectionEntry,
     listCollectionEntries,
+    listCollectionEntriesInRange,
     countCollectionEntries,
     deleteAllCollectionEntries,
     writeCollectionWeakKey,
