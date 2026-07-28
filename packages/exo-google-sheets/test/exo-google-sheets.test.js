@@ -1,5 +1,6 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
+import { E, makeLoopback } from '@endo/captp';
 import { makeExoSpreadsheet } from '../index.js';
 
 const makeClient = () => {
@@ -38,26 +39,31 @@ const makeClient = () => {
     },
   };
 };
-test('facets attenuate permissions and range scope', async t => {
+test('facets attenuate permissions and range scope over loopback CapTP', async t => {
   const client = makeClient();
-  const { spreadsheet, writer, control } = makeExoSpreadsheet(client, {
+  const facets = makeExoSpreadsheet(client, {
     pollIntervalMs: 0,
   });
-  t.deepEqual(await spreadsheet.sheet('Tasks').read('A1:B2'), [
+  const { makeFar, isOnlyFar } = makeLoopback('guest');
+  const { spreadsheet, writer, control } = await makeFar(facets);
+  t.true(isOnlyFar(spreadsheet));
+  t.deepEqual(await E(E(spreadsheet).sheet('Tasks')).read('A1:B2'), [
     ['name', 'done'],
     ['one', false],
   ]);
-  t.deepEqual(await spreadsheet.readRecords('Tasks!A1:B2'), [
+  t.deepEqual(await E(spreadsheet).readRecords('Tasks!A1:B2'), [
     { name: 'one', done: false },
   ]);
-  t.is(writer.readOnly().write, undefined);
-  t.is(writer.appendOnly().read, undefined);
-  await writer.range('Tasks!A1:B2').write('A1', [['x']]);
-  await t.throwsAsync(writer.range('Tasks!A1:B2').write('C1', [['x']]), {
+  const reader = await E(writer).readOnly();
+  const appender = await E(writer).appendOnly();
+  t.is(reader.write, undefined);
+  t.is(appender.read, undefined);
+  await E(E(writer).range('Tasks!A1:B2')).write('A1', [['x']]);
+  await t.throwsAsync(E(E(writer).range('Tasks!A1:B2')).write('C1', [['x']]), {
     message: /escapes/,
   });
-  control.setAllowedSheets(['Tasks']);
-  await t.throwsAsync(writer.write('Other!A1', [['x']]), {
+  await E(control).setAllowedSheets(['Tasks']);
+  await t.throwsAsync(E(writer).write('Other!A1', [['x']]), {
     message: /allowed/,
   });
 });

@@ -97,8 +97,8 @@ const parseA1 = value => {
     bottom: Number(endRow || startRow),
   };
 };
+/* eslint-disable @endo/restrict-comparison-operands */
 const contains = (outer, inner) => {
-  // eslint-disable-next-line @endo/restrict-comparison-operands
   return (
     outer.left <= inner.left &&
     outer.top <= inner.top &&
@@ -106,6 +106,7 @@ const contains = (outer, inner) => {
     outer.bottom >= inner.bottom
   );
 };
+/* eslint-enable @endo/restrict-comparison-operands */
 const sheetPrefix = sheet =>
   /[ !']/.test(sheet) ? `'${sheet.replace(/'/g, "''")}'` : sheet;
 

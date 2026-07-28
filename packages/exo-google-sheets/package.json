@@ -32,6 +32,7 @@
     "@endo/patterns": "workspace:^"
   },
   "devDependencies": {
+    "@endo/captp": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
