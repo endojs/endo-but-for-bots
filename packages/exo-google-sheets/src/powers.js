@@ -35,6 +35,32 @@ import { contains, parseA1, sheetPrefix } from './a1.js';
  * @property {string} [range] A1 rectangle this power is confined to, if any.
  */
 
+/**
+ * Read one part designation as the scope narrowing it names.  This is the
+ * mereological verb: a tab is a part of the spreadsheet, a rectangle is a part
+ * of a tab, and `'Tasks!A1:C10'` names both in one step.  Which axis a
+ * designation narrows is decided by whether it parses as A1 — so the parse,
+ * not a second method name, carries the distinction.
+ *
+ * The one designation this cannot read is a tab whose *title* is A1-shaped (a
+ * tab literally named `A1`); `sheet(title)` remains for that case, and no
+ * corresponding hazard runs the other way, since a string that parses as A1
+ * always denotes cells.
+ *
+ * @param {string} designation
+ * @returns {Scope}
+ */
+export const partScope = designation => {
+  if (typeof designation !== 'string' || designation.length === 0)
+    throw new TypeError('part must be a non-empty tab name or A1 range');
+  const parsed = parseA1(designation);
+  if (!parsed) return harden({ sheet: designation });
+  return parsed.sheet
+    ? harden({ sheet: parsed.sheet, range: designation })
+    : harden({ range: designation });
+};
+harden(partScope);
+
 const DEFAULT_MAX_CELLS_PER_READ = 10_000;
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_REQUESTS_PER_MINUTE = 60;

@@ -21,6 +21,7 @@ import {
   SpreadsheetWriteOnlyInterface,
   SpreadsheetWriterInterface,
 } from './interfaces.js';
+import { partScope } from './powers.js';
 
 /**
  * @import { makeAppendPowers, makeReadPowers, makeWritePowers } from './powers.js'
@@ -160,6 +161,8 @@ export const makeReader = powers =>
     SpreadsheetInterface,
     /** @type {any} */ ({
       ...readMethods(powers),
+      /** @param {string} designation A tab name, an A1 range, or both. */
+      part: designation => makeReader(powers.narrow(partScope(designation))),
       /** @param {string} name */
       sheet: name => makeReader(powers.narrow({ sheet: name })),
       /** @param {string} selector */
@@ -181,6 +184,8 @@ export const makeAppender = powers =>
     SpreadsheetAppenderInterface,
     /** @type {any} */ ({
       ...appendMethods(powers),
+      /** @param {string} designation A tab name, an A1 range, or both. */
+      part: designation => makeAppender(powers.narrow(partScope(designation))),
       /** @param {string} name */
       sheet: name => makeAppender(powers.narrow({ sheet: name })),
       /** @param {string} selector */
@@ -203,6 +208,8 @@ export const makeWriteOnly = powers =>
     SpreadsheetWriteOnlyInterface,
     /** @type {any} */ ({
       ...writeMethods(powers),
+      /** @param {string} designation A tab name, an A1 range, or both. */
+      part: designation => makeWriteOnly(powers.narrow(partScope(designation))),
       /** @param {string} name */
       sheet: name => makeWriteOnly(powers.narrow({ sheet: name })),
       /** @param {string} selector */
@@ -241,6 +248,8 @@ export const makeWriter = powers => {
         Promise.all(
           updates.map(({ range, values }) => writes.write(range, values)),
         ),
+      /** @param {string} designation A tab name, an A1 range, or both. */
+      part: designation => makeWriter(narrow(partScope(designation))),
       /** @param {string} name */
       sheet: name => makeWriter(narrow({ sheet: name })),
       /** @param {string} selector */

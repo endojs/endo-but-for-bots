@@ -91,6 +91,38 @@ test('attenuation is structural: a facet lacks the vocabulary it lacks authority
   ]);
 });
 
+test('part() narrows the whole and composes, on every authority class', async t => {
+  const client = makeClient();
+  const { spreadsheet, writer } = makeExoSpreadsheet(client);
+  await null;
+  // A part of a whole is a narrower whole of the same authority class.
+  const tab = spreadsheet.part('Tasks');
+  t.deepEqual(await tab.read('A1:B2'), [
+    ['name', 'done'],
+    ['one', false],
+  ]);
+  // …and parts compose.
+  const cells = tab.part('A1:B2');
+  t.deepEqual(await cells.read('A1:B2'), [
+    ['name', 'done'],
+    ['one', false],
+  ]);
+  await t.throwsAsync(cells.read('C1'), { message: /escapes/ });
+  // One designation may name both axes at once.
+  await t.throwsAsync(spreadsheet.part('Tasks!A1:B2').read('Other!A1'), {
+    message: /escapes/,
+  });
+  // The part axis never widens the verb axis: narrowing a reader yields a
+  // reader, and narrowing a write-only facet yields a write-only facet.
+  t.is(cells.write, undefined);
+  t.is(writer.writeOnly().part('Tasks').read, undefined);
+  // …nor the reverse: attenuating a narrowed writer keeps the narrowing.
+  await t.throwsAsync(writer.part('Tasks!A1:B2').writeOnly().write('C1', []), {
+    message: /escapes/,
+  });
+  t.is(client.calls.filter(([verb]) => verb === 'update').length, 0);
+});
+
 test('revokeWrites severs mutating authority and leaves reads intact', async t => {
   const client = makeClient();
   const { spreadsheet, writer, control } = makeExoSpreadsheet(client);

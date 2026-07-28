@@ -26,9 +26,21 @@ Two consequences worth stating plainly:
 - **There is no read-only mode.** A reader is not a writer with writing turned
   off; it is an object built over powers that contain no write operation. Which
   facet a guest receives is the grant.
-- **Narrowing mints, never masks.** `sheet('Tasks')` and `range('A1:C10')`
-  return a fresh facet over powers bound to a smaller designation, in the shape
-  of `pathlib`'s `/` — not a wider capability wearing a smaller label.
+- **Narrowing mints, never masks.** `part('Tasks')` returns a fresh facet over
+  powers bound to a smaller designation, in the shape of `pathlib`'s `/` — not
+  a wider capability wearing a smaller label.
+
+`part(designation)` is the mereological verb, and it is the primary way to
+narrow: a part of a whole is a narrower whole of the same authority class, so
+`spreadsheet.part('Tasks').part('A1:C10')` composes, and `part('Tasks!A1:C10')`
+names both axes at once. `sheet(title)` and `range(a1)` remain as the explicit
+spelling — `sheet` because it is the one designation `part` cannot read on its
+own (a tab whose title is itself A1-shaped, such as a tab named `A1`).
+
+The part axis and the authority axis are orthogonal, in both directions:
+narrowing the part never widens the verbs, and attenuating the verbs never
+widens the part. `writer.part('Tasks').writeOnly()` and
+`writer.writeOnly().part('Tasks')` land in the same place.
 
 To withdraw authority already handed out, `control.revokeWrites()` severs the
 caretaker that the append and overwrite powers reach the client through, and

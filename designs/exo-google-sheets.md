@@ -109,15 +109,28 @@ read and write authority can be separated all the way down.
 
 - **Scope axis (coarse → fine).** A *group of spreadsheets* (the account
   surface, a `SheetsService`) narrows to a *single spreadsheet*, which narrows
-  to a *single sheet/tab* (`sheet(title)`), which narrows to a *range within a
-  sheet* (`range('A1:C10')`). Root-level account authority exists and is
-  narrowed *electively*; the coarse handle is never derivable from a fine one.
+  to a *single sheet/tab*, which narrows to a *range within a sheet*. The verb
+  is mereological — `whole.part(designation)` returns a narrower whole of the
+  same authority class, so the steps compose (`part('Tasks').part('A1:C10')`)
+  and one designation may name both axes (`part('Tasks!A1:C10')`).
+  `sheet(title)` and `range(a1)` remain as the explicit spelling; `sheet` in
+  particular is the disambiguator for the one designation `part` cannot read on
+  its own, a tab whose title is itself A1-shaped. Root-level account authority
+  exists and is narrowed *electively*; the coarse handle is never derivable
+  from a fine one.
 - **Permission axis (read ⇄ write, mutually exclusive slices).** A read-write
   facet attenuates to `readOnly()` (observe, never mutate), `appendOnly()` (a
   blind producer that can add rows but neither read nor overwrite), or
   `writeOnly()` (overwrite without read-back). Splitting append/write/read into
   distinct facets lets two parties share one sheet as a queue — one appends,
   the other reads — without either holding the other's authority.
+
+The two axes are orthogonal in both directions, and structurally so: narrowing
+the part never widens the verbs, because a narrowed facet is minted by the same
+constructor; attenuating the verbs never widens the part, because `readOnly()`
+and its siblings pass along powers already bound to the current designation.
+`writer.part('Tasks').writeOnly()` and `writer.writeOnly().part('Tasks')` land
+in the same place.
 
 The per-spreadsheet facets, from broadest to narrowest authority:
 `SpreadsheetControl` (host-side caretaker), `SpreadsheetWriter` (read-write,
@@ -163,6 +176,7 @@ interface Spreadsheet {
   // Read-only facet. Default grant.
   title(): Promise<string>;
   sheets(): Promise<SheetInfo[]>;
+  part(designation: string): Spreadsheet;     // narrow to a tab and/or range
   sheet(title: string): Spreadsheet;          // narrow scope to one tab
   range(a1: string): Spreadsheet;             // narrow scope to one range
   read(range: string): Promise<CellValue[][]>;          // A1 notation
@@ -184,6 +198,7 @@ interface SpreadsheetWriter /* extends Spreadsheet */ {
   appendOnly(): SpreadsheetAppender;          // add rows, no read, no overwrite
   writeOnly(): SpreadsheetWriteOnly;          // overwrite, no read-back
   // Scope-axis attenuators:
+  part(designation: string): SpreadsheetWriter;
   sheet(title: string): SpreadsheetWriter;    // tab-scoped writer
   range(a1: string): SpreadsheetWriter;       // range-scoped writer
 }
@@ -191,6 +206,7 @@ interface SpreadsheetWriter /* extends Spreadsheet */ {
 interface SpreadsheetAppender {
   // Blind producer — a queue's write end. Cannot read or overwrite.
   append(range: string, rows: CellValue[][]): Promise<AppendResult>;
+  part(designation: string): SpreadsheetAppender;
   sheet(title: string): SpreadsheetAppender;
   range(a1: string): SpreadsheetAppender;
   help(): string;
@@ -200,6 +216,7 @@ interface SpreadsheetWriteOnly {
   // Overwrite without read-back; symmetric with readOnly.
   write(range: string, values: CellValue[][]): Promise<UpdateResult>;
   clear(range: string): Promise<void>;
+  part(designation: string): SpreadsheetWriteOnly;
   sheet(title: string): SpreadsheetWriteOnly;
   range(a1: string): SpreadsheetWriteOnly;
   help(): string;
