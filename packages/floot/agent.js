@@ -298,6 +298,8 @@ const FlootFactoryInterface = M.interface('FlootFactory', {
   getSession: M.callWhen(M.string()).returns(M.remotable()),
   renameSession: M.callWhen(M.string(), M.string()).returns(M.undefined()),
   deleteSession: M.callWhen(M.string()).returns(M.undefined()),
+  getVoicePreferences: M.callWhen().returns(M.record()),
+  setVoicePreferences: M.callWhen(M.record()).returns(M.record()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
 
@@ -1235,6 +1237,43 @@ harden(makeStreamingAgent);
 // an array of { id, title, createdAt } — is persisted.
 const REGISTRY_NAME = 'floot-sessions';
 
+// Petname where whole-Floot voice/TTS preferences (voice, speed, expression…)
+// are persisted. These are a property of the Floot instance — shared across
+// every session and every device — not of any one session or browser.
+const VOICE_PREFS_NAME = 'floot-voice-preferences';
+
+// Only these keys are accepted from a client and mirrored to the petstore, each
+// coerced to its expected type. Anything else (or a non-finite number) is
+// dropped, so a malformed client can't poison the stored preferences.
+const VOICE_PREF_NUMERIC_KEYS = harden([
+  'speed',
+  'noiseScale',
+  'noiseW',
+  'sentenceSilence',
+]);
+
+/**
+ * @param {Record<string, unknown>} input
+ * @returns {Record<string, string | number>}
+ */
+const sanitizeVoicePrefs = input => {
+  /** @type {Record<string, string | number>} */
+  const clean = {};
+  if (input && typeof input === 'object') {
+    if (typeof input.voice === 'string') {
+      clean.voice = input.voice;
+    }
+    for (const key of VOICE_PREF_NUMERIC_KEYS) {
+      const value = Number(input[key]);
+      if (Number.isFinite(value)) {
+        clean[key] = value;
+      }
+    }
+  }
+  return clean;
+};
+harden(sanitizeVoicePrefs);
+
 const newSessionId = () =>
   `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -1497,6 +1536,37 @@ export const make = (hostPowers, _context, { env } = {}) => {
     });
     // Keep the chain alive even if this write rejects.
     registryWrite = result.catch(() => {});
+    return result;
+  };
+
+  // Whole-Floot voice/TTS preferences, mirrored to the factory petstore the
+  // same way as the registry (lazy load, chained remove-then-store writes).
+  /** @type {Record<string, string | number> | undefined} */
+  let voicePrefs;
+  const loadVoicePrefs = async () => {
+    if (voicePrefs) return voicePrefs;
+    if (await E(powers).has(VOICE_PREFS_NAME)) {
+      const stored = await E(powers).lookup(VOICE_PREFS_NAME);
+      voicePrefs = sanitizeVoicePrefs(
+        /** @type {Record<string, unknown>} */ (stored) || {},
+      );
+    } else {
+      voicePrefs = {};
+    }
+    return voicePrefs;
+  };
+  let voicePrefsWrite = Promise.resolve();
+  const saveVoicePrefs = () => {
+    const result = voicePrefsWrite.then(async () => {
+      if (await E(powers).has(VOICE_PREFS_NAME)) {
+        await E(powers).remove(VOICE_PREFS_NAME);
+      }
+      await E(powers).storeValue(
+        harden({ ...(voicePrefs || {}) }),
+        VOICE_PREFS_NAME,
+      );
+    });
+    voicePrefsWrite = result.catch(() => {});
     return result;
   };
 
@@ -1978,12 +2048,39 @@ export const make = (hostPowers, _context, { env } = {}) => {
     },
 
     /**
+     * Whole-Floot voice/TTS preferences (voice, speed, expression…), shared by
+     * every session and every device. Empty when never set — the UI then falls
+     * back to the TTS capability's own defaults.
+     *
+     * @returns {Promise<Record<string, string | number>>}
+     */
+    async getVoicePreferences() {
+      await loadVoicePrefs();
+      return harden({ ...(voicePrefs || {}) });
+    },
+
+    /**
+     * Merge and persist voice/TTS preferences. Partial updates are allowed: only
+     * the recognized keys present in `prefs` are changed. Returns the full
+     * merged, persisted set.
+     *
+     * @param {Record<string, unknown>} prefs
+     * @returns {Promise<Record<string, string | number>>}
+     */
+    async setVoicePreferences(prefs) {
+      await loadVoicePrefs();
+      voicePrefs = { ...(voicePrefs || {}), ...sanitizeVoicePrefs(prefs) };
+      await saveVoicePrefs();
+      return harden({ ...voicePrefs });
+    },
+
+    /**
      * @param {string} [methodName]
      * @returns {string}
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: owns all chat sessions. createSession(title?, presetId?, model?, runtime?) -> session facet; listSessions() -> [{id,title,createdAt,presetId,runtime,model}]; listPresets() -> [{id,title,description}]; listModels() -> [{id,title,description,default}]; listRuntimes() -> [{id,title,description,default}]; getSession(id) -> facet; renameSession(id,title); deleteSession(id). A session facet exposes converse(input) (streaming reply reader), getHistory(), and getInfo().';
+        return 'Floot factory: owns all chat sessions. createSession(title?, presetId?, model?, runtime?) -> session facet; listSessions() -> [{id,title,createdAt,presetId,runtime,model}]; listPresets() -> [{id,title,description}]; listModels() -> [{id,title,description,default}]; listRuntimes() -> [{id,title,description,default}]; getSession(id) -> facet; renameSession(id,title); deleteSession(id); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. A session facet exposes converse(input) (streaming reply reader), getHistory(), and getInfo().';
       }
       const docs = {
         createSession:
@@ -2000,6 +2097,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
         renameSession: 'renameSession(id, title) — Rename a session.',
         deleteSession:
           'deleteSession(id) — Delete a session and its backing guest.',
+        getVoicePreferences:
+          'getVoicePreferences() — Return the whole-Floot voice/TTS preferences {voice?, speed?, noiseScale?, noiseW?, sentenceSilence?} shared across sessions and devices.',
+        setVoicePreferences:
+          'setVoicePreferences(prefs) — Merge and persist whole-Floot voice/TTS preferences; returns the merged set.',
       };
       return docs[methodName] || `No documentation for method "${methodName}".`;
     },

@@ -1520,6 +1520,12 @@ export const flootComponent = (
       ttsSettings = { ...ttsSettings, [name]: value };
     }
     saveTtsSettings();
+    // Mirror to the whole-Floot server preferences so the change follows the
+    // user across every session and device. Best-effort: the local cache above
+    // already applied it, and older factories simply reject this call.
+    E(factory)
+      .setVoicePreferences(harden({ ...ttsSettings }))
+      .catch(() => {});
     notify();
     const speechController = ttsSpeechController;
     if (speechController && (ttsSpeaking || ttsActiveStream)) {
@@ -1635,9 +1641,16 @@ export const flootComponent = (
   });
 
   if (ttsServer) {
-    E(ttsServer)
-      .getConfiguration()
-      .then(config => {
+    Promise.all([
+      E(ttsServer).getConfiguration(),
+      // Whole-Floot voice preferences (shared across sessions and devices).
+      // Older factories lack this method — treat that as "unset" and fall back
+      // to the per-device localStorage cache below.
+      E(factory)
+        .getVoicePreferences()
+        .catch(() => ({})),
+    ])
+      .then(([config, serverPrefs]) => {
         const voices = Array.isArray(config?.voices) ? config.voices : [];
         const defaults = config?.defaults || {};
         const ranges = config?.ranges || {};
@@ -1649,20 +1662,28 @@ export const flootComponent = (
         } catch {
           // Ignore unavailable storage and malformed old settings.
         }
+        // Precedence: server prefs (whole-Floot) win over the local cache,
+        // which wins over the TTS capability's own defaults.
+        const prefs = /** @type {Record<string, unknown>} */ (
+          serverPrefs || {}
+        );
+        const pick = (/** @type {string} */ key) => prefs[key] ?? saved[key];
         const voiceIds = new Set(voices.map(voice => voice.id));
-        const voice = `${saved.voice || defaults.voice || ''}`;
+        const voice = `${pick('voice') || defaults.voice || ''}`;
         /** @type {TtsSettings} */
         const next = {
           voice: voiceIds.has(voice)
             ? voice
             : `${defaults.voice || voices[0]?.id || ''}`,
-          speed: Number(saved.speed ?? defaults.speed ?? ttsSettings.speed),
+          speed: Number(pick('speed') ?? defaults.speed ?? ttsSettings.speed),
           noiseScale: Number(
-            saved.noiseScale ?? defaults.noiseScale ?? ttsSettings.noiseScale,
+            pick('noiseScale') ?? defaults.noiseScale ?? ttsSettings.noiseScale,
           ),
-          noiseW: Number(saved.noiseW ?? defaults.noiseW ?? ttsSettings.noiseW),
+          noiseW: Number(
+            pick('noiseW') ?? defaults.noiseW ?? ttsSettings.noiseW,
+          ),
           sentenceSilence: Number(
-            saved.sentenceSilence ??
+            pick('sentenceSilence') ??
               defaults.sentenceSilence ??
               ttsSettings.sentenceSilence,
           ),
@@ -1686,6 +1707,9 @@ export const flootComponent = (
         }
         ttsSettings = next;
         ttsConfiguration = { voices, ranges };
+        // Warm the per-device cache with the resolved (server-derived) values
+        // so a later offline load still reflects the whole-Floot choice.
+        saveTtsSettings();
         notify();
       })
       .catch(() => {
