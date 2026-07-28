@@ -20,6 +20,8 @@
  * `packages/daemon/scripts/bundle-bus-worker-xs.mjs`.
  */
 
+import { bytesFromText } from '@endo/bytes/from-string.js';
+import { bytesToText } from '@endo/bytes/to-string.js';
 import { makeCapTP } from '@endo/captp';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
@@ -30,8 +32,6 @@ import {
   makeXsNode,
   markShouldTerminate,
   silentReject,
-  textDecoder,
-  textEncoder,
 } from './bus-xs-core.js';
 
 void E;
@@ -166,7 +166,7 @@ const workerFacet = makeExo(
 /** @param {Record<string, unknown>} message */
 const send = message => {
   const json = JSON.stringify(message);
-  node.sendEnvelope(daemonHandle, 'deliver', textEncoder.encode(json));
+  node.sendEnvelope(daemonHandle, 'deliver', bytesFromText(json));
 };
 
 const { dispatch } = makeCapTP('Endo', send, workerFacet, {
@@ -174,7 +174,7 @@ const { dispatch } = makeCapTP('Endo', send, workerFacet, {
 });
 
 node.registerSession(daemonHandle, payload => {
-  const json = textDecoder.decode(payload);
+  const json = bytesToText(payload);
   let message;
   try {
     message = JSON.parse(json);
