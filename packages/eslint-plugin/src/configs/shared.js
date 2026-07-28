@@ -565,11 +565,14 @@ export const internalRules = {
       custom: { regex: '.*I$', match: false },
     },
   ],
+  // `fractionGroupLength` groups the digits after the decimal point. The rule
+  // defaults it to `Infinity` (no fractional grouping at all), so it must be
+  // stated to keep a fractional part grouped the same way as an integer one.
   'unicorn/numeric-separators-style': [
     'error',
     {
       onlyIfContainsSeparator: false,
-      number: { minimumDigits: 5, groupLength: 3 },
+      number: { minimumDigits: 5, groupLength: 3, fractionGroupLength: 3 },
       binary: { minimumDigits: 0, groupLength: 4 },
       octal: { minimumDigits: 0, groupLength: 4 },
       hexadecimal: { minimumDigits: 0, groupLength: 4 },
