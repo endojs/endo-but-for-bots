@@ -1,3 +1,5 @@
+/** @import { SheetsClient } from '../types.js' */
+
 const DEFAULT_BASE_URL = 'https://sheets.googleapis.com/v4';
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
 // Google Sheets represents dates as "serial numbers": the whole part counts
@@ -198,16 +200,18 @@ export const makeSheetsClient = (
     get: (options = {}) => call('', { query: options }),
   });
 
-  return harden({
-    values,
-    spreadsheets,
-    getValues: values.get,
-    batchGetValues: values.batchGet,
-    updateValues: values.update,
-    appendValues: values.append,
-    clearValues: values.clear,
-    getSpreadsheet: spreadsheets.get,
-  });
+  return /** @satisfies {SheetsClient} */ (
+    harden({
+      values,
+      spreadsheets,
+      getValues: values.get,
+      batchGetValues: values.batchGet,
+      updateValues: values.update,
+      appendValues: values.append,
+      clearValues: values.clear,
+      getSpreadsheet: spreadsheets.get,
+    })
+  );
 };
 
 harden(encodeA1Range);
