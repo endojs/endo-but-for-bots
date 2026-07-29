@@ -500,6 +500,35 @@ This is the primary tradeoff of the XS choice.
 
 ## Known Gaps
 
+- [ ] The XS realm never locks down.
+  `rust/endo/xsnap/src/lib.rs`'s `bootstrap_ses` evaluates
+  `polyfills.js` and then `ses_boot.js`; neither calls `lockdown()`,
+  `ses` is not bundled into either, and the `fx_lockdown` FFI binding
+  in `ffi.rs` is declared but never called.
+  So `globalThis.harden` is `polyfills.js`'s deep-freeze rather than
+  SES's, the intrinsics are unrepaired, and the compartments
+  `bus-worker-xs.js`'s `evaluate` creates confine module scope
+  without resting on a hardened realm.
+  Closing this is not a matter of adding `import 'ses'` and a
+  `lockdown()` call to `bus-worker-xs-ses-boot.js`; three things have
+  to move together:
+  1. `polyfills.js` installs `Object[Symbol.for('harden')]` with
+     `configurable: false`, which `@endo/harden`'s own
+     `make-selector.js` notes will "prevent any HardenedJS's lockdown
+     from succeeding".
+     The polyfill has to become removable (or be dropped in favor of
+     SES's own `harden`) before lockdown can run.
+  2. Lockdown replaces `globalThis`, which drops the `host<Name>`
+     aliases `lib.rs` evaluates before it (`HOST_ALIASES`) and that
+     both bootstraps resolve their host functions through.
+     Either the aliases move after lockdown or the host functions get
+     endowed into the boot compartment instead.
+  3. `polyfills.js`'s `TextEncoder` / `TextDecoder` and the native
+     replacements installed alongside them are also pre-lockdown
+     `globalThis` writes with the same ordering problem.
+  Until then, treat the XS worker as isolating by process and
+  compartment, not as a hardened-JS confinement boundary, and say so
+  wherever the boot path is documented.
 - [ ] Worker facet `makeArchive` / `makeFromTree` / `makeUnconfined`
   — the XS worker bootstrap
   (`packages/daemon/src/bus-worker-xs.js`) implements `evaluate` and

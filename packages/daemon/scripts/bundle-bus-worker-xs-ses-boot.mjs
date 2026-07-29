@@ -4,16 +4,18 @@
  * IIFE for evaluation in the XS JavaScript engine.
  *
  * Produces one file:
- *   ses_boot.js — runs after polyfills + SES lockdown and before the
- *   daemon / worker bootstrap.  Installs `harden` and the
- *   `HandledPromise` shim on `globalThis`.
+ *   ses_boot.js — runs after `polyfills.js` and the host-power
+ *   aliases and before the daemon / worker bootstrap.  Installs the
+ *   `HandledPromise` shim on `globalThis`.  Despite the name it does
+ *   not call `lockdown()`; see the entry point's header.
  *
- * Mirrors `bundle-bus-daemon-rust-xs.mjs` and
- * `bundle-bus-worker-xs.mjs`: same compartment-mapper pipeline, and
- * likewise no package exclusion list — module retention follows the
- * entry point's import graph, so a package whose modules are never
- * reached costs nothing.  Steer retention with `exports` / `imports`
- * conditions if that ever changes.
+ * Uses the same compartment-mapper pipeline as
+ * `bundle-bus-daemon-rust-xs.mjs` and writes to the same output
+ * directory.  Unlike that script it carries no package exclusion
+ * list (nor does `bundle-bus-worker-xs.mjs`): module retention
+ * follows the entry point's import graph, so a package whose modules
+ * are never reached costs nothing.  Steer retention with `exports` /
+ * `imports` conditions if that ever changes.
  *
  * Usage: node packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.mjs
  */

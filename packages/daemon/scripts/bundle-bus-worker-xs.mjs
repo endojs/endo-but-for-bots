@@ -6,10 +6,12 @@
  *   worker_bootstrap.js — worker entry point (CapTP, exo facet,
  *   single CapTP session keyed on the daemon's handle)
  *
- * Mirrors `bundle-bus-daemon-rust-xs.mjs`: same compartment-mapper
- * pipeline, output to `rust/endo/xsnap/src/worker_bootstrap.js`.
+ * Uses the same compartment-mapper pipeline as
+ * `bundle-bus-daemon-rust-xs.mjs`, with output to
+ * `rust/endo/xsnap/src/worker_bootstrap.js`.
  *
- * No package exclusion list: `makeBundle` retains only the modules
+ * No package exclusion list (that script has one; this one does not):
+ * `makeBundle` retains only the modules
  * the entry point actually reaches, so whether a Node-only package
  * appears in the compartment graph is immaterial as long as none of
  * its modules are retained.  `bus-worker-xs.js` reaches none of
