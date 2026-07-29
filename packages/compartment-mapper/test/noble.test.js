@@ -7,7 +7,10 @@ import { scaffold } from './scaffold.js';
  * @import {FixtureAssertionFn} from './test.types.js';
  */
 
-const fixture = new URL('fixtures-noble/index.js', import.meta.url).toString();
+const fixture = new URL(
+  'fixtures/node-modules/noble-hashes/index.js',
+  import.meta.url,
+).toString();
 
 /**
  * @type {FixtureAssertionFn<unknown>}
@@ -19,7 +22,7 @@ const assertFixture = (t, { namespace }) => {
 const fixtureAssertionCount = 1;
 
 scaffold(
-  'fixtures-noble (infer module type from pkg.json exports)',
+  'noble-hashes fixture (infer module type from pkg.json exports)',
   test,
   fixture,
   assertFixture,
