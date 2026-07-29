@@ -20,6 +20,7 @@
 
 import { makeExo } from '@endo/exo';
 import { makeError, q, X } from '@endo/errors';
+import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 import { bytesToText } from '@endo/bytes/to-string.js';
 import { RegistryInterface } from './interfaces.js';
 
@@ -716,13 +717,13 @@ export const makeEndoRegistry = (backend, options = {}) => {
   };
 
   /**
-   * @param {string | Uint8Array} packageJson  UTF-8/JSON text (the passable
-   *   capability-boundary shape) or bytes (accepted for in-process callers).
+   * @param {ArrayBuffer} packageJson Immutable UTF-8/JSON bytes from the
+   *   capability boundary.
    * @param {{ offline?: boolean, workspaceRoot?: unknown }} [resolveOptions]
    */
   const resolve = async (packageJson, resolveOptions = {}) => {
     const { offline = false, workspaceRoot } = resolveOptions;
-    const root = parsePackageJson(packageJson);
+    const root = parsePackageJson(bytesFromImmutable(packageJson));
     const rootName = typeof root.name === 'string' ? root.name : '<entry>';
 
     /** @type {Array<{ name: string, range: string, source: string, importer: string }>} */

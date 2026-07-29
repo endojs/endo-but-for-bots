@@ -779,11 +779,9 @@ export const ReadableTreeInterface = M.interface('EndoReadableTree', {
 // `@registry` special name.  See designs/registry-capability.md.
 export const RegistryInterface = M.interface('EndoRegistry', {
   help: M.call().optional(M.string()).returns(M.string()),
-  // resolve(packageJsonText, options?) -> RegistryResolution.  The entry
-  // package.json crosses the capability boundary as UTF-8/JSON text (a
-  // mutable Uint8Array is not Passable); callers holding bytes decode
-  // first.  A Passable immutable byte-array shape is a follow-up.
-  resolve: M.call(M.string())
+  // resolve(packageJsonBytes, options?) -> RegistryResolution. The entry
+  // package.json crosses the capability boundary as an immutable byte array.
+  resolve: M.call(M.byteArray())
     .optional(
       M.splitRecord({}, { offline: M.boolean(), workspaceRoot: M.any() }),
     )
