@@ -1,0 +1,89 @@
+{
+  "name": "@endo/rps-demo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Rock Paper Scissors as an Endo daemon plugin: a small distributed-game teaching demo",
+  "keywords": [
+    "endo",
+    "daemon",
+    "captp",
+    "exo",
+    "demo",
+    "game",
+    "games"
+  ],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/endojs/endo/tree/master/packages/rps-demo#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/rps-demo"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "main": "./index.js",
+  "module": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./src/rock-paper-scissors.js": "./src/rock-paper-scissors.js",
+    "./src/score.js": "./src/score.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
+    "lint:eslint": "eslint '**/*.js'",
+    "lint:types": "tsc",
+    "postpack": "git clean -fX -e node_modules/",
+    "prepack": "git clean -fX -e node_modules/ && tsc --build tsconfig.build.json",
+    "test": "ava",
+    "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
+    "test:xs": "exit 0"
+  },
+  "dependencies": {
+    "@endo/exo": "workspace:^",
+    "@endo/patterns": "workspace:^",
+    "@endo/promise-kit": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/errors": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
+    "@endo/init": "workspace:^",
+    "@endo/lockdown": "workspace:^",
+    "@endo/ses-ava": "workspace:^",
+    "ava": "catalog:dev",
+    "c8": "catalog:dev",
+    "eslint": "catalog:dev",
+    "tsd": "catalog:dev",
+    "typescript": "catalog:dev"
+  },
+  "files": [
+    "./*.d.ts",
+    "./*.js",
+    "./*.map",
+    "LICENSE*",
+    "SECURITY*",
+    "dist",
+    "lib",
+    "src",
+    "tools"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/internal"
+    ]
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.*"
+    ],
+    "timeout": "2m"
+  }
+}
