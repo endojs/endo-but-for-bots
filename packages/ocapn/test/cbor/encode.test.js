@@ -190,14 +190,14 @@ test('encode string rejects unpaired surrogates', t => {
   // String with lone high surrogate (U+D800)
   const invalidString = String.fromCharCode(0xd800);
   t.throws(() => writer.writeString(invalidString), {
-    message: /Expected well-formed string/,
+    message: /well-formed string/,
   });
 
   // String with lone low surrogate (U+DC00)
   const writer2 = makeCborWriter();
   const invalidString2 = String.fromCharCode(0xdc00);
   t.throws(() => writer2.writeString(invalidString2), {
-    message: /Expected well-formed string/,
+    message: /well-formed string/,
   });
 });
 
