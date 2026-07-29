@@ -80,6 +80,22 @@ test('values methods construct REST requests and parse responses', async t => {
   t.regex(fixture.calls[5].url, /includeGridData=false$/);
 });
 
+test('returns a hardened client interface', t => {
+  const client = makeSheetsClient(async () => response(200, {}), {
+    spreadsheetId: 'id',
+  });
+
+  t.true(Object.isFrozen(client));
+  t.true(Object.isFrozen(client.values));
+  t.true(Object.isFrozen(client.spreadsheets));
+  t.throws(
+    () => {
+      client.values.get = async () => undefined;
+    },
+    { instanceOf: TypeError },
+  );
+});
+
 test('checks the response status before parsing a successful response', async t => {
   const events = [];
   const client = makeSheetsClient(

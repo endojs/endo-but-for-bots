@@ -161,7 +161,7 @@ export const makeSheetsClient = (
     return response.json();
   };
 
-  const values = {
+  const values = harden({
     get: (range, options = {}) =>
       call(`/values/${encodeA1Range(range)}`, {
         query: { valueRenderOption: 'UNFORMATTED_VALUE', ...options },
@@ -192,13 +192,13 @@ export const makeSheetsClient = (
         query: options,
         body: {},
       }),
-  };
+  });
 
-  const spreadsheets = {
+  const spreadsheets = harden({
     get: (options = {}) => call('', { query: options }),
-  };
+  });
 
-  return {
+  return harden({
     values,
     spreadsheets,
     getValues: values.get,
@@ -207,7 +207,7 @@ export const makeSheetsClient = (
     appendValues: values.append,
     clearValues: values.clear,
     getSpreadsheet: spreadsheets.get,
-  };
+  });
 };
 
 harden(encodeA1Range);
