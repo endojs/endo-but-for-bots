@@ -1,0 +1,55 @@
+{
+  "description": "JSON read variant coverage matrix over the shared mount fixture (mount-fixture-manifest.json), the cross-language contract for EndoMount.readJson / maybeReadJson. Each case is { name, method: 'readJson' | 'maybeReadJson', path, ...outcome } where `path` is a mount-face-relative path and exactly one outcome key is set: `expect` (the exact JSON value the parse yields — asserted by deep equality), `expectUndefined: true` (the call resolves to undefined, only valid for maybeReadJson on a missing/escaping path), or `expectThrows: true` (the call rejects — a missing file for readJson, or invalid JSON in a present file for either method, since the parse sits outside maybeReadJson's read guard). The write side (writeJson round trip, 2-space + trailing-newline formatting, the non-serializable throw) is stateful and lives in the Node unit tests in mount-json.test.js, not in this cross-language read table. The Node runner is mount-json.test.js; a Rust/XS-side runner consumes this same JSON to assert identical results.",
+  "cases": [
+    {
+      "name": "readJson of the fixture data.json (nested-value fidelity)",
+      "method": "readJson",
+      "path": "data.json",
+      "expect": {
+        "name": "fixture",
+        "version": 1,
+        "nested": { "flag": true, "list": [1, 2, 3] }
+      }
+    },
+    {
+      "name": "readJson of package.json",
+      "method": "readJson",
+      "path": "package.json",
+      "expect": { "name": "mount-fixture" }
+    },
+    {
+      "name": "maybeReadJson of an existing file returns the parsed value",
+      "method": "maybeReadJson",
+      "path": "data.json",
+      "expect": {
+        "name": "fixture",
+        "version": 1,
+        "nested": { "flag": true, "list": [1, 2, 3] }
+      }
+    },
+    {
+      "name": "maybeReadJson of a missing file is undefined",
+      "method": "maybeReadJson",
+      "path": "does-not-exist.json",
+      "expectUndefined": true
+    },
+    {
+      "name": "readJson of a missing file throws",
+      "method": "readJson",
+      "path": "does-not-exist.json",
+      "expectThrows": true
+    },
+    {
+      "name": "readJson of a present file with invalid JSON throws",
+      "method": "readJson",
+      "path": "notes.txt",
+      "expectThrows": true
+    },
+    {
+      "name": "maybeReadJson of a present file with invalid JSON still throws (parse outside the read guard)",
+      "method": "maybeReadJson",
+      "path": "notes.txt",
+      "expectThrows": true
+    }
+  ]
+}

@@ -200,6 +200,11 @@ const ENDOMOUNT_EXTENSIONS = [
   // Content search over the files `glob` selects — a daemon-local extension
   // beyond the lite `Directory` vocabulary.
   'grep',
+  // Structured JSON read/write layered on the text surface — daemon-local
+  // extensions beyond the lite `Directory` vocabulary.
+  'readJson',
+  'maybeReadJson',
+  'writeJson',
   // Declared as part of the name-hub contract but throws ENOSYS until a
   // filesystem watcher is wired (filesystem-watchers.md) — see § C1.
   'followNameChanges',
