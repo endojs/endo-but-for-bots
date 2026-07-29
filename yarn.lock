@@ -1416,7 +1416,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/cbor@workspace:packages/cbor":
+"@endo/cbor@workspace:^, @endo/cbor@workspace:packages/cbor":
   version: 0.0.0-use.local
   resolution: "@endo/cbor@workspace:packages/cbor"
   dependencies:
@@ -1703,6 +1703,7 @@ __metadata:
     "@endo/bytes": "workspace:^"
     "@endo/cancel": "workspace:^"
     "@endo/captp": "workspace:^"
+    "@endo/cbor": "workspace:^"
     "@endo/compartment-mapper": "workspace:^"
     "@endo/daemon-cas": "workspace:^"
     "@endo/errors": "workspace:^"
