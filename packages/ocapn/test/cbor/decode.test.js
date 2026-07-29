@@ -494,10 +494,34 @@ test('reject non-minimal head on a map header', t => {
   });
 });
 
+test('reject non-minimal head on a byte string', t => {
+  // Empty byte string with length 0 written as 0x58 0x00 instead of the
+  // minimal 0x40.
+  const reader = decode('5800');
+  t.throws(() => reader.readBytestring(), { message: /Non-minimal CBOR head/ });
+});
+
 test('reject non-minimal head on a bignum tag', t => {
   // Tag 2 written as 0xd8 0x02 instead of the minimal 0xc2.
   const reader = decode('d8024101');
   t.throws(() => reader.readInteger(), { message: /Non-minimal CBOR head/ });
+});
+
+test('reject non-minimal head on a selector tag', t => {
+  // Tag 280 written in the 4-byte-argument form instead of the minimal
+  // 0xd9 0x01 0x18.
+  const reader = decode('da00000118666d6574686f64');
+  t.throws(() => reader.readSelectorAsString(), {
+    message: /Non-minimal CBOR head/,
+  });
+});
+
+test('peekTypeHint rejects a non-minimal tag head', t => {
+  // peekTypeHint reads the tag to categorize it, so it must refuse a
+  // non-canonical head rather than launder one into a type answer that a
+  // later read would then accept.
+  const reader = decode('da000000024101');
+  t.throws(() => reader.peekTypeHint(), { message: /Non-minimal CBOR head/ });
 });
 
 test('reject non-minimal bignum payload', t => {

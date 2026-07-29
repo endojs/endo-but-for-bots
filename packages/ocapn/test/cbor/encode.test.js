@@ -374,3 +374,42 @@ test('encode string length 256 (2-byte length)', t => {
   // Major 3, AI 25 = 0x79, then 2 byte length (256 = 0x0100)
   t.true(hex.startsWith('790100'));
 });
+
+// ===== Writer Argument Validation =====
+//
+// @endo/cbor's writers reject an argument of the wrong type. The previous
+// hand-rolled writers coerced instead: writeBoolean('x') silently emitted f5
+// (true) and writeFloat64('x') emitted a NaN pattern, so a caller's type error
+// became a well-formed message carrying the wrong value. These pin the
+// rejection.
+
+test('encode boolean rejects a non-boolean', t => {
+  const writer = makeCborWriter();
+  t.throws(() => writer.writeBoolean(/** @type {any} */ ('x')), {
+    message: /boolean expected/,
+  });
+});
+
+test('encode float64 rejects a non-number', t => {
+  const writer = makeCborWriter();
+  t.throws(() => writer.writeFloat64(/** @type {any} */ ('x')), {
+    message: /number expected/,
+  });
+});
+
+test('encode integer rejects a non-bigint', t => {
+  const writer = makeCborWriter();
+  t.throws(() => writer.writeInteger(/** @type {any} */ (1)), {
+    message: /bigint expected/,
+  });
+});
+
+test('encode array header rejects a count outside [0, 2**32)', t => {
+  const writer = makeCborWriter();
+  t.throws(() => writer.writeArrayHeader(-1), {
+    message: /array length must be an integer/,
+  });
+  t.throws(() => writer.writeArrayHeader(2 ** 32), {
+    message: /array length must be an integer/,
+  });
+});
