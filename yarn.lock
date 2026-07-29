@@ -2511,11 +2511,13 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/marshal@workspace:packages/marshal"
   dependencies:
+    "@endo/bytes": "workspace:^"
     "@endo/common": "workspace:^"
     "@endo/env-options": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
+    "@endo/hex": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/nat": "workspace:^"
