@@ -287,11 +287,12 @@ tests:
 - **Options**: `streamGrep` respects `options.glob`; an oversized `buffer`
   is clamped.
 
-## Open Questions
+## Resolved Questions
 
-- Should a later pass add streaming search to the structural
-  `ReadableTree` view (and `SnapshotTree`), so read-only tree consumers
-  can search without holding a mount reference? Default here: no; the view
-  stays minimal.
-- Is 1,024 the right `buffer` clamp? Any small constant preserves the
-  resource bound; tune during implementation.
+- Streaming search remains an `EndoMount` capability. A later design may
+  consider `ReadableTree` and `SnapshotTree`, but this design keeps those
+  structural views minimal and does not add search to them.
+- The producer clamps `buffer` at 1,024 elements. This is a bounded
+  pre-ack window that accommodates high-latency consumers without allowing
+  an unbounded daemon-side memory commitment. An implementation may lower
+  the limit only with measurement and a corresponding design update.
