@@ -1,0 +1,35 @@
+# Cross-host OCapN-Noise TCP+CBOR capability round-trip — live run 2026-07-29
+#
+# Server: minion.town (EC2 i-0380cd68b90020fad, us-west-1), systemd unit
+# endo-ocapn-tcp-demo.service -> docker container endo-ocapn-tcp-toy
+# (image endo-pet-daemon:ocapn-ws, ocapn-tcp-server.mjs bind-mounted),
+# listening 0.0.0.0:8929, advertising tcp:host=minion.town tcp:port=8929.
+# Security group sg-0f2cf8d86744b7293 ingress tcp/8929 opened 2026-07-29
+# (rule sgr-0d9fc044a33568003; maintainer-authorized, PR #683 review
+# comment "Authorized." 2026-07-29T00:11:35Z on DEMO-REPORT.md L146).
+# Client: garden container (no public address), dial-only TCP transport.
+
+## Server side (via SSM, after `systemctl enable --now endo-ocapn-tcp-demo`):
+
+endo-ocapn-tcp-toy 0.0.0.0:8929->8929/tcp, [::]:8929->8929/tcp, 8930/tcp Up 7 seconds
+$ cat /opt/ocapn-demo/ocapn-tcp-location.json
+{
+  "type": "ocapn-peer",
+  "network": "np",
+  "transport": "np",
+  "designator": "c1ac846d8d5a00f3636f9fbc7a2e84225910c2b7442910b4468b4950cdb4a292",
+  "hints": {
+    "tcp:host": "minion.town",
+    "tcp:port": "8929"
+  }
+}
+
+## Client side (garden container, packages/daemon):
+
+$ node demo/minion-town/ocapn-tcp-client.mjs /tmp/minion-tcp-location.json greeter garden-cross-host
+[client] dialing {"type":"ocapn-peer","network":"np","transport":"np","designator":"c1ac846d8d5a00f3636f9fbc7a2e84225910c2b7442910b4468b4950cdb4a292","hints":{"tcp:host":"minion.town","tcp:port":"8929"}}
+[client] enlivened 'greeter'; invoking...
+[client] getNodeId() = c1ac846d8d5a00f3636f9fbc7a2e84225910c2b7442910b4468b4950cdb4a292
+[client] hello(garden-cross-host) = Hello, garden-cross-host! — greetings over OCapN-Noise-TCP+CBOR from the minion.town host.
+RESULT {"ok":true,"swissnum":"greeter","nodeId":"c1ac846d8d5a00f3636f9fbc7a2e84225910c2b7442910b4468b4950cdb4a292","reply":"Hello, garden-cross-host! — greetings over OCapN-Noise-TCP+CBOR from the minion.town host."}
+exit 0

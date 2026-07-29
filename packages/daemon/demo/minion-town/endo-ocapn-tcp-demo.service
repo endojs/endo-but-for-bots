@@ -1,0 +1,15 @@
+[Unit]
+Description=Endo OCapN-Noise-TCP+CBOR demo (toy greeter, docker, public :8929)
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/docker rm -f endo-ocapn-tcp-toy
+ExecStart=/usr/bin/docker run --rm --name endo-ocapn-tcp-toy -p 8929:8929 -v /opt/ocapn-demo:/demo-out -v /opt/ocapn-demo/ocapn-tcp-server.mjs:/app/packages/daemon/demo/minion-town/ocapn-tcp-server.mjs:ro -e DEMO_HOST=0.0.0.0 -e DEMO_PORT=8929 -e DEMO_PUBLIC_HOST=minion.town -e DEMO_PUBLIC_PORT=8929 --entrypoint node endo-pet-daemon:ocapn-ws demo/minion-town/ocapn-tcp-server.mjs /demo-out/ocapn-tcp-location.json
+ExecStop=-/usr/bin/docker stop endo-ocapn-tcp-toy
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
