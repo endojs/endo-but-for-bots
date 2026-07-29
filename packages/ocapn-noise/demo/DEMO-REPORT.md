@@ -5,9 +5,11 @@ carried over **WebSocket/HTTP** and **TCP+CBOR**, between real peers — includi
 the previously-unproven **Crossed Hellos** and **reverse peer authentication**
 paths — culminating in a Pet-Daemon-to-Pet-Daemon invite/accept connection.
 
-Status: **Milestones 1 and 2 are done and reproducibly demonstrated.**
-Milestones 3–5 are blocked on access to / changes on the live `minion.town`
-host and on daemon-side integration that is not yet landed (details below).
+Status: **Milestones 1 and 2 are done and reproducibly demonstrated.** This PR
+carries M1/M2. Milestones 3–5 were blocked here on access to / changes on the
+live `minion.town` host and on daemon-side integration; that block was lifted by
+maintainer authorization and M3–M5 have since been demonstrated on the
+downstream PRs of this stack — see *Decision and outcome* at the end.
 
 ---
 
@@ -118,7 +120,10 @@ After `C.provideSession(locS)` / `S.waitForInboundSession(C.keyId)`:
 
 ---
 
-## Milestones 3–5 — status and blockers
+## Milestones 3–5 — the blockers, and how they were cleared
+
+The blockers below are the state as of this PR's demo run. They have since been
+cleared; *Decision and outcome* records what was authorized and what it proved.
 
 **M3 (local ↔ minion.town, toy server).** Blocked on host access from this
 environment:
@@ -135,7 +140,7 @@ environment:
 **M4/M5 (Pet Daemon serves OCapN-over-Noise; invite/accept between daemons).**
 Additionally blocked on the not-yet-landed daemon integration in finding #3.
 
-### Options to proceed (need a decision)
+### Options that were on the table (resolved: **(a)**)
 
 - **(a) Drive M3–M5 from the leader host via the board.** The leader
   (`endolin-garden2`) holds AWS/SSM and can deploy to / reconfigure minion.town.
@@ -150,3 +155,40 @@ Additionally blocked on the not-yet-landed daemon integration in finding #3.
 - **(c) Scope tonight to M1/M2** (the core "prove it between real peers on both
   transports, with Crossed Hellos + reverse auth" result, now done) and defer the
   minion.town graduation to a follow-up with the access sorted out.
+
+---
+
+## Decision and outcome
+
+**Option (a), authorized by @kriskowal** on 2026-07-29
+([review comment](https://github.com/endojs/endo-but-for-bots/pull/683#discussion_r3670049016)) —
+including the live-host changes that option named, the Caddy configuration and,
+where it proved necessary, the security group. All three milestones have since
+been demonstrated, on branches stacked toward
+[#340](https://github.com/endojs/endo-but-for-bots/pull/340):
+
+- **M3/M4 — cross-host over WSS.** A toy OCapN-Noise-WS listener runs on
+  minion.town behind an *ungated* Caddy route at `wss://minion.town/ocapn`, and a
+  garden peer dials it, completes the Noise IK handshake, and round-trips a
+  capability. The peer rewrites the listener's loopback `ws:` hint to the public
+  endpoint, which works because the handshake binds to the location
+  **designator**, not to the transport URL. Demo, unit file, and route live under
+  `packages/daemon/demo/minion-town/` on
+  [#684](https://github.com/endojs/endo-but-for-bots/pull/684), which also adds
+  the daemon-side WebSocket+Noise transport whose absence finding #3 reported.
+- **M5 — Pet-Daemon invite/accept.** Two daemons pair and round-trip a capability
+  (`E(adder).add(2, 3) → 5`, plus a `Far` pass-by-reference) over both
+  `ocapn+noise+tcp` and `ocapn+noise+ws`
+  ([#688](https://github.com/endojs/endo-but-for-bots/pull/688)), and across hosts
+  against the full Pet Daemon at `wss://minion.town/ocapn-daemon`
+  ([#693](https://github.com/endojs/endo-but-for-bots/pull/693)).
+- **Raw TCP+CBOR across hosts.** The security-group half of the authorization
+  opened inbound `tcp/8929` on minion.town, where a TCP+CBOR listener serves the
+  greeter; a garden peer dials it directly and round-trips a capability over
+  netstring-CBOR + Noise IK
+  ([#693](https://github.com/endojs/endo-but-for-bots/pull/693)). This closed the
+  last unproven transport/topology cell — both transports are now demonstrated
+  cross-host, not only locally.
+
+What remains of this report as a live claim is therefore Milestones 1 and 2: the
+two-process, both-transport local proof this PR contributes.
