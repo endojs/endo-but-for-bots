@@ -1,5 +1,4 @@
 // @ts-check
-/* global globalThis */
 
 /**
  * Web Crypto power for `makeMemoryCasStore`.
@@ -37,7 +36,6 @@ import { makeError, X } from '@endo/errors';
  * @type {Sha256Hex}
  */
 export const sha256HexWebCrypto = async bytes => {
-  // eslint-disable-next-line no-restricted-globals
   const crypto = globalThis.crypto;
   if (!crypto || !crypto.subtle) {
     throw makeError(
