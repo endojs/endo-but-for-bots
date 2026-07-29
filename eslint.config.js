@@ -320,6 +320,7 @@ export default defineConfig(
       'packages/chat/test/**/probe.mjs',
       'packages/chat/test/**/run.mjs',
       'packages/daemon/scripts/*.mjs',
+      'packages/ocapn-noise/demo/',
       'packages/thixotrope/dist-xs/',
       'packages/thixotrope/scripts/*.mjs',
       'packages/familiar/preload.mjs',
