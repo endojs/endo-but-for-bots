@@ -58,6 +58,7 @@
     "@endo/bytes": "workspace:^",
     "@endo/cancel": "workspace:^",
     "@endo/captp": "workspace:^",
+    "@endo/cbor": "workspace:^",
     "@endo/compartment-mapper": "workspace:^",
     "@endo/daemon-cas": "workspace:^",
     "@endo/errors": "workspace:^",
