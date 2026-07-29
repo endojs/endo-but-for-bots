@@ -253,9 +253,6 @@ them but does not fail if the package is unavailable; the
 compartment whose require would have resolved into the optional
 package instead resolves to a missing-module exit, and the
 application receives a runtime error at first use.
-Open question 4 (below) is a confirmation rather than an unresolved
-choice; demoting the open question to a confirmation requires
-maintainer sign-off.
 
 **Ingestion failures.**
 When `endor run` fetches a package the registry refuses (404, 5xx,
@@ -273,12 +270,9 @@ the compartment-map build aborting before the worker starts, with
 `IngestionError` carrying the offending `(name, version)` pair and
 the registry's response.
 
-This design names a possible new manifest shape, `endo.mod`, as
-the Go-mod analogue.
-The maintainer should decide whether to introduce a new manifest or
-to extend `compartment-map.json` itself with the dependency-intent
-data; either choice is consistent with the rest of this design.
-Open question 1 (below) covers this.
+`package.json` is the Go-mod analogue: it carries direct-dependency
+intent. The resolved `compartment-map.json` is a deterministic,
+content-addressable output for a given `package.json`.
 
 #### Ad-hoc compartment maps
 
@@ -436,9 +430,9 @@ If the host re-runs the same application without the input mounts
 having changed, the scratch directory is re-used; ejection is a
 no-op when the destination's `realpath` already matches the input
 mount's content hash.
-Content equality is computed via the CAS where possible (mounts
-backed by `readable-tree` already carry hashes) and via
-recursive `stat` + `sha256` otherwise.
+Content equality is computed by content hash. Mount formulas compute
+their current content hash; git filesystems can use their current
+tree hash directly.
 This matches the spirit of `daemon-cas-management.md`'s
 deduplication.
 
@@ -519,62 +513,34 @@ each application that elects host-Node execution.
 The POSIX-sandbox follow-up retires Case 2's ad-hoc confinement
 once the sandbox is available on the deployment target.
 
-**Cross-major-version migration tradeoff.**
-Case 1 hosts multiple major versions of the same package in distinct
-compartments without operator intervention; this is the
-compartment-map's native shape.
-If open question 3 (below) resolves toward single-major resolution
-for Case 2 (Node's native-resolver constraint), an application that
-runs cleanly under Case 1 today and migrates to Case 2 tomorrow may
-need a stricter resolution re-run that rejects the multi-major
-graph.
-The cost is bounded (one resolution failure per offending package,
-fixed by adjusting direct deps) but real, and operators choosing
-between Case 1 and Case 2 should know the cross-major shape is not
-portable.
-Open question 3 names the resolution; this note records the cost
-even while the question is unresolved.
+**Cross-major-version semantics.** Case 1 and Case 2 both host
+multiple major versions of the same package in distinct
+compartments. Moving an application between paths therefore does
+not change its dependency semantics.
 
-## Open questions for the maintainer
+## Resolved design decisions
 
-1. **New manifest vs. extension of `compartment-map.json` for the
-   Go-mod analogue.** Should we introduce an `endo.mod` (or
-   similar) file that carries direct-dependency declarations and
-   module versions, or extend `compartment-map.json` with a
-   `dependencies` block?
-   The former matches Go's separation between "intent"
-   (`go.mod`) and "compiled output" (the resolved graph); the
-   latter keeps a single artifact.
-2. **Module-store sharing across daemons.** Should the
-   sqlite-backed module store be per-daemon (the
-   `{statePath}/registry.sqlite` shape from
-   `endor-npm-registry-proxy.md`) or a system-wide cache shared
-   across users?
-   System-wide is friendlier to Familiar deployments but adds
-   permission and migration questions.
-3. **Cross-major-version compartment hosting.** The compartment
-   map already supports multiple major versions of the same
-   package in distinct compartments; should the host-eject case
-   (Case 2) accept the same multi-major shape, or should host-eject
-   require a single-major resolution per package (Node's
-   native-resolver constraint)?
-4. **`peerDependencies` and `optionalDependencies` in MVS
-   (confirmation).** The design takes the position in § Case 1
-   Resolution (above) that `peerDependencies` are direct deps the
-   entry package must provide (fail-closed at compartment-map build
-   time) and `optionalDependencies` are best-effort (missing-module
-   exit, runtime error at first use).
-   This question is a maintainer confirmation rather than an open
-   choice; if the maintainer prefers a different policy, the body
-   needs revision.
-   `endor-npm-registry-proxy.md` § Known gaps flags the underlying
-   ambiguity.
-5. **Eject equality.** Should re-eject equality (Case 2) be
-   computed by content hash only, or also by mount-formula
-   identity?
-   The latter is cheaper for `readable-tree`-backed mounts but
-   may miss cases where two distinct readable-tree formulas
-   happen to point at the same content.
+1. **`package.json` remains the Go-mod analogue.** It declares the
+   application's direct dependencies. The `compartment-map.json` is
+   a deterministic output for a given `package.json`, so it can be
+   cached by content address rather than carrying a second source of
+   dependency intent.
+2. **The module store is per daemon.** The sqlite-backed store lives
+   at `{statePath}/registry.sqlite`, as in
+   `endor-npm-registry-proxy.md`; no system-wide shared cache is
+   introduced.
+3. **Case 2 preserves multi-major semantics.** As in Case 1, an
+   application may host multiple major versions of a package in
+   distinct compartments.
+4. **MVS dependency policy is confirmed.** `peerDependencies` are
+   direct dependencies that the entry package must provide, failing
+   closed while building the compartment map. `optionalDependencies`
+   are best effort: an unavailable optional module exits as missing,
+   and use fails at runtime. `endor-npm-registry-proxy.md` § Known
+   gaps records the underlying ambiguity.
+5. **Re-eject equality is content-hash equality.** Mount formulas
+   compute their current content hash. Git filesystems can use their
+   current tree hash directly.
 
 ## Follow-up gated on POSIX sandbox
 
