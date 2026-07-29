@@ -135,6 +135,7 @@ export const defineProperty = (object, prop, descriptor) => {
 };
 
 export const {
+  deleteProperty: reflectDeleteProperty,
   apply,
   construct,
   get: reflectGet,
