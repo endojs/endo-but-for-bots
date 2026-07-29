@@ -80,6 +80,28 @@ test('values methods construct REST requests and parse responses', async t => {
   t.regex(fixture.calls[5].url, /includeGridData=false$/);
 });
 
+test('checks the response status before parsing a successful response', async t => {
+  const events = [];
+  const client = makeSheetsClient(
+    async () => ({
+      get ok() {
+        events.push('ok');
+        return true;
+      },
+      status: 200,
+      headers: new Headers(),
+      json: async () => {
+        events.push('json');
+        return { values: [] };
+      },
+    }),
+    { spreadsheetId: 'id' },
+  );
+
+  await client.values.get('A1');
+  t.deepEqual(events, ['ok', 'json']);
+});
+
 test('maps Google quota errors to structured errors', async t => {
   const client = makeSheetsClient(
     async () =>

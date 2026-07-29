@@ -138,13 +138,13 @@ export const makeSheetsClient = (
       init.body = JSON.stringify(request.body);
     }
     const response = await fetchPower(url, init);
-    let payload;
-    try {
-      payload = await response.json();
-    } catch {
-      payload = undefined;
-    }
     if (!response.ok) {
+      let payload;
+      try {
+        payload = await response.json();
+      } catch {
+        payload = undefined;
+      }
       const error = payload && payload.error ? payload.error : payload || {};
       const status = Number(error.code) || Number(response.status) || 0;
       const retryAfterSeconds = retryAfterFrom(response.headers);
@@ -158,7 +158,7 @@ export const makeSheetsClient = (
         },
       );
     }
-    return payload;
+    return response.json();
   };
 
   const values = {
