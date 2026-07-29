@@ -398,17 +398,24 @@ export const makeModuleInstance = (
       // through. {@link makeNotifierWithResolver} is the synchronous
       // variant of `Promise.withResolvers` that captures this pattern; each
       // `notify` call lazily attempts to resolve against the upstream's
-      // notifiers.
-      const { notify: queueOrForward, resolve: resolveUpstream } =
-        makeNotifierWithResolver();
-      notify = update => {
+      // notifiers. An unresolved forwarding notifier stays queued with its
+      // upstream rather than becoming a recursive forwarding target.
+      const { notify: queueOrForward } = makeNotifierWithResolver(() => {
         const upstreamInstance = mapGet(importedInstances, deferredSpecifier);
-        const upstreamNotify = upstreamInstance.notifiers[deferredImportName];
-        if (upstreamNotify !== undefined) {
-          resolveUpstream(upstreamNotify);
+        if (upstreamInstance === undefined) {
+          throw SyntaxError(
+            `The requested module '${deferredSpecifier}' does not provide an export named '${deferredImportName}'`,
+          );
         }
-        queueOrForward(update);
-      };
+        const upstreamNotify = upstreamInstance.notifiers[deferredImportName];
+        if (upstreamNotify === undefined && !upstreamInstance.isExecuting) {
+          throw SyntaxError(
+            `The requested module '${deferredSpecifier}' does not provide an export named '${deferredImportName}'`,
+          );
+        }
+        return upstreamNotify;
+      });
+      notify = queueOrForward;
     }
     notifiers[exportName] = notify;
 
@@ -419,7 +426,7 @@ export const makeModuleInstance = (
     // cycle's linked-but-not-yet-evaluated window raises a ReferenceError
     // rather than silently returning the cached `undefined`. An upstream
     // `var` binding clears its TDZ as part of its hoisting preamble (see
-    // `transform-analyze.js`), so for `var` the updater fires before the
+    // `functor.js`), so for `var` the updater fires before the
     // downstream's getter is observed and the getter returns `undefined`.
     let value;
     let tdz = true;
@@ -528,7 +535,9 @@ export const makeModuleInstance = (
     // and the string must correspond to a valid identifier, sorting these
     // properties works for this specific case.
     arrayForEach(arraySort(keys(exportsProps)), k => {
-      reflectDeleteProperty(exportsTarget, k);
+      if (!reflectDeleteProperty(exportsTarget, k)) {
+        throw TypeError(`Cannot reorder module export ${q(k)}`);
+      }
       defineProperty(exportsTarget, k, exportsProps[k]);
     });
 
@@ -548,12 +557,14 @@ export const makeModuleInstance = (
   }
   let didThrow = false;
   let thrownError;
+  let isExecuting = false;
   const execute = () => {
     if (optFunctor) {
       // uninitialized
       const functor = optFunctor;
       optFunctor = null;
       // initializing - call with `this` of `undefined`.
+      isExecuting = true;
       try {
         functor(
           freeze({
@@ -567,6 +578,8 @@ export const makeModuleInstance = (
       } catch (e) {
         didThrow = true;
         thrownError = e;
+      } finally {
+        isExecuting = false;
       }
       // initialized
     }
@@ -578,6 +591,9 @@ export const makeModuleInstance = (
   return freeze({
     notifiers,
     exportsProxy,
+    get isExecuting() {
+      return isExecuting;
+    },
     execute,
   });
 };

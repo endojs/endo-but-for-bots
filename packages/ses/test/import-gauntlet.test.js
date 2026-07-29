@@ -1,6 +1,6 @@
 // @ts-nocheck
-// These tests exercise all forms of import and export between a pair of
-// modules using a single Compartment.
+// These tests exercise imports and exports among cyclic modules using a single
+// Compartment.
 
 import test from 'ava';
 import '../index.js';
@@ -25,6 +25,41 @@ test('import for side effect', async t => {
   });
 
   await compartment.import('./main.js');
+});
+
+test('mutually deferred reexports fail linking without recursive overflow', async t => {
+  t.plan(2);
+
+  const makeImportHook = makeNodeImporter({
+    'https://example.com/main.js': `export { x } from './a.js';`,
+    'https://example.com/a.js': `export { x } from './b.js';`,
+    'https://example.com/b.js': `export { x } from './a.js';`,
+  });
+  const compartment = new Compartment({
+    resolveHook: resolveNode,
+    importHook: makeImportHook('https://example.com'),
+    __options__: true,
+  });
+
+  const error = await t.throwsAsync(compartment.import('./main.js'));
+  t.regex(error.message, /cycle while resolving module export/);
+});
+
+test('missing reexport fails linking instead of becoming a namespace export', async t => {
+  t.plan(2);
+
+  const makeImportHook = makeNodeImporter({
+    'https://example.com/main.js': `export { nope } from './b.js';`,
+    'https://example.com/b.js': `export const present = true;`,
+  });
+  const compartment = new Compartment({
+    resolveHook: resolveNode,
+    importHook: makeImportHook('https://example.com'),
+    __options__: true,
+  });
+
+  const error = await t.throwsAsync(compartment.import('./main.js'));
+  t.regex(error.message, /does not provide an export named 'nope'/);
 });
 
 test('import all from module', async t => {

@@ -6,7 +6,23 @@
  *   supplied.
  */
 
-import { arrayPush } from './commons.js';
+import {
+  arrayIncludes,
+  arrayPush,
+  freeze,
+  SyntaxError,
+  weaksetAdd,
+  weaksetHas,
+} from './commons.js';
+
+// eslint-disable-next-line no-restricted-globals
+const forwardingNotifiers = new WeakSet();
+// eslint-disable-next-line no-restricted-globals
+const resolvedNotifiers = new WeakSet();
+
+export const isUnresolvedNotifier = notifier =>
+  weaksetHas(forwardingNotifiers, notifier) &&
+  !weaksetHas(resolvedNotifiers, notifier);
 
 /**
  * Creates a notifier that defers subscribers until a resolver is invoked,
@@ -24,18 +40,49 @@ import { arrayPush } from './commons.js';
  * target lazily may safely call `resolve` again on each `notify`; only the
  * first call has effect.
  *
+ * @param {() => ((update: (value: any) => void) => void) | undefined} [getTargetNotify]
  * @returns {{
  *   notify: (update: (value: any) => void) => void,
  *   resolve: (targetNotify: (update: (value: any) => void) => void) => void,
  * }}
  */
-export const makeNotifierWithResolver = () => {
+export const makeNotifierWithResolver = getTargetNotify => {
   /** @type {Array<(value: any) => void>} */
   const pendingUpdaters = [];
   /** @type {((update: (value: any) => void) => void) | undefined} */
   let resolvedTargetNotify;
 
-  const notify = update => {
+  /** @type {(update: (value: any) => void) => void} */
+  let notify;
+
+  function resolve(targetNotify) {
+    if (resolvedTargetNotify === undefined) {
+      resolvedTargetNotify = targetNotify;
+      weaksetAdd(resolvedNotifiers, notify);
+      for (const pending of pendingUpdaters) {
+        targetNotify(pending);
+      }
+      pendingUpdaters.length = 0;
+    }
+  }
+
+  notify = update => {
+    if (resolvedTargetNotify === undefined && getTargetNotify !== undefined) {
+      const targetNotify = getTargetNotify();
+      if (targetNotify !== undefined) {
+        if (isUnresolvedNotifier(targetNotify)) {
+          // Let the upstream queue us until it resolves. Settling on it here
+          // would make two mutually deferred notifiers recurse forever.
+          if (arrayIncludes(pendingUpdaters, update)) {
+            throw SyntaxError('Detected cycle while resolving module export');
+          }
+          arrayPush(pendingUpdaters, update);
+          targetNotify(update);
+          return;
+        }
+        resolve(targetNotify);
+      }
+    }
     if (resolvedTargetNotify === undefined) {
       arrayPush(pendingUpdaters, update);
     } else {
@@ -43,15 +90,6 @@ export const makeNotifierWithResolver = () => {
     }
   };
 
-  const resolve = targetNotify => {
-    if (resolvedTargetNotify === undefined) {
-      resolvedTargetNotify = targetNotify;
-      for (const pending of pendingUpdaters) {
-        targetNotify(pending);
-      }
-      pendingUpdaters.length = 0;
-    }
-  };
-
-  return { notify, resolve };
+  weaksetAdd(forwardingNotifiers, notify);
+  return freeze({ notify, resolve });
 };
