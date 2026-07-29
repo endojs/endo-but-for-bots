@@ -289,9 +289,11 @@ un-wrapped.
 **Host-level offline vs. caller-requested offline.** A sandboxed Endor host with
 no network configured surfaces its fetches as `registry-error` →
 `RegistryNetworkError`, *not* `RegistryOfflineError` — `offline` in `registry.js`
-is a per-`resolve` caller option, not a host property. This is consistent with
-Node (a machine with no network also yields network errors) and is called out in
-Open questions in case a distinct host-offline signal is later wanted.
+is a per-`resolve` caller option, not a host property. No separate host-offline
+signal is needed: cached MVS data remains stable while the daemon is offline. If
+a dependency version changes and the cache lacks the required metadata, the fetch
+naturally fails as a network error. This is consistent with Node, where a machine
+without network access also yields network errors.
 
 ## Dependencies
 
@@ -391,12 +393,6 @@ The Rust host functions themselves get `#[test]` coverage in their power modules
   the right trust boundary here.
 
 ## Open questions
-
-- Should a network-denied Endor host expose a distinct **host-offline** signal so
-  a fetch attempt surfaces as `RegistryOfflineError` rather than
-  `RegistryNetworkError`? (Current design: it is a network error, matching Node.)
-  Resolving this may want a `registryUrl: null`/`offline` host-config knob read by
-  `makeRegistryXsPowers`.
 - Which HTTP client crate — `reqwest` (heavy, TLS batteries included) vs. `ureq`
   (blocking, light) vs. `hyper` + `rustls` (control, more code)? A tracking
   decision for Phase 2; `reqwest` is the low-risk default given `tokio` is already
