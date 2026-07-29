@@ -790,28 +790,54 @@ mod tests {
         assert!(mjs.cjs_raw.is_none());
     }
 
-    /// The nearest `package.json` decides a `.js` file's parser, as
-    /// in Node: a dual-build package with a CommonJS root and an
-    /// `esm/package.json` carrying `"type": "module"` (the
-    /// `@noble/hashes` shape) parses `esm/*.js` as ESM and root
-    /// `*.js` as CommonJS. A deeper directory without its own
-    /// marker inherits the nearest ancestor's.
+    // This is also the fixture consumed by compartment-mapper's
+    // nested-pkg.test.js. Keeping its package files in one place makes both
+    // implementations exercise the same nested-package-json shape.
+    const NESTED_PACKAGE_JSON_FIXTURE: &[(&str, &str)] = &[
+        (
+            "package.json",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../packages/compartment-mapper/test/fixtures/node-modules/nested-package-json/node_modules/apackage/package.json"
+            )),
+        ),
+        (
+            "afolder/package.json",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../packages/compartment-mapper/test/fixtures/node-modules/nested-package-json/node_modules/apackage/afolder/package.json"
+            )),
+        ),
+        (
+            "afolder/file.js",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../packages/compartment-mapper/test/fixtures/node-modules/nested-package-json/node_modules/apackage/afolder/file.js"
+            )),
+        ),
+        (
+            "afolder/anotherfolder/file2.js",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../packages/compartment-mapper/test/fixtures/node-modules/nested-package-json/node_modules/apackage/afolder/anotherfolder/file2.js"
+            )),
+        ),
+    ];
+
+    /// The nearest `package.json` decides a `.js` file's parser, as in Node.
+    /// The shared fixture has a CommonJS package root and an auxiliary nested
+    /// marker that makes the whole `afolder/` subtree ESM.
     #[test]
-    fn nested_package_json_scopes_module_flavor() {
-        let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
-        files.insert("package.json".into(), b"{\"name\":\"dual\"}".to_vec());
-        files.insert(
-            "esm/package.json".into(),
-            b"{\"type\":\"module\"}".to_vec(),
-        );
-        files.insert("index.js".into(), b"module.exports = 1;".to_vec());
-        files.insert("esm/index.js".into(), b"export default 1;".to_vec());
-        files.insert("esm/deep/util.js".into(), b"export default 2;".to_vec());
+    fn shared_nested_package_json_fixture_scopes_module_flavor() {
+        let files: BTreeMap<String, Vec<u8>> = NESTED_PACKAGE_JSON_FIXTURE
+            .iter()
+            .map(|(path, source)| (path.to_string(), source.as_bytes().to_vec()))
+            .collect();
 
         let flavors = esm_flavor_by_dir(&files, false);
         assert!(!esm_default_for("index.js", &flavors));
-        assert!(esm_default_for("esm/index.js", &flavors));
-        assert!(esm_default_for("esm/deep/util.js", &flavors));
+        assert!(esm_default_for("afolder/file.js", &flavors));
+        assert!(esm_default_for("afolder/anotherfolder/file2.js", &flavors));
 
         // The mirror shape: an ESM root with a nested CommonJS
         // marker (`cjs/package.json` with no `type`, meaning

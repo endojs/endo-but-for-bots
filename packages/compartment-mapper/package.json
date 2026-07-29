@@ -56,7 +56,7 @@
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
-    "prettier-fixtures": "prettier --write --with-node-modules './test/fixtures-*/**/*.*js'",
+    "prettier-fixtures": "prettier --write --with-node-modules './test/fixtures-*/**/*.*js' './test/fixtures/**/*.js'",
     "test": "ses-ava"
   },
   "dependencies": {
