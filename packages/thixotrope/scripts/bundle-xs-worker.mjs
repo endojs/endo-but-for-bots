@@ -84,13 +84,6 @@ const peerUrl = url.pathToFileURL(
 ).href;
 const peerBundle = await makeBundle(readPowers, peerUrl, {
   packageDependenciesHook,
-  // Dual-build dependencies without `"type": "module"` (@noble/curves
-  // 1.9.x and the @noble/hashes 1.8 it pins) default to the CJS parser,
-  // but the always-on `import` condition resolves their exports to ESM
-  // files. Parse `.js` in such packages as ESM to match. Every other
-  // package in this graph declares `"type": "module"`, so the override
-  // is inert for them.
-  commonjsLanguageForExtension: { js: 'mjs' },
 });
 const peerDist = path.join(distDir, 'worker-peer.js');
 fs.writeFileSync(peerDist, peerBundle);
