@@ -348,6 +348,29 @@ See [§ Rootfs form-field shapes](#rootfs-form-field-shapes) above for
 the full operator-facing description of the same compatibility matrix
 on the daemon path.
 
+## Stdio JSONL RPC bridge
+
+`rpc.js` is the spawnable, language-agnostic counterpart of the dev REPL.
+Instead of a readline prompt it presents the stdio JSONL RPC surface from
+[`designs/endopi-stdio-rpc-bridge.md`](../../designs/endopi-stdio-rpc-bridge.md):
+an embedding host (an IDE plug-in, a CI runner, a Familiar pane) spawns
+the process, writes one JSON command per line to stdin, and reads one JSON
+event per line from stdout.
+Diagnostics go to stderr, so stdout carries only protocol records.
+
+```sh
+node packages/genie/rpc.js [-m provider/modelId] [-w /workspace/path]
+```
+
+The protocol itself — the strict `\n` framing, the command/event vocabulary,
+and the reusable building blocks (`makeJsonlDecoder`, `encodeRecord`,
+`translateAgentEvent`, `makeRpcSession`, `makeRpcBridge`, `serveRpc`) — lives
+in [`@endo/agentry/rpc`](../agentry/README.md#stdio-jsonl-rpc-bridge), shared
+across endo agent harnesses. `rpc.js` wires a genie agent to those blocks:
+it builds the agent (currently tool-free; wiring genie's tool suite is a
+follow-on) and hands it to `makeRpcSession` + `serveRpc`. A host that embeds
+the bridge over its own agent composes the same exports directly.
+
 ## Features
 
 ### Core Components

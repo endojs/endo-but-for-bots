@@ -27,6 +27,7 @@
     "test:integration:sandbox-slice": "bash test/integration.sh -E GENIE_MODEL=ollama/llama3.2 -E GENIE_TEST=test/scenarios/sandbox-slice.sh",
     "test:integration:dev-repl-sandbox": "ava test/dev-repl-sandbox.test.js --timeout=120s",
     "repl": "node dev-repl.js --workspace workspace_dev",
+    "rpc": "node rpc.js",
     "lint": "yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix",
     "lint:eslint": "eslint '**/*.js'"
@@ -34,6 +35,7 @@
   "dependencies": {
     "@earendil-works/pi-agent-core": "^0.80.3",
     "@earendil-works/pi-ai": "^0.80.3",
+    "@endo/agentry": "workspace:^",
     "@endo/daemon": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",

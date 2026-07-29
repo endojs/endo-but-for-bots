@@ -38,10 +38,14 @@ function inconceivable(nope, wat) {
  * For the "ollama" provider we construct a custom model object; for known
  * providers we look it up via getModel().
  *
+ * Exported so the stdio RPC bridge's `set_model` command can re-resolve a
+ * `provider/modelId` selection against the same registry the agent factory
+ * uses.
+ *
  * @param {string | undefined} modelString
  * @returns {Promise<Model<'openai-completions'>>}
  */
-async function resolveModel(modelString) {
+export async function resolveModel(modelString) {
   let provider = DEFAULT_PROVIDER;
   let modelId = DEFAULT_MODEL_ID;
   if (modelString) {
@@ -65,6 +69,7 @@ async function resolveModel(modelString) {
       `Pass a valid "provider/modelId" string (e.g. "${DEFAULT_MODEL_STRING}").`,
   );
 }
+harden(resolveModel);
 
 /**
  * Resolve the API key for an Ollama model.
