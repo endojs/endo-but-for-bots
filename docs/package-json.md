@@ -148,9 +148,12 @@ is used when provided and the ordinary dependency is a fallback.
 This is documented under
 [modern Yarn `peerDependencies`](https://yarnpkg.com/configuration/manifest#peerDependencies).
 
-pnpm 11.14 and later accepts the `workspace:` and `catalog:` protocols in
-`peerDependencies` and substitutes normal ranges during publication.
-The exact supported schemes and version boundary are in the
+pnpm accepts semantic-version ranges plus the `workspace:` and `catalog:`
+protocols in `peerDependencies`.
+Since pnpm 11.14, it also accepts named-registry, `npm:` alias, `file:`, Git, and
+URL specifiers and checks the version range carried by each form.
+Bare `name@version` values remain invalid.
+The exact supported forms and version boundary are in the
 [pnpm peer dependency reference](https://pnpm.io/package_json#peerdependencies).
 
 ### Scripts, native builds, and package-scoped configuration
@@ -419,8 +422,9 @@ pnpm uses still different subfields:
 resolves into its lockfile.
 pnpm also added `engines.runtime` in 10.21 to provision a runtime for a
 dependency.
-See [pnpm runtime management](https://pnpm.io/package_json#devenginesruntime)
-and [pnpm package-manager management](https://pnpm.io/package_json#devenginespackagemanager).
+See [pnpm development runtime management](https://pnpm.io/package_json#devenginesruntime),
+[dependency runtime management](https://pnpm.io/package_json#enginesruntime),
+and [package-manager management](https://pnpm.io/package_json#devenginespackagemanager).
 
 These three `devEngines` consumers overlap in spelling but not schema or
 accepted names.
