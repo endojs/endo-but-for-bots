@@ -258,13 +258,19 @@ issuer semantics, vbank, board publication, smart-wallet.
   group laws. No remotables, no durability. Ships independently useful.
 - **Phase 1 — heap issuer kit.** `makeIssuerKit` as heap-zone `@endo/exo` classes
   with `M.interface` guards; `paymentLedger` stores values ([`issue 3167`](https://github.com/Agoric/agoric-sdk/issues/3167)).
+  Carry forward the revocable-payment-on-use hardening: when a payment is
+  consumed, its caretaker is revoked so the spent payment is genuinely dead
+  (pioneered by the upstream `feat(zoe): revoke used-up payments` work).
 - **Phase 2 — durable kit via the Zone seam.** `makeDurableIssuerKit(zone)`;
   daemon-backed durable zone adapter (vfs / exo-state). Upgrade-participation tests
   modeled on [`issue 5593`](https://github.com/Agoric/agoric-sdk/issues/5593).
 - **Phase 3 — agoric interop.** `@agoric/ertp` re-exports `@endo/ertp` and injects
   `@agoric/zone`; brand-identity-preservation test; migration guide. Boatman
   ferries the Endo-side package upstream when authorized.
-- **Phase 4 — deferred v2 frontier (separate designs, to be filed).** Non-scalar
+- **Phase 4 — deferred v2 frontier (separate designs, to be filed).** The existing want-patterns ERTP and Zoe implementation
+  work (upstream `feat(ertp): ertp-only part of minimal want-patterns` and
+  `feat(zoe): zoe part of minimal want patterns`) is the baseline code this
+  design will document and align with the `@endo/ertp` model. Non-scalar
   Store for NFT-scale copyBag purses ([`issue 10920`](https://github.com/Agoric/agoric-sdk/issues/10920)); shared-rights model
   ([`issue 397`](https://github.com/Agoric/agoric-sdk/issues/397)); Want-Patterns integration ([`issue 2230`](https://github.com/Agoric/agoric-sdk/issues/2230)) — each its own design,
   none blocking Phases 0–3.
