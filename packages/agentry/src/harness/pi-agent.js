@@ -32,7 +32,8 @@ const defaultConvertToLlm = messages =>
  * Construct a pi-agent-core `Agent` from harness-level inputs. This is the one
  * place the harness builds a `PiAgent`: it owns the `initialState` shape, the
  * default `convertToLlm` filter, the default thinking level
- * (`reasoning ? 'medium' : 'off'`), and `toolExecution: 'sequential'`. A
+ * (`reasoning ? 'medium' : 'off'`), the default `streamFn`
+ * (`streamFn ?? streamSimple`), and `toolExecution: 'sequential'`. A
  * `getApiKey` is included in the constructor options only when one is supplied,
  * matching the conditional-spread the callers relied on (pi-agent-core may
  * distinguish an absent hook from an explicit `undefined`).
@@ -42,7 +43,10 @@ const defaultConvertToLlm = messages =>
  * @param {AgentTool<any>[]} options.tools
  * @param {string} options.systemPrompt
  * @param {AgentMessage[]} [options.messages]
- * @param {StreamFn} [options.streamFn]
+ * @param {StreamFn} [options.streamFn] - Stream function for the pi-agent-core
+ *   `Agent`. Defaults to `streamSimple` from `@earendil-works/pi-ai/compat`
+ *   when omitted; two callers (`@endo/lal`'s worker loop and
+ *   `define-agent.js`) rely on this default rather than passing one.
  * @param {(messages: AgentMessage[]) => Message[] | Promise<Message[]>} [options.convertToLlm]
  * @param {GetApiKey} [options.getApiKey]
  * @param {ThinkingLevel} [options.thinkingLevel]
@@ -70,8 +74,11 @@ export const makePiAgent = ({
     },
     convertToLlm,
     toolExecution,
-    // Pi 0.81 requires a stream function when a turn begins. Keep the
-    // harness's established compat-registry behavior when callers omit one.
+    // Pi 0.81 evaluates `runtimeOptions.streamFn ?? getDefaultStreamFn()` in
+    // the Agent constructor, and `getDefaultStreamFn()` throws unless someone
+    // called the upstream `setDefaultStreamFn` hook (ambient mutable module
+    // state this harness deliberately declines). Keep the harness's
+    // established compat-registry behavior when callers omit one.
     streamFn: streamFn ?? streamSimple,
     // Include getApiKey only when supplied, so a non-Ollama caller leaves the
     // hook absent rather than explicitly `undefined`.
