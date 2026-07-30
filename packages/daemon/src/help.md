@@ -881,7 +881,8 @@ grepPattern: string — an ECMAScript RegExp source (same as grep()); the patter
 matched file is searched for. NOTE: same ReDoS hazard as grep — supply trusted patterns.
 Both patterns are required, so a native filesystem layer can fuse the enumerate-and-scan
 into a single pass. It returns the same `{ file, line, text }` records as grep and honors
-the same confinement and deny-pattern filtering.
+the same confinement and deny-pattern filtering. The glob enumeration is capped at
+10,000 files (silent truncation), then grep's maxResults caps the match records.
 options.maxResults: number — non-negative safe-integer cap on match records (default 1000).
 `glorp(g, p)` is the fused equivalent of `grep(p, glob(g))`; prefer it when you have both
 patterns up front.
