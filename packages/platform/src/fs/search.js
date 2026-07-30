@@ -128,6 +128,35 @@ const isDeniedName = (denySet, name) =>
   denySet !== undefined && denySet.has(name.toLowerCase());
 
 /**
+ * Whether a resolved physical `real` path reaches content inside a denied
+ * directory, by checking every segment of the path below the confinement
+ * root against the deny set. A symlink with an allowed entry name (e.g.
+ * `pub -> .ssh`) resolves to a real path whose tail is the denied directory;
+ * the entry-name check at the walk site passes (`pub` is not denied) but the
+ * content it exposes is denied, so this resolves-site check closes the leak.
+ * Returns `false` when there is no deny set or the path is not within the root.
+ *
+ * @param {Set<string> | undefined} denySet
+ * @param {string | undefined} real
+ * @param {string | undefined} rootReal
+ * @returns {boolean}
+ */
+const realPathReachesDenied = (denySet, real, rootReal) => {
+  if (denySet === undefined || real === undefined || rootReal === undefined) {
+    return false;
+  }
+  if (real === rootReal) {
+    return false;
+  }
+  if (!real.startsWith(`${rootReal}/`)) {
+    return false;
+  }
+  const rel = real.slice(rootReal.length + 1);
+  return rel.split('/').some(segment => isDeniedName(denySet, segment));
+};
+harden(realPathReachesDenied);
+
+/**
  * Compile one glob pattern segment into a matcher over a single
  * directory-entry name. `*` matches zero or more characters within the one
  * segment and never a `/`; a run of consecutive `*` collapses to the same
@@ -276,7 +305,12 @@ export const makeSearch = powers => {
     const resolveChild = async childPath => {
       await null;
       const real = await powers.maybeRealPath(childPath);
-      return { real, confined: isPathWithin(real, confinementRootReal) };
+      const confined = isPathWithin(real, confinementRootReal);
+      // A symlink with an allowed entry name may resolve into a denied
+      // directory (e.g. `pub -> .ssh`); the entry-name check above passed,
+      // but the content it reaches is denied, so drop it here.
+      const denied = realPathReachesDenied(denySet, real, confinementRootReal);
+      return { real, confined: confined && !denied };
     };
 
     /**
@@ -487,6 +521,12 @@ export const makeSearch = powers => {
         if (!isPathWithin(real, confinementRootReal)) {
           continue;
         }
+        // A symlink with an allowed entry name may resolve into a denied
+        // directory (e.g. `pub -> .ssh`); the segment check above passed, but
+        // the content it reaches is denied, so skip it here too.
+        if (realPathReachesDenied(denySet, real, confinementRootReal)) {
+          continue;
+        }
         if (await powers.isDirectory(filePath)) {
           continue;
         }
@@ -499,8 +539,14 @@ export const makeSearch = powers => {
           continue;
         }
         // Split on `\n`; a trailing `\r` is stripped so a CRLF file yields the
-        // same match text a LF file would. Line numbers are 1-based.
+        // same match text a LF file would. Line numbers are 1-based. A file
+        // ending in a newline must not yield a phantom empty final line, so
+        // drop the trailing empty element `split` produces after a terminal
+        // `\n` (a 0-byte file yields zero lines, a 2-line file yields 2).
         const lines = content.split('\n');
+        if (lines.length > 0 && lines[lines.length - 1] === '') {
+          lines.pop();
+        }
         for (let i = 0; i < lines.length; i += 1) {
           if (maxResults !== undefined && count >= maxResults) {
             break;
@@ -523,7 +569,34 @@ export const makeSearch = powers => {
   }
   harden(grepFiles);
 
-  return harden({ globPaths, grepFiles });
+  /**
+   * Fused glob+grep: enumerate the files matching `globPattern` and search each
+   * for `regexSource`, yielding batches of `{ file, line, text }` records. This
+   * is the native-override seam a platform with a fused enumerate-and-scan walk
+   * substitutes: the JS reference composes the two generators above so the glob
+   * batches stream straight into grep without a full path-set round-trip through
+   * JS, but a native engine may collapse the whole pass into one walk. Deny
+   * filtering, confinement, and `maxResults` are honored exactly as in grep.
+   *
+   * @param {string} root
+   * @param {string} globPattern
+   * @param {string} regexSource
+   * @param {GrepOptions} [options]
+   * @returns {AsyncGenerator<GrepMatch[]>}
+   */
+  async function* glorpFiles(root, globPattern, regexSource, options = {}) {
+    await null;
+    const paths = globPaths(root, globPattern, {
+      deniedSegments: options.deniedSegments,
+      confinementRoot: options.confinementRoot,
+      batchSize: options.batchSize,
+      includeDirectories: false,
+    });
+    yield* grepFiles(root, regexSource, paths, options);
+  }
+  harden(glorpFiles);
+
+  return harden({ globPaths, grepFiles, glorpFiles });
 };
 harden(makeSearch);
 

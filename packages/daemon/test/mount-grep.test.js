@@ -124,11 +124,39 @@ test('grep silently skips denied, escaping, directory, and missing supplied path
     'src',
     'does/not/exist.txt',
   ]);
-  t.true([...result].length > 0);
-  t.true(
-    [...result].every(match => match.file === 'notes.txt'),
-    'only the valid readable file contributes matches',
+  // Pin the exact records (the shape mount-glob.test.js uses), not just a
+  // loose `length > 0` / `every` floor — a regression that admitted `.env`
+  // would still pass the weak form.
+  t.deepEqual(
+    [...result],
+    [
+      { file: 'notes.txt', line: 1, text: 'first line' },
+      { file: 'notes.txt', line: 2, text: 'second line' },
+      { file: 'notes.txt', line: 3, text: 'third line' },
+    ],
+    'only the valid readable file contributes matches; denied, directory, and missing paths drop silently',
   );
+});
+
+test('grep never surfaces denied content through an in-root symlink with an allowed name', async t => {
+  const { root, skipped } = buildMountFixture(t);
+  // The fixture carries `pub -> .ssh` (an in-root symlink with an allowed name
+  // that resolves into a denied directory). When symlinks are unavailable the
+  // link is skipped, so this case is vacuous and passes.
+  if (skipped.has('pub')) {
+    t.pass('symlinks unavailable on this platform; pub -> .ssh not materialized');
+    return;
+  }
+  const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
+  // A whole-tree grep must not reach .ssh/id_rsa through the `pub` symlink.
+  const tree = await E(mount).grep('PRIVATE KEY|must-never-surface');
+  t.true(
+    [...tree].every(match => !match.file.startsWith('pub')),
+    'denied content does not leak through an allowed-named symlink',
+  );
+  // Searching the symlink path directly also yields nothing.
+  const direct = await E(mount).grep('PRIVATE KEY', ['pub/id_rsa']);
+  t.deepEqual([...direct], [], 'a denied-via-symlink supplied path yields no matches');
 });
 
 test('grep on a subView reports sub-root-relative file paths', async t => {

@@ -682,16 +682,27 @@ export const MountInterface = M.interface('EndoMount', {
   grep: M.callWhen(M.string())
     .optional(
       M.await(M.arrayOf(M.string())),
-      M.splitRecord({}, { maxResults: M.number() }),
+      // The rest is closed (`{}`) so a typo'd option key (e.g. `maxResult`)
+      // fails loudly at the exo boundary instead of slipping through the
+      // default `M.any()` rest. `maxResults` is admitted as a number; the
+      // method body further constrains it to a non-negative safe integer
+      // capped at `GREP_MAX_RESULTS` (NaN/Infinity/negatives reject).
+      M.splitRecord({}, { maxResults: M.number() }, {}),
     )
     .returns(M.array()),
   // Fused glob+grep composition. Both patterns are required positionals (unlike
   // grep's optional `paths`), so the operation can be pushed down to native code
   // as a single fused enumerate-and-scan call. The reference implementation
-  // composes the delegated surface: `grep(grepPattern, glob(globPattern))`. See
-  // designs/platform-search-pushdown.md § "The Array surface".
+  // composes the delegated surface: `grep(grepPattern, glob(globPattern))`, or
+  // dispatches to a native `search.glorpFiles` when the file powers supply one.
+  // ReDoS hazard: `pattern` is a caller-supplied ECMAScript RegExp source
+  // compiled with `new RegExp(pattern)` and tested per line on the daemon's
+  // single event loop — a catastrophic backtracking source can stall the
+  // daemon (measured tens of seconds from one short line). There is no
+  // portable per-call CPU bound in pure JS; a native engine may impose one.
+  // See designs/platform-search-pushdown.md § "The Array surface".
   glorp: M.call(M.string(), M.string())
-    .optional(M.splitRecord({}, { maxResults: M.number() }))
+    .optional(M.splitRecord({}, { maxResults: M.number() }, {}))
     .returns(M.promise()),
   lookup: M.call(PathArgShape).returns(M.promise()),
   // `maybeLookup` is async in every mount implementation, so retain the

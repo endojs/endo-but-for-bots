@@ -276,3 +276,27 @@ test('glob bounds stacked `**` walks (no super-linear re-traversal)', async t =>
     t.deepEqual(result, baseline, `${pattern} is bounded and ≡ "**"`);
   }
 });
+
+test('glob on a revoked mount throws before returning any path', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mount-glob-revoke-'));
+  t.teardown(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'a.txt'), '');
+  fs.mkdirSync(path.join(root, 'sub'));
+  fs.writeFileSync(path.join(root, 'sub', 'b.txt'), '');
+
+  // eslint-disable-next-line import/order
+  const { makeRevocableMount } = await import('../src/mount.js');
+  const { mount, control } = makeRevocableMount({
+    rootPath: root,
+    readOnly: false,
+    filePowers,
+  });
+  await null;
+  t.deepEqual([...(await E(mount).glob('**'))], ['a.txt', 'sub', 'sub/b.txt']);
+
+  E(control).revoke();
+
+  await t.throwsAsync(() => E(mount).glob('**'), {
+    message: /Mount has been revoked/,
+  });
+});
