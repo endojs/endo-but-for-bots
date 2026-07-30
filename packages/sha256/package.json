@@ -1,0 +1,71 @@
+{
+  "name": "@endo/sha256",
+  "version": "0.1.0",
+  "description": "Platform-neutral synchronous SHA-256 over Uint8Array values",
+  "keywords": [
+    "sha256",
+    "hash",
+    "endo"
+  ],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/endojs/endo/tree/master/packages/sha256#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/sha256"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "main": "./src/sha256-browser.js",
+  "exports": {
+    ".": {
+      "xs": "./src/sha256-xs.js",
+      "browser": "./src/sha256-browser.js",
+      "node": "./src/sha256-node.js",
+      "default": "./src/sha256-browser.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "eslint --fix .",
+    "lint:eslint": "eslint .",
+    "lint:types": "tsc",
+    "test": "ava",
+    "test:xs": "node scripts/generate-test-xs.js && xst tmp/test-xs.js && node scripts/generate-test-xs.js --clean"
+  },
+  "dependencies": {
+    "@endo/harden": "workspace:^",
+    "@endo/hex": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/compartment-mapper": "workspace:^",
+    "ava": "catalog:dev",
+    "eslint": "catalog:dev",
+    "ses": "workspace:^",
+    "typescript": "catalog:dev"
+  },
+  "files": [
+    "LICENSE*",
+    "README.md",
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/internal"
+    ]
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.*"
+    ],
+    "timeout": "2m"
+  }
+}
