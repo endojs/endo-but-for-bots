@@ -36,68 +36,69 @@ home. This design is that home.
 
 ## The surveyed ERTP-evolution corpus
 
-Cited link-free (plain `agoric-sdk issue NNNN` text) to avoid creating upstream
-cross-reference backlinks. Grouped by the theme each thread pushes ERTP toward.
+Cited with fully qualified URLs to the `Agoric/agoric-sdk` tracker (a link in
+committed markdown creates no upstream cross-reference backlink). Grouped by the
+theme each thread pushes ERTP toward.
 
-**Refactor / vision epics.** amountMath-refactor Epic (`agoric-sdk issue 2311`,
+**Refactor / vision epics.** amountMath-refactor Epic ([`agoric-sdk issue 2311`](https://github.com/Agoric/agoric-sdk/issues/2311),
 closed — made AmountMath pass-by-copy and static, split absolute vs. relative
 brand checks; the archetype of ERTP modernization), `ERTP — Nice to Have`
-(`issue 2365`, closed), `ERTP Updates Required for Applications` (`issue 2232`,
-closed), `Small Zoe/ERTP Tasks` (`issue 3959`, closed), `EPIC: Zoe/ERTP Audit
-Issues` (`issue 4059`, open — the closest live cross-cutting tracker),
-`Add design.md to ERTP` (`issue 12432`, open).
+([`issue 2365`](https://github.com/Agoric/agoric-sdk/issues/2365), closed), `ERTP Updates Required for Applications` ([`issue 2232`](https://github.com/Agoric/agoric-sdk/issues/2232),
+closed), `Small Zoe/ERTP Tasks` ([`issue 3959`](https://github.com/Agoric/agoric-sdk/issues/3959), closed), `EPIC: Zoe/ERTP Audit
+Issues` ([`issue 4059`](https://github.com/Agoric/agoric-sdk/issues/4059), open — the closest live cross-cutting tracker),
+`Add design.md to ERTP` ([`issue 12432`](https://github.com/Agoric/agoric-sdk/issues/12432), open).
 
 **Durability / upgrade** (the "v2" half that shipped). `Durability for ERTP`
-(`issue 5333`, closed — the umbrella), `feat(ertp): durability` (`issue 5283`,
+([`issue 5333`](https://github.com/Agoric/agoric-sdk/issues/5333), closed — the umbrella), `feat(ertp): durability` ([`issue 5283`](https://github.com/Agoric/agoric-sdk/pull/5283),
 merged), `plan for durable/non-durable/soft-durable tests in ERTP/zoe/contracts`
-(`issue 5593`, closed — durability *tightens* the API contract: everything stored
+([`issue 5593`](https://github.com/Agoric/agoric-sdk/issues/5593), closed — durability *tightens* the API contract: everything stored
 must be durable-compatible, a requirement pushed onto every client), `Virtual
-objects and virtual stores for ERTP` (`issue 4504`, closed), `Make purses virtual
-objects` (`issue 2841`, closed), `turn Payments back into Remotables`
-(`issue 3356`, closed — a **partial reversal** of virtualization, walked back for
-RAM/GC reasons), `add "destroyLedgerWithFailure"?` (`issue 3434`, closed).
+objects and virtual stores for ERTP` ([`issue 4504`](https://github.com/Agoric/agoric-sdk/issues/4504), closed), `Make purses virtual
+objects` ([`issue 2841`](https://github.com/Agoric/agoric-sdk/issues/2841), closed), `turn Payments back into Remotables`
+([`issue 3356`](https://github.com/Agoric/agoric-sdk/issues/3356), closed — a **partial reversal** of virtualization, walked back for
+RAM/GC reasons), `add "destroyLedgerWithFailure"?` ([`issue 3434`](https://github.com/Agoric/agoric-sdk/issues/3434), closed).
 
-**AmountMath / AssetKind.** `Algebraic properties of amounts` (`issue 557`, open —
+**AmountMath / AssetKind.** `Algebraic properties of amounts` ([`issue 557`](https://github.com/Agoric/agoric-sdk/issues/557), open —
 formalize amount as a commutative group per asset kind), `Amounts should be
-parameterized (Amount<V>)` (`issue 2845`, closed — blocked historically on JSDoc
+parameterized (Amount<V>)` ([`issue 2845`](https://github.com/Agoric/agoric-sdk/issues/2845), closed — blocked historically on JSDoc
 default type params), `Rename amountMathKind/mathKind to assetKind`
-(`issue 2849`, closed), `rename identity to additiveIdentity` (`issue 3587`,
-closed), `Only allow bigint NatValues` (`issue 3960`, closed), `Protect against
-accidental arithmetic of Amounts` (`issue 2064`, closed), `setMathHelpers leaks
-history-dependent ordering` (`issue 4261`, closed — set ordering over remotables
-is a covert channel), `min()/max() incorrect for non-fungibles` (`issue 6691`,
+([`issue 2849`](https://github.com/Agoric/agoric-sdk/issues/2849), closed), `rename identity to additiveIdentity` ([`issue 3587`](https://github.com/Agoric/agoric-sdk/issues/3587),
+closed), `Only allow bigint NatValues` ([`issue 3960`](https://github.com/Agoric/agoric-sdk/issues/3960), closed), `Protect against
+accidental arithmetic of Amounts` ([`issue 2064`](https://github.com/Agoric/agoric-sdk/issues/2064), closed), `setMathHelpers leaks
+history-dependent ordering` ([`issue 4261`](https://github.com/Agoric/agoric-sdk/issues/4261), closed — set ordering over remotables
+is a covert channel), `min()/max() incorrect for non-fungibles` ([`issue 6691`](https://github.com/Agoric/agoric-sdk/issues/6691),
 closed).
 
 **Issuer / mint / purse / payment.** `payment ledger can just store values`
-(`issue 3167`, open — the ledger need not store whole Amounts, since the brand is
-constant), `Require ERTP Issuers made through Zoe contracts` (`issue 3717`,
+([`issue 3167`](https://github.com/Agoric/agoric-sdk/issues/3167), open — the ledger need not store whole Amounts, since the brand is
+constant), `Require ERTP Issuers made through Zoe contracts` ([`issue 3717`](https://github.com/Agoric/agoric-sdk/issues/3717),
 closed — issuer provenance), `Mark/Stamp non-standard ERTP Issuers?`
-(`issue 4237`, closed), `Need so-called "use objects"` (`issue 4320`, closed —
+([`issue 4237`](https://github.com/Agoric/agoric-sdk/issues/4237), closed), `Need so-called "use objects"` ([`issue 4320`](https://github.com/Agoric/agoric-sdk/issues/4320), closed —
 rights both exercisable and exclusively transferable across upgrade), `fixed total
-supply limit for a mint` (`issue 2140`, closed).
+supply limit for a mint` ([`issue 2140`](https://github.com/Agoric/agoric-sdk/issues/2140), closed).
 
 **Non-fungibles / performance** (the live dormant frontier). `Improved
-representation of Non-fungibles amounts in ERTP` (`issue 10920`, open — needs a
+representation of Non-fungibles amounts in ERTP` ([`issue 10920`](https://github.com/Agoric/agoric-sdk/issues/10920), open — needs a
 Store for non-scalar values; O(N) CopyBag insert/delete must be fixed before real
-NFTs), `KREAd triggers expensive ERTP NFT handling` (`issue 8862`, closed — the
-diagnosis), `cryptic "Withdrawal failed" on copyBag withdraw` (`issue 8132`,
+NFTs), `KREAd triggers expensive ERTP NFT handling` ([`issue 8862`](https://github.com/Agoric/agoric-sdk/issues/8862), closed — the
+diagnosis), `cryptic "Withdrawal failed" on copyBag withdraw` ([`issue 8132`](https://github.com/Agoric/agoric-sdk/issues/8132),
 open).
 
 **Rights as patterns (Want Patterns).** `NFTs are easy to specify` umbrella
-(`issue 2334`, open), `Want Patterns Implementation Plan` (`issue 2230`, open —
+([`issue 2334`](https://github.com/Agoric/agoric-sdk/issues/2334), open), `Want Patterns Implementation Plan` ([`issue 2230`](https://github.com/Agoric/agoric-sdk/issues/2230), open —
 match invitations by instance/description, not opaque handle), `Express shared
-rights` (`issue 397`, open — ERTP today expresses only exclusive rights but was
+rights` ([`issue 397`](https://github.com/Agoric/agoric-sdk/issues/397), open — ERTP today expresses only exclusive rights but was
 intended to express shared rights too), `Amount Patterns test cases`
-(`issue 2355`, open).
+([`issue 2355`](https://github.com/Agoric/agoric-sdk/issues/2355), open).
 
-**Brand metadata / provenance.** `remove getDisplayInfo()` (`issue 10235`, open),
-`deprecate getDisplayInfo` (`issue 9220`, closed), `update boardAux when new ERTP
-brands are added` (`issue 8627`, open) — a coherent arc pulling display metadata
+**Brand metadata / provenance.** `remove getDisplayInfo()` ([`issue 10235`](https://github.com/Agoric/agoric-sdk/issues/10235), open),
+`deprecate getDisplayInfo` ([`issue 9220`](https://github.com/Agoric/agoric-sdk/issues/9220), closed), `update boardAux when new ERTP
+brands are added` ([`issue 8627`](https://github.com/Agoric/agoric-sdk/issues/8627), open) — a coherent arc pulling display metadata
 *out of* the brand object into a published surface, reducing phishing surface.
 
 **Security / audit.** `Purple Team Vulnerability Assessment of ERTP + Zoe`
-(`issue 4264`, closed), input-validation hardening (`issues 4057 / 3885 / 3046`,
-closed), `Zoe is gullible to issuer's allegation of brand` (`issue 1378`, closed).
+([`issue 4264`](https://github.com/Agoric/agoric-sdk/issues/4264), closed), input-validation hardening ([`issue 4057`](https://github.com/Agoric/agoric-sdk/issues/4057) / [`issue 3885`](https://github.com/Agoric/agoric-sdk/issues/3885) / [`issue 3046`](https://github.com/Agoric/agoric-sdk/issues/3046),
+closed), `Zoe is gullible to issuer's allegation of brand` ([`issue 1378`](https://github.com/Agoric/agoric-sdk/issues/1378), closed).
 
 ## Design: `@endo/ertp`
 
@@ -113,23 +114,23 @@ ERTP's shapes map onto Endo passable types with no adaptation layer:
   objects with hand-written argument coercion. Each carries an `M.interface`
   method guard, so shape validation at the trust boundary is declarative — this
   directly retires the hand-written input-validation work the audit threads asked
-  for (`issues 4057 / 3885 / 3046`, `4264`).
+  for ([`issue 4057`](https://github.com/Agoric/agoric-sdk/issues/4057) / [`issue 3885`](https://github.com/Agoric/agoric-sdk/issues/3885) / [`issue 3046`](https://github.com/Agoric/agoric-sdk/issues/3046), [`4264`](https://github.com/Agoric/agoric-sdk/issues/4264)).
 - **AmountMath** is a pass-by-copy static module of pure functions over
-  `(AssetKind, value)`, exactly the shape `agoric-sdk issue 2311` landed. Its set /
+  `(AssetKind, value)`, exactly the shape [`agoric-sdk issue 2311`](https://github.com/Agoric/agoric-sdk/issues/2311) landed. Its set /
   copySet / copyBag algebra is **delegated to `@endo/patterns`' key algebra**
   (`keyEQ`, `elementsIsSuperset`, bag union / difference, `rankOrder`) rather than
   re-implemented. This is the largest structural win: `agoric-sdk`'s AmountMath
   predates mature `@endo/patterns`, so its set-math lives in bespoke
   `mathHelpers`; the recast makes AmountMath a thin brand-coercing wrapper over the
   key algebra Endo already ships and tests. The covert-channel bug in set ordering
-  (`issue 4261`) and the non-fungible comparison bug (`issue 6691`) are resolved by
+  ([`issue 4261`](https://github.com/Agoric/agoric-sdk/issues/4261)) and the non-fungible comparison bug ([`issue 6691`](https://github.com/Agoric/agoric-sdk/issues/6691)) are resolved by
   construction, because `@endo/patterns` defines the total order and the
   incomparability semantics once.
 - **AssetKind** ∈ `nat | copySet | copyBag` (with legacy `set` as a deprecated
-  alias). `nat` values are `bigint` (`issue 3960`); the copy kinds are
+  alias). `nat` values are `bigint` ([`issue 3960`](https://github.com/Agoric/agoric-sdk/issues/3960)); the copy kinds are
   `@endo/patterns` CopySet / CopyBag. `Amount<K extends AssetKind>` is expressible
   as a real TypeScript generic under Endo's `.ts`-types-index convention, which
-  clears the JSDoc blocker that stalled `issue 2845`.
+  clears the JSDoc blocker that stalled [`issue 2845`](https://github.com/Agoric/agoric-sdk/issues/2845).
 
 ```mermaid
 graph TD
@@ -168,12 +169,12 @@ durability mechanism. The value algebra is zone-free; only the stateful facets
 - **Heap zone** → ephemeral issuer kits (tests, transient agents).
 - **Durable zone** → persistent kits. The zone's stores are the system of record.
 
-The durability requirement `issue 5593` flagged — everything stored must be
+The durability requirement [`issue 5593`](https://github.com/Agoric/agoric-sdk/issues/5593) flagged — everything stored must be
 durable-compatible — becomes a property of the injected zone, not a global ERTP
 constraint. The `paymentLedger` stores bare **values** keyed by payment, not whole
-Amounts (`issue 3167`), reconstituting the Amount at the method boundary; with the
+Amounts ([`issue 3167`](https://github.com/Agoric/agoric-sdk/issues/3167)), reconstituting the Amount at the method boundary; with the
 brand constant per ledger this saves store space and falls out naturally from the
-zone-store shape. The `Payments-back-to-Remotables` reversal (`issue 3356`) is
+zone-store shape. The `Payments-back-to-Remotables` reversal ([`issue 3356`](https://github.com/Agoric/agoric-sdk/issues/3356)) is
 re-expressed as a zone choice: payments are heap-zone exos (Remotables) even when
 the ledger is durable, so their identities need not survive upgrade — the ledger
 does.
@@ -203,18 +204,18 @@ graph LR
 
 | v2 ambition (corpus) | `@endo/ertp` disposition |
 |---|---|
-| AmountMath pass-by-copy static (`2311`) | Satisfied — carried as the design's baseline |
-| Amount parameterized `Amount<V>` (`2845`) | Satisfied — real TS generics via types-index |
-| Algebraic laws for amounts (`557`) | Satisfied — laws become property tests over the `@endo/patterns` key algebra reference |
-| assetKind / naming cleanup (`2849`, `3587`, `3960`, `2064`) | Satisfied — adopted natively |
-| Set-order covert channel, non-fungible min/max (`4261`, `6691`) | Satisfied by construction (delegated to `@endo/patterns`) |
-| Durability / upgrade participation (`5333`, `5283`, `5593`) | Satisfied — mapped onto the Zone seam |
-| Payment ledger stores values (`3167`) | Satisfied |
-| Declarative input validation / audit hardening (`4057`, `3885`, `4264`) | Satisfied — `@endo/exo` method guards |
-| Non-fungible store performance (`10920`, `8862`, `8132`) | **Deferred** — needs a non-scalar Store; see roadmap Phase 4 |
-| Rights as patterns / Want Patterns (`2334`, `2230`, `2355`) | **Deferred** — Zoe-adjacent; a sibling design |
-| Shared (non-exclusive) rights (`397`) | **Deferred** — needs its own model; noted, not built |
-| Issuer/brand provenance, published metadata (`3717`, `4237`, `8627`, `10235`) | **Partially deferred** — `@endo/ertp` drops `getDisplayInfo` from the brand and expects an out-of-band metadata surface, but the published registry is out of scope |
+| AmountMath pass-by-copy static ([`2311`](https://github.com/Agoric/agoric-sdk/issues/2311)) | Satisfied — carried as the design's baseline |
+| Amount parameterized `Amount<V>` ([`2845`](https://github.com/Agoric/agoric-sdk/issues/2845)) | Satisfied — real TS generics via types-index |
+| Algebraic laws for amounts ([`557`](https://github.com/Agoric/agoric-sdk/issues/557)) | Satisfied — laws become property tests over the `@endo/patterns` key algebra reference |
+| assetKind / naming cleanup ([`2849`](https://github.com/Agoric/agoric-sdk/issues/2849), [`3587`](https://github.com/Agoric/agoric-sdk/issues/3587), [`3960`](https://github.com/Agoric/agoric-sdk/issues/3960), [`2064`](https://github.com/Agoric/agoric-sdk/issues/2064)) | Satisfied — adopted natively |
+| Set-order covert channel, non-fungible min/max ([`4261`](https://github.com/Agoric/agoric-sdk/issues/4261), [`6691`](https://github.com/Agoric/agoric-sdk/issues/6691)) | Satisfied by construction (delegated to `@endo/patterns`) |
+| Durability / upgrade participation ([`5333`](https://github.com/Agoric/agoric-sdk/issues/5333), [`5283`](https://github.com/Agoric/agoric-sdk/pull/5283), [`5593`](https://github.com/Agoric/agoric-sdk/issues/5593)) | Satisfied — mapped onto the Zone seam |
+| Payment ledger stores values ([`3167`](https://github.com/Agoric/agoric-sdk/issues/3167)) | Satisfied |
+| Declarative input validation / audit hardening ([`4057`](https://github.com/Agoric/agoric-sdk/issues/4057), [`3885`](https://github.com/Agoric/agoric-sdk/issues/3885), [`4264`](https://github.com/Agoric/agoric-sdk/issues/4264)) | Satisfied — `@endo/exo` method guards |
+| Non-fungible store performance ([`10920`](https://github.com/Agoric/agoric-sdk/issues/10920), [`8862`](https://github.com/Agoric/agoric-sdk/issues/8862), [`8132`](https://github.com/Agoric/agoric-sdk/issues/8132)) | **Deferred** — needs a non-scalar Store; see roadmap Phase 4 |
+| Rights as patterns / Want Patterns ([`2334`](https://github.com/Agoric/agoric-sdk/issues/2334), [`2230`](https://github.com/Agoric/agoric-sdk/issues/2230), [`2355`](https://github.com/Agoric/agoric-sdk/issues/2355)) | **Deferred** — Zoe-adjacent; a sibling design |
+| Shared (non-exclusive) rights ([`397`](https://github.com/Agoric/agoric-sdk/issues/397)) | **Deferred** — needs its own model; noted, not built |
+| Issuer/brand provenance, published metadata ([`3717`](https://github.com/Agoric/agoric-sdk/issues/3717), [`4237`](https://github.com/Agoric/agoric-sdk/issues/4237), [`8627`](https://github.com/Agoric/agoric-sdk/issues/8627), [`10235`](https://github.com/Agoric/agoric-sdk/issues/10235)) | **Partially deferred** — `@endo/ertp` drops `getDisplayInfo` from the brand and expects an out-of-band metadata surface, but the published registry is out of scope |
 
 ### Migration path and interop
 
@@ -253,19 +254,19 @@ issuer semantics, vbank, board publication, smart-wallet.
 ## Phased roadmap
 
 - **Phase 0 — value core.** `Amount`, `AmountMath`, `AssetKind` as a pure,
-  zone-free module over `@endo/patterns`. Property tests encode the `issue 557`
+  zone-free module over `@endo/patterns`. Property tests encode the [`issue 557`](https://github.com/Agoric/agoric-sdk/issues/557)
   group laws. No remotables, no durability. Ships independently useful.
 - **Phase 1 — heap issuer kit.** `makeIssuerKit` as heap-zone `@endo/exo` classes
-  with `M.interface` guards; `paymentLedger` stores values (`issue 3167`).
+  with `M.interface` guards; `paymentLedger` stores values ([`issue 3167`](https://github.com/Agoric/agoric-sdk/issues/3167)).
 - **Phase 2 — durable kit via the Zone seam.** `makeDurableIssuerKit(zone)`;
   daemon-backed durable zone adapter (vfs / exo-state). Upgrade-participation tests
-  modeled on `issue 5593`.
+  modeled on [`issue 5593`](https://github.com/Agoric/agoric-sdk/issues/5593).
 - **Phase 3 — agoric interop.** `@agoric/ertp` re-exports `@endo/ertp` and injects
   `@agoric/zone`; brand-identity-preservation test; migration guide. Boatman
   ferries the Endo-side package upstream when authorized.
 - **Phase 4 — deferred v2 frontier (separate designs, to be filed).** Non-scalar
-  Store for NFT-scale copyBag purses (`issue 10920`); shared-rights model
-  (`issue 397`); Want-Patterns integration (`issue 2230`) — each its own design,
+  Store for NFT-scale copyBag purses ([`issue 10920`](https://github.com/Agoric/agoric-sdk/issues/10920)); shared-rights model
+  ([`issue 397`](https://github.com/Agoric/agoric-sdk/issues/397)); Want-Patterns integration ([`issue 2230`](https://github.com/Agoric/agoric-sdk/issues/2230)) — each its own design,
   none blocking Phases 0–3.
 
 ## Design Decisions
@@ -299,10 +300,10 @@ issuer semantics, vbank, board publication, smart-wallet.
 - Where does the durable store physically live in the Endo daemon — a dedicated
   store formula, the exo-state, or the vfs? (Interacts with the daemon durability
   and mount designs.)
-- Does `@endo/ertp` drop `brand.getDisplayInfo()` outright (following `issue 9220`
-  / `issue 10235`) and require an out-of-band metadata surface, or retain it for
+- Does `@endo/ertp` drop `brand.getDisplayInfo()` outright (following [`issue 9220`](https://github.com/Agoric/agoric-sdk/issues/9220)
+  / [`issue 10235`](https://github.com/Agoric/agoric-sdk/issues/10235)) and require an out-of-band metadata surface, or retain it for
   source-compatibility during migration?
-- Shared rights (`issue 397`): in scope as a deferred Phase-4 design, or
+- Shared rights ([`issue 397`](https://github.com/Agoric/agoric-sdk/issues/397)): in scope as a deferred Phase-4 design, or
   explicitly out of the `@endo/ertp` charter?
 
 ## Prompt
@@ -316,3 +317,6 @@ issuer semantics, vbank, board publication, smart-wallet.
 > and interop story with agoric-sdk's ERTP, open questions and risks, and a phased
 > roadmap. Keep agoric/agoric-sdk comment-and-link-free: cite issues in plain
 > non-linking text.
+
+Note: per maintainer review direction, the corpus citations above use fully
+qualified URLs, superseding the prompt's link-free citation constraint.
