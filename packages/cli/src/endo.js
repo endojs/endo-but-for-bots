@@ -37,7 +37,10 @@ const commonOptions = {
       'segments replace the default restricted set',
     collectDeniedSegment,
   ],
-  noDeny: ['--no-deny', 'Disable path-segment denial entirely (empty set)'],
+  allow: [
+    '--allow',
+    'Allow all path segments (disable path-segment denial entirely)',
+  ],
 };
 
 const parseOptionAsMapping = (optionValueString, obj) => {
@@ -617,9 +620,9 @@ export const main = async rawArgs => {
     .option(...commonOptions.requiredName)
     .option('--read-only', 'mount as read-only')
     .option(...commonOptions.deny)
-    .option(...commonOptions.noDeny)
+    .option(...commonOptions.allow)
     .action(async (sourcePath, cmd) => {
-      const { name, as: agentNames, readOnly, deny } = cmd.opts();
+      const { name, as: agentNames, readOnly, deny, allow } = cmd.opts();
       if (!name) {
         throw new Error('--name is required for mount');
       }
@@ -629,7 +632,7 @@ export const main = async rawArgs => {
         name,
         agentNames,
         readOnly,
-        deniedSegments: resolveDeniedSegments(deny),
+        deniedSegments: resolveDeniedSegments(deny, allow),
       });
     });
 
@@ -643,9 +646,9 @@ export const main = async rawArgs => {
     .option(...commonOptions.requiredName)
     .option('--read-only', 'mount as read-only')
     .option(...commonOptions.deny)
-    .option(...commonOptions.noDeny)
+    .option(...commonOptions.allow)
     .action(async cmd => {
-      const { name, as: agentNames, readOnly, deny } = cmd.opts();
+      const { name, as: agentNames, readOnly, deny, allow } = cmd.opts();
       if (!name) {
         throw new Error('--name is required for mktmp');
       }
@@ -654,7 +657,7 @@ export const main = async rawArgs => {
         name,
         agentNames,
         readOnly,
-        deniedSegments: resolveDeniedSegments(deny),
+        deniedSegments: resolveDeniedSegments(deny, allow),
       });
     });
 
