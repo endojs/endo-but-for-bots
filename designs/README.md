@@ -13,6 +13,17 @@ source-only archive; replaces Endor's handwritten `main` / `exports` /
 `imports` runtime resolver and establishes one top-level packaged-application
 fixture corpus for Node, compartment-mapper, and Endor),
 [daemon-endor-sqlite-iterate-streaming](daemon-endor-sqlite-iterate-streaming.md) (added 2026-08-06; a native XS SQLite cursor, `hostSqliteStmtNext(stmt)`, and hardened `StatementSync.iterate(...params)` parity path that binds once and yields one decoded row per host call; the manager pet-store loads its required in-memory map directly from that iterator without a transient all-rows array),
+[cbor-encode-decode](cbor-encode-decode.md) (added 2026-07-30;
+packaging refactor that splits `@endo/cbor` into `@endo/cbor/encode`
+and `@endo/cbor/decode` subpath exports over an internal
+`internals.js` holding the shared `canonicalInfo`, `CANONICAL_NAN`,
+and the `UINT64_BOUND`/`UINT32_BOUND` domain bounds, so a decoding
+consumer retains no encoding machinery and an encoding consumer
+retains no decoding machinery; the root `.` re-export is preserved
+(`export *` from both halves, whose export name sets are disjoint);
+no signature, canonicality, or number-domain change; follow-up to
+kriskowal's approving review of
+endojs/endo-but-for-bots#885),
 [conservative-regexp-subset](conservative-regexp-subset.md) (added 2026-07-10,
 revised 2026-07-29; settles review choices: block-determinism safety,
 builder-selected corpus-backed limits, whole-string plus contains/composition
@@ -886,6 +897,7 @@ finalized.
 | syrups | Deprecated | Consolidated with PR 29's `@endo/syrups` (same shape: `Uint8Array` chunks in, `Uint8Array`-delimited messages out); see [`ocapn-tcp-syrup-framing.md`](ocapn-tcp-syrup-framing.md) |
 | cbor-frame | Implemented (PR #288) | `@endo/cbor-frame` reader/writer for length-prefixed CBOR byte strings; peer of `@endo/syrup-frame` and `@endo/netstring` |
 | cbor-codec | Phase 1 implemented | Shared canonical-CBOR primitive codec (`@endo/cbor`) extracted from `packages/ocapn/src/cbor` and PR #124's `packages/slots/src/cbor.js`; also serves the M11 `endor` slot-machine line; complement of the framing package `@endo/cbor-frame` (impl PR #288) |
+| cbor-encode-decode | Not Started | Split `@endo/cbor` into `@endo/cbor/encode` and `@endo/cbor/decode` subpath exports with an internal `internals.js` for the shared `canonicalInfo`/`CANONICAL_NAN`/bounds; root `.` re-export preserved; follow-up to kriskowal's review of #885 |
 | ocapn-noise-cryptographic-review | Not Started | External review coordination |
 | daemon-agent-network-identity | Not Started | Per-agent keypairs for network identity |
 | daemon-ocapn-external-connectivity | In Progress | Daemon adopts `@endo/ocapn` for the daemon-to-daemon peer edge; retires the bespoke `EndoNetwork`/`EndoGreeter`/`RemoteControl` CapTP peer stack. Worker, CLI, and web-gateway edges stay CapTP. Satisfies the daemon-integration half of the M4 exit criterion (implementation in-flight: PRs #340, #684, #688, #693) |
@@ -1584,7 +1596,7 @@ date of this pass.
 | M1: AI Agent Experience (was M0) | 0 | **Complete** | — |
 | M2: Project Hygiene (was M½) | 0 | **Complete** | — |
 | M3: Remote Access & Tools (was M1) | 19 (`gateway-package`, `daemon-docker-selfhost`, `daemon-agent-tools`, `endo-agent-tools`, `agentry-agent-builder`, `agentry-git-verb-gaps`, `agentry-git-eval-scenarios`, `exo-git-follow-root-advancement`, `daemon-mount`, `daemon-worker-import-from-mount`, `registry-capability`, `mvs-resolver`, `snapshot-mapper`, `filesystem-watchers`, `daemon-locator-terminology`, `daemon-rename-to-manager`, `daemon-xs-worker-snapshot`, `endoclaw-timer`, `endoclaw-network-fetch`) | 9-13 weeks | 11-15 weeks |
-| M4: Networking (was M2) | 8 (`ocapn-network-transport-separation`, `ocapn-tcp-for-test-extraction`, `ocapn-tcp-syrup-framing`, `cbor-frame`, `cbor-codec`, `ocapn-noise-cryptographic-review`, `daemon-agent-network-identity`, `ocapn-orthogonal-persistence`) | 5-6 weeks | 6-8 weeks |
+| M4: Networking (was M2) | 9 (`ocapn-network-transport-separation`, `ocapn-tcp-for-test-extraction`, `ocapn-tcp-syrup-framing`, `cbor-frame`, `cbor-codec`, `cbor-encode-decode`, `ocapn-noise-cryptographic-review`, `daemon-agent-network-identity`, `ocapn-orthogonal-persistence`) | 5-6 weeks | 6-8 weeks |
 | M5: Public Hosting & Billing (was M7) | 4 in-flight on PR #356 stack (`gateway-package` counted under M3; `gateway-packaging-ci`, `gateway-aws-deployment`, `gateway-aws-attuned` counted here) + 3 design gaps (`gateway-oauth-bonding`, `gateway-key-recovery`, `gateway-stripe-adapter`) | 4-6 weeks design + impl | merge cadence of PRs #343 and #356 |
 | M6: MCP Bridge Hosting (was Milestone B) | 2 net-new (`endo-gateway-mcp` impl, `endo-claude`); cross-milestone slices in M3 (P0) and M5 (P2/P3/P4 gaps) | ~3-3.5 weeks own work (endo-gateway-mcp ~2 weeks + endo-claude ~1-1.5 weeks) + ~6-9 weeks across P0-P4 | gated by M3 gateway-package phases 2/7/8 merge cadence |
 | M7: Weblets & Integrations (was M3) | 12 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |
@@ -1592,7 +1604,7 @@ date of this pass.
 | M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
 | M10: Confinement & Ecosystem (was M5) | 6 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
 | M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
-| **Total remaining** | **63** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
+| **Total remaining** | **64** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
 
 The 2026-05-20 reconciliation corrects a counting gap in the prior
 snapshot's narrative: M1, M3, and M4 had absorbed new rows since the
