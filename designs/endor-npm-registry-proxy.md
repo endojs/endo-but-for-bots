@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-04-17 |
-| **Updated** | 2026-07-28 |
+| **Updated** | 2026-07-30 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 
@@ -541,13 +541,23 @@ The tree's children are the package's files, stored as blobs.
       `^16.8.0 || ^17 || ^18` — distinct anchor majors coexist)
       and leaves the optional peers `redux` / `@types/react`
       unactivated.
-- [ ] A `process` global (`process.env.NODE_ENV` at minimum) for
-      the archive runtime's CJS loader: real-world CJS packages
-      gate dev/prod entry selection on it (`react`, `graphql`),
-      so their evaluation dies on `get process: undefined
-      variable` even though their (peer) edges now link. Whether
-      to shim a frozen `process.env` or reject remains a
-      confinement decision.
+- [x] A `process` global for the archive runtime's CJS loader:
+      real-world CJS packages gate dev/prod entry selection on
+      `process.env.NODE_ENV` (`react`, `graphql`), so their
+      evaluation died on `get process: undefined variable` even
+      after their (peer) edges linked. Endowed as a minimal
+      **frozen** shim: `env` is `Object.freeze({ NODE_ENV:
+      'production' })` (deterministic, never the host's),
+      `nextTick` rides the promise queue, `versions` has no
+      `node` key (Node-detection takes its non-Node branch),
+      and the event-emitter surface (`on`, `once`, `emit`,
+      …) is chainable no-ops. The rest of Node's `process`
+      surface (`stdout`, `exit`, signals, `hrtime`) stays
+      absent; packages touching it fail with a clean undefined
+      read. Verified by real execution: `endor run` of a
+      program reading `process.env.NODE_ENV` returns
+      `production`, `'node' in process.versions` is
+      `false`, and `process.platform` is `xs`.
 - [ ] Pre/post-install scripts (intentionally omitted — Endo
       does not execute arbitrary install scripts).
 - [ ] Binary packages (`.node` native modules) — not
