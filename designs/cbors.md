@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-04 |
-| **Updated** | 2026-05-04 |
+| **Updated** | 2026-07-30 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Not Started |
 
@@ -254,6 +254,19 @@ A small amount of head-parsing scaffolding is duplicated across the
 three rather than extracted into a shared "framing primitives"
 package, so that each can be adopted independently and audited on
 its own.
+
+> **Superseded for the daemon envelope (2026-07-30).** The duplication this
+> paragraph records was a decision about the *three framing peers above* —
+> `@endo/cbors`, `@endo/netstring`, `@endo/syrup-frame` — kept peer-independent
+> and individually auditable. It was never about the daemon's
+> `packages/daemon/src/envelope.js`, a non-framing consumer that already
+> depends on `@endo/bytes`, `@endo/captp`, and the rest of the daemon's audit
+> surface. That envelope's own third copy of the head grammar has since been
+> pointed at the shared `@endo/cbor` primitive package (phase 4 of
+> [cbor-codec.md](cbor-codec.md), per kriskowal's "and elsewhere" authorization
+> in the review of #755) — a pure refactor with byte-identical encoder output.
+> The framing peers' independence is unaffected: they remain free of
+> `@endo/cbor`, and the daemon does not lie in that peer set.
 
 ### Specimen example
 
