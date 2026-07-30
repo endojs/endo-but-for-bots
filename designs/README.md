@@ -48,6 +48,10 @@ retains no decoding machinery; the root `.` re-export is preserved
 no signature, canonicality, or number-domain change; follow-up to
 kriskowal's approving review of
 endojs/endo-but-for-bots#885),
+[endo-zone](endo-zone.md) (added 2026-07-30; proposed portable
+`@endo/zone` prerequisite for `@endo/ertp`: Endo-owned zone contract and heap
+implementation, host-owned Agoric and daemon durability adapters, and an
+explicit MapStore/retention/restart boundary),
 [conservative-regexp-subset](conservative-regexp-subset.md) (added 2026-07-10,
 revised 2026-07-29; settles review choices: block-determinism safety,
 builder-selected corpus-backed limits, whole-string plus contains/composition
@@ -445,6 +449,7 @@ LLM-agent stack).*
 | [endor-tui](endor-tui.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [hex-package](hex-package.md) | 2026-04-23 | 2026-05-18 | **Complete** |
 | [endo-bytes](endo-bytes.md) | 2026-05-08 | 2026-05-10 | Implemented |
+| [endo-zone](endo-zone.md) | 2026-07-30 | 2026-07-30 | Proposed |
 | [endo-gateway-mcp](endo-gateway-mcp.md) | 2026-05-29 | 2026-05-29 | Not Started |
 | [endo-claude](endo-claude.md) | 2026-08-16 | 2026-08-16 | Not Started |
 | [endo-workflow](endo-workflow.md) | 2026-08-17 | 2026-09-02 | In Progress |
@@ -511,6 +516,10 @@ This update flips [endor-npm-registry-proxy](endor-npm-registry-proxy.md) in M11
 from In Progress to **Complete** (finish line reverified 2026-08-01), so
 Complete/Implemented goes 48 -> 49 and In Progress 36 -> 35; the design count is
 unchanged.
+
+The 2026-09-04 rebase adds [endo-zone](endo-zone.md) (Proposed) to M10 as the
+portable Zone prerequisite for `@endo/ertp`, increasing Proposed from 39 to 40
+and the design count from 196 to 197.
 
 ## Roadmap
 
@@ -1350,6 +1359,7 @@ ecosystem.
 | daemon-capability-persona | Not Started | Epithets and delegation |
 | daemon-secret-manager | Implemented (local backend) | Singleton manager for arbitrary secret bytes; management under `@secrets`, read capabilities in the ordinary `secrets` pet store, existing lookup/marshal formulas, live inventory-path metadata, replacement, revocation, post-revocation deletion with retained audit, and a value-blind Secret Blobs Space; no ACL |
 | daemon-capability-bank | Not Started | Integrates all capability categories |
+| endo-zone | Proposed | Portable Zone contract and heap implementation; host-owned durable adapters; prerequisite for `@endo/ertp` |
 | endoclaw-browser | Not Started | Playwright-backed `Browser` exo with origin allowlist |
 | endoclaw-channel-bridges | Not Started | `chat` SDK (Vercel) adapters for Slack, Telegram, Discord, etc. |
 | endoclaw-skill-registry | Not Started | Skills directory — capability-aware plugin index |
@@ -1642,6 +1652,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | ~~daemon-guest-eval-simplification~~ | — | — | 3 | ✅ Implemented (PR #92, ~2 hours actual; well under 1-day estimate) |
 | endo-fetch (supersedes endoclaw-network-fetch) | S-M | ~1-2 days | 3 | `@endo/fetch` unconfined base provides direct HTTP; `@endo/confined-fetch` receives that base plus a VFS state directory, adds policy + TOFU persistence through `@endo/exo-http-client`, and revives through `@pins`; `makeHttpTool` binds only the confined client ([`daemon-agent-tools`](daemon-agent-tools.md) Phase 3.6) |
 | endo-workflow | L-XL | 2.5-3.5 weeks (phases 1-4: kernel M, service M-L, mail M, composition M; UI space + worked reference flow follow as M-L + M) | 3 | `@endo/workflow` durable workflow system: pure statechart kernel, plugin service with numbered-marshal journals, mail-backed `ask` effects, `@pins` revival, seq-cursored `follow`, `space-workflow`. No daemon changes; effort is concentrated in the kernel semantics, recovery discipline, and the Phase 6 end-to-end acceptance flow. **Phases 1-4 + follow feeds + the hardening rounds + the `space-workflow` UI landed (~2 days actual, 81 tests); CLI verbs and the live-substrate flow carry the remaining M** |
+| endo-zone | M | 3-4 days | 10 | Portable `@endo/zone` core and heap implementation, plus Agoric compatibility adapter. The daemon durable adapter remains gated on the persistent-MapStore phases. |
 | ~~ci-no-npm-lifecycle~~ | S | — | 2 | ✅ Complete (PR #126 merged 2026-05-15) |
 | ~~chat-playwright-smoke~~ | S | — | 2 | ✅ Complete (PRs #91 design, #94 impl, #95+#104 fix; ~16 hours total) |
 | ~~base64-native-fallthrough~~ | S | — | 2 | ✅ Complete (via `actual/master` merge, commit `7325bbe15` from `endojs/endo#3216`) |
@@ -1748,9 +1759,9 @@ date of this pass.
 | M7: Weblets & Integrations (was M3) | 12 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |
 | M8: Peer App Sharing (was Milestone A) | 3 net-new (`familiar-deep-link-invitations`, `endo-app-sharing`, `familiar-app-ui-hosting`); existing constituents counted under M3/M4/M7 | 2-3 weeks | 3-5 weeks |
 | M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
-| M10: Confinement & Ecosystem (was M5) | 7 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-secret-manager`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
+| M10: Confinement & Ecosystem (was M5) | 8 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-secret-manager`, `daemon-capability-bank`, `endo-zone`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
 | M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
-| **Total remaining** | **65** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
+| **Total remaining** | **66** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
 
 The 2026-05-20 reconciliation corrects a counting gap in the prior
 snapshot's narrative: M1, M3, and M4 had absorbed new rows since the
