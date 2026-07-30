@@ -73,24 +73,23 @@ fn main() -> ExitCode {
         "run" => {
             let cas_hash = parse_flag_value(rest, "--cas");
             let no_cas = rest.iter().any(|a| a == "--no-cas");
-            let conditions = parse_conditions(rest);
             let path = parse_positional_path(rest);
             match engine {
                 "xs" => {
                     if let Some(hash) = cas_hash {
                         // Run from CAS root hash.
-                        result_to_exit("endor", cmd_run_from_cas(&hash, &conditions))
+                        result_to_exit("endor", cmd_run_from_cas(&hash))
                     } else if let Some(ref p) = path {
                         if is_entry_module(p) {
-                            result_to_exit("endor", cmd_run_entry(rest, p, &conditions))
+                            result_to_exit("endor", cmd_run_entry(rest, p))
                         } else if no_cas {
                             xsnap_result_to_exit(xsnap::run_xs_archive(p))
                         } else {
-                            result_to_exit("endor", cmd_run_with_cas(p, &conditions))
+                            result_to_exit("endor", cmd_run_with_cas(p))
                         }
                     } else {
                         eprintln!(
-                            "usage: endor run [-e xs] [--cas <hash>] [--no-cas] [--registry <url>] [--offline] [--conditions <a,b>] <archive.zip | entry.js>"
+                            "usage: endor run [-e xs] [--cas <hash>] [--no-cas] [--registry <url>] [--offline] <archive.zip | entry.js>"
                         );
                         ExitCode::from(2)
                     }
@@ -220,7 +219,7 @@ fn print_subcommand_help(sub: &str) {
         }
         "run" => {
             eprintln!(
-                "Usage: endor run [-e xs] [--registry <url>] [--offline] [--conditions <a,b>] <archive.zip | entry.js>"
+                "Usage: endor run [-e xs] [--registry <url>] [--offline] <archive.zip | entry.js>"
             );
             eprintln!();
             eprintln!("Run a compartment-map archive, or an entry module, standalone.");
@@ -250,11 +249,6 @@ fn print_subcommand_help(sub: &str) {
             eprintln!("  --offline              Refuse network access: only packages");
             eprintln!("                         already in the CAS and registry table");
             eprintln!("                         resolve");
-            eprintln!("  --conditions <a,b>     Extra package-exports condition names");
-            eprintln!("                         (comma-separated, e.g. browser) active");
-            eprintln!("                         in every resolution pass beside the");
-            eprintln!("                         default import/require/default set,");
-            eprintln!("                         the way a bundler activates browser.");
         }
         "gc" => {
             eprintln!("Usage: endor gc");
@@ -402,9 +396,7 @@ fn parse_positional_path(args: &[String]) -> Option<PathBuf> {
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
-        if a == "-e" || a == "--engine" || a == "--cas" || a == "--cas-dir" || a == "--registry"
-            || a == "--conditions"
-        {
+        if a == "-e" || a == "--engine" || a == "--cas" || a == "--cas-dir" || a == "--registry" {
             // skip the flag value as well
             i += 2;
             continue;
@@ -414,7 +406,6 @@ fn parse_positional_path(args: &[String]) -> Option<PathBuf> {
             || a.starts_with("--cas=")
             || a.starts_with("--cas-dir=")
             || a.starts_with("--registry=")
-            || a.starts_with("--conditions=")
         {
             i += 1;
             continue;
@@ -426,21 +417,6 @@ fn parse_positional_path(args: &[String]) -> Option<PathBuf> {
         return Some(PathBuf::from(a));
     }
     None
-}
-
-/// Parse `--conditions <a,b,...>` into the list of extra export-map
-/// condition names to activate at run time (e.g. `browser`). Names
-/// are comma-separated; blank entries are dropped.
-fn parse_conditions(args: &[String]) -> Vec<String> {
-    parse_flag_value(args, "--conditions")
-        .map(|list| {
-            list.split(',')
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// Parse a flag with a value (e.g., --cas <hash>).
@@ -543,11 +519,7 @@ fn is_entry_module(path: &std::path::Path) -> bool {
 /// compartment map binding them — then loads that map back out of
 /// the CAS and executes it in an XS machine. State lives beside the
 /// daemon's, as for `endor npm-resolve`.
-fn cmd_run_entry(
-    args: &[String],
-    entry_path: &std::path::Path,
-    conditions: &[String],
-) -> Result<(), EndoError> {
+fn cmd_run_entry(args: &[String], entry_path: &std::path::Path) -> Result<(), EndoError> {
     let offline = args.iter().any(|a| a == "--offline");
 
     // npm-style configuration: ~/.npmrc, then the entry package's
@@ -608,15 +580,12 @@ fn cmd_run_entry(
 
     let archive = endo::execute::load_assembled_archive(&cas, &assembled.compartment_map_hash)
         .map_err(|e| EndoError::Config(format!("{e}")))?;
-    xsnap::run_xs_archive_loaded_with_conditions(&archive, conditions)
+    xsnap::run_xs_archive_loaded(&archive)
         .map_err(|e| EndoError::Config(format!("run: {e}")))?;
     Ok(())
 }
 
-fn cmd_run_with_cas(
-    archive_path: &std::path::Path,
-    conditions: &[String],
-) -> Result<(), EndoError> {
+fn cmd_run_with_cas(archive_path: &std::path::Path) -> Result<(), EndoError> {
     // Create a temporary CAS for standalone runs.
     let cas_dir = std::env::temp_dir().join("endor-cas");
     let cas = endo::cas::ContentStore::open(&cas_dir)
@@ -632,12 +601,12 @@ fn cmd_run_with_cas(
     eprintln!("endor[run]: archive root {}", ingested.root_hash);
 
     // Run the archive using the loaded archive (already in memory).
-    xsnap::run_xs_archive_loaded_with_conditions(&ingested.archive, conditions)
+    xsnap::run_xs_archive_loaded(&ingested.archive)
         .map_err(|e| EndoError::Config(format!("run: {e}")))?;
     Ok(())
 }
 
-fn cmd_run_from_cas(root_hash: &str, conditions: &[String]) -> Result<(), EndoError> {
+fn cmd_run_from_cas(root_hash: &str) -> Result<(), EndoError> {
     let cas_dir = std::env::temp_dir().join("endor-cas");
     let cas = endo::cas::ContentStore::open(&cas_dir)
         .map_err(|e| EndoError::Config(format!("CAS open: {e}")))?;
@@ -645,7 +614,7 @@ fn cmd_run_from_cas(root_hash: &str, conditions: &[String]) -> Result<(), EndoEr
     let archive = endo::cas_archive::load_archive_from_cas(&cas, root_hash)
         .map_err(|e| EndoError::Config(format!("CAS load: {e}")))?;
 
-    xsnap::run_xs_archive_loaded_with_conditions(&archive, conditions)
+    xsnap::run_xs_archive_loaded(&archive)
         .map_err(|e| EndoError::Config(format!("run: {e}")))?;
     Ok(())
 }

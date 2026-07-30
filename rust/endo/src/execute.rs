@@ -995,20 +995,11 @@ mod tests {
         dep_key: &str,
         dep_files: &[(&str, &str)],
     ) -> Result<(), xsnap::XsnapError> {
-        run_two_comp_with_conditions(entry_src, dep_key, dep_files, &[])
-    }
-
-    fn run_two_comp_with_conditions(
-        entry_src: &str,
-        dep_key: &str,
-        dep_files: &[(&str, &str)],
-        conditions: &[String],
-    ) -> Result<(), xsnap::XsnapError> {
         let cas_tmp = tempfile::tempdir().unwrap();
         let cas = ContentStore::open(cas_tmp.path()).unwrap();
         let map_hash = two_comp_map(&cas, entry_src, dep_key, dep_files);
         let archive = load_assembled_archive(&cas, &map_hash).unwrap();
-        xsnap::run_xs_archive_loaded_with_conditions(&archive, conditions)
+        xsnap::run_xs_archive_loaded(&archive)
     }
 
     // The fixture used by compartment-mapper's Node and Endo parity tests.
@@ -1168,53 +1159,6 @@ mod tests {
                 ),
                 ("boom.cjs", "throw new Error('require build must not load');\n"),
                 ("src/sub.js", "export const word = 'esm';\n"),
-            ],
-        )
-        .unwrap();
-    }
-
-    /// An extra condition (the `endor run --conditions` surface) is
-    /// active in every resolution pass: with `browser` active, a
-    /// nanoid-shaped exports object hands over its browser build.
-    #[test]
-    fn extra_condition_selects_browser_build() {
-        run_two_comp_with_conditions(
-            "import { build } from 'dep'; if (build !== 'browser') throw new Error(build);\n",
-            "dep",
-            &[
-                (
-                    "package.json",
-                    r#"{"name": "dep", "type": "module", "exports": {".": {"browser": "./browser.js", "default": "./node.js"}}}"#,
-                ),
-                ("browser.js", "export const build = 'browser';\n"),
-                (
-                    "node.js",
-                    "throw new Error('default build must not load under browser');\n",
-                ),
-            ],
-            &["browser".to_string()],
-        )
-        .unwrap();
-    }
-
-    /// Without an extra condition the same exports object resolves
-    /// through `default`, pinning that `--conditions` widens rather
-    /// than changes the default behaviour.
-    #[test]
-    fn without_extra_condition_default_build_loads() {
-        run_two_comp(
-            "import { build } from 'dep'; if (build !== 'node') throw new Error(build);\n",
-            "dep",
-            &[
-                (
-                    "package.json",
-                    r#"{"name": "dep", "type": "module", "exports": {".": {"browser": "./browser.js", "default": "./node.js"}}}"#,
-                ),
-                (
-                    "browser.js",
-                    "throw new Error('browser build must not load by default');\n",
-                ),
-                ("node.js", "export const build = 'node';\n"),
             ],
         )
         .unwrap();

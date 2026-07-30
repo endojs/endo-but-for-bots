@@ -573,29 +573,17 @@ The tree's children are the package's files, stored as blobs.
       construct and normalize URLs execute. Remaining web-global
       gaps: `crypto.subtle`, streaming/`fatal` `TextDecoder`
       fidelity, `encodeInto`.
-- [x] Runtime identity for dual-build packages, first step:
-      `endor run --conditions <a,b>` activates extra
-      package-exports condition names (typically `browser`) in
-      every resolution pass beside that pass's module-flavor
-      condition, the way a bundler activates `browser` beside
-      `import`/`require`; and archive compartments are endowed
-      with a web-platform `crypto` (`getRandomValues`,
-      `randomUUID` — a standard veneer over the already-endowed
-      `randomHex256` host function, no new authority). Together
-      these run packages whose `browser` build needs only
-      web-standard globals where their node build touches
-      unavailable `node:` builtins — nanoid@5 executes under
-      `--conditions browser` where its default build fails on
-      `node:crypto` + `Buffer`. The flag is opt-in on purpose:
-      activating `browser` by default could shadow a
-      working pure-JS `default`/node build with a
-      `window`-touching browser build, so flipping the default
-      condition set (or professing a node identity via builtin
-      shims instead) stays an open policy question. Still open
-      within this lane: `TextEncoder`/`TextDecoder`,
-      `crypto.subtle`, `atob`/`btoa`/`URL`, and `Intl` (an
-      engine-surface matter for the xs2rust arc, not this
-      proxy).
+- [x] Runtime identity for browser-oriented packages, first step:
+      archive compartments are endowed with web-platform `crypto`
+      (`getRandomValues`, `randomUUID` — a standard veneer over the
+      already-endowed `randomHex256` host function, no new
+      authority). Package-exports condition selection, including a
+      possible browser condition, remains deferred to the existing
+      JavaScript `compartment-mapper` implementation rather than
+      duplicating that resolver in Rust. Still open within this lane:
+      `TextEncoder`/`TextDecoder`, `crypto.subtle`, `atob`/`btoa`/
+      `URL`, and `Intl` (an engine-surface matter for the xs2rust
+      arc, not this proxy).
 - [x] Top-level `await` in the entry module (or any module in
       the graph): the standalone runners now import the entry
       through the asynchronous `Compartment.prototype.import`

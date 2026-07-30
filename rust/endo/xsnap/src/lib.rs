@@ -1993,20 +1993,6 @@ const ARCHIVE_ENDOWMENTS_JS: &str = "globalThis.__archiveEndowments = { \
 ///
 /// Same as `run_xs_archive` but skips the ZIP parsing step.
 pub fn run_xs_archive_loaded(loaded: &archive::LoadedArchive) -> Result<(), XsnapError> {
-    run_xs_archive_loaded_with_conditions(loaded, &[])
-}
-
-/// Run a pre-loaded archive with extra export-map conditions active
-/// (the `endor run --conditions` surface). Each name is set into the
-/// machine global `__archiveExtraConditions`, which the archive
-/// exports resolver activates in every resolution pass beside that
-/// pass's module-flavor condition — the way a bundler activates
-/// `browser` beside `import`/`require`. An empty slice is exactly
-/// `run_xs_archive_loaded`.
-pub fn run_xs_archive_loaded_with_conditions(
-    loaded: &archive::LoadedArchive,
-    conditions: &[String],
-) -> Result<(), XsnapError> {
     eprintln!("endor[run]: from pre-loaded archive");
     ensure_shared_cluster();
 
@@ -2025,17 +2011,6 @@ pub fn run_xs_archive_loaded_with_conditions(
         "__archiveEndowments.URL = globalThis.URL; \
          __archiveEndowments.URLSearchParams = globalThis.URLSearchParams;",
     );
-    if !conditions.is_empty() {
-        let encoded: Vec<String> = conditions
-            .iter()
-            .map(|c| archive::json_encode_string(c))
-            .collect();
-        machine.eval(&format!(
-            "globalThis.__archiveExtraConditions = [{}];",
-            encoded.join(", ")
-        ));
-    }
-
     if !archive::install_archive_async(&machine, loaded) {
         return Err(XsnapError::Archive(
             "archive installation failed".to_string(),
