@@ -45,6 +45,9 @@
       "path": "../promise-kit/tsconfig.composite.json"
     },
     {
+      "path": "../sha256/tsconfig.composite.json"
+    },
+    {
       "path": "../where/tsconfig.composite.json"
     }
   ]
