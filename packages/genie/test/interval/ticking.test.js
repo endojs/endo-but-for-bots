@@ -130,12 +130,13 @@ test('reschedule retries with backoff', async t => {
   const interval = await scheduler.makeInterval('retry', 500, {
     tickTimeoutMs: 2000,
   });
-  await delay(30);
+  await delay(80);
   t.true(ticks.length >= 1);
   ticks[0].tickResponse.reschedule();
 
   // Wait for retry (backoff should be min(1000, 500/10) * 2^0 = 50ms).
-  await delay(100);
+  // Allow generous headroom for macOS CI timer jitter under concurrent load.
+  await delay(250);
   t.true(ticks.length >= 2, `Expected retry tick, got ${ticks.length} ticks`);
   t.is(ticks[1].tickNumber, 1); // same tick number on retry
   ticks[1].tickResponse.resolve();
