@@ -845,9 +845,9 @@ leading-dot names); `**` as a whole segment matches zero or more directory level
 and a trailing `**` additionally matches file descendants, not only directories.
 Every other character, including `?`, `[`, `]`, `{`, `}`, and `+`, is a literal.
 Denied names (such as .ssh, .aws, .env) never appear, even when named literally.
-Entries whose symlinks escape the mount root are excluded. Results include
-directories as well as files, are sorted by UTF-16 code unit, and are capped at
-10,000 with silent truncation.
+Symlinks that escape the mount root, or resolve into a denied directory, are
+excluded. Results include directories as well as files, are sorted by UTF-16 code
+unit, and are capped at 10,000 with silent truncation.
 `**` reports a symlink to a directory but does not descend through it, so the walk
 covers the tree and not the link graph; a segment that names a path still follows one,
 so glob("node_modules/@endo/*/src/**/*.js") reaches through workspace links.
@@ -862,28 +862,33 @@ Example: glob("src/*") → the immediate children of src.
 
 Search file contents for a regular expression across selected files.
 pattern: string — An ECMAScript RegExp source, evaluated as new RegExp(pattern) with no flags.
+NOTE: a caller-supplied source may catastrophically backtrack and stall the daemon;
+supply trusted patterns.
 paths: string[] | Promise<string[]> — Which files to search. Pass a glob result to compose
 the two — grep(pattern, glob("src/**/*.js")) — since glob is an independent producer of
 paths (the promise is awaited for you). Omit it to search every file under the mount face.
-options.maxResults: number — Cap on the number of match records (default 1000).
+options.maxResults: number — Non-negative safe-integer cap on the number of match
+records (default 1000). NaN, Infinity, negatives, and fractions are rejected.
 options.followSymlinks: boolean — Applies only when paths is omitted, to the implicit
 walk that finds the files (see glob); a path you pass in is named, so it is always read.
 Each matching line yields one { file, line, text } record: file is the mount-face-relative
 path, line is 1-based, and text is the whole line with any trailing carriage return stripped
-(CRLF normalization). A path that is denied, escapes the mount, is a directory, or cannot
-be read is skipped silently.
+(CRLF normalization). A path that is denied, escapes the mount, resolves into a denied
+directory, is a directory, or cannot be read is skipped silently.
 Example: grep("TODO", glob("src/**/*.js")) → every TODO line under src.
 Example: grep("^export") → up to 1000 exported-symbol lines across the whole mount.
 
-## glorp(glob, grep, options?) -> Promise<Array<{ file, line, text }>>
+## glorp(globPattern, grepPattern, options?) -> Promise<Array<{ file, line, text }>>
 
-Fused glob+grep: enumerate the files matching the glob pattern, then search them for the grep pattern.
-glob: string — A glob pattern (same dialect as glob()); the files it matches are the search set.
-grep: string — An ECMAScript RegExp source (same as grep()); the pattern each matched file is searched for.
-Both patterns are required, so the whole operation is one call whose two patterns a native filesystem
-layer can push down and fuse into a single enumerate-and-scan pass. It returns the same
-{ file, line, text } records as grep and honors the same confinement and deny-pattern filtering.
-options.maxResults: number — Cap on the number of match records (default 1000).
+Fused glob+grep: enumerate the files matching the glob pattern, then search them
+for the grep pattern in one call.
+globPattern: string — A glob pattern (same dialect as glob()); selects the search set.
+grepPattern: string — An ECMAScript RegExp source (same as grep()); the pattern each
+matched file is searched for. NOTE: same ReDoS hazard as grep — supply trusted patterns.
+Both patterns are required, so a native filesystem layer can fuse the enumerate-and-scan
+into a single pass. It returns the same { file, line, text } records as grep and honors
+the same confinement and deny-pattern filtering.
+options.maxResults: number — Non-negative safe-integer cap on match records (default 1000).
 options.followSymlinks: boolean — Passed to the glob half only (see glob); the grep half
 receives the enumerated paths, which are named and so always read.
 glorp(g, p) is the fused equivalent of grep(p, glob(g)); prefer it when you have both patterns up front.

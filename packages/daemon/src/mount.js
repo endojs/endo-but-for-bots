@@ -41,9 +41,39 @@ import {
 } from './interfaces.js';
 
 // Re-exported from the platform search engine (the eager `glob()` collector's
-// post-sort cap). Kept as a `mount.js` export so consumers and the
-// cross-language contract test bind to the one canonical constant.
-export { GLOB_MAX_RESULTS };
+// post-sort cap and the `grep`/`glorp` match-record cap). Kept as `mount.js`
+// exports so consumers and the cross-language contract test bind to the one
+// canonical constants.
+export { GLOB_MAX_RESULTS, GREP_MAX_RESULTS };
+
+/**
+ * Coerce a caller-supplied `maxResults` option into a non-negative safe integer
+ * capped at `ceiling`. The interface guard admits any `M.number()`, so `NaN`,
+ * `Infinity`, negatives, and fractions reach the method body; each is a hazard:
+ * `NaN` makes the cap comparison always false (a full-tree scan returning `[]`),
+ * `Infinity` disables the cap, and negatives/fractions misbehave. Reject all but
+ * non-negative safe integers, and clamp a finite value above the ceiling down
+ * to it. `undefined` yields the default cap.
+ *
+ * @param {number | undefined} maxResults
+ * @param {number} ceiling
+ * @returns {number}
+ */
+const clampMaxResults = (maxResults, ceiling) => {
+  if (maxResults === undefined) {
+    return ceiling;
+  }
+  if (typeof maxResults !== 'number' || !Number.isSafeInteger(maxResults)) {
+    throw RangeError(
+      `maxResults must be a safe integer, got ${q(maxResults)}`,
+    );
+  }
+  if (maxResults < 0) {
+    throw RangeError(`maxResults must be non-negative, got ${q(maxResults)}`);
+  }
+  return Math.min(maxResults, ceiling);
+};
+harden(clampMaxResults);
 
 const mountEntryRecords = new WeakMap();
 const mountRecords = new WeakMap();
@@ -859,6 +889,10 @@ const makeMountExo = ctx => {
       confinementRoot,
       followSymlinks,
     })) {
+      // A revoke landing mid-walk must not keep delivering paths; the entry
+      // gate only covers method start, so re-check per batch (mirroring
+      // followChanges).
+      assertLive();
       paths.push(...batch);
       if (paths.length >= GLOB_MAX_RESULTS) {
         break;
@@ -893,7 +927,8 @@ const makeMountExo = ctx => {
   const grep = async (pattern, paths = undefined, options = {}) => {
     await null;
     assertLive();
-    const { maxResults = GREP_MAX_RESULTS, followSymlinks } = options;
+    const maxResults = clampMaxResults(options.maxResults, GREP_MAX_RESULTS);
+    const { followSymlinks } = options;
     const search = provideSearch(filePowers);
     /** @type {Array<{ file: string, line: number, text: string }>} */
     const matches = [];
@@ -904,6 +939,10 @@ const makeMountExo = ctx => {
       maxResults,
       followSymlinks,
     })) {
+      // A revoke landing mid-walk must not keep delivering file contents; the
+      // entry gate only covers method start, so re-check per batch (mirroring
+      // followChanges).
+      assertLive();
       matches.push(...batch);
       if (matches.length >= maxResults) {
         break;
@@ -912,17 +951,15 @@ const makeMountExo = ctx => {
     return harden(matches.slice(0, maxResults));
   };
 
-  // Fused glob+grep: enumerate the files matching the `glob` pattern and
-  // search them for the `grep` pattern, returning grep's `{ file, line, text }`
+  // Fused glob+grep: enumerate the files matching the `globPattern` and
+  // search them for the `grepPattern`, returning grep's `{ file, line, text }`
   // records. Both patterns are required positionals (unlike grep's optional
   // `paths`), so the whole operation is expressible as a single call whose two
   // patterns a native filesystem layer can push down and fuse into one
   // enumerate-and-scan pass — no glob result set round-trips through JS. The
-  // reference implementation here composes the decoupled surface directly by
-  // calling the lexical `glob` and `grep` above — the same
-  // `grep(pattern, glob(g))` seam grep already exposes, with the glob result
-  // awaited before it becomes grep's `paths` argument. A native powers layer
-  // may override `glorp` with a single fused call.
+  // reference implementation composes the lexical `glob` then `grep` (the same
+  // `grep(pattern, glob(g))` seam), or dispatches to a native
+  // `search.glorpFiles` when the file powers supply one.
   /**
    * @param {string} globPattern
    * @param {string} grepPattern
@@ -931,7 +968,38 @@ const makeMountExo = ctx => {
   const glorp = async (globPattern, grepPattern, options = {}) => {
     await null;
     assertLive();
-    const { maxResults = GREP_MAX_RESULTS, followSymlinks } = options;
+    const maxResults = clampMaxResults(options.maxResults, GREP_MAX_RESULTS);
+    const { followSymlinks } = options;
+    // A native powers layer may expose a fused `glorpFiles` on its `search`
+    // engine; when present, dispatch to it so the whole enumerate-and-scan pass
+    // runs in one native walk with no glob result-set round-trip through JS.
+    // Otherwise compose the lexical `glob` then `grep` (the same
+    // `grep(pattern, glob(g))` seam), which `provideSearch` resolves through
+    // `filePowers.search` when a native `globPaths`/`grepFiles` is present.
+    const search = provideSearch(filePowers);
+    if (search.glorpFiles !== undefined) {
+      /** @type {Array<{ file: string, line: number, text: string }>} */
+      const matches = [];
+      for await (const batch of search.glorpFiles(
+        currentDir,
+        globPattern,
+        grepPattern,
+        {
+          deniedSegments:
+            deniedSegments === undefined ? undefined : [...deniedSegments],
+          confinementRoot,
+          maxResults,
+          followSymlinks,
+        },
+      )) {
+        assertLive();
+        matches.push(...batch);
+        if (matches.length >= maxResults) {
+          break;
+        }
+      }
+      return harden(matches.slice(0, maxResults));
+    }
     // `followSymlinks` belongs to the enumeration half only. grep receives an
     // explicit `paths` array here, and a named path is followed regardless, so
     // forwarding it to grep as well would be inert — and would misreport, to
