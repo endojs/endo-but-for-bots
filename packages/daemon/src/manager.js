@@ -1358,6 +1358,43 @@ const makeDaemonCore = async (
         return { id, formula };
       }),
     );
+
+    // One-shot startup migration: a host formula persisted before the
+    // required `registry` field existed (see designs/registry-capability.md
+    // § Migration for already-formulated hosts) fails fast at incarnation,
+    // exactly as a missing `nodeWorker` does. Upgrade it in place with a
+    // fresh registry formula pointed at the daemon's default registry URL,
+    // mirroring the registry formula every new host gets in
+    // `formulateHostDependencies`.
+    await Promise.all(
+      entries.map(async entry => {
+        if (
+          entry.formula.type !== 'host' ||
+          /** @type {HostFormula} */ (entry.formula).registry !== undefined
+        ) {
+          return;
+        }
+        const { number: hostFormulaNumber, node: hostNode } = parseId(entry.id);
+        const registryFormulaNumber = /** @type {FormulaNumber} */ (
+          await randomHex256()
+        );
+        const { id: registryId } = await formulateNumberedRegistry(
+          registryFormulaNumber,
+          hostNode,
+        );
+        const migratedFormula = /** @type {HostFormula} */ ({
+          .../** @type {HostFormula} */ (entry.formula),
+          registry: registryId,
+        });
+        await persistencePowers.writeFormula(
+          hostFormulaNumber,
+          hostNode,
+          migratedFormula,
+        );
+        entry.formula = migratedFormula;
+      }),
+    );
+
     await withFormulaGraphLock(async () => {
       for (const { id, formula } of entries) {
         if (!formulaForId.has(id)) {
