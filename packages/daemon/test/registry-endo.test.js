@@ -17,7 +17,9 @@ import path from 'path';
 import fsp from 'fs/promises';
 import { E } from '@endo/eventual-send';
 import { makeCancelKit } from '@endo/cancel';
-import { start, stop, purge, makeEndoClient } from '../index.js';
+import { start, stop, restart, purge, makeEndoClient } from '../index.js';
+import { makeDaemonDatabase } from '../src/manager-database-node.js';
+import { parseId } from '../src/formula-identifier.js';
 
 const contexts = [];
 
@@ -31,6 +33,21 @@ test.afterEach.always(async () => {
     await fsp.rm(root, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+/**
+ * Open a read/write handle to the daemon's SQLite database for test
+ * inspection and mutation, mirroring `openTestDb` in endo.test.js.
+ *
+ * @param {string} statePath
+ * @returns {import('../src/manager-database.js').DaemonDatabase}
+ */
+const openTestDb = statePath =>
+  makeDaemonDatabase({
+    statePath,
+    ephemeralStatePath: '',
+    cachePath: '',
+    sockPath: '',
+  });
 
 const prepare = async t => {
   const { cancel, cancelled } = makeCancelKit();
@@ -98,5 +115,66 @@ test.serial(
     const host2 = E(getBootstrap()).host();
     const again = await E(host2).lookup('@registry');
     t.truthy(again, '@registry resolves for a second client');
+  },
+);
+
+// Migration coverage: a host formula persisted before #671 required the
+// `registry` field lacks it entirely.  On startup, `seedFormulaGraphFromPersistence`
+// (packages/daemon/src/manager.js) upgrades it in place with a fresh
+// daemon-default registry formula so the daemon starts successfully and
+// `@registry` resolves, rather than failing fast the way a genuinely
+// malformed host formula would.  See designs/registry-capability.md §
+// Migration for already-formulated hosts.
+test.serial(
+  'a host formula persisted without registry is migrated on startup and resolves @registry',
+  async t => {
+    const { host, cancelled } = await prepare(t);
+    const { config } = contexts[contexts.length - 1];
+
+    const hostId = await E(host).identify('@agent');
+    const { number: hostNumber, node: hostNode } = parseId(hostId);
+
+    const { formula: formulaBefore } = openTestDb(config.statePath).readFormula(
+      hostNumber,
+    );
+    t.is(formulaBefore.type, 'host');
+    t.truthy(
+      formulaBefore.registry,
+      'a freshly formulated host already carries a registry field',
+    );
+
+    await stop(config);
+
+    // Simulate a pre-#671 persisted host formula by writing it back
+    // with the registry field stripped out.
+    const { registry: _registry, ...legacyFormula } = formulaBefore;
+    openTestDb(config.statePath).writeFormula(
+      hostNumber,
+      hostNode,
+      legacyFormula,
+    );
+
+    await restart(config);
+    const { getBootstrap, closed } = await makeEndoClient(
+      'client-migrated',
+      config.sockPath,
+      cancelled,
+    );
+    closed.catch(() => {});
+    const hostAfter = E(getBootstrap()).host();
+
+    const { formula: migratedFormula } = openTestDb(
+      config.statePath,
+    ).readFormula(hostNumber);
+    t.is(migratedFormula.type, 'host');
+    t.truthy(migratedFormula.registry, 'migration re-populates registry');
+
+    const registryAfter = await E(hostAfter).lookup('@registry');
+    t.truthy(registryAfter, '@registry resolves for the migrated host');
+    t.is(
+      await E(hostAfter).identify('@registry'),
+      migratedFormula.registry,
+      'the migrated registry field backs the @registry special name',
+    );
   },
 );
