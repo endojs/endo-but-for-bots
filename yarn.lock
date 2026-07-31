@@ -2814,6 +2814,7 @@ __metadata:
     "@endo/stream-node": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
+    expect-type: "npm:^1.4.0"
     typescript: "catalog:dev"
   languageName: unknown
   linkType: soft
