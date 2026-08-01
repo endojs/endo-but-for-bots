@@ -94,6 +94,44 @@ const GitRebaseInputShape = M.or(
   GitRebaseControlInputShape,
 );
 
+const GitRefUpdateResultShape = M.or(
+  'created',
+  'updated',
+  'up-to-date',
+  'fast-forward',
+  'forced',
+  'pruned',
+  'rejected',
+);
+
+const GitRemoteRefUpdateShape = M.splitRecord(
+  {
+    remote: M.string(),
+    result: GitRefUpdateResultShape,
+  },
+  { local: GitRefShape },
+  harden({}),
+);
+
+const GitRemoteOperationResultShape = M.splitRecord(
+  {
+    updatedRefs: M.arrayOf(GitRemoteRefUpdateShape),
+    text: M.string(),
+  },
+  {},
+  harden({}),
+);
+
+const GitRemotePullResultShape = M.splitRecord(
+  {
+    fetch: GitRemoteOperationResultShape,
+    integration: M.or('up-to-date', 'fast-forward', 'merge', 'rebase'),
+    head: GitRefShape,
+  },
+  {},
+  harden({}),
+);
+
 // #endregion
 
 export const GitInterface = M.interface('Git', {
@@ -165,11 +203,15 @@ export const GitTreeInterface = M.interface('EndoGitTree', {
 
 export const GitRemoteInterface = M.interface('GitRemote', {
   inspect: M.call().returns(M.promise()),
-  fetch: M.call()
+  fetch: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
-    .returns(M.promise()),
-  pull: M.call().optional(M.recordOf(M.string(), M.any())).returns(M.promise()),
-  push: M.call().optional(M.recordOf(M.string(), M.any())).returns(M.promise()),
+    .returns(GitRemoteOperationResultShape),
+  pull: M.callWhen()
+    .optional(M.recordOf(M.string(), M.any()))
+    .returns(GitRemotePullResultShape),
+  push: M.callWhen()
+    .optional(M.recordOf(M.string(), M.any()))
+    .returns(GitRemoteOperationResultShape),
 });
 
 export const GitRemoteControllerInterface = M.interface('GitRemoteController', {

@@ -820,9 +820,12 @@ test('GitRemote push round-trips to an independent fetcher over file://', async 
   });
   const pushedRefs = [...pushResult.updatedRefs];
   t.is(pushedRefs.length, 1);
-  const pushedOid = pushedRefs[0].local.oid;
+  const [pushedRef] = pushedRefs;
+  assert(pushedRef && pushedRef.local, 'push should report a local ref');
+  const pushedOid = pushedRef.local.oid;
+  assert(pushedOid, 'pushed ref should report an oid');
   t.regex(pushedOid, /^[0-9a-f]{40}$/u);
-  t.like(pushedRefs[0], {
+  t.like(pushedRef, {
     remote: 'refs/heads/agent/feature',
     result: 'created',
   });
@@ -1065,7 +1068,7 @@ test('GitRemote enforces tag and prune policy at the call boundary', async t => 
     ...makeNotYetImplementedBackend(),
     remoteFetch: async input => {
       fetchCalls.push(input);
-      return harden({ updatedRefs: [] });
+      return harden({ updatedRefs: [], text: 'ok' });
     },
   });
   const git = makeGit({ mount, backend, lineageOf });
@@ -1106,7 +1109,7 @@ test('GitRemote wildcard push policy binds source and destination names', async 
     ...makeNotYetImplementedBackend(),
     remotePush: async input => {
       pushCalls.push(input);
-      return harden({ updatedRefs: [] });
+      return harden({ updatedRefs: [], text: 'ok' });
     },
   });
   const git = makeGit({ mount, backend, lineageOf });
@@ -1148,7 +1151,7 @@ test('GitRemote.push forwards a destination-scoped force-with-lease', async t =>
     ...makeNotYetImplementedBackend(),
     remotePush: async input => {
       pushCalls.push(input);
-      return harden({ updatedRefs: [] });
+      return harden({ updatedRefs: [], text: 'ok' });
     },
   });
   const git = makeGit({ mount, backend, lineageOf });
@@ -1205,7 +1208,7 @@ test('GitRemote.push scopes the lease to the destination, not the source', async
     ...makeNotYetImplementedBackend(),
     remotePush: async input => {
       pushCalls.push(input);
-      return harden({ updatedRefs: [] });
+      return harden({ updatedRefs: [], text: 'ok' });
     },
   });
   const git = makeGit({ mount, backend, lineageOf });
@@ -1265,7 +1268,7 @@ test('GitRemote.push of the policy refspecs never carries a lease', async t => {
     ...makeNotYetImplementedBackend(),
     remotePush: async input => {
       pushCalls.push(input);
-      return harden({ updatedRefs: [] });
+      return harden({ updatedRefs: [], text: 'ok' });
     },
   });
   const git = makeGit({ mount, backend, lineageOf });
@@ -1310,7 +1313,7 @@ test('GitRemote.push reads its authority flags coerce-free', async t => {
     ...makeNotYetImplementedBackend(),
     remotePush: async input => {
       pushCalls.push(input);
-      return harden({ updatedRefs: [] });
+      return harden({ updatedRefs: [], text: 'ok' });
     },
   });
   const git = makeGit({ mount, backend, lineageOf });
@@ -1371,7 +1374,7 @@ test('GitRemote.push pins the force-with-lease OID domain', async t => {
     ...makeNotYetImplementedBackend(),
     remotePush: async input => {
       pushCalls.push(input);
-      return harden({ updatedRefs: [] });
+      return harden({ updatedRefs: [], text: 'ok' });
     },
   });
   const git = makeGit({ mount, backend, lineageOf });
@@ -1422,7 +1425,7 @@ test('GitRemote.push force-with-lease is gated by allowForcePush', async t => {
     ...makeNotYetImplementedBackend(),
     remotePush: async input => {
       pushCalls.push(input);
-      return harden({ updatedRefs: [] });
+      return harden({ updatedRefs: [], text: 'ok' });
     },
   });
   const git = makeGit({ mount, backend, lineageOf });
@@ -1479,7 +1482,7 @@ test('GitRemote.push revalidates concrete tag overrides against allowTags', asyn
     ...makeNotYetImplementedBackend(),
     remotePush: async input => {
       pushCalls.push(input);
-      return harden({ updatedRefs: [] });
+      return harden({ updatedRefs: [], text: 'ok' });
     },
   });
   const git = makeGit({ mount, backend, lineageOf });
@@ -1531,7 +1534,7 @@ test('GitRemote.pull rejects an integration branch outside fetch policy', async 
     ...makeNotYetImplementedBackend(),
     remoteFetch: async input => {
       fetchCalls.push(input);
-      return harden({ updatedRefs: [] });
+      return harden({ updatedRefs: [], text: 'ok' });
     },
   });
   const git = makeGit({ mount, backend, lineageOf });

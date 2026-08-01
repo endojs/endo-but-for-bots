@@ -1,3 +1,5 @@
+import '@endo/init';
+
 import { makeGit } from '../src/git.js';
 import type { GitBackend } from '../src/git.js';
 import type {
@@ -15,7 +17,9 @@ import type {
   GitRefUpdateResult,
   GitRemote,
   GitRemoteCredential,
+  GitRemoteOperationResult,
   GitRemoteOperationSuccessAuditEvent,
+  GitRemotePullResult,
   GitRemoteRefUpdate,
   GitRestoreOptions,
   GitStashPushOptions,
@@ -143,6 +147,15 @@ type _PullBranchAcceptsRefSelectors = Assert<
 >;
 type _AuditHasNoCredential = Assert<
   Equal<Extract<keyof GitRemoteOperationSuccessAuditEvent, 'credential'>, never>
+>;
+type _GitRemoteFetchResult = Assert<
+  Equal<Awaited<ReturnType<GitRemote['fetch']>>, GitRemoteOperationResult>
+>;
+type _GitRemotePullResult = Assert<
+  Equal<Awaited<ReturnType<GitRemote['pull']>>, GitRemotePullResult>
+>;
+type _GitRemotePushResult = Assert<
+  Equal<Awaited<ReturnType<GitRemote['push']>>, GitRemoteOperationResult>
 >;
 
 type ExpectedReadOnlyEndoGit = {
