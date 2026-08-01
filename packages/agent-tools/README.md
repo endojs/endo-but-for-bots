@@ -44,7 +44,7 @@ storage hooks through the `evaluate` rename.
 | `src/tool.js` | Provider-independent `makeTool` and `ToolRecord`. |
 | `src/json-tools/` | Parked JSON wrappers for Git, mounts, filesystem, shell, and HTTP. |
 | `src/code-mode/` | Evaluation tool, Compartment host, daemon host, and declaration formatting. |
-| `src/code-mode-globals/` | Per-capability global descriptor factories. |
+| `src/code-mode-globals/` | Per-capability global descriptor factories for local filesystems, daemon mounts, Shell, HTTP, Git, and GitRemote. |
 | `src/adapters/` | Pi and SmallCaps bridges; MCP, Codex, and Claude Code shapes are planned. |
 | `generated/code-mode-globals/` | Checked-in generated declaration artifacts. |
 
@@ -81,13 +81,29 @@ import { makeEvaluateTool } from '@endo/agent-tools/code-mode/evaluate-tool.js';
 import { makeCompartmentEvaluate } from '@endo/agent-tools/code-mode/compartment.js';
 import { makeDaemonEvaluate } from '@endo/agent-tools/code-mode/daemon.js';
 import { makeGitGlobal } from '@endo/agent-tools/code-mode-globals/git.js';
-import { makeWorkspaceGlobal } from '@endo/agent-tools/code-mode-globals/fs.js';
+import {
+  makeLocalFilesystemGlobal,
+  makeDaemonMountGlobal,
+} from '@endo/agent-tools/code-mode-globals/fs.js';
+import { makeGitRemoteGlobal } from '@endo/agent-tools/code-mode-globals/git-remote.js';
+import { makeHttpGlobal } from '@endo/agent-tools/code-mode-globals/http.js';
+import { makeShellGlobal } from '@endo/agent-tools/code-mode-globals/shell.js';
 import { toPiAgentTool } from '@endo/agent-tools/pi';
 import { toolResultToSmallcaps } from '@endo/agent-tools/adapters/smallcaps.js';
 ```
 
 The Pi packages remain optional peer dependencies.
 Importing the root or a non-Pi module does not opt a consumer into Pi.
+
+Code-mode global factories describe capabilities already granted by a host.
+`makeDaemonMountGlobal({ readOnly: true })` advertises the structural
+`ReadableTree` view, while the default advertises the daemon `EndoMount`.
+`makeLocalFilesystemGlobal` is separate and describes the local
+`@endo/platform/fs/extended` adapter; it is not a daemon-mount declaration.
+The Shell, HTTP, Git, and GitRemote factories likewise carry no provisioning,
+attenuation, credential, or controller authority.
+`makeWorkspaceGlobal` is a deprecated alias for `makeLocalFilesystemGlobal`;
+new code should call `makeLocalFilesystemGlobal` directly.
 
 Planned adapter modules have shape only in this release.
 The MCP adapter is not implemented, and Codex and Claude Code adapters are
