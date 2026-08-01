@@ -111,8 +111,8 @@ export const makeXsWorkerFacet = ({ markShouldTerminate }) =>
 
     /**
      * @param {string} source
-     * @param {string[]} codeNames
-     * @param {import('@endo/pass-style').Passable[]} endowmentValues
+     * @param {readonly string[]} codeNames
+     * @param {readonly import('@endo/pass-style').Passable[]} endowmentValues
      * @param {string} id
      * @param {PromiseLike<any>} cancelled
      */
