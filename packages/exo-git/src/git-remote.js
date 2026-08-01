@@ -21,7 +21,10 @@ import { assertGitCredentialForUrl } from './git-credential.js';
  *   GitRemoteCredential,
  *   GitRemoteEndpoint,
  *   GitRemoteKit,
+ *   GitRemoteOperationResult,
  *   GitRemotePolicy,
+ *   GitRemotePullResult,
+ *   GitRemoteSnapshot,
  * } from './types.js'
  */
 
@@ -1040,11 +1043,16 @@ export const makeGitRemote = ({
   };
 
   const remote = makeExo('GitRemote', GitRemoteInterface, {
+    /** @returns {Promise<GitRemoteSnapshot>} */
     async inspect() {
       ensureLive();
       return snapshotPolicy();
     },
 
+    /**
+     * @param {Parameters<GitRemote['fetch']>[0]} [options]
+     * @returns {Promise<GitRemoteOperationResult>}
+     */
     async fetch(options = {}) {
       await null;
       let fence;
@@ -1078,6 +1086,10 @@ export const makeGitRemote = ({
       }
     },
 
+    /**
+     * @param {Parameters<GitRemote['pull']>[0]} [options]
+     * @returns {Promise<GitRemotePullResult>}
+     */
     async pull(options = {}) {
       await null;
       let fence;
@@ -1151,10 +1163,14 @@ export const makeGitRemote = ({
               );
           }
         }
-        const result = harden({ fetch, integration, head });
+        const result = harden({
+          fetch,
+          integration,
+          head,
+        });
         assertOperationFence('pull', fence);
         recordOperationSuccess('pull', result);
-        return result;
+        return /** @type {GitRemotePullResult} */ (result);
       } catch (err) {
         const finalErr =
           fence === undefined ? err : operationError('pull', fence, err);
@@ -1163,6 +1179,10 @@ export const makeGitRemote = ({
       }
     },
 
+    /**
+     * @param {Parameters<GitRemote['push']>[0]} [options]
+     * @returns {Promise<GitRemoteOperationResult>}
+     */
     async push(options = {}) {
       await null;
       let fence;

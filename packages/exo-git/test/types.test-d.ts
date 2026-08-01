@@ -8,12 +8,14 @@ import type {
   GitRemote,
   GitRemoteCredential,
   GitRemoteOperationSuccessAuditEvent,
-  GitRemoteRefUpdate,
   HistoryRewriteEndoGit,
   PathEntryIssuer,
   ReadOnlyEndoGit,
   ReadOnlyGitWorktree,
   ReadWriteEndoGit,
+  GitRemoteOperationResult,
+  GitRemotePullResult,
+  GitRemoteRefUpdate,
   WritableGitWorktree,
 } from '../src/types.js';
 
@@ -99,6 +101,19 @@ type PullOptions = NonNullable<Parameters<GitRemote['pull']>[0]>;
 expectTypeOf<NonNullable<PullOptions['branch']>>().toEqualTypeOf<
   GitRef | string
 >();
+
+// `fetch`/`pull`/`push` resolve to explicit result records, not
+// `Promise<any>`/`Promise<object>`; a regression back to a loose return
+// type would silently drop the runtime guard's compile-time counterpart.
+expectTypeOf<
+  Awaited<ReturnType<GitRemote['fetch']>>
+>().toEqualTypeOf<GitRemoteOperationResult>();
+expectTypeOf<
+  Awaited<ReturnType<GitRemote['pull']>>
+>().toEqualTypeOf<GitRemotePullResult>();
+expectTypeOf<
+  Awaited<ReturnType<GitRemote['push']>>
+>().toEqualTypeOf<GitRemoteOperationResult>();
 
 declare const powers: Parameters<typeof makeGit>[0];
 declare const selectedAtRuntime: boolean;
