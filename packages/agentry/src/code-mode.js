@@ -15,7 +15,7 @@ import {
   formatGlobalDeclarations,
   normalizeGlobals,
 } from '@endo/agent-tools/code-mode/declarations.js';
-import { makeWorkspaceGlobal } from '@endo/agent-tools/code-mode-globals/fs.js';
+import { makeLocalFilesystemGlobal } from '@endo/agent-tools/code-mode-globals/fs.js';
 import { makeGitGlobal } from '@endo/agent-tools/code-mode-globals/git.js';
 import { toPiAgentTool } from '@endo/agent-tools/adapters/pi.js';
 import { toolResultToSmallcaps } from '@endo/agent-tools/adapters/smallcaps.js';
@@ -137,7 +137,7 @@ const makeCodeModeGlobals = (powers = {}) => {
   if (powers.workspace !== undefined || powers.workspacePetName !== undefined) {
     const workspacePetName = powers.workspacePetName ?? 'workspace';
     globals.push(
-      makeWorkspaceGlobal({
+      makeLocalFilesystemGlobal({
         name: petNameToBindingName(workspacePetName, 'workspace'),
         petName: workspacePetName,
       }),
