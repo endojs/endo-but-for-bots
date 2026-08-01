@@ -339,7 +339,7 @@ type GitRef = {
   stashShow: (index?: number) => Promise<string>;
   tree: (ref: GitRef | string) => Promise<GitReadableTree>;
   filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
-  readOnly: () => GitImportedReadOnlyEndoGit;
+  readOnly: () => ReadOnlyEndoGit;
 };
 type GitBlobInfo = {
     algorithm: string;
@@ -436,21 +436,6 @@ type GitStatusEntry = {
 };
 type GitStatusNode = GitDirectory | GitFile | GitReadableTree | GitReadableBlob;
 type GitWorktreeStatus = 'clean' | 'modified' | 'deleted' | 'untracked' | 'ignored' | 'conflicted';
-type GitImportedReadOnlyEndoGit = {
-    worktree: () => Promise<GitReadOnlyGitWorktree>;
-    status: () => Promise<GitStatusEntry[]>;
-    diff: (options?: GitDiffOptions) => Promise<string>;
-    log: (options?: GitLogOptions) => Promise<GitCommit[]>;
-    show: (ref: GitRef | string) => Promise<string>;
-    revParse: (ref: GitRef | string) => Promise<GitRef>;
-    currentBranch: () => Promise<GitRef | undefined>;
-    branches: () => Promise<GitRef[]>;
-    stashList: () => Promise<string[]>;
-    stashShow: (index?: number) => Promise<string>;
-    tree: (ref: GitRef | string) => Promise<GitReadableTree>;
-    filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
-    readOnly: () => GitImportedReadOnlyEndoGit;
-};
 type GitLiteDirectory = {
     has: (...path: string[]) => Promise<boolean>;
     list: (...path: string[]) => Promise<string[]>;

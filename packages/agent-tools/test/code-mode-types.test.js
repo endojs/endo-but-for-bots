@@ -2,13 +2,23 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { getInterfaceGuardPayload } from '@endo/patterns';
-import { GitInterface } from '@endo/exo-git';
+import { GitInterface, GitRemoteInterface } from '@endo/exo-git';
+import {
+  HttpClientInterface,
+  HttpResponseInterface,
+} from '@endo/exo-http-client';
+import { ShellInterface } from '@endo/exo-shell';
+import { MountInterface } from '@endo/daemon/src/interfaces.js';
+import { ReadableTreeInterface } from '@endo/platform/fs/lite';
 import { FilesystemInterface } from '@endo/platform/fs/extended/type-guards.js';
 
 /** @import { InterfaceGuard } from '@endo/patterns' */
 
 import { gitDeclarations } from '../generated/code-mode-globals/git-declarations.js';
 import { fsDeclarations } from '../generated/code-mode-globals/fs-declarations.js';
+import { shellDeclarations } from '../generated/code-mode-globals/shell-declarations.js';
+import { httpDeclarations } from '../generated/code-mode-globals/http-declarations.js';
+import { gitRemoteDeclarations } from '../generated/code-mode-globals/git-remote-declarations.js';
 import {
   buildGitTypeDeclarations,
   buildGitIRs,
@@ -19,6 +29,22 @@ import {
   buildFsTypeDeclarations,
   buildWorkspaceIR,
 } from '../scripts/code-mode-fs-extract.js';
+import {
+  buildDaemonMountIRs,
+  buildDaemonMountTypeDeclarations,
+} from '../scripts/code-mode-daemon-mount-extract.js';
+import {
+  buildShellIR,
+  buildShellTypeDeclarations,
+} from '../scripts/code-mode-shell-extract.js';
+import {
+  buildHttpIR,
+  buildHttpTypeDeclarations,
+} from '../scripts/code-mode-http-extract.js';
+import {
+  buildGitRemoteIR,
+  buildGitRemoteTypeDeclarations,
+} from '../scripts/code-mode-git-remote-extract.js';
 
 /**
  * @param {string} aux
@@ -46,6 +72,36 @@ const declaredTypeMembers = (aux, typeName) => {
   ].map(([, name]) => name);
 };
 
+/**
+ * @param {string} text
+ * @returns {string[]}
+ */
+const declaredObjectMembers = text =>
+  [...text.matchAll(/^\s+([A-Za-z_$][0-9A-Za-z_$]*)\s*:/gm)].map(
+    ([, name]) => name,
+  );
+
+/**
+ * @param {import('@endo/patterns').InterfaceGuard} guard
+ * @returns {string[]}
+ */
+const guardMethodNames = guard =>
+  Object.keys(getInterfaceGuardPayload(guard).methodGuards).sort();
+
+/**
+ * @param {import('ava').ExecutionContext} t
+ * @param {import('../scripts/code-mode-type-extract.js').GlobalTypeIR} ir
+ * @param {import('@endo/patterns').InterfaceGuard} guard
+ * @param {string} label
+ */
+const assertIRMatchesGuard = (t, ir, guard, label) => {
+  t.deepEqual(
+    ir.members.map(member => member.name).sort(),
+    guardMethodNames(guard),
+    `${label} declaration must match its runtime guard method names`,
+  );
+};
+
 // Freshness gate (git): the checked-in git artifact must equal a fresh
 // extraction, so a change to the exo-git types.d.ts or to a renderer cannot
 // land without regenerating and committing the declarations.
@@ -64,7 +120,10 @@ test('generated git declarations are up to date with their source', t => {
 // Freshness gate (fs): the checked-in workspace artifact must equal a fresh
 // extraction from the FS guards.
 test('generated fs declarations are up to date with their source', t => {
-  const fresh = buildFsTypeDeclarations();
+  const fresh = {
+    ...buildFsTypeDeclarations(),
+    ...buildDaemonMountTypeDeclarations(),
+  };
   t.deepEqual(Object.keys(fsDeclarations).sort(), Object.keys(fresh).sort());
   for (const key of Object.keys(fresh)) {
     t.deepEqual(
@@ -73,6 +132,24 @@ test('generated fs declarations are up to date with their source', t => {
       `${key} declaration is stale; run: yarn workspace @endo/agent-tools gen:code-mode-types`,
     );
   }
+});
+
+test('generated Shell declarations are up to date with their source', t => {
+  t.deepEqual(shellDeclarations, buildShellTypeDeclarations());
+});
+
+test('generated HTTP declarations are up to date with their source', t => {
+  t.deepEqual(httpDeclarations, buildHttpTypeDeclarations());
+});
+
+test('generated GitRemote declarations are up to date with their source', t => {
+  t.deepEqual(gitRemoteDeclarations, buildGitRemoteTypeDeclarations());
+});
+
+test('generated daemon-mount declarations are up to date with their source', t => {
+  const fresh = buildDaemonMountTypeDeclarations();
+  t.deepEqual(fsDeclarations.daemonMount, fresh.daemonMount);
+  t.deepEqual(fsDeclarations.daemonMountReadOnly, fresh.daemonMountReadOnly);
 });
 
 // The base declaration stays guard-canonical except for the deliberately
@@ -227,6 +304,80 @@ test('workspace declarations derive from the Filesystem guard', t => {
       `${name} is not a Filesystem guard method`,
     );
   }
+});
+
+test('daemon-mount declarations match the enforced mount method names', t => {
+  const { daemonMount, daemonMountReadOnly } = buildDaemonMountIRs();
+  assertIRMatchesGuard(t, daemonMount, MountInterface, 'daemon mount');
+  assertIRMatchesGuard(
+    t,
+    daemonMountReadOnly,
+    ReadableTreeInterface,
+    'daemon read-only mount',
+  );
+});
+
+test('Shell, HTTP, and GitRemote declarations match runtime method names', t => {
+  assertIRMatchesGuard(t, buildShellIR(), ShellInterface, 'Shell');
+  assertIRMatchesGuard(t, buildHttpIR(), HttpClientInterface, 'HttpClient');
+  assertIRMatchesGuard(t, buildGitRemoteIR(), GitRemoteInterface, 'GitRemote');
+  const response = buildHttpIR().auxTypes.find(
+    type => type.name === 'HttpResponse',
+  );
+  if (response === undefined) {
+    t.fail('HttpClient declaration must include HttpResponse');
+  } else {
+    t.deepEqual(
+      declaredObjectMembers(response.text).sort(),
+      guardMethodNames(HttpResponseInterface),
+      'HttpResponse declaration must match its runtime guard',
+    );
+  }
+});
+
+test('HTTP stream declaration preserves the small PassableBytesReader surface', t => {
+  t.true(
+    httpDeclarations.http.aux.includes(
+      'stream: () => HttpPassableBytesReader;',
+    ),
+  );
+  t.true(
+    httpDeclarations.http.aux.includes('type HttpPassableBytesReader = {'),
+  );
+  t.false(httpDeclarations.http.aux.includes('stream: () => unknown;'));
+});
+
+test('daemon read-only mount declarations omit mutation methods', t => {
+  t.true(fsDeclarations.daemonMount.aux.includes('writeText:'));
+  t.true(fsDeclarations.daemonMount.aux.includes('makeDirectory:'));
+  t.false(fsDeclarations.daemonMountReadOnly.aux.includes('writeText:'));
+  t.false(fsDeclarations.daemonMountReadOnly.aux.includes('makeDirectory:'));
+  t.false(
+    fsDeclarations.daemonMountReadOnly.aux.includes('type DaemonMount ='),
+  );
+});
+
+test('Shell and HTTP declarations include named arguments and result shapes', t => {
+  t.true(
+    shellDeclarations.shell.aux.includes(
+      'exec: (command: string, args: readonly string[], options?:',
+    ),
+  );
+  t.true(shellDeclarations.shell.aux.includes('type ShellResult ='));
+  t.true(
+    httpDeclarations.http.aux.includes(
+      'fetch: (url: string, options?: HttpFetchOptions)',
+    ),
+  );
+  t.true(httpDeclarations.http.aux.includes('type HttpResponse ='));
+});
+
+test('GitRemote declarations include concrete result records', t => {
+  const { aux } = gitRemoteDeclarations.gitRemote;
+  t.true(aux.includes('Promise<RemoteGitRemoteOperationResult>'));
+  t.true(aux.includes('type RemoteGitRemoteOperationResult ='));
+  t.true(aux.includes('type RemoteGitRemotePullResult ='));
+  t.false(aux.includes('Promise<any>'));
 });
 
 test('workspace declaration reaches the Directory surface transitively', t => {

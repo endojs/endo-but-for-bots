@@ -9,7 +9,9 @@
  * This module is NOT part of the `@endo/agentry` runtime graph: it depends on
  * the `typescript` compiler API and the `@endo/patterns` guard payload helpers,
  * both dev-only. The per-exo extractors (`code-mode-git-extract.js`,
- * `code-mode-fs-extract.js`) compose these primitives with their own
+ * `code-mode-fs-extract.js`, `code-mode-daemon-mount-extract.js`,
+ * `code-mode-git-remote-extract.js`, `code-mode-http-extract.js`,
+ * `code-mode-shell-extract.js`) compose these primitives with their own
  * source configuration; `scripts/gen-code-mode-types.js` composes the per-exo
  * extractors to write the checked-in runtime artifacts, and the divergence gate
  * in `test/code-mode-types.test.js` re-runs them to keep those artifacts fresh.
@@ -468,6 +470,16 @@ const extractTsAliasesIR = ({
             ts.isTypeReferenceNode(current) &&
             ts.isIdentifier(current.typeName)
           ) {
+            // The synthesized root declaration is the canonical name for a
+            // recursive reference to itself.  Allocating it as an auxiliary
+            // alias would rename it (the root name is already occupied) and
+            // print an accidental imported-looking duplicate type.
+            if (
+              current.typeName.text === rootType &&
+              fromFile === sourceFile.fileName
+            ) {
+              return ts.visitEachChild(current, visit, context);
+            }
             const found = resolveReference(current.typeName.text, fromFile);
             if (found !== undefined) {
               const outputName = ensureAlias(

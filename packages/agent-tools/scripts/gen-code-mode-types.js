@@ -9,7 +9,11 @@
  * renderer it needs, and writes one checked-in runtime artifact per exo:
  *
  *   - `generated/code-mode-globals/git-declarations.js` (git, gitReadOnly)
- *   - `generated/code-mode-globals/fs-declarations.js`  (workspace)
+ *   - `generated/code-mode-globals/git-remote-declarations.js` (gitRemote)
+ *   - `generated/code-mode-globals/fs-declarations.js`  (workspace, daemonMount,
+ *     daemonMountReadOnly)
+ *   - `generated/code-mode-globals/shell-declarations.js` (shell)
+ *   - `generated/code-mode-globals/http-declarations.js` (http)
  *
  * Run with: `yarn workspace @endo/agent-tools gen:code-mode-types`
  *
@@ -30,6 +34,10 @@ import { fileURLToPath } from 'node:url';
 
 import { buildGitTypeDeclarations } from './code-mode-git-extract.js';
 import { buildFsTypeDeclarations } from './code-mode-fs-extract.js';
+import { buildDaemonMountTypeDeclarations } from './code-mode-daemon-mount-extract.js';
+import { buildGitRemoteTypeDeclarations } from './code-mode-git-remote-extract.js';
+import { buildHttpTypeDeclarations } from './code-mode-http-extract.js';
+import { buildShellTypeDeclarations } from './code-mode-shell-extract.js';
 
 /**
  * @param {string} descriptorFile The per-exo runtime descriptor module that
@@ -131,6 +139,40 @@ writeArtifact({
   descriptorFile: 'fs.js',
   sourceDoc: ` *   - workspace: the platform/fs/extended interface guards
  *     (\`FilesystemInterface\` and the remotables it reaches), the richest
- *     available source since the FS \`.d.ts\` is a stub.`,
-  declarations: buildFsTypeDeclarations(),
+ *     available source since the FS \`.d.ts\` is a stub.
+ *   - daemonMount / daemonMountReadOnly: the focused code-mode contract
+ *     derived from \`packages/daemon/src/types.d.ts\`, with runtime method
+ *     names pinned to the daemon mount interfaces.`,
+  declarations: {
+    ...buildFsTypeDeclarations(),
+    ...buildDaemonMountTypeDeclarations(),
+  },
+});
+
+writeArtifact({
+  outPath: '../generated/code-mode-globals/shell-declarations.js',
+  exportName: 'shellDeclarations',
+  descriptorFile: 'shell.js',
+  sourceDoc: ` *   - shell: packages/exo-shell/src/types.ts (the \`EndoShell\` type alias),
+ *     printed by the TypeScript compiler API.`,
+  declarations: buildShellTypeDeclarations(),
+});
+
+writeArtifact({
+  outPath: '../generated/code-mode-globals/http-declarations.js',
+  exportName: 'httpDeclarations',
+  descriptorFile: 'http.js',
+  sourceDoc: ` *   - http: packages/exo-http-client/src/types.ts (the \`HttpClient\` type
+ *     alias), printed by the TypeScript compiler API. The small
+ *     \`PassableBytesReader\` contract is authored by its focused extractor.`,
+  declarations: buildHttpTypeDeclarations(),
+});
+
+writeArtifact({
+  outPath: '../generated/code-mode-globals/git-remote-declarations.js',
+  exportName: 'gitRemoteDeclarations',
+  descriptorFile: 'git-remote.js',
+  sourceDoc: ` *   - gitRemote: packages/exo-git/src/types.ts (the \`GitRemote\` type alias),
+ *     printed by the TypeScript compiler API.`,
+  declarations: buildGitRemoteTypeDeclarations(),
 });
