@@ -367,9 +367,12 @@ methods outside those declarations.
 The `@endo/agentry/code-mode-provisioning` subpath is the thin mapping between
 plain provisioning intent, daemon formulas, and the prompt descriptors above.
 Filesystem and Git authority are independently optional and independently
-mode-selected.
-Their effective authority is the union, so writable Git can change worktree
-files even when the separate `workspace` mount is read-only.
+mode-selected, but writable Git necessarily writes the same working tree at
+the OS level, so a writable Git mode (`readWrite` or `historyRewrite`)
+requires a writable filesystem grant.
+`fs: 'readOnly'` combined with a writable Git mode is rejected at
+provisioning time, and the daemon's `provideGit` independently rejects a
+writable request over a read-only mount.
 
 The privileged host constructs mounts, Git, and remotes under deterministic
 controller aliases derived from a stable session ID.

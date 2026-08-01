@@ -4952,6 +4952,83 @@ testNeedsNodeWorker(
   },
 );
 
+testNeedsNodeWorker(
+  'provideGit rejects writable Git over a read-only mount',
+  async t => {
+    const { host, config } = await prepareHost(t);
+    const repoPath = path.join(config.statePath, '..', 'git-readonly-repo');
+    await createGitFixture(repoPath);
+
+    const readOnlyMount = await E(host).provideMount(
+      repoPath,
+      'git-readonly-worktree',
+      { readOnly: true },
+    );
+    await t.throwsAsync(
+      E(host).provideGit(readOnlyMount, 'git-readonly-ordinary'),
+      { message: /cannot construct writable Git over a read-only mount/ },
+    );
+    await t.throwsAsync(
+      E(host).provideGit(readOnlyMount, 'git-readonly-history', {
+        allowHistoryRewrite: true,
+      }),
+      { message: /cannot construct writable Git over a read-only mount/ },
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'provideGit allows a declared read-only Git over a read-only mount',
+  async t => {
+    const { host, config } = await prepareHost(t);
+    const repoPath = path.join(
+      config.statePath,
+      '..',
+      'git-readonly-declared-repo',
+    );
+    await createGitFixture(repoPath);
+
+    const readOnlyMount = await E(host).provideMount(
+      repoPath,
+      'git-readonly-declared-worktree',
+      { readOnly: true },
+    );
+    const gitCap = await E(host).provideGit(
+      readOnlyMount,
+      'git-readonly-declared',
+      { readOnly: true },
+    );
+    const status = await E(gitCap).status();
+    t.true(Array.isArray(status));
+    await t.throwsAsync(E(gitCap).commit('blocked'), {
+      message: /read-only Git capability/,
+    });
+  },
+);
+
+testNeedsNodeWorker(
+  'provideGit allows writable Git over a writable mount',
+  async t => {
+    const { host, config } = await prepareHost(t);
+    const repoPath = path.join(config.statePath, '..', 'git-writable-repo');
+    await createGitFixture(repoPath);
+
+    const writableMount = await E(host).provideMount(
+      repoPath,
+      'git-writable-worktree',
+    );
+    const gitCap = await E(host).provideGit(writableMount, 'git-writable');
+    await fs.promises.writeFile(
+      path.join(repoPath, 'writable.txt'),
+      'writable\n',
+    );
+    const entry = await E(writableMount).entry(['writable.txt']);
+    await E(gitCap).add([entry]);
+    const commit = await E(gitCap).commit('writable mount commit');
+    t.is(commit.summary, 'writable mount commit');
+  },
+);
+
 test('provideGit rejects a malformed commit identity at the host boundary', async t => {
   const { host, config } = await prepareHost(t);
   const repoPath = path.join(

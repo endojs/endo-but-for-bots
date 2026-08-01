@@ -580,6 +580,11 @@ const normalizePolicy = async (spec, cwd) => {
       X`EndoProvisionSpec.git must be readOnly, readWrite, or historyRewrite`,
     );
   }
+  if (fs === 'readOnly' && (git === 'readWrite' || git === 'historyRewrite')) {
+    throw makeError(
+      X`EndoProvisionSpec: writable Git requires a writable filesystem grant; fs: 'readOnly' cannot be combined with git: 'readWrite' or 'historyRewrite'`,
+    );
+  }
 
   const canonicalCwd = await canonicalDirectory(resolve(cwd), 'cwd');
   const requestedPath =
@@ -930,6 +935,7 @@ const realizeProvision = async (host, persistence, credentials) => {
     const git = await provideOrLookup(host, gitAlias, () =>
       E(host).provideGit(gitMount, gitAlias, {
         allowHistoryRewrite: persistence.policy.git === 'historyRewrite',
+        readOnly: persistence.policy.git === 'readOnly',
       }),
     );
     grants.push(['git', gitAlias]);

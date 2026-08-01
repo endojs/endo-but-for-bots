@@ -79,7 +79,7 @@ test('filesystem and Git modes select independent matching declarations', async 
       { sessionId: 'git-rw', cwd: root },
     ),
     normalizeEndoProvisionSpec(
-      { fs: 'readOnly', git: 'historyRewrite' },
+      { fs: 'readWrite', git: 'historyRewrite' },
       { sessionId: 'independent', cwd: root },
     ),
   ]);
@@ -95,7 +95,7 @@ test('filesystem and Git modes select independent matching declarations', async 
   t.deepEqual(gitReadOnly, [makeGitGlobal({ name: 'git', readOnly: true })]);
   t.deepEqual(gitReadWrite, [makeGitGlobal({ name: 'git' })]);
   t.deepEqual(independent, [
-    makeDaemonMountGlobal({ name: 'workspace', readOnly: true }),
+    makeDaemonMountGlobal({ name: 'workspace', readOnly: false }),
     makeGitGlobal({ name: 'git', historyRewrite: true }),
   ]);
 });
@@ -154,6 +154,14 @@ test('normalization rejects malformed, secret, and widening policy', async t => 
     [{ workspace: { extra: true } }, /unknown field.*extra/],
     [{ fs: 'sometimes' }, /fs must be readOnly or readWrite/],
     [{ git: 'force' }, /git must be readOnly, readWrite, or historyRewrite/],
+    [
+      { fs: 'readOnly', git: 'readWrite' },
+      /writable Git requires a writable filesystem grant/,
+    ],
+    [
+      { fs: 'readOnly', git: 'historyRewrite' },
+      /writable Git requires a writable filesystem grant/,
+    ],
     [
       { git: 'readOnly', gitRemotes: { origin: { url: 'file:///tmp/x' } } },
       /remotes require writable Git/,

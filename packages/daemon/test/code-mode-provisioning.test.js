@@ -168,29 +168,25 @@ test.serial(
       message: /read-only Git capability/,
     });
 
-    const independent = await provisionEndoCodeMode({
-      sessionId: 'independent-scopes',
-      cwd: workspace,
-      sockPath: config.sockPath,
-      spec: { fs: 'readOnly', git: 'readWrite' },
-    });
-    clientCleanups.push(independent.cleanup);
-    const independentWorkspace = /** @type {EndoMount} */ (
-      await E(independent.powers).lookup('workspace')
-    );
-    const writableGit = /** @type {WritableEndoGit} */ (
-      await E(independent.powers).lookup('git')
+    await t.throwsAsync(
+      () =>
+        provisionEndoCodeMode({
+          sessionId: 'read-only-fs-writable-git-rejected',
+          cwd: workspace,
+          sockPath: config.sockPath,
+          spec: { fs: 'readOnly', git: 'readWrite' },
+        }),
+      { message: /writable Git requires a writable filesystem grant/ },
     );
     await t.throwsAsync(
-      E(independentWorkspace).writeText('still-blocked.txt', 'blocked\n'),
-      { message: /read-only/ },
-    );
-    await E(writableGit).createBranch('ordinary-mode');
-    await t.throwsAsync(
-      E(writableGit).commit('blocked amend', { amend: true }),
-      {
-        message: /without history-rewrite authority/,
-      },
+      () =>
+        provisionEndoCodeMode({
+          sessionId: 'read-only-fs-history-rewrite-git-rejected',
+          cwd: workspace,
+          sockPath: config.sockPath,
+          spec: { fs: 'readOnly', git: 'historyRewrite' },
+        }),
+      { message: /writable Git requires a writable filesystem grant/ },
     );
 
     const gitHistory = await provisionEndoCodeMode({

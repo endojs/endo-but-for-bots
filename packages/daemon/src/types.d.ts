@@ -1548,6 +1548,13 @@ export interface EndoHost extends EndoAgent {
        * Omitted, commits default to `Endo <endo@invalid.local>`.
        */
       identity?: GitCommitIdentity;
+      /**
+       * Declares that the caller intends a read-only Git capability and
+       * accepts a read-only backing mount.  Omitted or `false`, `provideGit`
+       * rejects a read-only mount rather than silently returning a
+       * read-only-attenuated capability for a writable request.
+       */
+      readOnly?: boolean;
     },
   ): Promise<EndoGit>;
   /**

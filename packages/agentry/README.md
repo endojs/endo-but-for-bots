@@ -159,9 +159,12 @@ The `EndoProvisionSpec` fields are optional grants:
 
 Omission grants nothing.
 When either `fs` or `git` is present, `workspace.path` defaults to `cwd`.
-Filesystem and Git are selected independently, but effective authority is their
-union: writable Git can mutate repository files behind a nominally read-only
-`workspace` view.
+Filesystem and Git are selected independently, but writable Git necessarily
+writes the same working tree at the OS level, so a writable Git mode
+(`readWrite` or `historyRewrite`) requires a writable filesystem grant;
+`fs: 'readOnly'` combined with a writable Git mode is rejected at
+provisioning time, and the daemon rejects the same combination independently
+if it is ever reached directly.
 Git remotes therefore require writable Git.
 A remote credential is only a host-side pet name; tokens, passwords, embedded
 URL credentials, and secret-shaped fields are rejected.
