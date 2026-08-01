@@ -81,6 +81,18 @@
       "types": "./src/code-mode-globals/fs.js",
       "default": "./src/code-mode-globals/fs.js"
     },
+    "./code-mode-globals/shell.js": {
+      "types": "./src/code-mode-globals/shell.js",
+      "default": "./src/code-mode-globals/shell.js"
+    },
+    "./code-mode-globals/http.js": {
+      "types": "./src/code-mode-globals/http.js",
+      "default": "./src/code-mode-globals/http.js"
+    },
+    "./code-mode-globals/git-remote.js": {
+      "types": "./src/code-mode-globals/git-remote.js",
+      "default": "./src/code-mode-globals/git-remote.js"
+    },
     "./adapters/pi.js": {
       "types": "./src/adapters/pi.d.ts",
       "default": "./src/adapters/pi.js"
@@ -100,6 +112,18 @@
     "./generated/code-mode-globals/fs-declarations.js": {
       "types": "./generated/code-mode-globals/fs-declarations.js",
       "default": "./generated/code-mode-globals/fs-declarations.js"
+    },
+    "./generated/code-mode-globals/shell-declarations.js": {
+      "types": "./generated/code-mode-globals/shell-declarations.js",
+      "default": "./generated/code-mode-globals/shell-declarations.js"
+    },
+    "./generated/code-mode-globals/http-declarations.js": {
+      "types": "./generated/code-mode-globals/http-declarations.js",
+      "default": "./generated/code-mode-globals/http-declarations.js"
+    },
+    "./generated/code-mode-globals/git-remote-declarations.js": {
+      "types": "./generated/code-mode-globals/git-remote-declarations.js",
+      "default": "./generated/code-mode-globals/git-remote-declarations.js"
     },
     "./types-index.js": {
       "types": "./types-index.d.ts",

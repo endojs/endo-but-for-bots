@@ -3,25 +3,42 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 test('agent-tools scoped exports resolve the relocated surfaces', async t => {
-  const [root, evaluate, compartment, daemon, git, fs, pi, smallcaps] =
-    await Promise.all([
-      // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
-      import('@endo/agent-tools'),
-      // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
-      import('@endo/agent-tools/code-mode/evaluate-tool.js'),
-      // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
-      import('@endo/agent-tools/code-mode/compartment.js'),
-      // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
-      import('@endo/agent-tools/code-mode/daemon.js'),
-      // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
-      import('@endo/agent-tools/code-mode-globals/git.js'),
-      // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
-      import('@endo/agent-tools/code-mode-globals/fs.js'),
-      // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
-      import('@endo/agent-tools/pi'),
-      // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
-      import('@endo/agent-tools/adapters/smallcaps.js'),
-    ]);
+  const [
+    root,
+    evaluate,
+    compartment,
+    daemon,
+    git,
+    fs,
+    shell,
+    http,
+    gitRemote,
+    pi,
+    smallcaps,
+  ] = await Promise.all([
+    // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
+    import('@endo/agent-tools'),
+    // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
+    import('@endo/agent-tools/code-mode/evaluate-tool.js'),
+    // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
+    import('@endo/agent-tools/code-mode/compartment.js'),
+    // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
+    import('@endo/agent-tools/code-mode/daemon.js'),
+    // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
+    import('@endo/agent-tools/code-mode-globals/git.js'),
+    // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
+    import('@endo/agent-tools/code-mode-globals/fs.js'),
+    // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
+    import('@endo/agent-tools/code-mode-globals/shell.js'),
+    // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
+    import('@endo/agent-tools/code-mode-globals/http.js'),
+    // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
+    import('@endo/agent-tools/code-mode-globals/git-remote.js'),
+    // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
+    import('@endo/agent-tools/pi'),
+    // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
+    import('@endo/agent-tools/adapters/smallcaps.js'),
+  ]);
 
   t.is(typeof root.makeTool, 'function');
   t.is(typeof evaluate.makeEvaluateTool, 'function');
@@ -30,6 +47,11 @@ test('agent-tools scoped exports resolve the relocated surfaces', async t => {
   t.is(typeof daemon.makeDaemonEvaluate, 'function');
   t.is(typeof git.makeGitGlobal, 'function');
   t.is(typeof fs.makeWorkspaceGlobal, 'function');
+  t.is(typeof fs.makeLocalFilesystemGlobal, 'function');
+  t.is(typeof fs.makeDaemonMountGlobal, 'function');
+  t.is(typeof shell.makeShellGlobal, 'function');
+  t.is(typeof http.makeHttpGlobal, 'function');
+  t.is(typeof gitRemote.makeGitRemoteGlobal, 'function');
   t.is(typeof pi.toPiAgentTool, 'function');
   t.is(typeof smallcaps.toolResultToSmallcaps, 'function');
 });
