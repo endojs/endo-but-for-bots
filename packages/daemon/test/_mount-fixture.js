@@ -56,7 +56,10 @@ const materializeRecord = (baseDir, record, created, skipped) => {
     // `type` throws `EINVAL`. Infer the kind from the target when it exists on
     // disk, defaulting to 'dir' for our directory-pointing fixture links; the
     // `optional` catch below still drops links a platform cannot create.
-    const targetPath = path.resolve(path.dirname(dest), /** @type {string} */ (record.target));
+    const targetPath = path.resolve(
+      path.dirname(dest),
+      /** @type {string} */ (record.target),
+    );
     /** @type {'dir' | 'file'} */
     let symlinkType;
     try {

@@ -53,7 +53,10 @@ const materializeRecord = (baseDir, record, created, skipped) => {
     // On Windows, `symlinkSync` requires an explicit `type` ('file' | 'dir' |
     // 'junction'); infer it from the target when present, defaulting to 'dir'
     // for our directory-pointing links so they materialize rather than throw.
-    const targetPath = path.resolve(path.dirname(dest), /** @type {string} */ (record.target));
+    const targetPath = path.resolve(
+      path.dirname(dest),
+      /** @type {string} */ (record.target),
+    );
     /** @type {'dir' | 'file'} */
     let symlinkType;
     try {

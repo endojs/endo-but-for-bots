@@ -56,9 +56,7 @@ const clampMaxResults = (maxResults, ceiling) => {
     return ceiling;
   }
   if (typeof maxResults !== 'number' || !Number.isSafeInteger(maxResults)) {
-    throw RangeError(
-      `maxResults must be a safe integer, got ${q(maxResults)}`,
-    );
+    throw RangeError(`maxResults must be a safe integer, got ${q(maxResults)}`);
   }
   if (maxResults < 0) {
     throw RangeError(`maxResults must be non-negative, got ${q(maxResults)}`);
