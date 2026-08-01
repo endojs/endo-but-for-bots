@@ -38,6 +38,18 @@ export {
 
 export { normalizeVirtualHostName, makeAppsNameHub } from './src/vhost.js';
 
+export {
+  OCAPN_PROTOCOL_FAMILY,
+  OCAPN_WS_CODEC,
+  OCAPN_WS_NETWORK,
+  OCAPN_WS_PATH,
+  OCAPN_WS_LEGACY_ALIAS_PATH,
+  OCAPN_WS_SUPPORTED,
+  matchOcapnWebSocketPath,
+  parseOcapnWebSocketPath,
+  ocapnWebSocketConnectionHint,
+} from './src/ocapn-ws.js';
+
 /** @import { GatewayConfig, BindAddress, GatewayPowers, Gateway } from './types.d.ts' */
 
 const GatewayInterface = M.interface('Gateway', {
