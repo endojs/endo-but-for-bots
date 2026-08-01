@@ -68,7 +68,7 @@ This package still does not map the tool record to MCP `outputSchema` or
 | `src/tool.js` | Provider-independent `makeTool` and `ToolRecord`. |
 | `src/json-tools/` | Parked JSON wrappers for Git, mounts, filesystem, shell, and HTTP. |
 | `src/code-mode/` | Evaluation tool, Compartment host, daemon host, and declaration formatting. |
-| `src/code-mode-globals/` | Per-capability global descriptor factories. |
+| `src/code-mode-globals/` | Per-capability global descriptor factories for the local filesystem, Shell, HTTP, Git, and GitRemote. |
 | `src/adapters/` | Pi and SmallCaps bridges; MCP, Codex, and Claude Code shapes are planned. |
 | `generated/code-mode-globals/` | Checked-in generated declaration artifacts. |
 
@@ -106,12 +106,21 @@ import { makeCompartmentEvaluate } from '@endo/agent-tools/code-mode/compartment
 import { makeDaemonEvaluate } from '@endo/agent-tools/code-mode/daemon.js';
 import { makeGitGlobal } from '@endo/agent-tools/code-mode-globals/git.js';
 import { makeWorkspaceGlobal } from '@endo/agent-tools/code-mode-globals/fs.js';
+import { makeGitRemoteGlobal } from '@endo/agent-tools/code-mode-globals/git-remote.js';
+import { makeHttpGlobal } from '@endo/agent-tools/code-mode-globals/http.js';
+import { makeShellGlobal } from '@endo/agent-tools/code-mode-globals/shell.js';
 import { toPiAgentTool } from '@endo/agent-tools/pi';
 import { toolResultToSmallcaps } from '@endo/agent-tools/adapters/smallcaps.js';
 ```
 
 The Pi packages remain optional peer dependencies.
 Importing the root or a non-Pi module does not opt a consumer into Pi.
+
+Code-mode global factories describe capabilities already granted by a host.
+`makeWorkspaceGlobal` describes the local `@endo/platform/fs/extended`
+adapter.
+The Shell, HTTP, Git, and GitRemote factories likewise carry no provisioning,
+attenuation, credential, or controller authority.
 
 Planned adapter modules have shape only in this release.
 The MCP adapter is not implemented, including its `outputSchema` and
