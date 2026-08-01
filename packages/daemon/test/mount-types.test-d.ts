@@ -55,9 +55,9 @@ expectTypeOf(mount.makeFile(entry, 'contents')).resolves.toEqualTypeOf<void>();
 // The public `write`/`makeFile` payload types stay exactly what the daemon
 // promises callers: a `DirectoryWriteSource` for `write`, and an optional
 // `string` for `makeFile`'s content.
-expectTypeOf<Parameters<EndoMount['write']>[1]>().toEqualTypeOf<
-  DirectoryWriteSource
->();
+expectTypeOf<
+  Parameters<EndoMount['write']>[1]
+>().toEqualTypeOf<DirectoryWriteSource>();
 expectTypeOf<Parameters<EndoMount['makeFile']>[1]>().toEqualTypeOf<
   string | undefined
 >();
