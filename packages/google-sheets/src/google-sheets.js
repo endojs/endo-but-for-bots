@@ -100,18 +100,18 @@ const retryAfterFrom = headers => {
 };
 
 /**
- * Makes a client that has exactly the network authority granted by fetchPower.
+ * Makes a client that has exactly the network authority granted by fetch.
  * It deliberately neither accepts nor constructs authorization headers.
  *
- * @param {(url: string, init?: object) => Promise<any>} fetchPower
+ * @param {(url: string, init?: object) => Promise<any>} fetch
  * @param {{ spreadsheetId: string, baseUrl?: string }} options
  */
 export const makeSheetsClient = (
-  fetchPower,
+  fetch,
   { spreadsheetId, baseUrl = DEFAULT_BASE_URL },
 ) => {
-  if (typeof fetchPower !== 'function') {
-    throw new TypeError('makeSheetsClient requires a fetch power');
+  if (typeof fetch !== 'function') {
+    throw new TypeError('makeSheetsClient requires a fetch function');
   }
   if (typeof spreadsheetId !== 'string' || spreadsheetId.length === 0) {
     throw new TypeError('spreadsheetId must be a non-empty string');
@@ -139,7 +139,7 @@ export const makeSheetsClient = (
       init.headers = { 'content-type': 'application/json' };
       init.body = JSON.stringify(request.body);
     }
-    const response = await fetchPower(url, init);
+    const response = await fetch(url, init);
     if (!response.ok) {
       let payload;
       try {

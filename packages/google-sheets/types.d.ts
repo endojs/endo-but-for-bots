@@ -13,17 +13,17 @@ export class GoogleSheetsError extends Error {
   details?: unknown;
 }
 
-export interface FetchResponse {
+export interface FetchLikeResponse {
   ok: boolean;
   status: number;
   headers?: { get(name: string): string | null };
   json(): Promise<unknown>;
 }
 
-export type FetchPower = (
+export type FetchLike = (
   url: string,
   init?: { method?: string; headers?: Record<string, string>; body?: string },
-) => Promise<FetchResponse>;
+) => Promise<FetchLikeResponse>;
 
 export interface SheetsClient {
   values: {
@@ -54,6 +54,6 @@ export function encodeA1Range(range: string): string;
 export function serialToISO8601(serial: number): string;
 export function iso8601ToSerial(iso8601: string): number;
 export function makeSheetsClient(
-  fetchPower: FetchPower,
+  fetch: FetchLike,
   options: { spreadsheetId: string; baseUrl?: string },
 ): SheetsClient;

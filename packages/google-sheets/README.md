@@ -5,8 +5,8 @@ Sheets REST API. It is for an application that already has a narrowly
 authorized `fetch` function and a spreadsheet identifier.
 
 The package does not obtain OAuth tokens, store credentials, or construct
-authorization headers. Supply a `fetch` power that has only the network and
-credential authority the application intends to grant. The client returns a
+authorization headers. Supply an authorized `fetch` that has only the network
+and credential authority the application intends to grant. The client returns a
 hardened interface for reading and changing values or retrieving spreadsheet
 metadata.
 
