@@ -144,7 +144,9 @@ test('grep never surfaces denied content through an in-root symlink with an allo
   // that resolves into a denied directory). When symlinks are unavailable the
   // link is skipped, so this case is vacuous and passes.
   if (skipped.has('pub')) {
-    t.pass('symlinks unavailable on this platform; pub -> .ssh not materialized');
+    t.pass(
+      'symlinks unavailable on this platform; pub -> .ssh not materialized',
+    );
     return;
   }
   const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
@@ -156,7 +158,11 @@ test('grep never surfaces denied content through an in-root symlink with an allo
   );
   // Searching the symlink path directly also yields nothing.
   const direct = await E(mount).grep('PRIVATE KEY', ['pub/id_rsa']);
-  t.deepEqual([...direct], [], 'a denied-via-symlink supplied path yields no matches');
+  t.deepEqual(
+    [...direct],
+    [],
+    'a denied-via-symlink supplied path yields no matches',
+  );
 });
 
 test('grep on a subView reports sub-root-relative file paths', async t => {

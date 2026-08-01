@@ -166,7 +166,8 @@ test('glorp dispatches to a native search.glorpFiles when present', async t => {
   });
   const result = await E(mount).glorp('**/*.js', 'export');
   t.true(called, 'the native glorpFiles seam was consulted');
-  t.deepEqual([...result], [
-    { file: 'synthetic.js', line: 1, text: 'native fused match' },
-  ]);
+  t.deepEqual(
+    [...result],
+    [{ file: 'synthetic.js', line: 1, text: 'native fused match' }],
+  );
 });
