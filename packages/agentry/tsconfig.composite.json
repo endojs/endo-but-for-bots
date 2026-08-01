@@ -27,6 +27,9 @@
       "path": "../far/tsconfig.composite.json"
     },
     {
+      "path": "../harden/tsconfig.composite.json"
+    },
+    {
       "path": "../where/tsconfig.composite.json"
     }
   ]

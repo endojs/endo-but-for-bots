@@ -387,7 +387,7 @@ const runEndo = async (detached, config) => {
       // This message corresponds to process.send({ type: 'ready' }) in
       // src/manager-node-powers.js and indicates the daemon is ready to receive
       // clients.
-      console.debug('endo daemon ready', message);
+      console.error('endo daemon ready', message);
     } else if (
       message.type === 'error' &&
       'message' in message &&

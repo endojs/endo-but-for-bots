@@ -5,7 +5,9 @@
     "noEmit": true
   },
   "include": [
+    "bin/**/*.js",
     "src/**/*.ts",
-    "src/**/*.js"
+    "src/**/*.js",
+    "*.js"
   ]
 }

@@ -23,6 +23,8 @@ Each surface is opt-in via its own subpath export.
 - `@endo/agentry/code-mode-provisioning` — Pi-independent translation from a
   plain provisioning policy to a retained daemon guest, matching lexical
   global descriptors, and non-secret reconstruction data.
+- `@endo/agentry/endo-code-mode-pi-extension` — a directly loadable Pi extension that binds
+  one retained daemon guest to each Pi session and exposes only `evaluate`.
 
 ## defineAgent
 
@@ -232,6 +234,126 @@ and host authority, and reconstruction rejects policy changes or widening.
 Credential material is process-local today, so reconstruction after a daemon
 restart reports `EndoCredentialUnavailableError` until the named host credential
 is reprovisioned.
+
+## Pi daemon code mode
+
+The `@endo/agentry/endo-code-mode-pi-extension` extension is the user-facing Pi integration.
+Standalone Pi can load it directly, or the thin `endo-pi` launcher can preload
+it while forwarding every ordinary Pi argument:
+
+```sh
+pi -e ./node_modules/@endo/agentry/endo-code-mode-pi-extension.js \
+  --endo-provision='{"fs":"readOnly","git":"readOnly"}'
+
+endo-pi --endo-provision='{"fs":"readOnly","git":"readOnly"}'
+```
+
+`endo-pi` calls Pi's public `main` and does not add a second command framework.
+The extension registers one string flag, `--endo-provision`, whose value is an
+inert `EndoProvisionSpec`, not a live powers object.
+An omitted flag or an empty object grants no filesystem, Git, or remote
+authority.
+When an explicit filesystem or Git grant omits `workspace.path`, the extension
+uses Pi's `cwd`.
+It never searches the workspace for an authority-policy file.
+
+The following initial-session examples cover the supported local modes:
+
+```sh
+# Read-only review.
+endo-pi --endo-provision='{"fs":"readOnly","git":"readOnly"}'
+
+# Writable files with a separate read-only Git view.
+endo-pi --endo-provision='{"fs":"readWrite","git":"readOnly"}'
+
+# Ordinary writable Git, without amend, reword, or force authority.
+endo-pi --endo-provision='{"git":"readWrite"}'
+
+# Explicit history-rewrite authority.
+endo-pi --endo-provision='{"git":"historyRewrite"}'
+```
+
+The modes describe separate views, but their effective authority is the union.
+For example, writable Git can change worktree files even if the separately
+named `workspace` capability is read-only.
+
+A configured remote names only policy and a host-side credential capability:
+
+```sh
+endo-pi --endo-provision='{
+  "git":"readWrite",
+  "gitRemotes":{
+    "origin":{
+      "url":"https://github.com/endojs/endo.git",
+      "allowedDirections":["fetch","push"],
+      "allowedBranches":["main"],
+      "credential":["credentials","github"]
+    }
+  }
+}'
+```
+
+Provision the named credential through a trusted host channel before starting
+the session.
+Tokens, passwords, authorization headers, credential objects, and embedded URL
+credentials must never be placed in JSON, argv, Pi history, logs, formulas, or
+model context.
+If process-local credential material is unavailable, a trusted TUI or RPC host
+may pass a `rehydrateCredential` option to `makeEndoCodeModePiExtension()`.
+That hook must obtain and reprovision the material through its own non-echoing
+channel; the extension passes it only the non-secret pet name and policy, never
+accepts a secret return value, and retries reconstruction once.
+
+On every successful session start, the extension appends its latest versioned,
+non-secret persistence record to Pi's custom session entries.
+Resume or reload without repeating the flag reuses the exact retained guest and
+normalized policy:
+
+```sh
+endo-pi --session <session-id>
+endo-pi --continue
+```
+
+Repeating an equivalent flag is accepted.
+A conflicting flag fails with instructions to start a new session or fork;
+resume and reload never widen authority.
+Forking inherits the normalized policy but derives a fresh retained guest
+namespace from the new Pi session id:
+
+```sh
+endo-pi --fork <session-id>
+```
+
+Session shutdown closes only the extension's local CapTP connection and pending
+operations.
+The daemon, retained guest, formulas, named evaluation results, and workspace
+remain available for a later resume.
+If the standard daemon is absent, startup makes one autostart attempt and then
+either reconnects or reports how to run `endo start`.
+
+Print and JSON modes use the same daemon lifecycle and the same single
+`evaluate` tool:
+
+```sh
+endo-pi -p \
+  --endo-provision='{"fs":"readOnly","git":"readOnly"}' \
+  'Review the current branch without modifying it.'
+
+endo-pi --mode json \
+  --endo-provision='{"fs":"readWrite","git":"readOnly"}' \
+  'Create NOTES.md from the repository README.'
+```
+
+In non-interactive modes, stdout remains reserved for Pi's text or JSON event
+stream.
+Extension diagnostics are structured JSON on stderr, and unavailable remote
+credentials terminate before a model turn without printing or persisting a
+secret.
+
+The local Compartment evaluator remains useful to package tests and offline
+smoke tests.
+It is not a selectable product backend for the Pi extension, whose evaluation
+always runs through a daemon guest.
 
 ## Status
 

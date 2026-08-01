@@ -11,6 +11,7 @@ test('agentry subpaths resolve through package exports', async t => {
     codeModeProvisioningModule,
     harnessTypesModule,
     codeModeTypesModule,
+    endoCodeModePiExtensionModule,
     evalModule,
     editTextModule,
   ] = await Promise.all([
@@ -21,6 +22,8 @@ test('agentry subpaths resolve through package exports', async t => {
     import('@endo/agentry/code-mode-provisioning'),
     import('@endo/agentry/harness/types.js'),
     import('@endo/agentry/code-mode/types.js'),
+    import('@endo/agentry/endo-code-mode-pi-extension'),
+    // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
     import('@endo/agentry/eval'),
     import('@endo/agentry/edit-text'),
   ]);
@@ -101,6 +104,17 @@ test('agentry subpaths resolve through package exports', async t => {
     Object.keys(codeModeTypesModule).sort(),
     [],
     '@endo/agentry/code-mode/types.js runtime export surface',
+  );
+
+  t.is(typeof endoCodeModePiExtensionModule.default, 'function');
+  t.is(
+    typeof endoCodeModePiExtensionModule.makeEndoCodeModePiExtension,
+    'function',
+  );
+  t.deepEqual(
+    Object.keys(endoCodeModePiExtensionModule).sort(),
+    ['default', 'makeEndoCodeModePiExtension'],
+    '@endo/agentry/endo-code-mode-pi-extension export surface',
   );
 
   // Pin the public runtime surface of the evaluation and text-editing utilities.
