@@ -1251,6 +1251,7 @@ __metadata:
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
+    expect-type: "npm:^1.4.0"
     typescript: "catalog:dev"
   peerDependencies:
     "@earendil-works/pi-agent-core": ^0.81.1
