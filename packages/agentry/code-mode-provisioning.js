@@ -1,0 +1,10 @@
+// @ts-check
+
+// This thunk filters the public provisioning surface while preserving a
+// physical legacy-resolution path and its paired type-only re-export index.
+export {
+  EndoCredentialUnavailableError,
+  normalizeEndoProvisionSpec,
+  provisionEndoCodeMode,
+  reconstructEndoCodeMode,
+} from './src/code-mode-provisioning.js';

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-06-03 |
-| **Updated** | 2026-06-25 |
+| **Updated** | 2026-08-01 |
 | **Author** | 0xpatrickdev (prompted) |
 | **Status** | In Progress |
 
@@ -13,6 +13,12 @@ The core of this builder shipped in
 [#517](https://github.com/endojs/endo-but-for-bots/pull/517).
 `@endo/agentry` exports `defineAgent` and the code-mode presets
 (`makeCodeModeAgent`, `makeCodeModeGitLoopAgent`).
+The capability-global descriptor factories reviewed in
+[#902](https://github.com/endojs/endo-but-for-bots/pull/902) add generated
+declarations for daemon mounts, Git modes, and Git remotes.
+The Pi-independent `@endo/agentry/code-mode-provisioning` subpath now maps a
+plain per-session policy to a retained daemon guest and those matching
+descriptors.
 The shipped shape differs from this design's first draft in two ways worth
 naming up front, because the rest of the document has been reconciled to the
 shipped surface:
@@ -161,6 +167,14 @@ Both modes resolve caps through the one guest petstore at different
 granularities (per-session for code mode, per-call for discrete tools; see
 [endo-agent-tools](endo-agent-tools.md) § Capability arguments are
 petnames).
+
+The per-session provisioning boundary is now explicit.
+`provisionEndoCodeMode` deterministically retains a guest from a stable session
+ID, binds selected daemon formulas into that guest, and returns the guest as
+evaluation powers alongside matching generated declarations.
+Its versioned persistence record contains canonical workspace and normalized
+policy data only; it carries no live capability, formula ID, daemon endpoint, or
+credential material.
 
 ## What `defineAgent` composes
 
@@ -340,12 +354,38 @@ Each preset builds the single evaluate tool with `makeEvaluateTool`, wraps it
 as a pi-agent-core tool via `toPiAgentTool` with the SmallCaps renderer, and calls
 `defineAgent({ model, instructions, tools: [...] })`.
 The lexical globals (`workspace`, `git`, and any configured `namedPowers`) are
-injected into the Compartment the guest code runs in; the model discovers a
-capability's method surface at runtime via `E(cap).__getMethodNames__()` rather
-than reading a checked-in declaration.
+injected into the Compartment the guest code runs in.
+Generated TypeScript declarations advertise the selected filesystem and Git
+mode; the model uses `E(cap).__getMethodNames__()` as a fallback for live
+methods outside those declarations.
 `makeCodeModeAgent` returns the record
 `{ agent, globals, evaluate, systemPrompt, model }`;
 `makeCodeModeGitLoopAgent` returns the live `Agent` directly.
+
+### Retained daemon sessions
+
+The `@endo/agentry/code-mode-provisioning` subpath is the thin mapping between
+plain provisioning intent, daemon formulas, and the prompt descriptors above.
+Filesystem and Git authority are independently optional and independently
+mode-selected.
+Their effective authority is the union, so writable Git can change worktree
+files even when the separate `workspace` mount is read-only.
+
+The privileged host constructs mounts, Git, and remotes under deterministic
+controller aliases derived from a stable session ID.
+It creates or recovers deterministic retained guest handle and agent formulas,
+then binds the same capability formula IDs into the guest as `workspace`, `git`,
+and each configured remote name.
+The controller aliases remain intact, and guest evaluation consequently retains
+`resultName` values in the guest's petstore.
+
+Remote credentials are represented in policy only as host-side pet names.
+Their material remains process-local to the daemon; after restart, reconstruction
+returns a typed actionable unavailable-credential condition until the host
+reprovisions that credential.
+Session cleanup only closes the caller's CapTP connection and cancels local
+operations.
+It deliberately does not delete the retained formulas or guest.
 
 The per-package preset bundles this design first proposed (each harness
 exporting its own `define<Name>Agent` / `make<Name>Agent` pair, reconstructing
@@ -671,6 +711,7 @@ wrapping lives in `@endo/agent-tools` (`adapters/smallcaps.js`).
 | [PR #297](https://github.com/endojs/endo-but-for-bots/pull/297) | **Confinement enabler.** Fixes the module-resolution bugs that prevented pi from loading through `@endo/compartment-mapper`'s `importLocation`, so code-mode guest code loads into a confined Endo `Compartment`. |
 | [PR #290](https://github.com/endojs/endo-but-for-bots/pull/290) | **The merged pi harness.** lal's loop now drives `@earendil-works/pi-agent-core`; `defineAgent`'s maker composes the same loop. The session-tree to mail mapping pins their correspondence (§ Mapping pi's session tree to the daemon mail model). |
 | [PR #517](https://github.com/endojs/endo-but-for-bots/pull/517) | **The shipped core.** `defineAgent` plus the two code-mode presets (`makeCodeModeAgent`, `makeCodeModeGitLoopAgent`). The single-call maker shape this design is reconciled to. |
+| [PR #902](https://github.com/endojs/endo-but-for-bots/pull/902) | **Capability-global declarations.** Supplies the descriptor factories consumed by the retained daemon-session provisioner. |
 | [PR #422](https://github.com/endojs/endo-but-for-bots/pull/422) | **The pi-ai pin.** Bumped `@earendil-works/pi-ai` / `@earendil-works/pi-agent-core` to `^0.79.0`, the version the contract is now verified against. |
 | [PR #125](https://github.com/endojs/endo-but-for-bots/pull/125) | **The revision-log axis.** Added `editMessage` / `messageHistory` / `done` (`revisionsByNumber` in `packages/daemon/src/mail.js`), the intra-node history axis the mapping invariant keeps from forking. |
 | [endo-gateway-mcp](endo-gateway-mcp.md) | The Gateway's MCP termination forwards the MCP `inputSchema` the aspirational discrete-tool path fills to an external MCP client. |

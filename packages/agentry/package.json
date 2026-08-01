@@ -33,6 +33,10 @@
       "types": "./src/code-mode.js",
       "default": "./src/code-mode.js"
     },
+    "./code-mode-provisioning": {
+      "types": "./code-mode-provisioning.d.ts",
+      "default": "./code-mode-provisioning.js"
+    },
     "./eval": {
       "types": "./src/eval/index.js",
       "default": "./src/eval/index.js"
@@ -57,13 +61,15 @@
     "@earendil-works/pi-agent-core": "^0.81.1",
     "@earendil-works/pi-ai": "^0.81.1",
     "@endo/agent-tools": "workspace:^",
+    "@endo/cancel": "workspace:^",
+    "@endo/daemon": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo-git": "workspace:^",
-    "@endo/far": "workspace:^"
+    "@endo/far": "workspace:^",
+    "@endo/where": "workspace:^"
   },
   "devDependencies": {
-    "@endo/daemon": "workspace:^",
     "@endo/exo-stream": "workspace:^",
     "@endo/git": "workspace:^",
     "@endo/init": "workspace:^",

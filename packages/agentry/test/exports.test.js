@@ -7,6 +7,7 @@ test('agentry subpaths resolve through package exports', async t => {
     rootModule,
     harnessModule,
     codeModeModule,
+    codeModeProvisioningModule,
     evalModule,
     editTextModule,
   ] = await Promise.all([
@@ -16,6 +17,7 @@ test('agentry subpaths resolve through package exports', async t => {
     import('@endo/agentry/harness'),
     // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
     import('@endo/agentry/code-mode'),
+    import('@endo/agentry/code-mode-provisioning'),
     // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
     import('@endo/agentry/eval'),
     // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
@@ -25,6 +27,8 @@ test('agentry subpaths resolve through package exports', async t => {
   t.is(typeof harnessModule.makePiAgent, 'function');
   t.is(typeof codeModeModule.makeCodeModeAgent, 'function');
   t.is(typeof codeModeModule.makeCodeModeSystemPrompt, 'function');
+  t.is(typeof codeModeProvisioningModule.provisionEndoCodeMode, 'function');
+  t.is(typeof codeModeProvisioningModule.reconstructEndoCodeMode, 'function');
   t.is(typeof editTextModule.applyEdits, 'function');
   t.is(typeof editTextModule.normalizeEdits, 'function');
   t.is(typeof editTextModule.computeUnifiedDiff, 'function');

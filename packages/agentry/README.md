@@ -20,6 +20,9 @@ Each surface is opt-in via its own subpath export.
 - `@endo/agentry/code-mode` — the complete Pi code-mode preset and prompt
   assembly (`makeCodeModeAgent`, `makeCodeModeGitLoopAgent`), built on
   `defineAgent` and `@endo/agent-tools`.
+- `@endo/agentry/code-mode-provisioning` — Pi-independent translation from a
+  plain provisioning policy to a retained daemon guest, matching lexical
+  global descriptors, and non-secret reconstruction data.
 
 ## defineAgent
 
@@ -93,10 +96,10 @@ including amend and reword operations.
 The model-facing tool surface is intentionally one tool:
 `evaluate({ source, resultName? })`. Workspace and Git operations happen inside
 the Endo Compartment through lexical caps (`workspace`, `git`, and any
-configured named powers). The lexical globals are advertised to the model by
-name and a one-line description only — the model discovers a capability's method
-surface at runtime via `E(cap).__getMethodNames__()` rather than reading a
-checked-in type declaration.
+configured named powers).
+The prompt carries generated TypeScript declarations selected for the granted
+capability mode; `E(cap).__getMethodNames__()` remains the fallback for methods
+outside a declaration.
 
 Plain-data completion values returned from `evaluate` are encoded for the model
 with the SmallCaps renderer from `@endo/agent-tools`, so BigInts and other
@@ -108,6 +111,79 @@ The complete Pi harness remains in agentry.
 The reusable evaluate substrate, capability declarations, and adapters live in
 `@endo/agent-tools`.
 An external MCP server is a separate consumer of that package.
+
+## Daemon code-mode provisioning
+
+`@endo/agentry/code-mode-provisioning` owns the host-privileged lifecycle that
+maps inert session policy into daemon capabilities.
+It is independent of Pi and can feed any code-mode loop that accepts an
+`evaluate` implementation and lexical global descriptors.
+
+```js
+import { makeDaemonEvaluate } from '@endo/agent-tools/code-mode/daemon.js';
+import { makeCodeModeAgent } from '@endo/agentry/code-mode';
+import { provisionEndoCodeMode } from '@endo/agentry/code-mode-provisioning';
+
+const session = await provisionEndoCodeMode({
+  sessionId: conversationId, // stable across process restarts
+  cwd: process.cwd(),
+  spec: {
+    workspace: { path: '.', deniedSegments: ['.git', '.env'] },
+    fs: 'readOnly',
+    git: 'readWrite',
+  },
+});
+
+const { agent } = makeCodeModeAgent({
+  model,
+  evaluate: makeDaemonEvaluate(session.powers),
+  globals: session.globals,
+});
+
+// Save this plain record, not the guest or any daemon capability.
+await saveSession(session.persistence);
+
+try {
+  await agent.prompt('Inspect the repository status.');
+  await agent.waitForIdle();
+} finally {
+  await session.cleanup();
+}
+```
+
+The `EndoProvisionSpec` fields are optional grants:
+
+- `fs`: `'readOnly'` or `'readWrite'`;
+- `git`: `'readOnly'`, `'readWrite'`, or `'historyRewrite'`; and
+- `gitRemotes`: remote policies using the daemon's current Git-remote options.
+
+Omission grants nothing.
+When either `fs` or `git` is present, `workspace.path` defaults to `cwd`.
+Filesystem and Git are selected independently, but effective authority is their
+union: writable Git can mutate repository files behind a nominally read-only
+`workspace` view.
+Git remotes therefore require writable Git.
+A remote credential is only a host-side pet name; tokens, passwords, embedded
+URL credentials, and secret-shaped fields are rejected.
+
+Provisioning derives deterministic controller aliases and retained guest handle
+and agent paths from `sessionId`.
+The host retains those aliases while the guest receives the same formula IDs as
+the simple pet names `workspace`, `git`, and each remote name.
+Consequently, daemon evaluation with `resultName` stores the result in the guest
+petstore rather than the host petstore.
+`cleanup()` closes only the caller's CapTP connection and local operations; it
+does not delete the retained formulas or guest.
+
+To resume after disconnect or daemon restart, persist `session.persistence` and
+pass it to `reconstructEndoCodeMode({ persistence })`.
+The versioned record contains only the retained guest pet-name path, canonical
+workspace path, and normalized non-secret policy.
+It excludes capabilities, formula IDs, daemon endpoints, credential material,
+and host authority, and reconstruction rejects policy changes or widening.
+Credential material is process-local today, so reconstruction after a daemon
+restart reports `EndoCredentialUnavailableError` until the named host credential
+is reprovisioned.
 
 ## Status
 
