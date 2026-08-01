@@ -37,6 +37,17 @@ export type GitRemoteRefUpdate = {
   result: GitRefUpdateResult;
 };
 
+export type GitRemoteOperationResult = {
+  updatedRefs: GitRemoteRefUpdate[];
+  text: string;
+};
+
+export type GitRemotePullResult = {
+  fetch: GitRemoteOperationResult;
+  integration: 'up-to-date' | 'fast-forward' | 'merge' | 'rebase';
+  head: GitRef;
+};
+
 export type GitCommit = {
   oid: string;
   summary: string;
@@ -222,13 +233,16 @@ export type GitRemoteSnapshot = GitRemotePolicy & { name: string };
 
 export type GitRemote = {
   inspect: () => Promise<GitRemoteSnapshot>;
-  fetch: (options?: { prune?: boolean; tags?: boolean }) => Promise<any>;
+  fetch: (options?: {
+    prune?: boolean;
+    tags?: boolean;
+  }) => Promise<GitRemoteOperationResult>;
   pull: (options?: {
     branch?: GitRef | string;
     strategy?: 'merge' | 'rebase' | 'ff-only';
     prune?: boolean;
     tags?: boolean;
-  }) => Promise<any>;
+  }) => Promise<GitRemotePullResult>;
   push: (options?: {
     /**
      * Ignored. `pushRefspecsFromOptions` never reads this field: a caller that
@@ -251,7 +265,7 @@ export type GitRemote = {
      */
     forceWithLease?: string;
     setUpstream?: boolean;
-  }) => Promise<any>;
+  }) => Promise<GitRemoteOperationResult>;
 };
 
 export type GitRemoteController = {
