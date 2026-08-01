@@ -3,13 +3,22 @@
 | | |
 |---|---|
 | **Created** | 2026-04-17 |
-| **Updated** | 2026-07-30 |
+| **Updated** | 2026-08-01 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+| **Status** | Complete |
 
 ## Status
 
 All five phases implemented:
+
+The finish line was reverified on 2026-08-01 with a clean
+application containing only `package.json` and `main.js`:
+`endor run main.js` fetched and executed `semver@7.5.4` and its
+transitive CommonJS dependencies, and a second `endor run
+--offline main.js` produced the same `semver=7.5.4` result from
+the SQLite registry table and CAS. `endor registry verify`
+reported three packages verified and zero incomplete; the
+application had no lockfile and no `node_modules` directory.
 
 - **Phase 1**: `rust/endo/src/registry.rs` — SQLite-backed
   `RegistryTable` with `lookup`, `insert`, `list_versions`,
@@ -482,7 +491,7 @@ The tree's children are the package's files, stored as blobs.
    registry table for reproducibility, but the implicit
    behavior is sufficient for development workflows.
 
-## Known gaps
+## Post-finish-line extensions and constraints
 
 - [x] Private registry authentication beyond `.npmrc` tokens:
       basic auth via nerf-darted `:username`+`:_password`
