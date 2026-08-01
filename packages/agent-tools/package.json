@@ -112,6 +112,7 @@
     "gen:code-mode-types": "node scripts/gen-code-mode-types.js",
     "test": "ava",
     "test:c8": "c8 ${C8_OPTIONS:-} ava",
+    "test:types": "tsc --project tsconfig.test-types.json",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix",
     "lint:eslint": "eslint '**/*.js'",
@@ -146,6 +147,7 @@
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
+    "expect-type": "^1.4.0",
     "typescript": "catalog:dev"
   },
   "peerDependencies": {
