@@ -1,0 +1,91 @@
+# Files exempt from the kebab-case file-name lint (lint-kebab-case-file-names.sh).
+#
+# Each non-blank, non-comment line is a git pathspec (default magic), matched
+# against the tracked-file list:
+#   - an exact path                 e.g. packages/marshal/src/rankOrder.js
+#   - a directory prefix            e.g. packages/test262-runner/test262
+#     (matches every file beneath it)
+#   - a glob where `*` spans `/`    e.g. *_FIXTURE.js
+#
+# The directory/glob forms are what let the vendored test262 corpus (thousands
+# of files) be exempted with two patterns instead of an enumerated, unreviewable
+# dump.
+
+# --- test262 (vendored TC39 conformance suite; not under our control) ---------
+# The whole vendored corpus keeps upstream TC39's own file naming (camelCase,
+# _FIXTURE.js, etc.). One directory prefix collapses what used to be thousands of
+# enumerated paths.
+packages/test262-runner/test262
+# The `_FIXTURE.js` module-fixture naming convention, wherever such fixtures live.
+*_FIXTURE.js
+# test262 stragglers outside the corpus directory.
+packages/test262-runner/LICENSE-tc39
+packages/ses/test262/make-importer.js.SKIP
+
+# --- genuine, manually-reviewed exemptions ------------------------------------
+# Files that intentionally keep a non-kebab name. Enumerated on purpose: these
+# ARE under our control (or are third-party manifests like Cargo.toml/Cargo.lock),
+# so each is a deliberate, reviewable exception rather than a swept-away tree.
+Cargo.lock
+Cargo.toml
+packages/bundle-source/changelogs/README-changelogs.md
+packages/captp/changelogs/README-changelogs.md
+packages/compartment-mapper/test/fixtures-cjs-compat/node_modules/nested-export/callBound.js
+packages/compartment-mapper/test/fixtures-policy/node_modules/alice/secondaryBuitins.js
+packages/compartment-mapper/test/fixtures-policy/node_modules/app/builtinsWithPolicy.js
+packages/compartment-mapper/test/fixtures-policy/node_modules/app/importActualBuiltin.js
+packages/eventual-send/changelogs/README-changelogs.md
+packages/marshal/changelogs/README-changelogs.md
+packages/marshal/src/encodePassable.js
+packages/marshal/src/encodeToCapData.js
+packages/marshal/src/encodeToSmallcaps.js
+packages/marshal/src/rankOrder.js
+packages/marshal/test/encodePassable-for-testing.js
+packages/marshal/test/encodePassable.test.js
+packages/marshal/test/rankOrder.test.js
+packages/pass-style/doc/copyArray-guarantees.md
+packages/pass-style/doc/copyRecord-guarantees.md
+packages/pass-style/src/byteArray.js
+packages/pass-style/src/copyArray.js
+packages/pass-style/src/copyRecord.js
+packages/pass-style/src/deeplyFulfilled.js
+packages/pass-style/src/makeTagged.js
+packages/pass-style/src/passStyle-helpers.js
+packages/pass-style/src/passStyleOf.js
+packages/pass-style/src/typeGuards.js
+packages/pass-style/test/byteArray.test.js
+packages/pass-style/test/deeplyFulfilled.test.js
+packages/pass-style/test/passStyleOf.test.js
+packages/patterns/src/keys/checkKey.js
+packages/patterns/src/keys/compareKeys.js
+packages/patterns/src/keys/copyBag.js
+packages/patterns/src/keys/copySet.js
+packages/patterns/src/patterns/getGuardPayloads.js
+packages/patterns/src/patterns/patternMatchers.js
+packages/patterns/test/containerHasSplit.test.js
+packages/patterns/test/copyBag.test.js
+packages/patterns/test/copyMap.test.js
+packages/patterns/test/copySet.test.js
+packages/ses/LICENSE-aura
+packages/ses/LICENSE-caja
+packages/ses/LICENSE-corejs
+packages/ses/LICENSE-v8
+packages/ses/test/_delete_hasOwn.js
+packages/ses/test/enable-property-overrides-default-unsafeError.test.js
+packages/ses/test/enable-property-overrides-min-unsafeError.test.js
+packages/ses/test/error/tame-console-unfilteredError.test.js
+packages/ses/test/error/tame-console-unsafe-unfilteredError.test.js
+packages/ses/test/error/tame-console-unsafe-unsafeError-unfilteredError.test.js
+packages/ses/test/error/tame-console-unsafe-unsafeError.test.js
+packages/ses/test/error/tame-console-unsafeError.test.js
+packages/ses/test/evalTaming-default.test.js
+packages/ses/test/evalTaming-no-eval.test.js
+packages/ses/test/evalTaming-noEval.test.js
+packages/ses/test/evalTaming-safe-eval.test.js
+packages/ses/test/evalTaming-safeEval.test.js
+packages/ses/test/evalTaming-unsafe-eval.test.js
+packages/ses/test/evalTaming-unsafeEval.test.js
+packages/ses/test/hasOwn-shim.test.js
+rust/ocapn_noise/Cargo.lock
+rust/ocapn_noise/Cargo.toml
+scripts/update-typeCoverage-floor.sh

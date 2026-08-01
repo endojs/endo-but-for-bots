@@ -48,6 +48,12 @@ jobs:
           node-version-file: .node-version
           cache: yarn
 
+      - name: Prefer kebab-case files
+        run: bash scripts/lint-kebab-case-file-names.sh
+
+      - name: Test the kebab-case linter
+        run: bash scripts/lint-kebab-case-file-names.test.sh
+
       - name: Install dependencies
         run: yarn install --immutable
 
