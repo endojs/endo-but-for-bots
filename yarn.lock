@@ -540,6 +540,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@babel/helper-string-parser@npm:^8.0.0":
+  version: 8.0.0
+  resolution: "@babel/helper-string-parser@npm:8.0.0"
+  checksum: 10c0/b2272a9eaa63a1bc9ce2673d580e69620fd79786f3e3cf1891f406801f8211810f194f2739fef920f01a97ae06ae465b2dfd238ab8037a3182d0869939ca9a5d
+  languageName: node
+  linkType: hard
+
 "@babel/helper-validator-identifier@npm:^7.24.7":
   version: 7.29.7
   resolution: "@babel/helper-validator-identifier@npm:7.29.7"
@@ -558,6 +565,13 @@ __metadata:
   version: 7.28.5
   resolution: "@babel/helper-validator-identifier@npm:7.28.5"
   checksum: 10c0/42aaebed91f739a41f3d80b72752d1f95fd7c72394e8e4bd7cdd88817e0774d80a432451bcba17c2c642c257c483bf1d409dd4548883429ea9493a3bc4ab0847
+  languageName: node
+  linkType: hard
+
+"@babel/helper-validator-identifier@npm:^8.0.4":
+  version: 8.0.4
+  resolution: "@babel/helper-validator-identifier@npm:8.0.4"
+  checksum: 10c0/9d3c639a42b70613016fda026487a3b8056df918cb40221a48ef666a3bd2574475e315ee509c552baef4bef55a627ee8ea530e9af5b376512ab248c37aeab336
   languageName: node
   linkType: hard
 
@@ -688,7 +702,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@babel/types@npm:^7.0.0, @babel/types@npm:^7.20.7, @babel/types@npm:^7.28.6, @babel/types@npm:^7.29.0, @babel/types@npm:~7.29.0":
+"@babel/types@npm:^7.0.0, @babel/types@npm:^7.20.7, @babel/types@npm:^7.28.6, @babel/types@npm:^7.29.0":
   version: 7.29.0
   resolution: "@babel/types@npm:7.29.0"
   dependencies:
@@ -705,6 +719,16 @@ __metadata:
     "@babel/helper-string-parser": "npm:^7.27.1"
     "@babel/helper-validator-identifier": "npm:^7.27.1"
   checksum: 10c0/24b11c9368e7e2c291fe3c1bcd1ed66f6593a3975f479cbb9dd7b8c8d8eab8a962b0d2fca616c043396ce82500ac7d23d594fbbbd013828182c01596370a0b10
+  languageName: node
+  linkType: hard
+
+"@babel/types@npm:~8.0.4":
+  version: 8.0.4
+  resolution: "@babel/types@npm:8.0.4"
+  dependencies:
+    "@babel/helper-string-parser": "npm:^8.0.0"
+    "@babel/helper-validator-identifier": "npm:^8.0.4"
+  checksum: 10c0/c1549372b5544a797c9dd3cfba27c17e0c986cfadb1c4a99246743073e3be99c7c671572326be1739b313a2194e3bfe5a74b1bd213d80c4bbc2c520c8cb4ff1f
   languageName: node
   linkType: hard
 
@@ -1844,7 +1868,7 @@ __metadata:
     "@babel/generator": "npm:^7.28.3"
     "@babel/parser": "npm:~7.29.3"
     "@babel/traverse": "npm:~7.29.0"
-    "@babel/types": "npm:~7.29.0"
+    "@babel/types": "npm:~8.0.4"
     "@endo/ses-ava": "workspace:^"
     "@types/babel__generator": "npm:~7.27.0"
     "@types/babel__traverse": "npm:~7.28.0"
@@ -2563,7 +2587,7 @@ __metadata:
     "@babel/generator": "npm:^7.28.3"
     "@babel/parser": "npm:~7.29.3"
     "@babel/traverse": "npm:~7.29.0"
-    "@babel/types": "npm:~7.29.0"
+    "@babel/types": "npm:~8.0.4"
     "@endo/ses-ava": "workspace:^"
     "@types/babel__generator": "npm:~7.27.0"
     "@types/babel__traverse": "npm:~7.28.0"
@@ -2946,7 +2970,7 @@ __metadata:
     "@babel/generator": "npm:^7.28.3"
     "@babel/parser": "npm:~7.29.3"
     "@babel/traverse": "npm:~7.29.0"
-    "@babel/types": "npm:~7.29.0"
+    "@babel/types": "npm:~8.0.4"
     "@endo/compartment-mapper": "workspace:^"
     "@endo/module-source": "workspace:^"
     "@endo/test262-runner": "workspace:^"
