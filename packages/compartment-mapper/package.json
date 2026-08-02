@@ -81,7 +81,7 @@
     "eslint-config-prettier": "catalog:dev",
     "eslint-plugin-eslint-comments": "catalog:dev",
     "eslint-plugin-import": "catalog:dev",
-    "prettier": "^3.5.3",
+    "prettier": "^3.9.6",
     "ses": "workspace:^",
     "typescript": "catalog:dev"
   },
