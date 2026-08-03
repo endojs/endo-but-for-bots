@@ -9,7 +9,10 @@
  * renderer it needs, and writes one checked-in runtime artifact per exo:
  *
  *   - `generated/code-mode-globals/git-declarations.js` (git, gitReadOnly)
+ *   - `generated/code-mode-globals/git-remote-declarations.js` (gitRemote)
  *   - `generated/code-mode-globals/fs-declarations.js`  (workspace)
+ *   - `generated/code-mode-globals/shell-declarations.js` (shell)
+ *   - `generated/code-mode-globals/http-declarations.js` (http)
  *
  * Run with: `yarn workspace @endo/agent-tools gen:code-mode-types`
  *
@@ -30,6 +33,9 @@ import { fileURLToPath } from 'node:url';
 
 import { buildGitTypeDeclarations } from './code-mode-git-extract.js';
 import { buildFsTypeDeclarations } from './code-mode-fs-extract.js';
+import { buildGitRemoteTypeDeclarations } from './code-mode-git-remote-extract.js';
+import { buildHttpTypeDeclarations } from './code-mode-http-extract.js';
+import { buildShellTypeDeclarations } from './code-mode-shell-extract.js';
 
 /**
  * @param {string} descriptorFile The per-exo runtime descriptor module that
@@ -133,4 +139,33 @@ writeArtifact({
  *     (\`FilesystemInterface\` and the remotables it reaches), the richest
  *     available source since the FS \`.d.ts\` is a stub.`,
   declarations: buildFsTypeDeclarations(),
+});
+
+writeArtifact({
+  outPath: '../generated/code-mode-globals/shell-declarations.js',
+  exportName: 'shellDeclarations',
+  descriptorFile: 'shell.js',
+  sourceDoc: ` *   - shell: packages/exo-shell/src/types.ts (the \`EndoShell\` type alias),
+ *     printed by the TypeScript compiler API.`,
+  declarations: buildShellTypeDeclarations(),
+});
+
+writeArtifact({
+  outPath: '../generated/code-mode-globals/http-declarations.js',
+  exportName: 'httpDeclarations',
+  descriptorFile: 'http.js',
+  sourceDoc: ` *   - http: packages/exo-http-client/src/types.ts (the \`HttpClient\` type
+ *     alias), printed by the TypeScript compiler API, with
+ *     \`PassableBytesReader\` and the stream nodes it reaches followed into
+ *     packages/exo-stream/types.d.ts.`,
+  declarations: buildHttpTypeDeclarations(),
+});
+
+writeArtifact({
+  outPath: '../generated/code-mode-globals/git-remote-declarations.js',
+  exportName: 'gitRemoteDeclarations',
+  descriptorFile: 'git-remote.js',
+  sourceDoc: ` *   - gitRemote: packages/exo-git/src/types.ts (the \`GitRemote\` type alias),
+ *     printed by the TypeScript compiler API.`,
+  declarations: buildGitRemoteTypeDeclarations(),
 });
