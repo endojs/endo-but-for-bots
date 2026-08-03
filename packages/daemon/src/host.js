@@ -799,7 +799,23 @@ export const makeHostMaker = ({
         E(directory).storeIdentifier(namePath, identifiers.gitId),
       );
 
-      const { allowHistoryRewrite = false } = options;
+      const { allowHistoryRewrite = false, readOnly = false } = options;
+      // The `git` formula maker derives the returned capability's own
+      // read-only attenuation from the mount's backing (`backing.readOnly`),
+      // so a writable request handed a read-only mount would otherwise
+      // silently downgrade to a read-only Git capability rather than fail —
+      // misrepresenting the authority actually granted, the same rationale as
+      // provideShell's read-only-mount rejection.  A caller that intends a
+      // read-only Git capability opts in with `readOnly: true` to skip this
+      // gate.
+      if (!readOnly) {
+        const backing = getMountBacking(mountCap);
+        if (backing !== undefined && backing.readOnly) {
+          throw makeError(
+            X`provideGit: cannot construct writable Git over a read-only mount`,
+          );
+        }
+      }
       const identity = normalizeGitIdentity(options.identity, 'provideGit');
       const { value } = await formulateGit(
         mountId,
