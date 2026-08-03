@@ -49,7 +49,7 @@
     "@endo/random": "workspace:^",
     "babel-eslint": "^10.1.0",
     "eslint": "catalog:dev",
-    "prettier": "^3.5.3",
+    "prettier": "^3.9.6",
     "typescript": "catalog:dev"
   },
   "files": [
