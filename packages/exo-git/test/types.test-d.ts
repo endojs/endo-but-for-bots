@@ -13,9 +13,9 @@ import type {
   ReadOnlyEndoGit,
   ReadOnlyGitWorktree,
   ReadWriteEndoGit,
-  GitRemoteOperationResult,
-  GitRemotePullResult,
-  GitRemoteRefUpdate,
+  RemoteOperationResult,
+  RemotePullResult,
+  RemoteRefUpdate,
   WritableGitWorktree,
 } from '../src/types.js';
 
@@ -33,60 +33,60 @@ expectTypeOf<
 // Representative ref-update rows across every `GitRefUpdateResult` member,
 // both for a fetch (updating `refs/remotes/*`) and a push (updating
 // `refs/heads/*`), including the no-`local` deletion case. Each is a
-// construction-site check: an incompatible edit to `GitRemoteRefUpdate` or
+// construction-site check: an incompatible edit to `RemoteRefUpdate` or
 // `GitRefUpdateResult` fails to compile right here instead of at a call site
 // deep in the audit pipeline.
-const fetchCreated: GitRemoteRefUpdate = {
+const fetchCreated: RemoteRefUpdate = {
   local: { name: 'refs/remotes/origin/main', kind: 'branch', oid: 'oid' },
   remote: 'refs/heads/main',
   result: 'created',
 };
-const fetchUpdated: GitRemoteRefUpdate = {
+const fetchUpdated: RemoteRefUpdate = {
   local: { name: 'refs/remotes/origin/main', kind: 'branch', oid: 'oid' },
   remote: 'refs/heads/main',
   result: 'updated',
 };
-const fetchPruned: GitRemoteRefUpdate = {
+const fetchPruned: RemoteRefUpdate = {
   local: { name: 'refs/remotes/origin/old', kind: 'branch' },
   remote: 'refs/heads/old',
   result: 'pruned',
 };
-const pushCreated: GitRemoteRefUpdate = {
+const pushCreated: RemoteRefUpdate = {
   local: { name: 'refs/heads/topic', kind: 'branch', oid: 'oid' },
   remote: 'refs/heads/topic',
   result: 'created',
 };
-const pushForced: GitRemoteRefUpdate = {
+const pushForced: RemoteRefUpdate = {
   local: { name: 'refs/heads/topic', kind: 'branch', oid: 'oid' },
   remote: 'refs/heads/topic',
   result: 'forced',
 };
-const pushRejected: GitRemoteRefUpdate = {
+const pushRejected: RemoteRefUpdate = {
   local: { name: 'refs/heads/topic', kind: 'branch', oid: 'oid' },
   remote: 'refs/heads/topic',
   result: 'rejected',
 };
-const deletionPush: GitRemoteRefUpdate = {
+const deletionPush: RemoteRefUpdate = {
   remote: 'refs/heads/topic',
   result: 'pruned',
 };
-expectTypeOf(fetchCreated).toEqualTypeOf<GitRemoteRefUpdate>();
-expectTypeOf(fetchUpdated).toEqualTypeOf<GitRemoteRefUpdate>();
-expectTypeOf(fetchPruned).toEqualTypeOf<GitRemoteRefUpdate>();
-expectTypeOf(pushCreated).toEqualTypeOf<GitRemoteRefUpdate>();
-expectTypeOf(pushForced).toEqualTypeOf<GitRemoteRefUpdate>();
-expectTypeOf(pushRejected).toEqualTypeOf<GitRemoteRefUpdate>();
-expectTypeOf(deletionPush).toEqualTypeOf<GitRemoteRefUpdate>();
+expectTypeOf(fetchCreated).toEqualTypeOf<RemoteRefUpdate>();
+expectTypeOf(fetchUpdated).toEqualTypeOf<RemoteRefUpdate>();
+expectTypeOf(fetchPruned).toEqualTypeOf<RemoteRefUpdate>();
+expectTypeOf(pushCreated).toEqualTypeOf<RemoteRefUpdate>();
+expectTypeOf(pushForced).toEqualTypeOf<RemoteRefUpdate>();
+expectTypeOf(pushRejected).toEqualTypeOf<RemoteRefUpdate>();
+expectTypeOf(deletionPush).toEqualTypeOf<RemoteRefUpdate>();
 
 // A success audit event's `updatedRefs` is a plain array of
-// `GitRemoteRefUpdate` (never `readonly`, never widened to `any[]`), its
+// `RemoteRefUpdate` (never `readonly`, never widened to `any[]`), its
 // `head` is a full `GitRef`, and — the security-relevant pin — it has no
 // `credential` field at all: an audit log must never carry secret material,
 // so `credential` regressing from `never` to present-but-optional would be a
 // silent capability leak into logs.
 expectTypeOf<
   NonNullable<GitRemoteOperationSuccessAuditEvent['updatedRefs']>
->().toEqualTypeOf<GitRemoteRefUpdate[]>();
+>().toEqualTypeOf<RemoteRefUpdate[]>();
 expectTypeOf<
   NonNullable<GitRemoteOperationSuccessAuditEvent['head']>
 >().toEqualTypeOf<GitRef>();
@@ -107,13 +107,13 @@ expectTypeOf<NonNullable<PullOptions['branch']>>().toEqualTypeOf<
 // type would silently drop the runtime guard's compile-time counterpart.
 expectTypeOf<
   Awaited<ReturnType<GitRemote['fetch']>>
->().toEqualTypeOf<GitRemoteOperationResult>();
+>().toEqualTypeOf<RemoteOperationResult>();
 expectTypeOf<
   Awaited<ReturnType<GitRemote['pull']>>
->().toEqualTypeOf<GitRemotePullResult>();
+>().toEqualTypeOf<RemotePullResult>();
 expectTypeOf<
   Awaited<ReturnType<GitRemote['push']>>
->().toEqualTypeOf<GitRemoteOperationResult>();
+>().toEqualTypeOf<RemoteOperationResult>();
 
 declare const powers: Parameters<typeof makeGit>[0];
 declare const selectedAtRuntime: boolean;

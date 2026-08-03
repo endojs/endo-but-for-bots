@@ -366,9 +366,9 @@ test('Shell and HTTP declarations include named arguments and result shapes', t 
 
 test('GitRemote declarations include concrete result records', t => {
   const { aux } = gitRemoteDeclarations.gitRemote;
-  t.true(aux.includes('Promise<RemoteGitRemoteOperationResult>'));
-  t.true(aux.includes('type RemoteGitRemoteOperationResult ='));
-  t.true(aux.includes('type RemoteGitRemotePullResult ='));
+  t.true(aux.includes('Promise<RemoteOperationResult>'));
+  t.true(aux.includes('type RemoteOperationResult ='));
+  t.true(aux.includes('type RemotePullResult ='));
   t.false(aux.includes('Promise<any>'));
 });
 

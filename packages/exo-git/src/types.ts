@@ -31,19 +31,19 @@ export type GitRefUpdateResult =
   | 'pruned'
   | 'rejected';
 
-export type GitRemoteRefUpdate = {
+export type RemoteRefUpdate = {
   local?: GitRef;
   remote: string;
   result: GitRefUpdateResult;
 };
 
-export type GitRemoteOperationResult = {
-  updatedRefs: GitRemoteRefUpdate[];
+export type RemoteOperationResult = {
+  updatedRefs: RemoteRefUpdate[];
   text: string;
 };
 
-export type GitRemotePullResult = {
-  fetch: GitRemoteOperationResult;
+export type RemotePullResult = {
+  fetch: RemoteOperationResult;
   integration: 'up-to-date' | 'fast-forward' | 'merge' | 'rebase';
   head: GitRef;
 };
@@ -176,7 +176,7 @@ export type GitRemoteEndpoint = {
   watchChange: (onChange: () => void) => (() => void) | undefined;
 };
 
-export type GitRemotePolicy = {
+export type RemotePolicy = {
   /**
    * Host-controlled remote endpoint URL.
    * Guests cannot mutate this field at call time; only
@@ -200,7 +200,7 @@ export type GitRemoteAuditEventBase = {
 
 export type GitRemotePolicyAuditEvent = GitRemoteAuditEventBase & {
   type: 'create' | 'revoke' | 'policy';
-  policy: GitRemotePolicy & { name: string };
+  policy: RemotePolicy & { name: string };
   revoked: boolean;
   method?: string;
 };
@@ -208,7 +208,7 @@ export type GitRemotePolicyAuditEvent = GitRemoteAuditEventBase & {
 export type GitRemoteOperationSuccessAuditEvent = GitRemoteAuditEventBase & {
   type: 'fetch' | 'pull' | 'push';
   outcome: 'ok';
-  updatedRefs?: GitRemoteRefUpdate[];
+  updatedRefs?: RemoteRefUpdate[];
   integration?: 'up-to-date' | 'fast-forward' | 'merge' | 'rebase';
   head?: GitRef;
 };
@@ -229,20 +229,20 @@ export type GitRemoteAuditEvent =
   | GitRemoteOperationSuccessAuditEvent
   | GitRemoteOperationFailureAuditEvent;
 
-export type GitRemoteSnapshot = GitRemotePolicy & { name: string };
+export type RemoteSnapshot = RemotePolicy & { name: string };
 
 export type GitRemote = {
-  inspect: () => Promise<GitRemoteSnapshot>;
+  inspect: () => Promise<RemoteSnapshot>;
   fetch: (options?: {
     prune?: boolean;
     tags?: boolean;
-  }) => Promise<GitRemoteOperationResult>;
+  }) => Promise<RemoteOperationResult>;
   pull: (options?: {
     branch?: GitRef | string;
     strategy?: 'merge' | 'rebase' | 'ff-only';
     prune?: boolean;
     tags?: boolean;
-  }) => Promise<GitRemotePullResult>;
+  }) => Promise<RemotePullResult>;
   push: (options?: {
     /**
      * Ignored. `pushRefspecsFromOptions` never reads this field: a caller that
@@ -265,11 +265,11 @@ export type GitRemote = {
      */
     forceWithLease?: string;
     setUpstream?: boolean;
-  }) => Promise<GitRemoteOperationResult>;
+  }) => Promise<RemoteOperationResult>;
 };
 
 export type GitRemoteController = {
-  inspect: () => Promise<GitRemoteSnapshot & { revoked: boolean }>;
+  inspect: () => Promise<RemoteSnapshot & { revoked: boolean }>;
   audit: () => Promise<any>;
   setAllowedDirections: (directions: GitDirection[]) => Promise<void>;
   setFetchRefspecs: (refspecs: string[]) => Promise<void>;

@@ -104,7 +104,7 @@ const GitRefUpdateResultShape = M.or(
   'rejected',
 );
 
-const GitRemoteRefUpdateShape = M.splitRecord(
+const RemoteRefUpdateShape = M.splitRecord(
   {
     remote: M.string(),
     result: GitRefUpdateResultShape,
@@ -113,18 +113,18 @@ const GitRemoteRefUpdateShape = M.splitRecord(
   harden({}),
 );
 
-const GitRemoteOperationResultShape = M.splitRecord(
+const RemoteOperationResultShape = M.splitRecord(
   {
-    updatedRefs: M.arrayOf(GitRemoteRefUpdateShape),
+    updatedRefs: M.arrayOf(RemoteRefUpdateShape),
     text: M.string(),
   },
   {},
   harden({}),
 );
 
-const GitRemotePullResultShape = M.splitRecord(
+const RemotePullResultShape = M.splitRecord(
   {
-    fetch: GitRemoteOperationResultShape,
+    fetch: RemoteOperationResultShape,
     integration: M.or('up-to-date', 'fast-forward', 'merge', 'rebase'),
     head: GitRefShape,
   },
@@ -205,13 +205,13 @@ export const GitRemoteInterface = M.interface('GitRemote', {
   inspect: M.call().returns(M.promise()),
   fetch: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
-    .returns(GitRemoteOperationResultShape),
+    .returns(RemoteOperationResultShape),
   pull: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
-    .returns(GitRemotePullResultShape),
+    .returns(RemotePullResultShape),
   push: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
-    .returns(GitRemoteOperationResultShape),
+    .returns(RemoteOperationResultShape),
 });
 
 export const GitRemoteControllerInterface = M.interface('GitRemoteController', {
