@@ -2,13 +2,21 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { getInterfaceGuardPayload } from '@endo/patterns';
-import { GitInterface } from '@endo/exo-git';
+import { GitInterface, GitRemoteInterface } from '@endo/exo-git';
+import {
+  HttpClientInterface,
+  HttpResponseInterface,
+} from '@endo/exo-http-client';
+import { ShellInterface } from '@endo/exo-shell';
 import { FilesystemInterface } from '@endo/platform/fs/extended/type-guards.js';
 
 /** @import { InterfaceGuard } from '@endo/patterns' */
 
 import { gitDeclarations } from '../generated/code-mode-globals/git-declarations.js';
 import { fsDeclarations } from '../generated/code-mode-globals/fs-declarations.js';
+import { shellDeclarations } from '../generated/code-mode-globals/shell-declarations.js';
+import { httpDeclarations } from '../generated/code-mode-globals/http-declarations.js';
+import { gitRemoteDeclarations } from '../generated/code-mode-globals/git-remote-declarations.js';
 import {
   buildGitTypeDeclarations,
   buildGitIRs,
@@ -19,6 +27,18 @@ import {
   buildFsTypeDeclarations,
   buildWorkspaceIR,
 } from '../scripts/code-mode-fs-extract.js';
+import {
+  buildShellIR,
+  buildShellTypeDeclarations,
+} from '../scripts/code-mode-shell-extract.js';
+import {
+  buildHttpIR,
+  buildHttpTypeDeclarations,
+} from '../scripts/code-mode-http-extract.js';
+import {
+  buildGitRemoteIR,
+  buildGitRemoteTypeDeclarations,
+} from '../scripts/code-mode-git-remote-extract.js';
 
 /**
  * @param {string} aux
@@ -44,6 +64,36 @@ const declaredTypeMembers = (aux, typeName) => {
   return [
     ...declaration[1].matchAll(/^\s+([A-Za-z_$][0-9A-Za-z_$]*)\s*:/gm),
   ].map(([, name]) => name);
+};
+
+/**
+ * @param {string} text
+ * @returns {string[]}
+ */
+const declaredObjectMembers = text =>
+  [...text.matchAll(/^\s+([A-Za-z_$][0-9A-Za-z_$]*)\s*:/gm)].map(
+    ([, name]) => name,
+  );
+
+/**
+ * @param {import('@endo/patterns').InterfaceGuard} guard
+ * @returns {string[]}
+ */
+const guardMethodNames = guard =>
+  Object.keys(getInterfaceGuardPayload(guard).methodGuards).sort();
+
+/**
+ * @param {import('ava').ExecutionContext} t
+ * @param {import('../scripts/code-mode-type-extract.js').GlobalTypeIR} ir
+ * @param {import('@endo/patterns').InterfaceGuard} guard
+ * @param {string} label
+ */
+const assertIRMatchesGuard = (t, ir, guard, label) => {
+  t.deepEqual(
+    ir.members.map(member => member.name).sort(),
+    guardMethodNames(guard),
+    `${label} declaration must match its runtime guard method names`,
+  );
 };
 
 // Freshness gate (git): the checked-in git artifact must equal a fresh
@@ -73,6 +123,18 @@ test('generated fs declarations are up to date with their source', t => {
       `${key} declaration is stale; run: yarn workspace @endo/agent-tools gen:code-mode-types`,
     );
   }
+});
+
+test('generated Shell declarations are up to date with their source', t => {
+  t.deepEqual(shellDeclarations, buildShellTypeDeclarations());
+});
+
+test('generated HTTP declarations are up to date with their source', t => {
+  t.deepEqual(httpDeclarations, buildHttpTypeDeclarations());
+});
+
+test('generated GitRemote declarations are up to date with their source', t => {
+  t.deepEqual(gitRemoteDeclarations, buildGitRemoteTypeDeclarations());
 });
 
 // The base declaration stays guard-canonical except for the deliberately
@@ -126,6 +188,9 @@ test('git declarations expand the reachable platform filesystem contracts', t =>
     'root(): GitERef<GitExtendedDirectory>;',
     'type GitReadableBlob =',
     'type GitReadableTree =',
+    // Followed across packages: the blob range's reader comes from
+    // `@endo/exo-stream`, not from the platform filesystem source.
+    'fetch: (offset: bigint, length: bigint) => Promise<GitPassableBytesReader>;',
   ]) {
     t.true(aux.includes(shape), `missing reachable type shape: ${shape}`);
   }
@@ -227,6 +292,84 @@ test('workspace declarations derive from the Filesystem guard', t => {
       `${name} is not a Filesystem guard method`,
     );
   }
+});
+
+test('Shell, HTTP, and GitRemote declarations match runtime method names', t => {
+  assertIRMatchesGuard(t, buildShellIR(), ShellInterface, 'Shell');
+  assertIRMatchesGuard(t, buildHttpIR(), HttpClientInterface, 'HttpClient');
+  assertIRMatchesGuard(t, buildGitRemoteIR(), GitRemoteInterface, 'GitRemote');
+  const response = buildHttpIR().auxTypes.find(
+    type => type.name === 'HttpResponse',
+  );
+  if (response === undefined) {
+    t.fail('HttpClient declaration must include HttpResponse');
+  } else {
+    t.deepEqual(
+      declaredObjectMembers(response.text).sort(),
+      guardMethodNames(HttpResponseInterface),
+      'HttpResponse declaration must match its runtime guard',
+    );
+  }
+});
+
+// `HttpResponse.stream()` returns `import('@endo/exo-stream').PassableBytesReader`.
+// The extractor follows that import into `@endo/exo-stream`'s own type source,
+// so the declaration carries the real streaming surface and the stream-node
+// types it reaches, rather than a hand-written stand-in or `unknown`.
+test('HTTP stream declaration inlines the followed exo-stream reader shape', t => {
+  const { aux } = httpDeclarations.http;
+  t.false(aux.includes('stream: () => unknown;'));
+  t.true(aux.includes('stream: () => HttpPassableBytesReader;'));
+  t.true(aux.includes('type HttpPassableBytesReader<'));
+  t.true(aux.includes('streamBase64('));
+  t.true(aux.includes('readReturnPattern('));
+  for (const shape of [
+    'type HttpStreamNode<',
+    'type HttpStreamYieldNode<',
+    'type HttpStreamReturnNode<',
+  ]) {
+    t.true(aux.includes(shape), `missing followed exo-stream type: ${shape}`);
+  }
+  // The walk stops at the `@endo` namespace boundary and at packages that
+  // publish no type source: `Pattern` (`@endo/patterns`) and `Passable`
+  // (`@endo/pass-style`) collapse to `unknown` rather than leaking a dangling
+  // reference into the prompt.
+  t.false(aux.includes("import('@endo/"));
+  t.false(/\bPattern\b/u.test(aux));
+  t.false(/\bPassable\b(?!BytesReader)/u.test(aux));
+});
+
+// A followed type that references itself through another followed type
+// (`StreamNode` -> `StreamYieldNode` -> `StreamNode`) must terminate with one
+// alias apiece rather than expanding forever.
+test('following imported types is cycle-safe', t => {
+  const { aux } = httpDeclarations.http;
+  t.true(aux.includes('promise: Promise<HttpStreamNode<Y, R>>;'));
+  const names = declaredTypeNames(aux);
+  t.deepEqual(names, [...new Set(names)]);
+});
+
+test('Shell and HTTP declarations include named arguments and result shapes', t => {
+  t.true(
+    shellDeclarations.shell.aux.includes(
+      'exec: (command: string, args: readonly string[], options?:',
+    ),
+  );
+  t.true(shellDeclarations.shell.aux.includes('type ShellResult ='));
+  t.true(
+    httpDeclarations.http.aux.includes(
+      'fetch: (url: string, options?: HttpFetchOptions)',
+    ),
+  );
+  t.true(httpDeclarations.http.aux.includes('type HttpResponse ='));
+});
+
+test('GitRemote declarations include concrete result records', t => {
+  const { aux } = gitRemoteDeclarations.gitRemote;
+  t.true(aux.includes('Promise<RemoteGitRemoteOperationResult>'));
+  t.true(aux.includes('type RemoteGitRemoteOperationResult ='));
+  t.true(aux.includes('type RemoteGitRemotePullResult ='));
+  t.false(aux.includes('Promise<any>'));
 });
 
 test('workspace declaration reaches the Directory surface transitively', t => {
