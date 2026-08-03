@@ -24,17 +24,17 @@
 export const gitRemoteDeclarations = harden({
   gitRemote: {
     aux: `type GitRemote = {
-  inspect: () => Promise<RemoteGitRemoteSnapshot>;
+  inspect: () => Promise<RemoteSnapshot>;
   fetch: (options?: {
     prune?: boolean;
     tags?: boolean;
-}) => Promise<RemoteGitRemoteOperationResult>;
+}) => Promise<RemoteOperationResult>;
   pull: (options?: {
     branch?: RemoteGitRef | string;
     strategy?: 'merge' | 'rebase' | 'ff-only';
     prune?: boolean;
     tags?: boolean;
-}) => Promise<RemoteGitRemotePullResult>;
+}) => Promise<RemotePullResult>;
   push: (options?: {
     refspecs?: string[];
     source?: string;
@@ -42,7 +42,7 @@ export const gitRemoteDeclarations = harden({
     force?: boolean;
     forceWithLease?: string;
     setUpstream?: boolean;
-}) => Promise<RemoteGitRemoteOperationResult>;
+}) => Promise<RemoteOperationResult>;
 };
 type RemoteGitDirection = 'fetch' | 'push';
 type RemoteGitRef = {
@@ -51,11 +51,11 @@ type RemoteGitRef = {
     oid?: string;
 };
 type RemoteGitRefUpdateResult = 'created' | 'updated' | 'up-to-date' | 'fast-forward' | 'forced' | 'pruned' | 'rejected';
-type RemoteGitRemoteOperationResult = {
-    updatedRefs: RemoteGitRemoteRefUpdate[];
+type RemoteOperationResult = {
+    updatedRefs: RemoteRefUpdate[];
     text: string;
 };
-type RemoteGitRemotePolicy = {
+type RemotePolicy = {
     url: string;
     allowedDirections: RemoteGitDirection[];
     fetchRefspecs: string[];
@@ -66,17 +66,17 @@ type RemoteGitRemotePolicy = {
     allowDelete?: boolean;
     allowLocalFileTransport?: boolean;
 };
-type RemoteGitRemotePullResult = {
-    fetch: RemoteGitRemoteOperationResult;
+type RemotePullResult = {
+    fetch: RemoteOperationResult;
     integration: 'up-to-date' | 'fast-forward' | 'merge' | 'rebase';
     head: RemoteGitRef;
 };
-type RemoteGitRemoteRefUpdate = {
+type RemoteRefUpdate = {
     local?: RemoteGitRef;
     remote: string;
     result: RemoteGitRefUpdateResult;
 };
-type RemoteGitRemoteSnapshot = RemoteGitRemotePolicy & {
+type RemoteSnapshot = RemotePolicy & {
     name: string;
 };`,
     body: `GitRemote`,

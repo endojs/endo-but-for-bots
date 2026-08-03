@@ -21,15 +21,15 @@ import { assertGitCredentialForUrl } from './git-credential.js';
  *   GitRemoteCredential,
  *   GitRemoteEndpoint,
  *   GitRemoteKit,
- *   GitRemoteOperationResult,
- *   GitRemotePolicy,
- *   GitRemotePullResult,
- *   GitRemoteSnapshot,
+ *   RemoteOperationResult,
+ *   RemotePolicy,
+ *   RemotePullResult,
+ *   RemoteSnapshot,
  * } from './types.js'
  */
 
 const DEFAULT_POLICY = harden(
-  /** @type {Required<Omit<GitRemotePolicy, 'allowedBranches' | 'url'>>} */ ({
+  /** @type {Required<Omit<RemotePolicy, 'allowedBranches' | 'url'>>} */ ({
     allowedDirections: harden(['fetch']),
     fetchRefspecs: harden([]),
     pushRefspecs: harden([]),
@@ -234,7 +234,7 @@ harden(parseRefspec);
 
 /**
  * @param {string} refspec
- * @param {GitRemotePolicy} policy
+ * @param {RemotePolicy} policy
  * @param {string} remoteName
  * @param {string} fieldName
  */
@@ -265,7 +265,7 @@ harden(validateFetchRefspec);
 
 /**
  * @param {string} refspec
- * @param {GitRemotePolicy} policy
+ * @param {RemotePolicy} policy
  * @param {string} fieldName
  */
 const validatePushRefspec = (refspec, policy, fieldName) => {
@@ -351,8 +351,8 @@ harden(derivePushRefspecsFromBranches);
 /**
  * @param {object} args
  * @param {string} args.name
- * @param {GitRemotePolicy} args.policy
- * @returns {GitRemotePolicy}
+ * @param {RemotePolicy} args.policy
+ * @returns {RemotePolicy}
  */
 const normalizePolicy = ({ name, policy }) => {
   const allowLocalFileTransport = requirePolicyBoolean(
@@ -592,10 +592,10 @@ harden(makeGitRemoteEndpoint);
  *   bound to.  Guest operations on the remote always compose with this
  *   Git; revoking the local Git collects the remote too.
  * @param {string} args.name  Remote name (typically 'origin').
- * @param {GitRemotePolicy} args.policy
+ * @param {RemotePolicy} args.policy
  * @param {boolean} [args.revoked]
  * @param {object} [args.credential]
- * @param {(state: { policy: GitRemotePolicy, revoked: boolean }) => Promise<void> | void} [args.onStateChange]
+ * @param {(state: { policy: RemotePolicy, revoked: boolean }) => Promise<void> | void} [args.onStateChange]
  * @returns {GitRemoteKit}
  */
 export const makeGitRemote = ({
@@ -627,7 +627,7 @@ export const makeGitRemote = ({
 
   // The policy record is mutable through the controller; we keep a
   // mutable struct here and freeze each read view we hand out.
-  /** @type {GitRemotePolicy} */
+  /** @type {RemotePolicy} */
   let currentPolicy = normalizePolicy({ name, policy });
   // GitRemote = GitRemoteEndpoint x existing Git: the endpoint owns the
   // `{ url, transport, credential }` sub-bundle and its credential
@@ -1043,7 +1043,7 @@ export const makeGitRemote = ({
   };
 
   const remote = makeExo('GitRemote', GitRemoteInterface, {
-    /** @returns {Promise<GitRemoteSnapshot>} */
+    /** @returns {Promise<RemoteSnapshot>} */
     async inspect() {
       ensureLive();
       return snapshotPolicy();
@@ -1051,7 +1051,7 @@ export const makeGitRemote = ({
 
     /**
      * @param {Parameters<GitRemote['fetch']>[0]} [options]
-     * @returns {Promise<GitRemoteOperationResult>}
+     * @returns {Promise<RemoteOperationResult>}
      */
     async fetch(options = {}) {
       await null;
@@ -1088,7 +1088,7 @@ export const makeGitRemote = ({
 
     /**
      * @param {Parameters<GitRemote['pull']>[0]} [options]
-     * @returns {Promise<GitRemotePullResult>}
+     * @returns {Promise<RemotePullResult>}
      */
     async pull(options = {}) {
       await null;
@@ -1170,7 +1170,7 @@ export const makeGitRemote = ({
         });
         assertOperationFence('pull', fence);
         recordOperationSuccess('pull', result);
-        return /** @type {GitRemotePullResult} */ (result);
+        return /** @type {RemotePullResult} */ (result);
       } catch (err) {
         const finalErr =
           fence === undefined ? err : operationError('pull', fence, err);
@@ -1181,7 +1181,7 @@ export const makeGitRemote = ({
 
     /**
      * @param {Parameters<GitRemote['push']>[0]} [options]
-     * @returns {Promise<GitRemoteOperationResult>}
+     * @returns {Promise<RemoteOperationResult>}
      */
     async push(options = {}) {
       await null;

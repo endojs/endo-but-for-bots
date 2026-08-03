@@ -45,7 +45,7 @@ const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
  *   GitDeleteBranchOptions,
  *   GitMergeOptions,
  *   GitRemoteCredential,
- *   GitRemoteRefUpdate,
+ *   RemoteRefUpdate,
  *   GitRefUpdateResult,
  *   GitRebaseInput,
  *   GitRef,
@@ -1604,7 +1604,7 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
    * @param {Map<string, string>} after
    */
   const summarizeFetchRefUpdates = (refspecs, before, after) => {
-    /** @type {GitRemoteRefUpdate[]} */
+    /** @type {RemoteRefUpdate[]} */
     const updates = [];
     const seen = new Set();
     for (const [index, refspec] of refspecs.entries()) {
@@ -1654,7 +1654,7 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
 
   /**
    * @param {string} raw
-   * @returns {Promise<GitRemoteRefUpdate[]>}
+   * @returns {Promise<RemoteRefUpdate[]>}
    */
   const parsePushPorcelainUpdates = async raw => {
     const records = raw.split('\n').flatMap(line => {
