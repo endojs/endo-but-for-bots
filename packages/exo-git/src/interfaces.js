@@ -132,6 +132,46 @@ const RemotePullResultShape = M.splitRecord(
   harden({}),
 );
 
+const RemotePolicyRequiredShape = {
+  url: M.string(),
+  allowedDirections: M.arrayOf(GitDirectionShape),
+  fetchRefspecs: M.arrayOf(M.string()),
+  pushRefspecs: M.arrayOf(M.string()),
+};
+
+const RemotePolicyOptionalShape = {
+  allowedBranches: M.arrayOf(M.string()),
+  allowForcePush: M.boolean(),
+  allowTags: M.boolean(),
+  allowDelete: M.boolean(),
+  allowLocalFileTransport: M.boolean(),
+};
+
+const RemoteSnapshotShape = M.splitRecord(
+  { ...RemotePolicyRequiredShape, name: M.string() },
+  RemotePolicyOptionalShape,
+  harden({}),
+);
+
+const RemoteControllerSnapshotShape = M.splitRecord(
+  { ...RemotePolicyRequiredShape, name: M.string(), revoked: M.boolean() },
+  RemotePolicyOptionalShape,
+  harden({}),
+);
+
+const GitCredentialKindShape = M.or('bearer', 'basic');
+
+const GitCredentialSnapshotShape = M.splitRecord(
+  {
+    kind: GitCredentialKindShape,
+    audience: M.string(),
+    available: M.boolean(),
+    revoked: M.boolean(),
+  },
+  {},
+  harden({}),
+);
+
 // #endregion
 
 export const GitInterface = M.interface('Git', {
@@ -202,7 +242,7 @@ export const GitTreeInterface = M.interface('EndoGitTree', {
 });
 
 export const GitRemoteInterface = M.interface('GitRemote', {
-  inspect: M.call().returns(M.promise()),
+  inspect: M.callWhen().returns(RemoteSnapshotShape),
   fetch: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
     .returns(RemoteOperationResultShape),
@@ -215,7 +255,7 @@ export const GitRemoteInterface = M.interface('GitRemote', {
 });
 
 export const GitRemoteControllerInterface = M.interface('GitRemoteController', {
-  inspect: M.call().returns(M.promise()),
+  inspect: M.callWhen().returns(RemoteControllerSnapshotShape),
   audit: M.call().returns(M.promise()),
   setAllowedDirections: M.call(M.arrayOf(GitDirectionShape)).returns(
     M.promise(),
@@ -232,7 +272,7 @@ export const GitRemoteControllerInterface = M.interface('GitRemoteController', {
 export const GitCredentialControllerInterface = M.interface(
   'GitCredentialController',
   {
-    inspect: M.call().returns(M.promise()),
+    inspect: M.callWhen().returns(GitCredentialSnapshotShape),
     rotate: M.call(M.recordOf(M.string(), M.any())).returns(M.promise()),
     revoke: M.call().returns(M.promise()),
   },
