@@ -237,6 +237,10 @@ type GitOpenFileOptions = {
     truncate?: boolean;
     append?: boolean;
 };
+type GitPassableBytesReader<TReadReturn = undefined> = {
+    streamBase64(synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>): Promise<GitStreamNode<string, TReadReturn>>;
+    readReturnPattern(): unknown | undefined;
+};
 type GitPathEntry = GitLitePathEntry;
 type GitPathEntryIssuer = GitLitePathEntryIssuer;
 type GitQid = {
@@ -263,7 +267,7 @@ type GitReadOnlyGitWorktree = GitReadableTree;
 type GitReadableBlob = GitReadableBlobRange;
 type GitReadableBlobRange = GitLiteReadableBlob & {
     getInfo: () => Promise<GitBlobInfo>;
-    fetch: (offset: bigint, length: bigint) => Promise<unknown>;
+    fetch: (offset: bigint, length: bigint) => Promise<GitPassableBytesReader>;
 };
 type GitReadableBlobSource = {
     streamBase64: (...args: any[]) => PromiseLike<unknown>;
@@ -276,6 +280,15 @@ type GitSnapshotBlob = GitLiteReadableBlob & {
 type GitSnapshotTree = GitLiteReadableTree & {
     sha256: () => string;
     getInfo: () => Promise<GitBlobInfo>;
+};
+type GitStreamNode<Y = undefined, R = undefined> = GitStreamYieldNode<Y, R> | GitStreamReturnNode<R>;
+type GitStreamReturnNode<R = undefined> = {
+    value: R;
+    promise: null;
+};
+type GitStreamYieldNode<Y = unknown, R = undefined> = {
+    value: Y;
+    promise: Promise<GitStreamNode<Y, R>>;
 };
 type GitTreeEntry = {
     path: string[];
@@ -339,7 +352,7 @@ type GitRef = {
   stashShow: (index?: number) => Promise<string>;
   tree: (ref: GitRef | string) => Promise<GitReadableTree>;
   filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
-  readOnly: () => GitImportedReadOnlyEndoGit;
+  readOnly: () => ReadOnlyEndoGit;
 };
 type GitBlobInfo = {
     algorithm: string;
@@ -436,21 +449,6 @@ type GitStatusEntry = {
 };
 type GitStatusNode = GitDirectory | GitFile | GitReadableTree | GitReadableBlob;
 type GitWorktreeStatus = 'clean' | 'modified' | 'deleted' | 'untracked' | 'ignored' | 'conflicted';
-type GitImportedReadOnlyEndoGit = {
-    worktree: () => Promise<GitReadOnlyGitWorktree>;
-    status: () => Promise<GitStatusEntry[]>;
-    diff: (options?: GitDiffOptions) => Promise<string>;
-    log: (options?: GitLogOptions) => Promise<GitCommit[]>;
-    show: (ref: GitRef | string) => Promise<string>;
-    revParse: (ref: GitRef | string) => Promise<GitRef>;
-    currentBranch: () => Promise<GitRef | undefined>;
-    branches: () => Promise<GitRef[]>;
-    stashList: () => Promise<string[]>;
-    stashShow: (index?: number) => Promise<string>;
-    tree: (ref: GitRef | string) => Promise<GitReadableTree>;
-    filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
-    readOnly: () => GitImportedReadOnlyEndoGit;
-};
 type GitLiteDirectory = {
     has: (...path: string[]) => Promise<boolean>;
     list: (...path: string[]) => Promise<string[]>;
@@ -516,6 +514,10 @@ type GitOpenFileOptions = {
     truncate?: boolean;
     append?: boolean;
 };
+type GitPassableBytesReader<TReadReturn = undefined> = {
+    streamBase64(synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>): Promise<GitStreamNode<string, TReadReturn>>;
+    readReturnPattern(): unknown | undefined;
+};
 type GitPathEntry = GitLitePathEntry;
 type GitQid = {
     type: 'file' | 'directory';
@@ -526,7 +528,7 @@ type GitReadOnlyGitWorktree = GitReadableTree;
 type GitReadableBlob = GitReadableBlobRange;
 type GitReadableBlobRange = GitLiteReadableBlob & {
     getInfo: () => Promise<GitBlobInfo>;
-    fetch: (offset: bigint, length: bigint) => Promise<unknown>;
+    fetch: (offset: bigint, length: bigint) => Promise<GitPassableBytesReader>;
 };
 type GitReadableBlobSource = {
     streamBase64: (...args: any[]) => PromiseLike<unknown>;
@@ -539,6 +541,15 @@ type GitSnapshotBlob = GitLiteReadableBlob & {
 type GitSnapshotTree = GitLiteReadableTree & {
     sha256: () => string;
     getInfo: () => Promise<GitBlobInfo>;
+};
+type GitStreamNode<Y = undefined, R = undefined> = GitStreamYieldNode<Y, R> | GitStreamReturnNode<R>;
+type GitStreamReturnNode<R = undefined> = {
+    value: R;
+    promise: null;
+};
+type GitStreamYieldNode<Y = unknown, R = undefined> = {
+    value: Y;
+    promise: Promise<GitStreamNode<Y, R>>;
 };
 type GitTreeEntry = {
     path: string[];
