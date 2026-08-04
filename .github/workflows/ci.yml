@@ -101,6 +101,9 @@ jobs:
       - name: Check the root TypeScript program
         run: corepack yarn tsc -p tsconfig.json --noEmit
 
+      - name: Check workspace TypeScript programs
+        run: corepack yarn lint:workspaces:types
+
       - name: Build composite TypeScript declarations
         run: corepack yarn build:types
 
