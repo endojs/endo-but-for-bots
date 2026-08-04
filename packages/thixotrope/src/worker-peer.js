@@ -8,7 +8,21 @@ import { syrupCodec } from '@endo/ocapn/syrup';
 
 import { makePipeNetwork } from './pipe-network.js';
 
+/** @import { ERef } from '@endo/eventual-send' */
+
 const IDENTIFIER_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+/**
+ * The facet published under the well-known `shell` swissnum: what a
+ * host gets back when it fetches `shell` from a worker session's
+ * bootstrap. Named here, beside the implementation, so that a host
+ * fetching the shell can say which interface it expects instead of
+ * receiving an untyped presence.
+ *
+ * @typedef {object} ThixotropeWorkerShell
+ * @property {() => ERef<string>} help
+ * @property {(source: string, endowments?: Record<string, unknown>) => ERef<unknown>} evaluate
+ */
 
 /**
  * The OCapN-native thixotrope worker shell (protocol unification, worker

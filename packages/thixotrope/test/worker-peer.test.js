@@ -3,11 +3,11 @@ import test from '@endo/ses-ava/test.js';
 
 import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { E } from '@endo/eventual-send';
-import { makeOcapn } from '@endo/ocapn';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
 import { makePipeNetwork } from '../src/pipe-network.js';
 import { makeWorkerPeer } from '../src/worker-peer.js';
+import { makeTestOcapn } from './_util.js';
 
 // Wire swissnums are (immutable) bytes, as `enlivenSturdyRef` encodes.
 const SHELL_SWISSNUM = bytesToImmutable(new TextEncoder().encode('shell'));
@@ -72,7 +72,7 @@ test('a worker peer speaks OCapN p2p to the host over a pipe', async t => {
   });
   duct.bindHost(hostPipe.deliver);
 
-  const hostClient = await makeOcapn({
+  const hostClient = await makeTestOcapn({
     codec: syrupCodec,
     network: hostPipe.network,
     debugLabel: 'host-of-worker',

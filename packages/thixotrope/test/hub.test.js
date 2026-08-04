@@ -14,12 +14,12 @@ import test from '@endo/ses-ava/test.js';
 import harden from '@endo/harden';
 import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { E } from '@endo/eventual-send';
-import { makeOcapn } from '@endo/ocapn';
 import { makeOcapnHub } from '@endo/ocapn/hub';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
 import { makePipeNetwork } from '../src/pipe-network.js';
 import { makeWorkerPeer } from '../src/worker-peer.js';
+import { makeTestOcapn } from './_util.js';
 
 const textEncoder = new TextEncoder();
 /** @param {string} text */
@@ -133,7 +133,7 @@ const attachClient = async (
       }
     },
   });
-  const client = await makeOcapn({
+  const client = await makeTestOcapn({
     codec: syrupCodec,
     network: pipe.network,
     debugLabel,

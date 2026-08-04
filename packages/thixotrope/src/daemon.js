@@ -19,8 +19,11 @@ import { isSessionToken } from './store-fs.js';
 import { makeWorkerSessionRecords } from './worker-session-records.js';
 
 /**
+ * @import {ERef, FarRef} from '@endo/eventual-send'
+ * @import {Connection, OcapnBootstrap} from '@endo/ocapn/client/types'
  * @import {WorkerEngine} from './worker-engine.js'
  * @import {ThixotropeStore} from './store-fs.js'
+ * @import {ThixotropeWorkerShell} from './worker-peer.js'
  */
 
 /**
@@ -75,8 +78,13 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  * @property {(name: string, description?: unknown) => object} makeResource
  * @property {(value: object, secret?: string) => string} publish
  * @property {(secret: string) => void} unpublish
- * @property {(secret: string) => Promise<any>} lookup the embedder's
- *   in-process route to a publication, through the endpoint
+ * @property {<T = any>(secret: string | Uint8Array) => Promise<T>} lookup the
+ *   embedder's in-process route to a publication, through the endpoint.
+ *   The daemon cannot know what interface a publication has — the
+ *   embedder that published it does — so `T` is the embedder's to name
+ *   on the receiving declaration. Its default leaves the result as
+ *   unconstrained as it was before, so an embedder that names nothing
+ *   is unaffected.
  * @property {(options?: { keep?: Array<string> }) => Promise<Array<string>>} collectVats
  * @property {() => Promise<void>} shutdown
  * @property {() => Promise<void>} crash abandon live state the way a
@@ -140,7 +148,7 @@ export const makeThixotropeDaemon = async ({
     }),
   });
 
-  /** @type {Map<string, { transport: any, sink: any, shellP?: Promise<any> }>} */
+  /** @type {Map<string, { transport: any, sink: any, shellP?: Promise<ThixotropeWorkerShell> }>} */
   const workers = new Map();
 
   /** @param {string} workerId */
@@ -209,9 +217,9 @@ export const makeThixotropeDaemon = async ({
     sessionHooks: {
       ...records.sessionHooks,
       onImport: (
-        /** @type {any} */ connection,
+        /** @type {Connection} */ connection,
         /** @type {string} */ slot,
-        /** @type {object} */ value,
+        /** @type {FarRef<object>} */ value,
       ) => {
         if (slot[0] === 'o' && slot[1] === '-') {
           importPositions.set(value, BigInt(slot.slice(2)));
@@ -627,14 +635,14 @@ export const makeThixotropeDaemon = async ({
     endpointResumption.peerLocation,
   );
 
-  /** @param {string | Uint8Array} secret */
+  /** @type {ThixotropeDaemon['lookup']} */
   const lookup = async secret => {
     const session = await endpointSessionP;
     const bytes =
       typeof secret === 'string'
         ? encodeSwissnum(secret)
         : swissnumFromBytes(secret);
-    return E(/** @type {any} */ (session.getBootstrap())).fetch(bytes);
+    return E(session.getBootstrap()).fetch(bytes);
   };
 
   /**
@@ -656,11 +664,14 @@ export const makeThixotropeDaemon = async ({
         session: workerId,
         position: 0n,
       });
+      /** @type {FarRef<OcapnBootstrap>} */
       const bootstrap = endpointResumed.provideImport({
         type: 'o',
         position: facing,
       });
-      entry.shellP = Promise.resolve(E(bootstrap).fetch(SHELL_SWISSNUM));
+      /** @type {ERef<ThixotropeWorkerShell>} */
+      const shell = E(bootstrap).fetch(SHELL_SWISSNUM);
+      entry.shellP = Promise.resolve(shell);
     }
     return entry.shellP;
   };
