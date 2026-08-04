@@ -18,7 +18,6 @@ import { fileURLToPath } from 'node:url';
 
 import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { E } from '@endo/eventual-send';
-import { makeOcapn } from '@endo/ocapn';
 import { makeOcapnHub } from '@endo/ocapn/hub';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
@@ -26,6 +25,7 @@ import { makeDurableWorkerTransport } from '../src/durable-worker-transport.js';
 import { makePipeNetwork } from '../src/pipe-network.js';
 import { makeFsStore } from '../src/store-fs.js';
 import { makeXsEngine } from '../src/xs-engine.js';
+import { makeTestOcapn } from './_util.js';
 
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const workerBinary =
@@ -111,7 +111,7 @@ testXs('an XS worker session sleeps, wakes, and survives crashes', async t => {
       }
     },
   });
-  const client = await makeOcapn({
+  const client = await makeTestOcapn({
     codec: syrupCodec,
     network: pipe.network,
     debugLabel: 'embedder-xs',
