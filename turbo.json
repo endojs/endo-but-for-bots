@@ -9,6 +9,10 @@
       "dependsOn": ["build"],
       "outputs": []
     },
+    "lint:types": {
+      "cache": false,
+      "outputs": []
+    },
     "test": {
       "dependsOn": ["build", "^build"],
       "outputs": []

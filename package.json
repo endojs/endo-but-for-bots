@@ -62,6 +62,7 @@
     "lint:workspaces:fix": "yarn workspaces foreach --all run lint-fix",
     "lint:prettier": "prettier --check .github packages",
     "lint:sh": "scripts/shellcheck.sh",
+    "lint:workspaces:types": "yarn turbo run lint:types --continue=always",
     "release:npm": "scripts/release-npm.mjs",
     "pack:all": "scripts/pack-all.mjs",
     "smoketest:publish": "scripts/smoketest-publishing.sh",
