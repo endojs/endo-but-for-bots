@@ -2,8 +2,7 @@
 
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
-import { test } from './_util.js';
-import { makeOcapn } from '../src/client/index.js';
+import { fetchRemote, makeTestOcapn, test } from './_util.js';
 import { makeWebSocketNetLayer } from '../src/netlayers/websocket.js';
 import { encodeSwissnum } from '../src/client/util.js';
 import { syrupCodec } from '../src/syrup/index.js';
@@ -12,6 +11,9 @@ import { syrupCodec } from '../src/syrup/index.js';
  * @template T
  * @typedef {{ netlayer?: T }} NetlayerRef
  */
+
+/** @import { ERef } from '@endo/eventual-send' */
+/** @typedef {{ echo: (value: unknown) => ERef<unknown> }} EchoService */
 
 /**
  * Wrap `makeWebSocketNetLayer` so its resolved netlayer is captured in
@@ -40,13 +42,13 @@ test('websocket netlayer establishes session and delivers messages', async t => 
   /** @type {NetlayerRef<Awaited<ReturnType<typeof makeWebSocketNetLayer>>>} */
   const netlayerRefB = {};
 
-  const clientA = await makeOcapn({
+  const clientA = await makeTestOcapn({
     codec: syrupCodec,
     network: captureWebSocketNetLayer(netlayerRefA),
     debugLabel: 'ws-A',
     debugMode: true,
   });
-  const clientB = await makeOcapn({
+  const clientB = await makeTestOcapn({
     codec: syrupCodec,
     network: captureWebSocketNetLayer(netlayerRefB),
     debugLabel: 'ws-B',
@@ -74,7 +76,9 @@ test('websocket netlayer establishes session and delivers messages', async t => 
     await debugB.provideInternalSession(netlayerA.location);
 
     const bootstrap = sessionA.ocapn.getRemoteBootstrap();
-    const echoRef = await E(bootstrap).fetch(encodeSwissnum('Echo'));
+    const echoRef = await /** @type {ERef<EchoService>} */ (
+      fetchRemote(bootstrap, encodeSwissnum('Echo'))
+    );
     const echoed = await E(echoRef).echo('hello websocket');
     t.is(echoed, 'hello websocket');
   } finally {
@@ -89,13 +93,13 @@ test('websocket netlayer rejects peer with mismatched designator', async t => {
   /** @type {NetlayerRef<Awaited<ReturnType<typeof makeWebSocketNetLayer>>>} */
   const netlayerRefB = {};
 
-  const clientA = await makeOcapn({
+  const clientA = await makeTestOcapn({
     codec: syrupCodec,
     network: captureWebSocketNetLayer(netlayerRefA),
     debugLabel: 'ws-auth-A',
     debugMode: true,
   });
-  const clientB = await makeOcapn({
+  const clientB = await makeTestOcapn({
     codec: syrupCodec,
     network: captureWebSocketNetLayer(netlayerRefB),
     debugLabel: 'ws-auth-B',

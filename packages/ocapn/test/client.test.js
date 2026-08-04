@@ -11,6 +11,7 @@ import {
   makeTestClientPair,
   makeUntagTestHelper,
   getOcapnDebug,
+  fetchRemote,
 } from './_util.js';
 import { encodeSwissnum } from '../src/client/util.js';
 import { makeCryptography } from '../src/cryptography.js';
@@ -19,6 +20,23 @@ import { writeOcapnHandshakeMessage } from '../src/codecs/operations.js';
 import { makeSlot } from '../src/captp/pairwise.js';
 
 const { makeOcapnKeyPair, signLocation } = makeCryptography(syrupCodec);
+
+/** @import { ERef } from '@endo/eventual-send' */
+
+/** @typedef {(...args: unknown[]) => unknown} TestCallableObject */
+/** @typedef {{ xyz: (...args: unknown[]) => unknown, getValue: (...args: unknown[]) => unknown }} TestRemoteObject */
+/** @typedef {{ foo: string, baz: number, nested: { value: string }, delayed: string, count: number }} TestRecord */
+/** @typedef {{ foo: string, baz: number, nonExistent: unknown }} TestMissingFieldRecord */
+/** @typedef {{ someField: unknown }} TestRemotableObject */
+/** @typedef {{ someField: unknown }} TestRejectedRecord */
+/** @typedef {() => ERef<Promise<unknown>[]>} TestPromisesProvider */
+/** @typedef {() => ERef<(...args: unknown[]) => unknown>} TestCallableProvider */
+/** @typedef {{ echo: (...args: unknown[]) => ERef<TestRemoteObject> }} TestEchoObject */
+/** @typedef {{ slowMethod: () => ERef<TestRemoteObject> }} TestSlowObject */
+/** @typedef {{ getSturdyRef: (...args: unknown[]) => ERef<TestCallableObject> }} TestSturdyRefReturner */
+/** @typedef {() => ERef<TestRecord>} TestRecordProvider */
+/** @typedef {() => ERef<TestRemoteObject>} TestRemoteObjectProvider */
+/** @typedef {{ slowMethod: () => ERef<unknown>, fastMethod: () => ERef<unknown> }} TestSlowResponder */
 
 test('test slow send', async t => {
   const testObjectTable = new Map();
@@ -102,12 +120,16 @@ testWithErrorUnwrapping(
     } = await establishSession();
     const bootstrapA = ocapnA.getRemoteBootstrap();
 
-    const getPromises = E(bootstrapA).fetch(encodeSwissnum('Get Promises'));
+    const getPromises = /** @type {ERef<TestPromisesProvider>} */ (
+      fetchRemote(bootstrapA, encodeSwissnum('Get Promises'))
+    );
     const promises = await E(getPromises)();
 
     // Do some promise pipelining so that incorrectly implemented answerPositions
     // could conflict with exported promises
-    const getNumberGetter = E(bootstrapA).fetch(encodeSwissnum('Deep Number'));
+    const getNumberGetter = /** @type {ERef<TestCallableProvider>} */ (
+      fetchRemote(bootstrapA, encodeSwissnum('Deep Number'))
+    );
     const numberGetter = E(getNumberGetter)();
     const number = await E(numberGetter)();
     t.is(number, 42, 'Number is 42');
@@ -587,7 +609,9 @@ testWithErrorUnwrapping(
 
     // Alice gets Bob's EchoObj
     const bootstrapB = ocapnA.getRemoteBootstrap();
-    const bobEchoObj = await E(bootstrapB).fetch(encodeSwissnum('EchoObj'));
+    const bobEchoObj = await /** @type {ERef<TestEchoObject>} */ (
+      fetchRemote(bootstrapB, encodeSwissnum('EchoObj'))
+    );
 
     // Alice calls echo with her local object (without awaiting)
     const echoPromise = E(bobEchoObj).echo(aliceFooObj);
@@ -632,14 +656,18 @@ testWithErrorUnwrapping(
     const bootstrapB = ocapnA.getRemoteBootstrap();
 
     // Alice gets Bob's SlowObj (a REMOTE object)
-    const bobSlowObj = await E(bootstrapB).fetch(encodeSwissnum('SlowObj'));
+    const bobSlowObj = await /** @type {ERef<TestSlowObject>} */ (
+      fetchRemote(bootstrapB, encodeSwissnum('SlowObj'))
+    );
 
     // Alice calls slowMethod on the REMOTE object, creating a REMOTE answer promise
     // This is the key difference: answerPromise is a remote answer (a-N slot), not a local promise
     const answerPromise = E(bobSlowObj).slowMethod();
 
     // Alice gets Bob's EchoObj
-    const bobEchoObj = await E(bootstrapB).fetch(encodeSwissnum('EchoObj'));
+    const bobEchoObj = await /** @type {ERef<TestEchoObject>} */ (
+      fetchRemote(bootstrapB, encodeSwissnum('EchoObj'))
+    );
 
     // Alice passes the remote answer promise to Bob's echo method
     // This tests that remote answer promises can be sent as arguments,
@@ -687,9 +715,10 @@ testWithErrorUnwrapping(
 
       // Get Bob's SturdyRefReturner
       const bootstrapB = ocapnA.getRemoteBootstrap();
-      const sturdyRefReturner = await E(bootstrapB).fetch(
-        encodeSwissnum('SturdyRefReturner'),
-      );
+      const sturdyRefReturner =
+        await /** @type {ERef<TestSturdyRefReturner>} */ (
+          fetchRemote(bootstrapB, encodeSwissnum('SturdyRefReturner'))
+        );
 
       // Get a promise that will resolve to a sturdyref
       // (Bob's method returns a sturdyref)
@@ -755,8 +784,8 @@ test('op:get with valid copyRecord', async t => {
     } = await establishSession();
     const bootstrapB = ocapnA.getRemoteBootstrap();
 
-    const recordProvider = E(bootstrapB).fetch(
-      encodeSwissnum('Record Provider'),
+    const recordProvider = /** @type {ERef<TestRecordProvider>} */ (
+      fetchRemote(bootstrapB, encodeSwissnum('Record Provider'))
     );
     const record = E(recordProvider)();
 
@@ -792,9 +821,10 @@ test('op:get with missing field rejects', async t => {
     } = await establishSession();
     const bootstrapB = ocapnA.getRemoteBootstrap();
 
-    const recordProvider = E(bootstrapB).fetch(
-      encodeSwissnum('Record Provider'),
-    );
+    const recordProvider =
+      /** @type {ERef<() => ERef<TestMissingFieldRecord>>} */ (
+        fetchRemote(bootstrapB, encodeSwissnum('Record Provider'))
+      );
     const record = E(recordProvider)();
 
     // Try to get a non-existent field
@@ -834,9 +864,10 @@ test('op:get rejects non-copyRecord', async t => {
     } = await establishSession();
     const bootstrapB = ocapnA.getRemoteBootstrap();
 
-    const remotableProvider = E(bootstrapB).fetch(
-      encodeSwissnum('Remotable Provider'),
-    );
+    const remotableProvider =
+      /** @type {ERef<() => ERef<TestRemotableObject>>} */ (
+        fetchRemote(bootstrapB, encodeSwissnum('Remotable Provider'))
+      );
     const remotable = E(remotableProvider)();
 
     // Try to get a field from a remotable (should fail)
@@ -879,8 +910,8 @@ test('op:get with promise pipelining', async t => {
     } = await establishSession();
     const bootstrapB = ocapnA.getRemoteBootstrap();
 
-    const asyncRecordProvider = E(bootstrapB).fetch(
-      encodeSwissnum('Async Record Provider'),
+    const asyncRecordProvider = /** @type {ERef<TestRecordProvider>} */ (
+      fetchRemote(bootstrapB, encodeSwissnum('Async Record Provider'))
     );
     // Pipeline: get the field before the promise resolves
     const recordPromise = E(asyncRecordProvider)();
@@ -913,9 +944,10 @@ test('op:get with rejected promise', async t => {
     } = await establishSession();
     const bootstrapB = ocapnA.getRemoteBootstrap();
 
-    const rejectingProvider = E(bootstrapB).fetch(
-      encodeSwissnum('Rejecting Provider'),
-    );
+    const rejectingProvider =
+      /** @type {ERef<() => ERef<TestRejectedRecord>>} */ (
+        fetchRemote(bootstrapB, encodeSwissnum('Rejecting Provider'))
+      );
     const rejectedPromise = E(rejectingProvider)();
 
     // Try to get a field from a rejected promise
@@ -1155,7 +1187,6 @@ test('E.get rejects Symbol property access', async t => {
     const testSymbol = Symbol('test');
     const error = await t.throwsAsync(
       async () => {
-        // @ts-expect-error - intentionally using symbol for testing
         await E.get(objectPromise)[testSymbol];
       },
       {
@@ -1378,8 +1409,8 @@ test('session disconnect rejects pending promises and subsequent calls', async t
 
     // Get a remote reference from B
     const bootstrapB = ocapnA.getRemoteBootstrap();
-    const slowResponder = await E(bootstrapB).fetch(
-      encodeSwissnum('SlowResponder'),
+    const slowResponder = await /** @type {ERef<TestSlowResponder>} */ (
+      fetchRemote(bootstrapB, encodeSwissnum('SlowResponder'))
     );
 
     // Start a slow call that will never resolve

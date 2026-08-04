@@ -794,7 +794,10 @@ export const makeOcapn = async ({
     return harden({
       restoreExport: (position, value) => ocapn.restoreExport(position, value),
       restorePendingResolver: record => ocapn.restorePendingResolver(record),
-      provideImport: slotInfo => ocapn.provideImport(slotInfo),
+      // Delegated by reference rather than wrapped: a wrapper arrow
+      // would have to pick one of `provideImport`'s two call
+      // signatures, collapsing the caller's choice of interface.
+      provideImport: ocapn.provideImport,
       advanceAnswerPosition: minimum => ocapn.advanceAnswerPosition(minimum),
     });
   };
