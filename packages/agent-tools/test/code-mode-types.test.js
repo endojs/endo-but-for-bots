@@ -39,41 +39,10 @@ import {
   buildGitRemoteIR,
   buildGitRemoteTypeDeclarations,
 } from '../scripts/code-mode-git-remote-extract.js';
-
-/**
- * @param {string} aux
- * @returns {string[]}
- */
-const declaredTypeNames = aux =>
-  [...aux.matchAll(/^type ([A-Za-z_$][0-9A-Za-z_$]*)/gm)].map(
-    ([, name]) => name,
-  );
-
-/**
- * @param {string} aux
- * @param {string} typeName
- * @returns {string[]}
- */
-const declaredTypeMembers = (aux, typeName) => {
-  const declaration = aux.match(
-    new RegExp(`type ${typeName} = [^\\n]*\\{([\\s\\S]*?)\\n\\};`),
-  );
-  if (declaration === null) {
-    return [];
-  }
-  return [
-    ...declaration[1].matchAll(/^\s+([A-Za-z_$][0-9A-Za-z_$]*)\s*:/gm),
-  ].map(([, name]) => name);
-};
-
-/**
- * @param {string} text
- * @returns {string[]}
- */
-const declaredObjectMembers = text =>
-  [...text.matchAll(/^\s+([A-Za-z_$][0-9A-Za-z_$]*)\s*:/gm)].map(
-    ([, name]) => name,
-  );
+import {
+  listDeclaredTypeMembers,
+  listDeclaredTypeNames,
+} from './_util/declaration-inspect.js';
 
 /**
  * @param {import('@endo/patterns').InterfaceGuard} guard
@@ -198,28 +167,38 @@ test('git declarations expand the reachable platform filesystem contracts', t =>
 
 test('git blob declarations expose Exo methods without CAS backing helpers', t => {
   const { aux } = gitDeclarations.git;
-  t.deepEqual(declaredTypeMembers(aux, 'GitLiteReadableBlob'), [
+  t.deepEqual(listDeclaredTypeMembers(aux, 'GitLiteReadableBlob'), [
     'streamBase64',
     'text',
     'json',
     'help',
   ]);
-  t.deepEqual(declaredTypeMembers(aux, 'GitReadableBlobRange'), [
+  t.deepEqual(listDeclaredTypeMembers(aux, 'GitReadableBlobRange'), [
     'getInfo',
     'fetch',
   ]);
   t.true(aux.includes('type GitReadableBlob = GitReadableBlobRange;'));
-  const leaked = aux.match(
-    /\b(?:makeFileReader|readRange|rangeRead|rangeReadText)\??:/,
+  const leakedMethodNames = [
+    'makeFileReader',
+    'readRange',
+    'rangeRead',
+    'rangeReadText',
+  ];
+  const leaked = leakedMethodNames.filter(
+    name => aux.includes(`${name}:`) || aux.includes(`${name}?:`),
   );
-  t.is(leaked, null, `leaked non-Git blob method: ${leaked?.[0]}`);
+  t.deepEqual(
+    leaked,
+    [],
+    `leaked non-Git blob method(s): ${leaked.join(', ')}`,
+  );
 });
 
 test('combined Git and workspace declarations have unique alias names', t => {
   const combined = [fsDeclarations.workspace.aux, gitDeclarations.git.aux].join(
     '\n',
   );
-  const names = declaredTypeNames(combined);
+  const names = listDeclaredTypeNames(combined);
   t.deepEqual(
     names,
     [...new Set(names)],
@@ -228,7 +207,7 @@ test('combined Git and workspace declarations have unique alias names', t => {
 });
 
 test('Git declarations define every reachable custom filesystem alias', t => {
-  const declared = new Set(declaredTypeNames(gitDeclarations.git.aux));
+  const declared = new Set(listDeclaredTypeNames(gitDeclarations.git.aux));
   for (const name of [
     'GitERef',
     'GitFilesystemStats',
@@ -298,18 +277,11 @@ test('Shell, HTTP, and GitRemote declarations match runtime method names', t => 
   assertIRMatchesGuard(t, buildShellIR(), ShellInterface, 'Shell');
   assertIRMatchesGuard(t, buildHttpIR(), HttpClientInterface, 'HttpClient');
   assertIRMatchesGuard(t, buildGitRemoteIR(), GitRemoteInterface, 'GitRemote');
-  const response = buildHttpIR().auxTypes.find(
-    type => type.name === 'HttpResponse',
+  t.deepEqual(
+    listDeclaredTypeMembers(httpDeclarations.http.aux, 'HttpResponse').sort(),
+    guardMethodNames(HttpResponseInterface),
+    'HttpResponse declaration must match its runtime guard',
   );
-  if (response === undefined) {
-    t.fail('HttpClient declaration must include HttpResponse');
-  } else {
-    t.deepEqual(
-      declaredObjectMembers(response.text).sort(),
-      guardMethodNames(HttpResponseInterface),
-      'HttpResponse declaration must match its runtime guard',
-    );
-  }
 });
 
 // `HttpResponse.stream()` returns `import('@endo/exo-stream').PassableBytesReader`.
@@ -320,9 +292,10 @@ test('HTTP stream declaration inlines the followed exo-stream reader shape', t =
   const { aux } = httpDeclarations.http;
   t.false(aux.includes('stream: () => unknown;'));
   t.true(aux.includes('stream: () => HttpPassableBytesReader;'));
-  t.true(aux.includes('type HttpPassableBytesReader<'));
-  t.true(aux.includes('streamBase64('));
-  t.true(aux.includes('readReturnPattern('));
+  t.deepEqual(listDeclaredTypeMembers(aux, 'HttpPassableBytesReader'), [
+    'streamBase64',
+    'readReturnPattern',
+  ]);
   for (const shape of [
     'type HttpStreamNode<',
     'type HttpStreamYieldNode<',
@@ -345,7 +318,7 @@ test('HTTP stream declaration inlines the followed exo-stream reader shape', t =
 test('following imported types is cycle-safe', t => {
   const { aux } = httpDeclarations.http;
   t.true(aux.includes('promise: Promise<HttpStreamNode<Y, R>>;'));
-  const names = declaredTypeNames(aux);
+  const names = listDeclaredTypeNames(aux);
   t.deepEqual(names, [...new Set(names)]);
 });
 
