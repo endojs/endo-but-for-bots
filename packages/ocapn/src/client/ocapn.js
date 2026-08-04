@@ -1,7 +1,7 @@
 // @ts-check
 
 /**
- * @import { RemoteKit, Settler } from '@endo/eventual-send'
+ * @import { FarRef, RemoteKit, Settler } from '@endo/eventual-send'
  * @import { Slot } from '../captp/types.js'
  * @import { ReferenceKit, TakeNextRemoteAnswer, RemoteKitHandler } from './ref-kit.js'
  * @import { OcapnTable } from '../captp/ocapn-tables.js'
@@ -11,7 +11,7 @@
  * @import { OcapnReader } from '../codec-interface.js'
  * @import { OcapnCodec } from '../codec-interface.js'
  * @import { SturdyRefTracker } from './sturdyrefs.js'
- * @import { Connection, InternalSession, LocationId, Logger, SessionId, SwissNum } from './types.js'
+ * @import { Connection, InternalSession, LocationId, Logger, OcapnBootstrap, ProvideImport, SessionId, SwissNum } from './types.js'
  * @import { OcapnPublicKey, Cryptography } from '../cryptography.js'
  */
 
@@ -671,10 +671,11 @@ const makeBootstrapObject = (
  */
 
 /**
+ * @template [Bootstrap=OcapnBootstrap]
  * @typedef {object} Ocapn
  * @property {((reason?: Error) => void)} abort
  * @property {((data: Uint8Array) => void)} dispatchMessageData
- * @property {() => object} getRemoteBootstrap
+ * @property {() => FarRef<Bootstrap>} getRemoteBootstrap
  * @property {ReferenceKit} referenceKit
  * @property {(position: bigint, value: object) => void} restoreExport
  *   re-seat a local export at a recorded position (session resumption)
@@ -683,7 +684,7 @@ const makeBootstrapObject = (
  *   targets re-subscribe the peer's resolver to the restored promise
  *   export; answer targets reject (the answering computation died with
  *   the previous process — at-most-once, never a hang)
- * @property {(slotInfo: { type: 'o' | 'p', position: bigint }) => object} provideImport
+ * @property {ProvideImport} provideImport
  *   materialize (or find) this session's import at a peer export
  *   position (session resumption; re-links references that cross
  *   sessions)
@@ -1418,7 +1419,7 @@ export const makeOcapn = (
       } else {
         // The computation that owed this answer died with the
         // previous process: reject rather than hang or re-execute.
-        E.sendOnly(/** @type {any} */ (resolver)).break(
+        E.sendOnly(resolver).break(
           harden(
             Error('session resumed after restart; pending answer aborted'),
           ),

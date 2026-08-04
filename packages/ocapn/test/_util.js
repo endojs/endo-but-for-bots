@@ -3,19 +3,78 @@ import harden from '@endo/harden';
 
 /** @typedef {import('@endo/ses-ava/prepare-endo.js').default} Test */
 
+/** @import { ERef, FarRef } from '@endo/eventual-send' */
 /**
- * @import { Client, ClientDebug, Connection, InternalSession, LocationId, NonceLocator, Session } from '../src/client/types.js'
+ * @import { Client, ClientDebug, Connection, InternalSession, LocationId, NonceLocator, SwissNum } from '../src/client/types.js'
  * @import { OcapnLocation } from '../src/codecs/components.js'
  * @import { TcpTestOnlyNetLayer } from '../src/netlayers/tcp-test-only.js'
  * @import { Ocapn, OcapnDebug } from '../src/client/ocapn.js'
+ * @import { OcapnBootstrap } from '../src/client/types.js'
  */
 
 import baseTest from '@endo/ses-ava/test.js';
+import { E } from '@endo/eventual-send';
 import { netListenAllowed } from './_net-permission.js';
 import { makeTcpNetLayer } from '../src/netlayers/tcp-test-only.js';
 import { makeOcapn } from '../src/client/index.js';
 import { syrupCodec } from '../src/syrup/index.js';
 import { locationToLocationId } from '../src/client/util.js';
+
+/**
+ * The test object table contains several unrelated remotables, and the tests
+ * deliberately exercise both method and function presences returned by it.
+ * This closed interface records the finite set of method names exercised by
+ * the fixture table without hiding misspelled eventual sends behind an index
+ * signature.
+ *
+ * @typedef {(...args: unknown[]) => unknown} TestRemoteMethod
+ * @typedef {TestRemoteMethod & {
+ *   acceptAnything: TestRemoteMethod,
+ *   add: TestRemoteMethod,
+ *   awaitAndDouble: TestRemoteMethod,
+ *   capturePromise: TestRemoteMethod,
+ *   double: TestRemoteMethod,
+ *   echo: TestRemoteMethod,
+ *   fastMethod: TestRemoteMethod,
+ *   fetch: TestRemoteMethod,
+ *   getCounter: TestRemoteMethod,
+ *   getDelayedValue: TestRemoteMethod,
+ *   getId: TestRemoteMethod,
+ *   getNumber: TestRemoteMethod,
+ *   getRecord: TestRemoteMethod,
+ *   getSturdyRef: TestRemoteMethod,
+ *   getValue: TestRemoteMethod,
+ *   greet: TestRemoteMethod,
+ *   increment: TestRemoteMethod,
+ *   makeObj: TestRemoteMethod,
+ *   multiply: TestRemoteMethod,
+ *   pet: TestRemoteMethod,
+ *   receive: TestRemoteMethod,
+ *   receiveGreeting: TestRemoteMethod,
+ *   receiveMany: TestRemoteMethod,
+ *   slowMethod: TestRemoteMethod,
+ *   takeCareOf: TestRemoteMethod,
+ *   useObj: TestRemoteMethod,
+ *   xyz: TestRemoteMethod,
+ * }} TestRemoteObject
+ * @typedef {object} TestBootstrap
+ * @property {(swissnum: SwissNum) => ERef<TestRemoteObject>} fetch
+ */
+
+/**
+ * Fetch a test capability with the interface for the fixture that owns it.
+ * The assertion is kept at this fixture boundary, before any eventual send.
+ *
+ * @template T
+ * @param {FarRef<TestBootstrap> | FarRef<OcapnBootstrap>} bootstrap
+ * @param {SwissNum} swissnum
+ * @returns {ERef<T>}
+ */
+export const fetchRemote = (bootstrap, swissnum) =>
+  /** @type {ERef<T>} */ (
+    /** @type {unknown} */ (E(bootstrap).fetch(swissnum))
+  );
+harden(fetchRemote);
 
 export const test = netListenAllowed ? baseTest : baseTest.skip;
 const testOnly = netListenAllowed ? baseTest.only : baseTest.skip;
@@ -23,9 +82,20 @@ const testOnly = netListenAllowed ? baseTest.only : baseTest.skip;
 const strictTextDecoder = new TextDecoder('utf-8', { fatal: true });
 
 /**
+ * @param {Parameters<typeof makeOcapn>[0]} options
+ * @returns {Promise<Client<TestBootstrap>>}
+ */
+export const makeTestOcapn = options =>
+  /** @type {Promise<Client<TestBootstrap>>} */ (
+    /** @type {unknown} */ (makeOcapn(options))
+  );
+harden(makeTestOcapn);
+
+/**
  * Get the debug object from an Ocapn instance, asserting it is present.
  * Requires the client to have been created with `debugMode: true`.
- * @param {Ocapn} ocapn
+ * @template Bootstrap
+ * @param {Ocapn<Bootstrap>} ocapn
  * @returns {OcapnDebug}
  */
 export const getOcapnDebug = ocapn => {
@@ -158,8 +228,8 @@ export const waitUntilTrue = async (fn, timeoutMs = 10_000, delayMs = 20) => {
 
 /**
  * @typedef {object} ClientKit
- * @property {Client} client
- * @property {ClientDebug} debug - Debug object (always present in test clients)
+ * @property {Client<TestBootstrap>} client
+ * @property {ClientDebug<TestBootstrap>} debug - Debug object (always present in test clients)
  * @property {TcpTestOnlyNetLayer} netlayer
  * @property {OcapnLocation} location
  * @property {LocationId} locationId
@@ -189,7 +259,7 @@ export const makeTestClient = async ({
   const locator = makeDefaultSwissnumTable
     ? makeDefaultSwissnumTable()
     : new Map();
-  const client = await makeOcapn({
+  const client = await makeTestOcapn({
     codec: syrupCodec,
     debugLabel,
     locator,
@@ -207,18 +277,24 @@ export const makeTestClient = async ({
         return netlayer;
       }),
   });
+  const testClient = /** @type {Client<TestBootstrap>} */ (
+    /** @type {unknown} */ (client)
+  );
   assert(
     // eslint-disable-next-line no-underscore-dangle
-    client._debug,
+    testClient._debug,
     'makeTestClient requires debugMode - client._debug must be present',
   );
 
-  const { _debug: debug } = client;
+  const { _debug: testClientDebug } = testClient;
+  const debug = /** @type {ClientDebug<TestBootstrap>} */ (
+    /** @type {unknown} */ (testClientDebug)
+  );
   assert(netlayerRef.netlayer, 'makeTcpNetLayer did not resolve a netlayer');
   const netlayer = netlayerRef.netlayer;
   const { location } = netlayer;
   const locationId = locationToLocationId(location);
-  return { client, debug, netlayer, location, locationId };
+  return { client: testClient, debug, netlayer, location, locationId };
 };
 
 /**
@@ -230,7 +306,7 @@ export const makeTestClient = async ({
  * @returns {Promise<{
  *   clientKitA: ClientKit,
  *   clientKitB: ClientKit,
- *   establishSession: () => Promise<{ sessionA: InternalSession, sessionB: InternalSession }>,
+ *   establishSession: () => Promise<{ sessionA: InternalSession<TestBootstrap>, sessionB: InternalSession<TestBootstrap> }>,
  *   shutdownBoth: () => void,
  *   getConnectionAtoB: () => Connection | undefined,
  *   getConnectionBtoA: () => Connection | undefined,
@@ -302,7 +378,8 @@ export const makeTestClientPair = async ({
  * This helper sends both op:deliver (to call a method that returns a tagged value)
  * and op:untag (to extract the payload) in sequence, enabling true pipelining tests.
  *
- * @param {InternalSession} senderSession - The session that will send the messages
+ * @template Bootstrap
+ * @param {InternalSession<Bootstrap>} senderSession - The session that will send the messages
  * @returns {object} Helper object with callAndUntag method
  */
 export const makeUntagTestHelper = senderSession => {

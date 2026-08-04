@@ -2,10 +2,13 @@
 
 /**
  * @import { OcapnLocation, OcapnSignature } from '../codecs/components.js'
+ * @import { HandoffReceiveSigEnvelope } from '../codecs/descriptors.js'
  * @import { OcapnKeyPair, OcapnPublicKey } from '../cryptography.js'
  * @import { GrantTracker } from './grant-tracker.js'
  * @import { SturdyRef, SturdyRefTracker } from './sturdyrefs.js'
  * @import { Ocapn } from './ocapn.js'
+ * @import { ERef, FarRef } from '@endo/eventual-send'
+ * @import { RemotableObject } from '@endo/pass-style'
  */
 
 /**
@@ -17,6 +20,54 @@
  * From OCapN spec. Used for resolving SturdyRefs.
  * @typedef {ArrayBufferLike & { _brand: 'PublicKeyId' }} PublicKeyId
  * From OCapN spec. Identifier for a public key (double SHA-256 hash of key descriptor).
+ */
+
+/**
+ * The OCapN-specified bootstrap interface implemented by each client.
+ *
+ * The protocol fixes the bootstrap's own shape, but says nothing about
+ * what a swissnum designates: that is an agreement between the peer
+ * that published the capability and the caller that knows the secret.
+ * `fetch` is therefore generic over the interface the caller expects,
+ * which the caller supplies from the contextual type of the receiving
+ * declaration. Left to infer, `T` is `unknown`, so a caller that names
+ * nothing is no worse off than before.
+ *
+ * It returns `Promise<T>` rather than `ERef<T>` because `E()` preserves
+ * a method's type parameters only when the declared return type is
+ * already a promise; see `ECallable` in `@endo/eventual-send`. With
+ * `ERef<T>` the signature survives as far as the interface declaration
+ * and is then flattened to `Promise<unknown>` at every `E(bootstrap)
+ * .fetch(…)` call, which is exactly where the caller needs it.
+ *
+ * @typedef {{
+ *   fetch: <T = unknown>(swissnum: SwissNum) => Promise<T>,
+ *   'deposit-gift': (giftId: ArrayBufferLike, gift: RemotableObject) => ERef<undefined>,
+ *   'withdraw-gift': (signedHandoffReceive: HandoffReceiveSigEnvelope) => ERef<RemotableObject>,
+ * }} OcapnBootstrap
+ */
+
+/**
+ * A remote object or promise imported during session resumption.
+ *
+ * @typedef {FarRef<object> | Promise<unknown>} RemoteImport
+ */
+
+/**
+ * Materialize (or find) a session's import at a peer export position —
+ * the restore-time counterpart of receiving the reference in a
+ * message, used to re-link references that cross sessions.
+ *
+ * The wire gives nothing but a slot, so the interface behind it is the
+ * caller's to name: the two call signatures are keyed on the slot's
+ * `type` discriminant, and each infers `T` from the contextual type of
+ * the receiving declaration. Left to infer, the results are the two
+ * arms of {@link RemoteImport}.
+ *
+ * @typedef {{
+ *   <T = object>(slotInfo: { type: 'o', position: bigint }): FarRef<T>,
+ *   <T = unknown>(slotInfo: { type: 'p', position: bigint }): Promise<T>,
+ * }} ProvideImport
  */
 
 /**
@@ -131,15 +182,15 @@
 /**
  * Minimal public session interface.
  * For full session access (testing/debugging), use debug.provideInternalSession().
+ * @template [Bootstrap=OcapnBootstrap]
  * @typedef {object} Session
- * @property {() => any} getBootstrap - Get the remote bootstrap object
- *   (`any`: a remote presence whose methods are known only to the
- *   caller, which invokes them through `E()`)
+ * @property {() => FarRef<Bootstrap>} getBootstrap - Get the remote bootstrap object
  * @property {(reason?: Error) => void} abort - Abort the session
  */
 
 /**
  * Full internal session with all properties for internal use and testing.
+ * @template [Bootstrap=OcapnBootstrap]
  * @typedef {object} InternalSession
  * @property {SessionId} id
  * @property {object} peer
@@ -150,7 +201,7 @@
  * @property {OcapnKeyPair} self.keyPair
  * @property {OcapnLocation} self.location
  * @property {OcapnSignature} self.locationSignature
- * @property {Ocapn} ocapn
+ * @property {Ocapn<Bootstrap>} ocapn
  * @property {Connection} connection
  * @property {() => bigint} getHandoffCount
  * Returns the current handoff count for this session as Receiver.
@@ -235,7 +286,7 @@
  * @typedef {object} ResumedSession
  * @property {(position: bigint, value: object) => void} restoreExport
  * @property {(record: { resolverPosition: bigint, target: { kind: 'promise' | 'answer', position: bigint } }) => void} restorePendingResolver
- * @property {(slotInfo: { type: 'o' | 'p', position: bigint }) => object} provideImport
+ * @property {ProvideImport} provideImport
  * Materialize (or find) this session's import at a peer export
  * position — the restore-time counterpart of receiving the reference
  * in a message, used to re-link references that cross sessions.
@@ -267,7 +318,7 @@
  *
  * @typedef {object} SessionHooks
  * @property {(connection: Connection, slot: import('../captp/types.js').Slot, value: object) => void} [onExport]
- * @property {(connection: Connection, slot: import('../captp/types.js').Slot, value: object) => void} [onImport]
+ * @property {(connection: Connection, slot: import('../captp/types.js').Slot, value: FarRef<object>) => void} [onImport]
  * @property {(connection: Connection, resolverSlot: import('../captp/types.js').Slot, target: { kind: 'promise' | 'answer', position: bigint }) => void} [onPendingResolver]
  * @property {(connection: Connection, resolverSlot: import('../captp/types.js').Slot) => void} [onResolverSettled]
  */
@@ -275,6 +326,7 @@
 /**
  * Debug/testing interface exposing internal APIs.
  * Only available when client is created with `debugMode: true`.
+ * @template [Bootstrap=OcapnBootstrap]
  * @typedef {object} ClientDebug
  * @property {Logger} logger
  * @property {string} debugLabel
@@ -282,7 +334,7 @@
  * @property {GrantTracker} grantTracker
  * @property {SessionManager} sessionManager
  * @property {SturdyRefTracker} sturdyRefTracker
- * @property {(location: OcapnLocation) => Promise<InternalSession>} provideInternalSession
+ * @property {(location: OcapnLocation) => Promise<InternalSession<Bootstrap>>} provideInternalSession
  * Returns the full InternalSession object with all internal properties for debugging/testing.
  */
 
@@ -306,8 +358,9 @@
 /**
  * The session-manager instance returned by `makeOcapn`.
  *
+ * @template [Bootstrap=OcapnBootstrap]
  * @typedef {object} Client
- * @property {(location: OcapnLocation) => Promise<Session>} provideSession
+ * @property {(location: OcapnLocation) => Promise<Session<Bootstrap>>} provideSession
  *   Open (or reuse) a CapTP session to the peer at `location`.
  * @property {(location: OcapnLocation, secret: string | Uint8Array) => SturdyRef} makeSturdyRef
  *   Mint a SturdyRef: an addressable, passable `(location, secret)`
