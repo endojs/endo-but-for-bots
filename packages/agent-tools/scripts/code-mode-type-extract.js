@@ -702,7 +702,10 @@ const extractTsAliasesIR = ({ rootModule, rootType, memberFilter }) => {
             outputName.replace(/<.*>$/u, ''),
             typeArguments &&
               ts.factory.createNodeArray(
-                typeArguments.map(argument => ts.visitNode(argument, visit)),
+                typeArguments.map(
+                  argument =>
+                    /** @type {ts.TypeNode} */ (ts.visitNode(argument, visit)),
+                ),
               ),
           );
         };
