@@ -46,7 +46,6 @@ const messageNumberKey = value => String(normalizeMessageNumber(value));
  * @param {object} [options]
  * @param {object} [options.initialMessage] - Optional first inbox message to deliver (default: one from HOST)
  * @param {Map<string, unknown>} [options.attachments] - id -> ref map for lookupById and adopt
- * @returns {{ powers: object, whenDismissed: (n: number) => Promise<void>, whenSend: () => Promise<{ recipient: string, strings: string[] }>, sent: Array<{ recipient: string, strings: string[], edgeNames: string[], petNames: string[], replyTo?: string }>, adoptions: Array<{ messageNumber: string, edgeName: string, petName: string }> }}
  */
 export function makeMockPowers(options = {}) {
   const { initialMessage, attachments } = options;

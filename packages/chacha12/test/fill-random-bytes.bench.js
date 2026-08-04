@@ -190,6 +190,7 @@ const makeFillerFromVariant = copyFn => {
   const baseState = chacha12State(seedBytes);
   const block = new Uint8Array(BLOCK_SIZE);
   let counter = 0;
+  /** @type {number} */
   let offset = BLOCK_SIZE;
   const refill = () => {
     baseState[12] = counter >>> 0;
