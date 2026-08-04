@@ -21,6 +21,7 @@ export class ZipWriter {
   constructor(options = {}) {
     const { deflate = undefined, deflateNow = undefined } = options;
 
+    /** @type {ArchivedFile['compressionMethod']} */
     let compressionMethod = STORE;
     /** @type {CompressFn | undefined} */
     let compressor = store;
