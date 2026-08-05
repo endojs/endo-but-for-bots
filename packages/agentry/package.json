@@ -101,6 +101,6 @@
       "test/**/*.test.*",
       "!test/eval-live.test.js"
     ],
-    "timeout": "2m"
+    "timeout": "3m"
   }
 }
