@@ -8,7 +8,6 @@ import '@endo/init/debug.js';
 /** @import { InterfaceGuard, Pattern } from '@endo/patterns' */
 /**
  * @import {
- *   GitHistoryToolCapability,
  *   GitToolFacet,
  *   GitToolRewriterCapability,
  *   ToolRecord,
@@ -24,10 +23,8 @@ import {
   getMethodGuardPayload,
 } from '@endo/patterns';
 import { Far } from '@endo/pass-style';
-import { GitInterface } from '@endo/exo-git';
 import {
   GitReaderInterface,
-  GitRebaseStartInputShape,
   GitRewriterInterface,
   GitWriterInterface,
 } from '@endo/exo-git/src/interfaces.js';
@@ -48,45 +45,20 @@ const gitInterfaceByFacet = harden({
 });
 
 /**
- * Positional guard structure from the supplied facet interface (default the
- * flat `GitInterface`, for `makeGitHistoryTool`'s always-elevated methods).
+ * Positional guard structure from the supplied facet interface.
  *
  * @param {string} method
- * @param {InterfaceGuard} [gitInterface]
+ * @param {InterfaceGuard} gitInterface
  */
-const guardShapeFor = (method, gitInterface = GitInterface) => {
-  if (method === 'rebase') {
-    return {
-      requiredCount: 1,
-      guards: harden([
-        M.splitRecord(
-          {
-            mode: 'start',
-            upstream: M.string(),
-          },
-          {
-            autosquash: M.boolean(),
-          },
-          {},
-        ),
-      ]),
-    };
-  }
+const guardShapeFor = (method, gitInterface) => {
   const { methodGuards } = getInterfaceGuardPayload(gitInterface);
   const { argGuards, optionalArgGuards } = getMethodGuardPayload(
     methodGuards[method],
   );
   const optional = optionalArgGuards || [];
-  const shape = {
+  return {
     requiredCount: argGuards.length,
     guards: harden([...argGuards, ...optional]),
-  };
-  if (method !== 'rebase') {
-    return shape;
-  }
-  return {
-    ...shape,
-    guards: harden([M.and(shape.guards[0], GitRebaseStartInputShape)]),
   };
 };
 
@@ -153,7 +125,11 @@ const slotRecords = harden([
   { slot0: { mode: 'start', upstream: 'main' } },
   { slot0: { mode: 'start', upstream: 'main', autosquash: true } },
   { slot0: { mode: 'continue' } },
+  { slot0: { mode: 'abort' } },
+  { slot0: { mode: 'skip' } },
   { slot0: { mode: 'continue', autosquash: true } },
+  { slot0: { mode: 'abort', upstream: 'main' } },
+  { slot0: { mode: 'skip', autosquash: false } },
   { slot0: harden({ author: 'alice', oneline: true, maxCount: 10 }) },
   { slot0: 'a', slot1: { a: 1, b: 2 } },
   { slot0: 'a', slot1: { nested: { x: 1 } } },
@@ -205,13 +181,6 @@ const inertGit = /** @type {ERef<GitToolRewriterCapability>} */ (
 /** @type {GitToolFacet[]} */
 const GIT_TOOL_FACETS = harden(['reader', 'writer', 'rewriter']);
 
-const gitHistoryTools = makeGitHistoryTool(
-  // This test inspects schemas and guards; it never invokes the capability.
-  /** @type {ERef<GitHistoryToolCapability>} */ (
-    /** @type {unknown} */ (Far('InertGitHistory', {}))
-  ),
-);
-
 /**
  * For one git tool, assert its hand-authored JSON Schema and its runtime guard
  * — read from the facet interface the tool's catalog was derived from — agree
@@ -260,14 +229,68 @@ for (const facet of GIT_TOOL_FACETS) {
   }
 }
 
-for (const tool of gitHistoryTools) {
+for (const tool of makeGitHistoryTool(inertGit)) {
   test(
-    `schema ⟷ guard agree for gitHistory.${tool.name}`,
+    `schema ⟷ guard agree for git[history].${tool.name}`,
     schemaGuardAgree,
     tool,
-    /** @type {InterfaceGuard} */ (GitInterface),
+    /** @type {InterfaceGuard} */ (GitRewriterInterface),
   );
 }
+
+test('canonical rebase guard accepts controls and keeps start fields scoped', t => {
+  const [rebaseInputShape] = guardShapeFor(
+    'rebase',
+    /** @type {InterfaceGuard} */ (GitRewriterInterface),
+  ).guards;
+  for (const input of [
+    { mode: 'start', upstream: 'main' },
+    { mode: 'start', upstream: 'main', autosquash: true },
+    { mode: 'continue' },
+    { mode: 'abort' },
+    { mode: 'skip' },
+  ]) {
+    t.true(matches(harden(input), rebaseInputShape), JSON.stringify(input));
+  }
+  for (const input of [
+    { mode: 'start' },
+    { mode: 'continue', upstream: 'main' },
+    { mode: 'abort', autosquash: true },
+    { mode: 'skip', autosquash: false },
+    { mode: 'finish' },
+  ]) {
+    t.false(matches(harden(input), rebaseInputShape), JSON.stringify(input));
+  }
+});
+
+test('rebase JSON schema represents start and every control mode', t => {
+  const rebase = makeGitTool(inertGit, { facet: 'rewriter' }).find(
+    tool => tool.name === 'rebase',
+  );
+  if (!rebase) {
+    t.fail('rewriter catalog must include rebase');
+    return;
+  }
+  const validate = ajv.compile(rebase.parameters);
+  for (const input of [
+    { mode: 'start', upstream: 'main' },
+    { mode: 'start', upstream: 'main', autosquash: false },
+    { mode: 'continue' },
+    { mode: 'abort' },
+    { mode: 'skip' },
+  ]) {
+    t.true(validate({ input }), JSON.stringify(input));
+  }
+  for (const input of [
+    { mode: 'start' },
+    { mode: 'continue', upstream: 'main' },
+    { mode: 'abort', autosquash: true },
+    { mode: 'skip', autosquash: false },
+    { mode: 'finish' },
+  ]) {
+    t.false(validate({ input }), JSON.stringify(input));
+  }
+});
 
 // --- bigint synthetic case ----------------------------------------------
 //

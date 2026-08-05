@@ -180,9 +180,21 @@ prefixes or dedupes.
 
 ## Git history tools
 
-The default `makeGitTool` inventory excludes history-rewriting operations.
-Hosts that deliberately grant the elevated history capability can use
-`makeGitHistoryTool` to expose `commit` with `options.amend`, `reword`,
-`cherryPick`, and an autosquash-capable `rebase` start operation.
-Rebase control modes remain available through the elevated code-mode Git
-capability, but are not exposed as JSON tools.
+`makeGitTool` derives its catalog from the facet named by its `facet` option.
+The default writer catalog exposes ordinary read/write operations but no
+history rewrite.
+A host that deliberately grants a rewriter capability selects
+`{ facet: 'rewriter' }` to add `commit` with `options.amend`, `reword`,
+`cherryPick`, and `rebase`.
+The deprecated `makeGitHistoryTool(gitCap)` name remains compatible by
+delegating to that same complete rewriter-facet catalog; it does not maintain a
+second history-only catalog.
+
+The JSON rebase tool supports `start` (with required `upstream` and optional
+`autosquash`), `continue`, `abort`, and `skip`.
+If `start` or `continue` stops for conflicts, inspect status, resolve and stage
+the conflicts, and then continue the rebase, skip the stopped commit, or abort.
+`checkoutConflict` selects Git index stages rather than stable branch roles:
+`ours` is stage 2 and `theirs` is stage 3.
+During rebase, Git calls the upstream side `ours` and the commit being replayed
+`theirs`, which is inverted from intuitive current/incoming branch wording.
