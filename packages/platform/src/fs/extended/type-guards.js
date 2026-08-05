@@ -45,18 +45,7 @@ const FilesystemMethods = {
   help: M.call().optional(M.string()).returns(M.string()),
 };
 
-// `sloppy: true` allows exo implementations to expose additional
-// methods beyond what's declared here. New methods land in wrap-
-// backend.js (the seam refactor) while these guards stay focused
-// on the canonical wire shape; consumers that opt in to the new
-// methods see them directly without an interface bump.
-export const FilesystemInterface = M.interface(
-  'Filesystem',
-  FilesystemMethods,
-  {
-    sloppy: true,
-  },
-);
+export const FilesystemInterface = M.interface('Filesystem', FilesystemMethods);
 harden(FilesystemInterface);
 
 /**
@@ -82,121 +71,117 @@ const NodeBaseMethods = {
   help: M.call().optional(M.string()).returns(M.string()),
 };
 
-export const DirectoryInterface = M.interface(
-  'Directory',
-  {
-    ...NodeBaseMethods,
-    // Catalog `lookup`: resolve a path to its cap in one call. Accepts a
-    // single name (`lookup('a')`) or a path array (`lookup(['a', 'b'])`),
-    // walking the whole path and returning the deepest cap. This is the
-    // same `string | string[]` calling convention `@endo/platform/fs`'s
-    // `Directory.lookup` and the daemon's `EndoDirectory.lookup`
-    // (`NameOrPathShape`) use, so a viewer calls `lookup` identically on
-    // every backing. The one-segment form is also exposed under the
-    // explicit name `lookupStep` for the CapTP-pipelining-optimized
-    // single-step walk. See designs/fs-interface-reconciliation.md
-    // §"Review findings incorporated" (F1).
-    lookup: M.call(M.or(M.string(), M.arrayOf(M.string()))).returns(
-      M.eref(M.or(M.remotable('Directory'), M.remotable('File'))),
-    ),
-    // One path segment, the pipelining-optimized walk:
-    // `E(d).lookupStep('a').lookupStep('b')` collapses depth-N into one
-    // round-trip via promise-chaining.
-    lookupStep: M.call(M.string()).returns(
-      M.eref(M.or(M.remotable('Directory'), M.remotable('File'))),
-    ),
-    // Narrow to a confined sub-tree: resolve `path` (which must name a
-    // directory) and return its Directory cap. The result has no parent
-    // reference, so it cannot navigate above the new root. Same
-    // `string | string[]` convention as `lookup`.
-    subView: M.call(M.or(M.string(), M.arrayOf(M.string()))).returns(
-      M.eref(M.remotable('Directory')),
-    ),
-    list: M.call().returns(M.eref(M.remotable('Cursor'))),
-    create: M.call(M.string())
-      .optional(Pass)
-      .returns(M.eref(M.remotable('OpenFile'))),
-    // Catalog whole-blob `write`: create-or-overwrite the named child
-    // with `value`, a UTF-8 `string`. The fire-and-forget whole-blob
-    // form; `create` (above) stays the distinct range-I/O writer-stream
-    // method. (The catalog also admits a `ReadableBlob` value for
-    // streaming large content; that form is follow-up work — raw bytes
-    // are not CapTP-passable, so they must arrive as a blob cap.) See
-    // designs/fs-interface-reconciliation.md §Mutation (F2).
-    write: M.call(M.string(), M.string()).returns(M.promise()),
-    makeDirectory: M.call(M.string())
-      .optional(Pass)
-      .returns(M.eref(M.remotable('Directory'))),
-    remove: M.call(M.string()).returns(M.promise()),
-    // Legacy aliases for `makeDirectory` / `remove`. Kept declared
-    // so the interface is honest about what wrapBackend's Directory
-    // exos actually expose.
-    mkdir: M.call(M.string())
-      .optional(Pass)
-      .returns(M.eref(M.remotable('Directory'))),
-    unlink: M.call(M.string()).returns(M.promise()),
-    // `rename(srcName, newParent, dstName)` is the cross-directory-cap
-    // relocate primitive: `newParent` is a *Directory cap* (possibly a
-    // different subtree, or — across filesystems — EXDEV). The catalog
-    // `move(fromPath, toPath)` is built on top of it. 9p-server's Trename
-    // (two independent fids) needs this cap form; path-to-path cannot
-    // express a move between two unrelated directory caps.
-    //
-    // `newParent` is wrapped in `M.await` so a caller can pipeline a
-    // `lookup → rename` chain without an intermediate await:
-    //
-    //   const newParent = E(host).lookup('newDir');       // promise
-    //   await E(srcDir).rename('a', newParent, 'b');      // dispatched in
-    //                                                      // the same batch
-    //
-    // The exo's async-shape dispatch (`M.callWhen`) awaits each
-    // `M.await(...)` argument before invoking the method body. Without
-    // this, the caller would need a serial round-trip. See DESIGN.md
-    // §10.1 for the cost framework.
-    rename: M.callWhen(
-      M.string(),
-      M.await(M.remotable('Directory')),
-      M.string(),
-    ).returns(M.undefined()),
-    // Catalog `move(fromPath, toPath)`: within-tree path-to-path
-    // relocate, matching `@endo/platform/fs`, the daemon `EndoDirectory`,
-    // and the Mount (`string | string[]` for each path). `rename`
-    // (below) is the distinct cross-directory-cap primitive that takes a
-    // destination Directory *cap*; `move` is built on top of it. See
-    // designs/fs-interface-reconciliation.md §Naming choices.
-    move: M.call(
-      M.or(M.string(), M.arrayOf(M.string())),
-      M.or(M.string(), M.arrayOf(M.string())),
-    ).returns(M.promise()),
-    // Catalog `copy(fromPath, toPath)`: within-tree path-to-path copy
-    // (recursive for directories), matching `@endo/platform/fs`, the
-    // daemon `EndoDirectory`, and the Mount.
-    copy: M.call(
-      M.or(M.string(), M.arrayOf(M.string())),
-      M.or(M.string(), M.arrayOf(M.string())),
-    ).returns(M.promise()),
-    fsync: M.call().returns(M.promise()),
-    // Walk a path from this directory; for each segment, return the
-    // existing Directory or `mkdir(seg)` it. The whole walk dispatches
-    // in one round-trip per segment (the per-call branch is
-    // server-side), so a deep materialise is one batch instead of
-    // N serial lookup-then-mkdir round-trips. Compare DESIGN.md §10.1
-    // [RT] item "No lookupOrCreate / materialise primitive".
-    materialise: M.call(M.arrayOf(M.string()))
-      .optional(Pass)
-      .returns(M.eref(M.remotable('Directory'))),
-    // Atomic snapshot + subscribe: returns a `Cursor` over the
-    // directory's entries at the moment of subscription PLUS a
-    // `NodeWatcher` that will receive every event from that point
-    // onward — no gap between snapshot and subscribe. The standalone
-    // `list()` + `watch()` pair has a TOCTOU race where mutations
-    // between the two calls are invisible to both; `watchFrom`
-    // closes that gap by materialising both halves in one method
-    // invocation. See DESIGN.md §10.1.
-    watchFrom: M.call().returns(M.eref(Pass)),
-  },
-  { sloppy: true },
-);
+export const DirectoryInterface = M.interface('Directory', {
+  ...NodeBaseMethods,
+  // Catalog `lookup`: resolve a path to its cap in one call. Accepts a
+  // single name (`lookup('a')`) or a path array (`lookup(['a', 'b'])`),
+  // walking the whole path and returning the deepest cap. This is the
+  // same `string | string[]` calling convention `@endo/platform/fs`'s
+  // `Directory.lookup` and the daemon's `EndoDirectory.lookup`
+  // (`NameOrPathShape`) use, so a viewer calls `lookup` identically on
+  // every backing. The one-segment form is also exposed under the
+  // explicit name `lookupStep` for the CapTP-pipelining-optimized
+  // single-step walk. See designs/fs-interface-reconciliation.md
+  // §"Review findings incorporated" (F1).
+  lookup: M.call(M.or(M.string(), M.arrayOf(M.string()))).returns(
+    M.eref(M.or(M.remotable('Directory'), M.remotable('File'))),
+  ),
+  // One path segment, the pipelining-optimized walk:
+  // `E(d).lookupStep('a').lookupStep('b')` collapses depth-N into one
+  // round-trip via promise-chaining.
+  lookupStep: M.call(M.string()).returns(
+    M.eref(M.or(M.remotable('Directory'), M.remotable('File'))),
+  ),
+  // Narrow to a confined sub-tree: resolve `path` (which must name a
+  // directory) and return its Directory cap. The result has no parent
+  // reference, so it cannot navigate above the new root. Same
+  // `string | string[]` convention as `lookup`.
+  subView: M.call(M.or(M.string(), M.arrayOf(M.string()))).returns(
+    M.eref(M.remotable('Directory')),
+  ),
+  list: M.call().returns(M.eref(M.remotable('Cursor'))),
+  create: M.call(M.string())
+    .optional(Pass)
+    .returns(M.eref(M.remotable('OpenFile'))),
+  // Catalog whole-blob `write`: create-or-overwrite the named child
+  // with `value`, a UTF-8 `string`. The fire-and-forget whole-blob
+  // form; `create` (above) stays the distinct range-I/O writer-stream
+  // method. (The catalog also admits a `ReadableBlob` value for
+  // streaming large content; that form is follow-up work — raw bytes
+  // are not CapTP-passable, so they must arrive as a blob cap.) See
+  // designs/fs-interface-reconciliation.md §Mutation (F2).
+  write: M.call(M.string(), M.string()).returns(M.promise()),
+  makeDirectory: M.call(M.string())
+    .optional(Pass)
+    .returns(M.eref(M.remotable('Directory'))),
+  remove: M.call(M.string()).returns(M.promise()),
+  // Legacy aliases for `makeDirectory` / `remove`. Kept declared
+  // so the interface is honest about what wrapBackend's Directory
+  // exos actually expose.
+  mkdir: M.call(M.string())
+    .optional(Pass)
+    .returns(M.eref(M.remotable('Directory'))),
+  unlink: M.call(M.string()).returns(M.promise()),
+  // `rename(srcName, newParent, dstName)` is the cross-directory-cap
+  // relocate primitive: `newParent` is a *Directory cap* (possibly a
+  // different subtree, or — across filesystems — EXDEV). The catalog
+  // `move(fromPath, toPath)` is built on top of it. 9p-server's Trename
+  // (two independent fids) needs this cap form; path-to-path cannot
+  // express a move between two unrelated directory caps.
+  //
+  // `newParent` is wrapped in `M.await` so a caller can pipeline a
+  // `lookup → rename` chain without an intermediate await:
+  //
+  //   const newParent = E(host).lookup('newDir');       // promise
+  //   await E(srcDir).rename('a', newParent, 'b');      // dispatched in
+  //                                                      // the same batch
+  //
+  // The exo's async-shape dispatch (`M.callWhen`) awaits each
+  // `M.await(...)` argument before invoking the method body. Without
+  // this, the caller would need a serial round-trip. See DESIGN.md
+  // §10.1 for the cost framework.
+  rename: M.callWhen(
+    M.string(),
+    M.await(M.remotable('Directory')),
+    M.string(),
+  ).returns(M.undefined()),
+  // Catalog `move(fromPath, toPath)`: within-tree path-to-path
+  // relocate, matching `@endo/platform/fs`, the daemon `EndoDirectory`,
+  // and the Mount (`string | string[]` for each path). `rename`
+  // (below) is the distinct cross-directory-cap primitive that takes a
+  // destination Directory *cap*; `move` is built on top of it. See
+  // designs/fs-interface-reconciliation.md §Naming choices.
+  move: M.call(
+    M.or(M.string(), M.arrayOf(M.string())),
+    M.or(M.string(), M.arrayOf(M.string())),
+  ).returns(M.promise()),
+  // Catalog `copy(fromPath, toPath)`: within-tree path-to-path copy
+  // (recursive for directories), matching `@endo/platform/fs`, the
+  // daemon `EndoDirectory`, and the Mount.
+  copy: M.call(
+    M.or(M.string(), M.arrayOf(M.string())),
+    M.or(M.string(), M.arrayOf(M.string())),
+  ).returns(M.promise()),
+  fsync: M.call().returns(M.promise()),
+  // Walk a path from this directory; for each segment, return the
+  // existing Directory or `mkdir(seg)` it. The whole walk dispatches
+  // in one round-trip per segment (the per-call branch is
+  // server-side), so a deep materialise is one batch instead of
+  // N serial lookup-then-mkdir round-trips. Compare DESIGN.md §10.1
+  // [RT] item "No lookupOrCreate / materialise primitive".
+  materialise: M.call(M.arrayOf(M.string()))
+    .optional(Pass)
+    .returns(M.eref(M.remotable('Directory'))),
+  // Atomic snapshot + subscribe: returns a `Cursor` over the
+  // directory's entries at the moment of subscription PLUS a
+  // `NodeWatcher` that will receive every event from that point
+  // onward — no gap between snapshot and subscribe. The standalone
+  // `list()` + `watch()` pair has a TOCTOU race where mutations
+  // between the two calls are invisible to both; `watchFrom`
+  // closes that gap by materialising both halves in one method
+  // invocation. See DESIGN.md §10.1.
+  watchFrom: M.call().returns(M.eref(Pass)),
+});
 harden(DirectoryInterface);
 
 export const FileInterface = M.interface('File', {
@@ -216,8 +201,8 @@ harden(FileInterface);
 
 // Cursor / OpenFile / Lock / Xattrs / NodeWatcher / BlobRef are
 // non-evolving — their method set is stable; we declare every
-// public method explicitly and skip `sloppy: true`. Drift on these
-// guards is a real bug we want CapTP to catch.
+// public method explicitly. Drift on these guards is a real bug we
+// want CapTP to catch.
 
 export const CursorInterface = M.interface('Cursor', {
   // Bounded page read for single-RTT directory listing. Returns

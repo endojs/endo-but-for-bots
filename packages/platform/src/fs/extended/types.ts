@@ -139,9 +139,9 @@ export type Directory = {
   setAttrs: (patch: NodeStat) => Promise<void>;
   watch: () => ERef<NodeWatcher>;
   xattrs: () => ERef<Xattrs>;
-  lookup: (nameOrPath: string | string[]) => ERef<Directory | File>;
+  lookup: (nameOrPath: string | readonly string[]) => ERef<Directory | File>;
   lookupStep: (name: string) => ERef<Directory | File>;
-  subView: (nameOrPath: string | string[]) => ERef<Directory>;
+  subView: (nameOrPath: string | readonly string[]) => ERef<Directory>;
   list: () => ERef<Cursor>;
   write: (name: string, value: string) => Promise<void>;
   create: (name: string, opts?: OpenFileOptions) => ERef<OpenFile>;
@@ -150,12 +150,12 @@ export type Directory = {
   remove: (name: string) => Promise<void>;
   unlink: (name: string) => Promise<void>;
   move: (
-    fromPath: string | string[],
-    toPath: string | string[],
+    fromPath: string | readonly string[],
+    toPath: string | readonly string[],
   ) => Promise<void>;
   copy: (
-    fromPath: string | string[],
-    toPath: string | string[],
+    fromPath: string | readonly string[],
+    toPath: string | readonly string[],
   ) => Promise<void>;
   rename: (
     oldName: string,
@@ -163,7 +163,7 @@ export type Directory = {
     newName: string,
   ) => Promise<void>;
   fsync: () => Promise<void>;
-  materialise: (path: string[]) => ERef<Directory>;
+  materialise: (path: readonly string[]) => ERef<Directory>;
   watchFrom: () => ERef<WatchFromResult>;
   help: (method?: string) => string;
 };

@@ -62,6 +62,7 @@ import { makeNodeWatcherExo } from './shared/watcher-exo.js';
  *   NodeKind,
  *   NodeStat,
  *   OpenFile,
+ *   OpenFileOptions,
  *   Qid,
  * } from './types.js'
  */
@@ -539,11 +540,11 @@ export const wrapBackend = (backend, opts = {}) => {
    * Used as the fallback for `Directory.materialise` when the
    * backing doesn't have a faster path.
    *
-   * @param {string[]} startPath
-   * @param {string[]} relPath
+   * @param {readonly string[]} startPath
+   * @param {readonly string[]} relPath
    */
   const materialise = async (startPath, relPath) => {
-    let cur = startPath;
+    let cur = [...startPath];
     for (const seg of relPath) {
       if (
         typeof seg !== 'string' ||
@@ -821,7 +822,9 @@ export const wrapBackend = (backend, opts = {}) => {
         return harden({ size: 0n, mtime: st.mtime, atime: st.atime });
       },
       async setStat(patch) {
-        await applyDirectoryStatPatch(path, patch);
+        // The guard admits any Passable; `applyDirectoryStatPatch`
+        // validates the real patch shape.
+        await applyDirectoryStatPatch(path, /** @type {NodeStat} */ (patch));
       },
       // ---- Legacy: wide-shape attrs + Qid + sidecar xattrs ----
       getQid() {
@@ -842,7 +845,9 @@ export const wrapBackend = (backend, opts = {}) => {
         });
       },
       async setAttrs(patch) {
-        await applyDirectoryStatPatch(path, patch);
+        // The guard admits any Passable; `applyDirectoryStatPatch`
+        // validates the real patch shape.
+        await applyDirectoryStatPatch(path, /** @type {NodeStat} */ (patch));
       },
       xattrs() {
         return xattrsExoFor(path);
@@ -944,7 +949,9 @@ export const wrapBackend = (backend, opts = {}) => {
       async create(name, openOpts) {
         assertChildName(name);
         const childPath = [...path, name];
-        const o = openOpts || {};
+        // The guard admits any Passable; the flag reads below only
+        // consult the real OpenFileOptions shape.
+        const o = /** @type {OpenFileOptions} */ (openOpts) || {};
         const mode = computeOpenMode({
           read: o.read !== false,
           write: true,
