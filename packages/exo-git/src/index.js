@@ -2,9 +2,10 @@
 
 export {
   makeGit,
+  makeGitKit,
+  makeGitOperations,
   isGitHistoryRewrite,
   isGitReadOnly,
-  getGitBackend,
   makeNotYetImplementedBackend,
 } from './git.js';
 
@@ -29,6 +30,9 @@ export {
 
 export {
   GitInterface,
+  GitReaderInterface,
+  GitWriterInterface,
+  GitRewriterInterface,
   GitTreeInterface,
   GitRemoteInterface,
   GitRemoteControllerInterface,

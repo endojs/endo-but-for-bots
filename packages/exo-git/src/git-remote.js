@@ -9,7 +9,7 @@ import {
   GitRemoteInterface,
   GitRemoteControllerInterface,
 } from './interfaces.js';
-import { getGitBackend, isGitReadOnly } from './git.js';
+import { gitPairingTokenFor, isGitReadOnly } from './git.js';
 import { assertGitCredentialForUrl } from './git-credential.js';
 
 /**
@@ -591,6 +591,14 @@ harden(makeGitRemoteEndpoint);
  * @param {object} args.git  The local `Git` capability this remote is
  *   bound to.  Guest operations on the remote always compose with this
  *   Git; revoking the local Git collects the remote too.
+ * @param {import('./git.js').GitOperations} args.operations  The
+ *   host-private backend authority paired with `git` at construction time
+ *   (see `makeGitOperations`). The composing caller that minted `git` is
+ *   the one place that ever held both, and hands this in explicitly —
+ *   `GitRemote` has no way to recover a backend from `git` itself, but it
+ *   does verify (via `gitPairingTokenFor`) that `operations` carries the
+ *   ephemeral pairing token minted alongside this specific `git`, not
+ *   merely alongside some other daemon-minted Git instance.
  * @param {string} args.name  Remote name (typically 'origin').
  * @param {RemotePolicy} args.policy
  * @param {boolean} [args.revoked]
@@ -600,18 +608,38 @@ harden(makeGitRemoteEndpoint);
  */
 export const makeGitRemote = ({
   git,
+  operations,
   name,
   policy,
   revoked: initialRevoked = false,
   credential,
   onStateChange,
 }) => {
-  if (isGitReadOnly(git)) {
-    throw new Error('GitRemote cannot be constructed from a read-only Git');
+  const gitReadOnly = isGitReadOnly(git);
+  if (gitReadOnly !== false) {
+    throw new Error(
+      gitReadOnly === undefined
+        ? 'GitRemote requires a daemon-minted Git cap'
+        : 'GitRemote cannot be constructed from a read-only Git',
+    );
   }
-  const backend = getGitBackend(git);
-  if (backend === undefined) {
+  if (
+    operations === undefined ||
+    operations === null ||
+    typeof operations !== 'object' ||
+    operations.backend === undefined
+  ) {
     throw new Error('GitRemote requires a daemon-minted Git cap');
+  }
+  const { backend, pairingToken } = operations;
+  // `operations` is a free-standing capability: nothing about its own shape
+  // ties it to `git`. Verify it was actually minted alongside this specific
+  // `git` — via the ephemeral pairing token, not `backend` object identity
+  // — not merely alongside *some* daemon-minted Git instance, so a caller
+  // cannot pair a genuine `git` for one repo with a genuine `GitOperations`
+  // for another.
+  if (pairingToken === undefined || pairingToken !== gitPairingTokenFor(git)) {
+    throw new Error('GitRemote requires operations minted for this git cap');
   }
   if (typeof name !== 'string' || name.length === 0) {
     throw new Error('GitRemote name must be a non-empty string');
