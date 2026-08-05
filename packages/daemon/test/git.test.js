@@ -244,7 +244,7 @@ test('Git.readOnly() attenuates mutating operations but preserves reads', async 
     message: /has no method "add"/,
   });
   await t.throwsAsync(E(runtimeReadOnlyGit).checkoutConflict([entry], 'ours'), {
-    message: /read-only Git capability/,
+    message: /has no method "checkoutConflict"/,
   });
   await t.throwsAsync(E(runtimeReadOnlyGit).commit('should fail'), {
     message: /has no method "commit"/,
