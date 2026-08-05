@@ -56,8 +56,11 @@ import { makeNodeWatcherExo } from './shared/watcher-exo.js';
  * @import {
  *   Directory,
  *   File,
+ *   FileReadOptions,
+ *   FileWriteOptions,
  *   Filesystem,
  *   NodeKind,
+ *   NodeStat,
  *   OpenFile,
  *   Qid,
  * } from './types.js'
@@ -639,7 +642,9 @@ export const wrapBackend = (backend, opts = {}) => {
         });
       },
       async setStat(patch) {
-        await applyStatPatch(path, patch);
+        // The guard admits any Passable; `applyStatPatch` validates
+        // the fields it applies.
+        await applyStatPatch(path, /** @type {NodeStat} */ (patch));
       },
       // ---- Legacy: wide-shape attrs + Qid + sidecar xattrs ----
       getQid() {
@@ -656,7 +661,7 @@ export const wrapBackend = (backend, opts = {}) => {
         });
       },
       async setAttrs(patch) {
-        await applyStatPatch(path, patch);
+        await applyStatPatch(path, /** @type {NodeStat} */ (patch));
       },
       xattrs() {
         return xattrsExoFor(path);
@@ -693,7 +698,7 @@ export const wrapBackend = (backend, opts = {}) => {
       // over the file bytes (or a slice). Saves the open/close
       // ceremony for the common whole-file case.
       async read(readOpts) {
-        const o = readOpts || {};
+        const o = /** @type {FileReadOptions} */ (readOpts) || {};
         const off = o.offset === undefined ? 0n : BigInt(o.offset);
         const len = o.length === undefined ? undefined : BigInt(o.length);
         const bytes = await backend.read(path, off, len);
@@ -715,7 +720,7 @@ export const wrapBackend = (backend, opts = {}) => {
       // Throw ENOSYS at call time rather than at close time so the
       // caller doesn't push bytes into a sink that won't truncate.
       async write(writeOpts) {
-        const { offset } = writeOpts || {};
+        const { offset } = /** @type {FileWriteOptions} */ (writeOpts) || {};
         const truncating = offset === undefined;
         if (truncating && !caps.setStat) {
           throw notSupported('File.write (whole-file overwrite)');
