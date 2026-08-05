@@ -5,7 +5,7 @@
     "packages/*"
   ],
   "engines": {
-    "node": ">=16"
+    "node": "^20.17.0 || >=22.9.0"
   },
   "packageManager": "yarn@4.13.0",
   "devDependencies": {
@@ -35,6 +35,7 @@
     "globals": "^17.6.0",
     "js-yaml": "^5.2.1",
     "lerna": "^8.2.4",
+    "npm-packlist": "^10.0.4",
     "prettier": "^3.5.3",
     "ses": "workspace:^",
     "source-map": "^0.7.6",
@@ -68,6 +69,7 @@
     "smoketest:publish": "scripts/smoketest-publishing.sh",
     "test": "yarn workspaces foreach --all --exclude @endo/skel run test",
     "test:c8": "yarn workspaces foreach --all run test:c8",
+    "test:package-uniformity": "ava scripts/test/check-package-uniformity.test.mjs",
     "test:types": "yarn turbo run test:types --continue=always",
     "test:xs": "yarn workspaces foreach --all run test:xs",
     "test262": "yarn workspaces foreach --all run test262",
