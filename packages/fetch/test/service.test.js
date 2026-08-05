@@ -9,6 +9,8 @@ import { makeInMemoryFilesystem } from '@endo/platform/fs/extended';
 import { makeFetchStore } from '../src/store.js';
 import { makeFetchService } from '../src/service.js';
 
+/** @import { FetchStoreDirectory } from '../src/types.js' */
+
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 /** Let the fire-and-forget persistence write-chain settle. */
 const flush = () => delay(10);
@@ -64,7 +66,12 @@ const makeFakeFetch = (body = 'ok') => {
 const makeStoreFixture = async () => {
   const fs = makeInMemoryFilesystem();
   const root = await E(fs).root();
-  const directory = await E(root).makeDirectory('fetch-store', {});
+  // `Directory.lookup` reports `Directory | File`; the fetch store only ever
+  // looks up the documents it wrote, which is what `FetchStoreDirectory`, the
+  // structural minimum `makeFetchStore` takes, says.
+  const directory = /** @type {FetchStoreDirectory} */ (
+    /** @type {unknown} */ (await E(root).makeDirectory('fetch-store'))
+  );
   let counter = 0;
   const makeId = async () => `${(counter += 1)}`;
   const open = () => makeFetchStore(directory, makeId);
