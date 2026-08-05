@@ -152,6 +152,7 @@ test('the version-controlled-filesystem loop closes end to end through provision
   const workspace = await provisionHostWorkspace(t, remoteRoot, { identity });
   const { remote } = makeGitRemote({
     git: workspace.git,
+    operations: workspace.operations,
     name: 'origin',
     policy: {
       url: remoteUrl,

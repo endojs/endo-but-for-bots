@@ -63,6 +63,7 @@ test('host-clone -> edit (incl. new path) -> add -> commit -> push -> re-fetch r
   const host = await hostCloneStandIn(t, remoteRoot);
   const { remote } = makeGitRemote({
     git: host.git,
+    operations: host.operations,
     name: 'origin',
     policy: {
       url: remoteUrl,

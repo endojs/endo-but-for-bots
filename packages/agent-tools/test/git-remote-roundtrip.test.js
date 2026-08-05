@@ -29,13 +29,14 @@ const execFileAsync = promisify(execFile);
  * tracking config the push set, and the controller's audit trail.
  */
 test('GitRemote fetch / pull / push use the bounded native data plane', async t => {
-  const { git, mount, root } = await provisionGitContext(t);
+  const { git, operations, mount, root } = await provisionGitContext(t);
   const remoteRoot = await provisionBareRemote(t, root);
   const remoteUrl = pathToFileURL(remoteRoot).href;
   const remoteHead = await advanceRemoteMain(t, remoteRoot);
 
   const { remote, controller } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     policy: {
       url: remoteUrl,
