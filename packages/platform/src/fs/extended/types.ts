@@ -83,13 +83,22 @@ export type NodeWatcher = {
 };
 
 /**
+ * Options accepted by `Xattrs.set`: the POSIX `XATTR_CREATE` /
+ * `XATTR_REPLACE` existence precondition. Advisory at this layer — the
+ * vat-local sidecar does not enforce it yet.
+ */
+export type XattrSetOptions = {
+  existence?: 'create' | 'replace';
+};
+
+/**
  * Vat-local `user.*` extended attributes. `get` and `set` are stream-shaped
  * because raw bytes are not passable across CapTP; `set` returns a writer whose
  * coalesced chunks become the attribute value when the writer closes.
  */
 export type Xattrs = {
   get: (name: string) => ERef<PassableBytesReader>;
-  set: (name: string) => ERef<PassableBytesWriter>;
+  set: (name: string, opts?: XattrSetOptions) => ERef<PassableBytesWriter>;
   list: () => ERef<PassableReader<string>>;
   remove: (name: string) => Promise<void>;
   help: (method?: string) => string;
