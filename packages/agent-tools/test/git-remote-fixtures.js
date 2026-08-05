@@ -7,11 +7,11 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { makeNativeGitBackend } from '@endo/git';
-import { makeGit } from '@endo/exo-git';
+import { makeGit, makeGitOperations } from '@endo/exo-git';
 import { makeMount, lineageOf } from '@endo/daemon/src/mount.js';
 import { makeFilePowers } from '@endo/daemon/src/manager-node-powers.js';
 
-/** @import { ReadWriteEndoGit } from '@endo/exo-git' */
+/** @import { ReadWriteEndoGit, GitOperations } from '@endo/exo-git' */
 
 const execFileAsync = promisify(execFile);
 
@@ -27,7 +27,7 @@ const execFileAsync = promisify(execFile);
  *   formula-owned commit identity to thread into the native backend, mirroring
  *   `provideGit`'s `{ identity }` construction option. Omitted, the backend
  *   falls back to its default `Endo <endo@invalid.local>` attribution.
- * @returns {Promise<{ git: ReadWriteEndoGit, mount: ReturnType<typeof makeMount>, root: string }>}
+ * @returns {Promise<{ git: ReadWriteEndoGit, operations: GitOperations, mount: ReturnType<typeof makeMount>, root: string }>}
  */
 export const composeGitOverWorktree = async (root, { identity } = {}) => {
   const filePowers = makeFilePowers({ fs, path });
@@ -35,7 +35,8 @@ export const composeGitOverWorktree = async (root, { identity } = {}) => {
   const backend = makeNativeGitBackend({ repoRoot: root, identity });
   await backend.assertRepositoryRoot();
   const git = makeGit({ mount, backend, lineageOf });
-  return { git, mount, root };
+  const operations = makeGitOperations({ backend, git });
+  return { git, operations, mount, root };
 };
 
 /**
@@ -44,7 +45,7 @@ export const composeGitOverWorktree = async (root, { identity } = {}) => {
  * push/fetch round-trip that pushes from a freshly initialized local repo.
  *
  * @param {import('ava').ExecutionContext} t
- * @returns {Promise<{ git: ReadWriteEndoGit, mount: ReturnType<typeof makeMount>, root: string }>}
+ * @returns {Promise<{ git: ReadWriteEndoGit, operations: GitOperations, mount: ReturnType<typeof makeMount>, root: string }>}
  */
 export const provisionGitContext = async t => {
   const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'git-remote-'));

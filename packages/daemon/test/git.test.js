@@ -18,7 +18,11 @@ import { promisify as nodePromisify } from 'node:util';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 import { internalHelpers, makeNativeGitBackend } from '@endo/git';
-import { makeGit, makeNotYetImplementedBackend } from '@endo/exo-git';
+import {
+  makeGit,
+  makeGitKit,
+  makeNotYetImplementedBackend,
+} from '@endo/exo-git';
 
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { makeFilePowers } from '../src/manager-node-powers.js';
@@ -100,7 +104,7 @@ const provisionMount = async t => {
   return makeMount({ rootPath: root, readOnly: false, filePowers });
 };
 
-test('Git exo advertises the full GitInterface', async t => {
+test('Git exo advertises the writer facet, cumulative up to the rewriter facet', async t => {
   const mount = await provisionMount(t);
   const git = makeGit({
     mount,
@@ -116,12 +120,18 @@ test('Git exo advertises the full GitInterface', async t => {
 
   // Inspection
   for (const name of ['status', 'diff', 'log', 'show', 'revParse']) {
-    t.true(methods.includes(name), `Git should advertise ${name}`);
+    t.true(methods.includes(name), `Git writer should advertise ${name}`);
   }
 
-  // Mutation
-  for (const name of ['add', 'restore', 'commit', 'reword', 'cherryPick']) {
-    t.true(methods.includes(name), `Git should advertise ${name}`);
+  // Mutation available without history-rewrite authority
+  for (const name of ['add', 'restore', 'commit']) {
+    t.true(methods.includes(name), `Git writer should advertise ${name}`);
+  }
+
+  // History-rewrite methods are absent from the writer facet entirely —
+  // posture is facet membership, not a runtime-rejected method call.
+  for (const name of ['reword', 'cherryPick', 'rebase']) {
+    t.false(methods.includes(name), `Git writer should not advertise ${name}`);
   }
 
   // Branching
@@ -135,13 +145,10 @@ test('Git exo advertises the full GitInterface', async t => {
     'detach',
     'switch',
   ]) {
-    t.true(methods.includes(name), `Git should advertise ${name}`);
+    t.true(methods.includes(name), `Git writer should advertise ${name}`);
   }
 
-  // Integration
-  for (const name of ['merge', 'rebase']) {
-    t.true(methods.includes(name), `Git should advertise ${name}`);
-  }
+  t.true(methods.includes('merge'));
 
   // Stash
   for (const name of [
@@ -152,14 +159,52 @@ test('Git exo advertises the full GitInterface', async t => {
     'stashPop',
     'stashDrop',
   ]) {
-    t.true(methods.includes(name), `Git should advertise ${name}`);
+    t.true(methods.includes(name), `Git writer should advertise ${name}`);
   }
 
-  // Trees + worktree binding
+  // Trees + worktree binding + downscoping
   t.true(methods.includes('tree'));
   t.true(methods.includes('filesystemAt'));
   t.true(methods.includes('worktree'));
   t.true(methods.includes('readOnly'));
+  t.true(methods.includes('scope'));
+
+  // `scope` cannot escalate: the writer facet's `scope` guard admits only
+  // `'reader' | 'writer'`, so asking it for `'rewriter'` rejects at the
+  // guard, the same way an unrecognized name would.
+  await t.throwsAsync(E(/** @type {any} */ (git)).scope('rewriter'));
+
+  // The rewriter facet, obtained as a genuine sibling of the same kit
+  // instance (not by escalating through `scope`), is cumulative over the
+  // writer: every writer method plus the history-rewrite trio.
+  const { rewriter } = makeGitKit({
+    mount,
+    backend: makeNotYetImplementedBackend(),
+    lineageOf,
+  });
+  // eslint-disable-next-line no-underscore-dangle
+  const rewriterMethods = await E(
+    /** @type {any} */ (rewriter),
+  ).__getMethodNames__();
+  for (const name of methods) {
+    t.true(
+      rewriterMethods.includes(name),
+      `Git rewriter should advertise every writer method, missing ${name}`,
+    );
+  }
+  for (const name of ['reword', 'cherryPick', 'rebase']) {
+    t.true(
+      rewriterMethods.includes(name),
+      `Git rewriter should advertise ${name}`,
+    );
+  }
+  // `scope` on the rewriter facet reaches every posture in its own kit
+  // instance, and repeated calls return the identical pre-existing
+  // reference rather than minting a fresh one each time.
+  const writerFromRewriter = await E(rewriter).scope('writer');
+  t.is(await E(rewriter).scope('writer'), writerFromRewriter);
+  const readerFromRewriter = await E(rewriter).scope('reader');
+  t.is(await E(writerFromRewriter).scope('reader'), readerFromRewriter);
 });
 
 test('Git.worktree() returns the bound mount cap', async t => {
@@ -184,9 +229,10 @@ test('Git.readOnly() attenuates mutating operations but preserves reads', async 
   const git = makeGit({ mount, backend, lineageOf });
 
   const readOnlyGit = await E(git).readOnly();
-  // The runtime Git guard retains mutator method names so it can reject them
-  // with its capability error; the public read-only type intentionally omits
-  // those methods.
+  // Posture is facet membership: the reader facet simply has no mutator
+  // methods (rather than advertising them and rejecting the call with a
+  // capability error), so every mutator call rejects with the guard's
+  // "no such method" TypeError.
   const runtimeReadOnlyGit = /** @type {HistoryRewriteEndoGit} */ (readOnlyGit);
 
   const entries = await E(readOnlyGit).status();
@@ -195,22 +241,22 @@ test('Git.readOnly() attenuates mutating operations but preserves reads', async 
 
   const entry = await E(mount).entry(['new.txt']);
   await t.throwsAsync(E(runtimeReadOnlyGit).add([entry]), {
-    message: /read-only Git capability/,
+    message: /has no method "add"/,
   });
   await t.throwsAsync(E(runtimeReadOnlyGit).commit('should fail'), {
-    message: /read-only Git capability/,
+    message: /has no method "commit"/,
   });
   await t.throwsAsync(
     E(runtimeReadOnlyGit).commit('should also fail', { amend: true }),
     {
-      message: /read-only Git capability/,
+      message: /has no method "commit"/,
     },
   );
   await t.throwsAsync(E(runtimeReadOnlyGit).reword('HEAD', 'should fail'), {
-    message: /read-only Git capability/,
+    message: /has no method "reword"/,
   });
   await t.throwsAsync(E(runtimeReadOnlyGit).cherryPick('HEAD'), {
-    message: /read-only Git capability/,
+    message: /has no method "cherryPick"/,
   });
   await t.throwsAsync(
     E(runtimeReadOnlyGit).rebase({
@@ -218,10 +264,10 @@ test('Git.readOnly() attenuates mutating operations but preserves reads', async 
       upstream: 'main',
       autosquash: true,
     }),
-    { message: /read-only Git capability/ },
+    { message: /has no method "rebase"/ },
   );
   await t.throwsAsync(E(runtimeReadOnlyGit).switchBranch('main'), {
-    message: /read-only Git capability/,
+    message: /has no method "switchBranch"/,
   });
 
   t.is(await E(readOnlyGit).readOnly(), readOnlyGit);
@@ -292,7 +338,7 @@ test('makeGit can be constructed directly as read-only', async t => {
   t.is((await E(git).status()).length, 1);
   const entry = await E(mount).entry(['blocked.txt']);
   await t.throwsAsync(E(runtimeReadOnlyGit).add([entry]), {
-    message: /read-only Git capability/,
+    message: /has no method "add"/,
   });
 });
 
@@ -884,25 +930,43 @@ test('Git history rewrite authority defaults off and can be elevated', async t =
   const entry = await E(mount).entry(['history.txt']);
   await E(git).add([entry]);
   const first = await E(git).commit('first subject');
+  // `amend` is the one argument-sensitive authority split: the writer
+  // facet's `commit` guard admits only `amend: false` (or omitted), so
+  // `amend: true` rejects at the guard before the backend ever sees it.
   await t.throwsAsync(
     E(runtimeOrdinaryGit).commit('blocked amend', { amend: true }),
     {
-      message: /without history-rewrite authority/,
+      message: /amend.*Must be: false/s,
     },
   );
+  // The guard's stated contract is "amend: false (or omitted)"; pin the
+  // explicit-false half of that alongside the omitted case exercised
+  // elsewhere and the `amend: true` rejection just above.
+  await fs.promises.writeFile(
+    path.join(repoRoot, 'history.txt'),
+    'explicit false\n',
+  );
+  await E(git).add([entry]);
+  const explicitFalse = await E(git).commit('explicit amend false', {
+    amend: false,
+  });
+  t.not(explicitFalse.oid, first.oid);
+  t.is(explicitFalse.summary, 'explicit amend false');
+  // `reword` / `cherryPick` / `rebase` are absent from the writer facet
+  // entirely — posture is facet membership, not a runtime-rejected call.
   await t.throwsAsync(
     E(runtimeOrdinaryGit).reword(first.oid, 'blocked reword'),
     {
-      message: /without history-rewrite authority/,
+      message: /has no method "reword"/,
     },
   );
   await t.throwsAsync(E(runtimeOrdinaryGit).cherryPick(first.oid), {
-    message: /without history-rewrite authority/,
+    message: /has no method "cherryPick"/,
   });
   await t.throwsAsync(
     E(runtimeOrdinaryGit).rebase({ mode: 'start', upstream: 'main' }),
     {
-      message: /without history-rewrite authority/,
+      message: /has no method "rebase"/,
     },
   );
 

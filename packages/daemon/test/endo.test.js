@@ -4875,10 +4875,14 @@ testNeedsNodeWorker(
       /** @type {import('@endo/exo-git').HistoryRewriteEndoGit} */ (
         ordinaryGit
       );
+    // The rewriter-only methods are absent from the writer facet entirely
+    // (facet membership, not a runtime-rejected method call), so an
+    // ordinary Git without history-rewrite authority fails the CapTP
+    // method lookup rather than a bespoke authority check.
     await t.throwsAsync(
       E(runtimeOrdinaryGit).reword('HEAD', 'blocked ordinary rewrite'),
       {
-        message: /without history-rewrite authority/,
+        message: /has no method "reword"/,
       },
     );
     const amended = await E(gitHistory).commit('amended before cancel', {
@@ -5004,8 +5008,12 @@ testNeedsNodeWorker(
     );
     const status = await E(gitCap).status();
     t.true(Array.isArray(status));
+    // `commit` is absent from the reader facet entirely (facet
+    // membership, not a runtime-rejected method call), so a read-only
+    // Git fails the CapTP method lookup rather than a bespoke authority
+    // check. See the analogous `reword` assertion elsewhere in this file.
     await t.throwsAsync(E(gitCap).commit('blocked'), {
-      message: /read-only Git capability/,
+      message: /has no method "commit"/,
     });
   },
 );

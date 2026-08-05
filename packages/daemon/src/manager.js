@@ -26,6 +26,7 @@ import {
   makeBasicCredential,
   makeBearerCredential,
   makeGit,
+  makeGitOperations,
   makeGitRemote,
   makeUnavailableGitCredential,
 } from '@endo/exo-git';
@@ -139,6 +140,21 @@ import { getUnredactedStackString } from './unredacted-stack.js';
  *   readRange: (offset: number, length: number) => Promise<Uint8Array>,
  * }} DaemonContentStoreBlob
  */
+
+/**
+ * Host-private association from a `git` formula's minted capability to the
+ * `GitOperations` capability minted alongside it, so a later `git-remote`
+ * formula for the same `gitId` can hand `makeGitRemote` the backend
+ * authority explicitly without `@endo/exo-git` deriving it from `git`
+ * itself. `provide(gitId)` returns the same object reference on every call
+ * within one process incarnation, so this WeakMap keyed on that reference
+ * is a reliable within-incarnation lookup — the daemon's own bookkeeping
+ * of "which operations go with which formula," not a capability side-table
+ * inside `@endo/exo-git`.
+ *
+ * @type {WeakMap<object, import('@endo/exo-git/src/git.js').GitOperations>}
+ */
+const gitOperationsByCap = new WeakMap();
 
 /**
  * Wrap a byte range as a `PassableBytesReader`, the CapTP-passable bytes
@@ -3219,7 +3235,7 @@ const makeDaemonCore = async (
         identity,
       });
       await backend.assertRepositoryRoot();
-      return makeGit(
+      const git = makeGit(
         {
           // `provide(mountId)` returns a union of cap types; the
           // `getMountBacking` check above guarantees an `EndoMount`,
@@ -3231,6 +3247,19 @@ const makeDaemonCore = async (
         },
         { readOnly: backing.readOnly, allowHistoryRewrite },
       );
+      // A later `git-remote` formula for this same `gitId` needs the
+      // backend authority explicitly (see `gitOperationsByCap` above);
+      // mint and record it now, while `backend` is in scope.  Passing
+      // `git` lets `makeGitOperations` stamp the result with this Git
+      // instance's ephemeral pairing token, minted fresh on every Git
+      // formula evaluation (including reincarnation), so a later
+      // `git-remote` formula cannot be satisfied by operations minted for
+      // a different `gitId`.
+      gitOperationsByCap.set(
+        /** @type {object} */ (git),
+        makeGitOperations({ backend, git }),
+      );
+      return git;
     },
     shell: async ({ mountId, policy }, context) => {
       context.thisDiesIfThatDies(mountId);
@@ -3378,6 +3407,12 @@ const makeDaemonCore = async (
         context.thisDiesIfThatDies(credentialId);
       }
       const git = await provide(gitId);
+      const operations = gitOperationsByCap.get(/** @type {object} */ (git));
+      if (operations === undefined) {
+        throw makeError(
+          X`git-remote formula's gitId ${q(gitId)} does not name a daemon-minted Git cap`,
+        );
+      }
       const credential =
         credentialId === undefined ? undefined : await provide(credentialId);
       const { remote } = makeGitRemote({
@@ -3385,6 +3420,7 @@ const makeDaemonCore = async (
         // bare `object` and asserts the shape internally.
         // eslint-disable-next-line object-shorthand
         git: /** @type {object} */ (git),
+        operations,
         // eslint-disable-next-line object-shorthand
         credential:
           credential === undefined

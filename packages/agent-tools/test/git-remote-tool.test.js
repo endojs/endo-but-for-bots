@@ -331,10 +331,11 @@ test('a present-but-empty options record forwards as a single empty record', asy
 test('an out-of-policy option is rejected at the capability boundary', async t => {
   // The tool states no policy of its own; a forbidden option fails closed at
   // the exo. Force-push without allowForcePush is the canonical example.
-  const { git, root } = await provisionGitContext(t);
+  const { git, operations, root } = await provisionGitContext(t);
   const remoteRoot = await provisionBareRemote(t, root);
   const { remote } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     policy: {
       url: pathToFileURL(remoteRoot).href,
@@ -365,13 +366,14 @@ test('an out-of-policy option is rejected at the capability boundary', async t =
 // --- end-to-end: the tools move real git objects over a file:// remote -------
 
 test('fetch / pull / push tools drive the bounded native data plane', async t => {
-  const { git, mount, root } = await provisionGitContext(t);
+  const { git, operations, mount, root } = await provisionGitContext(t);
   const remoteRoot = await provisionBareRemote(t, root);
   const remoteUrl = pathToFileURL(remoteRoot).href;
   const remoteHead = await advanceRemoteMain(t, remoteRoot);
 
   const { remote } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     policy: {
       url: remoteUrl,
