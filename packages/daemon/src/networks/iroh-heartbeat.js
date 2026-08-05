@@ -4,7 +4,8 @@
 import harden from '@endo/harden';
 
 // iroh's QUIC stack closes a connection after its default max idle timeout
-// (~2 minutes) and @number0/iroh's `EndpointOptions` exposes no transport
+// (~30 seconds with the current binding) and @number0/iroh's
+// `EndpointOptions` exposes no transport
 // config to shorten that or to enable QUIC-level keep-alive. A quiet but
 // healthy CapTP session (two daemons that have swapped bootstrap references
 // and are each awaiting the other) is therefore torn down. The heartbeat
@@ -31,7 +32,7 @@ import harden from '@endo/harden';
  * Heartbeat send period. Comfortably below iroh's QUIC idle timeout so a
  * single beat keeps the connection alive.
  */
-export const HEARTBEAT_INTERVAL_MS = 30_000;
+export const HEARTBEAT_INTERVAL_MS = 10_000;
 harden(HEARTBEAT_INTERVAL_MS);
 
 /**
@@ -142,8 +143,11 @@ export const makeIrohHeartbeat = (
       // A one-byte payload suffices to generate traffic; the content is
       // ignored. The binding's `sendDatagram` takes a plain `Array<number>`
       // (napi marshals `Vec<u8>` from a JS Array, not a TypedArray), and a
-      // fresh array avoids handing native code a shared view.
-      sendDatagram([0]);
+      // fresh array avoids handing native code a shared view. Call as a
+      // method on the connection: `sendDatagram` is a NAPI-RS native method
+      // that requires `this` to be the connection, so a destructured reference
+      // fails with "Illegal invocation".
+      connection.sendDatagram([0]);
     } catch (error) {
       // A full send buffer or transient datagram error is not fatal: the next
       // beat retries and the peer's watchdog tolerates a single miss.
@@ -161,7 +165,7 @@ export const makeIrohHeartbeat = (
       return;
     }
     try {
-      Promise.resolve(readDatagram()).then(
+      Promise.resolve(connection.readDatagram()).then(
         () => {
           touch();
           pump();

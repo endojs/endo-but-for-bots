@@ -4,7 +4,8 @@
 import harden from '@endo/harden';
 
 // iroh's QUIC stack closes a connection after its default max idle timeout
-// (~2 minutes) and @number0/iroh's `EndpointOptions` exposes no transport
+// (~30 seconds with the current binding) and @number0/iroh's
+// `EndpointOptions` exposes no transport
 // config to shorten that or to enable QUIC-level keep-alive. A quiet but
 // healthy CapTP session (two peers that have swapped bootstrap references
 // and are each awaiting the other) would therefore be torn down. The
@@ -32,7 +33,7 @@ import harden from '@endo/harden';
  * Heartbeat send period. Comfortably below iroh's QUIC idle timeout so a
  * single beat keeps the connection alive.
  */
-export const HEARTBEAT_INTERVAL_MS = 30_000;
+export const HEARTBEAT_INTERVAL_MS = 10_000;
 harden(HEARTBEAT_INTERVAL_MS);
 
 /**
@@ -143,8 +144,13 @@ export const makeIrohHeartbeat = (
       // A one-byte payload suffices to generate traffic; the content is
       // ignored. The binding's `sendDatagram` takes a plain
       // `Array<number>`, and a fresh array avoids handing native code a
-      // shared view.
-      /** @type {NonNullable<typeof sendDatagram>} */ (sendDatagram)([0]);
+      // shared view. Call as a method on the connection: `sendDatagram`
+      // is a NAPI-RS native method that requires `this` to be the
+      // connection, so a destructured reference fails with "Illegal
+      // invocation".
+      /** @type {NonNullable<typeof sendDatagram>} */ (connection.sendDatagram)(
+        [0],
+      );
     } catch (error) {
       // A full send buffer or transient datagram error is not fatal: the
       // next beat retries and the peer's watchdog tolerates a single
@@ -163,7 +169,9 @@ export const makeIrohHeartbeat = (
     }
     try {
       Promise.resolve(
-        /** @type {NonNullable<typeof readDatagram>} */ (readDatagram)(),
+        /** @type {NonNullable<typeof readDatagram>} */ (
+          connection.readDatagram
+        )(),
       ).then(
         () => {
           touch();
