@@ -24,11 +24,11 @@
 export const gitRemoteDeclarations = harden({
   gitRemote: {
     aux: `type GitRemote = {
-  inspect: () => Promise<RemoteSnapshot>;
   fetch: (options?: {
     prune?: boolean;
     tags?: boolean;
 }) => Promise<RemoteOperationResult>;
+  inspect: () => Promise<RemoteSnapshot>;
   pull: (options?: {
     branch?: RemoteGitRef | string;
     strategy?: 'merge' | 'rebase' | 'ff-only';

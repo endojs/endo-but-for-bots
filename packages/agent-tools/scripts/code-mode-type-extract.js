@@ -850,7 +850,9 @@ const extractTsAliasesIR = ({ rootModule, rootType, memberFilter }) => {
 
   return harden({
     rootName: rootType,
-    members,
+    members: members.sort((a, b) =>
+      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+    ),
     auxTypes: [...auxTypes.values()].sort((a, b) =>
       a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
     ),

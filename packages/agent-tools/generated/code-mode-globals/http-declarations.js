@@ -26,8 +26,8 @@
 export const httpDeclarations = harden({
   http: {
     aux: `type HttpClient = {
-  fetch: (url: string, options?: HttpFetchOptions) => Promise<HttpResponse>;
   allowedOrigins: () => string[];
+  fetch: (url: string, options?: HttpFetchOptions) => Promise<HttpResponse>;
   help: () => string;
 };
 type HttpERef<T> = T | Promise<T>;

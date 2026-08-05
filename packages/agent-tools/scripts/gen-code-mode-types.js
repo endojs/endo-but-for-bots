@@ -18,8 +18,9 @@
  *
  * `test/code-mode-types.test.js` is the divergence gate: it re-runs the same
  * extraction and fails if a checked-in artifact is stale, so a change to any
- * source (the exo-git types, the FS guards) or to a renderer must be
- * regenerated and committed.
+ * source (the exo-git or platform filesystem types) or to a renderer must be
+ * regenerated and committed. It also checks each printed capability type
+ * against the runtime `M.interface` guard that enforces it.
  *
  * `typescript` and `@endo/patterns` are dev dependencies and are only used here
  * and in the gate, never at agentry runtime: the artifacts are plain checked-in
@@ -135,9 +136,11 @@ writeArtifact({
   outPath: '../generated/code-mode-globals/fs-declarations.js',
   exportName: 'fsDeclarations',
   descriptorFile: 'fs.js',
-  sourceDoc: ` *   - workspace: the platform/fs/extended interface guards
- *     (\`FilesystemInterface\` and the remotables it reaches), the richest
- *     available source since the FS \`.d.ts\` is a stub.`,
+  sourceDoc: ` *   - workspace: packages/platform/src/fs/extended/types.ts (the
+ *     \`Filesystem\` type alias and the capability types it reaches), printed
+ *     by the TypeScript compiler API, with \`PassableReader\`,
+ *     \`PassableBytesReader\`, \`PassableBytesWriter\`, and the stream nodes
+ *     they reach followed into packages/exo-stream/types.d.ts.`,
   declarations: buildFsTypeDeclarations(),
 });
 
