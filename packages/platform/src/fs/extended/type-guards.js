@@ -113,7 +113,9 @@ export const DirectoryInterface = M.interface(
       M.eref(M.remotable('Directory')),
     ),
     list: M.call().returns(M.eref(M.remotable('Cursor'))),
-    create: M.call(M.string(), Pass).returns(M.eref(M.remotable('OpenFile'))),
+    create: M.call(M.string())
+      .optional(Pass)
+      .returns(M.eref(M.remotable('OpenFile'))),
     // Catalog whole-blob `write`: create-or-overwrite the named child
     // with `value`, a UTF-8 `string`. The fire-and-forget whole-blob
     // form; `create` (above) stays the distinct range-I/O writer-stream
@@ -122,14 +124,16 @@ export const DirectoryInterface = M.interface(
     // are not CapTP-passable, so they must arrive as a blob cap.) See
     // designs/fs-interface-reconciliation.md §Mutation (F2).
     write: M.call(M.string(), M.string()).returns(M.promise()),
-    makeDirectory: M.call(M.string(), Pass).returns(
-      M.eref(M.remotable('Directory')),
-    ),
+    makeDirectory: M.call(M.string())
+      .optional(Pass)
+      .returns(M.eref(M.remotable('Directory'))),
     remove: M.call(M.string()).returns(M.promise()),
     // Legacy aliases for `makeDirectory` / `remove`. Kept declared
     // so the interface is honest about what wrapBackend's Directory
     // exos actually expose.
-    mkdir: M.call(M.string(), Pass).returns(M.eref(M.remotable('Directory'))),
+    mkdir: M.call(M.string())
+      .optional(Pass)
+      .returns(M.eref(M.remotable('Directory'))),
     unlink: M.call(M.string()).returns(M.promise()),
     // `rename(srcName, newParent, dstName)` is the cross-directory-cap
     // relocate primitive: `newParent` is a *Directory cap* (possibly a
@@ -178,9 +182,9 @@ export const DirectoryInterface = M.interface(
     // server-side), so a deep materialise is one batch instead of
     // N serial lookup-then-mkdir round-trips. Compare DESIGN.md §10.1
     // [RT] item "No lookupOrCreate / materialise primitive".
-    materialise: M.call(M.arrayOf(M.string()), Pass).returns(
-      M.eref(M.remotable('Directory')),
-    ),
+    materialise: M.call(M.arrayOf(M.string()))
+      .optional(Pass)
+      .returns(M.eref(M.remotable('Directory'))),
     // Atomic snapshot + subscribe: returns a `Cursor` over the
     // directory's entries at the moment of subscription PLUS a
     // `NodeWatcher` that will receive every event from that point
@@ -199,7 +203,9 @@ export const FileInterface = M.interface(
   'File',
   {
     ...NodeBaseMethods,
-    open: M.call(Pass).returns(M.eref(M.remotable('OpenFile'))),
+    open: M.call()
+      .optional(Pass)
+      .returns(M.eref(M.remotable('OpenFile'))),
     snapshot: M.call().returns(M.promise()),
   },
   { sloppy: true },
@@ -244,7 +250,7 @@ export const OpenFileInterface = M.interface('OpenFile', {
   // tail). `offset` is optional — defaults to the cursor.
   write: M.callWhen().optional(M.bigint()).returns(Pass),
   truncate: M.call(M.bigint()).returns(M.promise()),
-  fsync: M.call(Pass).returns(M.promise()),
+  fsync: M.call().optional(Pass).returns(M.promise()),
   lock: M.call(Pass).returns(M.eref(M.remotable('Lock'))),
   getLock: M.call(Pass).returns(M.promise()),
   close: M.call().returns(M.promise()),
@@ -260,9 +266,9 @@ harden(LockInterface);
 
 export const XattrsInterface = M.interface('Xattrs', {
   get: M.call(M.string()).returns(M.eref(M.remotable('PassableBytesReader'))),
-  set: M.call(M.string(), Pass).returns(
-    M.eref(M.remotable('PassableBytesWriter')),
-  ),
+  set: M.call(M.string())
+    .optional(Pass)
+    .returns(M.eref(M.remotable('PassableBytesWriter'))),
   list: M.call().returns(M.eref(M.remotable('PassableReader'))),
   remove: M.call(M.string()).returns(M.promise()),
   help: M.call().optional(M.string()).returns(M.string()),

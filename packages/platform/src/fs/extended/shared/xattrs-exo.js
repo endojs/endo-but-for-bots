@@ -64,7 +64,7 @@ export const makeXattrsExo = ({ xattrTable, fireLocal, lockKeyOf, path }) => {
       };
       return bytesReaderFromIterator(gen());
     },
-    async set(name, _opts) {
+    async set(name) {
       assertUserNamespace(name);
       const m = ensureMap();
       /** @type {Uint8Array[]} */

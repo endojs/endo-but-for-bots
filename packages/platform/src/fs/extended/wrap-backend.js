@@ -486,7 +486,7 @@ export const wrapBackend = (backend, opts = {}) => {
         // Truncate is a mutation; bump mtime.
         touch(path, { mtime: true });
       },
-      async fsync(_opts) {
+      async fsync() {
         requireOpen('fsync');
         if (caps.fsync) {
           // @ts-expect-error optional method probed above
@@ -828,7 +828,7 @@ export const wrapBackend = (backend, opts = {}) => {
       xattrs() {
         return xattrsExoFor(path);
       },
-      async mkdir(name, _opts) {
+      async mkdir(name) {
         // Legacy synonym for makeDirectory.
         assertChildName(name);
         const childPath = [...path, name];
@@ -953,7 +953,7 @@ export const wrapBackend = (backend, opts = {}) => {
         }
         return makeOpenFileExo(childPath, mode);
       },
-      async makeDirectory(name, _opts) {
+      async makeDirectory(name) {
         assertChildName(name);
         const childPath = [...path, name];
         const k = await backend.kind(childPath);
@@ -1008,7 +1008,7 @@ export const wrapBackend = (backend, opts = {}) => {
           await backend.fsync(path);
         }
       },
-      async materialise(relPath, _opts) {
+      async materialise(relPath) {
         const finalPath = await materialise(path, relPath);
         return makeDirectoryExo(finalPath);
       },

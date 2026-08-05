@@ -149,10 +149,10 @@ const makeReadOnlyDirectory = dir => {
     async create(_name, _opts) {
       throw denied('create');
     },
-    async mkdir(_name, _opts) {
+    async mkdir(_name) {
       throw denied('mkdir');
     },
-    async makeDirectory(_name, _opts) {
+    async makeDirectory(_name) {
       throw denied('makeDirectory');
     },
     async unlink(_name) {
@@ -173,7 +173,7 @@ const makeReadOnlyDirectory = dir => {
     async fsync() {
       throw denied('fsync');
     },
-    async materialise(_path, _opts) {
+    async materialise(_path) {
       throw denied('materialise');
     },
     async watchFrom() {
@@ -259,7 +259,7 @@ const makeReadOnlyOpenFile = oh => {
     async truncate(_length) {
       throw denied('truncate');
     },
-    async fsync(_opts) {
+    async fsync() {
       throw denied('fsync');
     },
     async lock(_opts) {
@@ -289,7 +289,7 @@ const makeReadOnlyXattrs = xattrs => {
     async get(name) {
       return E(xattrs).get(name);
     },
-    async set(_name, _opts) {
+    async set(_name) {
       throw denied('xattrs.set');
     },
     async list() {

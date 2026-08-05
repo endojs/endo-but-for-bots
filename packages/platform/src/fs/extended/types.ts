@@ -59,8 +59,8 @@ export interface Directory {
   list(): ERef<Cursor>;
   write(name: string, value: string): Promise<void>;
   create(name: string, opts?: OpenFileOptions): ERef<OpenFile>;
-  makeDirectory(name: string, opts?: object): ERef<Directory>;
-  mkdir(name: string, opts?: object): ERef<Directory>;
+  makeDirectory(name: string): ERef<Directory>;
+  mkdir(name: string): ERef<Directory>;
   remove(name: string): Promise<void>;
   unlink(name: string): Promise<void>;
   move(fromPath: string | string[], toPath: string | string[]): Promise<void>;
@@ -71,7 +71,7 @@ export interface Directory {
     newName: string,
   ): Promise<void> | void;
   fsync(): Promise<void>;
-  materialise(path: string[], opts?: object): ERef<Directory>;
+  materialise(path: string[]): ERef<Directory>;
   watchFrom(): ERef<object>;
   help(method?: string): string;
 }
@@ -84,7 +84,7 @@ export interface File {
   setAttrs(patch: NodeStat): Promise<void>;
   watch(): ERef<NodeWatcher>;
   xattrs(): ERef<Xattrs>;
-  open(opts: OpenFileOptions): ERef<OpenFile>;
+  open(opts?: OpenFileOptions): ERef<OpenFile>;
   read(opts?: object): any;
   write(opts?: object): any;
   snapshot(): Promise<object>;
