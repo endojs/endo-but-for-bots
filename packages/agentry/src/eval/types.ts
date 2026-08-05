@@ -1,5 +1,7 @@
 import type { AgentEvent, StreamFn } from '@earendil-works/pi-agent-core';
 import type { Model, Usage } from '@earendil-works/pi-ai';
+import type { CodeModePower } from '@endo/agent-tools/code-mode/types.js';
+import type { GetApiKey, ThinkingLevel } from '../harness/types.js';
 
 /**
  * Read the UTF-8 content of an `@endo/platform/fs`-style File capability. The
@@ -101,11 +103,11 @@ export interface RunGitScenarioOptions<Expected = unknown> {
   /**
    * A live writable `@endo/platform/fs` Filesystem over the scenario repository.
    */
-  workspace: unknown;
+  workspace: CodeModePower;
   /**
    * A live read/write `@endo/exo-git` Git capability over the same repository.
    */
-  git: unknown;
+  git: CodeModePower;
   scenario: GitScenario<Expected>;
   /**
    * Read a committed File's content as UTF-8; passed through to the scenario's
@@ -113,8 +115,8 @@ export interface RunGitScenarioOptions<Expected = unknown> {
    */
   readText: ReadText;
   /** Resolve the model's API key. Omit for a faux/local model. */
-  getApiKey?: import('../harness/credentials.js').GetApiKey;
-  thinkingLevel?: import('../harness/model.js').ThinkingLevel;
+  getApiKey?: GetApiKey;
+  thinkingLevel?: ThinkingLevel;
   streamFn?: StreamFn;
   /** Optional listener for sanitized or otherwise caller-owned event capture. */
   onEvent?: (event: AgentEvent) => void | Promise<void>;

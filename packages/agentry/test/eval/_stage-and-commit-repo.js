@@ -10,6 +10,8 @@ import path from 'node:path';
 
 import { initRepo, makePowersOver } from '../_eval-fixture.js';
 
+/** @import { CodeModePower } from '@endo/agent-tools/code-mode/types.js' */
+
 /**
  * Provision a real git repository for the stage-and-commit scenario: an initial
  * commit (so HEAD exists), then the scenario's target file written into the
@@ -21,7 +23,11 @@ import { initRepo, makePowersOver } from '../_eval-fixture.js';
  * @param {object} options
  * @param {string} options.path Repository-relative path of the untracked file.
  * @param {string} options.content Its content.
- * @returns {Promise<{ repoRoot: string, workspace: unknown, git: unknown }>}
+ * @returns {Promise<{
+ *   repoRoot: string,
+ *   workspace: CodeModePower,
+ *   git: CodeModePower,
+ * }>}
  */
 export const provisionStageAndCommitRepo = async (
   t,

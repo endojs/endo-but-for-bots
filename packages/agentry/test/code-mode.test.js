@@ -32,7 +32,7 @@ import {
 } from '../src/code-mode.js';
 import { defineAgent, makeEnvCredentials } from '../src/define-agent.js';
 
-/** @import { CodeModeGlobal, Evaluate } from '@endo/agent-tools/code-mode/evaluate-tool.js' */
+/** @import { CodeModeGlobal, CodeModePower, Evaluate } from '@endo/agent-tools/code-mode/types.js' */
 /** @import { Model } from '@earendil-works/pi-ai' */
 /** @import { PassableBytesReader, PassableBytesWriter } from '@endo/exo-stream' */
 
@@ -346,7 +346,7 @@ test('makeCodeModeAgent exposes only evaluate and rejects non-readOnly git in re
     { message: /requires an already read-only Git capability/ },
   );
 
-  const readOnlyGit = /** @type {{ readOnly: () => unknown }} */ (
+  const readOnlyGit = /** @type {{ readOnly: () => CodeModePower }} */ (
     /** @type {unknown} */ (git)
   ).readOnly();
   const { agent, globals } = makeCodeModeAgent({

@@ -3,9 +3,9 @@
 
 /** @import { Model } from '@earendil-works/pi-ai' */
 /** @import { Agent, AgentMessage, StreamFn } from '@earendil-works/pi-agent-core' */
-/** @import { Credentials, GetApiKey } from './harness/credentials.js' */
-/** @import { ThinkingLevel } from './harness/model.js' */
-/** @import { Evaluate, StoreValue, CodeModeGlobal, CodeModePower, PowerHandle, LookupPowers } from '@endo/agent-tools/code-mode/evaluate-tool.js' */
+/** @import { Credentials, GetApiKey, ThinkingLevel } from './harness/types.js' */
+/** @import { CodeModeGlobal, CodeModePower, Evaluate, LookupPowers, PowerHandle, StoreValue } from '@endo/agent-tools/code-mode/types.js' */
+/** @import { CodeModePowers, GitLoopOptions, MakeCodeModeAgentOptions } from './code-mode/types.js' */
 
 import { E } from '@endo/eventual-send';
 import { isGitHistoryRewrite, isGitReadOnly } from '@endo/exo-git';
@@ -93,34 +93,6 @@ const lookupRequiredPower = (powers, petName, label) => {
   }
   return E(powers).lookup(petName);
 };
-
-/**
- * @typedef {object} CodeModePowers
- * @property {CodeModePower} [workspace]
- * @property {string} [workspacePetName]
- * @property {CodeModePower} [git]
- * @property {string} [gitPetName]
- * @property {'readOnly' | 'readWrite' | 'historyRewrite'} [gitMode]
- * @property {CodeModeGlobal[]} [namedPowers]
- *
- * @typedef {object} MakeCodeModeAgentOptions
- * @property {Model<string>} model
- * @property {CodeModePowers} [powers]
- * @property {LookupPowers} [lookupPowers] A live powers handle with
- *   `lookup(petName)` for resolving capabilities not passed inline.
- * @property {Credentials} [credentials]
- * @property {Record<string, unknown>} [endowments]
- * @property {Evaluate} [evaluate]
- * @property {StoreValue} [storeValue]
- * @property {() => Promise<void> | void} [onContainedEventualSendRejection]
- * @property {CodeModeGlobal[]} [globals]
- * @property {string} [systemPrompt]
- * @property {string} [preamble]
- * @property {AgentMessage[]} [messages]
- * @property {StreamFn} [streamFn]
- * @property {GetApiKey} [getApiKey]
- * @property {ThinkingLevel} [thinkingLevel]
- */
 
 /**
  * Build the lexical globals for a code-mode agent from its configured powers.
@@ -316,24 +288,6 @@ export const makeCodeModeAgent = options => {
   return { agent, globals, evaluate, systemPrompt, model };
 };
 harden(makeCodeModeAgent);
-
-/**
- * @typedef {object} GitLoopOptions
- * @property {Model<string>} model
- * @property {CodeModePower} workspace
- * @property {CodeModePower} git
- * @property {Evaluate} [evaluate]
- * @property {Record<string, unknown>} [endowments]
- * @property {() => Promise<void> | void} [onContainedEventualSendRejection]
- * @property {CodeModeGlobal[]} [globals]
- * @property {string} [systemPrompt]
- * @property {AgentMessage[]} [messages]
- * @property {StreamFn} [streamFn]
- * @property {GetApiKey} [getApiKey]
- * @property {ThinkingLevel} [thinkingLevel]
- * @property {boolean} [readOnlyGit]
- * @property {StoreValue} [storeValue]
- */
 
 /**
  * The git-loop preset: a thin alias over {@link makeCodeModeAgent} that wires a

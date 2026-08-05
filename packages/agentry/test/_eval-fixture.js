@@ -22,6 +22,8 @@ import { makeNativeGitBackend } from '@endo/git';
 import { makeMount, lineageOf } from '@endo/daemon/src/mount.js';
 import { makeFilePowers } from '@endo/daemon/src/manager-node-powers.js';
 
+/** @import { CodeModePower } from '@endo/agent-tools/code-mode/types.js' */
+
 const execFileAsync = nodePromisify(execFile);
 
 /**
@@ -74,7 +76,7 @@ harden(readText);
  * @param {string} repoRoot
  * @param {object} [options]
  * @param {boolean} [options.allowHistoryRewrite]
- * @returns {{ workspace: unknown, git: unknown }}
+ * @returns {{ workspace: CodeModePower, git: CodeModePower }}
  */
 export const makePowersOver = (
   repoRoot,

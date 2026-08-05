@@ -2,7 +2,7 @@
 /// <reference types="ses"/>
 
 /** @import { Model } from '@earendil-works/pi-ai' */
-/** @import { GetApiKey } from '../harness/credentials.js' */
+/** @import { GetApiKey } from '../harness/types.js' */
 
 import { resolveModelProfile } from '../harness/model.js';
 

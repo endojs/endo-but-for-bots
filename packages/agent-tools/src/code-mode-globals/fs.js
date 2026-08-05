@@ -1,7 +1,7 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { CodeModeGlobal } from '../code-mode/evaluate-tool.js' */
+/** @import { CodeModeGlobal } from '../code-mode/types.js' */
 
 import { fsDeclarations } from '../../generated/code-mode-globals/fs-declarations.js';
 
