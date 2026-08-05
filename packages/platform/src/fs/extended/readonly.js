@@ -32,9 +32,7 @@ import {
  * @import {
  *   Directory,
  *   File,
- *   FileReadOptions,
  *   Filesystem,
- *   LockQuery,
  *   NodeWatcher,
  *   OpenFile,
  *   ResolvedNode,
@@ -241,7 +239,7 @@ const makeReadOnlyFile = file => {
       return makeReadOnlyXattrs(inner);
     },
     async open(opts) {
-      const o = /** @type {any} */ (opts) || {};
+      const o = opts || {};
       if (o.write || o.append || o.truncate || o.create) {
         throw denied('open(write|append|truncate|create)');
       }
@@ -252,9 +250,7 @@ const makeReadOnlyFile = file => {
       return E(file).snapshot();
     },
     async read(opts) {
-      // The guard admits any Passable; the wrapped cap enforces the
-      // real FileReadOptions shape.
-      return E(file).read(/** @type {FileReadOptions | undefined} */ (opts));
+      return E(file).read(opts);
     },
     async write(_opts) {
       throw denied('write');
@@ -290,9 +286,7 @@ const makeReadOnlyOpenFile = oh => {
       throw denied('lock');
     },
     async getLock(opts) {
-      // The guard admits any Passable; the wrapped cap enforces the
-      // real LockQuery shape.
-      return E(oh).getLock(/** @type {LockQuery} */ (opts));
+      return E(oh).getLock(opts);
     },
     async close() {
       return E(oh).close();

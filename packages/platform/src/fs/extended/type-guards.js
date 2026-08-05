@@ -2,11 +2,12 @@
 /**
  * Interface guards for `@endo/platform/fs/extended` (§4 of DESIGN.md).
  *
- * Every cap defined in §4 has an `M.interface` here. The shape of
- * passable records (Qid, Attrs, OpenOpts, ...) is documented in
- * DESIGN.md §4.9 but only loosely validated here (`M.any()` /
- * `M.record()`) — deep schema validation is implementation-time
- * work, not interface-time.
+ * Every cap defined in §4 has an `M.interface` here. The passable
+ * records crossing the surface (Qid, stat patches, open options, ...)
+ * are validated against record shapes authored from the corresponding
+ * types in `./types.ts`, so the guards enforce the same contract the
+ * authored types document — and the exos' contextual parameter types
+ * are derived from these shapes, not asserted.
  *
  * Naming convention follows `@endo/exo-stream` and the rest of the
  * repo: `<TypeName>Interface` exported alongside, no `Endo*` prefix
@@ -23,11 +24,103 @@ export {
   PassableBytesWriterInterface,
 } from '@endo/exo-stream/type-guards.js';
 
+// Record shapes for the passables crossing this surface, authored
+// from the corresponding types in `./types.ts`. Input shapes are
+// tolerant readers: `M.splitRecord` with no rest pattern admits
+// unknown extra fields, matching the implementations
+// (`narrowStatPatch` drops fields it doesn't know; `computeOpenMode`
+// reads only its flags). Known fields still must match.
+
 /**
- * Pattern matching anything passable. Stand-in for fully-typed
- * record patterns until F1 hardens the schemas.
+ * `NodeStat` patch accepted by `setStat` / `setAttrs`. POSIX-only
+ * fields (`mode`, `uid`, ...) pass the shape but are rejected at
+ * runtime with a targeted EINVAL pointing at the future PosixFs cap.
  */
-const Pass = M.any();
+const NodeStatPatchShape = M.splitRecord(
+  {},
+  { size: M.bigint(), mtime: M.bigint(), atime: M.bigint() },
+);
+harden(NodeStatPatchShape);
+
+/**
+ * A node's identity triple (`Qid` in `./types.ts`). Required keys
+ * only — a content-address backend may attach extra fields through
+ * its `qidFor` hook.
+ */
+const QidShape = M.splitRecord({
+  type: M.or('file', 'directory'),
+  pathId: M.bigint(),
+  version: M.bigint(),
+});
+harden(QidShape);
+
+/** `OpenFileOptions` accepted by `Directory.create` / `File.open`. */
+const OpenFileOptionsShape = M.splitRecord(
+  {},
+  {
+    read: M.boolean(),
+    write: M.boolean(),
+    create: M.boolean(),
+    truncate: M.boolean(),
+    append: M.boolean(),
+  },
+);
+harden(OpenFileOptionsShape);
+
+/** `FileReadOptions` accepted by the one-shot `File.read` porcelain. */
+const FileReadOptionsShape = M.splitRecord(
+  {},
+  { offset: M.bigint(), length: M.bigint() },
+);
+harden(FileReadOptionsShape);
+
+/** `FileWriteOptions` accepted by the one-shot `File.write` porcelain. */
+const FileWriteOptionsShape = M.splitRecord({}, { offset: M.bigint() });
+harden(FileWriteOptionsShape);
+
+/** `LockOpts` accepted by `OpenFile.lock`. */
+const LockOptsShape = M.splitRecord(
+  { type: M.or('shared', 'exclusive') },
+  { start: M.bigint(), length: M.bigint(), wait: M.boolean() },
+);
+harden(LockOptsShape);
+
+/** `LockQuery` accepted by `OpenFile.getLock`. */
+const LockQueryShape = M.splitRecord(
+  {},
+  { start: M.bigint(), length: M.bigint() },
+);
+harden(LockQueryShape);
+
+/**
+ * Options bag on the verbs whose options no implementation reads yet
+ * (`mkdir` / `makeDirectory` / `materialise` / `OpenFile.fsync`): any
+ * copyRecord. Declared so the `materialiseViaWalk` convention
+ * (`mkdir(seg, opts)`) and blindly-forwarding wrappers stay
+ * guard-clean; tighten to a real shape when a field grows a reader.
+ */
+const OptionsRecordShape = M.record();
+harden(OptionsRecordShape);
+
+/** `existence` precondition accepted by `Xattrs.set`. */
+const XattrSetOptionsShape = M.splitRecord(
+  {},
+  { existence: M.or('create', 'replace') },
+);
+harden(XattrSetOptionsShape);
+
+/** The `{ cursor, watcher }` pair `Directory.watchFrom` resolves to. */
+const WatchFromResultShape = harden({
+  cursor: M.remotable('Cursor'),
+  watcher: M.remotable('NodeWatcher'),
+});
+
+/** The `BlobInfo` triple `BlobRef.getInfo` reports. */
+const BlobInfoShape = harden({
+  algorithm: M.string(),
+  hash: M.string(),
+  size: M.bigint(),
+});
 
 const FilesystemMethods = {
   root: M.call().returns(M.eref(M.remotable('Directory'))),
@@ -62,10 +155,13 @@ harden(FilesystemInterface);
  */
 const NodeBaseMethods = {
   getStat: M.call().returns(M.promise()),
-  setStat: M.call(Pass).returns(M.promise()),
-  getQid: M.call().returns(Pass),
+  setStat: M.call(NodeStatPatchShape).returns(M.promise()),
+  // `M.eref`: primitive backings answer `getQid` synchronously, but a
+  // forwarding wrapper (`readOnly`, `cachedFilesystem`) over a remote
+  // cap can only forward the promise.
+  getQid: M.call().returns(M.eref(QidShape)),
   getAttrs: M.call().returns(M.promise()),
-  setAttrs: M.call(Pass).returns(M.promise()),
+  setAttrs: M.call(NodeStatPatchShape).returns(M.promise()),
   watch: M.call().returns(M.eref(M.remotable('NodeWatcher'))),
   xattrs: M.call().returns(M.eref(M.remotable('Xattrs'))),
   help: M.call().optional(M.string()).returns(M.string()),
@@ -101,7 +197,7 @@ export const DirectoryInterface = M.interface('Directory', {
   ),
   list: M.call().returns(M.eref(M.remotable('Cursor'))),
   create: M.call(M.string())
-    .optional(Pass)
+    .optional(OpenFileOptionsShape)
     .returns(M.eref(M.remotable('OpenFile'))),
   // Catalog whole-blob `write`: create-or-overwrite the named child
   // with `value`, a UTF-8 `string`. The fire-and-forget whole-blob
@@ -112,14 +208,14 @@ export const DirectoryInterface = M.interface('Directory', {
   // designs/fs-interface-reconciliation.md §Mutation (F2).
   write: M.call(M.string(), M.string()).returns(M.promise()),
   makeDirectory: M.call(M.string())
-    .optional(Pass)
+    .optional(OptionsRecordShape)
     .returns(M.eref(M.remotable('Directory'))),
   remove: M.call(M.string()).returns(M.promise()),
   // Legacy aliases for `makeDirectory` / `remove`. Kept declared
   // so the interface is honest about what wrapBackend's Directory
   // exos actually expose.
   mkdir: M.call(M.string())
-    .optional(Pass)
+    .optional(OptionsRecordShape)
     .returns(M.eref(M.remotable('Directory'))),
   unlink: M.call(M.string()).returns(M.promise()),
   // `rename(srcName, newParent, dstName)` is the cross-directory-cap
@@ -170,7 +266,7 @@ export const DirectoryInterface = M.interface('Directory', {
   // N serial lookup-then-mkdir round-trips. Compare DESIGN.md §10.1
   // [RT] item "No lookupOrCreate / materialise primitive".
   materialise: M.call(M.arrayOf(M.string()))
-    .optional(Pass)
+    .optional(OptionsRecordShape)
     .returns(M.eref(M.remotable('Directory'))),
   // Atomic snapshot + subscribe: returns a `Cursor` over the
   // directory's entries at the moment of subscription PLUS a
@@ -180,20 +276,20 @@ export const DirectoryInterface = M.interface('Directory', {
   // between the two calls are invisible to both; `watchFrom`
   // closes that gap by materialising both halves in one method
   // invocation. See DESIGN.md §10.1.
-  watchFrom: M.call().returns(M.eref(Pass)),
+  watchFrom: M.call().returns(M.eref(WatchFromResultShape)),
 });
 harden(DirectoryInterface);
 
 export const FileInterface = M.interface('File', {
   ...NodeBaseMethods,
   open: M.call()
-    .optional(Pass)
+    .optional(OpenFileOptionsShape)
     .returns(M.eref(M.remotable('OpenFile'))),
   read: M.call()
-    .optional(Pass)
+    .optional(FileReadOptionsShape)
     .returns(M.eref(M.remotable('PassableBytesReader'))),
   write: M.call()
-    .optional(Pass)
+    .optional(FileWriteOptionsShape)
     .returns(M.eref(M.remotable('PassableBytesWriter'))),
   snapshot: M.call().returns(M.eref(M.remotable('BlobRef'))),
 });
@@ -241,9 +337,9 @@ export const OpenFileInterface = M.interface('OpenFile', {
     .optional(M.bigint())
     .returns(M.eref(M.remotable('PassableBytesWriter'))),
   truncate: M.call(M.bigint()).returns(M.promise()),
-  fsync: M.call().optional(Pass).returns(M.promise()),
-  lock: M.call(Pass).returns(M.eref(M.remotable('Lock'))),
-  getLock: M.call(Pass).returns(M.promise()),
+  fsync: M.call().optional(OptionsRecordShape).returns(M.promise()),
+  lock: M.call(LockOptsShape).returns(M.eref(M.remotable('Lock'))),
+  getLock: M.call(LockQueryShape).returns(M.promise()),
   close: M.call().returns(M.promise()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
@@ -258,7 +354,7 @@ harden(LockInterface);
 export const XattrsInterface = M.interface('Xattrs', {
   get: M.call(M.string()).returns(M.eref(M.remotable('PassableBytesReader'))),
   set: M.call(M.string())
-    .optional(Pass)
+    .optional(XattrSetOptionsShape)
     .returns(M.eref(M.remotable('PassableBytesWriter'))),
   list: M.call().returns(M.eref(M.remotable('PassableReader'))),
   remove: M.call(M.string()).returns(M.promise()),
@@ -294,7 +390,7 @@ harden(NodeWatcherInterface);
  * designs/fs-interface-consolidation.md § C4.
  */
 export const BlobRefInterface = M.interface('BlobRef', {
-  getInfo: M.call().returns(Pass),
+  getInfo: M.call().returns(BlobInfoShape),
   fetch: M.call(M.bigint(), M.bigint()).returns(
     M.eref(M.remotable('PassableBytesReader')),
   ),
