@@ -10,27 +10,58 @@ import { Far } from '@endo/pass-style';
 import { makeGitHistoryTool, makeGitTool } from '../src/json-tools/git.js';
 
 /** @import { ERef } from '@endo/eventual-send' */
-/** @import { GitHistoryToolCapability, GitToolCapability } from '../src/types.js' */
-
-const SLICE = [
-  'log',
-  'diff',
-  'show',
-  'commit',
-  'branches',
-  'createBranch',
-  'switchBranch',
-  'currentBranch',
-];
+/**
+ * @import {
+ *   GitHistoryToolCapability,
+ *   GitToolFacet,
+ *   GitToolRewriterCapability,
+ * } from '../src/types.js'
+ */
 
 /**
- * Stub Git capability that records the method name and positional args.
+ * The catalog `makeGitTool` derives per facet: cumulative, matching
+ * `@endo/exo-git`'s reader-within-writer-within-rewriter membership.
+ *
+ * @type {Record<GitToolFacet, string[]>}
+ */
+const SLICE_BY_FACET = {
+  reader: ['log', 'diff', 'show', 'branches', 'currentBranch'],
+  writer: [
+    'log',
+    'diff',
+    'show',
+    'commit',
+    'branches',
+    'createBranch',
+    'switchBranch',
+    'currentBranch',
+  ],
+  rewriter: [
+    'log',
+    'diff',
+    'show',
+    'commit',
+    'reword',
+    'cherryPick',
+    'rebase',
+    'branches',
+    'createBranch',
+    'switchBranch',
+    'currentBranch',
+  ],
+};
+
+/**
+ * Stub Git capability that records the method name and positional args. A
+ * single stub carrying every rewriter-tier method is structurally a valid
+ * reader/writer/rewriter capability (each `GitTool*Capability` is a `Pick` of
+ * this same shape), so one stub exercises `makeGitTool` at every facet.
  *
  * @param {unknown[][]} calls An array each call appends its `[name, ...args]` to.
- * @returns {ERef<GitToolCapability>}
+ * @returns {ERef<GitToolRewriterCapability>}
  */
 const makeStubGit = calls => {
-  /** @type {GitToolCapability} */
+  /** @type {GitToolRewriterCapability} */
   const stubGit = {
     log: async (...a) => {
       calls.push(['log', ...a]);
@@ -47,6 +78,18 @@ const makeStubGit = calls => {
     commit: async (...a) => {
       calls.push(['commit', ...a]);
       return { oid: 'x', summary: a[0] };
+    },
+    reword: async (...a) => {
+      calls.push(['reword', ...a]);
+      return { oid: 'x', summary: a[1] };
+    },
+    cherryPick: async (...a) => {
+      calls.push(['cherryPick', ...a]);
+      return '';
+    },
+    rebase: async (...a) => {
+      calls.push(['rebase', ...a]);
+      return '';
     },
     branches: async (...a) => {
       calls.push(['branches', ...a]);
@@ -91,31 +134,61 @@ const makeHistoryStubGit = calls =>
     },
   });
 
-test('makeGitTool builds one record per non-remotable-slice method', t => {
-  const tools = makeGitTool(makeStubGit([]));
-  t.is(tools.length, SLICE.length);
-  const names = tools.map(tool => tool.name).sort();
-  t.deepEqual(names, [...SLICE].sort());
-  for (const tool of tools) {
-    t.is(typeof tool.description, 'string');
-    t.truthy(tool.parameters);
-    t.is(tool.inputSchema, tool.parameters);
-    t.is(typeof tool.invoke, 'function');
+test('makeGitTool derives its catalog from the granted facet', t => {
+  for (const facet of /** @type {GitToolFacet[]} */ (
+    Object.keys(SLICE_BY_FACET)
+  )) {
+    const tools = makeGitTool(
+      /** @type {any} */ (makeStubGit([])),
+      /** @type {any} */ ({ facet }),
+    );
+    const names = tools.map(tool => tool.name).sort();
+    t.deepEqual(names, [...SLICE_BY_FACET[facet]].sort(), `facet: ${facet}`);
+    for (const tool of tools) {
+      t.is(typeof tool.description, 'string');
+      t.truthy(tool.parameters);
+      t.is(tool.inputSchema, tool.parameters);
+      t.is(typeof tool.invoke, 'function');
+    }
   }
 });
 
-test('makeGitTool omits cap-heavy methods', t => {
-  const tools = makeGitTool(makeStubGit([]));
-  const names = new Set(tools.map(tool => tool.name));
-  t.false(names.has('status'));
-  t.false(names.has('add'));
-  t.false(names.has('restore'));
-  t.false(names.has('filesystemAt'));
+test('makeGitTool defaults to the writer facet when no options are given', t => {
+  const tools = makeGitTool(/** @type {any} */ (makeStubGit([])));
+  const names = tools.map(tool => tool.name).sort();
+  t.deepEqual(names, [...SLICE_BY_FACET.writer].sort());
 });
 
-test('invoke marshals named args to positional and calls the capability', async t => {
+test('makeGitTool omits cap-heavy methods at every facet', t => {
+  for (const facet of /** @type {GitToolFacet[]} */ (
+    Object.keys(SLICE_BY_FACET)
+  )) {
+    const tools = makeGitTool(
+      /** @type {any} */ (makeStubGit([])),
+      /** @type {any} */ ({ facet }),
+    );
+    const names = new Set(tools.map(tool => tool.name));
+    t.false(names.has('status'), `facet: ${facet}`);
+    t.false(names.has('add'), `facet: ${facet}`);
+    t.false(names.has('restore'), `facet: ${facet}`);
+    t.false(names.has('filesystemAt'), `facet: ${facet}`);
+  }
+});
+
+test('the writer facet rejects commit amend before reaching the capability', async t => {
+  const tools = makeGitTool(/** @type {any} */ (makeStubGit([])));
+  const commit = tools.find(tool => tool.name === 'commit');
+  if (!commit) throw new Error('no commit tool');
+  await null;
+  await t.throwsAsync(
+    commit.invoke({ message: 'not an amendment', options: { amend: true } }),
+    { message: /options/ },
+  );
+});
+
+test('invoke marshals named args to positional and calls the capability at the writer facet', async t => {
   const calls = [];
-  const tools = makeGitTool(makeStubGit(calls));
+  const tools = makeGitTool(/** @type {any} */ (makeStubGit(calls)));
   const byName = name => {
     const found = tools.find(tool => tool.name === name);
     if (!found) throw new Error(`no tool named ${name}`);
@@ -137,8 +210,45 @@ test('invoke marshals named args to positional and calls the capability', async 
   ]);
 });
 
+test('invoke marshals named args to positional and calls the capability at the rewriter facet', async t => {
+  const calls = [];
+  const tools = makeGitTool(
+    /** @type {any} */ (makeStubGit(calls)),
+    /** @type {any} */ ({ facet: 'rewriter' }),
+  );
+  const byName = name => {
+    const found = tools.find(tool => tool.name === name);
+    if (!found) throw new Error(`no tool named ${name}`);
+    return found;
+  };
+
+  await null;
+
+  await byName('commit').invoke({
+    message: 'amended message',
+    options: harden({ amend: true }),
+  });
+  await byName('reword').invoke({ ref: 'HEAD~1', message: 'new subject' });
+  await byName('cherryPick').invoke({ ref: 'side' });
+  await byName('cherryPick').invoke({
+    ref: 'side',
+    options: harden({ noCommit: true }),
+  });
+  await byName('rebase').invoke({
+    input: harden({ mode: 'start', upstream: 'main', autosquash: true }),
+  });
+
+  t.deepEqual(calls, [
+    ['commit', 'amended message', { amend: true }],
+    ['reword', 'HEAD~1', 'new subject'],
+    ['cherryPick', 'side'],
+    ['cherryPick', 'side', { noCommit: true }],
+    ['rebase', { mode: 'start', upstream: 'main', autosquash: true }],
+  ]);
+});
+
 test('invoke rejects an arg that violates the runtime guard', async t => {
-  const tools = makeGitTool(makeStubGit([]));
+  const tools = makeGitTool(/** @type {any} */ (makeStubGit([])));
   const commit = tools.find(tool => tool.name === 'commit');
   if (!commit) throw new Error('no commit tool');
   await null;
@@ -146,7 +256,10 @@ test('invoke rejects an arg that violates the runtime guard', async t => {
 });
 
 test('the schemas advertise real, declarative property names', t => {
-  const tools = makeGitTool(makeStubGit([]));
+  const tools = makeGitTool(
+    /** @type {any} */ (makeStubGit([])),
+    /** @type {any} */ ({ facet: 'rewriter' }),
+  );
   const byName = name => {
     const found = tools.find(tool => tool.name === name);
     if (!found) throw new Error(`no tool named ${name}`);
@@ -171,7 +284,10 @@ test('the schemas advertise real, declarative property names', t => {
     }
   }
 
-  t.deepEqual(propsOf('commit'), ['message']);
+  t.deepEqual(propsOf('commit'), ['message', 'options']);
+  t.deepEqual(propsOf('reword'), ['ref', 'message']);
+  t.deepEqual(propsOf('cherryPick'), ['ref', 'options']);
+  t.deepEqual(propsOf('rebase'), ['input']);
   t.deepEqual(propsOf('show'), ['ref']);
   t.deepEqual(propsOf('createBranch'), ['name', 'options']);
   t.deepEqual(propsOf('switchBranch'), ['branch']);
@@ -218,19 +334,12 @@ test('makeGitHistoryTool requires an explicit elevated capability', async t => {
   ]);
 });
 
-test('makeGitTool rejects history-rewrite options', async t => {
-  const tools = makeGitTool(makeStubGit([]));
-  const commit = tools.find(tool => tool.name === 'commit');
-  if (!commit) throw new Error('no commit tool');
-  await t.throwsAsync(
-    commit.invoke({ message: 'not an amendment', options: { amend: true } }),
-    { message: /options/ },
-  );
-});
-
 test('invoke resolves named args by their real property names', async t => {
   const calls = [];
-  const tools = makeGitTool(makeStubGit(calls));
+  const tools = makeGitTool(
+    /** @type {any} */ (makeStubGit(calls)),
+    /** @type {any} */ ({ facet: 'rewriter' }),
+  );
   const byName = name => {
     const found = tools.find(tool => tool.name === name);
     if (!found) throw new Error(`no tool named ${name}`);
@@ -240,18 +349,51 @@ test('invoke resolves named args by their real property names', async t => {
   await null;
 
   await byName('show').invoke({ ref: 'HEAD' });
+  await byName('cherryPick').invoke({ ref: { name: 'HEAD', kind: 'commit' } });
   await byName('switchBranch').invoke({ branch: 'feature' });
   await byName('log').invoke({ options: harden({ maxCount: 3 }) });
 
   t.deepEqual(calls, [
     ['show', 'HEAD'],
+    ['cherryPick', { name: 'HEAD', kind: 'commit' }],
     ['switchBranch', 'feature'],
     ['log', { maxCount: 3 }],
   ]);
 });
 
+test('rebase JSON tool only exposes start mode with autosquash', async t => {
+  const tools = makeGitTool(
+    /** @type {any} */ (makeStubGit([])),
+    /** @type {any} */ ({ facet: 'rewriter' }),
+  );
+  const rebase = tools.find(tool => tool.name === 'rebase');
+  if (!rebase) throw new Error('no rebase tool');
+
+  await null;
+
+  await t.notThrowsAsync(() =>
+    rebase.invoke({ input: { mode: 'start', upstream: 'main' } }),
+  );
+  await t.notThrowsAsync(() =>
+    rebase.invoke({
+      input: { mode: 'start', upstream: 'main', autosquash: true },
+    }),
+  );
+  await Promise.all(
+    ['continue', 'abort', 'skip'].map(async mode => {
+      const err = await t.throwsAsync(() =>
+        rebase.invoke({ input: { mode, autosquash: true } }),
+      );
+      t.true(
+        err !== undefined && err.message.includes('rebase input'),
+        `error should name rebase input for ${mode}; got: ${err?.message}`,
+      );
+    }),
+  );
+});
+
 test('invoke rejects a wrong property name and a missing required one', async t => {
-  const tools = makeGitTool(makeStubGit([]));
+  const tools = makeGitTool(/** @type {any} */ (makeStubGit([])));
   const byName = name => {
     const found = tools.find(tool => tool.name === name);
     if (!found) throw new Error(`no tool named ${name}`);

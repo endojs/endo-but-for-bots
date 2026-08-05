@@ -87,7 +87,10 @@ const realSpawner = async (argv, opts = {}) => {
  * Bootstrap a workspace the way a host provisions one: clone the bare remote at
  * the host, then compose a `mount -> Git` over the cloned worktree, threading a
  * formula-owned commit identity (the Phase-2 `{ identity }` construction option
- * on `provideGit`) into the backend.
+ * on `provideGit`) into the backend. The workspace catalog under test
+ * (`provisionWorkspaceTools` / `makeWorkspaceTools`) composes `makeGitTool` at
+ * its default `writer` facet, so ordinary write authority (no
+ * `allowHistoryRewrite`) suffices.
  *
  * @param {import('ava').ExecutionContext} t
  * @param {string} remoteRoot
