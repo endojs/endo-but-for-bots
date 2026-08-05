@@ -2,7 +2,13 @@
 // Existing `.js` type imports resolve to this module during typechecking, and
 // composite declaration emit produces the corresponding `.d.ts` artifact.
 
-import type { Qid } from './types.js';
+import type { NodeKind, NodeStat, Qid, WatchEvent } from './types.js';
+
+// The node kind, the portable stat shape, and the watch event are the same
+// vocabulary the capability surface uses (`./types.js`); a backend speaks it
+// rather than redeclaring it. Re-exported so `backend-types.js` stays the one
+// import site for the backend protocol.
+export type { NodeKind, NodeStat, WatchEvent };
 
 /**
  * `FsBackend` is the minimal protocol that any storage backing (in-memory map,
@@ -13,42 +19,12 @@ import type { Qid } from './types.js';
  * exo surface on top of an `FsBackend`.
  */
 
-/** The kind of a filesystem node. */
-export type NodeKind = 'file' | 'directory';
-
 /** An entry in a directory listing. */
 export interface DirEntry {
   /** The unqualified child name, without path separators. */
   name: string;
   /** The child's node type. */
   kind: NodeKind;
-}
-
-/**
- * Partial portable attributes accepted by `setStat` and yielded by
- * `getStat`.
- */
-export interface NodeStat {
-  /** Resize the file; times are nanoseconds since the Unix epoch. */
-  size?: bigint;
-  mtime?: bigint;
-  atime?: bigint;
-}
-
-/** An event yielded by `backend.watch?(path)`. */
-export interface WatchEvent {
-  kind: 'changed' | 'created' | 'removed' | 'child-added' | 'child-removed';
-  /** The direct child's name for child events. */
-  name?: string;
-}
-
-/** Range-lock options used by `OpenFile.lock`. */
-export interface LockOpts {
-  type: 'shared' | 'exclusive';
-  start?: bigint;
-  length?: bigint;
-  /** `length === 0n` means to the end of the file. */
-  wait?: boolean;
 }
 
 /**

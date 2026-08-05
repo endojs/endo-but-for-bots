@@ -40,7 +40,13 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
  * @returns {ERef<Directory | File>}
  */
 export const walk = (root, path) =>
-  path.reduce((dir, name) => E(dir).lookup(name), root);
+  path.reduce(
+    // Every segment but the last must name a directory for the walk to
+    // continue; `lookup` reports `Directory | File`, so narrow here and let
+    // the backend raise ENOTDIR when the assumption is wrong.
+    (dir, name) => E(/** @type {ERef<Directory>} */ (dir)).lookup(name),
+    /** @type {ERef<Directory | File>} */ (root),
+  );
 harden(walk);
 
 /**
