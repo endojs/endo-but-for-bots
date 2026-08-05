@@ -132,8 +132,8 @@ const makeStubBackend = opts => {
 test('rename fires child-removed on src parent and child-added on dst parent', async t => {
   const fs = makeInMemoryFilesystem();
   const root = await E(fs).root();
-  await E(root).mkdir('a', {});
-  await E(root).mkdir('b', {});
+  await E(root).mkdir('a');
+  await E(root).mkdir('b');
   const subA = await E(root).lookup('a');
   const subB = await E(root).lookup('b');
   const oh = await E(subA).create('thing', {});
@@ -442,7 +442,7 @@ test('Directory.remove cleans up xattr / stat table entries', async t => {
 
   // Set an xattr.
   await writeBytes(
-    await E(await E(file).xattrs()).set('user.tag', {}),
+    await E(await E(file).xattrs()).set('user.tag'),
     utf8('ghost-tag'),
   );
 
@@ -472,7 +472,7 @@ test('Directory.rename moves xattr / stat table entries to the new path', async 
   await E(oh).close();
   const before = await E(root).lookup('alpha');
   await writeBytes(
-    await E(await E(before).xattrs()).set('user.tag', {}),
+    await E(await E(before).xattrs()).set('user.tag'),
     utf8('preserved'),
   );
 
@@ -579,7 +579,7 @@ test('readOnly wrapper forwards File.read and denies File.write', async t => {
 test('chroot wrapper exposes File.read porcelain via wrapped File caps', async t => {
   const fs = makeInMemoryFilesystem();
   const root = await E(fs).root();
-  await E(root).makeDirectory('sub', {});
+  await E(root).makeDirectory('sub');
   const sub = await E(root).lookup('sub');
   const oh = await E(sub).create('inner', {});
   await writeBytes(await E(oh).write(0n), utf8('chrooted'));
@@ -616,7 +616,7 @@ test('withCachedReads wrapper forwards File.read and File.write porcelain', asyn
 test('Directory.getAttrs() throws ENOENT on a removed path', async t => {
   const fs = makeInMemoryFilesystem();
   const root = await E(fs).root();
-  await E(root).makeDirectory('doomed', {});
+  await E(root).makeDirectory('doomed');
   const dir = await E(root).lookup('doomed');
   await E(root).remove('doomed');
 
