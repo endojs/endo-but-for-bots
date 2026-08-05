@@ -1897,6 +1897,7 @@ __metadata:
     "@endo/platform": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/stream": "workspace:^"
+    "@fast-check/ava": "catalog:dev"
     ava: "catalog:dev"
     eslint: "catalog:dev"
     expect-type: "npm:^1.4.0"
