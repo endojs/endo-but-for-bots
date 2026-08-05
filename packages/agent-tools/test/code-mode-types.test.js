@@ -181,7 +181,7 @@ test('git declarations expand the reachable platform filesystem contracts', t =>
     'write: (path: string[], value: GitDirectoryWriteSource) => Promise<void>;',
     'type GitFile =',
     'type GitFilesystem =',
-    'root(): GitERef<GitExtendedDirectory>;',
+    'root: () => GitERef<GitExtendedDirectory>;',
     'type GitReadableBlob =',
     'type GitReadableTree =',
     // Followed across packages: the blob range's reader comes from

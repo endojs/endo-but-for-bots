@@ -32,6 +32,13 @@ export const fsDeclarations = harden({
   statfs: () => Promise<unknown>;
 };
 type ERef<T> = T | Promise<T>;
+type BlobRef = {
+  fetch: (arg0: bigint, arg1: bigint) => ERef<PassableBytesReader>;
+  getInfo: () => unknown;
+  help: (arg0?: string) => string;
+  json: () => Promise<unknown>;
+  text: () => Promise<unknown>;
+};
 type Cursor = {
   close: () => Promise<unknown>;
   help: (arg0?: string) => string;
@@ -43,7 +50,7 @@ type Cursor = {
 };
 type Directory = {
   copy: (arg0: string | Array<string>, arg1: string | Array<string>) => Promise<unknown>;
-  create: (arg0: string, arg1: unknown) => ERef<OpenFile>;
+  create: (arg0: string, arg1?: unknown) => ERef<OpenFile>;
   fsync: () => Promise<unknown>;
   getAttrs: () => Promise<unknown>;
   getQid: () => unknown;
@@ -52,9 +59,9 @@ type Directory = {
   list: () => ERef<Cursor>;
   lookup: (arg0: string | Array<string>) => ERef<Directory | File>;
   lookupStep: (arg0: string) => ERef<Directory | File>;
-  makeDirectory: (arg0: string, arg1: unknown) => ERef<Directory>;
-  materialise: (arg0: Array<string>, arg1: unknown) => ERef<Directory>;
-  mkdir: (arg0: string, arg1: unknown) => ERef<Directory>;
+  makeDirectory: (arg0: string, arg1?: unknown) => ERef<Directory>;
+  materialise: (arg0: Array<string>, arg1?: unknown) => ERef<Directory>;
+  mkdir: (arg0: string, arg1?: unknown) => ERef<Directory>;
   move: (arg0: string | Array<string>, arg1: string | Array<string>) => Promise<unknown>;
   remove: (arg0: string) => Promise<unknown>;
   rename: (arg0: string, arg1: Directory, arg2: string) => undefined;
@@ -72,11 +79,13 @@ type File = {
   getQid: () => unknown;
   getStat: () => Promise<unknown>;
   help: (arg0?: string) => string;
-  open: (arg0: unknown) => ERef<OpenFile>;
+  open: (arg0?: unknown) => ERef<OpenFile>;
+  read: (arg0?: unknown) => ERef<PassableBytesReader>;
   setAttrs: (arg0: unknown) => Promise<unknown>;
   setStat: (arg0: unknown) => Promise<unknown>;
-  snapshot: () => Promise<unknown>;
+  snapshot: () => ERef<BlobRef>;
   watch: () => ERef<NodeWatcher>;
+  write: (arg0?: unknown) => ERef<PassableBytesWriter>;
   xattrs: () => ERef<Xattrs>;
 };
 type Lock = {
@@ -89,13 +98,13 @@ type NodeWatcher = {
 };
 type OpenFile = {
   close: () => Promise<unknown>;
-  fsync: (arg0: unknown) => Promise<unknown>;
+  fsync: (arg0?: unknown) => Promise<unknown>;
   getLock: (arg0: unknown) => Promise<unknown>;
   help: (arg0?: string) => string;
   lock: (arg0: unknown) => ERef<Lock>;
-  read: (arg0?: bigint, arg1?: bigint) => unknown;
+  read: (arg0?: bigint, arg1?: bigint) => ERef<PassableBytesReader>;
   truncate: (arg0: bigint) => Promise<unknown>;
-  write: (arg0?: bigint) => unknown;
+  write: (arg0?: bigint) => ERef<PassableBytesWriter>;
 };
 type PassableBytesReader = {
   readReturnPattern: () => undefined | unknown;
@@ -115,7 +124,7 @@ type Xattrs = {
   help: (arg0?: string) => string;
   list: () => ERef<PassableReader>;
   remove: (arg0: string) => Promise<unknown>;
-  set: (arg0: string, arg1: unknown) => ERef<PassableBytesWriter>;
+  set: (arg0: string, arg1?: unknown) => ERef<PassableBytesWriter>;
 };`,
     body: `Filesystem`,
   },
