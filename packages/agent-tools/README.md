@@ -68,7 +68,7 @@ This package still does not map the tool record to MCP `outputSchema` or
 | `src/tool.js` | Provider-independent `makeTool` and `ToolRecord`. |
 | `src/json-tools/` | Parked JSON wrappers for Git, mounts, filesystem, shell, and HTTP. |
 | `src/code-mode/` | Evaluation tool, Compartment host, daemon host, and declaration formatting. |
-| `src/code-mode-globals/` | Per-capability global descriptor factories for the local filesystem, Shell, HTTP, Git, and GitRemote. |
+| `src/code-mode-globals/` | Per-capability global descriptor factories for the local filesystem, Shell, HTTP, Git, and GitRemote, plus the workspace seam helpers. |
 | `src/adapters/` | Pi and SmallCaps bridges; MCP, Codex, and Claude Code shapes are planned. |
 | `generated/code-mode-globals/` | Checked-in generated declaration artifacts. |
 
@@ -106,6 +106,10 @@ import { makeCompartmentEvaluate } from '@endo/agent-tools/code-mode/compartment
 import { makeDaemonEvaluate } from '@endo/agent-tools/code-mode/daemon.js';
 import { makeGitGlobal } from '@endo/agent-tools/code-mode-globals/git.js';
 import { makeWorkspaceGlobal } from '@endo/agent-tools/code-mode-globals/fs.js';
+import {
+  makeInMemoryWorkspaceSeam,
+  makeNodeWorkspaceSeam,
+} from '@endo/agent-tools/code-mode-globals/fs-seams.js';
 import { makeGitRemoteGlobal } from '@endo/agent-tools/code-mode-globals/git-remote.js';
 import { makeHttpGlobal } from '@endo/agent-tools/code-mode-globals/http.js';
 import { makeShellGlobal } from '@endo/agent-tools/code-mode-globals/shell.js';
@@ -126,6 +130,65 @@ Planned adapter modules have shape only in this release.
 The MCP adapter is not implemented, including its `outputSchema` and
 `structuredContent` mapping, and Codex and Claude Code adapters are future
 provider bridges over the same tool records.
+
+## Choosing a workspace backing
+
+The `workspace` global is one guest-facing name over several host-side
+backings.
+The backend is invisible to the guest: authority is configured by which
+capability the host binds under `workspace`, not by a runtime flag on the tool.
+The declaration the model reads is the same `Filesystem` surface in every row
+below, so guest code written against one seam runs unchanged against another.
+
+| Deployment | Backing | Who mints it | Who binds it |
+| --- | --- | --- | --- |
+| Compartment evaluate — evals, CI, tests | in-memory | `makeInMemoryWorkspaceSeam()` | the host, as a compartment endowment |
+| Compartment evaluate — local development | `node:fs` under a root path | `makeNodeWorkspaceSeam({ rootPath })` | the host, as a compartment endowment |
+| Daemon evaluate — real agent use | a daemon mount | the host's provisioning policy | the daemon, under the guest's `workspace` pet name |
+| Any host — historical view | a git tree or a read-only attenuation | the host, pre-attenuated | whichever seam above it is handed to |
+
+The two seam helpers mint a backing and the matching descriptor as one pair,
+so the declaration a guest reads cannot drift from the authority it was handed:
+
+```js
+import { E } from '@endo/eventual-send';
+import { makeCompartmentEvaluate } from '@endo/agent-tools/code-mode/compartment.js';
+import { makeEvaluateTool } from '@endo/agent-tools/code-mode/evaluate-tool.js';
+import { makeNodeWorkspaceSeam } from '@endo/agent-tools/code-mode-globals/fs-seams.js';
+
+const { workspace, global } = makeNodeWorkspaceSeam({ rootPath: '/srv/repo' });
+const evaluate = makeCompartmentEvaluate({ endowments: { E, workspace } });
+const tool = makeEvaluateTool(evaluate, [global]);
+```
+
+The node backing confines every path to `rootPath`, rejecting a symlink whose
+`realpath` escapes it, so the guest's reach is the subtree the host names and
+nothing above it.
+
+There is deliberately no daemon seam helper here: this package imports no
+daemon implementation.
+The daemon recipe is to provision a mount, adapt it, and bind it under the
+guest's `workspace` pet name:
+
+```js
+const mount = await E(host).provideMount(hostPath, petName);
+const workspace = mountAsFilesystem(mount);
+```
+
+`mountAsFilesystem` comes from `@endo/platform/fs/extended`; the descriptor is
+`makeWorkspaceGlobal({ name: 'workspace' })`, the same one the seam helpers
+return.
+The executable form of this recipe belongs to provisioning policy, not to this
+package: which host path, which pet name, and which guest may ask for it are
+policy decisions `@endo/agent-tools` does not make.
+
+Read-only historical views arrive pre-attenuated and need no separate seam.
+`E(git).filesystemAt(ref)` yields a `Filesystem` over a commit's tree, and
+`readOnly(fs)` attenuates any `Filesystem` so its mutating methods reject with
+`EACCES`.
+Bind either one under `workspace` with `makeWorkspaceGlobal` and the guest sees
+the same declaration; the verbs it cannot use fail at the capability, which is
+where authority is enforced.
 
 ## Parked JSON wrappers
 

@@ -81,6 +81,10 @@
       "types": "./src/code-mode-globals/fs.js",
       "default": "./src/code-mode-globals/fs.js"
     },
+    "./code-mode-globals/fs-seams.js": {
+      "types": "./src/code-mode-globals/fs-seams.js",
+      "default": "./src/code-mode-globals/fs-seams.js"
+    },
     "./code-mode-globals/shell.js": {
       "types": "./src/code-mode-globals/shell.js",
       "default": "./src/code-mode-globals/shell.js"

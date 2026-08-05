@@ -10,6 +10,7 @@ test('agent-tools scoped exports resolve the relocated surfaces', async t => {
     daemon,
     git,
     fs,
+    fsSeams,
     shell,
     http,
     gitRemote,
@@ -29,6 +30,8 @@ test('agent-tools scoped exports resolve the relocated surfaces', async t => {
     // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
     import('@endo/agent-tools/code-mode-globals/fs.js'),
     // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
+    import('@endo/agent-tools/code-mode-globals/fs-seams.js'),
+    // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
     import('@endo/agent-tools/code-mode-globals/shell.js'),
     // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
     import('@endo/agent-tools/code-mode-globals/http.js'),
@@ -47,6 +50,8 @@ test('agent-tools scoped exports resolve the relocated surfaces', async t => {
   t.is(typeof daemon.makeDaemonEvaluate, 'function');
   t.is(typeof git.makeGitGlobal, 'function');
   t.is(typeof fs.makeWorkspaceGlobal, 'function');
+  t.is(typeof fsSeams.makeInMemoryWorkspaceSeam, 'function');
+  t.is(typeof fsSeams.makeNodeWorkspaceSeam, 'function');
   t.is(typeof shell.makeShellGlobal, 'function');
   t.is(typeof http.makeHttpGlobal, 'function');
   t.is(typeof gitRemote.makeGitRemoteGlobal, 'function');
