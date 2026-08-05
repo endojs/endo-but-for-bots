@@ -3,22 +3,20 @@
 | | |
 |---|---|
 | **Created** | 2026-07-08 |
-| **Updated** | 2026-07-16 |
+| **Updated** | 2026-08-05 |
 | **Author** | 0xpatrickdev (prompted) |
 | **Status** | In Progress |
 
 ## Status
 
-Two of the five verbs landed via #644: `commit({ amend })` and
-`reword(ref, message)` across the exo, guard, backend, code-mode, and elevated
-JSON (`makeGitHistoryTool`) surfaces, gated on the `allowHistoryRewrite`
-attenuation axis ([daemon-git-capability](daemon-git-capability.md) Design
-Decision 11). The remaining verbs — `cherryPick`, `rebase({ autosquash })` for
-`mode: 'start'`, and `checkoutConflict(entries, side)` — plus the `EndoGit`
-contract-test extension are sequenced as Phase 4 of
-[daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan
-(accepted 2026-07-11; parallel-eligible with the loop lane), with tool
-exposure per [daemon-agent-tools](daemon-agent-tools.md) § Phases 5–6.
+All five verbs now span the exo, guard, backend, generated code-mode, and JSON
+surfaces.
+The cumulative Git facets make the authority choice explicit: reader omits
+mutation, writer adds ordinary changes and conflict checkout, and rewriter adds
+amend, reword, cherry-pick, and rebase.
+The default `makeGitTool` catalog selects writer, while the deprecated
+`makeGitHistoryTool` remains the narrow four-tool compatibility inventory
+backed by the canonical rewriter definitions.
 
 ## What is the Problem Being Solved?
 
@@ -48,8 +46,7 @@ acceptance contract for these verbs.
 | Conflict-side selection | `checkoutConflict(entries, side)` with `side: 'ours' \| 'theirs'` | generated from the `EndoGit` type | include as `paths: string[]`, resolved to entries by the tool |
 
 Out of scope: broad `reset`, interactive todo editing, path checkout from an
-arbitrary commit, remote force-with-lease representation, and JSON exposure for
-the non-start `rebase` control calls.
+arbitrary commit, and remote force-with-lease representation.
 
 ## EndoGit API
 
@@ -151,11 +148,10 @@ autosquash.
 
 ## Code-Mode and JSON Surfaces
 
-> **The JSON slice below is parked — see #731.** The elevated JSON history
-> tool (`makeGitHistoryTool`) rides the parked JSON tool-wrapper layer; its
-> slice definition is kept for when that layer resumes. The `EndoGit` verb
-> substrate and the generated code-mode surface are unaffected and stay
-> prioritized.
+> **New JSON tool-wrapper work remains parked — see #731.** The already
+> in-flight local Git slice described here is complete, including conflict
+> checkout and rebase recovery. The `EndoGit` verb substrate and generated
+> code-mode surface remain the primary consumer path.
 
 Code mode receives all five additions automatically by regenerating
 `packages/agent-tools/generated/code-mode-globals/git-declarations.js` from
@@ -171,16 +167,20 @@ whose wire arguments are plain JSON:
 - `cherryPick(ref, options?)` and `reword(ref, message)` use the same
   JSON-safe ref convention as `show`, `merge`, `createBranch({ startPoint })`,
   and other ref-bearing git tools.
-- `rebase({ mode: 'start', upstream, autosquash: true })` is exposed as the
-  structured autosquash start operation. The control-only modes (`continue`,
-  `abort`, `skip`) remain code-mode-first because they are usually part of a
-  multi-step local loop that benefits from typed state and explicit branching.
+- `rebase` exposes closed shapes for `start`, `continue`, `abort`, and `skip`.
+  `start` requires `upstream` and alone accepts `autosquash`. If `start` or
+  `continue` stops for conflicts, the tool directs the caller to inspect
+  status, resolve and stage the conflicts, then continue, skip the stopped
+  commit, or abort.
 - `checkoutConflict` is exposed to JSON as
   `checkoutConflict({ paths: string[], side })`. This follows the landed
   path-string tool pattern: the tool accepts mount-relative path strings,
   resolves them through the granted worktree mount, and calls the capability
   method with authenticated `EndoMountEntry` values. The capability method
-  itself remains entry-based, not string-based.
+  itself remains entry-based, not string-based. `ours` selects index stage 2
+  and `theirs` selects stage 3; during rebase, Git's intuitive branch roles are
+  inverted because `ours` is the upstream plus replayed commits and `theirs`
+  is the commit being replayed.
 
 The JSON slice still excludes methods that return live capabilities or require
 stored caprefs in their result flow. Those need the petname/result-persistence
@@ -227,7 +227,6 @@ unless it carries Git's full footgun honestly.
 | Interactive todo editing | Explicitly not planned. | It would expose arbitrary sequencing (`edit`, `drop`, `exec`, reorder) and recreate the shell/editor surface this capability layer avoids. |
 | Path checkout from an arbitrary commit | Deferred. | The existing historical read surface plus named `restore` cover current eval needs; a future design can add a structured operation if an eval needs exact path checkout semantics. |
 | Remote force-with-lease representation | Deferred to `GitRemote`, not local `Git`. | Push policy belongs on the bounded remote capability so endpoint, refspec, and force-push checks stay together. |
-| JSON tools for `rebase` control modes | Deferred until capref/result persistence and loop ergonomics are settled. | `continue`, `abort`, and `skip` are usually follow-up steps in a conflict-resolution loop, while autosquash start is a single JSON-safe operation. |
 
 ## Authority Analysis
 
@@ -248,9 +247,9 @@ worktree the caller could already mutate through `add`, `restore`, `commit`,
   without giving it arbitrary path strings.
 
 The remaining operational hazard is destructive history rewrite, not authority
-escape. That hazard is inherent in giving a writable local `Git` cap and is
-bounded by grant choice: a host can give `git.readOnly()` to agents that may
-inspect history but must not rewrite it.
+escape. That hazard is bounded by the explicit facet grant: a writer can
+resolve conflicts but cannot amend, reword, cherry-pick, or rebase, and a
+reader can inspect history without any mutation authority.
 
 ## Dependencies
 

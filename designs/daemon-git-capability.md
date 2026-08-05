@@ -881,7 +881,7 @@ No open questions remain on this document; revisit if real implementation surfac
    - **Read-only-mount-derived path:** `provideGit(readOnlyMount)` constructs a `Git` whose mutability flag is already false; the formula does not briefly mint a writable `Git` and wrap it.
 
    Allowed on a read-only `Git`: `status`, `diff`, `log`, `show`, `revParse`, `branches`, `currentBranch`, `tree(ref)`, `filesystemAt(ref)`, `readOnly()` (idempotent — see Design Decision 9), and `worktree.snapshot()`.
-   Rejected: `add`, `restore`, `commit`, `reword`, `createBranch`, `deleteBranch`, `renameBranch`, `switchBranch`, `detach`, `merge`, `rebase`, `stashPush`, `stashApply`, `stashPop`, `stashDrop`.
+   Rejected: `add`, `restore`, `checkoutConflict`, `commit`, `reword`, `cherryPick`, `createBranch`, `deleteBranch`, `renameBranch`, `switchBranch`, `detach`, `merge`, `rebase`, `stashPush`, `stashApply`, `stashPop`, `stashDrop`.
 
    Two additional boundaries on a read-only `Git`:
    - `GitRemote` construction from a read-only `Git` is rejected for now.
@@ -897,9 +897,11 @@ No open questions remain on this document; revisit if real implementation surfac
 10. **Bulk reads are a backend data plane.**
     Large immutable tree operations may use native archive streams internally (see § Bulk Tree Data Plane), but that does not change the guest-visible capability surface; no `stageGitTree()` style guest API exposes the bulk path.
 11. **History rewrite is a second attenuation axis, withheld by default.**
-    (Recorded 2026-07-11 for the surface #644 landed.)
-    `commit({ amend: true })` and `reword(ref, message)` alter an existing commit's content or message in place — a hazard that ordinary mutation, including a plain `rebase` (which re-parents commits onto a new base without changing their content or message), does not carry — so they are gated on a construction-time `allowHistoryRewrite` flag (`provideGit(mountCap, petName, { allowHistoryRewrite })`, default false) enforced by an `assertHistoryRewrite` guard beside `assertWritable`.
-    The axis boundary is thus "modifies a committed object in place", not the broader "produces new SHAs" — plain `rebase` produces new SHAs yet rides the ordinary-mutation lists ungated, because it preserves each replayed commit's content and message.
-    The axis composes with read-only: `readOnly()` drops both, and a `Git` minted without the flag rejects the rewrite verbs while accepting plain `commit`.
-    At the tool layer the default JSON inventory (`makeGitTool`) advertises only new-commit creation; the elevated `makeGitHistoryTool` exposes amend and reword when a host deliberately grants the rewrite authority ([daemon-agent-tools](daemon-agent-tools.md) § Phase 5).
-    The remaining history-editing verbs (`cherryPick`, autosquash `rebase`, `checkoutConflict`) are specified in [agentry-git-verb-gaps](agentry-git-verb-gaps.md) and sequenced as Phase 4 of [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan; of these only the ones that modify a committed object in place ride this axis — autosquash `rebase` folds fixup/squash commits into their targets, while `cherryPick` and `checkoutConflict` are plain writable-mutation verbs (they add new commits or resolve working-tree state, leaving existing commits intact).
+    (Recorded 2026-07-11 for #644 and revised 2026-08-05 for the cumulative facet model.)
+    A writer facet carries ordinary repository mutation, including plain commit and conflict checkout, but cannot amend, reword, cherry-pick, or rebase.
+    Those history-changing operations live only on the rewriter facet, so granting the facet is the explicit authority choice rather than an option checked after a broader method is advertised.
+    `provideGit(mountCap, petName, { allowHistoryRewrite })` selects that rewriter grant; omitting the option selects writer, and the facet method guards plus backend validation remain defense in depth.
+    The axis composes with read-only: the reader facet drops both ordinary mutation and history rewrite, while the writer facet can create new commits without rewriting the existing stack.
+    At the tool layer `makeGitTool` derives its reader, writer, or rewriter inventory from the selected facet and defaults to writer.
+    The deprecated `makeGitHistoryTool` remains a narrow compatibility inventory containing exactly `commit`, `reword`, `cherryPick`, and `rebase`; it projects the canonical rewriter schemas and guards rather than maintaining copies ([daemon-agent-tools](daemon-agent-tools.md) § Phases 5–6).
+    `checkoutConflict` stays on the writer facet because it resolves named unmerged entries without itself rewriting committed history.
