@@ -55,7 +55,7 @@ export type NodeStat = {
  */
 export type NodeAttrs = NodeStat & {
   ctime?: bigint;
-  btime?: bigint;
+  btime?: bigint | null;
 };
 
 /**
@@ -228,13 +228,17 @@ export type BlobRef = {
 
 export type LockType = 'shared' | 'exclusive';
 
-/** Range-lock request accepted by `OpenFile.lock`. */
+/**
+ * Range-lock request accepted by `OpenFile.lock`.
+ *
+ * Conflicting requests fail immediately with `EAGAIN`; callers that need
+ * retries must implement that policy themselves, so there is no `wait` option.
+ */
 export type LockOpts = {
   type: LockType;
   start?: bigint;
   /** `length === 0n` means to the end of the file. */
   length?: bigint;
-  wait?: boolean;
 };
 
 /** Range query accepted by `OpenFile.getLock`. */

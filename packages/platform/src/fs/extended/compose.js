@@ -853,7 +853,7 @@ export const namespace = mounts => {
             try {
               const root = await E(mount).root();
               const qid = await E(root).getQid();
-              yield harden({ name, qid });
+              yield harden({ name, kind: 'directory', qid });
             } catch {
               // mount fetch failed; skip silently.
             }
@@ -979,7 +979,7 @@ export const namespace = mounts => {
             try {
               const root = await E(mount).root();
               const qid = await E(root).getQid();
-              yield harden({ name, qid });
+              yield harden({ name, kind: 'directory', qid });
             } catch {
               // mount fetch failed; skip silently.
             }
