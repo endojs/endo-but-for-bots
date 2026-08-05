@@ -214,7 +214,6 @@ export const FileInterface = M.interface(
       .returns(M.eref(M.remotable('PassableBytesWriter'))),
     snapshot: M.call().returns(M.eref(M.remotable('BlobRef'))),
   },
-  { sloppy: true },
 );
 harden(FileInterface);
 

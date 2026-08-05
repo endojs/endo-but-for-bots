@@ -32,6 +32,7 @@ import {
  * @import {
  *   Directory,
  *   File,
+ *   FileReadOptions,
  *   Filesystem,
  *   LockQuery,
  *   NodeWatcher,
@@ -251,7 +252,9 @@ const makeReadOnlyFile = file => {
       return E(file).snapshot();
     },
     async read(opts) {
-      return E(file).read(opts);
+      // The guard admits any Passable; the wrapped cap enforces the
+      // real FileReadOptions shape.
+      return E(file).read(/** @type {FileReadOptions | undefined} */ (opts));
     },
     async write(_opts) {
       throw denied('write');
