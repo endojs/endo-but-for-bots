@@ -26,11 +26,7 @@ import type { ERef, FarRef } from '@endo/eventual-send';
  * - `host-net`    — share host net namespace, no extra filtering.
  */
 export type NetworkProfile =
-  | 'none'
-  | 'private'
-  | 'host-loopback'
-  | 'host-lan'
-  | 'host-net';
+  'none' | 'private' | 'host-loopback' | 'host-lan' | 'host-net';
 
 // ---------------------------------------------------------------------------
 // Backend driver names and probe results
@@ -41,11 +37,7 @@ export type NetworkProfile =
  * `podman` (Phase 2); the rest are reserved for later phases.
  */
 export type BackendName =
-  | 'bwrap'
-  | 'podman'
-  | 'lima'
-  | 'containerization'
-  | 'wsl';
+  'bwrap' | 'podman' | 'lima' | 'containerization' | 'wsl';
 
 /**
  * Backend selection passed to `SandboxFactory.make()`.

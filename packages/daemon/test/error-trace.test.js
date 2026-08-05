@@ -109,9 +109,10 @@ test.beforeEach(t => {
 });
 
 test.afterEach.always(async t => {
-  const ctxList = /** @type {Array<{ cancel: (e: Error) => void,
-   *                                  cancelled: Promise<unknown>,
-   *                                  config: any }>} */ (t.context);
+  const ctxList =
+    /** @type {Array<{ cancel: (e: Error) => void,
+     *                                  cancelled: Promise<unknown>,
+     *                                  config: any }>} */ (t.context);
   for (const { config } of ctxList) {
     // eslint-disable-next-line no-await-in-loop
     await stop(config).catch(() => {});

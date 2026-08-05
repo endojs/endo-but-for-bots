@@ -65,12 +65,7 @@ export type GitIndexStatus =
   | 'conflicted';
 
 export type GitWorktreeStatus =
-  | 'clean'
-  | 'modified'
-  | 'deleted'
-  | 'untracked'
-  | 'ignored'
-  | 'conflicted';
+  'clean' | 'modified' | 'deleted' | 'untracked' | 'ignored' | 'conflicted';
 
 export type GitStatusEntry = {
   entry: PathEntry;
@@ -360,9 +355,7 @@ export type HistoryRewriteEndoGit = ReadWriteEndoGit & {
  * known statically.
  */
 export type EndoGit =
-  | ReadOnlyEndoGit
-  | ReadWriteEndoGit
-  | HistoryRewriteEndoGit;
+  ReadOnlyEndoGit | ReadWriteEndoGit | HistoryRewriteEndoGit;
 
 /** `makeGit` options requesting the read-only facet. */
 export type GitMakeReadOnlyOptions = {
