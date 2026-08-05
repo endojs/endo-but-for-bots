@@ -70,6 +70,8 @@ const GitCommitOptionsShape = M.splitRecord(
   harden({}),
 );
 
+const GitConflictSideShape = M.or(M.eq('ours'), M.eq('theirs'));
+
 const GitCherryPickOptionsShape = M.splitRecord(
   {},
   { noCommit: M.boolean() },
@@ -211,6 +213,10 @@ const GitRewriterScopeNameShape = M.or('reader', 'writer', 'rewriter');
 export const GIT_METHOD_GUARDS = harden({
   add: M.callWhen(M.arrayOf(M.remotable())).returns(M.undefined()),
   branches: M.callWhen().returns(M.arrayOf(GitRefShape)),
+  checkoutConflict: M.callWhen(
+    M.arrayOf(M.remotable()),
+    GitConflictSideShape,
+  ).returns(M.undefined()),
   cherryPick: M.callWhen(RefArgShape)
     .optional(GitCherryPickOptionsShape)
     .returns(M.string()),
@@ -294,6 +300,7 @@ export const GIT_READER_METHODS = harden([
 
 export const GIT_WRITER_ONLY_METHODS = harden([
   'add',
+  'checkoutConflict',
   'createBranch',
   'deleteBranch',
   'detach',

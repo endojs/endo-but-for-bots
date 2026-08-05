@@ -42,6 +42,7 @@ export const gitDeclarations = harden({
   scope: (name: 'reader' | 'writer') => GitReadOnlyEndoGit | WritableEndoGit;
   add: (entries: GitPathEntry[]) => Promise<void>;
   restore: (entries: GitPathEntry[], options?: GitRestoreOptions) => Promise<void>;
+  checkoutConflict: (entries: GitPathEntry[], side: GitConflictSide) => Promise<void>;
   commit: (message: string) => Promise<GitCommit>;
   createBranch: (name: string, options?: GitCreateBranchOptions) => Promise<GitRef>;
   deleteBranch: (name: string, options?: GitDeleteBranchOptions) => Promise<void>;
@@ -169,6 +170,7 @@ type GitCommit = {
     author?: string;
     committedAt?: number;
 };
+type GitConflictSide = 'ours' | 'theirs';
 type GitCreateBranchOptions = {
     startPoint?: string;
     switchAfterCreate?: boolean;

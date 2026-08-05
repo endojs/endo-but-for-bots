@@ -22,6 +22,7 @@ import {
  *   GitCherryPickOptions,
  *   GitCommit,
  *   GitCommitOptions,
+ *   GitConflictSide,
  *   GitCreateBranchOptions,
  *   GitDeleteBranchOptions,
  *   GitDiffOptions,
@@ -121,6 +122,7 @@ import {
  * @property {(ref: string) => Promise<GitRef>} revParse
  * @property {(paths: string[]) => Promise<void>} add
  * @property {(paths: string[], opts?: GitRestoreOptions) => Promise<void>} restore
+ * @property {(paths: string[], side: GitConflictSide) => Promise<void>} checkoutConflict
  * @property {(message: string, opts?: GitCommitOptions) => Promise<GitCommit>} commit
  * @property {(ref: string, message: string) => Promise<GitCommit>} reword
  * @property {(ref: string, opts?: GitCherryPickOptions) => Promise<string>} cherryPick
@@ -536,6 +538,17 @@ async function restore(entries, options = {}) {
 }
 
 /**
+ * @param {readonly object[]} entries
+ * @param {GitConflictSide} side
+ * @this {GitMethodThis}
+ */
+async function checkoutConflict(entries, side) {
+  const { state } = this;
+  const paths = await entriesToRepoPaths(state, entries);
+  return state.backend.checkoutConflict(paths, side);
+}
+
+/**
  * @param {string} message
  * @param {GitCommitOptions} options
  * @this {GitMethodThis}
@@ -780,6 +793,7 @@ const writerMethods = harden({
   status,
   add,
   restore,
+  checkoutConflict,
   commit,
   createBranch,
   deleteBranch,
@@ -1017,6 +1031,7 @@ export const makeNotYetImplementedBackend = () => {
     revParse: async () => fail('revParse'),
     add: async () => fail('add'),
     restore: async () => fail('restore'),
+    checkoutConflict: async () => fail('checkoutConflict'),
     commit: async () => fail('commit'),
     reword: async () => fail('reword'),
     cherryPick: async () => fail('cherryPick'),

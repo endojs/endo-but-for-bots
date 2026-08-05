@@ -31,14 +31,19 @@ const makeStubMount = () =>
   });
 
 /**
- * Stub Git capability that bridges through a stub mount. `add` records the
- * repo-relative path each supplied entry resolves to (via `segments()`), so a
- * test can assert the path→entry marshalling reached the cap intact.
+ * Stub Git capability that bridges through a stub mount.
+ * The mutating methods record the repo-relative path each supplied entry
+ * resolves to, so a test can assert the path→entry marshalling reached the cap
+ * intact.
  *
- * @param {{ statusRows?: unknown[], addCalls?: unknown[][] }} [opts]
+ * @param {{ statusRows?: unknown[], addCalls?: unknown[][], checkoutConflictCalls?: unknown[][] }} [opts]
  * @returns {ERef<GitMountToolCapability>}
  */
-const makeStubGit = ({ statusRows = [], addCalls = [] } = {}) => {
+const makeStubGit = ({
+  statusRows = [],
+  addCalls = [],
+  checkoutConflictCalls = [],
+} = {}) => {
   const mount = makeStubMount();
   return /** @type {ERef<GitMountToolCapability>} */ (
     /** @type {unknown} */ (
@@ -56,15 +61,26 @@ const makeStubGit = ({ statusRows = [], addCalls = [] } = {}) => {
           );
           addCalls.push(paths);
         },
+        checkoutConflict: async (entries, side) => {
+          await null;
+          const paths = await Promise.all(
+            entries.map(async entry => {
+              await null;
+              const segments = await E(entry).segments();
+              return segments.join('/');
+            }),
+          );
+          checkoutConflictCalls.push([paths, side]);
+        },
       })
     )
   );
 };
 
-test('makeGitMountTools builds a status and an add record', t => {
+test('makeGitMountTools builds status, add, and checkoutConflict records', t => {
   const tools = makeGitMountTools(makeStubGit());
   const names = tools.map(tool => tool.name).sort();
-  t.deepEqual(names, ['add', 'status']);
+  t.deepEqual(names, ['add', 'checkoutConflict', 'status']);
   for (const tool of tools) {
     t.is(typeof tool.description, 'string');
     t.truthy(tool.parameters);
@@ -137,6 +153,50 @@ test('add resolves path strings to mount entries and calls the cap', async t => 
   });
   t.deepEqual(addCalls, [['src/a.js', 'src/dir/b.js']]);
   t.is(result, 'Staged 2 paths.');
+});
+
+test('checkoutConflict resolves path strings and side to the cap', async t => {
+  const checkoutConflictCalls = [];
+  const tools = makeGitMountTools(makeStubGit({ checkoutConflictCalls }));
+  const result = await byNameOf(tools)('checkoutConflict').invoke({
+    paths: ['src/a.js', 'src/dir/b.js'],
+    side: 'theirs',
+  });
+  t.deepEqual(checkoutConflictCalls, [
+    [['src/a.js', 'src/dir/b.js'], 'theirs'],
+  ]);
+  t.is(result, 'Selected theirs for 2 conflicted paths.');
+});
+
+test('checkoutConflict rejects bad side/path shapes', async t => {
+  const checkoutConflictCalls = [];
+  const tools = makeGitMountTools(makeStubGit({ checkoutConflictCalls }));
+  const byName = byNameOf(tools);
+  await t.throwsAsync(
+    () =>
+      byName('checkoutConflict').invoke({
+        paths: ['a.js'],
+        side: 'base',
+      }),
+    { message: /side/ },
+  );
+  await t.throwsAsync(
+    () =>
+      byName('checkoutConflict').invoke({
+        paths: [],
+        side: 'ours',
+      }),
+    { message: /non-empty/ },
+  );
+  await t.throwsAsync(
+    () =>
+      byName('checkoutConflict').invoke({
+        paths: ['.'],
+        side: 'ours',
+      }),
+    { message: /worktree root/ },
+  );
+  t.deepEqual(checkoutConflictCalls, []);
 });
 
 test('add normalizes redundant path separators before resolving', async t => {

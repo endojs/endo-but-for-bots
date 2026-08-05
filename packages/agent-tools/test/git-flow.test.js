@@ -217,17 +217,18 @@ test('the runtime guard rejects a bad arg before reaching the live cap', async t
   await t.throwsAsync(() => byName('commit').invoke({ bogus: 'x' }));
 });
 
-test('add/restore stay out of the JSON-transparent makeGitTool slice', t => {
+test('add/restore/checkoutConflict stay out of makeGitTool', t => {
   // The cap is only touched at invoke time, so an empty object suffices to
   // inspect the record names.
   const tools = makeGitTool(
     /** @type {import('../src/types.js').GitToolCapability} */ (harden({})),
   );
   const names = new Set(tools.map(tool => tool.name));
-  // `add`/`restore` take `M.arrayOf(M.remotable())`, so they cannot sit in the
-  // one-to-one guard-mapped slice. `add` is now served by the mount-bridged
-  // `makeGitMountTools` (proved above); `restore` remains deferred entirely.
+  // These methods take `M.arrayOf(M.remotable())`, so they cannot sit in the
+  // one-to-one guard-mapped slice. `add` and `checkoutConflict` are served by
+  // the mount-bridged `makeGitMountTools`; `restore` remains deferred entirely.
   t.false(names.has('add'));
+  t.false(names.has('checkoutConflict'));
   t.false(names.has('restore'));
   t.false(names.has('status'));
 
@@ -239,6 +240,7 @@ test('add/restore stay out of the JSON-transparent makeGitTool slice', t => {
     ).map(tool => tool.name),
   );
   t.true(mountToolNames.has('add'));
+  t.true(mountToolNames.has('checkoutConflict'));
   t.true(mountToolNames.has('status'));
   t.false(mountToolNames.has('restore'));
 });
