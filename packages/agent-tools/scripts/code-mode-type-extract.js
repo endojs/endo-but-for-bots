@@ -141,7 +141,7 @@ export const renderDeclaration = (ir, options = {}) => {
       ),
     },
     ...ir.auxTypes.map((type, index) => ({
-      name: auxNames[index],
+      name: rewrite(auxNames[index]),
       text: rewrite(type.text),
     })),
   ];
