@@ -168,6 +168,25 @@ test('checkoutConflict resolves path strings and side to the cap', async t => {
   t.is(result, 'Selected theirs for 2 conflicted paths.');
 });
 
+test('checkoutConflict descriptions use index stages and explain rebase roles', t => {
+  const checkoutConflict = byNameOf(makeGitMountTools(makeStubGit()))(
+    'checkoutConflict',
+  );
+  const side = /** @type {{ description: string, type: string }} */ (
+    /** @type {{ properties: { side: object } }} */ (
+      checkoutConflict.parameters
+    ).properties.side
+  );
+
+  t.is(side.type, 'string');
+  for (const phrase of ['stage 2', 'stage 3', 'index', 'rebase', 'inverted']) {
+    t.true(checkoutConflict.description.includes(phrase));
+    t.true(side.description.includes(phrase));
+  }
+  t.false(checkoutConflict.description.includes('current branch side'));
+  t.false(side.description.includes('incoming side'));
+});
+
 test('checkoutConflict rejects bad side/path shapes', async t => {
   const checkoutConflictCalls = [];
   const tools = makeGitMountTools(makeStubGit({ checkoutConflictCalls }));

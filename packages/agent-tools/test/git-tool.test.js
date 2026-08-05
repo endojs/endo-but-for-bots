@@ -12,7 +12,6 @@ import { makeGitHistoryTool, makeGitTool } from '../src/json-tools/git.js';
 /** @import { ERef } from '@endo/eventual-send' */
 /**
  * @import {
- *   GitHistoryToolCapability,
  *   GitToolFacet,
  *   GitToolRewriterCapability,
  * } from '../src/types.js'
@@ -109,30 +108,6 @@ const makeStubGit = calls => {
   };
   return Far('StubGit', stubGit);
 };
-
-/**
- * @param {unknown[][]} calls
- * @returns {ERef<GitHistoryToolCapability>}
- */
-const makeHistoryStubGit = calls =>
-  Far('HistoryStubGit', {
-    commit: async (...a) => {
-      calls.push(['commit', ...a]);
-      return { oid: 'x', summary: a[0] };
-    },
-    reword: async (...a) => {
-      calls.push(['reword', ...a]);
-      return { oid: 'x', summary: a[1] };
-    },
-    cherryPick: async (...a) => {
-      calls.push(['cherryPick', ...a]);
-      return '';
-    },
-    rebase: async (...a) => {
-      calls.push(['rebase', ...a]);
-      return '';
-    },
-  });
 
 test('makeGitTool derives its catalog from the granted facet', t => {
   for (const facet of /** @type {GitToolFacet[]} */ (
@@ -295,43 +270,36 @@ test('the schemas advertise real, declarative property names', t => {
   t.deepEqual(propsOf('diff'), ['options']);
 });
 
-test('makeGitHistoryTool requires an explicit elevated capability', async t => {
-  const calls = [];
-  const tools = makeGitHistoryTool(makeHistoryStubGit(calls));
-  t.deepEqual(tools.map(tool => tool.name).sort(), [
-    'cherryPick',
-    'commit',
-    'rebase',
-    'reword',
-  ]);
-  const byName = name => {
-    const found = tools.find(tool => tool.name === name);
-    if (!found) throw new Error(`no history tool named ${name}`);
-    return found;
-  };
+test('makeGitHistoryTool preserves its four-tool order from the canonical rewriter catalog', t => {
+  const git = makeStubGit([]);
+  const historyTools = makeGitHistoryTool(git);
+  const rewriterTools = makeGitTool(git, { facet: 'rewriter' });
+  const rewriterByName = new Map(rewriterTools.map(tool => [tool.name, tool]));
 
-  await byName('commit').invoke({
-    message: 'amended message',
-    options: harden({ amend: true }),
-  });
-  await byName('reword').invoke({ ref: 'HEAD~1', message: 'new subject' });
-  await byName('cherryPick').invoke({
-    ref: 'side',
-    options: harden({ noCommit: true }),
-  });
-  await byName('rebase').invoke({
-    input: harden({ mode: 'start', upstream: 'main', autosquash: true }),
-  });
-  await t.throwsAsync(
-    byName('rebase').invoke({ input: harden({ mode: 'abort' }) }),
-    { message: /rebase input.*missing properties.*upstream/ },
+  t.deepEqual(
+    historyTools.map(tool => tool.name),
+    ['commit', 'reword', 'cherryPick', 'rebase'],
   );
-  t.deepEqual(calls, [
-    ['commit', 'amended message', { amend: true }],
-    ['reword', 'HEAD~1', 'new subject'],
-    ['cherryPick', 'side', { noCommit: true }],
-    ['rebase', { mode: 'start', upstream: 'main', autosquash: true }],
-  ]);
+  for (const historyTool of historyTools) {
+    const rewriterTool = rewriterByName.get(historyTool.name);
+    if (!rewriterTool) {
+      throw new Error(`rewriter catalog has no ${historyTool.name} tool`);
+    }
+    t.is(historyTool.description, rewriterTool.description);
+    t.is(historyTool.parameters, rewriterTool.parameters);
+  }
+});
+
+test('history composition does not duplicate ordinary-only writer tools', t => {
+  const git = makeStubGit([]);
+  const writerNames = makeGitTool(git).map(tool => tool.name);
+  const historyNames = makeGitHistoryTool(git).map(tool => tool.name);
+  const overlaps = writerNames.filter(name => historyNames.includes(name));
+
+  // `commit` is the compatibility inventory's intentional historical overlap:
+  // the history form carries amend. No reader/navigation or branch-edit tool
+  // is repeated when a host composes the two catalogs.
+  t.deepEqual(overlaps, ['commit']);
 });
 
 test('invoke resolves named args by their real property names', async t => {
@@ -361,9 +329,10 @@ test('invoke resolves named args by their real property names', async t => {
   ]);
 });
 
-test('rebase JSON tool only exposes start mode with autosquash', async t => {
+test('rebase JSON tool dispatches start and every control mode', async t => {
+  const calls = [];
   const tools = makeGitTool(
-    /** @type {any} */ (makeStubGit([])),
+    /** @type {any} */ (makeStubGit(calls)),
     /** @type {any} */ ({ facet: 'rewriter' }),
   );
   const rebase = tools.find(tool => tool.name === 'rebase');
@@ -371,25 +340,70 @@ test('rebase JSON tool only exposes start mode with autosquash', async t => {
 
   await null;
 
-  await t.notThrowsAsync(() =>
-    rebase.invoke({ input: { mode: 'start', upstream: 'main' } }),
+  await rebase.invoke({ input: { mode: 'start', upstream: 'main' } });
+  await rebase.invoke({
+    input: { mode: 'start', upstream: 'main', autosquash: true },
+  });
+  await rebase.invoke({ input: { mode: 'continue' } });
+  await rebase.invoke({ input: { mode: 'abort' } });
+  await rebase.invoke({ input: { mode: 'skip' } });
+
+  t.deepEqual(calls, [
+    ['rebase', { mode: 'start', upstream: 'main' }],
+    ['rebase', { mode: 'start', upstream: 'main', autosquash: true }],
+    ['rebase', { mode: 'continue' }],
+    ['rebase', { mode: 'abort' }],
+    ['rebase', { mode: 'skip' }],
+  ]);
+});
+
+test('rebase JSON tool guard rejects fields on the wrong mode', async t => {
+  const calls = [];
+  const tools = makeGitTool(
+    /** @type {any} */ (makeStubGit(calls)),
+    /** @type {any} */ ({ facet: 'rewriter' }),
   );
-  await t.notThrowsAsync(() =>
-    rebase.invoke({
-      input: { mode: 'start', upstream: 'main', autosquash: true },
-    }),
+  const rebase = tools.find(tool => tool.name === 'rebase');
+  if (!rebase) throw new Error('no rebase tool');
+
+  await null;
+
+  const invalidInputs = [
+    { mode: 'start' },
+    { mode: 'continue', upstream: 'main' },
+    { mode: 'abort', autosquash: true },
+    { mode: 'skip', autosquash: false },
+    { mode: 'finish' },
+  ];
+  const errors = await Promise.all(
+    invalidInputs.map(input => t.throwsAsync(() => rebase.invoke({ input }))),
   );
-  await Promise.all(
-    ['continue', 'abort', 'skip'].map(async mode => {
-      const err = await t.throwsAsync(() =>
-        rebase.invoke({ input: { mode, autosquash: true } }),
-      );
-      t.true(
-        err !== undefined && err.message.includes('rebase input'),
-        `error should name rebase input for ${mode}; got: ${err?.message}`,
-      );
-    }),
+  for (let index = 0; index < invalidInputs.length; index += 1) {
+    const input = invalidInputs[index];
+    const err = errors[index];
+    t.true(
+      err !== undefined && err.message.includes('rebase input'),
+      `error should name rebase input for ${JSON.stringify(input)}; got: ${
+        err?.message
+      }`,
+    );
+  }
+  t.deepEqual(calls, []);
+});
+
+test('rebase descriptions explain modes and stopped-conflict recovery', t => {
+  const tools = makeGitTool(makeStubGit([]), { facet: 'rewriter' });
+  const rebase = tools.find(tool => tool.name === 'rebase');
+  if (!rebase) throw new Error('no rebase tool');
+  const input = /** @type {{ description?: string }} */ (
+    /** @type {{ properties: { input: object } }} */ (rebase.parameters)
+      .properties.input
   );
+
+  for (const phrase of ['start', 'continue', 'abort', 'skip', 'conflicts']) {
+    t.true(rebase.description.includes(phrase));
+    t.true(input.description?.includes(phrase));
+  }
 });
 
 test('invoke rejects a wrong property name and a missing required one', async t => {

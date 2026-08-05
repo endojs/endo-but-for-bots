@@ -6,7 +6,6 @@
 /**
  * @import {
  *   GitHistoryToolCapability,
- *   GitToolCapability,
  *   GitToolFacet,
  *   GitToolReaderCapability,
  *   GitToolRewriterCapability,
@@ -15,21 +14,18 @@
  * } from '../types.js'
  */
 
-/** @typedef {Record<keyof GitToolRewriterCapability | keyof GitHistoryToolCapability, (...args: unknown[]) => Promise<unknown>>} GitToolDispatch */
+/** @typedef {Record<keyof GitToolRewriterCapability, (...args: unknown[]) => Promise<unknown>>} GitToolDispatch */
 
 import { E } from '@endo/eventual-send';
 import {
   getInterfaceGuardPayload,
   getMethodGuardPayload,
-  M,
 } from '@endo/patterns';
-import { GitInterface } from '@endo/exo-git';
 import {
   GIT_READER_METHODS,
   GIT_REWRITER_METHODS,
   GIT_WRITER_METHODS,
   GitReaderInterface,
-  GitRebaseStartInputShape,
   GitRewriterInterface,
   GitWriterInterface,
 } from '@endo/exo-git/src/interfaces.js';
@@ -39,7 +35,7 @@ import { makeTool } from '../tool.js';
 /**
  * JSON Schemas for the Git methods exposed as agent tools. Methods that need
  * remotable arguments or return live capabilities are excluded; runtime arg
- * guards come from `GitInterface`.
+ * guards come from the corresponding facet interface.
  */
 
 const NO_ARGS = harden({
@@ -107,8 +103,9 @@ const CHERRY_PICK_OPTIONS_PROP = harden({
 
 const REBASE_START_INPUT_PROP = harden({
   type: 'object',
+  description: 'Start a new rebase onto an upstream ref.',
   properties: {
-    mode: { const: 'start' },
+    mode: { const: 'start', description: 'Start a new rebase.' },
     upstream: {
       type: 'string',
       description: 'The upstream ref to replay the current branch onto.',
@@ -121,6 +118,64 @@ const REBASE_START_INPUT_PROP = harden({
   required: ['mode', 'upstream'],
   additionalProperties: false,
 });
+
+const REBASE_INPUT_PROP = harden({
+  description:
+    'Choose one rebase action. Use "start" with upstream and optional ' +
+    'autosquash; use "continue", "abort", or "skip" without those fields ' +
+    'to control a rebase already in progress. If start or continue stops ' +
+    'for conflicts, inspect status, resolve and stage the conflicts, then ' +
+    'continue, skip the stopped commit, or abort the rebase.',
+  oneOf: [
+    REBASE_START_INPUT_PROP,
+    {
+      type: 'object',
+      description:
+        'Continue a stopped rebase after all conflicts have been resolved and staged.',
+      properties: {
+        mode: {
+          const: 'continue',
+          description: 'Continue the rebase already in progress.',
+        },
+      },
+      required: ['mode'],
+      additionalProperties: false,
+    },
+    {
+      type: 'object',
+      description:
+        'Abort the rebase and restore the branch and worktree to their pre-rebase state.',
+      properties: {
+        mode: {
+          const: 'abort',
+          description: 'Abort the rebase already in progress.',
+        },
+      },
+      required: ['mode'],
+      additionalProperties: false,
+    },
+    {
+      type: 'object',
+      description:
+        'Skip the stopped commit and continue replaying the remaining commits.',
+      properties: {
+        mode: {
+          const: 'skip',
+          description: 'Skip the current commit in the rebase.',
+        },
+      },
+      required: ['mode'],
+      additionalProperties: false,
+    },
+  ],
+});
+
+const REBASE_DESCRIPTION =
+  'Manage a rebase with mode "start" (upstream required, autosquash ' +
+  'optional), "continue", "abort", or "skip". If start or continue stops ' +
+  'for conflicts, inspect status, resolve and stage each conflict, then ' +
+  'continue; use skip to omit the stopped commit or abort to restore the ' +
+  'pre-rebase state.';
 
 /**
  * This package intentionally exposes only a curated JSON-safe writable Git slice
@@ -200,11 +255,11 @@ const gitToolSchemas = harden({
     },
   },
   rebase: {
-    description: 'Replay the current branch onto an upstream ref.',
+    description: REBASE_DESCRIPTION,
     parameters: {
       type: 'object',
       properties: {
-        input: REBASE_START_INPUT_PROP,
+        input: REBASE_INPUT_PROP,
       },
       required: ['input'],
       additionalProperties: false,
@@ -266,52 +321,6 @@ const WRITER_COMMIT_SCHEMA = harden({
   }),
 });
 
-/** @type {Record<keyof GitHistoryToolCapability, { description: string, parameters: object }>} */
-const gitHistoryToolSchemas = harden({
-  commit: {
-    description: 'Record staged changes, or amend HEAD when requested.',
-    parameters: {
-      type: 'object',
-      properties: {
-        message: COMMIT_PROP,
-        options: COMMIT_OPTIONS_PROP,
-      },
-      required: ['message'],
-      additionalProperties: false,
-    },
-  },
-  reword: {
-    description: 'Replace a commit message while keeping its patch unchanged.',
-    parameters: {
-      type: 'object',
-      properties: {
-        ref: REF_PROP,
-        message: { type: 'string', description: 'The replacement message.' },
-      },
-      required: ['ref', 'message'],
-      additionalProperties: false,
-    },
-  },
-  cherryPick: {
-    description: 'Replay an existing commit onto the current branch.',
-    parameters: {
-      type: 'object',
-      properties: { ref: REF_PROP, options: CHERRY_PICK_OPTIONS_PROP },
-      required: ['ref'],
-      additionalProperties: false,
-    },
-  },
-  rebase: {
-    description: 'Replay the current branch onto an upstream ref.',
-    parameters: {
-      type: 'object',
-      properties: { input: REBASE_START_INPUT_PROP },
-      required: ['input'],
-      additionalProperties: false,
-    },
-  },
-});
-
 /**
  * The full, cumulative schema catalog in fixed declaration order. Every
  * facet's advertised method list is a filter of this order, never an
@@ -323,13 +332,6 @@ const gitHistoryToolSchemas = harden({
 const gitToolMethods = harden(
   /** @type {(keyof GitToolRewriterCapability)[]} */ (
     Object.keys(gitToolSchemas)
-  ),
-);
-
-/** @type {(keyof GitHistoryToolCapability)[]} */
-const gitHistoryToolMethods = harden(
-  /** @type {(keyof GitHistoryToolCapability)[]} */ (
-    Object.keys(gitHistoryToolSchemas)
   ),
 );
 
@@ -387,6 +389,21 @@ const gitToolMethodsByFacet = harden(
 );
 
 /**
+ * The fixed compatibility inventory promised by `makeGitHistoryTool`.
+ * Its membership and order are public API, while every schema, description,
+ * and positional guard is projected from the canonical rewriter catalog
+ * below.
+ *
+ * @type {(keyof GitHistoryToolCapability)[]}
+ */
+const gitHistoryToolMethods = harden([
+  'commit',
+  'reword',
+  'cherryPick',
+  'rebase',
+]);
+
+/**
  * `gitToolSchemas`, projected per facet with `commit` swapped for
  * {@link WRITER_COMMIT_SCHEMA} at every facet below `rewriter`, so the
  * advertised schema never offers an `amend` option a facet's runtime guard
@@ -411,18 +428,18 @@ const gitToolSchemasByFacet = harden(
 
 /**
  * Positional arg guards for a method, required first and then optional, read
- * off the supplied interface guard. `getMethodGuardPayload` unwraps the
+ * from the supplied interface guard. `getMethodGuardPayload` unwraps the
  * `M.callWhen` await-arg wrappers. Reading from the facet's own interface
- * (rather than always the flat `GitInterface`) is what makes `commit`'s
- * guard argument-sensitive per facet: a writer facet's `commit` guard
+ * is what makes `commit`'s guard argument-sensitive per facet: a writer
+ * facet's `commit` guard
  * excludes `amend: true` (`GIT_METHOD_GUARDS.commitReadWrite`), while a
  * rewriter facet's admits it.
  *
  * @param {string} method
- * @param {InterfaceGuard} [gitInterface]
+ * @param {InterfaceGuard} gitInterface
  * @returns {Pattern[]}
  */
-const positionalArgGuards = (method, gitInterface = GitInterface) => {
+const positionalArgGuards = (method, gitInterface) => {
   const { methodGuards } = /** @type {InterfaceGuardPayload} */ (
     getInterfaceGuardPayload(gitInterface)
   );
@@ -433,76 +450,24 @@ const positionalArgGuards = (method, gitInterface = GitInterface) => {
 };
 
 /**
- * Per-facet arg-guard overrides. `rebase`'s JSON tool only ever exposes the
- * `mode: "start"` case (continue/abort/skip are out of scope for this
- * slice), narrower than the exo interface's `GitRebaseInputShape`, so every
- * facet whose method list carries `rebase` needs the `GitRebaseStartInputShape`
- * intersection layered onto that facet's own positional guard.
- *
- * @type {Record<GitToolFacet, Partial<Record<keyof GitToolRewriterCapability, Pattern[]>>>}
- */
-const gitToolArgGuardsByFacet = harden(
-  /** @type {Record<GitToolFacet, Partial<Record<keyof GitToolRewriterCapability, Pattern[]>>>} */ (
-    Object.fromEntries(
-      /** @type {GitToolFacet[]} */ (Object.keys(gitToolInterfaceByFacet)).map(
-        facet => [
-          facet,
-          harden(
-            gitToolMethodsByFacet[facet].includes('rebase')
-              ? {
-                  rebase: harden([
-                    M.and(
-                      positionalArgGuards(
-                        'rebase',
-                        gitToolInterfaceByFacet[facet],
-                      )[0],
-                      GitRebaseStartInputShape,
-                    ),
-                  ]),
-                }
-              : {},
-          ),
-        ],
-      ),
-    )
-  ),
-);
-
-/** @type {Partial<Record<keyof GitHistoryToolCapability, Pattern[]>>} */
-const gitHistoryToolArgGuards = harden({
-  rebase: harden([
-    M.and(positionalArgGuards('rebase')[0], GitRebaseStartInputShape),
-  ]),
-});
-
-/**
  * Build agent-tool records for a live `Git` capability.
  *
- * @param {ERef<GitToolReaderCapability | GitToolWriterCapability | GitToolRewriterCapability | GitHistoryToolCapability>} gitCap
+ * @param {ERef<GitHistoryToolCapability | GitToolReaderCapability | GitToolWriterCapability | GitToolRewriterCapability>} gitCap
  *   A live `Git` capability. The exo `Git` cap is reached by dynamic method
  *   name through `E`, so this records only the invocation shape this maker
  *   needs.
  * @param {(keyof GitToolDispatch)[]} methods
  * @param {Partial<Record<keyof GitToolDispatch, { description: string, parameters: object }>>} schemas
  * @param {InterfaceGuard} gitInterface The facet interface `methods` was
- *   projected from, used to derive any arg guard not present in
- *   `argGuardsByMethod`.
- * @param {Partial<Record<keyof GitToolDispatch, Pattern[]>>} argGuardsByMethod
+ *   projected from, used to derive each positional argument guard.
  * @returns {ToolRecord[]}
  */
-const makeGitTools = (
-  gitCap,
-  methods,
-  schemas,
-  gitInterface,
-  argGuardsByMethod = {},
-) => {
+const makeGitTools = (gitCap, methods, schemas, gitInterface) => {
   const records = methods.map(method => {
     const schema = /** @type {{ description: string, parameters: object }} */ (
       schemas[method]
     );
-    const argGuards =
-      argGuardsByMethod[method] || positionalArgGuards(method, gitInterface);
+    const argGuards = positionalArgGuards(method, gitInterface);
     // The schema's declared property order is the positional argument order,
     // matching the convention `makeTool` applies to the named-args record.
     const paramNames = Object.keys(
@@ -577,15 +542,17 @@ export const makeGitTool = (gitCap, { facet = 'writer' } = {}) => {
     methods,
     gitToolSchemasByFacet[facet],
     gitToolInterfaceByFacet[facet],
-    gitToolArgGuardsByFacet[facet],
   );
 };
 harden(makeGitTool);
 
 /**
- * Build explicitly elevated history-rewrite tool records for a live `Git`
- * capability.
- * Hosts must opt in to exposing these operations to a model.
+ * Build the historical four-tool history-rewrite inventory.
+ *
+ * @deprecated Prefer `makeGitTool(gitCap, { facet: 'rewriter' })` for the
+ *   complete facet-derived catalog. This compatibility maker intentionally
+ *   retains only `commit`, `reword`, `cherryPick`, and `rebase`, in that
+ *   order, while sharing their canonical rewriter schemas and guards.
  *
  * @param {ERef<GitHistoryToolCapability>} gitCap
  * @returns {ToolRecord[]}
@@ -594,8 +561,7 @@ export const makeGitHistoryTool = gitCap =>
   makeGitTools(
     gitCap,
     gitHistoryToolMethods,
-    gitHistoryToolSchemas,
-    /** @type {InterfaceGuard} */ (GitInterface),
-    gitHistoryToolArgGuards,
+    gitToolSchemas,
+    /** @type {InterfaceGuard} */ (GitRewriterInterface),
   );
 harden(makeGitHistoryTool);

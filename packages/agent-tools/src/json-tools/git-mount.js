@@ -59,10 +59,15 @@ const checkoutConflictParameters = harden({
   properties: {
     paths: addParameters.properties.paths,
     side: {
+      type: 'string',
       enum: ['ours', 'theirs'],
       description:
-        'The unmerged index side to select for every path. "ours" selects ' +
-        'the current branch side; "theirs" selects the incoming side.',
+        'The unmerged Git index stage to select for every path: "ours" is ' +
+        'stage 2 and "theirs" is stage 3. These names identify index ' +
+        'stages, not stable branch roles. During rebase, Git treats the ' +
+        'upstream onto which commits are replayed as ours and the commit ' +
+        'being replayed as theirs, inverted from intuitive ' +
+        'current/incoming branch wording.',
     },
   },
   required: ['paths', 'side'],
@@ -186,8 +191,11 @@ export const makeGitMountTools = gitCap => {
   const checkoutConflictTool = makeTool({
     name: 'checkoutConflict',
     description:
-      'Resolve conflicted paths by selecting the current branch side ' +
-      '("ours") or incoming side ("theirs"), then stage the resolution.',
+      'Resolve conflicted paths by selecting Git index stage 2 ("ours") ' +
+      'or stage 3 ("theirs"), then stage the resolution. These are index ' +
+      'stages, not stable branch roles: during rebase, ours is the upstream ' +
+      'side and theirs is the commit being replayed, inverted from ' +
+      'intuitive current/incoming wording.',
     parameters: checkoutConflictParameters,
     argGuards: harden([M.arrayOf(M.string()), M.or('ours', 'theirs')]),
     execute: async args => {

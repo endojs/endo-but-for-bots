@@ -7,6 +7,7 @@ import { Far } from '@endo/pass-style';
 
 import { makeCompartmentEvaluate } from '../src/code-mode/compartment.js';
 import { formatGlobalDeclarations } from '../src/code-mode/declarations.js';
+import { makeGitGlobal } from '../src/code-mode-globals/git.js';
 import { makeGitRemoteGlobal } from '../src/code-mode-globals/git-remote.js';
 import { makeHttpGlobal } from '../src/code-mode-globals/http.js';
 import { makeShellGlobal } from '../src/code-mode-globals/shell.js';
@@ -35,6 +36,28 @@ test('capability global factories preserve custom lexical names and pet paths', 
   t.true(prompt.includes('declare const builderShell: EndoShell;'));
   t.true(prompt.includes('declare const network: HttpClient;'));
   t.true(prompt.includes('declare const upstream: GitRemote;'));
+});
+
+test('history Git global explains rebase control and conflict recovery', t => {
+  const { description } = makeGitGlobal({
+    name: 'git',
+    historyRewrite: true,
+  });
+  if (description === undefined) {
+    throw new Error('history Git global must include a description');
+  }
+  for (const phrase of [
+    'start',
+    'continue',
+    'abort',
+    'skip',
+    'conflicts',
+    'stage 2',
+    'stage 3',
+    'inverted',
+  ]) {
+    t.true(description.includes(phrase));
+  }
 });
 
 test('a compartment can evaluate code against fake capability globals', async t => {

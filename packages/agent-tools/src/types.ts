@@ -41,8 +41,8 @@ type GitToolWriteMethodNames =
 
 /**
  * Adds the history-rewrite verbs only a rewriter facet carries: `reword`,
- * `cherryPick`, the `mode: "start"` case of `rebase`, and `commit`'s `amend`
- * option.
+ * `cherryPick`, all four `rebase` modes (`start`, `continue`, `abort`, and
+ * `skip`), and `commit`'s `amend` option.
  */
 type GitToolRewriteMethodNames =
   | GitToolWriteMethodNames
@@ -80,10 +80,10 @@ export type GitToolReaderCapability = Pick<
  *
  * This slice holds only the JSON-transparent methods whose hand-authored tool
  * schemas map one-to-one onto their `GitInterface` guards (the divergence gate
- * pins that parity). The two Phase 3 methods whose native signatures traffic in
- * live capabilities — `status` (rows bearing mount-entry remotables) and `add`
- * (an array of mount-entry remotables) — are served instead by
- * {@link GitMountToolCapability} / `makeGitMountTools`, which bridge path
+ * pins that parity). The methods whose native signatures traffic in live
+ * capabilities — `status` (rows bearing mount-entry remotables), `add`, and
+ * `checkoutConflict` (arrays of mount-entry remotables) — are served instead
+ * by {@link GitMountToolCapability} / `makeGitMountTools`, which bridge path
  * strings to entries through the worktree mount.
  */
 export type GitToolWriterCapability = Pick<
@@ -94,11 +94,11 @@ export type GitToolWriterCapability = Pick<
 /**
  * The write-plus-history-rewrite slice of `HistoryRewriteEndoGit` that
  * `makeGitTool(gitCap, { facet: 'rewriter' })` exposes: everything
- * {@link GitToolWriterCapability} carries, plus `reword`, `cherryPick`, the
- * `mode: "start"` case of `rebase`, and `commit`'s `amend` option. Granting
- * this catalog is a deliberate authority decision — call `makeGitTool` with
- * `{ facet: 'rewriter' }` only when the tool surface is meant to advertise
- * history rewrite.
+ * {@link GitToolWriterCapability} carries, plus `reword`, `cherryPick`, all
+ * four `rebase` modes, and `commit`'s `amend` option. Granting this catalog is
+ * a deliberate authority decision — call `makeGitTool` with `{ facet:
+ * 'rewriter' }` only when the tool surface is meant to advertise history
+ * rewrite.
  */
 export type GitToolRewriterCapability = Pick<
   HistoryRewriteEndoGit,
@@ -113,9 +113,12 @@ export type GitToolRewriterCapability = Pick<
 export type GitToolCapability = GitToolWriterCapability;
 
 /**
- * Explicitly elevated history-rewrite slice for `makeGitHistoryTool`.
- * Hosts must opt into constructing these tools; the default `makeGitTool`
- * inventory does not advertise these operations regardless of facet.
+ * The narrow capability accepted by the compatibility history-tool maker.
+ *
+ * @deprecated Prefer {@link GitToolRewriterCapability} with `makeGitTool` for
+ * the complete rewriter-facet catalog. This type intentionally retains the
+ * four methods accepted by `makeGitHistoryTool` before facet-derived catalogs
+ * were introduced.
  */
 export type GitHistoryToolCapability = Pick<
   HistoryRewriteEndoGit,
@@ -214,7 +217,8 @@ export declare function makeTool(spec: ToolSpec): ToolRecord;
  * derived — `'reader'` for read/navigation verbs only, `'writer'` (the
  * default) additionally for `commit` / `createBranch` / `switchBranch`, and
  * `'rewriter'` additionally for `reword` / `cherryPick` / `rebase` and
- * `commit`'s `amend` option. The `gitCap` type is pinned to match: passing a
+ * `commit`'s `amend` option. The rebase tool supports `start`, `continue`,
+ * `abort`, and `skip`. The `gitCap` type is pinned to match: passing a
  * capability narrower than the requested facet is a type error.
  */
 export interface MakeGitTool {
@@ -234,6 +238,11 @@ export interface MakeGitTool {
 
 export declare const makeGitTool: MakeGitTool;
 
+/**
+ * @deprecated Prefer `makeGitTool(gitCap, { facet: 'rewriter' })` for the
+ * complete rewriter-facet catalog. This maker retains the narrow four-tool
+ * compatibility inventory.
+ */
 export declare function makeGitHistoryTool(
   gitCap: ERef<GitHistoryToolCapability>,
 ): ToolRecord[];
