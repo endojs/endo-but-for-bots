@@ -53,7 +53,14 @@ import { makeNodeWatcherExo } from './shared/watcher-exo.js';
 
 /**
  * @import { FsBackend } from './backend-types.js'
- * @import { Filesystem } from './types.js'
+ * @import {
+ *   Directory,
+ *   File,
+ *   Filesystem,
+ *   NodeKind,
+ *   OpenFile,
+ *   Qid,
+ * } from './types.js'
  */
 
 /**
@@ -154,6 +161,11 @@ export const wrapBackend = (backend, opts = {}) => {
   // A content-address backend may supply `qidFor(path, kind)` returning
   // a stronger (e.g. git-OID-based) `Qid`; a missing method or a
   // per-path `undefined` falls back to the path-hash `synthQid`.
+  /**
+   * @param {string[]} path
+   * @param {NodeKind} kind
+   * @returns {Qid}
+   */
   const qidOf = (path, kind) => {
     const supplied = backend.qidFor?.(path, kind);
     // Re-harden at the trust boundary: `getQid` marshals this across the
@@ -361,9 +373,9 @@ export const wrapBackend = (backend, opts = {}) => {
   // at each assignment site below documents the mutual-recursion
   // shape.
 
-  /** @type {(path: string[]) => any} */
+  /** @type {(path: string[]) => Directory} */
   let makeDirectoryExo;
-  /** @type {(path: string[]) => any} */
+  /** @type {(path: string[]) => File} */
   let makeFileExo;
 
   // ---------- Bound exo factories (delegate to shared/) ----------
@@ -391,6 +403,7 @@ export const wrapBackend = (backend, opts = {}) => {
    *
    * @param {string[]} path
    * @param {{ read: boolean, write: boolean, append: boolean, truncate: boolean }} mode
+   * @returns {OpenFile}
    */
   const makeOpenFileExo = (path, mode) => {
     let closed = false;
@@ -701,12 +714,12 @@ export const wrapBackend = (backend, opts = {}) => {
       // Throw ENOSYS at call time rather than at close time so the
       // caller doesn't push bytes into a sink that won't truncate.
       async write(writeOpts) {
-        const o = writeOpts || {};
-        const truncating = o.offset === undefined;
+        const { offset } = writeOpts || {};
+        const truncating = offset === undefined;
         if (truncating && !caps.setStat) {
           throw notSupported('File.write (whole-file overwrite)');
         }
-        const off = truncating ? 0n : BigInt(o.offset);
+        const off = offset === undefined ? 0n : BigInt(offset);
         /** @type {Uint8Array[]} */
         const chunks = [];
         const sinkIterator = {
