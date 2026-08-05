@@ -398,8 +398,9 @@ export const makeGitFsBackend = ({ backend, treeOid }) => {
      * than throwing `BigInt` synchronously into the sync `getQid`
      * getter, honoring the never-throw contract the fallback documents.
      *
+     * @template {NodeKind} K
      * @param {string[]} path
-     * @param {NodeKind} kind
+     * @param {K} kind
      */
     qidFor(path, kind) {
       const entry = resolvedSync.get(path.join('\0'));
