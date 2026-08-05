@@ -206,7 +206,13 @@ export const FileInterface = M.interface(
     open: M.call()
       .optional(Pass)
       .returns(M.eref(M.remotable('OpenFile'))),
-    snapshot: M.call().returns(M.promise()),
+    read: M.call()
+      .optional(Pass)
+      .returns(M.eref(M.remotable('PassableBytesReader'))),
+    write: M.call()
+      .optional(Pass)
+      .returns(M.eref(M.remotable('PassableBytesWriter'))),
+    snapshot: M.call().returns(M.eref(M.remotable('BlobRef'))),
   },
   { sloppy: true },
 );
@@ -244,11 +250,15 @@ export const OpenFileInterface = M.interface('OpenFile', {
   // bare bytes return; see designs/endo-fs-backend-seam.md
   // "Design deviation". Both args optional so a 0-arg call is a
   // "from cursor to EOF" probe.
-  read: M.callWhen().optional(M.bigint(), M.bigint()).returns(Pass),
+  read: M.callWhen()
+    .optional(M.bigint(), M.bigint())
+    .returns(M.eref(M.remotable('PassableBytesReader'))),
   // `write(offset)` returns a `PassableBytesWriter` whose chunks are
   // coalesced and pwritten at `offset` on close (no truncate of the
   // tail). `offset` is optional — defaults to the cursor.
-  write: M.callWhen().optional(M.bigint()).returns(Pass),
+  write: M.callWhen()
+    .optional(M.bigint())
+    .returns(M.eref(M.remotable('PassableBytesWriter'))),
   truncate: M.call(M.bigint()).returns(M.promise()),
   fsync: M.call().optional(Pass).returns(M.promise()),
   lock: M.call(Pass).returns(M.eref(M.remotable('Lock'))),
