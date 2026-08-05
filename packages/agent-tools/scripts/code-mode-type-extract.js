@@ -65,6 +65,12 @@ import { getTag, passStyleOf } from '@endo/pass-style';
  *   (excluding the root type itself, which the renderer synthesizes from
  *   `members` so a read-only member filter cannot leak the full surface back in
  *   through a self-referential return).
+ * @property {string} [selfName] Name a self-referential member signature (e.g.
+ *   `scope(...) => X | Self`) uses for the root type when it differs from
+ *   `rootName`. Set this when a caller renames `rootName` after extraction
+ *   (e.g. `ReadWriteEndoGit` printed as `WritableEndoGit`) so the renderer can
+ *   rewrite the stale self-reference left behind in `members`/`auxTypes`
+ *   text. Defaults to `rootName` when omitted.
  */
 
 // #region shared renderer (no typescript / patterns dependency)
@@ -97,6 +103,9 @@ export const renderDeclaration = (ir, options = {}) => {
   const { auxPrefix = '' } = options;
   /** @type {Map<string, string>} */
   const renamed = new Map();
+  if (ir.selfName !== undefined && ir.selfName !== ir.rootName) {
+    renamed.set(ir.selfName, ir.rootName);
+  }
   const scopedName = name => {
     const match = /^([A-Za-z_$][0-9A-Za-z_$]*)(<.*>)?$/u.exec(name);
     if (!match) {

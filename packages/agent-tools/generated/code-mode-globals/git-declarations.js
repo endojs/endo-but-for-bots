@@ -39,6 +39,7 @@ export const gitDeclarations = harden({
   tree: (ref: GitRef | string) => Promise<GitReadableTree>;
   filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
   readOnly: () => GitReadOnlyEndoGit;
+  scope: (name: 'reader' | 'writer') => GitReadOnlyEndoGit | WritableEndoGit;
   add: (entries: GitPathEntry[]) => Promise<void>;
   restore: (entries: GitPathEntry[], options?: GitRestoreOptions) => Promise<void>;
   commit: (message: string) => Promise<GitCommit>;
@@ -262,6 +263,7 @@ type GitReadOnlyEndoGit = {
     tree: (ref: GitRef | string) => Promise<GitReadableTree>;
     filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
     readOnly: () => GitReadOnlyEndoGit;
+    scope: (name: 'reader') => GitReadOnlyEndoGit;
 };
 type GitReadOnlyGitWorktree = GitReadableTree;
 type GitReadableBlob = GitReadableBlobRange;
@@ -353,6 +355,7 @@ type GitRef = {
   tree: (ref: GitRef | string) => Promise<GitReadableTree>;
   filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
   readOnly: () => ReadOnlyEndoGit;
+  scope: (name: 'reader') => ReadOnlyEndoGit;
 };
 type GitBlobInfo = {
     algorithm: string;

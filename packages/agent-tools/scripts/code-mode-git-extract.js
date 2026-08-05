@@ -81,6 +81,7 @@ export const GIT_READONLY_MEMBERS = harden([
   'stashList',
   'stashShow',
   'readOnly',
+  'scope',
 ]);
 harden(GIT_READONLY_MEMBERS);
 
@@ -125,6 +126,7 @@ export const buildGitIRs = () =>
       return {
         git: harden({
           rootName: 'WritableEndoGit',
+          selfName: GIT_ROOT_TYPE,
           members: git.members
             .filter(
               member =>
