@@ -15386,6 +15386,7 @@ __metadata:
     globals: "npm:^17.6.0"
     js-yaml: "npm:^5.2.1"
     lerna: "npm:^8.2.4"
+    npm-packlist: "npm:^10.0.4"
     prettier: "npm:^3.5.3"
     ses: "workspace:^"
     source-map: "npm:^0.7.6"
