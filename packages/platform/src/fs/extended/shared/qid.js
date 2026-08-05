@@ -10,12 +10,13 @@
  * same path return identical Qids and Qid equality stays meaningful
  * within a vat.
  *
- * @import { NodeKind } from '../backend-types.js'
+ * @import { NodeKind, Qid } from '../types.js'
  */
 
 /**
  * @param {string[]} path
  * @param {NodeKind} kind
+ * @returns {Qid}
  */
 export const synthQid = (path, kind) => {
   // 64-bit FNV-1a over the joined path, masked to fit a bigint we

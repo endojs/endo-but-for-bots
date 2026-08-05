@@ -11,6 +11,7 @@
  * unchanged against any wrapBackend-built `Filesystem`.
  *
  * @import { FsBackend, DirEntry, NodeKind } from '../backend-types.js'
+ * @import { Cursor, DirectoryEntry, Qid } from '../types.js'
  */
 
 import { makeExo } from '@endo/exo';
@@ -25,7 +26,7 @@ import { synthQid } from './qid.js';
  * @param {object} opts
  * @param {FsBackend} opts.backend
  * @param {string[]} opts.dirPath
- * @param {(path: string[], kind: NodeKind) => any} [opts.qidOf]
+ * @param {(path: string[], kind: NodeKind) => Qid} [opts.qidOf]
  *   optional QID synthesizer (defaults to the path-hash `synthQid`).
  *   wrap-backend passes its content-address-aware `qidOf` so a listing
  *   entry's `qid` matches the one a later `lookup(name).getQid()` would
@@ -47,6 +48,10 @@ export const makeCursorExo = ({ backend, dirPath, qidOf = synthQid }) => {
   // Augment each backend entry with a synthesized `qid` for legacy
   // consumers. Both `entry.kind` and `entry.qid.type` carry the
   // same information.
+  /**
+   * @param {DirEntry} entry
+   * @returns {DirectoryEntry}
+   */
   const augment = entry =>
     harden({
       name: entry.name,
@@ -59,7 +64,7 @@ export const makeCursorExo = ({ backend, dirPath, qidOf = synthQid }) => {
       if (exhausted) return harden({ entries: [], atEnd: true });
       const max = limit === undefined ? Infinity : toSafeNumber(limit, 'limit');
       const it = ensureIter();
-      /** @type {DirEntry[]} */
+      /** @type {DirectoryEntry[]} */
       const entries = [];
       let atEnd = false;
       while (entries.length < max) {
@@ -97,7 +102,7 @@ export const makeCursorExo = ({ backend, dirPath, qidOf = synthQid }) => {
     async toArray() {
       if (exhausted) return harden([]);
       const it = ensureIter();
-      /** @type {DirEntry[]} */
+      /** @type {DirectoryEntry[]} */
       const out = [];
       for (;;) {
         const step = await it.next();
