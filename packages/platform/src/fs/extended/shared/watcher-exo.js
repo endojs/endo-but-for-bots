@@ -18,11 +18,13 @@ import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
 import { NodeWatcherInterface } from '../type-guards.js';
 
+/** @import { WatchEvent } from '../types.js' */
+
 /**
  * @param {object} opts
  * @param {boolean} opts.hasWatch        whether `backend.watch` is callable
- * @param {() => AsyncIterable<any>} opts.backendWatch  () => backend.watch(path)
- * @param {Map<string, Set<(e: any) => void>>} opts.localSubs
+ * @param {() => AsyncIterable<WatchEvent>} opts.backendWatch  () => backend.watch(path)
+ * @param {Map<string, Set<(e: WatchEvent | undefined) => void>>} opts.localSubs
  * @param {string} opts.subKey  the localSubs key (typically `lockKeyOf(path)`)
  */
 export const makeNodeWatcherExo = ({
@@ -31,7 +33,7 @@ export const makeNodeWatcherExo = ({
   localSubs,
   subKey,
 }) => {
-  /** @type {any[]} */
+  /** @type {WatchEvent[]} */
   const buffer = [];
   /** @type {Array<(value: any) => void>} */
   const waiters = [];

@@ -24,6 +24,8 @@ import {
   toSafeNumber,
 } from './helpers.js';
 
+/** @import { BlobInfo, BlobRef } from '../types.js' */
+
 const textDecoder = new TextDecoder();
 
 /**
@@ -43,9 +45,11 @@ const textDecoder = new TextDecoder();
  * @param {string} [help]  optional override for the `help()` body
  * @param {{ algorithm: string, hash: string }} [infoOverride]
  *   optional backend-supplied algorithm + hash
+ * @returns {BlobRef}
  */
 export const makeBlobRefExo = (bytes, help, infoOverride) => {
   const captured = harden(new Uint8Array(bytes));
+  /** @type {BlobInfo} */
   let info;
   if (infoOverride !== undefined) {
     info = harden({
