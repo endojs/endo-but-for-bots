@@ -5,6 +5,7 @@ import type {
   GitRef,
   GitRemote,
   HistoryRewriteEndoGit,
+  ReadOnlyEndoGit,
   ReadWriteEndoGit,
   WritableGitWorktree,
 } from '@endo/exo-git';
@@ -13,21 +14,69 @@ import type { HttpClient, HttpResponse } from '@endo/exo-http-client';
 import type { Pattern } from '@endo/patterns';
 
 /**
- * The read, branch-navigation, and additive-commit slice of `ReadWriteEndoGit` that
- * the default git tool catalog exposes to an LLM.
+ * The three cumulative Git facets `makeGitTool` derives a catalog from,
+ * named the same way `@endo/exo-git`'s `makeGitKit` names its facets
+ * (reader within writer within rewriter).
+ */
+export type GitToolFacet = 'reader' | 'writer' | 'rewriter';
+
+/** The read/navigation slice every facet's catalog carries. */
+type GitToolReadMethodNames =
+  | 'log'
+  | 'diff'
+  | 'show'
+  | 'branches'
+  | 'currentBranch';
+
+/**
+ * Adds the ordinary edit verbs a writer facet (and above) carries: `commit`
+ * (additive only — a writer's `commit` guard excludes `amend: true`),
+ * `createBranch`, `switchBranch`.
+ */
+type GitToolWriteMethodNames =
+  | GitToolReadMethodNames
+  | 'commit'
+  | 'createBranch'
+  | 'switchBranch';
+
+/**
+ * Adds the history-rewrite verbs only a rewriter facet carries: `reword`,
+ * `cherryPick`, the `mode: "start"` case of `rebase`, and `commit`'s `amend`
+ * option.
+ */
+type GitToolRewriteMethodNames =
+  | GitToolWriteMethodNames
+  | 'reword'
+  | 'cherryPick'
+  | 'rebase';
+
+/**
+ * The read-only slice of the default git tool catalog: `makeGitTool(gitCap,
+ * { facet: 'reader' })`. Deliberately omits every mutator; a reader facet
+ * carries none.
+ */
+export type GitToolReaderCapability = Pick<
+  ReadOnlyEndoGit,
+  GitToolReadMethodNames
+>;
+
+/**
+ * The read, branch-navigation, and additive-edit slice of `ReadWriteEndoGit`
+ * that `makeGitTool` exposes by default (`facet: 'writer'`, or the `facet`
+ * option omitted).
  *
- * Deliberately omits the destructive and history-rewriting methods of
- * `ReadWriteEndoGit`
- * — `merge`, `restore`, `deleteBranch`, `renameBranch`, the `stash*`
- * family, the working-tree/detach mutators (`switch`, `detach`), and history
- * rewrites (`commit` with `amend`, `reword`, `cherryPick`, `rebase`).
- * Those carry authority a tool
- * surface handed to a model should not advertise: they can discard uncommitted
- * work or rewrite shared history. `commit` is included only through the default
- * maker's message-only schema, so it creates a new commit.
- * Widening this `Pick`
- * is a deliberate authority decision, not a convenience — add a method only
- * when the tool surface is meant to grant it.
+ * Deliberately omits the destructive, non-history-rewrite methods —
+ * `merge`, `restore`, `deleteBranch`, `renameBranch`, the `stash*` family, and
+ * the working-tree/detach mutators (`switch`, `detach`). Those carry
+ * authority a tool surface handed to a model should not advertise: they can
+ * discard uncommitted work. `commit` (additive only), `createBranch`, and
+ * `switchBranch` are included as the write surface the local git tool
+ * intentionally grants at this tier; `reword`, `cherryPick`, `rebase`, and
+ * `commit`'s `amend` option are held back for {@link GitToolRewriterCapability}
+ * — the live `Git` capability handed to `makeGitTool` still enforces
+ * `allowHistoryRewrite` at the runtime layer (see `GitInterface`) as defense
+ * in depth, but the catalog itself no longer advertises verbs the granted
+ * facet cannot perform.
  *
  * This slice holds only the JSON-transparent methods whose hand-authored tool
  * schemas map one-to-one onto their `GitInterface` guards (the divergence gate
@@ -37,22 +86,36 @@ import type { Pattern } from '@endo/patterns';
  * {@link GitMountToolCapability} / `makeGitMountTools`, which bridge path
  * strings to entries through the worktree mount.
  */
-export type GitToolCapability = Pick<
+export type GitToolWriterCapability = Pick<
   ReadWriteEndoGit,
-  | 'log'
-  | 'diff'
-  | 'show'
-  | 'commit'
-  | 'branches'
-  | 'createBranch'
-  | 'switchBranch'
-  | 'currentBranch'
+  GitToolWriteMethodNames
 >;
+
+/**
+ * The write-plus-history-rewrite slice of `HistoryRewriteEndoGit` that
+ * `makeGitTool(gitCap, { facet: 'rewriter' })` exposes: everything
+ * {@link GitToolWriterCapability} carries, plus `reword`, `cherryPick`, the
+ * `mode: "start"` case of `rebase`, and `commit`'s `amend` option. Granting
+ * this catalog is a deliberate authority decision — call `makeGitTool` with
+ * `{ facet: 'rewriter' }` only when the tool surface is meant to advertise
+ * history rewrite.
+ */
+export type GitToolRewriterCapability = Pick<
+  HistoryRewriteEndoGit,
+  GitToolRewriteMethodNames
+>;
+
+/**
+ * Back-compat alias for the default (`'writer'`) facet catalog `makeGitTool`
+ * composes when its `facet` option is omitted, and the type
+ * {@link WorkspaceGitCapability} composes over.
+ */
+export type GitToolCapability = GitToolWriterCapability;
 
 /**
  * Explicitly elevated history-rewrite slice for `makeGitHistoryTool`.
  * Hosts must opt into constructing these tools; the default `makeGitTool`
- * inventory does not advertise these operations.
+ * inventory does not advertise these operations regardless of facet.
  */
 export type GitHistoryToolCapability = Pick<
   HistoryRewriteEndoGit,
@@ -145,9 +208,31 @@ export interface ToolRecord {
 
 export declare function makeTool(spec: ToolSpec): ToolRecord;
 
-export declare function makeGitTool(
-  gitCap: ERef<GitToolCapability>,
-): ToolRecord[];
+/**
+ * Build the default attenuated agent-tool records for a live `Git`
+ * capability. The `facet` option pins which cumulative facet's catalog is
+ * derived — `'reader'` for read/navigation verbs only, `'writer'` (the
+ * default) additionally for `commit` / `createBranch` / `switchBranch`, and
+ * `'rewriter'` additionally for `reword` / `cherryPick` / `rebase` and
+ * `commit`'s `amend` option. The `gitCap` type is pinned to match: passing a
+ * capability narrower than the requested facet is a type error.
+ */
+export interface MakeGitTool {
+  (
+    gitCap: ERef<GitToolReaderCapability>,
+    options: { facet: 'reader' },
+  ): ToolRecord[];
+  (
+    gitCap: ERef<GitToolWriterCapability>,
+    options?: { facet?: 'writer' },
+  ): ToolRecord[];
+  (
+    gitCap: ERef<GitToolRewriterCapability>,
+    options: { facet: 'rewriter' },
+  ): ToolRecord[];
+}
+
+export declare const makeGitTool: MakeGitTool;
 
 export declare function makeGitHistoryTool(
   gitCap: ERef<GitHistoryToolCapability>,

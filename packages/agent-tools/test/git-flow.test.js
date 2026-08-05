@@ -104,6 +104,26 @@ const provisionGit = async (t, rootPath) => {
 };
 
 /**
+ * Construct a live exo `Git` capability with history-rewrite authority
+ * (`allowHistoryRewrite: true`), for the tests that drive `makeGitTool`'s
+ * `rewriter`-facet catalog against a real backend.
+ *
+ * @param {import('ava').ExecutionContext} t
+ * @param {string} [rootPath]
+ */
+const provisionRewriterGit = async (t, rootPath) => {
+  const repoRoot = await provisionGitWorktree(t, rootPath);
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({ repoRoot });
+  const git = makeGit(
+    { mount, backend, lineageOf },
+    { allowHistoryRewrite: true },
+  );
+  return { repoRoot, mount, git };
+};
+
+/**
  * Look a tool up by name, throwing if absent (so the result is non-undefined).
  *
  * @param {import('../src/types.js').ToolRecord[]} tools
@@ -203,6 +223,84 @@ test('makeGitTool drives branch operations over a real Git cap', async t => {
   );
   const names = branches.map(ref => ref.name).sort();
   t.deepEqual(names, ['feature', 'main']);
+});
+
+test('makeGitTool derives the rewriter-facet catalog against a real Git cap', async t => {
+  const { repoRoot, git } = await provisionRewriterGit(t);
+  const byName = byNameOf(
+    makeGitTool(/** @type {any} */ (git), { facet: 'rewriter' }),
+  );
+
+  // `reword`, `cherryPick`, and `rebase` are absent from the default (writer)
+  // facet catalog (proved by 'add/restore/checkoutConflict stay out of
+  // makeGitTool' below) but present here, driven against a real
+  // history-rewrite-authorized cap.
+  await fs.promises.writeFile(path.join(repoRoot, 'greeting.txt'), 'hello');
+  await execFileAsync('git', ['add', 'greeting.txt'], { cwd: repoRoot });
+  const first = /** @type {{ oid: string, summary: string }} */ (
+    await byName('commit').invoke({ message: 'first commit' })
+  );
+  const reworded = /** @type {{ oid: string, summary: string }} */ (
+    await byName('reword').invoke({
+      ref: first.oid,
+      message: 'reworded commit',
+    })
+  );
+  t.is(reworded.summary, 'reworded commit');
+
+  // `commit`'s `amend` option, absent from the writer facet's schema, is
+  // advertised and honored at the rewriter facet.
+  await fs.promises.writeFile(path.join(repoRoot, 'note.txt'), 'a note');
+  await execFileAsync('git', ['add', 'note.txt'], { cwd: repoRoot });
+  const amended = /** @type {{ oid: string, summary: string }} */ (
+    await byName('commit').invoke({
+      message: 'amended commit',
+      options: harden({ amend: true }),
+    })
+  );
+  t.is(amended.summary, 'amended commit');
+  const log = /** @type {Array<{ oid: string }>} */ (
+    await byName('log').invoke({})
+  );
+  // The init commit plus the amended commit — amend replaces HEAD rather than
+  // adding a third commit on top of it.
+  t.is(log.length, 2, 'amend should replace HEAD rather than add a commit');
+
+  // `createBranch` off the amended HEAD, then `cherryPick` and `rebase` — the
+  // exact history-rewrite verbs the writer facet withholds.
+  await execFileAsync('git', ['branch', 'side'], { cwd: repoRoot });
+  await execFileAsync('git', ['switch', 'side'], { cwd: repoRoot });
+  await fs.promises.writeFile(path.join(repoRoot, 'side.txt'), 'side change');
+  await execFileAsync('git', ['add', 'side.txt'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    [
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '-m',
+      'side commit',
+    ],
+    { cwd: repoRoot },
+  );
+  const sideOid = (
+    await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })
+  ).stdout.trim();
+  await execFileAsync('git', ['switch', 'main'], { cwd: repoRoot });
+
+  const picked = /** @type {string} */ (
+    await byName('cherryPick').invoke({ ref: sideOid })
+  );
+  t.truthy(picked);
+
+  const rebased = /** @type {string} */ (
+    await byName('rebase').invoke({
+      input: harden({ mode: 'start', upstream: 'main' }),
+    })
+  );
+  t.truthy(rebased);
 });
 
 test('the runtime guard rejects a bad arg before reaching the live cap', async t => {

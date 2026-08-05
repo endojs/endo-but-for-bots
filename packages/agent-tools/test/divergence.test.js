@@ -6,7 +6,14 @@ import '@endo/init/debug.js';
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { InterfaceGuard, Pattern } from '@endo/patterns' */
-/** @import { GitHistoryToolCapability, GitToolCapability, ToolRecord } from '../src/types.js' */
+/**
+ * @import {
+ *   GitHistoryToolCapability,
+ *   GitToolFacet,
+ *   GitToolRewriterCapability,
+ *   ToolRecord,
+ * } from '../src/types.js'
+ */
 
 import test from 'ava';
 import { Ajv } from 'ajv';
@@ -18,7 +25,12 @@ import {
 } from '@endo/patterns';
 import { Far } from '@endo/pass-style';
 import { GitInterface } from '@endo/exo-git';
-import { GitRebaseStartInputShape } from '@endo/exo-git/src/interfaces.js';
+import {
+  GitReaderInterface,
+  GitRebaseStartInputShape,
+  GitRewriterInterface,
+  GitWriterInterface,
+} from '@endo/exo-git/src/interfaces.js';
 
 import { makeGitHistoryTool, makeGitTool } from '../src/json-tools/git.js';
 
@@ -28,15 +40,39 @@ import { makeGitHistoryTool, makeGitTool } from '../src/json-tools/git.js';
 
 const ajv = new Ajv({ strict: false });
 
+/** @type {Record<GitToolFacet, InterfaceGuard>} */
+const gitInterfaceByFacet = harden({
+  reader: /** @type {InterfaceGuard} */ (GitReaderInterface),
+  writer: /** @type {InterfaceGuard} */ (GitWriterInterface),
+  rewriter: /** @type {InterfaceGuard} */ (GitRewriterInterface),
+});
+
 /**
- * Positional guard structure from `GitInterface`.
+ * Positional guard structure from the supplied facet interface (default the
+ * flat `GitInterface`, for `makeGitHistoryTool`'s always-elevated methods).
  *
  * @param {string} method
+ * @param {InterfaceGuard} [gitInterface]
  */
-const guardShapeFor = method => {
-  const { methodGuards } = getInterfaceGuardPayload(
-    /** @type {InterfaceGuard} */ (GitInterface),
-  );
+const guardShapeFor = (method, gitInterface = GitInterface) => {
+  if (method === 'rebase') {
+    return {
+      requiredCount: 1,
+      guards: harden([
+        M.splitRecord(
+          {
+            mode: 'start',
+            upstream: M.string(),
+          },
+          {
+            autosquash: M.boolean(),
+          },
+          {},
+        ),
+      ]),
+    };
+  }
+  const { methodGuards } = getInterfaceGuardPayload(gitInterface);
   const { argGuards, optionalArgGuards } = getMethodGuardPayload(
     methodGuards[method],
   );
@@ -161,12 +197,13 @@ const toNamedRecord = (slotRecord, paramNames) => {
   return named;
 };
 
-const gitTools = makeGitTool(
-  // This test inspects schemas and guards; it never invokes the capability.
-  /** @type {ERef<GitToolCapability>} */ (
-    /** @type {unknown} */ (Far('InertGit', {}))
-  ),
+// This test inspects schemas and guards; it never invokes the capability.
+const inertGit = /** @type {ERef<GitToolRewriterCapability>} */ (
+  /** @type {unknown} */ (Far('InertGit', {}))
 );
+
+/** @type {GitToolFacet[]} */
+const GIT_TOOL_FACETS = harden(['reader', 'writer', 'rewriter']);
 
 const gitHistoryTools = makeGitHistoryTool(
   // This test inspects schemas and guards; it never invokes the capability.
@@ -177,11 +214,16 @@ const gitHistoryTools = makeGitHistoryTool(
 
 /**
  * For one git tool, assert its hand-authored JSON Schema and its runtime guard
- * agree on every candidate args record.
+ * — read from the facet interface the tool's catalog was derived from — agree
+ * on every candidate args record.
  */
 const schemaGuardAgree = test.macro({
-  exec(t, /** @type {ToolRecord} */ tool) {
-    const shape = guardShapeFor(tool.name);
+  exec(
+    t,
+    /** @type {ToolRecord} */ tool,
+    /** @type {InterfaceGuard} */ gitInterface,
+  ) {
+    const shape = guardShapeFor(tool.name, gitInterface);
     const paramNames = paramNamesOf(tool);
     const validate = ajv.compile(tool.parameters);
     let checked = 0;
@@ -206,8 +248,16 @@ const schemaGuardAgree = test.macro({
   },
 });
 
-for (const tool of gitTools) {
-  test(schemaGuardAgree, tool);
+for (const facet of GIT_TOOL_FACETS) {
+  const gitTools = makeGitTool(inertGit, /** @type {any} */ ({ facet }));
+  for (const tool of gitTools) {
+    test(
+      `schema ⟷ guard agree for git[${facet}].${tool.name}`,
+      schemaGuardAgree,
+      tool,
+      gitInterfaceByFacet[facet],
+    );
+  }
 }
 
 for (const tool of gitHistoryTools) {
@@ -215,6 +265,7 @@ for (const tool of gitHistoryTools) {
     `schema ⟷ guard agree for gitHistory.${tool.name}`,
     schemaGuardAgree,
     tool,
+    /** @type {InterfaceGuard} */ (GitInterface),
   );
 }
 
