@@ -3,17 +3,22 @@
 
 import { q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
-import { makeExo } from '@endo/exo';
+import { defineExoClassKit } from '@endo/exo';
 import {
   readOnly as readOnlyFs,
   wrapBackend,
 } from '@endo/platform/fs/extended';
 
 import { makeGitFsBackend } from './git-filesystem.js';
-import { GitInterface } from './interfaces.js';
+import {
+  GitReaderInterface,
+  GitWriterInterface,
+  GitRewriterInterface,
+} from './interfaces.js';
 
 /**
  * @import {
+ *   EndoGit,
  *   GitCherryPickOptions,
  *   GitCommit,
  *   GitCommitOptions,
@@ -22,6 +27,11 @@ import { GitInterface } from './interfaces.js';
  *   GitDiffOptions,
  *   GitIndexStatus,
  *   GitLogOptions,
+ *   GitMakeHistoryRewriteOptions,
+ *   GitMakeOptions,
+ *   GitMakeReadOnlyOptions,
+ *   GitMakeReadWriteOptions,
+ *   GitMakeReadWriteOrHistoryRewriteOptions,
  *   GitMergeOptions,
  *   GitRebaseInput,
  *   GitRef,
@@ -41,52 +51,6 @@ import { GitInterface } from './interfaces.js';
  *   WritableGitWorktree,
  * } from './types.js'
  */
-
-/**
- * Host-private map from daemon-minted Git exos to their mutability posture.
- * Trusted adjacent providers such as GitRemote can reject read-only Git caps
- * without adding a guest-visible inspection method.
- *
- * @type {WeakMap<object, boolean>}
- */
-const gitReadOnly = new WeakMap();
-/** @type {WeakMap<object, boolean>} */
-const gitHistoryRewrite = new WeakMap();
-/** @type {WeakMap<object, GitBackend>} */
-const gitBackends = new WeakMap();
-
-/**
- * Host-private accessor: returns whether a daemon-minted Git exo is
- * read-only, or undefined for fakes / remotes not minted in this vat.
- *
- * @param {unknown} git
- * @returns {boolean | undefined}
- */
-export const isGitReadOnly = git =>
-  gitReadOnly.get(/** @type {object} */ (git));
-harden(isGitReadOnly);
-
-/**
- * Host-private accessor: returns whether a daemon-minted Git exo has
- * history-rewrite authority, or undefined for fakes / remotes not minted here.
- *
- * @param {unknown} git
- * @returns {boolean | undefined}
- */
-export const isGitHistoryRewrite = git =>
-  gitHistoryRewrite.get(/** @type {object} */ (git));
-harden(isGitHistoryRewrite);
-
-/**
- * Host-private accessor for adjacent daemon providers such as GitRemote.
- * Returns undefined for fakes or Git caps not minted in this vat.
- *
- * @param {unknown} git
- * @returns {GitBackend | undefined}
- */
-export const getGitBackend = git =>
-  gitBackends.get(/** @type {object} */ (git));
-harden(getGitBackend);
 
 /**
  * Backend-facing row produced by `GitBackend.status`.  The public Git exo
@@ -234,456 +198,799 @@ harden(getGitBackend);
  */
 
 /**
- * The implementation object has one runtime method table for both
- * authority postures.
+ * Host-private capability handed only to composing host code (never to a
+ * guest, and not reachable from `reader`, `writer`, or `rewriter` by any
+ * method those facets expose): the backend authority `GitRemote` needs to
+ * run its native fetch/push data plane.  Minted alongside the guest-facing
+ * `Git` kit from the same `powers` and threaded explicitly into
+ * `makeGitRemote({ operations })` by the caller that built both.
+ * `pairingToken` is an ephemeral, unforgeable brand generated fresh for
+ * each `makeGitKit` call (i.e. each Git formula evaluation) — never
+ * persisted, and never derived from `backend` object identity — so
+ * `makeGitRemote` can verify (via `gitPairingTokenFor`) that this
+ * `GitOperations` was minted alongside the specific `git` it claims to
+ * pair with, rather than merely alongside *some* daemon-minted Git
+ * instance that happens to share a backend reference. A restart
+ * reincarnates the Git formula and mints a new token; the old token does
+ * not need to survive the upgrade.
  *
- * @typedef {Omit<HistoryRewriteEndoGit, 'worktree' | 'readOnly'> & {
- *   worktree: () => Promise<WritableGitWorktree | ReadOnlyGitWorktree>;
- *   readOnly: () => ReadOnlyEndoGit;
- * }} GitImplementation
+ * @typedef {object} GitOperations
+ * @property {GitBackend} backend
+ * @property {unknown} pairingToken
  */
 
 /**
- * Construct the public Git capability exo.  Phase 1: methods are wired
- * to a backend but every backend method throws "not yet implemented"
- * until Phases 2-5 land them.  This commit establishes only the shape
- * and the authority boundary (the mount cap carries the public worktree
- * authority; the host-private backing grant the formula instantiator
- * used to derive this capability is not part of the public surface).
+ * Mint the host-private operations capability for one Git instance's
+ * backend. Independent of the guest-facing kit: it carries no reference to
+ * any `reader` / `writer` / `rewriter` facet and cannot be recovered from
+ * one. Pass the `git` facet minted alongside `backend` (by the same
+ * `makeGit` / `makeGitKit` call) so the resulting `GitOperations` carries
+ * that instance's pairing token; omitting `git` (or passing a value not
+ * minted by this module) yields an operations capability that can never
+ * pass `makeGitRemote`'s pairing check.
+ *
+ * @param {{ backend: GitBackend, git?: unknown }} powers
+ * @returns {GitOperations}
+ */
+export const makeGitOperations = ({ backend, git }) => {
+  if (backend === null || typeof backend !== 'object') {
+    throw new Error('makeGitOperations requires a backend');
+  }
+  return harden({ backend, pairingToken: gitPairingTokenFor(git) });
+};
+harden(makeGitOperations);
+
+/**
+ * Shared per-instance state: the `filesystemAt` memo and the mount lineage
+ * sentinel are per Git *instance*, not per facet, so `reader`, `writer`, and
+ * `rewriter` facets of the same `makeGitKit` call resolve the same cached
+ * Filesystem for the same tree OID and reject the same foreign `PathEntry`
+ * values.
+ *
+ * @typedef {object} GitState
+ * @property {WritableGitWorktree} mount
+ * @property {GitBackend} backend
+ * @property {(value: unknown) => object | undefined} lineageOf
+ * @property {object | undefined} mountLineage
+ * @property {Map<string, object>} filesystemByTreeOid
+ * @property {Promise<ReadOnlyGitWorktree> | undefined} readOnlyWorktreeP
+ */
+
+/**
+ * The `this` context every shared method body below runs with: whichever
+ * facet dispatched the call, but every one of them only reads `this.state`
+ * (identical for all three facets of one instance) or `this.facets` (to
+ * reach a named sibling), so a single hoisted function reference is safe to
+ * assign into more than one facet's method table.
+ *
+ * @typedef {object} GitMethodThis
+ * @property {GitState} state
+ * @property {{ reader: ReadOnlyEndoGit, writer: ReadWriteEndoGit, rewriter: HistoryRewriteEndoGit }} facets
+ */
+
+/**
+ * @param {GitPowers} powers
+ * @returns {GitState}
+ */
+const initGitState = ({ mount, backend, lineageOf }) =>
+  // Be careful not to freeze the state record (defineExoClassKit seals it,
+  // but individual fields such as `readOnlyWorktreeP` and the
+  // `filesystemByTreeOid` Map remain mutable).
+  ({
+    mount,
+    backend,
+    lineageOf,
+    mountLineage: lineageOf(mount),
+    filesystemByTreeOid: new Map(),
+    readOnlyWorktreeP: undefined,
+  });
+
+/**
+ * The worktree authority a read-only Git exposes.  A writable Git hands
+ * out the writable `mount`; a read-only Git must not, or its `worktree()`
+ * and the per-entry `node`s minted by `status()` would carry full write
+ * authority (`writeText`, `remove`, `move`, `makeFile`) despite the
+ * facet's read-only intent.  `mount.readOnly()` yields a structural
+ * read-only view that shares the same mount lineage, so entries minted by
+ * the writable mount still resolve through it but no write method
+ * survives the attenuation.  Resolved lazily and memoized on `state`
+ * because `readOnly()` is a synchronous attenuation but the read-only view
+ * is only needed once a read flows through the reader facet.
+ *
+ * @overload
+ * @param {GitState} state
+ * @param {true} readOnly
+ * @returns {Promise<ReadOnlyGitWorktree>}
+ */
+/**
+ * @overload
+ * @param {GitState} state
+ * @param {false} readOnly
+ * @returns {WritableGitWorktree}
+ */
+/**
+ * @param {GitState} state
+ * @param {boolean} readOnly
+ * @returns {WritableGitWorktree | Promise<ReadOnlyGitWorktree>}
+ */
+const worktreeAuthorityFor = (state, readOnly) => {
+  if (!readOnly) {
+    return state.mount;
+  }
+  if (state.readOnlyWorktreeP === undefined) {
+    state.readOnlyWorktreeP = Promise.resolve(E(state.mount).readOnly());
+  }
+  return state.readOnlyWorktreeP;
+};
+
+/**
+ * Translate an array of PathEntry caps into the repo-relative path strings
+ * that the backend (and the underlying git binary) accept.  Entries from a
+ * different mount lineage are rejected before any path is exposed to git.
+ *
+ * @param {GitState} state
+ * @param {readonly object[]} entries
+ * @returns {Promise<string[]>}
+ */
+const entriesToRepoPaths = async (state, entries) => {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    throw new Error('entries must be a non-empty array of PathEntry values');
+  }
+  const paths = [];
+  for (const entry of entries) {
+    const otherLineage = state.lineageOf(/** @type {object} */ (entry));
+    if (otherLineage === undefined) {
+      throw new Error('entry is not a PathEntry minted for this Git worktree');
+    }
+    if (otherLineage !== state.mountLineage) {
+      throw new Error(
+        'entry was minted by a different mount lineage and cannot be used here',
+      );
+    }
+    // eslint-disable-next-line no-await-in-loop
+    const segments = await E(entry).segments();
+    paths.push(segments.join('/'));
+  }
+  return paths;
+};
+
+/**
+ * @param {unknown} ref
+ * @returns {string}
+ */
+const refName = ref =>
+  typeof ref === 'string' ? ref : /** @type {{ name: string }} */ (ref).name;
+
+// #region Shared method bodies
+//
+// Every function below is referenced from two or three of the reader /
+// writer / rewriter method tables further down (see `writerMethods` and
+// `rewriterMethods`'s object spreads). None of them close over per-instance
+// data directly: every one takes `this.state` (bound at call time by
+// whichever facet dispatched the call) so the identical function reference
+// is safe to share across facets of the same kit. This is what makes the
+// facets cumulative without duplicating a single method body.
+
+/** @this {GitMethodThis} */
+async function worktree() {
+  return worktreeAuthorityFor(this.state, false);
+}
+
+/** @this {GitMethodThis} */
+async function worktreeReadOnly() {
+  return worktreeAuthorityFor(this.state, true);
+}
+
+/**
+ * @param {GitState} state
+ * @param {WritableGitWorktree | Promise<ReadOnlyGitWorktree>} worktreeAuthority
+ *   The `node` authority `status()` resolves each row through: a read-only
+ *   Git resolves nodes through the read-only worktree view, ensuring a
+ *   status row never hands a caller a writable node out of an attenuated
+ *   facet.
+ */
+const doStatus = async (state, worktreeAuthority) => {
+  const raw = await state.backend.status();
+  const wrapped = await Promise.all(
+    raw.map(async r => {
+      const segments = r.path === '' ? [] : r.path.split('/');
+      const entry = await E(state.mount).entry(segments);
+      let node;
+      try {
+        // Resolve the node by repo-relative segments rather than by the
+        // `entry` descriptor: the read-only worktree view exposes the
+        // structural `ReadableTree` surface whose `lookup` accepts only
+        // string / string[] paths (not a PathEntry). Segments are
+        // equivalent and work for both the writable mount and the
+        // read-only view.
+        node = /** @type {GitStatusNode} */ (
+          await E(worktreeAuthority).lookup(segments)
+        );
+      } catch (lookupError) {
+        node = undefined;
+        // A deleted path (in either the index or the worktree) has no
+        // live node; a lookup failure is expected and load-bearing for
+        // the GitStatusEntry shape (no `node` field). For every other
+        // status, the lookup should have succeeded; surface the
+        // swallowed error on stderr so a silent regression does not hide
+        // behind the structured row.
+        if (r.index !== 'deleted' && r.worktree !== 'deleted') {
+          const detail =
+            /** @type {Error} */ (lookupError).message ?? lookupError;
+          console.error(
+            `Git.status: lookup failed for ${q(r.path)} ` +
+              `(index=${q(r.index)}, worktree=${q(r.worktree)}): ${detail}`,
+          );
+        }
+      }
+      return harden({
+        entry,
+        path: r.path,
+        index: r.index,
+        worktree: r.worktree,
+        ...(node !== undefined ? { node } : {}),
+        ...(r.renamedFrom !== undefined ? { renamedFrom: r.renamedFrom } : {}),
+      });
+    }),
+  );
+  return harden(wrapped);
+};
+
+/** @this {GitMethodThis} */
+async function status() {
+  const { state } = this;
+  return doStatus(state, worktreeAuthorityFor(state, false));
+}
+
+/** @this {GitMethodThis} */
+async function statusReadOnly() {
+  const { state } = this;
+  return doStatus(state, worktreeAuthorityFor(state, true));
+}
+
+/**
+ * @param {{ cached?: boolean, base?: unknown, head?: unknown, entries?: readonly object[], paths?: string[] }} options
+ * @this {GitMethodThis}
+ */
+async function diff(options = {}) {
+  const { state } = this;
+  // Translate caller-supplied options to the backend shape:
+  // - `base` and `head` accept GitRef-or-string; collapse to a string
+  //   name the backend forwards to git unchanged.
+  // - `entries` (PathEntry[]) get resolved to repo-relative paths with
+  //   the same lineage check `add` uses. `paths` (string[]) passes
+  //   through (callers can use either).
+  const opts =
+    /** @type {{ cached?: boolean, base?: unknown, head?: unknown, entries?: readonly object[], paths?: string[] }} */ (
+      options
+    );
+  const resolved =
+    /** @type {{ cached?: boolean, base?: string, head?: string, paths?: string[] }} */ ({});
+  if (opts.cached !== undefined) resolved.cached = opts.cached;
+  if (opts.base !== undefined) {
+    resolved.base =
+      typeof opts.base === 'string'
+        ? opts.base
+        : /** @type {{ name: string }} */ (opts.base).name;
+  }
+  if (opts.head !== undefined) {
+    resolved.head =
+      typeof opts.head === 'string'
+        ? opts.head
+        : /** @type {{ name: string }} */ (opts.head).name;
+  }
+  if (Array.isArray(opts.entries) && opts.entries.length > 0) {
+    resolved.paths = await entriesToRepoPaths(state, opts.entries);
+  } else if (Array.isArray(opts.paths) && opts.paths.length > 0) {
+    resolved.paths = [...opts.paths];
+  }
+  return state.backend.diff(resolved);
+}
+
+/**
+ * @param {GitLogOptions} options
+ * @this {GitMethodThis}
+ */
+async function log(options = {}) {
+  const { ref, ...rest } = /** @type {GitLogOptions} */ (options);
+  const resolved = /** @type {GitBackendLogOptions} */ ({ ...rest });
+  if (ref !== undefined) resolved.ref = refName(ref);
+  return this.state.backend.log(resolved);
+}
+
+/**
+ * @param {unknown} ref
+ * @this {GitMethodThis}
+ */
+async function show(ref) {
+  return this.state.backend.show(refName(ref));
+}
+
+/**
+ * @param {unknown} ref
+ * @this {GitMethodThis}
+ */
+async function revParse(ref) {
+  return this.state.backend.revParse(refName(ref));
+}
+
+/**
+ * @param {readonly object[]} entries
+ * @this {GitMethodThis}
+ */
+async function add(entries) {
+  const { state } = this;
+  const paths = await entriesToRepoPaths(state, entries);
+  return state.backend.add(paths);
+}
+
+/**
+ * @param {readonly object[]} entries
+ * @param {GitRestoreOptions} options
+ * @this {GitMethodThis}
+ */
+async function restore(entries, options = {}) {
+  const { state } = this;
+  const paths = await entriesToRepoPaths(state, entries);
+  return state.backend.restore(paths, options);
+}
+
+/**
+ * @param {string} message
+ * @param {GitCommitOptions} options
+ * @this {GitMethodThis}
+ */
+async function commit(message, options = {}) {
+  return this.state.backend.commit(message, options);
+}
+
+/**
+ * @param {unknown} ref
+ * @param {string} message
+ * @this {GitMethodThis}
+ */
+async function reword(ref, message) {
+  return this.state.backend.reword(refName(ref), message);
+}
+
+/**
+ * @param {unknown} ref
+ * @param {GitCherryPickOptions} options
+ * @this {GitMethodThis}
+ */
+async function cherryPick(ref, options = {}) {
+  return this.state.backend.cherryPick(refName(ref), options);
+}
+
+/** @this {GitMethodThis} */
+async function currentBranch() {
+  return this.state.backend.currentBranch();
+}
+
+/** @this {GitMethodThis} */
+async function branches() {
+  return this.state.backend.branches();
+}
+
+/**
+ * @param {string} name
+ * @param {GitCreateBranchOptions} options
+ * @this {GitMethodThis}
+ */
+async function createBranch(name, options = {}) {
+  return this.state.backend.createBranch(name, options);
+}
+
+/**
+ * @param {string} name
+ * @param {GitDeleteBranchOptions} options
+ * @this {GitMethodThis}
+ */
+async function deleteBranch(name, options = {}) {
+  return this.state.backend.deleteBranch(name, options);
+}
+
+/**
+ * @param {string} from
+ * @param {string} to
+ * @this {GitMethodThis}
+ */
+async function renameBranch(from, to) {
+  return this.state.backend.renameBranch(from, to);
+}
+
+/**
+ * @param {string} name
+ * @this {GitMethodThis}
+ */
+async function switchBranch(name) {
+  return this.state.backend.switchBranch(name);
+}
+
+/**
+ * @param {unknown} ref
+ * @this {GitMethodThis}
+ */
+async function detach(ref) {
+  return this.state.backend.detach(refName(ref));
+}
+
+/**
+ * @param {unknown} ref
+ * @this {GitMethodThis}
+ */
+async function doSwitch(ref) {
+  return this.state.backend.switch(refName(ref));
+}
+
+/**
+ * @param {unknown} ref
+ * @param {GitMergeOptions} options
+ * @this {GitMethodThis}
+ */
+async function merge(ref, options = {}) {
+  return this.state.backend.merge(refName(ref), options);
+}
+
+/**
+ * @param {GitRebaseInput} input
+ * @this {GitMethodThis}
+ */
+async function rebase(input) {
+  return this.state.backend.rebase(input);
+}
+
+/**
+ * @param {GitStashPushOptions} options
+ * @this {GitMethodThis}
+ */
+async function stashPush(options = {}) {
+  const { state } = this;
+  const opts = /** @type {GitStashPushOptions} */ (options);
+  const resolved =
+    /** @type {{ message?: string, paths?: string[], includeUntracked?: boolean }} */ ({});
+  if (opts.message !== undefined) resolved.message = opts.message;
+  if (opts.includeUntracked !== undefined) {
+    resolved.includeUntracked = opts.includeUntracked;
+  }
+  if (Array.isArray(opts.entries) && opts.entries.length > 0) {
+    resolved.paths = await entriesToRepoPaths(state, opts.entries);
+  } else if (Array.isArray(opts.paths) && opts.paths.length > 0) {
+    resolved.paths = [...opts.paths];
+  }
+  return state.backend.stashPush(resolved);
+}
+
+/** @this {GitMethodThis} */
+async function stashList() {
+  return this.state.backend.stashList();
+}
+
+/**
+ * @param {number | undefined} index
+ * @this {GitMethodThis}
+ */
+async function stashShow(index) {
+  return this.state.backend.stashShow(index);
+}
+
+/**
+ * @param {number | undefined} index
+ * @this {GitMethodThis}
+ */
+async function stashApply(index) {
+  return this.state.backend.stashApply(index);
+}
+
+/**
+ * @param {number | undefined} index
+ * @this {GitMethodThis}
+ */
+async function stashPop(index) {
+  return this.state.backend.stashPop(index);
+}
+
+/**
+ * @param {number | undefined} index
+ * @this {GitMethodThis}
+ */
+async function stashDrop(index) {
+  return this.state.backend.stashDrop(index);
+}
+
+/**
+ * @param {unknown} ref
+ * @this {GitMethodThis}
+ */
+async function tree(ref) {
+  return this.state.backend.tree(refName(ref));
+}
+
+/**
+ * @param {unknown} ref
+ * @this {GitMethodThis}
+ */
+async function filesystemAt(ref) {
+  const { state } = this;
+  const { treeOid } = await state.backend.resolveTree(refName(ref));
+  const cached = state.filesystemByTreeOid.get(treeOid);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const fsBackend = makeGitFsBackend({ backend: state.backend, treeOid });
+  // The cache is keyed only on `treeOid`; two refs that resolve to the
+  // same tree (e.g. cherry-picks, `--allow-empty` commits, identical
+  // branches) intentionally share one Filesystem cap so brand identity is
+  // stable for `compose`. The description must therefore reference only
+  // the tree — embedding a `commitOid` would make `statfs().type` lie
+  // about which commit the cached Filesystem was first minted for.
+  const description = `git-tree (${treeOid})`;
+  const fs = readOnlyFs(wrapBackend(fsBackend, { description }));
+  state.filesystemByTreeOid.set(treeOid, fs);
+  return fs;
+}
+
+/** Every facet's `readOnly()` attenuates to the same pre-existing reader. */
+/** @this {GitMethodThis} */
+function attenuateToReadOnly() {
+  return this.facets.reader;
+}
+
+/**
+ * Downscope to a pre-existing sibling facet of the same instance. The scope
+ * vocabulary is closed and strictly non-escalating per facet — reader
+ * accepts only `'reader'`, writer accepts `'reader' | 'writer'`, rewriter
+ * accepts all three (`scopeReader` / `scopeWriter` / `scopeRewriter` in
+ * `interfaces.js`) — so an unknown name *or* an escalation attempt is
+ * rejected by the guard before this body runs, with the same rejection
+ * shape either way. Repeated calls with the same name return the identical
+ * facet reference (`this.facets` is fixed per instance), and no internal
+ * state record is ever returned — only the other guarded exo facets of
+ * this kit.
+ *
+ * @param {'reader' | 'writer' | 'rewriter'} name
+ * @this {GitMethodThis}
+ */
+function scope(name) {
+  return this.facets[name];
+}
+
+// #endregion
+
+const readerMethods = harden({
+  worktree: worktreeReadOnly,
+  status: statusReadOnly,
+  diff,
+  log,
+  show,
+  revParse,
+  currentBranch,
+  branches,
+  stashList,
+  stashShow,
+  tree,
+  filesystemAt,
+  scope,
+  readOnly: attenuateToReadOnly,
+});
+
+const writerMethods = harden({
+  ...readerMethods,
+  worktree,
+  status,
+  add,
+  restore,
+  commit,
+  createBranch,
+  deleteBranch,
+  renameBranch,
+  switchBranch,
+  detach,
+  switch: doSwitch,
+  merge,
+  stashPush,
+  stashApply,
+  stashPop,
+  stashDrop,
+});
+
+const rewriterMethods = harden({
+  ...writerMethods,
+  reword,
+  cherryPick,
+  rebase,
+});
+
+/** @type {((exo: unknown, facetName?: string) => boolean) | undefined} */
+let isGitKitInstance;
+
+/**
+ * Per-instance pairing identity: every facet minted for one `makeGitKit`
+ * call maps to that call's own ephemeral pairing token — a fresh, private,
+ * unforgeable brand minted for that call alone — so a `GitOperations`
+ * capability can be verified against the specific `git` it claims to pair
+ * with, not merely against the kit type, and not against `backend` object
+ * identity (which is real authority, not a pairing marker). Populated in
+ * `makeGitKit`, read by `gitPairingTokenFor`. Never persisted: a
+ * reincarnated Git formula calls `makeGitKit` again and gets a new token.
+ *
+ * @type {WeakMap<object, object>}
+ */
+const gitInstancePairingTokens = new WeakMap();
+
+/**
+ * The exo class kit: one instance, three cumulative facets sharing
+ * `GitState`. `reader`'s methods are a subset of `writer`'s, which are a
+ * subset of `rewriter`'s (see `readerMethods` / `writerMethods` /
+ * `rewriterMethods` above) — every method that exists on a facet is a
+ * shared function reference, not a copy, so there is exactly one
+ * implementation per Git operation regardless of how many facets expose
+ * it. Posture is facet membership: which object a caller holds *is* its
+ * authority, checked with `isGitKitInstance(cap, facetName)` below rather
+ * than a side-table stamp.
+ */
+const makeGitKitInstance = defineExoClassKit(
+  'Git',
+  {
+    reader: GitReaderInterface,
+    writer: GitWriterInterface,
+    rewriter: GitRewriterInterface,
+  },
+  initGitState,
+  {
+    reader: readerMethods,
+    writer: writerMethods,
+    rewriter: rewriterMethods,
+  },
+  {
+    receiveInstanceTester(isInstance) {
+      isGitKitInstance = isInstance;
+    },
+  },
+);
+
+/**
+ * Mint one Git instance and return all three cumulative facets plus the
+ * host-private posture-testing hook. Composing host code (the daemon's
+ * `provideGit` formula handler, in-process tests) calls this directly when
+ * it needs more than one posture from the same instance, or needs the
+ * `reader`/`writer`/`rewriter` identity for later `scope`/`readOnly`
+ * comparisons. `makeGit` below is the narrower, overload-typed entry point
+ * most callers want.
+ *
+ * @param {GitPowers} powers
+ * @returns {{ reader: ReadOnlyEndoGit, writer: ReadWriteEndoGit, rewriter: HistoryRewriteEndoGit }}
+ */
+export const makeGitKit = powers => {
+  const kit =
+    /** @type {{ reader: ReadOnlyEndoGit, writer: ReadWriteEndoGit, rewriter: HistoryRewriteEndoGit }} */ (
+      makeGitKitInstance(powers)
+    );
+  // A fresh, private brand for this call alone: ephemeral (never written to
+  // a formula), and independent of `powers.backend` identity, so pairing
+  // verification does not ride on the same object as the backend's real
+  // authority. Every reincarnation of the owning Git formula calls
+  // `makeGitKit` again and mints a new one.
+  const pairingToken = harden({});
+  gitInstancePairingTokens.set(kit.reader, pairingToken);
+  gitInstancePairingTokens.set(kit.writer, pairingToken);
+  gitInstancePairingTokens.set(kit.rewriter, pairingToken);
+  return kit;
+};
+harden(makeGitKit);
+
+/**
+ * Host-private accessor: the ephemeral pairing token a daemon-minted `git`
+ * facet was minted with, or `undefined` for a fake, foreign, or
+ * non-daemon-minted value. Lets a caller of `makeGitRemote` (or
+ * `makeGitRemote` itself) verify that a `GitOperations` capability was
+ * actually minted alongside the specific `git` it is paired with, rather
+ * than merely being *some* daemon-minted operations value.
+ *
+ * @param {unknown} git
+ * @returns {object | undefined}
+ */
+export const gitPairingTokenFor = git =>
+  typeof git === 'object' && git !== null
+    ? gitInstancePairingTokens.get(git)
+    : undefined;
+harden(gitPairingTokenFor);
+
+/**
+ * Host-private accessor: returns whether a daemon-minted Git exo is
+ * read-only, or undefined for fakes / remotes not minted in this vat.
+ *
+ * @param {unknown} git
+ * @returns {boolean | undefined}
+ */
+export const isGitReadOnly = git => {
+  if (isGitKitInstance === undefined) {
+    return undefined;
+  }
+  if (isGitKitInstance(git, 'reader')) {
+    return true;
+  }
+  if (isGitKitInstance(git, 'writer') || isGitKitInstance(git, 'rewriter')) {
+    return false;
+  }
+  return undefined;
+};
+harden(isGitReadOnly);
+
+/**
+ * Host-private accessor: returns whether a daemon-minted Git exo has
+ * history-rewrite authority, or undefined for fakes / remotes not minted
+ * here.
+ *
+ * @param {unknown} git
+ * @returns {boolean | undefined}
+ */
+export const isGitHistoryRewrite = git => {
+  if (isGitKitInstance === undefined) {
+    return undefined;
+  }
+  if (isGitKitInstance(git, 'rewriter')) {
+    return true;
+  }
+  if (isGitKitInstance(git, 'reader') || isGitKitInstance(git, 'writer')) {
+    return false;
+  }
+  return undefined;
+};
+harden(isGitHistoryRewrite);
+
+/**
+ * Construct the public Git capability exo. Internally mints a three-facet
+ * exo class kit (`reader` / `writer` / `rewriter`, see `makeGitKit`) and
+ * returns the single facet `opts` selects — the call-site contract is
+ * unchanged from the single-class implementation this replaces.
  *
  * @overload
  * @param {GitPowers} powers
- * @param {{readOnly: true, allowHistoryRewrite?: boolean}} opts
+ * @param {GitMakeReadOnlyOptions} opts
  * @returns {ReadOnlyEndoGit}
  */
 /**
  * @overload
  * @param {GitPowers} powers
- * @param {{readOnly?: false, allowHistoryRewrite: true}} opts
+ * @param {GitMakeHistoryRewriteOptions} opts
  * @returns {HistoryRewriteEndoGit}
  */
 /**
  * @overload
  * @param {GitPowers} powers
- * @param {{readOnly?: false, allowHistoryRewrite?: false}} [opts]
+ * @param {GitMakeReadWriteOptions} [opts]
  * @returns {ReadWriteEndoGit}
  */
 /**
  * @overload
  * @param {GitPowers} powers
- * @param {{readOnly?: false, allowHistoryRewrite: boolean}} opts
+ * @param {GitMakeReadWriteOrHistoryRewriteOptions} opts
  * @returns {ReadWriteEndoGit | HistoryRewriteEndoGit}
  */
 /**
  * @overload
  * @param {GitPowers} powers
- * @param {{readOnly?: boolean, allowHistoryRewrite?: boolean}} [opts]
- * @returns {ReadOnlyEndoGit | ReadWriteEndoGit | HistoryRewriteEndoGit}
+ * @param {GitMakeOptions} [opts]
+ * @returns {EndoGit}
  */
 /**
  * @param {GitPowers} powers
- * @param {object} [opts]
- * @param {boolean} [opts.readOnly]  True when this Git cap is attenuated
- *   or was derived from a read-only mount.
- *   Mutation methods throw before
- *   the backend can touch the worktree.
- * @param {boolean} [opts.allowHistoryRewrite]  True when this Git cap may
- *   amend, reword, cherry-pick, or rebase existing commits.
- *   Defaults to false.
- * @returns {ReadOnlyEndoGit | ReadWriteEndoGit | HistoryRewriteEndoGit}
+ * @param {GitMakeOptions} [opts]
+ * @returns {EndoGit}
  */
 export const makeGit = (
-  { mount, backend, lineageOf },
+  powers,
   { readOnly = false, allowHistoryRewrite = false } = {},
 ) => {
-  // The mount's lineage sentinel — used to verify that every entry
-  // passed to a path-bearing Git method was minted by this Git's bound
-  // mount, not by some other mount this guest may also hold.
-  const mountLineage = lineageOf(mount);
-
-  // Memoize `filesystemAt(ref)` on the canonical tree OID so repeated
-  // calls within one Git instance return the same Filesystem cap (same
-  // brand).  Brand identity matters for `compose` cycle detection in
-  // `@endo/platform/fs/extended`; without memoization, two `filesystemAt('HEAD')`
-  // calls would compose as distinct participants even when HEAD has
-  // not moved.  See `designs/endo-fs-from-git.md` § Brands.
-  /** @type {Map<string, object>} */
-  const filesystemByTreeOid = new Map();
-
-  // The worktree authority a read-only Git exposes.  A writable Git
-  // hands out the writable `mount`; a read-only Git must not, or its
-  // `worktree()` and the per-entry `node`s minted by `status()` would
-  // carry full write authority (`writeText`, `remove`, `move`,
-  // `makeFile`) despite the cap's read-only intent.  `mount.readOnly()`
-  // yields a structural read-only view that shares the same mount
-  // lineage, so entries minted by the writable mount still resolve
-  // through it but no write method survives the attenuation.  Resolved
-  // lazily because `readOnly()` is a synchronous attenuation method and
-  // the read-only view is only needed once a read flows through it.
-  /** @type {Promise<ReadOnlyGitWorktree> | undefined} */
-  let readOnlyWorktreeP;
-  /** @returns {WritableGitWorktree | Promise<ReadOnlyGitWorktree>} */
-  const worktreeAuthority = () => {
-    if (!readOnly) {
-      return mount;
-    }
-    if (readOnlyWorktreeP === undefined) {
-      readOnlyWorktreeP = Promise.resolve(E(mount).readOnly());
-    }
-    return readOnlyWorktreeP;
-  };
-
-  /**
-   * Translate an array of PathEntry caps into the repo-relative
-   * path strings that the backend (and the underlying git binary)
-   * accept.  Entries from a different mount lineage are rejected
-   * before any path is exposed to git.
-   *
-   * @param {readonly object[]} entries
-   * @returns {Promise<string[]>}
-   */
-  const entriesToRepoPaths = async entries => {
-    if (!Array.isArray(entries) || entries.length === 0) {
-      throw new Error('entries must be a non-empty array of PathEntry values');
-    }
-    const paths = [];
-    for (const entry of entries) {
-      const otherLineage = lineageOf(/** @type {object} */ (entry));
-      if (otherLineage === undefined) {
-        throw new Error(
-          'entry is not a PathEntry minted for this Git worktree',
-        );
-      }
-      if (otherLineage !== mountLineage) {
-        throw new Error(
-          'entry was minted by a different mount lineage and cannot be used here',
-        );
-      }
-      // eslint-disable-next-line no-await-in-loop
-      const segments = await E(entry).segments();
-      paths.push(segments.join('/'));
-    }
-    return paths;
-  };
-
-  const assertWritable = methodName => {
-    if (readOnly) {
-      throw new Error(
-        `Git.${methodName} is not permitted on a read-only Git capability`,
-      );
-    }
-  };
-
-  const assertHistoryRewrite = methodName => {
-    if (!allowHistoryRewrite) {
-      throw new Error(
-        `Git.${methodName} is not permitted on a Git capability without history-rewrite authority`,
-      );
-    }
-  };
-
-  /**
-   * @param {unknown} ref
-   * @returns {string}
-   */
-  const refName = ref =>
-    typeof ref === 'string' ? ref : /** @type {{ name: string }} */ (ref).name;
-
-  /** @type {ReadOnlyEndoGit | ReadWriteEndoGit | HistoryRewriteEndoGit} */
-  let selfExo;
-
-  /** @type {GitImplementation} */
-  const gitMethods = {
-    async worktree() {
-      return worktreeAuthority();
-    },
-
-    async status() {
-      const raw = await backend.status();
-      // Wrap each raw record into a GitStatusEntry.  The backend
-      // produced repo-relative path strings; here we mint the
-      // authority-bearing PathEntry through the bound mount so
-      // a caller can hold a path-bearing reference that's confined
-      // to this worktree.  The `entry` descriptor is inert (it carries
-      // no I/O authority of its own), so it is always minted from the
-      // writable mount.  The `node` carries the actual read/write
-      // authority, so it is resolved through `worktreeAuthority()`: a
-      // read-only Git resolves nodes through the read-only worktree
-      // view, ensuring a status row never hands a caller a writable
-      // node out of an attenuated cap.
-      const worktree = await worktreeAuthority();
-      const wrapped = await Promise.all(
-        raw.map(async r => {
-          const segments = r.path === '' ? [] : r.path.split('/');
-          const entry = await E(mount).entry(segments);
-          let node;
-          try {
-            // Resolve the node by repo-relative segments rather than by
-            // the `entry` descriptor: the read-only worktree view exposes
-            // the structural `ReadableTree` surface whose `lookup` accepts
-            // only string / string[] paths (not a PathEntry).
-            // Segments are equivalent and work for both the writable mount
-            // and the read-only view.
-            node = /** @type {GitStatusNode} */ (
-              await E(worktree).lookup(segments)
-            );
-          } catch (lookupError) {
-            node = undefined;
-            // A deleted path (in either the index or the worktree)
-            // has no live node; a lookup failure is expected and
-            // load-bearing for the GitStatusEntry shape (no `node`
-            // field).  For every other status, the lookup should
-            // have succeeded; surface the swallowed error on stderr
-            // so a silent regression does not hide behind the
-            // structured row.
-            if (r.index !== 'deleted' && r.worktree !== 'deleted') {
-              const detail =
-                /** @type {Error} */ (lookupError).message ?? lookupError;
-              console.error(
-                `Git.status: lookup failed for ${q(r.path)} ` +
-                  `(index=${q(r.index)}, worktree=${q(r.worktree)}): ${detail}`,
-              );
-            }
-          }
-          return harden({
-            entry,
-            path: r.path,
-            index: r.index,
-            worktree: r.worktree,
-            ...(node !== undefined ? { node } : {}),
-            ...(r.renamedFrom !== undefined
-              ? { renamedFrom: r.renamedFrom }
-              : {}),
-          });
-        }),
-      );
-      return harden(wrapped);
-    },
-
-    async diff(options = {}) {
-      // Translate caller-supplied options to the backend shape:
-      // - `base` and `head` accept GitRef-or-string; collapse to a
-      //   string name the backend forwards to git unchanged.
-      // - `entries` (PathEntry[]) get resolved to repo-relative
-      //   paths with the same lineage check `add` uses.  `paths`
-      //   (string[]) passes through (callers can use either).
-      const opts =
-        /** @type {{ cached?: boolean, base?: unknown, head?: unknown, entries?: readonly object[], paths?: string[] }} */ (
-          options
-        );
-      const resolved =
-        /** @type {{ cached?: boolean, base?: string, head?: string, paths?: string[] }} */ ({});
-      if (opts.cached !== undefined) resolved.cached = opts.cached;
-      if (opts.base !== undefined) {
-        resolved.base =
-          typeof opts.base === 'string'
-            ? opts.base
-            : /** @type {{ name: string }} */ (opts.base).name;
-      }
-      if (opts.head !== undefined) {
-        resolved.head =
-          typeof opts.head === 'string'
-            ? opts.head
-            : /** @type {{ name: string }} */ (opts.head).name;
-      }
-      if (Array.isArray(opts.entries) && opts.entries.length > 0) {
-        resolved.paths = await entriesToRepoPaths(opts.entries);
-      } else if (Array.isArray(opts.paths) && opts.paths.length > 0) {
-        resolved.paths = [...opts.paths];
-      }
-      return backend.diff(resolved);
-    },
-
-    async log(options = {}) {
-      const { ref, ...rest } = /** @type {GitLogOptions} */ (options);
-      const resolved = /** @type {GitBackendLogOptions} */ ({ ...rest });
-      if (ref !== undefined) resolved.ref = refName(ref);
-      return backend.log(resolved);
-    },
-
-    async show(ref) {
-      return backend.show(refName(ref));
-    },
-
-    async revParse(ref) {
-      return backend.revParse(refName(ref));
-    },
-
-    async add(entries) {
-      assertWritable('add');
-      const paths = await entriesToRepoPaths(entries);
-      return backend.add(paths);
-    },
-
-    async restore(entries, options = {}) {
-      assertWritable('restore');
-      const paths = await entriesToRepoPaths(entries);
-      return backend.restore(paths, options);
-    },
-
-    async commit(message, options = {}) {
-      assertWritable('commit');
-      if (options.amend) {
-        assertHistoryRewrite('commit');
-      }
-      return backend.commit(message, options);
-    },
-
-    async reword(ref, message) {
-      assertWritable('reword');
-      assertHistoryRewrite('reword');
-      return backend.reword(refName(ref), message);
-    },
-
-    async cherryPick(ref, options = {}) {
-      assertWritable('cherryPick');
-      assertHistoryRewrite('cherryPick');
-      return backend.cherryPick(refName(ref), options);
-    },
-
-    async currentBranch() {
-      return backend.currentBranch();
-    },
-
-    async branches() {
-      return backend.branches();
-    },
-
-    async createBranch(name, options = {}) {
-      assertWritable('createBranch');
-      return backend.createBranch(name, options);
-    },
-
-    async deleteBranch(name, options = {}) {
-      assertWritable('deleteBranch');
-      return backend.deleteBranch(name, options);
-    },
-
-    async renameBranch(from, to) {
-      assertWritable('renameBranch');
-      return backend.renameBranch(from, to);
-    },
-
-    async switchBranch(name) {
-      assertWritable('switchBranch');
-      return backend.switchBranch(name);
-    },
-
-    async detach(ref) {
-      assertWritable('detach');
-      return backend.detach(refName(ref));
-    },
-
-    async switch(ref) {
-      assertWritable('switch');
-      return backend.switch(refName(ref));
-    },
-
-    async merge(ref, options = {}) {
-      assertWritable('merge');
-      return backend.merge(refName(ref), options);
-    },
-
-    async rebase(input) {
-      assertWritable('rebase');
-      assertHistoryRewrite('rebase');
-      return backend.rebase(input);
-    },
-
-    async stashPush(options = {}) {
-      assertWritable('stashPush');
-      const opts =
-        /** @type {{ message?: string, entries?: readonly object[], paths?: string[], includeUntracked?: boolean }} */ (
-          options
-        );
-      const resolved =
-        /** @type {{ message?: string, paths?: string[], includeUntracked?: boolean }} */ ({});
-      if (opts.message !== undefined) resolved.message = opts.message;
-      if (opts.includeUntracked !== undefined) {
-        resolved.includeUntracked = opts.includeUntracked;
-      }
-      if (Array.isArray(opts.entries) && opts.entries.length > 0) {
-        resolved.paths = await entriesToRepoPaths(opts.entries);
-      } else if (Array.isArray(opts.paths) && opts.paths.length > 0) {
-        resolved.paths = [...opts.paths];
-      }
-      return backend.stashPush(resolved);
-    },
-
-    async stashList() {
-      return backend.stashList();
-    },
-
-    async stashShow(index) {
-      return backend.stashShow(index);
-    },
-
-    async stashApply(index) {
-      assertWritable('stashApply');
-      return backend.stashApply(index);
-    },
-
-    async stashPop(index) {
-      assertWritable('stashPop');
-      return backend.stashPop(index);
-    },
-
-    async stashDrop(index) {
-      assertWritable('stashDrop');
-      return backend.stashDrop(index);
-    },
-
-    async tree(ref) {
-      return backend.tree(refName(ref));
-    },
-
-    async filesystemAt(ref) {
-      const { treeOid } = await backend.resolveTree(refName(ref));
-      const cached = filesystemByTreeOid.get(treeOid);
-      if (cached !== undefined) {
-        return cached;
-      }
-      const fsBackend = makeGitFsBackend({ backend, treeOid });
-      // The cache is keyed only on `treeOid`; two refs that resolve
-      // to the same tree (e.g. cherry-picks, `--allow-empty` commits,
-      // identical branches) intentionally share one Filesystem cap so
-      // brand identity is stable for `compose`.  The description must
-      // therefore reference only the tree — embedding a `commitOid`
-      // would make `statfs().type` lie about which commit the cached
-      // Filesystem was first minted for.
-      const description = `git-tree (${treeOid})`;
-      const fs = readOnlyFs(wrapBackend(fsBackend, { description }));
-      filesystemByTreeOid.set(treeOid, fs);
-      return fs;
-    },
-
-    readOnly() {
-      if (readOnly) {
-        return selfExo;
-      }
-      return makeGit(
-        { mount, backend, lineageOf },
-        { readOnly: true, allowHistoryRewrite: false },
-      );
-    },
-  };
-
-  // Cast: literal patterns infer broad `Key` types, while `GitRebaseInput`
-  // preserves the discriminated union for callers.
-  // The runtime guard remains in place and rejects invalid mode-specific
-  // fields.
-  // eslint-disable-next-line jsdoc/reject-any-type
-  const exo = makeExo('Git', /** @type {any} */ (GitInterface), gitMethods);
-
-  const typed =
-    /** @type {ReadOnlyEndoGit | ReadWriteEndoGit | HistoryRewriteEndoGit} */ (
-      exo
-    );
-  gitReadOnly.set(typed, readOnly);
-  gitHistoryRewrite.set(typed, allowHistoryRewrite);
-  gitBackends.set(typed, backend);
-  selfExo = typed;
-  return typed;
+  const { reader, writer, rewriter } = makeGitKit(powers);
+  if (readOnly) {
+    return reader;
+  }
+  if (allowHistoryRewrite) {
+    return rewriter;
+  }
+  return writer;
 };
 harden(makeGit);
 

@@ -1,9 +1,11 @@
 export type * from './src/types.js';
+export type { GitOperations } from './src/git.js';
 export {
   makeGit,
+  makeGitKit,
+  makeGitOperations,
   isGitHistoryRewrite,
   isGitReadOnly,
-  getGitBackend,
   makeNotYetImplementedBackend,
   makeGitFsBackend,
   makeGitRemoteEndpoint,
@@ -17,6 +19,9 @@ export {
   revokeGitCredential,
   getGitCredentialController,
   GitInterface,
+  GitReaderInterface,
+  GitWriterInterface,
+  GitRewriterInterface,
   GitTreeInterface,
   GitRemoteInterface,
   GitRemoteControllerInterface,
