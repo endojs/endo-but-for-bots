@@ -121,7 +121,7 @@ const makeReadOnlyDirectory = dir => {
       const qidP = E(childP).getQid();
       const [child, qid] = await Promise.all([childP, qidP]);
       if (qid && qid.type === 'directory') {
-        return makeReadOnlyDirectory(child);
+        return makeReadOnlyDirectory(/** @type {Directory} */ (child));
       }
       return makeReadOnlyFile(child);
     },
@@ -130,7 +130,7 @@ const makeReadOnlyDirectory = dir => {
       const qidP = E(childP).getQid();
       const [child, qid] = await Promise.all([childP, qidP]);
       if (qid && qid.type === 'directory') {
-        return makeReadOnlyDirectory(child);
+        return makeReadOnlyDirectory(/** @type {Directory} */ (child));
       }
       return makeReadOnlyFile(child);
     },
