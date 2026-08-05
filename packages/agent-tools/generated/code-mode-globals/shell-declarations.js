@@ -24,10 +24,10 @@
 export const shellDeclarations = harden({
   shell: {
     aux: `type EndoShell = {
-  inspect: () => Promise<ShellInspectResult>;
   exec: (command: string, args: readonly string[], options?: {
     timeoutMs?: number;
 }) => Promise<ShellResult>;
+  inspect: () => Promise<ShellInspectResult>;
 };
 type ShellInspectResult = {
     allowedCommands: readonly string[];

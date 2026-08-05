@@ -7,9 +7,11 @@
  * Regenerate with: yarn workspace @endo/agent-tools gen:code-mode-types
  *
  * Source of truth:
- *   - workspace: the platform/fs/extended interface guards
- *     (`FilesystemInterface` and the remotables it reaches), the richest
- *     available source since the FS `.d.ts` is a stub.
+ *   - workspace: packages/platform/src/fs/extended/types.ts (the
+ *     `Filesystem` type alias and the capability types it reaches), printed
+ *     by the TypeScript compiler API, with `PassableReader`,
+ *     `PassableBytesReader`, `PassableBytesWriter`, and the stream nodes
+ *     they reach followed into packages/exo-stream/types.d.ts.
  *
  * The generic extraction and rendering live in
  * scripts/code-mode-type-extract.js; this exo's source configuration lives in
@@ -25,106 +27,195 @@
 export const fsDeclarations = harden({
   workspace: {
     aux: `type Filesystem = {
-  brands: () => Promise<unknown>;
-  help: (arg0?: string) => string;
-  named: (arg0: string) => ERef<Directory>;
+  brands: () => Promise<ReadonlySet<bigint> | readonly bigint[]>;
+  help: (method?: string) => string;
+  named: (name: string) => ERef<Directory>;
   root: () => ERef<Directory>;
-  statfs: () => Promise<unknown>;
+  statfs: () => Promise<FilesystemStats>;
 };
-type ERef<T> = T | Promise<T>;
+type BlobInfo = {
+    algorithm: string;
+    hash: string;
+    size: bigint;
+};
 type BlobRef = {
-  fetch: (arg0: bigint, arg1: bigint) => ERef<PassableBytesReader>;
-  getInfo: () => unknown;
-  help: (arg0?: string) => string;
-  json: () => Promise<unknown>;
-  text: () => Promise<unknown>;
+    getInfo: () => BlobInfo;
+    fetch: (offset: bigint, length: bigint) => ERef<PassableBytesReader>;
+    text: () => Promise<string>;
+    json: () => Promise<unknown>;
+    help: (method?: string) => string;
 };
 type Cursor = {
-  close: () => Promise<unknown>;
-  help: (arg0?: string) => string;
-  read: (arg0?: bigint) => Promise<unknown>;
-  rewind: () => Promise<unknown>;
-  skip: (arg0: bigint) => Promise<unknown>;
-  stream: () => ERef<PassableReader>;
-  toArray: () => Promise<unknown>;
+    read: (limit?: bigint) => Promise<DirectoryPage>;
+    stream: () => ERef<PassableReader<DirectoryEntry>>;
+    toArray: () => Promise<DirectoryEntry[]>;
+    skip: (n: bigint) => Promise<void>;
+    rewind: () => Promise<void>;
+    close: () => Promise<void>;
+    help: (method?: string) => string;
 };
 type Directory = {
-  copy: (arg0: string | Array<string>, arg1: string | Array<string>) => Promise<unknown>;
-  create: (arg0: string, arg1?: unknown) => ERef<OpenFile>;
-  fsync: () => Promise<unknown>;
-  getAttrs: () => Promise<unknown>;
-  getQid: () => unknown;
-  getStat: () => Promise<unknown>;
-  help: (arg0?: string) => string;
-  list: () => ERef<Cursor>;
-  lookup: (arg0: string | Array<string>) => ERef<Directory | File>;
-  lookupStep: (arg0: string) => ERef<Directory | File>;
-  makeDirectory: (arg0: string, arg1?: unknown) => ERef<Directory>;
-  materialise: (arg0: Array<string>, arg1?: unknown) => ERef<Directory>;
-  mkdir: (arg0: string, arg1?: unknown) => ERef<Directory>;
-  move: (arg0: string | Array<string>, arg1: string | Array<string>) => Promise<unknown>;
-  remove: (arg0: string) => Promise<unknown>;
-  rename: (arg0: string, arg1: Directory, arg2: string) => undefined;
-  setAttrs: (arg0: unknown) => Promise<unknown>;
-  setStat: (arg0: unknown) => Promise<unknown>;
-  subView: (arg0: string | Array<string>) => ERef<Directory>;
-  unlink: (arg0: string) => Promise<unknown>;
-  watch: () => ERef<NodeWatcher>;
-  watchFrom: () => ERef<unknown>;
-  write: (arg0: string, arg1: string) => Promise<unknown>;
-  xattrs: () => ERef<Xattrs>;
+    getQid: () => Qid<'directory'>;
+    getStat: () => Promise<NodeStat>;
+    setStat: (patch: NodeStat) => Promise<void>;
+    getAttrs: () => Promise<NodeAttrs>;
+    setAttrs: (patch: NodeStat) => Promise<void>;
+    watch: () => ERef<NodeWatcher>;
+    xattrs: () => ERef<Xattrs>;
+    lookup: (nameOrPath: string | string[]) => ERef<Directory | File>;
+    lookupStep: (name: string) => ERef<Directory | File>;
+    subView: (nameOrPath: string | string[]) => ERef<Directory>;
+    list: () => ERef<Cursor>;
+    write: (name: string, value: string) => Promise<void>;
+    create: (name: string, opts?: OpenFileOptions) => ERef<OpenFile>;
+    makeDirectory: (name: string) => ERef<Directory>;
+    mkdir: (name: string) => ERef<Directory>;
+    remove: (name: string) => Promise<void>;
+    unlink: (name: string) => Promise<void>;
+    move: (fromPath: string | string[], toPath: string | string[]) => Promise<void>;
+    copy: (fromPath: string | string[], toPath: string | string[]) => Promise<void>;
+    rename: (oldName: string, newParent: ERef<Directory>, newName: string) => Promise<void>;
+    fsync: () => Promise<void>;
+    materialise: (path: string[]) => ERef<Directory>;
+    watchFrom: () => ERef<WatchFromResult>;
+    help: (method?: string) => string;
 };
+type DirectoryEntry = {
+    name: string;
+    kind: 'file';
+    qid: Qid<'file'>;
+} | {
+    name: string;
+    kind: 'directory';
+    qid: Qid<'directory'>;
+};
+type DirectoryPage = {
+    entries: DirectoryEntry[];
+    atEnd: boolean;
+};
+type ERef<T> = T | Promise<T>;
 type File = {
-  getAttrs: () => Promise<unknown>;
-  getQid: () => unknown;
-  getStat: () => Promise<unknown>;
-  help: (arg0?: string) => string;
-  open: (arg0?: unknown) => ERef<OpenFile>;
-  read: (arg0?: unknown) => ERef<PassableBytesReader>;
-  setAttrs: (arg0: unknown) => Promise<unknown>;
-  setStat: (arg0: unknown) => Promise<unknown>;
-  snapshot: () => ERef<BlobRef>;
-  watch: () => ERef<NodeWatcher>;
-  write: (arg0?: unknown) => ERef<PassableBytesWriter>;
-  xattrs: () => ERef<Xattrs>;
+    getQid: () => Qid<'file'>;
+    getStat: () => Promise<NodeStat>;
+    setStat: (patch: NodeStat) => Promise<void>;
+    getAttrs: () => Promise<NodeAttrs>;
+    setAttrs: (patch: NodeStat) => Promise<void>;
+    watch: () => ERef<NodeWatcher>;
+    xattrs: () => ERef<Xattrs>;
+    open: (opts?: OpenFileOptions) => ERef<OpenFile>;
+    read: (opts?: FileReadOptions) => ERef<PassableBytesReader>;
+    write: (opts?: FileWriteOptions) => ERef<PassableBytesWriter>;
+    snapshot: () => Promise<BlobRef>;
+    help: (method?: string) => string;
+};
+type FileReadOptions = {
+    offset?: bigint;
+    length?: bigint;
+};
+type FileWriteOptions = {
+    offset?: bigint;
+};
+type FilesystemStats = {
+    blockSize?: bigint;
+    totalBlocks?: bigint;
+    freeBlocks?: bigint;
+    totalBytes?: bigint;
+    freeBytes?: bigint;
+    files?: bigint;
+    directories?: bigint;
+    type?: string;
 };
 type Lock = {
-  help: (arg0?: string) => string;
-  release: () => Promise<unknown>;
+    release: () => Promise<void>;
+    help: (method?: string) => string;
+};
+type LockOpts = {
+    type: LockType;
+    start?: bigint;
+    length?: bigint;
+};
+type LockQuery = {
+    start?: bigint;
+    length?: bigint;
+};
+type LockState = {
+    type: LockType;
+    start: bigint;
+    length: bigint;
+};
+type LockType = 'shared' | 'exclusive';
+type NodeAttrs = NodeStat & {
+    ctime?: bigint;
+    btime?: bigint | null;
+};
+type NodeKind = 'file' | 'directory';
+type NodeStat = {
+    size?: bigint;
+    mtime?: bigint;
+    atime?: bigint;
 };
 type NodeWatcher = {
-  cancel: () => Promise<unknown>;
-  events: () => ERef<PassableReader>;
+    events: () => ERef<PassableReader<WatchEvent>>;
+    cancel: () => Promise<void>;
 };
 type OpenFile = {
-  close: () => Promise<unknown>;
-  fsync: (arg0?: unknown) => Promise<unknown>;
-  getLock: (arg0: unknown) => Promise<unknown>;
-  help: (arg0?: string) => string;
-  lock: (arg0: unknown) => ERef<Lock>;
-  read: (arg0?: bigint, arg1?: bigint) => ERef<PassableBytesReader>;
-  truncate: (arg0: bigint) => Promise<unknown>;
-  write: (arg0?: bigint) => ERef<PassableBytesWriter>;
+    read: (offset?: bigint, length?: bigint) => ERef<PassableBytesReader>;
+    write: (offset?: bigint) => ERef<PassableBytesWriter>;
+    truncate: (size: bigint) => Promise<void>;
+    fsync: () => Promise<void>;
+    lock: (opts: LockOpts) => ERef<Lock>;
+    getLock: (opts: LockQuery) => Promise<LockState | null>;
+    close: () => Promise<void>;
+    help: (method?: string) => string;
 };
-type PassableBytesReader = {
-  readReturnPattern: () => undefined | unknown;
-  streamBase64: (arg0: unknown) => Promise<unknown>;
+type OpenFileOptions = {
+    read?: boolean;
+    write?: boolean;
+    create?: boolean;
+    truncate?: boolean;
+    append?: boolean;
 };
-type PassableBytesWriter = {
-  streamBase64: (arg0: unknown) => Promise<unknown>;
-  writeReturnPattern: () => undefined | unknown;
+type PassableBytesReader<TReadReturn = undefined> = {
+    streamBase64(synPromise: ERef<StreamNode<unknown, TReadReturn>>): Promise<StreamNode<string, TReadReturn>>;
+    readReturnPattern(): unknown | undefined;
 };
-type PassableReader = {
-  readPattern: () => undefined | unknown;
-  readReturnPattern: () => undefined | unknown;
-  stream: (arg0: unknown) => Promise<unknown>;
+type PassableBytesWriter<TWriteReturn = undefined> = {
+    streamBase64(synPromise: ERef<StreamNode<string, TWriteReturn>>): Promise<StreamNode<undefined, TWriteReturn>>;
+    writeReturnPattern(): unknown | undefined;
+};
+type PassableReader<TRead = unknown, TReadReturn = unknown> = {
+    stream(synPromise: ERef<StreamNode<undefined, TReadReturn>>): Promise<StreamNode<TRead, TReadReturn>>;
+    readPattern(): unknown | undefined;
+    readReturnPattern(): unknown | undefined;
+};
+type Qid<K = NodeKind> = {
+    type: K;
+    pathId: bigint;
+    version: bigint;
+};
+type StreamNode<Y = undefined, R = undefined> = StreamYieldNode<Y, R> | StreamReturnNode<R>;
+type StreamReturnNode<R = undefined> = {
+    value: R;
+    promise: null;
+};
+type StreamYieldNode<Y = unknown, R = undefined> = {
+    value: Y;
+    promise: Promise<StreamNode<Y, R>>;
+};
+type WatchEvent = {
+    kind: 'changed' | 'created' | 'removed' | 'child-added' | 'child-removed';
+    name?: string;
+};
+type WatchFromResult = {
+    cursor: Cursor;
+    watcher: NodeWatcher;
 };
 type Xattrs = {
-  get: (arg0: string) => ERef<PassableBytesReader>;
-  help: (arg0?: string) => string;
-  list: () => ERef<PassableReader>;
-  remove: (arg0: string) => Promise<unknown>;
-  set: (arg0: string, arg1?: unknown) => ERef<PassableBytesWriter>;
+    get: (name: string) => ERef<PassableBytesReader>;
+    set: (name: string) => ERef<PassableBytesWriter>;
+    list: () => ERef<PassableReader<string>>;
+    remove: (name: string) => Promise<void>;
+    help: (method?: string) => string;
 };`,
     body: `Filesystem`,
   },

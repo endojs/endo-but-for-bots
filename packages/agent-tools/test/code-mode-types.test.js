@@ -8,7 +8,7 @@ import {
   HttpResponseInterface,
 } from '@endo/exo-http-client';
 import { ShellInterface } from '@endo/exo-shell';
-import { FilesystemInterface } from '@endo/platform/fs/extended/type-guards.js';
+import * as extendedFsTypeGuards from '@endo/platform/fs/extended/type-guards.js';
 
 /** @import { InterfaceGuard } from '@endo/patterns' */
 
@@ -52,6 +52,28 @@ const guardMethodNames = guard =>
   Object.keys(getInterfaceGuardPayload(guard).methodGuards).sort();
 
 /**
+ * Every `<TypeName>Interface` the extended filesystem publishes, keyed by the
+ * type name the `workspace` declaration is expected to print for it. Derived
+ * from the guard module's own exports rather than a hand-kept list, so a new
+ * guard joins the divergence gate the moment it is exported — including the
+ * three stream guards `@endo/platform/fs/extended` re-exports from
+ * `@endo/exo-stream`, whose declarations the extractor follows across the
+ * package boundary.
+ *
+ * @type {Record<string, InterfaceGuard>}
+ */
+const WORKSPACE_GUARDS = harden(
+  Object.fromEntries(
+    Object.entries(extendedFsTypeGuards)
+      .filter(([name]) => name.endsWith('Interface'))
+      .map(([name, guard]) => [
+        name.slice(0, -'Interface'.length),
+        /** @type {InterfaceGuard} */ (guard),
+      ]),
+  ),
+);
+
+/**
  * @param {import('ava').ExecutionContext} t
  * @param {import('../scripts/code-mode-type-extract.js').GlobalTypeIR} ir
  * @param {import('@endo/patterns').InterfaceGuard} guard
@@ -92,6 +114,14 @@ test('generated fs declarations are up to date with their source', t => {
       `${key} declaration is stale; run: yarn workspace @endo/agent-tools gen:code-mode-types`,
     );
   }
+});
+
+test('TypeScript-extracted declaration members stay alphabetized', t => {
+  const { members } = buildWorkspaceIR();
+  t.deepEqual(
+    members.map(member => member.name),
+    [...members].map(member => member.name).sort(),
+  );
 });
 
 test('generated Shell declarations are up to date with their source', t => {
@@ -281,21 +311,35 @@ test('base and history git declarations split history rewrite authority', t => {
   }
 });
 
-// The FS `.d.ts` is a stub, so `workspace` is derived from the interface
-// guards. `sloppy: true` on FilesystemInterface means the live surface can be a
-// superset; the declaration must stay a subset of the guard's declared methods.
-test('workspace declarations derive from the Filesystem guard', t => {
-  const workspace = buildWorkspaceIR();
-  const members = workspace.members.map(member => member.name);
-  const guardMethods = Object.keys(
-    getInterfaceGuardPayload(
-      /** @type {InterfaceGuard} */ (FilesystemInterface),
-    ).methodGuards,
+// Divergence gate (fs): `workspace` is printed from the checked TypeScript
+// source, and the `M.interface` guards stay the runtime enforcement layer.
+// Neither side may grow, lose, or rename a method without the other, so the
+// declaration's method names must equal the guard's for every guarded type.
+test('workspace declarations match the filesystem runtime guards', t => {
+  const { workspace } = fsDeclarations;
+  t.deepEqual(
+    Object.keys(WORKSPACE_GUARDS).sort(),
+    [
+      'BlobRef',
+      'Cursor',
+      'Directory',
+      'File',
+      'Filesystem',
+      'Lock',
+      'NodeWatcher',
+      'OpenFile',
+      'PassableBytesReader',
+      'PassableBytesWriter',
+      'PassableReader',
+      'Xattrs',
+    ],
+    'a new extended-filesystem guard must be reachable from the workspace declaration',
   );
-  for (const name of members) {
-    t.true(
-      guardMethods.includes(name),
-      `${name} is not a Filesystem guard method`,
+  for (const [typeName, guard] of Object.entries(WORKSPACE_GUARDS)) {
+    t.deepEqual(
+      listDeclaredTypeMembers(workspace.aux, typeName).sort(),
+      guardMethodNames(guard),
+      `${typeName} declaration must match its runtime guard method names`,
     );
   }
 });
@@ -380,4 +424,57 @@ test('workspace declaration reaches the Directory surface transitively', t => {
   // Directory verbs only reachable transitively from `root()`.
   t.true(workspace.aux.includes('lookup:'));
   t.true(workspace.aux.includes('write:'));
+});
+
+// The guard walker printed `Promise<unknown>` wherever a guard said
+// `M.promise()` — 32 returns across the workspace section. Printing from the
+// authored TypeScript instead names the concrete result records, so the only
+// `unknown` results left are the ones the authored type really says.
+test('workspace declaration names its result records', t => {
+  const { aux } = fsDeclarations.workspace;
+  for (const shape of [
+    'statfs: () => Promise<FilesystemStats>;',
+    'getStat: () => Promise<NodeStat>;',
+    'getAttrs: () => Promise<NodeAttrs>;',
+    "getQid: () => Qid<'directory'>;",
+    'read: (limit?: bigint) => Promise<DirectoryPage>;',
+    'toArray: () => Promise<DirectoryEntry[]>;',
+    'watchFrom: () => ERef<WatchFromResult>;',
+    'snapshot: () => Promise<BlobRef>;',
+    'getLock: (opts: LockQuery) => Promise<LockState | null>;',
+  ]) {
+    t.true(aux.includes(shape), `missing named result shape: ${shape}`);
+  }
+  // `BlobRef.json()` is the one member whose authored return really is
+  // unknown: it parses arbitrary JSON.
+  const unknownResults = aux
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.includes('=> Promise<unknown>'));
+  t.deepEqual(unknownResults, ['json: () => Promise<unknown>;']);
+  t.false(aux.includes(': any'));
+  t.true(aux.includes('btime?: bigint | null;'));
+  t.false(aux.includes('wait?: boolean;'));
+});
+
+// The reader and writer types are `@endo/exo-stream`'s, referenced from the
+// filesystem's authored source rather than re-authored beside it. The
+// extractor follows the import and inlines the real definitions.
+test('workspace declaration inlines the followed exo-stream stream shapes', t => {
+  const { aux } = fsDeclarations.workspace;
+  t.true(aux.includes('stream: () => ERef<PassableReader<DirectoryEntry>>;'));
+  t.true(aux.includes('events: () => ERef<PassableReader<WatchEvent>>;'));
+  t.true(
+    aux.includes(
+      'read: (opts?: FileReadOptions) => ERef<PassableBytesReader>;',
+    ),
+  );
+  for (const shape of [
+    'type StreamNode<',
+    'type StreamYieldNode<',
+    'type StreamReturnNode<',
+  ]) {
+    t.true(aux.includes(shape), `missing followed exo-stream type: ${shape}`);
+  }
+  t.false(aux.includes("import('@endo/"));
 });

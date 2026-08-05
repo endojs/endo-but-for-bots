@@ -26,35 +26,35 @@
 export const gitDeclarations = harden({
   git: {
     aux: `type WritableEndoGit = {
-  worktree: () => Promise<GitWritableGitWorktree>;
-  status: () => Promise<GitStatusEntry[]>;
-  diff: (options?: GitDiffOptions) => Promise<string>;
-  log: (options?: GitLogOptions) => Promise<GitCommit[]>;
-  show: (ref: GitRef | string) => Promise<string>;
-  revParse: (ref: GitRef | string) => Promise<GitRef>;
-  currentBranch: () => Promise<GitRef | undefined>;
-  branches: () => Promise<GitRef[]>;
-  stashList: () => Promise<string[]>;
-  stashShow: (index?: number) => Promise<string>;
-  tree: (ref: GitRef | string) => Promise<GitReadableTree>;
-  filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
-  readOnly: () => GitReadOnlyEndoGit;
-  scope: (name: 'reader' | 'writer') => GitReadOnlyEndoGit | WritableEndoGit;
   add: (entries: GitPathEntry[]) => Promise<void>;
-  restore: (entries: GitPathEntry[], options?: GitRestoreOptions) => Promise<void>;
+  branches: () => Promise<GitRef[]>;
   checkoutConflict: (entries: GitPathEntry[], side: GitConflictSide) => Promise<void>;
   commit: (message: string) => Promise<GitCommit>;
   createBranch: (name: string, options?: GitCreateBranchOptions) => Promise<GitRef>;
+  currentBranch: () => Promise<GitRef | undefined>;
   deleteBranch: (name: string, options?: GitDeleteBranchOptions) => Promise<void>;
-  renameBranch: (from: string, to: string) => Promise<void>;
-  switchBranch: (name: string) => Promise<void>;
   detach: (ref: GitRef | string) => Promise<void>;
-  switch: (ref: GitRef | string) => Promise<void>;
+  diff: (options?: GitDiffOptions) => Promise<string>;
+  filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
+  log: (options?: GitLogOptions) => Promise<GitCommit[]>;
   merge: (ref: GitRef | string, options?: GitMergeOptions) => Promise<string>;
-  stashPush: (options?: GitStashPushOptions) => Promise<string>;
+  readOnly: () => GitReadOnlyEndoGit;
+  renameBranch: (from: string, to: string) => Promise<void>;
+  restore: (entries: GitPathEntry[], options?: GitRestoreOptions) => Promise<void>;
+  revParse: (ref: GitRef | string) => Promise<GitRef>;
+  scope: (name: 'reader' | 'writer') => GitReadOnlyEndoGit | WritableEndoGit;
+  show: (ref: GitRef | string) => Promise<string>;
   stashApply: (index?: number) => Promise<void>;
-  stashPop: (index?: number) => Promise<void>;
   stashDrop: (index?: number) => Promise<void>;
+  stashList: () => Promise<string[]>;
+  stashPop: (index?: number) => Promise<void>;
+  stashPush: (options?: GitStashPushOptions) => Promise<string>;
+  stashShow: (index?: number) => Promise<string>;
+  status: () => Promise<GitStatusEntry[]>;
+  switch: (ref: GitRef | string) => Promise<void>;
+  switchBranch: (name: string) => Promise<void>;
+  tree: (ref: GitRef | string) => Promise<GitReadableTree>;
+  worktree: () => Promise<GitWritableGitWorktree>;
 };
 type GitBlobInfo = {
     algorithm: string;
@@ -273,7 +273,6 @@ type GitLockOpts = {
     type: GitLockType;
     start?: bigint;
     length?: bigint;
-    wait?: boolean;
 };
 type GitLockQuery = {
     start?: bigint;
@@ -287,7 +286,7 @@ type GitLockState = {
 type GitLockType = 'shared' | 'exclusive';
 type GitNodeAttrs = GitNodeStat & {
     ctime?: bigint;
-    btime?: bigint;
+    btime?: bigint | null;
 };
 type GitNodeKind = 'file' | 'directory';
 type GitNodeStat = {
@@ -403,10 +402,10 @@ type GitXattrs = {
   },
   gitHistory: {
     aux: `type EndoGitHistory = {
-  commit: (message: string, options?: GitCommitOptions) => Promise<GitCommit>;
-  reword: (ref: GitRef | string, message: string) => Promise<GitCommit>;
   cherryPick: (ref: GitRef | string, options?: GitCherryPickOptions) => Promise<string>;
+  commit: (message: string, options?: GitCommitOptions) => Promise<GitCommit>;
   rebase: (input: GitRebaseInput) => Promise<string>;
+  reword: (ref: GitRef | string, message: string) => Promise<GitCommit>;
 };
 type GitCherryPickOptions = {
     noCommit?: boolean;
@@ -438,20 +437,20 @@ type GitRef = {
   },
   gitReadOnly: {
     aux: `type ReadOnlyEndoGit = {
-  worktree: () => Promise<GitReadOnlyGitWorktree>;
-  status: () => Promise<GitStatusEntry[]>;
-  diff: (options?: GitDiffOptions) => Promise<string>;
-  log: (options?: GitLogOptions) => Promise<GitCommit[]>;
-  show: (ref: GitRef | string) => Promise<string>;
-  revParse: (ref: GitRef | string) => Promise<GitRef>;
-  currentBranch: () => Promise<GitRef | undefined>;
   branches: () => Promise<GitRef[]>;
+  currentBranch: () => Promise<GitRef | undefined>;
+  diff: (options?: GitDiffOptions) => Promise<string>;
+  filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
+  log: (options?: GitLogOptions) => Promise<GitCommit[]>;
+  readOnly: () => ReadOnlyEndoGit;
+  revParse: (ref: GitRef | string) => Promise<GitRef>;
+  scope: (name: 'reader') => ReadOnlyEndoGit;
+  show: (ref: GitRef | string) => Promise<string>;
   stashList: () => Promise<string[]>;
   stashShow: (index?: number) => Promise<string>;
+  status: () => Promise<GitStatusEntry[]>;
   tree: (ref: GitRef | string) => Promise<GitReadableTree>;
-  filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
-  readOnly: () => ReadOnlyEndoGit;
-  scope: (name: 'reader') => ReadOnlyEndoGit;
+  worktree: () => Promise<GitReadOnlyGitWorktree>;
 };
 type GitBlobInfo = {
     algorithm: string;
@@ -646,7 +645,6 @@ type GitLockOpts = {
     type: GitLockType;
     start?: bigint;
     length?: bigint;
-    wait?: boolean;
 };
 type GitLockQuery = {
     start?: bigint;
@@ -660,7 +658,7 @@ type GitLockState = {
 type GitLockType = 'shared' | 'exclusive';
 type GitNodeAttrs = GitNodeStat & {
     ctime?: bigint;
-    btime?: bigint;
+    btime?: bigint | null;
 };
 type GitNodeKind = 'file' | 'directory';
 type GitNodeStat = {
