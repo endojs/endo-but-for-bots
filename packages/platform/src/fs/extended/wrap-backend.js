@@ -60,9 +60,7 @@ import { makeNodeWatcherExo } from './shared/watcher-exo.js';
  *   FileWriteOptions,
  *   Filesystem,
  *   NodeKind,
- *   NodeStat,
  *   OpenFile,
- *   OpenFileOptions,
  *   Qid,
  * } from './types.js'
  */
@@ -643,9 +641,7 @@ export const wrapBackend = (backend, opts = {}) => {
         });
       },
       async setStat(patch) {
-        // The guard admits any Passable; `applyStatPatch` validates
-        // the fields it applies.
-        await applyStatPatch(path, /** @type {NodeStat} */ (patch));
+        await applyStatPatch(path, patch);
       },
       // ---- Legacy: wide-shape attrs + Qid + sidecar xattrs ----
       getQid() {
@@ -662,7 +658,7 @@ export const wrapBackend = (backend, opts = {}) => {
         });
       },
       async setAttrs(patch) {
-        await applyStatPatch(path, /** @type {NodeStat} */ (patch));
+        await applyStatPatch(path, patch);
       },
       xattrs() {
         return xattrsExoFor(path);
@@ -822,9 +818,7 @@ export const wrapBackend = (backend, opts = {}) => {
         return harden({ size: 0n, mtime: st.mtime, atime: st.atime });
       },
       async setStat(patch) {
-        // The guard admits any Passable; `applyDirectoryStatPatch`
-        // validates the real patch shape.
-        await applyDirectoryStatPatch(path, /** @type {NodeStat} */ (patch));
+        await applyDirectoryStatPatch(path, patch);
       },
       // ---- Legacy: wide-shape attrs + Qid + sidecar xattrs ----
       getQid() {
@@ -845,9 +839,7 @@ export const wrapBackend = (backend, opts = {}) => {
         });
       },
       async setAttrs(patch) {
-        // The guard admits any Passable; `applyDirectoryStatPatch`
-        // validates the real patch shape.
-        await applyDirectoryStatPatch(path, /** @type {NodeStat} */ (patch));
+        await applyDirectoryStatPatch(path, patch);
       },
       xattrs() {
         return xattrsExoFor(path);
@@ -949,9 +941,7 @@ export const wrapBackend = (backend, opts = {}) => {
       async create(name, openOpts) {
         assertChildName(name);
         const childPath = [...path, name];
-        // The guard admits any Passable; the flag reads below only
-        // consult the real OpenFileOptions shape.
-        const o = /** @type {OpenFileOptions} */ (openOpts) || {};
+        const o = openOpts || {};
         const mode = computeOpenMode({
           read: o.read !== false,
           write: true,

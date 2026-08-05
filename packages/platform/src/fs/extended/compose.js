@@ -54,6 +54,8 @@ import {
   toSegments,
 } from './shared/helpers.js';
 
+/** @import { Qid } from './types.js' */
+
 /**
  * Opaque tag stamped onto every Filesystem this module hands out.
  * Used by cycle-detection — the union of a composed FS's
@@ -317,6 +319,7 @@ export const emptyFilesystem = () => {
     ctime: 0n,
     btime: null,
   });
+  /** @type {Qid<'directory'>} */
   const rootQid = harden({
     type: 'directory',
     pathId: 0n,
@@ -786,6 +789,7 @@ export const namespace = mounts => {
     }
   }
 
+  /** @type {Qid<'directory'>} */
   const rootQid = harden({
     type: 'directory',
     pathId: 0n,

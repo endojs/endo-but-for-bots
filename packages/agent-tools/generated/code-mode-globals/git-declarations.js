@@ -391,9 +391,12 @@ type GitWatchFromResult = {
     watcher: GitNodeWatcher;
 };
 type GitWritableGitWorktree = GitDirectory & GitPathEntryIssuer;
+type GitXattrSetOptions = {
+    existence?: 'create' | 'replace';
+};
 type GitXattrs = {
     get: (name: string) => GitERef<GitPassableBytesReader>;
-    set: (name: string) => GitERef<GitPassableBytesWriter>;
+    set: (name: string, opts?: GitXattrSetOptions) => GitERef<GitPassableBytesWriter>;
     list: () => GitERef<GitPassableReader<string>>;
     remove: (name: string) => Promise<void>;
     help: (method?: string) => string;
@@ -745,9 +748,12 @@ type GitWatchFromResult = {
     cursor: GitCursor;
     watcher: GitNodeWatcher;
 };
+type GitXattrSetOptions = {
+    existence?: 'create' | 'replace';
+};
 type GitXattrs = {
     get: (name: string) => GitERef<GitPassableBytesReader>;
-    set: (name: string) => GitERef<GitPassableBytesWriter>;
+    set: (name: string, opts?: GitXattrSetOptions) => GitERef<GitPassableBytesWriter>;
     list: () => GitERef<GitPassableReader<string>>;
     remove: (name: string) => Promise<void>;
     help: (method?: string) => string;

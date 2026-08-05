@@ -145,8 +145,10 @@ test('lock with invalid type rejects', async t => {
   const fs = makeInMemoryFilesystem();
   const root = await E(fs).root();
   const f = await openFile(root, 'f');
+  // The interface guard's LockOpts shape rejects the bad `type` at the
+  // exo boundary, before the lock table's own EINVAL check runs.
   await t.throwsAsync(
     () => E(f).lock({ type: 'mandatory', start: 0n, length: 1n }),
-    { message: /EINVAL/ },
+    { message: /In "lock" method.*Must match one of/s },
   );
 });
