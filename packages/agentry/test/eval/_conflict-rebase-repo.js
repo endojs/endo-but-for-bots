@@ -12,6 +12,8 @@ import { E } from '@endo/eventual-send';
 
 import { initRepo, makePowersOver } from '../_eval-fixture.js';
 
+/** @import { CodeModePower } from '@endo/agent-tools/code-mode/types.js' */
+
 export const appBaseText = `\
 Release notes paragraph.
 `;
@@ -54,8 +56,8 @@ harden(integrationNoteText);
  * @param {string} [options.integrationBranch] Default `integration`.
  * @returns {Promise<{
  *   repoRoot: string,
- *   workspace: unknown,
- *   git: unknown,
+ *   workspace: CodeModePower,
+ *   git: CodeModePower,
  *   featureBranch: string,
  *   integrationBranch: string,
  *   integrationOid: string,

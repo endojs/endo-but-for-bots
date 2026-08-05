@@ -1,7 +1,7 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { CodeModeGlobal, GlobalDeclaration } from './evaluate-tool.js' */
+/** @import { CodeModeGlobal, GlobalDeclaration } from './types.js' */
 
 const IDENTIFIER_RE = /^[A-Za-z_$][0-9A-Za-z_$]*$/;
 

@@ -106,6 +106,33 @@ test('generated GitRemote declarations are up to date with their source', t => {
   t.deepEqual(gitRemoteDeclarations, buildGitRemoteTypeDeclarations());
 });
 
+// These roots are the public declarations injected into agentry code-mode
+// prompts. Keep their names pinned independently of the generator freshness
+// checks so a regenerated artifact cannot silently rename a model-visible
+// capability without a focused failure.
+test('generated code-mode declaration roots stay stable', t => {
+  t.deepEqual(
+    {
+      git: gitDeclarations.git.body,
+      gitHistory: gitDeclarations.gitHistory.body,
+      gitReadOnly: gitDeclarations.gitReadOnly.body,
+      workspace: fsDeclarations.workspace.body,
+      shell: shellDeclarations.shell.body,
+      http: httpDeclarations.http.body,
+      gitRemote: gitRemoteDeclarations.gitRemote.body,
+    },
+    {
+      git: 'WritableEndoGit',
+      gitHistory: 'EndoGitHistory',
+      gitReadOnly: 'ReadOnlyEndoGit',
+      workspace: 'Filesystem',
+      shell: 'EndoShell',
+      http: 'HttpClient',
+      gitRemote: 'GitRemote',
+    },
+  );
+});
+
 // The base declaration stays guard-canonical except for the deliberately
 // attenuated history-rewrite methods. `gitHistory` carries those separately.
 test('git declarations split the GitInterface history-rewrite method', t => {

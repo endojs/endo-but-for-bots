@@ -22,7 +22,7 @@
       "default": "./types-index.js"
     },
     "./pi": {
-      "types": "./src/adapters/pi.d.ts",
+      "types": "./pi.d.ts",
       "default": "./src/adapters/pi.js"
     },
     "./tool.js": {
@@ -30,35 +30,35 @@
       "default": "./src/tool.js"
     },
     "./workspace.js": {
-      "types": "./src/workspace.d.ts",
+      "types": "./workspace.types.d.ts",
       "default": "./src/workspace.js"
     },
     "./json-tools/git.js": {
-      "types": "./src/json-tools/git.d.ts",
+      "types": "./json-tools/git.types.d.ts",
       "default": "./src/json-tools/git.js"
     },
     "./json-tools/git-mount.js": {
-      "types": "./src/json-tools/git-mount.d.ts",
+      "types": "./json-tools/git-mount.types.d.ts",
       "default": "./src/json-tools/git-mount.js"
     },
     "./json-tools/git-remote.js": {
-      "types": "./src/json-tools/git-remote.d.ts",
+      "types": "./json-tools/git-remote.types.d.ts",
       "default": "./src/json-tools/git-remote.js"
     },
     "./json-tools/fs.js": {
-      "types": "./src/json-tools/fs.d.ts",
+      "types": "./json-tools/fs.types.d.ts",
       "default": "./src/json-tools/fs.js"
     },
     "./json-tools/shell.js": {
-      "types": "./src/json-tools/shell.d.ts",
+      "types": "./json-tools/shell.types.d.ts",
       "default": "./src/json-tools/shell.js"
     },
     "./json-tools/http.js": {
-      "types": "./src/json-tools/http.d.ts",
+      "types": "./json-tools/http.types.d.ts",
       "default": "./src/json-tools/http.js"
     },
     "./code-mode/evaluate-tool.js": {
-      "types": "./src/code-mode/evaluate-tool.js",
+      "types": "./code-mode/evaluate-tool.types.d.ts",
       "default": "./src/code-mode/evaluate-tool.js"
     },
     "./code-mode/compartment.js": {
@@ -94,8 +94,12 @@
       "default": "./src/code-mode-globals/git-remote.js"
     },
     "./adapters/pi.js": {
-      "types": "./src/adapters/pi.d.ts",
+      "types": "./adapters/pi.types.d.ts",
       "default": "./src/adapters/pi.js"
+    },
+    "./code-mode/types.js": {
+      "types": "./src/code-mode/types-index.types.d.ts",
+      "default": "./src/code-mode/types-index.js"
     },
     "./adapters/smallcaps.js": {
       "types": "./src/adapters/smallcaps.js",

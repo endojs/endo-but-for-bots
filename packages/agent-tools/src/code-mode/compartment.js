@@ -1,7 +1,7 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { Evaluate, EvaluateInput, StoreValue } from './evaluate-tool.js' */
+/** @import { Evaluate, EvaluateInput, StoreValue } from './types.js' */
 
 /**
  * A no-argument observer for a rejected eventual-send result.

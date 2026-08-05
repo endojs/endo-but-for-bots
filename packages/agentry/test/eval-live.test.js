@@ -33,10 +33,16 @@ import { readText } from './_eval-fixture.js';
 import { provisionConflictRebaseRepo } from './eval/_conflict-rebase-repo.js';
 import { provisionStageAndCommitRepo } from './eval/_stage-and-commit-repo.js';
 
+/** @import { CodeModePower } from '@endo/agent-tools/code-mode/types.js' */
+
 /**
  * @typedef {object} EvalRow One live-eval scenario.
  * @property {string} title The test title for this row.
- * @property {(t: import('ava').ExecutionContext) => Promise<{ repoRoot: string, workspace: unknown, git: unknown }>} provisionRepo
+ * @property {(t: import('ava').ExecutionContext) => Promise<{
+ *   repoRoot: string,
+ *   workspace: CodeModePower,
+ *   git: CodeModePower,
+ * }>} provisionRepo
  *   Provision the scenario's repository and return its powers.
  * @property {(repo: any) => import('../src/eval/types.js').GitScenario} makeScenario
  *   Build the scenario from the provisioned repository.

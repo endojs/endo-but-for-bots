@@ -3,8 +3,7 @@
 
 /** @import { Message, Model } from '@earendil-works/pi-ai' */
 /** @import { Agent, AgentMessage, AgentTool, StreamFn } from '@earendil-works/pi-agent-core' */
-/** @import { ThinkingLevel } from './model.js' */
-/** @import { GetApiKey } from './credentials.js' */
+/** @import { GetApiKey, ThinkingLevel } from './types.js' */
 
 import { Agent as PiAgent } from '@earendil-works/pi-agent-core';
 import { streamSimple } from '@earendil-works/pi-ai/compat';

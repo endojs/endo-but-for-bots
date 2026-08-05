@@ -1,7 +1,7 @@
 // @ts-check
 
 /** @import { ERef } from '@endo/eventual-send' */
-/** @import { Evaluate, EvaluateInput } from './evaluate-tool.js' */
+/** @import { Evaluate, EvaluateInput } from './types.js' */
 
 import { E } from '@endo/eventual-send';
 

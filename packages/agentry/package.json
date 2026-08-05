@@ -18,20 +18,28 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./src/index.js",
+      "types": "./types-index.d.ts",
       "default": "./src/index.js"
     },
     "./harness": {
-      "types": "./src/harness/index.js",
+      "types": "./harness.types.d.ts",
       "default": "./src/harness/index.js"
     },
     "./define-agent": {
-      "types": "./src/define-agent.js",
+      "types": "./define-agent.types.d.ts",
       "default": "./src/define-agent.js"
     },
     "./code-mode": {
-      "types": "./src/code-mode.js",
+      "types": "./code-mode.types.d.ts",
       "default": "./src/code-mode.js"
+    },
+    "./harness/types.js": {
+      "types": "./src/harness/types-index.types.d.ts",
+      "default": "./src/harness/types-index.js"
+    },
+    "./code-mode/types.js": {
+      "types": "./src/code-mode/types-index.types.d.ts",
+      "default": "./src/code-mode/types-index.js"
     },
     "./eval": {
       "types": "./src/eval/index.js",

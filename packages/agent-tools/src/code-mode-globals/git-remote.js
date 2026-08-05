@@ -1,7 +1,7 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { CodeModeGlobal } from '../code-mode/evaluate-tool.js' */
+/** @import { CodeModeGlobal } from '../code-mode/types.js' */
 
 import { gitRemoteDeclarations } from '../../generated/code-mode-globals/git-remote-declarations.js';
 
