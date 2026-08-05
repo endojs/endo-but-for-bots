@@ -92,7 +92,7 @@ jobs:
         run: yarn build:types:check
 
       - name: Check package uniformity
-        run: node scripts/check-package-uniformity.mjs
+        run: yarn test:package-uniformity && node scripts/check-package-uniformity.mjs
 
       # build the API docs to verify it works
       - name: build API docs
