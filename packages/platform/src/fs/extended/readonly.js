@@ -28,17 +28,47 @@ import {
 } from './type-guards.js';
 
 /**
+ * @import { ERef } from '@endo/eventual-send'
  * @import {
  *   Directory,
  *   File,
  *   Filesystem,
+ *   LockQuery,
  *   NodeWatcher,
+ *   OpenFile,
+ *   ResolvedNode,
  *   Xattrs,
  * } from './types.js'
  */
 
 const denied = method =>
   makeError(X`EACCES: ${method} not permitted on a read-only Filesystem`);
+
+/**
+ * Resolve a child node and its kind as a discriminated {@link ResolvedNode}.
+ *
+ * The qid is pipelined from `childP` itself, in one batch with the lookup, so
+ * the discrimination remains correct when the child is a remote presence: a
+ * sync `child.getQid()` against a remote cap returns a promise (its `type` is
+ * `undefined`), which would mis-classify every node as a File. Because the
+ * qid comes from that same child, `qid.type` is authoritative for the child's
+ * kind — a correlation the type system cannot see, hence this module's one
+ * cast.
+ *
+ * @param {ERef<Directory | File>} childP
+ * @returns {Promise<ResolvedNode>}
+ */
+const resolveChild = async childP => {
+  const qidP = E(childP).getQid();
+  const [child, qid] = await Promise.all([childP, qidP]);
+  if (qid && qid.type === 'directory') {
+    return harden({
+      kind: 'directory',
+      node: /** @type {Directory} */ (child),
+    });
+  }
+  return harden({ kind: 'file', node: /** @type {File} */ (child) });
+};
 
 /**
  * @param {Filesystem} inner a endo-fs `Filesystem` cap
@@ -112,27 +142,16 @@ const makeReadOnlyDirectory = dir => {
       return makeReadOnlyXattrs(inner);
     },
     async lookup(nameOrPath) {
-      // Pipeline lookup + getQid in one batch so the type
-      // discrimination remains correct when `dir` is a remote
-      // presence. A sync `child.getQid()` against a remote cap
-      // returns a promise (its `type` is `undefined`), which would
-      // mis-wrap every node as a File.
-      const childP = E(dir).lookup(nameOrPath);
-      const qidP = E(childP).getQid();
-      const [child, qid] = await Promise.all([childP, qidP]);
-      if (qid && qid.type === 'directory') {
-        return makeReadOnlyDirectory(/** @type {Directory} */ (child));
-      }
-      return makeReadOnlyFile(child);
+      const resolved = await resolveChild(E(dir).lookup(nameOrPath));
+      return resolved.kind === 'directory'
+        ? makeReadOnlyDirectory(resolved.node)
+        : makeReadOnlyFile(resolved.node);
     },
     async lookupStep(name) {
-      const childP = E(dir).lookupStep(name);
-      const qidP = E(childP).getQid();
-      const [child, qid] = await Promise.all([childP, qidP]);
-      if (qid && qid.type === 'directory') {
-        return makeReadOnlyDirectory(/** @type {Directory} */ (child));
-      }
-      return makeReadOnlyFile(child);
+      const resolved = await resolveChild(E(dir).lookupStep(name));
+      return resolved.kind === 'directory'
+        ? makeReadOnlyDirectory(resolved.node)
+        : makeReadOnlyFile(resolved.node);
     },
     async subView(nameOrPath) {
       // A sub-tree of a read-only view is itself read-only. Inner
@@ -192,7 +211,8 @@ const makeReadOnlyDirectory = dir => {
 };
 
 /**
- * @param {object} file
+ * @param {File} file
+ * @returns {File}
  */
 const makeReadOnlyFile = file => {
   return makeExo('File', FileInterface, {
@@ -246,7 +266,7 @@ const makeReadOnlyFile = file => {
 };
 
 /**
- * @param {object} oh
+ * @param {OpenFile} oh
  */
 const makeReadOnlyOpenFile = oh => {
   return makeExo('OpenFile', OpenFileInterface, {
@@ -267,7 +287,9 @@ const makeReadOnlyOpenFile = oh => {
       throw denied('lock');
     },
     async getLock(opts) {
-      return E(oh).getLock(opts);
+      // The guard admits any Passable; the wrapped cap enforces the
+      // real LockQuery shape.
+      return E(oh).getLock(/** @type {LockQuery} */ (opts));
     },
     async close() {
       return E(oh).close();
@@ -282,7 +304,8 @@ const makeReadOnlyOpenFile = oh => {
 };
 
 /**
- * @param {object} xattrs
+ * @param {Xattrs} xattrs
+ * @returns {Xattrs}
  */
 const makeReadOnlyXattrs = xattrs => {
   return makeExo('Xattrs', XattrsInterface, {

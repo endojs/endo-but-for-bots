@@ -162,9 +162,10 @@ export const wrapBackend = (backend, opts = {}) => {
   // a stronger (e.g. git-OID-based) `Qid`; a missing method or a
   // per-path `undefined` falls back to the path-hash `synthQid`.
   /**
+   * @template {NodeKind} K
    * @param {string[]} path
-   * @param {NodeKind} kind
-   * @returns {Qid}
+   * @param {K} kind
+   * @returns {Qid<K>}
    */
   const qidOf = (path, kind) => {
     const supplied = backend.qidFor?.(path, kind);

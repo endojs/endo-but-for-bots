@@ -26,7 +26,7 @@ import { synthQid } from './qid.js';
  * @param {object} opts
  * @param {FsBackend} opts.backend
  * @param {string[]} opts.dirPath
- * @param {(path: string[], kind: NodeKind) => Qid} [opts.qidOf]
+ * @param {<K extends NodeKind>(path: string[], kind: K) => Qid<K>} [opts.qidOf]
  *   optional QID synthesizer (defaults to the path-hash `synthQid`).
  *   wrap-backend passes its content-address-aware `qidOf` so a listing
  *   entry's `qid` matches the one a later `lookup(name).getQid()` would
@@ -46,18 +46,23 @@ export const makeCursorExo = ({ backend, dirPath, qidOf = synthQid }) => {
   };
 
   // Augment each backend entry with a synthesized `qid` for legacy
-  // consumers. Both `entry.kind` and `entry.qid.type` carry the
-  // same information.
+  // consumers. `DirectoryEntry` correlates `kind` and `qid.type`, so
+  // build each arm with its literal kind rather than the backend
+  // entry's unnarrowed one.
   /**
    * @param {DirEntry} entry
    * @returns {DirectoryEntry}
    */
-  const augment = entry =>
-    harden({
-      name: entry.name,
-      kind: entry.kind,
-      qid: qidOf([...dirPath, entry.name], entry.kind),
-    });
+  const augment = entry => {
+    const path = [...dirPath, entry.name];
+    return entry.kind === 'directory'
+      ? harden({
+          name: entry.name,
+          kind: 'directory',
+          qid: qidOf(path, 'directory'),
+        })
+      : harden({ name: entry.name, kind: 'file', qid: qidOf(path, 'file') });
+  };
 
   return makeExo('Cursor', CursorInterface, {
     async read(limit) {
