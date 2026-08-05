@@ -16,7 +16,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const makePowers = async () => {
   const fs = makeInMemoryFilesystem();
   const root = await E(fs).root();
-  const storeRoot = await E(root).makeDirectory('reminder-store', {});
+  const storeRoot = await E(root).makeDirectory('reminder-store');
 
   /** @type {any[]} */
   const received = [];

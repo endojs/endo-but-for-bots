@@ -52,7 +52,7 @@ const makeFakeFetch = (body = 'ok') => {
 const makePowers = async ({ policyAuthority } = {}) => {
   const fs = makeInMemoryFilesystem();
   const root = await E(fs).root();
-  const storeRoot = await E(root).makeDirectory('fetch-store', {});
+  const storeRoot = await E(root).makeDirectory('fetch-store');
 
   const powers = Far('Powers', {
     /** @param {string} name */

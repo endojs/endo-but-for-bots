@@ -30,7 +30,7 @@ const makeId = async () => {
 const makeTestStore = async () => {
   const fs = makeInMemoryFilesystem();
   const root = await E(fs).root();
-  const storeRoot = await E(root).makeDirectory('reminder-store', {});
+  const storeRoot = await E(root).makeDirectory('reminder-store');
   const store = await makeReminderStore(storeRoot, makeId);
   return { store, storeRoot };
 };
