@@ -199,22 +199,19 @@ export const DirectoryInterface = M.interface(
 );
 harden(DirectoryInterface);
 
-export const FileInterface = M.interface(
-  'File',
-  {
-    ...NodeBaseMethods,
-    open: M.call()
-      .optional(Pass)
-      .returns(M.eref(M.remotable('OpenFile'))),
-    read: M.call()
-      .optional(Pass)
-      .returns(M.eref(M.remotable('PassableBytesReader'))),
-    write: M.call()
-      .optional(Pass)
-      .returns(M.eref(M.remotable('PassableBytesWriter'))),
-    snapshot: M.call().returns(M.eref(M.remotable('BlobRef'))),
-  },
-);
+export const FileInterface = M.interface('File', {
+  ...NodeBaseMethods,
+  open: M.call()
+    .optional(Pass)
+    .returns(M.eref(M.remotable('OpenFile'))),
+  read: M.call()
+    .optional(Pass)
+    .returns(M.eref(M.remotable('PassableBytesReader'))),
+  write: M.call()
+    .optional(Pass)
+    .returns(M.eref(M.remotable('PassableBytesWriter'))),
+  snapshot: M.call().returns(M.eref(M.remotable('BlobRef'))),
+});
 harden(FileInterface);
 
 // Cursor / OpenFile / Lock / Xattrs / NodeWatcher / BlobRef are
