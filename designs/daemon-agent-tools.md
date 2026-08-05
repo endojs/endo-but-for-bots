@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-03-02 |
-| **Updated** | 2026-07-16 |
+| **Updated** | 2026-08-05 |
 | **Author** | Kris Kowal, endolinbot (prompted) |
 | **Status** | In Progress |
 
@@ -35,6 +35,10 @@ What has shipped, by layer:
   the host-spawner engine, #615), and the mount-bridged local git `status`
   / `add` tools (#616) — Phase 1 in full, plus the Shell capability and
   tool (Phase 2a/2b; the sandbox engine 2c is still gated and open).
+  The local Git catalog now derives its reader, writer, and rewriter
+  inventories from the granted facet. The compatibility
+  `makeGitHistoryTool` remains the explicit four-tool history inventory, and
+  mount-bridged conflict checkout completes the JSON conflict-recovery path.
 - **Network tier.** The confined-HTTP substrate landed as a standalone
   package pair on 2026-07-08 (#566): `@endo/http-confine` (the pure
   confinement core) and `@endo/exo-http-client` (the `HttpClient` /
@@ -97,7 +101,7 @@ What this document owns is the remainder:
 |---|---|---|---|
 | Filesystem | `Dir` from [daemon-capability-filesystem](daemon-capability-filesystem.md) | `Filesystem` (`@endo/platform/fs/extended`) via `mountAsFilesystem(mount)` for the live worktree and `Git.filesystemAt(ref)` for history | read tool landed (#523); list / edit / stat landed (#614) |
 | Shell | `makeShell({ cwd, allowedCommands, … })` from a raw path | `Shell` capability derived from a writable `EndoMount`, executing through the `Spawner` seam (§ Shell Capability) | capability + `makeShellTool` landed (#615, host-spawner engine); sandbox engine (Phase 2c) remaining |
-| Git (local) | `Git` exo over a repository path string | `Git` over `EndoMount` via `provideGit(mountCap, petName)` ([daemon-git-capability](daemon-git-capability.md)) | capability landed (#364); tools landed (`makeGitTool`); mount-bridged `status` / `add` landed (#616) |
+| Git (local) | `Git` exo over a repository path string | `Git` over `EndoMount` via `provideGit(mountCap, petName)` ([daemon-git-capability](daemon-git-capability.md)) | capability landed (#364); facet-derived catalogs landed (`makeGitTool`); mount-bridged `status` / `add` landed (#616), with conflict checkout added in Phase 6 |
 | Git (remote) | deliberately omitted ("network access is a separate capability") | `GitRemote` = `Git` + bounded HTTPS transport + non-extractable credential ([daemon-git-remotes](daemon-git-remotes.md)) | capability landed (#365, #368); `makeGitRemoteTool` remaining |
 | Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3) | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); `provideHttpClient` daemon wiring and `makeHttpTool` remaining |
 | Search | `grep` / `glob` on `Dir` | interim: `Filesystem` walks plus the Shell group's allowlisted `grep`; a capability-backed search substrate is an open question | not started |
@@ -424,8 +428,8 @@ deliverable's shape.
   plus the composite `makeMountFsTools` in
   `packages/agent-tools/src/json-tools/fs.js`.
 - [x] A read-only `Filesystem` never advertises an edit tool
-  (build-time filtering, matching `makeGitTool`'s `isGitReadOnly`
-  precedent). `makeMountFsTools` drops the `scope:'write'` edit tool when
+  (build-time filtering, matching `makeGitTool`'s facet-derived catalog
+  filtering). `makeMountFsTools` drops the `scope:'write'` edit tool when
   the backing is `readOnly()`.
 - [x] Tests over a real `makeNodeFilesystem` plus a daemon-backed `Mount`
   (no hand-rolled petstore stubs). `test/mount-fs-tools.test.js` runs
@@ -473,7 +477,8 @@ deliverable's shape.
 ### Phase 3.5: Local mount-bridged git tools — landed (#616)
 
 - [x] `makeGitMountTools(gitCap)` in `packages/agent-tools/src/json-tools/git-mount.js`:
-  `status` and `add` tools over the *local* `Git` capability, bridging
+  `status`, `add`, and `checkoutConflict` tools over the *local* `Git`
+  capability, bridging
   live `EndoMountEntry` remotables across the JSON wire where `makeGitTool`
   could not carry live-capability signatures. Network operations stay
   excluded; the push tier remains the separately granted `GitRemote`
@@ -532,10 +537,12 @@ PR #636, branch `design/agentry-git-eval-scenarios`).
 - [x] `commit({ amend })` and `reword(ref, message)` across the local Git and
   code-mode surfaces: exo + `GitInterface` guard + `GitBackend` + native impl +
   code-mode regen (`packages/agent-tools/generated/code-mode-globals/git-declarations.js`).
-  The default
-  JSON tool inventory retains only new-commit creation; an explicit
-  `makeGitHistoryTool` maker exposes amend and reword when a host deliberately
-  grants history-rewrite authority.
+  The default writer JSON inventory retains only new-commit creation.
+  `makeGitTool` derives reader, writer, and rewriter catalogs from the granted
+  facet, while the explicit `makeGitHistoryTool` compatibility maker retains
+  the fixed `commit`, `reword`, `cherryPick`, and `rebase` history inventory.
+  Both makers project the same canonical rewriter schemas and guards for those
+  four tools.
 - [ ] Extend the `473b718b3` contract test (branch
   `docs/agentry-git-rebase-evals`) so the exo type, `GitInterface`,
   `packages/exo-git/src/types.js`, `types.d.ts`, and the generated
@@ -550,16 +557,21 @@ per [agentry-git-verb-gaps](agentry-git-verb-gaps.md). The acceptance contract
 is the `stack-surgery` scenario in `designs/agentry-git-eval-scenarios.md`
 (draft PR #636, branch `design/agentry-git-eval-scenarios`).
 
-- [ ] `cherryPick(ref, options?)` and `rebase({ autosquash })` for
-  `mode: 'start'` across all surfaces, including JSON (cherryPick ref +
-  options; autosquash-start as a structured op; control modes stay
-  code-mode-only).
-- [ ] `checkoutConflict(entries, side)` across all surfaces:
-  `entriesToRepoPaths` lineage + `ours`/`theirs` index-stage; JSON as
+- [x] `cherryPick(ref, options?)` and rebase `start`, `continue`, `abort`, and
+  `skip` across all surfaces. Each mode has a closed JSON shape; `start`
+  requires `upstream` and alone accepts `autosquash`.
+- [x] `checkoutConflict(entries, side)` across all surfaces:
+  `entriesToRepoPaths` lineage + `ours` stage 2 / `theirs` stage 3 index
+  semantics; JSON as
   `checkoutConflict({ paths, side })` resolving strings to authenticated
-  `EndoMountEntry` values (the capability method stays entry-based).
-- [ ] Tests: read-only rejection per mutator, autosquash-flag validation,
-  conflict-side path lineage, conflict-stop for cherryPick.
+  `EndoMountEntry` values (the capability method stays entry-based). During a
+  rebase, Git's intuitive branch roles invert: `ours` is the upstream plus the
+  commits replayed so far, and `theirs` is the commit being replayed.
+- [x] Stopped rebase recovery directs the caller to inspect status, resolve and
+  stage conflicts, then continue, skip the stopped commit, or abort.
+- [x] Tests: facet membership, read-only rejection, autosquash validation,
+  conflict-side lineage, index semantics, closed rebase controls, and
+  conflict-recovery descriptions.
 
 ## Dependencies
 

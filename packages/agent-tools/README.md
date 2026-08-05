@@ -186,9 +186,14 @@ history rewrite.
 A host that deliberately grants a rewriter capability selects
 `{ facet: 'rewriter' }` to add `commit` with `options.amend`, `reword`,
 `cherryPick`, and `rebase`.
-The deprecated `makeGitHistoryTool(gitCap)` name remains compatible by
-delegating to that same complete rewriter-facet catalog; it does not maintain a
-second history-only catalog.
+The deprecated `makeGitHistoryTool(gitCap)` remains the explicit, history-only
+compatibility inventory.
+It emits exactly `commit`, `reword`, `cherryPick`, and `rebase`, in that order,
+while projecting the same schemas, descriptions, and runtime guards as those
+tools in the canonical rewriter catalog.
+It therefore does not repeat the rewriter catalog's read, navigation, or
+ordinary branch-edit tools when a host composes the writer and history
+inventories.
 
 The JSON rebase tool supports `start` (with required `upstream` and optional
 `autosquash`), `continue`, `abort`, and `skip`.
