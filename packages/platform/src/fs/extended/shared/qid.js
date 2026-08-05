@@ -14,9 +14,10 @@
  */
 
 /**
+ * @template {NodeKind} K
  * @param {string[]} path
- * @param {NodeKind} kind
- * @returns {Qid}
+ * @param {K} kind
+ * @returns {Qid<K>}
  */
 export const synthQid = (path, kind) => {
   // 64-bit FNV-1a over the joined path, masked to fit a bigint we

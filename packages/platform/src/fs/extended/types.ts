@@ -59,12 +59,13 @@ export type NodeAttrs = NodeStat & {
 };
 
 /**
- * A node's identity triple. `pathId` is a stable per-path hash by default; a
- * content-address backend may source it from a stronger identity such as a git
- * object id.
+ * A node's identity triple, parameterized by the node's kind so a
+ * `Directory`'s qid is `Qid<'directory'>` and a `File`'s is `Qid<'file'>`.
+ * `pathId` is a stable per-path hash by default; a content-address backend may
+ * source it from a stronger identity such as a git object id.
  */
-export type Qid = {
-  type: NodeKind;
+export type Qid<K extends NodeKind = NodeKind> = {
+  type: K;
   pathId: bigint;
   version: bigint;
 };
@@ -94,12 +95,15 @@ export type Xattrs = {
   help: (method?: string) => string;
 };
 
-/** A directory listing entry, as yielded by `Cursor.read` and `Cursor.stream`. */
-export type DirectoryEntry = {
-  name: string;
-  kind: NodeKind;
-  qid: Qid;
-};
+/**
+ * A directory listing entry, as yielded by `Cursor.read` and `Cursor.stream`.
+ * `kind` and `qid.type` are correlated discriminants: narrowing either
+ * narrows the whole entry, and the union makes a mismatched pair
+ * (`kind: 'file'` with a directory qid) unrepresentable.
+ */
+export type DirectoryEntry =
+  | { name: string; kind: 'file'; qid: Qid<'file'> }
+  | { name: string; kind: 'directory'; qid: Qid<'directory'> };
 
 /** One bounded page of a directory listing. */
 export type DirectoryPage = {
@@ -128,7 +132,7 @@ export type WatchFromResult = {
 };
 
 export type Directory = {
-  getQid: () => Qid;
+  getQid: () => Qid<'directory'>;
   getStat: () => Promise<NodeStat>;
   setStat: (patch: NodeStat) => Promise<void>;
   getAttrs: () => Promise<NodeAttrs>;
@@ -164,6 +168,16 @@ export type Directory = {
   help: (method?: string) => string;
 };
 
+/**
+ * A child node paired with its kind, as resolved by pipelining `lookup` with
+ * `getQid`. The tagged-record shape restores the discriminated narrowing that
+ * two independently awaited values (a node and its qid) cannot give the type
+ * system on their own: narrowing `kind` narrows `node` to the matching cap.
+ */
+export type ResolvedNode =
+  | { kind: 'file'; node: File }
+  | { kind: 'directory'; node: Directory };
+
 /** Options for the one-shot `File.read` porcelain. */
 export type FileReadOptions = {
   offset?: bigint;
@@ -179,7 +193,7 @@ export type FileWriteOptions = {
 };
 
 export type File = {
-  getQid: () => Qid;
+  getQid: () => Qid<'file'>;
   getStat: () => Promise<NodeStat>;
   setStat: (patch: NodeStat) => Promise<void>;
   getAttrs: () => Promise<NodeAttrs>;
