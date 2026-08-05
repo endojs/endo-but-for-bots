@@ -243,6 +243,7 @@ expectTypeOf<WritableGitWorktree>().toExtend<PathEntryIssuer>();
 type Mutator =
   | 'add'
   | 'restore'
+  | 'checkoutConflict'
   | 'commit'
   | 'reword'
   | 'createBranch'
@@ -314,3 +315,25 @@ historyRewriteGit.commit('amended commit', { amend: true });
 historyRewriteGit.reword('HEAD', 'reworded commit');
 historyRewriteGit.cherryPick('HEAD');
 historyRewriteGit.rebase({ mode: 'start', upstream: 'main' });
+
+// `checkoutConflict` selects one side of an unmerged index entry and stages
+// it — an additive, non-history-rewriting write, unlike `reword` /
+// `cherryPick` / `rebase` above. It must therefore be ordinary write
+// authority: present on `ReadWriteEndoGit` (not gated behind
+// `allowHistoryRewrite`), with the identical signature carried through to
+// `HistoryRewriteEndoGit` by structural extension. A regression that moved
+// `checkoutConflict` onto `HistoryRewriteEndoGit` only would force every
+// merge-conflict resolution through the elevated posture for no authority
+// reason — the same over-gating this fixture's `Mutator` list (which already
+// pins it absent from `ReadOnlyEndoGit`) exists to catch in the other
+// direction.
+expectTypeOf<ReadWriteEndoGit['checkoutConflict']>().toEqualTypeOf<
+  HistoryRewriteEndoGit['checkoutConflict']
+>();
+
+declare const conflictEntries: Parameters<
+  ReadWriteEndoGit['checkoutConflict']
+>[0];
+ordinaryGit.checkoutConflict(conflictEntries, 'ours');
+ordinaryGit.checkoutConflict(conflictEntries, 'theirs');
+historyRewriteGit.checkoutConflict(conflictEntries, 'ours');

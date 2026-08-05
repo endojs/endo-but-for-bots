@@ -67,11 +67,12 @@ export type GitHistoryToolCapability = Pick<
  * with `PathEntry` / node remotables and `add()` takes an array of
  * `PathEntry` remotables — so their tool wire (JSON-safe rows out, path
  * strings in) diverges from the raw `GitInterface` guard by design. `add` is the
- * additive staging half of the commit loop; it stages but never discards.
+ * additive staging half of the commit loop; `checkoutConflict` selects and
+ * stages one side of existing unmerged entries.
  */
 export type GitMountToolCapability = Pick<
   ReadWriteEndoGit,
-  'status' | 'add'
+  'status' | 'add' | 'checkoutConflict'
 > & {
   /** The bridge mints lineage-bearing entries from the writable worktree. */
   worktree: () => Promise<WritableGitWorktree>;

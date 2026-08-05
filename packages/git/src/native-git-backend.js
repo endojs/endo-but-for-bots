@@ -41,6 +41,7 @@ const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
  *   GitCherryPickOptions,
  *   GitCommit,
  *   GitCommitOptions,
+ *   GitConflictSide,
  *   GitCreateBranchOptions,
  *   GitDeleteBranchOptions,
  *   GitMergeOptions,
@@ -2320,6 +2321,30 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
       if (opts.staged) args.push('--staged');
       args.push('--', ...paths);
       await runGit(args);
+    },
+
+    /**
+     * Select one side of an unmerged index entry, write it to the worktree,
+     * and stage the path so the conflict is resolved through Git's index
+     * stages rather than by synthesizing file bytes.
+     *
+     * @param {string[]} paths
+     * @param {GitConflictSide} side
+     * @returns {Promise<void>}
+     */
+    checkoutConflict: async (paths, side) => {
+      if (!Array.isArray(paths) || paths.length === 0) {
+        throw new Error('checkoutConflict: paths must be a non-empty array');
+      }
+      for (const p of paths) {
+        requireNonEmptyString(p, 'checkoutConflict path');
+      }
+      if (side !== 'ours' && side !== 'theirs') {
+        throw new Error('checkoutConflict.side must be ours or theirs');
+      }
+      await assertNoExecutableRepoConfig();
+      await runGit(['checkout', `--${side}`, '--', ...paths]);
+      await runGit(['add', '--', ...paths]);
     },
 
     /**

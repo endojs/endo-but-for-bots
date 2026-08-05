@@ -124,7 +124,7 @@ test('Git exo advertises the writer facet, cumulative up to the rewriter facet',
   }
 
   // Mutation available without history-rewrite authority
-  for (const name of ['add', 'restore', 'commit']) {
+  for (const name of ['add', 'restore', 'checkoutConflict', 'commit']) {
     t.true(methods.includes(name), `Git writer should advertise ${name}`);
   }
 
@@ -242,6 +242,9 @@ test('Git.readOnly() attenuates mutating operations but preserves reads', async 
   const entry = await E(mount).entry(['new.txt']);
   await t.throwsAsync(E(runtimeReadOnlyGit).add([entry]), {
     message: /has no method "add"/,
+  });
+  await t.throwsAsync(E(runtimeReadOnlyGit).checkoutConflict([entry], 'ours'), {
+    message: /read-only Git capability/,
   });
   await t.throwsAsync(E(runtimeReadOnlyGit).commit('should fail'), {
     message: /has no method "commit"/,
@@ -1393,6 +1396,126 @@ test('NativeGitBackend.cherryPick stops cleanly on conflict', async t => {
   t.is(conflicted && conflicted.worktree, 'conflicted');
 });
 
+test('Git.checkoutConflict selects and stages ours in a merge conflict', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  await fs.promises.writeFile(path.join(repoRoot, 'conflict.txt'), 'base\n');
+  await execFileAsync('git', ['add', 'conflict.txt'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'base file'],
+    { cwd: repoRoot },
+  );
+
+  await execFileAsync('git', ['switch', '-c', 'side'], { cwd: repoRoot });
+  await fs.promises.writeFile(path.join(repoRoot, 'conflict.txt'), 'side\n');
+  await execFileAsync('git', ['add', 'conflict.txt'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'side edit'],
+    { cwd: repoRoot },
+  );
+
+  await execFileAsync('git', ['switch', 'main'], { cwd: repoRoot });
+  await fs.promises.writeFile(path.join(repoRoot, 'conflict.txt'), 'main\n');
+  await execFileAsync('git', ['add', 'conflict.txt'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'main edit'],
+    { cwd: repoRoot },
+  );
+
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({ repoRoot });
+  const git = makeGit({ mount, backend, lineageOf });
+
+  await t.throwsAsync(E(git).merge('side'), {
+    message: /CONFLICT|Automatic merge failed/,
+  });
+  const entry = await E(mount).entry(['conflict.txt']);
+  await E(git).checkoutConflict([entry], 'ours');
+
+  t.is(
+    await fs.promises.readFile(path.join(repoRoot, 'conflict.txt'), 'utf8'),
+    'main\n',
+  );
+  const { stdout: staged } = await execFileAsync(
+    'git',
+    ['show', ':conflict.txt'],
+    { cwd: repoRoot },
+  );
+  t.is(staged, 'main\n');
+  const { stdout: unmerged } = await execFileAsync(
+    'git',
+    ['ls-files', '-u', '--', 'conflict.txt'],
+    { cwd: repoRoot },
+  );
+  t.is(unmerged, '');
+});
+
+test('Git.checkoutConflict selects and stages theirs in a cherry-pick conflict', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  await fs.promises.writeFile(path.join(repoRoot, 'conflict.txt'), 'base\n');
+  await execFileAsync('git', ['add', 'conflict.txt'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'base file'],
+    { cwd: repoRoot },
+  );
+
+  await execFileAsync('git', ['switch', '-c', 'side'], { cwd: repoRoot });
+  await fs.promises.writeFile(path.join(repoRoot, 'conflict.txt'), 'side\n');
+  await execFileAsync('git', ['add', 'conflict.txt'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'side edit'],
+    { cwd: repoRoot },
+  );
+  const sideOid = (
+    await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })
+  ).stdout.trim();
+
+  await execFileAsync('git', ['switch', 'main'], { cwd: repoRoot });
+  await fs.promises.writeFile(path.join(repoRoot, 'conflict.txt'), 'main\n');
+  await execFileAsync('git', ['add', 'conflict.txt'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'main edit'],
+    { cwd: repoRoot },
+  );
+
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({ repoRoot });
+  const git = makeGit(
+    { mount, backend, lineageOf },
+    { allowHistoryRewrite: true },
+  );
+
+  await t.throwsAsync(E(git).cherryPick(sideOid), {
+    message: /cherry-pick failed|CONFLICT/,
+  });
+  const entry = await E(mount).entry(['conflict.txt']);
+  await E(git).checkoutConflict([entry], 'theirs');
+
+  t.is(
+    await fs.promises.readFile(path.join(repoRoot, 'conflict.txt'), 'utf8'),
+    'side\n',
+  );
+  const { stdout: staged } = await execFileAsync(
+    'git',
+    ['show', ':conflict.txt'],
+    { cwd: repoRoot },
+  );
+  t.is(staged, 'side\n');
+  const { stdout: unmerged } = await execFileAsync(
+    'git',
+    ['ls-files', '-u', '--', 'conflict.txt'],
+    { cwd: repoRoot },
+  );
+  t.is(unmerged, '');
+});
+
 test('Git scaffold methods all surface a clear "not yet implemented"', async t => {
   const mount = await provisionMount(t);
   const backend = makeNotYetImplementedBackend();
@@ -1413,6 +1536,10 @@ test('Git scaffold methods all surface a clear "not yet implemented"', async t =
     message: /not yet implemented/,
   });
   await t.throwsAsync(E(git).cherryPick('HEAD'), {
+    message: /not yet implemented/,
+  });
+  const entry = await E(mount).entry(['conflict.txt']);
+  await t.throwsAsync(E(git).checkoutConflict([entry], 'ours'), {
     message: /not yet implemented/,
   });
   await t.throwsAsync(E(git).branches(), { message: /not yet implemented/ });
@@ -2855,6 +2982,48 @@ test('Git.add wraps PathEntry inputs and refuses cross-mount entries', async t =
   await t.throwsAsync(E(git).add([otherEntry]), {
     message: /different mount lineage/,
   });
+});
+
+test('Git.checkoutConflict refuses unauthenticated and cross-mount entries before backend mutation', async t => {
+  const mount = await provisionMount(t);
+  let mutationCalls = 0;
+  const backend = harden({
+    ...makeNotYetImplementedBackend(),
+    checkoutConflict: async () => {
+      mutationCalls += 1;
+    },
+  });
+  const git = makeGit({ mount, backend, lineageOf });
+
+  const ownEntry = await E(mount).entry(['conflict.txt']);
+  await E(git).checkoutConflict([ownEntry], 'ours');
+  t.is(mutationCalls, 1);
+
+  const fakeEntry = /** @type {PathEntry} */ (
+    /** @type {unknown} */ (
+      Far('FakeEntry', { segments: () => harden(['conflict.txt']) })
+    )
+  );
+  await t.throwsAsync(E(git).checkoutConflict([fakeEntry], 'ours'), {
+    message: /not a PathEntry/,
+  });
+  t.is(mutationCalls, 1);
+
+  const otherRoot = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'cross-git-'),
+  );
+  t.teardown(() => fs.promises.rm(otherRoot, { recursive: true, force: true }));
+  const filePowers = makeFilePowers({ fs, path });
+  const otherMount = makeMount({
+    rootPath: otherRoot,
+    readOnly: false,
+    filePowers,
+  });
+  const otherEntry = await E(otherMount).entry(['conflict.txt']);
+  await t.throwsAsync(E(git).checkoutConflict([otherEntry], 'theirs'), {
+    message: /different mount lineage/,
+  });
+  t.is(mutationCalls, 1);
 });
 
 test('Git.commit through the public exo returns a structured commit record', async t => {
