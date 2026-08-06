@@ -24,7 +24,7 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./types.d.ts",
+      "types": "./types.types.d.ts",
       "default": "./index.js"
     },
     "./reader-pump.js": {
@@ -116,6 +116,7 @@
     "./*.d.ts",
     "./*.js",
     "./*.map",
+    "./*.ts",
     "LICENSE*",
     "SECURITY*",
     "dist",
