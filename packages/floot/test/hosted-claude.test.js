@@ -47,6 +47,50 @@ test('Claude resolver provisions distinct hosted clients', async t => {
   t.false(names.has('claude-client-session-a'));
 });
 
+test('the shared ClaudeClient claim survives a factory restart', async t => {
+  // No provisioner: sessions fall through to the shared "claude-client". The
+  // claim is persisted to the factory petstore, so a resolver from a later
+  // incarnation must refuse a different session — otherwise it would silently
+  // `--continue` the first session's conversation.
+  /** @type {Map<string, unknown>} */
+  const names = new Map();
+  names.set('claude-client', harden({ kind: 'shared-client' }));
+  const powers = harden({
+    async has(name) {
+      return names.has(name);
+    },
+    async lookup(name) {
+      if (!names.has(name)) throw Error(`missing ${name}`);
+      return names.get(name);
+    },
+    async remove(name) {
+      names.delete(name);
+    },
+    async storeValue(value, name) {
+      names.set(name, value);
+    },
+  });
+
+  const resolver = makeClaudeClientResolver(powers);
+  await resolver.get('session-a');
+  await t.throwsAsync(() => resolver.get('session-b'), {
+    message: /session session-a already holds it/,
+  });
+
+  // Simulate a factory restart: a fresh resolver over the same petstore.
+  const revived = makeClaudeClientResolver(powers);
+  await t.throwsAsync(() => revived.get('session-b'), {
+    message: /session session-a already holds it/,
+  });
+  // The claiming session itself still resolves.
+  await t.notThrowsAsync(() => revived.get('session-a'));
+
+  // Removing the claiming session releases the claim for good.
+  await revived.remove('session-a');
+  const third = makeClaudeClientResolver(powers);
+  await t.notThrowsAsync(() => third.get('session-b'));
+});
+
 test('speech restart replays accumulated text and carries future deltas', async t => {
   const readers = [];
   const options = [];

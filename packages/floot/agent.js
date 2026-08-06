@@ -215,11 +215,53 @@ harden(makeSpeechWriter);
 export const makeClaudeClientResolver = (powers, env = {}) => {
   /** @type {Map<string, Promise<any>>} */
   const clients = new Map();
-  /** @type {string | undefined} */
-  let sharedClaimedBy;
   const base = env.FLOOT_CLAUDE_CLIENT || 'claude-client';
   const provisionerName =
     env.FLOOT_CLAUDE_PROVISIONER || 'claude-session-provisioner';
+
+  // Which session claimed the shared client. A shared ClaudeClient carries ONE
+  // CLI conversation and workspace, so the claim must survive a daemon restart:
+  // held only in memory, a different session could claim it after a restart and
+  // silently `--continue` the first session's conversation. Persisted to the
+  // factory petstore; loaded lazily, written on first claim.
+  const SHARED_CLAIM_NAME = 'floot-claude-shared-claim';
+  /** @type {string | undefined} */
+  let sharedClaimedBy;
+  const loadSharedClaim = async () => {
+    if (sharedClaimedBy !== undefined) return sharedClaimedBy;
+    if (await E(powers).has(SHARED_CLAIM_NAME)) {
+      sharedClaimedBy = `${await E(powers).lookup(SHARED_CLAIM_NAME)}`;
+    }
+    return sharedClaimedBy;
+  };
+  const saveSharedClaim = async id => {
+    sharedClaimedBy = id;
+    try {
+      if (await E(powers).has(SHARED_CLAIM_NAME)) {
+        await E(powers).remove(SHARED_CLAIM_NAME);
+      }
+      await E(powers).storeValue(id, SHARED_CLAIM_NAME);
+    } catch (error) {
+      // The in-memory claim still guards this incarnation; only cross-restart
+      // protection is lost, and that must not fail the turn.
+      console.error(
+        '[floot] could not persist shared ClaudeClient claim:',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  };
+  const dropSharedClaim = async id => {
+    if ((await loadSharedClaim()) !== id) return;
+    sharedClaimedBy = undefined;
+    try {
+      if (await E(powers).has(SHARED_CLAIM_NAME)) {
+        await E(powers).remove(SHARED_CLAIM_NAME);
+      }
+    } catch {
+      // Best-effort; a stale claim only blocks other sessions from the shared
+      // client, which is the safe direction.
+    }
+  };
 
   const get = (id, provisionOptions) => {
     let clientP = clients.get(id);
@@ -244,10 +286,11 @@ export const makeClaudeClientResolver = (powers, env = {}) => {
             `floot: Claude provisioner "${provisionerName}" did not store "${perSession}".`,
           );
         }
-        if (sharedClaimedBy !== undefined && sharedClaimedBy !== id) {
+        const claimedBy = await loadSharedClaim();
+        if (claimedBy !== undefined && claimedBy !== id) {
           throw new Error(
             `floot: session ${id} cannot use the shared ClaudeClient "${base}" —` +
-              ` session ${sharedClaimedBy} already holds it, and a client` +
+              ` session ${claimedBy} already holds it, and a client` +
               ` carries one CLI conversation and workspace. Provision` +
               ` "${perSession}" with @endo/claude-sandbox for this session.`,
           );
@@ -260,7 +303,7 @@ export const makeClaudeClientResolver = (powers, env = {}) => {
           );
         }
         const shared = await E(powers).lookup(base);
-        sharedClaimedBy = id;
+        await saveSharedClaim(id);
         return shared;
       })().catch(error => {
         clients.delete(id);
@@ -273,7 +316,7 @@ export const makeClaudeClientResolver = (powers, env = {}) => {
 
   const remove = async id => {
     clients.delete(id);
-    if (sharedClaimedBy === id) sharedClaimedBy = undefined;
+    await dropSharedClaim(id);
     const perSession = `${base}-${id}`;
     if (await E(powers).has(provisionerName)) {
       const provisioner = await E(powers).lookup(provisionerName);
