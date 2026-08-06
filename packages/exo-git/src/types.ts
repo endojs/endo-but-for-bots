@@ -200,18 +200,13 @@ export type RemotePolicy = {
   allowLocalFileTransport?: boolean;
 };
 
-export type NormalizedRemotePolicy = Omit<
-  RemotePolicy,
-  | 'allowForcePush'
-  | 'allowTags'
-  | 'allowDelete'
-  | 'allowLocalFileTransport'
-> & {
-  allowForcePush: boolean;
-  allowTags: boolean;
-  allowDelete: boolean;
-  allowLocalFileTransport: boolean;
-};
+export type NormalizedRemotePolicy = RemotePolicy &
+  Required<
+    Pick<
+      RemotePolicy,
+      'allowForcePush' | 'allowTags' | 'allowDelete' | 'allowLocalFileTransport'
+    >
+  >;
 
 export type GitRemoteAuditEventBase = {
   sequence: number;

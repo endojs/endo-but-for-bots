@@ -1,7 +1,7 @@
 // @ts-check
 /// <reference types="ses"/>
 
-import { q } from '@endo/errors';
+import { Fail, q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { E } from '@endo/eventual-send';
 
@@ -585,11 +585,8 @@ export const makeGitRemote = ({
       return ref;
     }
     const destination = getGitRemotePullDestination(currentPolicy);
-    if (destination === undefined) {
-      throw new Error(
-        'GitRemote.pull requires a branch when fetchRefspecs are empty or wildcarded',
-      );
-    }
+    destination !== undefined ||
+      Fail`GitRemote.pull requires a branch when fetchRefspecs are empty or wildcarded`;
     return destination;
   };
 
@@ -834,7 +831,11 @@ export const makeGitRemote = ({
       async setPushRefspecs(refspecs) {
         const nextPolicy = normalizeGitRemotePolicy({
           name,
-          policy: { ...currentPolicy, pushRefspecs: [...refspecs] },
+          policy: {
+            ...currentPolicy,
+            allowedBranches: undefined,
+            pushRefspecs: [...refspecs],
+          },
         });
         await persistState(nextPolicy, revoked);
         currentPolicy = nextPolicy;

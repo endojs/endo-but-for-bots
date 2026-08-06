@@ -96,6 +96,26 @@ test('normalization preserves reverse-lexicographic refspec order', t => {
   );
 });
 
+test('normalization retains allowedBranches in policy snapshots', t => {
+  const normalized = normalizeGitRemotePolicy({
+    name: 'origin',
+    policy: {
+      ...makePolicy(),
+      allowedDirections: ['push'],
+      allowedBranches: ['main', 'refs/heads/release/*'],
+    },
+  });
+
+  t.deepEqual(normalized.allowedBranches, ['main', 'refs/heads/release/*']);
+  t.deepEqual(
+    [...normalized.pushRefspecs],
+    [
+      'refs/heads/main:refs/heads/main',
+      'refs/heads/release/*:refs/heads/release/*',
+    ],
+  );
+});
+
 test('explicit defaultPullRef controls unqualified pull', async t => {
   const policy = {
     ...makePolicy(),
