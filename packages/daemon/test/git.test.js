@@ -3766,7 +3766,10 @@ test('Git.filesystemAt: mutating verbs all throw EACCES', async t => {
   await t.throwsAsync(E(opener).write(0n), { message: /EACCES/ });
   await t.throwsAsync(E(opener).truncate(0n), { message: /EACCES/ });
   await t.throwsAsync(E(opener).fsync({}), { message: /EACCES/ });
-  await t.throwsAsync(E(opener).lock({}), { message: /EACCES/ });
+  await t.throwsAsync(
+    E(opener).lock({ type: 'exclusive', start: 0n, length: 0n }),
+    { message: /EACCES/ },
+  );
 });
 
 test('Git.filesystemAt: open({ write: true }) rejects', async t => {
