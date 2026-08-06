@@ -19,6 +19,7 @@
 //! The oracle and Ironhorse both execute source-level programs. Parse-phase
 //! negatives therefore compare the two front ends directly.
 
+use crate::expectations::{Mode, Outcome};
 use crate::frontmatter::{self, Frontmatter, Negative};
 use crate::report::CaseRecord;
 use crate::{dual_run, dual_run_async, Agreement, AsyncDualRun, DualRun, IronhorseCompile};
@@ -1203,6 +1204,13 @@ pub struct XstReport {
     /// Populated by [`XstReport::record_case`] and by [`XstReport::record`];
     /// legacy aggregate callers record an empty feature list.
     pub cases: Vec<CaseRecord>,
+    /// The per-(case, mode) observed outcome, the serialization of the honest
+    /// split into the committed expectation-list shape (design
+    /// [`crate::expectations`]). Populated alongside the aggregate counts so a
+    /// run either writes an initial list (`--update-expectations`) or is
+    /// compared against a committed one (`--expectations`); the aggregate
+    /// `met_bar()` path is unchanged when neither flag is set.
+    pub observed: BTreeMap<(String, crate::expectations::Mode), crate::expectations::Outcome>,
 }
 
 impl XstReport {
@@ -1229,6 +1237,32 @@ impl XstReport {
         }
         if result.computron_gap {
             self.computron_advisories += 1;
+        }
+        // Serialize this case's outcome into the committed expectation-list
+        // shape (design § Mapping the honest split to list entries), keyed by
+        // (path, mode). An `onlyStrict` case's sole run is the strict mode (its
+        // whole verdict is the named strict skip); every other case's primary
+        // run is sloppy, with strict recorded as a separate named skip when the
+        // case has a strict mode not yet implemented.
+        let outcome = match &result.verdict {
+            Verdict::Covered => Outcome::Pass,
+            Verdict::Fail(_) => Outcome::Fail,
+            Verdict::PreSkip(reason) | Verdict::RunSkip(reason) => Outcome::Skip(reason.clone()),
+        };
+        let only_strict =
+            matches!(&result.verdict, Verdict::PreSkip(reason) if reason.starts_with("onlyStrict"));
+        if only_strict {
+            self.observed
+                .insert((path.to_string(), Mode::Strict), outcome.clone());
+        } else {
+            self.observed
+                .insert((path.to_string(), Mode::Sloppy), outcome.clone());
+            if result.strict_skipped {
+                self.observed.insert(
+                    (path.to_string(), Mode::Strict),
+                    Outcome::Skip("strict-unimplemented".to_string()),
+                );
+            }
         }
         match result.verdict {
             Verdict::Covered => {

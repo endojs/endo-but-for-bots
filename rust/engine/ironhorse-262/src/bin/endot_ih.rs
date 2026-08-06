@@ -39,6 +39,7 @@
 //! create/destroy cycles a whole-tree run makes, so the full sweep caps the
 //! number of cases per process; each subprocess frees everything on exit.
 
+use ironhorse_262::expectations::{compare, Expectations, Header};
 use ironhorse_262::report::RunReport;
 use ironhorse_262::test262::{collect_js, collect_js_batch, collect_js_direct, locate_test262};
 use ironhorse_262::xst::{run_files, Config, SesMode, DEFAULT_CASE_TIMEOUT_SECONDS};
@@ -56,6 +57,9 @@ fn main() {
     let mut batch_index: Option<usize> = None;
     let mut batch_size: Option<usize> = None;
     let mut run_id: String = String::new();
+    let mut expectations_path: Option<PathBuf> = None;
+    let mut update_expectations: Option<PathBuf> = None;
+    let mut strict_skip_reasons = false;
     let mut subtrees: Vec<String> = Vec::new();
 
     let mut args = std::env::args().skip(1);
@@ -147,6 +151,19 @@ fn main() {
                         .unwrap_or_else(|| fail("--batch-size needs a positive integer")),
                 );
             }
+            "--expectations" => {
+                expectations_path = Some(PathBuf::from(
+                    args.next()
+                        .unwrap_or_else(|| fail("--expectations needs a path")),
+                ));
+            }
+            "--update-expectations" => {
+                update_expectations =
+                    Some(PathBuf::from(args.next().unwrap_or_else(|| {
+                        fail("--update-expectations needs a path")
+                    })));
+            }
+            "--strict-skip-reasons" => strict_skip_reasons = true,
             "-h" | "--help" => {
                 print!("{}", HELP);
                 return;
@@ -303,7 +320,66 @@ fn main() {
         }
     }
 
-    if rep.met_bar() {
+    let mut gate_failed = !rep.met_bar();
+
+    // Expectation-list mode (design `designs/test262-fixture-consolidation.md`):
+    // `--update-expectations` writes the observed run as the committed list;
+    // `--expectations` compares the run to a committed list and gates on the
+    // two-directional ratchet (progress AND regression both surface, so
+    // neither is silently absorbed).
+    if let Some(path) = &update_expectations {
+        let header = Header {
+            engine: "ironhorse".to_string(),
+            features: features_label(&cfg.features_include),
+            corpus: subtrees.join(","),
+            tip: std::env::var("GARDEN_TEST262_TIP").unwrap_or_else(|_| "unknown".to_string()),
+        };
+        let mut exp = Expectations::new(header);
+        exp.entries = rep.observed.clone();
+        match std::fs::write(path, exp.to_text()) {
+            Ok(()) => eprintln!(
+                "wrote {} expectation entries to {}",
+                exp.entries.len(),
+                path.display()
+            ),
+            Err(e) => fail(&format!(
+                "could not write expectations to {}: {}",
+                path.display(),
+                e
+            )),
+        }
+    }
+    if let Some(path) = &expectations_path {
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| fail(&format!("could not read {}: {}", path.display(), e)));
+        let exp = Expectations::parse(&text)
+            .unwrap_or_else(|e| fail(&format!("bad expectation list {}: {}", path.display(), e)));
+        let events = compare(&rep.observed, &exp);
+        let gating: Vec<_> = events
+            .iter()
+            .filter(|ev| ev.is_gating(strict_skip_reasons))
+            .collect();
+        println!("{}", "-".repeat(72));
+        println!(
+            "expectations: {} entries, {} ratchet event(s) ({} gating)",
+            exp.entries.len(),
+            events.len(),
+            gating.len()
+        );
+        for ev in &events {
+            println!("  {}", ev.describe());
+        }
+        if !gating.is_empty() {
+            println!(
+                "RATCHET: {} gating drift(s); re-baseline with --update-expectations {}",
+                gating.len(),
+                path.display()
+            );
+            gate_failed = true;
+        }
+    }
+
+    if !gate_failed {
         println!(
             "BAR MET: {} covered, 0 failed (of {} total; {} skipped by named reason)",
             rep.covered,
@@ -311,8 +387,20 @@ fn main() {
             rep.total - rep.covered
         );
     } else {
-        println!("BAR NOT MET: {} failure(s)", rep.failures.len());
+        if !rep.met_bar() {
+            println!("BAR NOT MET: {} failure(s)", rep.failures.len());
+        }
         std::process::exit(1);
+    }
+}
+
+/// The `features=` label a committed list header carries: the opted-in feature
+/// set, or `default` when the run used the default skip set.
+fn features_label(features_include: &[String]) -> String {
+    if features_include.is_empty() {
+        "default".to_string()
+    } else {
+        features_include.join("+")
     }
 }
 
@@ -356,6 +444,14 @@ OPTIONS:
                              .js cases (non-recursive)
     --batch-index N          zero-based chunk of the directory's sorted DIRECT cases (implies --direct-only)
     --batch-size N           positive maximum files in that chunk
+    --expectations FILE      gate on a committed parameterized expectation list
+                             (green iff observed == expected per (case, mode);
+                             both progress and regression surface as a ratchet)
+    --update-expectations FILE
+                             write the observed run as a committed list at FILE
+                             (the re-baseline that accepts a ratchet drift)
+    --strict-skip-reasons    also gate when a skip's named reason moves (off by
+                             default while the opcode surface still grows)
     -h, --help               print this help
 
 THIRD-HOST (ses-xs-parity axis, alongside `xst -l` and node+SES prelude):

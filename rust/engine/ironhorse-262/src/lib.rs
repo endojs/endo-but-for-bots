@@ -101,6 +101,7 @@ fn run_program_with_symbols(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
 }
 
 pub mod compile_diff;
+pub mod expectations;
 pub mod frontmatter;
 pub mod report;
 pub mod test262;
