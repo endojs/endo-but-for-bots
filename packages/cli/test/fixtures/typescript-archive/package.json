@@ -1,0 +1,7 @@
+{
+  "name": "typescript-archive-fixture",
+  "private": true,
+  "type": "module",
+  "main": "./main.js",
+  "exports": "./main.js"
+}

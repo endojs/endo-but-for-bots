@@ -11,6 +11,8 @@
     "test/_types.d.ts",
     "!**/*.d.ts",
     "demo/**/*.js",
+    "demo/**/*.ts",
     "bin/endo.cjs"
-  ]
+  ],
+  "exclude": ["test/fixtures"]
 }
