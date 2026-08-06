@@ -66,6 +66,7 @@ Fields described on separate primary pages are listed in the last column.
 | [TypeScript module reference](https://www.typescriptlang.org/docs/handbook/modules/reference.html#packagejson-exports) | `name`, `type`, `main`, `exports`, `imports`, `types`, `typings`, `typesVersions` | Resolution-mode conditions |
 | [Babel configuration](https://babeljs.io/docs/config-files) | `babel` | `browserslist` through target resolution |
 | Bundlers and resolvers | No shared manifest reference exists | Webpack, Vite, Turbopack, Browserify, esbuild, Rollup's Node resolver, and Parcel fields are inventoried below from their own primary references |
+| [`@endo/compartment-mapper` 2.3.0](https://github.com/endojs/endo/tree/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper#readme), behavior evidenced by direct source inspection | No enumerated manifest page; the README describes behavior in prose | `name`, `version`, `type`, `main`, `module`, `browser`, `exports`, `imports`, `parsers`, `dependencies`, `devDependencies`, `peerDependencies`, `peerDependenciesMeta`, `optionalDependencies`, and `bundleDependencies`, inventoried from immutable source below |
 
 The catalog covers the complete field sets above and established ecosystem
 fields for which the named tools document direct behavior.
@@ -326,6 +327,7 @@ TypeScript versions.
 | esbuild | Browser platform defaults to `browser,module,main`, Node to `main,module`, and neutral to no main fields. It also interprets browser maps and conditions. [`main-fields` reference](https://esbuild.github.io/api/#main-fields) |
 | Rollup | Core Rollup does not itself provide Node package lookup. `@rollup/plugin-node-resolve` reads `exports`/`imports`, then defaults to `module,main`; browser behavior is opt-in. [`node-resolve` reference](https://github.com/rollup/plugins/tree/master/packages/node-resolve#readme) |
 | Parcel 2 | Tries `source`, `exports`, `browser`, `module`, then `main`; package exports require the resolver option documented by Parcel. [`dependency resolution`](https://parceljs.org/features/dependency-resolution/) |
+| `@endo/compartment-mapper` 2.3.0 | Resolves the `import`, `default`, and `endo` conditions plus any caller-supplied conditions such as `browser` or `node`, and never adds `require`. The `.` entry is `module` when the `import` condition is active, otherwise `main`, and `exports` overrides both; the `browser` field is applied last and only when the `browser` condition is active. Evidence: immutable [`node-modules.js`](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L802-L805) and [`infer-exports.js`](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/infer-exports.js#L186-L206) |
 
 Vite removed its old heuristic that inspected `browser` and `module` contents
 and now follows `mainFields` order.
@@ -616,6 +618,55 @@ resolution field.
 The former configures source transforms; the latter replaces entry points or
 modules for browser builds.
 Neither implies Babel behavior unless a Babel transform is explicitly selected.
+
+### Endo compartment mapper
+
+`@endo/compartment-mapper` builds SES compartment maps for Node.js-style
+applications, resolving each package's entry points and dependency graph rather
+than bundling or installing.
+It publishes no enumerated manifest page, so the fields below were collected by
+direct inspection of its immutable
+[`@endo/compartment-mapper@2.3.0`](https://github.com/endojs/endo/tree/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper#readme)
+source; every line reference resolves at that revision.
+
+| Field | Behavior in the compartment mapper | Evidence |
+| --- | --- | --- |
+| `name` | Reads; **required** for every package, an absent or empty value throwing. Used as the compartment identity and self-reference referrer, and warned when it disagrees with the containing directory | [`node-modules.js` L239-L243](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L239-L243), [L473-L478](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L473-L478) |
+| `version` | Reads only as informative compartment-descriptor metadata and part of the compartment label; defaults to the empty string and never affects resolution | [`node-modules.js` L570](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L570), [L613](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L613), [L1065](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L1065) |
+| `type` | Reads; `"module"` selects the ECMAScript parser defaults, `"commonjs"` the CommonJS defaults, any other value throws, and an absent value defaults to CommonJS. Also read from ancestor manifests to scope subfolders and to gate the CommonJS package-root alias | [`node-modules.js` L415-L427](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L415-L427), [L629](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L629); [`infer-exports.js` L347-L349](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/infer-exports.js#L347-L349) |
+| `main` | Reads as the legacy `.` entry fallback and as the key the object-form `browser` map replaces | [`infer-exports.js` L201-L203](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/infer-exports.js#L201-L203), [L344-L345](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/infer-exports.js#L344-L345) |
+| `module` | Reads as an ECMAScript entry hint: with the `import` condition it overrides `main` for `.` and tags the target `mjs`, and its mere presence flips the parser defaults to ECMAScript | [`infer-exports.js` L193-L200](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/infer-exports.js#L193-L200); [`node-modules.js` L415](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L415) |
+| `browser` | Reads only when the `browser` condition is active; accepts **both** a string entry and an object substitution map, with `false` ignoring a module. Applied last, so it can overwrite other aliases | [`infer-exports.js` L29-L61](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/infer-exports.js#L29-L61), [L354-L367](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/infer-exports.js#L354-L367) |
+| `exports` | Reads as the authoritative subpath and conditional-export map; supports string, array-fallback, and nested-condition forms, `*` wildcard patterns, and `null` exclusions. Its presence sets `explicitExports`, which governs whether dependents receive a wildcard scope | [`infer-exports.js` L73-L119](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/infer-exports.js#L73-L119), [L204-L206](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/infer-exports.js#L204-L206); [`node-modules.js` L615](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L615) |
+| `imports` | Reads as the internal `#`-prefixed self-reference map; keys not starting with `#` are ignored, and string, conditional, `null`, and wildcard targets are supported | [`infer-exports.js` L132-L167](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/infer-exports.js#L132-L167), [L322-L339](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/infer-exports.js#L322-L339) |
+| `parsers` | Reads an **endo-specific** map from file extension to language such as `mjs`, `cjs`, or `json`, merged over the type-derived defaults; a non-object value or an unknown language throws | [`node-modules.js` L390](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L390), [L394-L413](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L394-L413) |
+| `dependencies` | Reads as the primary set of compartment-graph edges to traverse, and to resolve common-dependency specifiers | [`node-modules.js` L503](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L503), [L810-L812](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L810-L812) |
+| `peerDependencies` | Reads; added to the traversed dependency set | [`node-modules.js` L504](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L504), [L520](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L520) |
+| `peerDependenciesMeta` | Reads; an entry marked `{ "optional": true }` is added as an optional dependency even when it is absent from `peerDependencies` | [`node-modules.js` L532-L537](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L532-L537) |
+| `optionalDependencies` | Reads; traversed and marked optional so a missing package is tolerated | [`node-modules.js` L507](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L507), [L539-L541](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L539-L541) |
+| `bundleDependencies` | Reads; added to the traversed dependency set. The alternate spelling `bundledDependencies` is **not** recognized | [`node-modules.js` L506](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L506), [L521](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L521) |
+| `devDependencies` | Reads **only** for the entry package and **only** when the caller sets the dev flag or the `development` condition | [`node-modules.js` L523](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L523), [L1397](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L1397) |
+
+Three behaviors distinguish it from the bundlers and resolvers above:
+
+- It is ECMAScript-first. The condition set is always seeded with `import`,
+  `default`, and `endo` before any caller conditions are added, and it never
+  adds `require`, so an `exports` or `imports` map that only offers a `require`
+  branch resolves through `default` or not at all. See
+  [`node-modules.js` L802-L805](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L802-L805).
+- `browser` is honored only when the caller supplies the `browser` condition,
+  and it is the last field applied, so it overrides `main`, `module`, and the
+  `exports`-derived aliases for the entries it names. See
+  [`infer-exports.js` L342-L367](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/infer-exports.js#L342-L367).
+- `parsers` is a manifest field no other tool in this catalog reads. It lets a
+  package that ships non-JavaScript sources name the language for each
+  extension, and an invalid map is a hard error rather than a warning. See
+  [`node-modules.js` L394-L413](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/node-modules.js#L394-L413).
+
+It does not read `files`, `private`, `workspaces`, `bin`, `engines`, `os`,
+`cpu`, `sideEffects`, `types`, or `typesVersions`; `files` appears only as a
+future glob target in a source comment
+([`infer-exports.js` L207](https://github.com/endojs/endo/blob/a9d2341a1ed6abb1da5991d246335989bf68e22f/packages/compartment-mapper/src/infer-exports.js#L207)).
 
 ## Common migration checks
 
