@@ -22,7 +22,7 @@
 
 import harden from '@endo/harden';
 
-/** @import { RandomSource } from '../types.d.ts' */
+/** @import { RandomSource } from '../random-source.types.js' */
 
 const BUFFER = new ArrayBuffer(8);
 const VIEW = new DataView(BUFFER);
