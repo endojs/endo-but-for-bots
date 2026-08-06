@@ -544,6 +544,18 @@ The tree's children are the package's files, stored as blobs.
       does not execute arbitrary install scripts).
 - [ ] Binary packages (`.node` native modules) — not
       supported in XS.
+- [x] Package `imports` field (subpath imports): `#`-prefixed
+      specifiers resolve through the importing package's own
+      `imports` map in the archive runtime — ESM `import` and
+      CJS `require` alike, with the exports grammar (wildcard
+      patterns, condition objects with the same
+      import-pass/require-pass ordering, array fallbacks,
+      `null` blocks). An in-package `./` target loads under
+      its canonical key, so its own relative imports resolve
+      against its real directory; a bare-package target routes
+      back through the compartment's link map. Proven on
+      chalk@5.6.2 (`#ansi-styles`, conditional
+      `#supports-color`), which fetches, caches, and executes.
 - [x] Top-level `await` in the entry module (or any module in
       the graph): the standalone runners now import the entry
       through the asynchronous `Compartment.prototype.import`

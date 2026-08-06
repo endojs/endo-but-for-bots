@@ -909,6 +909,111 @@ mod tests {
         xsnap::run_xs_archive_loaded(&archive)
     }
 
+    // The fixture used by compartment-mapper's Node and Endo parity tests.
+    // Keeping Endor's test on these same package files makes a successful run
+    // evidence that all three runtimes resolve the same pattern map and
+    // expected values, rather than merely similar hand-written examples.
+    const SUBPATH_PATTERN_FIXTURE: &[(&str, &str)] = &[
+        (
+            "package.json",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../packages/compartment-mapper/test/fixtures-package-imports-exports/node_modules/patterns-lib/package.json"
+            )),
+        ),
+        (
+            "src/main.js",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../packages/compartment-mapper/test/fixtures-package-imports-exports/node_modules/patterns-lib/src/main.js"
+            )),
+        ),
+        (
+            "src/features/alpha.js",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../packages/compartment-mapper/test/fixtures-package-imports-exports/node_modules/patterns-lib/src/features/alpha.js"
+            )),
+        ),
+        (
+            "src/features/beta/exact-target.js",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../packages/compartment-mapper/test/fixtures-package-imports-exports/node_modules/patterns-lib/src/features/beta/exact-target.js"
+            )),
+        ),
+        (
+            "src/features/beta/gamma.js",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../packages/compartment-mapper/test/fixtures-package-imports-exports/node_modules/patterns-lib/src/features/beta/gamma.js"
+            )),
+        ),
+        (
+            "src/internal/helper.js",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../packages/compartment-mapper/test/fixtures-package-imports-exports/node_modules/patterns-lib/src/internal/helper.js"
+            )),
+        ),
+        (
+            "src/private/thing.js",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../packages/compartment-mapper/test/fixtures-package-imports-exports/node_modules/patterns-lib/src/private/thing.js"
+            )),
+        ),
+    ];
+
+    const SUBPATH_PATTERN_ASSERTION: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../packages/compartment-mapper/test/fixtures-package-imports-exports/node_modules/app/assert-main.js"
+    ));
+
+    const SUBPATH_PATTERN_ENTRY: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../packages/compartment-mapper/test/fixtures-package-imports-exports/node_modules/app/main.js"
+    ));
+
+    #[test]
+    fn subpath_pattern_fixture_matches_compartment_mapper() {
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+        let patterns_tree = store_file_tree(&cas, SUBPATH_PATTERN_FIXTURE);
+        let app_tree = store_file_tree(
+            &cas,
+            &[
+                ("main.js", SUBPATH_PATTERN_ENTRY),
+                ("assert-main.js", SUBPATH_PATTERN_ASSERTION),
+                ("package.json", r#"{"name": "app", "type": "module"}"#),
+            ],
+        );
+        let map = serde_json::json!({
+            "tags": [],
+            "entry": { "compartment": "<entry>", "module": "./assert-main.js" },
+            "compartments": {
+                "<entry>": {
+                    "name": "app",
+                    "location": format!("cas:sha256:{app_tree}"),
+                    "modules": {
+                        "patterns-lib": { "compartment": "patterns-lib-v1.0.0", "module": "." },
+                    },
+                },
+                "patterns-lib-v1.0.0": {
+                    "name": "patterns-lib",
+                    "version": "1.0.0",
+                    "location": format!("cas:sha256:{patterns_tree}"),
+                    "modules": {},
+                },
+            },
+        });
+        let map_hash = cas
+            .store(&serde_json::to_vec(&map).unwrap(), "compartment-map")
+            .unwrap();
+        let archive = load_assembled_archive(&cas, &map_hash).unwrap();
+        xsnap::run_xs_archive_loaded(&archive).unwrap();
+    }
+
     /// When a package has both `main` and `exports`, the exports map
     /// wins (Node semantics): `main` points at a file that throws,
     /// so loading it would fail the run.
@@ -1016,6 +1121,132 @@ mod tests {
             ],
         )
         .unwrap();
+    }
+
+    // --- Package `imports` field (subpath imports) ---
+
+    /// A `#`-prefixed specifier resolves through the importing
+    /// package's own `imports` map to a module of the same package
+    /// (chalk@5's `#ansi-styles` shape).
+    #[test]
+    fn imports_field_resolves_internal_hash_specifier() {
+        run_two_comp(
+            "import v from 'dep'; export const got = v;\n",
+            "dep",
+            &[
+                (
+                    "package.json",
+                    r##"{"name": "dep", "type": "module", "exports": "./index.js", "imports": {"#styles": "./vendor/styles.js"}}"##,
+                ),
+                ("index.js", "import s from '#styles'; export default s;\n"),
+                ("vendor/styles.js", "export default 'styled';\n"),
+            ],
+        )
+        .unwrap();
+    }
+
+    /// An imports target chosen through a condition object skips
+    /// inapplicable conditions (`types`, `node`) and lands on
+    /// `default` (chalk@5's `#supports-color` shape: its `node`
+    /// build touches Node builtins this runtime does not provide, so
+    /// order-blind resolution would fail the run).
+    #[test]
+    fn imports_field_resolves_conditional_target() {
+        run_two_comp(
+            "import v from 'dep'; export const got = v;\n",
+            "dep",
+            &[
+                (
+                    "package.json",
+                    r##"{"name": "dep", "type": "module", "exports": "./index.js", "imports": {"#flag": {"types": "./flag.d.ts", "node": "./boom.js", "default": "./flag.js"}}}"##,
+                ),
+                ("index.js", "import f from '#flag'; export default f;\n"),
+                ("boom.js", "throw new Error('node build must not load');\n"),
+                ("flag.js", "export default true;\n"),
+            ],
+        )
+        .unwrap();
+    }
+
+    /// A single-`*` imports pattern maps the matched text into the
+    /// target path, as in exports.
+    #[test]
+    fn imports_field_wildcard_pattern_resolves() {
+        run_two_comp(
+            "import v from 'dep'; export const got = v;\n",
+            "dep",
+            &[
+                (
+                    "package.json",
+                    r##"{"name": "dep", "type": "module", "exports": "./index.js", "imports": {"#internal/*": "./src/internal/*.js"}}"##,
+                ),
+                ("index.js", "import a from '#internal/alpha'; export default a;\n"),
+                ("src/internal/alpha.js", "export default 'alpha';\n"),
+            ],
+        )
+        .unwrap();
+    }
+
+    /// An imports target module keeps referrer-relative resolution:
+    /// it is registered under its canonical key, so its own `./`
+    /// imports resolve against its real directory, not against the
+    /// `#` specifier it was requested by.
+    #[test]
+    fn imports_field_target_resolves_own_relative_imports() {
+        run_two_comp(
+            "import v from 'dep'; export const got = v;\n",
+            "dep",
+            &[
+                (
+                    "package.json",
+                    r##"{"name": "dep", "type": "module", "exports": "./index.js", "imports": {"#deep": "./vendor/deep/index.js"}}"##,
+                ),
+                ("index.js", "import d from '#deep'; export default d;\n"),
+                ("vendor/deep/index.js", "import h from './helper.js'; export default h;\n"),
+                ("vendor/deep/helper.js", "export default 'deep-helper';\n"),
+            ],
+        )
+        .unwrap();
+    }
+
+    /// `require('#x')` routes through the same imports map with
+    /// require-conditions-first.
+    #[test]
+    fn imports_field_resolves_for_cjs_require() {
+        run_two_comp(
+            "import v from 'dep'; export const got = v;\n",
+            "dep",
+            &[
+                (
+                    "package.json",
+                    r##"{"name": "dep", "imports": {"#util": {"import": "./boom.js", "require": "./lib/util.js"}}}"##,
+                ),
+                ("index.js", "module.exports = require('#util');\n"),
+                ("boom.js", "throw new Error('import build must not load');\n"),
+                ("lib/util.js", "module.exports = 41;\n"),
+            ],
+        )
+        .unwrap();
+    }
+
+    /// A `#` specifier the imports map does not list fails cleanly,
+    /// never falling back to file lookup.
+    #[test]
+    fn unlisted_import_specifier_fails_cleanly() {
+        let result = run_two_comp(
+            "import v from 'dep'; export const got = v;\n",
+            "dep",
+            &[
+                (
+                    "package.json",
+                    r##"{"name": "dep", "type": "module", "exports": "./index.js", "imports": {"#styles": "./vendor/styles.js"}}"##,
+                ),
+                ("index.js", "import n from '#nope'; export default n;\n"),
+                ("vendor/styles.js", "export default 'styled';\n"),
+                ("#nope.js", "export default 'file fallback must not load';\n"),
+            ],
+        );
+        assert!(result.is_err());
     }
 
     // --- Referrer-relative resolution ---
