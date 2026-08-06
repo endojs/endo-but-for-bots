@@ -51,6 +51,7 @@ type RemoteGitRef = {
     oid?: string;
 };
 type RemoteGitRefUpdateResult = 'created' | 'updated' | 'up-to-date' | 'fast-forward' | 'forced' | 'pruned' | 'rejected';
+type RemoteNormalizedRemotePolicy = RemotePolicy & Required<Pick<RemotePolicy, 'allowForcePush' | 'allowTags' | 'allowDelete' | 'allowLocalFileTransport'>>;
 type RemoteOperationResult = {
     updatedRefs: RemoteRefUpdate[];
     text: string;
@@ -60,6 +61,7 @@ type RemotePolicy = {
     allowedDirections: RemoteGitDirection[];
     fetchRefspecs: string[];
     pushRefspecs: string[];
+    defaultPullRef?: string;
     allowedBranches?: string[];
     allowForcePush?: boolean;
     allowTags?: boolean;
@@ -76,7 +78,7 @@ type RemoteRefUpdate = {
     remote: string;
     result: RemoteGitRefUpdateResult;
 };
-type RemoteSnapshot = RemotePolicy & {
+type RemoteSnapshot = RemoteNormalizedRemotePolicy & {
     name: string;
 };`,
     body: `GitRemote`,
