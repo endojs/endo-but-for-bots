@@ -5,6 +5,9 @@
     "skipLibCheck": false,
     "strict": true
   },
-  "files": ["types-index.d.ts", "test/git-mount-tool-types.test-d.ts"],
+  "files": [
+    "types-index.types.d.ts",
+    "test/git-mount-tool-types.test-d.ts"
+  ],
   "include": ["test/*.test-d.ts"]
 }

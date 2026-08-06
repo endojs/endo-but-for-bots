@@ -266,12 +266,12 @@ const parseDtsModule = (dtsUrl, moduleName) => {
 /** @typedef {{ sourceFile: ts.SourceFile, aliasMap: Map<string, ts.TypeAliasDeclaration | ts.InterfaceDeclaration>, importMap: Map<string, ImportBinding> }} ParsedTypeModule */
 
 /**
- * Type sources the package's own `exports` map cannot name.
- * `@endo/platform` publishes `types-index.d.ts` re-export indexes for these
- * subpaths, which carry no definitions of their own; the definitions live in
- * the checked `.ts` hosts beside them.
+ * Type sources the package's own `exports` map cannot name directly.
+ * These packages publish thin declaration re-export indexes, which carry no
+ * definitions of their own; the definitions live in checked `.ts` hosts.
  */
 const TYPE_SOURCE_OVERRIDES = new Map([
+  ['@endo/exo-stream', 'types.ts'],
   ['@endo/platform/fs/lite/types', 'src/fs/types.ts'],
   ['@endo/platform/fs/extended', 'src/fs/extended/types.ts'],
 ]);
