@@ -194,17 +194,26 @@ export const make = (powers, context, contextWrapper = {}) => {
 
   // A session reincarnated after a daemon restart whose persistent config dir
   // already holds a transcript must resume it on the first post-restart turn,
-  // not fork a fresh, context-free conversation (the reported bug). Detect that
-  // here — at construction, before any mount — by reading the config dir's
-  // plain host backing directory directly: Claude Code persists a conversation
-  // under `<config>/projects/<encoded-cwd>/*.jsonl`, so any project entry means
-  // at least one turn already ran for this session.
-  let resumePriorConversation = false;
+  // not fork a fresh, context-free conversation (the reported bug). Detect
+  // that by reading the config dir's plain host backing directory directly:
+  // Claude Code persists a conversation under
+  // `<config>/projects/<encoded-cwd>/*.jsonl`, so any project entry means at
+  // least one turn already ran for this session. The detector is handed to
+  // the client and consulted before EVERY spawn — a one-shot check at
+  // construction would silently fall back to "fresh" on a transient read
+  // failure, and could not notice a first turn that was killed before Claude
+  // persisted anything (which must not `--continue`).
+  /** @type {(() => boolean) | undefined} */
+  let detectPriorConversation;
   if (persistConfig && configHostDir) {
+    const projectsDir = nodePath.join(configHostDir, 'projects');
+    detectPriorConversation = () =>
+      existsSync(projectsDir) && readdirSync(projectsDir).length > 0;
+  }
+  let resumePriorConversation = false;
+  if (detectPriorConversation) {
     try {
-      const projectsDir = nodePath.join(configHostDir, 'projects');
-      resumePriorConversation =
-        existsSync(projectsDir) && readdirSync(projectsDir).length > 0;
+      resumePriorConversation = detectPriorConversation();
     } catch {
       // Unreadable backing dir (first run, races): treat as a fresh session.
     }
@@ -420,6 +429,7 @@ export const make = (powers, context, contextWrapper = {}) => {
     }),
     initialPrompt,
     resumePriorConversation,
+    detectPriorConversation,
   });
 
   // Tear down on cancellation/collection. `cancel` is transient (the

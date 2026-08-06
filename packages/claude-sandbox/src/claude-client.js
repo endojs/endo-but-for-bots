@@ -197,6 +197,18 @@ const defaultStderrIterable = proc =>
  *   post-restart turn resumes the pre-restart conversation instead of
  *   starting a fresh, context-free one. Defaults to `false` (a brand-new
  *   session has nothing to resume).
+ * @property {() => boolean} [detectPriorConversation] - Ground-truth
+ *   check for a persisted transcript, consulted before *every* spawn
+ *   (not once at construction). When provided it decides `--continue`
+ *   directly, which closes two gaps the in-memory flag cannot: a first
+ *   turn killed before Claude persisted anything must NOT make the next
+ *   turn pass `--continue` (there is nothing to resume — the CLI would
+ *   error or silently fork a fresh conversation), and a post-restart
+ *   turn must resume whenever a transcript exists even if the one-shot
+ *   construction-time detection raced or failed. A detector throw falls
+ *   back to the in-memory flag. Also gates `initialPrompt`, so a
+ *   reincarnated formula does not re-fire its initial prompt as a
+ *   spurious extra turn on every daemon restart.
  * @property {string} [mcpConfigPath] - Slice-internal path to an MCP
  *   config file (see the floot package's mcp-socket-server). When set,
  *   every spawn passes `--mcp-config` (with this path) and
@@ -243,6 +255,7 @@ export const makeClaudeClient = ({
   env = {},
   initialPrompt,
   resumePriorConversation = false,
+  detectPriorConversation,
   makeStdoutIterable = defaultStdoutIterable,
   makeStderrIterable = defaultStderrIterable,
   stderrReadLimit = 16_384,
@@ -281,6 +294,22 @@ export const makeClaudeClient = ({
   // `resumePriorConversation: true` so its first post-restart turn
   // resumes the pre-restart conversation rather than forking a fresh one.
   let conversationStarted = resumePriorConversation;
+  // Whether the *next* spawn should resume with `--continue`. The detector,
+  // when present, is the ground truth (it reads the persisted transcript), so
+  // a turn killed before Claude persisted anything does not poison the next
+  // turn with a `--continue` that has nothing to resume, and a post-restart
+  // turn resumes whenever a transcript actually exists. Without a detector
+  // (tests, ephemeral tmpfs config dirs) the in-memory flag is all we have.
+  const priorConversation = () => {
+    if (detectPriorConversation) {
+      try {
+        return detectPriorConversation();
+      } catch {
+        // Unreadable backing dir (transient fs race): fall back to the flag.
+      }
+    }
+    return conversationStarted;
+  };
   /** @type {ProcessHandle | null} */
   let inFlight = null;
   // Closes the reply channel of the most recent turn (queued or running).
@@ -387,7 +416,7 @@ export const makeClaudeClient = ({
     if (useSystemPrompt) {
       argv.push('--append-system-prompt', String(useSystemPrompt));
     }
-    if (conversationStarted) {
+    if (priorConversation()) {
       argv.push('--continue');
     }
     const proc = await E(activeSlice).spawn(
@@ -529,7 +558,13 @@ export const makeClaudeClient = ({
   // Fire-and-forget the initial prompt: queue it as the first turn and
   // drain it in the background so the buffer does not grow unbounded if
   // the caller never pulls. Explicit `send()`s queue after it.
-  if (initialPrompt) {
+  //
+  // Only on a genuinely fresh session: the prompt rides in the formula env,
+  // so a reincarnated formula would otherwise re-fire it as a spurious extra
+  // turn on every daemon restart (and, when resume detection missed, that
+  // re-fired turn would become the fresh conversation all later `--continue`
+  // turns build on — total context loss).
+  if (initialPrompt && !priorConversation()) {
     const initReader = runTurn(initialPrompt);
     (async () => {
       // Drain without closing: closing would fire onClose and kill the very
