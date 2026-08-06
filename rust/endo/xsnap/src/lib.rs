@@ -898,66 +898,26 @@ pub const HOST_ALIASES: &str = include_str!("host_aliases.js");
 /// unrepaired intrinsics and `polyfills.js`'s deep-freeze `harden`.
 /// Tracked in `designs/worker-rust-xs.md` § Known Gaps.
 
-/// Web-platform text endowments for archive compartments, appended
-/// to `globalThis.__archiveEndowments` as a separate statement after
-/// the base endowments object: the machine's `TextEncoder` and
-/// `TextDecoder` globals (native-backed where installed, otherwise
-/// the `POLYFILLS` pure-JS pair — evaluate `POLYFILLS` first on
-/// machines that skip the SES bootstrap), plus pure-JS `atob` and
-/// `btoa`. npm packages' browser and dual builds lean on these; all
-/// four are pure byte/string transforms carrying no new authority.
-pub const ARCHIVE_TEXT_ENDOWMENTS_JS: &str = r#"
-(function () {
-    var E = globalThis.__archiveEndowments;
-    E.TextEncoder = globalThis.TextEncoder;
-    E.TextDecoder = globalThis.TextDecoder;
-    var ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-    E.btoa = function btoa(data) {
-        var s = String(data);
-        var out = '';
-        for (var i = 0; i < s.length; i += 3) {
-            for (var k = i; k < i + 3 && k < s.length; k++) {
-                if (s.charCodeAt(k) > 255) {
-                    var eb = new Error('btoa: character beyond U+00FF at index ' + k);
-                    eb.name = 'InvalidCharacterError';
-                    throw eb;
-                }
-            }
-            var n = (s.charCodeAt(i) << 16)
-                | ((i + 1 < s.length ? s.charCodeAt(i + 1) : 0) << 8)
-                | (i + 2 < s.length ? s.charCodeAt(i + 2) : 0);
-            out += ALPHABET[(n >> 18) & 63];
-            out += ALPHABET[(n >> 12) & 63];
-            out += i + 1 < s.length ? ALPHABET[(n >> 6) & 63] : '=';
-            out += i + 2 < s.length ? ALPHABET[n & 63] : '=';
-        }
-        return out;
-    };
-    E.atob = function atob(data) {
-        var s = String(data).replace(/[\t\n\f\r ]+/g, '');
-        if (s.length % 4 === 0) {
-            s = s.replace(/==?$/, '');
-        }
-        if (s.length % 4 === 1 || /[^A-Za-z0-9+\/]/.test(s)) {
-            var ea = new Error('atob: invalid base64');
-            ea.name = 'InvalidCharacterError';
-            throw ea;
-        }
-        var out = '';
-        var buffer = 0;
-        var bits = 0;
-        for (var i = 0; i < s.length; i++) {
-            buffer = (buffer << 6) | ALPHABET.indexOf(s[i]);
-            bits += 6;
-            if (bits >= 8) {
-                bits -= 8;
-                out += String.fromCharCode((buffer >> bits) & 255);
-            }
-        }
-        return out;
-    };
-})();
-"#;
+/// Web-platform text endowments for archive compartments, evaluated as
+/// a side-effecting script after the base endowments object so it
+/// installs onto `globalThis.__archiveEndowments`: the machine's
+/// `TextEncoder` and `TextDecoder` globals (native-backed where
+/// installed, otherwise the `POLYFILLS` pure-JS pair — evaluate
+/// `POLYFILLS` first on machines that skip the SES bootstrap), plus
+/// `atob` and `btoa`. npm packages' browser and dual builds lean on
+/// these; all four are pure byte/string transforms carrying no new
+/// authority.
+///
+/// The base64 codec is NOT reimplemented in Rust or hand-rolled in JS
+/// here: this is a bundle of `@endo/base64` (the single behavioral
+/// oracle for the byte<->string transform, its alphabet, padding, and
+/// RFC 4648 error semantics) plus the thin WHATWG `atob`/`btoa`
+/// adaptation layer — forgiving-base64 whitespace handling, optional
+/// trailing padding, and the `InvalidCharacterError` name — that
+/// `@endo/base64` deliberately does not provide. Generated from
+/// `packages/daemon/src/archive-text-endowments-xs.js` by
+/// `packages/daemon/scripts/bundle-archive-text-endowments-xs.mjs`.
+pub const ARCHIVE_TEXT_ENDOWMENTS_JS: &str = include_str!("archive_text_endowments.js");
 
 pub const SES_BOOT: &str = include_str!("ses_boot.js");
 
@@ -2665,9 +2625,13 @@ mod tests {
     fn archive_text_endowments_provide_codecs() {
         // The archive text endowments hand compartments working
         // TextEncoder/TextDecoder (the POLYFILLS pair on a machine
-        // without native codecs) plus pure-JS atob/btoa with browser
-        // error semantics (InvalidCharacterError) and
-        // forgiving-base64 whitespace handling.
+        // without native codecs) plus `atob`/`btoa`. The base64 codec
+        // is `@endo/base64`, bundled (see ARCHIVE_TEXT_ENDOWMENTS_JS),
+        // so it remains the behavioral oracle: the RFC 4648 §10 vectors
+        // below are lifted verbatim from `@endo/base64`'s own
+        // `test/main.test.js`. The endowment adds only the WHATWG shell:
+        // browser error semantics (`InvalidCharacterError`) and
+        // forgiving-base64 whitespace + optional-padding handling.
         let machine = new_machine();
         machine.eval(POLYFILLS);
         machine.eval("globalThis.__archiveEndowments = {};");
@@ -2679,13 +2643,32 @@ mod tests {
                     var enc = new E.TextEncoder().encode('h\\u00e9\\u2603'); \
                     var dec = new E.TextDecoder().decode(enc); \
                     if (dec !== 'h\\u00e9\\u2603') return 'decode mismatch: ' + dec; \
-                    if (E.btoa('hello') !== 'aGVsbG8=') return 'btoa: ' + E.btoa('hello'); \
-                    if (E.btoa('he') !== 'aGU=') return 'btoa pad: ' + E.btoa('he'); \
-                    if (E.atob('aGVsbG8=') !== 'hello') return 'atob: ' + E.atob('aGVsbG8='); \
-                    if (E.atob(' aGVs\\nbG8= ') !== 'hello') return 'forgiving atob failed'; \
-                    var threw = false; \
-                    try { E.atob('a'); } catch (e) { threw = e.name === 'InvalidCharacterError'; } \
-                    if (!threw) return 'atob length-1 rest must throw InvalidCharacterError'; \
+                    /* RFC 4648 §10 vectors — the @endo/base64 oracle set. */ \
+                    var vectors = [ \
+                        ['', ''], ['f', 'Zg=='], ['fo', 'Zm8='], \
+                        ['foo', 'Zm9v'], ['foob', 'Zm9vYg=='], \
+                        ['fooba', 'Zm9vYmE='], ['foobar', 'Zm9vYmFy'] \
+                    ]; \
+                    for (var i = 0; i < vectors.length; i++) { \
+                        var plain = vectors[i][0], coded = vectors[i][1]; \
+                        if (E.btoa(plain) !== coded) \
+                            return 'btoa(' + plain + '): ' + E.btoa(plain); \
+                        if (E.atob(coded) !== plain) \
+                            return 'atob(' + coded + '): ' + E.atob(coded); \
+                    } \
+                    /* Forgiving-base64: whitespace and absent padding. */ \
+                    if (E.atob(' aGVs\\nbG8= ') !== 'hello') return 'forgiving whitespace failed'; \
+                    if (E.atob('Zm8') !== 'fo') return 'forgiving unpadded failed'; \
+                    /* Binary round-trip (bytes outside ASCII). */ \
+                    if (E.atob(E.btoa('\\x0d\\x02\\x09\\xff\\xfe')) !== '\\x0d\\x02\\x09\\xff\\xfe') \
+                        return 'binary round-trip failed'; \
+                    /* Malformed / alphabet / padding edge cases reject as ICE. */ \
+                    var bad = ['a', 'Z%', 'aGVsbG8@']; \
+                    for (var j = 0; j < bad.length; j++) { \
+                        var threw = false; \
+                        try { E.atob(bad[j]); } catch (e) { threw = e.name === 'InvalidCharacterError'; } \
+                        if (!threw) return 'atob(' + bad[j] + ') must throw InvalidCharacterError'; \
+                    } \
                     var threw2 = false; \
                     try { E.btoa('\\u0100'); } catch (e) { threw2 = e.name === 'InvalidCharacterError'; } \
                     if (!threw2) return 'btoa beyond U+00FF must throw InvalidCharacterError'; \
