@@ -3,8 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
+| **Updated** | 2026-08-06 |
 | **Author** | Aaron Kumavis (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
 | **Builds on** | designs/ironhorse-engine.md (§ Snapshots, requirement 1c) |
 
 Investigation of a seam in the Ironhorse engine's snapshot subsystem
@@ -24,6 +25,70 @@ Per the naming doctrine (ironhorse-engine resolved question 7, as
 amended 2026-07-29): the trait and the arena hooks are **Ironhorse**
 (language execution); the SQLite backend and its file lifecycle are
 **Endor** (platform binding).
+
+## Status
+
+Phases 1 and 2 implemented (2026-08-06, this branch); phase 3 (lazy
+reification) and phase 4 (hardening) not started.
+
+- `rust/engine/ironhorse-snapshot/src/store.rs` — the paged logical
+  image and the `HeapStore` trait: `StoreManifest` (gates + geometry +
+  epoch), `SmallState`, `CheckpointBatch`, `check_epoch`,
+  `validate_store` (exhaustive open-time gates, accounting, full row
+  inventory), `image_to_batch` / `store_to_image`,
+  `export_to_container` / `import_from_container` (the byte-identity
+  locks), `root_hash` (logical identity: SHA-256 of the canonical
+  export, locked equal to the blob path's CAS key), and `MemoryStore`
+  with per-commit row stats.
+- `rust/engine/ironhorse-snapshot/src/store_file.rs` — `FileStore`,
+  the single-file pure-Rust reference store: lazy point reads by
+  directory entry; atomic whole-file-rewrite commit (temp + rename)
+  merging dirty rows over clean ones.
+  Its commit I/O is O(store) while commit *encoding* is O(dirty) —
+  reference semantics only; the O(dirty)-I/O backend is SQLite.
+- `rust/engine/ironhorse-vm/src/value.rs` — the canonical geometry
+  (`SLOTS_PER_PAGE` = 256, `CHUNK_EXTENT_BYTES` = 64 KiB) and the
+  per-page / per-extent dirty bitmaps, set only by the record/byte
+  mutating paths (`alloc`, `get_mut`, `slice_mut`, `compact`);
+  free-list and mark-bit churn never dirties, restores start clean,
+  compaction dirties exactly the new extent range.
+  Deviation from the doc as first written: the geometry constants
+  live in the **vm** (the bitmaps key to them and the dependency runs
+  snapshot → vm); `ironhorse-snapshot::store` re-exports them.
+- `rust/engine/ironhorse-snapshot/src/machine.rs` — the store-backed
+  machine surface: `StoreSession` (the machine↔store pairing pinned
+  by epoch — an addition over the design text, closing the
+  dirty-set-against-the-wrong-baseline hazard surfaced during
+  implementation), `begin_store_session` (full epoch-1 write, refuses
+  a `NotEmpty` store), `checkpoint_to_store` (dirty rows + whole
+  small state; bitmaps cleared only after a successful commit),
+  `resume_from_store` (validate exhaustively, then reify eagerly —
+  the lazy mode is phase 3).
+- `rust/endo/ironhorse-store-sqlite/` — the daemon-side SQLite
+  backend (§ SQLite schema: `meta` / `slot_pages` / `chunk_exts` /
+  `small_state` / `side_tables`; WAL + foreign keys at open;
+  transactional dirty-row upserts + geometry drop; explicit full
+  last-connection close, sidecar removal asserted by test).
+  Deviation: a sibling crate in the root workspace rather than an
+  `endo` module, so it builds and tests without the XS C toolchain
+  the `xsnap` crate needs; wiring into the `endor` binary's
+  supervisor verbs lands with the worker-envelope work.
+- Locks: `ironhorse-snapshot/tests/store_checkpoint.rs` (both
+  reference backends: store equals the live machine after every
+  checkpoint; export byte-equals the machine's own blob; root hash
+  equals the blob CAS key; incrementality measured at the full /
+  partial / zero points; resume equals uninterrupted in result AND
+  computrons; pairing guards fail closed; lifecycle across file
+  reopens), the vm dirty-tracking suite, the store-model and
+  FileStore suites, and the SQLite suite (including cross-backend
+  byte parity with `MemoryStore`).
+
+Remaining, mapped to the phases: the dirty-fraction sweep benchmark
+(phase 2's proportionality instrument beyond the three-point lock);
+lazy reification, the six-way metamorphic determinism suite, and the
+hot-path benchmark gate (phase 3); fuzz targets and the supervisor
+cadence policy (phase 4); the incremental root-hash tree (future
+work).
 
 ## What Is the Problem Being Solved?
 
