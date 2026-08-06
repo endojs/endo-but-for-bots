@@ -95,3 +95,69 @@ test('normalization preserves reverse-lexicographic refspec order', t => {
     ['refs/heads/zeta:refs/heads/zeta', 'refs/heads/alpha:refs/heads/alpha'],
   );
 });
+
+test('explicit defaultPullRef controls unqualified pull', async t => {
+  const policy = {
+    ...makePolicy(),
+    defaultPullRef: 'refs/heads/alpha',
+  };
+  const normalized = normalizeGitRemotePolicy({ name: 'origin', policy });
+  const { fetchedRefspecLists, mergedRefs, remote } = makeRemoteHarness(policy);
+
+  const snapshot = await E(remote).inspect();
+  t.deepEqual(snapshot, harden({ name: 'origin', ...normalized }));
+  await E(remote).pull();
+
+  t.deepEqual(fetchedRefspecLists, [[...FETCH_REFSPECS]]);
+  t.deepEqual(mergedRefs, ['refs/remotes/origin/alpha']);
+});
+
+test('omitted defaultPullRef preserves first-concrete-refspec pull', async t => {
+  const { fetchedRefspecLists, mergedRefs, remote } =
+    makeRemoteHarness(makePolicy());
+
+  await E(remote).pull();
+
+  t.deepEqual(fetchedRefspecLists, [[...FETCH_REFSPECS]]);
+  t.deepEqual(mergedRefs, ['refs/remotes/origin/zeta']);
+});
+
+test('defaultPullRef rejects invalid, wildcard, missing, and ambiguous selectors', t => {
+  const cases = harden([
+    {
+      defaultPullRef: 'main',
+      message: /must be fully qualified under refs/,
+    },
+    {
+      defaultPullRef: 'refs/heads/*',
+      message: /must select a concrete fetch refspec source/,
+    },
+    {
+      defaultPullRef: 'refs/heads/missing',
+      message: /does not select a configured concrete fetch refspec/,
+    },
+    {
+      defaultPullRef: 'refs/heads/zeta',
+      fetchRefspecs: [
+        '+refs/heads/zeta:refs/remotes/origin/zeta',
+        '+refs/heads/zeta:refs/remotes/origin/also-zeta',
+      ],
+      message: /ambiguous across 2 configured concrete fetch refspecs/,
+    },
+  ]);
+
+  for (const { defaultPullRef, fetchRefspecs, message } of cases) {
+    t.throws(
+      () =>
+        normalizeGitRemotePolicy({
+          name: 'origin',
+          policy: {
+            ...makePolicy(),
+            defaultPullRef,
+            ...(fetchRefspecs === undefined ? {} : { fetchRefspecs }),
+          },
+        }),
+      { message },
+    );
+  }
+});

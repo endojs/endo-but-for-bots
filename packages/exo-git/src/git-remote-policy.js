@@ -12,7 +12,7 @@ import { q } from '@endo/errors';
  */
 
 const DEFAULT_POLICY = harden(
-  /** @type {Omit<NormalizedRemotePolicy, 'url'>} */ ({
+  /** @type {Omit<NormalizedRemotePolicy, 'url' | 'defaultPullRef'>} */ ({
     allowedDirections: harden(['fetch']),
     fetchRefspecs: harden([]),
     pushRefspecs: harden([]),
@@ -327,8 +327,49 @@ const derivePushRefspecsFromBranches = branches =>
 harden(derivePushRefspecsFromBranches);
 
 /**
+ * @param {string[]} fetchRefspecs
+ * @param {string | undefined} defaultPullRef
+ * @returns {{ force: boolean, src: string, dst: string } | undefined}
+ */
+const selectPullMapping = (fetchRefspecs, defaultPullRef) => {
+  const mappings = fetchRefspecs.map(refspec =>
+    parseGitRefspec(refspec, 'GitRemote policy.fetchRefspecs[]'),
+  );
+  if (defaultPullRef === undefined) {
+    return mappings.find(
+      ({ src, dst }) => src !== '' && !src.includes('*') && !dst.includes('*'),
+    );
+  }
+  const fieldName = 'GitRemote policy.defaultPullRef';
+  const ref = requirePolicyString(defaultPullRef, fieldName);
+  assertQualifiedRef(ref, fieldName);
+  if (ref.includes('*')) {
+    throw new Error(
+      `${fieldName} must select a concrete fetch refspec source: ${q(ref)}`,
+    );
+  }
+  const matches = mappings.filter(
+    ({ src, dst }) =>
+      src === ref && src !== '' && !src.includes('*') && !dst.includes('*'),
+  );
+  if (matches.length === 0) {
+    throw new Error(
+      `${fieldName} does not select a configured concrete fetch refspec: ${q(ref)}`,
+    );
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `${fieldName} is ambiguous across ${matches.length} configured concrete fetch refspecs: ${q(ref)}`,
+    );
+  }
+  return matches[0];
+};
+harden(selectPullMapping);
+
+/**
  * Normalize and validate one Git remote policy without reordering any
- * refspec list.
+ * refspec list. `defaultPullRef`, when present, names the fully qualified
+ * source of exactly one concrete fetch refspec.
  *
  * @param {object} args
  * @param {string} args.name
@@ -372,6 +413,14 @@ export const normalizeGitRemotePolicy = ({ name, policy }) => {
     allowedDirections,
     fetchRefspecs: harden(fetchRefspecs),
     pushRefspecs: harden(pushRefspecs),
+    ...(policy.defaultPullRef === undefined
+      ? {}
+      : {
+          defaultPullRef: requirePolicyString(
+            policy.defaultPullRef,
+            'GitRemote policy.defaultPullRef',
+          ),
+        }),
     allowForcePush: requireGitRemoteBoolean(
       policy.allowForcePush,
       DEFAULT_POLICY.allowForcePush,
@@ -412,6 +461,7 @@ export const normalizeGitRemotePolicy = ({ name, policy }) => {
       'GitRemote policy allows push but has no pushRefspecs or allowedBranches',
     );
   }
+  selectPullMapping(normalized.fetchRefspecs, normalized.defaultPullRef);
   return normalized;
 };
 harden(normalizeGitRemotePolicy);
@@ -473,3 +523,14 @@ export const gitRefspecMatchesPattern = (parsed, policyRefspec) => {
   return !policyHasWildcard || srcCapture === dstCapture;
 };
 harden(gitRefspecMatchesPattern);
+
+/**
+ * Resolve the local fetch destination used by an unqualified pull.
+ * An omitted default preserves the legacy first-concrete-refspec rule.
+ *
+ * @param {NormalizedRemotePolicy} policy
+ * @returns {string | undefined}
+ */
+export const getGitRemotePullDestination = policy =>
+  selectPullMapping(policy.fetchRefspecs, policy.defaultPullRef)?.dst;
+harden(getGitRemotePullDestination);

@@ -26,6 +26,13 @@ normalization.
 Consumers that serialize or hash a normalized policy must treat these arrays
 as ordered and must not sort them.
 
+An optional `defaultPullRef` names the fully qualified source side of exactly
+one configured concrete fetch refspec, such as `refs/heads/main`.
+An unqualified `GitRemote.pull()` integrates that mapping's destination.
+For compatibility, when `defaultPullRef` is omitted, pull selects the first
+declared concrete fetch refspec; empty and wildcard-only policies still require
+an explicit pull branch.
+
 Policy-consuming packages should import `normalizeGitRemotePolicy` from
 `@endo/exo-git` instead of copying its normalization rules, and should preserve
 the returned refspec order when forming canonical persistence or hash inputs.

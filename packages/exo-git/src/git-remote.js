@@ -8,6 +8,7 @@ import { E } from '@endo/eventual-send';
 import { assertGitCredentialForUrl } from './git-credential.js';
 import {
   captureGitRefPattern,
+  getGitRemotePullDestination,
   gitRefspecMatchesPattern,
   normalizeGitRef,
   normalizeGitRemotePolicy,
@@ -583,17 +584,13 @@ export const makeGitRemote = ({
       }
       return ref;
     }
-    const concreteFetch = currentPolicy.fetchRefspecs.find(
-      refspec =>
-        !refspec.includes('*') &&
-        parseGitRefspec(refspec, 'GitRemote.pull fetchRefspec').src,
-    );
-    if (concreteFetch === undefined) {
+    const destination = getGitRemotePullDestination(currentPolicy);
+    if (destination === undefined) {
       throw new Error(
         'GitRemote.pull requires a branch when fetchRefspecs are empty or wildcarded',
       );
     }
-    return parseGitRefspec(concreteFetch, 'GitRemote.pull fetchRefspec').dst;
+    return destination;
   };
 
   /**

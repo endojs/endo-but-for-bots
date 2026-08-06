@@ -140,6 +140,7 @@ const RemotePolicyRequiredShape = {
 };
 
 const RemotePolicyOptionalShape = {
+  defaultPullRef: M.string(),
   allowedBranches: M.arrayOf(M.string()),
   allowForcePush: M.boolean(),
   allowTags: M.boolean(),
