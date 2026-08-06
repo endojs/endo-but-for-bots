@@ -38,7 +38,7 @@ export {
 
 export { normalizeVirtualHostName, makeAppsNameHub } from './src/vhost.js';
 
-/** @import { GatewayConfig, BindAddress, GatewayPowers, Gateway } from './types.d.ts' */
+/** @import { GatewayConfig, BindAddress, GatewayPowers, Gateway } from './src/types.js' */
 
 const GatewayInterface = M.interface('Gateway', {
   start: M.call().returns(M.promise()),
