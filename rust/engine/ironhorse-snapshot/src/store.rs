@@ -54,15 +54,13 @@ use crate::image::{
 use crate::slot_codec::{decode_slots, encode_slot, SLOT_RECORD_BYTES};
 use ironhorse_vm::{Slot, COST_TABLE_VERSION};
 
-/// Slot records per store page. A page blob is `SLOTS_PER_PAGE ×`
-/// [`SLOT_RECORD_BYTES`] bytes (the last page of an arena may be
-/// shorter). Starting geometry per the design's open question 2;
-/// changing it is a store-schema version bump, not a silent re-read.
-pub const SLOTS_PER_PAGE: u32 = 256;
-
-/// Chunk-arena bytes per store extent (the last extent may be
-/// shorter). Same versioning discipline as [`SLOTS_PER_PAGE`].
-pub const CHUNK_EXTENT_BYTES: u32 = 64 * 1024;
+/// The canonical page/extent geometry, owned by the vm because the
+/// arenas' dirty bitmaps are keyed to it (`ironhorse_vm::value`) and the
+/// dependency runs snapshot → vm. A page blob is `SLOTS_PER_PAGE ×`
+/// [`SLOT_RECORD_BYTES`] bytes and an extent is `CHUNK_EXTENT_BYTES`
+/// raw bytes (the last of each may be shorter). Changing either is a
+/// store-schema version bump, not a silent re-read.
+pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 
 /// The store schema version, independent of the snapshot
 /// [`crate::format::IRONHORSE_FORMAT_VERSION`] (which governs the record
@@ -101,6 +99,10 @@ pub enum StoreError {
     /// exactly one (or does not start at 1 on an empty store) — the
     /// split-brain / replayed-batch guard.
     EpochMismatch { expected: u64, found: u64 },
+    /// A first (full-write) checkpoint was aimed at a store that
+    /// already holds an epoch. Adopting existing content is the resume
+    /// path's job; silently overwriting it would discard a heap.
+    NotEmpty { epoch: u64 },
 }
 
 impl From<SnapshotError> for StoreError {
