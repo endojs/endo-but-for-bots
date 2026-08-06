@@ -18,7 +18,7 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./types-index.d.ts",
+      "types": "./types-index.types.d.ts",
       "default": "./src/index.js"
     },
     "./harness": {
@@ -34,7 +34,7 @@
       "default": "./src/code-mode.js"
     },
     "./code-mode-provisioning": {
-      "types": "./code-mode-provisioning.d.ts",
+      "types": "./code-mode-provisioning.types.d.ts",
       "default": "./code-mode-provisioning.js"
     },
     "./harness/types.js": {
@@ -50,7 +50,7 @@
       "default": "./endo-code-mode-pi-extension.js"
     },
     "./eval": {
-      "types": "./src/eval/index.js",
+      "types": "./src/eval/index.types.d.ts",
       "default": "./src/eval/index.js"
     },
     "./edit-text": {
