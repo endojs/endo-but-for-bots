@@ -24,10 +24,10 @@
   "type": "module",
   "main": "./index.js",
   "module": "./index.js",
-  "types": "./types.d.ts",
+  "types": "./index.types.d.ts",
   "exports": {
     ".": {
-      "types": "./types.d.ts",
+      "types": "./index.types.d.ts",
       "default": "./index.js"
     },
     "./src/config.js": "./src/config.js",

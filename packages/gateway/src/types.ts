@@ -88,21 +88,21 @@ export type Gateway = {
   getConfig(): Promise<GatewayConfig>;
 };
 
-export const DEFAULT_BIND_ADDRESS: string;
-export const defaultFeatureToggles: FeatureToggles;
-export const defaultGatewayConfig: GatewayConfig;
+export declare const DEFAULT_BIND_ADDRESS: string;
+export declare const defaultFeatureToggles: FeatureToggles;
+export declare const defaultGatewayConfig: GatewayConfig;
 
-export function parseBindAddress(input: string): BindAddress;
-export function mergeGatewayConfig(
+export declare function parseBindAddress(input: string): BindAddress;
+export declare function mergeGatewayConfig(
   config?: Partial<GatewayConfig>,
 ): GatewayConfig;
-export function bindAddressFromEnv(
+export declare function bindAddressFromEnv(
   env: { [name: string]: string | undefined },
   configured?: string,
 ): string;
-export function normalizeVirtualHostName(name: string): string;
-export function makeAppsNameHub(): AppsNameHub;
-export function makeGateway(args?: {
+export declare function normalizeVirtualHostName(name: string): string;
+export declare function makeAppsNameHub(): AppsNameHub;
+export declare function makeGateway(args?: {
   powers?: GatewayPowers;
   config?: Partial<GatewayConfig>;
 }): Gateway;
