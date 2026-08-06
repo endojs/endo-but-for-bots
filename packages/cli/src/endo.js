@@ -12,6 +12,10 @@ import { prompt } from './prompt.js';
 
 import { isTerminalError } from './doe-normaal.js';
 import installGroupedHelp from './grouped-help.js';
+import {
+  collectDeniedSegment,
+  resolveDeniedSegments,
+} from './denied-segments.js';
 
 const packageDescriptorPath = url.fileURLToPath(
   new URL('../package.json', import.meta.url),
@@ -26,6 +30,16 @@ const commonOptions = {
   requiredName: [
     '-n,--name <name>',
     'Assigns a name to the result for future reference (required)',
+  ],
+  deny: [
+    '--deny <segment>',
+    'Restrict a path segment such as .ssh (repeatable); the given ' +
+      'segments replace the default restricted set',
+    collectDeniedSegment,
+  ],
+  allow: [
+    '--allow',
+    'Allow all path segments (disable path-segment denial entirely)',
   ],
 };
 
@@ -605,13 +619,21 @@ export const main = async rawArgs => {
     .option(...commonOptions.as)
     .option(...commonOptions.requiredName)
     .option('--read-only', 'mount as read-only')
+    .option(...commonOptions.deny)
+    .option(...commonOptions.allow)
     .action(async (sourcePath, cmd) => {
-      const { name, as: agentNames, readOnly } = cmd.opts();
+      const { name, as: agentNames, readOnly, deny, allow } = cmd.opts();
       if (!name) {
         throw new Error('--name is required for mount');
       }
       const { mount: mountCmd } = await import('./commands/mount.js');
-      return mountCmd({ sourcePath, name, agentNames, readOnly });
+      return mountCmd({
+        sourcePath,
+        name,
+        agentNames,
+        readOnly,
+        deniedSegments: resolveDeniedSegments(deny, allow),
+      });
     });
 
   program
@@ -623,13 +645,20 @@ export const main = async rawArgs => {
     .option(...commonOptions.as)
     .option(...commonOptions.requiredName)
     .option('--read-only', 'mount as read-only')
+    .option(...commonOptions.deny)
+    .option(...commonOptions.allow)
     .action(async cmd => {
-      const { name, as: agentNames, readOnly } = cmd.opts();
+      const { name, as: agentNames, readOnly, deny, allow } = cmd.opts();
       if (!name) {
         throw new Error('--name is required for mktmp');
       }
       const { mktmp } = await import('./commands/mktmp.js');
-      return mktmp({ name, agentNames, readOnly });
+      return mktmp({
+        name,
+        agentNames,
+        readOnly,
+        deniedSegments: resolveDeniedSegments(deny, allow),
+      });
     });
 
   program
