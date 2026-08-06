@@ -1409,10 +1409,10 @@ export const flootComponent = (
         // mic switch is off) — this is the "set to Ask, yet no prompt" case.
         let permState = '';
         try {
-          const status = await navigator.permissions?.query?.(
+          const permStatus = await navigator.permissions?.query?.(
             /** @type {any} */ ({ name: 'microphone' }),
           );
-          permState = status?.state || '';
+          permState = permStatus?.state || '';
         } catch {
           // Permissions API unsupported, or 'microphone' isn't a known name on
           // this browser — leave permState empty and give generic guidance.
@@ -1431,18 +1431,16 @@ export const flootComponent = (
           : '';
         if (permState === 'denied') {
           micError =
-            'Microphone blocked for this site. Tap the address-bar lock → ' +
-            'Permissions → Microphone → Allow (or “Reset permissions”), ' +
-            'reload, then tap 🎤 again.' +
-            appNote;
+            `Microphone blocked for this site. Tap the address-bar lock → ` +
+            `Permissions → Microphone → Allow (or “Reset permissions”), ` +
+            `reload, then tap 🎤 again.${appNote}`;
         } else {
           micError =
-            'The browser tried to ask for the microphone but got no answer, ' +
-            'so the block is at the phone’s OS level. Enable Android Settings ' +
-            '→ Apps → (your browser) → Permissions → Microphone, and turn on ' +
-            'the system “Microphone access” switch (swipe down → Privacy / ' +
-            'Quick Settings). Then tap 🎤 again.' +
-            appNote;
+            `The browser tried to ask for the microphone but got no answer, ` +
+            `so the block is at the phone’s OS level. Enable Android Settings ` +
+            `→ Apps → (your browser) → Permissions → Microphone, and turn on ` +
+            `the system “Microphone access” switch (swipe down → Privacy / ` +
+            `Quick Settings). Then tap 🎤 again.${appNote}`;
         }
       } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
         micError = 'No microphone was found on this device.';
