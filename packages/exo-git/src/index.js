@@ -17,6 +17,8 @@ export {
   getGitRemoteController,
 } from './git-remote.js';
 
+export { normalizeGitRemotePolicy } from './git-remote-policy.js';
+
 export { makeGitCloner } from './git-cloner.js';
 
 export {

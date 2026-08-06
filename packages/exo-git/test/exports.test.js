@@ -32,6 +32,7 @@ test('exo-git public exports', t => {
     'makeGitRemoteEndpoint',
     'makeNotYetImplementedBackend',
     'makeUnavailableGitCredential',
+    'normalizeGitRemotePolicy',
     'revokeGitCredential',
   ]);
 });

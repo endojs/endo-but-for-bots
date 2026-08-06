@@ -1,6 +1,6 @@
 import { expectTypeOf } from 'expect-type';
 
-import { makeGit } from '@endo/exo-git';
+import { makeGit, normalizeGitRemotePolicy } from '@endo/exo-git';
 import type {
   Directory,
   EndoGit,
@@ -43,6 +43,7 @@ import type {
   GitWorktree,
   GitWorktreeStatus,
   HistoryRewriteEndoGit,
+  NormalizedRemotePolicy,
   PathEntry,
   PathEntryIssuer,
   ReadableBlob,
@@ -58,6 +59,19 @@ import type {
   WritableGitWorktree,
 } from '@endo/exo-git';
 import type { GitBackend } from '../src/git.js';
+
+declare const remotePolicy: RemotePolicy;
+const normalizedRemotePolicy = normalizeGitRemotePolicy({
+  name: 'origin',
+  policy: remotePolicy,
+});
+
+// The canonical normalizer is reachable through the package entry point and
+// returns the normalized policy contract rather than an untyped object.
+expectTypeOf(normalizedRemotePolicy).toEqualTypeOf<NormalizedRemotePolicy>();
+expectTypeOf(normalizedRemotePolicy.defaultPullRef).toEqualTypeOf<
+  string | undefined
+>();
 
 // The shared backend contract must carry the canonical credential type on
 // both remote operations; widening to `unknown` would silently drop the
