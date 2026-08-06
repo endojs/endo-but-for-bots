@@ -141,7 +141,8 @@ interop('date: Invalid Date round-trips as ["date", null]', t => {
 // ---------- Uint8Array ----------
 
 interop('bytes: empty / small / high bytes / larger', t => {
-  const eqBytes = (tt, got, want) => tt.deepEqual(Array.from(got), Array.from(want));
+  const eqBytes = (tt, got, want) =>
+    tt.deepEqual(Array.from(got), Array.from(want));
   assertWireCompat(t, 'empty', new Uint8Array([]), { eq: eqBytes });
   assertWireCompat(t, 'small', new Uint8Array([1, 2, 3]), { eq: eqBytes });
   assertWireCompat(t, 'high bytes', new Uint8Array([0, 250, 255, 128]), {
@@ -280,7 +281,12 @@ interop('safety: __proto__ / constructor keys from a peer are dropped', t => {
 interop('safety: hostile error typeName cannot reach Object.prototype', t => {
   // ["error","constructor",…] previously resolved to Object → a String
   // wrapper.  With the null-prototype ERROR_TYPES table it falls back to Error.
-  for (const bad of ['constructor', 'toString', 'hasOwnProperty', '__proto__']) {
+  for (const bad of [
+    'constructor',
+    'toString',
+    'hasOwnProperty',
+    '__proto__',
+  ]) {
     const got = codec.deserialize(JSON.stringify(['error', bad, 'msg']));
     t.true(got instanceof Error, `["error","${bad}"] decodes to an Error`);
     t.is(got.message, 'msg');
