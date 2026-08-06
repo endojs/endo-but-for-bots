@@ -45,16 +45,16 @@ const makeFakePowers = () => {
 // A ClaudeClient stand-in: each send() hands back a fresh buffered reader that
 // the test drives, mirroring the real per-turn reply wire.
 const makeFakeClient = () => {
-  /** @type {Array<{ push: (event: object) => void, killed: () => boolean }>} */
+  /** @type {Array<{ push: (event: object) => void, killed: () => boolean, prompt: string, opts: Record<string, unknown> }>} */
   const turns = [];
   const client = harden({
-    async send() {
+    async send(prompt, opts = {}) {
       let killed = false;
       const { push, reader, setOnClose } = makeBufferedReader();
       setOnClose(() => {
         killed = true;
       });
-      turns.push({ push, killed: () => killed });
+      turns.push({ push, killed: () => killed, prompt, opts: { ...opts } });
       return reader;
     },
   });
@@ -158,7 +158,7 @@ test('a claude-cli turn persists history and folds usage', async t => {
   });
 });
 
-test('a failed claude-cli turn aborts the reply and persists nothing', async t => {
+test('a failed claude-cli turn aborts the reply but keeps the delivered prompt', async t => {
   t.timeout(20_000);
   const powers = makeFakePowers();
   const { client, turns } = makeFakeClient();
@@ -183,12 +183,11 @@ test('a failed claude-cli turn aborts the reply and persists nothing', async t =
   const events = await replyP;
   t.is(events.at(-1)?.type, 'abort', 'the consumer learns the turn failed');
 
-  // No assistant turn is persisted, and the failed turn leaves the active
-  // branch where it was: `cachedLeaf` only advances on success, so the
-  // orphaned user node is off-branch and the next turn starts from the same
-  // point. This mirrors the API-backed path exactly (both only commit the
-  // leaf after a completed turn).
-  t.deepEqual(await agent.getHistory(), []);
+  // No assistant reply is persisted, but the user node stays on the active
+  // branch: on the CLI path the model's memory is the sandbox transcript,
+  // which already holds the delivered prompt — dropping it from the tree
+  // would show a history the model does not match. Usage stays untouched.
+  t.deepEqual(await agent.getHistory(), [{ role: 'user', content: 'do it' }]);
   t.deepEqual(await agent.getUsage(), {
     inputTokens: 0,
     outputTokens: 0,
@@ -235,12 +234,47 @@ test('stopping the reply kills the in-flight CLI turn', async t => {
   await turnP;
   t.true(turns[0].killed(), 'the in-flight claude -p was killed');
 
-  // As on the API path, an aborted turn commits nothing: no assistant node,
-  // no usage, and the active branch is unmoved.
-  t.deepEqual(await agent.getHistory(), []);
+  // The killed turn's partial output is persisted: the CLI's own transcript
+  // retains the prompt and whatever streamed before the kill, so the tree
+  // mirrors it — otherwise the next turn's displayed history and the
+  // conversation the CLI resumes with --continue diverge. Usage is not
+  // counted (no result event ever arrived).
+  t.deepEqual(await agent.getHistory(), [
+    { role: 'user', content: 'long task' },
+    { role: 'assistant', content: 'working' },
+  ]);
   t.deepEqual(await agent.getUsage(), {
     inputTokens: 0,
     outputTokens: 0,
     turns: 0,
   });
+});
+
+test('the session model rides each CLI turn as a per-send override', async t => {
+  t.timeout(20_000);
+  const powers = makeFakePowers();
+  const { client, turns } = makeFakeClient();
+  const agent = await makeStreamingAgent(
+    powers,
+    undefined,
+    { claudeClient: client, claudeModel: 'claude-opus-5' },
+    'test prompt',
+  );
+
+  const { writer, reader } = makeReplyChannel();
+  const replyP = collectReply(reader);
+  const turnP = agent.converse('hello', writer);
+  for (let i = 0; i < 50 && turns.length === 0; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  t.is(turns.length, 1);
+  // The client's own env default was frozen at provision time; the per-turn
+  // override is what makes a later model change actually take effect.
+  t.is(turns[0].opts.model, 'claude-opus-5');
+  t.is(turns[0].opts.systemPrompt, 'test prompt');
+  turns[0].push({ type: 'result', subtype: 'success', result: 'hi' });
+  turns[0].push({ type: 'end' });
+  await turnP;
+  await replyP;
 });

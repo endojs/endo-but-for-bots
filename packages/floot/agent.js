@@ -774,6 +774,10 @@ const provisionPresetObjects = async (
  *   (@endo/claude-sandbox): `send(prompt) -> reply reader` of raw stream-json
  *   events. Turns bypass the provider tool loop — the CLI runs its own tools
  *   in the sandbox and keeps its own conversation continuity.
+ * @property {string} [claudeModel] - Model id passed per turn (`--model`).
+ *   Threaded explicitly because the client's own default is frozen into its
+ *   formula env at provision time — without a per-turn override, changing a
+ *   session's model after provisioning would silently have no effect.
  */
 
 /**
@@ -826,6 +830,7 @@ export const makeStreamingAgent = async (
       ? options.maxToolRounds
       : DEFAULT_MAX_TOOL_ROUNDS;
   const claudeClient = /** @type {any} */ (providerConfig).claudeClient;
+  const claudeModel = /** @type {any} */ (providerConfig).claudeModel;
   /** @type {any} */
   const provider = claudeClient
     ? null
@@ -977,44 +982,83 @@ export const makeStreamingAgent = async (
       // streamed tool activity in the conversation tree so getHistory() can
       // reconstruct the same call/result cards after a refresh.
       writer.setPhase('thinking');
+
+      // Persist a turn's tool activity and (possibly partial) reply under the
+      // user node and advance cachedLeaf. On the CLI path the tree is
+      // display-only — the model's memory is the CLI's own transcript — so the
+      // tree must mirror what that transcript retains on EVERY outcome, or the
+      // history the UI shows and the context the model resumes drift apart.
+      /**
+       * @param {Array<{ id: string, name: string, args: string, result: string | null }>} toolCalls
+       * @param {string} replyText
+       */
+      const persistTurn = async (toolCalls, replyText) => {
+        let replyParentId = userNode.id;
+        if (toolCalls.length > 0) {
+          const toolNode = await tree.addNode(replyParentId, [
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: toolCalls.map(call => ({
+                id: call.id,
+                type: 'function',
+                function: { name: call.name, arguments: call.args },
+              })),
+            },
+            ...toolCalls.map(call => ({
+              role: 'tool',
+              tool_call_id: call.id,
+              content: call.result ?? '',
+            })),
+          ]);
+          replyParentId = toolNode.id;
+        }
+        if (replyText) {
+          const finalNode = await tree.addNode(replyParentId, [
+            { role: 'assistant', content: replyText },
+          ]);
+          replyParentId = finalNode.id;
+        }
+        cachedLeaf = replyParentId;
+      };
+
+      let turnResult;
+      try {
+        turnResult = await runClaudeTurn({
+          client: claudeClient,
+          text,
+          writer,
+          signal,
+          // Pin the session's selected model per turn; the client's own
+          // default is frozen into its formula env at provision time.
+          model: claudeModel,
+          // Give the CLI runtime the same session persona/instructions the API
+          // runtime gets (the CLI never sees the tree's system message).
+          systemPrompt: effectivePrompt,
+        });
+      } catch (error) {
+        // The failed turn's prompt was already delivered to (and persisted by)
+        // the CLI, so keep the user node on the main branch — otherwise the
+        // next getHistory drops a message the model still remembers. (If the
+        // spawn itself failed the model never saw it; a repeated message is
+        // the harmless direction of that ambiguity.)
+        cachedLeaf = userNode.id;
+        throw error;
+      }
       const {
         finalContent: replyText,
         usage: turnUsage,
         toolCalls,
-      } = await runClaudeTurn({
-        client: claudeClient,
-        text,
-        writer,
-        signal,
-        // Give the CLI runtime the same session persona/instructions the API
-        // runtime gets (the CLI never sees the tree's system message).
-        systemPrompt: effectivePrompt,
-      });
-      if (signal?.aborted) return;
-      let replyParentId = userNode.id;
-      if (toolCalls.length > 0) {
-        const toolNode = await tree.addNode(replyParentId, [
-          {
-            role: 'assistant',
-            content: '',
-            tool_calls: toolCalls.map(call => ({
-              id: call.id,
-              type: 'function',
-              function: { name: call.name, arguments: call.args },
-            })),
-          },
-          ...toolCalls.map(call => ({
-            role: 'tool',
-            tool_call_id: call.id,
-            content: call.result ?? '',
-          })),
-        ]);
-        replyParentId = toolNode.id;
+      } = turnResult;
+      if (signal?.aborted) {
+        // Killed mid-turn (Stop). The CLI's transcript retains the prompt and
+        // whatever streamed before the kill; mirror that partial turn into the
+        // tree instead of dropping it. No writer/usage traffic — the consumer
+        // already closed the reply channel.
+        await persistTurn(toolCalls, replyText);
+        return;
       }
-      const finalNode = await tree.addNode(replyParentId, [
-        { role: 'assistant', content: replyText },
-      ]);
-      cachedLeaf = finalNode.id;
+      await persistTurn(toolCalls, replyText);
       const totals = await loadUsage();
       totals.inputTokens += turnUsage?.inputTokens || 0;
       totals.outputTokens += turnUsage?.outputTokens || 0;
@@ -1809,6 +1853,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
                   : undefined,
               ),
             ),
+            // Per-turn --model: the client's env default was frozen at
+            // provision time, so a later model change would otherwise be
+            // silently ignored for this session.
+            ...(model ? { claudeModel: model } : {}),
           };
         } else {
           agentConfig = { provider: await getProvider(model) };
