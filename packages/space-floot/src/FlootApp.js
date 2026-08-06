@@ -24,7 +24,15 @@ import { SettingsPanel } from './SettingsPanel.js';
 const useControllerState = controller => {
   const [, setTick] = useState(0);
   // Mount-once: the controller instance is stable for this mount.
-  useEffect(() => controller.subscribe(() => setTick(t => t + 1)), []);
+  useEffect(() => {
+    const unsubscribe = controller.subscribe(() => setTick(t => t + 1));
+    // A notify that fired between the render's getState() snapshot and this
+    // subscription is otherwise lost, leaving the view stale until the NEXT
+    // event — e.g. a fast initial session-list load, or a turn that finished
+    // during mount. Re-render once now to pick up anything missed.
+    setTick(t => t + 1);
+    return unsubscribe;
+  }, []);
   return controller.getState();
 };
 
