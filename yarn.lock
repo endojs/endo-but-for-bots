@@ -1410,7 +1410,7 @@ __metadata:
     "@endo/ses-ava": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
-    capnweb: "npm:^0.6.1"
+    capnweb: "npm:^0.10.0"
     eslint: "catalog:dev"
     ses: "workspace:^"
     typescript: "catalog:dev"
@@ -7740,10 +7740,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"capnweb@npm:^0.6.1":
-  version: 0.6.1
-  resolution: "capnweb@npm:0.6.1"
-  checksum: 10c0/f7863ef68261f69dc5c8eb57763ae7943e5bbc05ab537139abbd836b8d95b9f0aa8f63e7d3c7ff94af8a6cd0170579a9a8b87ee5adac6e1987d63ca46e5690af
+"capnweb@npm:^0.10.0":
+  version: 0.10.0
+  resolution: "capnweb@npm:0.10.0"
+  checksum: 10c0/32c7a2a1533394e83ff960363fe1b85a490e7724fa52089328d2f704b19cb73076caf92b7a55e34102f6f800811202e39c423a20fad67cfa548514ce87a6c2ba
   languageName: node
   linkType: hard
 
