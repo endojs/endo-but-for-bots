@@ -14,7 +14,11 @@ import { E, makeCapTP } from '@endo/captp';
 
 // Create a message dispatcher and bootstrap.
 // Messages on myconn are exchanged with JSON-able objects.
-const { dispatch, getBootstrap, abort } = makeCapTP('myid', myconn.send, myBootstrap);
+const { dispatch, getBootstrap, abort, shutdown } = makeCapTP(
+  'myid',
+  myconn.send,
+  myBootstrap,
+);
 myconn.onReceive = obj => dispatch(obj);
 
 Malformed decoded call and trap-iterator method payloads are rejected, and the
@@ -25,6 +29,10 @@ E(getBootstrap()).method(args).then(res => console.log('got res', res));
 
 // Tear down the CapTP connection if it fails (e.g. connection is closed).
 abort(Error('Connection aborted by user.'));
+
+// Deliberately shut down without reporting the reason through `onReject`.
+// Pending operations still reject with this reason.
+shutdown(Error('Connection closed by user.'));
 ```
 
 ## Loopback

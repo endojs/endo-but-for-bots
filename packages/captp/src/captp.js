@@ -915,10 +915,14 @@ export const makeCapTP = (
     // The other side has signaled something has gone wrong.
     // Pull the plug!
     CTP_DISCONNECT(obj) {
-      const { reason = disconnectReason(ourId) } = obj;
+      const { reason = disconnectReason(ourId), graceful = false } = obj;
       if (unplug === false) {
-        // Reject with the original reason.
-        quietReject(obj.reason, false);
+        if (graceful !== true) {
+          // Report the original reason through `onReject`. A graceful
+          // disconnect is deliberate lifecycle, not an exception, so it
+          // still rejects pending settlers below but is never reported.
+          quietReject(obj.reason, false);
+        }
         unplug = reason;
         // Deliver the object, even though we're unplugged.
         Promise.resolve(rawSend(obj)).catch(sink);
@@ -990,6 +994,13 @@ export const makeCapTP = (
     dispatch({ type: 'CTP_DISCONNECT', epoch, reason });
   };
 
+  // Deliberately disconnect. Pending operations still reject with the
+  // reason, but neither side reports it through `onReject`.
+  /** @param {unknown} [reason] */
+  const shutdown = reason => {
+    dispatch({ type: 'CTP_DISCONNECT', epoch, reason, graceful: true });
+  };
+
   const makeTrapHandler = (name, obj) => {
     const far = Far(name, obj);
     exportedTrapHandlers.add(far);
@@ -999,6 +1010,7 @@ export const makeCapTP = (
   // Put together our return value.
   const rets = {
     abort,
+    shutdown,
     dispatch,
     getBootstrap,
     getStats,
