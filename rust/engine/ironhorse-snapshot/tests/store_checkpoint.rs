@@ -10,8 +10,10 @@
 use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, resume_from_store, MachineSnapshot,
 };
+use ironhorse_snapshot::sha256::hex_sha256;
 use ironhorse_snapshot::store::{
-    export_to_container, slot_page_count, store_to_image, HeapStore, MemoryStore, StoreError,
+    export_to_container, root_hash, slot_page_count, store_to_image, HeapStore, MemoryStore,
+    StoreError,
 };
 use ironhorse_snapshot::store_file::FileStore;
 use ironhorse_snapshot::Signature;
@@ -63,6 +65,13 @@ fn store_tracks_live_machine(store: &mut dyn HeapStore) {
     assert_eq!(epoch, 2);
     assert_eq!(store_to_image(store).unwrap(), m.snapshot_image(&sig()));
     assert_eq!(export_to_container(store).unwrap(), m.write_snapshot(&sig()));
+    // Logical identity: the store's root hash is the same CAS key the
+    // blob path would compute for this machine state, so blob and
+    // store workers share one content-address space.
+    assert_eq!(
+        root_hash(store).unwrap(),
+        hex_sha256(&m.write_snapshot(&sig()))
+    );
 }
 
 #[test]

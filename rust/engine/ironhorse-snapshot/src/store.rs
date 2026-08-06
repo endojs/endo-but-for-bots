@@ -646,6 +646,18 @@ pub fn import_from_container(
     store.commit(&image_to_batch(&image, 1))
 }
 
+/// The store state's **logical identity**: the SHA-256 of its canonical
+/// export (design decision 6 — identity is logical, not file bytes,
+/// because a database file is not byte-canonical). Equals the CAS key
+/// [`crate::machine::MachineSnapshot::suspend_to_cas`] would produce
+/// for the same machine state, so blob-suspended and store-checkpointed
+/// workers share one content-address space. Computed via a full export
+/// today; an incrementally maintained page-hash tree is the design's
+/// named future work for when this becomes hot.
+pub fn root_hash(store: &dyn HeapStore) -> Result<String, StoreError> {
+    Ok(crate::sha256::hex_sha256(&export_to_container(store)?))
+}
+
 // --- the in-memory reference store ---
 
 /// What one [`MemoryStore::commit`] wrote, for the incremental-
