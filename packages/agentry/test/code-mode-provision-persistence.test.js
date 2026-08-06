@@ -24,7 +24,7 @@ test('persistence validation accepts only normalized records', async t => {
   const root = await makeWorkspace(t);
   const persistence = await normalizeEndoProvisionSpec(
     { fs: 'readOnly', workspace: { deniedSegments: ['private', '.git'] } },
-    { sessionId: 'persist', cwd: root },
+    { harness: 'test', sessionId: 'persist', cwd: root },
   );
 
   t.deepEqual(await validateEndoProvisionPersistence(persistence), persistence);
@@ -59,7 +59,7 @@ test('persistence equality ignores record key order but preserves array order', 
   const root = await makeWorkspace(t);
   const persistence = await normalizeEndoProvisionSpec(
     { fs: 'readOnly', workspace: { deniedSegments: ['.git', 'private'] } },
-    { sessionId: 'equality', cwd: root },
+    { harness: 'test', sessionId: 'equality', cwd: root },
   );
   const reordered = {
     policy: {
@@ -93,4 +93,31 @@ test('persistence equality ignores record key order but preserves array order', 
       workspacePath: `${persistence.workspacePath}-changed`,
     }),
   );
+});
+
+test('persistence validation rejects foreign or malformed roots and harnesses', async t => {
+  const root = await makeWorkspace(t);
+  const persistence = await normalizeEndoProvisionSpec(undefined, {
+    harness: 'test',
+    sessionId: 'invalid-persistence-path',
+    cwd: root,
+  });
+  const invalidPaths = [
+    ['foreign', 'test', ...persistence.guestHandlePath.slice(2)],
+    ['code-mode', 'Pi', ...persistence.guestHandlePath.slice(2)],
+    ['code-mode', 'test_code', ...persistence.guestHandlePath.slice(2)],
+    ['code-mode', 'test', 'session-invalid', 'guest-handle'],
+  ];
+
+  for (const guestHandlePath of invalidPaths) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () =>
+        validateEndoProvisionPersistence({
+          ...persistence,
+          guestHandlePath,
+        }),
+      { message: /invalid guest handle path/ },
+    );
+  }
 });

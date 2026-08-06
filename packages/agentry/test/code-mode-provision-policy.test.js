@@ -22,31 +22,52 @@ const makeWorkspace = async t => {
 test('normalization preserves omission and resolves a canonical cwd', async t => {
   const { root, child } = await makeWorkspace(t);
   const first = await normalizeEndoProvisionSpec(undefined, {
+    harness: 'test',
     sessionId: 'stable-session',
     cwd: child,
   });
   const second = await normalizeEndoProvisionSpec(
     {},
     {
+      harness: 'test',
       sessionId: 'stable-session',
       cwd: child,
     },
   );
   const relative = await normalizeEndoProvisionSpec(
     { workspace: { path: 'child' } },
-    { sessionId: 'relative-session', cwd: root },
+    { harness: 'test', sessionId: 'relative-session', cwd: root },
   );
 
   t.deepEqual(first, second);
   t.is(first.version, 1);
   t.is(first.workspacePath, await realpath(child));
-  t.deepEqual(first.guestHandlePath.slice(0, 2), [
-    'pi-code',
+  t.deepEqual(first.guestHandlePath.slice(0, 2), ['code-mode', 'test']);
+  t.deepEqual(first.guestHandlePath.slice(2), [
     'session-e18c78136e8ee72d10e2af231794072c72fa11fcf2367f56e50eb0d97d37b870',
+    'guest-handle',
   ]);
   t.deepEqual(Object.keys(first.policy), ['workspace']);
   t.is(relative.workspacePath, await realpath(child));
   t.notDeepEqual(relative.guestHandlePath, first.guestHandlePath);
+});
+
+test('normalization rejects malformed harness keys', async t => {
+  const { root } = await makeWorkspace(t);
+  const invalidHarnesses = ['Pi', 'pi_code', '-pi', `a${'b'.repeat(32)}`];
+
+  for (const harness of invalidHarnesses) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () =>
+        normalizeEndoProvisionSpec(undefined, {
+          harness,
+          sessionId: 'invalid-harness',
+          cwd: root,
+        }),
+      { message: /harness must match/ },
+    );
+  }
 });
 
 test('Git remote policy uses the authoritative exo-git normal form', async t => {
@@ -75,7 +96,7 @@ test('Git remote policy uses the authoritative exo-git normal form', async t => 
         },
       },
     },
-    { sessionId: 'remotes', cwd: root },
+    { harness: 'test', sessionId: 'remotes', cwd: root },
   );
 
   t.deepEqual(Object.keys(persistence.policy.gitRemotes ?? {}), [
@@ -121,7 +142,7 @@ test('Git remote dictionaries retain an own __proto__ binding', async t => {
       git: 'readWrite',
       gitRemotes,
     },
-    { sessionId: 'proto-remote', cwd: root },
+    { harness: 'test', sessionId: 'proto-remote', cwd: root },
   );
 
   t.deepEqual(Object.keys(persistence.policy.gitRemotes ?? {}), ['__proto__']);
@@ -132,6 +153,7 @@ test('EndoProvisionSpec rejects malformed roots and incompatible modes', async t
   const { root } = await makeWorkspace(t);
   const normalize = spec =>
     normalizeEndoProvisionSpec(/** @type {any} */ (spec), {
+      harness: 'test',
       sessionId: 'invalid-root',
       cwd: root,
     });
@@ -164,7 +186,7 @@ test('EndoProvisionSpec rejects malformed roots and incompatible modes', async t
     () =>
       normalizeEndoProvisionSpec(
         { workspace: { path: 'missing' }, fs: 'readOnly' },
-        { sessionId: 'missing', cwd: root },
+        { harness: 'test', sessionId: 'missing', cwd: root },
       ),
     { message: /does not exist or cannot be resolved/ },
   );
@@ -175,7 +197,7 @@ test('Git remote policy rejects invalid bindings and credential material', async
   const normalizeRemote = gitRemotes =>
     normalizeEndoProvisionSpec(
       /** @type {any} */ ({ fs: 'readWrite', git: 'readWrite', gitRemotes }),
-      { sessionId: 'invalid-remote', cwd: root },
+      { harness: 'test', sessionId: 'invalid-remote', cwd: root },
     );
   const invalid = [
     [{ git: { url: 'file:///tmp/x' } }, /non-reserved JavaScript binding/],
@@ -226,7 +248,7 @@ test('Git remote policy rejects invalid branch and pull selections', async t => 
         git: 'readWrite',
         gitRemotes: { origin },
       }),
-      { sessionId: 'invalid-git-policy', cwd: root },
+      { harness: 'test', sessionId: 'invalid-git-policy', cwd: root },
     );
   const base = {
     url: 'https://example.test/repo.git',

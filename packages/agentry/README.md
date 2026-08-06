@@ -162,6 +162,7 @@ import { makeCodeModeAgent } from '@endo/agentry/code-mode';
 import { provisionEndoCodeMode } from '@endo/agentry/code-mode-provisioning';
 
 const session = await provisionEndoCodeMode({
+  harness: 'example', // stable harness key for this provisioning consumer
   sessionId: conversationId, // stable across process restarts
   cwd: process.cwd(),
   spec: {
@@ -218,6 +219,10 @@ URL credentials, and secret-shaped fields are rejected.
 
 Provisioning derives deterministic controller aliases and retained guest handle
 and agent paths from `sessionId`.
+The host-side retained state for the Pi harness lives in the daemon pet store
+under `code-mode/pi/session-<hash>/`, as shown by `endo list`.
+The `code-mode/` root is harness-scoped, so future harnesses can keep their
+state beside `pi/` without sharing session namespaces.
 The host retains those aliases while the guest receives the same formula IDs as
 the simple pet names `workspace`, `git`, and each remote name.
 Consequently, daemon evaluation with `resultName` stores the result in the guest

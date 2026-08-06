@@ -191,6 +191,7 @@ test.serial(
       /** @type {import('../../agentry/src/code-mode-provisioning-types.js').EndoProvisionPersistence} */ (
         driver.appended[0].data
       );
+    t.deepEqual(persistence.guestHandlePath.slice(0, 2), ['code-mode', 'pi']);
     await driver.emit('session_shutdown', {
       type: 'session_shutdown',
       reason: 'quit',

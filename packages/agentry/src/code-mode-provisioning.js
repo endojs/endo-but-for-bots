@@ -63,9 +63,10 @@ const connectAndRealize = async (persistence, sockPath) => {
   };
 
   try {
-    const sessionKey = persistence.guestHandlePath[1];
+    const harness = persistence.guestHandlePath[1];
+    const sessionKey = persistence.guestHandlePath[2];
     const client = await makeEndoClient(
-      `pi-code-${sessionKey.slice('session-'.length, 'session-'.length + 12)}`,
+      `code-mode-${harness}-${sessionKey.slice('session-'.length, 'session-'.length + 12)}`,
       selectSockPath(sockPath),
       cancelled,
     );
@@ -98,6 +99,7 @@ const connectAndRealize = async (persistence, sockPath) => {
  */
 export const provisionEndoCodeMode = async options => {
   const persistence = await normalizeEndoProvisionSpec(options?.spec, {
+    harness: options?.harness,
     sessionId: options?.sessionId,
     cwd: options?.cwd,
   });

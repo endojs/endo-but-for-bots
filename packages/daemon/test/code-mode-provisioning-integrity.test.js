@@ -23,7 +23,11 @@ test.serial(
     const host = await fixture.connectHost('integrity-host');
     const interrupted = await normalizeEndoProvisionSpec(
       { fs: 'readOnly' },
-      { sessionId: 'interrupted-provision', cwd: fixture.workspace },
+      {
+        harness: 'test',
+        sessionId: 'interrupted-provision',
+        cwd: fixture.workspace,
+      },
     );
     const controllerPath = interrupted.guestHandlePath.slice(0, -1);
 
@@ -35,7 +39,8 @@ test.serial(
       'interrupted-seed',
       'agent',
     );
-    await E(host).makeDirectory(['pi-code']);
+    await E(host).makeDirectory(['code-mode']);
+    await E(host).makeDirectory(['code-mode', 'test']);
     await E(host).makeDirectory(controllerPath);
     await E(host).storeIdentifier(
       [...controllerPath, 'guest-agent'],
@@ -45,6 +50,7 @@ test.serial(
     await t.throwsAsync(
       () =>
         provisionEndoCodeMode({
+          harness: 'test',
           sessionId: 'interrupted-provision',
           cwd: fixture.workspace,
           sockPath: fixture.sockPath,
@@ -60,6 +66,7 @@ test.serial(
     await t.throwsAsync(
       () =>
         provisionEndoCodeMode({
+          harness: 'test',
           sessionId: 'interrupted-provision',
           cwd: fixture.workspace,
           sockPath: fixture.sockPath,

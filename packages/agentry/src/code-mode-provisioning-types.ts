@@ -50,6 +50,8 @@ export type EndoProvisionPersistence = {
 };
 
 export type NormalizeEndoProvisionOptions = {
+  /** Harness key that scopes retained daemon state. */
+  harness: string;
   /** Stable caller-owned identifier used only to derive deterministic names. */
   sessionId: string;
   /** Caller-supplied working directory used to resolve a relative workspace. */

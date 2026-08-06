@@ -13,7 +13,7 @@ const makePersistence = policy =>
   harden(
     /** @type {any} */ ({
       version: 1,
-      guestHandlePath: ['pi-code', 'session-test', 'guest-handle'],
+      guestHandlePath: ['code-mode', 'test', 'session-test', 'guest-handle'],
       workspacePath: '/workspace',
       policy: {
         workspace: { deniedSegments: [] },

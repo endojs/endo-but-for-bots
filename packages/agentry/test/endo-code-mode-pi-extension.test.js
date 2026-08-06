@@ -101,7 +101,7 @@ const makeHarness = options => {
   const activeTools = [];
   /** @type {Array<{ message: string, type: string | undefined }>} */
   const notifications = [];
-  /** @type {Array<import('../src/endo-code-mode-pi-extension.js').EndoPiProblem>} */
+  /** @type {Array<import('../src/endo-code-mode-pi-extension.js').EndoCodeModePiProblem>} */
   const diagnostics = [];
   /** @type {number[]} */
   const terminations = [];
@@ -438,7 +438,7 @@ for (const reason of ['resume', 'reload']) {
     const cwd = await makeWorkspace(t);
     const persistence = await normalizeEndoProvisionSpec(
       { fs: 'readOnly' },
-      { sessionId: 'retained-session', cwd },
+      { harness: 'pi', sessionId: 'retained-session', cwd },
     );
     const harness = makeHarness({
       cwd,
@@ -462,7 +462,7 @@ test('new and fork create distinct retained namespaces; fork inherits policy', a
   const cwd = await makeWorkspace(t);
   const parent = await normalizeEndoProvisionSpec(
     { fs: 'readWrite', git: 'readOnly' },
-    { sessionId: 'parent-session', cwd },
+    { harness: 'pi', sessionId: 'parent-session', cwd },
   );
   const fresh = makeHarness({ cwd, sessionId: 'new-session' });
   const fork = makeHarness({
@@ -492,7 +492,7 @@ test('resume rejects a conflicting CLI policy with fork/new guidance', async t =
   const cwd = await makeWorkspace(t);
   const stored = await normalizeEndoProvisionSpec(
     { fs: 'readOnly' },
-    { sessionId: 'retained-session', cwd },
+    { harness: 'pi', sessionId: 'retained-session', cwd },
   );
   const harness = makeHarness({
     cwd,
@@ -516,7 +516,7 @@ test('resume with unparseable stored persistence is rejected as invalid', async 
   const cwd = await makeWorkspace(t);
   const stored = await normalizeEndoProvisionSpec(
     { fs: 'readOnly' },
-    { sessionId: 'retained-session', cwd },
+    { harness: 'pi', sessionId: 'retained-session', cwd },
   );
   const harness = makeHarness({
     cwd,
@@ -549,7 +549,7 @@ test('resume whose stored authority cannot be re-derived is rejected as invalid'
   const cwd = await makeWorkspace(t);
   const stored = await normalizeEndoProvisionSpec(
     { fs: 'readOnly' },
-    { sessionId: 'retained-session', cwd },
+    { harness: 'pi', sessionId: 'retained-session', cwd },
   );
   // A workspace that no longer exists lets validation trust the record as-is
   // (a stubbed validator) while the real normalizer's realpath lookup fails
@@ -580,7 +580,7 @@ test('resume whose re-derived authority differs from the persisted policy is rej
   const cwd = await makeWorkspace(t);
   const stored = await normalizeEndoProvisionSpec(
     { fs: 'readOnly' },
-    { sessionId: 'retained-session', cwd },
+    { harness: 'pi', sessionId: 'retained-session', cwd },
   );
   // Not-yet-normalized deniedSegments (duplicated, mixed case) pass a stubbed
   // validator unchanged, but persistenceToSpec + the real normalizer collapse
@@ -624,7 +624,7 @@ test("resume with another session's retained guest is rejected as mismatched", a
   // guestHandlePath, which is the "wrong session" signal.
   const stored = await normalizeEndoProvisionSpec(
     { fs: 'readOnly' },
-    { sessionId: 'other-session', cwd },
+    { harness: 'pi', sessionId: 'other-session', cwd },
   );
   const harness = makeHarness({
     cwd,
@@ -748,7 +748,7 @@ test('trusted interactive hook can rehydrate a credential without handling its v
         },
       },
     },
-    { sessionId: 'credential-session', cwd },
+    { harness: 'pi', sessionId: 'credential-session', cwd },
   );
   let attempts = 0;
   let hookCount = 0;
