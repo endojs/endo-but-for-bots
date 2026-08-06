@@ -9,6 +9,12 @@
       "path": "../agent-tools/tsconfig.composite.json"
     },
     {
+      "path": "../cancel/tsconfig.composite.json"
+    },
+    {
+      "path": "../daemon/tsconfig.composite.json"
+    },
+    {
       "path": "../errors/tsconfig.composite.json"
     },
     {
@@ -19,6 +25,9 @@
     },
     {
       "path": "../far/tsconfig.composite.json"
+    },
+    {
+      "path": "../where/tsconfig.composite.json"
     }
   ]
 }

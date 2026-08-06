@@ -447,6 +447,7 @@ export type GitRemoteFormula = {
     allowedDirections: Array<'fetch' | 'push'>;
     fetchRefspecs: string[];
     pushRefspecs: string[];
+    defaultPullRef?: string;
     allowedBranches?: string[];
     allowForcePush?: boolean;
     allowTags?: boolean;
@@ -1627,6 +1628,7 @@ export interface EndoHost extends EndoAgent {
       allowedDirections?: Array<'fetch' | 'push'>;
       fetchRefspecs?: string[];
       pushRefspecs?: string[];
+      defaultPullRef?: string;
       allowedBranches?: string[];
       allowForcePush?: boolean;
       allowTags?: boolean;

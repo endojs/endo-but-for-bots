@@ -1021,6 +1021,9 @@ export const makeHostMaker = ({
         allowedDirections: harden([...(opts.allowedDirections || ['fetch'])]),
         fetchRefspecs: harden([...(opts.fetchRefspecs || [])]),
         pushRefspecs: harden([...(opts.pushRefspecs || [])]),
+        ...(opts.defaultPullRef !== undefined
+          ? { defaultPullRef: opts.defaultPullRef }
+          : {}),
         ...(opts.allowedBranches !== undefined
           ? { allowedBranches: harden([...opts.allowedBranches]) }
           : {}),
