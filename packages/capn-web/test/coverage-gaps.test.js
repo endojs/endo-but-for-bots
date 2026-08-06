@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global setTimeout */
 // Coverage-gap tests identified during the comprehensive review (T1, T2,
 // T4, T5).  Each test pins behaviour we'd previously left implicit.
 

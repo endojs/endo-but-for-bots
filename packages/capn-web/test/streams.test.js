@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global globalThis, setTimeout */
 // Wire-level support for ["writable", id] / ["readable", id].  We don't
 // implement full WritableStream-wrapper semantics yet — the test confirms
 // that:
@@ -53,7 +52,7 @@ streamTest('JS WritableStream is encoded as ["writable", -id]', async t => {
     localMain: Far('s', { take: _ => null }),
     gcImports: false,
   });
-  // eslint-disable-next-line no-undef
+
   const ws = new WritableStream({});
   await E(sessionA.getRemoteMain()).take(ws);
   // The first push's argument should be ["writable", -1].
@@ -69,7 +68,7 @@ streamTest('JS ReadableStream is encoded as ["readable", -id]', async t => {
     localMain: Far('s', { take: _ => null }),
     gcImports: false,
   });
-  // eslint-disable-next-line no-undef
+
   const rs = new ReadableStream({});
   await E(sessionA.getRemoteMain()).take(rs);
   const arg = sent[0][1][3][0];

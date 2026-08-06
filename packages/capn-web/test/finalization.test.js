@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global setTimeout */
 // Live garbage-collection tests.  These rely on `--expose-gc` (Node) and the
 // FinalizationRegistry firing during a forced GC.  When run without
 // --expose-gc the gcAndFinalize helper degrades to a no-op and these tests

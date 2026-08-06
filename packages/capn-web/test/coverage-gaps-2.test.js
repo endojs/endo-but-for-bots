@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global setTimeout, globalThis, process */
 // Coverage-gap tests T6-T8 + T10-T12 from the comprehensive review.
 // Each test pins a behaviour we'd previously left implicit.
 

@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global setTimeout */
 // Garbage-collection tests.  These need --expose-gc + a --no-warnings node
 // invocation to work fully; without it the tests still pass because the
 // gcAndFinalize helper degrades to a no-op and we only assert what we can

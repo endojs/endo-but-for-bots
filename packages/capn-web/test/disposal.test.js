@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global setTimeout */
 import test from '@endo/ses-ava/test.js';
 import { Far } from '@endo/pass-style';
 import { E } from '@endo/eventual-send';

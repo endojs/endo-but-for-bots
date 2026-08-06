@@ -1,4 +1,3 @@
-/* global globalThis */
 // Devaluator: turn a live JS value into a Cap'n Web wire expression.
 //
 // The output is a JSON-serialisable structure whose semantics are described

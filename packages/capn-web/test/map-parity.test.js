@@ -128,7 +128,6 @@ test('callRemap rejects symbol property keys with a clear error', async t => {
   const stub = await E(session.getRemoteMain()).get();
   let caught;
   try {
-    // eslint-disable-next-line no-undef
     await session.callRemap(stub, x => x[Symbol('foo')]());
   } catch (e) {
     caught = e;
