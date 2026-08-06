@@ -51,36 +51,42 @@ const withEndoServer = (t, localMain) => {
 
 // ---------- promise pipelining ----------
 
-interop('pipelining: chained property/method calls in one round trip', async t => {
-  t.timeout(10_000);
-  class Leaf extends capnweb.RpcTarget {
-    value() {
-      return 'leaf-value';
+interop(
+  'pipelining: chained property/method calls in one round trip',
+  async t => {
+    t.timeout(10_000);
+    class Leaf extends capnweb.RpcTarget {
+      value() {
+        return 'leaf-value';
+      }
     }
-  }
-  class Branch extends capnweb.RpcTarget {
-    getLeaf() {
-      return new Leaf();
+    class Branch extends capnweb.RpcTarget {
+      getLeaf() {
+        return new Leaf();
+      }
     }
-  }
-  class Main extends capnweb.RpcTarget {
-    getBranch() {
-      return new Branch();
+    class Main extends capnweb.RpcTarget {
+      getBranch() {
+        return new Branch();
+      }
     }
-  }
-  const r = withCapnwebServer(t, Main);
-  // Pipeline three deep without awaiting intermediate promises.
-  t.is(await E(E(E(r).getBranch()).getLeaf()).value(), 'leaf-value');
-});
+    const r = withCapnwebServer(t, Main);
+    // Pipeline three deep without awaiting intermediate promises.
+    t.is(await E(E(E(r).getBranch()).getLeaf()).value(), 'leaf-value');
+  },
+);
 
-interop('pipelining: endo server, capnweb client chains without await', async t => {
-  t.timeout(10_000);
-  const leaf = Far('leaf', { value: () => 'endo-leaf' });
-  const branch = Far('branch', { getLeaf: () => leaf });
-  const main = Far('main', { getBranch: () => branch });
-  const r = withEndoServer(t, main);
-  t.is(await r.getBranch().getLeaf().value(), 'endo-leaf');
-});
+interop(
+  'pipelining: endo server, capnweb client chains without await',
+  async t => {
+    t.timeout(10_000);
+    const leaf = Far('leaf', { value: () => 'endo-leaf' });
+    const branch = Far('branch', { getLeaf: () => leaf });
+    const main = Far('main', { getBranch: () => branch });
+    const r = withEndoServer(t, main);
+    t.is(await r.getBranch().getLeaf().value(), 'endo-leaf');
+  },
+);
 
 // NOTE on capnweb's client-side auto-dispose.  cloudflare/capnweb disposes a
 // method call's argument payload as soon as the call returns
@@ -101,28 +107,31 @@ interop('pipelining: endo server, capnweb client chains without await', async t 
 
 // ---------- capabilities returned from and passed back to a peer ----------
 
-interop('caps: capnweb returns a stub the endo client drives statefully', async t => {
-  t.timeout(10_000);
-  class Counter extends capnweb.RpcTarget {
-    constructor() {
-      super();
-      this.n = 0;
+interop(
+  'caps: capnweb returns a stub the endo client drives statefully',
+  async t => {
+    t.timeout(10_000);
+    class Counter extends capnweb.RpcTarget {
+      constructor() {
+        super();
+        this.n = 0;
+      }
+      incr(by) {
+        this.n += by;
+        return this.n;
+      }
     }
-    incr(by) {
-      this.n += by;
-      return this.n;
+    class Main extends capnweb.RpcTarget {
+      make() {
+        return new Counter();
+      }
     }
-  }
-  class Main extends capnweb.RpcTarget {
-    make() {
-      return new Counter();
-    }
-  }
-  const r = withCapnwebServer(t, Main);
-  const c = await E(r).make();
-  t.is(await E(c).incr(5), 5);
-  t.is(await E(c).incr(3), 8);
-});
+    const r = withCapnwebServer(t, Main);
+    const c = await E(r).make();
+    t.is(await E(c).incr(5), 5);
+    t.is(await E(c).incr(3), 8);
+  },
+);
 
 // ---------- map() with captured stubs ----------
 
@@ -194,30 +203,33 @@ interop('errors: endo server rejection reaches a capnweb client', async t => {
   t.regex(caught.message, /endo-side failure/);
 });
 
-interop('errors: an AggregateError thrown by capnweb reaches endo with its errors', async t => {
-  t.timeout(20_000);
-  class Main extends capnweb.RpcTarget {
-    boom() {
-      throw new AggregateError(
-        [new Error('first'), new Error('second')],
-        'both failed',
-      );
+interop(
+  'errors: an AggregateError thrown by capnweb reaches endo with its errors',
+  async t => {
+    t.timeout(20_000);
+    class Main extends capnweb.RpcTarget {
+      boom() {
+        throw new AggregateError(
+          [new Error('first'), new Error('second')],
+          'both failed',
+        );
+      }
     }
-  }
-  const r = withCapnwebServer(t, Main);
-  let caught;
-  try {
-    await E(r).boom();
-  } catch (e) {
-    caught = e;
-  }
-  t.true(caught instanceof AggregateError, 'decoded to an AggregateError');
-  t.regex(caught.message, /both failed/);
-  t.deepEqual(
-    caught.errors.map(e => e.message),
-    ['first', 'second'],
-  );
-});
+    const r = withCapnwebServer(t, Main);
+    let caught;
+    try {
+      await E(r).boom();
+    } catch (e) {
+      caught = e;
+    }
+    t.true(caught instanceof AggregateError, 'decoded to an AggregateError');
+    t.regex(caught.message, /both failed/);
+    t.deepEqual(
+      caught.errors.map(e => e.message),
+      ['first', 'second'],
+    );
+  },
+);
 
 // ---------- Blob: known limitation ----------
 
