@@ -314,7 +314,8 @@ test('base and history git declarations split history rewrite authority', t => {
 // Divergence gate (fs): `workspace` is printed from the checked TypeScript
 // source, and the `M.interface` guards stay the runtime enforcement layer.
 // Neither side may grow, lose, or rename a method without the other, so the
-// declaration's method names must equal the guard's for every guarded type.
+// declaration's method names must exactly equal the guard's for every guarded
+// type.
 test('workspace declarations match the filesystem runtime guards', t => {
   const { workspace } = fsDeclarations;
   t.deepEqual(

@@ -115,11 +115,11 @@ const makeReadOnlyFilesystem = inner => {
 const makeReadOnlyDirectory = dir => {
   return makeExo('Directory', DirectoryInterface, {
     getQid() {
-      // Forward the synchronous getter. If `dir` is a local exo
-      // (same vat), this returns the cached qid; if `dir` is
-      // remote, the call is eventual but the contract still holds.
-      // eslint-disable-next-line @endo/no-polymorphic-call
-      return /** @type {any} */ (dir).getQid();
+      // Keep same-vat callers synchronous, while forwarding remote
+      // presences eventually. `M.eref` accepts either result.
+      const getQid = dir?.getQid;
+      if (typeof getQid === 'function') return getQid.call(dir);
+      return /** @type {any} */ (E(dir).getQid());
     },
     async getStat() {
       return E(dir).getStat();
@@ -216,8 +216,11 @@ const makeReadOnlyDirectory = dir => {
 const makeReadOnlyFile = file => {
   return makeExo('File', FileInterface, {
     getQid() {
-      // eslint-disable-next-line @endo/no-polymorphic-call
-      return /** @type {any} */ (file).getQid();
+      // Keep same-vat callers synchronous, while forwarding remote
+      // presences eventually. `M.eref` accepts either result.
+      const getQid = file?.getQid;
+      if (typeof getQid === 'function') return getQid.call(file);
+      return /** @type {any} */ (E(file).getQid());
     },
     async getStat() {
       return E(file).getStat();
