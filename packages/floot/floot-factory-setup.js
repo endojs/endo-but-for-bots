@@ -43,6 +43,42 @@ const resolveCodePath = () => {
 };
 
 /**
+ * Grant the NixOS machine-admin caplet to the factory host so the
+ * "machine-admin" session preset can copy it into a session guest.
+ *
+ * The caplet is provisioned into the ROOT daemon inventory as
+ * `controller-for-nixos-admin` by packages/space-nixos-admin/setup.js (listed
+ * in ENDO_EXTRA ahead of this script). We hand the factory a locator to it
+ * under `nixos-admin`, mirroring how `llm-provider` is granted. Stored on the
+ * factory PROFILE (the caplet's own powers) so the factory caplet reads it via
+ * `E(host).lookup('nixos-admin')`.
+ *
+ * Best-effort and idempotent: a no-op when the controller is absent (a
+ * non-NixOS host, or the setup has not run yet this boot — this runs on every
+ * start, so a later boot fills it in). Never fails factory setup.
+ *
+ * @param {import('@endo/eventual-send').ERef<any>} agent
+ * @param {string[]} factoryProfilePath - pet-name path of the factory profile
+ */
+const grantNixosAdmin = async (agent, factoryProfilePath) => {
+  try {
+    if (!(await E(agent).has('controller-for-nixos-admin'))) {
+      return;
+    }
+    const locator = await E(agent).locate('controller-for-nixos-admin');
+    const factoryAgent = await E(agent).lookup(factoryProfilePath);
+    await E(factoryAgent).storeLocator('nixos-admin', locator);
+    console.log('Granted nixos-admin to the Floot factory.');
+  } catch (err) {
+    console.warn(
+      `Floot: could not grant nixos-admin to the factory: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+};
+
+/**
  * Provision (or revive) the floot-factory: its guest, its provider handle, the
  * pinned factory caplet, and a default session if none exist yet.
  *
@@ -65,7 +101,9 @@ export const main = async agent => {
   // secret is NOT needed to re-bind (it lives in floot/llm-provider from the
   // first provision), so restarts don't require ANTHROPIC_API_KEY.
   const systemPrompt =
-    process.env.FLOOT_SYSTEM_PROMPT || process.env.ENDO_FLOOT_SYSTEM_PROMPT || '';
+    process.env.FLOOT_SYSTEM_PROMPT ||
+    process.env.ENDO_FLOOT_SYSTEM_PROMPT ||
+    '';
   const codePath = resolveCodePath();
 
   // Re-bind path (ENDO_EXTRA re-runs every setup on each start). The factory is a
@@ -95,6 +133,9 @@ export const main = async agent => {
       }),
     });
     await E(agent).copy(controllerPath, ['@pins', pinName]);
+    // Re-grant machine-admin every boot: keeps existing factories (created
+    // before this feature, or before the controller existed) up to date.
+    await grantNixosAdmin(agent, controllerProfilePath);
     console.log(
       `Floot factory re-bound to the current release at "${dir}/controller" (sessions preserved).`,
     );
@@ -102,7 +143,9 @@ export const main = async agent => {
   }
 
   const provider =
-    process.env.FLOOT_PROVIDER || process.env.ENDO_FLOOT_PROVIDER || 'anthropic';
+    process.env.FLOOT_PROVIDER ||
+    process.env.ENDO_FLOOT_PROVIDER ||
+    'anthropic';
   const model = process.env.FLOOT_MODEL || process.env.ENDO_FLOOT_MODEL || '';
   const authToken =
     process.env.ANTHROPIC_API_KEY ||
@@ -162,6 +205,9 @@ export const main = async agent => {
 
   // 5. Single pin: the factory revives all its sessions on daemon restart.
   await E(agent).copy(controllerPath, ['@pins', `${dir}-controller`]);
+  // 5b. Grant the NixOS machine-admin caplet to the factory (if present) so the
+  // "machine-admin" preset can hand it to sessions.
+  await grantNixosAdmin(agent, controllerProfilePath);
   console.log(`Floot factory created at "${dir}/controller" and pinned.`);
 
   // 6. Seed a default session if this is a fresh factory.

@@ -442,6 +442,38 @@ before acting through "endo". In exec, look it up and read from it:
 Speak short, plain summaries of what you did — never read code or raw capability
 output aloud.`;
 
+// "Machine admin" persona: full Endo control PLUS the ability to edit and apply
+// this host's NixOS configuration. This is root-equivalent authority over the
+// whole machine, so the prompt leans hard on validate-then-confirm-then-apply.
+const machineAdminSystemPrompt = `${fullControlSystemPrompt}
+
+You ALSO administer this machine's operating system. It runs NixOS, and your
+petstore contains "nixos" — a capability to EDIT and APPLY the host's NixOS
+configuration (a git-backed flake checkout of modules/*.nix, hosts/*.nix, and
+flake.nix). Reach it in exec with \`const nixos = await E(powers).lookup('nixos')\`:
+- \`E(nixos).listFiles()\` lists config files; \`E(nixos).readFile(path)\` reads one;
+  \`E(nixos).writeFile(path, text)\` edits one (staged, not yet applied).
+- \`E(nixos).build(note)\` validates the edited config by building it WITHOUT
+  activating it — a safe dry run.
+- \`E(nixos).apply(message)\` commits the change and runs \`nixos-rebuild switch\`;
+  the host health-checks the daemon afterward and AUTO-ROLLS-BACK to the previous
+  generation if it does not come back healthy. A commit message is required.
+- \`E(nixos).rollback()\` reactivates the previous generation (emergency undo).
+- \`E(nixos).status()\` reports the progress/result of the last build or apply.
+
+These run asynchronously in a privileged host service, so build/apply/rollback
+return immediately — then POLL \`E(nixos).status()\` until its phase is "ok" or
+"error" (read \`getLog()\` on error). Applying a NixOS config is ROOT-EQUIVALENT
+and changes the whole machine, so work with extreme care:
+- Read the relevant file(s) first and make the SMALLEST edit that does the job.
+- ALWAYS \`build()\` after editing and confirm status is ok BEFORE applying. Never
+  apply a config that has not built cleanly.
+- Before \`apply()\`, state plainly in one sentence what will change and WAIT for
+  the user to agree. Only then apply, then confirm the resulting status.
+- If the machine misbehaves after an apply, \`rollback()\` immediately, then
+  investigate.
+Speak short, plain summaries — never read config text aloud.`;
+
 // Catalog of session presets. Each preset pairs a system prompt with a set of
 // objects to provision (idempotently) into the session guest's petstore the
 // first time the session's agent is built. Provisioned objects are referenced
@@ -472,6 +504,18 @@ const PRESETS = [
     objects: [
       { kind: 'host-powers', petName: 'endo' },
       { kind: 'code-mount', petName: 'endo-src' },
+    ],
+  },
+  {
+    id: 'machine-admin',
+    title: 'Machine admin (NixOS)',
+    description:
+      "Full Endo control PLUS editing and applying this host's NixOS configuration. Root-equivalent machine control — handle with extreme care.",
+    systemPrompt: machineAdminSystemPrompt,
+    objects: [
+      { kind: 'host-powers', petName: 'endo' },
+      { kind: 'code-mount', petName: 'endo-src' },
+      { kind: 'nixos-admin', petName: 'nixos' },
     ],
   },
 ];
@@ -647,6 +691,19 @@ const provisionPresetObjects = async (
         if (await E(host).has(mountTmp)) await E(host).remove(mountTmp);
         await E(host).provideMount(codePath, mountTmp, { readOnly: true });
         await E(host).move([mountTmp], [agentName, obj.petName]);
+      }
+    } else if (obj.kind === 'nixos-admin') {
+      // Copy the factory host's NixOS machine-admin caplet into the guest's
+      // petstore. The factory receives it (as `nixos-admin`) from the root
+      // daemon at factory setup via storeLocator; it is absent on a host with
+      // no NixOS admin controller (e.g. non-NixOS), so skip gracefully — the
+      // session still opens, just without machine-admin authority.
+      if (await E(host).has('nixos-admin')) {
+        await E(host).copy(['nixos-admin'], [agentName, obj.petName]);
+      } else {
+        console.warn(
+          `[floot-factory] nixos-admin caplet unavailable on this daemon; skipping "${obj.petName}" for session ${id}`,
+        );
       }
     } else {
       console.warn(
