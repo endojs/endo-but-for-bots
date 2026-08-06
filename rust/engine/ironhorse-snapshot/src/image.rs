@@ -66,7 +66,7 @@ impl MeterImage {
         }
     }
 
-    fn encode(&self) -> Vec<u8> {
+    pub(crate) fn encode(&self) -> Vec<u8> {
         let mut v = Vec::new();
         v.extend_from_slice(&self.index.to_be_bytes());
         v.extend_from_slice(&self.interval.to_be_bytes());
@@ -77,7 +77,7 @@ impl MeterImage {
         v
     }
 
-    fn decode(p: &[u8]) -> Result<MeterImage, SnapshotError> {
+    pub(crate) fn decode(p: &[u8]) -> Result<MeterImage, SnapshotError> {
         if p.len() < 28 {
             return Err(SnapshotError::Corrupt("METR header"));
         }
@@ -110,13 +110,13 @@ pub struct CreationParams {
 }
 
 impl CreationParams {
-    fn encode(&self) -> Vec<u8> {
+    pub(crate) fn encode(&self) -> Vec<u8> {
         let mut v = Vec::with_capacity(8);
         v.extend_from_slice(&self.initial_slot_count.to_be_bytes());
         v.extend_from_slice(&self.initial_chunk_bytes.to_be_bytes());
         v
     }
-    fn decode(p: &[u8]) -> Result<CreationParams, SnapshotError> {
+    pub(crate) fn decode(p: &[u8]) -> Result<CreationParams, SnapshotError> {
         if p.len() < 8 {
             return Err(SnapshotError::Corrupt("CREA payload too short"));
         }
@@ -205,7 +205,7 @@ impl MachineImage {
 
 // --- string-list and slot-list atom payload helpers ---
 
-fn encode_strings(list: &[String]) -> Vec<u8> {
+pub(crate) fn encode_strings(list: &[String]) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&(list.len() as u32).to_be_bytes());
     for s in list {
@@ -216,7 +216,7 @@ fn encode_strings(list: &[String]) -> Vec<u8> {
     v
 }
 
-fn decode_strings(p: &[u8]) -> Result<Vec<String>, SnapshotError> {
+pub(crate) fn decode_strings(p: &[u8]) -> Result<Vec<String>, SnapshotError> {
     if p.len() < 4 {
         return Err(SnapshotError::Corrupt("string list header"));
     }
@@ -246,7 +246,7 @@ fn decode_strings(p: &[u8]) -> Result<Vec<String>, SnapshotError> {
     Ok(out)
 }
 
-fn encode_u32s(list: &[u32]) -> Vec<u8> {
+pub(crate) fn encode_u32s(list: &[u32]) -> Vec<u8> {
     let mut v = Vec::with_capacity(4 + list.len() * 4);
     v.extend_from_slice(&(list.len() as u32).to_be_bytes());
     for &x in list {
@@ -255,7 +255,7 @@ fn encode_u32s(list: &[u32]) -> Vec<u8> {
     v
 }
 
-fn decode_u32s(p: &[u8]) -> Result<Vec<u32>, SnapshotError> {
+pub(crate) fn decode_u32s(p: &[u8]) -> Result<Vec<u32>, SnapshotError> {
     if p.len() < 4 {
         return Err(SnapshotError::Corrupt("u32 list header"));
     }
@@ -318,14 +318,14 @@ fn decode_heap(p: &[u8]) -> Result<(Vec<Slot>, Vec<u32>, u32), SnapshotError> {
 }
 
 /// STAC payload: `[count][records…]`.
-fn encode_stack(stack: &[Slot]) -> Vec<u8> {
+pub(crate) fn encode_stack(stack: &[Slot]) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&(stack.len() as u32).to_be_bytes());
     v.extend_from_slice(&encode_slots(stack));
     v
 }
 
-fn decode_stack(p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
+pub(crate) fn decode_stack(p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
     if p.len() < 4 {
         return Err(SnapshotError::Corrupt("STAC header"));
     }
