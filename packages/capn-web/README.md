@@ -168,24 +168,43 @@ special-value type.
 
 ## Wire-format compatibility
 
-The wire format matches `cloudflare/capnweb` 0.6 for the implemented surface:
+The wire format matches `cloudflare/capnweb` 0.10 for the implemented surface:
 
 - All top-level message types (`push`, `pull`, `resolve`, `reject`, `release`,
-  `stream`, `abort`).
+  `stream`, `abort`, `pipe`).
 - All special-value tags (`undefined`, `nan`, `inf`, `-inf`, `bigint`, `date`,
-  `bytes`, `error`, `headers`, `request`, `response`).
+  `bytes`, `error`, `headers`, `request`, `response`). `date` accepts `null`
+  for an Invalid Date, `error` carries the optional `props` element (`cause`,
+  an `AggregateError`'s `errors`, own-enumerable keys), and `bytes` is base64
+  without padding — all as of capnweb 0.8.
 - Reference-introducing expressions (`import`, `pipeline`, `export`, `promise`,
   `writable`, `readable`).
 - Array escape (`[[…]]`).
 
-The `test/interop-capnweb.test.js` suite proves end-to-end interop by running
-an `@endo/capn-web` session against a real `cloudflare/capnweb` `RpcSession`
-in the same process: simple calls, special values, capability passing, and
-bidirectional method invocation all work both directions.
+### Transport encoding levels
+
+The WebSocket and HTTP-batch transports use capnweb's default `string`
+encoding: messages are JSON strings. The **MessagePort** transport uses the
+`structuredClonable` level that capnweb adopted in 0.9.0 — it posts the live
+message object and lets structured clone carry `bigint`, `Date`, `undefined`
+and `Uint8Array` natively. `makeMessagePortTransport` speaks that dialect (it
+posts objects and folds a peer's native leaves back into the tuple grammar on
+receive), so it interoperates with `capnweb.newMessagePortRpcSession`. This is
+a change from earlier `@endo/capn-web`, which posted JSON strings over
+MessagePort; two endo peers still interoperate, but a MessagePort peer must
+speak structured clone.
+
+The interop suites prove end-to-end compatibility against a real
+`cloudflare/capnweb` session in the same process:
+`test/interop-capnweb.test.js`, `test/interop-capnweb-values.test.js`
+(byte-level wire equivalence for every special value and structure),
+`test/interop-capnweb-caps.test.js` (capabilities, pipelining, `.map()`,
+error propagation), and `test/transports/message-port-capnweb.test.js`
+(the structured-clonable MessagePort boundary, both directions).
 
 ## Limitations (v1)
 
-- `.map()` is wire-compatible with `cloudflare/capnweb` 0.6's
+- `.map()` is wire-compatible with `cloudflare/capnweb`'s
   `["remap", subjectId, propertyPath, captures, instructions]` form:
   each instruction is `["pipeline", subject, path, args?]` and the last
   instruction's value is the answer. The interop suite covers both
