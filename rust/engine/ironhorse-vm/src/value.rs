@@ -21,6 +21,19 @@
 /// other id.
 pub const XS_NO_ID: u16 = 0;
 
+/// Slot records per dirty-tracking page — the canonical page geometry
+/// of the snapshot store seam (design
+/// `designs/ironhorse-snapshot-store-seam.md`). The vm owns the
+/// constant because the arenas' dirty bitmaps are keyed to it and the
+/// snapshot crate depends on the vm, never the reverse; `ironhorse-snapshot`
+/// re-exports it as the store page size. Changing it is a store-schema
+/// version bump.
+pub const SLOTS_PER_PAGE: u32 = 256;
+
+/// Chunk-arena bytes per dirty-tracking extent (same ownership and
+/// versioning discipline as [`SLOTS_PER_PAGE`]).
+pub const CHUNK_EXTENT_BYTES: u32 = 64 * 1024;
+
 /// Handle into the slot arena. `u32::MAX` is the null sentinel
 /// (XS's `C_NULL`), never a live index.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -309,6 +322,16 @@ pub struct SlotArena {
     marks: Vec<bool>,
     /// Count of live (non-free) slots, mirroring `currentHeapCount`.
     live: u32,
+    /// One dirty bit per [`SLOTS_PER_PAGE`]-record page, set by the
+    /// record-mutating paths ([`SlotArena::alloc`],
+    /// [`SlotArena::get_mut`]) and drained by the incremental snapshot
+    /// checkpoint (design `designs/ironhorse-snapshot-store-seam.md`).
+    /// Host bookkeeping only — nothing observable reads it, the same
+    /// determinism firewall as the cost recorder. `free`/`sweep`/`mark`
+    /// do not set bits: they never change record bytes (the free list
+    /// travels in the checkpoint's small state, and mark bits are
+    /// transient).
+    dirty: Vec<bool>,
 }
 
 impl SlotArena {
@@ -318,7 +341,19 @@ impl SlotArena {
             free: Vec::new(),
             marks: Vec::new(),
             live: 0,
+            dirty: Vec::new(),
         }
+    }
+
+    /// Set the dirty bit of the page holding record `i`, growing the
+    /// bitmap on first touch of a new page.
+    #[inline]
+    fn mark_dirty_slot(&mut self, i: u32) {
+        let page = (i / SLOTS_PER_PAGE) as usize;
+        if page >= self.dirty.len() {
+            self.dirty.resize(page + 1, false);
+        }
+        self.dirty[page] = true;
     }
 
     /// Allocate a slot, reusing the free list first (XS semantics).
@@ -327,11 +362,13 @@ impl SlotArena {
         if let Some(i) = self.free.pop() {
             self.slots[i as usize] = slot;
             self.marks[i as usize] = false;
+            self.mark_dirty_slot(i);
             SlotIndex(i)
         } else {
             let i = self.slots.len() as u32;
             self.slots.push(slot);
             self.marks.push(false);
+            self.mark_dirty_slot(i);
             SlotIndex(i)
         }
     }
@@ -349,6 +386,11 @@ impl SlotArena {
     }
     #[inline]
     pub fn get_mut(&mut self, index: SlotIndex) -> &mut Slot {
+        // A `&mut` record may be written through, so its page is
+        // conservatively dirty (a read-only `get_mut` over-marks, which
+        // costs a redundant page write at the next checkpoint, never a
+        // missed one).
+        self.mark_dirty_slot(index.0);
         &mut self.slots[index.0 as usize]
     }
 
@@ -454,14 +496,39 @@ impl SlotArena {
     /// Rebuild an arena from a serialized image: the flat record array, the
     /// free list, and the live count. Marks are reset (a snapshot is taken
     /// on a quiescent machine, outside any collection — design § Snapshots
-    /// constraint 1), so no mark state needs to survive.
+    /// constraint 1), so no mark state needs to survive. The dirty bitmap
+    /// starts clean: a just-restored arena is byte-identical to its store,
+    /// so the next incremental checkpoint owes nothing.
     pub fn from_image(slots: Vec<Slot>, free: Vec<u32>, live: u32) -> SlotArena {
         let marks = vec![false; slots.len()];
+        let dirty = vec![false; slots.len().div_ceil(SLOTS_PER_PAGE as usize)];
         SlotArena {
             slots,
             free,
             marks,
             live,
+            dirty,
+        }
+    }
+
+    // --- incremental-checkpoint dirty tracking (store seam design) ---
+
+    /// The pages whose records changed since the last
+    /// [`SlotArena::clear_dirty`], ascending. Peek-only: the checkpoint
+    /// clears the bits only after its store commit succeeds, so a failed
+    /// commit forgets nothing.
+    pub fn dirty_pages(&self) -> Vec<u32> {
+        self.dirty
+            .iter()
+            .enumerate()
+            .filter_map(|(p, &d)| if d { Some(p as u32) } else { None })
+            .collect()
+    }
+
+    /// Reset the dirty bitmap after a successful checkpoint commit.
+    pub fn clear_dirty(&mut self) {
+        for d in self.dirty.iter_mut() {
+            *d = false;
         }
     }
 }
@@ -480,11 +547,38 @@ const CHUNK_HEADER: usize = 4;
 #[derive(Default)]
 pub struct ChunkArena {
     bytes: Vec<u8>,
+    /// One dirty bit per [`CHUNK_EXTENT_BYTES`]-byte extent of the byte
+    /// space, set by the byte-mutating paths ([`ChunkArena::alloc`],
+    /// [`ChunkArena::slice_mut`], [`ChunkArena::compact`]) and drained
+    /// by the incremental snapshot checkpoint. Host bookkeeping only;
+    /// see the twin bitmap on [`SlotArena`].
+    dirty: Vec<bool>,
 }
 
 impl ChunkArena {
     pub fn new() -> ChunkArena {
-        ChunkArena { bytes: Vec::new() }
+        ChunkArena {
+            bytes: Vec::new(),
+            dirty: Vec::new(),
+        }
+    }
+
+    /// Mark every extent covering byte range `[start, end)` dirty,
+    /// growing the bitmap as the byte space grows.
+    #[inline]
+    fn mark_dirty_range(&mut self, start: usize, end: usize) {
+        if end <= start {
+            return;
+        }
+        let per = CHUNK_EXTENT_BYTES as usize;
+        let first = start / per;
+        let last = (end - 1) / per;
+        if last >= self.dirty.len() {
+            self.dirty.resize(last + 1, false);
+        }
+        for e in first..=last {
+            self.dirty[e] = true;
+        }
     }
 
     /// Append bytes behind a length header, returning the offset of the
@@ -499,6 +593,7 @@ impl ChunkArena {
         let off = self.bytes.len() as u32;
         self.bytes.extend_from_slice(data);
         debug_assert_eq!(off as usize, header + CHUNK_HEADER);
+        self.mark_dirty_range(header, self.bytes.len());
         ChunkOffset(off)
     }
 
@@ -533,6 +628,7 @@ impl ChunkArena {
     #[inline]
     pub fn slice_mut(&mut self, off: ChunkOffset, len: usize) -> &mut [u8] {
         let start = off.0 as usize;
+        self.mark_dirty_range(start, start + len);
         &mut self.bytes[start..start + len]
     }
 
@@ -568,6 +664,12 @@ impl ChunkArena {
             remap.insert(old, ChunkOffset(new_off));
         }
         self.bytes = fresh;
+        // The whole byte space was rewritten (and possibly shrunk):
+        // every surviving extent is dirty, and the bitmap tracks the
+        // new, smaller geometry so a checkpoint never names an extent
+        // past the compacted end.
+        let exts = self.bytes.len().div_ceil(CHUNK_EXTENT_BYTES as usize);
+        self.dirty = vec![true; exts];
         remap
     }
 
@@ -588,9 +690,34 @@ impl ChunkArena {
         &self.bytes
     }
 
-    /// Rebuild a chunk arena from a serialized `BLOC` image.
+    /// Rebuild a chunk arena from a serialized `BLOC` image. The dirty
+    /// bitmap starts clean, as on [`SlotArena::from_image`].
     pub fn from_image(bytes: Vec<u8>) -> ChunkArena {
-        ChunkArena { bytes }
+        let exts = bytes.len().div_ceil(CHUNK_EXTENT_BYTES as usize);
+        ChunkArena {
+            bytes,
+            dirty: vec![false; exts],
+        }
+    }
+
+    // --- incremental-checkpoint dirty tracking (store seam design) ---
+
+    /// The extents whose bytes changed since the last
+    /// [`ChunkArena::clear_dirty`], ascending. Peek-only, like
+    /// [`SlotArena::dirty_pages`].
+    pub fn dirty_extents(&self) -> Vec<u32> {
+        self.dirty
+            .iter()
+            .enumerate()
+            .filter_map(|(e, &d)| if d { Some(e as u32) } else { None })
+            .collect()
+    }
+
+    /// Reset the dirty bitmap after a successful checkpoint commit.
+    pub fn clear_dirty(&mut self) {
+        for d in self.dirty.iter_mut() {
+            *d = false;
+        }
     }
 }
 
@@ -670,4 +797,119 @@ pub fn number_to_ecma_string(n: f64) -> String {
         format!("{}e{}{}", head, esign, e.abs())
     };
     format!("{}{}", sign, body)
+}
+
+#[cfg(test)]
+mod dirty_tests {
+    //! The dirty-tracking contract the incremental snapshot checkpoint
+    //! relies on (store seam design): record/byte mutations mark their
+    //! page/extent; free-list and mark-bit churn does not (those travel
+    //! in the checkpoint's small state or are transient); restores
+    //! start clean; a chunk compaction dirties exactly the new,
+    //! possibly smaller, extent range.
+
+    use super::*;
+
+    #[test]
+    fn slot_alloc_and_get_mut_mark_their_pages() {
+        let mut a = SlotArena::new();
+        let first = a.alloc(Slot::integer(1));
+        assert_eq!(a.dirty_pages(), vec![0]);
+        a.clear_dirty();
+        assert!(a.dirty_pages().is_empty());
+
+        // Fill past one page so the next alloc lands on page 1.
+        for _ in 1..SLOTS_PER_PAGE {
+            a.alloc(Slot::integer(0));
+        }
+        a.clear_dirty();
+        a.alloc(Slot::integer(2));
+        assert_eq!(a.dirty_pages(), vec![1]);
+
+        a.clear_dirty();
+        a.get_mut(first).value = Payload::Integer(9);
+        assert_eq!(a.dirty_pages(), vec![0]);
+    }
+
+    #[test]
+    fn slot_free_sweep_and_marks_do_not_dirty() {
+        let mut a = SlotArena::new();
+        let root = a.alloc(Slot::integer(1));
+        let dead = a.alloc(Slot::integer(2));
+        a.clear_dirty();
+
+        // free: the record bytes are untouched; the free list travels
+        // in small state.
+        a.free(dead);
+        assert!(a.dirty_pages().is_empty(), "free must not dirty");
+
+        // mark bits are transient collector state.
+        a.clear_marks();
+        a.mark(root);
+        assert!(a.dirty_pages().is_empty(), "marking must not dirty");
+        a.sweep();
+        assert!(a.dirty_pages().is_empty(), "sweep must not dirty");
+    }
+
+    #[test]
+    fn slot_alloc_reusing_the_free_list_dirties_the_reused_page() {
+        let mut a = SlotArena::new();
+        let x = a.alloc(Slot::integer(1));
+        a.free(x);
+        a.clear_dirty();
+        let y = a.alloc(Slot::integer(2));
+        assert_eq!(y, x, "free-list reuse");
+        assert_eq!(a.dirty_pages(), vec![0]);
+    }
+
+    #[test]
+    fn slot_from_image_starts_clean() {
+        let a = SlotArena::from_image(vec![Slot::integer(7); 300], vec![], 300);
+        assert!(a.dirty_pages().is_empty());
+    }
+
+    #[test]
+    fn chunk_alloc_marks_covered_extents() {
+        let mut c = ChunkArena::new();
+        c.alloc(b"hi");
+        assert_eq!(c.dirty_extents(), vec![0]);
+        c.clear_dirty();
+
+        // An allocation spanning the extent boundary marks both sides.
+        let big = vec![7u8; CHUNK_EXTENT_BYTES as usize];
+        c.alloc(&big);
+        assert_eq!(c.dirty_extents(), vec![0, 1]);
+    }
+
+    #[test]
+    fn chunk_slice_mut_marks_only_the_touched_extents() {
+        let mut c = ChunkArena::new();
+        let pad = vec![0u8; CHUNK_EXTENT_BYTES as usize];
+        c.alloc(&pad); // spans extents 0..=1
+        let off = c.alloc(b"abcd"); // extent 1
+        c.clear_dirty();
+        c.slice_mut(off, 4)[0] = b'z';
+        assert_eq!(c.dirty_extents(), vec![1]);
+    }
+
+    #[test]
+    fn chunk_compact_dirties_exactly_the_new_extent_range() {
+        let mut c = ChunkArena::new();
+        let _dead = c.alloc(&vec![1u8; CHUNK_EXTENT_BYTES as usize]);
+        let keep = c.alloc(b"keep me");
+        c.clear_dirty();
+
+        let remap = c.compact(&[keep]);
+        let new_off = remap[&keep];
+        assert_eq!(c.payload(new_off), b"keep me");
+        // The compacted space fits in one extent, all of it dirty; the
+        // stale second extent is gone from the bitmap entirely.
+        assert_eq!(c.dirty_extents(), vec![0]);
+    }
+
+    #[test]
+    fn chunk_from_image_starts_clean() {
+        let c = ChunkArena::from_image(vec![9u8; (CHUNK_EXTENT_BYTES + 1) as usize]);
+        assert!(c.dirty_extents().is_empty());
+    }
 }

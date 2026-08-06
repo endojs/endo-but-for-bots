@@ -60,8 +60,13 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use crate::format::{Signature, SnapshotError};
-use crate::image::{read_machine, write_machine, MachineImage};
+use crate::image::{read_machine, write_machine, MachineImage, MeterImage};
 use crate::sha256::{hex, Sha256};
+use crate::store::{
+    chunk_extent_count, encode_chunk_extent, encode_slot_page, image_to_batch, store_to_image,
+    validate_store, CheckpointBatch, HeapStore, SmallState, StoreError, StoreManifest,
+    STORE_SCHEMA_VERSION,
+};
 use ironhorse_vm::Interp;
 
 /// An error from the file/CAS snapshot surface: either an I/O failure or a
@@ -221,6 +226,167 @@ pub fn resume_from_cas(
     let path = cas_dir.join(sha256);
     let file = File::open(&path)?;
     from_snapshot_file(file, expected_sig)
+}
+
+// --- the store-backed checkpoint surface (store seam design, phase 2)
+//
+// The blob verbs above serialize the whole heap every time; these
+// verbs pair a machine with a `HeapStore` so that after one full
+// write, every later checkpoint commits only the pages and extents the
+// machine actually dirtied since the previous one. Same suspend-point
+// contract as the blob path: a checkpoint is taken at machine
+// quiescence between cranks, never mid-dispatch.
+
+/// A machine's binding to one store: the proof that the store's
+/// current epoch is this machine's previous checkpoint, which is what
+/// makes committing *only* the dirty rows sound. Obtained from
+/// [`begin_store_session`] (full first write) or [`resume_from_store`]
+/// (adopting a store's content); consumed by [`checkpoint_to_store`].
+#[derive(Debug, PartialEq, Eq)]
+pub struct StoreSession {
+    epoch: u64,
+}
+
+impl StoreSession {
+    /// The store epoch this session last committed or adopted.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+}
+
+/// The manifest of the machine's current arenas at `epoch`. The field
+/// formulas are exactly [`MachineImage::from_arenas`]'s, so a store
+/// checkpointed incrementally exports byte-identically to a blob
+/// written by [`MachineSnapshot::write_snapshot`].
+fn manifest_of(interp: &Interp, signature: &Signature, epoch: u64) -> StoreManifest {
+    StoreManifest {
+        version: crate::format::Version::current(),
+        store_schema: STORE_SCHEMA_VERSION,
+        signature: signature.clone(),
+        creation: crate::image::CreationParams {
+            initial_slot_count: interp.slots.capacity(),
+            initial_chunk_bytes: interp.chunks.byte_size() as u32,
+        },
+        slot_count: interp.slots.capacity(),
+        slot_live: interp.slots.live_count(),
+        chunk_len: interp.chunks.byte_size() as u64,
+        epoch,
+    }
+}
+
+/// The machine's small state, mirroring [`MachineSnapshot::snapshot_image`]
+/// exactly (keys and well-known-symbol identities travel empty per the
+/// current side-table coverage).
+fn small_state_of(interp: &Interp) -> SmallState {
+    SmallState {
+        stack: interp.stack_slots().to_vec(),
+        slot_free: interp.slots.free_list().to_vec(),
+        keys: Vec::new(),
+        names: interp.program_symbol_names().to_vec(),
+        symbols: Vec::new(),
+        meter: MeterImage::of(interp.meter_state()),
+    }
+}
+
+/// Bind a machine to an **empty** store with a full epoch-1 write and
+/// return the session for later incremental checkpoints. A store that
+/// already holds an epoch is refused ([`StoreError::NotEmpty`]) —
+/// adopting existing content is [`resume_from_store`]'s job.
+pub fn begin_store_session(
+    interp: &mut Interp,
+    signature: &Signature,
+    store: &mut dyn HeapStore,
+) -> Result<StoreSession, StoreError> {
+    match store.manifest() {
+        Err(StoreError::Empty) => {}
+        Ok(m) => return Err(StoreError::NotEmpty { epoch: m.epoch }),
+        Err(e) => return Err(e),
+    }
+    let batch = image_to_batch(&interp.snapshot_image(signature), 1);
+    store.commit(&batch)?;
+    // Only a successful commit clears the bitmaps: a failed commit
+    // forgets nothing and the next attempt re-offers the same dirt.
+    interp.slots.clear_dirty();
+    interp.chunks.clear_dirty();
+    Ok(StoreSession { epoch: 1 })
+}
+
+/// Commit the machine's state since the session's last checkpoint:
+/// the dirty slot pages and chunk extents, plus the whole (small)
+/// manifest and small state. Returns the new epoch.
+///
+/// The session/store pairing is verified first — a store whose epoch
+/// is not the session's fails closed with
+/// [`StoreError::EpochMismatch`] rather than absorbing a dirty set
+/// computed against some other baseline (the missed-page corruption
+/// this seam must make unrepresentable).
+pub fn checkpoint_to_store(
+    session: &mut StoreSession,
+    interp: &mut Interp,
+    signature: &Signature,
+    store: &mut dyn HeapStore,
+) -> Result<u64, StoreError> {
+    let stored = store.manifest()?;
+    if stored.epoch != session.epoch {
+        return Err(StoreError::EpochMismatch {
+            expected: session.epoch,
+            found: stored.epoch,
+        });
+    }
+    let epoch = session.epoch + 1;
+    let manifest = manifest_of(interp, signature, epoch);
+
+    let records = interp.slots.records();
+    let slot_pages: Vec<(u32, Vec<u8>)> = interp
+        .slots
+        .dirty_pages()
+        .into_iter()
+        .map(|page| (page, encode_slot_page(records, page)))
+        .collect();
+    // The chunk bitmap tracks the current geometry (compaction resizes
+    // it), so every dirty extent is in range by construction; the
+    // guard is belt-and-braces against a future bitmap bug.
+    let raw = interp.chunks.raw();
+    let ext_count = chunk_extent_count(manifest.chunk_len);
+    let chunk_extents: Vec<(u32, Vec<u8>)> = interp
+        .chunks
+        .dirty_extents()
+        .into_iter()
+        .filter(|&e| e < ext_count)
+        .map(|e| (e, encode_chunk_extent(raw, e)))
+        .collect();
+
+    let batch = CheckpointBatch {
+        manifest,
+        small: small_state_of(interp).encode(),
+        slot_pages,
+        chunk_extents,
+    };
+    store.commit(&batch)?;
+    interp.slots.clear_dirty();
+    interp.chunks.clear_dirty();
+    session.epoch = epoch;
+    Ok(epoch)
+}
+
+/// Rebuild a machine from a store (eager reification: every page and
+/// extent is read now; the lazy mode is the design's phase 3) and
+/// return it with the session bound at the store's epoch. Runs the
+/// full open-time validation — gates, accounting, row inventory —
+/// before touching any content, so a resumed machine can only be the
+/// machine that was checkpointed.
+pub fn resume_from_store(
+    store: &dyn HeapStore,
+    expected_sig: &Signature,
+) -> Result<(Interp, StoreSession), StoreError> {
+    let (manifest, _small) = validate_store(store, expected_sig)?;
+    let image = store_to_image(store)?;
+    Ok((
+        image_to_interp(image),
+        StoreSession {
+            epoch: manifest.epoch,
+        },
+    ))
 }
 
 #[cfg(test)]
