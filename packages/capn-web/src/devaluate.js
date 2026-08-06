@@ -91,8 +91,9 @@ export const makeDevaluator = ctx => {
    * @returns {unknown}
    */
   const devaluateInner = (value, seen) => {
-    // 1. Atomic specials.
-    const special = tryEncodeSpecial(value);
+    // 1. Atomic specials.  Pass the recursive devaluator so error props
+    //    (cause, AggregateError.errors, own-enumerable keys) are encoded.
+    const special = tryEncodeSpecial(value, v => devaluateInner(v, seen));
     if (special !== undefined) return special;
 
     // 2. JSON-safe primitives.

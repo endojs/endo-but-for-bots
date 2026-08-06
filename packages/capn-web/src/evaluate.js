@@ -117,7 +117,7 @@ export const makeEvaluator = ctx => {
       if (tag === 'request') return decodeRequest(expr, evaluate);
       if (tag === 'response') return decodeResponse(expr, evaluate);
       if (isSpecialTag(tag)) {
-        return decodeSpecial(expr);
+        return decodeSpecial(expr, evaluate);
       }
       if (isRefTag(tag)) {
         return evaluateRef(tag, rest);

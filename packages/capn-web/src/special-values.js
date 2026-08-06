@@ -11,19 +11,25 @@ const { isNaN } = Number;
 
 // AggregateError is ES2021 and may be missing in some constrained
 // runtimes; guard so module evaluation doesn't fail.
-const ERROR_TYPES = harden({
-  Error,
-  EvalError,
-  RangeError,
-  ReferenceError,
-  SyntaxError,
-  TypeError,
-  URIError,
+//
+// Null prototype so a hostile wire `typeName` can't reach `Object.prototype`
+// members: `["error", "constructor", …]` must fall through to `Error`, not
+// resolve to `Object`.  Matches cloudflare/capnweb 0.10.0's hardening.
+const ERROR_TYPES = harden(
+  Object.assign(Object.create(null), {
+    Error,
+    EvalError,
+    RangeError,
+    ReferenceError,
+    SyntaxError,
+    TypeError,
+    URIError,
 
-  ...(typeof AggregateError !== 'undefined' ? { AggregateError } : {}),
-});
+    ...(typeof AggregateError !== 'undefined' ? { AggregateError } : {}),
+  }),
+);
 
-const ERROR_TYPE_NAMES = harden(Object.keys(ERROR_TYPES));
+const hasAggregateError = typeof AggregateError !== 'undefined';
 
 /**
  * Encode a Uint8Array to base64.  Works in both browsers (btoa) and Node.
@@ -31,19 +37,25 @@ const ERROR_TYPE_NAMES = harden(Object.keys(ERROR_TYPES));
  * @param {Uint8Array} bytes
  */
 export const bytesToBase64 = bytes => {
+  let b64;
   if (typeof Buffer !== 'undefined') {
-    return Buffer.from(
+    b64 = Buffer.from(
       bytes.buffer,
       bytes.byteOffset,
       bytes.byteLength,
     ).toString('base64');
+  } else {
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 1) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    // eslint-disable-next-line no-undef
+    b64 = btoa(binary);
   }
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 1) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  // eslint-disable-next-line no-undef
-  return btoa(binary);
+  // Match cloudflare/capnweb, which emits standard-alphabet base64 with the
+  // trailing `=` padding omitted.  Our decoder (and capnweb's) accept the
+  // padded or unpadded form, but omitting it keeps the wire byte-identical.
+  return b64.replace(/=+$/, '');
 };
 
 /**
@@ -66,13 +78,64 @@ export const base64ToBytes = b64 => {
 };
 
 /**
+ * Encode an `Error` to capnweb's `["error", name, message, stack?, props?]`
+ * form.  When a `recurse` devaluator is supplied, own-enumerable properties
+ * (other than name/message/stack), `cause`, and — for an `AggregateError` —
+ * the `errors` array are captured into a `props` bag, each recursively
+ * devaluated.  Without `recurse` (e.g. a standalone caller), the legacy
+ * three-element form is emitted.  Matches cloudflare/capnweb 0.10.0.
+ *
+ * @param {Error} err
+ * @param {((v: unknown) => unknown) | undefined} recurse
+ * @returns {unknown[]}
+ */
+const encodeError = (err, recurse) => {
+  const name = typeof err.name === 'string' ? err.name : 'Error';
+  /** @type {unknown[]} */
+  const result = ['error', name, err.message];
+  if (!recurse) return result;
+  /** @type {Record<string, unknown> | undefined} */
+  let props;
+  const captureProp = (key, val) => {
+    let encoded;
+    try {
+      encoded = recurse(val);
+    } catch (_e) {
+      // capnweb drops a prop it can't serialize rather than failing the
+      // whole error; match that so one bad prop doesn't poison the send.
+      return;
+    }
+    if (!props) props = {};
+    props[key] = encoded;
+  };
+  for (const key of Object.keys(err)) {
+    if (key !== 'name' && key !== 'message' && key !== 'stack') {
+      captureProp(key, /** @type {any} */ (err)[key]);
+    }
+  }
+  if ('cause' in err) captureProp('cause', /** @type {any} */ (err).cause);
+  if (hasAggregateError && err instanceof AggregateError) {
+    captureProp('errors', err.errors);
+  }
+  if (props) {
+    // We don't serialize stacks; capnweb normalizes the stack slot to null
+    // when props are present so the bag always lands at index 4.
+    result.push(null);
+    result.push(props);
+  }
+  return result;
+};
+
+/**
  * Try to encode a primitive/atomic value as a Cap'n Web special-value
  * expression.  Returns undefined if the value is not a special.
  *
  * @param {unknown} value
+ * @param {((v: unknown) => unknown)} [recurse]  Devaluator for nested values
+ *   (error props).  Omitted by standalone callers.
  * @returns {unknown[] | undefined}
  */
-export const tryEncodeSpecial = value => {
+export const tryEncodeSpecial = (value, recurse) => {
   if (value === undefined) return ['undefined'];
   if (typeof value === 'number') {
     if (isNaN(value)) return ['nan'];
@@ -81,15 +144,73 @@ export const tryEncodeSpecial = value => {
     return undefined;
   }
   if (typeof value === 'bigint') return ['bigint', value.toString()];
-  if (value instanceof Date) return ['date', value.getTime()];
-  if (value instanceof Uint8Array) return ['bytes', bytesToBase64(value)];
-  if (value instanceof Error) {
-    const typeName = ERROR_TYPE_NAMES.includes(value.constructor.name)
-      ? value.constructor.name
-      : 'Error';
-    return ['error', typeName, value.message];
+  if (value instanceof Date) {
+    const time = value.getTime();
+    // An Invalid Date has a NaN time; capnweb encodes it as ["date", null].
+    return ['date', isNaN(time) ? null : time];
   }
+  if (value instanceof Uint8Array) return ['bytes', bytesToBase64(value)];
+  if (value instanceof Error) return encodeError(value, recurse);
   return undefined;
+};
+
+/**
+ * Decode an `["error", name, message, stack?, props?]` tail into an Error.
+ * The `name` is looked up in the null-prototype `ERROR_TYPES` table so a
+ * hostile wire name can't reach a prototype member; an unknown name falls
+ * back to `Error`.  `AggregateError` is constructed with an empty errors
+ * list so the message lands in the right constructor slot.  When a `recurse`
+ * evaluator is supplied and a `props` bag is present, its entries are
+ * evaluated and assigned — except structurally dangerous keys (anything on
+ * `Object.prototype`, plus `toJSON`), which are still evaluated (so embedded
+ * stubs are introduced/released) but not assigned.  Matches
+ * cloudflare/capnweb 0.10.0.
+ *
+ * @param {unknown[]} rest  The tag's arguments: [name, message, stack?, props?]
+ * @param {((v: unknown) => unknown)} [recurse]
+ * @returns {Error}
+ */
+const decodeError = (rest, recurse) => {
+  const [typeName, message, stack, props] = rest;
+  const Cls = /** @type {ErrorConstructor} */ (
+    ERROR_TYPES[/** @type {keyof typeof ERROR_TYPES} */ (typeName)] || Error
+  );
+  const msg = typeof message === 'string' ? message : '';
+  // AggregateError's first constructor argument is the errors iterable, not
+  // the message, so build it explicitly (with an empty list; a serialized
+  // `errors` prop, if any, is restored from the props bag below).
+  const err =
+    hasAggregateError && typeName === 'AggregateError'
+      ? new AggregateError([], msg)
+      : new Cls(msg);
+  if (typeof stack === 'string') {
+    try {
+      err.stack = stack;
+    } catch (_e) {
+      /* ignore */
+    }
+  }
+  if (
+    recurse &&
+    props !== null &&
+    typeof props === 'object' &&
+    !Array.isArray(props)
+  ) {
+    for (const key of Object.keys(/** @type {object} */ (props))) {
+      const encoded = /** @type {any} */ (props)[key];
+      if (key === 'name' || key === 'message' || key === 'stack') {
+        // Reserved slots are carried positionally, not in the props bag.
+      } else if (key in Object.prototype || key === 'toJSON') {
+        // Filter structurally dangerous keys exactly as capnweb does:
+        // evaluate the value (so any embedded stubs are still introduced and
+        // later released) but never assign it onto the error.
+        recurse(encoded);
+      } else {
+        /** @type {any} */ (err)[key] = recurse(encoded);
+      }
+    }
+  }
+  return err;
 };
 
 /**
@@ -98,8 +219,10 @@ export const tryEncodeSpecial = value => {
  * (i.e. it begins with a string tag we recognise).
  *
  * @param {unknown[]} expr
+ * @param {((v: unknown) => unknown)} [recurse]  Evaluator for nested values
+ *   (error props).  Omitted by standalone callers.
  */
-export const decodeSpecial = expr => {
+export const decodeSpecial = (expr, recurse) => {
   const [tag, ...rest] = expr;
   switch (tag) {
     case 'undefined':
@@ -117,6 +240,8 @@ export const decodeSpecial = expr => {
     }
     case 'date': {
       const [ms] = rest;
+      // A null ms is an Invalid Date (capnweb encodes NaN-time dates this way).
+      if (ms === null) return new Date(NaN);
       if (typeof ms !== 'number') throw new TypeError('date must be a number');
       return new Date(ms);
     }
@@ -125,21 +250,8 @@ export const decodeSpecial = expr => {
       if (typeof s !== 'string') throw new TypeError('bytes must be a string');
       return base64ToBytes(s);
     }
-    case 'error': {
-      const [typeName, message, stack] = rest;
-      const Cls = /** @type {ErrorConstructor} */ (
-        ERROR_TYPES[/** @type {keyof typeof ERROR_TYPES} */ (typeName)] || Error
-      );
-      const err = new Cls(typeof message === 'string' ? message : '');
-      if (typeof stack === 'string') {
-        try {
-          err.stack = stack;
-        } catch (_e) {
-          /* ignore */
-        }
-      }
-      return err;
-    }
+    case 'error':
+      return decodeError(rest, recurse);
     default:
       throw new TypeError(`unknown special-value tag: ${String(tag)}`);
   }
