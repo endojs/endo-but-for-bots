@@ -1035,6 +1035,8 @@ dependencies = [
  "endo_iroh",
  "flate2",
  "hex",
+ "ironhorse-compile",
+ "ironhorse-vm",
  "libc",
  "rusqlite",
  "serde",
@@ -2035,6 +2037,24 @@ dependencies = [
  "vergen-gitcl",
  "webpki-roots 1.0.8",
  "ws_stream_wasm",
+]
+
+[[package]]
+name = "ironhorse-compile"
+version = "0.0.1"
+dependencies = [
+ "ironhorse-regexp",
+]
+
+[[package]]
+name = "ironhorse-regexp"
+version = "0.0.1"
+
+[[package]]
+name = "ironhorse-vm"
+version = "0.0.1"
+dependencies = [
+ "ironhorse-regexp",
 ]
 
 [[package]]
