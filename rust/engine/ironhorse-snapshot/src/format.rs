@@ -1,0 +1,271 @@
+//! The snapshot format constants: the FourCC atom tags, the Ironhorse `VERS`
+//! discriminator, and the host `SIGN` callback-table signature scheme
+//! (design `designs/ironhorse-engine.md` § Snapshots; the signature
+//! discipline from `designs/daemon-xs-worker-snapshot.md`).
+
+use crate::atom::AtomError;
+
+/// A 4-byte FourCC atom tag (big-endian ASCII, as in `xsSnapshot.c`).
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct FourCc(pub [u8; 4]);
+
+impl FourCc {
+    /// The tag rendered as text, for diagnostics.
+    pub fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.0).unwrap_or("????")
+    }
+}
+
+/// The outer container envelope (XS's machine snapshot container).
+pub const XS_M: FourCc = FourCc(*b"XS_M");
+
+/// `VERS` — engine version, slot width, endianness, plus the Ironhorse
+/// discriminator ([`IRONHORSE_MAGIC`]).
+pub const VERS: FourCc = FourCc(*b"VERS");
+/// `SIGN` — host callback-table signature.
+pub const SIGN: FourCc = FourCc(*b"SIGN");
+/// `CREA` — machine creation parameters.
+pub const CREA: FourCc = FourCc(*b"CREA");
+/// `BLOC` — chunk-heap (byte-arena) data.
+pub const BLOC: FourCc = FourCc(*b"BLOC");
+/// `HEAP` — slot-heap images (the flat slot-record array + free list).
+pub const HEAP: FourCc = FourCc(*b"HEAP");
+/// `STAC` — the interpreter's live stack slots.
+pub const STAC: FourCc = FourCc(*b"STAC");
+/// `KEYS` — the key table (runtime-interned property keys).
+pub const KEYS: FourCc = FourCc(*b"KEYS");
+/// `NAME` — the name table (program symbol names, id-ordered).
+pub const NAME: FourCc = FourCc(*b"NAME");
+/// `SYMB` — the symbol table (well-known / registered symbol identities).
+pub const SYMB: FourCc = FourCc(*b"SYMB");
+/// `METR` — the metering state (design row 6): the frozen 16.16
+/// fixed-point counters plus the cost-table version that produced them,
+/// so a resumed machine continues its meter exactly. Ironhorse-specific (XS
+/// carries meter state differently), which the Ironhorse `VERS` discriminator
+/// already fences off.
+pub const METR: FourCc = FourCc(*b"METR");
+
+/// The Ironhorse discriminator embedded at the head of the `VERS` atom. An
+/// Ironhorse snapshot is never mistaken for an XS one and vice versa
+/// (design § Snapshots requirement 1c): XS's `VERS` payload begins with
+/// its own version bytes, never this magic, so a reader that checks the
+/// magic fails closed on a foreign container. The XS importer is out of
+/// scope (resolved question 3), so this is the only `VERS` shape Ironhorse
+/// reads.
+pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
+
+/// The Ironhorse snapshot format version. Bumped on any change to the atom
+/// layout or the slot-record encoding; the reader refuses a version it
+/// does not understand.
+pub const IRONHORSE_FORMAT_VERSION: u32 = 1;
+
+/// Slot-record width tag written into `VERS`: Ironhorse's serialized slot
+/// image is a fixed [`crate::slot_codec::SLOT_RECORD_BYTES`]-byte record
+/// (its own encoding, not XS's 32-byte in-memory `txSlot`), recorded so a
+/// reader can reject a snapshot whose record width it cannot decode.
+pub const SLOT_WIDTH_TAG: u8 = crate::slot_codec::SLOT_RECORD_BYTES as u8;
+
+/// Endianness marker (multi-byte integers in the atom grammar are always
+/// big-endian, as in `xsSnapshot.c`; the byte records this explicitly so a
+/// future little-endian variant is a version bump, not a silent
+/// misread). `0x01` = big-endian.
+pub const ENDIAN_BIG: u8 = 0x01;
+
+/// The decoded `VERS` atom.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Version {
+    pub format_version: u32,
+    pub slot_width: u8,
+    pub endian: u8,
+}
+
+impl Version {
+    /// The current ironhorse version stamp.
+    pub fn current() -> Version {
+        Version {
+            format_version: IRONHORSE_FORMAT_VERSION,
+            slot_width: SLOT_WIDTH_TAG,
+            endian: ENDIAN_BIG,
+        }
+    }
+
+    /// Serialize the `VERS` payload: `ENDR` magic, then version, slot
+    /// width, endianness.
+    pub fn encode(&self) -> Vec<u8> {
+        let mut v = Vec::with_capacity(4 + 4 + 1 + 1);
+        v.extend_from_slice(&IRONHORSE_MAGIC);
+        v.extend_from_slice(&self.format_version.to_be_bytes());
+        v.push(self.slot_width);
+        v.push(self.endian);
+        v
+    }
+
+    /// Decode a `VERS` payload, enforcing the ironhorse discriminator and a
+    /// known format version.
+    pub fn decode(payload: &[u8]) -> Result<Version, VersionError> {
+        if payload.len() < 10 {
+            return Err(VersionError::Truncated);
+        }
+        if payload[0..4] != IRONHORSE_MAGIC {
+            let mut m = [0u8; 4];
+            m.copy_from_slice(&payload[0..4]);
+            return Err(VersionError::NotIronhorse(m));
+        }
+        let format_version = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+        if format_version != IRONHORSE_FORMAT_VERSION {
+            return Err(VersionError::UnsupportedVersion(format_version));
+        }
+        let slot_width = payload[8];
+        if slot_width != SLOT_WIDTH_TAG {
+            return Err(VersionError::SlotWidthMismatch {
+                expected: SLOT_WIDTH_TAG,
+                found: slot_width,
+            });
+        }
+        let endian = payload[9];
+        if endian != ENDIAN_BIG {
+            return Err(VersionError::UnsupportedEndian(endian));
+        }
+        Ok(Version {
+            format_version,
+            slot_width,
+            endian,
+        })
+    }
+}
+
+/// A `VERS` atom that ironhorse refuses to read.
+#[derive(Debug, PartialEq, Eq)]
+pub enum VersionError {
+    Truncated,
+    /// The `VERS` payload did not carry the [`IRONHORSE_MAGIC`] discriminator —
+    /// a foreign (e.g. XS) snapshot, whose import is out of scope.
+    NotIronhorse([u8; 4]),
+    UnsupportedVersion(u32),
+    SlotWidthMismatch { expected: u8, found: u8 },
+    UnsupportedEndian(u8),
+}
+
+/// The host callback-table signature (`SIGN`). Identifies the
+/// callback-table version a snapshot was written against. The table is
+/// **append-only**: new host functions are added at the end, existing
+/// indices never change, and any layout change bumps the signature (per
+/// `designs/daemon-xs-worker-snapshot.md` § Callback table binding). A
+/// reader whose signature differs from the snapshot's refuses the read,
+/// exactly as `fxReadSnapshot` does — a callback-index would otherwise
+/// bind to the wrong host function.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Signature(pub String);
+
+impl Signature {
+    pub fn new(s: impl Into<String>) -> Signature {
+        Signature(s.into())
+    }
+
+    /// Serialize the `SIGN` payload (the raw signature bytes).
+    pub fn encode(&self) -> Vec<u8> {
+        self.0.as_bytes().to_vec()
+    }
+
+    /// Decode a `SIGN` payload.
+    pub fn decode(payload: &[u8]) -> Result<Signature, SignatureError> {
+        match std::str::from_utf8(payload) {
+            Ok(s) => Ok(Signature(s.to_string())),
+            Err(_) => Err(SignatureError::NotUtf8),
+        }
+    }
+
+    /// Whether a snapshot written under `self` may be read by a machine
+    /// whose current signature is `current`. Equality is required: any
+    /// difference means the callback table changed layout, so indices
+    /// cannot be trusted.
+    pub fn is_compatible_with(&self, current: &Signature) -> bool {
+        self == current
+    }
+}
+
+/// A `SIGN` atom that cannot be decoded.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SignatureError {
+    NotUtf8,
+}
+
+/// Errors surfacing from a whole-container decode. Wraps the per-atom
+/// framing, version, and signature failures.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SnapshotError {
+    Atom(AtomError),
+    Version(VersionError),
+    Signature(SignatureError),
+    /// The host's current signature does not match the snapshot's — the
+    /// callback table changed layout since the snapshot was written.
+    SignatureMismatch { expected: Signature, found: Signature },
+    /// The snapshot's cost-table version does not match this engine's
+    /// frozen table ([`ironhorse_vm::COST_TABLE_VERSION`]) — resuming would
+    /// continue a meter under changed weights. Fails closed, the metering
+    /// analogue of [`SnapshotError::SignatureMismatch`] (design row 6).
+    CostTableMismatch { expected: String, found: String },
+    /// A required atom (`VERS`, `SIGN`, `HEAP`, …) was absent.
+    MissingAtom(FourCc),
+    /// A structural payload was malformed (wrong length, bad slot record).
+    Corrupt(&'static str),
+}
+
+impl From<AtomError> for SnapshotError {
+    fn from(e: AtomError) -> Self {
+        SnapshotError::Atom(e)
+    }
+}
+impl From<VersionError> for SnapshotError {
+    fn from(e: VersionError) -> Self {
+        SnapshotError::Version(e)
+    }
+}
+impl From<SignatureError> for SnapshotError {
+    fn from(e: SignatureError) -> Self {
+        SnapshotError::Signature(e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_round_trips() {
+        let v = Version::current();
+        let bytes = v.encode();
+        assert_eq!(Version::decode(&bytes).unwrap(), v);
+    }
+
+    #[test]
+    fn version_rejects_foreign_magic() {
+        // A XS-shaped VERS payload begins with version bytes, not ENDR.
+        let mut payload = vec![0x08, 0x03, 0x01, 0x00]; // e.g. "8.3.1.0"
+        payload.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            Version::decode(&payload),
+            Err(VersionError::NotIronhorse([0x08, 0x03, 0x01, 0x00]))
+        );
+    }
+
+    #[test]
+    fn version_rejects_unknown_format() {
+        let mut payload = IRONHORSE_MAGIC.to_vec();
+        payload.extend_from_slice(&999u32.to_be_bytes());
+        payload.push(SLOT_WIDTH_TAG);
+        payload.push(ENDIAN_BIG);
+        assert_eq!(
+            Version::decode(&payload),
+            Err(VersionError::UnsupportedVersion(999))
+        );
+    }
+
+    #[test]
+    fn signature_round_trips_and_gates() {
+        let s = Signature::new("ironhorse-worker-v1");
+        assert_eq!(Signature::decode(&s.encode()).unwrap(), s);
+        assert!(s.is_compatible_with(&Signature::new("ironhorse-worker-v1")));
+        assert!(!s.is_compatible_with(&Signature::new("ironhorse-worker-v2")));
+    }
+}
