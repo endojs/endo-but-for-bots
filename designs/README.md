@@ -371,6 +371,7 @@ LLM-agent stack).*
 | [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md) | 2026-05-14 | 2026-05-19 | Proposed |
 | [ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) | 2026-07-16 | 2026-07-22 | In Progress |
 | [thixotrope-ironhorse-engine](thixotrope-ironhorse-engine.md) | 2026-08-06 | 2026-08-06 | Proposed |
+| [ironhorse-persistent-realm](ironhorse-persistent-realm.md) | 2026-08-06 | 2026-08-06 | Proposed |
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [ocapn-tcp-syrups-framing](ocapn-tcp-syrups-framing.md) | 2026-04-23 | 2026-05-06 | Not Started |
 | [syrups](syrups.md) | 2026-05-04 | 2026-05-06 | Deprecated |
@@ -533,6 +534,9 @@ flowchart TD
         tiron[thixotrope-ironhorse-engine]
         oortho --> tiron
     end
+
+    ihpr[ironhorse-persistent-realm]
+    ihpr --> tiron
 
     subgraph Chat UX
         cpend[chat-pending-commands<br/><i>IN PROGRESS</i>]
@@ -790,7 +794,7 @@ finalized.
 | ~~ocapn-noise-network~~ | **Complete** | Noise IK netlayer for OCapN landed via PR #137 (merged 2026-05-08), consolidating the stacked PRs #111 (CBOR codec) + #112 (Noise IK netlayer) + #113 (transport tests) |
 | ~~ocapn-iroh-netlayer~~ | **Complete** | iroh 1.0 QUIC netlayer for `@endo/ocapn` (`@endo/ocapn-iroh`): dial-by-EndpointId with discovery/relays, netstring framing under the `ocapn/netstring/0` ALPN, standard `op:start-session`; implemented with the design |
 | ocapn-orthogonal-persistence | In Progress | Phases 1-4 landed and hardened 2026-07-17: `@endo/thixotrope` with resumable sessions at the export-table layer, real XS heap snapshots (`rust/thixotrope-xs-worker` + `makeXsEngine`), sleepy workers with delivered-watermark journals, durable host exports and cross-worker object/promise links, the worker controller, at-most-once host obligations, and post-ultrareview crash hardening. Vat-level GC landed ahead of schedule (collectVats mark-and-sweep, retireWorker with tombstoned links, unpublish, shared-snapshot-ref guard). Doc now also carries the accepted forward plans: Phase 7 name hub + upgrade-by-rebinding (pet-store-style indirection preserving orthogonal purity — no in-place code upgrade, succession + name rebinding instead) and vat-level GC with explicit retirement; Phase 8 resource vats; Phase 9 non-reifying (comms-vat) host adopting the tables records as c-lists. Remaining implementation: Phases 5-9 plus ses lockdown on XS |
-| thixotrope-ironhorse-engine | Proposed | Second `WorkerEngine` implementation: run thixotrope workers on the Ironhorse engine (`rust/engine/`, the Rust port of XS) via a `thixotrope-ironhorse-worker` runner and `makeIronhorseEngine`, same duct protocol and CAS contract as the XS runner. Thixotrope's boot + worker-peer bundle become a driving corpus for Ironhorse's boot campaign (gap ledger first); engine prerequisites (Proxy, native `lockdown()`, guest-callable `Compartment` intrinsic, the host-function seam, snapshot side-table completion) land in the Ironhorse program's lane (PR #600) |
+| thixotrope-ironhorse-engine | Proposed | Second `WorkerEngine` implementation: run thixotrope workers on the Ironhorse engine (`rust/engine/`, the Rust port of XS) via a `thixotrope-ironhorse-worker` runner and `makeIronhorseEngine`, same duct protocol and CAS contract as the XS runner. Thixotrope's boot + worker-peer bundle become a driving corpus for Ironhorse's boot campaign (gap ledger first); engine prerequisites (the persistent-realm contract per [ironhorse-persistent-realm](ironhorse-persistent-realm.md), Proxy, native `lockdown()`, guest-callable `Compartment` intrinsic, the host-function seam, snapshot side-table completion) land in the Ironhorse program's lane (PR #600) |
 
 **Exit criterion:** Two Endo daemons can connect securely over
 OCapN-Noise. Locator format supports node identification via agent
@@ -1107,6 +1111,7 @@ user interface move to Rust.
 | Design | Status | Notes |
 |--------|--------|-------|
 | daemon-sqlite-shutdown-checkpoint | Not Started | Expose one idempotent database `close()` and require process-level suspension, graceful shutdown, and state-directory handoff to complete the full last-connection close on both Node (better-sqlite3) and Rust+XS (rusqlite). This makes file-level snapshot and cross-supervisor handoff single-file-safe without an explicit checkpoint pragma, and pins the crash-path recovery-on-open contract. A planned measurement will decide whether to set `journal_size_limit`. Answers the pet-store design's open question per PR #124 review. |
+| ironhorse-persistent-realm | Proposed | Formal statement of the XS↔Ironhorse symbol-model difference (in-machine compiler with machine-wide interning vs. out-of-machine `ironhorse-compile` with program-local symbol atoms) and its closure: a machine-interned symbol space, per-program ID relink at load, a persistent-realm evaluation API (one machine, many separately-compiled programs, one accreting heap — required by runtime `eval`/`Compartment.evaluate`, the endor daemon's sequential three-script boot, `endor worker -e ironhorse`, and thixotrope workers), and the `KEYS`/`NAME`/`SYMB` snapshot atoms carrying the accreted tables. Sibling spec in the ironhorse-engine family; implementation belongs to the PR #600 program lane. |
 | endor-git-bindings | Proposed | Daemon-private local Git object/ref storage over pure-Rust `gix` (cross-compiles with no per-target C toolchain; vendored libgit2 is the documented contingency); the local-only baseline excludes network transports and keeps Git object IDs distinct from `ContentStore` SHA-256 roots. |
 | endor-tui | Not Started | TUI entry point for `endor`: Chat UI in terminal idiom, and an integrated stepping debugger for XS workers (XS `mxDebug` protocol) |
 | endor-bus-tui | Not Started | Bus-protocol verbs for worker-owned TUI regions, XS handle API, Exo/CapTP wrapper |
@@ -1373,7 +1378,8 @@ have been remapped: 0 → 1, ½ → 2, 1 → 3, 2 → 4, 3 → 7, 4 → 9,
 | cbor-codec | S | 2-3 days | 4 | New `@endo/cbor` package plus ocapn and slots migrations; slots adoption gated on PR #124 landing |
 | ocapn-noise-cryptographic-review | S | 1 day | 4 | External review coordination |
 | ocapn-orthogonal-persistence | M | 4-5 days | 4 | Phases 1-4 landed including the XS engine (`rust/thixotrope-xs-worker` on the `xsnap` crate; thixotrope suite green on real XS heap snapshots) and the worker controller; remaining estimate covers ses-lockdown-on-XS and the Phase 5 Noise transport wiring |
-| thixotrope-ironhorse-engine | M | 4-5 days | 4 | Thixotrope-side scope only (design Phases 1, 5, 6: the boot gap-ledger bar, the `thixotrope-ironhorse-worker` runner + `makeIronhorseEngine` adapter, the Ironhorse test variants); the engine prerequisites (Phases 2-4: Proxy, `lockdown()`, `Compartment` intrinsic, host functions, snapshot side tables) are costed in the Ironhorse program (PR #600), not in M4 |
+| thixotrope-ironhorse-engine | M | 4-5 days | 4 | Thixotrope-side scope only (design Phases 1, 5, 6: the boot gap-ledger bar, the `thixotrope-ironhorse-worker` runner + `makeIronhorseEngine` adapter, the Ironhorse test variants); the engine prerequisites (Phases 2-4: the [ironhorse-persistent-realm](ironhorse-persistent-realm.md) contract, Proxy, `lockdown()`, `Compartment` intrinsic, host functions, snapshot side tables) are costed in the Ironhorse program (PR #600), not in M4 |
+| ironhorse-persistent-realm | L | — | 11 | Engine-lane spec (PR #600 program): machine-interned symbol space, load-time per-program ID relink, persistent-realm evaluation API and heap-resident compartments, `KEYS`/`NAME`/`SYMB` snapshot atoms, oracle-shim sequential-eval extension; duration is the program's to schedule, not an M4/M11 line item |
 | daemon-agent-network-identity | S-M | 3 days | 4 | Network registration, locator construction |
 | ~~ocapn-noise-network~~ | L | — | 4 | ✅ Complete (PR #137 consolidates stacked PRs #111/#112/#113; merged 2026-05-08) |
 | ~~ocapn-iroh-netlayer~~ | M | — | 4 | ✅ Complete (implemented with the design: `@endo/ocapn-iroh`, mock-iroh CI tests plus `ENDO_IROH_INTEGRATION=1`-gated real-endpoint test) |

@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
+| **Updated** | 2026-08-06 — review finding 1 folded in: the persistent-realm / machine-interned-symbols prerequisite is now named as a first-class gap, formalized in the sibling design [ironhorse-persistent-realm](ironhorse-persistent-realm.md); Phases 1, 2, and 4 reference its contract and bars |
 | **Author** | kumavis (prompted) |
 | **Status** | Proposed |
 
@@ -128,6 +129,20 @@ From the `rust/engine/README.md` ledger at this writing:
   `Promise.prototype.finally` and the combinators; the stage-6
   snapshot surface with meter state riding the `METR` atom.
 - **Named gaps, load-bearing for thixotrope**:
+  - **No persistent-realm evaluation seam.**
+    Every execution path is one-program-per-interpreter
+    (`Compartment::evaluate{,_with_symbols}` build a throwaway
+    `Interp` per call; the only multi-crank path, `Interp::run`,
+    takes bare bytecode with no symbol rebinding), globals are
+    keyed by **program-local** symbol ids, and the snapshot carries
+    a single program's name table — so the runner model below
+    (boot script, worker bundle, a dispatch script per delivery,
+    and every guest `evaluate(source)`, all into one per-worker
+    heap) is inexpressible today, live and in snapshots.
+    This is the structural prerequisite, above everything else in
+    this list; formalized, with its closure plan and acceptance
+    bars, in
+    [ironhorse-persistent-realm](ironhorse-persistent-realm.md).
   - `lockdown()` and `mutabilities` fold as `Halt::Unsupported`
     (stage-4b harden child's scope fold).
   - The `Compartment` **intrinsic** is not bound
@@ -138,6 +153,10 @@ From the `rust/engine/README.md` ledger at this writing:
     stage 5; `ironhorse-compile` is now pure Rust and
     `forbid(unsafe_code)`, so linking it into the intrinsic's
     `evaluate` is architecturally unblocked.
+    Its substance beyond the compile call — the freshly compiled
+    program joining the machine's symbol space — **is** the
+    persistent-realm contract above; the two are one piece of
+    machinery.
   - **No `Proxy`, `WeakRef`, or `FinalizationRegistry`** — the
     names exist only in the engine's key table
     (`default_keys.rs`), with no implementation behind them.
@@ -161,16 +180,21 @@ From the `rust/engine/README.md` ledger at this writing:
     A thixotrope worker heap — an OCapN client made of closures,
     Maps, pending promises, and byte buffers — is precisely the
     rich case.
+    The `KEYS`/`SYMB` atoms also travel empty today; carrying the
+    machine-accreted name tables is the snapshot half of the
+    persistent-realm contract above.
 
-The shape of the conclusion: **the seam fits like a glove; the
-engine does not yet fill it.**
+The shape of the conclusion: **the seam fits; the engine does not
+yet fill it.**
 The runner protocol, CAS contract, and suspend-point discipline
 translate one-to-one, and nothing in the thixotrope host changes at
 all.
-The work is (a) closing named engine surfaces the bundle needs,
-(b) a minimal host-function seam, and (c) completing snapshot
-side-table coverage — all of it already enumerated, compile-checked,
-and oracle-gated inside the Ironhorse program's own discipline.
+The work is (a) the persistent-realm contract
+([ironhorse-persistent-realm](ironhorse-persistent-realm.md)),
+(b) closing named engine surfaces the bundle needs, (c) a minimal
+host-function seam, and (d) completing snapshot side-table
+coverage — all of it enumerable, compile-checked, and oracle-gated
+inside the Ironhorse program's own discipline.
 
 ## Architecture
 
@@ -238,18 +262,28 @@ the thixotrope corpus and consumes the results.
    `dist-xs/boot.js` then `dist-xs/worker-peer.js` — on Ironhorse,
    asserting zero divergence and recording the named halt where each
    stops.
+   The bar also carries the persistent-realm probes
+   (two-program global persistence, symbol-ordinal collision,
+   suspend→resume→dispatch — the acceptance bars of
+   [ironhorse-persistent-realm](ironhorse-persistent-realm.md)),
+   because per-bundle independent runs alone cannot catch that
+   class.
    Deliverable: a checked-in ledger like the daemon boot table,
-   which **is** the engine work-list for Phase 2 and replaces this
-   design's assertions with measurements.
-2. **Language and intrinsic closure** (Ironhorse lane): the ledger
-   rows, known to include the `Proxy` exotic object (port of
-   `xsProxy.c`'s proxy half — the largest single new surface),
-   native `lockdown()` over the landed harden substrate, the
-   guest-callable `Compartment` intrinsic linking
-   `ironhorse-compile` for its re-entrant `evaluate`, the remaining
-   boot rows (`to_instance`, computed `at`,
-   class-instance-construction), and — deferrable, see decision
-   5 — `WeakRef`/`FinalizationRegistry` with deterministic
+   which **is** the engine work-list for Phases 2–4 and replaces
+   this design's assertions with measurements.
+2. **Persistent realm, language, and intrinsic closure** (Ironhorse
+   lane): the persistent-realm contract first — machine-interned
+   symbols, per-program relink at load, heap-resident compartments,
+   per [ironhorse-persistent-realm](ironhorse-persistent-realm.md) —
+   which is likewise the substance of the guest-callable
+   `Compartment` intrinsic (its re-entrant `evaluate` links
+   `ironhorse-compile` and interns into the machine).
+   Then the ledger rows, known to include the `Proxy` exotic object
+   (port of `xsProxy.c`'s proxy half — the largest single new
+   built-in surface), native `lockdown()` over the landed harden
+   substrate, the remaining boot rows (`to_instance`, computed
+   `at`, class-instance-construction), and — deferrable, see
+   decision 5 — `WeakRef`/`FinalizationRegistry` with deterministic
    collection points, plus async generators if the ledger names
    them.
 3. **The host-function seam** (Ironhorse lane): named native
@@ -261,10 +295,14 @@ the thixotrope corpus and consumes the results.
    xsnap crate.
 4. **Snapshot side-table completion** (Ironhorse lane): flip
    `Pending` rows to carried atoms, prioritized by what the worker
-   heap actually holds — functions/closures, promises and
-   reactions, collections, buffers and views, iterators, RegExps,
-   harden state, symbol registry, generators/async instances; the
-   `Modules` row is **not needed** (the bundle is a script).
+   heap actually holds — the machine-accreted name tables riding
+   the reserved `KEYS`/`NAME`/`SYMB` atoms first (the snapshot half
+   of [ironhorse-persistent-realm](ironhorse-persistent-realm.md);
+   without it a multi-program heap has no image at all), then
+   functions/closures, promises and reactions, collections, buffers
+   and views, iterators, RegExps, harden state, symbol registry,
+   generators/async instances; the `Modules` row is **not needed**
+   (the bundle is a script).
    Acceptance: a booted worker-peer heap suspends and resumes with
    the round-trip and meter-continuity bars stage 6 already
    defines.
@@ -350,6 +388,7 @@ the thixotrope corpus and consumes the results.
 |---|---|
 | [ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) | Parent: defines the `WorkerEngine` seam, the duct protocol, and the XS precedent this design mirrors |
 | [ironhorse-engine](ironhorse-engine.md) | The engine program whose lanes carry Phases 2–4; its boot-bundle campaign gains the thixotrope corpus |
+| [ironhorse-persistent-realm](ironhorse-persistent-realm.md) | The structural prerequisite: machine-interned symbols and sequential program evaluation over one heap, which this design's runner model and guest `evaluate` require (Phases 1, 2, and 4 reference its contract and bars) |
 | [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | The CAS layout and callback-table signature discipline both runners follow |
 
 ## Prompt
