@@ -1189,6 +1189,34 @@ mod tests {
         .unwrap();
     }
 
+    /// `crypto.getRandomValues` fills a TypedArray view that sits at a
+    /// non-zero `byteOffset` inside a larger buffer, writing only the
+    /// view's own bytes — the native `randomFillBytes` primitive must
+    /// honour `byteOffset`/`byteLength`, not clobber the whole buffer.
+    #[test]
+    fn crypto_getrandomvalues_respects_view_offset() {
+        run_two_comp(
+            "const buf = new ArrayBuffer(16);\n\
+             const head = new Uint8Array(buf, 0, 4);\n\
+             const mid = new Uint8Array(buf, 4, 8);\n\
+             crypto.getRandomValues(mid);\n\
+             const whole = new Uint8Array(buf);\n\
+             for (let i = 0; i < 4; i++) if (whole[i] !== 0) throw new Error('head clobbered');\n\
+             for (let i = 12; i < 16; i++) if (whole[i] !== 0) throw new Error('tail clobbered');\n\
+             let sum = 0;\n\
+             for (let i = 4; i < 12; i++) sum += whole[i];\n\
+             if (sum === 0) throw new Error('view not filled');\n\
+             void head;\n\
+             export const got = 'ok';\n",
+            "dep",
+            &[
+                ("package.json", r#"{"name": "dep"}"#),
+                ("index.js", "export default 0;\n"),
+            ],
+        )
+        .unwrap();
+    }
+
     /// A single-`*` wildcard pattern maps the matched text into the
     /// target path.
     #[test]

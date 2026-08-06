@@ -6,6 +6,7 @@
 //!   sha256(data) -> string (hex)
 //!   sha256Bytes(data) -> ArrayBuffer (32 raw bytes)
 //!   randomHex256() -> string (64-char hex, 256 bits)
+//!   randomFillBytes(view) -> undefined (fills a TypedArray view in place)
 //!   ed25519Keygen() -> string (JSON: {publicKey, privateKey} as hex)
 //!   ed25519Sign(privateKeyHex, messageHex) -> string (signature hex)
 
@@ -66,6 +67,23 @@ pub unsafe extern "C" fn host_random_hex256(the: *mut XsMachine) {
     let mut buf = [0u8; 32];
     rand::RngCore::fill_bytes(&mut OsRng, &mut buf);
     set_result_string(the, &hex::encode(buf));
+}
+
+/// `randomFillBytes(view) -> undefined`
+///
+/// Fills the bytes of a TypedArray view in place with
+/// cryptographically secure random data — the byte-level primitive
+/// under the archive `crypto.getRandomValues` veneer, so it populates
+/// the caller's view directly with no hexadecimal round-trip.
+pub unsafe extern "C" fn host_random_fill(the: *mut XsMachine) {
+    let slot = (*the).frame.sub(1);
+    let byte_length = crate::worker_io::typed_array_byte_length(the, slot);
+    if byte_length == 0 {
+        return;
+    }
+    let mut buf = vec![0u8; byte_length];
+    rand::RngCore::fill_bytes(&mut OsRng, &mut buf);
+    crate::worker_io::write_typed_array_bytes(the, slot, &buf);
 }
 
 /// `ed25519Keygen() -> string`
@@ -184,6 +202,7 @@ pub unsafe extern "C" fn host_sha256_finish(the: *mut XsMachine) {
 pub const CALLBACKS: &[crate::ffi::XsCallback] = &[
     host_sha256,
     host_random_hex256,
+    host_random_fill,
     host_ed25519_keygen,
     host_ed25519_sign,
     host_sha256_init,
@@ -198,6 +217,7 @@ pub const CALLBACKS: &[crate::ffi::XsCallback] = &[
 pub unsafe fn register(machine: &crate::Machine) {
     machine.define_function("sha256", host_sha256, 1);
     machine.define_function("randomHex256", host_random_hex256, 0);
+    machine.define_function("randomFillBytes", host_random_fill, 1);
     machine.define_function("ed25519Keygen", host_ed25519_keygen, 0);
     machine.define_function("ed25519Sign", host_ed25519_sign, 2);
     machine.define_function("sha256Init", host_sha256_init, 0);

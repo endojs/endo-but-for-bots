@@ -1452,6 +1452,14 @@ fn cbor_skip(data: &[u8], pos: usize) -> Option<usize> {
 /// program's output is separable from the runner's stderr
 /// diagnostics; warn/error ride the trace channel (stderr).
 ///
+/// `crypto` is the web-platform subset a package's `browser` build
+/// reaches for — `getRandomValues` and `randomUUID` — a standard
+/// veneer over the `randomFillBytes` host function, which populates
+/// the caller's view in place with the same shape as
+/// `getRandomValues` (no hexadecimal round-trip), so it grants no
+/// authority the compartment did not already hold. `crypto.subtle`
+/// is deliberately absent.
+///
 /// `process` is a minimal frozen shim of the Node global, not a Node
 /// emulation: real npm packages branch on `process.env.NODE_ENV`
 /// before doing anything else (react and graphql select their
@@ -1487,6 +1495,28 @@ globalThis.__archiveEndowments = {
         var err = function () { trace(format(arguments)); };
         return { log: out, info: out, debug: out, trace: out, warn: err, error: err };
     })(),
+    crypto: Object.freeze((function () {
+        var getRandomValues = function (view) {
+            if (!ArrayBuffer.isView(view)) {
+                throw new TypeError(
+                    'crypto.getRandomValues: argument must be an ArrayBuffer view');
+            }
+            randomFillBytes(view);
+            return view;
+        };
+        var randomUUID = function () {
+            var b = getRandomValues(new Uint8Array(16));
+            b[6] = (b[6] & 15) | 64;
+            b[8] = (b[8] & 63) | 128;
+            var text = '';
+            for (var i = 0; i < 16; i++) {
+                text += (b[i] + 256).toString(16).slice(1);
+                if (i === 3 || i === 5 || i === 7 || i === 9) text += '-';
+            }
+            return text;
+        };
+        return { getRandomValues: getRandomValues, randomUUID: randomUUID };
+    })()),
     process: (function () {
         var noopChain = function () { return this; };
         return Object.freeze({
@@ -1919,75 +1949,6 @@ pub fn run_xs_archive(archive_path: &std::path::Path) -> Result<(), XsnapError> 
         None,
     )
 }
-
-/// The globals visible inside archive Compartments, shared by the
-/// standalone runner and the daemon's archive install path so the
-/// two surfaces cannot drift apart.
-///
-/// `console` is what npm code actually calls: log/info/debug go to
-/// the process stdout so a program's output is separable from the
-/// runner's stderr diagnostics; warn/error ride the trace channel
-/// (stderr). `crypto` is the web-platform subset a package's
-/// `browser` build reaches for — `getRandomValues` and `randomUUID`
-/// — a standard veneer over the already-endowed `randomHex256` host
-/// function, so it grants no authority the compartment did not
-/// already hold. `crypto.subtle` is deliberately absent.
-const ARCHIVE_ENDOWMENTS_JS: &str = "globalThis.__archiveEndowments = { \
-    print: trace, trace, \
-    console: (function () { \
-        var format = function (args) { \
-            var parts = []; \
-            for (var i = 0; i < args.length; i++) { \
-                var a = args[i]; \
-                if (typeof a === 'string') { parts.push(a); continue; } \
-                var s; \
-                try { s = JSON.stringify(a); } catch (e) { s = undefined; } \
-                parts.push(s === undefined ? String(a) : s); \
-            } \
-            return parts.join(' '); \
-        }; \
-        var out = function () { stdoutLine(format(arguments)); }; \
-        var err = function () { trace(format(arguments)); }; \
-        return { log: out, info: out, debug: out, trace: out, warn: err, error: err }; \
-    })(), \
-    crypto: Object.freeze((function () { \
-        var getRandomValues = function (view) { \
-            if (!ArrayBuffer.isView(view)) { \
-                throw new TypeError( \
-                    'crypto.getRandomValues: argument must be an ArrayBuffer view'); \
-            } \
-            var bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength); \
-            var i = 0; \
-            while (i < bytes.length) { \
-                var hex = randomHex256(); \
-                for (var j = 0; j < 64 && i < bytes.length; j += 2, i += 1) { \
-                    bytes[i] = parseInt(hex.slice(j, j + 2), 16); \
-                } \
-            } \
-            return view; \
-        }; \
-        var randomUUID = function () { \
-            var b = getRandomValues(new Uint8Array(16)); \
-            b[6] = (b[6] & 15) | 64; \
-            b[8] = (b[8] & 63) | 128; \
-            var text = ''; \
-            for (var i = 0; i < 16; i++) { \
-                text += (b[i] + 256).toString(16).slice(1); \
-                if (i === 3 || i === 5 || i === 7 || i === 9) text += '-'; \
-            } \
-            return text; \
-        }; \
-        return { getRandomValues: getRandomValues, randomUUID: randomUUID }; \
-    })()), \
-    readFileText, writeFileText, readDir, mkdir, \
-    remove, rename, exists, isDir, readLink, \
-    openReader, read, closeReader, \
-    openWriter, write, closeWriter, \
-    openDir, closeDir, symlink, link, \
-    sha256, sha256Init, sha256Update, sha256Finish, \
-    randomHex256, ed25519Keygen, ed25519Sign, \
-    getPid, getEnv, joinPath, realPath \
-};";
 
 /// Run a pre-loaded archive (e.g., loaded from CAS).
 ///
