@@ -75,6 +75,7 @@
     "test262": "yarn workspaces foreach --all run test262",
     "build": "yarn workspaces foreach --all run build",
     "build-ts": "tsc --build tsconfig.build.json",
+    "bundle:xs": "node packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.mjs && node packages/daemon/scripts/bundle-bus-worker-xs.mjs && node packages/daemon/scripts/bundle-bus-daemon-rust-xs.mjs",
     "build:wasm": "bash rust/ocapn_noise/build.sh",
     "build:types:gen": "node scripts/generate-composite-tsconfigs.mjs",
     "build:types:check": "node scripts/generate-composite-tsconfigs.mjs --check",

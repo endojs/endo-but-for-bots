@@ -648,13 +648,11 @@ jobs:
       - name: Generate XS bootstraps
         run: |
           yarn workspace @endo/thixotrope run build:xs-bundles
-          node packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.mjs
-          node packages/daemon/scripts/bundle-bus-worker-xs.mjs
           # The daemon bundle is the one that fails when a `node:`
           # builtin re-enters the daemon's compartment graph, and it is
           # gitignored, so without this step that regression reddens
           # nothing.
-          node packages/daemon/scripts/bundle-bus-daemon-rust-xs.mjs
+          yarn bundle:xs
 
       - name: Build xsnap crate
         run: cargo check --manifest-path rust/endo/xsnap/Cargo.toml
