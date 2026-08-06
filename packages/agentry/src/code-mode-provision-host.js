@@ -177,7 +177,8 @@ const realizeProvisionResources = async (host, persistence, credentials) => {
   const controllerPath = persistence.guestHandlePath.slice(0, -1);
   const guestAgentPath = harden([...controllerPath, 'guest-agent']);
   const persistencePath = harden([...controllerPath, 'persistence']);
-  await ensureNameDirectory(host, ['pi-code']);
+  await ensureNameDirectory(host, ['code-mode']);
+  await ensureNameDirectory(host, persistence.guestHandlePath.slice(0, 2));
   await ensureNameDirectory(host, controllerPath);
 
   // Record the authenticated policy before creating any capability aliases.

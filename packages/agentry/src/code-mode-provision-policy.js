@@ -82,6 +82,7 @@ const LANGUAGE_RESERVED_BINDINGS = harden([
 ]);
 const SECRET_NAME_RE = /(?:api.?key|authorization|password|secret|token)/iu;
 const IDENTIFIER_RE = /^[A-Za-z_$][0-9A-Za-z_$]*$/u;
+const HARNESS_KEY_RE = /^[a-z][a-z0-9-]{0,31}$/u;
 const SESSION_KEY_RE = /^session-[0-9a-f]{64}$/u;
 
 /**
@@ -436,6 +437,10 @@ const normalizePolicy = async (spec, cwd) => {
  * @returns {Promise<EndoProvisionPersistence>}
  */
 export const normalizeEndoProvisionSpec = async (spec, options) => {
+  const harness = requireString(options?.harness, 'harness');
+  if (!HARNESS_KEY_RE.test(harness)) {
+    throw makeError(X`harness must match /^[a-z][a-z0-9-]{0,31}$/`);
+  }
   const sessionId = requireString(options?.sessionId, 'sessionId');
   if (sessionId.length > 1024) {
     throw makeError(X`sessionId must be at most 1024 characters`);
@@ -445,7 +450,7 @@ export const normalizeEndoProvisionSpec = async (spec, options) => {
   const { workspacePath, policy } = await normalizePolicy(spec, cwd);
   return harden({
     version: 1,
-    guestHandlePath: harden(['pi-code', sessionKey, 'guest-handle']),
+    guestHandlePath: harden(['code-mode', harness, sessionKey, 'guest-handle']),
     workspacePath,
     policy,
   });
@@ -473,10 +478,11 @@ export const validateEndoProvisionPersistence = async value => {
     'Endo provision persistence.guestHandlePath',
   );
   if (
-    guestHandlePath.length !== 3 ||
-    guestHandlePath[0] !== 'pi-code' ||
-    !SESSION_KEY_RE.test(guestHandlePath[1]) ||
-    guestHandlePath[2] !== 'guest-handle'
+    guestHandlePath.length !== 4 ||
+    guestHandlePath[0] !== 'code-mode' ||
+    !HARNESS_KEY_RE.test(guestHandlePath[1]) ||
+    !SESSION_KEY_RE.test(guestHandlePath[2]) ||
+    guestHandlePath[3] !== 'guest-handle'
   ) {
     throw makeError(
       X`Endo provision persistence has an invalid guest handle path`,

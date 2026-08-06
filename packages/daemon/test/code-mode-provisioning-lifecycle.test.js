@@ -55,6 +55,7 @@ test.serial(
     const host = await fixture.connectHost('provision-host');
     const localRemote = fixture.trackSession(
       await provisionEndoCodeMode({
+        harness: 'test',
         sessionId: 'local-remote',
         cwd: fixture.workspace,
         sockPath: fixture.sockPath,
@@ -104,6 +105,7 @@ test.serial(
 
     const readOnlySession = fixture.trackSession(
       await provisionEndoCodeMode({
+        harness: 'test',
         sessionId: 'read-only-git',
         cwd: fixture.workspace,
         sockPath: fixture.sockPath,

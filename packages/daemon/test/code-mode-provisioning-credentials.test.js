@@ -56,6 +56,7 @@ test.serial(
     });
     const credentialSession = fixture.trackSession(
       await provisionEndoCodeMode({
+        harness: 'test',
         sessionId: 'credential-remote',
         cwd: fixture.workspace,
         sockPath: fixture.sockPath,
@@ -73,6 +74,7 @@ test.serial(
     });
     const reprovisioned = fixture.trackSession(
       await provisionEndoCodeMode({
+        harness: 'test',
         sessionId: 'credential-remote',
         cwd: fixture.workspace,
         sockPath: fixture.sockPath,
@@ -89,6 +91,7 @@ test.serial(
     await t.throwsAsync(
       () =>
         provisionEndoCodeMode({
+          harness: 'test',
           sessionId: 'missing-credential',
           cwd: fixture.workspace,
           sockPath: fixture.sockPath,
@@ -111,6 +114,7 @@ test.serial(
     await t.throwsAsync(
       () =>
         provisionEndoCodeMode({
+          harness: 'test',
           sessionId: 'wrong-audience',
           cwd: fixture.workspace,
           sockPath: fixture.sockPath,

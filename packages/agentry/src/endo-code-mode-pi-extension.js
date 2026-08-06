@@ -30,7 +30,7 @@ const ACTIVE_TOOL_NAMES = harden(['evaluate']);
 const NO_TOOL_NAMES = harden([]);
 
 /**
- * @typedef {object} EndoPiProblem
+ * @typedef {object} EndoCodeModePiProblem
  * @property {'endo_code_mode_error'} type
  * @property {string} code
  * @property {string} message
@@ -42,12 +42,12 @@ const NO_TOOL_NAMES = harden([]);
  * @property {boolean} hasUI
  *
  * @typedef {object} EndoCodeModePiExtensionOptions
- * @property {(spec: EndoProvisionSpec | undefined, options: { sessionId: string, cwd: string }) => Promise<EndoProvisionPersistence>} [normalizeProvision]
+ * @property {(spec: EndoProvisionSpec | undefined, options: { harness: string, sessionId: string, cwd: string }) => Promise<EndoProvisionPersistence>} [normalizeProvision]
  * @property {(persistence: unknown) => Promise<EndoProvisionPersistence>} [validatePersistence]
  * @property {(persistence: EndoProvisionPersistence) => Promise<EndoProvisionResult>} [reconstructProvision]
  * @property {() => Promise<void>} [startDaemon]
  * @property {(request: CredentialRehydrationRequest) => Promise<void>} [rehydrateCredential]
- * @property {(problem: EndoPiProblem) => void} [writeDiagnostic]
+ * @property {(problem: EndoCodeModePiProblem) => void} [writeDiagnostic]
  * @property {(status: number) => void} [terminate]
  */
 
@@ -211,7 +211,7 @@ const isDaemonUnavailable = error => {
 
 /**
  * @param {unknown} error
- * @returns {EndoPiProblem}
+ * @returns {EndoCodeModePiProblem}
  */
 const makeProblem = error => {
   if (error instanceof EndoPiLifecycleError) {
@@ -269,7 +269,7 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
     pi => {
       /** @type {EndoProvisionResult | undefined} */
       let active;
-      /** @type {EndoPiProblem | undefined} */
+      /** @type {EndoCodeModePiProblem | undefined} */
       let problem;
 
       const cleanupActive = async () => {
@@ -385,6 +385,7 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
           if (storedData === undefined) {
             try {
               desired = await normalizeProvision(cliSpec, {
+                harness: 'pi',
                 sessionId,
                 cwd: context.cwd,
               });
@@ -411,6 +412,7 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
               let requested;
               try {
                 requested = await normalizeProvision(cliSpec, {
+                  harness: 'pi',
                   sessionId,
                   cwd: context.cwd,
                 });
@@ -433,6 +435,7 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
             let derived;
             try {
               derived = await normalizeProvision(persistenceToSpec(stored), {
+                harness: 'pi',
                 sessionId,
                 cwd: stored.workspacePath,
               });
