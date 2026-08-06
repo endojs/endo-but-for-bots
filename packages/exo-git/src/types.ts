@@ -187,6 +187,12 @@ export type RemotePolicy = {
   allowedDirections: GitDirection[];
   fetchRefspecs: string[];
   pushRefspecs: string[];
+  /**
+   * Fully qualified source ref of the one concrete fetch mapping used by an
+   * unqualified `GitRemote.pull()`.
+   * When omitted, pull uses the first declared concrete fetch refspec.
+   */
+  defaultPullRef?: string;
   allowedBranches?: string[];
   allowForcePush?: boolean;
   allowTags?: boolean;
