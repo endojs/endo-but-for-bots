@@ -37,9 +37,9 @@ const hasAggregateError = typeof AggregateError !== 'undefined';
  * @param {Uint8Array} bytes
  */
 export const bytesToBase64 = bytes => {
-  let b64;
+  let base64;
   if (typeof Buffer !== 'undefined') {
-    b64 = Buffer.from(
+    base64 = Buffer.from(
       bytes.buffer,
       bytes.byteOffset,
       bytes.byteLength,
@@ -50,26 +50,26 @@ export const bytesToBase64 = bytes => {
       binary += String.fromCharCode(bytes[i]);
     }
     // eslint-disable-next-line no-undef
-    b64 = btoa(binary);
+    base64 = btoa(binary);
   }
   // Match cloudflare/capnweb, which emits standard-alphabet base64 with the
   // trailing `=` padding omitted.  Our decoder (and capnweb's) accept the
   // padded or unpadded form, but omitting it keeps the wire byte-identical.
-  return b64.replace(/=+$/, '');
+  return base64.replace(/=+$/, '');
 };
 
 /**
  * Decode a base64 string (with or without padding) into a Uint8Array.
  *
- * @param {string} b64
+ * @param {string} base64
  */
-export const base64ToBytes = b64 => {
+export const base64ToBytes = base64 => {
   if (typeof Buffer !== 'undefined') {
-    const buf = Buffer.from(b64, 'base64');
-    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+    const buffer = Buffer.from(base64, 'base64');
+    return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
   }
   // eslint-disable-next-line no-undef
-  const binary = atob(b64);
+  const binary = atob(base64);
   const out = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) {
     out[i] = binary.charCodeAt(i);
@@ -96,10 +96,10 @@ const encodeError = (err, recurse) => {
   if (!recurse) return result;
   /** @type {Record<string, unknown> | undefined} */
   let props;
-  const captureProp = (key, val) => {
+  const captureProp = (key, value) => {
     let encoded;
     try {
-      encoded = recurse(val);
+      encoded = recurse(value);
     } catch (_e) {
       // capnweb drops a prop it can't serialize rather than failing the
       // whole error; match that so one bad prop doesn't poison the send.
@@ -171,18 +171,18 @@ export const tryEncodeSpecial = (value, recurse) => {
  * @returns {Error}
  */
 const decodeError = (rest, recurse) => {
-  const [typeName, message, stack, props] = rest;
+  const [typeName, rawMessage, stack, props] = rest;
   const Cls = /** @type {ErrorConstructor} */ (
     ERROR_TYPES[/** @type {keyof typeof ERROR_TYPES} */ (typeName)] || Error
   );
-  const msg = typeof message === 'string' ? message : '';
+  const message = typeof rawMessage === 'string' ? rawMessage : '';
   // AggregateError's first constructor argument is the errors iterable, not
   // the message, so build it explicitly (with an empty list; a serialized
   // `errors` prop, if any, is restored from the props bag below).
   const err =
     hasAggregateError && typeName === 'AggregateError'
-      ? new AggregateError([], msg)
-      : new Cls(msg);
+      ? new AggregateError([], message)
+      : new Cls(message);
   if (typeof stack === 'string') {
     try {
       err.stack = stack;
@@ -218,12 +218,12 @@ const decodeError = (rest, recurse) => {
  * unknown.  The caller has already determined the array is a tagged value
  * (i.e. it begins with a string tag we recognise).
  *
- * @param {unknown[]} expr
+ * @param {unknown[]} expression
  * @param {((v: unknown) => unknown)} [recurse]  Evaluator for nested values
  *   (error props).  Omitted by standalone callers.
  */
-export const decodeSpecial = (expr, recurse) => {
-  const [tag, ...rest] = expr;
+export const decodeSpecial = (expression, recurse) => {
+  const [tag, ...rest] = expression;
   switch (tag) {
     case 'undefined':
       return undefined;

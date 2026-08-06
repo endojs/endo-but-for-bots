@@ -28,9 +28,9 @@ import { isForbiddenKey } from './path-keys.js';
  */
 
 /**
- * @param {EvaluatorContext} ctx
+ * @param {EvaluatorContext} context
  */
-export const makeEvaluator = ctx => {
+export const makeEvaluator = context => {
   /**
    * @param {string} tag
    * @param {unknown[]} rest
@@ -46,7 +46,7 @@ export const makeEvaluator = ctx => {
       // (The sign tells us which side allocated the id; for lookup, both
       // signs land in our exports.)
       if (path === undefined && args === undefined) {
-        return ctx.getExportValue(id);
+        return context.getExportValue(id);
       }
       // import/pipeline can carry path/args — meaning "the value of calling
       // path(args) on the referenced target".  Only the push/stream
@@ -62,8 +62,8 @@ export const makeEvaluator = ctx => {
       if (typeof id !== 'number') {
         throw new TypeError(`${tag} id must be a number`);
       }
-      if (tag === 'promise') return ctx.getOrMakePromise(id);
-      return ctx.getOrMakePresence(id);
+      if (tag === 'promise') return context.getOrMakePromise(id);
+      return context.getOrMakePresence(id);
     }
     if (tag === 'writable' || tag === 'readable') {
       const [id] = rest;
@@ -75,8 +75,8 @@ export const makeEvaluator = ctx => {
       // somebody references the export.  If we have one, hand it back
       // directly — the bytes will arrive via `["push"]` chunk dispatch
       // into the export's writable hook.
-      if (tag === 'readable' && ctx.consumePipeReadable) {
-        const pr = ctx.consumePipeReadable(id);
+      if (tag === 'readable' && context.consumePipeReadable) {
+        const pr = context.consumePipeReadable(id);
         if (pr !== undefined) return pr;
       }
       // Fall back to the stub-based form: install a presence stub at the
@@ -84,7 +84,7 @@ export const makeEvaluator = ctx => {
       // proxies write/read calls back to the peer.  In environments
       // without the WHATWG Streams classes, the wrapper falls through to
       // the bare stub.
-      const stub = ctx.getOrMakePresence(id);
+      const stub = context.getOrMakePresence(id);
       if (tag === 'writable') return importWritableStream(stub);
       return importReadableStream(stub);
     }
@@ -95,29 +95,29 @@ export const makeEvaluator = ctx => {
   };
 
   /**
-   * @param {unknown} expr
+   * @param {unknown} expression
    * @returns {unknown}
    */
-  const evaluate = expr => {
-    if (expr === null) return null;
-    if (typeof expr === 'string') return expr;
-    if (typeof expr === 'boolean') return expr;
-    if (typeof expr === 'number') return expr;
+  const evaluate = expression => {
+    if (expression === null) return null;
+    if (typeof expression === 'string') return expression;
+    if (typeof expression === 'boolean') return expression;
+    if (typeof expression === 'number') return expression;
 
-    if (Array.isArray(expr)) {
+    if (Array.isArray(expression)) {
       // Escaped array literal: [[<inner>]]
-      if (expr.length === 1 && Array.isArray(expr[0])) {
-        return expr[0].map(v => evaluate(v));
+      if (expression.length === 1 && Array.isArray(expression[0])) {
+        return expression[0].map(v => evaluate(v));
       }
-      const [tag, ...rest] = expr;
+      const [tag, ...rest] = expression;
       if (typeof tag !== 'string') {
         throw new TypeError('expression array must begin with a string tag');
       }
-      if (tag === 'headers') return decodeHeaders(expr);
-      if (tag === 'request') return decodeRequest(expr, evaluate);
-      if (tag === 'response') return decodeResponse(expr, evaluate);
+      if (tag === 'headers') return decodeHeaders(expression);
+      if (tag === 'request') return decodeRequest(expression, evaluate);
+      if (tag === 'response') return decodeResponse(expression, evaluate);
       if (isSpecialTag(tag)) {
-        return decodeSpecial(expr, evaluate);
+        return decodeSpecial(expression, evaluate);
       }
       if (isRefTag(tag)) {
         return evaluateRef(tag, rest);
@@ -125,7 +125,7 @@ export const makeEvaluator = ctx => {
       throw new TypeError(`unknown expression tag: ${tag}`);
     }
 
-    if (typeof expr === 'object') {
+    if (typeof expression === 'object') {
       // Plain object: recurse on values.  Skip prototype-affecting keys
       // defensively — assigning to `out["__proto__"]` walks through
       // Object.prototype's __proto__ setter and would mutate out's
@@ -135,7 +135,7 @@ export const makeEvaluator = ctx => {
       // copyRecord-style values are normally clean.
       /** @type {Record<string, unknown>} */
       const out = {};
-      for (const [k, v] of Object.entries(/** @type {object} */ (expr))) {
+      for (const [k, v] of Object.entries(/** @type {object} */ (expression))) {
         if (!isForbiddenKey(k)) {
           Object.defineProperty(out, k, {
             value: evaluate(v),
@@ -148,7 +148,7 @@ export const makeEvaluator = ctx => {
       return out;
     }
 
-    throw new TypeError(`unsupported expression type: ${typeof expr}`);
+    throw new TypeError(`unsupported expression type: ${typeof expression}`);
   };
 
   return harden({ evaluate });

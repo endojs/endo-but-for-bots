@@ -22,17 +22,17 @@ const noop = () => {};
 
 /**
  * @param {import('./types.js').RpcTransport} transport
- * @param {object} [opts]
- * @param {unknown} [opts.localMain]   The local "main" interface, accessible
+ * @param {object} [options]
+ * @param {unknown} [options.localMain]   The local "main" interface, accessible
  *   by the peer as ["pipeline", 0, ...] / ["import", 0].  May be undefined.
- * @param {boolean} [opts.gcImports]   Use weak refs + FinalizationRegistry
+ * @param {boolean} [options.gcImports]   Use weak refs + FinalizationRegistry
  *   to drop imported stubs automatically when no longer reachable.  Default
  *   true.
- * @param {(reason?: unknown) => void} [opts.onAbort]  Optional callback when
+ * @param {(reason?: unknown) => void} [options.onAbort]  Optional callback when
  *   the session aborts.
  */
-export const makeCapnWebSession = (transport, opts = {}) => {
-  const { localMain, gcImports = true, onAbort = noop } = opts;
+export const makeCapnWebSession = (transport, options = {}) => {
+  const { localMain, gcImports = true, onAbort = noop } = options;
 
   let aborted = false;
   /** @type {unknown} */
@@ -171,27 +171,27 @@ export const makeCapnWebSession = (transport, opts = {}) => {
   function attachExportedPromise(id, p) {
     if (pendingExportPromises.has(id)) return;
     pendingExportPromises.add(id);
-    const safeSend = (tag, val) => {
+    const safeSend = (tag, value) => {
       if (aborted) return;
       pendingExportPromises.delete(id);
-      let expr;
+      let expression;
       try {
-        expr = devaluator.devaluate(val);
+        expression = devaluator.devaluate(value);
       } catch (devalErr) {
         // Couldn't serialize; surface a generic error to the peer.
         const reason =
           devalErr instanceof Error ? devalErr.message : String(devalErr);
         try {
-          expr = devaluator.devaluate(
+          expression = devaluator.devaluate(
             new Error(`failed to serialize ${tag} value: ${reason}`),
           );
         } catch (_e) {
-          expr = ['error', 'Error', 'failed to serialize answer'];
+          expression = ['error', 'Error', 'failed to serialize answer'];
         }
-        sendMessage(['reject', id, expr]);
+        sendMessage(['reject', id, expression]);
         return;
       }
-      sendMessage([tag, id, expr]);
+      sendMessage([tag, id, expression]);
     };
     Promise.resolve(p).then(
       v => safeSend('resolve', v),
@@ -241,8 +241,8 @@ export const makeCapnWebSession = (transport, opts = {}) => {
       return Promise.reject(abortReason || new Error('session aborted'));
     const qid = nextOutgoingPushId;
     nextOutgoingPushId += 1;
-    const expr = buildPipelineExpression(rootId, path, args);
-    sendMessage(['push', expr]);
+    const expression = buildPipelineExpression(rootId, path, args);
+    sendMessage(['push', expression]);
     sendMessage(['pull', qid]);
     const { promise, resolve, reject } = makePromiseStub(qid, stubMachinery);
     tables.installImport(qid, /** @type {object} */ (promise), true);
@@ -257,11 +257,11 @@ export const makeCapnWebSession = (transport, opts = {}) => {
   }
 
   /**
-   * Send-only push: emits a regular spec-compliant `["push", expr]` and
+   * Send-only push: emits a regular spec-compliant `["push", expression]` and
    * skips the matching `pull` so the peer is never asked to deliver the
    * answer.  This wastes one export slot on the receiver until they
    * release it (or we abort), but keeps us strictly within the documented
-   * Cap'n Web protocol.  We previously used `["stream", expr]` here, which
+   * Cap'n Web protocol.  We previously used `["stream", expression]` here, which
    * is how cloudflare/capnweb spells fire-and-forget — but that tag isn't
    * part of the "core six" message types the spec lists, so emitting it
    * to a strict peer would risk an `unknown message tag` abort.
@@ -272,7 +272,7 @@ export const makeCapnWebSession = (transport, opts = {}) => {
    */
   function doPipelinedPushSendOnly(rootId, path, args) {
     if (aborted) return;
-    const expr = buildPipelineExpression(rootId, path, args);
+    const expression = buildPipelineExpression(rootId, path, args);
     // Spec-compliant fire-and-forget: a push without a pull.  We still
     // need to advance our outgoing-push id so the peer's exports table
     // stays in sync, and we eagerly emit a release for that id so the
@@ -280,7 +280,7 @@ export const makeCapnWebSession = (transport, opts = {}) => {
     // would accumulate one orphan export per send-only call).
     const qid = nextOutgoingPushId;
     nextOutgoingPushId += 1;
-    sendMessage(['push', expr]);
+    sendMessage(['push', expression]);
     sendMessage(['release', qid, 1]);
   }
 
@@ -476,11 +476,11 @@ export const makeCapnWebSession = (transport, opts = {}) => {
   }
 
   /**
-   * @param {unknown} expr
+   * @param {unknown} expression
    * @param {boolean} isStream  If true, no answer should be sent and the
    *   answer id is auto-released.
    */
-  async function handlePush(expr, isStream) {
+  async function handlePush(expression, isStream) {
     const qid = nextIncomingPushId;
     nextIncomingPushId += 1;
 
@@ -488,7 +488,9 @@ export const makeCapnWebSession = (transport, opts = {}) => {
     // wrapper.  Promise.resolve coerces a possibly-sync throw into a
     // rejected promise.
     /** @type {Promise<unknown>} */
-    const answer = Promise.resolve().then(() => executePushExpression(expr));
+    const answer = Promise.resolve().then(() =>
+      executePushExpression(expression),
+    );
     // Suppress unhandled-rejection warnings if the peer never pulls — the
     // export sits in our table waiting for either pull or release.  A
     // no-op observer is enough; handlePull's own await will still see the
@@ -519,18 +521,20 @@ export const makeCapnWebSession = (transport, opts = {}) => {
   }
 
   /**
-   * @param {unknown} expr
+   * @param {unknown} expression
    * @returns {Promise<unknown>}
    */
-  async function executePushExpression(expr) {
-    if (Array.isArray(expr) && expr[0] === 'remap') {
+  async function executePushExpression(expression) {
+    if (Array.isArray(expression) && expression[0] === 'remap') {
       // ["remap", subjectId, propertyPath, captures, instructions]
       // — capnweb wire format.  The mapper subject is `subjectId` (one
       // of our exports); the captures and instructions follow.
-      if (expr.length !== 5) {
-        throw new TypeError(`invalid remap expression: arity ${expr.length}`);
+      if (expression.length !== 5) {
+        throw new TypeError(
+          `invalid remap expression: arity ${expression.length}`,
+        );
       }
-      const [, id, path, capturesExpr, instructions] = expr;
+      const [, id, path, capturesExpr, instructions] = expression;
       if (
         typeof id !== 'number' ||
         (path !== undefined && path !== null && !Array.isArray(path)) ||
@@ -558,18 +562,18 @@ export const makeCapnWebSession = (transport, opts = {}) => {
       return replayRemap({ instructions, captures }, target);
     }
     if (
-      Array.isArray(expr) &&
-      (expr[0] === 'pipeline' || expr[0] === 'import')
+      Array.isArray(expression) &&
+      (expression[0] === 'pipeline' || expression[0] === 'import')
     ) {
-      const id = expr[1];
-      const path = expr[2];
-      const args = expr[3];
+      const id = expression[1];
+      const path = expression[2];
+      const args = expression[3];
       if (
         typeof id !== 'number' ||
         (path !== undefined && !Array.isArray(path)) ||
         (args !== undefined && !Array.isArray(args))
       ) {
-        throw new TypeError(`invalid ${expr[0]} expression`);
+        throw new TypeError(`invalid ${expression[0]} expression`);
       }
       const root = lookupReferenceForExecution(id);
       if (path === undefined && args === undefined) return root;
@@ -577,7 +581,7 @@ export const makeCapnWebSession = (transport, opts = {}) => {
         args === undefined ? undefined : args.map(a => evaluator.evaluate(a));
       return walkPathAndCall(root, path || [], evaluatedArgs);
     }
-    return evaluator.evaluate(expr);
+    return evaluator.evaluate(expression);
   }
 
   // ------- public helpers -------
@@ -735,16 +739,16 @@ export const makeCapnWebSession = (transport, opts = {}) => {
 
   /**
    * @param {number} id
-   * @param {unknown} expr
+   * @param {unknown} expression
    * @param {boolean} isReject
    */
-  function handleResolve(id, expr, isReject) {
+  function handleResolve(id, expression, isReject) {
     const pending = pendingPushAnswers.get(id);
     if (!pending) return;
     pendingPushAnswers.delete(id);
     let value;
     try {
-      value = evaluator.evaluate(expr);
+      value = evaluator.evaluate(expression);
     } catch (e) {
       pending.reject(e);
       return;
@@ -762,12 +766,12 @@ export const makeCapnWebSession = (transport, opts = {}) => {
   }
 
   /**
-   * @param {unknown} expr
+   * @param {unknown} expression
    */
-  function handleAbort(expr) {
+  function handleAbort(expression) {
     let reason;
     try {
-      reason = evaluator.evaluate(expr);
+      reason = evaluator.evaluate(expression);
     } catch (_e) {
       reason = new Error('peer aborted with unparseable reason');
     }
@@ -807,8 +811,8 @@ export const makeCapnWebSession = (transport, opts = {}) => {
     abortReason = reason;
     if (sendAbortMessage) {
       try {
-        const expr = devaluator.devaluate(reason);
-        const raw = JSON.stringify(['abort', expr]);
+        const expression = devaluator.devaluate(reason);
+        const raw = JSON.stringify(['abort', expression]);
         Promise.resolve(transport.send(raw)).catch(noop);
       } catch (_e) {
         /* ignore */

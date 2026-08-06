@@ -42,9 +42,9 @@ import { makeFinalizingMap } from './finalize.js';
  */
 
 /**
- * @param {object} opts
- * @param {boolean} [opts.gcImports]              Use weak imports + auto-release.
- * @param {(id: number, refcount: number) => void} opts.sendRelease
+ * @param {object} options
+ * @param {boolean} [options.gcImports]              Use weak imports + auto-release.
+ * @param {(id: number, refcount: number) => void} options.sendRelease
  *   Called when an import id is no longer referenced locally.
  */
 export const makeTables = ({ gcImports = true, sendRelease }) => {

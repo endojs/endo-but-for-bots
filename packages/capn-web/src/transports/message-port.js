@@ -86,7 +86,7 @@ const incomingToJson = data =>
  */
 export const makeMessagePortTransport = port => {
   /** @type {string[]} */
-  const buf = [];
+  const buffer = [];
   /** @type {Array<(s: string | null) => void>} */
   const waiters = [];
   let closed = false;
@@ -110,7 +110,7 @@ export const makeMessagePortTransport = port => {
       w(data);
       return;
     }
-    buf.push(data);
+    buffer.push(data);
   };
 
   if (typeof port.addEventListener === 'function') {
@@ -141,7 +141,7 @@ export const makeMessagePortTransport = port => {
       }
     },
     receive: () => {
-      if (buf.length > 0) return Promise.resolve(buf.shift() ?? null);
+      if (buffer.length > 0) return Promise.resolve(buffer.shift() ?? null);
       if (closed) return Promise.resolve(null);
       return new Promise(resolve => waiters.push(resolve));
     },

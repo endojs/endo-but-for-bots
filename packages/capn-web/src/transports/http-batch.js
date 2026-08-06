@@ -19,24 +19,23 @@ import harden from '@endo/harden';
 
 /**
  * @param {string} url
- * @param {object} [opts]
- * @param {(input: any, init: any) => Promise<any>} [opts.fetch]  Fetch
+ * @param {object} [options]
+ * @param {(input: any, init: any) => Promise<any>} [options.fetch]  Fetch
  *   implementation; defaults to globalThis.fetch.
- * @param {Record<string, string>} [opts.headers]  Additional request headers.
- * @param {(reason: unknown) => void} [opts.onError]  Optional callback for
+ * @param {Record<string, string>} [options.headers]  Additional request headers.
+ * @param {(reason: unknown) => void} [options.onError]  Optional callback for
  *   transport-level errors (network failures, non-2xx responses).  By default
  *   such errors close the transport (waking pending `receive()` callers with
  *   `null`) so the session sees end-of-stream.
  * @returns {import('../types.js').RpcTransport}
  */
-export const makeHttpBatchTransport = (url, opts = {}) => {
-  // eslint-disable-next-line no-undef
-  const fetchFn = opts.fetch || (typeof fetch !== 'undefined' ? fetch : null);
+export const makeHttpBatchTransport = (url, options = {}) => {
+  const fetchFn = options.fetch || globalThis.fetch || null;
   if (!fetchFn) {
     throw new Error('makeHttpBatchTransport: no fetch available');
   }
-  const baseHeaders = opts.headers || {};
-  const onError = opts.onError;
+  const baseHeaders = options.headers || {};
+  const onError = options.onError;
 
   /** @type {string[]} */
   const outBuf = [];

@@ -8,12 +8,12 @@
 //
 // Two flavours are exported:
 //
-//   processHttpBatchBody(bodyText, opts)
+//   processHttpBatchBody(bodyText, options)
 //     The protocol-only kernel: takes a body string, returns a body string.
 //     Use this if your host gives you the request body as a string and you
 //     need full control over the HTTP response.
 //
-//   handleHttpBatchRequest(request, opts)
+//   handleHttpBatchRequest(request, options)
 //     A thin Fetch-API wrapper: takes a `Request`, returns a `Response`.
 //     Suitable for Cloudflare Workers, Bun, and any environment with the
 //     standard `fetch` types.
@@ -69,11 +69,11 @@ const makeBatchTransport = inputLines => {
  * \n-joined outgoing RPC messages).
  *
  * @param {string} bodyText
- * @param {ServerBatchOptions} opts
+ * @param {ServerBatchOptions} options
  * @returns {Promise<string>}
  */
-export const processHttpBatchBody = async (bodyText, opts) => {
-  const { localMain, gcImports = false, onAbort } = opts;
+export const processHttpBatchBody = async (bodyText, options) => {
+  const { localMain, gcImports = false, onAbort } = options;
   // Empty body = zero messages.  Filter empty trailing lines defensively.
   const inputLines =
     bodyText && bodyText.length > 0
@@ -101,10 +101,10 @@ harden(processHttpBatchBody);
  * format the client transport expects.
  *
  * @param {Request} request
- * @param {ServerBatchOptions} opts
+ * @param {ServerBatchOptions} options
  * @returns {Promise<Response>}
  */
-export const handleHttpBatchRequest = async (request, opts) => {
+export const handleHttpBatchRequest = async (request, options) => {
   if (request.method !== 'POST') {
     return new Response('Method Not Allowed', {
       status: 405,
@@ -112,8 +112,8 @@ export const handleHttpBatchRequest = async (request, opts) => {
     });
   }
   const body = await request.text();
-  const respBody = await processHttpBatchBody(body, opts);
-  return new Response(respBody, {
+  const responseBody = await processHttpBatchBody(body, options);
+  return new Response(responseBody, {
     status: 200,
     headers: { 'content-type': 'text/plain; charset=utf-8' },
   });
