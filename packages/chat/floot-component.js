@@ -683,7 +683,18 @@ export const flootComponent = (
     const session = getActiveSession();
     const liveTurn = session ? liveTurnFor(session.id) : null;
     const base = session ? session.messages : [];
-    const allMessages = liveTurn ? [...base, ...liveTurn.messages] : base;
+    // Queued submissions render after the live turn's output: they run after
+    // it, and hiding them until then reads as a swallowed message.
+    const queued = session
+      ? queuedSends
+          .filter(q => q.sessionId === session.id)
+          .map(q => ({ role: /** @type {const} */ ('user'), text: q.text }))
+      : [];
+    const allMessages = [
+      ...base,
+      ...(liveTurn ? liveTurn.messages : []),
+      ...queued,
+    ];
     return harden({
       sessions: sessions.map(s => ({
         id: s.id,
@@ -758,6 +769,14 @@ export const flootComponent = (
   let cancelled = false;
   let busy = false;
   let turnCancelled = false;
+  // Submissions accepted while a turn is still running (typed mid-stream, or a
+  // voice utterance after a soft barge-in) queue on submitChain. They must stay
+  // VISIBLE while queued: submit() clears the compose box immediately, and the
+  // optimistic session push only happens once the queued turn actually starts,
+  // so without this the message vanishes until the prior turn finishes.
+  /** @type {Array<{ id: number, sessionId: string, text: string }>} */
+  let queuedSends = [];
+  let nextQueuedSendId = 1;
   /** @type {FlootTurn | null} */
   let activeTurn = null;
   /** @type {(() => void) | null} */
@@ -828,8 +847,40 @@ export const flootComponent = (
 
       /** @param {{ type: string }} ev */
       const onEvent = ev => {
-        // Ignore events for a session we're no longer viewing (defensive; the
-        // busy guard normally blocks switching mid-turn).
+        // The terminal event must run even when the view moved to another
+        // session (e.g. the active session was deleted mid-turn): it is the
+        // only thing that releases `busy` and the queued submitChain. Filtering
+        // it with the guard below stranded the component busy forever.
+        if (ev.type === 'done') {
+          const stopped = turnCancelled;
+          if (turn.error) {
+            sessionStatus.set(turn.sessionId, 'error');
+          } else {
+            sessionStatus.set(turn.sessionId, 'idle');
+          }
+          // Only speak to the status line for the session being viewed.
+          if (activeSessionId === turn.sessionId) {
+            if (turn.error) {
+              status = `error: ${turn.error}`;
+            } else {
+              status = stopped ? 'stopped.' : 'Ready.';
+            }
+          }
+          // Fold the finished turn's output into the session optimistically so
+          // the reply doesn't blink out between the turn ending (it leaves the
+          // registry) and the canonical history reload landing.
+          session.messages.push(.../** @type {any[]} */ (turn.messages));
+          notify();
+          // Repaint from the daemon's canonical transcript (now including this
+          // turn's persisted reply) so the turn's output is never double-shown.
+          loadHistory(session).then(() => {
+            notify();
+            detach();
+          });
+          return;
+        }
+        // Ignore progress events for a session we're no longer viewing
+        // (defensive; the busy guard normally blocks switching mid-turn).
         if (activeSessionId !== turn.sessionId) return;
         if (ev.type === 'delta' || ev.type === 'final') {
           notify();
@@ -845,26 +896,6 @@ export const flootComponent = (
         } else if (ev.type === 'abort') {
           sessionStatus.set(turn.sessionId, 'error');
           notify();
-        } else if (ev.type === 'done') {
-          const stopped = turnCancelled;
-          if (turn.error) {
-            sessionStatus.set(turn.sessionId, 'error');
-            status = `error: ${turn.error}`;
-          } else {
-            sessionStatus.set(turn.sessionId, 'idle');
-            status = stopped ? 'stopped.' : 'Ready.';
-          }
-          // Fold the finished turn's output into the session optimistically so
-          // the reply doesn't blink out between the turn ending (it leaves the
-          // registry) and the canonical history reload landing.
-          session.messages.push(.../** @type {any[]} */ (turn.messages));
-          notify();
-          // Repaint from the daemon's canonical transcript (now including this
-          // turn's persisted reply) so the turn's output is never double-shown.
-          loadHistory(session).then(() => {
-            notify();
-            detach();
-          });
         }
       };
       unsubscribeTurn = turn.subscribe(onEvent);
@@ -873,7 +904,13 @@ export const flootComponent = (
     });
   };
 
-  const runConverse = async (/** @type {string} */ text) => {
+  const runConverse = async (
+    /** @type {string} */ text,
+    /** @type {number} */ queuedId = 0,
+  ) => {
+    // The queued placeholder is superseded by the optimistic session push
+    // below (same text, now part of the running turn's transcript).
+    if (queuedId) queuedSends = queuedSends.filter(q => q.id !== queuedId);
     let session = getActiveSession();
     if (!session) session = await createSession();
 
@@ -923,9 +960,23 @@ export const flootComponent = (
     const text = (raw || '').trim();
     if (!text) return submitChain;
     inputText = '';
+    // Show the message as pending immediately; runConverse folds it into the
+    // session transcript when its turn actually starts. Without an active
+    // session there is nothing queued ahead, so no placeholder is needed.
+    const activeSession = getActiveSession();
+    let queuedId = 0;
+    if (activeSession) {
+      queuedId = nextQueuedSendId;
+      nextQueuedSendId += 1;
+      queuedSends.push({ id: queuedId, sessionId: activeSession.id, text });
+    }
     notify();
     submitChain = submitChain.then(() => {
-      turnPromise = runConverse(text);
+      turnPromise = runConverse(text, queuedId).finally(() => {
+        // Defensive: if the turn failed before adopting the placeholder,
+        // drop it rather than leave a ghost message.
+        if (queuedId) queuedSends = queuedSends.filter(q => q.id !== queuedId);
+      });
       return turnPromise.catch(() => {});
     });
     return submitChain;
@@ -974,6 +1025,10 @@ export const flootComponent = (
   };
 
   const deleteSessionById = (/** @type {string} */ id) => {
+    // Deleting the session being streamed would reassign activeSessionId
+    // mid-turn (the one path the busy guards on select/new don't cover). Stop
+    // the turn first, then delete.
+    if (busy && id === activeSessionId) return;
     const session = sessions.find(s => s.id === id);
     if (!session) return;
     // eslint-disable-next-line no-alert
@@ -1112,6 +1167,11 @@ export const flootComponent = (
         ? `${pendingUtterance} ${text}`
         : text;
     }
+    // Keep the buffered utterance visible in the compose box for the whole
+    // grace window; blanking it made recognized speech vanish for ~a second
+    // before it sent, which reads as a swallowed message.
+    inputText = pendingUtterance;
+    notify();
     if (resumeTimer) clearTimeout(resumeTimer);
     if (!pendingUtterance) return;
     resumeTimer = window.setTimeout(() => {
@@ -1184,13 +1244,14 @@ export const flootComponent = (
     silenceStart = 0;
     const tooShort = Date.now() - speechStart < VAD.MIN_SPEECH_MS;
     if (tooShort) {
-      // A blip below the minimum-speech duration — discard as noise.
+      // A blip below the minimum-speech duration — discard as noise, but keep
+      // any buffered continuation visible rather than blanking the box.
       if (channel)
         E(channel.reader)
           .return()
           .catch(() => {});
       channel = null;
-      inputText = '';
+      inputText = pendingUtterance;
       notify();
       return;
     }
@@ -1403,10 +1464,15 @@ export const flootComponent = (
     if (rafId) cancelAnimationFrame(rafId);
     rafId = 0;
     abortUtterance();
-    // Drop any buffered voice continuation that never got sent.
+    // Drop any buffered voice continuation that never got sent — including
+    // its compose-box mirror, so no orphaned text lingers after the mic is
+    // off.
     if (resumeTimer) {
       clearTimeout(resumeTimer);
       resumeTimer = 0;
+    }
+    if (pendingUtterance && inputText === pendingUtterance) {
+      inputText = '';
     }
     pendingUtterance = '';
     if (processor) processor.onaudioprocess = null;
