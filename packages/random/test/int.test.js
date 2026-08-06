@@ -59,7 +59,7 @@ test('determinism: same seed produces same randomInt sequence', t => {
   }
 });
 
-/** @typedef {import('../types.d.ts').RandomSource} RandomSource */
+/** @typedef {import('../random-source.types.js').RandomSource} RandomSource */
 
 // Build a counting wrapper around a `RandomSource`.  Tracks the
 // total number of bytes drawn so far so tests can assert how many

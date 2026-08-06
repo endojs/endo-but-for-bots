@@ -4,7 +4,6 @@
     "*.js",
     "*.ts",
     "src",
-    "test",
-    "types.d.ts"
+    "test"
   ]
 }
