@@ -108,6 +108,61 @@ test('T2c: partial release keeps the export alive', async t => {
   t.is(sessionA.getStats().exports, 1); // main only
 });
 
+test('T2d: a hostile over-release is clamped, not driven negative', async t => {
+  // A count far larger than the outstanding refcount must free the export
+  // exactly once (clamped to the refcount), never drive the refcount deeply
+  // negative or dispose a value while legitimate references remain.
+  const { a, b } = makeLoopbackPair();
+  const sessionA = makeCapnWebSession(a, { gcImports: false });
+  makeCapnWebSession(b, {
+    localMain: Far('s', { take: _ => null }),
+    gcImports: false,
+  });
+  const cap = Far('cap', { id: () => 'k' });
+  const r = sessionA.getRemoteMain();
+  await E(r).take(cap);
+  await E(r).take(cap);
+  await E(r).take(cap); // cap refcount = 3
+  t.is(sessionA.getStats().exports, 2);
+  // Over-release by 2**40 (a valid safe integer): clamps to 3, frees once.
+  await b.send(JSON.stringify(['release', -1, 2 ** 40]));
+  await new Promise(resolve => setTimeout(resolve, 50));
+  t.is(sessionA.getStats().exports, 1); // main only; freed exactly once
+  // The session survived the hostile message and still serves calls.
+  t.is(await E(r).take(Far('cap2', { id: () => 'k2' })), null);
+});
+
+test('T2e: a negative release count is rejected as malformed', async t => {
+  // A negative count would otherwise *increase* the refcount and pin the
+  // export forever; the boundary rejects it as malformed and aborts the
+  // session fail-closed, consistent with other malformed-wire handling.
+  //
+  // try/catch rather than t.throwsAsync: under the shims-only ses-ava config
+  // t.throwsAsync mis-annotates a hardened session-abort rejection — the same
+  // reason the interop error tests in this package use try/catch.
+  t.timeout(10_000);
+  const { a, b } = makeLoopbackPair();
+  const sessionA = makeCapnWebSession(a, { gcImports: false });
+  makeCapnWebSession(b, {
+    localMain: Far('s', { take: _ => null }),
+    gcImports: false,
+  });
+  const cap = Far('cap', { id: () => 'k' });
+  const r = sessionA.getRemoteMain();
+  await E(r).take(cap); // cap refcount = 1
+  await b.send(JSON.stringify(['release', -1, -5]));
+  await new Promise(resolve => setTimeout(resolve, 50));
+  // The malformed release aborted A's session; a further call rejects.
+  let caught;
+  try {
+    await E(r).take(cap);
+  } catch (e) {
+    caught = e;
+  }
+  t.true(caught instanceof Error, 'a further call rejects after the abort');
+  t.regex(caught.message, /non-negative integer|malformed|aborted/);
+});
+
 // ---------- T4: callRemap on a non-array singleton ----------
 
 test('T4: callRemap on a non-array result applies the mapper once', async t => {
