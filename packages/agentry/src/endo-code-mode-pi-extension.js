@@ -19,6 +19,10 @@ import {
   validateEndoProvisionPersistence,
 } from './code-mode-provision-policy.js';
 import { reconstructEndoCodeMode } from './code-mode-provisioning.js';
+import {
+  renderEvaluateCall,
+  renderEvaluateResult,
+} from './pi-evaluate-render.js';
 
 const FLAG_NAME = 'endo-provision';
 const SESSION_ENTRY_TYPE = 'endo.pi-code-mode.provision';
@@ -479,6 +483,8 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
           pi.registerTool(
             toPiAgentTool(evaluate, {
               renderToolResult: toolResultToSmallcaps,
+              renderCall: renderEvaluateCall,
+              renderResult: renderEvaluateResult,
             }),
           );
           pi.setActiveTools(ACTIVE_TOOL_NAMES);

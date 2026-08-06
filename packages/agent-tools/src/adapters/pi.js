@@ -6,6 +6,19 @@
 /** @import { ToolRecord } from '../types.js' */
 
 /**
+ * `renderCall`/`renderResult` are typed opaquely here: this package does not
+ * depend on Pi's TUI, so it neither knows nor constrains their real
+ * signatures. The engine-specific caller (e.g. `@endo/agentry`) supplies
+ * functions matching Pi's own `ToolDefinition['renderCall'/'renderResult']`
+ * shape; that assignment is checked at the call site, not here.
+ *
+ * @typedef {AgentTool<Tool['parameters']> & {
+ *   renderCall?: (...args: any[]) => any,
+ *   renderResult?: (...args: any[]) => any,
+ * }} PiToolDefinition
+ */
+
+/**
  * Default tool-result renderer: plain strings pass through unchanged; every
  * other value is `JSON.stringify`-ed. Marshalling-aware callers (e.g.
  * `@endo/agentry`, which speaks SmallCaps) inject their own renderer through
@@ -31,12 +44,26 @@ const defaultRenderToolResult = result =>
  * `@endo/agent-tools` free of any marshalling dependency while letting a
  * SmallCaps-speaking caller round-trip BigInts and sigil-prefixed strings.
  *
+ * The optional `renderCall`/`renderResult` functions are opaque to this
+ * package: they exist for engines (e.g. Pi) whose `ToolDefinition` accepts
+ * TUI renderers alongside the `AgentTool` shape. This module carries no
+ * dependency on any such TUI, so it passes them through unmodified onto the
+ * returned object rather than typing or interpreting them.
+ *
  * @param {ToolRecord} tool
- * @param {{ renderToolResult?: (result: unknown) => string }} [options]
- * @returns {AgentTool<Tool['parameters']>}
+ * @param {{
+ *   renderToolResult?: (result: unknown) => string,
+ *   renderCall?: (...args: any[]) => any,
+ *   renderResult?: (...args: any[]) => any,
+ * }} [options]
+ * @returns {PiToolDefinition}
  */
 export const toPiAgentTool = (tool, options = {}) => {
-  const { renderToolResult = defaultRenderToolResult } = options;
+  const {
+    renderToolResult = defaultRenderToolResult,
+    renderCall,
+    renderResult,
+  } = options;
   return harden({
     name: tool.name,
     label: tool.name,
@@ -54,6 +81,8 @@ export const toPiAgentTool = (tool, options = {}) => {
       };
       return toolResult;
     },
+    ...(renderCall && { renderCall }),
+    ...(renderResult && { renderResult }),
   });
 };
 harden(toPiAgentTool);
