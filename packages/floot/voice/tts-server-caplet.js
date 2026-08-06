@@ -17,10 +17,15 @@
 //   { type: 'phase', phase } |
 //   { type: 'bytes', b64, sampleRate } |   // raw s16le mono PCM, base64
 //   { type: 'end' } | { type: 'abort', reason }
-// One 'bytes' event per speakable sentence chunk, emitted as soon as piper
-// finishes that chunk — so the browser can start playing sentence 1 while later
-// text is still arriving. Raw PCM (not WAV/mp3) so the browser builds an
-// AudioBuffer directly with no decode and we avoid an ffmpeg hop.
+// 'bytes' events stream as piper produces audio — the browser schedules each
+// back-to-back, so chunk framing carries no meaning (a sentence may span
+// several events). Raw PCM (not WAV/mp3) so the browser builds an AudioBuffer
+// directly with no decode and we avoid an ffmpeg hop.
+//
+// One piper process serves the WHOLE reply: sentences are written to its stdin
+// as the chunker emits them and raw PCM streams out continuously. Spawning a
+// process per sentence (the previous design) paid a full ONNX model load per
+// sentence — several hundred ms to seconds of dead air between sentences.
 //
 // Self-contained on purpose (the daemon worker is plain Node, no tsx): mirrors
 // src/tts/piper-tts.ts + sentence-chunker.ts reduced to what synthesize needs.
@@ -160,7 +165,14 @@ const makeAudioChannel = onClose => {
   return harden({ writer, reader, isClosed });
 };
 
-// ── Minimal piper driver (plain JS port of PiperTTSStream.synthesize) ────────
+// ── Minimal piper driver ─────────────────────────────────────────────────────
+// One long-lived piper process per synthesize() call (per reply). Piper in
+// --output-raw mode reads one utterance per stdin line and streams raw s16le
+// PCM continuously, so the ONNX model loads once per reply instead of once per
+// sentence — the previous per-sentence spawn put the model-load latency
+// (hundreds of ms to seconds) into every inter-sentence gap. Sentences are
+// written as they arrive; piper synthesizes them in order while earlier audio
+// is already streaming out.
 const makePiper = ({
   binary,
   modelPath,
@@ -170,121 +182,128 @@ const makePiper = ({
   sentenceSilence,
   sampleRate,
 }) => {
-  const active = new Set();
+  /** @type {import('node:child_process').ChildProcess | null} */
+  let child = null;
   let aborted = false;
+  /** @type {(pcm: Buffer) => void} */
+  let onChunk = () => {};
+  // PCM samples are 2 bytes; a pipe read may split one across chunks. Forward
+  // only even-length prefixes and carry the odd byte, or every later sample in
+  // the stream would be misaligned (loud static).
+  /** @type {Buffer | null} */
+  let carry = null;
+  /** @type {Promise<void> | null} */
+  let exited = null;
 
-  // Synthesize one sentence to raw s16le mono PCM bytes.
-  const synthOne = text =>
-    new Promise((resolve, reject) => {
-      if (aborted) {
-        reject(new Error('aborted'));
-        return;
-      }
-      // length-scale stretches phoneme duration, so speed is its inverse.
-      const child = spawn(
-        binary,
-        [
-          '--model',
-          modelPath,
-          '--output-raw',
-          '--length-scale',
-          String(1 / speed),
-          '--noise-scale',
-          String(noiseScale),
-          '--noise-w',
-          String(noiseW),
-          '--sentence-silence',
-          String(sentenceSilence),
-        ],
-        { stdio: ['pipe', 'pipe', 'ignore'] },
-      );
-      active.add(child);
-      const chunks = [];
+  const ensureSpawned = () => {
+    if (child || aborted) return;
+    // length-scale stretches phoneme duration, so speed is its inverse.
+    const proc = spawn(
+      binary,
+      [
+        '--model',
+        modelPath,
+        '--output-raw',
+        '--length-scale',
+        String(1 / speed),
+        '--noise-scale',
+        String(noiseScale),
+        '--noise-w',
+        String(noiseW),
+        '--sentence-silence',
+        String(sentenceSilence),
+      ],
+      { stdio: ['pipe', 'pipe', 'ignore'] },
+    );
+    child = proc;
+    exited = new Promise((resolve, reject) => {
       let settled = false;
-      const done = (err, buf) => {
+      const done = err => {
         if (settled) return;
         settled = true;
-        active.delete(child);
         if (err) reject(err);
-        else resolve(buf);
+        else resolve(undefined);
       };
-      child.on('error', err => done(err));
+      proc.on('error', err => done(err));
       // stdin can emit EPIPE if piper exits/closes before consuming input (bad
-      // model, or killed mid-write by abort()); without a handler Node escalates
-      // it to an uncaught exception that tears down the whole worker.
-      child.stdin.on('error', err => done(err));
-      child.stdout.on('data', c => chunks.push(c));
-      child.on('close', code => {
+      // model, or killed mid-write by abort()); without a handler Node
+      // escalates it to an uncaught exception that tears down the worker.
+      proc.stdin.on('error', () => {});
+      proc.stdout.on('data', (/** @type {Buffer} */ c) => {
+        if (aborted) return;
+        const buf = carry ? Buffer.concat([carry, c]) : c;
+        /** @type {number} */
+        const evenLength = buf.length - (buf.length % 2);
+        carry = evenLength < buf.length ? buf.subarray(evenLength) : null;
+        if (evenLength > 0) onChunk(buf.subarray(0, evenLength));
+      });
+      proc.on('close', code => {
         if (aborted) {
           done(new Error('aborted'));
         } else if (code === 0) {
-          done(null, Buffer.concat(chunks));
+          done(null);
         } else {
           done(new Error(`piper exited with code ${code}`));
         }
       });
-      child.stdin.write(text);
-      child.stdin.end();
     });
+    // A consumer that never awaits finish() (abort paths) must not surface an
+    // unhandled rejection; finish() re-awaits the same promise for callers.
+    exited.catch(() => {});
+  };
 
   return {
     sampleRate,
-    synthOne,
+    setOnChunk: cb => {
+      onChunk = cb;
+    },
+    // Queue one sentence. Newlines cannot appear inside a sentence (each line
+    // is one piper utterance); collapse any stray whitespace defensively.
+    speak: text => {
+      if (aborted) return;
+      ensureSpawned();
+      child?.stdin?.write(`${`${text}`.replace(/\s+/g, ' ').trim()}\n`);
+    },
+    // No more input: close stdin and resolve once piper has drained its queue
+    // and exited (all audio already streamed through onChunk).
+    finish: () => {
+      if (!child) return Promise.resolve();
+      child.stdin?.end();
+      return /** @type {Promise<void>} */ (exited);
+    },
     abort: () => {
       aborted = true;
-      for (const child of active) {
-        if (!child.killed) child.kill('SIGTERM');
-      }
-      active.clear();
+      if (child && !child.killed) child.kill('SIGTERM');
     },
   };
 };
 
-// Read reply text deltas, chunk into sentences, synthesize each in order, and
-// stream the audio bytes. Sentences are synthesized sequentially so audio plays
-// back in order and we don't spawn an unbounded number of piper processes.
+// Read reply text deltas, chunk into sentences, and feed them to the single
+// piper process; its PCM streams to the writer as it is produced, so sentence
+// N plays while N+1 is still synthesizing (and later text is still arriving).
 const pump = async (piper, textReader, writer) => {
   const chunker = makeChunker();
-  const queue = [];
-  let aborting = false;
-
   writer.setPhase('synthesizing');
-
-  // Synthesize queued sentences in arrival order, emitting bytes as each lands.
-  const drain = async () => {
-    while (queue.length && !aborting) {
-      const sentence = queue.shift();
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const buf = await piper.synthOne(sentence);
-        if (aborting) return;
-        writer.bytes(buf.toString('base64'), piper.sampleRate);
-      } catch (err) {
-        if (aborting) return;
-        throw err;
-      }
-    }
-  };
+  piper.setOnChunk(pcm =>
+    writer.bytes(pcm.toString('base64'), piper.sampleRate),
+  );
 
   try {
     for await (const value of iterateReader(textReader, { buffer: 4 })) {
       if (value.type === 'delta') {
-        for (const s of chunker.push(value.text)) queue.push(s);
-        await drain();
+        for (const s of chunker.push(value.text)) piper.speak(s);
       } else if (value.type === 'end') {
         break;
       } else if (value.type === 'abort') {
-        aborting = true;
         piper.abort();
         writer.abort(value.reason);
         return;
       }
     }
-    for (const s of chunker.finish()) queue.push(s);
-    await drain();
+    for (const s of chunker.finish()) piper.speak(s);
+    await piper.finish();
     writer.end();
   } catch (err) {
-    aborting = true;
     piper.abort();
     writer.abort(err instanceof Error ? err.message : String(err));
   }
