@@ -14,7 +14,7 @@
  * Powered by @earendil-works/pi-agent-core for LLM interaction and tool dispatch.
  */
 
-/** @import { AgentTool, AgentToolResult, AgentEvent } from '@earendil-works/pi-agent-core' */
+/** @import { AgentTool, AgentToolResult, AgentEvent, StreamFn } from '@earendil-works/pi-agent-core' */
 /** @import { Api, KnownProvider, Model, Provider } from '@earendil-works/pi-ai' */
 
 import harden from '@endo/harden';
@@ -330,6 +330,9 @@ function toAgentTool(spec, execTool) {
  * @param {string} [options.systemPrompt] - Complete system prompt override;
  *   when provided the prompt-building options (hostname, currentTime, etc.)
  *   are ignored.
+ * @param {StreamFn} [options.streamFn] - Stream function for the
+ *   pi-agent-core `Agent`. Defaults to `streamSimple` from
+ *   `@earendil-works/pi-ai/compat` when omitted.
  * @returns {Promise<PiAgent>}
  */
 export async function makePiAgent(options = {}) {
@@ -349,6 +352,7 @@ export async function makePiAgent(options = {}) {
     strictPolicy = false,
     securityNotes = '',
     systemPrompt: systemPromptOpt,
+    streamFn = streamSimple,
   } = options;
 
   // Use the caller-supplied prompt when provided; otherwise build one from
@@ -399,9 +403,13 @@ export async function makePiAgent(options = {}) {
           m.role === 'toolResult',
       ),
     toolExecution: 'sequential',
-    // Pi 0.81 no longer supplies an implicit stream function. Genie uses the
-    // compat model registry, so its corresponding stream is the fallback.
-    streamFn: streamSimple,
+    // Pi 0.81 evaluates `runtimeOptions.streamFn ?? getDefaultStreamFn()` in
+    // the Agent constructor, and `getDefaultStreamFn()` throws unless someone
+    // called the upstream `setDefaultStreamFn` hook (ambient mutable module
+    // state genie deliberately declines). `streamSimple` from
+    // `@earendil-works/pi-ai/compat` is genie's sole stream function, supplied
+    // explicitly via the `streamFn` option default so a caller can override it.
+    streamFn,
     ...(isOllama ? { getApiKey: async _provider => getOllamaApiKey() } : {}),
   });
 
