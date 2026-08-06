@@ -303,6 +303,7 @@ LLM-agent stack).*
 | [daemon-docker-selfhost](daemon-docker-selfhost.md) | 2026-03-02 | 2026-03-02 | Not Started |
 | [daemon-capability-bus](daemon-capability-bus.md) | 2026-02-25 | 2026-04-11 | In Progress |
 | [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) | 2026-04-14 | 2026-04-16 | **Complete** |
+| [daemon-sqlite-shutdown-checkpoint](daemon-sqlite-shutdown-checkpoint.md) | 2026-08-06 | 2026-08-06 | Not Started |
 | [daemon-xs-worker-debugger](daemon-xs-worker-debugger.md) | 2026-04-14 | 2026-04-15 | In Progress |
 | [daemon-endor-architecture](daemon-endor-architecture.md) | 2026-04-16 | 2026-04-16 | Active |
 | [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | 2026-04-15 | 2026-04-16 | In Progress |
@@ -1101,6 +1102,7 @@ user interface move to Rust.
 
 | Design | Status | Notes |
 |--------|--------|-------|
+| daemon-sqlite-shutdown-checkpoint | Not Started | Explicit `wal_checkpoint(TRUNCATE)` folded into the shared `close()` so a graceful shutdown leaves a self-contained `endo.sqlite` on both Node (better-sqlite3) and Rust+XS (rusqlite); makes file-level snapshot and cross-supervisor handoff single-file-safe, and pins the crash-path recovery-on-open contract. No new Rust host function. Answers the pet-store design's open question per PR #124 review. |
 | endor-git-bindings | Proposed | Daemon-private local Git object/ref storage over pure-Rust `gix` (cross-compiles with no per-target C toolchain; vendored libgit2 is the documented contingency); the local-only baseline excludes network transports and keeps Git object IDs distinct from `ContentStore` SHA-256 roots. |
 | endor-tui | Not Started | TUI entry point for `endor`: Chat UI in terminal idiom, and an integrated stepping debugger for XS workers (XS `mxDebug` protocol) |
 | endor-bus-tui | Not Started | Bus-protocol verbs for worker-owned TUI regions, XS handle API, Exo/CapTP wrapper |
