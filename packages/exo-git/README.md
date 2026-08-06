@@ -7,6 +7,7 @@ The package is intentionally Node-free and portable across SES realms — it kno
 - `makeGit({ mount, backend, lineageOf }, { readOnly, allowHistoryRewrite })` — a `makeGitKit` wrapper that returns exactly one selected facet, matching the call-site contract of the earlier single-class implementation: the default construction returns the `writer` facet (`ReadWriteEndoGit`), `{ allowHistoryRewrite: true }` returns `rewriter` (`HistoryRewriteEndoGit`), and `{ readOnly: true }` returns `reader` (`ReadOnlyEndoGit`).
 - `makeGitOperations({ backend, git })` — mints the host-private `GitOperations` capability (the backend authority) alongside a Git kit, from the same `powers`. `git` should be the facet minted alongside `backend` by the same `makeGit` / `makeGitKit` call: it stamps the resulting `GitOperations` with that instance's ephemeral pairing token, without which `makeGitRemote` can never accept it. Never guest-visible and not derivable from `reader` / `writer` / `rewriter`; composing host code that built both passes `operations` explicitly to `makeGitRemote`.
 - `makeGitRemote({ git, operations, credential, name, policy })` — remote-git companion (fetch / pull / push) bound to a credential cap; requires the writable `git` facet it composes with and the paired `operations` capability the same composing code minted.
+- `normalizeGitRemotePolicy({ name, policy })` — the canonical parser, validator, and normalizer for the policy accepted by `makeGitRemote`.
 - `makeBasicCredential`, `makeBearerCredential`, `makeUnavailableGitCredential` — credential capabilities.  Each carries a host-private `GitCredentialController` accessible via `getGitCredentialController(cred)`.
 - `makeGitFsBackend({ backend, treeOid })` — `FsBackend` adapter for an immutable git tree.  Composes with `@endo/endo-fs` `wrapBackend(...)`.
 - Interface guards: `GitReaderInterface`, `GitWriterInterface`, `GitRewriterInterface` (one per kit facet, generated from the shared `GIT_METHOD_GUARDS` table in `src/interfaces.js`), `GitInterface` (compatibility export equivalent to `GitRewriterInterface`, used by `@endo/agent-tools`'s JSON-tool and code-mode prompt generation), `GitTreeInterface`, `GitRemoteInterface`, `GitRemoteControllerInterface`, `GitCredentialControllerInterface`, `BasicCredentialInterface`, `BearerCredentialInterface`.
@@ -17,3 +18,14 @@ Sister packages:
 - `@endo/endo-fs` — the `Filesystem` / `FsBackend` seam this package targets.
 
 The split mirrors `@endo/exo-stream` / underlying stream sources: the exo layer is portable; the host-specific backing lives elsewhere.
+
+## Remote policy normalization
+
+`fetchRefspecs` and `pushRefspecs` retain their declared order through
+normalization.
+Consumers that serialize or hash a normalized policy must treat these arrays
+as ordered and must not sort them.
+
+Policy-consuming packages should import `normalizeGitRemotePolicy` from
+`@endo/exo-git` instead of copying its normalization rules, and should preserve
+the returned refspec order when forming canonical persistence or hash inputs.

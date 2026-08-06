@@ -194,13 +194,26 @@ export type RemotePolicy = {
   allowLocalFileTransport?: boolean;
 };
 
+export type NormalizedRemotePolicy = Omit<
+  RemotePolicy,
+  | 'allowForcePush'
+  | 'allowTags'
+  | 'allowDelete'
+  | 'allowLocalFileTransport'
+> & {
+  allowForcePush: boolean;
+  allowTags: boolean;
+  allowDelete: boolean;
+  allowLocalFileTransport: boolean;
+};
+
 export type GitRemoteAuditEventBase = {
   sequence: number;
 };
 
 export type GitRemotePolicyAuditEvent = GitRemoteAuditEventBase & {
   type: 'create' | 'revoke' | 'policy';
-  policy: RemotePolicy & { name: string };
+  policy: NormalizedRemotePolicy & { name: string };
   revoked: boolean;
   method?: string;
 };
@@ -229,7 +242,7 @@ export type GitRemoteAuditEvent =
   | GitRemoteOperationSuccessAuditEvent
   | GitRemoteOperationFailureAuditEvent;
 
-export type RemoteSnapshot = RemotePolicy & { name: string };
+export type RemoteSnapshot = NormalizedRemotePolicy & { name: string };
 
 export type GitRemote = {
   inspect: () => Promise<RemoteSnapshot>;

@@ -10,6 +10,7 @@ export {
   makeGitFsBackend,
   makeGitRemoteEndpoint,
   makeGitRemote,
+  normalizeGitRemotePolicy,
   makeGitCloner,
   getGitRemoteController,
   makeBasicCredential,
