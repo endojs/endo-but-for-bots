@@ -199,7 +199,13 @@ export const makeTables = ({ gcImports = true, sendRelease }) => {
   const releaseExport = (id, count) => {
     const entry = exportsTable.get(id);
     if (!entry) return;
-    entry.refcount -= count;
+    // Clamp a peer's over-release: a count larger than the outstanding
+    // refcount must not drive it below zero and force a premature
+    // [Symbol.dispose] while legitimate references remain. The wire count is
+    // validated as a non-negative safe integer at the message boundary
+    // (session.js dispatch), so here we only defend against over-release.
+    const n = count > entry.refcount ? entry.refcount : count;
+    entry.refcount -= n;
     if (entry.refcount <= 0) {
       exportsTable.delete(id);
       if (

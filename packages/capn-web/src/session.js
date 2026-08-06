@@ -340,6 +340,21 @@ export const makeCapnWebSession = (transport, opts = {}) => {
         );
       }
     };
+    // A wire refcount is a count of outstanding introductions — a small
+    // natural number, never a wide 64-bit quantity — so a non-negative
+    // safe-integer check is the honest domain guard at this parser edge. It
+    // rejects a hostile `["release", id, -1]` (which would otherwise
+    // *increase* the refcount and pin the export forever) and a
+    // NaN/Infinity/fractional count; an over-release by a large-but-valid
+    // integer is clamped where the refcount is decremented (tables.js).
+    const assertCount = index => {
+      const n = rest[index];
+      if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 0) {
+        throw new TypeError(
+          `malformed ${tag} message: arg ${index} must be a non-negative integer`,
+        );
+      }
+    };
     try {
       switch (tag) {
         case 'push':
@@ -372,7 +387,7 @@ export const makeCapnWebSession = (transport, opts = {}) => {
         case 'release':
           assertArity(2);
           assertNumber(0);
-          assertNumber(1);
+          assertCount(1);
           handleRelease(rest[0], rest[1]);
           break;
         case 'abort':

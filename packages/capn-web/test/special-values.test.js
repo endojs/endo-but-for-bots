@@ -34,6 +34,17 @@ test('round-trip: Date', async t => {
   t.is(back.getTime(), d.getTime());
 });
 
+test('round-trip: negative zero coerces to +0 (JSON/capnweb parity)', async t => {
+  // -0 is not a special value; it rides the JSON-safe primitive path, where
+  // JSON.stringify(-0) === "0". capnweb (also JSON-based) coerces the same
+  // way, so losing the sign is intentional wire parity — pinned here so a
+  // future -0 special-case can't silently diverge from capnweb.
+  const r = makePair(Far('s', { echo: x => x }));
+  const back = await E(r).echo(-0);
+  t.is(back, 0);
+  t.is(Object.is(back, -0), false); // arrived as +0, not -0
+});
+
 test('round-trip: Uint8Array', async t => {
   const r = makePair(Far('s', { echo: x => x }));
   const bytes = new Uint8Array([0, 1, 2, 250, 251, 252, 253, 254, 255]);
