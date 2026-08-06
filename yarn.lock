@@ -1493,6 +1493,7 @@ __metadata:
     "@endo/preact-container": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/sha256": "workspace:^"
     "@endo/space-channel": "workspace:^"
     "@endo/space-chat": "workspace:^"
     "@endo/space-file-explorer": "workspace:^"
@@ -2794,6 +2795,7 @@ __metadata:
     "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/sha256": "workspace:^"
     "@endo/stream": "workspace:^"
     "@endo/stream-node": "workspace:^"
     ava: "catalog:dev"
@@ -2935,6 +2937,20 @@ __metadata:
     eslint: "catalog:dev"
     ses: "workspace:^"
     terser: "npm:^5.16.6"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/sha256@workspace:^, @endo/sha256@workspace:packages/sha256":
+  version: 0.0.0-use.local
+  resolution: "@endo/sha256@workspace:packages/sha256"
+  dependencies:
+    "@endo/compartment-mapper": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/hex": "workspace:^"
+    ava: "catalog:dev"
+    eslint: "catalog:dev"
+    ses: "workspace:^"
     typescript: "catalog:dev"
   languageName: unknown
   linkType: soft

@@ -4,7 +4,7 @@
 |---|---|
 | **Created** | 2026-07-22 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | Implemented in the associated draft PR |
 
 ## Problem
 
@@ -143,7 +143,7 @@ flowchart TD
   stand-in that `@endo/platform/fs/extended` reaches through Vite's `node:crypto`
   alias. `@endo/sha256`'s JS implementation is the canonical home for that code;
   the chat shim should then re-export from here rather than carry its own copy.
-- **xs** → the **Endor-provided Rust-native host function** (next section). This
+- **xs** → the **Endo-provided Rust-native host function** (next section). This
   is the condition the bundler follows, which is why the bundle stops importing
   `node:crypto` once `blobref.js` imports `@endo/sha256`.
 
@@ -151,7 +151,7 @@ The `default` maps to the pure-JS build so the package is safe under any
 bundler/condition that does not set `node`/`xs`/`browser` (and so `test:rust`'s
 own Node-side tests can compare the pure-JS output against `node:crypto`).
 
-## XS host-function ⇄ Endor Rust-native interface contract
+## XS host-function ⇄ Endo Rust-native interface contract
 
 The XS runtime already exposes SHA-256 host functions on `globalThis`,
 registered from Rust and backed by the `sha2` crate — so **no new Rust is

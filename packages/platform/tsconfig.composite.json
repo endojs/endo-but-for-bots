@@ -39,6 +39,9 @@
       "path": "../patterns/tsconfig.composite.json"
     },
     {
+      "path": "../sha256/tsconfig.composite.json"
+    },
+    {
       "path": "../stream/tsconfig.composite.json"
     },
     {
