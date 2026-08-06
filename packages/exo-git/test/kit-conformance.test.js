@@ -66,6 +66,7 @@ const makeFakeBackend = () =>
     }),
     add: async () => undefined,
     restore: async () => undefined,
+    checkoutConflict: async () => undefined,
     commit: async (message, options = {}) => ({
       oid: '1'.repeat(40),
       summary: message,

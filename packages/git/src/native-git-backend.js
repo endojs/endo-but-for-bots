@@ -2328,6 +2328,18 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
      * and stage the path so the conflict is resolved through Git's index
      * stages rather than by synthesizing file bytes.
      *
+     * Paths are processed one at a time — `git checkout --<side>` then
+     * `git add` per path — so a mid-list failure leaves every already-visited
+     * path both checked out and staged, and the thrown error names the exact
+     * path that could not be resolved rather than leaving the worktree in an
+     * opaque partial state. Two conflict classes are surfaced, not resolved:
+     * `git checkout --ours`/`--theirs` fails when the chosen side has no
+     * version of the path (a delete/modify conflict, where that side deleted
+     * the file), and it likewise fails when the path is not actually
+     * unmerged. In both cases the caller must resolve the path explicitly —
+     * select the surviving side, `restore` it, or remove it — rather than
+     * expect `checkoutConflict` to invent bytes for a side that has none.
+     *
      * @param {string[]} paths
      * @param {GitConflictSide} side
      * @returns {Promise<void>}
@@ -2343,8 +2355,29 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
         throw new Error('checkoutConflict.side must be ours or theirs');
       }
       await assertNoExecutableRepoConfig();
-      await runGit(['checkout', `--${side}`, '--', ...paths]);
-      await runGit(['add', '--', ...paths]);
+      const resolved = [];
+      for (const conflictPath of paths) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await runGit(['checkout', `--${side}`, '--', conflictPath]);
+          // eslint-disable-next-line no-await-in-loop
+          await runGit(['add', '--', conflictPath]);
+        } catch (err) {
+          const cause = err instanceof Error ? err.message : String(err);
+          const done = resolved.length
+            ? ` Already resolved and staged: ${resolved.join(', ')}.`
+            : '';
+          throw new Error(
+            `checkoutConflict: could not select '${side}' for ` +
+              `'${conflictPath}'. The '${side}' side may have no version of ` +
+              `this path (a delete/modify conflict, where that side deleted ` +
+              `the file), or the path may not be unmerged; resolve it ` +
+              `explicitly.${done}\n${cause}`,
+            { cause: err },
+          );
+        }
+        resolved.push(conflictPath);
+      }
     },
 
     /**

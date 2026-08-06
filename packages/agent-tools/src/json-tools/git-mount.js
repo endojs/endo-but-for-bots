@@ -195,7 +195,12 @@ export const makeGitMountTools = gitCap => {
       'or stage 3 ("theirs"), then stage the resolution. These are index ' +
       'stages, not stable branch roles: during rebase, ours is the upstream ' +
       'side and theirs is the commit being replayed, inverted from ' +
-      'intuitive current/incoming wording.',
+      'intuitive current/incoming wording. Fails on a path whose selected ' +
+      'side has no version — a delete/modify conflict, where that side ' +
+      'deleted the file — or a path that is not actually unmerged; resolve ' +
+      'those by picking the surviving side or removing the path. Paths are ' +
+      'processed left to right, so on failure the earlier paths are already ' +
+      'staged and the error names the path that stopped it.',
     parameters: checkoutConflictParameters,
     argGuards: harden([M.arrayOf(M.string()), M.or('ours', 'theirs')]),
     execute: async args => {

@@ -300,14 +300,23 @@ const gitToolSchemas = harden({
 });
 
 /**
- * The writer facet's `commit` schema, narrower than `gitToolSchemas.commit`:
- * no `options` property at all, matching the writer facet's runtime guard
- * (`GIT_METHOD_GUARDS.commitReadWrite`), which rejects `amend: true`. A
- * schema that still advertised `options.amend` at this facet would be a
- * prompt-surface lie — the very divergence this catalog derivation exists to
- * close. Only `commit` needs a per-facet schema override: every other
- * writer-tier method's schema is identical to its rewriter-tier entry in
- * `gitToolSchemas`.
+ * The writer facet's `commit` schema, narrower than both
+ * `gitToolSchemas.commit` and the writer facet's own runtime guard: it
+ * declares only `message` and omits `options` entirely. This is a deliberate
+ * narrowing, not a match. The runtime guard (`GIT_METHOD_GUARDS.commitReadWrite`)
+ * still accepts an optional options record so long as it does not set
+ * `amend: true` — `options: {}` and `options: { amend: false }` both pass — so
+ * the schema is a strict subset of what the guard admits. Advertising
+ * `options.amend` at this facet would be a prompt-surface lie — the very
+ * divergence this catalog derivation exists to close — and there is no
+ * writer-facet use for the remaining commit options, so the schema simply
+ * declines to offer `options` at all. The narrowing is safe (every input the
+ * schema admits the guard also admits), but note it is invisible to
+ * `divergence.test.js`, which derives candidate inputs only from
+ * schema-declared property names and so structurally cannot flag a guard that
+ * is wider than its schema. Only `commit` needs a per-facet schema override:
+ * every other writer-tier method's schema is identical to its rewriter-tier
+ * entry in `gitToolSchemas`.
  *
  * @type {{ description: string, parameters: object }}
  */
