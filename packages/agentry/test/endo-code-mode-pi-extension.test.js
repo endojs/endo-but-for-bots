@@ -3,6 +3,7 @@
 /** @import { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from '@earendil-works/pi-coding-agent' */
 /** @import { EndoProvisionPersistence, EndoProvisionResult } from '../src/code-mode-provisioning-types.js' */
 
+import { initTheme } from '@earendil-works/pi-coding-agent';
 import test from '@endo/ses-ava/prepare-endo.js';
 import fc from 'fast-check';
 
@@ -19,6 +20,15 @@ import {
 import { makeEndoCodeModePiExtension } from '../endo-code-mode-pi-extension.js';
 import { makeEndoProvisionGlobals } from '../src/code-mode-provision-globals.js';
 import { samePlainData } from '../src/endo-code-mode-pi-extension.js';
+import {
+  renderEvaluateCall,
+  renderEvaluateResult,
+} from '../src/pi-evaluate-render.js';
+
+// The renderers call into Pi's `keyHint`, which reads the interactive theme
+// singleton; initialize it once so the collapsed-result expand hint renders
+// instead of throwing "Theme not initialized".
+initTheme();
 
 const SESSION_ENTRY_TYPE = 'endo.pi-code-mode.provision';
 const NONINTERACTIVE_MODES = harden(/** @type {const} */ (['print', 'json']));
@@ -378,7 +388,15 @@ test('startup with an omitted grant uses cwd and activates only evaluate', async
   t.deepEqual(Object.keys(persistence.policy), ['workspace']);
   t.deepEqual(harness.activeTools, [[], ['evaluate']]);
   t.is(harness.tools.length, 1);
-  t.is(/** @type {{ name: string }} */ (harness.tools[0]).name, 'evaluate');
+  const [evaluateTool] =
+    /** @type {{ name: string, renderCall: unknown, renderResult: unknown }[]} */ (
+      harness.tools
+    );
+  t.is(evaluateTool.name, 'evaluate');
+  // The registered tool carries the terminal renderers so Pi's TUI stops
+  // falling back to a name-only header and a bare SmallCaps JSON dump.
+  t.is(evaluateTool.renderCall, renderEvaluateCall);
+  t.is(evaluateTool.renderResult, renderEvaluateResult);
   t.deepEqual(harness.appended, [
     { customType: SESSION_ENTRY_TYPE, data: persistence },
   ]);
@@ -929,4 +947,181 @@ test('JSON launcher keeps structured extension failure off stdout', async t => {
   });
   t.false(stdout.includes(secret));
   t.false(childStderr.includes(secret));
+});
+
+const fakeTheme =
+  /** @type {import('@earendil-works/pi-coding-agent').Theme} */ (
+    /** @type {unknown} */ ({
+      fg: (_color, text) => text,
+      bold: text => text,
+    })
+  );
+
+/**
+ * Pi's `ToolRenderContext` is not re-exported from the package root (see
+ * `../src/pi-evaluate-render.js`), so this fake mirrors the subset the
+ * renderers under test actually read.
+ *
+ * @typedef {{
+ *   lastComponent: import('@earendil-works/pi-tui').Component | undefined,
+ *   state: Record<string, unknown>,
+ *   isError: boolean,
+ *   expanded?: boolean,
+ * }} FakeRenderContext
+ */
+
+/**
+ * Returned loosely as `any`: this fake is duck-typed against the renderers'
+ * own (unexported) context type, not Pi's real `ToolRenderContext`.
+ *
+ * @param {Partial<FakeRenderContext>} [overrides]
+ * @returns {any}
+ */
+const makeRenderContext = overrides =>
+  /** @type {FakeRenderContext} */ (
+    /** @type {unknown} */ ({
+      args: {},
+      toolCallId: 'call-1',
+      invalidate: () => {},
+      lastComponent: undefined,
+      state: {},
+      cwd: '/',
+      executionStarted: true,
+      argsComplete: true,
+      isPartial: false,
+      expanded: false,
+      showImages: false,
+      isError: false,
+      ...overrides,
+    })
+  );
+
+/**
+ * @param {import('@earendil-works/pi-tui').Component} component
+ * @param {number} [width]
+ * @returns {string}
+ */
+const renderText = (component, width = 80) =>
+  component
+    .render(width)
+    // eslint-disable-next-line no-control-regex
+    .map(line => line.replace(/\x1b\[[0-9;]*m/g, ''))
+    .join('\n');
+
+test('renderEvaluateCall renders a bash-style header and the highlighted source', t => {
+  const source = 'const answer = 42;\nconsole.log(answer);';
+  const component = renderEvaluateCall(
+    { source },
+    fakeTheme,
+    makeRenderContext(),
+  );
+  const text = renderText(component);
+  t.regex(text, /\$ evaluate/);
+  t.true(text.includes('const answer = 42;'));
+  t.true(text.includes('console.log(answer);'));
+});
+
+test('renderEvaluateCall shows the source on an errored call for context', t => {
+  const source = 'throw new Error("boom");';
+  const component = renderEvaluateCall(
+    { source },
+    fakeTheme,
+    makeRenderContext({ isError: true }),
+  );
+  t.true(renderText(component).includes('throw new Error("boom");'));
+});
+
+test('renderEvaluateResult collapses long output to a tail preview with a hidden-line marker', t => {
+  const lines = ['one', 'two', 'three', 'four', 'five', 'six', 'seven'];
+  const result =
+    /** @type {import('@earendil-works/pi-agent-core').AgentToolResult<unknown>} */ ({
+      content: [],
+      details: lines.join('\n'),
+    });
+  const component = renderEvaluateResult(
+    result,
+    { expanded: false, isPartial: false },
+    fakeTheme,
+    makeRenderContext(),
+  );
+  const text = renderText(component);
+  // Two lines were pushed out of the 5-line tail preview; the marker states
+  // the exact count and offers the expand hint, matching the built-in bash
+  // tool's collapsed shape.
+  t.regex(text, /\.\.\. \(2 earlier lines,/);
+  t.regex(text, /to expand/);
+  t.false(text.includes('one'));
+  t.false(text.includes('two'));
+  t.true(text.includes('three'));
+  t.true(text.includes('seven'));
+});
+
+test('renderEvaluateResult shows small output in full with no marker when collapsed', t => {
+  const result =
+    /** @type {import('@earendil-works/pi-agent-core').AgentToolResult<unknown>} */ ({
+      content: [],
+      details: 'one\ntwo',
+    });
+  const component = renderEvaluateResult(
+    result,
+    { expanded: false, isPartial: false },
+    fakeTheme,
+    makeRenderContext(),
+  );
+  const text = renderText(component);
+  t.true(text.includes('one'));
+  t.true(text.includes('two'));
+  t.false(text.includes('earlier lines'));
+});
+
+test('renderEvaluateResult shows the full output with no marker when expanded', t => {
+  const lines = ['one', 'two', 'three', 'four', 'five', 'six', 'seven'];
+  const result =
+    /** @type {import('@earendil-works/pi-agent-core').AgentToolResult<unknown>} */ ({
+      content: [],
+      details: lines.join('\n'),
+    });
+  const component = renderEvaluateResult(
+    result,
+    { expanded: true, isPartial: false },
+    fakeTheme,
+    makeRenderContext({ expanded: true }),
+  );
+  const text = renderText(component);
+  for (const line of lines) {
+    t.true(text.includes(line), `expected expanded output to include ${line}`);
+  }
+  t.false(text.includes('earlier lines'));
+});
+
+test('renderEvaluateResult renders the completion value, not the SmallCaps model text', t => {
+  const result =
+    /** @type {import('@earendil-works/pi-agent-core').AgentToolResult<unknown>} */ ({
+      content: [{ type: 'text', text: '!not-the-details-text' }],
+      details: 42n,
+    });
+  const component = renderEvaluateResult(
+    result,
+    { expanded: true, isPartial: false },
+    fakeTheme,
+    makeRenderContext({ expanded: true }),
+  );
+  const text = renderText(component);
+  t.true(text.includes('42n'));
+  t.false(text.includes('not-the-details-text'));
+});
+
+test('renderEvaluateResult renders the error message from content when isError', t => {
+  const result =
+    /** @type {import('@earendil-works/pi-agent-core').AgentToolResult<unknown>} */ ({
+      content: [{ type: 'text', text: 'evaluate.source must be a string' }],
+      details: undefined,
+    });
+  const component = renderEvaluateResult(
+    result,
+    { expanded: false, isPartial: false },
+    fakeTheme,
+    makeRenderContext({ isError: true }),
+  );
+  t.true(renderText(component).includes('evaluate.source must be a string'));
 });

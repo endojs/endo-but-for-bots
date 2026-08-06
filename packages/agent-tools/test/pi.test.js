@@ -61,6 +61,21 @@ test('the renderToolResult hook controls the rendered text', async t => {
   t.deepEqual(seen, [{ value: 42 }]);
 });
 
+test('renderCall and renderResult pass through opaquely when supplied', t => {
+  const renderCall = () => 'call-component';
+  const renderResult = () => 'result-component';
+  const withRenderers = toPiAgentTool(toolReturning('ok'), {
+    renderCall,
+    renderResult,
+  });
+  t.is(withRenderers.renderCall, renderCall);
+  t.is(withRenderers.renderResult, renderResult);
+
+  const withoutRenderers = toPiAgentTool(toolReturning('ok'));
+  t.false('renderCall' in withoutRenderers);
+  t.false('renderResult' in withoutRenderers);
+});
+
 test('toPiAgentTool forwards pi AbortSignal as invocation context', async t => {
   /** @type {AbortSignal | undefined} */
   let received;
