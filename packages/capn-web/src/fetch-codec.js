@@ -69,10 +69,10 @@ export const encodeHeaders = h => {
 };
 
 /**
- * @param {unknown[]} expr  ["headers", [[k, v], …]]
+ * @param {unknown[]} expression  ["headers", [[k, v], …]]
  */
-export const decodeHeaders = expr => {
-  const [, pairs] = expr;
+export const decodeHeaders = expression => {
+  const [, pairs] = expression;
   if (!Array.isArray(pairs)) {
     throw new TypeError('headers expression must contain an array of pairs');
   }
@@ -117,11 +117,11 @@ export const encodeRequest = (r, _devaluate) => {
 };
 
 /**
- * @param {unknown[]} expr
+ * @param {unknown[]} expression
  * @param {(v: unknown) => unknown} evaluate
  */
-export const decodeRequest = (expr, evaluate) => {
-  const [, url, initExpr] = expr;
+export const decodeRequest = (expression, evaluate) => {
+  const [, url, initExpr] = expression;
   if (typeof url !== 'string') {
     throw new TypeError('request url must be a string');
   }
@@ -160,11 +160,11 @@ export const encodeResponse = (r, _devaluate) => {
 };
 
 /**
- * @param {unknown[]} expr
+ * @param {unknown[]} expression
  * @param {(v: unknown) => unknown} evaluate
  */
-export const decodeResponse = (expr, evaluate) => {
-  const [, body, initExpr] = expr;
+export const decodeResponse = (expression, evaluate) => {
+  const [, body, initExpr] = expression;
   const init = /** @type {any} */ (evaluate(initExpr)) || {};
   const decodedBody =
     body === null ? null : /** @type {any} */ (evaluate(body));

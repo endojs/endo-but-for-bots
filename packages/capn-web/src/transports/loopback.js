@@ -7,7 +7,7 @@ import harden from '@endo/harden';
  */
 const makeQueue = () => {
   /** @type {string[]} */
-  const buf = [];
+  const buffer = [];
   /** @type {Array<(s: string | null) => void>} */
   const waiters = [];
   let closed = false;
@@ -19,10 +19,10 @@ const makeQueue = () => {
         w(s);
         return;
       }
-      buf.push(s);
+      buffer.push(s);
     },
     pull() {
-      if (buf.length > 0) return Promise.resolve(buf.shift());
+      if (buffer.length > 0) return Promise.resolve(buffer.shift());
       if (closed) return Promise.resolve(null);
       return new Promise(resolve => waiters.push(resolve));
     },

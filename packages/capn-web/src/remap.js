@@ -39,10 +39,10 @@ const isJsonSafePrimitive = v =>
   typeof v === 'boolean' ||
   (typeof v === 'number' && Number.isFinite(v));
 
-const checkPathSegment = seg => {
-  if (isForbiddenKey(seg)) {
+const checkPathSegment = segment => {
+  if (isForbiddenKey(segment)) {
     throw new TypeError(
-      `forbidden property name in remap path: ${String(seg)}`,
+      `forbidden property name in remap path: ${String(segment)}`,
     );
   }
 };
@@ -223,11 +223,11 @@ export const replayRemap = async (recording, input) => {
       }
       return variables[subject];
     }
-    const idx = -subject - 1;
-    if (idx >= captures.length) {
+    const index = -subject - 1;
+    if (index >= captures.length) {
       throw new TypeError(`remap capture ${subject} out of range`);
     }
-    return captures[idx];
+    return captures[index];
   };
 
   /**
@@ -237,20 +237,20 @@ export const replayRemap = async (recording, input) => {
    * descent so that remote presences (which look up properties via their
    * handler, not as own properties) work uniformly with plain objects.
    *
-   * @param {unknown} expr
+   * @param {unknown} expression
    */
-  const evaluate = async expr => {
-    if (Array.isArray(expr) && expr[0] === 'pipeline') {
-      const subject = /** @type {number} */ (expr[1]);
-      const path = /** @type {(string | number)[]} */ (expr[2] || []);
-      const args = /** @type {unknown[] | undefined} */ (expr[3]);
-      for (const seg of path) checkPathSegment(seg);
+  const evaluate = async expression => {
+    if (Array.isArray(expression) && expression[0] === 'pipeline') {
+      const subject = /** @type {number} */ (expression[1]);
+      const path = /** @type {(string | number)[]} */ (expression[2] || []);
+      const args = /** @type {unknown[] | undefined} */ (expression[3]);
+      for (const segment of path) checkPathSegment(segment);
       let cur = /** @type {any} */ (await resolveSubject(subject));
       if (args === undefined) {
         // Pure get: walk the whole path via HandledPromise.get so
         // presence handlers are consulted at each step.
-        for (const seg of path) {
-          cur = await HandledPromise.get(cur, /** @type {any} */ (seg));
+        for (const segment of path) {
+          cur = await HandledPromise.get(cur, /** @type {any} */ (segment));
         }
         return cur;
       }
@@ -258,8 +258,8 @@ export const replayRemap = async (recording, input) => {
       // call as applyMethod (path of length >= 1) or applyFunction
       // (empty path).
       const evaluatedArgs = await Promise.all(args.map(a => evaluate(a)));
-      for (const seg of path.slice(0, -1)) {
-        cur = await HandledPromise.get(cur, /** @type {any} */ (seg));
+      for (const segment of path.slice(0, -1)) {
+        cur = await HandledPromise.get(cur, /** @type {any} */ (segment));
       }
       if (path.length === 0) {
         return HandledPromise.applyFunction(cur, evaluatedArgs);
@@ -272,7 +272,7 @@ export const replayRemap = async (recording, input) => {
       );
     }
     // Literal: a primitive or a captured value already inline.
-    return expr;
+    return expression;
   };
 
   // Apply every instruction; non-last results go into variables.

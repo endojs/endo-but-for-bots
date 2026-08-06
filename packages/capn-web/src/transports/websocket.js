@@ -18,7 +18,7 @@ import harden from '@endo/harden';
  */
 export const makeWebSocketTransport = socket => {
   /** @type {string[]} */
-  const buf = [];
+  const buffer = [];
   /** @type {Array<(s: string | null) => void>} */
   const waiters = [];
   let closed = false;
@@ -32,7 +32,7 @@ export const makeWebSocketTransport = socket => {
       w(data);
       return;
     }
-    buf.push(data);
+    buffer.push(data);
   };
 
   const closeAndWake = reason => {
@@ -88,7 +88,7 @@ export const makeWebSocketTransport = socket => {
       trySend(m);
     },
     receive: () => {
-      if (buf.length > 0) return Promise.resolve(buf.shift() ?? null);
+      if (buffer.length > 0) return Promise.resolve(buffer.shift() ?? null);
       if (closed) return Promise.resolve(null);
       return new Promise(resolve => waiters.push(resolve));
     },

@@ -25,61 +25,61 @@ const { WeakRef, FinalizationRegistry } = globalThis;
  * @template K
  * @template {object} V
  * @param {(key: K) => void} [finalizer]
- * @param {{ weakValues?: boolean }} [opts]
+ * @param {{ weakValues?: boolean }} [options]
  * @returns {FinalizingMap<K, V>}
  */
-export const makeFinalizingMap = (finalizer, opts) => {
-  const { weakValues = false } = opts || {};
+export const makeFinalizingMap = (finalizer, options) => {
+  const { weakValues = false } = options || {};
   if (!weakValues || !WeakRef || !FinalizationRegistry) {
     /** @type {Map<K, V>} */
-    const keyToVal = new Map();
+    const keyToValue = new Map();
     return harden({
-      get: key => keyToVal.get(key),
-      has: key => keyToVal.has(key),
-      set: (key, val) => {
-        keyToVal.set(key, val);
+      get: key => keyToValue.get(key),
+      has: key => keyToValue.has(key),
+      set: (key, value) => {
+        keyToValue.set(key, value);
       },
-      delete: key => keyToVal.delete(key),
-      getSize: () => keyToVal.size,
-      clearWithoutFinalizing: () => keyToVal.clear(),
+      delete: key => keyToValue.delete(key),
+      getSize: () => keyToValue.size,
+      clearWithoutFinalizing: () => keyToValue.clear(),
     });
   }
   /** @type {Map<K, WeakRef<any>>} */
-  const keyToRef = new Map();
+  const keyToWeakRef = new Map();
   /** @type {FinalizationRegistry<K>} */
   const registry = new FinalizationRegistry(key => {
     finalizingMap.delete(key);
   });
   const finalizingMap = harden({
     clearWithoutFinalizing: () => {
-      for (const ref of keyToRef.values()) {
-        registry.unregister(ref);
+      for (const weakRef of keyToWeakRef.values()) {
+        registry.unregister(weakRef);
       }
-      keyToRef.clear();
+      keyToWeakRef.clear();
     },
     get: key => {
-      const wr = keyToRef.get(key);
-      if (!wr) return undefined;
-      return wr.deref();
+      const weakRef = keyToWeakRef.get(key);
+      if (!weakRef) return undefined;
+      return weakRef.deref();
     },
     has: key => finalizingMap.get(key) !== undefined,
-    set: (key, val) => {
+    set: (key, value) => {
       finalizingMap.delete(key);
-      const wr = new WeakRef(val);
-      keyToRef.set(key, wr);
-      registry.register(val, key, wr);
+      const weakRef = new WeakRef(value);
+      keyToWeakRef.set(key, weakRef);
+      registry.register(value, key, weakRef);
     },
     delete: key => {
-      const wr = keyToRef.get(key);
-      if (!wr) return false;
-      registry.unregister(wr);
-      keyToRef.delete(key);
+      const weakRef = keyToWeakRef.get(key);
+      if (!weakRef) return false;
+      registry.unregister(weakRef);
+      keyToWeakRef.delete(key);
       if (finalizer) {
         finalizer(key);
       }
       return true;
     },
-    getSize: () => keyToRef.size,
+    getSize: () => keyToWeakRef.size,
   });
   return finalizingMap;
 };

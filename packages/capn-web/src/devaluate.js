@@ -81,9 +81,9 @@ const passStyleOfOrUndefined = value => {
  */
 
 /**
- * @param {DevaluatorContext} ctx
+ * @param {DevaluatorContext} context
  */
-export const makeDevaluator = ctx => {
+export const makeDevaluator = context => {
   /**
    * @param {unknown} value
    * @param {WeakSet<object>} seen  Tracks containers currently on the
@@ -118,7 +118,7 @@ export const makeDevaluator = ctx => {
       const writer = exportWritableStream(
         /** @type {WritableStream} */ (value),
       );
-      const id = ctx.exportValue(writer, false);
+      const id = context.exportValue(writer, false);
       return ['writable', id];
     }
     if (G.ReadableStream && value instanceof G.ReadableStream) {
@@ -129,14 +129,14 @@ export const makeDevaluator = ctx => {
       // readable stub form (`["readable", -id]`) if `sendPipe` isn't
       // configured (e.g. no `TransformStream` available, or the
       // devaluator was constructed in a non-session context).
-      if (ctx.sendPipe) {
-        const id = ctx.sendPipe(/** @type {ReadableStream} */ (value));
+      if (context.sendPipe) {
+        const id = context.sendPipe(/** @type {ReadableStream} */ (value));
         return ['readable', id];
       }
       const reader = exportReadableStream(
         /** @type {ReadableStream} */ (value),
       );
-      const id = ctx.exportValue(reader, false);
+      const id = context.exportValue(reader, false);
       return ['readable', id];
     }
 
@@ -145,7 +145,7 @@ export const makeDevaluator = ctx => {
       value !== null &&
       (typeof value === 'object' || typeof value === 'function')
     ) {
-      const importId = ctx.importIdOf(/** @type {object} */ (value));
+      const importId = context.importIdOf(/** @type {object} */ (value));
       if (importId !== undefined) {
         const isPromiseStub =
           typeof (/** @type {any} */ (value).then) === 'function';
@@ -156,11 +156,11 @@ export const makeDevaluator = ctx => {
     // 5. Pass-style leaf classification — remotable / promise / error.
     const style = passStyleOfOrUndefined(value);
     if (style === 'remotable') {
-      const id = ctx.exportValue(value, false);
+      const id = context.exportValue(value, false);
       return ['export', id];
     }
     if (style === 'promise') {
-      const id = ctx.exportValue(value, true);
+      const id = context.exportValue(value, true);
       return ['promise', id];
     }
     if (style === 'error') {
