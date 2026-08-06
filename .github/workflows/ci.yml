@@ -82,9 +82,6 @@ jobs:
       - name: Show shellcheck version
         run: shellcheck --version
 
-      - name: Run yarn lint
-        run: yarn lint
-
       - name: Check SECURITY.md uniformity
         run: bash scripts/check-security-md.sh
 
@@ -94,15 +91,21 @@ jobs:
       - name: Check package uniformity
         run: yarn test:package-uniformity && node scripts/check-package-uniformity.mjs
 
-      # build the API docs to verify it works
-      - name: build API docs
-        run: yarn docs
+      # Keep declaration generation below: only overlap checks that do not
+      # emit declarations.
+      - parallel:
+          - name: Run yarn lint
+            run: yarn lint
 
-      - name: Check the root TypeScript program
-        run: corepack yarn tsc -p tsconfig.json --noEmit
+          # build the API docs to verify it works
+          - name: build API docs
+            run: yarn docs
 
-      - name: Check workspace TypeScript programs
-        run: corepack yarn lint:workspaces:types
+          - name: Check the root TypeScript program
+            run: corepack yarn tsc -p tsconfig.json --noEmit
+
+          - name: Check workspace TypeScript programs
+            run: corepack yarn lint:workspaces:types
 
       - name: Build composite TypeScript declarations
         run: corepack yarn build:types
