@@ -1,4 +1,3 @@
-/* global globalThis */
 // WHATWG Streams ⇄ Cap'n Web bridge.
 //
 // On the SENDER side:

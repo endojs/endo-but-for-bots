@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global setTimeout, globalThis, Response */
 // Integration tests inspired by cloudflare/capnweb's __tests__/index.test.ts
 // suite — patterns we hadn't yet covered.  Run against the in-memory
 // loopback transport (which exercises the same protocol path the real
@@ -62,7 +61,7 @@ test('error propagation: remote stack lines are not exposed', async t => {
       bad: () => {
         // Throw from inside a clearly-named function so we can check
         // whether that name leaks across the wire.
-        // eslint-disable-next-line camelcase
+
         const remoteSecretFrame = () => {
           throw new Error('boom');
         };
@@ -132,7 +131,7 @@ test('circular object reference is rejected (does not infinite-loop)', async t =
 
 test('large Uint8Array (10000 bytes) round-trips', async t => {
   const r = makePair(Far('s', { echo: x => x }));
-  const big = new Uint8Array(10000);
+  const big = new Uint8Array(10_000);
   for (let i = 0; i < big.length; i += 1) big[i] = i % 256;
   const back = await E(r).echo(big);
   t.is(back.length, big.length);

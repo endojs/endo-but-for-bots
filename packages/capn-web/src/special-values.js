@@ -19,7 +19,7 @@ const ERROR_TYPES = harden({
   SyntaxError,
   TypeError,
   URIError,
-  // eslint-disable-next-line no-undef
+
   ...(typeof AggregateError !== 'undefined' ? { AggregateError } : {}),
 });
 

@@ -1,4 +1,3 @@
-/* global globalThis */
 // Detect or force-enable the engine GC.  Adapted from @endo/captp's
 // engine-gc.js — works regardless of whether --expose-gc was passed.
 

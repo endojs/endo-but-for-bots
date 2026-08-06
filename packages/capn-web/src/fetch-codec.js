@@ -1,4 +1,3 @@
-/* global globalThis */
 // Fetch types: Headers, Request, Response.  Per the Cap'n Web protocol:
 //
 //   ["headers", [[name, value], …]]

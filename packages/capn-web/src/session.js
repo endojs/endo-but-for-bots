@@ -3,10 +3,6 @@
 // Wires together a transport, the imports/exports tables, the devaluator and
 // evaluator, the stub factories, and the message dispatch loop.
 
-/* eslint-disable no-use-before-define -- session uses mutually-recursive
-   nested function declarations (all hoisted; the no-use-before-define rule
-   doesn't recognize that for nested functions) */
-
 import harden from '@endo/harden';
 
 import { makeTables } from './tables.js';

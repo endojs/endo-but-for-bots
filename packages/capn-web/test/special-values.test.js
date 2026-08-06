@@ -20,7 +20,7 @@ test('round-trip: undefined', async t => {
 
 test('round-trip: bigint', async t => {
   const r = makePair(Far('s', { echo: x => x }));
-  const big = 12345678901234567890n;
+  const big = 12_345_678_901_234_567_890n;
   const back = await E(r).echo(big);
   t.is(typeof back, 'bigint');
   t.is(back, big);

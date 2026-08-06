@@ -27,6 +27,9 @@
       "path": "packages/cancel/tsconfig.composite.json"
     },
     {
+      "path": "packages/capn-web/tsconfig.composite.json"
+    },
+    {
       "path": "packages/captp/tsconfig.composite.json"
     },
     {

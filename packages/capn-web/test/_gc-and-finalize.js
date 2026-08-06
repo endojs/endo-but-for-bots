@@ -1,4 +1,3 @@
-/* global setImmediate */
 // GC + finalize helper.  Returns a function that, when awaited, runs gc() and
 // flushes finalizers.  If no gcPower is available, returns a no-op.
 

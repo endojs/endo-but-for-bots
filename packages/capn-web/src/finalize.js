@@ -1,4 +1,3 @@
-/* global globalThis */
 import harden from '@endo/harden';
 
 const { WeakRef, FinalizationRegistry } = globalThis;
@@ -49,7 +48,6 @@ export const makeFinalizingMap = (finalizer, opts) => {
   const keyToRef = new Map();
   /** @type {FinalizationRegistry<K>} */
   const registry = new FinalizationRegistry(key => {
-    // eslint-disable-next-line no-use-before-define
     finalizingMap.delete(key);
   });
   const finalizingMap = harden({

@@ -1,7 +1,5 @@
 // @ts-nocheck
-/* global setTimeout */
-/* eslint-disable max-classes-per-file, class-methods-use-this,
-   lines-between-class-members -- the interop suite mirrors capnweb's
+/* eslint-disable max-classes-per-file, class-methods-use-this -- the interop suite mirrors capnweb's
    "extend RpcTarget" idiom; multiple short classes per test are idiomatic. */
 // Interop test: connect an @endo/capn-web session to a real
 // cloudflare/capnweb RpcSession over an in-memory transport pair.  Both
@@ -24,7 +22,6 @@ import { makeCapnWebSession, makeLoopbackPair } from '../src/index.js';
 // test in the file becomes test.skip rather than failing.
 let capnweb;
 try {
-  // eslint-disable-next-line import/no-unresolved
   capnweb = await import('capnweb');
 } catch (_e) {
   capnweb = null;
@@ -90,7 +87,7 @@ interop('endo client → capnweb server: special values round-trip', async t => 
   const endoClient = makeCapnWebSession(a, { gcImports: false });
   const r = endoClient.getRemoteMain();
   t.is(await E(r).echo(42n), 42n);
-  const d = new Date(123456789);
+  const d = new Date(123_456_789);
   const dBack = await E(r).echo(d);
   t.is(dBack.getTime(), d.getTime());
   const back = await E(r).echo(undefined);
@@ -108,7 +105,6 @@ interop('endo client → capnweb server: arguments and pipelining', async t => {
       return x + y;
     }
     getCounter() {
-      // eslint-disable-next-line no-use-before-define
       return new Counter();
     }
   }

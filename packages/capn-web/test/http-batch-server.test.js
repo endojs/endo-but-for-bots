@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global globalThis, Request, setTimeout */
 // Server-side HTTP batch helpers — round-trip the client transport and the
 // server `processHttpBatchBody` / `handleHttpBatchRequest`.
 

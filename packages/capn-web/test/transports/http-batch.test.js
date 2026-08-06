@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global setTimeout */
 // HTTP batch transport.  We test the client-side batching using a fake fetch
 // that simulates a server: it parses the request body, runs a session
 // against it, captures outgoing messages, and returns them as the response

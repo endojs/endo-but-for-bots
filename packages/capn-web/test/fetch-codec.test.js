@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global globalThis, process */
 // Round-trip Headers, Request, Response across the wire.
 
 import test from '@endo/ses-ava/test.js';
@@ -80,7 +79,7 @@ fetchTest('Headers round-trip preserves entries', async t => {
   // even standalone (it tries to write a sort-cache symbol on a frozen
   // internal slot).  Probe-then-iterate doesn't help — the failure is
   // non-deterministic across instances.  We detect Node 18 and skip.
-  // eslint-disable-next-line no-undef
+
   const major = parseInt(
     (typeof process !== 'undefined' &&
       process.versions &&

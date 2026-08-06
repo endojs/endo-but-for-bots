@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global setTimeout */
 // Stream backpressure tests for the WHATWG-Streams ⇄ Cap'n Web bridge.
 //
 // The bridge serialises one chunk per remote call, so backpressure
