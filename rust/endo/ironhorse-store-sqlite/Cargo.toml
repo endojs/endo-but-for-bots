@@ -1,0 +1,16 @@
+# The daemon-side SQLite backend of the Ironhorse snapshot store seam
+# (designs/ironhorse-snapshot-store-seam.md § Crate and dependency
+# layout). Deliberately OUTSIDE the rust/engine workspace: the engine
+# crates are forbid(unsafe_code) and zero-C, while this crate links the
+# bundled SQLite the daemon already ships (rusqlite matches the
+# rust/endo pin). A sibling crate rather than an endo module so it
+# builds and tests without the XS C toolchain the xsnap crate needs.
+[package]
+name = "ironhorse-store-sqlite"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rusqlite = { version = "0.31", features = ["bundled"] }
+ironhorse-snapshot = { path = "../../engine/ironhorse-snapshot" }
+ironhorse-vm = { path = "../../engine/ironhorse-vm" }
