@@ -193,7 +193,11 @@ pub fn load_archive_base64(data: &str) -> io::Result<LoadedArchive> {
 /// `exports` field, unlisted subpaths are encapsulated (a clean
 /// error, not a file fallback); without one, subpaths fall back to
 /// Node-style file lookup (`.js` / `/index.js` completion) and `"."`
-/// falls back to `"main"` / `index.js`.
+/// falls back to `"main"` / `index.js`. The same matching core
+/// serves the package `imports` field (`#`-prefixed subpath
+/// imports), which resolves strictly within the importing package's
+/// own manifest — in-package `./` targets to that compartment's
+/// sources, bare-package targets back through its link map.
 ///
 /// The package manifest is read back as the raw `./package.json`
 /// source registered by [`crate::execute`] (kept unwrapped for this
@@ -316,19 +320,11 @@ function __resolveExportTarget(target, starText, conds) {
     return undefined;
 }
 
-// Match a subpath ('.', './sub') against an exports value under one
-// condition set. A bare string/array exports, or an object whose
-// first key does not start with '.', is sugar for { '.': exports }.
-function __matchExports(exp, subpath, conds) {
-    var subpathMap = exp;
-    if (typeof exp === 'string' || Array.isArray(exp)) {
-        subpathMap = { '.': exp };
-    } else {
-        for (var first in exp) {
-            if (first.charCodeAt(0) !== 46 /* '.' */) subpathMap = { '.': exp };
-            break;
-        }
-    }
+// Match a subpath against one subpath map under one condition set
+// (the shared core of exports and imports matching): the exact key
+// first, then single-`*` wildcard patterns by longest-prefix /
+// longest-suffix specificity.
+function __matchSubpathMap(subpathMap, subpath, conds) {
     if (Object.prototype.hasOwnProperty.call(subpathMap, subpath)) {
         return __resolveExportTarget(subpathMap[subpath], '', conds);
     }
@@ -351,6 +347,22 @@ function __matchExports(exp, subpath, conds) {
     }
     if (best !== undefined) return __resolveExportTarget(best, bestStar, conds);
     return undefined;
+}
+
+// Match a subpath ('.', './sub') against an exports value under one
+// condition set. A bare string/array exports, or an object whose
+// first key does not start with '.', is sugar for { '.': exports }.
+function __matchExports(exp, subpath, conds) {
+    var subpathMap = exp;
+    if (typeof exp === 'string' || Array.isArray(exp)) {
+        subpathMap = { '.': exp };
+    } else {
+        for (var first in exp) {
+            if (first.charCodeAt(0) !== 46 /* '.' */) subpathMap = { '.': exp };
+            break;
+        }
+    }
+    return __matchSubpathMap(subpathMap, subpath, conds);
 }
 
 // Resolve a package subpath to a canonical source key in that
@@ -391,13 +403,50 @@ function __resolveExports(compName, subpath, condsOrder) {
     }
     return canon2;
 }
+
+// Node's subpath imports: resolve a '#'-prefixed specifier through
+// the importing package's own `imports` map. Wildcards, condition
+// objects, array fallback chains, and null blocks follow the
+// exports grammar. An in-package ('./') target resolves to a
+// canonical source key in the same compartment (returned as
+// { key }); a bare-package target is returned as { bare } for the
+// caller to route through the compartment's link map. Everything
+// else — no imports map, an unlisted specifier, a blocked (null)
+// target, '#' or '#/' themselves — is a clean, named error.
+function __resolveImports(compName, spec, condsOrder) {
+    var manifest = __packageManifest(compName);
+    var imp = manifest ? manifest.imports : undefined;
+    var target;
+    if (imp !== undefined && imp !== null && typeof imp === 'object'
+        && !Array.isArray(imp)
+        && spec !== '#' && spec.slice(0, 2) !== '#/') {
+        var order = condsOrder || ['import', 'require'];
+        for (var oi = 0; oi < order.length && target === undefined; oi++) {
+            target = __matchSubpathMap(imp, spec, [order[oi]]);
+        }
+    }
+    if (target === undefined || target === null) {
+        throw new Error(
+            "Package import specifier '" + spec +
+            "' is not defined by imports of " + compName);
+    }
+    if (target.slice(0, 2) === './') {
+        var canon = __lookupSource(compName, target);
+        if (canon === undefined) {
+            throw new Error('Module not found: ' + compName + '/' + target);
+        }
+        return { key: canon };
+    }
+    return { bare: target };
+}
 "#;
 
 /// The runtime CommonJS loader: Node-style module cache with
 /// cycle-safe partial exports, per-module `require` (relative
 /// specifiers against the requiring module's directory, bare and
 /// subpath specifiers through the link map and the exports resolver
-/// with `require`-conditions-first), `require.resolve`, `__filename`
+/// with `require`-conditions-first, `#`-prefixed specifiers through
+/// the package's own `imports` map), `require.resolve`, `__filename`
 /// / `__dirname`, and function-wrapper evaluation through
 /// `Compartment.prototype.evaluate` — which also restores sloppy-mode
 /// semantics the old strict ESM shim silently denied CJS sources.
@@ -441,6 +490,13 @@ function __resolveRequire(compName, referrer, spec) {
         throw new Error(
             'require: specifier must be a non-empty string, required from '
             + compName + '/' + referrer);
+    }
+    if (spec.charCodeAt(0) === 35 /* '#' */) {
+        var imported = __resolveImports(compName, spec, ['require', 'import']);
+        if (imported.key !== undefined) {
+            return { compartment: compName, key: imported.key };
+        }
+        return __resolveRequire(compName, referrer, imported.bare);
     }
     if (spec.charCodeAt(0) === 46 /* '.' */) {
         var full = __resolveRelative(spec, referrer);
@@ -673,6 +729,22 @@ function __makeArchiveCompartment(compName) {{
             return __resolveRelative(specifier, referrer);
         }},
         loadNowHook: function(specifier) {{
+            // Node's subpath imports: a '#'-prefixed specifier
+            // resolves through this package's own `imports` map —
+            // to a module of this compartment under its canonical
+            // key (so its own relative imports resolve against its
+            // real directory), or onward through the link map when
+            // the target is a bare package specifier.
+            if (specifier.charCodeAt(0) === 35 /* '#' */) {{
+                var importedNow = __resolveImports(compName, specifier);
+                if (importedNow.key !== undefined) {{
+                    return {{
+                        namespace: __makeArchiveCompartment(compName)
+                            .importNow(importedNow.key)
+                    }};
+                }}
+                specifier = importedNow.bare;
+            }}
             // Check for cross-compartment link first.
             var link = links[specifier];
             if (link) {{
@@ -709,6 +781,16 @@ function __makeArchiveCompartment(compName) {{
             // engine drives the foreign module's (possibly async)
             // evaluation itself; an eager foreignComp.import()
             // awaited here would deadlock the loader.
+            if (specifier.charCodeAt(0) === 35 /* '#' */) {{
+                var importedAsync = __resolveImports(compName, specifier);
+                if (importedAsync.key !== undefined) {{
+                    return {{
+                        namespace: importedAsync.key,
+                        compartment: __makeArchiveCompartment(compName)
+                    }};
+                }}
+                specifier = importedAsync.bare;
+            }}
             var link = links[specifier];
             if (link) {{
                 return {{
