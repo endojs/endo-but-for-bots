@@ -1102,7 +1102,7 @@ user interface move to Rust.
 
 | Design | Status | Notes |
 |--------|--------|-------|
-| daemon-sqlite-shutdown-checkpoint | Not Started | Explicit `wal_checkpoint(TRUNCATE)` folded into the shared `close()` so a graceful shutdown leaves a self-contained `endo.sqlite` on both Node (better-sqlite3) and Rust+XS (rusqlite); makes file-level snapshot and cross-supervisor handoff single-file-safe, and pins the crash-path recovery-on-open contract. No new Rust host function. Answers the pet-store design's open question per PR #124 review. |
+| daemon-sqlite-shutdown-checkpoint | Not Started | Expose one idempotent database `close()` and require process-level suspension, graceful shutdown, and state-directory handoff to complete the full last-connection close on both Node (better-sqlite3) and Rust+XS (rusqlite). This makes file-level snapshot and cross-supervisor handoff single-file-safe without an explicit checkpoint pragma, and pins the crash-path recovery-on-open contract. A planned measurement will decide whether to set `journal_size_limit`. Answers the pet-store design's open question per PR #124 review. |
 | endor-git-bindings | Proposed | Daemon-private local Git object/ref storage over pure-Rust `gix` (cross-compiles with no per-target C toolchain; vendored libgit2 is the documented contingency); the local-only baseline excludes network transports and keeps Git object IDs distinct from `ContentStore` SHA-256 roots. |
 | endor-tui | Not Started | TUI entry point for `endor`: Chat UI in terminal idiom, and an integrated stepping debugger for XS workers (XS `mxDebug` protocol) |
 | endor-bus-tui | Not Started | Bus-protocol verbs for worker-owned TUI regions, XS handle API, Exo/CapTP wrapper |
