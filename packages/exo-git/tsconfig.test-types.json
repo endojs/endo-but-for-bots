@@ -5,6 +5,6 @@
     "skipLibCheck": false,
     "strict": true
   },
-  "files": ["types-index.d.ts", "test/types.test-d.ts"],
+  "files": ["src/types.ts", "test/types.test-d.ts"],
   "include": ["test/*.test-d.ts"]
 }
