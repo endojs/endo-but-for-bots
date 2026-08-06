@@ -1,7 +1,6 @@
 {
   "name": "@endo/agent-tools",
   "version": "0.0.1",
-  "private": true,
   "description": "Provider-independent agent tool catalog for Endo, including capability-scoped filesystem tools backed by an @endo/platform/fs/extended Filesystem",
   "keywords": [],
   "author": "Endo contributors",
@@ -149,6 +148,9 @@
     "lint-fix": "yarn lint:eslint --fix",
     "lint:eslint": "eslint '**/*.js'",
     "lint:types": "tsc"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "ava": {
     "files": [

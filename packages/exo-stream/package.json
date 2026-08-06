@@ -1,7 +1,6 @@
 {
   "name": "@endo/exo-stream",
   "version": "0.1.0",
-  "private": true,
   "description": "CapTP abstraction for bridging async iterator streams",
   "keywords": [
     "endo",

@@ -1,7 +1,6 @@
 {
   "name": "@endo/exo-shell",
   "version": "0.0.0",
-  "private": true,
   "description": "Remotable exo glue and interface guard for an EndoShell capability — a writable-mount-scoped, allowlisted, argv-only command executor. Portable across SES realms; pair with @endo/host-spawner (or a sandbox spawner) for the process-execution engine.",
   "keywords": [
     "endo",
@@ -60,6 +59,9 @@
     "ava": "catalog:dev",
     "eslint": "catalog:dev",
     "typescript": "catalog:dev"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "ava": {
     "files": [
