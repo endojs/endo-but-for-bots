@@ -1,23 +1,63 @@
 import { expectTypeOf } from 'expect-type';
 
-import { makeGit } from '../src/git.js';
-import type { GitBackend } from '../src/git.js';
+import { makeGit } from '@endo/exo-git';
 import type {
+  Directory,
+  EndoGit,
+  File,
+  Filesystem,
+  GitCherryPickOptions,
+  GitCommit,
+  GitCommitOptions,
+  GitCreateBranchOptions,
+  GitDeleteBranchOptions,
+  GitDiffOptions,
+  GitDirection,
+  GitIndexStatus,
+  GitLogOptions,
+  GitMakeHistoryRewriteOptions,
+  GitMakeOptions,
+  GitMakeReadOnlyOptions,
+  GitMakeReadWriteOptions,
+  GitMakeReadWriteOrHistoryRewriteOptions,
+  GitMergeOptions,
+  GitOperations,
+  GitReadWriteCommitOptions,
+  GitRebaseInput,
   GitRef,
   GitRefUpdateResult,
   GitRemote,
+  GitRemoteAuditEvent,
+  GitRemoteAuditEventBase,
+  GitRemoteController,
   GitRemoteCredential,
+  GitRemoteEndpoint,
+  GitRemoteKit,
+  GitRemoteOperationFailureAuditEvent,
   GitRemoteOperationSuccessAuditEvent,
+  GitRemotePolicyAuditEvent,
+  GitRestoreOptions,
+  GitStashPushOptions,
+  GitStatusEntry,
+  GitStatusNode,
+  GitWorktree,
+  GitWorktreeStatus,
   HistoryRewriteEndoGit,
+  PathEntry,
   PathEntryIssuer,
+  ReadableBlob,
+  ReadableTree,
   ReadOnlyEndoGit,
   ReadOnlyGitWorktree,
   ReadWriteEndoGit,
   RemoteOperationResult,
+  RemotePolicy,
   RemotePullResult,
   RemoteRefUpdate,
+  RemoteSnapshot,
   WritableGitWorktree,
-} from '../src/types.js';
+} from '@endo/exo-git';
+import type { GitBackend } from '../src/git.js';
 
 // The shared backend contract must carry the canonical credential type on
 // both remote operations; widening to `unknown` would silently drop the
