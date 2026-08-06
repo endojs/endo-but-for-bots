@@ -3,6 +3,22 @@ name = "endo"
 version = "0.1.0"
 edition = "2021"
 
+
+[dependencies.ironhorse-vm]
+path = '../engine/ironhorse-vm'
+optional = true
+
+[dependencies.ironhorse-compile]
+path = '../engine/ironhorse-compile'
+optional = true
+
+[features]
+# The Ironhorse engine is linked in by default so the one `endor` binary
+# carries both engines through the parity campaign (design
+# designs/ironhorse-engine.md § Endor integration). Build with
+# --no-default-features to get an XS-only binary.
+default = ['ironhorse-engine']
+ironhorse-engine = ['ironhorse-vm', 'ironhorse-compile']
 [dependencies]
 base64 = "0.22"
 endo_iroh = { path = "../endo_iroh" }
