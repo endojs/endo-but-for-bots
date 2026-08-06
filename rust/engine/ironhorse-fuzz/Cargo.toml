@@ -1,0 +1,22 @@
+[package]
+name = "ironhorse-fuzz"
+description = "cargo-fuzz targets (design § Fuzzability): target 1 differential source fuzzing, target 2 bytecode decoder. The comparison and generation logic is a plain, testable lib so it builds without a libFuzzer toolchain. #![forbid(unsafe_code)]."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "ironhorse_fuzz"
+path = "src/lib.rs"
+
+[dependencies]
+ironhorse-vm = { path = "../ironhorse-vm" }
+xs-oracle = { path = "../xs-oracle" }
+ironhorse-regexp = { path = "../ironhorse-regexp" }
+ironhorse-compile = { path = "../ironhorse-compile" }
+# Stage-6 child 4: the snapshot round-trip-invariance and malformed-atom
+# decoder fuzz arms drive the XS_M writer/reader (design § Snapshots,
+# Fuzzability). The substance stays here in the forbid(unsafe_code) lib so it
+# builds and unit-tests without a libFuzzer toolchain.
+ironhorse-snapshot = { path = "../ironhorse-snapshot" }

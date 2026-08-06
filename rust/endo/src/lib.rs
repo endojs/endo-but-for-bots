@@ -23,3 +23,4 @@ pub mod socket;
 pub mod supervisor;
 pub mod types;
 pub mod util;
+pub mod ironhorse_engine;

@@ -1,0 +1,1292 @@
+//! `ironhorse-xst`: the xst-analogue test262 runner for the Rust engine
+//! (design [`designs/ironhorse-test262-convergence.md`] § Part 2,
+//! "Harness → `ironhorse-xst`"). It plays for ironhorse exactly the role
+//! `xs/tools/xst.c` + `xst262.c` (@ `48ee02d8cfe0`) play for XS, plus the
+//! one thing `xst` never had: a differential oracle.
+//!
+//! This module is the runner core (rollout step 1): full YAML frontmatter
+//! ([`crate::frontmatter`]), the ironhorse not-yet-implemented feature skip list
+//! + `--features-include`, sloppy+strict double-run mode selection (strict a
+//! named skip until the stage-5 compiler), negative verdicts (constructor
+//! name vs `negative.type`, stack/memory aborts accepted for an expected
+//! `RangeError`), the dual-run oracle wiring (verdict + observable agreement
+//! gating, computron advisory, `--gate-meter-exact`, `--repeat N`
+//! determinism), and the xst-shaped YAML report (`mode:` / `skip:` /
+//! `fail:` plus the ironhorse `advisory:` and `skip-detail:` extensions).
+//!
+//! It subsumes the dual-run harness rather than sitting beside it: the same
+//! `assemble()` order (`sta.js`, `assert.js`, includes, body) and the same
+//! [`crate::dual_run`] differential, with the verdict layer grown on top.
+//! Pre-stage-5 the oracle is still the compiler (both engines run the
+//! XS-emitted bytecode), so a divergence has one suspect; when
+//! `ironhorse-compile` lands the differential moves to source level and the
+//! parse-phase negatives activate.
+
+use crate::frontmatter::{self, Frontmatter, Negative};
+use crate::{dual_run, dual_run_async, Agreement, AsyncDualRun, DualRun};
+use ironhorse_vm::Halt;
+use std::collections::{BTreeMap, HashSet};
+use std::path::{Path, PathBuf};
+
+/// The ironhorse not-yet-implemented feature skip list — the analogue of
+/// `xst262.c`'s 13-entry `gxFeatures`. A test whose frontmatter `features:`
+/// names any of these is skipped before it runs, reported in the report's
+/// `skip:` section by feature name (design § Part 2, "ironhorse skip list").
+///
+/// This is deliberately the coarse, well-known not-landed surface, not an
+/// exhaustive enumeration of every unimplemented feature: the honest split
+/// still names everything else at the exact unsupported opcode when a run
+/// reaches it (`skip-detail:`), so an under-inclusive list only moves a skip
+/// from `feature:` to `unsupported-opcode:`, never hides it. Trimmed as the
+/// stage ladder lands each surface; `--features-include <feature>` opts a
+/// set back in (e.g. `ses-xs-parity` once stage-4 lockdown/Compartment
+/// lands), matching the npm `test262-harness` idiom the repo drives `xst`
+/// with.
+pub const DEFAULT_ENDOR_SKIP_FEATURES: &[&str] = &[
+    // xst `gxFeatures` analogues — surfaces ironhorse does not implement.
+    "Temporal",
+    "ShadowRealm",
+    "decorators",
+    "Atomics",
+    "SharedArrayBuffer",
+    "tail-call-optimization",
+    "IsHTMLDDA",
+    // The guest Hardened-JavaScript surface ironhorse does not yet expose as a
+    // guest-callable intrinsic: `lockdown()` (a named scope fold in
+    // `ironhorse-vm::interp::create_hardened_globals`) and the `Compartment`
+    // constructor (a named scope fold in `ironhorse-vm::compartment`, modeled as
+    // a host-side Rust realm API, not a guest intrinsic). ironhorse DOES land the
+    // guest `harden`/`petrify` globals, so those are never skipped. This is
+    // the direct `xst262.c` `gxFeatures` analogue — a feature the *engine*
+    // does not implement — and is trimmed as the guest surface lands. A
+    // `ses-xs-parity` test that needs either self-names `feature:Compartment`
+    // / `feature:lockdown` here rather than a generic run-time abort.
+    "lockdown",
+    "Compartment",
+    // Hardened-JavaScript / SES parity opt-in set: needs the stage-4
+    // lockdown/Compartment surface, not yet landed. Opt in explicitly with
+    // `--features-include ses-xs-parity` once it does.
+    "ses-xs-parity",
+];
+
+/// The SES lockdown/compartment mode — ironhorse-xst's analogue of `xst262.c`'s
+/// `-l` / `-lc` / `-c` (design § Part 2, the lockdown/compartment row). It
+/// selects the Hardened-JavaScript setup applied to every case before it
+/// runs, exactly as `xst` calls `lockdown()` and/or evaluates the body in a
+/// `Compartment`. This is the engine-side entry point of the "ironhorse as a
+/// third `packages/test262-runner` host alongside `xst` and `node`" the
+/// engine design promises: the `ses-xs-parity` axis runs `xst -l`, `node`
+/// with the SES prelude, and `ironhorse-xst -l`.
+///
+/// Because the guest surface these modes need (`lockdown()`, the
+/// `Compartment` intrinsic) is a named scope fold ironhorse does not yet expose
+/// (only the host-side realm API + the guest `harden`/`petrify` globals are
+/// landed), a case run under a mode other than [`SesMode::None`] is a
+/// whole-case *named* pre-skip ([`SesMode::unimplemented_skip`]) rather than
+/// a generic abort or a false failure — the honest split, parallel to the
+/// `onlyStrict` strict-mode skip. When the guest `lockdown`/`Compartment`
+/// surface lands, `unimplemented_skip` returns `None` and the mode's prelude
+/// ([`SesMode::prelude`]) is applied to the assembled source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SesMode {
+    /// No lockdown/compartment setup (the default; `xst` with no `-l`/`-c`).
+    #[default]
+    None,
+    /// `-l`: `lockdown()` before the case (freeze the shared intrinsics).
+    Lockdown,
+    /// `-c`: evaluate the case body in a fresh `Compartment`.
+    Compartment,
+    /// `-lc`: `lockdown()`, then evaluate the body in a `Compartment`.
+    LockdownCompartment,
+}
+
+impl SesMode {
+    /// Parse the `xst`-shaped mode token (`l` / `lc` / `c`), as it appears
+    /// after the `-` on the CLI or as the `--ses-mode` value.
+    pub fn parse(token: &str) -> Option<SesMode> {
+        match token {
+            "l" => Some(SesMode::Lockdown),
+            "c" => Some(SesMode::Compartment),
+            "lc" | "cl" => Some(SesMode::LockdownCompartment),
+            _ => None,
+        }
+    }
+
+    /// The short `xst` name of the mode (`l` / `lc` / `c`), for the report's
+    /// `mode:` section; `none` for [`SesMode::None`].
+    pub fn short(self) -> &'static str {
+        match self {
+            SesMode::None => "none",
+            SesMode::Lockdown => "l",
+            SesMode::Compartment => "c",
+            SesMode::LockdownCompartment => "lc",
+        }
+    }
+
+    /// The Hardened-JavaScript prelude/wrap the mode applies to the assembled
+    /// case — `xst`'s `lockdown()` call and/or `Compartment` evaluation. This
+    /// is the shape that runs *once the guest surface lands*; today
+    /// [`Self::unimplemented_skip`] short-circuits before it is reached, so it
+    /// is the documented target, exercised by a unit test but not yet on the
+    /// live run path. `{body}` is where the assembled source is spliced.
+    pub fn prelude(self) -> &'static str {
+        match self {
+            SesMode::None => "{body}",
+            SesMode::Lockdown => "lockdown();\n{body}",
+            // The compartment wrap evaluates the assembled body in a fresh
+            // compartment over the (optionally locked-down) shared intrinsics
+            // — `new Compartment().evaluate(<body>)` in `xst`. ironhorse splices
+            // the body directly (not as a string) since the guest evaluator
+            // is what lands; until then this is unreached.
+            SesMode::Compartment => "new Compartment().evaluate(function(){\n{body}\n});",
+            SesMode::LockdownCompartment => {
+                "lockdown();\nnew Compartment().evaluate(function(){\n{body}\n});"
+            }
+        }
+    }
+
+    /// The honest named skip a mode incurs while its guest surface is a scope
+    /// fold, or `None` once ironhorse exposes the guest `lockdown`/`Compartment`
+    /// surface. This is the single seam that flips these modes from
+    /// whole-case named skips to real runs when the surface lands — remove a
+    /// match arm (and the matching entry in [`DEFAULT_ENDOR_SKIP_FEATURES`])
+    /// as each guest builtin is implemented.
+    pub fn unimplemented_skip(self) -> Option<&'static str> {
+        match self {
+            SesMode::None => None,
+            SesMode::Lockdown => Some("ses-mode:lockdown-unimplemented"),
+            SesMode::Compartment => Some("ses-mode:compartment-unimplemented"),
+            SesMode::LockdownCompartment => Some("ses-mode:lockdown-compartment-unimplemented"),
+        }
+    }
+}
+
+/// Runner configuration, derived from the CLI (design § Part 2, "dual-run
+/// oracle wiring").
+#[derive(Debug, Clone)]
+pub struct Config {
+    /// `--oracle` (default on) / `--no-oracle`: gate on verdict + observable
+    /// agreement with the XS oracle. With it off, ironhorse's own verdict
+    /// stands and an oracle disagreement cannot fail the build (it is
+    /// demoted to a named skip).
+    pub oracle: bool,
+    /// `--gate-meter-exact`: tighten `ironhorse-meter-exact`-tagged cases to the
+    /// historical bit-exact computron bar (a divergence fails). Off, the
+    /// computron comparison is advisory only.
+    pub gate_meter_exact: bool,
+    /// `--repeat N`: re-run ironhorse N times and require identical computrons
+    /// across runs — the unconditional determinism gate. Default 1 (no
+    /// extra runs).
+    pub repeat: u32,
+    /// `--features-include <feature>`: features to remove from the skip set
+    /// (opt them into the run).
+    pub features_include: Vec<String>,
+    /// `-l` / `-lc` / `-c` / `--ses-mode <l|lc|c>`: the SES lockdown/
+    /// compartment mode applied to every case (the third-host `ses-xs-parity`
+    /// axis runs `-l`). Default [`SesMode::None`].
+    pub ses_mode: SesMode,
+    /// `--feature-filter <feature>`: run **only** cases whose frontmatter
+    /// `features:` lists this (the `test262-harness --features-include`
+    /// semantics the repo drives `xst`/`node` with — distinct from
+    /// ironhorse-xst's skip-list `--features-include`). Empty = no filter. Used
+    /// to restrict a whole-tree walk to the `ses-xs-parity` axis.
+    pub feature_filter: Vec<String>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            oracle: true,
+            gate_meter_exact: false,
+            repeat: 1,
+            features_include: Vec::new(),
+            ses_mode: SesMode::None,
+            feature_filter: Vec::new(),
+        }
+    }
+}
+
+/// One case's verdict — the section of the xst-shaped report it lands in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verdict {
+    /// Ran end-to-end and met the bar (positive: observable agreement with
+    /// the oracle; negative: the expected-type abort). The report's covered
+    /// tally.
+    Covered,
+    /// Skipped before running — a declared-unimplemented feature, a
+    /// structural shape (`module`/`async`), or an `onlyStrict` test whose
+    /// sole mode is the not-yet-implemented strict mode. The report's
+    /// `skip:` section (xst's feature/flag skips).
+    PreSkip(String),
+    /// Skipped after attempting the run, named by the exact opcode / value /
+    /// structural reason that stopped it — the honest split the port's
+    /// progress instrument. The report's `skip-detail:` section (an ironhorse
+    /// extension over `xst`).
+    RunSkip(String),
+    /// A real failure the bar forbids: a divergence from the oracle verdict
+    /// or observable, an over-acceptance, a gated meter-exact violation, or
+    /// a determinism failure. The report's `fail:` section.
+    Fail(String),
+}
+
+/// The outcome of running one case through the mode/verdict machinery.
+#[derive(Debug, Clone)]
+pub struct CaseResult {
+    pub verdict: Verdict,
+    /// A strict-mode run existed for this case but was named-skipped
+    /// (strict lands with the stage-5 compiler). Feeds the report's `mode:`
+    /// strict tally.
+    pub strict_skipped: bool,
+    /// The case was covered but ironhorse's computrons differed from the
+    /// oracle's — advisory telemetry, never a failure by itself (design §
+    /// Metering, accuracy-over-parity). Feeds the `advisory:` section.
+    pub computron_gap: bool,
+}
+
+fn preskip(reason: &str) -> CaseResult {
+    CaseResult {
+        verdict: Verdict::PreSkip(reason.to_string()),
+        strict_skipped: false,
+        computron_gap: false,
+    }
+}
+
+/// The effective feature skip set: the default not-implemented list minus
+/// anything `--features-include` opted back in.
+fn effective_skip_features(cfg: &Config) -> HashSet<String> {
+    let opted: HashSet<&str> = cfg.features_include.iter().map(|s| s.as_str()).collect();
+    DEFAULT_ENDOR_SKIP_FEATURES
+        .iter()
+        .filter(|f| !opted.contains(**f))
+        .map(|f| f.to_string())
+        .collect()
+}
+
+/// Strict-mode selection from a case's `flags` — ironhorse's mirror of
+/// `xst262.c`'s default two-run (sloppy then strict) with the `onlyStrict` /
+/// `noStrict` / `raw` selectors. Returns `(run_sloppy, has_strict,
+/// only_strict)`. `module` is handled as a structural pre-skip before this
+/// is consulted.
+pub fn strict_mode_status(flags: &[String]) -> (bool, bool, bool) {
+    let has = |name: &str| flags.iter().any(|f| f == name);
+    if has("onlyStrict") {
+        return (false, true, true);
+    }
+    // `raw` runs the body verbatim (no harness, no "use strict" prologue);
+    // `noStrict` selects the single sloppy run.
+    if has("noStrict") || has("raw") {
+        return (true, false, false);
+    }
+    // The test262 default: two runs, sloppy then strict.
+    (true, true, false)
+}
+
+/// The constructor name carried by a stringified thrown value —
+/// `String(new TypeError("m"))` is `"TypeError: m"`, so the constructor is
+/// the text before the first `:`; a bare `"RangeError"` (empty message) is
+/// itself. This is the same shape `xst262.c`'s verdict compares against
+/// `negative.type`.
+pub fn constructor_name(err: &str) -> &str {
+    match err.find(':') {
+        Some(i) => err[..i].trim(),
+        None => err.trim(),
+    }
+}
+
+fn looks_like_overflow(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    e.contains("stack") || e.contains("overflow") || e.contains("memory") || e.contains("allocat")
+}
+
+fn ironhorse_completed(a: Agreement) -> bool {
+    matches!(a, Agreement::BothComplete | Agreement::IronhorseOnlyComplete)
+}
+
+fn oracle_completed(a: Agreement) -> bool {
+    matches!(a, Agreement::BothComplete | Agreement::OracleOnlyComplete)
+}
+
+/// Does the oracle's run satisfy an expected runtime negative of type `ty`?
+/// The oracle must have aborted with a thrown value whose constructor name
+/// is `ty`, or — for an expected `RangeError` — exited on a memory/stack
+/// abort (`xst262.c` accepts a machine memory/stack exit for a `RangeError`).
+pub fn oracle_negative_ok(ty: &str, run: &DualRun) -> bool {
+    if oracle_completed(run.agreement) {
+        return false;
+    }
+    if constructor_name(&run.oracle_error) == ty {
+        return true;
+    }
+    ty == "RangeError" && (run.oracle_error.is_empty() || looks_like_overflow(&run.oracle_error))
+}
+
+/// Does ironhorse's run satisfy an expected runtime negative of type `ty`? A
+/// JS-level `Throw` whose constructor name is `ty`, or — for an expected
+/// `RangeError` — ironhorse's fixed-geometry stack overflow or meter abort,
+/// which map to XS's memory/stack-exit acceptance (design § Part 2,
+/// "Negative verdict").
+pub fn ironhorse_negative_ok(ty: &str, run: &DualRun) -> bool {
+    match &run.ironhorse_halt {
+        Halt::Throw(s) => constructor_name(s) == ty,
+        Halt::StackOverflow(_) | Halt::MeterAbort => ty == "RangeError",
+        _ => false,
+    }
+}
+
+/// Assemble the sloppy source both engines run — the standard test262 order
+/// (`sta.js`, `assert.js`, each `includes:` file, the body), or the body
+/// verbatim for a `raw` test. Structural shapes the differential cannot
+/// model (`module`, `async`) are handled by the caller before this; a
+/// missing harness file is a named structural skip.
+fn assemble(harness_dir: &Path, src: &str, fm: &Frontmatter) -> Result<String, String> {
+    if fm.flags.iter().any(|f| f == "raw") {
+        return Ok(src.to_string());
+    }
+    let read = |name: &str| -> Result<String, String> {
+        std::fs::read_to_string(harness_dir.join(name))
+            .map_err(|e| format!("structural:missing-harness:{}:{}", name, e))
+    };
+    let mut out = String::new();
+    out.push_str(&read("sta.js")?);
+    out.push('\n');
+    out.push_str(&read("assert.js")?);
+    out.push('\n');
+    for inc in &fm.includes {
+        out.push_str(&read(inc)?);
+        out.push('\n');
+    }
+    out.push_str(src);
+    Ok(out)
+}
+
+struct Eval {
+    outcome: Verdict,
+    ironhorse_computrons: u64,
+    computron_gap: bool,
+}
+
+/// Compute one case's verdict from a dual-run record already in hand and its
+/// frontmatter (the negative/positive split). Shared by the synchronous
+/// [`evaluate`] path and the async path ([`run_async_case`]), which supplies
+/// its own dual-run so it can additionally read the completion latch.
+fn verdict_for(cfg: &Config, run: &DualRun, fm: &Frontmatter, meter_exact_gate: bool) -> Verdict {
+    match &fm.negative {
+        Some(neg) => evaluate_negative(cfg, run, neg),
+        None => evaluate_positive(cfg, run, meter_exact_gate),
+    }
+}
+
+/// Evaluate one assembled sloppy source against the oracle differential.
+fn evaluate(cfg: &Config, source: &str, fm: &Frontmatter, meter_exact_gate: bool) -> Eval {
+    let run = match dual_run(source) {
+        Some(r) => r,
+        None => {
+            return Eval {
+                outcome: Verdict::RunSkip("oracle-machine-error".into()),
+                ironhorse_computrons: 0,
+                computron_gap: false,
+            }
+        }
+    };
+    let outcome = verdict_for(cfg, &run, fm, meter_exact_gate);
+    // The computron comparison is advisory (accuracy-over-parity): a covered
+    // case whose computrons drift from the oracle's is telemetry, folded
+    // into the report's `advisory:` section, never a failure on its own.
+    let computron_gap =
+        matches!(outcome, Verdict::Covered) && run.oracle_computrons != run.ironhorse_computrons;
+    Eval {
+        outcome,
+        ironhorse_computrons: run.ironhorse_computrons,
+        computron_gap,
+    }
+}
+
+fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Verdict {
+    // Structural ironhorse stops name themselves — the honest skip.
+    match &run.ironhorse_halt {
+        Halt::Unsupported(op) => return Verdict::RunSkip(format!("unsupported-opcode:{}", op)),
+        Halt::Decode(_) => return Verdict::RunSkip("parse-or-decode".into()),
+        _ => {}
+    }
+    let meter_violation = |run: &DualRun| -> Verdict {
+        Verdict::Fail(format!(
+            "meter-exact violation: oracle={} ironhorse={} computrons",
+            run.oracle_computrons, run.ironhorse_computrons
+        ))
+    };
+    match run.agreement {
+        Agreement::BothComplete => {
+            if run.result_agrees {
+                // Observable agreement (gating) met. Computron is advisory,
+                // unless a meter-exact gate is armed for this case.
+                if meter_exact_gate && run.oracle_computrons != run.ironhorse_computrons {
+                    meter_violation(run)
+                } else {
+                    Verdict::Covered
+                }
+            } else if run.ironhorse_result == "[object Object]" {
+                // A non-primitive completion ironhorse renders as its Reference
+                // stub where the oracle's `String()` differs — a built-in
+                // coercion gap, honestly named, not a covered-grammar error.
+                Verdict::RunSkip("non-primitive-completion".into())
+            } else {
+                Verdict::Fail(format!(
+                    "result divergence: oracle={:?} ironhorse={:?}",
+                    run.oracle_result, run.ironhorse_result
+                ))
+            }
+        }
+        Agreement::BothAbort => match &run.ironhorse_halt {
+            Halt::Throw(_) => {
+                if run.error_agrees {
+                    if meter_exact_gate && run.oracle_computrons != run.ironhorse_computrons {
+                        meter_violation(run)
+                    } else {
+                        Verdict::Covered
+                    }
+                } else {
+                    // Both aborted but ironhorse threw a different value — the
+                    // oracle's real Error object ironhorse does not construct, a
+                    // built-in gap, not a covered-grammar divergence.
+                    Verdict::RunSkip("abort-value-differs".into())
+                }
+            }
+            // ironhorse aborted for a limit reason (stack/meter) the oracle
+            // cannot share: an ironhorse limitation, not a semantic lie.
+            _ => Verdict::RunSkip("ironhorse-aborted-limit".into()),
+        },
+        // ironhorse completed a source the oracle rejected — the over-acceptance
+        // the differential exists to catch (gating under `--oracle`).
+        Agreement::IronhorseOnlyComplete => {
+            if cfg.oracle {
+                Verdict::Fail(
+                    "over-acceptance: ironhorse completed a source the oracle rejected".into(),
+                )
+            } else {
+                Verdict::RunSkip("oracle-gate-off:ironhorse-only-complete".into())
+            }
+        }
+        // ironhorse aborted where the oracle completed — an ironhorse limitation.
+        Agreement::OracleOnlyComplete => Verdict::RunSkip("ironhorse-aborted".into()),
+    }
+}
+
+fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
+    // Parse/resolution-phase negatives need ironhorse's own compiler to mirror
+    // the reject; pre-stage-5 the oracle compiles, so they are named skips
+    // until `ironhorse-compile` lands (design § Part 2).
+    if neg.phase == "parse" || neg.phase == "resolution" {
+        return Verdict::RunSkip(format!("negative-{}:pending-compiler", neg.phase));
+    }
+    // A runtime negative ironhorse never reached (an unsupported opcode / decode
+    // stop) is an honest opcode skip, not a verdict.
+    match &run.ironhorse_halt {
+        Halt::Unsupported(op) => return Verdict::RunSkip(format!("unsupported-opcode:{}", op)),
+        Halt::Decode(_) => return Verdict::RunSkip("parse-or-decode".into()),
+        _ => {}
+    }
+    let oracle_ok = oracle_negative_ok(&neg.ty, run);
+    let ironhorse_ok = ironhorse_negative_ok(&neg.ty, run);
+    if ironhorse_completed(run.agreement) {
+        // ironhorse did not abort where a throw was expected.
+        if cfg.oracle && oracle_ok {
+            Verdict::Fail(format!(
+                "negative over-acceptance: ironhorse completed; expected a {} throw",
+                neg.ty
+            ))
+        } else {
+            Verdict::RunSkip("negative-oracle-unexpected".into())
+        }
+    } else if ironhorse_ok && (!cfg.oracle || oracle_ok) {
+        Verdict::Covered
+    } else if ironhorse_ok {
+        // ironhorse got the expected type but the oracle did not — an
+        // oracle-side surprise, not an ironhorse failure.
+        Verdict::RunSkip("negative-oracle-unexpected".into())
+    } else {
+        // ironhorse aborted with a value not of the expected type — its Error
+        // surface is incomplete here, honestly named.
+        Verdict::RunSkip(format!("negative-type-unmatched:{}", neg.ty))
+    }
+}
+
+/// Re-run ironhorse `repeat` times and report whether its computrons ever differ
+/// from `baseline` — the unconditional determinism gate (design § Part 2:
+/// identical computrons per build). The oracle is deterministic too, so a
+/// plain re-`dual_run` isolates any ironhorse nondeterminism.
+fn determinism_violation(source: &str, repeat: u32, baseline: u64) -> bool {
+    for _ in 1..repeat {
+        match dual_run(source) {
+            Some(r) if r.ironhorse_computrons != baseline => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// The name of the global the async prelude records the `$DONE` completion
+/// into, read back off ironhorse after the job drain
+/// ([`crate::AsyncDualRun::ironhorse_signal`]). Assigned as an *implicit* sloppy
+/// global (no `var`) so it is a pure global-object property on both engines,
+/// never a frame local that closure-cell aliasing could shadow.
+const ASYNC_SIGNAL_NAME: &str = "__endorAsyncSignal";
+
+/// The pure-JS async harness prelude, prepended to an `async`-flagged case
+/// (design § Part 2, the async row: "`$DONE` host function + did-not-run
+/// latch"). Because the oracle compiles the assembled source and ironhorse runs
+/// that exact bytecode, `$DONE`/`print` are defined **once, in JS** — so the
+/// two engines run byte-identically (no host-function metering to calibrate)
+/// and the completion is observed by reading [`ASYNC_SIGNAL_NAME`] off ironhorse
+/// after the drain, gated by the dual-run's computron agreement.
+///
+/// `$DONE` mirrors `doneprintHandle.js`'s classification exactly; a test that
+/// lists `doneprintHandle.js` in its `includes:` simply redeclares `$DONE`
+/// (a hoisted function) to route through `print`, which this prelude also
+/// defines to write the same sentinel — so either path records the same
+/// `Test262:AsyncTest{Complete,Failure:…}` marker string.
+const ASYNC_PRELUDE: &str = r#"function $DONE(error) {
+  if (error) {
+    if (typeof error === 'object' && error !== null && 'name' in error) {
+      __endorAsyncSignal = 'Test262:AsyncTestFailure:' + error.name + ': ' + error.message;
+    } else {
+      __endorAsyncSignal = 'Test262:AsyncTestFailure:Test262Error: ' + error;
+    }
+  } else {
+    __endorAsyncSignal = 'Test262:AsyncTestComplete';
+  }
+}
+function print(msg) { __endorAsyncSignal = '' + msg; }
+"#;
+
+/// Run one case (source text) through the full mode/verdict machinery.
+pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
+    let fm = frontmatter::parse(src);
+
+    // Feature pre-skip: a declared feature ironhorse does not implement.
+    let skip_set = effective_skip_features(cfg);
+    if let Some(f) = fm.features.iter().find(|f| skip_set.contains(f.as_str())) {
+        return preskip(&format!("feature:{}", f));
+    }
+
+    // Structural pre-skips: shapes the differential cannot model yet.
+    if fm.flags.iter().any(|f| f == "module") {
+        return preskip("structural:module");
+    }
+    // `CanBlockIsFalse` marks the `$262.agent`/Atomics blocking-agent tests,
+    // which need a threading story ironhorse does not have — a named structural
+    // skip. (`async` no longer rides this pre-skip; it runs below.)
+    if fm.flags.iter().any(|f| f == "CanBlockIsFalse") {
+        return preskip("structural:can-block");
+    }
+
+    let (_run_sloppy, has_strict, only_strict) = strict_mode_status(&fm.flags);
+
+    // An `onlyStrict` test's sole mode is the not-yet-implemented strict
+    // mode — the whole test is a named strict skip.
+    if only_strict {
+        return CaseResult {
+            verdict: Verdict::PreSkip("onlyStrict:strict-mode-unimplemented".into()),
+            strict_skipped: true,
+            computron_gap: false,
+        };
+    }
+
+    // SES lockdown/compartment mode (`-l`/`-lc`/`-c`): the mode's guest
+    // surface (`lockdown()`, the `Compartment` intrinsic) is a named scope
+    // fold ironhorse does not yet expose, so a case run under any mode is a
+    // whole-case named pre-skip — the honest split, parallel to the
+    // `onlyStrict` strict skip. When the guest surface lands, this seam
+    // ([`SesMode::unimplemented_skip`]) returns `None` and the mode's
+    // [`SesMode::prelude`] is applied to the assembled source instead.
+    if let Some(reason) = cfg.ses_mode.unimplemented_skip() {
+        return CaseResult {
+            verdict: Verdict::PreSkip(reason.into()),
+            strict_skipped: has_strict,
+            computron_gap: false,
+        };
+    }
+
+    let meter_exact_gate =
+        cfg.gate_meter_exact && fm.features.iter().any(|f| f == "ironhorse-meter-exact");
+
+    // `async`-flagged case: assemble with the `$DONE` prelude, run the dual-run
+    // (both engines drain the promise job queue — the fxRunLoop-equivalent —
+    // per case), and layer the async completion verdict on the differential.
+    if fm.flags.iter().any(|f| f == "async") {
+        return run_async_case(cfg, harness_dir, src, &fm, has_strict, meter_exact_gate);
+    }
+
+    let source = match assemble(harness_dir, src, &fm) {
+        Ok(s) => s,
+        Err(reason) => {
+            return CaseResult {
+                verdict: Verdict::PreSkip(reason),
+                strict_skipped: has_strict,
+                computron_gap: false,
+            }
+        }
+    };
+
+    let eval = evaluate(cfg, &source, &fm, meter_exact_gate);
+
+    // The determinism gate (unconditional half of the doctrine) overrides a
+    // covered/skip verdict with a failure if ironhorse's computrons are not
+    // reproducible across runs of this same build.
+    let verdict =
+        if cfg.repeat > 1 && determinism_violation(&source, cfg.repeat, eval.ironhorse_computrons) {
+            Verdict::Fail(format!(
+                "nondeterministic computrons across {} runs",
+                cfg.repeat
+            ))
+        } else {
+            eval.outcome
+        };
+
+    CaseResult {
+        verdict,
+        strict_skipped: has_strict,
+        computron_gap: eval.computron_gap,
+    }
+}
+
+/// Run one `async`-flagged case: prepend the [`ASYNC_PRELUDE`] to the standard
+/// assembly, dual-run it (each engine drains its own promise job queue), and
+/// resolve the verdict as the base differential verdict *refined* by ironhorse's
+/// `$DONE` completion latch. The refinement only ever *narrows* a `Covered`
+/// base to an honest skip — never manufactures a failure — so ironhorse cannot lie
+/// about an async case (a genuine ironhorse divergence is already caught by the
+/// completion/computron differential in [`verdict_for`]).
+fn run_async_case(
+    cfg: &Config,
+    harness_dir: &Path,
+    src: &str,
+    fm: &Frontmatter,
+    has_strict: bool,
+    meter_exact_gate: bool,
+) -> CaseResult {
+    let assembled = match assemble(harness_dir, src, fm) {
+        Ok(s) => s,
+        Err(reason) => {
+            return CaseResult {
+                verdict: Verdict::PreSkip(reason),
+                strict_skipped: has_strict,
+                computron_gap: false,
+            }
+        }
+    };
+    let source = format!("{ASYNC_PRELUDE}{assembled}");
+
+    let async_run = match dual_run_async(&source, ASYNC_SIGNAL_NAME) {
+        Some(a) => a,
+        None => {
+            return CaseResult {
+                verdict: Verdict::RunSkip("oracle-machine-error".into()),
+                strict_skipped: has_strict,
+                computron_gap: false,
+            }
+        }
+    };
+
+    let base = verdict_for(cfg, &async_run.run, fm, meter_exact_gate);
+    let computron_gap =
+        matches!(base, Verdict::Covered) && async_run.run.oracle_computrons != async_run.run.ironhorse_computrons;
+
+    // A `Covered` differential means ironhorse reproduced the oracle's full
+    // execution (script + microtask drain) — only then is the async completion
+    // latch meaningful; a divergence keeps its base Fail/skip.
+    let outcome = match base {
+        Verdict::Covered => refine_async(&async_run),
+        other => other,
+    };
+
+    // The determinism gate runs over the same prelude-bearing source.
+    let verdict = if cfg.repeat > 1
+        && determinism_violation(&source, cfg.repeat, async_run.run.ironhorse_computrons)
+    {
+        Verdict::Fail(format!(
+            "nondeterministic computrons across {} runs",
+            cfg.repeat
+        ))
+    } else {
+        outcome
+    };
+
+    CaseResult {
+        verdict,
+        strict_skipped: has_strict,
+        computron_gap,
+    }
+}
+
+/// Refine a differentially-`Covered` async case by its `$DONE` completion
+/// latch (the did-not-run / success / failure trichotomy `xst262.c` computes
+/// after `fxRunLoop`), plus the unhandled-rejection latch. Only the clean
+/// success path counts as covered; every other shape is an honest named skip —
+/// never a `Fail`, because on a `Covered` base the oracle *agreed* with ironhorse,
+/// so a non-success signal reflects the shared execution (an oracle-side
+/// failure or a test that never signaled), not an ironhorse defect.
+fn refine_async(async_run: &AsyncDualRun) -> Verdict {
+    if async_run.ironhorse_unhandled_rejection {
+        return Verdict::RunSkip("async:unhandled-rejection".into());
+    }
+    match async_run.ironhorse_signal.as_deref() {
+        Some("Test262:AsyncTestComplete") => Verdict::Covered,
+        Some(s) if s.starts_with("Test262:AsyncTestFailure") => {
+            Verdict::RunSkip("async:reported-failure".into())
+        }
+        // A signal that is neither the success marker nor a known failure
+        // marker: some other `print` output — honestly named, not covered.
+        Some(_) => Verdict::RunSkip("async:unexpected-signal".into()),
+        // The did-not-run latch: `$DONE` was never called (nor `print`), so the
+        // async test never signaled completion on the shared execution.
+        None => Verdict::RunSkip("async:no-completion-signal".into()),
+    }
+}
+
+/// The xst-shaped report over a set of cases: `mode:` / `skip:` / `fail:`
+/// plus the ironhorse `advisory:` and `skip-detail:` extensions (design § Part
+/// 2, "dual-run oracle wiring" + "the honest-split discipline").
+#[derive(Debug, Default, Clone)]
+pub struct XstReport {
+    pub total: usize,
+    /// Cases covered (ran end-to-end, met the bar).
+    pub covered: usize,
+    /// Cases that attempted a sloppy run (covered + run-skips + failures).
+    pub sloppy_run: usize,
+    /// Strict-mode runs named-skipped (mode: section).
+    pub strict_skipped: usize,
+    /// `fail:` — real failures: `(path, detail)`. Must be empty to meet the bar.
+    pub failures: Vec<(String, String)>,
+    /// `skip:` — pre-run feature/flag/structural skips → count.
+    pub pre_skips: BTreeMap<String, usize>,
+    /// `skip-detail:` — post-run honest named skips → count.
+    pub run_skips: BTreeMap<String, usize>,
+    /// `advisory:` — covered cases whose computrons drifted from the oracle.
+    pub computron_advisories: usize,
+    /// The SES lockdown/compartment mode this run applied (`-l`/`-lc`/`-c`),
+    /// surfaced in the report's `mode:` section so a reader sees which
+    /// Hardened-JavaScript axis produced it. [`SesMode::None`] for a plain run.
+    pub ses_mode: SesMode,
+}
+
+impl XstReport {
+    /// The bar: a nonzero total with zero failures (design's honest-split
+    /// discipline — zero divergence on whatever the covered grammar reaches).
+    pub fn met_bar(&self) -> bool {
+        self.total > 0 && self.failures.is_empty()
+    }
+
+    /// Fold one case's result in, attributed to `path`.
+    pub fn record(&mut self, path: &str, r: CaseResult) {
+        self.total += 1;
+        if r.strict_skipped {
+            self.strict_skipped += 1;
+        }
+        if r.computron_gap {
+            self.computron_advisories += 1;
+        }
+        match r.verdict {
+            Verdict::Covered => {
+                self.covered += 1;
+                self.sloppy_run += 1;
+            }
+            Verdict::RunSkip(reason) => {
+                *self.run_skips.entry(reason).or_insert(0) += 1;
+                self.sloppy_run += 1;
+            }
+            Verdict::PreSkip(reason) => {
+                *self.pre_skips.entry(reason).or_insert(0) += 1;
+            }
+            Verdict::Fail(detail) => {
+                self.failures.push((path.to_string(), detail));
+                self.sloppy_run += 1;
+            }
+        }
+    }
+
+    fn sorted(map: &BTreeMap<String, usize>) -> Vec<(String, usize)> {
+        let mut v: Vec<_> = map.iter().map(|(k, n)| (k.clone(), *n)).collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        v
+    }
+
+    /// The pre-run feature/flag skips, most-skipped first.
+    pub fn skip_summary(&self) -> Vec<(String, usize)> {
+        Self::sorted(&self.pre_skips)
+    }
+
+    /// The post-run honest named skips, most-skipped first.
+    pub fn skip_detail_summary(&self) -> Vec<(String, usize)> {
+        Self::sorted(&self.run_skips)
+    }
+
+    /// The xst-shaped YAML report — `mode:` / `skip:` / `fail:` plus the
+    /// ironhorse `advisory:` and `skip-detail:` sections. Tooling that reads an
+    /// `xst` `-o` report reads this unchanged; the two ironhorse sections are
+    /// additive.
+    pub fn to_yaml(&self) -> String {
+        let mut s = String::new();
+        s.push_str("runner: ironhorse-xst\n");
+        s.push_str(&format!("total: {}\n", self.total));
+        s.push_str(&format!("covered: {}\n", self.covered));
+        s.push_str(&format!("bar-met: {}\n", self.met_bar()));
+        s.push_str("mode:\n");
+        s.push_str(&format!("  sloppy-run: {}\n", self.sloppy_run));
+        s.push_str(&format!(
+            "  strict-skipped-unimplemented: {}\n",
+            self.strict_skipped
+        ));
+        s.push_str(&format!("  ses-mode: {}\n", self.ses_mode.short()));
+        s.push_str("fail:\n");
+        for (path, detail) in &self.failures {
+            s.push_str(&format!("  - path: {}\n", yaml_quote(path)));
+            s.push_str(&format!("    detail: {}\n", yaml_quote(detail)));
+        }
+        s.push_str("skip:\n");
+        for (reason, n) in self.skip_summary() {
+            s.push_str(&format!("  {}: {}\n", yaml_quote(&reason), n));
+        }
+        s.push_str("skip-detail:\n");
+        for (reason, n) in self.skip_detail_summary() {
+            s.push_str(&format!("  {}: {}\n", yaml_quote(&reason), n));
+        }
+        s.push_str("advisory:\n");
+        s.push_str(&format!("  computron-gap: {}\n", self.computron_advisories));
+        s
+    }
+}
+
+/// Double-quote a YAML scalar, escaping `\` and `"` so a colon/bracket in a
+/// path or a detail string never breaks the mapping.
+fn yaml_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Run a set of test262 files (absolute paths) against the harness in
+/// `harness_dir`, returning the xst-shaped report. `root` is stripped from
+/// each path for readable failure labels.
+pub fn run_files(cfg: &Config, harness_dir: &Path, root: &Path, files: &[PathBuf]) -> XstReport {
+    let mut rep = XstReport::default();
+    rep.ses_mode = cfg.ses_mode;
+    for path in files {
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned();
+        let src = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => {
+                rep.record(&rel, preskip("unreadable"));
+                continue;
+            }
+        };
+        // `--feature-filter` (the `test262-harness --features-include`
+        // semantics): a case that does not carry a required feature is out of
+        // scope for this run — not recorded, so it never enters `total`.
+        if !cfg.feature_filter.is_empty() {
+            let fm = frontmatter::parse(&src);
+            let carries = cfg
+                .feature_filter
+                .iter()
+                .any(|want| fm.features.iter().any(|f| f == want));
+            if !carries {
+                continue;
+            }
+        }
+        let r = run_case(cfg, harness_dir, &src);
+        rep.record(&rel, r);
+    }
+    rep
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mode_selection_mirrors_xst() {
+        assert_eq!(strict_mode_status(&[]), (true, true, false)); // default: both
+        assert_eq!(
+            strict_mode_status(&["onlyStrict".into()]),
+            (false, true, true)
+        );
+        assert_eq!(
+            strict_mode_status(&["noStrict".into()]),
+            (true, false, false)
+        );
+        assert_eq!(strict_mode_status(&["raw".into()]), (true, false, false));
+    }
+
+    #[test]
+    fn constructor_name_extracts_the_type() {
+        assert_eq!(constructor_name("TypeError: cannot read x"), "TypeError");
+        assert_eq!(constructor_name("RangeError"), "RangeError");
+        assert_eq!(
+            constructor_name("Test262Error: Expected a TypeError"),
+            "Test262Error"
+        );
+    }
+
+    #[test]
+    fn ses_mode_parses_the_xst_tokens() {
+        assert_eq!(SesMode::parse("l"), Some(SesMode::Lockdown));
+        assert_eq!(SesMode::parse("c"), Some(SesMode::Compartment));
+        assert_eq!(SesMode::parse("lc"), Some(SesMode::LockdownCompartment));
+        assert_eq!(SesMode::parse("cl"), Some(SesMode::LockdownCompartment));
+        assert_eq!(SesMode::parse("x"), None);
+        assert_eq!(SesMode::None.short(), "none");
+        assert_eq!(SesMode::Lockdown.short(), "l");
+        assert_eq!(SesMode::LockdownCompartment.short(), "lc");
+    }
+
+    #[test]
+    fn ses_mode_prelude_and_skip_seam() {
+        // The default runs the body verbatim and needs no guest surface.
+        assert_eq!(SesMode::None.prelude(), "{body}");
+        assert_eq!(SesMode::None.unimplemented_skip(), None);
+        // A lockdown mode's prelude calls the guest `lockdown()` — the shape
+        // that runs once the guest surface lands.
+        assert!(SesMode::Lockdown.prelude().starts_with("lockdown();"));
+        assert!(SesMode::Compartment.prelude().contains("Compartment"));
+        // Until it lands, every non-None mode is a distinct named skip.
+        assert_eq!(
+            SesMode::Lockdown.unimplemented_skip(),
+            Some("ses-mode:lockdown-unimplemented")
+        );
+        assert_eq!(
+            SesMode::Compartment.unimplemented_skip(),
+            Some("ses-mode:compartment-unimplemented")
+        );
+        assert_eq!(
+            SesMode::LockdownCompartment.unimplemented_skip(),
+            Some("ses-mode:lockdown-compartment-unimplemented")
+        );
+    }
+
+    #[test]
+    fn ses_mode_makes_a_case_a_named_preskip() {
+        // With a lockdown mode armed, a plain covered-grammar case is a whole-
+        // case named pre-skip (the guest `lockdown()` surface is a scope
+        // fold), never a failure — even though the case itself runs fine with
+        // no mode. The harness dir is irrelevant: the mode short-circuits
+        // before assembly.
+        let mut cfg = Config::default();
+        cfg.ses_mode = SesMode::Lockdown;
+        let r = run_case(&cfg, Path::new("/nonexistent"), "1 + 1;");
+        assert_eq!(
+            r.verdict,
+            Verdict::PreSkip("ses-mode:lockdown-unimplemented".into())
+        );
+    }
+
+    #[test]
+    fn guest_lockdown_and_compartment_are_skip_features() {
+        // The two real `ses-xs-parity` tests in the subset declare
+        // `Compartment` / `lockdown` features; ironhorse lacks the guest surface,
+        // so they are named `feature:*` skips (the `gxFeatures` analogue) even
+        // when `ses-xs-parity` itself is opted in.
+        let mut cfg = Config::default();
+        cfg.features_include = vec!["ses-xs-parity".into()];
+        let skip = effective_skip_features(&cfg);
+        assert!(skip.contains("Compartment"));
+        assert!(skip.contains("lockdown"));
+        assert!(!skip.contains("ses-xs-parity"));
+    }
+
+    #[test]
+    fn report_yaml_carries_the_ses_mode() {
+        let mut rep = XstReport::default();
+        rep.ses_mode = SesMode::Lockdown;
+        assert!(rep.to_yaml().contains("ses-mode: l"));
+        let plain = XstReport::default();
+        assert!(plain.to_yaml().contains("ses-mode: none"));
+    }
+
+    #[test]
+    fn features_include_opts_a_feature_back_in() {
+        let mut cfg = Config::default();
+        assert!(effective_skip_features(&cfg).contains("ses-xs-parity"));
+        cfg.features_include = vec!["ses-xs-parity".into()];
+        assert!(!effective_skip_features(&cfg).contains("ses-xs-parity"));
+        // A never-listed feature is never in the skip set.
+        assert!(!effective_skip_features(&cfg).contains("Symbol"));
+    }
+
+    #[test]
+    fn ironhorse_range_error_accepts_stack_and_meter_aborts() {
+        // A synthetic dual-run with ironhorse stack overflow: an expected
+        // RangeError negative is satisfied on ironhorse's side.
+        let run = synthetic_abort(Halt::StackOverflow(4), "");
+        assert!(ironhorse_negative_ok("RangeError", &run));
+        assert!(!ironhorse_negative_ok("TypeError", &run));
+
+        let meter = synthetic_abort(Halt::MeterAbort, "");
+        assert!(ironhorse_negative_ok("RangeError", &meter));
+
+        let thrown = synthetic_abort(Halt::Throw("TypeError: bad".into()), "TypeError: bad");
+        assert!(ironhorse_negative_ok("TypeError", &thrown));
+        assert!(!ironhorse_negative_ok("RangeError", &thrown));
+    }
+
+    #[test]
+    fn report_yaml_has_the_xst_sections() {
+        let mut rep = XstReport::default();
+        rep.record(
+            "language/a.js",
+            CaseResult {
+                verdict: Verdict::Covered,
+                strict_skipped: true,
+                computron_gap: true,
+            },
+        );
+        rep.record(
+            "language/b.js",
+            CaseResult {
+                verdict: Verdict::RunSkip("unsupported-opcode:XS_CODE_FOO".into()),
+                strict_skipped: true,
+                computron_gap: false,
+            },
+        );
+        rep.record(
+            "language/c.js",
+            CaseResult {
+                verdict: Verdict::PreSkip("feature:Temporal".into()),
+                strict_skipped: false,
+                computron_gap: false,
+            },
+        );
+        let y = rep.to_yaml();
+        assert!(y.contains("runner: ironhorse-xst"));
+        assert!(y.contains("mode:"));
+        assert!(y.contains("strict-skipped-unimplemented: 2"));
+        assert!(y.contains("skip:"));
+        assert!(y.contains("skip-detail:"));
+        assert!(y.contains("advisory:"));
+        assert!(y.contains("computron-gap: 1"));
+        assert!(rep.met_bar());
+    }
+
+    #[test]
+    fn covered_grammar_sections_have_zero_failures_through_xst() {
+        // The ironhorse-xst analogue of test262.rs's covered-grammar bar: walk a
+        // bounded, deterministic slice of the covered-grammar sections
+        // through the full mode/verdict/oracle machinery and require ZERO
+        // failures — every case ironhorse runs end-to-end either meets the bar
+        // (covered) or is honestly named-skipped; nothing diverges. The
+        // covered count is reported, not asserted to a target (it grows as
+        // stages land the built-ins). The full-tree walk is the `ironhorse-xst`
+        // binary; this in-`cargo test` slice stays bounded so the oracle RSS
+        // is contained.
+        use crate::test262::{collect_js, locate_test262};
+        let (root, harness) = match locate_test262() {
+            Some(p) => p,
+            None => {
+                eprintln!("test262 subset absent; skipping the ironhorse-xst covered-grammar bar");
+                return;
+            }
+        };
+        let sections = [
+            "language/expressions/addition",
+            "language/expressions/logical-not",
+            "language/statements/throw",
+            "language/statements/if",
+        ];
+        let mut files = Vec::new();
+        for s in sections {
+            files.extend(collect_js(&root.join(s)));
+        }
+        assert!(
+            !files.is_empty(),
+            "covered-grammar sections must have tests"
+        );
+        let cfg = Config::default();
+        let rep = run_files(&cfg, &harness, &root, &files);
+        eprintln!(
+            "ironhorse-xst covered-grammar slice: total={} covered={} failed={} advisory-computron-gap={}",
+            rep.total,
+            rep.covered,
+            rep.failures.len(),
+            rep.computron_advisories,
+        );
+        for (reason, n) in rep.skip_detail_summary() {
+            eprintln!("    {:>5}  {}", n, reason);
+        }
+        for (path, detail) in &rep.failures {
+            eprintln!("  FAIL {}\n    {}", path, detail);
+        }
+        // The report YAML must be well-formed enough to re-parse its own
+        // shape (a smoke check on the emitter).
+        let y = rep.to_yaml();
+        assert!(y.contains("runner: ironhorse-xst") && y.contains("bar-met: true"));
+        assert!(
+            rep.met_bar(),
+            "zero failures required through the xst runner; got {}",
+            rep.failures.len()
+        );
+    }
+
+    /// A `DualRun` in a shared-abort shape for exercising the negative
+    /// verdict helpers without an oracle machine.
+    fn synthetic_abort(ironhorse_halt: Halt, ironhorse_error: &str) -> DualRun {
+        DualRun {
+            source: String::new(),
+            agreement: Agreement::BothAbort,
+            result_agrees: false,
+            oracle_result: String::new(),
+            ironhorse_result: String::new(),
+            computrons_agree: false,
+            oracle_computrons: 0,
+            ironhorse_computrons: 0,
+            error_agrees: false,
+            oracle_error: String::new(),
+            ironhorse_error: ironhorse_error.to_string(),
+            oracle_meter_raw: 0,
+            ironhorse_meter_raw: 0,
+            ironhorse_dispatched: 0,
+            ironhorse_halt,
+            bytecode: Vec::new(),
+        }
+    }
+
+    /// An `AsyncDualRun` wrapping a trivially-agreeing dual-run with a chosen
+    /// completion signal and rejection latch — for the pure `refine_async`
+    /// trichotomy without an oracle machine.
+    fn synthetic_async(signal: Option<&str>, unhandled: bool) -> AsyncDualRun {
+        AsyncDualRun {
+            run: synthetic_abort(Halt::Return, ""),
+            ironhorse_signal: signal.map(|s| s.to_string()),
+            ironhorse_unhandled_rejection: unhandled,
+        }
+    }
+
+    #[test]
+    fn refine_async_only_narrows_covered_to_honest_skips() {
+        // The clean `$DONE()` success is the only covered shape.
+        assert_eq!(
+            refine_async(&synthetic_async(Some("Test262:AsyncTestComplete"), false)),
+            Verdict::Covered
+        );
+        // A reported async failure, an unexpected signal, and the did-not-run
+        // latch each become a NAMED skip — never a `Fail` (on a `Covered` base
+        // the oracle agreed with ironhorse, so a non-success signal is a shared
+        // outcome, not an ironhorse defect).
+        assert!(matches!(
+            refine_async(&synthetic_async(Some("Test262:AsyncTestFailure:X"), false)),
+            Verdict::RunSkip(r) if r == "async:reported-failure"
+        ));
+        assert!(matches!(
+            refine_async(&synthetic_async(Some("something else"), false)),
+            Verdict::RunSkip(r) if r == "async:unexpected-signal"
+        ));
+        assert!(matches!(
+            refine_async(&synthetic_async(None, false)),
+            Verdict::RunSkip(r) if r == "async:no-completion-signal"
+        ));
+        // The unhandled-rejection latch wins even over a would-be success.
+        assert!(matches!(
+            refine_async(&synthetic_async(Some("Test262:AsyncTestComplete"), true)),
+            Verdict::RunSkip(r) if r == "async:unhandled-rejection"
+        ));
+    }
+
+    #[test]
+    fn async_prelude_records_done_through_the_drain() {
+        // The `$DONE` sentinel + job-drain wiring, exercised end-to-end through
+        // the real oracle differential (no test262 tree needed). Each source
+        // prepends the async prelude, dual-runs, and the ironhorse completion latch
+        // is read after the promise pump drains.
+        let done = |body: &str| {
+            let src = format!("{ASYNC_PRELUDE}{body}");
+            dual_run_async(&src, ASYNC_SIGNAL_NAME).expect("oracle machine available")
+        };
+
+        // A synchronous success signals `AsyncTestComplete`.
+        let s = done("$DONE();");
+        assert_eq!(s.ironhorse_signal.as_deref(), Some("Test262:AsyncTestComplete"));
+        assert!(!s.ironhorse_unhandled_rejection);
+
+        // An awaited primitive then `$DONE()` — the resume runs at the drain.
+        let a = done("(async function(){ await 1; $DONE(); })();");
+        assert_eq!(a.run.agreement, Agreement::BothComplete);
+        assert_eq!(a.ironhorse_signal.as_deref(), Some("Test262:AsyncTestComplete"));
+
+        // A resolved-promise reaction feeding `$DONE` — drained the same way.
+        let p = done("Promise.resolve(1).then(function(){ $DONE(); }, $DONE);");
+        assert_eq!(p.ironhorse_signal.as_deref(), Some("Test262:AsyncTestComplete"));
+
+        // Never signals: the did-not-run latch reads `None`.
+        assert_eq!(done("1 + 1;").ironhorse_signal, None);
+
+        // A rejected promise nothing observes trips the unhandled-rejection
+        // latch (mirroring `the->rejection`), and never signals `$DONE`.
+        let r = done("Promise.reject(new Error('x'));");
+        assert!(r.ironhorse_unhandled_rejection);
+        assert_eq!(r.ironhorse_signal, None);
+    }
+
+    #[test]
+    fn async_sections_have_zero_failures_through_xst() {
+        // The async analogue of `covered_grammar_sections_have_zero_failures_
+        // through_xst`: walk a bounded slice of the async surface (which used
+        // to pre-skip wholesale as `structural:async-or-can-block`) through the
+        // full runner and require ZERO failures — every `async` case ironhorse runs
+        // to a real `$DONE` completion is covered, everything else is honestly
+        // named-skipped, nothing diverges. The covered count is reported, not
+        // pinned (it grows as the async surface lands more built-ins).
+        use crate::test262::{collect_js, locate_test262};
+        let (root, harness) = match locate_test262() {
+            Some(p) => p,
+            None => {
+                eprintln!("test262 subset absent; skipping the ironhorse-xst async bar");
+                return;
+            }
+        };
+        // Bounded async directories (whole-tree `built-ins/Promise` is large;
+        // the await + async-function statement sections are a representative,
+        // deterministic slice that stays inside the oracle RSS budget).
+        let sections = [
+            "language/expressions/await",
+            "language/statements/async-function",
+        ];
+        let mut files = Vec::new();
+        for s in sections {
+            files.extend(collect_js(&root.join(s)));
+        }
+        assert!(!files.is_empty(), "async sections must have tests");
+        let cfg = Config::default();
+        let rep = run_files(&cfg, &harness, &root, &files);
+        eprintln!(
+            "ironhorse-xst async slice: total={} covered={} failed={}",
+            rep.total,
+            rep.covered,
+            rep.failures.len(),
+        );
+        for (reason, n) in rep.skip_detail_summary() {
+            eprintln!("    {:>5}  {}", n, reason);
+        }
+        for (path, detail) in &rep.failures {
+            eprintln!("  FAIL {}\n    {}", path, detail);
+        }
+        assert!(
+            rep.covered > 0,
+            "the async surface has landed; expected some covered async cases"
+        );
+        assert!(
+            rep.failures.is_empty(),
+            "zero failures required through the async xst runner; got {}",
+            rep.failures.len()
+        );
+    }
+}

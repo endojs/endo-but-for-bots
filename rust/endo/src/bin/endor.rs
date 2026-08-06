@@ -66,6 +66,8 @@ fn main() -> ExitCode {
         }
         "worker" => match engine {
             "xs" => xsnap_result_to_exit(unsafe { xsnap::run_xs_worker() }),
+            #[cfg(feature = "ironhorse-engine")]
+            "ironhorse" => ironhorse_result_to_exit(endo::ironhorse_engine::engine::run_worker()),
             other => unknown_engine(other),
         },
         "run" => {
@@ -92,6 +94,14 @@ fn main() -> ExitCode {
                         ExitCode::from(2)
                     }
                 }
+                #[cfg(feature = "ironhorse-engine")]
+                "ironhorse" => match path {
+                    Some(ref p) => ironhorse_result_to_exit(endo::ironhorse_engine::engine::run_script(p)),
+                    None => {
+                        eprintln!("usage: endor run -e ironhorse <script.js>");
+                        ExitCode::from(2)
+                    }
+                },
                 other => unknown_engine(other),
             }
         }
@@ -132,6 +142,8 @@ fn print_help() {
     eprintln!("  worker  [-e xs]                Run a supervised worker child");
     eprintln!("  run     [-e xs] <archive.zip>  Run a compartment-map archive");
     eprintln!("  run     <entry.js>             Run an entry module, npm deps via CAS");
+    eprintln!("  run     -e ironhorse <script.js>");
+    eprintln!("                                 Run a script on the Rust engine");
     eprintln!();
     eprintln!("Maintenance:");
     eprintln!("  gc                             Garbage-collect the CAS");
@@ -329,6 +341,22 @@ fn xsnap_result_to_exit(result: Result<(), xsnap::XsnapError>) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("endor: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// Exit mapping for the Ironhorse engine. A halt — including an
+/// unlanded-opcode gap — is a non-zero exit that names itself, so the
+/// engine never reports success for a program it could not run.
+#[cfg(feature = "ironhorse-engine")]
+fn ironhorse_result_to_exit(
+    result: Result<(), endo::ironhorse_engine::engine::MachineError>,
+) -> ExitCode {
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("endor[ironhorse]: {e}");
             ExitCode::from(1)
         }
     }

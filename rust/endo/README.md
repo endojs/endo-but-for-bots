@@ -28,6 +28,25 @@ The first two run from a clean checkout. The third does not yet; see
 `packages/thixotrope/scripts/bundle-xs-worker.mjs` writes a throwing stub
 so the crate still compiles.
 
+All three bundles are gitignored build artifacts, so a fresh checkout
+has none of them and `include_str!` fails until they are generated:
+
+```sh
+node packages/daemon/scripts/bundle-bus-worker-xs.mjs           # worker_bootstrap.js
+node packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.mjs  # ses_boot.js
+node packages/daemon/scripts/bundle-bus-daemon-rust-xs.mjs      # daemon_bootstrap.js
+```
+
+**Known blocker:** the last of those three currently fails.
+`bus-manager-rust-xs.js` transitively imports `manager.js`, which pulls
+in the Node-only `@endo/platform/fs/lite`, `@endo/git` and
+`@endo/host-spawner`; compartment-mapper cannot bundle those for XS.
+Excluding them only moves the failure, since `manager.js` genuinely
+uses them. Generating the manager bundle needs XS-compatible
+implementations of those subpaths — separate work from the engine port.
+Building the XS `c/moddable` submodule also requires
+`git submodule update --init c/moddable`.
+
 The binary lands at `target/release/endor`.
 
 ## Binaries
@@ -66,6 +85,39 @@ endor run     [-e xs] <archive.zip> # standalone archive runner
 XS is the default engine for every child-facing subcommand, so `-e xs`
 is optional and the daemon passes it explicitly only for clarity
 in `ps` output.
+
+### The `ironhorse` engine
+
+The Rust engine port (`rust/engine/`, design
+`designs/ironhorse-engine.md`) is linked into this same binary and
+selected with `-e ironhorse`:
+
+```sh
+endor run -e ironhorse <script.js>   # run a script on the Rust engine
+```
+
+It compiles the source with `ironhorse-compile` and executes the bytecode on
+`ironhorse-vm` over a real compartment, printing the completion value on
+stdout and the engine's computron count on stderr:
+
+```console
+$ endor run -e ironhorse demo.js
+endor[run -e ironhorse]: demo.js
+endor[run -e ironhorse]: 269 computrons (261 dispatched, meter_raw 17680712)
+385
+```
+
+The engine crates come in through the `ironhorse-engine` cargo feature,
+which is **on by default** so one binary carries both engines through
+the parity campaign. `cargo build -p endo --no-default-features` gives
+an XS-only binary, which then reports `-e ironhorse` as an unknown
+engine.
+
+Programs that reach a surface the port has not landed yet halt with a
+**named** gap and a non-zero exit — Ironhorse declines such a program rather
+than returning a wrong answer. `endor worker -e ironhorse` is likewise
+not built yet (it needs the host-function surface and the SES boot
+bundle, roadmap stages 4 and 7) and says so.
 
 The **daemon** is the capability bus: it routes envelopes between its
 children but runs no JavaScript itself. The **manager** is the
