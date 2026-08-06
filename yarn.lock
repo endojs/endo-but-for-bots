@@ -1396,6 +1396,27 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/capn-web@workspace:packages/capn-web":
+  version: 0.0.0-use.local
+  resolution: "@endo/capn-web@workspace:packages/capn-web"
+  dependencies:
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/pass-style": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    capnweb: "npm:^0.6.1"
+    eslint: "catalog:dev"
+    ses: "workspace:^"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/captp@workspace:^, @endo/captp@workspace:packages/captp":
   version: 0.0.0-use.local
   resolution: "@endo/captp@workspace:packages/captp"
@@ -7716,6 +7737,13 @@ __metadata:
   version: 1.0.30001791
   resolution: "caniuse-lite@npm:1.0.30001791"
   checksum: 10c0/53c8b5dad1c196a5e495405a7d2dc1db58aed9be02f60cf2a2e29d2c8d8cbb6c39beabf958d6aa191ab967ddcf49f22319452256b980bad1e271615acfe58940
+  languageName: node
+  linkType: hard
+
+"capnweb@npm:^0.6.1":
+  version: 0.6.1
+  resolution: "capnweb@npm:0.6.1"
+  checksum: 10c0/f7863ef68261f69dc5c8eb57763ae7943e5bbc05ab537139abbd836b8d95b9f0aa8f63e7d3c7ff94af8a6cd0170579a9a8b87ee5adac6e1987d63ca46e5690af
   languageName: node
   linkType: hard
 
