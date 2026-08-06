@@ -35,6 +35,8 @@
  *      - Every literal TypeScript declaration entry target exists in the
  *        package tree, or is derivable by declaration emit from a sibling
  *        source file (all packages, private included)
+ *   4. Every tracked declaration file follows the *.types.d.* naming
+ *      convention or has an explicit negation in the root .gitignore.
  *
  * The skel package is the source of truth and is exempt from the
  * description differs-from-skel check (since skel defines the default
@@ -45,6 +47,7 @@
  * enforcement scripts).
  */
 
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   mkdir,
@@ -145,6 +148,46 @@ const EXCEPTIONS = [
  */
 const isException = (pkg, path, actual) =>
   EXCEPTIONS.includes(`${pkg}:${path}:${actual}`);
+
+const DECLARATION_FILE_RE = /\.d\.(?:ts|mts|cts)$/u;
+const CONVENTIONAL_DECLARATION_FILE_RE = /\.types\.d\.(?:ts|mts|cts)$/u;
+
+/**
+ * Ensure a hand-authored declaration cannot be tracked only through
+ * `git add --force` while remaining subject to the root declaration ignore
+ * rule. Such files can be omitted by npm-packlist, and their publication can
+ * otherwise depend on package-specific `files` rules. The naming convention
+ * or an explicit exception makes the tracking intent visible.
+ */
+const assertTrackedDeclarationFileNames = async () => {
+  const gitignore = await readFile(path.join(repoRoot, '.gitignore'), 'utf8');
+  const explicitlyUnignored = new Set(
+    gitignore
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.startsWith('!'))
+      .map(line => line.slice(1).replace(/^\//u, '')),
+  );
+  const trackedFiles = execFileSync(
+    'git',
+    ['ls-files', '-z', '--', '*.d.ts', '*.d.mts', '*.d.cts'],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    },
+  )
+    .split('\0')
+    .filter(Boolean);
+
+  for (const relPath of trackedFiles) {
+    if (!DECLARATION_FILE_RE.test(relPath)) continue;
+    if (CONVENTIONAL_DECLARATION_FILE_RE.test(relPath)) continue;
+    if (explicitlyUnignored.has(relPath)) continue;
+    fail(
+      `${relPath}: tracked declaration must follow the '*.types.d.{ts,mts,cts}' convention or have an explicit root .gitignore negation`,
+    );
+  }
+};
 
 /**
  * @param {string} pkg
@@ -827,6 +870,8 @@ export const findDeclarationPublicationProblems = async (
 };
 
 const main = async () => {
+  await assertTrackedDeclarationFileNames();
+
   // Source-of-truth values harvested from skel once.
   const skelSecuritySha = await sha256OfFile(
     path.join(SKEL_ABS, 'SECURITY.md'),
