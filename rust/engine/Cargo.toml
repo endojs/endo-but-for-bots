@@ -1,0 +1,23 @@
+# Ironhorse engine workspace (design: designs/ironhorse-engine.md).
+#
+# Independent workspace nested under rust/engine so the oracle-locked
+# transliteration of XS builds in-repo from the first commit (resolved
+# question 9) without perturbing the existing rust/ workspace. The
+# repo-root Cargo.toml excludes this path.
+[workspace]
+resolver = "2"
+members = [
+    "ironhorse-vm",
+    "xs-oracle",
+    "ironhorse-262",
+    "ironhorse-fuzz",
+    "ironhorse-regexp",
+    "ironhorse-compile",
+    "ironhorse-snapshot",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
