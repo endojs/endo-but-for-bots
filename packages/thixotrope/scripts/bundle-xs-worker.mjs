@@ -94,6 +94,7 @@ for (const stub of [
   'ses_boot.js',
   'worker_bootstrap.js',
   'daemon_bootstrap.js',
+  'archive_text_endowments.js',
 ]) {
   const stubPath = path.join(xsnapSrcDir, stub);
   if (!fs.existsSync(stubPath)) {
