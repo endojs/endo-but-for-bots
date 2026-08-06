@@ -24,39 +24,34 @@ const referenceSourceExport = 'conflictRebaseSource';
  * A git code-mode scenario for a rebase that must stop for a content conflict,
  * resolve it deliberately, then continue replaying the remaining clean commit.
  *
- * @param {GitConflictRebaseTarget} expected
+ * @param {GitConflictRebaseTarget} [expectedTarget]
  * @returns {GitScenario<GitConflictRebaseTarget>}
  */
-export const makeConflictRebaseScenario = ({
-  featureBranch,
-  integrationBranch,
-  integrationOid,
-  replayedSummaries,
-  originalFeatureOids,
-  expectedPatches,
-  featureTreeOid,
-  appText,
-  notes,
-}) => {
+export const makeConflictRebaseScenario = expectedTarget => {
   const expected = harden({
-    featureBranch,
-    integrationBranch,
-    integrationOid,
-    replayedSummaries,
-    originalFeatureOids,
-    expectedPatches,
-    featureTreeOid,
-    appText,
-    notes,
+    featureBranch: expectedTarget?.featureBranch ?? '',
+    integrationBranch: expectedTarget?.integrationBranch ?? '',
+    integrationOid: expectedTarget?.integrationOid ?? '',
+    replayedSummaries: expectedTarget?.replayedSummaries ?? [],
+    originalFeatureOids: expectedTarget?.originalFeatureOids ?? [],
+    expectedPatches: expectedTarget?.expectedPatches ?? [],
+    featureTreeOid: expectedTarget?.featureTreeOid ?? '',
+    appText: expectedTarget?.appText ?? '',
+    notes: expectedTarget?.notes ?? [],
   });
   return harden({
     name: 'conflict-rebase',
+    requirements: harden({ allowHistoryRewrite: true }),
     expected,
     prompt: conflictRebasePrompt,
     referenceSourcePath,
     referenceSourceExport,
-    assertOutcome: ({ git, readText }) =>
-      assertGitConflictRebaseOutcome({ git, readText, expected }),
+    assertOutcome: args => {
+      if (expectedTarget === undefined) {
+        throw new Error('conflict-rebase scenario target is not provisioned');
+      }
+      return assertGitConflictRebaseOutcome({ ...args, expected });
+    },
   });
 };
 harden(makeConflictRebaseScenario);

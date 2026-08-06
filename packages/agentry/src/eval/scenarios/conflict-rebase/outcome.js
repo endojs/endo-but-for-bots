@@ -1,8 +1,7 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { OutcomeReport, ReadText } from '../../types.js' */
-/** @import { GitConflictRebaseTarget } from './types.js' */
+/** @import { GitConflictRebaseTarget, OutcomeReport, ReadText } from '../../types.js' */
 
 import { E } from '@endo/eventual-send';
 

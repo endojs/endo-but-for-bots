@@ -484,6 +484,19 @@ smoke tests.
 It is not a selectable product backend for the Pi extension, whose evaluation
 always runs through a daemon guest.
 
+## Git evaluation matrix
+
+The eval harness provides a reusable matrix runner for the
+`stage-and-commit` and `conflict-rebase` scenarios.
+Its default conditions are `code-mode`, classic `tool-calls`, and `shell`.
+The shell condition is an honestly-labeled ambient-authority control: it uses a
+scenario-scoped allowlisted shell capability alongside the Git and filesystem
+tools, rather than claiming the same attenuation boundary as the other
+conditions.
+Conflict-rebase declares its need for elevated history-rewrite authority;
+stage-and-commit receives the ordinary Git capability.
+The CLI is available as `yarn workspace @endo/agentry eval:matrix`.
+
 ## Status
 
 This package is private to the endo monorepo. The API is best-effort stable but

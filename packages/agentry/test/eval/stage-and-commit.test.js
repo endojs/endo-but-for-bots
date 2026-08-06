@@ -8,6 +8,8 @@
 // only on a host where the `ENDO_LLM_*` / `LAL_*` credentials are present.
 
 import test from '@endo/ses-ava/prepare-endo.js';
+import fs from 'node:fs';
+import { E } from '@endo/eventual-send';
 import {
   registerFauxProvider,
   fauxAssistantMessage,
@@ -15,11 +17,16 @@ import {
 } from '@earendil-works/pi-ai/compat';
 
 import {
+  defaultEvalConditions,
+  makeDefaultGitScenarioSpecs,
   makeRunMetricsRecorder,
+  renderEvalMatrixMarkdownTable,
+  runEvalMatrix,
   runGitScenario,
 } from '../../src/eval/index.js';
 import { makeStageAndCommitScenario } from '../../src/eval/scenarios/stage-and-commit/index.js';
 import { stageAndCommitSource } from '../../src/eval/scenarios/stage-and-commit/reference.js';
+import { provisionStageAndCommitRepo as provisionMatrixRepo } from '../../src/eval/scenarios/stage-and-commit/provision.js';
 import { readText } from '../_eval-fixture.js';
 import { provisionStageAndCommitRepo } from './_stage-and-commit-repo.js';
 
@@ -127,6 +134,53 @@ const evaluateOnceModel = (t, source) =>
       stopReason: 'toolUse',
     }),
     fauxAssistantMessage('done'),
+  ]);
+
+/**
+ * @param {import('ava').ExecutionContext} t
+ * @param {ReturnType<typeof makeStageAndCommitScenario>} scenario
+ * @returns {Model<string>}
+ */
+const matrixModel = (t, scenario) =>
+  fauxModel(t, [
+    fauxAssistantMessage(
+      fauxToolCall('evaluate', {
+        source: stageAndCommitSource(
+          scenario.expected.path,
+          scenario.expected.message,
+        ),
+      }),
+      { stopReason: 'toolUse' },
+    ),
+    fauxAssistantMessage('code-mode done'),
+    fauxAssistantMessage(
+      fauxToolCall('add', { paths: [scenario.expected.path] }),
+      {
+        stopReason: 'toolUse',
+      },
+    ),
+    fauxAssistantMessage(
+      fauxToolCall('commit', { message: scenario.expected.message }),
+      {
+        stopReason: 'toolUse',
+      },
+    ),
+    fauxAssistantMessage('tool-calls done'),
+    fauxAssistantMessage(
+      fauxToolCall('exec', {
+        command: 'git',
+        args: ['add', scenario.expected.path],
+      }),
+      { stopReason: 'toolUse' },
+    ),
+    fauxAssistantMessage(
+      fauxToolCall('exec', {
+        command: 'git',
+        args: ['commit', '-m', scenario.expected.message],
+      }),
+      { stopReason: 'toolUse' },
+    ),
+    fauxAssistantMessage('shell done'),
   ]);
 
 test('run metrics recorder sums assistant usage and tool errors', t => {
@@ -247,6 +301,100 @@ test('outcome assertion passes when the scripted run reaches the target end-stat
   t.true(events.includes('agent_start'));
   t.true(events.includes('tool_execution_start'));
   t.true(events.includes('agent_end'));
+});
+
+test('matrix runs the stage-and-commit scenario across all conditions', async t => {
+  const scenario = makeStageAndCommitScenario();
+  const model = matrixModel(t, scenario);
+
+  const result = await runEvalMatrix({
+    scenarios: makeDefaultGitScenarioSpecs().slice(0, 1),
+    conditions: defaultEvalConditions,
+    models: [{ model, name: 'faux-model' }],
+    repeats: 1,
+    readText,
+  });
+
+  t.deepEqual(
+    result.rows.map(row => [row.scenario, row.condition, row.model, row.pass]),
+    [
+      ['stage-and-commit', 'code-mode', 'faux-model', true],
+      ['stage-and-commit', 'tool-calls', 'faux-model', true],
+      ['stage-and-commit', 'shell', 'faux-model', true],
+    ],
+  );
+  t.deepEqual(
+    result.aggregates.map(aggregate => [
+      aggregate.condition,
+      aggregate.runs,
+      aggregate.passRate,
+    ]),
+    [
+      ['code-mode', 1, 1],
+      ['tool-calls', 1, 1],
+      ['shell', 1, 1],
+    ],
+  );
+  t.regex(
+    renderEvalMatrixMarkdownTable(result.aggregates),
+    /\| stage-and-commit \| shell \| faux-model \| 1 \| 100% \|/,
+  );
+});
+
+for (const repeats of [0, -1, 1.5, NaN, Infinity]) {
+  test(`matrix rejects an invalid repeat count: ${repeats}`, async t => {
+    await t.throwsAsync(
+      () =>
+        runEvalMatrix({
+          scenarios: [],
+          conditions: [],
+          models: [],
+          repeats,
+          readText,
+        }),
+      { message: 'repeats must be a positive finite integer' },
+    );
+  });
+}
+
+test('matrix provisioner contains paths and creates parent directories', async t => {
+  const repo = await provisionMatrixRepo({
+    path: 'nested/target.txt',
+    content: 'nested content\n',
+  });
+  t.teardown(repo.cleanup);
+
+  const status = await E(repo.git).status();
+  t.true(status.some(row => row.path === 'nested/target.txt'));
+
+  await t.throwsAsync(
+    () => provisionMatrixRepo({ path: '../escaped.txt', content: 'nope\n' }),
+    { message: 'stage-and-commit path must stay within the repository' },
+  );
+});
+
+test('matrix provisioner gives each run a bounded shell and cleans it up', async t => {
+  const repo = await provisionMatrixRepo({
+    path: 'target.txt',
+    content: 'target\n',
+  });
+  t.teardown(repo.cleanup);
+  const shell = /** @type {any} */ (repo.shell);
+  const policy = await E(shell).inspect();
+  t.deepEqual(policy, {
+    allowedCommands: ['git'],
+    timeoutMs: 30_000,
+    maxOutputBytes: 256 * 1024,
+  });
+  const status = await E(shell).exec('git', ['status', '--short']);
+  t.is(status.exitCode, 0);
+  t.true(status.stdout.includes('target.txt'));
+  await t.throwsAsync(() => E(shell).exec('sh', []), {
+    message: /not in the allowlist/,
+  });
+  const repoRoot = repo.repoRoot;
+  await repo.cleanup?.();
+  t.false(fs.existsSync(repoRoot));
 });
 
 test('outcome assertion fails the commit-message check when the wrong message is used', async t => {
