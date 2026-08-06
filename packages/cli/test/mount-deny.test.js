@@ -1,6 +1,4 @@
 // @ts-check
-/* global process */
-
 import path from 'path';
 import test from 'ava';
 import url from 'url';
