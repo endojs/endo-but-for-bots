@@ -5,7 +5,6 @@
     "*.ts",
     "src/**/*.js",
     "src/**/*.ts",
-    "test",
-    "types-index.d.ts"
+    "test"
   ]
 }

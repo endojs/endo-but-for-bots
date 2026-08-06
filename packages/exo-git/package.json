@@ -20,10 +20,10 @@
   },
   "type": "module",
   "main": "./src/index.js",
-  "types": "./types-index.d.ts",
+  "types": "./types-index.types.d.ts",
   "exports": {
     ".": {
-      "types": "./types-index.d.ts",
+      "types": "./types-index.types.d.ts",
       "default": "./src/index.js"
     },
     "./src/git.js": {
@@ -51,7 +51,7 @@
       "default": "./src/interfaces.js"
     },
     "./types-index.js": {
-      "types": "./types-index.d.ts",
+      "types": "./types-index.types.d.ts",
       "default": "./types-index.js"
     },
     "./package.json": "./package.json"
