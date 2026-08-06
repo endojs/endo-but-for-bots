@@ -1,7 +1,6 @@
 {
   "name": "@endo/exo-git",
   "version": "0.0.0",
-  "private": true,
   "description": "Remotable exo glue and interface guards for an EndoGit capability — portable across SES realms; pair with @endo/git for the Node-side GitBackend.",
   "keywords": [
     "endo",
@@ -83,6 +82,9 @@
     "eslint": "catalog:dev",
     "expect-type": "^1.4.0",
     "typescript": "catalog:dev"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "ava": {
     "files": [
