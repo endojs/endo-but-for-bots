@@ -1,0 +1,17 @@
+[package]
+name = "xs-oracle"
+description = "Differential oracle: compiles JS to XS bytecode and runs it on XS, returning (bytecode, result, run-only computrons) for parity comparison. Dev/CI only; the sole engine crate that links unsafe C."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "xs_oracle"
+path = "src/lib.rs"
+
+[build-dependencies]
+cc = "1"
+
+[dev-dependencies]
+ironhorse-vm = { path = "../ironhorse-vm" }
