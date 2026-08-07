@@ -5007,7 +5007,7 @@ testNeedsNodeWorker(
       { readOnly: true },
     );
     const status = await E(gitCap).status();
-    t.true(Array.isArray(status));
+    t.true(Array.isArray(status.entries));
     // `commit` is absent from the reader facet entirely (facet
     // membership, not a runtime-rejected method call), so a read-only
     // Git fails the CapTP method lookup rather than a bespoke authority

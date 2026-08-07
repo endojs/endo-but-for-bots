@@ -48,6 +48,7 @@ const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
  *   GitDeleteBranchOptions,
  *   GitMergeOptions,
  *   GitRemoteCredential,
+ *   GitStatusOptions,
  *   RemoteRefUpdate,
  *   GitRefUpdateResult,
  *   GitRebaseInput,
@@ -57,7 +58,6 @@ const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
  * } from '@endo/exo-git'
  * @import {
  *   GitTreeEntry,
- *   NativeGitStatusOptions,
  *   RawStatusEntry,
  *   RemoteRefspec,
  *   RepositoryIdentity,
@@ -2078,12 +2078,11 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
      * verbatim) and rename/copy records embed the source-path field
      * inline rather than escaping it.
      *
-     * Returns the raw structural list.  The public Git exo wraps each
-     * entry into a `GitStatusEntry` by minting a `PathEntry` on
-     * the bound mount — the backend has no mount cap to mint with.
+     * Returns the raw structural list.  The public Git exo projects each row
+     * into copy data.
      *
      * @returns {Promise<RawStatusEntry[]>}
-     * @param {NativeGitStatusOptions} [options]
+     * @param {GitStatusOptions} [options]
      */
     status: async (options = {}) => {
       const untracked = options.untracked ?? 'all';
@@ -2092,8 +2091,14 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
           "status.untracked must be one of 'all', 'normal', or 'no'",
         );
       }
-      // Use the streaming reader: porcelain=v1 records start with a column-
-      // sensitive XY code (e.g. ' D' for a worktree-only deletion);
+      if (
+        options.maxCount !== undefined &&
+        (!Number.isInteger(options.maxCount) || options.maxCount <= 0)
+      ) {
+        throw new Error('status.maxCount must be a positive integer');
+      }
+      // Use the streaming reader: porcelain=v1 records start with a
+      // column-sensitive XY code (e.g. ' D' for a worktree-only deletion);
       // trimming would strip a leading space and shift the path.
       const out = await readGitText([
         'status',
@@ -2146,7 +2151,11 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
           }
         }
       }
-      return harden(entries);
+      return harden(
+        options.maxCount === undefined
+          ? entries
+          : entries.slice(0, options.maxCount),
+      );
     },
 
     /**

@@ -25,23 +25,33 @@ const GitWorktreeStatusShape = M.or(
   'untracked',
 );
 
-const GitStatusOptionsShape = M.splitRecord(
-  {},
-  { untracked: M.or('all', 'normal', 'no') },
-  harden({}),
-);
-
 const GitStatusEntryShape = M.splitRecord(
   {
-    entry: M.remotable(),
     index: GitIndexStatusShape,
     path: M.string(),
     worktree: GitWorktreeStatusShape,
   },
   {
-    node: M.remotable(),
     renamedFrom: M.string(),
   },
+);
+
+const GitStatusOptionsShape = M.splitRecord(
+  {},
+  {
+    maxCount: M.number(),
+    untracked: M.or('all', 'normal', 'no'),
+  },
+  harden({}),
+);
+
+const GitStatusResultShape = M.splitRecord(
+  {
+    entries: M.arrayOf(GitStatusEntryShape),
+    truncated: M.boolean(),
+  },
+  {},
+  harden({}),
 );
 
 const GitRefKindShape = M.or('branch', 'commit', 'detached', 'tag');
@@ -273,7 +283,7 @@ export const GIT_METHOD_GUARDS = harden({
   stashShow: M.callWhen().optional(M.number()).returns(M.string()),
   status: M.callWhen()
     .optional(GitStatusOptionsShape)
-    .returns(M.arrayOf(GitStatusEntryShape)),
+    .returns(GitStatusResultShape),
   switch: M.callWhen(RefArgShape).returns(M.undefined()),
   switchBranch: M.callWhen(M.string()).returns(M.undefined()),
   tree: M.callWhen(RefArgShape).returns(M.remotable()),

@@ -150,13 +150,14 @@ test('git tools drive a real Git cap: stage → status → commit → log → fi
 
   // `status` (mount-bridged tool) reports the staged file as JSON-safe rows,
   // with no remotables on the wire.
-  const staged = /** @type {Array<{ path: string, index: string }>} */ (
-    await byMountName('status').invoke({})
-  );
-  const stagedRow = staged.find(row => row.path === 'greeting.txt');
+  const staged =
+    /** @type {{ entries: Array<{ path: string, index: string }> }} */ (
+      await byMountName('status').invoke({})
+    );
+  const stagedRow = staged.entries.find(row => row.path === 'greeting.txt');
   t.truthy(stagedRow, 'status should report the staged file');
   t.is(stagedRow?.index, 'added');
-  for (const row of staged) {
+  for (const row of staged.entries) {
     t.false('entry' in row);
     t.false('node' in row);
   }
@@ -169,11 +170,11 @@ test('git tools drive a real Git cap: stage → status → commit → log → fi
   t.is(commit.summary, 'add greeting');
 
   // Status (mount-bridged tool) is clean once the file is committed.
-  const afterStatus = /** @type {Array<{ path: string }>} */ (
+  const afterStatus = /** @type {{ entries: Array<{ path: string }> }} */ (
     await byMountName('status').invoke({})
   );
   t.false(
-    afterStatus.some(row => row.path === 'greeting.txt'),
+    afterStatus.entries.some(row => row.path === 'greeting.txt'),
     'the committed file should no longer be dirty',
   );
 
@@ -380,14 +381,15 @@ test('a "../" escape in an add path is contained by the mount, clamped at the wo
 
   // `status` reports the file at its root-relative path — no leading `..`, no
   // outer path — proving the segment was clamped, not preserved as an escape.
-  const staged = /** @type {Array<{ path: string, index: string }>} */ (
-    await byMountName('status').invoke({})
-  );
-  const row = staged.find(entry => entry.path === 'contained.txt');
+  const staged =
+    /** @type {{ entries: Array<{ path: string, index: string }> }} */ (
+      await byMountName('status').invoke({})
+    );
+  const row = staged.entries.find(entry => entry.path === 'contained.txt');
   t.truthy(row, 'the clamped path should stage the in-repo root file');
   t.is(row?.index, 'added');
   t.false(
-    staged.some(entry => entry.path.includes('..')),
+    staged.entries.some(entry => entry.path.includes('..')),
     'no staged path should retain a ".." segment',
   );
 

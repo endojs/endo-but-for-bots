@@ -11,10 +11,11 @@ import { makeTool } from '../tool.js';
 
 /**
  * The git tools in this module bridge the writable Git methods whose native
- * signatures traffic in live capabilities — `status()` returns rows bearing
- * `PathEntry` / node remotables, while `add()` and `checkoutConflict()`
+ * signatures traffic in live capabilities — `add()` and `checkoutConflict()`
  * take arrays of `PathEntry` remotables — so they cannot sit in the
- * JSON-transparent, one-to-one guard-mapped slice `makeGitTool` exposes. Each tool here holds the
+ * JSON-transparent, one-to-one guard-mapped slice `makeGitTool` exposes.
+ * `status()` remains here as the mount-bridged agent tool so it can apply the
+ * agent-facing untracked-file default. Each tool here holds the
  * mount/git capability pair (the mount reached through `Git.worktree()`) and
  * converts at the boundary: path strings in, JSON-safe records out. The
  * capability, never a path string, remains the confinement boundary — a `../`
@@ -22,10 +23,29 @@ import { makeTool } from '../tool.js';
  * brittle string check here.
  */
 
-/** No-argument JSON Schema, shared by the read-only `status` tool. */
-const NO_ARGS = harden({
+const STATUS_OPTIONS = harden({
   type: 'object',
-  properties: {},
+  properties: {
+    maxCount: {
+      type: 'integer',
+      minimum: 1,
+      description: 'Return at most this many status rows.',
+    },
+    untracked: {
+      type: 'string',
+      enum: ['all', 'normal', 'no'],
+      description:
+        'Include all untracked files, collapse them to directories, or omit them.',
+    },
+  },
+  required: [],
+  additionalProperties: false,
+});
+
+/** JSON Schema shared by the read-only `status` tool. */
+const STATUS_PARAMETERS = harden({
+  type: 'object',
+  properties: { options: STATUS_OPTIONS },
   required: [],
   additionalProperties: false,
 });
@@ -136,28 +156,42 @@ export const makeGitMountTools = gitCap => {
   const statusTool = makeTool({
     name: 'status',
     description:
-      'Report the working-tree status as { path, index, worktree } rows, ' +
-      'one per changed path (with renamedFrom when a rename is detected).',
-    parameters: NO_ARGS,
-    // No positional args, but declaring an (empty) guard array still makes
-    // `makeTool` reject any stray argument key fail-closed.
-    argGuards: harden([]),
-    execute: async () => {
-      const rows = await E(gitCap).status();
-      // Each row carries authority-bearing `entry` / `node` remotables that
-      // cannot cross the JSON tool wire; project to the JSON-safe status
-      // fields the model reads.
-      return harden(
-        rows.map(row => {
-          const { path, index, worktree, renamedFrom } = row;
-          return {
-            path,
-            index,
-            worktree,
-            ...(renamedFrom !== undefined ? { renamedFrom } : {}),
-          };
-        }),
-      );
+      'Report the working-tree status as { entries, truncated }, with one ' +
+      'copy-data row per changed path. By default, untracked directories are ' +
+      'collapsed to one row; pass options.untracked="all" for every file.',
+    parameters: STATUS_PARAMETERS,
+    argGuards: harden([
+      M.splitRecord(
+        {},
+        { maxCount: M.number(), untracked: M.or('all', 'normal', 'no') },
+        harden({}),
+      ),
+    ]),
+    execute: async args => {
+      const options =
+        /** @type {{ maxCount?: number, untracked?: 'all' | 'normal' | 'no' }} */ (
+          args.options || {}
+        );
+      const result = await E(gitCap).status({
+        untracked: options.untracked ?? 'normal',
+        ...(options.maxCount === undefined
+          ? {}
+          : { maxCount: options.maxCount }),
+      });
+      return harden({
+        entries: harden(
+          result.entries.map(row => {
+            const { path, index, worktree, renamedFrom } = row;
+            return harden({
+              path,
+              index,
+              worktree,
+              ...(renamedFrom !== undefined ? { renamedFrom } : {}),
+            });
+          }),
+        ),
+        truncated: result.truncated,
+      });
     },
   });
 

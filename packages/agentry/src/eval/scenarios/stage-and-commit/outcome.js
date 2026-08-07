@@ -90,7 +90,7 @@ export const assertGitCommitOutcome = async ({ git, readText, expected }) => {
 
   // 3. The working tree is clean for the target path: the scenario asked for a
   // commit, so the file must no longer show as untracked or modified.
-  const rows = await E(gitRef).status();
+  const rows = (await E(gitRef).status()).entries;
   const lingering = rows.find(
     /** @param {{ path: string }} row */ row => row.path === expected.path,
   );

@@ -197,7 +197,7 @@ test('read-only git is a subset of read-write git and omits mutators', t => {
   t.true(readOnly.includes('diff'));
 });
 
-test('git declarations expand the reachable platform filesystem contracts', t => {
+test('git declarations retain reachable filesystem contracts without status caps', t => {
   const { aux } = gitDeclarations.git;
   t.false(aux.includes("import('@endo/platform"));
   for (const shape of [
@@ -205,50 +205,26 @@ test('git declarations expand the reachable platform filesystem contracts', t =>
     'child: (name: string) => GitLitePathEntry;',
     'type GitPathEntryIssuer =',
     'entry: (path: string | string[]) => GitLitePathEntry;',
-    'type GitDirectory =',
     'lookup: (path: string | string[]) => Promise<unknown>;',
     'type GitDirectoryWriteSource = GitReadableBlobSource | GitLiteReadableTree;',
     'write: (path: string[], value: GitDirectoryWriteSource) => Promise<void>;',
-    'type GitFile =',
     'type GitFilesystem =',
     'root: () => GitERef<GitExtendedDirectory>;',
-    'type GitReadableBlob =',
     'type GitReadableTree =',
-    // Followed across packages: the blob range's reader comes from
-    // `@endo/exo-stream`, not from the platform filesystem source.
-    'fetch: (offset: bigint, length: bigint) => Promise<GitPassableBytesReader>;',
   ]) {
     t.true(aux.includes(shape), `missing reachable type shape: ${shape}`);
   }
 });
 
-test('git blob declarations expose Exo methods without CAS backing helpers', t => {
+test('git status declarations expose copy data without live capabilities', t => {
   const { aux } = gitDeclarations.git;
-  t.deepEqual(listDeclaredTypeMembers(aux, 'GitLiteReadableBlob'), [
-    'streamBase64',
-    'text',
-    'json',
-    'help',
-  ]);
-  t.deepEqual(listDeclaredTypeMembers(aux, 'GitReadableBlobRange'), [
-    'getInfo',
-    'fetch',
-  ]);
-  t.true(aux.includes('type GitReadableBlob = GitReadableBlobRange;'));
-  const leakedMethodNames = [
-    'makeFileReader',
-    'readRange',
-    'rangeRead',
-    'rangeReadText',
-  ];
-  const leaked = leakedMethodNames.filter(
-    name => aux.includes(`${name}:`) || aux.includes(`${name}?:`),
-  );
-  t.deepEqual(
-    leaked,
-    [],
-    `leaked non-Git blob method(s): ${leaked.join(', ')}`,
-  );
+  t.true(aux.includes('type GitStatusEntry ='));
+  t.true(aux.includes('type GitStatusResult ='));
+  t.true(aux.includes('entries: GitStatusEntry[];'));
+  t.true(aux.includes('truncated: boolean;'));
+  t.false(aux.includes('entry: GitPathEntry;'));
+  t.false(aux.includes('node?:'));
+  t.false(aux.includes('type GitStatusNode ='));
 });
 
 test('combined Git and workspace declarations have unique alias names', t => {
@@ -269,7 +245,6 @@ test('Git declarations define every reachable custom filesystem alias', t => {
     'GitERef',
     'GitFilesystemStats',
     'GitSnapshotTree',
-    'GitSnapshotBlob',
     'GitBlobInfo',
   ]) {
     t.true(declared.has(name), `missing generated alias: ${name}`);

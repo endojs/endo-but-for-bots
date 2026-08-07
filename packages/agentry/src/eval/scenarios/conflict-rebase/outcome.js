@@ -191,7 +191,7 @@ export const assertGitConflictRebaseOutcome = async ({
     );
   });
 
-  const rows = await E(gitRef).status();
+  const rows = (await E(gitRef).status()).entries;
   checks.push(
     check(
       'worktree-clean',

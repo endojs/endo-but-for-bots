@@ -45,10 +45,9 @@ import {
  *   ReadableTree,
  *   GitRestoreOptions,
  *   GitStashPushOptions,
- *   GitStatusEntry,
- *   GitStatusOptions,
- *   GitStatusNode,
- *   GitWorktreeStatus,
+  *   GitStatusOptions,
+  *   GitStatusResult,
+  *   GitWorktreeStatus,
  *   HistoryRewriteEndoGit,
  *   ReadOnlyEndoGit,
  *   ReadOnlyGitWorktree,
@@ -59,8 +58,8 @@ import {
 
 /**
  * Backend-facing row produced by `GitBackend.status`.  The public Git exo
- * wraps each `BackendStatusEntry` into a `GitStatusEntry` by minting an
- * `PathEntry` for the path; the public type lives in `types.d.ts`.
+ * projects each `BackendStatusEntry` into copy data; the public type lives in
+ * `types.d.ts`.
  *
  * @typedef {object} BackendStatusEntry
  * @property {string} path
@@ -293,15 +292,12 @@ const initGitState = ({ mount, backend, lineageOf }) =>
 
 /**
  * The worktree authority a read-only Git exposes.  A writable Git hands
- * out the writable `mount`; a read-only Git must not, or its `worktree()`
- * and the per-entry `node`s minted by `status()` would carry full write
- * authority (`writeText`, `remove`, `move`, `makeFile`) despite the
- * facet's read-only intent.  `mount.readOnly()` yields a structural
- * read-only view that shares the same mount lineage, so entries minted by
- * the writable mount still resolve through it but no write method
- * survives the attenuation.  Resolved lazily and memoized on `state`
- * because `readOnly()` is a synchronous attenuation but the read-only view
- * is only needed once a read flows through the reader facet.
+ * out the writable `mount`; a read-only Git must not expose write methods
+ * through `worktree()` despite the facet's read-only intent.  `mount.readOnly()`
+ * yields a structural read-only view that shares the same mount lineage.
+ * Resolved lazily and memoized on `state` because `readOnly()` is a
+ * synchronous attenuation but the read-only view is only needed once a read
+ * flows through the reader facet.
  *
  * @overload
  * @param {GitState} state
@@ -389,58 +385,31 @@ async function worktreeReadOnly() {
 
 /**
  * @param {GitState} state
- * @param {WritableGitWorktree | Promise<ReadOnlyGitWorktree>} worktreeAuthority
- *   The `node` authority `status()` resolves each row through: a read-only
- *   Git resolves nodes through the read-only worktree view, ensuring a
- *   status row never hands a caller a writable node out of an attenuated
- *   facet.
  * @param {GitStatusOptions} options
+ * @returns {Promise<GitStatusResult>}
  */
-const doStatus = async (state, worktreeAuthority, options) => {
-  const raw = await state.backend.status(options);
-  const wrapped = await Promise.all(
-    raw.map(async r => {
-      const segments = r.path === '' ? [] : r.path.split('/');
-      const entry = await E(state.mount).entry(segments);
-      let node;
-      try {
-        // Resolve the node by repo-relative segments rather than by the
-        // `entry` descriptor: the read-only worktree view exposes the
-        // structural `ReadableTree` surface whose `lookup` accepts only
-        // string / string[] paths (not a PathEntry). Segments are
-        // equivalent and work for both the writable mount and the
-        // read-only view.
-        node = /** @type {GitStatusNode} */ (
-          await E(worktreeAuthority).lookup(segments)
-        );
-      } catch (lookupError) {
-        node = undefined;
-        // A deleted path (in either the index or the worktree) has no
-        // live node; a lookup failure is expected and load-bearing for
-        // the GitStatusEntry shape (no `node` field). For every other
-        // status, the lookup should have succeeded; surface the
-        // swallowed error on stderr so a silent regression does not hide
-        // behind the structured row.
-        if (r.index !== 'deleted' && r.worktree !== 'deleted') {
-          const detail =
-            /** @type {Error} */ (lookupError).message ?? lookupError;
-          console.error(
-            `Git.status: lookup failed for ${q(r.path)} ` +
-              `(index=${q(r.index)}, worktree=${q(r.worktree)}): ${detail}`,
-          );
-        }
-      }
-      return harden({
-        entry,
-        path: r.path,
-        index: r.index,
-        worktree: r.worktree,
-        ...(node !== undefined ? { node } : {}),
-        ...(r.renamedFrom !== undefined ? { renamedFrom: r.renamedFrom } : {}),
-      });
+const doStatus = async (state, options) => {
+  const { maxCount, ...backendOptions } = options;
+  if (
+    maxCount !== undefined &&
+    (!Number.isInteger(maxCount) || maxCount <= 0)
+  ) {
+    throw new Error('status.maxCount must be a positive integer');
+  }
+  const raw = await state.backend.status(backendOptions);
+  const selected = maxCount === undefined ? raw : raw.slice(0, maxCount);
+  const entries = selected.map(r =>
+    harden({
+      path: r.path,
+      index: r.index,
+      worktree: r.worktree,
+      ...(r.renamedFrom !== undefined ? { renamedFrom: r.renamedFrom } : {}),
     }),
   );
-  return harden(wrapped);
+  return harden({
+    entries: harden(entries),
+    truncated: maxCount !== undefined && raw.length > maxCount,
+  });
 };
 
 /**
@@ -448,8 +417,7 @@ const doStatus = async (state, worktreeAuthority, options) => {
  * @this {GitMethodThis}
  */
 async function status(options = {}) {
-  const { state } = this;
-  return doStatus(state, worktreeAuthorityFor(state, false), options);
+  return doStatus(this.state, options);
 }
 
 /**
@@ -457,8 +425,7 @@ async function status(options = {}) {
  * @this {GitMethodThis}
  */
 async function statusReadOnly(options = {}) {
-  const { state } = this;
-  return doStatus(state, worktreeAuthorityFor(state, true), options);
+  return doStatus(this.state, options);
 }
 
 /**

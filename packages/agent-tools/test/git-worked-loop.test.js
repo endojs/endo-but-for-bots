@@ -211,19 +211,20 @@ test('the version-controlled-filesystem loop closes end to end through provision
   t.is(build.stdout, editedReadme, 'the build step sees the agent edit');
 
   // 4. status → add → diff → commit → log, through the git tools.
-  const dirty = /** @type {{ path: string }[]} */ (
+  const dirty = /** @type {{ entries: { path: string }[] }} */ (
     await vcs('status').invoke({})
   );
-  const dirtyPaths = dirty.map(row => row.path).sort();
+  const dirtyPaths = dirty.entries.map(row => row.path).sort();
   t.deepEqual(dirtyPaths, ['AGENT.md', 'README.md']);
 
   await vcs('add').invoke({ paths: ['README.md', 'AGENT.md'] });
 
-  const staged = /** @type {{ path: string, index?: string }[]} */ (
-    await vcs('status').invoke({})
-  );
+  const staged =
+    /** @type {{ entries: { path: string, index?: string }[] }} */ (
+      await vcs('status').invoke({})
+    );
   t.true(
-    staged.every(row => row.index && row.index !== 'unmodified'),
+    staged.entries.every(row => row.index && row.index !== 'unmodified'),
     'both paths are staged after add',
   );
 
