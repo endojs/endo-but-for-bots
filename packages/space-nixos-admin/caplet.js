@@ -31,16 +31,24 @@
 // git-committed (auditable), the privileged action is a fixed rebuild command
 // (not arbitrary shell), and a failed apply auto-rolls-back.
 
+import { makeError, q, X } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { readFile, writeFile, rename, mkdir, readdir } from 'node:fs/promises';
 import { join, resolve, relative, dirname, sep } from 'node:path';
+
+// The config reads this file with `lib.fileContents`, so a revision bump is a
+// one-line diff and setting it is a whole-file write of a validated hash rather
+// than an edit to Nix source.
+const ENDO_REV_FILE = 'endo.rev';
 
 const NixosAdminInterface = M.interface('NixosAdmin', {
   getConfig: M.call().returns(M.promise()),
   listFiles: M.call().optional(M.string()).returns(M.promise()),
   readFile: M.call(M.string()).returns(M.promise()),
   writeFile: M.call(M.string(), M.string()).returns(M.promise()),
+  getEndoRev: M.call().returns(M.promise()),
+  setEndoRev: M.call(M.string()).returns(M.promise()),
   build: M.call().optional(M.string()).returns(M.promise()),
   apply: M.call(M.string()).returns(M.promise()),
   rollback: M.call().returns(M.promise()),
@@ -211,6 +219,52 @@ export const make = async (_powers, _context, options = {}) => {
     },
 
     /**
+     * The Endo commit this host is configured to run, as recorded in
+     * `endo.rev`. This is the configured revision, which is the running one
+     * only once the config has been applied.
+     */
+    async getEndoRev() {
+      requireConfigured();
+      try {
+        const text = await readFile(join(configDir, ENDO_REV_FILE), 'utf8');
+        return text.trim();
+      } catch {
+        // No pin file: the host still tracks services.endo.defaultBranch.
+        return '';
+      }
+    },
+
+    /**
+     * Point the host at a different Endo commit. Nothing happens until
+     * `build`/`apply` — this only stages the edit.
+     *
+     * Validating here rather than letting the write through means a bad
+     * argument fails at the capability boundary, instead of as a Nix
+     * evaluation error minutes later in someone else's log.
+     *
+     * @param {string} rev - full 40-character lowercase commit hash
+     */
+    async setEndoRev(rev) {
+      requireConfigured();
+      const trimmed = String(rev).trim();
+      if (!/^[0-9a-f]{40}$/.test(trimmed)) {
+        throw makeError(
+          X`setEndoRev needs a full 40-character lowercase commit hash, got ${q(rev)}`,
+        );
+      }
+      const target = join(configDir, ENDO_REV_FILE);
+      const previous = await readFile(target, 'utf8')
+        .then(text => text.trim())
+        .catch(() => '');
+      await mkdir(configDir, { recursive: true });
+      // The trailing newline is load-bearing for readability, not for parsing:
+      // `lib.fileContents` strips exactly one, and a file without it shows up
+      // in every diff as "no newline at end of file".
+      await writeFile(target, `${trimmed}\n`, 'utf8');
+      return harden({ path: ENDO_REV_FILE, rev: trimmed, previous });
+    },
+
+    /**
      * Dry-run: stage the working tree and `nixos-rebuild build` the flake
      * WITHOUT activating it, so a broken config is caught before it can affect
      * the running system. Use this to validate edits before `apply`.
@@ -289,15 +343,23 @@ export const make = async (_powers, _context, options = {}) => {
         '':
           "NixosAdmin: edit and apply this host's NixOS configuration. " +
           'listFiles(subdir?) / readFile(path) / writeFile(path, text) edit the ' +
-          'endo-owned flake checkout; build(message?) validates without ' +
-          'activating; apply(message) commits + switches with health-checked ' +
-          'auto-rollback; rollback() reactivates the previous generation; ' +
+          'endo-owned flake checkout; getEndoRev()/setEndoRev(rev) read and ' +
+          'set the Endo commit this host runs; build(message?) validates ' +
+          'without activating; apply(message) commits + switches with ' +
+          'health-checked auto-rollback; rollback() reactivates the ' +
+          'previous generation, restoring its Endo revision with it; ' +
           'status()/getLog() report progress. Applying is ROOT-EQUIVALENT — ' +
           'validate with build() and confirm with the user before apply().',
         listFiles:
           'listFiles(subdir?) -> string[] of relative config file paths.',
         readFile: 'readFile(path) -> UTF-8 contents of one config file.',
         writeFile: 'writeFile(path, text) -> stage an edit (not yet applied).',
+        getEndoRev:
+          'getEndoRev() -> the Endo commit this host is configured to run.',
+        setEndoRev:
+          'setEndoRev(rev) -> stage a different Endo commit (40-hex hash). ' +
+          'Takes effect on apply(); a failed apply rolls the revision back ' +
+          'with the generation.',
         build:
           'build(message?) -> dry-run nixos-rebuild build (no activation).',
         apply:
