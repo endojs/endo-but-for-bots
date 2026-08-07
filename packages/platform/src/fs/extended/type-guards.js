@@ -43,16 +43,28 @@ const NodeStatPatchShape = M.splitRecord(
 harden(NodeStatPatchShape);
 
 /**
- * A node's identity triple (`Qid` in `./types.ts`). Required keys
- * only — a content-address backend may attach extra fields through
- * its `qidFor` hook.
+ * A node's identity triple (`Qid<K>` in `./types.ts`), parameterized by the
+ * node's kind so a `Directory`'s guard accepts only `Qid<'directory'>` and a
+ * `File`'s only `Qid<'file'>`. A custom backend returning the wrong
+ * discriminator (e.g. a directory qid typed `'file'`) is rejected here,
+ * before the read-only and caching wrappers trust `qid.type` to pick a
+ * facet. Required keys only — a content-address backend may attach extra
+ * fields through its `qidFor` hook.
+ *
+ * @param {'file' | 'directory'} type
  */
-const QidShape = M.splitRecord({
-  type: M.or('file', 'directory'),
-  pathId: M.bigint(),
-  version: M.bigint(),
-});
-harden(QidShape);
+const makeQidShape = type =>
+  M.splitRecord({
+    type,
+    pathId: M.bigint(),
+    version: M.bigint(),
+  });
+
+const DirectoryQidShape = makeQidShape('directory');
+harden(DirectoryQidShape);
+
+const FileQidShape = makeQidShape('file');
+harden(FileQidShape);
 
 /** `OpenFileOptions` accepted by `Directory.create` / `File.open`. */
 const OpenFileOptionsShape = M.splitRecord(
@@ -78,10 +90,15 @@ harden(FileReadOptionsShape);
 const FileWriteOptionsShape = M.splitRecord({}, { offset: M.bigint() });
 harden(FileWriteOptionsShape);
 
-/** `LockOpts` accepted by `OpenFile.lock`. */
+/**
+ * `LockOpts` accepted by `OpenFile.lock`. The canonical type declares no
+ * `wait` member (conflicting requests fail immediately with `EAGAIN`), so
+ * a `wait` extension is left to the open rest of the tolerant reader like
+ * any other undeclared field, rather than singled out and typed here.
+ */
 const LockOptsShape = M.splitRecord(
   { type: M.or('shared', 'exclusive') },
-  { start: M.bigint(), length: M.bigint(), wait: M.boolean() },
+  { start: M.bigint(), length: M.bigint() },
 );
 harden(LockOptsShape);
 
@@ -156,10 +173,6 @@ harden(FilesystemInterface);
 const NodeBaseMethods = {
   getStat: M.call().returns(M.promise()),
   setStat: M.call(NodeStatPatchShape).returns(M.promise()),
-  // `M.eref`: primitive backings answer `getQid` synchronously, but a
-  // forwarding wrapper (`readOnly`, `cachedFilesystem`) over a remote
-  // cap can only forward the promise.
-  getQid: M.call().returns(M.eref(QidShape)),
   getAttrs: M.call().returns(M.promise()),
   setAttrs: M.call(NodeStatPatchShape).returns(M.promise()),
   watch: M.call().returns(M.eref(M.remotable('NodeWatcher'))),
@@ -169,6 +182,12 @@ const NodeBaseMethods = {
 
 export const DirectoryInterface = M.interface('Directory', {
   ...NodeBaseMethods,
+  // `M.eref`: primitive backings answer `getQid` synchronously, but a
+  // forwarding wrapper (`readOnly`, `cachedFilesystem`) over a remote
+  // cap can only forward the promise; those wrappers must validate
+  // the forwarded fulfillment themselves, since `M.eref` only checks
+  // an unresolved promise's shape, not what it resolves to.
+  getQid: M.call().returns(M.eref(DirectoryQidShape)),
   // Catalog `lookup`: resolve a path to its cap in one call. Accepts a
   // single name (`lookup('a')`) or a path array (`lookup(['a', 'b'])`),
   // walking the whole path and returning the deepest cap. This is the
@@ -275,13 +294,19 @@ export const DirectoryInterface = M.interface('Directory', {
   // `list()` + `watch()` pair has a TOCTOU race where mutations
   // between the two calls are invisible to both; `watchFrom`
   // closes that gap by materialising both halves in one method
-  // invocation. See DESIGN.md §10.1.
-  watchFrom: M.call().returns(M.eref(WatchFromResultShape)),
+  // invocation. See DESIGN.md §10.1. `watchFrom` is always async in
+  // every implementation, so — unlike `getQid` — there is no sync
+  // fast path to preserve; `M.callWhen` validates the fulfilled
+  // `{ cursor, watcher }` record directly, catching a malformed
+  // result forwarded from a remote backing.
+  watchFrom: M.callWhen().returns(WatchFromResultShape),
 });
 harden(DirectoryInterface);
 
 export const FileInterface = M.interface('File', {
   ...NodeBaseMethods,
+  // See `DirectoryInterface.getQid` above.
+  getQid: M.call().returns(M.eref(FileQidShape)),
   open: M.call()
     .optional(OpenFileOptionsShape)
     .returns(M.eref(M.remotable('OpenFile'))),

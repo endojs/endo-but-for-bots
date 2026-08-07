@@ -35,27 +35,37 @@ import {
  *   Filesystem,
  *   NodeWatcher,
  *   OpenFile,
- *   ResolvedNode,
+ *   Qid,
  *   Xattrs,
  * } from './types.js'
+ */
+
+/**
+ * @typedef {(
+ *   | { kind: 'directory', node: Directory, qid: Qid<'directory'> }
+ *   | { kind: 'file', node: File, qid: Qid<'file'> }
+ * )} ResolvedChild
  */
 
 const denied = method =>
   makeError(X`EACCES: ${method} not permitted on a read-only Filesystem`);
 
 /**
- * Resolve a child node and its kind as a discriminated {@link ResolvedNode}.
+ * Resolve a child node and its qid, pipelined in one batch with the lookup
+ * (DESIGN.md §4.10), so the discrimination remains correct when the child is
+ * a remote presence: a sync `child.getQid()` against a remote cap returns a
+ * promise (its `type` is `undefined`), which would mis-classify every node
+ * as a File. Because the qid comes from that same child, `qid.type` is
+ * authoritative for the child's kind — a correlation the type system cannot
+ * see, hence this module's one cast.
  *
- * The qid is pipelined from `childP` itself, in one batch with the lookup, so
- * the discrimination remains correct when the child is a remote presence: a
- * sync `child.getQid()` against a remote cap returns a promise (its `type` is
- * `undefined`), which would mis-classify every node as a File. Because the
- * qid comes from that same child, `qid.type` is authoritative for the child's
- * kind — a correlation the type system cannot see, hence this module's one
- * cast.
+ * The resolved qid is also cached on the caller's behalf, so the read-only
+ * wrapper this builds around the child can answer `getQid()` synchronously
+ * instead of forwarding a promise — see `makeReadOnlyDirectory` /
+ * `makeReadOnlyFile`.
  *
  * @param {ERef<Directory | File>} childP
- * @returns {Promise<ResolvedNode>}
+ * @returns {Promise<ResolvedChild>}
  */
 const resolveChild = async childP => {
   const qidP = E(childP).getQid();
@@ -64,9 +74,10 @@ const resolveChild = async childP => {
     return harden({
       kind: 'directory',
       node: /** @type {Directory} */ (child),
+      qid,
     });
   }
-  return harden({ kind: 'file', node: /** @type {File} */ (child) });
+  return harden({ kind: 'file', node: /** @type {File} */ (child), qid });
 };
 
 /**
@@ -87,11 +98,13 @@ const makeReadOnlyFilesystem = inner => {
   return makeExo('Filesystem', FilesystemInterface, {
     async root() {
       const r = await E(inner).root();
-      return makeReadOnlyDirectory(r);
+      const qid = await E(r).getQid();
+      return makeReadOnlyDirectory(r, qid);
     },
     async named(viewName) {
       const r = await E(inner).named(viewName);
-      return makeReadOnlyDirectory(r);
+      const qid = await E(r).getQid();
+      return makeReadOnlyDirectory(r, qid);
     },
     async statfs() {
       return E(inner).statfs();
@@ -110,16 +123,17 @@ const makeReadOnlyFilesystem = inner => {
 
 /**
  * @param {Directory} dir
+ * @param {Qid<'directory'>} qid  resolved at construction (by the caller,
+ *   pipelined alongside the call that produced `dir`) so this wrapper's
+ *   `getQid()` can stay synchronous instead of forwarding a promise whose
+ *   fulfillment the guard would never validate (DESIGN.md §4.10 pipelining
+ *   convention).
  * @returns {Directory}
  */
-const makeReadOnlyDirectory = dir => {
+const makeReadOnlyDirectory = (dir, qid) => {
   return makeExo('Directory', DirectoryInterface, {
     getQid() {
-      // Keep same-vat callers synchronous, while forwarding remote
-      // presences eventually. `M.eref` accepts either result.
-      const getQid = dir?.getQid;
-      if (typeof getQid === 'function') return getQid.call(dir);
-      return /** @type {any} */ (E(dir).getQid());
+      return qid;
     },
     async getStat() {
       return E(dir).getStat();
@@ -143,19 +157,21 @@ const makeReadOnlyDirectory = dir => {
     async lookup(nameOrPath) {
       const resolved = await resolveChild(E(dir).lookup(nameOrPath));
       return resolved.kind === 'directory'
-        ? makeReadOnlyDirectory(resolved.node)
-        : makeReadOnlyFile(resolved.node);
+        ? makeReadOnlyDirectory(resolved.node, resolved.qid)
+        : makeReadOnlyFile(resolved.node, resolved.qid);
     },
     async lookupStep(name) {
       const resolved = await resolveChild(E(dir).lookupStep(name));
       return resolved.kind === 'directory'
-        ? makeReadOnlyDirectory(resolved.node)
-        : makeReadOnlyFile(resolved.node);
+        ? makeReadOnlyDirectory(resolved.node, resolved.qid)
+        : makeReadOnlyFile(resolved.node, resolved.qid);
     },
     async subView(nameOrPath) {
       // A sub-tree of a read-only view is itself read-only. Inner
       // `subView` enforces the directory-only contract.
-      return makeReadOnlyDirectory(await E(dir).subView(nameOrPath));
+      const sub = await E(dir).subView(nameOrPath);
+      const subQid = await E(sub).getQid();
+      return makeReadOnlyDirectory(sub, subQid);
     },
     async list() {
       // Cursor is read-only by nature.
@@ -211,16 +227,14 @@ const makeReadOnlyDirectory = dir => {
 
 /**
  * @param {File} file
+ * @param {Qid<'file'>} qid  resolved at construction; see
+ *   `makeReadOnlyDirectory`'s `qid` param.
  * @returns {File}
  */
-const makeReadOnlyFile = file => {
+const makeReadOnlyFile = (file, qid) => {
   return makeExo('File', FileInterface, {
     getQid() {
-      // Keep same-vat callers synchronous, while forwarding remote
-      // presences eventually. `M.eref` accepts either result.
-      const getQid = file?.getQid;
-      if (typeof getQid === 'function') return getQid.call(file);
-      return /** @type {any} */ (E(file).getQid());
+      return qid;
     },
     async getStat() {
       return E(file).getStat();
