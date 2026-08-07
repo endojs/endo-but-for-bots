@@ -351,3 +351,32 @@ test('formula with deps creates group edges', t => {
   t.false(collected.includes(id('worker:node')));
   t.false(collected.includes(id('guest:node')));
 });
+
+// A host formula persisted before `registry` existed has nothing under that
+// label, and `extractLabeledDeps` reports the hole rather than inventing an id.
+// `isLocalId` parses its argument, so an unfiltered hole threw there — and
+// because every formula is added during seeding, one legacy formula stopped the
+// daemon from booting at all.
+test('onFormulaAdded skips absent deps rather than parsing them', t => {
+  const legacyHost = { type: 'host', petStore: id('store:node') };
+  const graph = makeFormulaGraph({
+    extractLabeledDeps: () => [
+      ['petStore', id('store:node')],
+      ['registry', undefined],
+    ],
+    // Mirror the real `isLocalId`, which parses and so cannot take undefined.
+    isLocalId: dep => {
+      if (typeof dep !== 'string') {
+        throw Error(`Invalid formula identifier ${JSON.stringify(dep)}`);
+      }
+      return true;
+    },
+    onCollect: () => {},
+  });
+
+  graph.addRoot(id('host:node'));
+  t.notThrows(() =>
+    graph.onFormulaAdded(id('host:node'), /** @type {any} */ (legacyHost)),
+  );
+  t.deepEqual(graph.listRetentionPaths(id('store:node')).length > 0, true);
+});
