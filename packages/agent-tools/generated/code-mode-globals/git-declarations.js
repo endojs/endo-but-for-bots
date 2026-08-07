@@ -53,6 +53,7 @@ export const gitDeclarations = harden({
   status: (options?: GitStatusOptions) => Promise<GitStatusResult>;
   switch: (ref: GitRef | string) => Promise<void>;
   switchBranch: (name: string) => Promise<void>;
+  trackingStatus: () => Promise<GitTrackingStatus>;
   tree: (ref: GitRef | string) => Promise<GitReadableTree>;
   worktree: () => Promise<GitWritableGitWorktree>;
 };
@@ -223,6 +224,13 @@ type GitStatusResult = {
     entries: GitStatusEntry[];
     truncated: boolean;
 };
+type GitTrackingStatus = {
+    branch?: string;
+    upstream?: string;
+    ahead: number;
+    behind: number;
+    detached: boolean;
+};
 type GitWorktreeStatus = 'clean' | 'modified' | 'deleted' | 'untracked' | 'ignored' | 'conflicted';
 type GitLiteDirectory = {
     has: (...path: string[]) => Promise<boolean>;
@@ -326,6 +334,7 @@ type GitQid<K = GitNodeKind> = {
 type GitReadOnlyEndoGit = {
     worktree: () => Promise<GitReadOnlyGitWorktree>;
     status: (options?: GitStatusOptions) => Promise<GitStatusResult>;
+    trackingStatus: () => Promise<GitTrackingStatus>;
     diff: (options?: GitDiffOptions) => Promise<string>;
     log: (options?: GitLogOptions) => Promise<GitCommit[]>;
     show: (ref: GitRef | string) => Promise<string>;
@@ -431,6 +440,7 @@ type GitRef = {
   stashList: () => Promise<string[]>;
   stashShow: (index?: number) => Promise<string>;
   status: (options?: GitStatusOptions) => Promise<GitStatusResult>;
+  trackingStatus: () => Promise<GitTrackingStatus>;
   tree: (ref: GitRef | string) => Promise<GitReadableTree>;
   worktree: () => Promise<GitReadOnlyGitWorktree>;
 };
@@ -572,6 +582,13 @@ type GitStatusOptions = {
 type GitStatusResult = {
     entries: GitStatusEntry[];
     truncated: boolean;
+};
+type GitTrackingStatus = {
+    branch?: string;
+    upstream?: string;
+    ahead: number;
+    behind: number;
+    detached: boolean;
 };
 type GitWorktreeStatus = 'clean' | 'modified' | 'deleted' | 'untracked' | 'ignored' | 'conflicted';
 type GitLitePathEntry = {

@@ -89,6 +89,14 @@ export type GitStatusResult = {
   truncated: boolean;
 };
 
+export type GitTrackingStatus = {
+  branch?: string;
+  upstream?: string;
+  ahead: number;
+  behind: number;
+  detached: boolean;
+};
+
 export type GitDiffOptions = {
   cached?: boolean;
   base?: GitRef | string;
@@ -314,6 +322,7 @@ export type GitRemoteKit = {
 export type ReadOnlyEndoGit = {
   worktree: () => Promise<ReadOnlyGitWorktree>;
   status: (options?: GitStatusOptions) => Promise<GitStatusResult>;
+  trackingStatus: () => Promise<GitTrackingStatus>;
   diff: (options?: GitDiffOptions) => Promise<string>;
   log: (options?: GitLogOptions) => Promise<GitCommit[]>;
   show: (ref: GitRef | string) => Promise<string>;

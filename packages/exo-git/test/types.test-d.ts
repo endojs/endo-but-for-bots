@@ -41,6 +41,7 @@ import type {
   GitStatusEntry,
   GitStatusOptions,
   GitStatusResult,
+  GitTrackingStatus,
   GitWorktree,
   GitWorktreeStatus,
   HistoryRewriteEndoGit,
@@ -74,6 +75,13 @@ expectTypeOf<GitStatusOptions>().toEqualTypeOf<{
 expectTypeOf<GitStatusResult>().toEqualTypeOf<{
   entries: GitStatusEntry[];
   truncated: boolean;
+}>();
+expectTypeOf<GitTrackingStatus>().toEqualTypeOf<{
+  branch?: string;
+  upstream?: string;
+  ahead: number;
+  behind: number;
+  detached: boolean;
 }>();
 declare const remotePolicy: RemotePolicy;
 const normalizedRemotePolicy = normalizeGitRemotePolicy({

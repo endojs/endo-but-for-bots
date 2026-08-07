@@ -2596,6 +2596,67 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
     },
 
     /**
+     * Report the checked-out branch and its configured upstream divergence.
+     * A detached HEAD has no branch or upstream, and a branch without an
+     * upstream reports zero divergence rather than failing the inspection.
+     *
+     * @returns {Promise<{ branch?: string, upstream?: string, ahead: number, behind: number, detached: boolean }>}
+     */
+    trackingStatus: async () => {
+      let branch;
+      try {
+        branch = (await runGitRaw(['symbolic-ref', '--short', 'HEAD'])).trim();
+      } catch (err) {
+        const message = /** @type {Error} */ (err).message || '';
+        if (/not a symbolic ref|HEAD is not a symbolic/u.test(message)) {
+          return harden({ ahead: 0, behind: 0, detached: true });
+        }
+        throw err;
+      }
+      if (branch === '') {
+        return harden({ ahead: 0, behind: 0, detached: true });
+      }
+
+      let upstream;
+      try {
+        upstream = (
+          await runGitRaw([
+            'rev-parse',
+            '--abbrev-ref',
+            '--symbolic-full-name',
+            '@{u}',
+          ])
+        ).trim();
+      } catch (err) {
+        const message = /** @type {Error} */ (err).message || '';
+        if (
+          /no upstream|no such ref|unknown revision|ambiguous argument|not stored as a remote-tracking branch/u.test(
+            message,
+          )
+        ) {
+          return harden({ branch, ahead: 0, behind: 0, detached: false });
+        }
+        throw err;
+      }
+      if (upstream === '') {
+        return harden({ branch, ahead: 0, behind: 0, detached: false });
+      }
+
+      const counts = (
+        await runGitRaw(['rev-list', '--left-right', '--count', '@{u}...HEAD'])
+      ).trim();
+      const [behindText, aheadText] = counts.split(/\s+/u);
+      const behind = Number(behindText);
+      const ahead = Number(aheadText);
+      if (!Number.isInteger(behind) || !Number.isInteger(ahead)) {
+        throw new Error(
+          `git rev-list returned invalid tracking counts: ${counts}`,
+        );
+      }
+      return harden({ branch, upstream, ahead, behind, detached: false });
+    },
+
+    /**
      * @returns {Promise<GitRef[]>}
      */
     branches: async () => {

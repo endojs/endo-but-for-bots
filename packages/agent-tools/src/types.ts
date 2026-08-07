@@ -26,7 +26,8 @@ type GitToolReadMethodNames =
   | 'diff'
   | 'show'
   | 'branches'
-  | 'currentBranch';
+  | 'currentBranch'
+  | 'trackingStatus';
 
 /**
  * Adds the ordinary edit verbs a writer facet (and above) carries: `commit`
