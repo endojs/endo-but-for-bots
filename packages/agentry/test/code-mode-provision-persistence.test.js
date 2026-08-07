@@ -23,11 +23,16 @@ const makeWorkspace = async t => {
 test('persistence validation accepts only normalized records', async t => {
   const root = await makeWorkspace(t);
   const persistence = await normalizeEndoProvisionSpec(
-    { fs: 'readOnly', workspace: { deniedSegments: ['private', '.git'] } },
+    {
+      fs: 'readOnly',
+      piTools: 'preserve',
+      workspace: { deniedSegments: ['private', '.git'] },
+    },
     { harness: 'test', sessionId: 'persist', cwd: root },
   );
 
   t.deepEqual(await validateEndoProvisionPersistence(persistence), persistence);
+  t.is(persistence.policy.piTools, 'preserve');
   t.true(Object.isFrozen(persistence));
   t.true(Object.isFrozen(persistence.guestHandlePath));
   t.true(Object.isFrozen(persistence.policy));

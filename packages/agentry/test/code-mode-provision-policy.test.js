@@ -52,6 +52,19 @@ test('normalization preserves omission and resolves a canonical cwd', async t =>
   t.notDeepEqual(relative.guestHandlePath, first.guestHandlePath);
 });
 
+test('normalization retains explicit Pi tool preservation in policy data', async t => {
+  const { root } = await makeWorkspace(t);
+  const persistence = await normalizeEndoProvisionSpec(
+    { piTools: 'preserve' },
+    { harness: 'test', sessionId: 'preserve-pi-tools', cwd: root },
+  );
+
+  t.deepEqual(persistence.policy, {
+    piTools: 'preserve',
+    workspace: { deniedSegments: persistence.policy.workspace.deniedSegments },
+  });
+});
+
 test('normalization rejects malformed harness keys', async t => {
   const { root } = await makeWorkspace(t);
   const invalidHarnesses = ['Pi', 'pi_code', '-pi', `a${'b'.repeat(32)}`];
@@ -162,6 +175,7 @@ test('EndoProvisionSpec rejects malformed roots and incompatible modes', async t
     [{ workspace: { extra: true } }, /unknown field.*extra/],
     [{ fs: 'sometimes' }, /fs must be readOnly or readWrite/],
     [{ git: 'force' }, /git must be readOnly, readWrite, or historyRewrite/],
+    [{ piTools: 'replace' }, /piTools must be preserve/],
     [
       { fs: 'readOnly', git: 'readWrite' },
       /writable Git requires a writable filesystem grant/,

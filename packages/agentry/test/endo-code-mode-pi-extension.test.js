@@ -1,7 +1,7 @@
 // @ts-check
 
 /** @import { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from '@earendil-works/pi-coding-agent' */
-/** @import { EndoProvisionPersistence, EndoProvisionResult } from '../src/code-mode-provisioning-types.js' */
+/** @import { EndoProvisionPersistence, EndoProvisionResult, EndoProvisionSpec } from '../src/code-mode-provisioning-types.js' */
 
 import { initTheme } from '@earendil-works/pi-coding-agent';
 import test from '@endo/ses-ava/prepare-endo.js';
@@ -61,6 +61,7 @@ const runLauncher = (args, cwd) =>
  * @property {string} [sessionId]
  * @property {unknown[]} [entries]
  * @property {string} [flag]
+ * @property {string[]} [activeToolNames]
  * @property {'tui' | 'rpc' | 'json' | 'print'} [mode]
  * @property {(persistence: EndoProvisionPersistence) => Promise<EndoProvisionResult>} [reconstructProvision]
  * @property {() => Promise<void>} [startDaemon]
@@ -86,6 +87,7 @@ const makeHarness = options => {
     entries = [],
     flag,
     mode = 'tui',
+    activeToolNames = ['read', 'write', 'edit', 'bash'],
     startDaemon = async () => {},
     rehydrateCredential,
   } = options;
@@ -99,6 +101,7 @@ const makeHarness = options => {
   const tools = [];
   /** @type {string[][]} */
   const activeTools = [];
+  let currentActiveTools = [...activeToolNames];
   /** @type {Array<{ message: string, type: string | undefined }>} */
   const notifications = [];
   /** @type {Array<import('../src/endo-code-mode-pi-extension.js').EndoCodeModePiProblem>} */
@@ -142,8 +145,10 @@ const makeHarness = options => {
       registerTool: tool => {
         tools.push(tool);
       },
+      getActiveTools: () => [...currentActiveTools],
       setActiveTools: names => {
-        activeTools.push([...names]);
+        currentActiveTools = [...names];
+        activeTools.push([...currentActiveTools]);
       },
       appendEntry: (customType, data) => {
         appended.push({ customType, data });
@@ -207,6 +212,9 @@ const makeHarness = options => {
     reconstructions,
     terminations,
     tools,
+    get currentActiveTools() {
+      return currentActiveTools;
+    },
     get cleanupCount() {
       return cleanupCount;
     },
@@ -344,6 +352,7 @@ for (const flag of ['{malformed', '[]', '"string"']) {
     t.is(harness.notifications.length, 1);
     t.regex(harness.notifications[0].message, /must be a JSON object/);
     t.false(harness.notifications[0].message.includes(flag));
+    t.deepEqual(harness.currentActiveTools, []);
   });
 }
 
@@ -411,6 +420,55 @@ test('startup with an omitted grant uses cwd and activates only evaluate', async
   t.false(prompt.includes(JSON.stringify(persistence.policy)));
 });
 
+test('piTools preserve keeps active Pi tools and composes the system prompt', async t => {
+  const cwd = await makeWorkspace(t);
+  const standardTools = ['read', 'write', 'edit', 'bash', 'other-extension'];
+  const harness = makeHarness({
+    cwd,
+    activeToolNames: standardTools,
+    flag: JSON.stringify({ piTools: 'preserve' }),
+  });
+
+  await harness.emit('session_start', {
+    type: 'session_start',
+    reason: 'startup',
+  });
+
+  t.deepEqual(harness.activeTools, [[], [...standardTools, 'evaluate']]);
+  t.deepEqual(harness.currentActiveTools, [...standardTools, 'evaluate']);
+  t.is(harness.reconstructions[0].policy.piTools, 'preserve');
+
+  const [promptResult] = await harness.emit('before_agent_start', {
+    type: 'before_agent_start',
+    systemPrompt: 'standard harness prompt',
+  });
+  const prompt = /** @type {{ systemPrompt: string }} */ (promptResult)
+    .systemPrompt;
+  t.true(prompt.startsWith('standard harness prompt\n\n'));
+  t.regex(prompt, /evaluate tool plus the other active Pi tools/);
+  t.false(prompt.includes('exactly one tool: evaluate'));
+
+  await harness.emit('session_shutdown', {
+    type: 'session_shutdown',
+    reason: 'reload',
+  });
+  t.deepEqual(harness.currentActiveTools, [...standardTools, 'evaluate']);
+
+  const retained = /** @type {EndoProvisionPersistence} */ (
+    harness.appended[0].data
+  );
+  const resumed = makeHarness({
+    cwd,
+    entries: [persistenceEntry(retained)],
+    activeToolNames: harness.currentActiveTools,
+  });
+  await resumed.emit('session_start', {
+    type: 'session_start',
+    reason: 'reload',
+  });
+  t.deepEqual(resumed.currentActiveTools, [...standardTools, 'evaluate']);
+});
+
 test('explicit filesystem and Git grants default their workspace to cwd', async t => {
   const cwd = await makeWorkspace(t);
   const harness = makeHarness({
@@ -461,7 +519,7 @@ for (const reason of ['resume', 'reload']) {
 test('new and fork create distinct retained namespaces; fork inherits policy', async t => {
   const cwd = await makeWorkspace(t);
   const parent = await normalizeEndoProvisionSpec(
-    { fs: 'readWrite', git: 'readOnly' },
+    { fs: 'readWrite', git: 'readOnly', piTools: 'preserve' },
     { harness: 'pi', sessionId: 'parent-session', cwd },
   );
   const fresh = makeHarness({ cwd, sessionId: 'new-session' });
@@ -486,6 +544,10 @@ test('new and fork create distinct retained namespaces; fork inherits policy', a
   t.notDeepEqual(forkPersistence.guestHandlePath, parent.guestHandlePath);
   t.deepEqual(forkPersistence.policy, parent.policy);
   t.is(forkPersistence.workspacePath, parent.workspacePath);
+  t.deepEqual(fork.activeTools, [
+    [],
+    ['read', 'write', 'edit', 'bash', 'evaluate'],
+  ]);
 });
 
 test('resume rejects a conflicting CLI policy with fork/new guidance', async t => {
@@ -511,6 +573,37 @@ test('resume rejects a conflicting CLI policy with fork/new guidance', async t =
   t.regex(harness.notifications[0].message, /conflicts/);
   t.regex(harness.notifications[0].message, /new session.*fork/s);
 });
+
+const preservationConflicts =
+  /** @type {Array<[string, EndoProvisionSpec | undefined, EndoProvisionSpec]>} */ ([
+    ['enabling', undefined, { piTools: 'preserve' }],
+    ['disabling', { piTools: 'preserve' }, {}],
+  ]);
+
+for (const [label, storedSpec, flag] of preservationConflicts) {
+  test(`resume rejects ${label} pi tool preservation`, async t => {
+    const cwd = await makeWorkspace(t);
+    const stored = await normalizeEndoProvisionSpec(storedSpec, {
+      harness: 'pi',
+      sessionId: 'retained-session',
+      cwd,
+    });
+    const harness = makeHarness({
+      cwd,
+      entries: [persistenceEntry(stored)],
+      flag: JSON.stringify(flag),
+    });
+
+    await harness.emit('session_start', {
+      type: 'session_start',
+      reason: 'resume',
+    });
+
+    t.deepEqual(harness.reconstructions, []);
+    t.regex(harness.notifications[0].message, /conflicts/);
+    t.deepEqual(harness.currentActiveTools, []);
+  });
+}
 
 test('resume with unparseable stored persistence is rejected as invalid', async t => {
   const cwd = await makeWorkspace(t);
@@ -706,6 +799,38 @@ test('failed daemon autostart is deterministic and actionable', async t => {
   t.regex(harness.diagnostics[0].action, /endo start/);
 });
 
+test('failed preserved startup leaves standard Pi tools active', async t => {
+  const cwd = await makeWorkspace(t);
+  const standardTools = ['read', 'write', 'edit', 'bash'];
+  const harness = makeHarness({
+    cwd,
+    activeToolNames: standardTools,
+    flag: JSON.stringify({ piTools: 'preserve' }),
+    reconstructProvision: async () => {
+      throw Object.assign(Error('refused'), { code: 'ECONNREFUSED' });
+    },
+    startDaemon: async () => {
+      throw Error('start race');
+    },
+  });
+
+  await harness.emit('session_start', {
+    type: 'session_start',
+    reason: 'startup',
+  });
+
+  t.deepEqual(harness.activeTools, [[], standardTools]);
+  t.deepEqual(harness.currentActiveTools, standardTools);
+  const [promptResult] = await harness.emit('before_agent_start', {
+    type: 'before_agent_start',
+    systemPrompt: 'standard harness prompt',
+  });
+  t.is(
+    /** @type {{ systemPrompt: string }} */ (promptResult).systemPrompt,
+    'standard harness prompt\n\nEndo code mode is unavailable. Standard Pi tools remain active; resolve the extension startup error before continuing.',
+  );
+});
+
 test('a daemon that returns different persistence than requested is rejected and cleaned up', async t => {
   const cwd = await makeWorkspace(t);
   let cleanupCount = 0;
@@ -840,7 +965,7 @@ test('interactive credential failure remains disconnected and actionable', async
   });
 
   t.deepEqual(harness.appended, []);
-  t.deepEqual(harness.activeTools, [[]]);
+  t.deepEqual(harness.activeTools, [[], []]);
   t.regex(harness.notifications[0].message, /trusted non-echoing TUI or RPC/);
 });
 

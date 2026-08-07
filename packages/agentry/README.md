@@ -191,6 +191,8 @@ try {
 
 The `EndoProvisionSpec` fields are optional grants:
 
+- `piTools`: `'preserve'` keeps Pi's currently active standard and extension
+  tools active alongside `evaluate`;
 - `fs`: `'readOnly'` or `'readWrite'`;
 - `git`: `'readOnly'`, `'readWrite'`, or `'historyRewrite'`; and
 - `gitRemotes`: remote policies normalized by `@endo/exo-git`, plus an optional
@@ -276,7 +278,19 @@ endo-pi --endo-provision='{"git":"readWrite"}'
 
 # Explicit history-rewrite authority.
 endo-pi --endo-provision='{"git":"historyRewrite"}'
+
+# Keep Pi's standard tools active alongside evaluate.
+endo-pi --endo-provision='{"piTools":"preserve","fs":"readOnly"}'
 ```
+
+By default, the extension strips all built-in Pi tools, leaving only `evaluate`,
+and the code-mode prompt replaces Pi's standard system prompt.
+`piTools: 'preserve'` is an opt-in primarily for developers building the
+harness, not end users: it re-adds Pi's active standard and extension tools
+alongside `evaluate`, while appending the code-mode guidance to the standard
+system prompt.
+If Endo startup fails, the standard Pi tools remain active and the extension
+reports only that code mode is unavailable.
 
 The modes describe separate views, but their effective authority is the union.
 For example, writable Git can change worktree files even if the separately
