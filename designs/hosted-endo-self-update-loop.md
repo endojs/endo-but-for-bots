@@ -4,7 +4,7 @@
 |---|---|
 | **Created** | 2026-08-07 |
 | **Author** | 0xPatrick (prompted) |
-| **Status** | Proposed |
+| **Status** | Phases 1-3 landed and verified on endo-server; phase 4 proposed |
 
 ## Summary
 
@@ -142,6 +142,31 @@ The newest few releases and whatever `current` points at are retained
 unconditionally as a floor, so a parsing failure degrades to today's behaviour
 rather than deleting something load-bearing.
 
+### A rollback must rewind the checkout too
+
+Restoring the generation is not enough on its own.
+The config checkout still holds the commit that failed, so the next apply —
+even a no-op "apply the committed tree" — puts it straight back, and with the
+revision pinned that means the bad revision as well.
+
+The rollback paths therefore rewind the checkout to the commit that produced
+the generation they landed on, which the existing `gen-<n>` tag already
+identifies, keeping the commit being left behind on a `rolled-back/<ts>-<sha>`
+branch so the record of what was tried survives.
+
+### The applier cannot restart itself mid-apply
+
+`endo-nixos-apply` runs the switch, so it has to survive its own activation.
+Without `restartIfChanged = false`, a config change that alters that unit makes
+`switch-to-configuration` stop the very service running `nixos-rebuild`: the
+apply dies by SIGTERM part-way through, leaving a half-switched system and a
+stale `nixos-rebuild-switch-to-configuration` transient unit that then blocks
+both the retry and the rollback.
+
+This was observed during the rollout, not predicted.
+The new definition still takes effect, because it is written to `/etc`; only
+the in-flight run is protected.
+
 ### The spool deploy sets the pin instead of bypassing it
 
 If `endo-deploy` keeps flipping `current` directly while the configuration pins
@@ -159,11 +184,19 @@ already has.
 ### A repository for the source
 
 `floot/endo` on Forgejo, alongside `floot/nixos-config`.
-The Endo repository is roughly 300 MB against 130 GB free, so size is not the
+The Endo repository is roughly 120 MB against 130 GB free, so size is not the
 constraint; the decision is whether Forgejo is upstream for the deployed branch
 or a mirror that GitHub can overwrite.
 This design treats Forgejo as upstream for what the host runs, and GitHub as
 where that work is proposed for review.
+
+Pinning a commit is only useful if the deploy can fetch it, and a commit the
+agent authors here is on Forgejo and nowhere else.
+`services.endo.mirrorUrl` is therefore consulted when resolving a pinned
+revision that `repoUrl` does not have.
+It is fetch-only, and only for resolving `rev`: a branch-tracking deploy still
+resolves its branch against `repoUrl`, so the mirror cannot quietly become the
+source of what a branch deploy builds.
 
 ### A writable work area
 
@@ -224,16 +257,33 @@ check.
 | Rollback target's release was pruned | Rebuilt from source; slower, and subject to registry availability |
 | Interrupted build leaves a partial release | No `.deploy-complete` marker, so it is rebuilt rather than reused |
 | Forgejo unreachable during apply | Push is logged and skipped; the apply proceeds, since a mirror failure must not fail a good rebuild |
+| A rollback leaves the bad pin in the checkout | The rollback rewinds it to the `gen-<n>` commit, keeping the bad one on a `rolled-back/*` branch |
 
 ## Phasing
 
 1. Revision pinning, per-revision releases, generation-aware retention, and the
    restart trigger.
    Self-contained, and valuable even if nothing else lands.
+   **Landed.**
 2. `getEndoRev` / `setEndoRev` on the nixos-admin caplet.
-3. The `floot/endo` mirror and the agent's writable clone.
+   **Landed.**
+3. The `floot/endo` mirror and `mirrorUrl`, so a revision that exists only on
+   the forge can be pinned and fetched.
+   **Landed.**
+   The agent's writable clone is not yet wired into a session preset; an agent
+   holding `host-powers` can call `provideGitClone` itself in the meantime.
 4. Optional: remove `host-powers` from `machine-admin` and grant the bounded
    capability set.
+
+### Verified on endo-server
+
+- A pinned revision builds and activates, and the daemon comes up on it.
+- A rollback restores the previous revision in **12 seconds**, reusing the
+  retained release rather than rebuilding it, and rewinds `endo.rev` with it.
+- A branch deploy resolves the branch, writes the pin, and hands off to the
+  apply path rather than flipping `current` behind the config's back.
+- A commit pushed only to `floot/endo` — not present on GitHub — was pinned,
+  fetched from the mirror, built, and run.
 
 ## Alternatives Considered
 
