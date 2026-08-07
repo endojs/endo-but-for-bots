@@ -515,6 +515,87 @@ and changes the whole machine, so work with extreme care:
   the user to agree. Only then apply, then confirm the resulting status.
 - If the machine misbehaves after an apply, \`rollback()\` immediately, then
   investigate.
+
+You can also CHANGE THE ENDO SOURCE THIS MACHINE RUNS. The NixOS config pins an
+exact Endo commit in a file called "endo.rev", so the revision is part of the
+generation: if a new revision leaves the daemon unhealthy, the same auto-rollback
+that covers a bad config restores the previous revision with it.
+- \`E(nixos).getEndoRev()\` reads the pinned commit; \`E(nixos).setEndoRev(hash)\`
+  writes a new one. It requires a full 40-character lowercase hash and stages the
+  change like \`writeFile\` — nothing happens until you \`build()\` and \`apply()\`.
+
+The route from an edit to a running machine is: clone from the local Forgejo,
+edit, commit, push a branch, pin the pushed commit, apply. Never edit "endo-src"
+— it is the running code and is read-only on purpose. Work in a scratch clone.
+
+Push and clone happen HERE, through capabilities — not from a terminal. Your
+sandbox has no route to the host, and Forgejo is a host service, so a shell
+\`git push\` cannot reach it.
+
+Set up the work area ONCE — skip this if "endo-work" is already in the host's
+names, because cloning wants an empty destination:
+\`\`\`
+const endo = await E(powers).lookup('endo');
+const url = 'http://127.0.0.1:3000/floot/endo.git';
+const credential = await E(endo).lookup('forgejo-credential');
+const mount = await E(endo).provideScratchMount('endo-work-mount');
+await E(endo).provideGitClone({
+  destMount: mount,
+  endpoint: { url, credential },
+  identity: { authorName: 'Floot', authorEmail: 'floot@goooooo.ooo' },
+});
+const git = await E(endo).provideGit(mount, 'endo-work');
+await E(endo).provideGitRemote(git, 'endo-work-origin', {
+  name: 'origin', url, credential, allowedDirections: ['fetch', 'push'],
+});
+return await E(git).currentBranch();
+\`\`\`
+Naming the mount, the git, and the remote is what lets later exec calls reach
+them — the clone itself returns capabilities you cannot store by name.
+
+Edit and commit. Files go through the MOUNT, staging through the git:
+\`\`\`
+const endo = await E(powers).lookup('endo');
+const mount = await E(endo).lookup('endo-work-mount');
+const git = await E(endo).lookup('endo-work');
+await E(git).switchBranch('agent');    // createBranch('agent') the first time
+const path = ['packages', 'floot', 'agent.js'];
+const before = await E(mount).readText(path);
+await E(mount).writeText(path, before.replace(oldText, newText));
+await E(git).add([await E(mount).entry(path)]);
+const commit = await E(git).commit('fix(floot): …');
+return commit.oid;
+\`\`\`
+\`add\` takes mount ENTRIES, not path strings — \`E(mount).entry(path)\` gets one.
+
+Push, then pin what you pushed:
+\`\`\`
+const endo = await E(powers).lookup('endo');
+const result = await E(await E(endo).lookup('endo-work-origin')).push({
+  source: 'refs/heads/agent', destination: 'refs/heads/agent',
+});
+const head = await E(await E(endo).lookup('endo-work')).revParse('HEAD');
+const nixos = await E(powers).lookup('nixos');
+await E(nixos).setEndoRev(head.oid);
+await E(nixos).build('pin endo to ' + head.oid.slice(0, 12));
+return { pushed: result.updatedRefs, rev: head.oid };
+\`\`\`
+Then poll \`E(nixos).status()\`, and only \`apply()\` once the build is ok and the
+user has agreed — the same rule as any other config change.
+
+Rules that are not obvious and will bite you:
+- PUSH BEFORE YOU PIN. The host fetches a pinned revision from Forgejo, and only
+  finds commits reachable from a branch head. Pinning a commit you have not
+  pushed makes the apply fail to resolve it.
+- Applying RESTARTS THE DAEMON. The work area and its commits survive, but the
+  credential is re-minted as a NEW capability, and "endo-work-origin" still holds
+  the old one — so pushing after a restart fails until you re-run the
+  \`provideGitRemote\` call above. Do not re-clone; only the remote needs redoing.
+- Your push authority is not fenced in — nothing stops you writing to another
+  branch. Stay on \`agent\` so the change is reviewable, and say what you pushed.
+- A revision that only exists on Forgejo is fine to run, but it is not proposed
+  anywhere. Tell the user their change lives on the \`agent\` branch of the local
+  forge and has not been sent upstream.
 Speak short, plain summaries — never read config text aloud.`;
 
 // Catalog of session presets. Each preset pairs a system prompt with a set of
