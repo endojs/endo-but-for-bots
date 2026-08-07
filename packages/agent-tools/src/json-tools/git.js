@@ -178,10 +178,9 @@ const REBASE_DESCRIPTION =
   'pre-rebase state.';
 
 /**
- * This package intentionally exposes only a curated JSON-safe writable Git slice
- * for now. Methods that remotely accept capabilities or can return
- * capabilities, including non-empty `status()` rows, need capref/result
- * serialization and are deferred future work.
+ * This package intentionally exposes only a curated JSON-safe writable Git
+ * slice for now. Methods that remotely accept capabilities need the
+ * mount-bridge adapter and are kept out of this one-to-one slice.
  *
  * Holds the schemas for every facet's tool at once; `gitToolMethodsByFacet`
  * below projects this onto the method names each facet actually advertises,

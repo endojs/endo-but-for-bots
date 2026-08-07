@@ -406,13 +406,15 @@ test('git-loop preset edits the workspace, commits, and reads HEAD~1 over a real
 
   await writeFileText(note, 'after\\n');
 
-  const rows = await E(git).status();
-  const row = rows.find(candidate => candidate.path === 'note.txt');
+  const status = await E(git).status();
+  const row = status.entries.find(candidate => candidate.path === 'note.txt');
   if (row === undefined) {
     throw new Error('note.txt did not appear in git status');
   }
-  await E(git).add([row.entry]);
-  const stagedDiff = await E(git).diff({ cached: true, entries: [row.entry] });
+  const worktree = await E(git).worktree();
+  const entry = await E(worktree).entry(row.path);
+  await E(git).add([entry]);
+  const stagedDiff = await E(git).diff({ cached: true, entries: [entry] });
   const commit = await E(git).commit('agent edit');
 
   const previousFs = await E(git).filesystemAt('HEAD~1');

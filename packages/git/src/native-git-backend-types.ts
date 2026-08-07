@@ -1,9 +1,5 @@
 import type { GitIndexStatus, GitWorktreeStatus } from '@endo/exo-git';
 
-export type NativeGitStatusOptions = {
-  untracked?: 'all' | 'normal' | 'no';
-};
-
 export type GitTreeEntry = {
   mode: string;
   type: 'blob' | 'tree' | 'commit';

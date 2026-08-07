@@ -36,11 +36,13 @@ const makeStubMount = () =>
  * resolves to, so a test can assert the path→entry marshalling reached the cap
  * intact.
  *
- * @param {{ statusRows?: unknown[], addCalls?: unknown[][], checkoutConflictCalls?: unknown[][] }} [opts]
+ * @param {{ statusRows?: unknown[], statusCalls?: unknown[][], truncated?: boolean, addCalls?: unknown[][], checkoutConflictCalls?: unknown[][] }} [opts]
  * @returns {ERef<GitMountToolCapability>}
  */
 const makeStubGit = ({
   statusRows = [],
+  statusCalls = [],
+  truncated = false,
   addCalls = [],
   checkoutConflictCalls = [],
 } = {}) => {
@@ -49,7 +51,10 @@ const makeStubGit = ({
     /** @type {unknown} */ (
       Far('StubGit', {
         worktree: async () => mount,
-        status: async () => harden(statusRows),
+        status: async options => {
+          statusCalls.push([options]);
+          return harden({ entries: harden(statusRows), truncated });
+        },
         add: async entries => {
           await null;
           const paths = await Promise.all(
@@ -95,49 +100,53 @@ const byNameOf = tools => name => {
   return found;
 };
 
-test('status strips the entry/node remotables to JSON-safe rows', async t => {
-  const inertEntry = Far('EndoMountEntry', {});
-  const inertNode = Far('Node', {});
+test('status returns copy-data rows and defaults untracked mode to normal', async t => {
   const statusRows = harden([
     {
-      entry: inertEntry,
       path: 'src/a.js',
       index: 'modified',
       worktree: 'clean',
-      node: inertNode,
     },
     {
-      entry: inertEntry,
       path: 'src/b.js',
       index: 'renamed',
       worktree: 'clean',
       renamedFrom: 'src/old.js',
-      node: inertNode,
     },
     {
-      entry: inertEntry,
       path: 'gone.js',
       index: 'deleted',
       worktree: 'deleted',
     },
   ]);
-  const tools = makeGitMountTools(makeStubGit({ statusRows }));
-  const rows = await byNameOf(tools)('status').invoke({});
-  t.deepEqual(rows, [
-    { path: 'src/a.js', index: 'modified', worktree: 'clean' },
-    {
-      path: 'src/b.js',
-      index: 'renamed',
-      worktree: 'clean',
-      renamedFrom: 'src/old.js',
-    },
-    { path: 'gone.js', index: 'deleted', worktree: 'deleted' },
-  ]);
-  // The projection must not smuggle remotables onto the JSON wire.
-  for (const row of /** @type {object[]} */ (rows)) {
+  const statusCalls = [];
+  const tools = makeGitMountTools(makeStubGit({ statusRows, statusCalls }));
+  const result = await byNameOf(tools)('status').invoke({});
+  t.deepEqual(result, { entries: statusRows, truncated: false });
+  t.deepEqual(statusCalls, [[{ untracked: 'normal' }]]);
+  for (const row of /** @type {object[]} */ (result.entries)) {
     t.false('entry' in row);
     t.false('node' in row);
   }
+});
+
+test('status forwards maxCount and untracked options and preserves truncation', async t => {
+  const statusCalls = [];
+  const tools = makeGitMountTools(
+    makeStubGit({
+      statusRows: [{ path: 'a', index: 'clean', worktree: 'untracked' }],
+      statusCalls,
+      truncated: true,
+    }),
+  );
+  const result = await byNameOf(tools)('status').invoke({
+    options: { maxCount: 1, untracked: 'all' },
+  });
+  t.deepEqual(result, {
+    entries: [{ path: 'a', index: 'clean', worktree: 'untracked' }],
+    truncated: true,
+  });
+  t.deepEqual(statusCalls, [[{ untracked: 'all', maxCount: 1 }]]);
 });
 
 test('status rejects a stray argument key', async t => {
@@ -302,8 +311,8 @@ test('add forwards a ".." segment to the capability, unfiltered', async t => {
   t.deepEqual(addCalls, [['../x', 'a/../b']]);
 });
 
-test('status on a clean tree returns an empty array', async t => {
+test('status on a clean tree returns an empty result', async t => {
   const tools = makeGitMountTools(makeStubGit());
   const rows = await byNameOf(tools)('status').invoke({});
-  t.deepEqual(rows, []);
+  t.deepEqual(rows, { entries: [], truncated: false });
 });

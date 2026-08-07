@@ -956,7 +956,7 @@ test.serial(
     });
 
     t.is((await E(git).currentBranch()).name, 'main');
-    t.deepEqual(await E(git).status(), []);
+    t.deepEqual(await E(git).status(), { entries: [], truncated: false });
     t.like(await E(remote).inspect(), {
       allowedDirections: ['fetch', 'push'],
       fetchRefspecs: ['+refs/heads/*:refs/remotes/origin/*'],

@@ -40,7 +40,7 @@ import type {
   GitStashPushOptions,
   GitStatusEntry,
   GitStatusOptions,
-  GitStatusNode,
+  GitStatusResult,
   GitWorktree,
   GitWorktreeStatus,
   HistoryRewriteEndoGit,
@@ -61,6 +61,20 @@ import type {
 } from '@endo/exo-git';
 import type { GitBackend } from '../src/git.js';
 
+expectTypeOf<GitStatusEntry>().toEqualTypeOf<{
+  path: string;
+  index: GitIndexStatus;
+  worktree: GitWorktreeStatus;
+  renamedFrom?: string;
+}>();
+expectTypeOf<GitStatusOptions>().toEqualTypeOf<{
+  maxCount?: number;
+  untracked?: 'all' | 'normal' | 'no';
+}>();
+expectTypeOf<GitStatusResult>().toEqualTypeOf<{
+  entries: GitStatusEntry[];
+  truncated: boolean;
+}>();
 declare const remotePolicy: RemotePolicy;
 const normalizedRemotePolicy = normalizeGitRemotePolicy({
   name: 'origin',
@@ -235,13 +249,6 @@ expectTypeOf<
 expectTypeOf<
   Awaited<ReturnType<ReadOnlyEndoGit['worktree']>>
 >().toEqualTypeOf<ReadOnlyGitWorktree>();
-expectTypeOf<Parameters<ReadOnlyEndoGit['status']>[0]>().toEqualTypeOf<
-  GitStatusOptions | undefined
->();
-const validStatusOptions: GitStatusOptions = { untracked: 'no' };
-expectTypeOf(validStatusOptions).toEqualTypeOf<GitStatusOptions>();
-// @ts-expect-error `status` only accepts Git's three untracked modes.
-const invalidStatusOptions: GitStatusOptions = { untracked: 'invalid' };
 expectTypeOf<WritableGitWorktree>().toExtend<PathEntryIssuer>();
 
 // `ReadOnlyEndoGit` must expose none of the mutating methods under any name;
