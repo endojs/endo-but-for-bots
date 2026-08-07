@@ -64,7 +64,7 @@
  * @module
  */
 
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import nodePath from 'node:path';
 
 import { E } from '@endo/eventual-send';
@@ -84,6 +84,10 @@ const CREDENTIAL_ENV_VARS = harden({
   apiKey: 'ANTHROPIC_API_KEY',
   oauthToken: 'CLAUDE_CODE_OAUTH_TOKEN',
 });
+
+/** Claude Code names each conversation transcript `<session-uuid>.jsonl`. */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /**
  * Create a cancellation context kit: an in-process passable context and
@@ -203,12 +207,91 @@ export const make = (powers, context, contextWrapper = {}) => {
   // construction would silently fall back to "fresh" on a transient read
   // failure, and could not notice a first turn that was killed before Claude
   // persisted anything (which must not `--continue`).
+  /** @type {(() => string[]) | undefined} */
+  let listTranscripts;
+  /** @type {(() => string | undefined) | undefined} */
+  let resolveResumeSessionId;
   /** @type {(() => boolean) | undefined} */
   let detectPriorConversation;
   if (persistConfig && configHostDir) {
     const projectsDir = nodePath.join(configHostDir, 'projects');
+    listTranscripts = () => {
+      if (!existsSync(projectsDir)) return [];
+      return readdirSync(projectsDir, { withFileTypes: true })
+        .filter(entry => entry.isDirectory())
+        .flatMap(entry => {
+          const projectDir = nodePath.join(projectsDir, entry.name);
+          return readdirSync(projectDir)
+            .filter(file => file.endsWith('.jsonl'))
+            .map(file => nodePath.join(projectDir, file));
+        });
+    };
+    // The newest non-empty transcript, named for the Claude Code session it
+    // holds. Only a non-empty `*.jsonl` counts: Claude Code creates the per-cwd
+    // project directory (and sibling scratch dirs such as `memory/`) as soon as
+    // it starts, so a merely non-empty `projects/` is true even for a spawn that
+    // died before writing a resumable turn — and resuming that errors out or
+    // silently forks a fresh, context-free conversation.
+    resolveResumeSessionId = () =>
+      /** @type {() => string[]} */ (listTranscripts)()
+        .map(file => ({
+          // Claude Code names each transcript for its session id. Anything
+          // else is not ours to resume by name.
+          id: nodePath.basename(file, '.jsonl'),
+          stat: statSync(file),
+        }))
+        .filter(({ id, stat }) => stat.size > 0 && UUID_RE.test(id))
+        .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs)[0]?.id;
+    // Deliberately broader than the resolver: any non-empty transcript means a
+    // turn already ran, even one this code cannot name. Such a session still
+    // resumes, via the `--continue` fallback, rather than reading as fresh.
     detectPriorConversation = () =>
-      existsSync(projectsDir) && readdirSync(projectsDir).length > 0;
+      /** @type {() => string[]} */ (listTranscripts)().some(
+        file => statSync(file).size > 0,
+      );
+  }
+
+  // Opt-in resume diagnostics. Reads `process.env` rather than the formula env
+  // so it can be turned on for sessions whose env was frozen at provision time
+  // (set ENDO_CLAUDE_DEBUG_RESUME on the daemon and restart). Reports, per
+  // spawn, the transcripts the detector saw and whether the newest external
+  // user entry chained onto earlier turns — the ground truth for "did the model
+  // actually resume its history".
+  /** @type {(() => unknown) | undefined} */
+  let describeTranscripts;
+  if (listTranscripts && process.env.ENDO_CLAUDE_DEBUG_RESUME) {
+    describeTranscripts = () =>
+      /** @type {() => string[]} */ (listTranscripts)().map(file => {
+        const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean);
+        // A human turn: an external, non-sidechain user entry whose content is
+        // plain text. Tool results are also `user` entries, with array content.
+        const prompts = lines
+          .flatMap(line => {
+            try {
+              return [JSON.parse(line)];
+            } catch {
+              return [];
+            }
+          })
+          .filter(
+            entry =>
+              entry.type === 'user' &&
+              entry.userType === 'external' &&
+              !entry.isSidechain &&
+              typeof entry.message?.content === 'string',
+          );
+        return {
+          file: nodePath.basename(file),
+          entries: lines.length,
+          prompts: prompts.length,
+          // How many turns saw the conversation so far. Anything short of
+          // `prompts - 1` means context was lost mid-session.
+          chained: prompts.filter(entry => entry.parentUuid).length,
+          lastChained: prompts.length
+            ? Boolean(prompts[prompts.length - 1].parentUuid)
+            : null,
+        };
+      });
   }
   let resumePriorConversation = false;
   if (detectPriorConversation) {
@@ -430,6 +513,8 @@ export const make = (powers, context, contextWrapper = {}) => {
     initialPrompt,
     resumePriorConversation,
     detectPriorConversation,
+    resolveResumeSessionId,
+    describeTranscripts,
   });
 
   // Tear down on cancellation/collection. `cancel` is transient (the

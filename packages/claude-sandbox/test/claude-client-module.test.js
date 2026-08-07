@@ -3,12 +3,15 @@
 
 import '@endo/init';
 import test from 'ava';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, utimes } from 'node:fs/promises';
 import os from 'node:os';
 import nodePath from 'node:path';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { make, makeCancellationKit } from '../src/claude-client-module.js';
+
+// Claude Code names each transcript for the session it holds.
+const PRIOR_SESSION_ID = 'edbd9889-ba6c-45f9-b30c-7b00bdbf5bd3';
 
 // The module's `make(powers, _context, { env })` runs with `powers`
 // being the `@agent` host authority. Provisioning (mount → provideMount
@@ -243,11 +246,16 @@ test('without a config mount CLAUDE_CONFIG_DIR stays on the ephemeral tmpfs', as
 test('a config mount persists CLAUDE_CONFIG_DIR and resumes a prior transcript', async t => {
   // A fake config backing dir that already holds a Claude transcript, as it
   // would after a pre-restart turn.
-  const configHostDir = await mkdtemp(nodePath.join(os.tmpdir(), 'claude-cfg-'));
+  const configHostDir = await mkdtemp(
+    nodePath.join(os.tmpdir(), 'claude-cfg-'),
+  );
   t.teardown(() => rm(configHostDir, { recursive: true, force: true }));
   const projectDir = nodePath.join(configHostDir, 'projects', '-workspace');
   await mkdir(projectDir, { recursive: true });
-  await writeFile(nodePath.join(projectDir, 'session.jsonl'), '{"type":"user"}\n');
+  await writeFile(
+    nodePath.join(projectDir, `${PRIOR_SESSION_ID}.jsonl`),
+    '{"type":"user"}\n',
+  );
 
   const host = makeMockHost({ configFsCap: { kind: 'fake-config-fs' } });
   const client = make(host.powers, undefined, {
@@ -272,12 +280,82 @@ test('a config mount persists CLAUDE_CONFIG_DIR and resumes a prior transcript',
   // CLAUDE_CONFIG_DIR points at the persistent mount, not the ephemeral tmpfs.
   t.is(host.spawnCalls[0].opts.env.CLAUDE_CONFIG_DIR, '/claude-config');
 
-  // The pre-restart transcript is detected, so the first turn resumes.
+  // The pre-restart transcript is detected, so the first turn resumes it — by
+  // name, so the CLI cannot silently pick a different conversation or none.
+  const { argv } = host.spawnCalls[0];
+  t.true(argv.includes('--resume'));
+  t.is(argv[argv.indexOf('--resume') + 1], PRIOR_SESSION_ID);
+  t.false(argv.includes('--continue'));
+});
+
+test('a transcript that is not named for a session id falls back to --continue', async t => {
+  // Claude Code names transcripts `<session-uuid>.jsonl`. Anything else cannot
+  // be resumed by name, but it still proves a turn already ran, so the session
+  // must resume via --continue rather than read as fresh and lose its history.
+  const configHostDir = await mkdtemp(
+    nodePath.join(os.tmpdir(), 'claude-cfg-'),
+  );
+  t.teardown(() => rm(configHostDir, { recursive: true, force: true }));
+  const projectDir = nodePath.join(configHostDir, 'projects', '-workspace');
+  await mkdir(projectDir, { recursive: true });
+  await writeFile(
+    nodePath.join(projectDir, 'legacy.jsonl'),
+    '{"type":"user"}\n',
+  );
+
+  const host = makeMockHost({ configFsCap: { kind: 'fake-config-fs' } });
+  const client = make(host.powers, undefined, {
+    env: baseEnv({
+      CONFIG_MOUNT_POINT: '/tmp/claude-config-my-claude-abc',
+      CONFIG_PET_NAME: 'claude-my-claude-abc-config',
+      CLAUDE_CONFIG_INNER_DIR: '/claude-config',
+      CLAUDE_CONFIG_HOST_DIR: configHostDir,
+    }),
+  });
+  await drain(await client.send('after restart'));
   t.true(host.spawnCalls[0].argv.includes('--continue'));
+  t.false(host.spawnCalls[0].argv.includes('--resume'));
+});
+
+test('the newest transcript wins when a config dir holds several', async t => {
+  const configHostDir = await mkdtemp(
+    nodePath.join(os.tmpdir(), 'claude-cfg-'),
+  );
+  t.teardown(() => rm(configHostDir, { recursive: true, force: true }));
+  const projectDir = nodePath.join(configHostDir, 'projects', '-workspace');
+  await mkdir(projectDir, { recursive: true });
+  const older = '11111111-1111-4111-8111-111111111111';
+  await writeFile(nodePath.join(projectDir, `${older}.jsonl`), '{"a":1}\n');
+  await writeFile(
+    nodePath.join(projectDir, `${PRIOR_SESSION_ID}.jsonl`),
+    '{"b":2}\n',
+  );
+  const now = Date.now();
+  await utimes(nodePath.join(projectDir, `${older}.jsonl`), now / 1000, 1);
+  await utimes(
+    nodePath.join(projectDir, `${PRIOR_SESSION_ID}.jsonl`),
+    now / 1000,
+    now / 1000,
+  );
+
+  const host = makeMockHost({ configFsCap: { kind: 'fake-config-fs' } });
+  const client = make(host.powers, undefined, {
+    env: baseEnv({
+      CONFIG_MOUNT_POINT: '/tmp/claude-config-my-claude-abc',
+      CONFIG_PET_NAME: 'claude-my-claude-abc-config',
+      CLAUDE_CONFIG_INNER_DIR: '/claude-config',
+      CLAUDE_CONFIG_HOST_DIR: configHostDir,
+    }),
+  });
+  await drain(await client.send('after restart'));
+  const { argv } = host.spawnCalls[0];
+  t.is(argv[argv.indexOf('--resume') + 1], PRIOR_SESSION_ID);
 });
 
 test('a config mount with an empty config dir starts a fresh conversation', async t => {
-  const configHostDir = await mkdtemp(nodePath.join(os.tmpdir(), 'claude-cfg-'));
+  const configHostDir = await mkdtemp(
+    nodePath.join(os.tmpdir(), 'claude-cfg-'),
+  );
   t.teardown(() => rm(configHostDir, { recursive: true, force: true }));
 
   const host = makeMockHost({ configFsCap: { kind: 'fake-config-fs' } });
@@ -292,6 +370,32 @@ test('a config mount with an empty config dir starts a fresh conversation', asyn
   await drain(await client.send('hello'));
   t.is(host.spawnCalls[0].opts.env.CLAUDE_CONFIG_DIR, '/claude-config');
   // No prior transcript → no resume on the first turn.
+  t.false(host.spawnCalls[0].argv.includes('--continue'));
+});
+
+test('a project dir with no transcript starts a fresh conversation', async t => {
+  // Claude Code creates `projects/<cwd>/` (and scratch dirs like `memory/`) as
+  // soon as it starts, so a spawn that died before writing a resumable turn
+  // still leaves a non-empty `projects/`. Resuming that with --continue errors
+  // out or forks a fresh conversation, so it must read as "no prior turn".
+  const configHostDir = await mkdtemp(
+    nodePath.join(os.tmpdir(), 'claude-cfg-'),
+  );
+  t.teardown(() => rm(configHostDir, { recursive: true, force: true }));
+  const projectDir = nodePath.join(configHostDir, 'projects', '-workspace');
+  await mkdir(nodePath.join(projectDir, 'memory'), { recursive: true });
+  await writeFile(nodePath.join(projectDir, 'empty.jsonl'), '');
+
+  const host = makeMockHost({ configFsCap: { kind: 'fake-config-fs' } });
+  const client = make(host.powers, undefined, {
+    env: baseEnv({
+      CONFIG_MOUNT_POINT: '/tmp/claude-config-my-claude-abc',
+      CONFIG_PET_NAME: 'claude-my-claude-abc-config',
+      CLAUDE_CONFIG_INNER_DIR: '/claude-config',
+      CLAUDE_CONFIG_HOST_DIR: configHostDir,
+    }),
+  });
+  await drain(await client.send('hello'));
   t.false(host.spawnCalls[0].argv.includes('--continue'));
 });
 
