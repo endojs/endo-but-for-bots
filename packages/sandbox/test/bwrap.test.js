@@ -246,6 +246,25 @@ const drainReader = async reader => {
   return Buffer.concat(chunks.map(c => Buffer.from(c)));
 };
 
+/**
+ * @param {number} pid
+ * @param {number} [timeoutMs]
+ */
+const waitForProcessGroupGone = async (pid, timeoutMs = 3000) => {
+  await null;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(-pid, 0);
+    } catch (e) {
+      if (/** @type {NodeJS.ErrnoException} */ (e).code === 'ESRCH') return;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error(`process group ${pid} survived bounded cleanup`);
+};
+
 test.serial('bwrap probe reports available with a version', async t => {
   // eslint-disable-next-line @jessie.js/safe-await-separator
   if (!(await bwrapCheck(t))) {
@@ -892,6 +911,209 @@ test.serial('fork() throws notImplemented before Phase 3', async t => {
   await t.throwsAsync(() => E(handle).fork(), {
     message: /Phase 3/,
   });
+});
+
+test.serial('bwrap serializes spawn and dispose in both orderings', async t => {
+  t.timeout(10_000);
+  // eslint-disable-next-line @jessie.js/safe-await-separator
+  if (!(await bwrapCheck(t))) return;
+  const driver = makeBwrapDriver({ env: {} });
+  const { powers, tmpdirs } = makeStubScratchProvider();
+  const factory = makeSandboxFactory({
+    drivers: harden([driver]),
+    scratchProvider: powers,
+  });
+  t.teardown(() => {
+    for (const dir of tmpdirs)
+      nodeFs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const spawnFirst = await E(factory).make(
+    harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+  );
+  const spawned = E(spawnFirst).spawn(
+    harden(['/bin/sleep', '300']),
+    harden({ captureStdout: false, captureStderr: false }),
+  );
+  const disposed = E(spawnFirst).dispose();
+  const proc = await spawned;
+  const pid = await E(proc).pid();
+  await disposed;
+  await t.throwsAsync(() => E(proc).wait(), { message: /disposed/ });
+  await waitForProcessGroupGone(pid);
+  await E(spawnFirst).dispose();
+
+  const disposeFirst = await E(factory).make(
+    harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+  );
+  await E(disposeFirst).dispose();
+  await t.throwsAsync(() => E(disposeFirst).spawn(harden(['/bin/true'])), {
+    message: /disposed/,
+  });
+});
+
+test.serial('bwrap keeps split UTF-8 stdout separate from stderr', async t => {
+  t.timeout(10_000);
+  // eslint-disable-next-line @jessie.js/safe-await-separator
+  if (!(await bwrapCheck(t))) return;
+  const driver = makeBwrapDriver({ env: {} });
+  const { powers, tmpdirs } = makeStubScratchProvider();
+  const factory = makeSandboxFactory({
+    drivers: harden([driver]),
+    scratchProvider: powers,
+  });
+  const handle = await E(factory).make(
+    harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+  );
+  t.teardown(async () => {
+    await E(handle).dispose();
+    for (const dir of tmpdirs)
+      nodeFs.rmSync(dir, { recursive: true, force: true });
+  });
+  const proc = await E(handle).spawn(
+    harden([
+      '/bin/sh',
+      '-c',
+      "printf '\\342'; sleep 0.05; printf '\\202\\254'; printf err >&2",
+    ]),
+    harden({ stdoutByteLimit: 4n, stderrByteLimit: 4n }),
+  );
+  const [stdout, stderr, status] = await Promise.all([
+    drainReader(await E(proc).stdout()),
+    drainReader(await E(proc).stderr()),
+    E(proc).wait(),
+  ]);
+  t.is(stdout.toString('utf8'), '€');
+  t.is(stderr.toString('utf8'), 'err');
+  t.deepEqual(status, { code: 0, signal: null });
+});
+
+test.serial(
+  'bwrap output cap kills a soft-refusing group with a pipe-holding descendant',
+  async t => {
+    t.timeout(10_000);
+    // eslint-disable-next-line @jessie.js/safe-await-separator
+    if (!(await bwrapCheck(t))) return;
+    const driver = makeBwrapDriver({ env: {} });
+    const { powers, tmpdirs } = makeStubScratchProvider();
+    const factory = makeSandboxFactory({
+      drivers: harden([driver]),
+      scratchProvider: powers,
+    });
+    const handle = await E(factory).make(
+      harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+    );
+    t.teardown(async () => {
+      await E(handle).dispose();
+      for (const dir of tmpdirs)
+        nodeFs.rmSync(dir, { recursive: true, force: true });
+    });
+    const proc = await E(handle).spawn(
+      harden([
+        '/bin/sh',
+        '-c',
+        'trap "" TERM; (trap "" TERM; while :; do sleep 60; done) & printf 1234; while :; do sleep 60; done',
+      ]),
+      harden({ stdoutByteLimit: 4n, stderrByteLimit: 1024n }),
+    );
+    const pid = await E(proc).pid();
+    const stdout = drainReader(await E(proc).stdout()).catch(e => e);
+    await t.throwsAsync(() => E(proc).wait(), {
+      message: /stdout.*byte limit/,
+    });
+    await stdout;
+    await waitForProcessGroupGone(pid);
+  },
+);
+
+test.serial(
+  'bwrap timeout and repeated cancellation reap process groups',
+  async t => {
+    t.timeout(15_000);
+    // eslint-disable-next-line @jessie.js/safe-await-separator
+    if (!(await bwrapCheck(t))) return;
+    const driver = makeBwrapDriver({ env: {} });
+    const { powers, tmpdirs } = makeStubScratchProvider();
+    const factory = makeSandboxFactory({
+      drivers: harden([driver]),
+      scratchProvider: powers,
+    });
+    const handle = await E(factory).make(
+      harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+    );
+    t.teardown(async () => {
+      await E(handle).dispose();
+      for (const dir of tmpdirs)
+        nodeFs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    const timed = await E(handle).spawn(
+      harden(['/bin/sh', '-c', 'trap "" TERM; while :; do sleep 60; done']),
+      harden({ timeoutMs: 25, captureStdout: false, captureStderr: false }),
+    );
+    const timedPid = await E(timed).pid();
+    await t.throwsAsync(() => E(timed).wait(), { message: /timed out/ });
+    await waitForProcessGroupGone(timedPid);
+
+    const cancelled = await E(handle).spawn(
+      harden(['/bin/sleep', '300']),
+      harden({ captureStdout: false, captureStderr: false }),
+    );
+    const cancelledPid = await E(cancelled).pid();
+    await Promise.all([E(cancelled).kill(), E(cancelled).kill()]);
+    await t.throwsAsync(() => E(cancelled).wait(), { message: /cancelled/ });
+    await waitForProcessGroupGone(cancelledPid);
+  },
+);
+
+test.serial('bwrap parent death leaves no owned process group', async t => {
+  t.timeout(10_000);
+  // eslint-disable-next-line @jessie.js/safe-await-separator
+  if (!(await bwrapCheck(t))) return;
+  const scratch = nodeFs.mkdtempSync(
+    nodePath.join(nodeOs.tmpdir(), 'endo-sandbox-owner-death-'),
+  );
+  const fixture = new URL('./fixtures/bwrap-owner.js', import.meta.url);
+  const owner = nodeSpawn(process.execPath, [fixture.pathname, scratch], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  t.teardown(() => {
+    try {
+      owner.kill('SIGKILL');
+    } catch {
+      // already gone
+    }
+    nodeFs.rmSync(scratch, { recursive: true, force: true });
+  });
+  /** @type {Buffer[]} */
+  const stderr = [];
+  owner.stderr?.on('data', chunk => stderr.push(chunk));
+  const pid = await new Promise((resolve, reject) => {
+    let output = '';
+    const timer = setTimeout(
+      () => reject(new Error('bwrap owner fixture did not become ready')),
+      5000,
+    );
+    owner.stdout?.on('data', chunk => {
+      output += String(chunk);
+      const match = output.match(/^(\d+)$/m);
+      if (match !== null) {
+        clearTimeout(timer);
+        resolve(Number(match[1]));
+      }
+    });
+    owner.once('exit', code => {
+      clearTimeout(timer);
+      reject(
+        new Error(
+          `bwrap owner fixture exited ${code}: ${Buffer.concat(stderr).toString('utf8')}`,
+        ),
+      );
+    });
+  });
+  owner.kill('SIGKILL');
+  await new Promise(resolve => owner.once('close', resolve));
+  await waitForProcessGroupGone(/** @type {number} */ (pid));
 });
 
 // --- PATH synthesis tests --------------------------------------------------

@@ -8,14 +8,18 @@ import { M } from '@endo/patterns';
 
 import assert from 'node:assert';
 import { spawn as nodeSpawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import * as nodeFs from 'node:fs';
 import * as nodeOs from 'node:os';
 import * as nodePath from 'node:path';
+import { PassThrough } from 'node:stream';
 
 import {
   ENDO_SANDBOX_PREFIX,
   makePodmanDriver,
   parseImagePathFromConfigEnv,
+  PODMAN_OPERATION_LABEL,
+  PODMAN_OWNER_LABEL,
 } from '../src/drivers/podman.js';
 import { DEFAULT_PATH } from '../src/drivers/path.js';
 import { makeSandboxFactory } from '../src/factory.js';
@@ -32,6 +36,7 @@ const StubMountInterface = M.interface('Mount', {
  * tests rely on inside the slice.
  */
 const ALPINE_REF = 'docker.io/library/alpine:3.19';
+const PODMAN_TEST_OWNER = 'sandbox-lifecycle-test-suite';
 
 /**
  * Run a host-side podman command and resolve with its captured stdio.
@@ -74,6 +79,25 @@ const podmanRun = async args => {
       }),
     );
   });
+};
+
+/** @param {string} ownerId */
+const listOwnedContainers = async ownerId => {
+  const result = await podmanRun([
+    'ps',
+    '-a',
+    '--filter',
+    `label=${PODMAN_OWNER_LABEL}=${ownerId}`,
+    '--format',
+    '{{.Names}}',
+  ]);
+  if (result.code !== 0) {
+    throw new Error(result.stderr.trim() || result.stdout.trim());
+  }
+  return result.stdout
+    .split('\n')
+    .map(name => name.trim())
+    .filter(name => name !== '');
 };
 
 /**
@@ -131,6 +155,82 @@ let podmanAvailability = { available: false, reason: 'not yet probed' };
 
 test.serial.before(async _t => {
   podmanAvailability = await probePodman();
+});
+
+test('podman probe fails closed without an exact cleanup scope', async t => {
+  const driver = makePodmanDriver({ env: {} });
+  const probe = await driver.probe();
+  t.false(probe.available);
+  t.regex(probe.reason ?? '', /stable ownerId/);
+  t.false(probe.details?.lifecycle?.crashCleanup ?? true);
+});
+
+test('podman reconciliation uses only the exact owner label', async t => {
+  /** @type {Array<{ command: string, args: string[] }>} */
+  const calls = [];
+  const childProcess = {
+    /**
+     * @param {string} command
+     * @param {string[]} args
+     */
+    spawn(command, args) {
+      calls.push({ command, args: [...args] });
+      let code = 0;
+      let stdout = '';
+      if (command === 'podman' && args.includes('--version')) {
+        stdout = 'podman version 5.8.0\n';
+      } else if (args.includes('{{.Host.Security.Rootless}}')) {
+        stdout = 'true\n';
+      } else if (args.includes('{{.Host.OCIRuntime.Name}}')) {
+        stdout = 'crun\n';
+      } else if (args.includes('ps')) {
+        stdout = 'owned-operation\n';
+      } else if (command !== 'podman') {
+        code = 1;
+      }
+
+      const child = new EventEmitter();
+      const stdoutStream = new PassThrough();
+      const stderrStream = new PassThrough();
+      Object.assign(child, {
+        stdout: stdoutStream,
+        stderr: stderrStream,
+      });
+      void Promise.resolve().then(() => {
+        stdoutStream.end(stdout);
+        stderrStream.end();
+        child.emit('close', code, null);
+      });
+      return child;
+    },
+  };
+  const ownerId = 'formula-exact-owner';
+  const driver = makePodmanDriver({
+    childProcess: /** @type {any} */ (childProcess),
+    env: {},
+    ownerId,
+  });
+  const probe = await driver.probe();
+  t.true(probe.available, probe.reason);
+
+  const listing = calls.find(call => call.args.includes('ps'));
+  t.deepEqual(listing, {
+    command: 'podman',
+    args: [
+      'ps',
+      '-a',
+      '--filter',
+      `label=${PODMAN_OWNER_LABEL}=${ownerId}`,
+      '--format',
+      '{{.Names}}',
+    ],
+  });
+  t.deepEqual(
+    calls
+      .filter(call => call.args.includes('rm'))
+      .map(call => call.args.at(-1)),
+    ['owned-operation'],
+  );
 });
 
 /**
@@ -215,9 +315,9 @@ test.serial('podman probe reports rootless availability + version', async t => {
     t.pass(`podman not available: ${podmanAvailability.reason}`);
     return;
   }
-  // `reapOrphans: false` keeps the boot-time sweep out of this probe
-  // so other tests can manage their own fixtures predictably.
-  const driver = makePodmanDriver({ env: {}, reapOrphans: false });
+  // The test owner id scopes the boot-time sweep to this suite's own
+  // containers, so other tests can manage their fixtures predictably.
+  const driver = makePodmanDriver({ env: {}, ownerId: PODMAN_TEST_OWNER });
   const probe = await driver.probe();
   t.true(probe.available, `probe should report available: ${probe.reason}`);
   t.is(typeof probe.version, 'string');
@@ -236,7 +336,7 @@ test.serial(
       t.pass(`podman not available: ${podmanAvailability.reason}`);
       return;
     }
-    const driver = makePodmanDriver({ env: {}, reapOrphans: false });
+    const driver = makePodmanDriver({ env: {}, ownerId: PODMAN_TEST_OWNER });
     const { powers } = makeStubScratchProvider();
     const factory = makeSandboxFactory({
       drivers: harden([driver]),
@@ -256,7 +356,7 @@ test.serial('alpine OCI slice spawns /bin/echo hello', async t => {
     );
     return;
   }
-  const driver = makePodmanDriver({ env: {}, reapOrphans: false });
+  const driver = makePodmanDriver({ env: {}, ownerId: PODMAN_TEST_OWNER });
   const { powers, tmpdirs } = makeStubScratchProvider();
   const factory = makeSandboxFactory({
     drivers: harden([driver]),
@@ -292,7 +392,7 @@ test.serial(
       );
       return;
     }
-    const driver = makePodmanDriver({ env: {}, reapOrphans: false });
+    const driver = makePodmanDriver({ env: {}, ownerId: PODMAN_TEST_OWNER });
     const { powers, makeMountCapForPath, tmpdirs } = makeStubScratchProvider();
     const factory = makeSandboxFactory({
       drivers: harden([driver]),
@@ -346,7 +446,7 @@ test.serial('network: none blocks external reach in alpine slice', async t => {
     );
     return;
   }
-  const driver = makePodmanDriver({ env: {}, reapOrphans: false });
+  const driver = makePodmanDriver({ env: {}, ownerId: PODMAN_TEST_OWNER });
   const { powers, tmpdirs } = makeStubScratchProvider();
   const factory = makeSandboxFactory({
     drivers: harden([driver]),
@@ -397,7 +497,7 @@ test.serial(
     // Phase 1 hosts may not have either.
     const slirpProbe = await podmanRun(['unshare', '--', 'true']);
     void slirpProbe;
-    const driver = makePodmanDriver({ env: {}, reapOrphans: false });
+    const driver = makePodmanDriver({ env: {}, ownerId: PODMAN_TEST_OWNER });
     const { powers, tmpdirs } = makeStubScratchProvider();
     const factory = makeSandboxFactory({
       drivers: harden([driver]),
@@ -459,7 +559,7 @@ test.serial('apk update succeeds inside a private alpine slice', async t => {
     );
     return;
   }
-  const driver = makePodmanDriver({ env: {}, reapOrphans: false });
+  const driver = makePodmanDriver({ env: {}, ownerId: PODMAN_TEST_OWNER });
   const { powers, tmpdirs } = makeStubScratchProvider();
   const factory = makeSandboxFactory({
     drivers: harden([driver]),
@@ -512,7 +612,7 @@ test.serial('apk update succeeds inside a private alpine slice', async t => {
   );
 });
 
-test.serial('orphan reap sweeps stale endo-sandbox- containers', async t => {
+test.serial('orphan reap uses exact owner labels', async t => {
   if (!podmanAvailability.available || !podmanAvailability.imagePresent) {
     t.pass(
       `podman or alpine image not available: ${podmanAvailability.reason ?? 'image absent'}`,
@@ -524,23 +624,40 @@ test.serial('orphan reap sweeps stale endo-sandbox- containers', async t => {
   // immediately (`/bin/true`) so we are reaping an exited record, not
   // a running namespace.
   const sentinelName = `${ENDO_SANDBOX_PREFIX}stale-${Date.now().toString(16)}`;
+  const unrelatedName = `${ENDO_SANDBOX_PREFIX}unrelated-${Date.now().toString(16)}`;
   const created = await podmanRun([
     'create',
     '--name',
     sentinelName,
+    '--label',
+    `${PODMAN_OWNER_LABEL}=${PODMAN_TEST_OWNER}`,
+    '--label',
+    `${PODMAN_OPERATION_LABEL}=stale-fixture`,
+    ALPINE_REF,
+    '/bin/true',
+  ]);
+  const unrelatedCreated = await podmanRun([
+    'create',
+    '--name',
+    unrelatedName,
+    '--label',
+    `${PODMAN_OWNER_LABEL}=some-other-formula`,
     ALPINE_REF,
     '/bin/true',
   ]);
   t.teardown(async () => {
     // Best-effort cleanup in case the test fails before the reap.
     await podmanRun(['rm', '-f', sentinelName]);
+    await podmanRun(['rm', '-f', unrelatedName]);
   });
-  if (created.code !== 0) {
-    t.pass(`could not pre-create sentinel: ${created.stderr.trim()}`);
+  if (created.code !== 0 || unrelatedCreated.code !== 0) {
+    t.pass(
+      `could not pre-create sentinels: ${created.stderr.trim()} ${unrelatedCreated.stderr.trim()}`,
+    );
     return;
   }
 
-  const driver = makePodmanDriver({ env: {}, reapOrphans: true });
+  const driver = makePodmanDriver({ env: {}, ownerId: PODMAN_TEST_OWNER });
   const probe = await driver.probe();
   t.true(probe.available);
 
@@ -557,6 +674,19 @@ test.serial('orphan reap sweeps stale endo-sandbox- containers', async t => {
     '',
     `sentinel ${sentinelName} should have been reaped, podman ps reports: ${after.stdout.trim() || '(empty)'}`,
   );
+  const unrelatedAfter = await podmanRun([
+    'ps',
+    '-a',
+    '--filter',
+    `name=${unrelatedName}`,
+    '--format',
+    '{{.Names}}',
+  ]);
+  t.is(
+    unrelatedAfter.stdout.trim(),
+    unrelatedName,
+    'exact-label cleanup must leave an unrelated prefixed container intact',
+  );
 });
 
 test.serial(
@@ -566,7 +696,7 @@ test.serial(
       t.pass(`podman not available: ${podmanAvailability.reason}`);
       return;
     }
-    const driver = makePodmanDriver({ env: {}, reapOrphans: false });
+    const driver = makePodmanDriver({ env: {}, ownerId: PODMAN_TEST_OWNER });
     const { powers, tmpdirs } = makeStubScratchProvider();
     const factory = makeSandboxFactory({
       drivers: harden([driver]),
@@ -596,7 +726,7 @@ test.serial(
       );
       return;
     }
-    const driver = makePodmanDriver({ env: {}, reapOrphans: false });
+    const driver = makePodmanDriver({ env: {}, ownerId: PODMAN_TEST_OWNER });
     const { powers, tmpdirs } = makeStubScratchProvider();
     const factory = makeSandboxFactory({
       drivers: harden([driver]),
@@ -631,7 +761,7 @@ test.serial('fork() throws notImplemented before Phase 3', async t => {
     );
     return;
   }
-  const driver = makePodmanDriver({ env: {}, reapOrphans: false });
+  const driver = makePodmanDriver({ env: {}, ownerId: PODMAN_TEST_OWNER });
   const { powers, tmpdirs } = makeStubScratchProvider();
   const factory = makeSandboxFactory({
     drivers: harden([driver]),
@@ -651,6 +781,258 @@ test.serial('fork() throws notImplemented before Phase 3', async t => {
   await t.throwsAsync(() => E(handle).fork(), {
     message: /Phase 3/,
   });
+});
+
+test.serial(
+  'podman serializes spawn and dispose in both orderings',
+  async t => {
+    t.timeout(20_000);
+    if (!podmanAvailability.available || !podmanAvailability.imagePresent) {
+      t.pass(
+        `podman or alpine image not available: ${podmanAvailability.reason ?? 'image absent'}`,
+      );
+      return;
+    }
+    const ownerId = `${PODMAN_TEST_OWNER}-race`;
+    const driver = makePodmanDriver({ env: {}, ownerId });
+    const { powers, tmpdirs } = makeStubScratchProvider();
+    const factory = makeSandboxFactory({
+      drivers: harden([driver]),
+      scratchProvider: powers,
+    });
+    t.teardown(() => cleanupTmpdirs(tmpdirs));
+
+    const spawnFirst = await E(factory).make(
+      harden({
+        rootfs: { kind: 'oci', ref: ALPINE_REF },
+        network: 'none',
+        backend: 'podman',
+      }),
+    );
+    const spawned = E(spawnFirst).spawn(
+      harden(['/bin/sleep', '300']),
+      harden({ captureStdout: false, captureStderr: false }),
+    );
+    const disposed = E(spawnFirst).dispose();
+    const proc = await spawned;
+    await disposed;
+    await t.throwsAsync(() => E(proc).wait(), { message: /disposed/ });
+    t.deepEqual(await listOwnedContainers(ownerId), []);
+    await E(spawnFirst).dispose();
+
+    const disposeFirst = await E(factory).make(
+      harden({
+        rootfs: { kind: 'oci', ref: ALPINE_REF },
+        network: 'none',
+        backend: 'podman',
+      }),
+    );
+    await E(disposeFirst).dispose();
+    await t.throwsAsync(() => E(disposeFirst).spawn(harden(['/bin/true'])), {
+      message: /disposed/,
+    });
+    t.deepEqual(await listOwnedContainers(ownerId), []);
+  },
+);
+
+test.serial('podman keeps split UTF-8 stdout separate from stderr', async t => {
+  t.timeout(20_000);
+  if (!podmanAvailability.available || !podmanAvailability.imagePresent) {
+    t.pass(
+      `podman or alpine image not available: ${podmanAvailability.reason ?? 'image absent'}`,
+    );
+    return;
+  }
+  const ownerId = `${PODMAN_TEST_OWNER}-split-streams`;
+  const driver = makePodmanDriver({ env: {}, ownerId });
+  const { powers, tmpdirs } = makeStubScratchProvider();
+  const factory = makeSandboxFactory({
+    drivers: harden([driver]),
+    scratchProvider: powers,
+  });
+  const handle = await E(factory).make(
+    harden({
+      rootfs: { kind: 'oci', ref: ALPINE_REF },
+      network: 'none',
+      backend: 'podman',
+    }),
+  );
+  t.teardown(async () => {
+    await E(handle).dispose();
+    cleanupTmpdirs(tmpdirs);
+  });
+  const proc = await E(handle).spawn(
+    harden([
+      '/bin/sh',
+      '-c',
+      "printf '\\342'; sleep 0.05; printf '\\202\\254'; printf err >&2",
+    ]),
+    harden({ stdoutByteLimit: 4n, stderrByteLimit: 4n }),
+  );
+  const [stdout, stderr, status] = await Promise.all([
+    drainReader(await E(proc).stdout()),
+    drainReader(await E(proc).stderr()),
+    E(proc).wait(),
+  ]);
+  t.is(stdout.toString('utf8'), '€');
+  t.is(stderr.toString('utf8'), 'err');
+  t.deepEqual(status, { code: 0, signal: null });
+  t.deepEqual(await listOwnedContainers(ownerId), []);
+});
+
+test.serial(
+  'podman output cap kills a soft-refusing container with a pipe-holding descendant',
+  async t => {
+    t.timeout(20_000);
+    if (!podmanAvailability.available || !podmanAvailability.imagePresent) {
+      t.pass(
+        `podman or alpine image not available: ${podmanAvailability.reason ?? 'image absent'}`,
+      );
+      return;
+    }
+    const ownerId = `${PODMAN_TEST_OWNER}-output-cap`;
+    const driver = makePodmanDriver({ env: {}, ownerId });
+    const { powers, tmpdirs } = makeStubScratchProvider();
+    const factory = makeSandboxFactory({
+      drivers: harden([driver]),
+      scratchProvider: powers,
+    });
+    const handle = await E(factory).make(
+      harden({
+        rootfs: { kind: 'oci', ref: ALPINE_REF },
+        network: 'none',
+        backend: 'podman',
+      }),
+    );
+    t.teardown(async () => {
+      await E(handle).dispose();
+      cleanupTmpdirs(tmpdirs);
+    });
+    const proc = await E(handle).spawn(
+      harden([
+        '/bin/sh',
+        '-c',
+        'trap "" TERM; (trap "" TERM; while :; do sleep 60; done) & printf 1234; while :; do sleep 60; done',
+      ]),
+      harden({ stdoutByteLimit: 4n, stderrByteLimit: 1024n }),
+    );
+    const stdout = drainReader(await E(proc).stdout()).catch(e => e);
+    await t.throwsAsync(() => E(proc).wait(), {
+      message: /stdout.*byte limit/,
+    });
+    await stdout;
+    t.deepEqual(await listOwnedContainers(ownerId), []);
+  },
+);
+
+test.serial(
+  'podman timeout and repeated cancellation reap containers',
+  async t => {
+    t.timeout(30_000);
+    if (!podmanAvailability.available || !podmanAvailability.imagePresent) {
+      t.pass(
+        `podman or alpine image not available: ${podmanAvailability.reason ?? 'image absent'}`,
+      );
+      return;
+    }
+    const ownerId = `${PODMAN_TEST_OWNER}-termination`;
+    const driver = makePodmanDriver({ env: {}, ownerId });
+    const { powers, tmpdirs } = makeStubScratchProvider();
+    const factory = makeSandboxFactory({
+      drivers: harden([driver]),
+      scratchProvider: powers,
+    });
+    const handle = await E(factory).make(
+      harden({
+        rootfs: { kind: 'oci', ref: ALPINE_REF },
+        network: 'none',
+        backend: 'podman',
+      }),
+    );
+    t.teardown(async () => {
+      await E(handle).dispose();
+      cleanupTmpdirs(tmpdirs);
+    });
+
+    const timed = await E(handle).spawn(
+      harden(['/bin/sh', '-c', 'trap "" TERM; while :; do sleep 60; done']),
+      harden({ timeoutMs: 25, captureStdout: false, captureStderr: false }),
+    );
+    await t.throwsAsync(() => E(timed).wait(), { message: /timed out/ });
+    t.deepEqual(await listOwnedContainers(ownerId), []);
+
+    const cancelled = await E(handle).spawn(
+      harden(['/bin/sleep', '300']),
+      harden({ captureStdout: false, captureStderr: false }),
+    );
+    await Promise.all([E(cancelled).kill(), E(cancelled).kill()]);
+    await t.throwsAsync(() => E(cancelled).wait(), { message: /cancelled/ });
+    t.deepEqual(await listOwnedContainers(ownerId), []);
+  },
+);
+
+test.serial('podman owner crash is reconciled by exact label', async t => {
+  t.timeout(30_000);
+  if (!podmanAvailability.available || !podmanAvailability.imagePresent) {
+    t.pass(
+      `podman or alpine image not available: ${podmanAvailability.reason ?? 'image absent'}`,
+    );
+    return;
+  }
+  const ownerId = `${PODMAN_TEST_OWNER}-owner-${Date.now().toString(16)}`;
+  const scratch = nodeFs.mkdtempSync(
+    nodePath.join(nodeOs.tmpdir(), 'endo-sandbox-podman-owner-'),
+  );
+  const fixture = new URL('./fixtures/podman-owner.js', import.meta.url);
+  const owner = nodeSpawn(
+    process.execPath,
+    [fixture.pathname, ownerId, ALPINE_REF, scratch],
+    { stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  t.teardown(async () => {
+    try {
+      owner.kill('SIGKILL');
+    } catch {
+      // already gone
+    }
+    const cleanupDriver = makePodmanDriver({ env: {}, ownerId });
+    await cleanupDriver.probe();
+    nodeFs.rmSync(scratch, { recursive: true, force: true });
+  });
+  /** @type {Buffer[]} */
+  const stderr = [];
+  owner.stderr?.on('data', chunk => stderr.push(chunk));
+  await new Promise((resolve, reject) => {
+    let output = '';
+    const timer = setTimeout(
+      () => reject(new Error('podman owner fixture did not become ready')),
+      15_000,
+    );
+    owner.stdout?.on('data', chunk => {
+      output += String(chunk);
+      if (output.includes('ready')) {
+        clearTimeout(timer);
+        resolve(undefined);
+      }
+    });
+    owner.once('exit', code => {
+      clearTimeout(timer);
+      reject(
+        new Error(
+          `podman owner fixture exited ${code}: ${Buffer.concat(stderr).toString('utf8')}`,
+        ),
+      );
+    });
+  });
+  t.is((await listOwnedContainers(ownerId)).length, 1);
+  const ownerExit = new Promise(resolve => owner.once('exit', resolve));
+  owner.kill('SIGKILL');
+  await ownerExit;
+
+  const cleanupDriver = makePodmanDriver({ env: {}, ownerId });
+  const cleanupProbe = await cleanupDriver.probe();
+  t.true(cleanupProbe.available, cleanupProbe.reason);
+  t.deepEqual(await listOwnedContainers(ownerId), []);
 });
 
 // ---------------------------------------------------------------------------
@@ -729,7 +1111,7 @@ test.serial(
     // user-facing failure case.
     assert(typeof expectedPath === 'string');
 
-    const driver = makePodmanDriver({ env: {}, reapOrphans: false });
+    const driver = makePodmanDriver({ env: {}, ownerId: PODMAN_TEST_OWNER });
     const { powers, tmpdirs } = makeStubScratchProvider();
     const factory = makeSandboxFactory({
       drivers: harden([driver]),
@@ -782,7 +1164,7 @@ test.serial(
       return;
     }
     const callerPath = '/opt/myapp/bin:/usr/bin';
-    const driver = makePodmanDriver({ env: {}, reapOrphans: false });
+    const driver = makePodmanDriver({ env: {}, ownerId: PODMAN_TEST_OWNER });
     const { powers, tmpdirs } = makeStubScratchProvider();
     const factory = makeSandboxFactory({
       drivers: harden([driver]),
@@ -878,7 +1260,7 @@ test.serial(
       return;
     }
 
-    const driver = makePodmanDriver({ env: {}, reapOrphans: false });
+    const driver = makePodmanDriver({ env: {}, ownerId: PODMAN_TEST_OWNER });
     const { powers, tmpdirs } = makeStubScratchProvider();
     const factory = makeSandboxFactory({
       drivers: harden([driver]),

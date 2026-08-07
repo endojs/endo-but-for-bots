@@ -102,6 +102,14 @@ const SpawnOptsShape = M.splitRecord(
     stdin: M.remotable('Reader'),
     captureStdout: M.boolean(),
     captureStderr: M.boolean(),
+    stdoutByteLimit: M.and(M.nat(), M.gte(1n)),
+    stderrByteLimit: M.and(M.nat(), M.gte(1n)),
+    // Capped at ~24.8 days by choice, not by the domain: a process
+    // deadline is not inherently a 32-bit quantity, but every timer
+    // implementation we target clamps there, and a single un-rearmed
+    // timer is the simpler mechanism. Lifting the cap means re-arming
+    // across the clamp, not widening this bound alone.
+    timeoutMs: M.and(M.number(), M.gte(1), M.lte(0x7fff_ffff)),
   },
 );
 harden(SpawnOptsShape);
@@ -109,6 +117,14 @@ harden(SpawnOptsShape);
 const BackendProbeDetailsShape = M.splitRecord(
   {},
   {
+    lifecycle: M.splitRecord(
+      {
+        available: M.boolean(),
+        processGroups: M.boolean(),
+        crashCleanup: M.boolean(),
+      },
+      { reason: M.string() },
+    ),
     landlock: M.splitRecord({ available: M.boolean() }, { reason: M.string() }),
     cgroup2: M.splitRecord(
       { available: M.boolean(), controllers: M.arrayOf(M.string()) },
@@ -179,8 +195,8 @@ export const ProcessHandleInterface = M.interface('SandboxProcess', {
   help: M.call().optional(M.string()).returns(M.string()),
   pid: M.call().returns(M.number()),
   stdin: M.call().returns(M.remotable('Writer')),
-  stdout: M.call().returns(M.remotable('Reader')),
-  stderr: M.call().returns(M.remotable('Reader')),
+  stdout: M.call().returns(M.remotable('PassableBytesReader')),
+  stderr: M.call().returns(M.remotable('PassableBytesReader')),
   wait: M.call().returns(M.promise()),
   kill: M.call().optional(M.or(M.string(), M.number())).returns(M.promise()),
 });
