@@ -43,6 +43,7 @@ import {
  *   GitRestoreOptions,
  *   GitStashPushOptions,
  *   GitStatusEntry,
+ *   GitStatusOptions,
  *   GitStatusNode,
  *   GitWorktreeStatus,
  *   HistoryRewriteEndoGit,
@@ -115,7 +116,7 @@ import {
  * @property {() => Promise<void>} assertNoExecutableRepoConfig  Refuses
  *   repository-local config that can execute code via filter or merge
  *   driver hooks before any worktree-mutation method runs.
- * @property {() => Promise<BackendStatusEntry[]>} status
+ * @property {(options?: GitStatusOptions) => Promise<BackendStatusEntry[]>} status
  * @property {(opts?: GitBackendDiffOptions) => Promise<string>} diff
  * @property {(opts?: GitBackendLogOptions) => Promise<GitCommit[]>} log
  * @property {(ref: string) => Promise<string>} show
@@ -390,9 +391,10 @@ async function worktreeReadOnly() {
  *   Git resolves nodes through the read-only worktree view, ensuring a
  *   status row never hands a caller a writable node out of an attenuated
  *   facet.
+ * @param {GitStatusOptions} options
  */
-const doStatus = async (state, worktreeAuthority) => {
-  const raw = await state.backend.status();
+const doStatus = async (state, worktreeAuthority, options) => {
+  const raw = await state.backend.status(options);
   const wrapped = await Promise.all(
     raw.map(async r => {
       const segments = r.path === '' ? [] : r.path.split('/');
@@ -438,16 +440,22 @@ const doStatus = async (state, worktreeAuthority) => {
   return harden(wrapped);
 };
 
-/** @this {GitMethodThis} */
-async function status() {
+/**
+ * @param {GitStatusOptions} [options]
+ * @this {GitMethodThis}
+ */
+async function status(options = {}) {
   const { state } = this;
-  return doStatus(state, worktreeAuthorityFor(state, false));
+  return doStatus(state, worktreeAuthorityFor(state, false), options);
 }
 
-/** @this {GitMethodThis} */
-async function statusReadOnly() {
+/**
+ * @param {GitStatusOptions} [options]
+ * @this {GitMethodThis}
+ */
+async function statusReadOnly(options = {}) {
   const { state } = this;
-  return doStatus(state, worktreeAuthorityFor(state, true));
+  return doStatus(state, worktreeAuthorityFor(state, true), options);
 }
 
 /**
