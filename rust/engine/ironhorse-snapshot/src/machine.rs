@@ -63,9 +63,8 @@ use crate::format::{Signature, SnapshotError};
 use crate::image::{read_machine, write_machine, MachineImage, MeterImage};
 use crate::sha256::{hex, Sha256};
 use crate::store::{
-    chunk_extent_count, encode_chunk_extent, encode_slot_page, image_to_batch, store_to_image,
-    validate_store, CheckpointBatch, HeapStore, SmallState, StoreError, StoreManifest,
-    STORE_SCHEMA_VERSION,
+    chunk_extent_count, image_to_batch, store_to_image, validate_store, CheckpointBatch,
+    HeapStore, SmallState, StoreError, StoreManifest, STORE_SCHEMA_VERSION,
 };
 use ironhorse_vm::Interp;
 
@@ -336,24 +335,33 @@ pub fn checkpoint_to_store(
     let epoch = session.epoch + 1;
     let manifest = manifest_of(interp, signature, epoch);
 
-    let records = interp.slots.records();
+    // Dirty rows only — never the whole heap. `page_records`/
+    // `extent_bytes` copy one page/extent out of the arena (dirty rows
+    // are resident by construction, lazy or not), and the encoding is
+    // the same canonical record codec the full path uses.
     let slot_pages: Vec<(u32, Vec<u8>)> = interp
         .slots
         .dirty_pages()
         .into_iter()
-        .map(|page| (page, encode_slot_page(records, page)))
+        .map(|page| {
+            let records = interp.slots.page_records(page);
+            let mut bytes = Vec::with_capacity(records.len() * crate::slot_codec::SLOT_RECORD_BYTES);
+            for slot in &records {
+                crate::slot_codec::encode_slot(slot, &mut bytes);
+            }
+            (page, bytes)
+        })
         .collect();
     // The chunk bitmap tracks the current geometry (compaction resizes
     // it), so every dirty extent is in range by construction; the
     // guard is belt-and-braces against a future bitmap bug.
-    let raw = interp.chunks.raw();
     let ext_count = chunk_extent_count(manifest.chunk_len);
     let chunk_extents: Vec<(u32, Vec<u8>)> = interp
         .chunks
         .dirty_extents()
         .into_iter()
         .filter(|&e| e < ext_count)
-        .map(|e| (e, encode_chunk_extent(raw, e)))
+        .map(|e| (e, interp.chunks.extent_bytes(e)))
         .collect();
 
     let batch = CheckpointBatch {
@@ -370,11 +378,11 @@ pub fn checkpoint_to_store(
 }
 
 /// Rebuild a machine from a store (eager reification: every page and
-/// extent is read now; the lazy mode is the design's phase 3) and
-/// return it with the session bound at the store's epoch. Runs the
-/// full open-time validation — gates, accounting, row inventory —
-/// before touching any content, so a resumed machine can only be the
-/// machine that was checkpointed.
+/// extent is read now; [`resume_from_store_lazy`] is the on-demand
+/// mode) and return it with the session bound at the store's epoch.
+/// Runs the full open-time validation — gates, accounting, row
+/// inventory — before touching any content, so a resumed machine can
+/// only be the machine that was checkpointed.
 pub fn resume_from_store(
     store: &dyn HeapStore,
     expected_sig: &Signature,
@@ -383,6 +391,83 @@ pub fn resume_from_store(
     let image = store_to_image(store)?;
     Ok((
         image_to_interp(image),
+        StoreSession {
+            epoch: manifest.epoch,
+        },
+    ))
+}
+
+/// The [`ironhorse_vm::PageSource`] adapter over a shared [`HeapStore`]
+/// (store seam design, phase 3). Reads go through the `RefCell` so the
+/// same store object also serves `commit` at checkpoint time (`&mut`
+/// via `borrow_mut`); faults happen only mid-crank and commits only
+/// between cranks, so the borrows never overlap.
+///
+/// The store was validated exhaustively before this adapter is
+/// constructed, so a read failure here is genuine I/O trouble; per the
+/// [`ironhorse_vm::PageSource`] contract it panics with a named
+/// message — the deterministic crashed-crank path.
+struct StorePageSource<S: HeapStore> {
+    store: std::rc::Rc<std::cell::RefCell<S>>,
+}
+
+impl<S: HeapStore> ironhorse_vm::PageSource for StorePageSource<S> {
+    fn slot_page(&self, page: u32) -> Vec<ironhorse_vm::Slot> {
+        let bytes = self
+            .store
+            .borrow()
+            .read_slot_page(page)
+            .unwrap_or_else(|e| panic!("lazy heap fault: slot page {page}: {e:?}"));
+        crate::slot_codec::decode_slots(&bytes)
+            .unwrap_or_else(|e| panic!("lazy heap fault: slot page {page} decode: {e:?}"))
+    }
+
+    fn chunk_extent(&self, ext: u32) -> Vec<u8> {
+        self.store
+            .borrow()
+            .read_chunk_extent(ext)
+            .unwrap_or_else(|e| panic!("lazy heap fault: chunk extent {ext}: {e:?}"))
+    }
+}
+
+/// Rebuild a machine from a store with **lazy reification** (store
+/// seam design, phase 3): the same exhaustive validation and the same
+/// small state up front, but the arenas are attached over a
+/// [`ironhorse_vm::PageSource`] and fault slot pages / chunk extents
+/// in on first touch, so wake latency is proportional to the wake
+/// crank's working set, not the heap.
+///
+/// Residency is grow-only; content is identical to an eager resume by
+/// construction (a fault installs exactly the bytes the store holds),
+/// which the metamorphic determinism suite locks. The store rides in
+/// an `Rc<RefCell<…>>` so the returned machine's fault path and the
+/// caller's later [`checkpoint_to_store`] (`&mut *store.borrow_mut()`)
+/// share it.
+pub fn resume_from_store_lazy<S: HeapStore + 'static>(
+    store: std::rc::Rc<std::cell::RefCell<S>>,
+    expected_sig: &Signature,
+) -> Result<(Interp, StoreSession), StoreError> {
+    let (manifest, small) = validate_store(&*store.borrow(), expected_sig)?;
+    let source = std::rc::Rc::new(StorePageSource {
+        store: store.clone(),
+    });
+    let slots = ironhorse_vm::SlotArena::lazy_from_parts(
+        manifest.slot_count,
+        small.slot_free.clone(),
+        manifest.slot_live,
+        source.clone(),
+    );
+    let chunks = ironhorse_vm::ChunkArena::lazy_from_parts(manifest.chunk_len as usize, source);
+    let mut interp = Interp::new();
+    interp.restore_snapshot_state(
+        slots,
+        chunks,
+        small.stack.clone(),
+        small.names.clone(),
+        small.meter.to_state(),
+    );
+    Ok((
+        interp,
         StoreSession {
             epoch: manifest.epoch,
         },

@@ -174,8 +174,8 @@ impl MachineImage {
                 initial_slot_count: slots.capacity(),
                 initial_chunk_bytes: chunks.byte_size() as u32,
             },
-            chunks: chunks.raw().to_vec(),
-            slots: slots.records().to_vec(),
+            chunks: chunks.raw_vec(),
+            slots: slots.records(),
             slot_free: slots.free_list().to_vec(),
             slot_live: slots.live_count(),
             stack: stack.to_vec(),
@@ -551,7 +551,7 @@ mod tests {
         // Its successor property references the "hi" chunk; decode it back.
         let pb = slots2.get(pa.next);
         if let Payload::String(o) = pb.value {
-            assert_eq!(chunks2.payload(o), &[0x00, 0x68, 0x00, 0x69]);
+            assert_eq!(&*chunks2.payload(o), &[0x00, 0x68, 0x00, 0x69]);
         } else {
             panic!("second property should be a string");
         }
@@ -619,7 +619,7 @@ mod tests {
         assert_eq!(write_machine(&back), bytes);
         let (slots2, chunks2) = back.to_arenas();
         if let Payload::BigInt(o) = slots2.get(bi).value {
-            assert_eq!(chunks2.payload(o), &[0x00, 0x01, 0x00, 0x00, 0x00]);
+            assert_eq!(&*chunks2.payload(o), &[0x00, 0x01, 0x00, 0x00, 0x00]);
         } else {
             panic!("bigint payload");
         }

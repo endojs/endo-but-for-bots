@@ -4727,13 +4727,13 @@ impl Interp {
     /// UTF-16 code-unit order, which is exactly the ECMAScript string
     /// ordering — the relational/equality opcodes therefore compare these
     /// bytes directly with no decode.
-    fn str_content(&self, off: crate::value::ChunkOffset) -> &[u8] {
+    fn str_content(&self, off: crate::value::ChunkOffset) -> crate::value::ChunkSlice<'_> {
         self.chunks.payload(off)
     }
 
     /// The string value's code units (`str_content` decoded from UTF-16BE).
     fn str_units(&self, off: crate::value::ChunkOffset) -> Vec<u16> {
-        be16_to_units(self.str_content(off))
+        be16_to_units(&self.str_content(off))
     }
 
     /// The string value's code-unit length (`length`, O(1) — half the stored
@@ -6023,7 +6023,7 @@ impl Interp {
                     let k = self.closure_index(op, code, pc);
                     match self.closure_cell(k) {
                         Some(cell) => {
-                            let s = *self.slots.get(cell);
+                            let s = self.slots.get(cell);
                             if s.kind == Kind::Uninitialized {
                                 return Halt::Throw("get closure: not initialized yet".into());
                             }
@@ -6073,7 +6073,7 @@ impl Interp {
                 XS_CODE_REFRESH_CLOSURE_1 | XS_CODE_REFRESH_CLOSURE_2 => {
                     let k = self.closure_index(op, code, pc);
                     let old = self.closure_cell(k);
-                    let src = old.map(|c| *self.slots.get(c)).unwrap_or_else(Slot::uninitialized);
+                    let src = old.map(|c| self.slots.get(c)).unwrap_or_else(Slot::uninitialized);
                     let mut fresh = Slot::of(src.kind, src.value);
                     fresh.flag = src.flag;
                     let cell = self.slots.alloc(fresh);
@@ -11011,7 +11011,7 @@ impl Interp {
                 };
                 match self.find_property(inst, id) {
                     Some(p) => {
-                        let prop = *self.slots.get(p);
+                        let prop = self.slots.get(p);
                         // An accessor own property needs the accessor-descriptor
                         // shape (`{get, set, enumerable, configurable}`), which
                         // is not modeled — honest skip. A data property carries
@@ -11304,7 +11304,7 @@ impl Interp {
                 // outside the covered data-descriptor shape.
                 let mut props: Vec<(u16, u8, Kind, Payload)> = Vec::new();
                 for &p in &slots {
-                    let s = *self.slots.get(p);
+                    let s = self.slots.get(p);
                     if s.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
                         return Err(Halt::Unsupported(
                             "getOwnPropertyDescriptors:accessor-property",
@@ -13166,7 +13166,7 @@ impl Interp {
                     .ok_or(Halt::Unsupported("Reflect.getOwnPropertyDescriptor:non-string-key"))?;
                 match self.find_property(inst, id) {
                     Some(p) => {
-                        let prop = *self.slots.get(p);
+                        let prop = self.slots.get(p);
                         if prop.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
                             return Err(Halt::Unsupported(
                                 "Reflect.getOwnPropertyDescriptor:accessor-property",
@@ -15813,7 +15813,7 @@ impl Interp {
             if cur.is_null() {
                 break;
             }
-            let s = *self.slots.get(cur);
+            let s = self.slots.get(cur);
             let mut copy = Slot::of(s.kind, s.value);
             copy.id = s.id;
             copy.flag = s.flag;
@@ -16615,7 +16615,7 @@ impl Interp {
         let proto = self.instance_prototype(inst);
         self.harden_enqueue(proto, list);
         for &p in &slots {
-            let s = *self.slots.get(p);
+            let s = self.slots.get(p);
             if s.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
                 // An accessor own property: XS queues its getter/setter function
                 // instances. Ironhorse keeps intrinsic accessors outside the slot
@@ -16754,7 +16754,7 @@ impl Interp {
         let mut prev = inst;
         let mut cur = self.slots.get(inst).next;
         while !cur.is_null() {
-            let s = *self.slots.get(cur);
+            let s = self.slots.get(cur);
             if s.id == id {
                 // A non-configurable own property (`XS_DONT_DELETE_FLAG` — the
                 // state `seal`/`freeze`/`defineProperty(configurable:false)`
@@ -19075,7 +19075,7 @@ mod tests {
         let lone = vec![b'A' as u16, 0xD800, b'B' as u16];
         let off = str_off(&interp.new_string_units(&lone));
         assert_eq!(interp.str_units(off), lone, "the lone surrogate reads back unchanged");
-        assert_eq!(interp.str_content(off), &[0x00, 0x41, 0xD8, 0x00, 0x00, 0x42]);
+        assert_eq!(&*interp.str_content(off), &[0x00, 0x41, 0xD8, 0x00, 0x00, 0x42]);
 
         // Comparison: byte-lexicographic order over the UTF-16BE payload is the
         // code-unit (ECMAScript relational) order — even for lone surrogates,
@@ -19135,7 +19135,7 @@ mod tests {
             assert_eq!(dst.str_units(dst_off), units, "atom decodes back to the same units");
             assert_eq!(dst.str_len(dst_off), units.len(), "O(1) length survives the round-trip");
             // And the bytes themselves are identical (bit-exact snapshot).
-            assert_eq!(dst.str_content(dst_off), payload.as_slice());
+            assert_eq!(&*dst.str_content(dst_off), payload.as_slice());
         }
     }
 }
