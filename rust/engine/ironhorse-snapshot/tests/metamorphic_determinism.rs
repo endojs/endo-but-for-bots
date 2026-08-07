@@ -119,14 +119,13 @@ enum Resume {
 fn run_store(compiled: &[(Vec<u8>, Vec<String>)], mode: Resume) -> (Vec<String>, u64, Vec<u8>) {
     let store = Rc::new(RefCell::new(MemoryStore::new()));
     let mut results = Vec::new();
-    let mut computrons = 0;
 
     // Crank 1 on a fresh machine, then bind.
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let o = m.run(&compiled[0].0);
     results.push(o.result);
-    computrons = o.computrons;
+    let mut computrons = o.computrons;
     let mut session = begin_store_session(m, &sig(), &mut *store.borrow_mut())
         .map_err(|(_, e)| e)
         .expect("begin session");
@@ -165,13 +164,12 @@ fn run_store(compiled: &[(Vec<u8>, Vec<String>)], mode: Resume) -> (Vec<String>,
 fn run_checkpoint_every_crank(compiled: &[(Vec<u8>, Vec<String>)]) -> (Vec<String>, u64, Vec<u8>) {
     let store = Rc::new(RefCell::new(MemoryStore::new()));
     let mut results = Vec::new();
-    let mut computrons = 0;
 
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let o = m.run(&compiled[0].0);
     results.push(o.result);
-    computrons = o.computrons;
+    let mut computrons = o.computrons;
     let mut session: StoreSession = begin_store_session(m, &sig(), &mut *store.borrow_mut())
         .map_err(|(_, e)| e)
         .expect("begin session");

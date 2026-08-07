@@ -47,11 +47,15 @@ use crate::store::{
 /// a new magic, and a reader fails closed on a magic it does not know.
 pub const FILE_MAGIC: [u8; 8] = *b"IHSTORE1";
 
-/// The temp-file suffix a commit writes before its atomic rename, the
-/// same publish discipline as [`crate::machine`]'s CAS writer. A
-/// leftover temp from a torn commit is inert: `open` never reads it,
-/// and the next commit overwrites it.
-const TMP_SUFFIX: &str = ".tmp";
+/// Temp files are uniquely named per process and per commit
+/// (`.tmp-{pid}-{n}`), so two writers can never interleave bytes in a
+/// shared temp inode (the PR-review concurrency finding); leftover
+/// temps from torn commits are inert (`open` never reads them).
+/// Cross-process last-rename-wins remains bounded by the documented
+/// single-writer-per-path model plus the durable succession check —
+/// a lost lineage is detected at its next commit or resume via the
+/// seal chain, never silently merged.
+static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DirEntry {
@@ -232,6 +236,15 @@ impl HeapStore for FileStore {
         self.read_entry(false, ext)
     }
 
+    fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
+        // Pure metadata: the directories were decoded at open.
+        let (loaded, _) = self.state.as_ref().ok_or(StoreError::Empty)?;
+        Ok((
+            loaded.pages.iter().map(|e| e.length as usize).collect(),
+            loaded.extents.iter().map(|e| e.length as usize).collect(),
+        ))
+    }
+
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
         // Reload the durable file: the cached view can be stale if
         // another handle on this path committed (the review's silent
@@ -328,7 +341,11 @@ impl HeapStore for FileStore {
 
         let tmp_path = {
             let mut os = self.path.clone().into_os_string();
-            os.push(TMP_SUFFIX);
+            os.push(format!(
+                ".tmp-{}-{}",
+                std::process::id(),
+                TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
             PathBuf::from(os)
         };
         let mut tmp = File::create(&tmp_path).map_err(io_err)?;
@@ -570,7 +587,7 @@ mod tests {
         let mut grown = image.clone();
         grown
             .chunks
-            .extend(std::iter::repeat(7u8).take(crate::store::CHUNK_EXTENT_BYTES as usize));
+            .extend(std::iter::repeat_n(7u8, crate::store::CHUNK_EXTENT_BYTES as usize));
         let prev = store.manifest().unwrap().seal;
         let mut batch = image_to_batch(&grown, 2, &prev);
         batch.chunk_extents.pop(); // drop the newest extent's row

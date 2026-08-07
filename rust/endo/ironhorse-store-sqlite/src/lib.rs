@@ -231,34 +231,78 @@ impl HeapStore for SqliteHeapStore {
             .ok_or(StoreError::MissingRow("chunk extent", ext))
     }
 
+    fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
+        // Metadata-only: `length(bytes)` never materializes the BLOBs,
+        // so open-time validation (and lazy resume) reads no row
+        // contents.
+        let m = self.manifest()?;
+        let mut pages = vec![None; slot_page_count(m.slot_count) as usize];
+        let mut stmt = self
+            .conn
+            .prepare("SELECT page, length(bytes) FROM slot_pages ORDER BY page")
+            .map_err(sql_err)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))
+            .map_err(sql_err)?;
+        for row in rows {
+            let (page, len) = row.map_err(sql_err)?;
+            if let Some(slot) = pages.get_mut(page as usize) {
+                *slot = Some(len as usize);
+            }
+        }
+        let pages: Vec<usize> = pages
+            .into_iter()
+            .enumerate()
+            .map(|(i, l)| l.ok_or(StoreError::MissingRow("slot page", i as u32)))
+            .collect::<Result<_, _>>()?;
+
+        let mut exts = vec![None; chunk_extent_count(m.chunk_len) as usize];
+        let mut stmt = self
+            .conn
+            .prepare("SELECT ext, length(bytes) FROM chunk_exts ORDER BY ext")
+            .map_err(sql_err)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))
+            .map_err(sql_err)?;
+        for row in rows {
+            let (ext, len) = row.map_err(sql_err)?;
+            if let Some(slot) = exts.get_mut(ext as usize) {
+                *slot = Some(len as usize);
+            }
+        }
+        let exts: Vec<usize> = exts
+            .into_iter()
+            .enumerate()
+            .map(|(i, l)| l.ok_or(StoreError::MissingRow("chunk extent", i as u32)))
+            .collect::<Result<_, _>>()?;
+        Ok((pages, exts))
+    }
+
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
         let tx = self.conn.transaction().map_err(sql_err)?;
         {
             let stored = Self::stored_manifest(&tx)?;
             check_succession(stored.as_ref(), batch)?;
 
-            // A grown geometry's new rows must be in the batch (the
-            // reference-backend semantic): failing later at validate
-            // would leave a committed-but-unresumable lineage.
+            // A grown geometry's new rows must be in the batch. Prior
+            // rows exist by induction, so only the grown region is
+            // checked — O(grown + dirty) set lookups, zero per-row SQL
+            // (the PR-review finding).
             let pages = slot_page_count(batch.manifest.slot_count);
             let exts = chunk_extent_count(batch.manifest.chunk_len);
-            let mut have_page = tx
-                .prepare("SELECT 1 FROM slot_pages WHERE page = ?1")
-                .map_err(sql_err)?;
-            for page in 0..pages {
-                if !batch.slot_pages.iter().any(|(p, _)| *p == page)
-                    && !have_page.exists(params![page as i64]).map_err(sql_err)?
-                {
+            let prior_pages = stored.as_ref().map_or(0, |m| slot_page_count(m.slot_count));
+            let prior_exts = stored.as_ref().map_or(0, |m| chunk_extent_count(m.chunk_len));
+            let batch_pages: std::collections::HashSet<u32> =
+                batch.slot_pages.iter().map(|(p, _)| *p).collect();
+            let batch_exts: std::collections::HashSet<u32> =
+                batch.chunk_extents.iter().map(|(e, _)| *e).collect();
+            for page in prior_pages..pages {
+                if !batch_pages.contains(&page) {
                     return Err(StoreError::MissingRow("slot page", page));
                 }
             }
-            let mut have_ext = tx
-                .prepare("SELECT 1 FROM chunk_exts WHERE ext = ?1")
-                .map_err(sql_err)?;
-            for ext in 0..exts {
-                if !batch.chunk_extents.iter().any(|(e, _)| *e == ext)
-                    && !have_ext.exists(params![ext as i64]).map_err(sql_err)?
-                {
+            for ext in prior_exts..exts {
+                if !batch_exts.contains(&ext) {
                     return Err(StoreError::MissingRow("chunk extent", ext));
                 }
             }

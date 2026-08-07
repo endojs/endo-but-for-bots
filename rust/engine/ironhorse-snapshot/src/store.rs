@@ -429,6 +429,12 @@ pub trait HeapStore {
     fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError>;
     /// The raw bytes of chunk extent `ext`.
     fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError>;
+    /// Row lengths WITHOUT row contents, index-ordered: `(slot page
+    /// byte lengths, chunk extent byte lengths)`. The open-time
+    /// inventory validates against this so a lazy resume does no
+    /// O(heap) content I/O (the PR-review finding); backends serve it
+    /// from metadata (directory entries, `length(bytes)` aggregates).
+    fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError>;
     /// Apply one checkpoint atomically. Must enforce the epoch
     /// discipline via [`check_epoch`] and drop rows beyond the new
     /// geometry.
@@ -693,28 +699,37 @@ pub fn validate_store(
         }
     }
 
-    // Row inventory: every promised row exists at its exact length.
-    for page in 0..slot_page_count(manifest.slot_count) {
-        let bytes = store.read_slot_page(page)?;
-        let expected = slot_page_len(manifest.slot_count, page) * SLOT_RECORD_BYTES;
-        if bytes.len() != expected {
+    // Row inventory: every promised row exists at its exact length —
+    // from METADATA, not contents, so validation (and therefore lazy
+    // resume) does no O(heap) row I/O.
+    let (page_lens, ext_lens) = store.inventory()?;
+    let n_pages = slot_page_count(manifest.slot_count);
+    if page_lens.len() != n_pages as usize {
+        return Err(StoreError::MissingRow("slot page", page_lens.len() as u32));
+    }
+    for (page, found) in page_lens.iter().enumerate() {
+        let expected = slot_page_len(manifest.slot_count, page as u32) * SLOT_RECORD_BYTES;
+        if *found != expected {
             return Err(StoreError::RowLength {
                 kind: "slot page",
-                index: page,
+                index: page as u32,
                 expected,
-                found: bytes.len(),
+                found: *found,
             });
         }
     }
-    for ext in 0..chunk_extent_count(manifest.chunk_len) {
-        let bytes = store.read_chunk_extent(ext)?;
-        let expected = chunk_extent_len(manifest.chunk_len, ext);
-        if bytes.len() != expected {
+    let n_exts = chunk_extent_count(manifest.chunk_len);
+    if ext_lens.len() != n_exts as usize {
+        return Err(StoreError::MissingRow("chunk extent", ext_lens.len() as u32));
+    }
+    for (ext, found) in ext_lens.iter().enumerate() {
+        let expected = chunk_extent_len(manifest.chunk_len, ext as u32);
+        if *found != expected {
             return Err(StoreError::RowLength {
                 kind: "chunk extent",
-                index: ext,
+                index: ext as u32,
                 expected,
-                found: bytes.len(),
+                found: *found,
             });
         }
     }
@@ -817,24 +832,50 @@ impl HeapStore for MemoryStore {
             .ok_or(StoreError::MissingRow("chunk extent", ext))
     }
 
+    fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
+        let m = self.manifest()?;
+        let mut pages = Vec::with_capacity(slot_page_count(m.slot_count) as usize);
+        for page in 0..slot_page_count(m.slot_count) {
+            pages.push(
+                self.slot_pages
+                    .get(&page)
+                    .ok_or(StoreError::MissingRow("slot page", page))?
+                    .len(),
+            );
+        }
+        let mut exts = Vec::with_capacity(chunk_extent_count(m.chunk_len) as usize);
+        for ext in 0..chunk_extent_count(m.chunk_len) {
+            exts.push(
+                self.chunk_extents
+                    .get(&ext)
+                    .ok_or(StoreError::MissingRow("chunk extent", ext))?
+                    .len(),
+            );
+        }
+        Ok((pages, exts))
+    }
+
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
         check_succession(self.manifest.as_ref(), batch)?;
-        // A grown geometry's new rows must be in the batch (pinning the
-        // one semantic FileStore already enforced): failing later at
-        // validate would leave a committed-but-unresumable lineage.
+        // A grown geometry's new rows must be in the batch. Prior rows
+        // exist by induction (they were committed), so only the grown
+        // region is checked — O(grown + dirty), not O(heap) (the
+        // PR-review finding).
         let pages = slot_page_count(batch.manifest.slot_count);
         let exts = chunk_extent_count(batch.manifest.chunk_len);
-        for page in 0..pages {
-            if !self.slot_pages.contains_key(&page)
-                && !batch.slot_pages.iter().any(|(p, _)| *p == page)
-            {
+        let prior_pages = self.manifest.as_ref().map_or(0, |m| slot_page_count(m.slot_count));
+        let prior_exts = self.manifest.as_ref().map_or(0, |m| chunk_extent_count(m.chunk_len));
+        let batch_pages: std::collections::HashSet<u32> =
+            batch.slot_pages.iter().map(|(p, _)| *p).collect();
+        let batch_exts: std::collections::HashSet<u32> =
+            batch.chunk_extents.iter().map(|(e, _)| *e).collect();
+        for page in prior_pages..pages {
+            if !batch_pages.contains(&page) {
                 return Err(StoreError::MissingRow("slot page", page));
             }
         }
-        for ext in 0..exts {
-            if !self.chunk_extents.contains_key(&ext)
-                && !batch.chunk_extents.iter().any(|(e, _)| *e == ext)
-            {
+        for ext in prior_exts..exts {
+            if !batch_exts.contains(&ext) {
                 return Err(StoreError::MissingRow("chunk extent", ext));
             }
         }
