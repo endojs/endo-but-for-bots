@@ -44,8 +44,8 @@ pub use module::{
 pub use opcode::{instruction_len, Opcode};
 pub use symbols::parse_symbols;
 pub use value::{
-    ChunkArena, ChunkOffset, Kind, Payload, Slot, SlotArena, SlotIndex, CHUNK_EXTENT_BYTES,
-    SLOTS_PER_PAGE,
+    ChunkArena, ChunkOffset, ChunkSlice, Kind, PageSource, Payload, Slot, SlotArena, SlotIndex,
+    CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE,
 };
 
 /// Run a program bytecode buffer (as emitted by the XS compiler) on

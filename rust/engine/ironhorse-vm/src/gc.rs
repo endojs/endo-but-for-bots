@@ -198,7 +198,7 @@ mod tests {
         // The surviving slot's offset was rewritten and still reads the
         // same bytes.
         let new_off = h.slots.get(keep).chunk_ref().unwrap();
-        assert_eq!(h.chunks.payload(new_off), b"world!");
+        assert_eq!(&*h.chunks.payload(new_off), b"world!");
     }
 
     #[test]
@@ -225,7 +225,7 @@ mod tests {
             stats.chunk_bytes_after
         );
         let new_off = h.slots.get(keep).chunk_ref().unwrap();
-        assert_eq!(h.chunks.payload(new_off), &keep_bytes, "BigInt digits survive relocation");
+        assert_eq!(&*h.chunks.payload(new_off), &keep_bytes, "BigInt digits survive relocation");
     }
 
     #[test]
