@@ -107,6 +107,30 @@ A follow-up automated review pass (PR #963 Copilot review,
   with the *pinned* heap, not the working set — accepted and named
   here rather than hidden.
 
+A second automated pass over the force-pushed head (2026-08-07)
+closed the cross-connection torn-read windows the first pass's fixes
+still left on the lazy paths, and tightened the decoders:
+
+- **Lazy resume re-checks the manifest after validation**, exactly as
+  eager resume does after its row reads: validation's manifest /
+  small / inventory reads are separate store operations, so a commit
+  from a second SQLite connection could otherwise seed a session and
+  its fault pin from mixed epochs. Epochs only advance, so same
+  (epoch, seal) after the reads proves they all saw one commit.
+- **Faults re-verify the pin after the row read**, not just before
+  it: a foreign commit landing between the pre-check and the read
+  would otherwise hand the fault a successor-epoch row the pre-check
+  could not see. Both windows are locked by a deterministic
+  interleaving-store harness (`store_checkpoint.rs`) that applies a
+  valid successor commit inside the chosen read.
+- **Decoders require exact consumption.** A manifest with bytes after
+  its seal, or a small state with bytes after its sixth section, now
+  fails closed as corrupt rather than decoding permissively — store
+  contents are untrusted, and format evolution goes through the
+  schema-version gate, not trailing data.
+- The pass re-raised the placeholder-allocation trade (twice); the
+  disposition stands as recorded above.
+
 Phase 1-2 detail (2026-08-06):
 
 - `rust/engine/ironhorse-snapshot/src/store.rs` — the paged logical

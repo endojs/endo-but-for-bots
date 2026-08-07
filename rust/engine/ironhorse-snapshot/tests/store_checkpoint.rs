@@ -8,12 +8,13 @@
 //! reference backends.
 
 use ironhorse_snapshot::machine::{
-    begin_store_session, checkpoint_to_store, resume_from_store, MachineSnapshot, StoreSession,
+    begin_store_session, checkpoint_to_store, resume_from_store, resume_from_store_lazy,
+    MachineSnapshot, StoreSession,
 };
 use ironhorse_snapshot::sha256::hex_sha256;
 use ironhorse_snapshot::store::{
-    export_to_container, image_to_batch, root_hash, slot_page_count, store_to_image, HeapStore,
-    MemoryStore, StoreError,
+    export_to_container, image_to_batch, root_hash, slot_page_count, store_to_image,
+    CheckpointBatch, HeapStore, MemoryStore, StoreError,
 };
 use ironhorse_snapshot::store_file::FileStore;
 use ironhorse_snapshot::Signature;
@@ -345,5 +346,142 @@ fn resume_after_incremental_checkpoint_reads_merged_state() {
     assert_eq!(
         s2.machine().write_snapshot(&sig()),
         session.machine().write_snapshot(&sig())
+    );
+}
+
+/// A `HeapStore` that delegates to a [`MemoryStore`] and applies one
+/// queued successor commit in the middle of a chosen operation — the
+/// cross-connection interleaving a shared SQLite file permits, made
+/// deterministic. `Validation` fires after serving the inventory read
+/// (coherent reads, store advances immediately after); `SlotRead`
+/// fires before serving a slot-page read (the served row belongs to
+/// the successor epoch while the fault's pre-check saw the pinned
+/// one).
+struct InterleavingStore {
+    inner: std::cell::RefCell<MemoryStore>,
+    pending: std::cell::RefCell<Option<CheckpointBatch>>,
+    fire_on: Interleave,
+    /// Lazy resume itself faults pages while rebuilding the machine
+    /// (`restore_snapshot_state`), so the row-read trigger stays
+    /// disarmed until the test has a session in hand.
+    armed: std::cell::Cell<bool>,
+}
+
+#[derive(PartialEq)]
+enum Interleave {
+    Validation,
+    RowRead,
+}
+
+impl InterleavingStore {
+    fn fire(&self) {
+        if !self.armed.get() {
+            return;
+        }
+        if let Some(batch) = self.pending.borrow_mut().take() {
+            self.inner
+                .borrow_mut()
+                .commit(&batch)
+                .expect("queued interleaved commit is a valid successor");
+        }
+    }
+}
+
+impl HeapStore for InterleavingStore {
+    fn manifest(&self) -> Result<ironhorse_snapshot::store::StoreManifest, StoreError> {
+        self.inner.borrow().manifest()
+    }
+    fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
+        self.inner.borrow().read_small_state()
+    }
+    fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
+        if self.fire_on == Interleave::RowRead {
+            self.fire();
+        }
+        self.inner.borrow().read_slot_page(page)
+    }
+    fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError> {
+        if self.fire_on == Interleave::RowRead {
+            self.fire();
+        }
+        self.inner.borrow().read_chunk_extent(ext)
+    }
+    fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
+        let served = self.inner.borrow().inventory();
+        if self.fire_on == Interleave::Validation {
+            self.fire();
+        }
+        served
+    }
+    fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
+        self.inner.borrow_mut().commit(batch)
+    }
+}
+
+/// Builds an epoch-1 store plus a queued valid epoch-2 successor batch
+/// (same image, so only the lineage advances), wrapped to fire at the
+/// chosen interleave point.
+fn interleaving_store(fire_on: Interleave) -> InterleavingStore {
+    let mut inner = MemoryStore::new();
+    let mut m = Interp::new();
+    assert!(m.run(&PROG_A).completed);
+    let session = begin(m, &mut inner);
+    let seal1 = inner.manifest().unwrap().seal;
+    let batch2 = image_to_batch(&session.machine().snapshot_image(&sig()), 2, &seal1);
+    drop(session);
+    let armed = fire_on == Interleave::Validation;
+    InterleavingStore {
+        inner: std::cell::RefCell::new(inner),
+        pending: std::cell::RefCell::new(Some(batch2)),
+        fire_on,
+        armed: std::cell::Cell::new(armed),
+    }
+}
+
+/// A commit landing between validation's reads and the arena attach
+/// must fail the resume closed (the post-validation manifest
+/// re-check), never seed a session or its fault pin from mixed epochs.
+#[test]
+fn lazy_resume_refuses_store_advanced_during_validation() {
+    let store = std::rc::Rc::new(std::cell::RefCell::new(interleaving_store(
+        Interleave::Validation,
+    )));
+    match resume_from_store_lazy(store, &sig()) {
+        Err(StoreError::BaselineMismatch { .. }) => {}
+        other => panic!("expected baseline mismatch, got {other:?}"),
+    }
+}
+
+/// A commit landing between a fault's pin pre-check and its row read
+/// must die as the named torn-read panic (the post-read pin
+/// re-check), never install a row from the successor epoch.
+#[test]
+fn lazy_fault_refuses_row_read_across_a_foreign_commit() {
+    let store = std::rc::Rc::new(std::cell::RefCell::new(interleaving_store(
+        Interleave::RowRead,
+    )));
+    let session =
+        resume_from_store_lazy(store.clone(), &sig()).expect("resumes while store is quiet");
+    let manifest = store.borrow().manifest().unwrap();
+    store.borrow().armed.set(true);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Touch every page and extent: whichever row the resume left
+        // unfaulted trips the armed interleave first.
+        for page in 0..slot_page_count(manifest.slot_count) {
+            session.machine().slots.touch_page(page);
+        }
+        for ext in 0..ironhorse_snapshot::store::chunk_extent_count(manifest.chunk_len) {
+            session.machine().chunks.touch_extent(ext);
+        }
+        panic!("machine was fully resident before the interleave could fire");
+    }));
+    let payload = outcome.expect_err("fault across a foreign commit must die");
+    let msg = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .unwrap_or("");
+    assert!(
+        msg.contains("store advanced under this machine"),
+        "expected the named torn-read panic, got: {msg}"
     );
 }

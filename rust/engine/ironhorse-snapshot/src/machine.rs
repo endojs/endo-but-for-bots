@@ -563,16 +563,26 @@ impl<S: HeapStore> ironhorse_vm::PageSource for StorePageSource<S> {
             .borrow()
             .read_slot_page(page)
             .unwrap_or_else(|e| panic!("lazy heap fault: slot page {page}: {e:?}"));
+        // The pin check and the row read are separate store operations,
+        // so on a shared backend a foreign commit can land between them
+        // and the read return a NEW-epoch row the pre-check could not
+        // see. Epochs only advance, so a matching pin AFTER the read
+        // proves the row belonged to the pinned commit.
+        self.check_pin("slot page post-read");
         crate::slot_codec::decode_slots(&bytes)
             .unwrap_or_else(|e| panic!("lazy heap fault: slot page {page} decode: {e:?}"))
     }
 
     fn chunk_extent(&self, ext: u32) -> Vec<u8> {
         self.check_pin("chunk extent");
-        self.store
+        let bytes = self
+            .store
             .borrow()
             .read_chunk_extent(ext)
-            .unwrap_or_else(|e| panic!("lazy heap fault: chunk extent {ext}: {e:?}"))
+            .unwrap_or_else(|e| panic!("lazy heap fault: chunk extent {ext}: {e:?}"));
+        // Same post-read verification as `slot_page` — see there.
+        self.check_pin("chunk extent post-read");
+        bytes
     }
 }
 
@@ -594,6 +604,22 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     expected_sig: &Signature,
 ) -> Result<StoreSession, StoreError> {
     let (manifest, small) = validate_store(&*store.borrow(), expected_sig)?;
+    // Re-check the manifest after validation's separate reads, exactly
+    // as eager resume does after its row reads: the manifest / small /
+    // inventory reads are not one atomic snapshot on every backend, so
+    // a concurrent commit (a second SQLite connection) could otherwise
+    // seed the session and its pin from mixed epochs. Epochs only
+    // advance, so same (epoch, seal) after the reads proves every read
+    // saw the one pinned commit.
+    {
+        let after = store.borrow().manifest()?;
+        if after.epoch != manifest.epoch || after.seal != manifest.seal {
+            return Err(StoreError::BaselineMismatch {
+                expected: manifest.seal,
+                found: after.seal,
+            });
+        }
+    }
     let pin = std::rc::Rc::new(LazyPin {
         epoch: std::cell::Cell::new(manifest.epoch),
         seal: std::cell::RefCell::new(manifest.seal.clone()),

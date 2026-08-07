@@ -272,6 +272,15 @@ impl StoreManifest {
         let seal = std::str::from_utf8(&p[i..i + seal_len])
             .map_err(|_| SnapshotError::Corrupt("store manifest seal not utf8"))?
             .to_string();
+        i += seal_len;
+        // Store contents are untrusted; a manifest that decodes but
+        // carries extra bytes is malformed, not forward-compatible —
+        // format evolution goes through the schema version gate above.
+        if i != p.len() {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store manifest trailing bytes",
+            )));
+        }
         Ok(StoreManifest {
             version,
             store_schema,
@@ -376,6 +385,13 @@ impl SmallState {
         let names = decode_strings(section("small state names section")?)?;
         let symbols = decode_u32s(section("small state symbols section")?)?;
         let meter = MeterImage::decode(section("small state meter section")?)?;
+        // Same exact-consumption rule as the manifest: six sections and
+        // nothing after them, or the small state fails closed.
+        if i != p.len() {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "small state trailing bytes",
+            )));
+        }
         Ok(SmallState {
             stack,
             slot_free,
@@ -979,6 +995,17 @@ mod tests {
             ))) => {}
             other => panic!("expected truncated signature, got {other:?}"),
         }
+
+        // Exact consumption: a decodable manifest followed by any
+        // trailing byte is malformed, not forward-compatible.
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        match StoreManifest::decode(&trailing) {
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store manifest trailing bytes",
+            ))) => {}
+            other => panic!("expected trailing-byte refusal, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1010,6 +1037,14 @@ mod tests {
                 SmallState::decode(&bytes[..cut]).is_err(),
                 "truncation at {cut} must fail closed"
             );
+        }
+        // And the mirror image: bytes past the sixth section are
+        // malformed, not ignorable.
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        match SmallState::decode(&trailing) {
+            Err(StoreError::Snapshot(SnapshotError::Corrupt("small state trailing bytes"))) => {}
+            other => panic!("expected trailing-byte refusal, got {other:?}"),
         }
     }
 
