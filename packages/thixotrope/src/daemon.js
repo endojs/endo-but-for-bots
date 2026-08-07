@@ -2,10 +2,10 @@
 /* global crypto */
 import harden from '@endo/harden';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { Fail, q } from '@endo/errors';
 import { E, Far } from '@endo/far';
 import { makeOcapn } from '@endo/ocapn';
+import { encodeSwissnum, swissnumFromBytes } from '@endo/ocapn/client/util';
 import { makeOcapnHub } from '@endo/ocapn/hub';
 import { makeCryptography, makeSessionId } from '@endo/ocapn/cryptography';
 import {
@@ -91,7 +91,7 @@ const randomHex128 = () => {
 };
 
 const textEncoder = new TextEncoder();
-const SHELL_SWISSNUM = bytesToImmutable(textEncoder.encode('shell'));
+const SHELL_SWISSNUM = swissnumFromBytes(textEncoder.encode('shell'));
 // The endpoint's pseudo-worker id: its session records (resource
 // descriptions, pending answers) live in this worker store.
 const ENDPOINT_ID = 'e'.repeat(32);
@@ -632,8 +632,8 @@ export const makeThixotropeDaemon = async ({
     const session = await endpointSessionP;
     const bytes =
       typeof secret === 'string'
-        ? bytesToImmutable(textEncoder.encode(secret))
-        : bytesToImmutable(secret);
+        ? encodeSwissnum(secret)
+        : swissnumFromBytes(secret);
     return E(/** @type {any} */ (session.getBootstrap())).fetch(bytes);
   };
 
