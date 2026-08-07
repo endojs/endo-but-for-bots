@@ -48,7 +48,7 @@
  * it is collected immediately.
  *
  * @param {object} args
- * @param {(formula: Formula) => Array<[string, FormulaIdentifier]>} args.extractLabeledDeps
+ * @param {(formula: Formula) => Array<[string, FormulaIdentifier | undefined]>} args.extractLabeledDeps
  * @param {(id: FormulaIdentifier) => boolean} args.isLocalId
  * @param {(collectedIds: FormulaIdentifier[]) => void} args.onCollect
  */
@@ -490,7 +490,19 @@ export const makeFormulaGraph = ({
     try {
       ensure(id);
       const labeled = extractLabeledDeps(formula);
-      const localDeps = labeled.filter(([, dep]) => isLocalId(dep));
+      // A dep can be absent: a formula persisted before a field existed has
+      // nothing under it, and `extractLabeledDeps` reports the hole rather
+      // than inventing an id. `isLocalId` parses, so it would throw on one —
+      // which strands the whole daemon at seeding time, since a formula it
+      // cannot add is a formula it cannot boot past. Drop the hole instead,
+      // matching how the snapshot consumer already reads these pairs.
+      const localDeps = labeled.filter(
+        /**
+         * @param {[string, FormulaIdentifier | undefined]} labeledDep
+         * @returns {labeledDep is [string, FormulaIdentifier]}
+         */
+        labeledDep => labeledDep[1] !== undefined && isLocalId(labeledDep[1]),
+      );
 
       formulaDeps.set(id, new Set(localDeps.map(([, dep]) => dep)));
 
