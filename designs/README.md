@@ -6,6 +6,9 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[daemon-no-wait](daemon-no-wait.md) (added 2026-07-17, revised 2026-08-07;
+native creation-versus-construction semantics for selected daemon methods,
+with durable formula-plus-name receipts and CLI `eval`/`make --no-wait`),
 [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) (added
 2026-08-29; supersedes the bespoke `EndoRegistry` capability with an enumerable
 registry root, non-enumerable npm and scope lookup hubs, enumerable exact-version
@@ -321,11 +324,24 @@ LLM-agent stack).*
 | [daemon-message-streaming](daemon-message-streaming.md) | 2026-03-26 | 2026-07-22 | **Complete** (PR #125: `editMessage`, `messageHistory`, `done`; supersedes the retired `streamReply` sketch) |
 | [daemon-mount](daemon-mount.md) | 2026-03-20 | 2026-05-27 | In Progress |
 | [daemon-mount-capabilities](daemon-mount-capabilities.md) | 2026-05-18 | 2026-05-27 | **Complete** |
+<<<<<<< HEAD
 | [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | 2026-05-22 | 2026-06-02 | Not Started |
 | [registry-capability](registry-capability.md) | 2026-06-02 | 2026-08-29 | Deprecated |
 | [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) | 2026-08-29 | 2026-08-29 | Not Started |
 | [mvs-resolver](mvs-resolver.md) | 2026-06-02 | 2026-06-02 | Not Started |
 | [snapshot-mapper](snapshot-mapper.md) | 2026-06-02 | 2026-06-02 | Not Started |
+||||||| parent of e03492552a (docs(designs): add daemon-no-wait creation-vs-construction design)
+| [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | 2026-05-22 | 2026-06-02 | Proposed |
+| [registry-capability](registry-capability.md) | 2026-06-02 | 2026-06-02 | Proposed |
+| [mvs-resolver](mvs-resolver.md) | 2026-06-02 | 2026-06-02 | Proposed |
+| [snapshot-mapper](snapshot-mapper.md) | 2026-06-02 | 2026-06-02 | Proposed |
+=======
+| [daemon-no-wait](daemon-no-wait.md) | 2026-07-17 | 2026-08-07 | Proposed |
+| [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | 2026-05-22 | 2026-06-02 | Proposed |
+| [registry-capability](registry-capability.md) | 2026-06-02 | 2026-06-02 | Proposed |
+| [mvs-resolver](mvs-resolver.md) | 2026-06-02 | 2026-06-02 | Proposed |
+| [snapshot-mapper](snapshot-mapper.md) | 2026-06-02 | 2026-06-02 | Proposed |
+>>>>>>> e03492552a (docs(designs): add daemon-no-wait creation-vs-construction design)
 | [filesystem-watchers](filesystem-watchers.md) | 2026-05-07 | 2026-05-07 | Not Started |
 | [platform-fs](platform-fs.md) | 2026-03-18 | 2026-05-19 | **Complete** |
 | [fs-interface-reconciliation](fs-interface-reconciliation.md) | 2026-06-18 | 2026-06-19 | In Progress |
@@ -485,6 +501,8 @@ The 2026-08-27 rebase adds [exo-git-follow-root-advancement](exo-git-follow-root
 
 The 2026-08-29 rebase adds [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) (Proposed), increasing Proposed from 38 to 39 and the design count from 193 to 194.
 
+**Status-table tally (2026-08-07, including `daemon-no-wait`):** 44 Complete/Implemented, 26 In Progress, 41 Not Started, 37 Proposed, 2 Active, 7 Reference, 2 Deprecated, and 4 Superseded (163 designs). This direct tally supersedes the historical counts above; it groups `cbor-codec`'s "Phase 1 implemented" status under In Progress and all annotated "Superseded by ..." rows under Superseded. `daemon-no-wait`, added 2026-07-17 and revised 2026-08-07 for panel readiness, specifies native creation-versus-construction semantics for selected formula-producing daemon methods: a formulation receipt (`{ id, locator }`) settles after formula persistence, a durable provisional name-commit record, successful name commit, controller publication, and construction start; eval and caplet `start*` facet siblings plus CLI `eval`/`make --no-wait` layer on top, waiting for construction stays the default, no-wait output names the result for `endo show`, and no-wait request is deferred until a durable outbox/deduplication protocol is designed. The refreshed Host/Guest/Directory/core/interface/type/test/CLI inventory includes the newer `loadContent` content-locator operation and preserves promise formulas as raw resolution-identifier channels.
+
 ## Roadmap
 
 ### Execution lead: Minion Town federation experiment
@@ -537,9 +555,11 @@ flowchart TD
         dform[daemon-form-request<br/><i>COMPLETE</i>]
         dval[daemon-value-message<br/><i>COMPLETE</i>]
         dcmd[daemon-commands-as-messages]
+        dnowait[daemon-no-wait]
         dform --> dval
         dform --> dcmd
         dval --> dcmd
+        dnowait --> dcmd
     end
 
     subgraph LLM Agents
@@ -548,7 +568,12 @@ flowchart TD
         fagent[familiar-bundled-agents<br/><i>COMPLETE</i>]
         dtools[daemon-agent-tools<br/><i>IN PROGRESS</i>]
         deval[daemon-guest-eval-simplification<br/><i>IMPLEMENTED</i>]
+<<<<<<< HEAD
         afollow[agent-follow-stream-tool<br/><i>PROPOSED</i>]
+||||||| parent of e03492552a (docs(designs): add daemon-no-wait creation-vs-construction design)
+=======
+        deval --> dnowait
+>>>>>>> e03492552a (docs(designs): add daemon-no-wait creation-vs-construction design)
         eat[endo-agent-tools]
         eagentry[agentry-agent-builder]
         agvg[agentry-git-verb-gaps]
@@ -1202,6 +1227,7 @@ star.)
 | chat-pending-commands | **Complete** | Pending commands region, unlocked command bar; PR #133 merged to `llm` 2026-07-13 (re-opened from #43) |
 | chat-slot-slash-commands | Not Started | Slash commands (e.g. `/js`) inside slot inputs; daemon-side transient pinning until retained by the outer formula |
 | daemon-commands-as-messages | Not Started | Commands as self-addressed messages with reply results; subsumes pending region |
+| daemon-no-wait | Proposed | Native creation-vs-construction split: eval and caplet `start*` siblings return a durable `{ id, locator }` receipt after formula persistence, a provisional name-commit record, name commit, and construction start; CLI `eval`/`make` gain `--no-wait` and print the result name for `endo show`; waiting stays the default; no-wait request is deferred pending a durable outbox/deduplication design |
 | inventory-cancel-and-liveness | Not Started | Cancel button with liveness indicator, coalesced watcher protocol |
 | inventory-grouping-by-type | In Progress | UI grouping, collapsible sections |
 | inventory-drag-and-drop | Not Started | HTML5 DnD handlers |
@@ -1572,7 +1598,14 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | endoclaw-webhooks | S-M | 3 days | 7 | Gateway webhook routes -> inbox messages |
 | endoclaw-voice | S | 1-2 days | 7 | Web Speech API in Chat UI |
 | ~~chat-reply-chain-visualization~~ | — | — | 9 | Deprecated (superseded by chat-focus-message) |
+<<<<<<< HEAD
 | chat-pending-commands | S-M | 3 days | 9 | Pending region, unlocked command bar (UI only); PR #133 merged to `llm` 2026-07-13 |
+||||||| parent of e03492552a (docs(designs): add daemon-no-wait creation-vs-construction design)
+| chat-pending-commands | S-M | 3 days | 9 | Pending region, unlocked command bar (UI only); PR #133 forwarded under bot |
+=======
+| chat-pending-commands | S-M | 3 days | 9 | Pending region, unlocked command bar (UI only); PR #133 forwarded under bot |
+| daemon-no-wait | L | 2–3 weeks | 9 | Revised 2026-08-07 for panel readiness: `startEvaluate` vertical, structured preflight/commit tasks, a context-aware graph lock, and durable provisional name-commit records; exact persistence-name-construction split; CLI `eval --no-wait` with result-name output; caplet `startMake*` family + `make --no-wait` temp-archive rework; raw promise-resolution identity compatibility; and conformance pinning. No-wait request remains deferred. Net ~380–560 production LOC, ~800–1,200 total churn. |
+>>>>>>> e03492552a (docs(designs): add daemon-no-wait creation-vs-construction design)
 | chat-slot-slash-commands | M | 4-5 days | 9 | Slot-level verb registry, transient-pin extension of `formulateEval`, shared slot-input component (1.2x bump) |
 | daemon-commands-as-messages | M-L | 1.5 weeks | 9 | New message type, self-delivery, result replies, Chat rendering |
 | inventory-cancel-and-liveness | M | 4-5 days | 9 | Cancel button, indicator states, coalesced watcher exo + daemon hooks |
@@ -1636,7 +1669,7 @@ date of this pass.
 | M6: MCP Bridge Hosting (was Milestone B) | 2 net-new (`endo-gateway-mcp` impl, `endo-claude`); cross-milestone slices in M3 (P0) and M5 (P2/P3/P4 gaps) | ~3-3.5 weeks own work (endo-gateway-mcp ~2 weeks + endo-claude ~1-1.5 weeks) + ~6-9 weeks across P0-P4 | gated by M3 gateway-package phases 2/7/8 merge cadence |
 | M7: Weblets & Integrations (was M3) | 12 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |
 | M8: Peer App Sharing (was Milestone A) | 3 net-new (`familiar-deep-link-invitations`, `endo-app-sharing`, `familiar-app-ui-hosting`); existing constituents counted under M3/M4/M7 | 2-3 weeks | 3-5 weeks |
-| M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
+| M9: UX & Tooling (was M4) | 14 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `daemon-no-wait`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 11–14 weeks | 13–16 weeks |
 | M10: Confinement & Ecosystem (was M5) | 6 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
 | M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
 | **Total remaining** | **64** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
