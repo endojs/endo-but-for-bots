@@ -460,8 +460,8 @@ test.serial(
     t.is((await walk(c, 1, 2, ['big.bin'])).type, T.Rwalk);
     t.is((await lopen(c, 2, 0)).type, T.Rlopen);
 
-  for (const requested of [4096, 65_536, 100_000, 131_048]) {
-    const rd = await tread(c, 2, 0n, requested);
+    for (const requested of [4096, 65_536, 100_000, 131_048]) {
+      const rd = await tread(c, 2, 0n, requested);
       t.is(rd.type, T.Rread, `count=${requested} should not error`);
       const got = makeReader(rd.payload).u32();
       t.is(

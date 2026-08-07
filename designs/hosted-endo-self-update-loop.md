@@ -4,7 +4,8 @@
 |---|---|
 | **Created** | 2026-08-07 |
 | **Author** | 0xPatrick (prompted) |
-| **Status** | Phases 1-3 landed and verified on endo-server; phase 4 proposed |
+| **Updated** | 2026-08-08 |
+| **Status** | **Complete** (the loop is closed and verified end to end on endo-server; phases 5-6 are optional follow-ons) |
 
 ## Summary
 
@@ -154,6 +155,23 @@ the generation they landed on, which the existing `gen-<n>` tag already
 identifies, keeping the commit being left behind on a `rolled-back/<ts>-<sha>`
 branch so the record of what was tried survives.
 
+### A rollback must skip generations that also failed
+
+An apply that activates and only then fails its health check still leaves a
+generation behind.
+`nixos-rebuild switch --rollback` steps back exactly one, so a second failure
+lands the host on the first failure's configuration — and with the revision
+pinned, on its Endo revision too.
+Observed during the registry migration below: two consecutive failed applies
+left the daemon crash-looping, and recovery needed SSH, which is the dependency
+this loop exists to remove.
+
+`mark_applied` already writes a `gen-<n>` tag only after a generation activated
+*and* passed its health check, so the tags are exactly the generations known to
+work.
+The rollback paths therefore step back to the newest tagged generation below the
+current one, falling back to the one-step rollback where nothing is tagged.
+
 ### The applier cannot restart itself mid-apply
 
 `endo-nixos-apply` runs the switch, so it has to survive its own activation.
@@ -197,6 +215,28 @@ revision that `repoUrl` does not have.
 It is fetch-only, and only for resolving `rev`: a branch-tracking deploy still
 resolves its branch against `repoUrl`, so the mirror cannot quietly become the
 source of what a branch deploy builds.
+
+### Publishing needs a credential the agent can hold
+
+`exec` runs in a Compartment endowed with `powers`, `E`, `harden`, and
+`console`, so the agent cannot read a password out of the daemon environment,
+and Forgejo's repositories are mode `0750` under its own user, so the local
+filesystem transport is closed to the daemon too.
+Publishing therefore needs a daemon-minted credential.
+
+`packages/space-nixos-admin/setup-forgejo-credential.js` mints one from
+`ENDO_FORGEJO_FLOOT_PW` on every daemon start and files it as
+`forgejo-credential`.
+The secret does not reach the session: a guest holding the capability sees
+`audience()` and nothing else, and the material is fed to git through askpass
+at transport time.
+
+It re-mints unconditionally rather than skipping when the name is bound, because
+credential material is daemon-process-local — a restart keeps the formula and
+loses the material.
+Re-minting rebinds the name to a fresh formula, so a `GitRemote` built against
+the old one keeps a stale reference and has to be re-provided after a restart.
+That is the one piece of the loop a session must redo after its own deploy.
 
 ### A writable work area
 
@@ -258,6 +298,8 @@ check.
 | Interrupted build leaves a partial release | No `.deploy-complete` marker, so it is rebuilt rather than reused |
 | Forgejo unreachable during apply | Push is logged and skipped; the apply proceeds, since a mirror failure must not fail a good rebuild |
 | A rollback leaves the bad pin in the checkout | The rollback rewinds it to the `gen-<n>` commit, keeping the bad one on a `rolled-back/*` branch |
+| Two applies fail in a row | The rollback targets the newest `gen-<n>`-tagged generation rather than stepping back one, so it cannot land on the previous failure |
+| The revision needs daemon state the running one lacks | Nothing catches this before the switch; the health check fails and the rollback restores the previous revision |
 
 ## Phasing
 
@@ -272,8 +314,15 @@ check.
    **Landed.**
    The agent's writable clone is not yet wired into a session preset; an agent
    holding `host-powers` can call `provideGitClone` itself in the meantime.
-4. Optional: remove `host-powers` from `machine-admin` and grant the bounded
+4. The agent-facing half: the Forgejo credential, and the loop written into the
+   `machine-admin` prompt as runnable `exec` snippets.
+   **Landed.**
+5. Optional: remove `host-powers` from `machine-admin` and grant the bounded
    capability set.
+6. Optional: an `agent/<topic>`-per-change convention behind a review and CI
+   gate, rather than the single long-lived `agent` branch phase 4 documents.
+   The pin file makes the gate cheap to enforce — there is exactly one place to
+   check what the host is allowed to run.
 
 ### Verified on endo-server
 
@@ -284,6 +333,8 @@ check.
   apply path rather than flipping `current` behind the config's back.
 - A commit pushed only to `floot/endo` — not present on GitHub — was pinned,
   fetched from the mirror, built, and run.
+- The Forgejo credential is minted on every start and is idempotent across a
+  daemon restart.
 
 ## Alternatives Considered
 
