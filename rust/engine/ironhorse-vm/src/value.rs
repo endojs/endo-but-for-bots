@@ -65,6 +65,11 @@ pub trait PageSource {
 struct SlotBacking {
     source: Rc<dyn PageSource>,
     resident: Vec<Cell<bool>>,
+    /// The attach-time record count — what the source's geometry can
+    /// serve, and the exact-length bound every fault is checked
+    /// against (a short row must die loudly, not install placeholder
+    /// records beside real ones).
+    snapshot_count: u32,
 }
 
 /// Handle into the slot arena. `u32::MAX` is the null sentinel
@@ -412,6 +417,7 @@ impl SlotArena {
             lazy: Some(SlotBacking {
                 source,
                 resident: (0..pages).map(|_| Cell::new(false)).collect(),
+                snapshot_count: slot_count,
             }),
         }
     }
@@ -441,9 +447,15 @@ impl SlotArena {
         }
         let records = backing.source.slot_page(page);
         let start = page as usize * SLOTS_PER_PAGE as usize;
+        // Exact length, both directions: a short row would silently
+        // leave placeholder records marked resident (the review's
+        // silent-corruption finding); a long row would overrun.
+        let expected = (backing.snapshot_count as usize)
+            .min(start + SLOTS_PER_PAGE as usize)
+            .saturating_sub(start);
         assert!(
-            start + records.len() <= self.slots.len(),
-            "page source returned {} records for page {page}, past the arena end",
+            records.len() == expected,
+            "page source returned {} records for page {page}, expected {expected} (corrupt or torn store row)",
             records.len(),
         );
         for (k, s) in records.into_iter().enumerate() {
@@ -476,6 +488,16 @@ impl SlotArena {
         match &self.lazy {
             None => true,
             Some(b) => b.resident.iter().all(|c| c.get()),
+        }
+    }
+
+    /// How many attach-time pages are resident (all of them when
+    /// detached) — the working-set observability the strengthened
+    /// lazy-resume lock asserts against.
+    pub fn resident_page_count(&self) -> u32 {
+        match &self.lazy {
+            None => self.slots.len().div_ceil(SLOTS_PER_PAGE as usize) as u32,
+            Some(b) => b.resident.iter().filter(|c| c.get()).count() as u32,
         }
     }
 
@@ -867,9 +889,10 @@ impl ChunkArena {
             }
             let bytes = source.chunk_extent(ext as u32);
             let ext_start = ext * per;
+            let expected = (*snapshot_len).min(ext_start + per) - ext_start;
             assert!(
-                ext_start + bytes.len() <= *snapshot_len,
-                "extent source returned {} bytes for extent {ext}, past the snapshot length",
+                bytes.len() == expected,
+                "extent source returned {} bytes for extent {ext}, expected {expected} (corrupt or torn store row)",
                 bytes.len(),
             );
             let mut v = cell.borrow_mut();
@@ -886,6 +909,28 @@ impl ChunkArena {
         self.ensure_range_resident(ext as usize * per, (ext as usize + 1) * per);
     }
 
+    /// Fault the header and payload extents of the block at `off` in,
+    /// WITHOUT taking a read guard. Callers that hold two
+    /// [`ChunkSlice`] guards at once (the string comparison opcodes)
+    /// MUST pre-fault every operand through this before taking the
+    /// first guard: constructing a second guard whose extents are
+    /// non-resident would otherwise `borrow_mut` under the first
+    /// guard's live `Ref` — the adversarial-review critical finding
+    /// (a lazily resumed machine crashing on `a === b` across
+    /// extents while every other run mode succeeds).
+    pub fn ensure_payload_resident(&self, off: ChunkOffset) {
+        if matches!(self.bytes, ChunkBytes::Plain(_)) || off.is_null() {
+            return;
+        }
+        let h = (off.0 as usize)
+            .checked_sub(CHUNK_HEADER)
+            .expect("chunk offset below header (corrupt heap)");
+        self.ensure_range_resident(h, h + CHUNK_HEADER);
+        let len = self.len_of(off);
+        let start = off.0 as usize;
+        self.ensure_range_resident(start, start + len);
+    }
+
     /// Fault every attach-time extent in (`&self`).
     pub fn ensure_all_resident(&self) {
         if let ChunkBytes::Lazy { snapshot_len, .. } = &self.bytes {
@@ -899,6 +944,15 @@ impl ChunkArena {
         match &self.bytes {
             ChunkBytes::Plain(_) => true,
             ChunkBytes::Lazy { resident, .. } => resident.iter().all(|c| c.get()),
+        }
+    }
+
+    /// How many attach-time extents are resident (all of them when
+    /// detached).
+    pub fn resident_extent_count(&self) -> u32 {
+        match &self.bytes {
+            ChunkBytes::Plain(v) => v.len().div_ceil(CHUNK_EXTENT_BYTES as usize) as u32,
+            ChunkBytes::Lazy { resident, .. } => resident.iter().filter(|c| c.get()).count() as u32,
         }
     }
 
@@ -978,9 +1032,16 @@ impl ChunkArena {
     }
 
     /// The stored length of the block whose payload begins at `off`.
+    /// An offset below the header width can only come from a corrupt
+    /// heap (record-content corruption is not validated at open —
+    /// design's named limitation); it dies as a uniformly named
+    /// deterministic panic in every build profile rather than a
+    /// debug-only underflow.
     #[inline]
     pub fn len_of(&self, off: ChunkOffset) -> usize {
-        let h = off.0 as usize - CHUNK_HEADER;
+        let h = (off.0 as usize)
+            .checked_sub(CHUNK_HEADER)
+            .expect("chunk offset below header (corrupt heap)");
         let hdr = self.view(h, h + CHUNK_HEADER);
         u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as usize
     }

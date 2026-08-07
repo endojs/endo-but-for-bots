@@ -63,8 +63,8 @@ use crate::format::{Signature, SnapshotError};
 use crate::image::{read_machine, write_machine, MachineImage, MeterImage};
 use crate::sha256::{hex, Sha256};
 use crate::store::{
-    chunk_extent_count, image_to_batch, store_to_image, validate_store, CheckpointBatch,
-    HeapStore, SmallState, StoreError, StoreManifest, STORE_SCHEMA_VERSION,
+    chunk_extent_count, image_to_batch, seal_commit, store_to_image, validate_store,
+    CheckpointBatch, HeapStore, SmallState, StoreError, StoreManifest, STORE_SCHEMA_VERSION,
 };
 use ironhorse_vm::Interp;
 
@@ -156,6 +156,10 @@ pub trait MachineSnapshot {
         let hash = self.write_snapshot_to_file(signature, file)?;
         let final_path = cas_dir.join(&hash);
         std::fs::rename(&tmp_path, &final_path)?;
+        // Durable publish: the rename is final only once the CAS
+        // directory itself is synced (same discipline as the file
+        // store's commit).
+        File::open(cas_dir)?.sync_all()?;
         Ok(hash)
     }
 }
@@ -236,20 +240,73 @@ pub fn resume_from_cas(
 // contract as the blob path: a checkpoint is taken at machine
 // quiescence between cranks, never mid-dispatch.
 
-/// A machine's binding to one store: the proof that the store's
-/// current epoch is this machine's previous checkpoint, which is what
-/// makes committing *only* the dirty rows sound. Obtained from
-/// [`begin_store_session`] (full first write) or [`resume_from_store`]
-/// (adopting a store's content); consumed by [`checkpoint_to_store`].
-#[derive(Debug, PartialEq, Eq)]
+/// A machine's binding to one store: the session **owns the machine**,
+/// so a dirty set can only ever be committed by the session that
+/// watched it accumulate — the machine/session mispairing and the
+/// dirty-bit theft the adversarial review demonstrated (a second
+/// session over the same machine consuming bits another store still
+/// needed) are unrepresentable, not merely guarded. The session also
+/// records the store's commit seal, and every checkpoint verifies the
+/// stored (epoch, seal) pair before committing: an equal-epoch fork,
+/// copy, or foreign store fails closed with
+/// [`StoreError::BaselineMismatch`].
+///
+/// Obtained from [`begin_store_session`] (full first write into an
+/// empty store) or [`resume_from_store`]/[`resume_from_store_lazy`]
+/// (adopting a store's content). [`StoreSession::into_machine`]
+/// unbinds — after which the machine's dirty bits no longer describe
+/// any store baseline, and the only safe re-binding is a fresh full
+/// write or a resume.
+/// The live (epoch, seal) pin a lazily resumed machine's page source
+/// checks on every fault. Shared between the session (which advances
+/// it on its own successful checkpoints) and the [`StorePageSource`]
+/// (which refuses to fault once the store no longer matches it — a
+/// store advanced by anyone ELSE means torn reads, and the machine
+/// must die deterministically rather than mix epochs).
+struct LazyPin {
+    epoch: std::cell::Cell<u64>,
+    seal: std::cell::RefCell<String>,
+}
+
 pub struct StoreSession {
+    interp: Interp,
     epoch: u64,
+    seal: String,
+    /// Present on lazily resumed sessions: advancing it on checkpoint
+    /// is what lets the machine keep faulting after its own commits
+    /// (its non-dirty rows are unchanged by its own checkpoint).
+    pin: Option<std::rc::Rc<LazyPin>>,
+}
+
+impl std::fmt::Debug for StoreSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoreSession")
+            .field("epoch", &self.epoch)
+            .field("seal", &self.seal)
+            .finish_non_exhaustive()
+    }
 }
 
 impl StoreSession {
     /// The store epoch this session last committed or adopted.
     pub fn epoch(&self) -> u64 {
         self.epoch
+    }
+
+    /// The bound machine.
+    pub fn machine(&self) -> &Interp {
+        &self.interp
+    }
+
+    /// The bound machine, mutably (run cranks through this).
+    pub fn machine_mut(&mut self) -> &mut Interp {
+        &mut self.interp
+    }
+
+    /// Unbind, discarding the store baseline. The returned machine's
+    /// dirty bits are meaningless as an incremental baseline.
+    pub fn into_machine(self) -> Interp {
+        self.interp
     }
 }
 
@@ -270,6 +327,7 @@ fn manifest_of(interp: &Interp, signature: &Signature, epoch: u64) -> StoreManif
         slot_live: interp.slots.live_count(),
         chunk_len: interp.chunks.byte_size() as u64,
         epoch,
+        seal: String::new(),
     }
 }
 
@@ -292,22 +350,31 @@ fn small_state_of(interp: &Interp) -> SmallState {
 /// already holds an epoch is refused ([`StoreError::NotEmpty`]) —
 /// adopting existing content is [`resume_from_store`]'s job.
 pub fn begin_store_session(
-    interp: &mut Interp,
+    mut interp: Interp,
     signature: &Signature,
     store: &mut dyn HeapStore,
-) -> Result<StoreSession, StoreError> {
+) -> Result<StoreSession, (Interp, StoreError)> {
     match store.manifest() {
         Err(StoreError::Empty) => {}
-        Ok(m) => return Err(StoreError::NotEmpty { epoch: m.epoch }),
-        Err(e) => return Err(e),
+        Ok(m) => return Err((interp, StoreError::NotEmpty { epoch: m.epoch })),
+        Err(e) => return Err((interp, e)),
     }
-    let batch = image_to_batch(&interp.snapshot_image(signature), 1);
-    store.commit(&batch)?;
+    let batch = image_to_batch(&interp.snapshot_image(signature), 1, "");
+    if let Err(e) = store.commit(&batch) {
+        // A failed commit hands the machine back with its dirt intact.
+        return Err((interp, e));
+    }
     // Only a successful commit clears the bitmaps: a failed commit
     // forgets nothing and the next attempt re-offers the same dirt.
     interp.slots.clear_dirty();
     interp.chunks.clear_dirty();
-    Ok(StoreSession { epoch: 1 })
+    let seal = batch.manifest.seal;
+    Ok(StoreSession {
+        interp,
+        epoch: 1,
+        seal,
+        pin: None,
+    })
 }
 
 /// Commit the machine's state since the session's last checkpoint:
@@ -321,7 +388,6 @@ pub fn begin_store_session(
 /// this seam must make unrepresentable).
 pub fn checkpoint_to_store(
     session: &mut StoreSession,
-    interp: &mut Interp,
     signature: &Signature,
     store: &mut dyn HeapStore,
 ) -> Result<u64, StoreError> {
@@ -332,8 +398,17 @@ pub fn checkpoint_to_store(
             found: stored.epoch,
         });
     }
+    if stored.seal != session.seal {
+        // Equal height, different lineage: a fork, copy, or foreign
+        // store — the case a bare epoch counter cannot see.
+        return Err(StoreError::BaselineMismatch {
+            expected: session.seal.clone(),
+            found: stored.seal,
+        });
+    }
     let epoch = session.epoch + 1;
-    let manifest = manifest_of(interp, signature, epoch);
+    let interp = &mut session.interp;
+    let mut manifest = manifest_of(interp, signature, epoch);
 
     // Dirty rows only — never the whole heap. `page_records`/
     // `extent_bytes` copy one page/extent out of the arena (dirty rows
@@ -364,16 +439,28 @@ pub fn checkpoint_to_store(
         .map(|e| (e, interp.chunks.extent_bytes(e)))
         .collect();
 
+    let small = small_state_of(interp).encode();
+    manifest.seal = seal_commit(&session.seal, &manifest, &small, &slot_pages, &chunk_extents);
+    let seal = manifest.seal.clone();
     let batch = CheckpointBatch {
+        prev_seal: session.seal.clone(),
         manifest,
-        small: small_state_of(interp).encode(),
+        small,
         slot_pages,
         chunk_extents,
     };
     store.commit(&batch)?;
-    interp.slots.clear_dirty();
-    interp.chunks.clear_dirty();
+    session.interp.slots.clear_dirty();
+    session.interp.chunks.clear_dirty();
     session.epoch = epoch;
+    session.seal = seal.clone();
+    if let Some(pin) = &session.pin {
+        // The session's own commit is a legitimate advance: non-dirty
+        // rows are unchanged, dirty rows now equal the machine's local
+        // content, so continued faulting stays content-identical.
+        pin.epoch.set(epoch);
+        *pin.seal.borrow_mut() = seal;
+    }
     Ok(epoch)
 }
 
@@ -386,15 +473,27 @@ pub fn checkpoint_to_store(
 pub fn resume_from_store(
     store: &dyn HeapStore,
     expected_sig: &Signature,
-) -> Result<(Interp, StoreSession), StoreError> {
+) -> Result<StoreSession, StoreError> {
     let (manifest, _small) = validate_store(store, expected_sig)?;
     let image = store_to_image(store)?;
-    Ok((
-        image_to_interp(image),
-        StoreSession {
-            epoch: manifest.epoch,
-        },
-    ))
+    // Re-check the manifest after the row reads: the reads above are
+    // not one atomic snapshot on every backend, so a concurrent commit
+    // could otherwise hand us a chimera of two epochs (the SQLite
+    // review's torn-read finding). Same-seal after the reads proves the
+    // rows all belonged to one epoch.
+    let after = store.manifest()?;
+    if after.epoch != manifest.epoch || after.seal != manifest.seal {
+        return Err(StoreError::BaselineMismatch {
+            expected: manifest.seal,
+            found: after.seal,
+        });
+    }
+    Ok(StoreSession {
+        interp: image_to_interp(image),
+        epoch: manifest.epoch,
+        seal: manifest.seal,
+        pin: None,
+    })
 }
 
 /// The [`ironhorse_vm::PageSource`] adapter over a shared [`HeapStore`]
@@ -409,10 +508,35 @@ pub fn resume_from_store(
 /// message — the deterministic crashed-crank path.
 struct StorePageSource<S: HeapStore> {
     store: std::rc::Rc<std::cell::RefCell<S>>,
+    /// The (epoch, seal) the machine's session currently stands at.
+    /// Every fault re-verifies it, so a store advanced by anyone else
+    /// turns torn reads into a deterministic named crashed crank
+    /// instead of a chimera heap (the review's two-lazy-machines
+    /// finding); the session advances the pin on its own commits.
+    pin: std::rc::Rc<LazyPin>,
+}
+
+impl<S: HeapStore> StorePageSource<S> {
+    fn check_pin(&self, what: &str) {
+        let m = self
+            .store
+            .borrow()
+            .manifest()
+            .unwrap_or_else(|e| panic!("lazy heap fault: manifest re-read ({what}): {e:?}"));
+        if m.epoch != self.pin.epoch.get() || m.seal != *self.pin.seal.borrow() {
+            panic!(
+                "lazy heap fault: store advanced under this machine \
+                 (pinned epoch {}, store epoch {}) — torn read refused",
+                self.pin.epoch.get(),
+                m.epoch,
+            );
+        }
+    }
 }
 
 impl<S: HeapStore> ironhorse_vm::PageSource for StorePageSource<S> {
     fn slot_page(&self, page: u32) -> Vec<ironhorse_vm::Slot> {
+        self.check_pin("slot page");
         let bytes = self
             .store
             .borrow()
@@ -423,6 +547,7 @@ impl<S: HeapStore> ironhorse_vm::PageSource for StorePageSource<S> {
     }
 
     fn chunk_extent(&self, ext: u32) -> Vec<u8> {
+        self.check_pin("chunk extent");
         self.store
             .borrow()
             .read_chunk_extent(ext)
@@ -446,10 +571,15 @@ impl<S: HeapStore> ironhorse_vm::PageSource for StorePageSource<S> {
 pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     store: std::rc::Rc<std::cell::RefCell<S>>,
     expected_sig: &Signature,
-) -> Result<(Interp, StoreSession), StoreError> {
+) -> Result<StoreSession, StoreError> {
     let (manifest, small) = validate_store(&*store.borrow(), expected_sig)?;
+    let pin = std::rc::Rc::new(LazyPin {
+        epoch: std::cell::Cell::new(manifest.epoch),
+        seal: std::cell::RefCell::new(manifest.seal.clone()),
+    });
     let source = std::rc::Rc::new(StorePageSource {
         store: store.clone(),
+        pin: pin.clone(),
     });
     let slots = ironhorse_vm::SlotArena::lazy_from_parts(
         manifest.slot_count,
@@ -466,12 +596,12 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.names.clone(),
         small.meter.to_state(),
     );
-    Ok((
+    Ok(StoreSession {
         interp,
-        StoreSession {
-            epoch: manifest.epoch,
-        },
-    ))
+        epoch: manifest.epoch,
+        seal: manifest.seal,
+        pin: Some(pin),
+    })
 }
 
 #[cfg(test)]

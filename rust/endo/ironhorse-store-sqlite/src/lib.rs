@@ -32,8 +32,8 @@
 use std::path::Path;
 
 use ironhorse_snapshot::store::{
-    check_epoch, chunk_extent_count, slot_page_count, CheckpointBatch, HeapStore, StoreError,
-    StoreManifest,
+    check_succession, chunk_extent_count, slot_page_count, CheckpointBatch, HeapStore,
+    StoreError, StoreManifest,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -73,12 +73,58 @@ impl SqliteHeapStore {
         Self::init(conn)
     }
 
+    /// The `PRAGMA application_id` stamp: `IRON` as a big-endian u32 —
+    /// the SQLite analogue of the file store's magic. A SQLite database
+    /// that is not a heap store fails closed at open instead of being
+    /// silently adopted as "empty" and grafted with our schema (the
+    /// review's foreign-database finding).
+    const APPLICATION_ID: i32 = i32::from_be_bytes(*b"IRON");
+
     fn init(conn: Connection) -> Result<SqliteHeapStore, StoreError> {
+        // Foreign-database gate before anything else touches the file.
+        let app_id: i32 = conn
+            .query_row("PRAGMA application_id", [], |r| r.get(0))
+            .map_err(sql_err)?;
+        if app_id == 0 {
+            // Unstamped: acceptable only for a genuinely fresh database
+            // (no tables at all) — an unstamped populated database is
+            // some other subsystem's data, not ours to adopt.
+            let tables: i64 = conn
+                .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table'", [], |r| {
+                    r.get(0)
+                })
+                .map_err(sql_err)?;
+            if tables != 0 {
+                return Err(StoreError::Io(
+                    "sqlite: refusing foreign database (populated, unstamped)".to_string(),
+                ));
+            }
+            conn.execute_batch(&format!("PRAGMA application_id = {}", Self::APPLICATION_ID))
+                .map_err(sql_err)?;
+        } else if app_id != Self::APPLICATION_ID {
+            return Err(StoreError::Io(format!(
+                "sqlite: refusing foreign database (application_id {app_id})"
+            )));
+        }
+
         // WAL + foreign keys per the daemon defaults
-        // (daemon-endo-rust-sqlite). `journal_mode` returns a row
-        // (`query_row`), and an in-memory database legitimately answers
-        // "memory" instead of "wal".
-        conn.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))
+        // (daemon-endo-rust-sqlite), plus the busy wait and the pinned
+        // autocheckpoint threshold those designs specify. The
+        // journal-mode pragma reports the resulting mode; anything but
+        // `wal` (or `memory`, for the in-memory tests) means the
+        // documented WAL discipline is not actually in force, and the
+        // silent fallback the review flagged must fail closed instead.
+        conn.busy_timeout(std::time::Duration::from_millis(5000))
+            .map_err(sql_err)?;
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))
+            .map_err(sql_err)?;
+        if mode != "wal" && mode != "memory" {
+            return Err(StoreError::Io(format!(
+                "sqlite: journal_mode=WAL refused (got {mode})"
+            )));
+        }
+        conn.execute_batch("PRAGMA wal_autocheckpoint = 1000")
             .map_err(sql_err)?;
         conn.execute_batch(
             "PRAGMA foreign_keys=ON;
@@ -189,7 +235,33 @@ impl HeapStore for SqliteHeapStore {
         let tx = self.conn.transaction().map_err(sql_err)?;
         {
             let stored = Self::stored_manifest(&tx)?;
-            check_epoch(stored.map(|m| m.epoch), batch.manifest.epoch)?;
+            check_succession(stored.as_ref(), batch)?;
+
+            // A grown geometry's new rows must be in the batch (the
+            // reference-backend semantic): failing later at validate
+            // would leave a committed-but-unresumable lineage.
+            let pages = slot_page_count(batch.manifest.slot_count);
+            let exts = chunk_extent_count(batch.manifest.chunk_len);
+            let mut have_page = tx
+                .prepare("SELECT 1 FROM slot_pages WHERE page = ?1")
+                .map_err(sql_err)?;
+            for page in 0..pages {
+                if !batch.slot_pages.iter().any(|(p, _)| *p == page)
+                    && !have_page.exists(params![page as i64]).map_err(sql_err)?
+                {
+                    return Err(StoreError::MissingRow("slot page", page));
+                }
+            }
+            let mut have_ext = tx
+                .prepare("SELECT 1 FROM chunk_exts WHERE ext = ?1")
+                .map_err(sql_err)?;
+            for ext in 0..exts {
+                if !batch.chunk_extents.iter().any(|(e, _)| *e == ext)
+                    && !have_ext.exists(params![ext as i64]).map_err(sql_err)?
+                {
+                    return Err(StoreError::MissingRow("chunk extent", ext));
+                }
+            }
 
             let mut upsert_page = tx
                 .prepare(
@@ -217,11 +289,9 @@ impl HeapStore for SqliteHeapStore {
             // Drop rows beyond the new geometry (the commit contract:
             // a shrink across a GC compaction must not leave stale
             // extents for a later, larger geometry to resurrect).
-            let pages = slot_page_count(batch.manifest.slot_count) as i64;
-            let exts = chunk_extent_count(batch.manifest.chunk_len) as i64;
-            tx.execute("DELETE FROM slot_pages WHERE page >= ?1", params![pages])
+            tx.execute("DELETE FROM slot_pages WHERE page >= ?1", params![pages as i64])
                 .map_err(sql_err)?;
-            tx.execute("DELETE FROM chunk_exts WHERE ext >= ?1", params![exts])
+            tx.execute("DELETE FROM chunk_exts WHERE ext >= ?1", params![exts as i64])
                 .map_err(sql_err)?;
 
             tx.execute(
@@ -312,15 +382,23 @@ mod tests {
         let mut store = SqliteHeapStore::open_in_memory().unwrap();
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let mut session = begin_store_session(&mut m, &sig(), &mut store).unwrap();
-        assert_eq!(store_to_image(&store).unwrap(), m.snapshot_image(&sig()));
+        let mut session = begin_store_session(m, &sig(), &mut store)
+            .map_err(|(_, e)| e)
+            .unwrap();
+        assert_eq!(
+            store_to_image(&store).unwrap(),
+            session.machine().snapshot_image(&sig())
+        );
 
-        assert!(m.run(&PROG_B).completed);
-        checkpoint_to_store(&mut session, &mut m, &sig(), &mut store).unwrap();
-        assert_eq!(store_to_image(&store).unwrap(), m.snapshot_image(&sig()));
+        assert!(session.machine_mut().run(&PROG_B).completed);
+        checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
+        assert_eq!(
+            store_to_image(&store).unwrap(),
+            session.machine().snapshot_image(&sig())
+        );
         assert_eq!(
             export_to_container(&store).unwrap(),
-            m.write_snapshot(&sig())
+            session.machine().write_snapshot(&sig())
         );
     }
 
@@ -340,8 +418,11 @@ mod tests {
         let mut store = SqliteHeapStore::open(&path).unwrap();
         let mut m1 = Interp::new();
         assert!(m1.run(&PROG_A).completed);
-        begin_store_session(&mut m1, &sig(), &mut store).unwrap();
-        drop(m1);
+        drop(
+            begin_store_session(m1, &sig(), &mut store)
+                .map_err(|(_, e)| e)
+                .unwrap(),
+        );
         store.close().expect("full close");
 
         // The full-close contract (daemon-sqlite-shutdown-checkpoint):
@@ -353,9 +434,9 @@ mod tests {
         assert!(!shm.exists(), "SHM sidecar must be gone after close");
 
         let store = SqliteHeapStore::open(&path).unwrap();
-        let (mut m2, session) = resume_from_store(&store, &sig()).expect("resumes");
+        let mut session = resume_from_store(&store, &sig()).expect("resumes");
         assert_eq!(session.epoch(), 1);
-        let b2 = m2.run(&PROG_B);
+        let b2 = session.machine_mut().run(&PROG_B);
         assert_eq!(b2.result, ub.result);
         assert_eq!(
             b2.computrons, ub.computrons,
@@ -375,10 +456,12 @@ mod tests {
         let mut store = SqliteHeapStore::open(&path).unwrap();
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let mut session = begin_store_session(&mut m, &sig(), &mut store).unwrap();
-        assert!(m.run(&PROG_B).completed);
-        checkpoint_to_store(&mut session, &mut m, &sig(), &mut store).unwrap();
-        let expected = m.snapshot_image(&sig());
+        let mut session = begin_store_session(m, &sig(), &mut store)
+            .map_err(|(_, e)| e)
+            .unwrap();
+        assert!(session.machine_mut().run(&PROG_B).completed);
+        checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
+        let expected = session.machine().snapshot_image(&sig());
         store.close().unwrap();
 
         let mut store = SqliteHeapStore::open(&path).unwrap();
@@ -386,7 +469,7 @@ mod tests {
         assert_eq!(store_to_image(&store).unwrap(), expected);
 
         // A replayed batch is refused after reopen.
-        let stale = image_to_batch(&expected, 2);
+        let stale = image_to_batch(&expected, 2, "");
         assert_eq!(
             store.commit(&stale).unwrap_err(),
             StoreError::EpochMismatch {
@@ -405,7 +488,7 @@ mod tests {
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
         let image = m.snapshot_image(&sig());
-        store.commit(&image_to_batch(&image, 1)).unwrap();
+        store.commit(&image_to_batch(&image, 1, "")).unwrap();
         assert!(
             !image.chunks.is_empty(),
             "fixture must carry chunk bytes for the shrink to mean anything"
@@ -413,7 +496,8 @@ mod tests {
 
         let mut shrunk = image.clone();
         shrunk.chunks = Vec::new();
-        let mut batch = image_to_batch(&shrunk, 2);
+        let prev = store.manifest().unwrap().seal;
+        let mut batch = image_to_batch(&shrunk, 2, &prev);
         batch.chunk_extents.clear();
         store.commit(&batch).unwrap();
 
@@ -449,13 +533,14 @@ mod tests {
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
         let image1 = m.snapshot_image(&sig());
-        sqlite.commit(&image_to_batch(&image1, 1)).unwrap();
-        memory.commit(&image_to_batch(&image1, 1)).unwrap();
+        sqlite.commit(&image_to_batch(&image1, 1, "")).unwrap();
+        memory.commit(&image_to_batch(&image1, 1, "")).unwrap();
 
         assert!(m.run(&PROG_B).completed);
         let image2 = m.snapshot_image(&sig());
-        sqlite.commit(&image_to_batch(&image2, 2)).unwrap();
-        memory.commit(&image_to_batch(&image2, 2)).unwrap();
+        let prev = memory.manifest().unwrap().seal;
+        sqlite.commit(&image_to_batch(&image2, 2, &prev)).unwrap();
+        memory.commit(&image_to_batch(&image2, 2, &prev)).unwrap();
 
         assert_eq!(
             export_to_container(&sqlite).unwrap(),

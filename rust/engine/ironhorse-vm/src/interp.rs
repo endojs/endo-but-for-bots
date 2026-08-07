@@ -15355,6 +15355,12 @@ impl Interp {
     fn strict_equal(&self, a: &Slot, b: &Slot) -> bool {
         match (a.value, b.value) {
             (Payload::String(x), Payload::String(y)) => {
+                // Pre-fault BOTH payloads before taking the two guards:
+                // constructing the second guard over a non-resident
+                // extent would borrow_mut under the first guard's live
+                // Ref on a lazy heap (the review's critical finding).
+                self.chunks.ensure_payload_resident(x);
+                self.chunks.ensure_payload_resident(y);
                 self.str_content(x) == self.str_content(y)
             }
             // `bigint === bigint`: equal iff same sign and magnitude. A BigInt
@@ -17024,6 +17030,10 @@ impl Interp {
         if a.kind == Kind::String && b.kind == Kind::String {
             if let (Payload::String(x), Payload::String(y)) = (a.value, b.value) {
                 let r = {
+                    // Pre-fault before the two live guards (see
+                    // strict_equal): lazy-heap borrow discipline.
+                    self.chunks.ensure_payload_resident(x);
+                    self.chunks.ensure_payload_resident(y);
                     let (ca, cb) = (self.str_content(x), self.str_content(y));
                     match op {
                         RelOp::Less => ca < cb,
@@ -17089,6 +17099,10 @@ impl Interp {
         let eq = match (a.kind, b.kind) {
             (Kind::String, Kind::String) => match (a.value, b.value) {
                 (Payload::String(x), Payload::String(y)) => {
+                    // Pre-fault before the two live guards (see
+                    // strict_equal): lazy-heap borrow discipline.
+                    self.chunks.ensure_payload_resident(x);
+                    self.chunks.ensure_payload_resident(y);
                     self.str_content(x) == self.str_content(y)
                 }
                 _ => false,

@@ -170,7 +170,9 @@ pub enum SideTable {
     SymbolRegistry,
     /// `symbol_names` / `symbol_ids` / `next_intern_id` — the program
     /// symbol name↔id tables and the runtime-interned-key counter. Only
-    /// `symbol_names` is serialized (`SYMB`); `symbol_ids` and
+    /// `symbol_names` is serialized (the `NAME` atom; `SYMB` carries
+    /// well-known symbol identities and is a separate, still-pending
+    /// surface); `symbol_ids` and
     /// `next_intern_id` are re-derived from it at restore.
     SymbolTables,
     /// `symbol_key_ids` — the symbol-value descriptor slot → property id map
@@ -272,7 +274,7 @@ impl SideTable {
             // program symbol id. Regression: `restore_side_tables.rs`
             // (`symbol_tables_rebuilt_at_restore`).
             SideTable::SymbolTables => {
-                ("symbol_names(serialized)+symbol_ids/next_intern_id(derived)", RebuiltAtRestore)
+                ("symbol_names(NAME-serialized)+symbol_ids/next_intern_id(derived)", RebuiltAtRestore)
             }
             // Boot objects/ids re-derived by re-linking intrinsics.
             SideTable::SymbolRegistry => ("symbol_registry/symbol_registry_keys", Pending),
