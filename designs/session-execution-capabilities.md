@@ -81,9 +81,10 @@ condition of ordinary workspace, Git, package installation, or Web use.
 
 ## Verified Current Seams
 
-This design was checked on 2026-08-06 against live `llm` commit
-`885ad2e027f0a9be7b8748b1dec35114ed61cdf4` and the live heads of pull
-requests 907, 948, and 950.
+This design was checked on 2026-08-06 against `llm` commit
+`885ad2e027f0a9be7b8748b1dec35114ed61cdf4` and the then-current heads of pull
+requests 907, 948, and 950, then rechecked after the portable package-manager
+review follow-up.
 
 | Package | Existing seam | Ownership added by this design |
 |---|---|---|
@@ -232,12 +233,15 @@ daemon backend compose:
 | npm 11.18+ | `npm ci --ignore-scripts --no-audit --no-fund --allow-git=none --allow-remote=none --allow-file=root --allow-directory=root` | Require a matching `package-lock.json` or `npm-shrinkwrap.json`; reject `exec`, `npx`, every Git or arbitrary URL dependency, non-root file/directory dependencies, unsafe project registry/proxy/path settings, and every lifecycle/run request. Refuse npm versions without all four `allow-*` controls. |
 | pnpm 11 | `pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile --no-runtime` | Require `pnpm-lock.yaml`; `--ignore-pnpmfile` is mandatory because `--ignore-scripts` alone does not suppress `.pnpmfile.cjs`/`.pnpmfile.mjs`; reject configured plugins/hooks, Git or arbitrary URL sources, path/store escapes, and runtime download. Refuse pnpm versions without `--no-runtime`. |
 | Yarn 1 | `yarn install --frozen-lockfile --ignore-scripts --non-interactive` | Set `YARN_IGNORE_PATH=1`, require `yarn.lock`, reject project `yarn-path`, plugins, unsafe registry/proxy/path settings, Git dependencies, and every script/run surface. |
-| Yarn 2+ | `yarn install --immutable --mode=skip-build` | Set `YARN_IGNORE_PATH=1`, `YARN_ENABLE_SCRIPTS=0`, and telemetry off; reject project plugins, `yarnPath`, injected environment files, executable configuration, Git dependencies, and unsupported offline/production modes. `skip-build` is required because `enableScripts: false` alone can still treat workspace scripts differently. |
+| Yarn 2 | `yarn install --immutable --skip-builds` | Set `YARN_IGNORE_PATH=1`, `YARN_ENABLE_SCRIPTS=0`, and telemetry off; reject project plugins, `yarnPath`, injected environment files, executable configuration, Git dependencies, and unsupported offline/production modes. Refuse other Yarn 2 variants if the legacy flag cannot be proven. |
+| Yarn 3+ | `yarn install --immutable --mode=skip-build` | Apply the same environment and configuration denials as Yarn 2. `skip-build` mode is required because `enableScripts: false` alone can still treat workspace scripts differently. Refuse versions whose supported invocation does not match the portable predecessor's major-version branch. |
 
 These flags are grounded in the npm `ci` documentation's `ignore-scripts`,
 `audit`, and `fund` behavior, pnpm's `install` and `pnpmfile` documentation,
-and Yarn's `install --mode=skip-build`, `enableScripts`, and `ignorePath`
-contracts:
+and Yarn's version-specific skip-build behavior, `enableScripts`, and
+`ignorePath` contracts.
+The portable predecessor's reviewed argv builder supplies `--skip-builds` only
+for Yarn 2 and `--mode=skip-build` for Yarn 3 and later:
 
 - <https://docs.npmjs.com/cli/v11/commands/npm-ci/>
 - <https://pnpm.io/cli/install>
