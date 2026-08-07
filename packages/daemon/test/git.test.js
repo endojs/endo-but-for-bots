@@ -3232,6 +3232,35 @@ test('Git.status interface guard rejects backend rows with invalid enum values',
   });
 });
 
+test('Git.status accepts and guards untracked-file options', async t => {
+  const mount = await provisionMount(t);
+  /** @type {unknown[]} */
+  const statusOptions = [];
+  const backend = harden({
+    ...makeNotYetImplementedBackend(),
+    status: async options => {
+      statusOptions.push(options);
+      return harden([]);
+    },
+  });
+  const git = makeGit({ mount, backend, lineageOf });
+
+  await E(git).status({ untracked: 'no' });
+  await E(git).status({ untracked: 'normal' });
+  t.deepEqual(statusOptions, [{ untracked: 'no' }, { untracked: 'normal' }]);
+
+  const invokeStatus = options => E(/** @type {any} */ (git)).status(options);
+  await t.throwsAsync(invokeStatus({ untracked: 'invalid' }), {
+    message: /status|untracked|record/i,
+  });
+  await t.throwsAsync(invokeStatus({ untracked: 'no', extra: true }), {
+    message: /status|untracked|record/i,
+  });
+  await t.throwsAsync(invokeStatus(null), {
+    message: /status|untracked|record/i,
+  });
+});
+
 test('Git accepts both string and structured GitRef arguments', async t => {
   const mount = await provisionMount(t);
   // Override show/revParse to record the resolved name without throwing.

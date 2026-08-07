@@ -39,6 +39,7 @@ import type {
   GitRestoreOptions,
   GitStashPushOptions,
   GitStatusEntry,
+  GitStatusOptions,
   GitStatusNode,
   GitWorktree,
   GitWorktreeStatus,
@@ -234,6 +235,13 @@ expectTypeOf<
 expectTypeOf<
   Awaited<ReturnType<ReadOnlyEndoGit['worktree']>>
 >().toEqualTypeOf<ReadOnlyGitWorktree>();
+expectTypeOf<Parameters<ReadOnlyEndoGit['status']>[0]>().toEqualTypeOf<
+  GitStatusOptions | undefined
+>();
+const validStatusOptions: GitStatusOptions = { untracked: 'no' };
+expectTypeOf(validStatusOptions).toEqualTypeOf<GitStatusOptions>();
+// @ts-expect-error `status` only accepts Git's three untracked modes.
+const invalidStatusOptions: GitStatusOptions = { untracked: 'invalid' };
 expectTypeOf<WritableGitWorktree>().toExtend<PathEntryIssuer>();
 
 // `ReadOnlyEndoGit` must expose none of the mutating methods under any name;

@@ -134,6 +134,25 @@ test('NativeGitBackend.status reads large output and preserves status columns', 
   );
 });
 
+test('NativeGitBackend.status filters untracked files according to options', async t => {
+  const { backend, repoRoot } = await provisionRepo(t);
+  await fs.promises.mkdir(path.join(repoRoot, 'tree', 'deeper'), {
+    recursive: true,
+  });
+  await fs.promises.writeFile(path.join(repoRoot, 'tree', 'deeper', 'a'), '');
+  await fs.promises.writeFile(path.join(repoRoot, 'one'), '');
+
+  const pathsFor = async options =>
+    (await backend.status(options)).map(entry => entry.path).sort();
+  t.deepEqual(await pathsFor(), ['one', 'tree/deeper/a']);
+  t.deepEqual(await pathsFor({ untracked: 'normal' }), ['one', 'tree/']);
+  t.deepEqual(await pathsFor({ untracked: 'no' }), []);
+  await t.throwsAsync(
+    backend.status(/** @type {any} */ ({ untracked: 'invalid' })),
+    { message: /status\.untracked/ },
+  );
+});
+
 const LEASE_URL = 'https://github.com/example/repo.git';
 const LEASE_OID = '0123456789abcdef0123456789abcdef01234567';
 
