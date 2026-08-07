@@ -7,7 +7,13 @@
 // forms. Intended for ENDO_EXTRA alongside setup-host.js and setup-peer.js.
 //
 // Reads (first match wins):
+//   ENDO_CLAUDE_OAUTH_TOKEN / CLAUDE_CODE_OAUTH_TOKEN — Claude subscription
+//     token from `claude setup-token`. Preferred: the CLI runtime bills against
+//     a Pro/Max subscription instead of API credits. Takes precedence over the
+//     API key below.
 //   ENDO_FLOOT_AUTH_TOKEN / ANTHROPIC_API_KEY / FLOOT_AUTH_TOKEN — API key
+//   ENDO_CLAUDE_CREDS_KIND / CLAUDE_CREDS_KIND — force `apiKey` or `oauthToken`
+//     when the token prefix is not conclusive
 //   ENDO_CLAUDE_CREDS_NAME (default claude-creds)
 //   ENDO_CLAUDE_CLIENT_NAME (default claude-client)
 //   ENDO_CLAUDE_PROVISIONER_NAME (default claude-session-provisioner)
@@ -65,6 +71,21 @@ const persistKeyToSidecar = async (name, apiKey) => {
 };
 
 /**
+ * Tokens minted by `claude setup-token` (a Pro/Max subscription grant) carry an
+ * `sk-ant-oat` prefix; raw console API keys carry `sk-ant-api`. The prefix is
+ * the only signal available here, so an unrecognised token stays an `apiKey`
+ * unless the operator names the kind explicitly.
+ *
+ * @param {string} token
+ * @returns {string | undefined}
+ */
+const inferCredentialKind = token => {
+  if (token.startsWith('sk-ant-oat')) return 'oauthToken';
+  if (token.startsWith('sk-ant-api')) return 'apiKey';
+  return undefined;
+};
+
+/**
  * @param {EndoHost} hostAgent
  * @param {object} spec
  * @param {string} spec.name
@@ -75,25 +96,44 @@ const provisionCredentials = async (
   hostAgent,
   { name, apiKey, kind = 'apiKey' },
 ) => {
-  if (!(await E(hostAgent).has(name))) {
-    if (!CREDENTIAL_KINDS.includes(kind)) {
-      throw makeError(
-        X`credential kind ${q(kind)} must be one of ${q(CREDENTIAL_KINDS.join(', '))}`,
-      );
-    }
-    const credentialsFile = await persistKeyToSidecar(name, apiKey);
-    await E(hostAgent).makeUnconfined('@main', credentialsModuleSpecifier, {
-      powersName: '@none',
-      resultName: name,
-      env: harden({
-        CREDENTIALS_FILE: credentialsFile,
-        CREDENTIALS_KIND: kind,
-      }),
-    });
-    console.log(`Minted ClaudeCredentials "${name}".`);
-  } else {
-    console.log(`ClaudeCredentials "${name}" already exists — skipping.`);
+  if (!CREDENTIAL_KINDS.includes(kind)) {
+    throw makeError(
+      X`credential kind ${q(kind)} must be one of ${q(CREDENTIAL_KINDS.join(', '))}`,
+    );
   }
+  if (await E(hostAgent).has(name)) {
+    // The kind is frozen into the credential formula's env at mint time, so a
+    // switch between an API key and a subscription token cannot be applied in
+    // place — the name has to be re-pointed at a freshly minted formula.
+    // Sessions provisioned earlier hold the old cap by reference and keep
+    // working (on the old secret) until they are re-provisioned.
+    let existingKind = 'apiKey';
+    try {
+      const existing = /** @type {any} */ (await E(hostAgent).lookup(name));
+      existingKind = await E(existing).kind();
+    } catch {
+      // A credential too old to report its kind predates `oauthToken`.
+    }
+    if (existingKind === kind) {
+      console.log(`ClaudeCredentials "${name}" already exists — skipping.`);
+      return;
+    }
+    console.log(
+      `ClaudeCredentials "${name}" is kind "${existingKind}" but "${kind}" was configured; re-minting. ` +
+        'Existing Claude sessions keep the old credential until re-provisioned.',
+    );
+    await E(hostAgent).remove(name);
+  }
+  const credentialsFile = await persistKeyToSidecar(name, apiKey);
+  await E(hostAgent).makeUnconfined('@main', credentialsModuleSpecifier, {
+    powersName: '@none',
+    resultName: name,
+    env: harden({
+      CREDENTIALS_FILE: credentialsFile,
+      CREDENTIALS_KIND: kind,
+    }),
+  });
+  console.log(`Minted ClaudeCredentials "${name}" (kind "${kind}").`);
 };
 
 /**
@@ -121,16 +161,29 @@ export const main = async hostAgent => {
     env.ENDO_CLAUDE_SANDBOX_IMAGE ||
     'oci:localhost/claude-code:latest';
 
+  // A subscription token wins over an API key: the CLI runtime then bills
+  // against the Pro/Max plan rather than API credits. ENDO_FLOOT_AUTH_TOKEN is
+  // deliberately not overloaded for this — Floot's `claude-api` runtime talks to
+  // the Anthropic API directly and still needs a real API key.
+  const oauthToken =
+    env.ENDO_CLAUDE_OAUTH_TOKEN || env.CLAUDE_CODE_OAUTH_TOKEN || '';
   const apiKey =
+    oauthToken ||
     env.ENDO_FLOOT_AUTH_TOKEN ||
     env.ANTHROPIC_API_KEY ||
     env.FLOOT_AUTH_TOKEN ||
     '';
   if (!apiKey) {
     throw new Error(
-      'ENDO_FLOOT_AUTH_TOKEN (or ANTHROPIC_API_KEY / FLOOT_AUTH_TOKEN) is required.',
+      'ENDO_CLAUDE_OAUTH_TOKEN (or ENDO_FLOOT_AUTH_TOKEN / ANTHROPIC_API_KEY / FLOOT_AUTH_TOKEN) is required.',
     );
   }
+  const credsKind =
+    env.ENDO_CLAUDE_CREDS_KIND ||
+    env.CLAUDE_CREDS_KIND ||
+    (oauthToken ? 'oauthToken' : undefined) ||
+    inferCredentialKind(apiKey) ||
+    'apiKey';
 
   if (!(await E(hostAgent).has('claude-sandbox', 'sandbox-factory'))) {
     throw new Error(
@@ -138,7 +191,11 @@ export const main = async hostAgent => {
     );
   }
 
-  await provisionCredentials(hostAgent, { name: credsName, apiKey });
+  await provisionCredentials(hostAgent, {
+    name: credsName,
+    apiKey,
+    kind: credsKind,
+  });
   await mkdir(workspaceDir, { recursive: true });
 
   const flootDir = env.ENDO_FLOOT_DIR || env.FLOOT_DIR || 'floot';
