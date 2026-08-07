@@ -14,3 +14,6 @@ edition = "2021"
 rusqlite = { version = "0.31", features = ["bundled"] }
 ironhorse-snapshot = { path = "../../engine/ironhorse-snapshot" }
 ironhorse-vm = { path = "../../engine/ironhorse-vm" }
+
+[dev-dependencies]
+ironhorse-compile = { path = "../../engine/ironhorse-compile" }

@@ -2061,6 +2061,7 @@ dependencies = [
 name = "ironhorse-store-sqlite"
 version = "0.1.0"
 dependencies = [
+ "ironhorse-compile",
  "ironhorse-snapshot",
  "ironhorse-vm",
  "rusqlite",
