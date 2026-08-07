@@ -266,6 +266,22 @@ pub fn resume_from_cas(
 struct LazyPin {
     epoch: std::cell::Cell<u64>,
     seal: std::cell::RefCell<String>,
+    /// Address of the pinned store's data (the `S` inside the
+    /// `Rc<RefCell<S>>` the page source reads through). The session
+    /// advances the pin after a commit only when the committed store
+    /// IS the pinned store — a commit into a byte-identical twin store
+    /// passes succession, but advancing the pin would wedge the next
+    /// fault (the PR-review finding). Compared by address rather than
+    /// by re-reading the manifest because during a same-store commit
+    /// the caller necessarily holds the `RefCell`'s mutable borrow to
+    /// pass `&mut dyn HeapStore`, so any probe through the `RefCell`
+    /// would re-enter it. The `Rc` held by the page source keeps the
+    /// allocation alive for the pin's whole lifetime, so the address
+    /// cannot be recycled. A caller that commits through a forwarding
+    /// wrapper around the pinned store fails the comparison and the
+    /// pin stays put; the next fault then fails closed (deterministic
+    /// named panic) rather than reading across epochs.
+    store_addr: *const (),
 }
 
 pub struct StoreSession {
@@ -455,11 +471,16 @@ pub fn checkpoint_to_store(
     session.epoch = epoch;
     session.seal = seal.clone();
     if let Some(pin) = &session.pin {
-        // The session's own commit is a legitimate advance: non-dirty
-        // rows are unchanged, dirty rows now equal the machine's local
-        // content, so continued faulting stays content-identical.
-        pin.epoch.set(epoch);
-        *pin.seal.borrow_mut() = seal;
+        // Advance only if this commit landed in the PINNED store,
+        // decided by address identity (borrow-free — see [`LazyPin`]);
+        // a commit into an identical twin leaves the pin — and the
+        // pinned store's content — exactly where the machine's faults
+        // need them.
+        let committed: *const dyn HeapStore = &*store;
+        if committed.cast::<()>() == pin.store_addr {
+            pin.epoch.set(epoch);
+            *pin.seal.borrow_mut() = seal;
+        }
     }
     Ok(epoch)
 }
@@ -576,6 +597,10 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     let pin = std::rc::Rc::new(LazyPin {
         epoch: std::cell::Cell::new(manifest.epoch),
         seal: std::cell::RefCell::new(manifest.seal.clone()),
+        // `RefCell::as_ptr` addresses the `S` itself — the same address
+        // a later `&mut *store.borrow_mut()` coerced to
+        // `&mut dyn HeapStore` carries into [`checkpoint_to_store`].
+        store_addr: store.as_ptr().cast::<()>().cast_const(),
     });
     let source = std::rc::Rc::new(StorePageSource {
         store: store.clone(),

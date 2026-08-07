@@ -65,13 +65,56 @@ principal review-driven revisions, recorded as design amendments:
   `busy_timeout(5000)` + `wal_autocheckpoint=1000` per the daemon
   designs.
 
+A follow-up automated review pass (PR #963 Copilot review,
+2026-08-07) drove a second, smaller wave:
+
+- **Open-time row inventory is metadata-only.** `HeapStore` grew
+  `inventory()` (present row keys + stored lengths — map metadata,
+  directory entries, or `SELECT length(bytes)` — never row content),
+  and `validate_store` checks existence/length through it. Before
+  this, validation read every row's bytes, so a *lazy* resume still
+  paid O(heap) I/O at open, defeating phase 3's wake-latency point.
+  Content reads now happen only on fault (or eager reify), and the
+  fault path's exact-length asserts keep the length half of the
+  check enforced at use.
+- **Commit presence checks are O(dirty + grown).** A batch that grows
+  the geometry must supply every row in the grown region; the check
+  now walks only `prior geometry .. new geometry` against a hash set
+  of the batch's keys, instead of re-walking the whole store per
+  commit.
+- **Lazy-pin advance is identity-gated, borrow-free.** The pin
+  advances only when the committed store *is* the pinned store,
+  decided by comparing the store's address recorded at resume — not
+  by re-probing the store's manifest, which necessarily re-enters the
+  `RefCell` the caller already holds mutably to pass
+  `&mut dyn HeapStore` on every same-store commit. A commit into a
+  byte-identical twin passes succession but leaves the pin (and the
+  pinned store's content) exactly where the machine's faults need
+  them.
+- **`FileStore` temp names are unique per attempt** (pid + process
+  sequence), so two writers racing the same path cannot clobber each
+  other's staging file; the single-writer-per-path model itself is
+  documented at the type, and the second-handle lock stays the seal
+  chain.
+- **Recorded trade — placeholder allocation at lazy attach.** A lazy
+  resume allocates the full dense `Cell` arrays (slots and residency
+  bits) up front: O(slot_count) zero-fill before any fault. The
+  sparse alternative (allocate per faulted page) was rejected because
+  dense indexing keeps the by-value `get` free of an extra map lookup
+  on the hottest path in the machine — the layer the benchmark gate
+  priced. The attach cost is one contiguous allocation pass, far
+  below the cost of faulting even a handful of pages, and it scales
+  with the *pinned* heap, not the working set — accepted and named
+  here rather than hidden.
+
 Phase 1-2 detail (2026-08-06):
 
 - `rust/engine/ironhorse-snapshot/src/store.rs` — the paged logical
   image and the `HeapStore` trait: `StoreManifest` (gates + geometry +
   epoch), `SmallState`, `CheckpointBatch`, `check_epoch`,
-  `validate_store` (exhaustive open-time gates, accounting, full row
-  inventory), `image_to_batch` / `store_to_image`,
+  `validate_store` (exhaustive open-time gates, accounting, row
+  inventory — metadata-only since the follow-up review),
+  `image_to_batch` / `store_to_image`,
   `export_to_container` / `import_from_container` (the byte-identity
   locks), `root_hash` (logical identity: SHA-256 of the canonical
   export, locked equal to the blob path's CAS key), and `MemoryStore`
@@ -529,6 +572,9 @@ Costs, stated honestly:
   This is correct and deterministic, and it is the accepted cost —
   pinning GC to require prior full residency would reify the same
   pages at the same moment with more machinery.
+  Making the collection itself lighter than the heap — tracing
+  against indexed store queries instead of resident content — is
+  Open Question 6.
 - Mark bits remain transient (never stored); sweep continues to push
   free-list entries in deterministic index order; the free list rides
   small state.
@@ -742,6 +788,49 @@ changes an engine observable.
 5. Whether `store::file` (the pure-Rust reference store) should grow
    into the default backend for non-daemon embedders, leaving SQLite
    as the daemon's choice — revisit when a second embedder exists.
+6. **Lighter GC against the store.** Today a collection is the
+   amortized full reifier (Design Decision 4): mark faults every live
+   slot page, and chunk compaction reifies the whole extent space
+   before downgrading it to plain bytes; only sweep and the free list
+   are content-free. Three directions could shrink a collection's
+   store I/O below O(live heap), in rising order of ambition — all
+   constrained by the determinism doctrine (collector behavior must
+   stay a release-fixed pure function of heap *content*, never of
+   residency, so sleep/wake stays observably identical to
+   uninterrupted):
+   - **Prefetch, not reschedule.** Collection *timing* cannot move
+     (release-fixed thresholds), but fault *latency* can hide: the
+     supervisor already knows the allocation meters, so it can warm
+     the heap (`touch_page` / `touch_extent` sweeps, or bulk
+     `SELECT`s ahead of the threshold) before the reifying collect
+     lands. Residency order is proven observably irrelevant (the
+     adversarial-prefetch metamorphic arm), so this is pure policy.
+     Cheapest, changes no engine semantics, saves latency spikes but
+     not total I/O.
+   - **Persisted page-edge summaries (remembered sets).** At
+     checkpoint, also write per-page outgoing-reference summaries
+     (which pages a page's slots point into — computable from the
+     dirty pages being encoded anyway) into an indexed side table,
+     sealed with the commit. A partial/generational collector could
+     then trace only pages dirtied since the last full collect plus
+     pages their summaries reach, resolving the rest through indexed
+     store queries instead of faulting content. Deterministic so long
+     as the summary format and the partial-collection rule are
+     release-fixed functions of store content. The real price is a
+     second collector algorithm to keep deterministic and metered —
+     and free-list/compaction interaction becomes the hard part.
+   - **Identity-keyed chunk rows.** Re-key chunk storage by stable
+     chunk identity instead of raw extent offsets, so compaction
+     becomes per-chunk row moves (`UPDATE`s over the index) rather
+     than a whole-space rewrite — de-globalizing the one GC phase
+     that today touches every byte. This is the deep redesign: it
+     changes the store schema, the slot→chunk reference encoding, and
+     the compaction algorithm together, and only pays once heaps are
+     large enough that compaction I/O dominates checkpoints.
+   Prerequisite for the latter two: the side-table chunk-roots
+   completeness item from the adversarial review (array-buffer and
+   static-string roots must be first-class before any collector
+   consults the store for reachability).
 
 ## Prompt
 
