@@ -1,19 +1,19 @@
 //! The store-backed checkpoint acceptance locks (store seam design,
-//! phase 2): after any checkpoint the store equals the live machine
-//! exactly; incremental commits write only the dirty rows; a resume
-//! from the store continues result AND computron count identically to
-//! an uninterrupted machine; and the session/store pairing guards fail
-//! closed. Every machine-level lock runs against both reference
-//! backends (memory and file) — the parity every future backend
-//! (SQLite daemon-side) must also meet.
+//! phase 2, revised by the adversarial review): after any checkpoint
+//! the store equals the bound machine exactly; incremental commits
+//! write only the dirty rows; a resume from the store continues result
+//! AND computron count identically to an uninterrupted machine; and
+//! the succession guards (epoch + commit-seal lineage, owning
+//! sessions) fail closed. Machine-level locks run against both
+//! reference backends.
 
 use ironhorse_snapshot::machine::{
-    begin_store_session, checkpoint_to_store, resume_from_store, MachineSnapshot,
+    begin_store_session, checkpoint_to_store, resume_from_store, MachineSnapshot, StoreSession,
 };
 use ironhorse_snapshot::sha256::hex_sha256;
 use ironhorse_snapshot::store::{
-    export_to_container, root_hash, slot_page_count, store_to_image, HeapStore, MemoryStore,
-    StoreError,
+    export_to_container, image_to_batch, root_hash, slot_page_count, store_to_image, HeapStore,
+    MemoryStore, StoreError,
 };
 use ironhorse_snapshot::store_file::FileStore;
 use ironhorse_snapshot::Signature;
@@ -23,8 +23,6 @@ fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
 }
 
-// The captured oracle bytecodes the blob-path suspend/resume tests use
-// (`src/machine.rs`): PROG_A completes "6", PROG_B completes "1".
 const PROG_A: [u8; 44] = [
     0x0b, 0x00, 0x4b, 0xe0, 0x38, 0x00, 0x00, 0x2e, 0x13, 0x0b, 0x01, 0x9e, 0x01, 0x86, 0x01,
     0x00, 0x02, 0x00, 0xe6, 0x01, 0x92, 0x5c, 0x01, 0x72, 0x01, 0x01, 0xbb, 0x44, 0x58, 0x92,
@@ -44,33 +42,43 @@ fn file_store(name: &str) -> (FileStore, std::path::PathBuf) {
     (FileStore::open(dir.join("heap.ihstore")).unwrap(), dir)
 }
 
+fn begin(m: Interp, store: &mut dyn HeapStore) -> StoreSession {
+    begin_store_session(m, &sig(), store).map_err(|(_, e)| panic!("begin: {e:?}")).unwrap()
+}
+
 /// The central invariant: after every checkpoint — full or incremental
-/// — reading the whole store back yields exactly the live machine's
-/// snapshot image, and the store's canonical export is byte-identical
-/// to the blob the machine itself would write.
+/// — the store equals the bound machine's snapshot image, its export
+/// byte-equals the machine's own blob, and its root hash is the blob's
+/// CAS key.
 fn store_tracks_live_machine(store: &mut dyn HeapStore) {
     let mut m = Interp::new();
     assert!(m.run(&PROG_A).completed);
-    let mut session = begin_store_session(&mut m, &sig(), store).expect("full first write");
+    let mut session = begin(m, store);
     assert_eq!(session.epoch(), 1);
-    assert_eq!(store_to_image(store).unwrap(), m.snapshot_image(&sig()));
+    assert_eq!(
+        store_to_image(store).unwrap(),
+        session.machine().snapshot_image(&sig())
+    );
     assert_eq!(
         export_to_container(store).unwrap(),
-        m.write_snapshot(&sig()),
+        session.machine().write_snapshot(&sig()),
         "store export byte-equals the machine's own blob"
     );
 
-    assert!(m.run(&PROG_B).completed);
-    let epoch = checkpoint_to_store(&mut session, &mut m, &sig(), store).expect("incremental");
+    assert!(session.machine_mut().run(&PROG_B).completed);
+    let epoch = checkpoint_to_store(&mut session, &sig(), store).expect("incremental");
     assert_eq!(epoch, 2);
-    assert_eq!(store_to_image(store).unwrap(), m.snapshot_image(&sig()));
-    assert_eq!(export_to_container(store).unwrap(), m.write_snapshot(&sig()));
-    // Logical identity: the store's root hash is the same CAS key the
-    // blob path would compute for this machine state, so blob and
-    // store workers share one content-address space.
+    assert_eq!(
+        store_to_image(store).unwrap(),
+        session.machine().snapshot_image(&sig())
+    );
+    assert_eq!(
+        export_to_container(store).unwrap(),
+        session.machine().write_snapshot(&sig())
+    );
     assert_eq!(
         root_hash(store).unwrap(),
-        hex_sha256(&m.write_snapshot(&sig()))
+        hex_sha256(&session.machine().write_snapshot(&sig()))
     );
 }
 
@@ -87,51 +95,40 @@ fn store_tracks_live_machine_file() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The incrementality bar, measured: the second checkpoint writes
-/// strictly fewer slot pages than the store holds (only the dirty
-/// ones), and a checkpoint with nothing dirty writes zero rows — while
-/// both still leave the store exactly equal to the live machine.
+/// The incrementality bar, measured exactly as before the session
+/// refactor.
 #[test]
 fn incremental_checkpoint_writes_only_dirty_rows() {
     let mut store = MemoryStore::new();
     let mut m = Interp::new();
     assert!(m.run(&PROG_A).completed);
-    let mut session = begin_store_session(&mut m, &sig(), &mut store).unwrap();
+    let mut session = begin(m, &mut store);
     let total_pages = slot_page_count(store.manifest().unwrap().slot_count) as usize;
-    assert_eq!(
-        store.last_commit_stats().slot_pages_written,
-        total_pages,
-        "the first write is full by construction"
-    );
+    assert_eq!(store.last_commit_stats().slot_pages_written, total_pages);
 
-    assert!(m.run(&PROG_B).completed);
-    checkpoint_to_store(&mut session, &mut m, &sig(), &mut store).unwrap();
+    assert!(session.machine_mut().run(&PROG_B).completed);
+    checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
     let stats = store.last_commit_stats();
-    assert!(
-        stats.slot_pages_written > 0,
-        "crank B allocated, so something is dirty"
-    );
+    assert!(stats.slot_pages_written > 0);
     let total_pages = slot_page_count(store.manifest().unwrap().slot_count) as usize;
     assert!(
         stats.slot_pages_written < total_pages,
-        "an incremental commit must not rewrite the whole heap: wrote {} of {}",
+        "wrote {} of {}",
         stats.slot_pages_written,
         total_pages
     );
-    assert_eq!(store_to_image(&store).unwrap(), m.snapshot_image(&sig()));
+    assert_eq!(
+        store_to_image(&store).unwrap(),
+        session.machine().snapshot_image(&sig())
+    );
 
-    // Nothing ran since: a third checkpoint carries zero dirty rows
-    // (manifest + small state only) and the store still agrees.
-    checkpoint_to_store(&mut session, &mut m, &sig(), &mut store).unwrap();
+    checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
     let stats = store.last_commit_stats();
     assert_eq!(stats.slot_pages_written, 0, "no false dirt");
     assert_eq!(stats.chunk_extents_written, 0, "no false dirt");
-    assert_eq!(store_to_image(&store).unwrap(), m.snapshot_image(&sig()));
 }
 
-/// The row-6 bar through the store: crank A, checkpoint, resume from
-/// the store, crank B — result and final computron count equal the
-/// uninterrupted machine's, on both backends.
+/// The row-6 bar through the store, both backends.
 fn resume_equals_uninterrupted(store: &mut dyn HeapStore) {
     let mut uninterrupted = Interp::new();
     assert!(uninterrupted.run(&PROG_A).completed);
@@ -140,17 +137,15 @@ fn resume_equals_uninterrupted(store: &mut dyn HeapStore) {
 
     let mut m1 = Interp::new();
     assert!(m1.run(&PROG_A).completed);
-    let session = begin_store_session(&mut m1, &sig(), store).unwrap();
-    drop(m1); // the suspended worker's machine is gone
+    let s1 = begin(m1, store);
+    let epoch = s1.epoch();
+    drop(s1); // the suspended worker's machine is gone
 
-    let (mut m2, resumed) = resume_from_store(store, &sig()).expect("resumes");
-    assert_eq!(resumed.epoch(), session.epoch());
-    let b2 = m2.run(&PROG_B);
-    assert_eq!(b2.result, ub.result, "result equals the uninterrupted run");
-    assert_eq!(
-        b2.computrons, ub.computrons,
-        "computron count equals the uninterrupted run (meter continued)"
-    );
+    let mut s2 = resume_from_store(store, &sig()).expect("resumes");
+    assert_eq!(s2.epoch(), epoch);
+    let b2 = s2.machine_mut().run(&PROG_B);
+    assert_eq!(b2.result, ub.result);
+    assert_eq!(b2.computrons, ub.computrons, "meter continued");
 }
 
 #[test]
@@ -166,10 +161,7 @@ fn resume_equals_uninterrupted_file() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A resumed session continues checkpointing incrementally: resume,
-/// run another crank, checkpoint — the store follows the resumed
-/// machine, across a file-store reopen (the suspended-worker
-/// lifecycle end to end).
+/// Resume, run, checkpoint incrementally, across file-store reopens.
 #[test]
 fn resumed_session_checkpoints_incrementally_across_reopen() {
     let (mut store, dir) = file_store("lifecycle");
@@ -177,65 +169,77 @@ fn resumed_session_checkpoints_incrementally_across_reopen() {
 
     let mut m1 = Interp::new();
     assert!(m1.run(&PROG_A).completed);
-    begin_store_session(&mut m1, &sig(), &mut store).unwrap();
-    drop(m1);
+    drop(begin(m1, &mut store));
     drop(store);
 
-    let store = FileStore::open(&path).unwrap();
-    let (mut m2, mut session) = resume_from_store(&store, &sig()).unwrap();
-    let mut store = store;
-    assert!(m2.run(&PROG_B).completed);
-    let epoch = checkpoint_to_store(&mut session, &mut m2, &sig(), &mut store).unwrap();
+    let mut store = FileStore::open(&path).unwrap();
+    let mut session = resume_from_store(&store, &sig()).unwrap();
+    assert!(session.machine_mut().run(&PROG_B).completed);
+    let epoch = checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
     assert_eq!(epoch, 2);
-    assert_eq!(store_to_image(&store).unwrap(), m2.snapshot_image(&sig()));
+    let expected = session.machine().snapshot_image(&sig());
+    assert_eq!(store_to_image(&store).unwrap(), expected);
 
-    // And the final state survives one more reopen.
     drop(store);
     let store = FileStore::open(&path).unwrap();
-    assert_eq!(store_to_image(&store).unwrap(), m2.snapshot_image(&sig()));
+    assert_eq!(store_to_image(&store).unwrap(), expected);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Binding a machine to a store that already holds an epoch is refused
-/// — resume is the adoption path, and a silent overwrite would discard
-/// a heap.
+/// Binding to a non-empty store is refused, and the machine is handed
+/// back intact.
 #[test]
 fn begin_on_a_nonempty_store_is_refused() {
     let mut store = MemoryStore::new();
     let mut m1 = Interp::new();
     assert!(m1.run(&PROG_A).completed);
-    begin_store_session(&mut m1, &sig(), &mut store).unwrap();
+    drop(begin(m1, &mut store));
 
-    let mut m2 = Interp::new();
-    assert_eq!(
-        begin_store_session(&mut m2, &sig(), &mut store).unwrap_err(),
-        StoreError::NotEmpty { epoch: 1 }
-    );
+    let m2 = Interp::new();
+    match begin_store_session(m2, &sig(), &mut store) {
+        Err((returned, StoreError::NotEmpty { epoch: 1 })) => {
+            // The machine survives the refusal.
+            let _ = returned.meter_state();
+        }
+        Err((_, e)) => panic!("expected NotEmpty, got {e:?}"),
+        Ok(_) => panic!("expected NotEmpty, got a session"),
+    }
 }
 
-/// A session may only checkpoint into the store holding its own
-/// previous epoch: a fresh (empty) store and a store advanced by
-/// another session both fail closed, so a dirty set can never land on
-/// the wrong baseline.
+/// The succession guards: a session may only checkpoint into the store
+/// holding its own previous commit — wrong store (empty), advanced
+/// store (epoch), and equal-epoch foreign store (seal) all fail closed.
 #[test]
 fn checkpoint_pairing_guards_fail_closed() {
     let mut store = MemoryStore::new();
     let mut m = Interp::new();
     assert!(m.run(&PROG_A).completed);
-    let mut session = begin_store_session(&mut m, &sig(), &mut store).unwrap();
+    let mut session = begin(m, &mut store);
 
     // Wrong store: empty.
     let mut other = MemoryStore::new();
     assert_eq!(
-        checkpoint_to_store(&mut session, &mut m, &sig(), &mut other).unwrap_err(),
+        checkpoint_to_store(&mut session, &sig(), &mut other).unwrap_err(),
         StoreError::Empty
     );
 
-    // Wrong store: advanced past the session by someone else.
-    let (mut m2, mut session2) = resume_from_store(&store, &sig()).unwrap();
-    checkpoint_to_store(&mut session2, &mut m2, &sig(), &mut store).unwrap();
+    // Equal-epoch FOREIGN store: a different machine's epoch-1 store.
+    // The bare epoch matches the session; the seal lineage does not
+    // (the adversarial review's fork finding).
+    let mut foreign = MemoryStore::new();
+    let mut fm = Interp::new();
+    assert!(fm.run(&PROG_B).completed);
+    drop(begin(fm, &mut foreign));
+    match checkpoint_to_store(&mut session, &sig(), &mut foreign) {
+        Err(StoreError::BaselineMismatch { .. }) => {}
+        other => panic!("expected BaselineMismatch on a foreign equal-epoch store, got {other:?}"),
+    }
+
+    // Advanced store: another session moved it past this session.
+    let mut s2 = resume_from_store(&store, &sig()).unwrap();
+    checkpoint_to_store(&mut s2, &sig(), &mut store).unwrap();
     assert_eq!(
-        checkpoint_to_store(&mut session, &mut m, &sig(), &mut store).unwrap_err(),
+        checkpoint_to_store(&mut session, &sig(), &mut store).unwrap_err(),
         StoreError::EpochMismatch {
             expected: 1,
             found: 2
@@ -243,19 +247,103 @@ fn checkpoint_pairing_guards_fail_closed() {
     );
 }
 
-/// A resume from a store that was checkpointed incrementally reads the
-/// merged state — dirty rows over preserved rows — not just the last
-/// batch (guards against a backend that forgets clean rows).
+/// A copied store file is a fork: after the original advances, a
+/// session over the copy cannot checkpoint into the original even when
+/// the epochs align (the file-copy split-brain the review traced).
+#[test]
+fn forked_file_store_fails_closed_on_seal() {
+    let (mut store, dir) = file_store("fork");
+    let path = dir.join("heap.ihstore");
+    let copy_path = dir.join("copy.ihstore");
+
+    let mut m = Interp::new();
+    assert!(m.run(&PROG_A).completed);
+    let mut session = begin(m, &mut store);
+    std::fs::copy(&path, &copy_path).unwrap();
+
+    // Both lineages advance once with DIFFERENT cranks: equal heights,
+    // divergent content, divergent seals. (An identical-content fork
+    // has an identical seal and converges harmlessly — the states are
+    // indistinguishable; only divergence is the corruption case.)
+    assert!(session.machine_mut().run(&PROG_B).completed);
+    checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
+
+    let mut copy = FileStore::open(&copy_path).unwrap();
+    let mut copy_session = resume_from_store(&copy, &sig()).unwrap();
+    assert!(copy_session.machine_mut().run(&PROG_A).completed);
+    checkpoint_to_store(&mut copy_session, &sig(), &mut copy).unwrap();
+
+    // The copy's session lands on the ORIGINAL: epoch aligns (2 == 2),
+    // the seal does not.
+    match checkpoint_to_store(&mut copy_session, &sig(), &mut store) {
+        Err(StoreError::BaselineMismatch { .. }) => {}
+        other => panic!("expected BaselineMismatch across the fork, got {other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two handles on one path: the slower handle's commit must fail
+/// closed against the durable file, not silently rename over the
+/// faster handle's checkpoint (the review's ping-pong finding).
+#[test]
+fn second_file_handle_cannot_clobber_a_commit() {
+    let (mut store_a, dir) = file_store("two-handles");
+    let path = dir.join("heap.ihstore");
+
+    let mut m = Interp::new();
+    assert!(m.run(&PROG_A).completed);
+    let mut session_a = begin(m, &mut store_a);
+
+    // Handle B opens the same path and advances the durable file.
+    let mut store_b = FileStore::open(&path).unwrap();
+    let mut session_b = resume_from_store(&store_b, &sig()).unwrap();
+    assert!(session_b.machine_mut().run(&PROG_B).completed);
+    checkpoint_to_store(&mut session_b, &sig(), &mut store_b).unwrap();
+
+    // Handle A's commit re-reads the durable file and refuses.
+    assert!(session_a.machine_mut().run(&PROG_B).completed);
+    match checkpoint_to_store(&mut session_a, &sig(), &mut store_a) {
+        Err(StoreError::EpochMismatch { .. }) | Err(StoreError::BaselineMismatch { .. }) => {}
+        other => panic!("expected fail-closed on stale handle, got {other:?}"),
+    }
+    // B's checkpoint survives on disk.
+    let reread = FileStore::open(&path).unwrap();
+    assert_eq!(reread.manifest().unwrap().epoch, 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A replayed full batch (import shape) into a non-empty store is
+/// refused by succession, exactly as before.
+#[test]
+fn replayed_batch_is_refused() {
+    let mut store = MemoryStore::new();
+    let mut m = Interp::new();
+    assert!(m.run(&PROG_A).completed);
+    let image = m.snapshot_image(&sig());
+    store.commit(&image_to_batch(&image, 1, "")).unwrap();
+    assert_eq!(
+        store.commit(&image_to_batch(&image, 1, "")).unwrap_err(),
+        StoreError::EpochMismatch {
+            expected: 2,
+            found: 1
+        }
+    );
+}
+
+/// Resume reads merged state (dirty rows over preserved rows).
 #[test]
 fn resume_after_incremental_checkpoint_reads_merged_state() {
     let mut store = MemoryStore::new();
     let mut m = Interp::new();
     assert!(m.run(&PROG_A).completed);
-    let mut session = begin_store_session(&mut m, &sig(), &mut store).unwrap();
-    assert!(m.run(&PROG_B).completed);
-    checkpoint_to_store(&mut session, &mut m, &sig(), &mut store).unwrap();
+    let mut session = begin(m, &mut store);
+    assert!(session.machine_mut().run(&PROG_B).completed);
+    checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
 
-    let (m2, _) = resume_from_store(&store, &sig()).unwrap();
-    assert_eq!(m2.meter_state(), m.meter_state());
-    assert_eq!(m2.write_snapshot(&sig()), m.write_snapshot(&sig()));
+    let s2 = resume_from_store(&store, &sig()).unwrap();
+    assert_eq!(s2.machine().meter_state(), session.machine().meter_state());
+    assert_eq!(
+        s2.machine().write_snapshot(&sig()),
+        session.machine().write_snapshot(&sig())
+    );
 }

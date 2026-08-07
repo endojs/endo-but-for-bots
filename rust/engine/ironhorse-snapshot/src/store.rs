@@ -66,7 +66,7 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// [`crate::format::IRONHORSE_FORMAT_VERSION`] (which governs the record
 /// encodings both containers share). Bumped on any change to the page
 /// geometry, the manifest layout, or the small-state layout.
-pub const STORE_SCHEMA_VERSION: u32 = 1;
+pub const STORE_SCHEMA_VERSION: u32 = 2;
 
 /// A store that cannot be used, or an operation on it that failed.
 /// Gate failures reuse the [`SnapshotError`] taxonomy so a foreign or
@@ -99,6 +99,11 @@ pub enum StoreError {
     /// exactly one (or does not start at 1 on an empty store) — the
     /// split-brain / replayed-batch guard.
     EpochMismatch { expected: u64, found: u64 },
+    /// A commit whose `prev_seal` does not match the stored manifest's
+    /// seal, or a session whose recorded seal no longer matches the
+    /// store — an equal-epoch fork, copy, or foreign store (the
+    /// adversarial-review finding a bare epoch counter cannot catch).
+    BaselineMismatch { expected: String, found: String },
     /// A first (full-write) checkpoint was aimed at a store that
     /// already holds an epoch. Adopting existing content is the resume
     /// path's job; silently overwriting it would discard a heap.
@@ -138,6 +143,12 @@ pub struct StoreManifest {
     /// The checkpoint generation. 0 never appears in a committed
     /// manifest; the first commit is epoch 1.
     pub epoch: u64,
+    /// The commit-seal chain: SHA-256 (hex) over the previous seal and
+    /// this commit's content ([`seal_commit`]). Together with
+    /// [`check_succession`] it binds every commit to the exact store
+    /// state it was computed against — an epoch number alone cannot
+    /// distinguish forks, copies, or unrelated stores at equal height.
+    pub seal: String,
 }
 
 /// Slot pages a `slot_count`-record arena occupies (the last page may
@@ -188,6 +199,9 @@ impl StoreManifest {
         v.extend_from_slice(&self.slot_live.to_be_bytes());
         v.extend_from_slice(&self.chunk_len.to_be_bytes());
         v.extend_from_slice(&self.epoch.to_be_bytes());
+        let sb = self.seal.as_bytes();
+        v.extend_from_slice(&(sb.len() as u32).to_be_bytes());
+        v.extend_from_slice(sb);
         v
     }
 
@@ -249,6 +263,15 @@ impl StoreManifest {
         let slot_live = u32::from_be_bytes(take4(&mut i)?);
         let chunk_len = u64::from_be_bytes(take8(&mut i)?);
         let epoch = u64::from_be_bytes(take8(&mut i)?);
+        let seal_len = u32::from_be_bytes(take4(&mut i)?) as usize;
+        if i + seal_len > p.len() {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store manifest seal truncated",
+            )));
+        }
+        let seal = std::str::from_utf8(&p[i..i + seal_len])
+            .map_err(|_| SnapshotError::Corrupt("store manifest seal not utf8"))?
+            .to_string();
         Ok(StoreManifest {
             version,
             store_schema,
@@ -258,8 +281,43 @@ impl StoreManifest {
             slot_live,
             chunk_len,
             epoch,
+            seal,
         })
     }
+}
+
+/// Compute a commit's seal: SHA-256 (hex) over the previous seal, the
+/// manifest's core fields, the small state, and every row in the batch
+/// (index-tagged, in the batch's sorted order). Two commits agree in
+/// seal only if their whole lineage and content agree, which is what
+/// lets [`check_succession`] refuse equal-epoch forks.
+pub fn seal_commit(
+    prev_seal: &str,
+    manifest_core: &StoreManifest,
+    small: &[u8],
+    slot_pages: &[(u32, Vec<u8>)],
+    chunk_extents: &[(u32, Vec<u8>)],
+) -> String {
+    let mut h = crate::sha256::Sha256::new();
+    h.update(prev_seal.as_bytes());
+    // Core fields, not the encoded manifest (whose seal field is what
+    // is being computed).
+    h.update(&manifest_core.epoch.to_be_bytes());
+    h.update(&manifest_core.slot_count.to_be_bytes());
+    h.update(&manifest_core.slot_live.to_be_bytes());
+    h.update(&manifest_core.chunk_len.to_be_bytes());
+    h.update(small);
+    for (i, bytes) in slot_pages {
+        h.update(b"P");
+        h.update(&i.to_be_bytes());
+        h.update(bytes);
+    }
+    for (i, bytes) in chunk_extents {
+        h.update(b"X");
+        h.update(&i.to_be_bytes());
+        h.update(bytes);
+    }
+    crate::sha256::hex(&h.finalize())
 }
 
 /// The whole-on-every-commit remainder of the machine state: the value
@@ -337,6 +395,11 @@ impl SmallState {
 /// larger geometry).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CheckpointBatch {
+    /// The seal of the store state this batch was computed against
+    /// (empty for the epoch-1 full write into an empty store). Every
+    /// backend refuses a batch whose `prev_seal` differs from the
+    /// stored manifest's seal ([`check_succession`]).
+    pub prev_seal: String,
     pub manifest: StoreManifest,
     /// Encoded [`SmallState`].
     pub small: Vec<u8>,
@@ -376,6 +439,21 @@ pub trait HeapStore {
 /// commit into an empty store is epoch 1; every later commit advances
 /// the stored epoch by exactly one. Anything else is a replayed or
 /// forked batch and fails closed.
+pub fn check_succession(
+    stored: Option<&StoreManifest>,
+    batch: &CheckpointBatch,
+) -> Result<(), StoreError> {
+    check_epoch(stored.map(|m| m.epoch), batch.manifest.epoch)?;
+    let expected = stored.map(|m| m.seal.as_str()).unwrap_or("");
+    if batch.prev_seal != expected {
+        return Err(StoreError::BaselineMismatch {
+            expected: expected.to_string(),
+            found: batch.prev_seal.clone(),
+        });
+    }
+    Ok(())
+}
+
 pub fn check_epoch(stored: Option<u64>, batch_epoch: u64) -> Result<(), StoreError> {
     let expected = stored.map_or(1, |e| e + 1);
     if batch_epoch != expected {
@@ -437,8 +515,8 @@ pub fn encode_chunk_extent(chunks: &[u8], ext: u32) -> Vec<u8> {
 /// every extent. This is the first-checkpoint and
 /// [`import_from_container`] shape; incremental batches are built by
 /// the machine surface from dirty bits.
-pub fn image_to_batch(image: &MachineImage, epoch: u64) -> CheckpointBatch {
-    let manifest = StoreManifest {
+pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> CheckpointBatch {
+    let mut manifest = StoreManifest {
         version: image.version.clone(),
         store_schema: STORE_SCHEMA_VERSION,
         signature: image.signature.clone(),
@@ -447,6 +525,7 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64) -> CheckpointBatch {
         slot_live: image.slot_live,
         chunk_len: image.chunks.len() as u64,
         epoch,
+        seal: String::new(),
     };
     let small = SmallState {
         stack: image.stack.clone(),
@@ -456,11 +535,16 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64) -> CheckpointBatch {
         symbols: image.symbols.clone(),
         meter: image.meter.clone(),
     };
+    let small_bytes = small.encode();
+    let slot_pages = encode_all_slot_pages(&image.slots);
+    let chunk_extents = encode_all_chunk_extents(&image.chunks);
+    manifest.seal = seal_commit(prev_seal, &manifest, &small_bytes, &slot_pages, &chunk_extents);
     CheckpointBatch {
+        prev_seal: prev_seal.to_string(),
         manifest,
-        small: small.encode(),
-        slot_pages: encode_all_slot_pages(&image.slots),
-        chunk_extents: encode_all_chunk_extents(&image.chunks),
+        small: small_bytes,
+        slot_pages,
+        chunk_extents,
     }
 }
 
@@ -478,7 +562,10 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
     }
 
     let pages = slot_page_count(manifest.slot_count);
-    let mut slots: Vec<Slot> = Vec::with_capacity(manifest.slot_count as usize);
+    // Clamp the pre-reservation: the manifest count is untrusted until
+    // the row reads below confirm it (the over-allocation trophy class;
+    // export/root_hash reach here without validate_store).
+    let mut slots: Vec<Slot> = Vec::with_capacity((manifest.slot_count as usize).min(1 << 16));
     for page in 0..pages {
         let bytes = store.read_slot_page(page)?;
         let expected = slot_page_len(manifest.slot_count, page) * SLOT_RECORD_BYTES;
@@ -497,7 +584,8 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
     }
 
     let exts = chunk_extent_count(manifest.chunk_len);
-    let mut chunks: Vec<u8> = Vec::with_capacity(manifest.chunk_len as usize);
+    // Same clamp discipline as the slot reservation above.
+    let mut chunks: Vec<u8> = Vec::with_capacity((manifest.chunk_len as usize).min(1 << 24));
     for ext in 0..exts {
         let bytes = store.read_chunk_extent(ext)?;
         let expected = chunk_extent_len(manifest.chunk_len, ext);
@@ -592,6 +680,18 @@ pub fn validate_store(
             "store free-list index out of range",
         )));
     }
+    // Distinctness: a duplicated free index passes the sum check but
+    // aliases one record to two allocations after resume (the
+    // adversarial-review aliasing finding). With distinctness, the sum
+    // check makes the live/free partition exact.
+    {
+        let mut seen = std::collections::HashSet::with_capacity(small.slot_free.len());
+        if !small.slot_free.iter().all(|f| seen.insert(*f)) {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store free-list contains duplicate indices",
+            )));
+        }
+    }
 
     // Row inventory: every promised row exists at its exact length.
     for page in 0..slot_page_count(manifest.slot_count) {
@@ -643,7 +743,7 @@ pub fn import_from_container(
     store: &mut dyn HeapStore,
 ) -> Result<(), StoreError> {
     let image = crate::image::read_machine(bytes, expected_sig)?;
-    store.commit(&image_to_batch(&image, 1))
+    store.commit(&image_to_batch(&image, 1, ""))
 }
 
 /// The store state's **logical identity**: the SHA-256 of its canonical
@@ -718,7 +818,26 @@ impl HeapStore for MemoryStore {
     }
 
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
-        check_epoch(self.manifest.as_ref().map(|m| m.epoch), batch.manifest.epoch)?;
+        check_succession(self.manifest.as_ref(), batch)?;
+        // A grown geometry's new rows must be in the batch (pinning the
+        // one semantic FileStore already enforced): failing later at
+        // validate would leave a committed-but-unresumable lineage.
+        let pages = slot_page_count(batch.manifest.slot_count);
+        let exts = chunk_extent_count(batch.manifest.chunk_len);
+        for page in 0..pages {
+            if !self.slot_pages.contains_key(&page)
+                && !batch.slot_pages.iter().any(|(p, _)| *p == page)
+            {
+                return Err(StoreError::MissingRow("slot page", page));
+            }
+        }
+        for ext in 0..exts {
+            if !self.chunk_extents.contains_key(&ext)
+                && !batch.chunk_extents.iter().any(|(e, _)| *e == ext)
+            {
+                return Err(StoreError::MissingRow("chunk extent", ext));
+            }
+        }
         for (page, bytes) in &batch.slot_pages {
             self.slot_pages.insert(*page, bytes.clone());
         }
@@ -727,8 +846,6 @@ impl HeapStore for MemoryStore {
         }
         // Drop rows beyond the new geometry (chunk shrink across a GC
         // compaction; slot pages are monotone but the sweep is uniform).
-        let pages = slot_page_count(batch.manifest.slot_count);
-        let exts = chunk_extent_count(batch.manifest.chunk_len);
         self.slot_pages.retain(|&p, _| p < pages);
         self.chunk_extents.retain(|&e, _| e < exts);
         self.small = batch.small.clone();
@@ -798,6 +915,7 @@ mod tests {
             slot_live: 200,
             chunk_len: 70_000,
             epoch: 3,
+            seal: "abc123".to_string(),
         };
         let bytes = m.encode();
         assert_eq!(StoreManifest::decode(&bytes).unwrap(), m);
@@ -897,7 +1015,7 @@ mod tests {
     fn image_batch_store_image_round_trips() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1)).expect("commits");
+        store.commit(&image_to_batch(&image, 1, "")).expect("commits");
         let back = store_to_image(&store).expect("reads back");
         assert_eq!(back, image);
     }
@@ -906,7 +1024,7 @@ mod tests {
     fn validate_accepts_a_committed_store() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1)).unwrap();
+        store.commit(&image_to_batch(&image, 1, "")).unwrap();
         let (manifest, small) = validate_store(&store, &sig()).expect("validates");
         assert_eq!(manifest.epoch, 1);
         assert_eq!(manifest.slot_count as usize, image.slots.len());
@@ -926,7 +1044,7 @@ mod tests {
     fn validate_fails_closed_on_signature_mismatch() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1)).unwrap();
+        store.commit(&image_to_batch(&image, 1, "")).unwrap();
         match validate_store(&store, &Signature::new("other-host")) {
             Err(StoreError::Snapshot(SnapshotError::SignatureMismatch { .. })) => {}
             other => panic!("expected signature mismatch, got {other:?}"),
@@ -938,7 +1056,7 @@ mod tests {
         let mut image = ran_image();
         image.meter.cost_table_version = "ironhorse-meter-999".to_string();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1)).unwrap();
+        store.commit(&image_to_batch(&image, 1, "")).unwrap();
         match validate_store(&store, &sig()) {
             Err(StoreError::Snapshot(SnapshotError::CostTableMismatch { .. })) => {}
             other => panic!("expected cost-table mismatch, got {other:?}"),
@@ -949,7 +1067,7 @@ mod tests {
     fn validate_fails_closed_on_missing_row() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1)).unwrap();
+        store.commit(&image_to_batch(&image, 1, "")).unwrap();
         // Drop a promised page: the inventory scan must name it.
         store.slot_pages.remove(&0);
         assert_eq!(
@@ -962,7 +1080,7 @@ mod tests {
     fn validate_fails_closed_on_row_length_mismatch() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1)).unwrap();
+        store.commit(&image_to_batch(&image, 1, "")).unwrap();
         let short = store.slot_pages.get(&0).unwrap()[..SLOT_RECORD_BYTES].to_vec();
         store.slot_pages.insert(0, short);
         match validate_store(&store, &sig()) {
@@ -978,7 +1096,7 @@ mod tests {
     #[test]
     fn validate_fails_closed_on_accounting_mismatch() {
         let image = ran_image();
-        let mut batch = image_to_batch(&image, 1);
+        let mut batch = image_to_batch(&image, 1, "");
         // Corrupt the live count so live + free != count.
         batch.manifest.slot_live += 1;
         let mut store = MemoryStore::new();
@@ -997,13 +1115,14 @@ mod tests {
     fn commit_drops_rows_beyond_the_new_geometry() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1)).unwrap();
+        store.commit(&image_to_batch(&image, 1, "")).unwrap();
         let exts_before = chunk_extent_count(store.manifest().unwrap().chunk_len);
 
         // Same machine state, chunk arena "compacted" to empty.
         let mut shrunk = image.clone();
         shrunk.chunks = Vec::new();
-        let mut batch = image_to_batch(&shrunk, 2);
+        let prev = store.manifest().unwrap().seal;
+        let mut batch = image_to_batch(&shrunk, 2, &prev);
         batch.chunk_extents.clear(); // nothing to write; drop-only
         store.commit(&batch).unwrap();
 
@@ -1017,7 +1136,7 @@ mod tests {
     fn memory_store_reports_commit_stats() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        let batch = image_to_batch(&image, 1);
+        let batch = image_to_batch(&image, 1, "");
         store.commit(&batch).unwrap();
         assert_eq!(
             store.last_commit_stats(),

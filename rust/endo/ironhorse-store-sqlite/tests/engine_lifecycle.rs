@@ -85,29 +85,28 @@ fn run_scenario(name: &str, cranks: &[&str]) -> String {
     let path = dir.join("worker-heap.sqlite");
 
     let mut store = SqliteHeapStore::open(&path).unwrap();
-    let mut m = Interp::new();
-    m.link_intrinsics(&compiled[0].1);
-    let outcome = m.run(&compiled[0].0);
+    let mut m0 = Interp::new();
+    m0.link_intrinsics(&compiled[0].1);
+    let outcome = m0.run(&compiled[0].0);
     assert_eq!(outcome.result, baseline_outcomes[0].result, "[{name}] crank 1 result");
-    let mut session = begin_store_session(&mut m, &sig(), &mut store).expect("begin session");
+    let mut session = begin_store_session(m0, &sig(), &mut store)
+        .map_err(|(_, e)| e)
+        .expect("begin session");
     assert_eq!(
         store_to_image(&store).unwrap(),
-        m.snapshot_image(&sig()),
+        session.machine().snapshot_image(&sig()),
         "[{name}] store equals live machine after the full write"
     );
 
     for (i, (bytecode, _)) in compiled.iter().enumerate().skip(1) {
         // Sleep: drop the machine, close the database fully.
-        drop(m);
         drop(session);
         store.close().expect("full close");
 
         // Wake: reopen, resume, run the next crank.
         store = SqliteHeapStore::open(&path).unwrap();
-        let (m2, s2) = resume_from_store(&store, &sig()).expect("resumes");
-        m = m2;
-        session = s2;
-        let outcome = m.run(bytecode);
+        session = resume_from_store(&store, &sig()).expect("resumes");
+        let outcome = session.machine_mut().run(bytecode);
         assert!(outcome.completed, "[{name}] resumed crank {} completes", i + 1);
         assert_eq!(
             outcome.result,
@@ -122,12 +121,12 @@ fn run_scenario(name: &str, cranks: &[&str]) -> String {
             i + 1
         );
 
-        let epoch = checkpoint_to_store(&mut session, &mut m, &sig(), &mut store)
-            .expect("incremental checkpoint");
+        let epoch =
+            checkpoint_to_store(&mut session, &sig(), &mut store).expect("incremental checkpoint");
         assert_eq!(epoch as usize, i + 1, "[{name}] one epoch per crank");
         assert_eq!(
             store_to_image(&store).unwrap(),
-            m.snapshot_image(&sig()),
+            session.machine().snapshot_image(&sig()),
             "[{name}] store equals live machine after checkpoint {}",
             i + 1
         );
@@ -312,7 +311,11 @@ fn truncated_database_fails_closed_not_wrong() {
     let mut m = Interp::new();
     m.link_intrinsics(&names);
     assert!(m.run(&bytecode).completed);
-    begin_store_session(&mut m, &sig(), &mut store).unwrap();
+    drop(
+        begin_store_session(m, &sig(), &mut store)
+            .map_err(|(_, e)| e)
+            .unwrap(),
+    );
     store.close().unwrap();
 
     // Truncate the closed, self-contained database file.

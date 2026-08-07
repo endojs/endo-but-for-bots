@@ -28,7 +28,7 @@ use std::rc::Rc;
 
 use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
-    resume_from_store_lazy, MachineSnapshot,
+    resume_from_store_lazy, MachineSnapshot, StoreSession,
 };
 use ironhorse_snapshot::store::{slot_page_count, chunk_extent_count, HeapStore, MemoryStore};
 use ironhorse_snapshot::Signature;
@@ -118,52 +118,45 @@ enum Resume {
 /// chosen resume mode.
 fn run_store(compiled: &[(Vec<u8>, Vec<String>)], mode: Resume) -> (Vec<String>, u64, Vec<u8>) {
     let store = Rc::new(RefCell::new(MemoryStore::new()));
-    let mut m = Interp::new();
-    m.link_intrinsics(&compiled[0].1);
     let mut results = Vec::new();
     let mut computrons = 0;
-    let mut session = None;
-    for (i, (bytecode, _)) in compiled.iter().enumerate() {
-        if i > 0 {
-            drop(m);
-            let (m2, s2) = match mode {
-                Resume::Eager => resume_from_store(&*store.borrow(), &sig()).expect("resumes"),
-                Resume::Lazy | Resume::LazyAdversarialPrefetch => {
-                    resume_from_store_lazy(store.clone(), &sig()).expect("resumes lazily")
-                }
-            };
-            m = m2;
-            if let Resume::LazyAdversarialPrefetch = mode {
-                // Touch every page and extent in reverse order — a
-                // fault schedule no organic run produces. Residency
-                // order must be observably irrelevant.
-                let manifest = store.borrow().manifest().unwrap();
-                for page in (0..slot_page_count(manifest.slot_count)).rev() {
-                    m.slots.touch_page(page);
-                }
-                for ext in (0..chunk_extent_count(manifest.chunk_len)).rev() {
-                    m.chunks.touch_extent(ext);
-                }
+
+    // Crank 1 on a fresh machine, then bind.
+    let mut m = Interp::new();
+    m.link_intrinsics(&compiled[0].1);
+    let o = m.run(&compiled[0].0);
+    results.push(o.result);
+    computrons = o.computrons;
+    let mut session = begin_store_session(m, &sig(), &mut *store.borrow_mut())
+        .map_err(|(_, e)| e)
+        .expect("begin session");
+
+    for (bytecode, _) in compiled.iter().skip(1) {
+        drop(session);
+        session = match mode {
+            Resume::Eager => resume_from_store(&*store.borrow(), &sig()).expect("resumes"),
+            Resume::Lazy | Resume::LazyAdversarialPrefetch => {
+                resume_from_store_lazy(store.clone(), &sig()).expect("resumes lazily")
             }
-            session = Some(s2);
+        };
+        if let Resume::LazyAdversarialPrefetch = mode {
+            // Touch every page and extent in reverse order — a fault
+            // schedule no organic run produces. Residency order must
+            // be observably irrelevant.
+            let manifest = store.borrow().manifest().unwrap();
+            for page in (0..slot_page_count(manifest.slot_count)).rev() {
+                session.machine().slots.touch_page(page);
+            }
+            for ext in (0..chunk_extent_count(manifest.chunk_len)).rev() {
+                session.machine().chunks.touch_extent(ext);
+            }
         }
-        let o = m.run(bytecode);
+        let o = session.machine_mut().run(bytecode);
         results.push(o.result);
         computrons = o.computrons;
-        match session.as_mut() {
-            None => {
-                session = Some(
-                    begin_store_session(&mut m, &sig(), &mut *store.borrow_mut())
-                        .expect("begin session"),
-                );
-            }
-            Some(s) => {
-                checkpoint_to_store(s, &mut m, &sig(), &mut *store.borrow_mut())
-                    .expect("checkpoint");
-            }
-        }
+        checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
     }
-    (results, computrons, m.write_snapshot(&sig()))
+    (results, computrons, session.machine().write_snapshot(&sig()))
 }
 
 /// Variant 6: one surviving machine, checkpoint after every crank, one
@@ -171,31 +164,27 @@ fn run_store(compiled: &[(Vec<u8>, Vec<String>)], mode: Resume) -> (Vec<String>,
 /// survivor's.
 fn run_checkpoint_every_crank(compiled: &[(Vec<u8>, Vec<String>)]) -> (Vec<String>, u64, Vec<u8>) {
     let store = Rc::new(RefCell::new(MemoryStore::new()));
-    let mut m = Interp::new();
-    m.link_intrinsics(&compiled[0].1);
     let mut results = Vec::new();
     let mut computrons = 0;
-    let mut session = None;
-    for (bytecode, _) in compiled {
-        let o = m.run(bytecode);
+
+    let mut m = Interp::new();
+    m.link_intrinsics(&compiled[0].1);
+    let o = m.run(&compiled[0].0);
+    results.push(o.result);
+    computrons = o.computrons;
+    let mut session: StoreSession = begin_store_session(m, &sig(), &mut *store.borrow_mut())
+        .map_err(|(_, e)| e)
+        .expect("begin session");
+
+    for (bytecode, _) in compiled.iter().skip(1) {
+        let o = session.machine_mut().run(bytecode);
         results.push(o.result);
         computrons = o.computrons;
-        match session.as_mut() {
-            None => {
-                session = Some(
-                    begin_store_session(&mut m, &sig(), &mut *store.borrow_mut())
-                        .expect("begin session"),
-                );
-            }
-            Some(s) => {
-                checkpoint_to_store(s, &mut m, &sig(), &mut *store.borrow_mut())
-                    .expect("checkpoint");
-            }
-        }
+        checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
     }
-    drop(m);
-    let (resumed, _) = resume_from_store_lazy(store.clone(), &sig()).expect("final lazy resume");
-    (results, computrons, resumed.write_snapshot(&sig()))
+    drop(session);
+    let resumed = resume_from_store_lazy(store.clone(), &sig()).expect("final lazy resume");
+    (results, computrons, resumed.machine().write_snapshot(&sig()))
 }
 
 fn metamorphic(scenario: &str, cranks: &[&str]) {
@@ -292,17 +281,26 @@ fn lazy_resume_faults_only_the_working_set() {
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     assert!(m.run(&compiled[0].0).completed);
-    begin_store_session(&mut m, &sig(), &mut *store.borrow_mut()).unwrap();
+    drop(
+        begin_store_session(m, &sig(), &mut *store.borrow_mut())
+            .map_err(|(_, e)| e)
+            .unwrap(),
+    );
     let total_pages = slot_page_count(store.borrow().manifest().unwrap().slot_count);
     assert!(total_pages > 12, "fixture must be genuinely wide");
-    drop(m);
 
-    let (mut m2, _) = resume_from_store_lazy(store.clone(), &sig()).unwrap();
-    let o = m2.run(&compiled[1].0);
+    let mut s2 = resume_from_store_lazy(store.clone(), &sig()).unwrap();
+    let o = s2.machine_mut().run(&compiled[1].0);
     assert!(o.completed);
     assert_eq!(o.result, "8");
+    // Strengthened per the review: not just "not fully resident" — the
+    // working-set crank must leave MOST of the heap unread. A quarter
+    // of the pages is a generous ceiling for this fixture's one-global
+    // working set.
+    let resident = s2.machine().slots.resident_page_count();
     assert!(
-        !m2.slots.is_fully_resident(),
-        "a working-set crank must not have faulted the whole heap"
+        resident * 4 <= total_pages,
+        "working-set crank faulted {resident} of {total_pages} pages"
     );
+    assert!(!s2.machine().slots.is_fully_resident());
 }

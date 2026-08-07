@@ -32,8 +32,8 @@ use std::rc::Rc;
 use ironhorse_snapshot::format::Signature;
 use ironhorse_snapshot::image::{MachineImage, MeterImage};
 use ironhorse_snapshot::store::{
-    chunk_extent_count, image_to_batch, slot_page_count, store_to_image, validate_store,
-    CheckpointBatch, HeapStore, MemoryStore, SmallState, StoreManifest,
+    chunk_extent_count, image_to_batch, seal_commit, slot_page_count, store_to_image,
+    validate_store, CheckpointBatch, HeapStore, MemoryStore, SmallState, StoreManifest,
     STORE_SCHEMA_VERSION,
 };
 use ironhorse_snapshot::store_file::FileStore;
@@ -158,7 +158,7 @@ impl Machine {
 /// Build the incremental batch for the machine's current state from
 /// public pieces only — the same construction the machine surface
 /// performs, exercised here under arbitrary schedules.
-fn incremental_batch(m: &Machine, epoch: u64) -> CheckpointBatch {
+fn incremental_batch(m: &Machine, epoch: u64, prev_seal: &str) -> CheckpointBatch {
     let slots = &m.heap.slots;
     let chunks = &m.heap.chunks;
     let manifest = StoreManifest {
@@ -176,6 +176,7 @@ fn incremental_batch(m: &Machine, epoch: u64) -> CheckpointBatch {
         slot_live: slots.live_count(),
         chunk_len: chunks.byte_size() as u64,
         epoch,
+        seal: String::new(),
     };
     let small = SmallState {
         stack: Vec::new(),
@@ -185,7 +186,7 @@ fn incremental_batch(m: &Machine, epoch: u64) -> CheckpointBatch {
         symbols: Vec::new(),
         meter: MeterImage::current(),
     };
-    let slot_pages = slots
+    let slot_pages: Vec<(u32, Vec<u8>)> = slots
         .dirty_pages()
         .into_iter()
         .map(|page| {
@@ -197,15 +198,19 @@ fn incremental_batch(m: &Machine, epoch: u64) -> CheckpointBatch {
         })
         .collect();
     let ext_count = chunk_extent_count(manifest.chunk_len);
-    let chunk_extents = chunks
+    let chunk_extents: Vec<(u32, Vec<u8>)> = chunks
         .dirty_extents()
         .into_iter()
         .filter(|&e| e < ext_count)
         .map(|e| (e, chunks.extent_bytes(e)))
         .collect();
+    let small_bytes = small.encode();
+    let mut manifest = manifest;
+    manifest.seal = seal_commit(prev_seal, &manifest, &small_bytes, &slot_pages, &chunk_extents);
     CheckpointBatch {
+        prev_seal: prev_seal.to_string(),
         manifest,
-        small: small.encode(),
+        small: small_bytes,
         slot_pages,
         chunk_extents,
     }
@@ -231,7 +236,7 @@ fn randomized_schedules_keep_store_equal_to_live_arenas() {
         for _ in 0..600 {
             m.step(&mut rng);
         }
-        let full = image_to_batch(&m.image(&[]), 1);
+        let full = image_to_batch(&m.image(&[]), 1, "");
         // The full batch encodes the whole arenas, so the live dirty
         // bits are consumed by it.
         m.heap.slots.clear_dirty();
@@ -246,7 +251,8 @@ fn randomized_schedules_keep_store_equal_to_live_arenas() {
                 m.step(&mut rng);
             }
             epoch += 1;
-            let batch = incremental_batch(&m, epoch);
+            let prev = mem_store.manifest().unwrap().seal;
+            let batch = incremental_batch(&m, epoch, &prev);
             m.heap.slots.clear_dirty();
             m.heap.chunks.clear_dirty();
             mem_store.commit(&batch).unwrap();
@@ -297,7 +303,7 @@ fn randomized_fault_schedules_reify_identically() {
     }
     let image = m.image(&[]);
     let store = Rc::new(RefCell::new(MemoryStore::new()));
-    store.borrow_mut().commit(&image_to_batch(&image, 1)).unwrap();
+    store.borrow_mut().commit(&image_to_batch(&image, 1, "")).unwrap();
     let manifest = store.borrow().manifest().unwrap();
 
     struct Src(Rc<RefCell<MemoryStore>>);
@@ -357,7 +363,7 @@ fn corrupted_store_files_never_panic() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("heap.ihstore");
     let mut store = FileStore::open(&path).unwrap();
-    store.commit(&image_to_batch(&m.image(&[]), 1)).unwrap();
+    store.commit(&image_to_batch(&m.image(&[]), 1, "")).unwrap();
     drop(store);
     let pristine = std::fs::read(&path).unwrap();
 
@@ -419,7 +425,7 @@ fn dirty_fraction_sweep_commits_exactly_the_touched_pages() {
         Vec::new(),
     );
     let mut store = MemoryStore::new();
-    store.commit(&image_to_batch(&image, 1)).unwrap();
+    store.commit(&image_to_batch(&image, 1, "")).unwrap();
     slots.clear_dirty();
 
     let pages = slot_page_count(slots.capacity()) as usize;
@@ -439,7 +445,8 @@ fn dirty_fraction_sweep_commits_exactly_the_touched_pages() {
             },
             live: Vec::new(),
         };
-        let batch = incremental_batch(&m, epoch);
+        let prev = store.manifest().unwrap().seal;
+        let batch = incremental_batch(&m, epoch, &prev);
         slots = m.heap.slots;
         slots.clear_dirty();
         store.commit(&batch).unwrap();

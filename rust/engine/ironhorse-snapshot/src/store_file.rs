@@ -39,8 +39,8 @@ use std::path::PathBuf;
 
 use crate::format::SnapshotError;
 use crate::store::{
-    check_epoch, chunk_extent_count, slot_page_count, CheckpointBatch, HeapStore, StoreError,
-    StoreManifest,
+    check_succession, chunk_extent_count, slot_page_count, CheckpointBatch, HeapStore,
+    StoreError, StoreManifest,
 };
 
 /// The file-format discriminator. Version-suffixed: a layout change is
@@ -157,7 +157,10 @@ impl FileStore {
                     .map_err(|_| corrupt("file store directory truncated"))?;
                 let offset = u64::from_be_bytes(b[0..8].try_into().unwrap());
                 let length = u32::from_be_bytes(b[8..12].try_into().unwrap());
-                if offset + length as u64 > file_len {
+                let end = offset
+                    .checked_add(length as u64)
+                    .ok_or_else(|| corrupt("file store directory entry overflows"))?;
+                if end > file_len {
                     return Err(corrupt("file store directory entry out of range"));
                 }
                 dir.push(DirEntry { offset, length });
@@ -230,10 +233,21 @@ impl HeapStore for FileStore {
     }
 
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
-        check_epoch(
-            self.state.as_ref().map(|(l, _)| l.manifest.epoch),
-            batch.manifest.epoch,
-        )?;
+        // Reload the durable file: the cached view can be stale if
+        // another handle on this path committed (the review's silent
+        // ping-pong finding). Both the succession check and the
+        // clean-row merge below must run against what is actually on
+        // disk, so a forked handle fails closed with
+        // EpochMismatch/BaselineMismatch instead of resurrecting its
+        // stale baseline over the other's commit.
+        let durable: Option<(Loaded, RefCell<File>)> = if self.path.exists() {
+            let mut f = File::open(&self.path).map_err(io_err)?;
+            let l = Self::load(&mut f)?;
+            Some((l, RefCell::new(f)))
+        } else {
+            None
+        };
+        check_succession(durable.as_ref().map(|(l, _)| &l.manifest), batch)?;
 
         let n_pages = slot_page_count(batch.manifest.slot_count);
         let n_exts = chunk_extent_count(batch.manifest.chunk_len);
@@ -270,8 +284,7 @@ impl HeapStore for FileStore {
                 sources.push(Source::DirtyPage(i));
                 lengths.push(batch.slot_pages[i].1.len() as u32);
             } else {
-                let entry = self
-                    .state
+                let entry = durable
                     .as_ref()
                     .and_then(|(l, _)| l.pages.get(page as usize))
                     .copied()
@@ -285,8 +298,7 @@ impl HeapStore for FileStore {
                 sources.push(Source::DirtyExtent(i));
                 lengths.push(batch.chunk_extents[i].1.len() as u32);
             } else {
-                let entry = self
-                    .state
+                let entry = durable
                     .as_ref()
                     .and_then(|(l, _)| l.extents.get(ext as usize))
                     .copied()
@@ -340,8 +352,8 @@ impl HeapStore for FileStore {
                     tmp.write_all(&batch.chunk_extents[*i].1).map_err(io_err)?
                 }
                 Source::Prior(entry) => {
-                    // Stream the clean row from the previous file.
-                    let (_, file) = self.state.as_ref().expect("prior row implies prior file");
+                    // Stream the clean row from the durable previous file.
+                    let (_, file) = durable.as_ref().expect("prior row implies prior file");
                     let mut f = file.borrow_mut();
                     f.seek(SeekFrom::Start(entry.offset)).map_err(io_err)?;
                     let mut buf = vec![0u8; entry.length as usize];
@@ -354,6 +366,12 @@ impl HeapStore for FileStore {
         tmp.sync_all().map_err(io_err)?;
         drop(tmp);
         std::fs::rename(&tmp_path, &self.path).map_err(io_err)?;
+        // The rename is the commit point, and it is durable only once
+        // the containing directory is synced (the review's power-loss
+        // finding: an acked checkpoint must not roll back on crash).
+        if let Some(dir) = self.path.parent() {
+            File::open(dir).and_then(|d| d.sync_all()).map_err(io_err)?;
+        }
 
         // Reopen and re-decode: the in-memory view always reflects the
         // durable file, never a shadow copy that could drift.
@@ -437,13 +455,15 @@ mod tests {
         let path = dir.join("heap.ihstore");
         let image = ran_image();
         let mut store = FileStore::open(&path).unwrap();
-        store.commit(&image_to_batch(&image, 1)).unwrap();
+        store.commit(&image_to_batch(&image, 1, "")).unwrap();
 
         // Mutate one record on page 0 and commit only that page.
         let mut changed = image.clone();
         changed.slots[0] = ironhorse_vm::Slot::integer(424242);
-        let full = image_to_batch(&changed, 2);
+        let prev = store.manifest().unwrap().seal;
+        let full = image_to_batch(&changed, 2, &prev);
         let one_page = CheckpointBatch {
+            prev_seal: prev.clone(),
             manifest: full.manifest.clone(),
             small: full.small.clone(),
             slot_pages: full
@@ -472,19 +492,20 @@ mod tests {
         let path = dir.join("heap.ihstore");
         let image = ran_image();
         let mut store = FileStore::open(&path).unwrap();
-        store.commit(&image_to_batch(&image, 1)).unwrap();
+        store.commit(&image_to_batch(&image, 1, "")).unwrap();
         drop(store);
 
         let mut store = FileStore::open(&path).unwrap();
         // Replaying epoch 1 into a store already at epoch 1 is refused.
         assert_eq!(
-            store.commit(&image_to_batch(&image, 1)).unwrap_err(),
+            store.commit(&image_to_batch(&image, 1, "")).unwrap_err(),
             StoreError::EpochMismatch {
                 expected: 2,
                 found: 1
             }
         );
-        store.commit(&image_to_batch(&image, 2)).unwrap();
+        let prev = store.manifest().unwrap().seal;
+        store.commit(&image_to_batch(&image, 2, &prev)).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -506,7 +527,7 @@ mod tests {
         let path = dir.join("heap.ihstore");
         let image = ran_image();
         let mut store = FileStore::open(&path).unwrap();
-        store.commit(&image_to_batch(&image, 1)).unwrap();
+        store.commit(&image_to_batch(&image, 1, "")).unwrap();
         drop(store);
 
         // Cut the file mid-directory: open must refuse, not misread.
@@ -524,13 +545,14 @@ mod tests {
         let path = dir.join("heap.ihstore");
         let image = ran_image();
         let mut store = FileStore::open(&path).unwrap();
-        store.commit(&image_to_batch(&image, 1)).unwrap();
+        store.commit(&image_to_batch(&image, 1, "")).unwrap();
         drop(store);
 
         std::fs::write(dir.join("heap.ihstore.tmp"), b"half a checkpoint").unwrap();
         let mut store = FileStore::open(&path).unwrap();
         assert_eq!(store_to_image(&store).unwrap(), image);
-        store.commit(&image_to_batch(&image, 2)).unwrap();
+        let prev = store.manifest().unwrap().seal;
+        store.commit(&image_to_batch(&image, 2, &prev)).unwrap();
         assert_eq!(store.manifest().unwrap().epoch, 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -543,13 +565,14 @@ mod tests {
         let path = dir.join("heap.ihstore");
         let image = ran_image();
         let mut store = FileStore::open(&path).unwrap();
-        store.commit(&image_to_batch(&image, 1)).unwrap();
+        store.commit(&image_to_batch(&image, 1, "")).unwrap();
 
         let mut grown = image.clone();
         grown
             .chunks
             .extend(std::iter::repeat(7u8).take(crate::store::CHUNK_EXTENT_BYTES as usize));
-        let mut batch = image_to_batch(&grown, 2);
+        let prev = store.manifest().unwrap().seal;
+        let mut batch = image_to_batch(&grown, 2, &prev);
         batch.chunk_extents.pop(); // drop the newest extent's row
         match store.commit(&batch) {
             Err(StoreError::MissingRow("chunk extent", _)) => {}

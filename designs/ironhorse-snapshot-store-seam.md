@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
-| **Updated** | 2026-08-06 |
+| **Updated** | 2026-08-07 |
 | **Author** | Aaron Kumavis (prompted) |
 | **Status** | In Progress |
 | **Builds on** | designs/ironhorse-engine.md (§ Snapshots, requirement 1c) |
@@ -28,8 +28,44 @@ amended 2026-07-29): the trait and the arena hooks are **Ironhorse**
 
 ## Status
 
-Phases 1 and 2 implemented (2026-08-06, this branch); phase 3 (lazy
-reification) and phase 4 (hardening) not started.
+Phases 1-4 implemented (2026-08-06/07, this branch, PR #963), then
+revised by a wide adversarial multi-agent review (8 finder dimensions,
+25 grounded findings, all confirmed ones fixed on-branch). The
+principal review-driven revisions, recorded as design amendments:
+
+- **Succession is (epoch, seal), not epoch alone.** Every commit's
+  manifest carries a `seal` — SHA-256 over the previous seal and the
+  commit's content — and every backend refuses a batch whose
+  `prev_seal` does not match the stored seal (`check_succession`). A
+  bare epoch counter cannot distinguish forks, copies, or foreign
+  stores at equal height; the seal chain fails all of them closed
+  (`StoreError::BaselineMismatch`). Identical-content forks share a
+  seal and converge harmlessly.
+- **`StoreSession` owns the machine.** The dirty bitmaps are
+  machine-global, so only the session that watched them accumulate may
+  commit them; ownership makes machine/session mispairing and
+  dirty-bit theft (a second binding consuming bits another store still
+  needed) unrepresentable rather than guarded.
+- **Lazy faults are pinned.** The lazy page source re-verifies the
+  store's (epoch, seal) on every fault (the session advances the pin
+  on its own commits), and eager resume re-checks the manifest after
+  its row reads — a store advanced by anyone else yields a
+  deterministic named crashed crank or a structured error, never a
+  chimera heap mixing epochs.
+- **Guard-discipline fix (critical):** the string comparison opcodes
+  hold two chunk guards at once and now pre-fault both operands, so a
+  lazily resumed machine cannot die on `a === b` across extents.
+  Fault installs assert exact row lengths (a short row dies loudly);
+  `FileStore` commits check succession against the durable file (not
+  a cached view), fsync the directory after the publishing rename,
+  and bound directory arithmetic; `validate_store` additionally
+  refuses duplicate free-list indices; `store_to_image` clamps its
+  pre-reservations; the SQLite backend gates on a `PRAGMA
+  application_id` stamp, verifies WAL actually engaged, and applies
+  `busy_timeout(5000)` + `wal_autocheckpoint=1000` per the daemon
+  designs.
+
+Phase 1-2 detail (2026-08-06):
 
 - `rust/engine/ironhorse-snapshot/src/store.rs` — the paged logical
   image and the `HeapStore` trait: `StoreManifest` (gates + geometry +
@@ -83,11 +119,65 @@ reification) and phase 4 (hardening) not started.
   FileStore suites, and the SQLite suite (including cross-backend
   byte parity with `MemoryStore`).
 
-Remaining, mapped to the phases: the dirty-fraction sweep benchmark
-(phase 2's proportionality instrument beyond the three-point lock);
-lazy reification, the six-way metamorphic determinism suite, and the
-hot-path benchmark gate (phase 3); fuzz targets and the supervisor
-cadence policy (phase 4); the incremental root-hash tree (future
+Phase 3-4 detail (2026-08-07): lazy reification (`PageSource`,
+Cell-backed by-value slot reads, the ChunkBytes Plain/Lazy enum with
+guard-deref chunk reads, grow-only residency, GC compaction as the
+amortized reifier, `resume_from_store_lazy`); the six-way metamorphic
+determinism suite (five real-JS scenarios × uninterrupted / blob /
+store-eager / store-lazy / adversarial-prefetch /
+checkpoint-every-crank, agreeing on per-crank results, final
+computrons, and final blob bytes) plus a working-set residency bound
+(a one-global wake crank must fault at most a quarter of a 12+-page
+heap); seeded hardening arms (randomized mutate/checkpoint/restore
+schedules with GC interleaved, randomized fault schedules, a 400-case
+corruption sweep, and the exact dirty-fraction sweep — closing phase
+2's measured-proportionality bar); and engine-level SQLite lifecycles
+running real compiled JavaScript through full sleep/wake cycles.
+
+**Hot-path benchmark outcome (2026-08-07), recorded as the amendment
+the gate text below requires.** The landed mechanization is a hybrid:
+Cell-backed by-value slot reads (variant (a)'s interior mutability,
+storage-wide rather than miss-path-confined) plus the Plain/Lazy enum
+for chunks (variant (b)'s dual representation where reads return
+slices). Measured on 12 interleaved release A/B rounds against the
+pre-change tree (`tests/dispatch_bench.rs`, medians): dispatch-heavy
+workload **-2.5%** (neutral/noise), chunk-heavy **+1.6%** (noise),
+slot-heavy microworkload **+7.1%** — the strict "zero measurable
+regression detached" bar was met on program-shaped
+(dispatch-dominated) workloads and missed on the slots microaxis.
+Decision: **accepted**, on the grounds that real programs are
+dispatch-dominated and the engine's overall 2.0x-of-XS envelope has
+ample headroom; the compile-time feature split remains the named
+fallback if that envelope later tightens. The bench is an
+*instrument* (manual two-tree A/B, no assertion, no attached-mode
+workload yet), not an automated gate; an attached-mode workload and a
+wake-latency benchmark remain open.
+
+**Named integrity limitations (review findings, accepted and scoped —
+these bound Requirement 6 and Design Decision 7 to *structural*
+validation):**
+
+1. **Row content is not checksummed.** `validate_store` proves gates,
+   accounting, and row existence/length — a bit flip *inside* a
+   length-valid row passes and resumes a different machine. The blob
+   path has the same property (its integrity comes from the external
+   CAS address). Candidate fix: per-row hashes in the manifest chain
+   (lazy-compatible, priced per commit); whole-store verification via
+   `root_hash` exists but is O(heap).
+2. **Record semantics are not validated at open.** A structurally
+   valid store whose record *contents* are corrupt (a chunk offset
+   below the header width, an out-of-range slot index) passes
+   validation and dies later as a uniformly named deterministic panic
+   (`len_of`'s checked underflow, the arenas' bounds checks) — a
+   crashed crank, not a wrong answer, but not the structured
+   open-time error either. Decoding every record at open would defeat
+   lazy resume; the panic path is the accepted trade.
+
+Remaining, mapped to the phases: cargo-fuzz promotion of the hardening
+arms (the `ironhorse-fuzz` crate links the XS oracle, absent in the
+build environment); the supervisor cadence policy and `endor` binary
+wiring (with the worker-envelope work); the attached-mode and
+wake-latency benchmarks; the incremental root-hash tree (future
 work).
 
 ## What Is the Problem Being Solved?
@@ -254,9 +344,12 @@ pub trait HeapStore {
 The arenas gain two bitmaps and an optional backing:
 
 - **Dirty bits** (always compiled, trivially cheap): one bit per slot
-  page / chunk extent, set by the write paths (`alloc`, `free`,
-  `get_mut`, `slice_mut`, arena growth, compaction rewrite).
-  `take_dirty()` drains them at checkpoint.
+  page / chunk extent, set by the record/byte-mutating paths (`alloc`,
+  `get_mut`, `slice_mut`, arena growth, compaction rewrite) — and
+  deliberately NOT by `free`/sweep/mark, which never change record
+  bytes (the free list travels whole in the small state). The
+  checkpoint peeks `dirty_pages()`/`dirty_extents()` and clears only
+  after a successful commit.
 - **Residency bits + fault hook** (active only when a backing is
   attached): `get`/`payload` consult residency and fault a missing
   page in through a narrow `PageSource` trait *defined by the vm* and
@@ -416,8 +509,8 @@ Costs, stated honestly:
   degenerate case).
 - A checkpoint after a GC **compaction** approaches a full chunk-space
   write (slide-compaction rewrites the whole byte space and the
-  offsets in surviving slots), and the sweep dirties every page whose
-  slots it freed.
+  offsets in surviving slots; the sweep itself dirties nothing — freed
+  records keep their bytes and the free list rides the small state).
   Compaction is inherently global; the seam does not hide that, it
   prices it.
 - Suspend = checkpoint + drop the machine; a *durability* checkpoint
@@ -634,10 +727,10 @@ changes an engine observable.
 
 ## Open Questions
 
-1. Arena mechanization (a) flat + bitmap vs (b) two-level pages — and
-   within (a), interior-mutable miss path vs the by-value/`&mut`
-   `get` refactor.
-   Owned by the phase-3 benchmark gate.
+1. ~~Arena mechanization~~ **Decided 2026-08-07** (see Status): a
+   hybrid — Cell-backed by-value slot reads plus the Plain/Lazy chunk
+   enum — with the measured A/B outcome recorded in the Status section
+   and the compile-time split retained as the fallback.
 2. Page and extent geometry (256 slots / 64 KiB starting points) —
    calibrate on real worker heaps in phase 2.
 3. Checkpoint cadence policy: supervisor-driven only, or an automatic
