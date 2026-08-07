@@ -346,8 +346,8 @@ export const make = async (_powers, _context, options = {}) => {
           'endo-owned flake checkout; getEndoRev()/setEndoRev(rev) read and ' +
           'set the Endo commit this host runs; build(message?) validates ' +
           'without activating; apply(message) commits + switches with ' +
-          'health-checked auto-rollback; rollback() reactivates the ' +
-          'previous generation, restoring its Endo revision with it; ' +
+          'health-checked auto-rollback; rollback() reactivates the last ' +
+          'HEALTHY generation, restoring its Endo revision with it; ' +
           'status()/getLog() report progress. Applying is ROOT-EQUIVALENT — ' +
           'validate with build() and confirm with the user before apply().',
         listFiles:
@@ -364,7 +364,10 @@ export const make = async (_powers, _context, options = {}) => {
           'build(message?) -> dry-run nixos-rebuild build (no activation).',
         apply:
           'apply(message) -> commit + nixos-rebuild switch + auto-rollback.',
-        rollback: 'rollback() -> reactivate the previous system generation.',
+        rollback:
+          'rollback() -> reactivate the last system generation that passed ' +
+          'its health check (not merely the previous one, which may itself ' +
+          'have been a failed apply).',
         status: 'status() -> { config, status } of the last apply.',
         getLog: 'getLog(maxBytes?) -> tail of the apply log.',
       };
