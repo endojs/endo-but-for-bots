@@ -1377,7 +1377,77 @@ const makeDaemonCore = async (
     }
   };
 
+  /**
+   * Fill the `@registry` slot on host formulas written before it existed.
+   *
+   * `registry` is required on every host (mirroring `@node`), and incarnation
+   * fails fast without it, so a daemon whose state predates the field cannot
+   * start at all — there is no route forward for it but to discard the state.
+   * See designs/registry-capability.md § Migration for already-formulated
+   * hosts.
+   *
+   * Runs before the graph is seeded, so the graph never sees the hole, and
+   * before any host is incarnated, so a caller cannot observe a half-migrated
+   * host. Idempotent: a host that already names a registry is left alone,
+   * including one whose owner substituted a registry of their own.
+   *
+   * The new registry needs no pin. Pinning during host construction is only a
+   * transient guard against collection mid-build; durable retention comes from
+   * the host formula's dependency edge, which the rewrite below establishes.
+   */
+  const upgradeHostFormulasMissingRegistry = async () => {
+    const formulaRecords = await persistencePowers.listFormulas();
+    const candidates = await Promise.all(
+      formulaRecords.map(async ({ number: formulaNumber, node }) => {
+        const fNum = /** @type {FormulaNumber} */ (formulaNumber);
+        const { formula } = await persistencePowers.readFormula(fNum);
+        return { fNum, node, formula };
+      }),
+    );
+    const stale = candidates.filter(
+      /**
+       * @param {(typeof candidates)[number]} candidate
+       * @returns {candidate is (typeof candidates)[number] & { formula: HostFormula }}
+       */
+      candidate =>
+        candidate.formula.type === 'host' &&
+        candidate.formula.registry === undefined,
+    );
+
+    await Promise.all(
+      stale.map(async ({ fNum, node, formula }) => {
+        const nodeNumber = /** @type {NodeNumber} */ (node || localNodeNumber);
+        const registryNumber = /** @type {FormulaNumber} */ (
+          await randomHex256()
+        );
+        // Host-scoped, exactly as a freshly formulated host gets.
+        /** @type {import('./types.js').RegistryFormula} */
+        const registryFormula = {
+          type: 'registry',
+          registryUrl: registryDefaultUrl,
+        };
+        await persistencePowers.writeFormula(
+          registryNumber,
+          nodeNumber,
+          registryFormula,
+        );
+        const registry = formatId({
+          number: registryNumber,
+          node: nodeNumber,
+        });
+        await persistencePowers.writeFormula(fNum, nodeNumber, {
+          ...formula,
+          registry,
+        });
+        console.error(
+          `Upgraded host formula ${fNum.slice(0, 12)}: added @registry ${registryNumber.slice(0, 12)}`,
+        );
+      }),
+    );
+  };
+
   const seedFormulaGraphFromPersistence = async () => {
+    await upgradeHostFormulasMissingRegistry();
     const formulaRecords = await persistencePowers.listFormulas();
     const entries = await Promise.all(
       formulaRecords.map(async ({ number: formulaNumber, node }) => {
