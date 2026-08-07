@@ -11,6 +11,14 @@ import {
   SandboxFactoryInterface,
 } from '../src/interfaces.js';
 
+const lifecycleProbe = harden({
+  lifecycle: harden({
+    available: true,
+    processGroups: true,
+    crashCleanup: true,
+  }),
+});
+
 const stubScratchProvider = harden({
   provideScratchMount: async () => {
     throw new Error('scratchProvider not used in Phase 0');
@@ -69,7 +77,12 @@ test('make() reports the requested backend selector in its error', async t => {
 test('listBackends reports a registered driver as available', async t => {
   const stubDriver = harden({
     name: /** @type {const} */ ('bwrap'),
-    probe: async () => harden({ available: true, version: 'stub-1.0' }),
+    probe: async () =>
+      harden({
+        available: true,
+        version: 'stub-1.0',
+        details: lifecycleProbe,
+      }),
     prepareSlice: async () => {
       throw new Error('not implemented');
     },
@@ -92,6 +105,7 @@ test('listBackends reports a registered driver as available', async t => {
     name: 'bwrap',
     available: true,
     version: 'stub-1.0',
+    details: lifecycleProbe,
   });
   t.true(
     matches(backends[0], BackendProbeShape),

@@ -575,6 +575,41 @@ export const makeBwrapDriver = ({
       });
     }
 
+    let helpResult;
+    try {
+      helpResult = await spawnAndCollect(cp, 'bwrap', ['--help']);
+    } catch (e) {
+      return harden({
+        available: false,
+        version,
+        reason: `failed to probe bwrap lifecycle flags: ${/** @type {Error} */ (e).message}`,
+      });
+    }
+    // bwrap writes its usage to either stream depending on version, so
+    // test both rather than materialising a concatenated copy.
+    const advertises = (/** @type {string} */ flag) =>
+      helpResult.stdout.includes(flag) || helpResult.stderr.includes(flag);
+    if (
+      helpResult.code !== 0 ||
+      !advertises('--die-with-parent') ||
+      !advertises('--new-session')
+    ) {
+      return harden({
+        available: false,
+        version,
+        reason:
+          'bwrap does not advertise required --die-with-parent and --new-session lifecycle support',
+        details: harden({
+          lifecycle: harden({
+            available: false,
+            processGroups: false,
+            crashCleanup: false,
+            reason: 'required bwrap lifecycle flags unavailable',
+          }),
+        }),
+      });
+    }
+
     // Run Phase 1.5 kernel-feature probes in parallel.  These never
     // throw — `LandlockProbe.probe()` / `Cgroup2Probe.probe()` always
     // resolve, with `available: false` on any error path.
@@ -584,6 +619,11 @@ export const makeBwrapDriver = ({
     ]);
     /** @type {BackendProbeDetails} */
     const details = harden({
+      lifecycle: harden({
+        available: true,
+        processGroups: true,
+        crashCleanup: true,
+      }),
       landlock: harden({
         available: landlock.available,
         ...(landlock.reason !== undefined ? { reason: landlock.reason } : {}),
@@ -799,7 +839,15 @@ export const makeBwrapDriver = ({
     let child;
     try {
       child = cp.spawn(execProgram, execArgv, {
-        stdio: ['pipe', 'pipe', 'pipe'],
+        stdio: [
+          'pipe',
+          opts.captureStdout === false ? 'ignore' : 'pipe',
+          opts.captureStderr === false ? 'ignore' : 'pipe',
+        ],
+        // A distinct host process group lets every termination path signal
+        // bwrap, its launcher, and all descendants with one negative pid.
+        // `--die-with-parent` independently covers an ungraceful daemon exit.
+        detached: true,
         // Inherit minimal env: bwrap itself needs PATH to find
         // libraries; the slice's clearenv inside takes effect after
         // the bwrap binary execs.
@@ -819,10 +867,10 @@ export const makeBwrapDriver = ({
         slice.live.delete(child);
         reject(err);
       });
-      child.once('close', (code, signal) => {
-        slice.live.delete(child);
+      child.once('exit', (code, signal) => {
         resolve({ code, signal });
       });
+      child.once('close', () => slice.live.delete(child));
     });
 
     // The DriverProcess surface exposes async-iterables for stdout
@@ -839,8 +887,13 @@ export const makeBwrapDriver = ({
       stderr: readableToAsyncIterable(child.stderr),
       wait: () => exited,
       kill: async signal => {
+        const pid = child.pid;
+        if (pid === undefined) return;
         try {
-          child.kill(/** @type {NodeJS.Signals} */ (signal ?? 'SIGTERM'));
+          process.kill(
+            -pid,
+            /** @type {NodeJS.Signals | number} */ (signal ?? 'SIGTERM'),
+          );
         } catch (e) {
           // ESRCH (process already gone) is fine; rethrow others.
           const err = /** @type {Error & { code?: string }} */ (e);
@@ -885,13 +938,13 @@ export const makeBwrapDriver = ({
           };
           child.once('close', finish);
           try {
-            child.kill('SIGTERM');
+            if (child.pid !== undefined) process.kill(-child.pid, 'SIGTERM');
           } catch {
             // ignore
           }
           killTimer = setTimeout(() => {
             try {
-              child.kill('SIGKILL');
+              if (child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
             } catch {
               // ignore
             }

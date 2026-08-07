@@ -8,6 +8,7 @@
  */
 
 import type { ERef, FarRef } from '@endo/eventual-send';
+import type { PassableBytesReader } from '@endo/exo-stream';
 
 // ---------------------------------------------------------------------------
 // Network policy
@@ -60,6 +61,18 @@ export type BackendSelector = 'auto' | BackendName;
  * podman runs as a regular user (the only mode the sandbox supports).
  */
 export type BackendProbeDetails = {
+  /**
+   * Lifecycle properties required by every usable sandbox driver.
+   * Drivers that cannot terminate a whole process tree and clean up after
+   * an owner crash are reported unavailable rather than silently weakening
+   * confinement.
+   */
+  lifecycle?: {
+    available: boolean;
+    processGroups: boolean;
+    crashCleanup: boolean;
+    reason?: string;
+  };
   /** Landlock LSM availability (kernel ≥ 5.13). */
   landlock?: {
     available: boolean;
@@ -249,7 +262,7 @@ export type SliceSpec = {
 // ---------------------------------------------------------------------------
 
 /** Reader / writer references — Endo's existing stdio plumbing. */
-export type ReaderRef = ERef<unknown>;
+export type ReaderRef = ERef<PassableBytesReader>;
 export type WriterRef = ERef<unknown>;
 
 /**
@@ -262,10 +275,16 @@ export type SpawnOpts = {
   cwd?: string;
   /** Attach an existing reader as stdin. */
   stdin?: ReaderRef;
-  /** Capture stdout via a `WriterRef`. Defaults to true. */
+  /** Capture stdout as a `PassableBytesReader`. Defaults to true. */
   captureStdout?: boolean;
-  /** Capture stderr via a `WriterRef`. Defaults to true. */
+  /** Capture stderr as a separate `PassableBytesReader`. Defaults to true. */
   captureStderr?: boolean;
+  /** Maximum stdout bytes before the whole process tree is terminated. */
+  stdoutByteLimit?: bigint;
+  /** Maximum stderr bytes before the whole process tree is terminated. */
+  stderrByteLimit?: bigint;
+  /** Maximum process runtime in milliseconds, capped at `0x7fffffff`. */
+  timeoutMs?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -458,4 +477,6 @@ export type MakeSandboxFactoryInput = {
   drivers: SandboxDriver[];
   /** Powers used to mint the writable scratch upper layer. */
   scratchProvider: SandboxPowers;
+  /** Formula/daemon cancellation context that owns every minted handle. */
+  context?: ERef<{ whenCancelled(): Promise<unknown> }>;
 };
