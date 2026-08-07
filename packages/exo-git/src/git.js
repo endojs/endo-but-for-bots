@@ -45,9 +45,10 @@ import {
  *   ReadableTree,
  *   GitRestoreOptions,
  *   GitStashPushOptions,
-  *   GitStatusOptions,
-  *   GitStatusResult,
-  *   GitWorktreeStatus,
+ *   GitStatusOptions,
+ *   GitStatusResult,
+ *   GitTrackingStatus,
+ *   GitWorktreeStatus,
  *   HistoryRewriteEndoGit,
  *   ReadOnlyEndoGit,
  *   ReadOnlyGitWorktree,
@@ -130,6 +131,7 @@ import {
  * @property {(ref: string, message: string) => Promise<GitCommit>} reword
  * @property {(ref: string, opts?: GitCherryPickOptions) => Promise<string>} cherryPick
  * @property {() => Promise<GitRef | undefined>} currentBranch
+ * @property {() => Promise<GitTrackingStatus>} trackingStatus
  * @property {() => Promise<GitRef[]>} branches
  * @property {(name: string, opts?: GitCreateBranchOptions) => Promise<GitRef>} createBranch
  * @property {(name: string, opts?: GitDeleteBranchOptions) => Promise<void>} deleteBranch
@@ -426,6 +428,11 @@ async function status(options = {}) {
  */
 async function statusReadOnly(options = {}) {
   return doStatus(this.state, options);
+}
+
+/** @this {GitMethodThis} */
+async function trackingStatus() {
+  return this.state.backend.trackingStatus();
 }
 
 /**
@@ -751,6 +758,7 @@ function scope(name) {
 const readerMethods = harden({
   worktree: worktreeReadOnly,
   status: statusReadOnly,
+  trackingStatus,
   diff,
   log,
   show,
@@ -1014,6 +1022,7 @@ export const makeNotYetImplementedBackend = () => {
     reword: async () => fail('reword'),
     cherryPick: async () => fail('cherryPick'),
     currentBranch: async () => fail('currentBranch'),
+    trackingStatus: async () => fail('trackingStatus'),
     branches: async () => fail('branches'),
     createBranch: async () => fail('createBranch'),
     deleteBranch: async () => fail('deleteBranch'),

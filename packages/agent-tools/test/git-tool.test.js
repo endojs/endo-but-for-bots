@@ -24,7 +24,14 @@ import { makeGitHistoryTool, makeGitTool } from '../src/json-tools/git.js';
  * @type {Record<GitToolFacet, string[]>}
  */
 const SLICE_BY_FACET = {
-  reader: ['log', 'diff', 'show', 'branches', 'currentBranch'],
+  reader: [
+    'log',
+    'diff',
+    'show',
+    'branches',
+    'currentBranch',
+    'trackingStatus',
+  ],
   writer: [
     'log',
     'diff',
@@ -34,6 +41,7 @@ const SLICE_BY_FACET = {
     'createBranch',
     'switchBranch',
     'currentBranch',
+    'trackingStatus',
   ],
   rewriter: [
     'log',
@@ -47,6 +55,7 @@ const SLICE_BY_FACET = {
     'createBranch',
     'switchBranch',
     'currentBranch',
+    'trackingStatus',
   ],
 };
 
@@ -104,6 +113,10 @@ const makeStubGit = calls => {
     currentBranch: async (...a) => {
       calls.push(['currentBranch', ...a]);
       return undefined;
+    },
+    trackingStatus: async (...a) => {
+      calls.push(['trackingStatus', ...a]);
+      return { ahead: 0, behind: 0, detached: true };
     },
   };
   return Far('StubGit', stubGit);

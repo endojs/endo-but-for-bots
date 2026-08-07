@@ -296,6 +296,11 @@ const gitToolSchemas = harden({
       'Report the currently checked-out branch (or nothing when detached).',
     parameters: NO_ARGS,
   },
+  trackingStatus: {
+    description:
+      'Report the current branch, upstream, and ahead/behind tracking counts.',
+    parameters: NO_ARGS,
+  },
 });
 
 /**

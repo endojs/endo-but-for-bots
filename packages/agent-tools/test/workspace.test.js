@@ -45,6 +45,7 @@ test('a git grant composes the versioning + mount-bridged tools, and nothing els
     'createBranch',
     'switchBranch',
     'currentBranch',
+    'trackingStatus',
   ]) {
     t.true(names.has(method), `git tool "${method}" present`);
   }

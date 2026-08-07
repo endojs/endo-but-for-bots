@@ -197,6 +197,15 @@ test('read-only git is a subset of read-write git and omits mutators', t => {
   t.true(readOnly.includes('diff'));
 });
 
+test('read-only generated Git declaration exposes tracking status', t => {
+  t.true(
+    listDeclaredTypeMembers(
+      gitDeclarations.gitReadOnly.aux,
+      'ReadOnlyEndoGit',
+    ).includes('trackingStatus'),
+  );
+});
+
 test('git declarations retain reachable filesystem contracts without status caps', t => {
   const { aux } = gitDeclarations.git;
   t.false(aux.includes("import('@endo/platform"));

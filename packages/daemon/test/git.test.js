@@ -1630,6 +1630,114 @@ test('NativeGitBackend.currentBranch returns the symbolic ref name', async t => 
   t.deepEqual(head, { name: 'main', kind: 'branch' });
 });
 
+test('NativeGitBackend.trackingStatus reports upstream divergence and detached HEAD', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  const base = (
+    await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })
+  ).stdout.trim();
+  await execFileAsync('git', ['update-ref', 'refs/remotes/origin/main', base], {
+    cwd: repoRoot,
+  });
+  await execFileAsync('git', ['config', 'branch.main.remote', 'origin'], {
+    cwd: repoRoot,
+  });
+  await execFileAsync(
+    'git',
+    ['config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'],
+    { cwd: repoRoot },
+  );
+  await execFileAsync(
+    'git',
+    ['config', 'branch.main.merge', 'refs/heads/main'],
+    {
+      cwd: repoRoot,
+    },
+  );
+  const backend = makeNativeGitBackend({ repoRoot });
+
+  t.deepEqual(await backend.trackingStatus(), {
+    branch: 'main',
+    upstream: 'origin/main',
+    ahead: 0,
+    behind: 0,
+    detached: false,
+  });
+  await execFileAsync(
+    'git',
+    [
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '--allow-empty',
+      '-m',
+      'ahead',
+    ],
+    { cwd: repoRoot },
+  );
+  t.deepEqual(await backend.trackingStatus(), {
+    branch: 'main',
+    upstream: 'origin/main',
+    ahead: 1,
+    behind: 0,
+    detached: false,
+  });
+
+  await execFileAsync('git', ['switch', '-c', 'remote-only', base], {
+    cwd: repoRoot,
+  });
+  await execFileAsync(
+    'git',
+    [
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '--allow-empty',
+      '-m',
+      'behind',
+    ],
+    { cwd: repoRoot },
+  );
+  const remoteHead = (
+    await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })
+  ).stdout.trim();
+  await execFileAsync('git', ['switch', 'main'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['update-ref', 'refs/remotes/origin/main', remoteHead],
+    { cwd: repoRoot },
+  );
+  t.deepEqual(await backend.trackingStatus(), {
+    branch: 'main',
+    upstream: 'origin/main',
+    ahead: 1,
+    behind: 1,
+    detached: false,
+  });
+
+  await backend.detach('HEAD');
+  t.deepEqual(await backend.trackingStatus(), {
+    ahead: 0,
+    behind: 0,
+    detached: true,
+  });
+});
+
+test('NativeGitBackend.trackingStatus handles a branch without an upstream', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  const backend = makeNativeGitBackend({ repoRoot });
+
+  t.deepEqual(await backend.trackingStatus(), {
+    branch: 'main',
+    ahead: 0,
+    behind: 0,
+    detached: false,
+  });
+});
+
 test('NativeGitBackend.branches lists the local branches', async t => {
   const repoRoot = await provisionGitWorktree(t);
   // Add a second branch so `branches()` returns more than one row.
