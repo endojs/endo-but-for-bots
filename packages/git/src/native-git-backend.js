@@ -2087,10 +2087,10 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
      * @returns {Promise<RawStatusEntry[]>}
      */
     status: async () => {
-      // Use the raw runner: porcelain=v1 records start with a column-
+      // Use the streaming reader: porcelain=v1 records start with a column-
       // sensitive XY code (e.g. ' D' for a worktree-only deletion);
-      // runGit's trim() would strip a leading space and shift the path.
-      const out = await runGitRaw([
+      // trimming would strip a leading space and shift the path.
+      const out = await readGitText([
         'status',
         '--porcelain=v1',
         '-z',
