@@ -27,7 +27,7 @@ import { getAmbientEnv, makeEnvCredentials } from './harness/credentials.js';
  * Build the system prompt for the narrow code-mode agent.
  *
  * @param {CodeModeGlobal[]} globals
- * @param {{ preamble?: string, storeValue?: boolean }} [options]
+ * @param {{ preamble?: string, storeValue?: boolean, preserveTools?: boolean }} [options]
  * @returns {string}
  */
 export const makeCodeModeSystemPrompt = (globals, options = {}) => {
@@ -38,9 +38,12 @@ export const makeCodeModeSystemPrompt = (globals, options = {}) => {
   const preamble =
     options.preamble ||
     'You are codeMode, an Endo code-mode agent. You solve tasks by writing JavaScript and calling the evaluate tool.';
+  const toolGuidance = options.preserveTools
+    ? 'You have the evaluate tool plus the other active Pi tools. Use the tool best suited to each task; use evaluate for Endo capabilities.'
+    : 'You have exactly one tool: evaluate. Do not call any other tool and do not answer in prose when a tool call can do the work.';
   return `${preamble}
 
-You have exactly one tool: evaluate. Do not call any other tool and do not answer in prose when a tool call can do the work.
+${toolGuidance}
 
 The evaluate tool evaluates JavaScript source in an Endo Compartment. The compartment includes hardened SES globals plus the powers listed below. These powers are already in lexical scope; do not look them up by pet name. The TypeScript declarations below are your primary reference: use them to pick a method and its arguments before your first call rather than probing at runtime. They may be a subset of a capability's live surface, so if you need a method that is not declared, discover it with E(capability).__getMethodNames__().
 

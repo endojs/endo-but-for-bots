@@ -14,6 +14,8 @@ export type GitRemoteSpec = Omit<
 };
 
 export type EndoProvisionSpec = {
+  /** Keep Pi's standard tools active alongside the Endo evaluate tool. */
+  piTools?: 'preserve';
   workspace?: {
     path?: string;
     deniedSegments?: string[];
@@ -28,6 +30,8 @@ export type NormalizedGitRemoteSpec = NormalizedRemotePolicy & {
 };
 
 export type EndoProvisionPolicy = {
+  /** Keep Pi's standard tools active alongside the Endo evaluate tool. */
+  piTools?: 'preserve';
   workspace: {
     deniedSegments: string[];
   };

@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 
-const ROOT_FIELDS = harden(['workspace', 'fs', 'git', 'gitRemotes']);
+const ROOT_FIELDS = harden(['workspace', 'fs', 'git', 'gitRemotes', 'piTools']);
 const WORKSPACE_FIELDS = harden(['path', 'deniedSegments']);
 const REMOTE_FIELDS = harden([
   'url',
@@ -29,6 +29,7 @@ const REMOTE_FIELDS = harden([
 ]);
 const FS_MODES = harden(['readOnly', 'readWrite']);
 const GIT_MODES = harden(['readOnly', 'readWrite', 'historyRewrite']);
+const PI_TOOLS_MODES = harden(['preserve']);
 const PRODUCT_RESERVED_BINDINGS = harden(['E', 'git', 'workspace']);
 const LANGUAGE_RESERVED_BINDINGS = harden([
   'arguments',
@@ -334,7 +335,7 @@ const normalizePolicy = async (spec, cwd) => {
       : requirePlainRecord(root.workspace, 'EndoProvisionSpec.workspace');
   assertKnownFields(workspace, WORKSPACE_FIELDS, 'EndoProvisionSpec.workspace');
 
-  const { fs, git } = root;
+  const { fs, git, piTools } = root;
   if (fs !== undefined && !FS_MODES.includes(/** @type {any} */ (fs))) {
     throw makeError(X`EndoProvisionSpec.fs must be readOnly or readWrite`);
   }
@@ -342,6 +343,12 @@ const normalizePolicy = async (spec, cwd) => {
     throw makeError(
       X`EndoProvisionSpec.git must be readOnly, readWrite, or historyRewrite`,
     );
+  }
+  if (
+    piTools !== undefined &&
+    !PI_TOOLS_MODES.includes(/** @type {any} */ (piTools))
+  ) {
+    throw makeError(X`EndoProvisionSpec.piTools must be preserve`);
   }
   if (fs === 'readOnly' && (git === 'readWrite' || git === 'historyRewrite')) {
     throw makeError(
@@ -412,6 +419,9 @@ const normalizePolicy = async (spec, cwd) => {
   /** @type {EndoProvisionPolicy} */
   const policy = harden({
     workspace: harden({ deniedSegments }),
+    ...(piTools === undefined
+      ? {}
+      : { piTools: /** @type {'preserve'} */ (piTools) }),
     ...(fs === undefined
       ? {}
       : { fs: /** @type {'readOnly' | 'readWrite'} */ (fs) }),
@@ -512,6 +522,9 @@ export const validateEndoProvisionPersistence = async value => {
     }),
     ...(policyRecord.fs === undefined ? {} : { fs: policyRecord.fs }),
     ...(policyRecord.git === undefined ? {} : { git: policyRecord.git }),
+    ...(policyRecord.piTools === undefined
+      ? {}
+      : { piTools: policyRecord.piTools }),
     ...(policyRecord.gitRemotes === undefined
       ? {}
       : { gitRemotes: policyRecord.gitRemotes }),

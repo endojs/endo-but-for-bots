@@ -116,6 +116,9 @@ const hasSameAuthority = (left, right) =>
  */
 const persistenceToSpec = persistence =>
   harden({
+    ...(persistence.policy.piTools === undefined
+      ? {}
+      : { piTools: persistence.policy.piTools }),
     workspace: harden({
       path: persistence.workspacePath,
       deniedSegments: harden([...persistence.policy.workspace.deniedSegments]),
@@ -271,6 +274,7 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
       let active;
       /** @type {EndoCodeModePiProblem | undefined} */
       let problem;
+      let preservePiTools = false;
 
       const cleanupActive = async () => {
         await null;
@@ -370,6 +374,8 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
       pi.on('session_start', async (event, context) => {
         await cleanupActive();
         problem = undefined;
+        preservePiTools = false;
+        const initialActiveTools = pi.getActiveTools();
         pi.setActiveTools(NO_TOOL_NAMES);
 
         try {
@@ -468,6 +474,7 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
             }
           }
 
+          preservePiTools = desired.policy.piTools === 'preserve';
           const connected = await connect(desired, context);
           if (!samePlainData(connected.persistence, desired)) {
             await connected.cleanup();
@@ -490,10 +497,19 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
               renderResult: renderEvaluateResult,
             }),
           );
-          pi.setActiveTools(ACTIVE_TOOL_NAMES);
+          if (preservePiTools) {
+            pi.setActiveTools([
+              ...new Set([...initialActiveTools, ...ACTIVE_TOOL_NAMES]),
+            ]);
+          } else {
+            pi.setActiveTools(ACTIVE_TOOL_NAMES);
+          }
           pi.appendEntry(SESSION_ENTRY_TYPE, connected.persistence);
         } catch (error) {
           await cleanupActive();
+          pi.setActiveTools(
+            preservePiTools ? initialActiveTools : NO_TOOL_NAMES,
+          );
           problem = makeProblem(error);
           if (context.hasUI) {
             context.ui.notify(`${problem.message} ${problem.action}`, 'error');
@@ -504,20 +520,28 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
         }
       });
 
-      pi.on('before_agent_start', () => {
+      pi.on('before_agent_start', event => {
         if (active !== undefined) {
+          const codeModePrompt = makeCodeModeSystemPrompt(active.globals, {
+            preserveTools: preservePiTools,
+          });
           return harden({
-            systemPrompt: makeCodeModeSystemPrompt(active.globals),
+            systemPrompt: preservePiTools
+              ? `${event.systemPrompt}\n\n${codeModePrompt}`
+              : codeModePrompt,
           });
         }
         return harden({
-          systemPrompt:
-            'Endo code mode is unavailable. No tools or authority are active; resolve the extension startup error before continuing.',
+          systemPrompt: preservePiTools
+            ? `${event.systemPrompt}\n\nEndo code mode is unavailable. Standard Pi tools remain active; resolve the extension startup error before continuing.`
+            : 'Endo code mode is unavailable. No tools or authority are active; resolve the extension startup error before continuing.',
         });
       });
 
       pi.on('session_shutdown', async () => {
-        pi.setActiveTools(NO_TOOL_NAMES);
+        if (!preservePiTools) {
+          pi.setActiveTools(NO_TOOL_NAMES);
+        }
         await cleanupActive();
       });
     },
