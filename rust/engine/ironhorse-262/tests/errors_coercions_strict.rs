@@ -68,6 +68,7 @@ fn object_to_primitive_drives_string_and_numeric_operations() {
         "({ valueOf() { return 7 } }) * 2",
         "({ valueOf() { return 8 } }) - 3",
         "try { ({ valueOf() { throw 7; } }) + 1 } catch (e) { e }",
+        "var n = new Number(1); n.valueOf = function () { return 42; }; n + 0",
     ] {
         assert_result_agrees(source);
     }

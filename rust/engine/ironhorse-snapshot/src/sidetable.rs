@@ -44,6 +44,8 @@
 //! - `resume_status` — the generator/async resume signal, meaningful only
 //!   mid-`resume`; a *suspended* generator's state is the `generators` row
 //!   (tracked, Pending), not this register.
+//! - `callback_return_depth` — the return-depth sentinel while a property
+//!   accessor or other callback is executing; no callback spans a crank.
 //!
 //! **Boot-derived / program-symbol caches — re-derived, never stored.** These
 //! are pure functions of the boot procedure and the program's `symbol_names`,
@@ -121,6 +123,8 @@ pub enum SideTable {
     GlobalProps,
     /// `error_data` — per-instance Error name/message.
     ErrorData,
+    /// `accessors` — per-instance getter/setter function slots.
+    Accessors,
     /// `wrapper_data` — per-instance primitive-wrapper boxed value.
     WrapperData,
     /// `arrays` — exotic array length + item chunk.
@@ -209,6 +213,7 @@ impl SideTable {
         SideTable::Jumps,
         SideTable::GlobalProps,
         SideTable::ErrorData,
+        SideTable::Accessors,
         SideTable::WrapperData,
         SideTable::Arrays,
         SideTable::Collections,
@@ -290,6 +295,7 @@ impl SideTable {
             SideTable::CallStack => ("call_stack", Pending),
             SideTable::Jumps => ("jumps", Pending),
             SideTable::ErrorData => ("error_data", Pending),
+            SideTable::Accessors => ("accessors", Pending),
             SideTable::WrapperData => ("wrapper_data", Pending),
             SideTable::Arrays => ("arrays", Pending),
             SideTable::Collections => ("collections", Pending),
@@ -352,7 +358,7 @@ mod tests {
     fn all_is_exhaustive() {
         // Count of variants, kept beside the enum. Bump when a variant is
         // added — the assertion below then forces the ALL entry too.
-        const VARIANT_COUNT: usize = 30;
+        const VARIANT_COUNT: usize = 31;
         assert_eq!(SideTable::ALL.len(), VARIANT_COUNT);
 
         // No duplicates: each field name appears once.

@@ -5736,7 +5736,23 @@ impl Interp {
                         }
                         // `fxRunDefine` creating a data property: one
                         // built-in step plus the property-slot allocation.
-                        self.instance_put(inst, id, value);
+                        // A later data member with the same literal key must
+                        // replace an earlier accessor member completely.
+                        if self.accessors.contains_key(&(inst, id)) {
+                            self.ordinary_define_own_property(
+                                inst,
+                                id,
+                                OrdinaryDescriptor {
+                                    value: Some(value),
+                                    writable: Some(true),
+                                    enumerable: Some(true),
+                                    configurable: Some(true),
+                                    ..OrdinaryDescriptor::default()
+                                },
+                            );
+                        } else {
+                            self.instance_put(inst, id, value);
+                        }
                         self.meter.tick_builtin();
                         // An object-literal generator method (`{ *m(){} }`)
                         // compiles the value as an ANONYMOUS `GENERATOR_FUNCTION`
@@ -6062,6 +6078,7 @@ impl Interp {
                         Payload::At(id, index) => (id, index),
                         _ => return Halt::Unsupported(op.name()),
                     };
+                    let numeric_index = (id == crate::value::XS_NO_ID).then_some(index);
                     let id = if id == crate::value::XS_NO_ID {
                         self.intern_key(&index.to_string())
                     } else {
@@ -6070,7 +6087,18 @@ impl Interp {
                     let deleted = match obj.value {
                         Payload::Reference(inst) => {
                             self.meter.tick_builtin();
-                            self.delete_own_property(inst, id)
+                            if let Some(index) =
+                                numeric_index.filter(|_| self.arrays.contains_key(&inst))
+                            {
+                                self.arrays.get_mut(&inst).unwrap().items.remove(&index);
+                                true
+                            } else if self.arrays.contains_key(&inst)
+                                && Some(id) == self.length_id
+                            {
+                                false
+                            } else {
+                                self.delete_own_property(inst, id)
+                            }
                         }
                         _ if obj.kind == Kind::Null || obj.kind == Kind::Undefined => {
                             let error = self.build_error("TypeError", 0, 0);
@@ -6082,8 +6110,22 @@ impl Interp {
                                 Err(halt) => return halt,
                             }
                         }
+                        // String wrapper index properties are non-configurable.
+                        Payload::String(off) if numeric_index.is_some() => {
+                            numeric_index.unwrap() as usize >= self.str_len(off)
+                        }
                         _ => true,
                     };
+                    if !deleted && self.strict {
+                        let error = self.build_error("TypeError", 0, 0);
+                        match self.raise_js(error) {
+                            Ok(target) => {
+                                pc = target;
+                                continue;
+                            }
+                            Err(halt) => return halt,
+                        }
+                    }
                     self.push(Slot::boolean(deleted));
                     pc += size as usize;
                 }
@@ -14319,6 +14361,9 @@ impl Interp {
                     Payload::Reference(object) if arg0.kind == Kind::Reference => object,
                     _ => return Err(Halt::Throw("TypeError: Reflect.isExtensible target".into())),
                 };
+                if !self.is_ordinary_object(object) {
+                    return Err(Halt::Unsupported("Reflect.isExtensible:exotic-object"));
+                }
                 Ok(Slot::boolean(self.instance_extensible(object)))
             }
             NativeMethod::ReflectPreventExtensions => {
@@ -14330,6 +14375,11 @@ impl Interp {
                         ))
                     }
                 };
+                if !self.is_ordinary_object(object) {
+                    return Err(Halt::Unsupported(
+                        "Reflect.preventExtensions:exotic-object",
+                    ));
+                }
                 self.slots.get_mut(object).flag |= XS_DONT_PATCH_FLAG;
                 Ok(Slot::boolean(true))
             }
@@ -17974,11 +18024,16 @@ impl Interp {
         for &p in &slots {
             let s = *self.slots.get(p);
             if s.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
-                // An accessor own property: XS queues its getter/setter function
-                // instances. Ironhorse keeps intrinsic accessors outside the slot
-                // graph, so their transitive freeze is a documented gap — the
-                // property itself is stamped non-configurable above (the
-                // observable), the getter/setter functions are not walked.
+                let accessor = self
+                    .accessors
+                    .get(&(inst, s.id))
+                    .copied()
+                    .unwrap_or_default();
+                for function in [accessor.get, accessor.set].into_iter().flatten() {
+                    if let Payload::Reference(function) = function.value {
+                        self.harden_enqueue(function, list);
+                    }
+                }
                 continue;
             }
             if s.kind == Kind::Reference {
@@ -18072,9 +18127,10 @@ impl Interp {
         }
     }
 
+    /// ECMAScript SameValue, including NaN equality and distinct signed zeros.
     fn same_value(&self, left: Slot, right: Slot) -> bool {
-        match (left.value, right.value) {
-            (Payload::Number(a), Payload::Number(b)) => {
+        match (numeric_of(&left), numeric_of(&right)) {
+            (Some(a), Some(b)) => {
                 (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits()
             }
             _ => self.strict_equal(&left, &right),
@@ -18285,10 +18341,9 @@ impl Interp {
                 return Ok(false);
             }
         } else {
-            let prototype = self.instance_prototype(inst);
-            if !prototype.is_null() {
-                let inherited = self.ordinary_get_own_descriptor(prototype, id);
-                if let Some(descriptor) = inherited {
+            let mut prototype = self.instance_prototype(inst);
+            while !prototype.is_null() {
+                if let Some(descriptor) = self.ordinary_get_own_descriptor(prototype, id) {
                     if descriptor.is_accessor() {
                         let setter = descriptor.set.unwrap_or_else(Slot::undefined);
                         if setter.kind == Kind::Undefined {
@@ -18300,7 +18355,9 @@ impl Interp {
                     if descriptor.writable == Some(false) {
                         return Ok(false);
                     }
+                    break;
                 }
+                prototype = self.instance_prototype(prototype);
             }
         }
         let receiver_inst = match receiver.value {
@@ -19025,15 +19082,6 @@ impl Interp {
             _ => return Ok(value),
         };
 
-        // Wrapper prototypes always supply `valueOf`, even when the source
-        // never spells that property name and link-time symbol pruning omits
-        // its method slot. The number/default hint selects it first.
-        if !string_hint {
-            if let Some(primitive) = self.wrapper_data.get(&inst).copied() {
-                return Ok(primitive);
-            }
-        }
-
         if let Some((_, symbol)) = self
             .well_known_symbols
             .iter()
@@ -19071,10 +19119,20 @@ impl Interp {
         };
         for name in names {
             let Some(&id) = self.symbol_ids.get(name) else {
+                if !string_hint && name == "valueOf" {
+                    if let Some(primitive) = self.wrapper_data.get(&inst).copied() {
+                        return Ok(primitive);
+                    }
+                }
                 continue;
             };
             let method = self.instance_get(inst, id);
             if method.kind == Kind::Undefined {
+                if !string_hint && name == "valueOf" {
+                    if let Some(primitive) = self.wrapper_data.get(&inst).copied() {
+                        return Ok(primitive);
+                    }
+                }
                 continue;
             }
             let result = self.call_primitive_method(code, method, value, &[])?;
