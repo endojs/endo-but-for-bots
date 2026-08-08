@@ -19,7 +19,7 @@
 #
 # Usage:
 #   full-run.sh [--test262-dir DIR] [--subtree PREFIX] [--out DIR]
-#               [--jobs N] [--oracle on|off] [--no-fetch]
+#               [--jobs N] [--oracle on|off] [--case-timeout N] [--no-fetch]
 #
 #   --test262-dir DIR  an existing test262 checkout (a root with test/ and
 #                      harness/). Default: clone tc39/test262 at the pinned
@@ -39,6 +39,7 @@
 #
 # NOTE: a whole-tree run is a MULTI-HOUR sweep. Publishing its output is a
 # separate, deliberate act (a gh-pages commit); ordinary CI must not run it.
+# END HELP
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -73,14 +74,14 @@ while [ $# -gt 0 ]; do
     --oracle) oracle="$2"; shift 2 ;;
     --case-timeout) case_timeout="$2"; shift 2 ;;
     --no-fetch) allow_fetch="no"; shift ;;
-    -h|--help) sed -n '2,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,/^# END HELP/p' "${BASH_SOURCE[0]}" | sed '$d'; exit 0 ;;
     *) echo "full-run.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
 if [ -z "$jobs" ]; then
-  n=$( (nproc 2>/dev/null || echo 4) )
-  jobs=$(( n / 2 )); [ "$jobs" -lt 1 ] && jobs=1; [ "$jobs" -gt 8 ] && jobs=8
+  cpu_count=$( (nproc 2>/dev/null || echo 4) )
+  jobs=$(( cpu_count / 2 )); [ "$jobs" -lt 1 ] && jobs=1; [ "$jobs" -gt 8 ] && jobs=8
 fi
 
 mkdir -p "$out"
@@ -91,7 +92,7 @@ echo "full-run: building the runner + report binaries (release)..." >&2
 cargo build --release --manifest-path "$engine_dir/Cargo.toml" \
   -p ironhorse-262 --bin ironhorse-xst --bin ironhorse-262-report >&2
 xst="$engine_dir/target/release/ironhorse-xst"
-report_bin="$engine_dir/target/release/ironhorse-262-report"
+report_binary="$engine_dir/target/release/ironhorse-262-report"
 
 # --- Resolve / vendor the authoritative test262 corpus at the pinned SHA. -----
 if [ -z "$test262_dir" ]; then
@@ -131,8 +132,8 @@ provenance="$out/provenance.json"
 discover_args=(--test262-dir "$test262_dir")
 [ -n "$subtree" ] && discover_args+=(--subtree "$subtree")
 
-mapfile -t all_batches < <("$report_bin" discover "${discover_args[@]}")
-mapfile -t pending < <("$report_bin" plan --results "$results" "${discover_args[@]}")
+mapfile -t all_batches < <("$report_binary" discover "${discover_args[@]}")
+mapfile -t pending < <("$report_binary" plan --results "$results" "${discover_args[@]}")
 echo "full-run: ${#all_batches[@]} batches total, ${#pending[@]} pending (resume-aware), jobs=$jobs" >&2
 
 # Completeness precondition: a scope that discovers nothing (a typo'd --subtree,
@@ -147,12 +148,12 @@ fi
 # Each batch writes to a .part file first and is atomically renamed on success,
 # so a killed process never leaves a partial file that resume mistakes for done.
 run_one() {
-  b="$1"
-  san=$(printf '%s' "$b" | sed 's|/|__|g')
-  final="$results/$san.json"
-  part="$results/$san.part"
+  batch="$1"
+  batch_file_stem=$(printf '%s' "$batch" | sed 's|/|__|g')
+  final="$results/$batch_file_stem.json"
+  part="$results/$batch_file_stem.part"
   "$xst" --flat $oracle_flag --case-timeout "$case_timeout" --json "$part" \
-    --test262-dir "$test262_dir" "$test_root/$b" >/dev/null 2>&1 || true
+    --test262-dir "$test262_dir" "$test_root/$batch" >/dev/null 2>&1 || true
   if [ -s "$part" ]; then mv -f "$part" "$final"; else rm -f "$part"; fi
 }
 export -f run_one
@@ -170,7 +171,7 @@ fi
 # that silently omits whole directories. This is why `run_one` can swallow a
 # single batch's failure (the parallel run finishes) without hiding it: the
 # reconciliation below is the real completeness check.
-mapfile -t still_pending < <("$report_bin" plan --results "$results" "${discover_args[@]}")
+mapfile -t still_pending < <("$report_binary" plan --results "$results" "${discover_args[@]}")
 if [ "${#still_pending[@]}" -gt 0 ]; then
   echo "full-run: ERROR ${#still_pending[@]} of ${#all_batches[@]} batch(es) produced no parseable result:" >&2
   printf '  %s\n' "${still_pending[@]}" >&2
@@ -196,7 +197,7 @@ cat > "$provenance" <<EOF
 EOF
 
 # --- Aggregate -> stable JSON + static HTML. ----------------------------------
-"$report_bin" aggregate --results "$results" --provenance "$provenance" \
+"$report_binary" aggregate --results "$results" --provenance "$provenance" \
   --json "$out/report.json" --html "$out/report.html"
 
 echo "full-run: done." >&2

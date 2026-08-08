@@ -387,8 +387,8 @@ fn render_case(entry: &Entry, line_no: usize, src: &str, shape: &Shape) -> Strin
 
     let (flags, negative, body): (Vec<&str>, Option<(&str, &str)>, String) = match shape {
         Shape::Assert { lit } => (
-            // The harness assert cases run the single sloppy mode the corpus
-            // ran; strict lands with the stage-5 compiler.
+            // The harness assert cases retain the single sloppy mode the
+            // source corpus measured.
             vec!["noStrict"],
             None,
             format!("assert.sameValue(({}), {});\n", src, lit),

@@ -759,6 +759,17 @@ mod tests {
         );
     }
 
+    #[test]
+    fn compiler_seam_constructs_unsupported_for_valid_unported_syntax() {
+        let source = "import.source('module');";
+        let run = dual_run_with(source, Compiler::Ironhorse).expect("oracle reference runs");
+        assert!(
+            matches!(run.ironhorse_compile, IronhorseCompile::Unsupported(ref message) if message.contains("source-phase import")),
+            "the production compiler seam must distinguish valid unported syntax: {:?}",
+            run.ironhorse_compile
+        );
+    }
+
     // A `DualRun` with the given agreement and ironhorse halt. For a
     // `Halt::Throw`, the oracle is modeled as throwing the same value with
     // the same computrons (the agreeing case), so `is_bit_exact` turns on

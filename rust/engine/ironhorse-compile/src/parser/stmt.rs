@@ -30,7 +30,7 @@
 //!     desugaring moves to the coder.
 
 use crate::ast::{flags, Item, Node, Value};
-use crate::parser::{ParseError, Parser};
+use crate::parser::{ParseError, ParseErrorKind, Parser};
 use crate::token::{classify_word, Token};
 use crate::token_flags::{has_flag, BEGIN_BINDING, BEGIN_EXPRESSION, BEGIN_STATEMENT, END_STATEMENT, IDENTIFIER_NAME};
 
@@ -57,7 +57,15 @@ impl Parser {
         self.flags |= flags::PROGRAM;
         self.program()?;
         self.expect_eof()?;
-        Ok(self.pop())
+        let program = self.pop();
+        if let Some(line) = super::duplicate_proto_setter_line(&program) {
+            return Err(ParseError {
+                line,
+                kind: ParseErrorKind::Syntax,
+                message: "duplicate __proto__ property".into(),
+            });
+        }
+        Ok(program)
     }
 
     /// Parse a whole **Module** (`fxModule`), returning the `Module` node.
@@ -66,7 +74,15 @@ impl Parser {
         self.flags |= flags::STRICT | flags::ASYNC;
         self.module_program()?;
         self.expect_eof()?;
-        Ok(self.pop())
+        let module = self.pop();
+        if let Some(line) = super::duplicate_proto_setter_line(&module) {
+            return Err(ParseError {
+                line,
+                kind: ParseErrorKind::Syntax,
+                message: "duplicate __proto__ property".into(),
+            });
+        }
+        Ok(module)
     }
 
     // ================= program / module / body =================
@@ -1651,6 +1667,9 @@ impl Parser {
                         let l = self.cur.line;
                         self.push_string(s, l, false);
                         self.get_next_token()?;
+                        if self.cur.token == Token::With {
+                            return Err(self.unsupported_error("import attributes"));
+                        }
                         self.push_null(); // with-attributes (unsupported form → null)
                         self.push_node_struct(3, Token::Export, line)?;
                         self.semicolon()?;
@@ -1926,6 +1945,9 @@ impl Parser {
             self.get_next_token()?;
         } else {
             return Err(self.error("missing module"));
+        }
+        if self.cur.token == Token::With {
+            return Err(self.unsupported_error("import attributes"));
         }
         self.push_null(); // with-attributes
         let l = self.cur.line;

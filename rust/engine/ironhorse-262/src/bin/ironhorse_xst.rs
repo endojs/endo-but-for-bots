@@ -214,7 +214,7 @@ fn main() {
         rep.total - rep.covered - rep.failures.len(),
     );
     println!(
-        "  mode: sloppy-run={} strict-skipped-unimplemented={} ses-mode={}",
+        "  mode: sloppy-run={} strict-skipped-by-policy={} ses-mode={}",
         rep.sloppy_run,
         rep.strict_skipped,
         rep.ses_mode.short()

@@ -281,6 +281,10 @@ fn duplicate_proto_setters_are_an_early_error() {
         "({ __proto__: null, ['__proto__']: null })",
         "({ __proto__, '__proto__': null })",
         "({ __proto__() {}, '__proto__': null })",
+        "({ __proto__: x, __proto__: y } = value)",
+        "({ __proto__: x, __proto__: y }) => 0",
+        "for ({ __proto__: x, __proto__: y } of []) {}",
+        "function f({ __proto__: x, __proto__: y }) {}",
     ] {
         prog(valid);
     }
@@ -329,6 +333,24 @@ fn formerly_deferred_constructs_now_parse() {
         let item = p.parse_assignment_expression().unwrap_or_else(|e| panic!("parse {src:?}: {e}"));
         let _ = dump(&item);
     }
+}
+
+#[test]
+fn valid_unported_import_attributes_are_unsupported() {
+    for source in ["import value from 'm' with { type: 'json' };", "export * from 'm' with { type: 'json' };"] {
+        let mut parser = Parser::new(source, true, false).unwrap();
+        let error = parser.parse_module().expect_err("import attributes are not yet ported");
+        assert_eq!(error.kind, ParseErrorKind::Unsupported);
+        assert!(error.message.contains("import attributes"));
+    }
+}
+
+#[test]
+fn strict_delete_identifier_is_an_early_error() {
+    let mut parser = Parser::new("'use strict'; var value; delete value;", false, false).unwrap();
+    let error = parser.parse_program(false).expect_err("strict delete identifier must reject");
+    assert_eq!(error.kind, ParseErrorKind::Syntax);
+    assert!(error.message.contains("delete"));
 }
 
 #[test]
