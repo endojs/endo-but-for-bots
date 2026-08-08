@@ -39,7 +39,32 @@ fn derived_construction_and_super_properties() {
     );
     assert_result_agrees("class A {} class B extends A {} new B() instanceof A");
     assert_result_agrees(
-        "class A { get x() { return this.v } } class B extends A { constructor() { super(); this.v = 3 } get() { return super['x'] } set(v) { super['x'] = v } } new B().get()",
+        "class A { get x() { return this.v } set x(v) { this.v = v } } class B extends A { constructor() { super(); this.v = 3 } get() { return super['x'] } set(v) { super['x'] = v } } let b = new B(); b.set(5); b.get()",
+    );
+    assert_result_agrees(
+        "class A { get x() { return this.v } set x(v) { this.v = v } } class B extends A { constructor() { super(); this.v = 3 } set(v) { super.x = v } } let b = new B(); b.set(7); b.v",
+    );
+}
+
+#[test]
+fn class_and_derived_constructor_errors_are_catchable() {
+    assert_result_agrees(
+        "class A {} let caught = false; try { A() } catch (e) { caught = e instanceof TypeError } caught",
+    );
+    assert_result_agrees(
+        "class A {} class B extends A {} let caught = false; try { B() } catch (e) { caught = e instanceof TypeError } caught",
+    );
+    assert_result_agrees(
+        "class A {} class B extends A { constructor() { this.x = 1 } } let caught = false; try { new B() } catch (e) { caught = e instanceof ReferenceError } caught",
+    );
+    assert_result_agrees(
+        "class A {} class B extends A { constructor() {} } let caught = false; try { new B() } catch (e) { caught = e instanceof ReferenceError } caught",
+    );
+    assert_result_agrees(
+        "class A {} class B extends A { constructor() { return 1 } } let caught = false; try { new B() } catch (e) { caught = e instanceof TypeError } caught",
+    );
+    assert_result_agrees(
+        "class A {} class B extends A { constructor() { return { x: 9 } } } new B().x",
     );
 }
 
