@@ -1776,6 +1776,39 @@ mod tests {
     }
 
     #[test]
+    fn strict_only_hang_attribution_probes_the_strict_variant() {
+        // Regression for the sloppy-only attribution bug: an `onlyStrict` case
+        // runs *only* the strict variant (`strict_mode_status` → run_sloppy
+        // false), so `ironhorse_terminates_alone` must probe the STRICT
+        // assembly. Probing the sloppy assembly instead would judge the wrong
+        // mode and mislabel a real strict-only ironhorse hang as an
+        // `oracle-nontermination` infrastructure skip — the exact category
+        // error the attribution exists to prevent.
+        let Some((_root, harness)) = crate::test262::locate_test262() else {
+            return;
+        };
+
+        // `with (…) {}` diverges by mode: a SyntaxError early error under
+        // strict (ironhorse terminates at parse), an infinite loop under
+        // sloppy. An `onlyStrict` case therefore must report `true` — the
+        // buggy sloppy-only probe would run the loop and hang to `false`.
+        let strict_diverges =
+            "/*---\nflags: [onlyStrict]\n---*/\nwith ({}) { while (true) {} }\n";
+        assert!(
+            ironhorse_terminates_alone(&harness, strict_diverges, std::time::Duration::from_secs(10)),
+            "an onlyStrict case must be probed via its strict assembly (a strict early error terminates), not the sloppy infinite loop"
+        );
+
+        // And a genuine strict-only non-terminator is still caught as a hang
+        // (ironhorse does not terminate), never laundered onto the oracle.
+        let strict_hang = "/*---\nflags: [onlyStrict]\n---*/\nwhile (true) {}\n";
+        assert!(
+            !ironhorse_terminates_alone(&harness, strict_hang, std::time::Duration::from_secs(2)),
+            "a strict-only infinite loop is an ironhorse hang, not oracle non-termination"
+        );
+    }
+
+    #[test]
     fn report_yaml_has_the_xst_sections() {
         let mut rep = XstReport::default();
         rep.record(
