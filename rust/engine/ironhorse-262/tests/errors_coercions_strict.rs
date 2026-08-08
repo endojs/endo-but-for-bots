@@ -85,6 +85,19 @@ fn strict_assignment_and_delete_throw_catchable_type_errors() {
 }
 
 #[test]
+fn global_descriptor_environment_aliasing_is_an_honest_gap() {
+    let run = dual_run(
+        "Object.defineProperty(this, 'x', { configurable: true, value: 1 }); x",
+    )
+    .expect("the XS oracle machine must start");
+    assert_eq!(run.agreement, Agreement::OracleOnlyComplete);
+    assert!(matches!(
+        run.ironhorse_halt,
+        ironhorse_vm::Halt::Unsupported("defineProperty:global-object")
+    ));
+}
+
+#[test]
 fn only_strict_test262_cases_execute_instead_of_preskipping() {
     let harness = std::env::temp_dir().join(format!(
         "ironhorse-errors-strict-harness-{}",

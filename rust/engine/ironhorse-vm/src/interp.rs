@@ -12007,10 +12007,18 @@ impl Interp {
             // existing key, a partial or accessor descriptor, an index/exotic
             // key, or an exotic receiver self-names.
             NativeMethod::ObjectDefineProperty => {
-                if self.is_ordinary_object(match arg0.value {
+                let target = match arg0.value {
                     Payload::Reference(object) if arg0.kind == Kind::Reference => object,
                     _ => return Err(Halt::Throw("TypeError: defineProperty target".into())),
-                }) {
+                };
+                // The global object is coupled to the environment record: a
+                // descriptor mutation can delete/recreate a binding while an
+                // already-evaluated Reference still targets that binding. The
+                // ordinary-object path does not model that aliasing yet.
+                if target == self.global_obj {
+                    return Err(Halt::Unsupported("defineProperty:global-object"));
+                }
+                if self.is_ordinary_object(target) {
                     let key = self
                         .stack
                         .get(base + 5)
@@ -12021,10 +12029,7 @@ impl Interp {
                         .get(base + 6)
                         .copied()
                         .unwrap_or_else(Slot::undefined);
-                    let object = match arg0.value {
-                        Payload::Reference(object) => object,
-                        _ => unreachable!(),
-                    };
+                    let object = target;
                     let descriptor_object = match descriptor_value.value {
                         Payload::Reference(descriptor)
                             if descriptor_value.kind == Kind::Reference =>
