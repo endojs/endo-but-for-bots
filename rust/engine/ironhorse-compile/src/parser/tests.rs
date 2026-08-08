@@ -269,6 +269,24 @@ fn object_literals() {
 }
 
 #[test]
+fn duplicate_proto_setters_are_an_early_error() {
+    let invalid = "({ __proto__: null, other: 1, '__proto__': null })";
+    let mut parser = Parser::new(invalid, false, false).expect("lexes");
+    let error = parser
+        .parse_program(false)
+        .expect_err("two prototype setters must be rejected");
+    assert!(error.message.contains("duplicate __proto__"), "{error}");
+
+    for valid in [
+        "({ __proto__: null, ['__proto__']: null })",
+        "({ __proto__, '__proto__': null })",
+        "({ __proto__() {}, '__proto__': null })",
+    ] {
+        prog(valid);
+    }
+}
+
+#[test]
 fn templates() {
     check(&[
         ("`abc`", "(Template () [(TemplateItem (String \"abc\") (String \"abc\"))])"),
@@ -521,6 +539,23 @@ fn class_declaration() {
          (PrivateProperty :strict ##p (Integer 1))] () () \
          (Function :strict :super :target :derived :method () (ParamsBinding :strict [(RestBinding :strict (Arg :strict #args ()))]) (Body :strict (Statement :strict (Super :strict (Params :strict :spread [(Spread :strict (Access :strict #args))]))))))))",
     )]);
+}
+
+#[test]
+fn bare_arrow_is_not_a_class_heritage_left_hand_side_expression() {
+    for invalid in [
+        "class C extends () => {} {}",
+        "var C = class extends () => {} {};",
+    ] {
+        let mut parser = Parser::new(invalid, false, false).expect("lexes");
+        let error = parser
+            .parse_program(false)
+            .expect_err("bare arrow heritage must be rejected");
+        assert!(error.message.contains("invalid arrow function"), "{error}");
+    }
+
+    // Parentheses turn the arrow into the permitted LeftHandSideExpression.
+    prog("class C extends (() => {}) {}");
 }
 
 #[test]

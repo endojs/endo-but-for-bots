@@ -191,6 +191,27 @@ mod tests {
     }
 
     #[test]
+    fn inline_modifier_syntax_is_validated_before_the_named_fold() {
+        for pattern in ["(?i:a)", "(?im-s:a)", "(?-s:a)"] {
+            assert!(
+                matches!(compile(pattern, ""), Err(CompileError::Unsupported(_))),
+                "valid inline modifiers remain an honest matcher fold: {pattern}"
+            );
+        }
+        for pattern in [
+            "(?ii:a)",
+            "(?i-i:a)",
+            "(?-:a)",
+            "(?i-:a)",
+            "(?g:a)",
+            "(?\\u0069:a)",
+            "(?i-a)",
+        ] {
+            assert!(!accepts(pattern, ""), "invalid inline modifiers: {pattern}");
+        }
+    }
+
+    #[test]
     fn accept_wellformed_named_group() {
         // A syntactically valid named group / reference is accepted at
         // compile time (its matcher is a named Unsupported).

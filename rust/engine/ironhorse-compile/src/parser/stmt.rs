@@ -1421,6 +1421,10 @@ impl Parser {
         if self.cur.token == Token::Extends {
             self.match_token(Token::Extends)?;
             self.call_expression()?;
+            // ClassHeritage is a LeftHandSideExpression. A bare arrow is not
+            // one (`class extends () => {} {}`), while a parenthesized arrow
+            // remains valid because the outer group wraps it in Expressions.
+            self.check_arrow_function(1)?;
             constructor_flags |= flags::DERIVED;
             heritage_flag = true;
         } else {

@@ -1188,7 +1188,51 @@ impl Compiler {
                     self.quantifier_parse(capture, current_index - 1)
                 }
             } else {
-                Err(CompileError::Unsupported("(?flags:) inline modifiers"))
+                // `Modifiers` is `ModifierFlags` optionally followed by
+                // `- ModifierFlags`, where each side is a non-repeating run
+                // of i/m/s and the two sets are disjoint. The matcher does
+                // not implement the scoped flag semantics yet, but the lexer
+                // must still reproduce XS's complete accept/reject decision:
+                // validate the grammar, parse the enclosed disjunction, then
+                // surface the valid feature as a named Unsupported result.
+                let mut add = 0u8;
+                let mut remove = 0u8;
+                let mut removing = false;
+                loop {
+                    let bit = match self.character {
+                        c if c == b'i' as i64 => Some(1u8),
+                        c if c == b'm' as i64 => Some(2u8),
+                        c if c == b's' as i64 => Some(4u8),
+                        _ => None,
+                    };
+                    if let Some(bit) = bit {
+                        if add & bit != 0 || remove & bit != 0 {
+                            return Err(self.error("duplicate inline modifier"));
+                        }
+                        if removing {
+                            remove |= bit;
+                        } else {
+                            add |= bit;
+                        }
+                        self.next()?;
+                        continue;
+                    }
+                    if self.character == b'-' as i64 && !removing {
+                        removing = true;
+                        self.next()?;
+                        continue;
+                    }
+                    break;
+                }
+                if self.character != b':' as i64 || (add | remove) == 0 || (removing && remove == 0)
+                {
+                    return Err(self.error("invalid inline modifiers"));
+                }
+                self.unsupported.get_or_insert("(?flags:) inline modifiers");
+                self.next()?;
+                let current = self.disjunction_parse(b')' as i64)?;
+                self.next()?;
+                self.quantifier_parse(current, current_index)
             }
         } else {
             self.capture_index += 1;

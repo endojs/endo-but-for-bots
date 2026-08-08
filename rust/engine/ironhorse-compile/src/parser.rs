@@ -1260,6 +1260,7 @@ impl Parser {
     /// `{ async f() {} }`).
     fn object_expression(&mut self) -> PResult<()> {
         let mut count = 0usize;
+        let mut saw_proto_setter = false;
         let line = self.cur.line;
         self.match_token(Token::LeftBrace)?;
         loop {
@@ -1274,6 +1275,9 @@ impl Parser {
             } else {
                 let (symbol, token0, token1, token2) = self.property_name()?;
                 let mut prop_flags = self.property_name_async_flag;
+                let proto_setter = token1 == Token::Property
+                    && symbol.as_deref() == Some("__proto__")
+                    && self.cur.token == Token::Colon;
                 if token1 == Token::PrivateProperty {
                     return Err(self.error("invalid private property"));
                 } else if token2 == Token::Getter || token2 == Token::Setter {
@@ -1306,6 +1310,12 @@ impl Parser {
                     prop_flags |= flags::SHORTHAND | flags::METHOD;
                     self.function_expression(prop_line, None, flags::SUPER | prop_flags)?;
                 } else if self.cur.token == Token::Colon {
+                    if proto_setter {
+                        if saw_proto_setter {
+                            return Err(self.error("duplicate __proto__ property"));
+                        }
+                        saw_proto_setter = true;
+                    }
                     self.get_next_token()?;
                     self.assignment_expression()?;
                 } else if token1 == Token::Property {
