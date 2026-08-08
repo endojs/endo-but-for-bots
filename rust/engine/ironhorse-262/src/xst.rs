@@ -1045,7 +1045,20 @@ impl XstReport {
     /// Fold one case's result in and retain its full [`CaseRecord`] (with the
     /// declared `features:`) for the per-case JSON a whole-tree sweep emits.
     pub fn record_case(&mut self, path: &str, features: Vec<String>, r: CaseResult) {
-        self.cases.push(CaseRecord::from_result(path, features, &r));
+        self.record_case_timed(path, features, r, 0);
+    }
+
+    /// Fold one timed case result into the report.
+    pub fn record_case_timed(
+        &mut self,
+        path: &str,
+        features: Vec<String>,
+        r: CaseResult,
+        elapsed_milliseconds: u64,
+    ) {
+        let mut case = CaseRecord::from_result(path, features, &r);
+        case.elapsed_milliseconds = elapsed_milliseconds;
+        self.cases.push(case);
         self.total += 1;
         if r.strict_skipped {
             self.strict_skipped += 1;
@@ -1334,6 +1347,7 @@ pub fn run_files(cfg: &Config, harness_dir: &Path, root: &Path, files: &[PathBuf
                 continue;
             }
         }
+        let started = std::time::Instant::now();
         let r = if cfg.per_case_timeout_seconds == 0 {
             run_case(cfg, harness_dir, &src)
         } else {
@@ -1344,7 +1358,12 @@ pub fn run_files(cfg: &Config, harness_dir: &Path, root: &Path, files: &[PathBuf
                 std::time::Duration::from_secs(cfg.per_case_timeout_seconds),
             )
         };
-        rep.record_case(&rel, fm.features.clone(), r);
+        rep.record_case_timed(
+            &rel,
+            fm.features.clone(),
+            r,
+            started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        );
     }
     rep
 }

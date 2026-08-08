@@ -189,6 +189,8 @@ pub struct CaseRecord {
     pub features: Vec<String>,
     pub strict_skipped: bool,
     pub computron_gap: bool,
+    /// Wall-clock time spent producing this case verdict.
+    pub elapsed_milliseconds: u64,
 }
 
 impl CaseRecord {
@@ -207,6 +209,7 @@ impl CaseRecord {
             features,
             strict_skipped: result.strict_skipped,
             computron_gap: result.computron_gap,
+            elapsed_milliseconds: 0,
         }
     }
 
@@ -313,11 +316,11 @@ impl RunReport {
 
     /// The top-line count in each provenance category.
     pub fn totals_by_category(&self) -> CategoryCounts {
-        let mut cc = CategoryCounts::default();
+        let mut category_counts = CategoryCounts::default();
         for c in &self.cases {
-            cc.add(c.category());
+            category_counts.add(c.category());
         }
-        cc
+        category_counts
     }
 
     /// Category counts grouped by the first `depth` path components (e.g.
@@ -370,7 +373,10 @@ impl RunReport {
             }
         }
         let mut v: Vec<(String, usize, Vec<String>)> =
-            counts.into_iter().map(|(k, (n, ex))| (k, n, ex)).collect();
+            counts
+                .into_iter()
+                .map(|(key, (count, examples))| (key, count, examples))
+                .collect();
         v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         v
     }
@@ -381,7 +387,7 @@ impl RunReport {
     pub fn to_json(&self) -> String {
         let mut cases = self.cases.clone();
         cases.sort_by(|a, b| a.path.cmp(&b.path));
-        let cc = self.totals_by_category();
+        let category_counts = self.totals_by_category();
         let by_outcome = self.totals_by_outcome();
 
         let mut s = String::new();
@@ -418,9 +424,9 @@ impl RunReport {
         s.push_str("  \"summary\": {\n");
         s.push_str(&format!("    \"total\": {},\n", self.total()));
         s.push_str("    \"by_outcome\": {\n");
-        let bo: Vec<_> = by_outcome.iter().collect();
-        for (i, (k, n)) in bo.iter().enumerate() {
-            let comma = if i + 1 < bo.len() { "," } else { "" };
+        let by_outcome_pairs: Vec<_> = by_outcome.iter().collect();
+        for (i, (k, n)) in by_outcome_pairs.iter().enumerate() {
+            let comma = if i + 1 < by_outcome_pairs.len() { "," } else { "" };
             s.push_str(&format!("      {}: {}{}\n", json_string(k), n, comma));
         }
         s.push_str("    },\n");
@@ -431,7 +437,7 @@ impl RunReport {
             s.push_str(&format!(
                 "      {}: {}{}\n",
                 json_string(cat.as_str()),
-                cc.get(*cat),
+                category_counts.get(*cat),
                 comma
             ));
         }
@@ -449,7 +455,7 @@ impl RunReport {
                 .collect::<Vec<_>>()
                 .join(", ");
             s.push_str(&format!(
-                "    {{ \"path\": {}, \"outcome\": {}, \"category\": {}, \"reason\": {}, \"features\": [{}], \"strict_skipped\": {}, \"computron_gap\": {} }}{}\n",
+                "    {{ \"path\": {}, \"outcome\": {}, \"category\": {}, \"reason\": {}, \"features\": [{}], \"strict_skipped\": {}, \"computron_gap\": {}, \"elapsed_milliseconds\": {} }}{}\n",
                 json_string(&c.path),
                 json_string(c.outcome.as_str()),
                 json_string(c.category().as_str()),
@@ -457,6 +463,7 @@ impl RunReport {
                 features,
                 c.strict_skipped,
                 c.computron_gap,
+                c.elapsed_milliseconds,
                 comma,
             ));
         }
@@ -481,13 +488,14 @@ impl RunReport {
                 .collect::<Vec<_>>()
                 .join(", ");
             s.push_str(&format!(
-                "  {{ \"path\": {}, \"outcome\": {}, \"reason\": {}, \"features\": [{}], \"strict_skipped\": {}, \"computron_gap\": {} }}{}\n",
+                "  {{ \"path\": {}, \"outcome\": {}, \"reason\": {}, \"features\": [{}], \"strict_skipped\": {}, \"computron_gap\": {}, \"elapsed_milliseconds\": {} }}{}\n",
                 json_string(&c.path),
                 json_string(c.outcome.as_str()),
                 json_string(&c.reason),
                 features,
                 c.strict_skipped,
                 c.computron_gap,
+                c.elapsed_milliseconds,
                 comma,
             ));
         }
@@ -559,6 +567,10 @@ fn case_from_yaml(node: &Yaml) -> Option<CaseRecord> {
         features: yaml_string_vec(&node["features"]),
         strict_skipped: node["strict_skipped"].as_bool().unwrap_or(false),
         computron_gap: node["computron_gap"].as_bool().unwrap_or(false),
+        elapsed_milliseconds: node["elapsed_milliseconds"]
+            .as_i64()
+            .unwrap_or_default()
+            .max(0) as u64,
     })
 }
 
@@ -704,15 +716,15 @@ pub fn aggregate(results_directory: &Path, provenance: Provenance) -> RunReport 
 ///
 /// The result is sorted, so the plan is reproducible.
 pub fn discover_batches(test_root: &Path) -> Vec<String> {
-    let mut out = Vec::new();
-    discover_into(test_root, test_root, &mut out);
-    out.sort();
-    out.dedup();
-    out
+    let mut batches = Vec::new();
+    discover_into(test_root, test_root, &mut batches);
+    batches.sort();
+    batches.dedup();
+    batches
 }
 
-fn discover_into(root: &Path, dir: &Path, out: &mut Vec<String>) {
-    let entries = match std::fs::read_dir(dir) {
+fn discover_into(root: &Path, directory: &Path, out_batches: &mut Vec<String>) {
+    let entries = match std::fs::read_dir(directory) {
         Ok(e) => e,
         Err(_) => return,
     };
@@ -733,16 +745,16 @@ fn discover_into(root: &Path, dir: &Path, out: &mut Vec<String>) {
         }
     }
     if has_direct_case {
-        if let Ok(rel) = dir.strip_prefix(root) {
+        if let Ok(rel) = directory.strip_prefix(root) {
             let relative_path = rel.to_string_lossy().into_owned();
             if !relative_path.is_empty() {
-                out.push(relative_path);
+                out_batches.push(relative_path);
             }
         }
     }
     subdirectories.sort();
     for sub in subdirectories {
-        discover_into(root, &sub, out);
+        discover_into(root, &sub, out_batches);
     }
 }
 
@@ -823,7 +835,7 @@ fn report_scope(config: &str) -> String {
 pub fn to_html(report: &RunReport) -> String {
     let p = &report.provenance;
     let total = report.total();
-    let cc = report.totals_by_category();
+    let category_counts = report.totals_by_category();
     let mut s = String::new();
 
     s.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n");
@@ -846,7 +858,7 @@ pub fn to_html(report: &RunReport) -> String {
 
     // Provenance.
     s.push_str("<section aria-labelledby=\"prov\">\n<h2 id=\"prov\">Run provenance</h2>\n<dl class=\"prov\">\n");
-    let prov = [
+    let provenance_rows = [
         ("Runner", p.runner.as_str()),
         ("test262 revision", p.test262_ref.as_str()),
         ("test262 SHA", p.test262_sha.as_str()),
@@ -858,7 +870,7 @@ pub fn to_html(report: &RunReport) -> String {
         ("Finished", p.finished_at.as_str()),
         ("Host", p.host.as_str()),
     ];
-    for (k, v) in prov {
+    for (k, v) in provenance_rows {
         s.push_str(&format!(
             "<div><dt>{}</dt><dd>{}</dd></div>\n",
             escape_html(k),
@@ -875,11 +887,19 @@ pub fn to_html(report: &RunReport) -> String {
     s.push_str("<section aria-labelledby=\"totals\">\n<h2 id=\"totals\">Totals by category</h2>\n");
     s.push_str("<ul class=\"cards\">\n");
     let cards = [
-        ("Covered", cc.covered, "covered"),
-        ("Ironhorse failures", cc.ironhorse_failure, "fail"),
-        ("Unsupported", cc.unsupported, "unsupported"),
-        ("Skipped", cc.skipped, "skipped"),
-        ("Infrastructure", cc.infrastructure, "infra"),
+        ("Covered", category_counts.covered, "covered"),
+        (
+            "Ironhorse failures",
+            category_counts.ironhorse_failure,
+            "fail",
+        ),
+        ("Unsupported", category_counts.unsupported, "unsupported"),
+        ("Skipped", category_counts.skipped, "skipped"),
+        (
+            "Infrastructure",
+            category_counts.infrastructure,
+            "infra",
+        ),
     ];
     for (label, n, card_class) in cards {
         s.push_str(&format!(
@@ -983,16 +1003,16 @@ fn category_table(map: &BTreeMap<String, CategoryCounts>) -> String {
     // Sort rows by total descending for readability, ties by key.
     let mut rows: Vec<(&String, &CategoryCounts)> = map.iter().collect();
     rows.sort_by(|a, b| b.1.total().cmp(&a.1.total()).then(a.0.cmp(b.0)));
-    for (k, cc) in rows {
+    for (k, category_counts) in rows {
         s.push_str(&format!(
             "<tr><th scope=\"row\" class=\"path\">{}</th><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td></tr>\n",
             escape_html(k),
-            cc.total(),
-            cc.covered,
-            cc.ironhorse_failure,
-            cc.unsupported,
-            cc.skipped,
-            cc.infrastructure,
+            category_counts.total(),
+            category_counts.covered,
+            category_counts.ironhorse_failure,
+            category_counts.unsupported,
+            category_counts.skipped,
+            category_counts.infrastructure,
         ));
     }
     s.push_str("</tbody>\n</table>\n");
@@ -1007,7 +1027,7 @@ fn reason_table(reasons: &[(String, usize, Vec<String>)]) -> String {
     }
     s.push_str("<table>\n<thead><tr><th scope=\"col\">Reason</th><th scope=\"col\">Count</th><th scope=\"col\">Example cases</th></tr></thead>\n<tbody>\n");
     for (reason, n, examples) in reasons {
-        let ex = examples
+        let example_rows = examples
             .iter()
             .map(|e| format!("<code>{}</code>", escape_html(e)))
             .collect::<Vec<_>>()
@@ -1016,7 +1036,7 @@ fn reason_table(reasons: &[(String, usize, Vec<String>)]) -> String {
             "<tr><th scope=\"row\" class=\"reason\">{}</th><td class=\"n\">{}</td><td>{}</td></tr>\n",
             escape_html(reason),
             n,
-            ex
+            example_rows
         ));
     }
     s.push_str("</tbody>\n</table>\n");
@@ -1089,6 +1109,7 @@ mod tests {
             features: features.iter().map(|s| s.to_string()).collect(),
             strict_skipped: false,
             computron_gap: false,
+            elapsed_milliseconds: 0,
         }
     }
 
@@ -1202,18 +1223,18 @@ mod tests {
                 case_record("language/x/d.js", Outcome::Fail, "result divergence", &[]),
             ],
         };
-        let byp = report.by_path(2);
-        assert_eq!(byp["built-ins/Proxy"].unsupported, 2);
-        assert_eq!(byp["built-ins/Array"].covered, 1);
-        assert_eq!(byp["language/x"].ironhorse_failure, 1);
+        let by_path = report.by_path(2);
+        assert_eq!(by_path["built-ins/Proxy"].unsupported, 2);
+        assert_eq!(by_path["built-ins/Array"].covered, 1);
+        assert_eq!(by_path["language/x"].ironhorse_failure, 1);
 
-        let byf = report.by_feature();
-        assert_eq!(byf["Proxy"].unsupported, 2);
+        let by_feature = report.by_feature();
+        assert_eq!(by_feature["Proxy"].unsupported, 2);
 
-        let cc = report.totals_by_category();
-        assert_eq!(cc.covered, 1);
-        assert_eq!(cc.unsupported, 2);
-        assert_eq!(cc.ironhorse_failure, 1);
+        let category_counts = report.totals_by_category();
+        assert_eq!(category_counts.covered, 1);
+        assert_eq!(category_counts.unsupported, 2);
+        assert_eq!(category_counts.ironhorse_failure, 1);
 
         // Reasons carry sample case ids.
         let reasons = report.reasons(Category::Unsupported, 5);
@@ -1287,14 +1308,16 @@ mod tests {
             "unsupported-opcode:X",
             &["Proxy"],
         )]);
-        let b2 =
-            RunReport::to_batch_json(&[case_record("language/b.js", Outcome::Covered, "", &[])]);
+        let mut timed_case = case_record("language/b.js", Outcome::Covered, "", &[]);
+        timed_case.elapsed_milliseconds = 17;
+        let b2 = RunReport::to_batch_json(&[timed_case]);
         std::fs::write(dir.join("built-ins__Proxy.json"), b1).unwrap();
         std::fs::write(dir.join("language.json"), b2).unwrap();
         let report = aggregate(&dir, Provenance::default());
         assert_eq!(report.total(), 2);
         assert_eq!(report.totals_by_category().unsupported, 1);
         assert_eq!(report.totals_by_category().covered, 1);
+        assert_eq!(report.cases[1].elapsed_milliseconds, 17);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1434,32 +1457,36 @@ mod tests {
             !files.is_empty(),
             "the subset must carry official Proxy cases"
         );
-        let rep = run_files(&Config::default(), &harness, &root, &files);
+        let run_report = run_files(&Config::default(), &harness, &root, &files);
         let report = RunReport {
             provenance: Provenance::default(),
-            cases: rep.cases.clone(),
+            cases: run_report.cases.clone(),
         };
-        let cc = report.totals_by_category();
+        let category_counts = report.totals_by_category();
         eprintln!(
             "Proxy oracle slice: total={} covered={} unsupported={} failures={} infra={}",
             report.total(),
-            cc.covered,
-            cc.unsupported,
-            cc.ironhorse_failure,
-            cc.infrastructure
+            category_counts.covered,
+            category_counts.unsupported,
+            category_counts.ironhorse_failure,
+            category_counts.infrastructure
         );
         for (reason, n, _ex) in report.reasons(Category::Unsupported, 1) {
             eprintln!("    {:>4}  {}", n, reason);
         }
         assert!(report.total() > 0);
         // Observed, not assumed: Proxy is not implemented.
-        assert_eq!(cc.covered, 0, "no Proxy case runs end-to-end today");
         assert_eq!(
-            cc.ironhorse_failure, 0,
+            category_counts.covered,
+            0,
+            "no Proxy case runs end-to-end today"
+        );
+        assert_eq!(
+            category_counts.ironhorse_failure, 0,
             "the honest split never manufactures a Proxy failure"
         );
         assert!(
-            cc.unsupported > 0,
+            category_counts.unsupported > 0,
             "Proxy cases are honest unsupported gaps, not infra non-results"
         );
     }
