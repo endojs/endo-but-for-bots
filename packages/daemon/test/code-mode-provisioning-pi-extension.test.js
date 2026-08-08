@@ -56,6 +56,7 @@ const makePiExtensionDriver = ({ cwd, sessionId, entries, flag, sockPath }) => {
         getFlag: name => (name === 'endo-provision' ? flag : undefined),
         registerCommand: () => {},
         registerTool: tool => tools.push(tool),
+        getActiveTools: () => [],
         setActiveTools: names => activeTools.push([...names]),
         appendEntry: (customType, data) => appended.push({ customType, data }),
       })
