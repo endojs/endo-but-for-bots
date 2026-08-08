@@ -2,7 +2,7 @@
 /// <reference types="ses"/>
 
 /** @import { ExtensionAPI, ExtensionContext, ExtensionFactory, SessionEntry } from '@earendil-works/pi-coding-agent' */
-/** @import { EndoProvisionPersistence, EndoProvisionResult, EndoProvisionSpec } from './code-mode-provisioning-types.js' */
+/** @import { EndoConnectionFailureContext, EndoConnectionFailureObserver, EndoProvisionPersistence, EndoProvisionResult, EndoProvisionSpec } from './code-mode-provisioning-types.js' */
 
 import { toPiAgentTool } from '@endo/agent-tools/adapters/pi.js';
 import { toolResultToSmallcaps } from '@endo/agent-tools/adapters/smallcaps.js';
@@ -44,7 +44,7 @@ const NO_TOOL_NAMES = harden([]);
  * @typedef {object} EndoCodeModePiExtensionOptions
  * @property {(spec: EndoProvisionSpec | undefined, options: { harness: string, sessionId: string, cwd: string }) => Promise<EndoProvisionPersistence>} [normalizeProvision]
  * @property {(persistence: unknown) => Promise<EndoProvisionPersistence>} [validatePersistence]
- * @property {(persistence: EndoProvisionPersistence) => Promise<EndoProvisionResult>} [reconstructProvision]
+ * @property {(persistence: EndoProvisionPersistence, options: { onConnectionFailure: EndoConnectionFailureObserver }) => Promise<EndoProvisionResult>} [reconstructProvision]
  * @property {() => Promise<void>} [startDaemon]
  * @property {(request: CredentialRehydrationRequest) => Promise<void>} [rehydrateCredential]
  * @property {(problem: EndoCodeModePiProblem) => void} [writeDiagnostic]
@@ -244,6 +244,40 @@ const makeProblem = error => {
 };
 
 /**
+ * Keep connection diagnostics concise and free of peer-supplied error text.
+ * The raw error remains available only to the host-owned observer boundary.
+ *
+ * @param {EndoConnectionFailureContext} context
+ * @returns {EndoCodeModePiProblem}
+ */
+const makeConnectionProblem = context =>
+  harden({
+    type: /** @type {const} */ ('endo_code_mode_error'),
+    code:
+      context.kind === 'protocol'
+        ? 'ENDO_DAEMON_PROTOCOL_FAILED'
+        : 'ENDO_DAEMON_CONNECTION_FAILED',
+    message:
+      context.kind === 'protocol'
+        ? 'The Endo daemon connection encountered a protocol error.'
+        : 'The Endo daemon connection closed unexpectedly.',
+    action: 'Restart Endo, then resume or reload this session.',
+  });
+
+/**
+ * @param {EndoConnectionFailureContext} context
+ * @returns {EndoPiLifecycleError}
+ */
+const makeConnectionFailureError = context => {
+  const connectionProblem = makeConnectionProblem(context);
+  return new EndoPiLifecycleError(
+    connectionProblem.code,
+    connectionProblem.message,
+    connectionProblem.action,
+  );
+};
+
+/**
  * Build a directly loadable Pi extension backed by the standard Endo daemon.
  * Dependency injection is limited to trusted host lifecycle seams so focused
  * tests and TUI/RPC credential rehydration do not need ambient secrets.
@@ -255,8 +289,8 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
   const {
     normalizeProvision = normalizeEndoProvisionSpec,
     validatePersistence = validateEndoProvisionPersistence,
-    reconstructProvision = persistence =>
-      reconstructEndoCodeMode({ persistence }),
+    reconstructProvision = (persistence, { onConnectionFailure }) =>
+      reconstructEndoCodeMode({ persistence, onConnectionFailure }),
     startDaemon = () => start(),
     rehydrateCredential,
     writeDiagnostic = problem => {
@@ -275,6 +309,10 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
       /** @type {EndoCodeModePiProblem | undefined} */
       let problem;
       let preservePiTools = false;
+      /** @type {'idle' | 'starting' | 'active' | 'failed' | 'shuttingDown'} */
+      let phase = 'idle';
+      let lifecycle = 0;
+      let connectionFailureReported = false;
 
       const cleanupActive = async () => {
         await null;
@@ -287,12 +325,18 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
 
       /**
        * @param {EndoProvisionPersistence} persistence
+       * @param {EndoConnectionFailureObserver} onConnectionFailure
        * @returns {Promise<EndoProvisionResult>}
        */
-      const connectWithDaemonRecovery = async persistence => {
+      const connectWithDaemonRecovery = async (
+        persistence,
+        onConnectionFailure,
+      ) => {
         await null;
         try {
-          return await reconstructProvision(persistence);
+          return await reconstructProvision(persistence, {
+            onConnectionFailure,
+          });
         } catch (error) {
           if (!isDaemonUnavailable(error)) {
             throw error;
@@ -307,7 +351,9 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
         }
 
         try {
-          return await reconstructProvision(persistence);
+          return await reconstructProvision(persistence, {
+            onConnectionFailure,
+          });
         } catch (error) {
           if (isDaemonUnavailable(error)) {
             throw new EndoPiLifecycleError(
@@ -323,12 +369,16 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
       /**
        * @param {EndoProvisionPersistence} persistence
        * @param {ExtensionContext} context
+       * @param {EndoConnectionFailureObserver} onConnectionFailure
        * @returns {Promise<EndoProvisionResult>}
        */
-      const connect = async (persistence, context) => {
+      const connect = async (persistence, context, onConnectionFailure) => {
         await null;
         try {
-          return await connectWithDaemonRecovery(persistence);
+          return await connectWithDaemonRecovery(
+            persistence,
+            onConnectionFailure,
+          );
         } catch (error) {
           if (
             error instanceof EndoCredentialUnavailableError &&
@@ -340,7 +390,7 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
               persistence,
               hasUI: context.hasUI,
             });
-            return connectWithDaemonRecovery(persistence);
+            return connectWithDaemonRecovery(persistence, onConnectionFailure);
           }
           throw error;
         }
@@ -372,6 +422,51 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
       });
 
       pi.on('session_start', async (event, context) => {
+        lifecycle += 1;
+        const sessionLifecycle = lifecycle;
+        phase = 'starting';
+        connectionFailureReported = false;
+        /** @type {EndoConnectionFailureContext | undefined} */
+        let startupConnectionFailure;
+
+        /** @type {EndoConnectionFailureObserver} */
+        const onConnectionFailure = (error, failureContext) => {
+          // Raw connection errors are deliberately neither retained nor shown.
+          // Only the trusted host callback receives them for correlation.
+          void error;
+          if (
+            sessionLifecycle !== lifecycle ||
+            phase === 'shuttingDown' ||
+            phase === 'idle' ||
+            phase === 'failed' ||
+            connectionFailureReported
+          ) {
+            return;
+          }
+          if (phase === 'starting') {
+            if (startupConnectionFailure === undefined) {
+              startupConnectionFailure = failureContext;
+            }
+            return;
+          }
+
+          connectionFailureReported = true;
+          phase = 'failed';
+          problem = makeConnectionProblem(failureContext);
+          const previous = active;
+          active = undefined;
+          pi.setActiveTools(NO_TOOL_NAMES);
+          if (previous !== undefined) {
+            void previous.cleanup().catch(() => {});
+          }
+          if (context.hasUI) {
+            context.ui.notify(`${problem.message} ${problem.action}`, 'error');
+          } else {
+            writeDiagnostic(problem);
+            terminate(1);
+          }
+        };
+
         await cleanupActive();
         problem = undefined;
         preservePiTools = false;
@@ -475,7 +570,15 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
           }
 
           preservePiTools = desired.policy.piTools === 'preserve';
-          const connected = await connect(desired, context);
+          const connected = await connect(
+            desired,
+            context,
+            onConnectionFailure,
+          );
+          if (startupConnectionFailure !== undefined) {
+            await connected.cleanup();
+            throw makeConnectionFailureError(startupConnectionFailure);
+          }
           if (!samePlainData(connected.persistence, desired)) {
             await connected.cleanup();
             throw new EndoPiLifecycleError(
@@ -485,6 +588,7 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
             );
           }
           active = connected;
+          phase = 'active';
 
           const evaluate = makeEvaluateTool(
             makeDaemonEvaluate(connected.powers),
@@ -506,11 +610,16 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
           }
           pi.appendEntry(SESSION_ENTRY_TYPE, connected.persistence);
         } catch (error) {
+          phase = 'failed';
           await cleanupActive();
           pi.setActiveTools(
             preservePiTools ? initialActiveTools : NO_TOOL_NAMES,
           );
-          problem = makeProblem(error);
+          problem = makeProblem(
+            startupConnectionFailure === undefined
+              ? error
+              : makeConnectionFailureError(startupConnectionFailure),
+          );
           if (context.hasUI) {
             context.ui.notify(`${problem.message} ${problem.action}`, 'error');
           } else {
@@ -539,10 +648,13 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
       });
 
       pi.on('session_shutdown', async () => {
+        lifecycle += 1;
+        phase = 'shuttingDown';
         if (!preservePiTools) {
           pi.setActiveTools(NO_TOOL_NAMES);
         }
         await cleanupActive();
+        phase = 'idle';
       });
     },
   );
