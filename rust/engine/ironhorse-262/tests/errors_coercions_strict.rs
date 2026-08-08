@@ -36,10 +36,15 @@ fn native_errors_have_the_right_realm_surface() {
         "new Error('boom', { cause: 17 }).cause",
         "var d = Object.getOwnPropertyDescriptor(new Error('boom', { cause: 17 }), 'cause'); d.value === 17 && d.writable && !d.enumerable && d.configurable",
         "new AggregateError([], 'boom', { cause: 23 }).cause",
+        "!Object.prototype.hasOwnProperty.call(new Error('boom', Symbol('options')), 'cause')",
         "Function.prototype.call.bind(Object.prototype.hasOwnProperty)({ x: 1 }, 'x')",
         "Object.getOwnPropertyNames({ value: 1 })[0]",
         "Object.prototype.toString.call(new TypeError)",
         "Error.prototype.toString.call({ name: 'Custom', message: 12 })",
+        "var e = new Error('boom'); e.name = 'Custom'; e.toString() === String(e)",
+        "try { Error.prototype.toString.call(null); false } catch (e) { e instanceof TypeError }",
+        "try { Error.prototype.toString.call({ name: Symbol() }); false } catch (e) { e instanceof TypeError }",
+        "DataView.length",
         "Object.getOwnPropertyDescriptor(Array, 'prototype').writable === false",
         "Object.keys(Object.prototype).length === 0",
         "var e = new Error('boom'); var keys = []; for (var k in e) keys.push(k); keys.length === 0",
@@ -61,6 +66,7 @@ fn object_to_primitive_drives_string_and_numeric_operations() {
         "'3' & 1",
         "({ valueOf() { return 6 } }) | 1",
         "({ valueOf() { return 7 } }) * 2",
+        "({ valueOf() { return 8 } }) - 3",
         "try { ({ valueOf() { throw 7; } }) + 1 } catch (e) { e }",
     ] {
         assert_result_agrees(source);
