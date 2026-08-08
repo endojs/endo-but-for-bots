@@ -40,6 +40,9 @@ fn native_errors_have_the_right_realm_surface() {
         "Object.getOwnPropertyNames({ value: 1 })[0]",
         "Object.prototype.toString.call(new TypeError)",
         "Error.prototype.toString.call({ name: 'Custom', message: 12 })",
+        "Object.getOwnPropertyDescriptor(Array, 'prototype').writable === false",
+        "Object.keys(Object.prototype).length === 0",
+        "var e = new Error('boom'); var keys = []; for (var k in e) keys.push(k); keys.length === 0",
     ] {
         assert_result_agrees(source);
     }

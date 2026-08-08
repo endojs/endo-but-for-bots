@@ -4,15 +4,12 @@ This directory is the **immutable starting snapshot** for the Ironhorse
 JavaScript-completion work. It is committed once, and every later change in that
 effort measures its regression invariant against it.
 
-> **This PR's branch stays open — do not merge it.** It is the shared base the
-> completion work stacks on; the snapshot below is the frozen reference every
-> later change is measured against.
-
 > **Provenance gap (read before trusting the totals as a HEAD measurement).**
 > The engine pin below (`14f26d0a6…`) is the head of the sibling reporting PR the
 > harness was cherry-picked from, **not** an ancestor of this branch, and it
-> predates two behavior changes this PR itself makes: the per-case wall-clock
-> bound and the real early-error negative adjudication (`evaluate_negative_early`).
+> predates later behavior changes: the per-case wall-clock bound, real early-error
+> negative adjudication (`evaluate_negative_early`), strict-mode execution, and
+> additional parser/regexp early errors.
 > So a fresh whole-tree run **at this PR head** will differ from the frozen
 > snapshot in predictable ways, and that delta is expected, not a regression:
 > the three non-terminators are now attributed to the oracle when Ironhorse
@@ -20,7 +17,7 @@ effort measures its regression invariant against it.
 > hand-authored `engine-hang:…` strings in `baseline.json`; and parse/resolution
 > negatives that were blanket run-skips can now land as `covered`,
 > `compiler-unimplemented:*`, an over-acceptance `Fail`, or an
-> `oracle-gate-off:negative-over-acceptance` skip (the early-error verdict is
+> `negative-oracle-unexpected` skip when both parsers accept (the early-error verdict is
 > decided at the parse phase, comparing ironhorse-compile's acceptance against
 > the oracle's own parse signal). The
 > report-refresh that closes this effort re-measures at the merged head and

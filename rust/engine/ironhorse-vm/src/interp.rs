@@ -4457,10 +4457,16 @@ impl Interp {
         let methods = std::mem::take(&mut self.proto_methods);
         for &(proto, mname, mfunc) in &methods {
             if let Some(&mid) = self.symbol_ids.get(mname) {
-                self.set_own_unmetered(
+                let flag = if mname == "prototype" {
+                    XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG
+                } else {
+                    XS_DONT_ENUM_FLAG
+                };
+                self.set_own_unmetered_with_flag(
                     proto,
                     mid,
                     Slot::of(Kind::Reference, Payload::Reference(mfunc)),
+                    flag,
                 );
             }
         }

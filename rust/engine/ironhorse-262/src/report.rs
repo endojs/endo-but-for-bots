@@ -44,7 +44,7 @@ pub enum Outcome {
     /// negative abort).
     Covered,
     /// Skipped before running — a declared-unimplemented feature or an
-    /// unmodelable structural shape (`module`, `onlyStrict`, an SES mode).
+    /// unmodelable structural shape (`module` or an SES mode).
     PreSkip,
     /// Skipped after attempting the run, named by the exact opcode/value/reason
     /// that stopped it — the honest coverage-gap split.
@@ -93,7 +93,7 @@ pub enum Category {
     /// — a genuine language-implementation gap (the actionable backlog).
     Unsupported,
     /// Declared or structural skip the run never attempted (a `feature:` on the
-    /// skip list, a `module`/`onlyStrict`/SES-mode shape).
+    /// skip list, a `module` or SES-mode shape).
     Skipped,
     /// The oracle, the harness, or the infrastructure could not produce a
     /// comparison — explicitly **not** an Ironhorse gap (an oracle machine

@@ -6,8 +6,7 @@
 //!
 //! This module is the runner core (rollout step 1): full YAML frontmatter
 //! ([`crate::frontmatter`]), the ironhorse not-yet-implemented feature skip list
-//! + `--features-include`, sloppy+strict double-run mode selection (strict a
-//! named skip until the stage-5 compiler), negative verdicts (constructor
+//! + `--features-include`, sloppy+strict double-run mode selection, negative verdicts (constructor
 //! name vs `negative.type`, stack/memory aborts accepted for an expected
 //! `RangeError`), the dual-run oracle wiring (verdict + observable agreement
 //! gating, computron advisory, `--gate-meter-exact`, `--repeat N`
@@ -17,10 +16,8 @@
 //! It subsumes the dual-run harness rather than sitting beside it: the same
 //! `assemble()` order (`sta.js`, `assert.js`, includes, body) and the same
 //! [`crate::dual_run`] differential, with the verdict layer grown on top.
-//! Pre-stage-5 the oracle is still the compiler (both engines run the
-//! XS-emitted bytecode), so a divergence has one suspect; when
-//! `ironhorse-compile` lands the differential moves to source level and the
-//! parse-phase negatives activate.
+//! The oracle and Ironhorse both execute source-level programs. Parse-phase
+//! negatives therefore compare the two front ends directly.
 
 use crate::frontmatter::{self, Frontmatter, Negative};
 use crate::report::CaseRecord;
@@ -246,8 +243,7 @@ pub enum Verdict {
     /// tally.
     Covered,
     /// Skipped before running — a declared-unimplemented feature, a
-    /// structural shape (`module`/`async`), or an `onlyStrict` test whose
-    /// sole mode is the not-yet-implemented strict mode. The report's
+    /// structural shape (`module`/`async`) or an unavailable SES mode. The report's
     /// `skip:` section (xst's feature/flag skips).
     PreSkip(String),
     /// Skipped after attempting the run, named by the exact opcode / value /
@@ -265,9 +261,8 @@ pub enum Verdict {
 #[derive(Debug, Clone)]
 pub struct CaseResult {
     pub verdict: Verdict,
-    /// A strict-mode run existed for this case but was named-skipped
-    /// (strict lands with the stage-5 compiler). Feeds the report's `mode:`
-    /// strict tally.
+    /// An unavailable SES mode caused this case to be skipped. This remains
+    /// for compatibility with the report format; ordinary strict variants run.
     pub strict_skipped: bool,
     /// The case was covered but ironhorse's computrons differed from the
     /// oracle's — advisory telemetry, never a failure by itself (design §
@@ -399,7 +394,10 @@ fn assemble(harness_dir: &Path, src: &str, fm: &Frontmatter) -> Result<String, S
 /// that Script in this runner, so putting it before only the body would be
 /// inert rather than a Directive Prologue.
 fn assemble_strict(harness_dir: &Path, src: &str, fm: &Frontmatter) -> Result<String, String> {
-    Ok(format!("\"use strict\";\n{}", assemble(harness_dir, src, fm)?))
+    Ok(format!(
+        "\"use strict\";\n{}",
+        assemble(harness_dir, src, fm)?
+    ))
 }
 
 struct Eval {
@@ -1246,28 +1244,34 @@ fn run_case_bounded(
 /// attribution conservatively toward `ironhorse-hang` (`false`).
 fn ironhorse_terminates_alone(harness_dir: &Path, src: &str, timeout: std::time::Duration) -> bool {
     let fm = frontmatter::parse(src);
-    let source = match assemble(harness_dir, src, &fm) {
-        Ok(s) => s,
-        Err(_) => return true,
-    };
-    let (tx, rx) = std::sync::mpsc::channel();
-    let spawn = std::thread::Builder::new()
-        .name("ironhorse-xst-attribute".into())
-        .stack_size(CASE_THREAD_STACK_BYTES)
-        .spawn(move || {
-            let _ = tx.send(crate::ironhorse_only_run(&source));
+    let (run_sloppy, run_strict, _) = strict_mode_status(&fm.flags);
+    let mut sources = Vec::new();
+    if run_sloppy {
+        sources.push(match assemble(harness_dir, src, &fm) {
+            Ok(s) => s,
+            Err(_) => return true,
         });
-    if spawn.is_err() {
-        return false;
     }
-    match rx.recv_timeout(timeout) {
-        // ironhorse produced a halt within the bound: it terminated.
-        Ok(_) => true,
-        // The worker panicked before sending — a prompt terminal, not a hang.
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => true,
-        // The bound elapsed with no halt: ironhorse genuinely did not terminate.
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => false,
+    if run_strict {
+        sources.push(match assemble_strict(harness_dir, src, &fm) {
+            Ok(s) => s,
+            Err(_) => return true,
+        });
     }
+    sources.into_iter().all(|source| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("ironhorse-xst-attribute".into())
+            .stack_size(CASE_THREAD_STACK_BYTES)
+            .spawn(move || {
+                let _ = tx.send(crate::ironhorse_only_run(&source));
+            });
+        spawned.is_ok()
+            && !matches!(
+                rx.recv_timeout(timeout),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            )
+    })
 }
 
 /// Run a set of test262 files (absolute paths) against the harness in
@@ -1538,7 +1542,7 @@ mod tests {
     /// did not (`IronhorseOnlyComplete`), with a chosen oracle-parse signal
     /// (`oracle_parsed`: did XS emit bytecode?) and thrown-value string — the two
     /// axes `oracle_host_aborted` reads.
-    fn synthetic_ih_only_complete(oracle_parsed: bool, oracle_error: &str) -> DualRun {
+    fn synthetic_ironhorse_only_complete(oracle_parsed: bool, oracle_error: &str) -> DualRun {
         let mut run = synthetic_abort(Halt::Return, "");
         run.agreement = Agreement::IronhorseOnlyComplete;
         run.oracle_parsed = oracle_parsed;
@@ -1556,7 +1560,7 @@ mod tests {
         // non-result the differential cannot cover — NOT an ironhorse
         // over-acceptance — and it scores `infrastructure`, never
         // `ironhorse-failure`.
-        let run = synthetic_ih_only_complete(true, "");
+        let run = synthetic_ironhorse_only_complete(true, "");
         assert!(oracle_host_aborted(&run));
         let cfg = Config::default();
         assert_eq!(
@@ -1564,10 +1568,7 @@ mod tests {
             Verdict::RunSkip("oracle-host-stack-limit".into())
         );
         assert_eq!(
-            crate::report::classify(
-                crate::report::Outcome::RunSkip,
-                "oracle-host-stack-limit"
-            ),
+            crate::report::classify(crate::report::Outcome::RunSkip, "oracle-host-stack-limit"),
             crate::report::Category::Infrastructure
         );
     }
@@ -1578,11 +1579,11 @@ mod tests {
         // distinct non-host shapes stay `Fail`:
         //  * the oracle REJECTED at parse — emitted no bytecode (a real early
         //    error ironhorse wrongly ran to completion);
-        let parse_reject = synthetic_ih_only_complete(false, "");
+        let parse_reject = synthetic_ironhorse_only_complete(false, "");
         assert!(!oracle_host_aborted(&parse_reject));
         //  * the oracle threw a real runtime value — a non-empty thrown string
         //    (ironhorse missed a runtime throw the oracle raised).
-        let runtime_throw = synthetic_ih_only_complete(true, "TypeError: nope");
+        let runtime_throw = synthetic_ironhorse_only_complete(true, "TypeError: nope");
         assert!(!oracle_host_aborted(&runtime_throw));
         let cfg = Config::default();
         for run in [parse_reject, runtime_throw] {
@@ -1619,7 +1620,7 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(
             evaluate_negative_early(&cfg, &run, &early_negative("parse")),
-            Verdict::RunSkip("oracle-gate-off:negative-over-acceptance".into())
+            Verdict::RunSkip("negative-oracle-unexpected".into())
         );
     }
 
