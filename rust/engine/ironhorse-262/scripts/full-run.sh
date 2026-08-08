@@ -260,9 +260,13 @@ run_one_batch() {
     "$test_root/$directory" >"$log" 2>&1 &
   worker=$!
   (
-    sleep 180
+    timer=0
+    trap 'kill "$timer" 2>/dev/null || true; exit 0' TERM INT
+    sleep 180 & timer=$!
+    wait "$timer" || exit 0
     kill -TERM "$worker" 2>/dev/null || exit 0
-    sleep 30
+    sleep 30 & timer=$!
+    wait "$timer" || exit 0
     kill -KILL "$worker" 2>/dev/null || true
   ) &
   watchdog=$!
