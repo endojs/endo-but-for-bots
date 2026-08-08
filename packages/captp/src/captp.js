@@ -201,10 +201,21 @@ export const makeDefaultCapTPImportExportTables = ({
 };
 
 /**
+ * @typedef {object} CapTPRejectionContext context for a rejection observed by
+ * CapTP
+ * @property {'promise' | 'disconnect' | 'protocol'} kind which CapTP boundary
+ * observed the rejection
+ *
+ * @callback CapTPOnReject
+ * @param {any} error
+ * @param {CapTPRejectionContext} context
+ * @returns {void}
+ *
  * @typedef {object} CapTPOptions the options to makeCapTP
  * @property {(val: unknown, slot: CapTPSlot) => void} [exportHook]
  * @property {(val: unknown, slot: CapTPSlot) => void} [importHook]
- * @property {(err: any) => void} [onReject]
+ * @property {CapTPOnReject} [onReject] observes rejections without changing
+ * promise delivery. Callbacks that accept only `error` remain supported.
  * @property {number} [epoch] an integer tag to attach to all messages in order to
  * assist in ignoring earlier defunct instance's messages
  * @property {TrapGuest} [trapGuest] if specified, enable this CapTP (guest) to
@@ -225,6 +236,21 @@ export const makeDefaultCapTPImportExportTables = ({
  * privileged downstream layer to associate the decoded error with the
  * sender's locally captured context.
  */
+
+/** @type {CapTPRejectionContext} */
+const PROMISE_REJECTION = harden({
+  kind: /** @type {const} */ ('promise'),
+});
+
+/** @type {CapTPRejectionContext} */
+const DISCONNECT_REJECTION = harden({
+  kind: /** @type {const} */ ('disconnect'),
+});
+
+/** @type {CapTPRejectionContext} */
+const PROTOCOL_REJECTION = harden({
+  kind: /** @type {const} */ ('protocol'),
+});
 
 /**
  * Create a CapTP connection.
@@ -285,10 +311,19 @@ export const makeCapTP = (
 
   /** @type {any} */
   let unplug = false;
-  /** @type {(reason?: any, returnIt?: boolean) => Promise<void> | Promise<never>} */
-  const quietReject = (reason = undefined, returnIt = true) => {
+  /**
+   * @param {any} [reason]
+   * @param {boolean} [returnIt]
+   * @param {CapTPRejectionContext} [context]
+   * @returns {Promise<void> | Promise<never>}
+   */
+  const quietReject = (
+    reason = undefined,
+    returnIt = true,
+    context = PROMISE_REJECTION,
+  ) => {
     if ((unplug === false || reason !== unplug) && reason !== undefined) {
-      onReject(reason);
+      onReject(reason, context);
     }
     if (!returnIt) {
       return Promise.resolve();
@@ -402,7 +437,7 @@ export const makeCapTP = (
     // A malformed peer message can have imported slots before validation
     // fails, so disconnect to discard all connection-local state.
     // eslint-disable-next-line no-use-before-define
-    abort(reason);
+    abortWithContext(reason, PROTOCOL_REJECTION);
     throw reason;
   };
 
@@ -535,7 +570,7 @@ export const makeCapTP = (
 
     // Silence the unhandled rejection warning, but don't affect
     // the user's handlers.
-    promise.catch(e => quietReject(e, false));
+    promise.catch(e => quietReject(e, false, PROMISE_REJECTION));
 
     return harden({ promise, settler });
   };
@@ -921,7 +956,9 @@ export const makeCapTP = (
           // Report the original reason through `onReject`. A graceful
           // disconnect is deliberate lifecycle, not an exception, so it
           // still rejects pending settlers below but is never reported.
-          quietReject(obj.reason, false);
+          const rejectionContext =
+            localDisconnectContext ?? DISCONNECT_REJECTION;
+          quietReject(obj.reason, false, rejectionContext);
         }
         unplug = reason;
         // Deliver the object, even though we're unplugged.
@@ -982,16 +1019,32 @@ export const makeCapTP = (
       return true;
     } catch (e) {
       recvSlot.abort();
-      quietReject(e, false);
+      quietReject(e, false, PROTOCOL_REJECTION);
 
       return false;
     }
   };
 
+  /** @type {CapTPRejectionContext | undefined} */
+  let localDisconnectContext;
+
+  /**
+   * @param {unknown} reason
+   * @param {CapTPRejectionContext} context
+   */
+  function abortWithContext(reason, context) {
+    localDisconnectContext = context;
+    try {
+      dispatch({ type: 'CTP_DISCONNECT', epoch, reason });
+    } finally {
+      localDisconnectContext = undefined;
+    }
+  }
+
   // Abort a connection.
   /** @param {unknown} [reason] */
   const abort = reason => {
-    dispatch({ type: 'CTP_DISCONNECT', epoch, reason });
+    abortWithContext(reason, DISCONNECT_REJECTION);
   };
 
   // Deliberately disconnect. Pending operations still reject with the
