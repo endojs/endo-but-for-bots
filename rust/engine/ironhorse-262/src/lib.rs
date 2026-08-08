@@ -52,9 +52,11 @@ pub enum Agreement {
 /// How ironhorse's **own** front end (`ironhorse-compile`) reacted to the
 /// program's source — the signal the early-error (parse/resolution) negative
 /// verdict needs to tell an honest *compiler rejection* (ironhorse raised the
-/// SyntaxError itself) apart from an *over-acceptance* (it emitted bytecode for
-/// a source the spec forbids) and a *harness assembly failure* (the compiler
-/// panicked). Captured in [`compile_for`]; meaningful only on the
+/// SyntaxError itself for a construct it implements) apart from an
+/// *over-acceptance* (it emitted bytecode for a source the spec forbids) and a
+/// *compiler coverage gap* (it panicked, or declined an unported-but-valid
+/// construct via [`Self::Unsupported`]). Captured by `compile_for` and reached
+/// through the public [`dual_run_with`]; meaningful only on the
 /// [`Compiler::Ironhorse`] path (the default runner), [`Self::NotAttempted`] on
 /// the oracle-reference path.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,9 +67,19 @@ pub enum IronhorseCompile {
     /// ironhorse-compile emitted bytecode — it *accepted* the source.
     Accepted,
     /// ironhorse-compile returned a structured parser/scoper early error (the
-    /// SyntaxError its own front end raises). The string is the rendered
-    /// `ParseError`, for the report.
+    /// SyntaxError its own front end raises) for a construct it *does*
+    /// implement — a real early-error reproduction. The string is the rendered
+    /// `ParseError`, for the report. Distinct from [`Self::Unsupported`] so a
+    /// refusal to parse an unported construct is never miscounted as a correct
+    /// early-error rejection.
     Rejected(String),
+    /// ironhorse-compile returned a structured error whose kind is
+    /// [`ironhorse_compile::parser::ParseErrorKind::Unsupported`] — the front
+    /// end declined a construct that is *valid JS but not yet ported*, not a
+    /// spec early error. This is an Ironhorse compiler coverage gap (grouped
+    /// with [`Self::Panicked`] as `compiler-unimplemented:<phase>`), never a
+    /// covered early error. The string is the rendered `ParseError`.
+    Unsupported(String),
     /// ironhorse-compile **panicked** — it reached a deferred/unimplemented
     /// coder path (e.g. `static block with lexical declarations deferred`) and
     /// folded rather than emitting bytecode. This is an Ironhorse *compiler
@@ -209,16 +221,22 @@ fn compile_for(
             }));
             match compiled {
                 Ok(Ok((bytes, symbols))) => (bytes, symbols, IronhorseCompile::Accepted),
-                // A structured reject: ironhorse's own front end raised the
-                // SyntaxError. Empty bytecode → ironhorse-vm aborts on decode,
-                // mirroring "ironhorse rejected"; the `Rejected` signal lets the
-                // early-error negative verdict count that as covered rather than
-                // an opaque abort.
-                Ok(Err(e)) => (
-                    Vec::new(),
-                    Vec::new(),
-                    IronhorseCompile::Rejected(e.to_string()),
-                ),
+                // A structured reject. Empty bytecode -> ironhorse-vm aborts on
+                // decode, mirroring "ironhorse rejected". Split on the error
+                // *kind*: a real early error the front end implements is a
+                // `Rejected` (countable as covered), but an `Unsupported` kind is
+                // a refusal to parse an unported-but-valid construct — a compiler
+                // coverage gap, never a covered early-error rejection.
+                Ok(Err(e)) => {
+                    let rendered = e.to_string();
+                    let signal = match e.kind {
+                        ironhorse_compile::parser::ParseErrorKind::Unsupported => {
+                            IronhorseCompile::Unsupported(rendered)
+                        }
+                        _ => IronhorseCompile::Rejected(rendered),
+                    };
+                    (Vec::new(), Vec::new(), signal)
+                }
                 // A coder fold / panic: ironhorse-compile reached a deferred
                 // path. Empty bytecode, and the panic payload becomes a compiler
                 // coverage-gap label — distinct from a clean rejection so a crash

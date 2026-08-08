@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # full-run.sh — the one-command, bounded, resumable, parallel full-test262
 # sweep of the Ironhorse engine, oracle-locked to XS (maintainer request,
-# kriskowal/garden#51). It runs the complete authoritative TC39 test262 corpus
+# kriscendobot/garden#51). It runs the complete authoritative TC39 test262 corpus
 # against Ironhorse and emits both a stable machine-readable `report.json` and a
 # self-contained static `report.html` (drop-in for kriscendobot gh-pages).
 #
@@ -27,7 +27,7 @@
 #   --subtree PREFIX   restrict the sweep to a subtree, e.g. built-ins/Proxy.
 #                      Default: the whole test/ tree.
 #   --out DIR          output directory. Default:
-#                      rust/engine/ironhorse-262/target/test262-report
+#                      rust/engine/target/test262-report
 #   --jobs N           batch parallelism. Default: min(nproc/2, 8). This bounds
 #                      peak memory (concurrent oracle processes).
 #   --oracle on|off    gate on the XS oracle (default on).
@@ -87,7 +87,7 @@ mkdir -p "$out"
 results="$out/results"
 mkdir -p "$results"
 
-echo "full-run: building the runner + report binaries (release)…" >&2
+echo "full-run: building the runner + report binaries (release)..." >&2
 cargo build --release --manifest-path "$engine_dir/Cargo.toml" \
   -p ironhorse-262 --bin ironhorse-xst --bin ironhorse-262-report >&2
 xst="$engine_dir/target/release/ironhorse-xst"
@@ -135,6 +135,14 @@ mapfile -t all_batches < <("$report_bin" discover "${discover_args[@]}")
 mapfile -t pending < <("$report_bin" plan --results "$results" "${discover_args[@]}")
 echo "full-run: ${#all_batches[@]} batches total, ${#pending[@]} pending (resume-aware), jobs=$jobs" >&2
 
+# Completeness precondition: a scope that discovers nothing (a typo'd --subtree,
+# an empty tree) must fail loudly, never publish a fully-provenanced report of
+# zero cases.
+if [ "${#all_batches[@]}" -eq 0 ]; then
+  echo "full-run: ERROR no batches discovered under $test_root${subtree:+/$subtree} - nothing to run" >&2
+  exit 2
+fi
+
 # --- Run the pending batches, one oracle process each, --jobs in parallel. ----
 # Each batch writes to a .part file first and is atomically renamed on success,
 # so a killed process never leaves a partial file that resume mistakes for done.
@@ -154,6 +162,22 @@ if [ "${#pending[@]}" -gt 0 ]; then
   printf '%s\n' "${pending[@]}" | xargs -P "$jobs" -I{} bash -c 'run_one "$@"' _ {}
 fi
 
+# --- Completeness gate: reconcile discovered vs produced. ---------------------
+# A batch process can die (OOM-kill, abort) leaving no file, or leave a
+# truncated one; `plan` (re-run here) counts both as still-pending — a file that
+# parses to zero cases is treated as incomplete. If ANY batch is still pending
+# after the sweep, fail rather than aggregate an authoritative-looking report
+# that silently omits whole directories. This is why `run_one` can swallow a
+# single batch's failure (the parallel run finishes) without hiding it: the
+# reconciliation below is the real completeness check.
+mapfile -t still_pending < <("$report_bin" plan --results "$results" "${discover_args[@]}")
+if [ "${#still_pending[@]}" -gt 0 ]; then
+  echo "full-run: ERROR ${#still_pending[@]} of ${#all_batches[@]} batch(es) produced no parseable result:" >&2
+  printf '  %s\n' "${still_pending[@]}" >&2
+  echo "full-run: refusing to publish an incomplete report; re-run to resume the missing batches." >&2
+  exit 1
+fi
+
 finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 cat > "$provenance" <<EOF
@@ -171,7 +195,7 @@ cat > "$provenance" <<EOF
 }
 EOF
 
-# --- Aggregate → stable JSON + static HTML. ----------------------------------
+# --- Aggregate -> stable JSON + static HTML. ----------------------------------
 "$report_bin" aggregate --results "$results" --provenance "$provenance" \
   --json "$out/report.json" --html "$out/report.html"
 

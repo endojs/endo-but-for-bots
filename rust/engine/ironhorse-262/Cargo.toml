@@ -38,7 +38,7 @@ name = "corpus-to-262"
 path = "src/bin/corpus_to_262.rs"
 
 # ironhorse-262-report: the whole-tree sweep's orchestration + reporting CLI
-# (kriskowal/garden#51). Discovery, resume planning, and deterministic
+# (kriscendobot/garden#51). Discovery, resume planning, and deterministic
 # aggregation of per-batch JSON into stable report.json + static HTML. Runs no
 # oracle — the per-case execution is `ironhorse-xst --flat --json`.
 [[bin]]

@@ -1,9 +1,27 @@
 # Ironhorse test262 completion — starting baseline (immutable)
 
 This directory is the **immutable starting snapshot** for the Ironhorse
-JavaScript-completion PR. It is committed once, by the foundation child
-(`ironhorse-js-00-report-harness-foundation`), and every later child in the
-completion orchestration measures its regression invariant against it.
+JavaScript-completion work. It is committed once, and every later change in that
+effort measures its regression invariant against it.
+
+> **This PR's branch stays open — do not merge it.** It is the shared base the
+> completion work stacks on; the snapshot below is the frozen reference every
+> later change is measured against.
+
+> **Provenance gap (read before trusting the totals as a HEAD measurement).**
+> The engine pin below (`14f26d0a6…`) is the head of the sibling reporting PR the
+> harness was cherry-picked from, **not** an ancestor of this branch, and it
+> predates two behavior changes this PR itself makes: the per-case wall-clock
+> bound and the real early-error negative adjudication (`evaluate_negative_early`).
+> So a fresh whole-tree run **at this PR head** will differ from the frozen
+> snapshot in predictable ways, and that delta is expected, not a regression:
+> the three non-terminators are recorded with the shipped harness's spelling
+> (`ironhorse-hang: no verdict within {N}s (non-terminating dispatch)`), not the
+> hand-authored `engine-hang:…` string in `baseline.json`; and parse/resolution
+> negatives that were blanket run-skips can now land as `covered` /
+> `compiler-unimplemented:*` / `negative-*:runtime-reject`. The
+> report-refresh that closes this effort re-measures at the merged head and
+> republishes; until then, treat these totals as the *pre-bound* starting line.
 
 ## The measured starting point
 

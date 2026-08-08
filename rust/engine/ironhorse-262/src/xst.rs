@@ -198,14 +198,27 @@ pub struct Config {
     /// assign-to-const `TypeError` spins the loop), so each case is dispatched
     /// under this deadline and a hang is recorded as an `ironhorse-hang` failure
     /// rather than wedging the whole per-directory batch process. `0` disables
-    /// the bound (an unbounded inline run). Default [`DEFAULT_CASE_TIMEOUT_SECS`].
-    pub per_case_timeout_secs: u64,
+    /// the bound (an unbounded inline run), which is the **library default**: an
+    /// in-process caller runs exactly as it did before this field existed. The
+    /// bound is CLI *policy* — `ironhorse-xst` (and the sweep it drives) opts in
+    /// to [`DEFAULT_CASE_TIMEOUT_SECONDS`], so a bound is never imposed on a
+    /// caller that did not ask for one and a case's verdict never becomes
+    /// load-dependent behind its back.
+    pub per_case_timeout_seconds: u64,
 }
 
-/// The default per-case wall-clock bound (seconds). Comfortably above the
-/// millisecond a normal dual-run takes — a case that needs longer is
-/// non-terminating, not slow.
-pub const DEFAULT_CASE_TIMEOUT_SECS: u64 = 10;
+/// The `ironhorse-xst` CLI's default per-case wall-clock bound (seconds).
+/// Comfortably above the millisecond a normal dual-run takes — a case that needs
+/// longer is non-terminating, not slow. This is CLI policy only; the library
+/// [`Config::default`] leaves the bound off (see [`Config::per_case_timeout_seconds`]).
+pub const DEFAULT_CASE_TIMEOUT_SECONDS: u64 = 10;
+
+/// The native stack pinned on each bounded per-case worker thread. Matches the
+/// repo's engine-thread convention (`rust/endo/src/endo.rs`, `inproc.rs`): 32
+/// MiB, comfortably above the main thread's ~8 MiB, so relocating a case onto a
+/// spawned thread never shrinks the stack the recursive-descent parser and the
+/// XS oracle's C parser recurse on.
+const CASE_THREAD_STACK_BYTES: usize = 32 * 1024 * 1024;
 
 impl Default for Config {
     fn default() -> Self {
@@ -216,7 +229,9 @@ impl Default for Config {
             features_include: Vec::new(),
             ses_mode: SesMode::None,
             feature_filter: Vec::new(),
-            per_case_timeout_secs: DEFAULT_CASE_TIMEOUT_SECS,
+            // Off by default: the library imposes no bound on a caller that did
+            // not ask for one. The CLI opts in to DEFAULT_CASE_TIMEOUT_SECONDS.
+            per_case_timeout_seconds: 0,
         }
     }
 }
@@ -566,11 +581,12 @@ fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
 /// forbids the source before it runs. The signal is ironhorse's own front-end
 /// reaction (`run.ironhorse_compile`), which the default runner now executes
 /// via `ironhorse-compile`; the XS oracle is the differential authority for
-/// whether the source really is an early error. The five outcomes the design
-/// asks us to keep distinct:
+/// whether the source really is an early error. The outcomes the design asks us
+/// to keep distinct:
 ///
-/// * **compiler rejection** — ironhorse-compile raised its own SyntaxError; when
-///   the oracle agrees the source is an early error, that is `Covered`.
+/// * **compiler rejection** — ironhorse-compile raised its own SyntaxError for a
+///   construct it implements; when the oracle agrees the source is an early
+///   error, that is `Covered`.
 /// * **over-acceptance** — ironhorse-compile emitted bytecode AND ironhorse ran
 ///   it to completion; a `Fail` the oracle differential catches (the bar-forbidden
 ///   defect this instrument exists to surface).
@@ -580,20 +596,26 @@ fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
 /// * **oracle surprise** — the XS oracle did NOT reject a source test262 marks as
 ///   an early error; the differential authority disagrees, so we do not claim
 ///   coverage (`negative-oracle-unexpected`).
-/// * **harness assembly failure** — ironhorse-compile panicked; a harness defect
-///   (`harness-assembly:compile-panic`), never a language verdict.
+/// * **compiler coverage gap** — ironhorse-compile panicked, or declined an
+///   unported-but-valid construct ([`IronhorseCompile::Unsupported`]); either is
+///   an Ironhorse compiler gap named `compiler-unimplemented:<phase>` (→
+///   `Category::Unsupported`), never a covered early error. A refusal to *parse*
+///   an unported construct must not be counted as a correct *rejection* of a
+///   forbidden one.
 fn evaluate_negative_early(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
     // A parse/resolution negative expects the oracle (XS) to reject the source
     // at compile — i.e. XS did not complete.
     let oracle_rejected = !oracle_completed(run.agreement);
 
     match &run.ironhorse_compile {
-        // ironhorse-compile reached a deferred/unimplemented coder path and
-        // folded (panicked). That is an Ironhorse *compiler coverage gap* — a
-        // named `unsupported`, never a covered early error and never silently
-        // relabeled a pass. The panic message is a gap label the report groups
-        // on so the missing construct names itself.
-        IronhorseCompile::Panicked(_) => {
+        // ironhorse-compile reached a deferred/unimplemented path — it either
+        // folded (panicked) or returned a structured `Unsupported`-kind error
+        // for an unported-but-valid construct. Both are an Ironhorse *compiler
+        // coverage gap*, named `compiler-unimplemented:<phase>` (→
+        // `Category::Unsupported`), never a covered early error and never
+        // silently relabeled a pass: a front end that merely cannot parse the
+        // construct has not *rejected* the forbidden one.
+        IronhorseCompile::Panicked(_) | IronhorseCompile::Unsupported(_) => {
             Verdict::RunSkip(format!("compiler-unimplemented:{}", neg.phase))
         }
 
@@ -899,8 +921,9 @@ pub struct XstReport {
     pub ses_mode: SesMode,
     /// Every case's full record — the per-case wire the whole-tree sweep emits
     /// as JSON (`ironhorse-xst --json`) for [`crate::report`] to aggregate.
-    /// Populated by [`XstReport::record_case`]; empty when a caller uses the
-    /// aggregate-only [`XstReport::record`].
+    /// Populated by **both** recorders: [`XstReport::record_case`] carries the
+    /// declared `features:`, while [`XstReport::record`] pushes the same record
+    /// with an empty `features` vector.
     pub cases: Vec<CaseRecord>,
 }
 
@@ -911,8 +934,10 @@ impl XstReport {
         self.total > 0 && self.failures.is_empty()
     }
 
-    /// Fold one case's result in, attributed to `path` (aggregate counters
-    /// only, no per-case record — used by the existing aggregate callers/tests).
+    /// Fold one case's result in, attributed to `path`, with no declared
+    /// features (used by the aggregate callers/tests that do not carry a
+    /// `features:` list). Delegates to [`Self::record_case`], so it pushes a
+    /// [`CaseRecord`] with an empty `features` vector like any other case.
     pub fn record(&mut self, path: &str, r: CaseResult) {
         self.record_case(path, Vec::new(), r);
     }
@@ -1016,9 +1041,6 @@ fn yaml_quote(s: &str) -> String {
     out
 }
 
-/// Run a set of test262 files (absolute paths) against the harness in
-/// `harness_dir`, returning the xst-shaped report. `root` is stripped from
-/// each path for readable failure labels.
 /// Run one case under a hard wall-clock bound (design § the per-case dispatch
 /// bound). The case is dispatched on its own thread and joined with `timeout`;
 /// a hang becomes a recorded `ironhorse-hang` **failure** instead of wedging the
@@ -1029,6 +1051,14 @@ fn yaml_quote(s: &str) -> String {
 /// determinism are identical to an unbounded run); only a genuine hang leaks its
 /// thread (stuck in C / a VM dispatch cycle, so uncancellable), reclaimed when
 /// the batch process exits.
+///
+/// The worker is pinned to a large stack ([`CASE_THREAD_STACK_BYTES`], the
+/// repo's engine-thread convention): both `ironhorse-compile`'s recursive-descent
+/// parser and the XS oracle's C parser recurse on *this* thread's native stack,
+/// and a spawned thread otherwise inherits Rust's 2 MiB default — a quarter of
+/// the main thread's ~8 MiB — so a deeply-nested source that ran before would
+/// overflow and SIGSEGV the whole batch (uncatchable by `catch_unwind`), the
+/// exact wedge the bound exists to prevent.
 fn run_case_bounded(
     cfg: &Config,
     harness_dir: &Path,
@@ -1036,15 +1066,20 @@ fn run_case_bounded(
     timeout: std::time::Duration,
 ) -> CaseResult {
     let (tx, rx) = std::sync::mpsc::channel();
-    let cfg_c = cfg.clone();
-    let hd_c = harness_dir.to_path_buf();
-    let src_c = src.to_string();
+    let owned_config = cfg.clone();
+    let owned_harness_directory = harness_dir.to_path_buf();
+    let owned_source = src.to_string();
     let spawn = std::thread::Builder::new()
         .name("ironhorse-xst-case".into())
+        .stack_size(CASE_THREAD_STACK_BYTES)
         .spawn(move || {
             // The receiver may already be gone (we timed out): a failed send is
             // expected, never a panic.
-            let _ = tx.send(run_case(&cfg_c, &hd_c, &src_c));
+            let _ = tx.send(run_case(
+                &owned_config,
+                &owned_harness_directory,
+                &owned_source,
+            ));
         });
     let handle = match spawn {
         Ok(h) => h,
@@ -1118,6 +1153,7 @@ fn ironhorse_terminates_alone(harness_dir: &Path, src: &str, timeout: std::time:
     let (tx, rx) = std::sync::mpsc::channel();
     let spawn = std::thread::Builder::new()
         .name("ironhorse-xst-attribute".into())
+        .stack_size(CASE_THREAD_STACK_BYTES)
         .spawn(move || {
             let _ = tx.send(crate::ironhorse_only_run(&source));
         });
@@ -1127,6 +1163,11 @@ fn ironhorse_terminates_alone(harness_dir: &Path, src: &str, timeout: std::time:
     matches!(rx.recv_timeout(timeout), Ok(_))
 }
 
+/// Run a set of test262 files (absolute paths) against the harness in
+/// `harness_dir`, returning the xst-shaped report. `root` is stripped from
+/// each path for readable failure labels. Each case runs under
+/// `cfg.per_case_timeout_seconds` (0 = unbounded, the library default; see
+/// [`run_case_bounded`]).
 pub fn run_files(cfg: &Config, harness_dir: &Path, root: &Path, files: &[PathBuf]) -> XstReport {
     let mut rep = XstReport::default();
     rep.ses_mode = cfg.ses_mode;
@@ -1159,14 +1200,14 @@ pub fn run_files(cfg: &Config, harness_dir: &Path, root: &Path, files: &[PathBuf
                 continue;
             }
         }
-        let r = if cfg.per_case_timeout_secs == 0 {
+        let r = if cfg.per_case_timeout_seconds == 0 {
             run_case(cfg, harness_dir, &src)
         } else {
             run_case_bounded(
                 cfg,
                 harness_dir,
                 &src,
-                std::time::Duration::from_secs(cfg.per_case_timeout_secs),
+                std::time::Duration::from_secs(cfg.per_case_timeout_seconds),
             )
         };
         rep.record_case(&rel, fm.features.clone(), r);
@@ -1428,6 +1469,29 @@ mod tests {
     }
 
     #[test]
+    fn early_error_unsupported_construct_is_a_named_compiler_gap_not_covered() {
+        // ironhorse-compile returned an `Unsupported`-kind error: it declined to
+        // parse a construct that is valid JS but not yet ported. That is a
+        // compiler coverage gap, NOT a covered early error — a refusal to parse
+        // an unported construct must never be counted as a correct rejection of
+        // a forbidden one, even when the oracle also rejects.
+        let run = synthetic_early(
+            Agreement::BothAbort,
+            IronhorseCompile::Unsupported("line 1: unsupported: arrow function".into()),
+        );
+        let cfg = Config::default();
+        let v = evaluate_negative_early(&cfg, &run, &early_negative("parse"));
+        assert_eq!(v, Verdict::RunSkip("compiler-unimplemented:parse".into()));
+        assert_eq!(
+            crate::report::classify(
+                crate::report::Outcome::RunSkip,
+                "compiler-unimplemented:parse"
+            ),
+            crate::report::Category::Unsupported
+        );
+    }
+
+    #[test]
     fn early_error_oracle_surprise_is_not_covered() {
         // ironhorse rejected but the oracle ACCEPTED the source: the differential
         // authority disagrees it is an early error, so we do not claim coverage.
@@ -1483,23 +1547,44 @@ mod tests {
 
     #[test]
     fn per_case_bound_records_a_hang_without_wedging() {
-        // A source that would spin forever must yield an `ironhorse-hang` failure
-        // in bounded time (the timeout), never block. We simulate the shape with
-        // a tiny timeout and a source the engine runs quickly — the point under
-        // test is that `run_case_bounded` returns a verdict at all under a bound
-        // and that a genuine non-terminator would be classed a Fail.
+        // Load-bearing: drive a *genuinely* non-terminating source through the
+        // bound and assert it returns an `ironhorse-hang` Fail in bounded
+        // wall-clock — this actually exercises the `RecvTimeoutError::Timeout`
+        // arm, so deleting that arm (or the bound) makes the test hang and fail
+        // rather than pass. `while (true) {}` spins the engine forever; a 2s
+        // bound is far above the millisecond a real dual-run takes.
         let cfg = Config::default();
-        let td = crate::test262::locate_test262();
-        if let Some((_root, harness)) = td {
-            let r = run_case_bounded(&cfg, &harness, "1 + 1;", std::time::Duration::from_secs(10));
+        if let Some((_root, harness)) = crate::test262::locate_test262() {
             // A trivial program completes well within the bound.
-            assert!(!matches!(&r.verdict, Verdict::Fail(m) if m.contains("ironhorse-hang")));
+            let quick =
+                run_case_bounded(&cfg, &harness, "1 + 1;", std::time::Duration::from_secs(2));
+            assert!(!matches!(&quick.verdict, Verdict::Fail(m) if m.contains("ironhorse-hang")));
+
+            // A non-terminator is recorded as a hang, in bounded time.
+            let started = std::time::Instant::now();
+            let hung = run_case_bounded(
+                &cfg,
+                &harness,
+                "while (true) {}",
+                std::time::Duration::from_secs(2),
+            );
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(30),
+                "the bound must return promptly, not block on the hang"
+            );
+            match &hung.verdict {
+                Verdict::Fail(m) => assert!(
+                    m.contains("ironhorse-hang"),
+                    "a non-terminating case must be a recorded hang, got: {m}"
+                ),
+                other => panic!("expected an ironhorse-hang Fail, got {other:?}"),
+            }
         }
         // The hang verdict maps to the bar-forbidden ironhorse-failure category.
         assert_eq!(
             crate::report::classify(
                 crate::report::Outcome::Fail,
-                "ironhorse-hang: no verdict within 10s (non-terminating dispatch)"
+                "ironhorse-hang: no verdict within 2s (non-terminating dispatch)"
             ),
             crate::report::Category::IronhorseFailure
         );

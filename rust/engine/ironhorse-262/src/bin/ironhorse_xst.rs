@@ -42,11 +42,14 @@
 
 use ironhorse_262::report::RunReport;
 use ironhorse_262::test262::{collect_js, collect_js_flat, locate_test262};
-use ironhorse_262::xst::{run_files, Config, SesMode};
+use ironhorse_262::xst::{run_files, Config, SesMode, DEFAULT_CASE_TIMEOUT_SECONDS};
 use std::path::PathBuf;
 
 fn main() {
     let mut cfg = Config::default();
+    // CLI policy: opt in to the per-case wall-clock bound the library leaves off
+    // by default (overridable with `--case-timeout`, `0` = unbounded).
+    cfg.per_case_timeout_seconds = DEFAULT_CASE_TIMEOUT_SECONDS;
     let mut test262_dir: Option<PathBuf> = None;
     let mut report_path: Option<PathBuf> = None;
     let mut json_path: Option<PathBuf> = None;
@@ -59,7 +62,7 @@ fn main() {
             "--oracle" => cfg.oracle = true,
             "--no-oracle" => cfg.oracle = false,
             "--case-timeout" => {
-                cfg.per_case_timeout_secs =
+                cfg.per_case_timeout_seconds =
                     args.next().and_then(|n| n.parse().ok()).unwrap_or_else(|| {
                         fail("--case-timeout needs a non-negative integer (seconds; 0 = unbounded)")
                     });

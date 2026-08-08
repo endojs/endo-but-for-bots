@@ -4,7 +4,7 @@ The one-command, bounded, resumable sweep that runs the **complete authoritative
 TC39 test262 corpus** against the Ironhorse engine (oracle-locked to XS) and
 emits a stable machine-readable `report.json` plus a self-contained static
 `report.html` (drop-in for kriscendobot gh-pages). Maintainer request:
-[kriskowal/garden#51](https://github.com/kriscendobot/garden/issues/51#issuecomment-5224315524).
+[kriscendobot/garden#51](https://github.com/kriscendobot/garden/issues/51#issuecomment-5224315524).
 
 ## One command
 
@@ -35,7 +35,7 @@ Outputs land in `rust/engine/target/test262-report/` by default:
   `ironhorse-xst` process**, so the oracle's RSS is freed on every batch exit.
   Peak memory is bounded by `--jobs` (that many concurrent oracle processes),
   not by the tree size.
-- **Resumable.** Each batch writes one JSON file atomically (`.part` → rename).
+- **Resumable.** Each batch writes one JSON file atomically (`.part` -> rename).
   An interrupted run leaves the completed files on disk; re-running the same
   command runs only what is missing.
 - **Per-case wall-clock bound.** Both the XS oracle and the ironhorse VM can
