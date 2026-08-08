@@ -103,3 +103,25 @@ jobs:
             test262-report/report.html
             test262-report/provenance.json
           if-no-files-found: warn
+
+      # Preserve the validated resume state (the completed per-batch results) and
+      # the per-batch diagnostics even when the sweep did NOT finish, so a whole-
+      # tree run that times out near GitHub's job limit is not lost: download this
+      # artifact, restore it under a local `--out`, and re-run `full-run.sh` to
+      # resume from exactly what completed (a batch is bound to its run identity,
+      # so only work matching this corpus/engine/oracle/scope is reused). Cross-
+      # dispatch resume is deliberately a manual restore — GitHub Actions cache is
+      # keyed immutably and cannot accumulate partial state across dispatches — so
+      # the whole-tree sweep's canonical home is a long-lived local/self-hosted run
+      # (see scripts/README.md § CI).
+      - name: Upload resume state + diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ironhorse-test262-resume-state
+          path: |
+            test262-report/results/**
+            test262-report/logs/**
+            test262-report/discovery.txt
+            test262-report/pending.txt
+          if-no-files-found: warn

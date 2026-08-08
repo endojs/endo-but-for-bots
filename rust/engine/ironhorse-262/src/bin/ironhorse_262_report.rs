@@ -26,8 +26,8 @@
 //!       `report.json` and the self-contained static HTML report.
 
 use ironhorse_262::report::{
-    aggregate, discover_batches, pending_batches, read_batch_checked, read_provenance, to_html,
-    Provenance,
+    aggregate, aggregate_plan, batch_case_limit, discover_batches, pending_batches_checked,
+    read_batch_full, read_provenance, to_html, Provenance,
 };
 use ironhorse_262::test262::locate_test262;
 use std::path::PathBuf;
@@ -45,6 +45,7 @@ fn main() {
         "plan" => command_plan(&rest),
         "validate" => command_validate(&rest),
         "aggregate" => command_aggregate(&rest),
+        "batch-size" => println!("{}", batch_case_limit()),
         "-h" | "--help" | "help" => println!("{}", HELP),
         other => {
             eprintln!("ironhorse-262-report: unknown subcommand: {}", other);
@@ -109,7 +110,8 @@ fn command_plan(args: &[String]) {
         option_value(args, "--results").unwrap_or_else(|| fail("plan needs --results DIR")),
     );
     let batches = discover_scoped(args);
-    let pending = pending_batches(&results, &batches);
+    let run_id = option_value(args, "--run-id");
+    let pending = pending_batches_checked(&results, &batches, run_id.as_deref());
     for b in &pending {
         println!("{}", b);
     }
@@ -124,8 +126,22 @@ fn command_validate(args: &[String]) {
     let batch = PathBuf::from(
         option_value(args, "--batch").unwrap_or_else(|| fail("validate needs --batch FILE")),
     );
-    if let Err(error) = read_batch_checked(&batch) {
-        fail(&format!("invalid batch {}: {}", batch.display(), error));
+    match read_batch_full(&batch) {
+        Err(error) => fail(&format!("invalid batch {}: {}", batch.display(), error)),
+        Ok((run_id, _cases)) => {
+            // With `--run-id`, a batch stamped with a different identity is not
+            // a valid completion of THIS run (round-2 must-fix #1).
+            if let Some(expected) = option_value(args, "--run-id") {
+                if !expected.is_empty() && !run_id.is_empty() && run_id != expected {
+                    fail(&format!(
+                        "batch {} run_id {:?} != expected {:?}",
+                        batch.display(),
+                        run_id,
+                        expected
+                    ));
+                }
+            }
+        }
     }
 }
 
@@ -140,7 +156,33 @@ fn command_aggregate(args: &[String]) {
         Some(path) => read_provenance(&PathBuf::from(path)),
         None => Provenance::default(),
     };
-    let report = aggregate(&results, provenance);
+    // With `--plan FILE`, aggregate EXACTLY the batches the discovery plan names,
+    // bound to the provenance run identity — never a directory glob (round-2
+    // must-fix #1). Without it, fall back to the legacy glob aggregation.
+    let report = match option_value(args, "--plan") {
+        Some(plan_path) => {
+            let text = std::fs::read_to_string(&plan_path)
+                .unwrap_or_else(|e| fail(&format!("could not read plan {}: {}", plan_path, e)));
+            let plan: Vec<String> = text
+                .lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty())
+                .map(|l| l.to_string())
+                .collect();
+            let (report, warnings) = aggregate_plan(&results, &plan, provenance);
+            for w in &warnings {
+                eprintln!("ironhorse-262-report: WARNING {}", w);
+            }
+            if !warnings.is_empty() {
+                fail(&format!(
+                    "{} batch(es) rejected during aggregation; refusing to publish a report that misrepresents the run",
+                    warnings.len()
+                ));
+            }
+            report
+        }
+        None => aggregate(&results, provenance),
+    };
 
     if let Err(e) = std::fs::write(&json_out, report.to_json()) {
         fail(&format!("could not write {}: {}", json_out.display(), e));
@@ -185,14 +227,23 @@ SUBCOMMANDS:
     discover   --test262-dir DIR [--subtree PREFIX]
         Print every case-count-capped batch under the test262 test/ tree.
 
-    plan       --results DIR --test262-dir DIR [--subtree PREFIX]
+    plan       --results DIR --test262-dir DIR [--subtree PREFIX] [--run-id ID]
         Print the batches not yet completed in the results dir (resume plan).
+        With --run-id, a batch stamped with a different identity is pending.
 
-    validate   --batch FILE
-        Validate a complete batch file for atomic promotion/resume.
+    validate   --batch FILE [--run-id ID]
+        Validate a complete batch file for atomic promotion/resume. With
+        --run-id, also reject a batch stamped with a different identity.
 
-    aggregate  --results DIR [--provenance FILE] --json OUT [--html OUT]
+    aggregate  --results DIR [--provenance FILE] [--plan FILE] --json OUT [--html OUT]
         Merge per-batch JSON into the stable report.json (+ optional HTML).
+        With --plan, aggregate EXACTLY the batches the plan names, bound to the
+        provenance run identity — never a directory glob — and fail on any
+        missing/mismatched batch.
+
+    batch-size
+        Print the single-source partition cap (cases per batch) the runner's
+        --batch-size and discovery share.
 
 The oracle-heavy per-case execution is `ironhorse-xst --flat --json`; this CLI
 never runs a case, so every subcommand is deterministic and fast.

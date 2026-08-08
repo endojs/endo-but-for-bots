@@ -52,6 +52,7 @@ fn main() {
     let mut flat = false;
     let mut batch_index: Option<usize> = None;
     let mut batch_size: Option<usize> = None;
+    let mut run_id: String = String::new();
     let mut subtrees: Vec<String> = Vec::new();
 
     let mut args = std::env::args().skip(1);
@@ -117,6 +118,11 @@ fn main() {
                 ));
             }
             "--flat" => flat = true,
+            "--run-id" => {
+                run_id = args
+                    .next()
+                    .unwrap_or_else(|| fail("--run-id needs a value"));
+            }
             "--batch-index" => {
                 batch_index = Some(
                     args.next()
@@ -266,7 +272,7 @@ fn main() {
     // records its cases (the orchestrator gates on the aggregate, not per-batch
     // exit status), and so an interrupted sweep can resume from what completed.
     if let Some(path) = &json_path {
-        match std::fs::write(path, RunReport::batch_json(&rep.cases)) {
+        match std::fs::write(path, RunReport::batch_json_with_id(&run_id, &rep.cases)) {
             Ok(()) => eprintln!(
                 "wrote {} case records to {}",
                 rep.cases.len(),
@@ -323,6 +329,8 @@ OPTIONS:
     -o, --report FILE        write the xst-shaped YAML report to FILE
     --json FILE              write the per-case JSON batch file (for the
                              whole-tree sweep's aggregator) to FILE
+    --run-id ID              stamp the --json batch with this run identity so
+                             the aggregator can bind the report to one run
     --flat                   for a directory positional, run only its DIRECT
                              .js cases (non-recursive)
     --batch-index N          zero-based chunk of the sorted positional files

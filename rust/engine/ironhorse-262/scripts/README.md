@@ -35,9 +35,23 @@ Outputs land in `rust/engine/target/test262-report/` by default:
   `ironhorse-xst` process**, so the oracle's RSS is freed on every batch exit.
   Peak memory is bounded by `--jobs` (that many concurrent oracle processes),
   not by the tree size.
-- **Resumable.** Each batch writes one JSON file atomically (`.part` → rename).
-  An interrupted run leaves the completed files on disk; re-running the same
-  command runs only what is missing.
+- **Resumable, and bound to a run identity.** Each batch writes one JSON file
+  atomically (`.part` → rename) and is **stamped with a run identity** — the
+  fingerprint of the result-affecting inputs (test262 SHA, engine SHA, oracle
+  mode, SES mode, batch cap, scope). An interrupted run leaves the completed
+  files on disk; re-running the same command runs only what is missing. Reusing
+  an output directory after **any** of those inputs changes re-runs the affected
+  batches rather than silently retaining a stale/foreign result, and aggregation
+  reads **exactly the discovered plan** (never a directory glob), so a leftover
+  batch from a different run can never leak into the report.
+- **Single-sourced partition cap.** The at-most-N-cases-per-batch cap lives in
+  one place (the Rust `BATCH_CASE_LIMIT`); the orchestrator reads it back with
+  `ironhorse-262-report batch-size` and passes it as `--batch-size`, so discovery
+  and execution cannot drift.
+- **Verified corpus identity.** The report emits `unknown`/`unverified` when the
+  corpus SHA cannot be established (the dir is not a git top-level — we never
+  ascend into an enclosing repo), and a vendored checkout that does not match the
+  configured pin, or is dirty, is fatal rather than published under a false pin.
 - **Deterministic.** Discovery, batching, and aggregation are sorted, so the
   same corpus + engine produces byte-identical `report.json`.
 - **Honest coverage.** Discovery walks the **entire** official `test/**` tree
@@ -67,6 +81,20 @@ run is a multi-hour sweep. It defaults to a bounded subtree (`built-ins/Proxy`)
 so a manual run is quick; pass `full` to sweep the whole tree. It uploads
 `report.json`/`report.html`/`provenance.json` as a build artifact; publishing to
 gh-pages is a separate, deliberate step.
+
+**Whole-tree resume is a manual restore, and the sweep's canonical home is a
+long-lived local/self-hosted run.** A whole-tree dispatch can time out near
+GitHub's job limit before it finishes; the workflow therefore also uploads the
+**validated resume state** (`results/`) and the **per-batch diagnostics**
+(`logs/`) as a second artifact (`ironhorse-test262-resume-state`), even on
+failure. To continue a timed-out run, download that artifact, unpack it under a
+local `--out`, and re-run `full-run.sh` with the same inputs — each batch is
+bound to its run identity, so only work matching this corpus/engine/oracle/scope
+is reused. Cross-dispatch automatic resume is deliberately **not** attempted:
+GitHub Actions cache keys are immutable and cannot accumulate partial state
+across dispatches. The whole-tree sweep is bounded (a zero-batch discovery is a
+hard error, never a published "0 cases" report) and OOM-safe, but its natural
+home is a self-hosted or local run that can hold the multi-hour wall clock.
 
 ## Complementary coverage
 
