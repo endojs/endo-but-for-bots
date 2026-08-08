@@ -6,8 +6,8 @@
 //!
 //! This module is the runner core (rollout step 1): full YAML frontmatter
 //! ([`crate::frontmatter`]), the ironhorse not-yet-implemented feature skip list
-//! + `--features-include`, sloppy+strict double-run mode selection, negative verdicts (constructor
-//! name vs `negative.type`, stack/memory aborts accepted for an expected
+//! + `--features-include`, sloppy+strict double-run mode selection, negative
+//! verdicts (constructor name vs `negative.type`, stack/memory aborts accepted for an expected
 //! `RangeError`), the dual-run oracle wiring (verdict + observable agreement
 //! gating, computron advisory, `--gate-meter-exact`, `--repeat N`
 //! determinism), and the xst-shaped YAML report (`mode:` / `skip:` /
@@ -81,8 +81,8 @@ pub const DEFAULT_ENDOR_SKIP_FEATURES: &[&str] = &[
 /// (only the host-side realm API + the guest `harden`/`petrify` globals are
 /// landed), a case run under a mode other than [`SesMode::None`] is a
 /// whole-case *named* pre-skip ([`SesMode::unimplemented_skip`]) rather than
-/// a generic abort or a false failure — the honest split, parallel to the
-/// `onlyStrict` strict-mode skip. When the guest `lockdown`/`Compartment`
+/// a generic abort or a false failure — the honest split. When the guest
+/// `lockdown`/`Compartment`
 /// surface lands, `unimplemented_skip` returns `None` and the mode's prelude
 /// ([`SesMode::prelude`]) is applied to the assembled source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -243,7 +243,7 @@ pub enum Verdict {
     /// tally.
     Covered,
     /// Skipped before running — a declared-unimplemented feature, a
-    /// structural shape (`module`/`async`) or an unavailable SES mode. The report's
+    /// structural shape (`module`) or an unavailable SES mode. The report's
     /// `skip:` section (xst's feature/flag skips).
     PreSkip(String),
     /// Skipped after attempting the run, named by the exact opcode / value /
@@ -261,8 +261,8 @@ pub enum Verdict {
 #[derive(Debug, Clone)]
 pub struct CaseResult {
     pub verdict: Verdict,
-    /// An unavailable SES mode caused this case to be skipped. This remains
-    /// for compatibility with the report format; ordinary strict variants run.
+    /// A strict variant was selected but deliberately omitted by a mode policy
+    /// (currently the exact-metering corpus or an unavailable SES mode).
     pub strict_skipped: bool,
     /// The case was covered but ironhorse's computrons differed from the
     /// oracle's — advisory telemetry, never a failure by itself (design §
@@ -291,7 +291,7 @@ fn effective_skip_features(cfg: &Config) -> HashSet<String> {
 
 /// Strict-mode selection from a case's `flags` — ironhorse's mirror of
 /// `xst262.c`'s default two-run (sloppy then strict) with the `onlyStrict` /
-/// `noStrict` / `raw` selectors. Returns `(run_sloppy, has_strict,
+/// `noStrict` / `raw` selectors. Returns `(run_sloppy, run_strict,
 /// only_strict)`. `module` is handled as a structural pre-skip before this
 /// is consulted.
 pub fn strict_mode_status(flags: &[String]) -> (bool, bool, bool) {
@@ -758,27 +758,32 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
         return preskip("structural:can-block");
     }
 
-    let (mut run_sloppy, mut has_strict, _only_strict) = strict_mode_status(&fm.flags);
+    let (mut run_sloppy, mut run_strict, only_strict) = strict_mode_status(&fm.flags);
+    let mut strict_skipped = false;
     // The proprietary exact-meter corpus records the meter of the literal
     // source file, not test262's synthetic second (`"use strict"`) variant.
     // Preserve that byte/meter identity contract while official test262 files
     // continue to execute every mode selected by their flags.
     if fm.features.iter().any(|f| f == "ironhorse-meter-exact") {
+        if only_strict {
+            return preskip("structural:only-strict-meter-exact");
+        }
+        strict_skipped = run_strict;
         run_sloppy = true;
-        has_strict = false;
+        run_strict = false;
     }
 
     // SES lockdown/compartment mode (`-l`/`-lc`/`-c`): the mode's guest
     // surface (`lockdown()`, the `Compartment` intrinsic) is a named scope
     // fold ironhorse does not yet expose, so a case run under any mode is a
-    // whole-case named pre-skip — the honest split, parallel to the
-    // `onlyStrict` strict skip. When the guest surface lands, this seam
+    // whole-case named pre-skip — the honest split. When the guest surface
+    // lands, this seam
     // ([`SesMode::unimplemented_skip`]) returns `None` and the mode's
     // [`SesMode::prelude`] is applied to the assembled source instead.
     if let Some(reason) = cfg.ses_mode.unimplemented_skip() {
         return CaseResult {
             verdict: Verdict::PreSkip(reason.into()),
-            strict_skipped: has_strict,
+            strict_skipped: run_strict,
             computron_gap: false,
         };
     }
@@ -793,8 +798,10 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
         let sloppy =
             run_sloppy.then(|| run_async_case(cfg, harness_dir, src, &fm, false, meter_exact_gate));
         let strict =
-            has_strict.then(|| run_async_case(cfg, harness_dir, src, &fm, true, meter_exact_gate));
-        return combine_mode_results(sloppy, strict);
+            run_strict.then(|| run_async_case(cfg, harness_dir, src, &fm, true, meter_exact_gate));
+        let mut result = combine_mode_results(sloppy, strict);
+        result.strict_skipped |= strict_skipped;
+        return result;
     }
 
     let run_mode = |source: &str| {
@@ -824,7 +831,7 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
     } else {
         None
     };
-    let strict = if has_strict {
+    let strict = if run_strict {
         match assemble_strict(harness_dir, src, &fm) {
             Ok(source) => Some(run_mode(&source)),
             Err(reason) => return preskip(&reason),
@@ -855,7 +862,7 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
 
     CaseResult {
         verdict,
-        strict_skipped: false,
+        strict_skipped,
         computron_gap,
     }
 }
@@ -1094,7 +1101,7 @@ impl XstReport {
         s.push_str("mode:\n");
         s.push_str(&format!("  sloppy-run: {}\n", self.sloppy_run));
         s.push_str(&format!(
-            "  strict-skipped-unimplemented: {}\n",
+            "  strict-skipped-by-policy: {}\n",
             self.strict_skipped
         ));
         s.push_str(&format!("  ses-mode: {}\n", self.ses_mode.short()));
@@ -1231,9 +1238,9 @@ fn run_case_bounded(
 }
 
 /// Attribute a per-case wall-clock hang: does ironhorse terminate on this
-/// source *alone* (no oracle) within `timeout`? Assembles the source exactly as
-/// the sloppy run does (the observed non-terminating cases are sloppy) and runs
-/// [`crate::ironhorse_only_run`] on its own wall-clock-bounded thread. `true`
+/// source *alone* (no oracle) within `timeout`? Reassembles every mode selected
+/// for the case and runs [`crate::ironhorse_only_run`] on its own
+/// wall-clock-bounded thread. `true`
 /// means ironhorse terminates independently, so the timeout was the oracle's
 /// non-termination, not ironhorse's. A missing-harness assembly error is itself
 /// a prompt terminal (ironhorse never even ran a dispatch loop → `true`); a
@@ -1244,40 +1251,56 @@ fn run_case_bounded(
 /// attribution conservatively toward `ironhorse-hang` (`false`).
 fn ironhorse_terminates_alone(harness_dir: &Path, src: &str, timeout: std::time::Duration) -> bool {
     let fm = frontmatter::parse(src);
-    let (run_sloppy, run_strict, _) = strict_mode_status(&fm.flags);
+    let (mut run_sloppy, mut run_strict, only_strict) = strict_mode_status(&fm.flags);
+    if fm.features.iter().any(|feature| feature == "ironhorse-meter-exact") {
+        if only_strict {
+            return true;
+        }
+        run_sloppy = true;
+        run_strict = false;
+    }
     let mut sources = Vec::new();
     if run_sloppy {
-        sources.push(match assemble(harness_dir, src, &fm) {
-            Ok(s) => s,
-            Err(_) => return true,
-        });
+        if let Ok(source) = assemble(harness_dir, src, &fm) {
+            sources.push(source);
+        }
     }
     if run_strict {
-        sources.push(match assemble_strict(harness_dir, src, &fm) {
-            Ok(s) => s,
-            Err(_) => return true,
-        });
+        if let Ok(source) = assemble_strict(harness_dir, src, &fm) {
+            sources.push(source);
+        }
     }
-    sources.into_iter().all(|source| {
+    let attribution_started = std::time::Instant::now();
+    for mut source in sources {
+        if fm.flags.iter().any(|flag| flag == "async") {
+            source = format!("{ASYNC_PRELUDE}{source}");
+        }
         let (tx, rx) = std::sync::mpsc::channel();
-        let spawned = std::thread::Builder::new()
+        let spawn = std::thread::Builder::new()
             .name("ironhorse-xst-attribute".into())
             .stack_size(CASE_THREAD_STACK_BYTES)
             .spawn(move || {
                 let _ = tx.send(crate::ironhorse_only_run(&source));
             });
-        spawned.is_ok()
-            && !matches!(
-                rx.recv_timeout(timeout),
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-            )
-    })
+        if spawn.is_err() {
+            return false;
+        }
+        let Some(remaining) = timeout.checked_sub(attribution_started.elapsed()) else {
+            return false;
+        };
+        match rx.recv_timeout(remaining) {
+            Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return false,
+        }
+    }
+    true
 }
 
 /// Run a set of test262 files (absolute paths) against the harness in
 /// `harness_dir`, returning the xst-shaped report. `root` is stripped from
-/// each path for readable failure labels. Each case runs under
-/// `cfg.per_case_timeout_seconds` (0 = unbounded, the library default; see
+/// each path for readable failure labels. The primary differential runs under
+/// `cfg.per_case_timeout_seconds` (0 = unbounded, the library default); a
+/// timeout permits one additional bound for Ironhorse-only attribution (see
 /// [`run_case_bounded`]).
 pub fn run_files(cfg: &Config, harness_dir: &Path, root: &Path, files: &[PathBuf]) -> XstReport {
     let mut rep = XstReport::default();
@@ -1782,7 +1805,7 @@ mod tests {
         let y = rep.to_yaml();
         assert!(y.contains("runner: ironhorse-xst"));
         assert!(y.contains("mode:"));
-        assert!(y.contains("strict-skipped-unimplemented: 2"));
+        assert!(y.contains("strict-skipped-by-policy: 2"));
         assert!(y.contains("skip:"));
         assert!(y.contains("skip-detail:"));
         assert!(y.contains("advisory:"));

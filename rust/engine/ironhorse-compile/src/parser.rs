@@ -79,6 +79,40 @@ impl From<LexError> for ParseError {
 
 type PResult<T> = Result<T, ParseError>;
 
+/// Return the line of the second `__proto__:` setter in an object literal.
+/// Converted assignment/parameter covers are `ObjectBinding` nodes, so only
+/// nodes that remain `Object` are subject to Annex B.3.1.
+fn duplicate_proto_setter_line(item: &Item) -> Option<u32> {
+    match item {
+        Item::Node(node) => {
+            if node.token == Token::Object {
+                let mut found = false;
+                if let Some(Item::List(properties)) = node.children.first() {
+                    for property in properties {
+                        if let Item::Node(property) = property {
+                            let is_proto_setter = property.token == Token::Property
+                                && property.flags & flags::SHORTHAND == 0
+                                && matches!(
+                                    property.children.first(),
+                                    Some(Item::Symbol(symbol)) if symbol == "__proto__"
+                                );
+                            if is_proto_setter {
+                                if found {
+                                    return Some(property.line);
+                                }
+                                found = true;
+                            }
+                        }
+                    }
+                }
+            }
+            node.children.iter().find_map(duplicate_proto_setter_line)
+        }
+        Item::List(items) => items.iter().find_map(duplicate_proto_setter_line),
+        Item::Symbol(_) | Item::Null => None,
+    }
+}
+
 /// The parser: the token window (`states[0]`/`states[1]`), the mode-flag
 /// word (`parser->flags`), and the node-build stack (`parser->root`).
 pub struct Parser {
@@ -156,6 +190,14 @@ impl Parser {
 
     fn error(&self, message: &str) -> ParseError {
         ParseError { line: self.cur.line, kind: ParseErrorKind::Syntax, message: message.to_string() }
+    }
+
+    fn unsupported_error(&self, message: &str) -> ParseError {
+        ParseError {
+            line: self.cur.line,
+            kind: ParseErrorKind::Unsupported,
+            message: format!("unsupported: {message}"),
+        }
     }
 
     // --- token window (fxGetNextToken / fxLookAheadOnce / fxMatchToken) ---
@@ -1104,6 +1146,12 @@ impl Parser {
         } else if self.cur.token == Token::Dot {
             self.get_next_token()?;
             if self.cur.token == Token::Identifier
+                && self.cur.symbol.as_deref() == Some("source")
+                && !self.cur.escaped
+            {
+                return Err(self.unsupported_error("source-phase import"));
+            }
+            if self.cur.token == Token::Identifier
                 && self.cur.symbol.as_deref() == Some("meta")
                 && !self.cur.escaped
             {
@@ -1267,7 +1315,6 @@ impl Parser {
     /// `{ async f() {} }`).
     fn object_expression(&mut self) -> PResult<()> {
         let mut count = 0usize;
-        let mut saw_proto_setter = false;
         let line = self.cur.line;
         self.match_token(Token::LeftBrace)?;
         loop {
@@ -1282,9 +1329,6 @@ impl Parser {
             } else {
                 let (symbol, token0, token1, token2) = self.property_name()?;
                 let mut prop_flags = self.property_name_async_flag;
-                let proto_setter = token1 == Token::Property
-                    && symbol.as_deref() == Some("__proto__")
-                    && self.cur.token == Token::Colon;
                 if token1 == Token::PrivateProperty {
                     return Err(self.error("invalid private property"));
                 } else if token2 == Token::Getter || token2 == Token::Setter {
@@ -1317,12 +1361,6 @@ impl Parser {
                     prop_flags |= flags::SHORTHAND | flags::METHOD;
                     self.function_expression(prop_line, None, flags::SUPER | prop_flags)?;
                 } else if self.cur.token == Token::Colon {
-                    if proto_setter {
-                        if saw_proto_setter {
-                            return Err(self.error("duplicate __proto__ property"));
-                        }
-                        saw_proto_setter = true;
-                    }
                     self.get_next_token()?;
                     self.assignment_expression()?;
                 } else if token1 == Token::Property {

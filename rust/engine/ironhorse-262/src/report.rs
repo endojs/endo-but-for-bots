@@ -193,8 +193,8 @@ pub struct CaseRecord {
 
 impl CaseRecord {
     /// Build a record from a runner [`CaseResult`] and the case's path/features.
-    pub fn from_result(path: &str, features: Vec<String>, r: &CaseResult) -> CaseRecord {
-        let (outcome, reason) = match &r.verdict {
+    pub fn from_result(path: &str, features: Vec<String>, result: &CaseResult) -> CaseRecord {
+        let (outcome, reason) = match &result.verdict {
             Verdict::Covered => (Outcome::Covered, String::new()),
             Verdict::PreSkip(s) => (Outcome::PreSkip, s.clone()),
             Verdict::RunSkip(s) => (Outcome::RunSkip, s.clone()),
@@ -205,8 +205,8 @@ impl CaseRecord {
             outcome,
             reason,
             features,
-            strict_skipped: r.strict_skipped,
-            computron_gap: r.computron_gap,
+            strict_skipped: result.strict_skipped,
+            computron_gap: result.computron_gap,
         }
     }
 
@@ -442,7 +442,7 @@ impl RunReport {
         s.push_str("  \"cases\": [\n");
         for (i, c) in cases.iter().enumerate() {
             let comma = if i + 1 < cases.len() { "," } else { "" };
-            let feats = c
+            let features = c
                 .features
                 .iter()
                 .map(|f| json_string(f))
@@ -454,7 +454,7 @@ impl RunReport {
                 json_string(c.outcome.as_str()),
                 json_string(c.category().as_str()),
                 json_string(&c.reason),
-                feats,
+                features,
                 c.strict_skipped,
                 c.computron_gap,
                 comma,
@@ -474,7 +474,7 @@ impl RunReport {
         s.push_str("{ \"cases\": [\n");
         for (i, c) in cases.iter().enumerate() {
             let comma = if i + 1 < cases.len() { "," } else { "" };
-            let feats = c
+            let features = c
                 .features
                 .iter()
                 .map(|f| json_string(f))
@@ -485,7 +485,7 @@ impl RunReport {
                 json_string(&c.path),
                 json_string(c.outcome.as_str()),
                 json_string(&c.reason),
-                feats,
+                features,
                 c.strict_skipped,
                 c.computron_gap,
                 comma,
@@ -641,11 +641,11 @@ pub fn read_provenance(path: &Path) -> Provenance {
         finished_at: yaml_string(&doc["finished_at"]),
         host: yaml_string(&doc["host"]),
         runner: {
-            let r = yaml_string(&doc["runner"]);
-            if r.is_empty() {
+            let runner = yaml_string(&doc["runner"]);
+            if runner.is_empty() {
                 "ironhorse-xst".to_string()
             } else {
-                r
+                runner
             }
         },
     }
@@ -660,12 +660,12 @@ pub fn batch_filename(subtree: &str) -> String {
 
 // Aggregation
 
-/// Merge every batch file in `results_dir` (any `*.json` except a reserved
+/// Merge every batch file in `results_directory` (any `*.json` except a reserved
 /// aggregate name) with the provenance, into one deterministic [`RunReport`].
 /// Duplicate paths (a batch re-run after an interruption) collapse to the
 /// last-read record; the final case list is sorted by path.
-pub fn aggregate(results_dir: &Path, provenance: Provenance) -> RunReport {
-    let mut batch_files: Vec<PathBuf> = std::fs::read_dir(results_dir)
+pub fn aggregate(results_directory: &Path, provenance: Provenance) -> RunReport {
+    let mut batch_files: Vec<PathBuf> = std::fs::read_dir(results_directory)
         .map(|rd| {
             rd.flatten()
                 .map(|e| e.path())
@@ -717,14 +717,14 @@ fn discover_into(root: &Path, dir: &Path, out: &mut Vec<String>) {
         Err(_) => return,
     };
     let mut has_direct_case = false;
-    let mut subdirs = Vec::new();
+    let mut subdirectories = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
             if path.file_name().map(|n| n == "staging").unwrap_or(false) {
                 continue;
             }
-            subdirs.push(path);
+            subdirectories.push(path);
         } else if path.extension().map(|e| e == "js").unwrap_or(false) {
             let name = path.file_name().unwrap_or_default().to_string_lossy();
             if !name.ends_with("_FIXTURE.js") {
@@ -734,20 +734,20 @@ fn discover_into(root: &Path, dir: &Path, out: &mut Vec<String>) {
     }
     if has_direct_case {
         if let Ok(rel) = dir.strip_prefix(root) {
-            let r = rel.to_string_lossy().into_owned();
-            if !r.is_empty() {
-                out.push(r);
+            let relative_path = rel.to_string_lossy().into_owned();
+            if !relative_path.is_empty() {
+                out.push(relative_path);
             }
         }
     }
-    subdirs.sort();
-    for sub in subdirs {
+    subdirectories.sort();
+    for sub in subdirectories {
         discover_into(root, &sub, out);
     }
 }
 
 /// The batches from `all` that have **not** yet completed — those whose result
-/// file is absent, empty, or **present but unparseable** in `results_dir`. This
+/// file is absent, empty, or **present but unparseable** in `results_directory`. This
 /// is the resume plan: after an interruption the completed per-directory batch
 /// files remain on disk and are skipped, so a re-run continues where it stopped.
 /// A batch process killed mid-write can leave a non-empty *truncated* file; a
@@ -756,10 +756,10 @@ fn discover_into(root: &Path, dir: &Path, out: &mut Vec<String>) {
 /// would drop its whole directory from the published total). Running this after a
 /// sweep and asserting the result is empty is the completeness gate that keeps a
 /// report from claiming cases it never produced.
-pub fn pending_batches(results_dir: &Path, all: &[String]) -> Vec<String> {
+pub fn pending_batches(results_directory: &Path, all: &[String]) -> Vec<String> {
     all.iter()
         .filter(|b| {
-            let f = results_dir.join(batch_filename(b));
+            let f = results_directory.join(batch_filename(b));
             match std::fs::metadata(&f) {
                 // Absent or empty: not yet run.
                 Err(_) => true,
@@ -881,10 +881,10 @@ pub fn to_html(report: &RunReport) -> String {
         ("Skipped", cc.skipped, "skipped"),
         ("Infrastructure", cc.infrastructure, "infra"),
     ];
-    for (label, n, cls) in cards {
+    for (label, n, card_class) in cards {
         s.push_str(&format!(
             "<li class=\"card {}\"><span class=\"num\">{}</span><span class=\"lbl\">{}</span><span class=\"percent\">{}</span></li>\n",
-            cls, n, escape_html(label), percent(n, total)
+            card_class, n, escape_html(label), percent(n, total)
         ));
     }
     s.push_str("</ul>\n");
@@ -918,21 +918,21 @@ pub fn to_html(report: &RunReport) -> String {
     s.push_str(
         "<section aria-labelledby=\"byfeature\">\n<h2 id=\"byfeature\">Breakdown by feature</h2>\n",
     );
-    let feats = report.by_feature();
-    let mut feat_rows: Vec<(String, CategoryCounts)> = feats.into_iter().collect();
-    feat_rows.sort_by(|a, b| {
+    let features = report.by_feature();
+    let mut feature_rows: Vec<(String, CategoryCounts)> = features.into_iter().collect();
+    feature_rows.sort_by(|a, b| {
         let ga = a.1.unsupported + a.1.ironhorse_failure;
         let gb = b.1.unsupported + b.1.ironhorse_failure;
         gb.cmp(&ga).then(a.0.cmp(&b.0))
     });
-    let shown = feat_rows.len().min(60);
+    let shown = feature_rows.len().min(60);
     s.push_str(&format!(
         "<p class=\"note\">{} features total; showing the {} with the most gaps.</p>\n",
-        feat_rows.len(),
+        feature_rows.len(),
         shown
     ));
-    let feat_map: BTreeMap<String, CategoryCounts> = feat_rows.into_iter().take(60).collect();
-    s.push_str(&category_table(&feat_map));
+    let feature_map: BTreeMap<String, CategoryCounts> = feature_rows.into_iter().take(60).collect();
+    s.push_str(&category_table(&feature_map));
     s.push_str("</section>\n");
 
     // Ironhorse failures (named).

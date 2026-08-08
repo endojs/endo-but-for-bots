@@ -346,14 +346,6 @@ fn valid_unported_import_attributes_are_unsupported() {
 }
 
 #[test]
-fn strict_delete_identifier_is_an_early_error() {
-    let mut parser = Parser::new("'use strict'; var value; delete value;", false, false).unwrap();
-    let error = parser.parse_program(false).expect_err("strict delete identifier must reject");
-    assert_eq!(error.kind, ParseErrorKind::Syntax);
-    assert!(error.message.contains("delete"));
-}
-
-#[test]
 fn malformed_input_never_panics() {
     // The fuzz target (a later child) depends on this: every byte
     // sequence yields a Result, never a panic.

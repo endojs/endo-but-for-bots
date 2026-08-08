@@ -2689,6 +2689,9 @@ impl Native {
 pub enum Halt {
     /// Reached RETURN/END: the completion value is in `result`.
     Return,
+    /// Internal control transfer to a JavaScript catch/finally target after a
+    /// native helper raises a realm-local error. Consumed by the dispatch loop.
+    Resume(usize),
     /// The meter host refused more computation.
     MeterAbort,
     /// The interpreter ran past a caller-supplied **step ceiling** without
@@ -2732,6 +2735,24 @@ pub enum Halt {
     /// `XS_CODE_AWAIT` shares the `YIELD` `mxCase` and likewise `goto
     /// XS_CODE_END_ALL`s out of `fxRunID`.
     Await(Slot),
+}
+
+/// Propagate a native/helper result from the bytecode dispatch loop, resuming
+/// at a JavaScript catch/finally target when a native helper raised an error.
+macro_rules! dispatch_result {
+    ($expression:expr, $program_counter:ident, $machine:expr, $return_depth:expr) => {
+        match $expression {
+            Ok(value) => value,
+            Err(Halt::Resume(target)) if $machine.call_stack.len() < $return_depth => {
+                return Halt::Resume(target);
+            }
+            Err(Halt::Resume(target)) => {
+                $program_counter = target;
+                continue;
+            }
+            Err(halt) => return halt,
+        }
+    };
 }
 
 /// The result of running one program's bytecode on ironhorse-vm.
@@ -4007,9 +4028,10 @@ impl Interp {
             let gopd = self.alloc_method(NativeMethod::ObjectGetOwnPropertyDescriptor);
             self.proto_methods
                 .push((object_ctor, "getOwnPropertyDescriptor", gopd));
-            let gopn = self.alloc_method(NativeMethod::ObjectGetOwnPropertyNames);
+            let get_own_property_names =
+                self.alloc_method(NativeMethod::ObjectGetOwnPropertyNames);
             self.proto_methods
-                .push((object_ctor, "getOwnPropertyNames", gopn));
+                .push((object_ctor, "getOwnPropertyNames", get_own_property_names));
             let defprop = self.alloc_method(NativeMethod::ObjectDefineProperty);
             self.proto_methods
                 .push((object_ctor, "defineProperty", defprop));
@@ -6227,28 +6249,34 @@ impl Interp {
                         }
                     } else if let Some((native, base)) = callee {
                         // A native (intrinsic) constructor callee.
-                        match self.call_native(native, base, argc, has_target, code) {
-                            Ok(()) => {
-                                // Return into the JS caller: `END_ALL` checks.
-                                if self.check_meter() == MeterCheck::Abort {
-                                    return Halt::MeterAbort;
-                                }
-                                pc = ret_pc;
-                            }
-                            Err(h) => return h,
+                        dispatch_result!(
+                            self.call_native(native, base, argc, has_target, code),
+                            pc,
+                            self,
+                            return_depth
+                        );
+                        // Return into the JS caller: `END_ALL` checks.
+                        if self.check_meter() == MeterCheck::Abort {
+                            return Halt::MeterAbort;
                         }
+                        pc = ret_pc;
                     } else if let Some((NativeMethod::FunctionCall, base)) = method {
                         // `Function.prototype.call`: a native receiver can be
                         // dispatched in place; a user receiver re-enters its
                         // bytecode frame through the trampoline.
-                        match self.call_dot_call_native(base, argc, code) {
-                            Ok(true) => {
+                        match dispatch_result!(
+                            self.call_dot_call_native(base, argc, code),
+                            pc,
+                            self,
+                            return_depth
+                        ) {
+                            true => {
                                 if self.check_meter() == MeterCheck::Abort {
                                     return Halt::MeterAbort;
                                 }
                                 pc = ret_pc;
                             }
-                            Ok(false) => match self.enter_call_dot_call(base, argc, ret_pc) {
+                            false => match self.enter_call_dot_call(base, argc, ret_pc) {
                                 Ok(body_start) => {
                                     if self.check_meter() == MeterCheck::Abort {
                                         return Halt::MeterAbort;
@@ -6257,7 +6285,6 @@ impl Interp {
                                 }
                                 Err(h) => return h,
                             },
-                            Err(h) => return h,
                         }
                     } else if let Some((NativeMethod::FunctionApply, base)) = method {
                         // `Function.prototype.apply` (no-array subset): re-enter
@@ -6277,15 +6304,16 @@ impl Interp {
                         // threaded through so a callback-taking method
                         // (`forEach`/`map`/…) can drive the callback via
                         // `run_callback`.
-                        match self.call_native_method(m, base, argc, code) {
-                            Ok(()) => {
-                                if self.check_meter() == MeterCheck::Abort {
-                                    return Halt::MeterAbort;
-                                }
-                                pc = ret_pc;
-                            }
-                            Err(h) => return h,
+                        dispatch_result!(
+                            self.call_native_method(m, base, argc, code),
+                            pc,
+                            self,
+                            return_depth
+                        );
+                        if self.check_meter() == MeterCheck::Abort {
+                            return Halt::MeterAbort;
                         }
+                        pc = ret_pc;
                     } else if let Some((bf, base)) = bound {
                         // A bound function (`fx_Function_prototype_bound`):
                         // re-enter the target with the bound `this` and the
@@ -6322,21 +6350,22 @@ impl Interp {
                             for arg in args.iter().skip(1) {
                                 self.push(*arg);
                             }
-                            match self.call_native_method(
-                                target_method,
-                                base,
-                                args.len().saturating_sub(1),
-                                code,
-                            ) {
-                                Ok(()) => {
-                                    if self.check_meter() == MeterCheck::Abort {
-                                        return Halt::MeterAbort;
-                                    }
-                                    pc = ret_pc;
-                                    continue;
-                                }
-                                Err(halt) => return halt,
+                            dispatch_result!(
+                                self.call_native_method(
+                                    target_method,
+                                    base,
+                                    args.len().saturating_sub(1),
+                                    code,
+                                ),
+                                pc,
+                                self,
+                                return_depth
+                            );
+                            if self.check_meter() == MeterCheck::Abort {
+                                return Halt::MeterAbort;
                             }
+                            pc = ret_pc;
+                            continue;
                         }
                         match self.enter_call_bound(bf, base, argc, ret_pc) {
                             Ok(body_start) => {
@@ -6641,71 +6670,49 @@ impl Interp {
 
                 // ---- arithmetic -------------------------------------
                 XS_CODE_ADD => {
-                    if let Err(halt) = self.op_add(code) {
-                        return halt;
-                    }
+                    dispatch_result!(self.op_add(code), pc, self, return_depth);
                     pc += size as usize;
                 }
                 XS_CODE_SUBTRACT => {
-                    if let Err(halt) = self.binary_arith(code, ArithOp::Sub) {
-                        return halt;
-                    }
+                    dispatch_result!(self.binary_arith(code, ArithOp::Sub), pc, self, return_depth);
                     pc += size as usize;
                 }
                 XS_CODE_MULTIPLY => {
-                    if let Err(halt) = self.binary_arith(code, ArithOp::Mul) {
-                        return halt;
-                    }
+                    dispatch_result!(self.binary_arith(code, ArithOp::Mul), pc, self, return_depth);
                     pc += size as usize;
                 }
                 XS_CODE_DIVIDE => {
-                    if let Err(halt) = self.binary_arith(code, ArithOp::Div) {
-                        return halt;
-                    }
+                    dispatch_result!(self.binary_arith(code, ArithOp::Div), pc, self, return_depth);
                     pc += size as usize;
                 }
                 XS_CODE_MODULO => {
-                    if let Err(halt) = self.binary_arith(code, ArithOp::Mod) {
-                        return halt;
-                    }
+                    dispatch_result!(self.binary_arith(code, ArithOp::Mod), pc, self, return_depth);
                     pc += size as usize;
                 }
 
                 // ---- bitwise ----------------------------------------
                 XS_CODE_BIT_AND => {
-                    if let Err(halt) = self.binary_bit(code, BitOp::And) {
-                        return halt;
-                    }
+                    dispatch_result!(self.binary_bit(code, BitOp::And), pc, self, return_depth);
                     pc += size as usize;
                 }
                 XS_CODE_BIT_OR => {
-                    if let Err(halt) = self.binary_bit(code, BitOp::Or) {
-                        return halt;
-                    }
+                    dispatch_result!(self.binary_bit(code, BitOp::Or), pc, self, return_depth);
                     pc += size as usize;
                 }
                 XS_CODE_BIT_XOR => {
-                    if let Err(halt) = self.binary_bit(code, BitOp::Xor) {
-                        return halt;
-                    }
+                    dispatch_result!(self.binary_bit(code, BitOp::Xor), pc, self, return_depth);
                     pc += size as usize;
                 }
                 XS_CODE_LEFT_SHIFT => {
-                    if let Err(halt) = self.binary_bit(code, BitOp::Shl) {
-                        return halt;
-                    }
+                    dispatch_result!(self.binary_bit(code, BitOp::Shl), pc, self, return_depth);
                     pc += size as usize;
                 }
                 XS_CODE_SIGNED_RIGHT_SHIFT => {
-                    if let Err(halt) = self.binary_bit(code, BitOp::Sar) {
-                        return halt;
-                    }
+                    dispatch_result!(self.binary_bit(code, BitOp::Sar), pc, self, return_depth);
                     pc += size as usize;
                 }
                 XS_CODE_UNSIGNED_RIGHT_SHIFT => {
-                    if let Err(halt) = self.binary_bit(code, BitOp::Shr) {
-                        return halt;
-                    }
+                    dispatch_result!(self.binary_bit(code, BitOp::Shr), pc, self, return_depth);
                     pc += size as usize;
                 }
                 XS_CODE_BIT_NOT => {
@@ -6719,27 +6726,19 @@ impl Interp {
 
                 // ---- comparison -------------------------------------
                 XS_CODE_LESS => {
-                    if let Err(halt) = self.relational(code, RelOp::Less) {
-                        return halt;
-                    }
+                    dispatch_result!(self.relational(code, RelOp::Less), pc, self, return_depth);
                     pc += size as usize;
                 }
                 XS_CODE_LESS_EQUAL => {
-                    if let Err(halt) = self.relational(code, RelOp::LessEqual) {
-                        return halt;
-                    }
+                    dispatch_result!(self.relational(code, RelOp::LessEqual), pc, self, return_depth);
                     pc += size as usize;
                 }
                 XS_CODE_MORE => {
-                    if let Err(halt) = self.relational(code, RelOp::More) {
-                        return halt;
-                    }
+                    dispatch_result!(self.relational(code, RelOp::More), pc, self, return_depth);
                     pc += size as usize;
                 }
                 XS_CODE_MORE_EQUAL => {
-                    if let Err(halt) = self.relational(code, RelOp::MoreEqual) {
-                        return halt;
-                    }
+                    dispatch_result!(self.relational(code, RelOp::MoreEqual), pc, self, return_depth);
                     pc += size as usize;
                 }
                 XS_CODE_STRICT_EQUAL => {
@@ -7174,6 +7173,9 @@ impl Interp {
                             self.exception = v;
                             match self.unwind_to_jump() {
                                 Some(target) => {
+                                    if self.call_stack.len() < return_depth {
+                                        return Halt::Resume(target);
+                                    }
                                     pc = target;
                                     if self.check_meter() == MeterCheck::Abort {
                                         return Halt::MeterAbort;
@@ -7604,6 +7606,9 @@ impl Interp {
                     self.exception = v;
                     match self.unwind_to_jump() {
                         Some(target) => {
+                            if self.call_stack.len() < return_depth {
+                                return Halt::Resume(target);
+                            }
                             pc = target;
                             if self.check_meter() == MeterCheck::Abort {
                                 return Halt::MeterAbort;
@@ -7623,6 +7628,9 @@ impl Interp {
                     let v = self.exception;
                     match self.unwind_to_jump() {
                         Some(target) => {
+                            if self.call_stack.len() < return_depth {
+                                return Halt::Resume(target);
+                            }
                             pc = target;
                             if self.check_meter() == MeterCheck::Abort {
                                 return Halt::MeterAbort;
@@ -11447,11 +11455,7 @@ impl Interp {
     fn error_to_string(&mut self, code: &[u8], this: Slot) -> Result<String, Halt> {
         let inst = match this.value {
             Payload::Reference(inst) => inst,
-            _ => {
-                return Err(Halt::Throw(
-                    "TypeError: Error receiver is not an object".into(),
-                ))
-            }
+            _ => return Err(self.catchable_type_error()),
         };
         let name_value = self
             .symbol_ids
@@ -11489,9 +11493,7 @@ impl Interp {
             value
         };
         if primitive.kind == Kind::Symbol {
-            return Err(Halt::Throw(
-                "TypeError: cannot coerce symbol to string".into(),
-            ));
+            return Err(self.catchable_type_error());
         }
         Ok(String::from_utf8_lossy(&self.to_string_bytes_metered(primitive)).into_owned())
     }
@@ -16946,6 +16948,17 @@ impl Interp {
         }
     }
 
+    /// Raise a realm-local TypeError from a native helper. The dispatch loop
+    /// consumes `Resume` and continues at the catch/finally target; an uncaught
+    /// error retains the ordinary host `Throw` result from [`Self::raise_js`].
+    fn catchable_type_error(&mut self) -> Halt {
+        let error = self.build_error("TypeError", 0, 0);
+        match self.raise_js(error) {
+            Ok(target) => Halt::Resume(target),
+            Err(halt) => halt,
+        }
+    }
+
     /// Adjust the meter for an uncaught throw escaping to the host: the
     /// escaping opcode's dispatch metering (added at the top of the loop)
     /// is removed — XS never meters it, its `mxBreak` bypassed by the
@@ -18900,49 +18913,27 @@ impl Interp {
             _ => return Err(Halt::Unsupported("to_primitive:non-callable")),
         };
         match self.method_of(f) {
-            Some(NativeMethod::ObjectValueOf) => Ok(receiver),
-            Some(NativeMethod::ObjectToString) => {
-                self.meter.tick_raw(METHOD_OBJECT_TOSTRING_METERING);
-                self.meter.tick_chunk_new(b"[object Object]".len() as u64);
-                let off = self.alloc_str_text(b"[object Object]");
-                Ok(Slot::of(Kind::String, Payload::String(off)))
-            }
-            Some(NativeMethod::FunctionToString) => {
-                let name = self
-                    .functions
-                    .get(&f)
-                    .map(|fi| fi.name.as_str())
-                    .unwrap_or("");
-                let text = format!("function [\"{name}\"] (){{[native code]}}");
-                self.meter.tick_raw(METHOD_FUNCTION_TOSTRING_METERING);
-                self.meter.tick_chunk_new(text.len() as u64);
-                let off = self.alloc_str_text(text.as_bytes());
-                Ok(Slot::of(Kind::String, Payload::String(off)))
-            }
-            Some(NativeMethod::WrapperValueOf) => match receiver.value {
-                Payload::Reference(r) => Ok(self.wrapper_data.get(&r).copied().unwrap_or(receiver)),
-                _ => Ok(receiver),
-            },
-            Some(NativeMethod::WrapperToString) => {
-                let prim = match receiver.value {
-                    Payload::Reference(r) => self.wrapper_data.get(&r).copied(),
-                    _ => None,
+            Some(native_method) => {
+                let base = self.stack.len();
+                self.push(receiver);
+                self.push(method);
+                self.push(Slot::undefined());
+                self.push(Slot::of(Kind::Uninitialized, Payload::None));
+                for argument in args {
+                    self.push(*argument);
                 }
-                .unwrap_or(receiver);
-                let bytes = self.to_string_bytes_metered(prim);
-                let off = self.alloc_str_text(&bytes);
-                Ok(Slot::of(Kind::String, Payload::String(off)))
+                match self.call_native_method(native_method, base, args.len(), code) {
+                    Ok(()) => Ok(self.pop()),
+                    Err(halt) => {
+                        self.stack.truncate(base);
+                        Err(halt)
+                    }
+                }
             }
-            Some(NativeMethod::ErrorToString) => {
-                let text = self.render(&receiver);
-                let off = self.alloc_str_text(text.as_bytes());
-                Ok(Slot::of(Kind::String, Payload::String(off)))
-            }
-            Some(_) | None if self.functions[&f].native.is_some() => {
+            None if self.functions[&f].native.is_some() => {
                 Err(Halt::Unsupported("to_primitive:native-method"))
             }
             None => self.run_callback(code, method, receiver, args),
-            Some(_) => Err(Halt::Unsupported("to_primitive:native-method")),
         }
     }
 
@@ -20360,6 +20351,7 @@ mod tests {
                 // `Await` is produced only inside a `step_async` nested dispatch
                 // and consumed there; it never escapes to a top-level outcome.
                 Halt::Await(_) => unreachable!("await escaped a step_async resume"),
+                Halt::Resume(_) => unreachable!("catch resume escaped a nested dispatch"),
             }
         }
     }
