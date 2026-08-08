@@ -1500,6 +1500,9 @@ pub enum NativeMethod {
     /// descriptor object (`{value, writable, enumerable, configurable}`) for
     /// `o`'s own property `k`, or `undefined` when absent.
     ObjectGetOwnPropertyDescriptor,
+    /// `Object.getOwnPropertyNames(o)` — all own string keys, including
+    /// non-enumerable Error `message`/`cause` properties.
+    ObjectGetOwnPropertyNames,
     /// `Object.defineProperty(o, k, descriptor)` — define a **new** own data
     /// property on an ordinary object from a full four-field data descriptor
     /// (`{value, writable, enumerable, configurable}`), storing the
@@ -2523,6 +2526,31 @@ impl Native {
         }
     }
 
+    /// ECMAScript `length` of the intrinsic constructor.
+    fn arity(self) -> u32 {
+        match self {
+            Native::AggregateError => 2,
+            Native::RegExp => 2,
+            Native::TypedArray(_) | Native::DataView => 3,
+            Native::Symbol | Native::Map | Native::Set | Native::WeakMap | Native::WeakSet => 0,
+            Native::Object
+            | Native::Function
+            | Native::Boolean
+            | Native::Number
+            | Native::String
+            | Native::Array
+            | Native::Error
+            | Native::EvalError
+            | Native::RangeError
+            | Native::ReferenceError
+            | Native::SyntaxError
+            | Native::TypeError
+            | Native::URIError
+            | Native::ArrayBuffer
+            | Native::Promise => 1,
+        }
+    }
+
     /// The intrinsic global constructors ironhorse binds, in `(name, variant)`
     /// pairs. The name is what the XS compiler records in the symbols
     /// atom; [`Interp::link_intrinsics`] binds each to the program-local id
@@ -3464,10 +3492,14 @@ impl Interp {
         let error_proto = self.slots.alloc(Slot::instance(object_proto));
         for (name, native) in Native::intrinsics() {
             let f = self.slots.alloc(Slot::instance(func_proto));
+            let name_chunk = self.alloc_str_text(name.as_bytes());
             self.functions.insert(
                 f,
                 FuncInfo {
                     native: Some(native),
+                    name: name.to_string(),
+                    name_chunk,
+                    arity: native.arity(),
                     ..FuncInfo::default()
                 },
             );
@@ -3540,6 +3572,11 @@ impl Interp {
                 Native::RegExp => self.slots.alloc(Slot::instance(object_proto)),
             };
             self.ctor_prototype.insert(f, proto);
+            // The two realm-local identity links required of every built-in
+            // constructor.  They are installed only when the program names
+            // the corresponding key, like the rest of the boot surface.
+            self.proto_methods.push((proto, "constructor", f));
+            self.proto_methods.push((f, "prototype", proto));
         }
         // Remember `%Array.prototype%` — every array literal / `new Array`
         // instance chains to it so its methods resolve up the chain.
@@ -3860,6 +3897,9 @@ impl Interp {
             let gopd = self.alloc_method(NativeMethod::ObjectGetOwnPropertyDescriptor);
             self.proto_methods
                 .push((object_ctor, "getOwnPropertyDescriptor", gopd));
+            let gopn = self.alloc_method(NativeMethod::ObjectGetOwnPropertyNames);
+            self.proto_methods
+                .push((object_ctor, "getOwnPropertyNames", gopn));
             let defprop = self.alloc_method(NativeMethod::ObjectDefineProperty);
             self.proto_methods
                 .push((object_ctor, "defineProperty", defprop));
@@ -4228,15 +4268,18 @@ impl Interp {
         }
     }
 
-    /// Allocate a native prototype-method function instance (chained to
-    /// %Function.prototype% is unnecessary for these — they are only ever
-    /// dispatched, never re-inspected) registered in [`Self::functions`].
+    /// Allocate a native prototype-method function instance. Native methods
+    /// are ordinary callable objects, so they inherit `%Function.prototype%`;
+    /// test262's property helpers rely on that when they capture uncurried
+    /// primordials with `Function.prototype.call.bind(nativeMethod)`.
     fn alloc_method(&mut self, m: NativeMethod) -> crate::value::SlotIndex {
-        let f = self.slots.alloc(Slot::instance(crate::value::SlotIndex::NULL));
+        let f = self.slots.alloc(Slot::instance(self.function_proto));
+        let name_chunk = self.alloc_str_text(b"");
         self.functions.insert(
             f,
             FuncInfo {
                 method: Some(m),
+                name_chunk,
                 ..FuncInfo::default()
             },
         );
@@ -5253,6 +5296,14 @@ impl Interp {
                         Some(k) => k,
                         None => return Halt::Unsupported(op.name()),
                     };
+                    let key = if key.kind == Kind::Reference {
+                        match self.to_primitive(code, key, true) {
+                            Ok(key) => key,
+                            Err(halt) => return halt,
+                        }
+                    } else {
+                        key
+                    };
                     let at = match self.resolve_at_key(key) {
                         Some(at) => at,
                         None => return Halt::Unsupported(op.name()),
@@ -5477,12 +5528,19 @@ impl Interp {
                             // evaluates to the RHS) — fully modeled, no
                             // allocation, so it meters nothing beyond its
                             // dispatch (verified against the pin). A **strict**
-                            // callee must throw a *catchable* `TypeError`, which
-                            // needs the native-error construction ironhorse does not
-                            // yet model (a wrong uncatchable host-abort would
-                            // diverge from a `try`/`catch`), so it self-names.
+                            // callee throws a realm-local, catchable TypeError.
                             if self.strict {
-                                return Halt::Unsupported("strict-set:integrity-violation");
+                                let error = self.build_error("TypeError", 0, 0);
+                                match self.raise_js(error) {
+                                    Ok(target) => {
+                                        pc = target;
+                                        if self.check_meter() == MeterCheck::Abort {
+                                            return Halt::MeterAbort;
+                                        }
+                                        continue;
+                                    }
+                                    Err(halt) => return halt,
+                                }
                             }
                         } else {
                             self.instance_put(inst, id, value);
@@ -5610,11 +5668,7 @@ impl Interp {
                         }
                         Payload::Reference(inst)
                             if (Some(id) == self.length_id || Some(id) == self.name_id)
-                                && self
-                                    .functions
-                                    .get(&inst)
-                                    .map(|fi| fi.native.is_none() && fi.method.is_none())
-                                    .unwrap_or(false) =>
+                                && self.functions.contains_key(&inst) =>
                         {
                             // A user function's own `length`/`name` data
                             // properties (`XS_DONT_ENUM|XS_DONT_SET`), created
@@ -5681,14 +5735,22 @@ impl Interp {
                             self.meter.tick_builtin();
                             let deleted = self.delete_own_property(inst, id);
                             // A strict `delete` of a non-configurable own
-                            // property throws a *catchable* `TypeError` (XS's
-                            // `fxRunDelete` on a `false` from
-                            // `mxBehaviorDeleteProperty`) — the native-error
-                            // construction ironhorse does not yet model, so it
-                            // self-names. A sloppy `delete` yields `false`
-                            // (fully modeled below).
+                            // property throws a realm-local, catchable
+                            // `TypeError` (XS's `fxRunDelete` on a `false` from
+                            // `mxBehaviorDeleteProperty`). A sloppy `delete`
+                            // yields `false` (fully modeled below).
                             if !deleted && self.strict {
-                                return Halt::Unsupported("strict-delete:non-configurable");
+                                let error = self.build_error("TypeError", 0, 0);
+                                match self.raise_js(error) {
+                                    Ok(target) => {
+                                        pc = target;
+                                        if self.check_meter() == MeterCheck::Abort {
+                                            return Halt::MeterAbort;
+                                        }
+                                        continue;
+                                    }
+                                    Err(halt) => return halt,
+                                }
                             }
                             if let Some(s) = self.stack.last_mut() {
                                 *s = Slot::boolean(deleted);
@@ -5922,15 +5984,25 @@ impl Interp {
                             Err(h) => return h,
                         }
                     } else if let Some((NativeMethod::FunctionCall, base)) = method {
-                        // `Function.prototype.call`: re-enter the target frame
-                        // (a trampoline), resuming the caller after this `run`.
-                        match self.enter_call_dot_call(base, argc, ret_pc) {
-                            Ok(body_start) => {
+                        // `Function.prototype.call`: a native receiver can be
+                        // dispatched in place; a user receiver re-enters its
+                        // bytecode frame through the trampoline.
+                        match self.call_dot_call_native(base, argc, code) {
+                            Ok(true) => {
                                 if self.check_meter() == MeterCheck::Abort {
                                     return Halt::MeterAbort;
                                 }
-                                pc = body_start;
+                                pc = ret_pc;
                             }
+                            Ok(false) => match self.enter_call_dot_call(base, argc, ret_pc) {
+                                Ok(body_start) => {
+                                    if self.check_meter() == MeterCheck::Abort {
+                                        return Halt::MeterAbort;
+                                    }
+                                    pc = body_start;
+                                }
+                                Err(h) => return h,
+                            },
                             Err(h) => return h,
                         }
                     } else if let Some((NativeMethod::FunctionApply, base)) = method {
@@ -5968,6 +6040,49 @@ impl Interp {
                         // increment, so it self-names.
                         if has_target {
                             return Halt::Unsupported("bind:new-bound");
+                        }
+                        // The test262 property harness captures uncurried
+                        // primordials with
+                        // `Function.prototype.call.bind(nativeMethod)`.  Run
+                        // that canonical bound-call shape directly: argument
+                        // 0 becomes the native method receiver and the rest
+                        // remain its arguments.
+                        let bound_data = self.bound_functions[&bf].clone();
+                        if self.method_of(bound_data.target) == Some(NativeMethod::FunctionCall) {
+                            let target = match bound_data.this_arg.value {
+                                Payload::Reference(target) => target,
+                                _ => return Halt::Unsupported("bind:call-target"),
+                            };
+                            let target_method = match self.method_of(target) {
+                                Some(method) => method,
+                                None => return Halt::Unsupported("bind:call-target"),
+                            };
+                            let mut args = bound_data.args;
+                            args.extend_from_slice(&self.stack[base + 4..base + 4 + argc]);
+                            let receiver = args.first().copied().unwrap_or_else(Slot::undefined);
+                            self.stack.truncate(base);
+                            self.push(receiver);
+                            self.push(Slot::of(Kind::Reference, Payload::Reference(target)));
+                            self.push(Slot::undefined());
+                            self.push(Slot::of(Kind::Uninitialized, Payload::None));
+                            for arg in args.iter().skip(1) {
+                                self.push(*arg);
+                            }
+                            match self.call_native_method(
+                                target_method,
+                                base,
+                                args.len().saturating_sub(1),
+                                code,
+                            ) {
+                                Ok(()) => {
+                                    if self.check_meter() == MeterCheck::Abort {
+                                        return Halt::MeterAbort;
+                                    }
+                                    pc = ret_pc;
+                                    continue;
+                                }
+                                Err(halt) => return halt,
+                            }
                         }
                         match self.enter_call_bound(bf, base, argc, ret_pc) {
                             Ok(body_start) => {
@@ -6269,70 +6384,70 @@ impl Interp {
 
                 // ---- arithmetic -------------------------------------
                 XS_CODE_ADD => {
-                    if self.op_add().is_err() {
-                        return Halt::Unsupported(op.name());
+                    if let Err(halt) = self.op_add(code) {
+                        return halt;
                     }
                     pc += size as usize;
                 }
                 XS_CODE_SUBTRACT => {
-                    if self.binary_arith(ArithOp::Sub).is_err() {
-                        return Halt::Unsupported(op.name());
+                    if let Err(halt) = self.binary_arith(code, ArithOp::Sub) {
+                        return halt;
                     }
                     pc += size as usize;
                 }
                 XS_CODE_MULTIPLY => {
-                    if self.binary_arith(ArithOp::Mul).is_err() {
-                        return Halt::Unsupported(op.name());
+                    if let Err(halt) = self.binary_arith(code, ArithOp::Mul) {
+                        return halt;
                     }
                     pc += size as usize;
                 }
                 XS_CODE_DIVIDE => {
-                    if self.binary_arith(ArithOp::Div).is_err() {
-                        return Halt::Unsupported(op.name());
+                    if let Err(halt) = self.binary_arith(code, ArithOp::Div) {
+                        return halt;
                     }
                     pc += size as usize;
                 }
                 XS_CODE_MODULO => {
-                    if self.binary_arith(ArithOp::Mod).is_err() {
-                        return Halt::Unsupported(op.name());
+                    if let Err(halt) = self.binary_arith(code, ArithOp::Mod) {
+                        return halt;
                     }
                     pc += size as usize;
                 }
 
                 // ---- bitwise ----------------------------------------
                 XS_CODE_BIT_AND => {
-                    if self.binary_bit(BitOp::And).is_err() {
-                        return Halt::Unsupported(op.name());
+                    if let Err(halt) = self.binary_bit(code, BitOp::And) {
+                        return halt;
                     }
                     pc += size as usize;
                 }
                 XS_CODE_BIT_OR => {
-                    if self.binary_bit(BitOp::Or).is_err() {
-                        return Halt::Unsupported(op.name());
+                    if let Err(halt) = self.binary_bit(code, BitOp::Or) {
+                        return halt;
                     }
                     pc += size as usize;
                 }
                 XS_CODE_BIT_XOR => {
-                    if self.binary_bit(BitOp::Xor).is_err() {
-                        return Halt::Unsupported(op.name());
+                    if let Err(halt) = self.binary_bit(code, BitOp::Xor) {
+                        return halt;
                     }
                     pc += size as usize;
                 }
                 XS_CODE_LEFT_SHIFT => {
-                    if self.binary_bit(BitOp::Shl).is_err() {
-                        return Halt::Unsupported(op.name());
+                    if let Err(halt) = self.binary_bit(code, BitOp::Shl) {
+                        return halt;
                     }
                     pc += size as usize;
                 }
                 XS_CODE_SIGNED_RIGHT_SHIFT => {
-                    if self.binary_bit(BitOp::Sar).is_err() {
-                        return Halt::Unsupported(op.name());
+                    if let Err(halt) = self.binary_bit(code, BitOp::Sar) {
+                        return halt;
                     }
                     pc += size as usize;
                 }
                 XS_CODE_UNSIGNED_RIGHT_SHIFT => {
-                    if self.binary_bit(BitOp::Shr).is_err() {
-                        return Halt::Unsupported(op.name());
+                    if let Err(halt) = self.binary_bit(code, BitOp::Shr) {
+                        return halt;
                     }
                     pc += size as usize;
                 }
@@ -6347,26 +6462,26 @@ impl Interp {
 
                 // ---- comparison -------------------------------------
                 XS_CODE_LESS => {
-                    if self.relational(RelOp::Less).is_err() {
-                        return Halt::Unsupported(op.name());
+                    if let Err(halt) = self.relational(code, RelOp::Less) {
+                        return halt;
                     }
                     pc += size as usize;
                 }
                 XS_CODE_LESS_EQUAL => {
-                    if self.relational(RelOp::LessEqual).is_err() {
-                        return Halt::Unsupported(op.name());
+                    if let Err(halt) = self.relational(code, RelOp::LessEqual) {
+                        return halt;
                     }
                     pc += size as usize;
                 }
                 XS_CODE_MORE => {
-                    if self.relational(RelOp::More).is_err() {
-                        return Halt::Unsupported(op.name());
+                    if let Err(halt) = self.relational(code, RelOp::More) {
+                        return halt;
                     }
                     pc += size as usize;
                 }
                 XS_CODE_MORE_EQUAL => {
-                    if self.relational(RelOp::MoreEqual).is_err() {
-                        return Halt::Unsupported(op.name());
+                    if let Err(halt) = self.relational(code, RelOp::MoreEqual) {
+                        return halt;
                     }
                     pc += size as usize;
                 }
@@ -6500,13 +6615,39 @@ impl Interp {
                 XS_CODE_TO_NUMERIC => {
                     let top = *self.stack.last().unwrap_or(&Slot::undefined());
                     match top.kind {
-                        Kind::Integer | Kind::Number => {}
+                        Kind::Integer | Kind::Number | Kind::BigInt => {}
                         Kind::Boolean | Kind::Null | Kind::Undefined => {
                             if let Some(s) = self.stack.last_mut() {
                                 *s = Slot::number(to_number(&top));
                             }
                         }
+                        Kind::String | Kind::Reference => {
+                            let numeric = match self.to_number_value(code, top) {
+                                Ok(value) => value,
+                                Err(halt) => return halt,
+                            };
+                            if let Some(s) = self.stack.last_mut() {
+                                *s = numeric;
+                            }
+                        }
                         _ => return Halt::Unsupported(op.name()),
+                    }
+                    pc += size as usize;
+                }
+                // `to_string`: the shared abstract operation used by template
+                // substitutions and other compiler-emitted string contexts.
+                XS_CODE_TO_STRING => {
+                    let top = *self.stack.last().unwrap_or(&Slot::undefined());
+                    let primitive = match self.to_primitive(code, top, true) {
+                        Ok(value) => value,
+                        Err(halt) => return halt,
+                    };
+                    if primitive.kind == Kind::Symbol {
+                        return Halt::Unsupported("to_string:symbol");
+                    }
+                    let value = self.to_string_slot_metered(primitive);
+                    if let Some(top) = self.stack.last_mut() {
+                        *top = value;
                     }
                     pc += size as usize;
                 }
@@ -7635,6 +7776,16 @@ impl Interp {
         // stack; run until its `END` pops the stack back to this depth.
         let return_depth = self.call_stack.len();
         match self.dispatch_at(code, body_start, return_depth) {
+            // A callback throw may unwind across this native re-entry into a
+            // catch/finally established by the caller. In that case the nested
+            // dispatcher has already resumed the caller and run it onward;
+            // its eventual Return must propagate instead of being mistaken
+            // for the callback's own result (whose frame was abandoned).
+            Halt::Return
+                if self.call_stack.len() < return_depth && self.stack.is_empty() =>
+            {
+                Err(Halt::Return)
+            }
             Halt::Return => Ok(self.pop()),
             other => Err(other),
         }
@@ -8102,6 +8253,7 @@ impl Interp {
                         _ => return Err(Halt::Unsupported(native_unsupported_name(native))),
                     },
                     _ if argc == 0 => Slot::integer(0),
+                    Kind::Reference => self.to_number_value(code, a)?,
                     _ => return Err(Halt::Unsupported(native_unsupported_name(native))),
                 };
                 if has_target {
@@ -8132,7 +8284,13 @@ impl Interp {
                             Slot::of(Kind::String, Payload::String(off))
                         }
                         Kind::Reference => {
-                            return Err(Halt::Unsupported(native_unsupported_name(native)))
+                            let primitive = self.to_primitive(code, a, true)?;
+                            if primitive.kind == Kind::Symbol {
+                                return Err(Halt::Unsupported("to_string:symbol"));
+                            }
+                            let bytes = self.to_string_bytes_metered(primitive);
+                            let off = self.alloc_str_text(&bytes);
+                            Slot::of(Kind::String, Payload::String(off))
                         }
                         // `String(aBigInt)` renders through `fxBigintToString`,
                         // whose radix-derived working-chunk allocation +
@@ -10317,7 +10475,30 @@ impl Interp {
         if let Some(text) = message {
             if let Some(&mid) = self.symbol_ids.get("message") {
                 let off = self.alloc_str_text(text.as_bytes());
-                self.set_own_unmetered(inst, mid, Slot::of(Kind::String, Payload::String(off)));
+                self.set_own_unmetered_with_flag(
+                    inst,
+                    mid,
+                    Slot::of(Kind::String, Payload::String(off)),
+                    XS_DONT_ENUM_FLAG,
+                );
+            }
+        }
+        // `InstallErrorCause`: when the options object has a `cause`
+        // property, copy its value to a writable, non-enumerable,
+        // configurable own property on the new realm-local Error instance.
+        if argc >= 2 {
+            let options = self
+                .stack
+                .get(base + 5)
+                .copied()
+                .unwrap_or_else(Slot::undefined);
+            if let (Payload::Reference(options), Some(&cause_id)) =
+                (options.value, self.symbol_ids.get("cause"))
+            {
+                if self.instance_has(options, cause_id).0 {
+                    let cause = self.instance_get(options, cause_id);
+                    self.set_own_unmetered_with_flag(inst, cause_id, cause, XS_DONT_ENUM_FLAG);
+                }
             }
         }
         Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -10380,7 +10561,27 @@ impl Interp {
         if let Some(text) = message {
             if let Some(&mid) = self.symbol_ids.get("message") {
                 let off = self.alloc_str_text(text.as_bytes());
-                self.set_own_unmetered(inst, mid, Slot::of(Kind::String, Payload::String(off)));
+                self.set_own_unmetered_with_flag(
+                    inst,
+                    mid,
+                    Slot::of(Kind::String, Payload::String(off)),
+                    XS_DONT_ENUM_FLAG,
+                );
+            }
+        }
+        if argc >= 3 {
+            let options = self
+                .stack
+                .get(base + 6)
+                .copied()
+                .unwrap_or_else(Slot::undefined);
+            if let (Payload::Reference(options), Some(&cause_id)) =
+                (options.value, self.symbol_ids.get("cause"))
+            {
+                if self.instance_has(options, cause_id).0 {
+                    let cause = self.instance_get(options, cause_id);
+                    self.set_own_unmetered_with_flag(inst, cause_id, cause, XS_DONT_ENUM_FLAG);
+                }
             }
         }
         // The `errors` Array (`fxNewArrayInstance` + the copied elements +
@@ -10398,10 +10599,11 @@ impl Interp {
         arr_data.length = n as u32;
         self.arrays.insert(arr_inst, arr_data);
         if let Some(&eid) = self.symbol_ids.get("errors") {
-            self.set_own_unmetered(
+            self.set_own_unmetered_with_flag(
                 inst,
                 eid,
                 Slot::of(Kind::Reference, Payload::Reference(arr_inst)),
+                XS_DONT_ENUM_FLAG,
             );
         }
         Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
@@ -10416,18 +10618,16 @@ impl Interp {
     /// target with the bound `this` + bound args prepended (the `run`
     /// trampoline via [`Self::enter_call_bound`]).
     fn make_bound_function(&mut self, base: usize, argc: usize) -> Result<Slot, Halt> {
-        let this = self.stack.get(base).copied().unwrap_or_else(Slot::undefined);
-        // The target must be a plain user function (a native/method/already-
-        // bound target's trampoline geometry is a later increment).
+        let this = self
+            .stack
+            .get(base)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        // Any callable may be bound. User functions use the ordinary bound
+        // trampoline; the canonical bound `Function.prototype.call` native
+        // shape is handled directly by the call opcode.
         let target = match this.value {
-            Payload::Reference(r)
-                if self
-                    .functions
-                    .get(&r)
-                    .map_or(false, |fi| fi.native.is_none() && fi.method.is_none()) =>
-            {
-                r
-            }
+            Payload::Reference(r) if self.functions.contains_key(&r) => r,
             _ => return Err(Halt::Unsupported("bind:non-user-function-receiver")),
         };
         let this_arg = self.stack.get(base + 4).copied().unwrap_or_else(Slot::undefined);
@@ -10517,6 +10717,84 @@ impl Interp {
         }
     }
 
+    /// Variant used by built-ins whose spec-created own property has fixed
+    /// attributes (Error `message`/`cause`, prototype methods, and the like).
+    fn set_own_unmetered_with_flag(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        flag: u8,
+    ) {
+        if let Some(p) = self.find_property(inst, id) {
+            let s = self.slots.get_mut(p);
+            s.kind = value.kind;
+            s.value = value.value;
+            s.flag = flag;
+        } else {
+            let head = self.slots.get(inst).next;
+            let mut prop = value;
+            prop.id = id;
+            prop.flag = flag;
+            prop.next = head;
+            let idx = self.slots.alloc(prop);
+            self.slots.get_mut(inst).next = idx;
+        }
+    }
+
+    /// Dispatch `native.call(thisArg, ...args)` without entering a bytecode
+    /// frame. Returns `false` when the receiver is not a native constructor or
+    /// native method, allowing the ordinary user-function trampoline to run.
+    fn call_dot_call_native(
+        &mut self,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<bool, Halt> {
+        let target = self
+            .stack
+            .get(base)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let target_ref = match target.value {
+            Payload::Reference(r) => r,
+            _ => return Ok(false),
+        };
+        let native = self.native_of(target_ref);
+        let method = self.method_of(target_ref);
+        if native.is_none() && method.is_none() {
+            return Ok(false);
+        }
+        let this_arg = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let forwarded: Vec<Slot> = if argc >= 1 {
+            self.stack[base + 5..base + 4 + argc].to_vec()
+        } else {
+            Vec::new()
+        };
+        let forwarded_len = forwarded.len();
+        self.stack.truncate(base);
+        self.push(this_arg);
+        self.push(target);
+        self.push(Slot::undefined());
+        self.push(Slot::of(Kind::Uninitialized, Payload::None));
+        for arg in forwarded {
+            self.push(arg);
+        }
+        self.meter.tick_raw(
+            CALL_TRAMPOLINE_METERING + forwarded_len as u64 * CALL_TRAMPOLINE_PER_ARG,
+        );
+        if let Some(native) = native {
+            self.call_native(native, base, forwarded_len, false, code)?;
+        } else if let Some(method) = method {
+            self.call_native_method(method, base, forwarded_len, code)?;
+        }
+        Ok(true)
+    }
+
     /// `Function.prototype.call` trampoline: reshape the call frame from
     /// `[f, callMethod, RESULT, FRAME, thisArg, args…]` into a direct call
     /// `[thisArg, f, RESULT, FRAME, args…]` and enter the receiver's body,
@@ -10598,7 +10876,7 @@ impl Interp {
     fn enter_call_dot_apply(
         &mut self,
         base: usize,
-        argc: usize,
+        _argc: usize,
         ret_pc: usize,
     ) -> Result<usize, Halt> {
         let f = self.stack.get(base).copied().unwrap_or_else(Slot::undefined);
@@ -10725,6 +11003,56 @@ impl Interp {
         self.enter_call(total, ret_pc, false)
     }
 
+    /// `Error.prototype.toString` over an arbitrary object receiver. The
+    /// method reads inherited `name`/`message` properties and applies the
+    /// shared string-hint primitive conversion, rather than consulting the
+    /// native Error side table (the method is intentionally generic).
+    fn error_to_string(&mut self, code: &[u8], this: Slot) -> Result<String, Halt> {
+        let inst = match this.value {
+            Payload::Reference(inst) => inst,
+            _ => return Err(Halt::Throw("TypeError: Error receiver is not an object".into())),
+        };
+        let name_value = self
+            .symbol_ids
+            .get("name")
+            .map(|&id| self.instance_get(inst, id))
+            .unwrap_or_else(Slot::undefined);
+        let message_value = self
+            .symbol_ids
+            .get("message")
+            .map(|&id| self.instance_get(inst, id))
+            .unwrap_or_else(Slot::undefined);
+        let name = if name_value.kind == Kind::Undefined {
+            "Error".to_string()
+        } else {
+            self.value_to_string(code, name_value)?
+        };
+        let message = if message_value.kind == Kind::Undefined {
+            String::new()
+        } else {
+            self.value_to_string(code, message_value)?
+        };
+        if name.is_empty() {
+            Ok(message)
+        } else if message.is_empty() {
+            Ok(name)
+        } else {
+            Ok(format!("{name}: {message}"))
+        }
+    }
+
+    fn value_to_string(&mut self, code: &[u8], value: Slot) -> Result<String, Halt> {
+        let primitive = if value.kind == Kind::Reference {
+            self.to_primitive(code, value, true)?
+        } else {
+            value
+        };
+        if primitive.kind == Kind::Symbol {
+            return Err(Halt::Throw("TypeError: cannot coerce symbol to string".into()));
+        }
+        Ok(String::from_utf8_lossy(&self.to_string_bytes_metered(primitive)).into_owned())
+    }
+
     /// Dispatch a native prototype **method** call (`obj.toString()`,
     /// `obj.hasOwnProperty(k)`, `wrapper.valueOf()`, …). The value stack holds
     /// the call frame `[THIS, FUNCTION, RESULT, FRAME]` from `base`; `THIS` is
@@ -10769,8 +11097,12 @@ impl Interp {
             // later increment). Allocates the result string chunk.
             NativeMethod::ObjectToString => {
                 self.meter.tick_raw(METHOD_OBJECT_TOSTRING_METERING);
-                self.meter.tick_chunk_new(b"[object Object]".len() as u64);
-                let off = self.alloc_str_text(b"[object Object]");
+                let text: &[u8] = match this.value {
+                    Payload::Reference(r) if self.error_data.contains_key(&r) => b"[object Error]",
+                    _ => b"[object Object]",
+                };
+                self.meter.tick_chunk_new(text.len() as u64);
+                let off = self.alloc_str_text(text);
                 Slot::of(Kind::String, Payload::String(off))
             }
             // `Function.prototype.toString`: XS renders any function as
@@ -10792,7 +11124,7 @@ impl Interp {
             }
             // `Error.prototype.toString`: `name` / `name: message`.
             NativeMethod::ErrorToString => {
-                let s = self.render(&this);
+                let s = self.error_to_string(code, this)?;
                 self.meter.tick_raw(METHOD_ERROR_TOSTRING_METERING);
                 self.meter.tick_chunk_new(s.len() as u64);
                 let off = self.alloc_str_text(s.as_bytes());
@@ -10937,7 +11269,6 @@ impl Interp {
                     || self.array_buffers.contains_key(&inst)
                     || self.data_views.contains_key(&inst)
                     || self.wrapper_data.contains_key(&inst)
-                    || self.error_data.contains_key(&inst)
                 {
                     return Err(Halt::Unsupported("Object.keys:exotic-object"));
                 }
@@ -10984,7 +11315,6 @@ impl Interp {
                     || self.array_buffers.contains_key(&inst)
                     || self.data_views.contains_key(&inst)
                     || self.wrapper_data.contains_key(&inst)
-                    || self.error_data.contains_key(&inst)
                 {
                     return Err(Halt::Unsupported("getOwnPropertyDescriptor:exotic-object"));
                 }
@@ -11052,6 +11382,47 @@ impl Interp {
                     }
                 }
             }
+            NativeMethod::ObjectGetOwnPropertyNames => {
+                let inst = match arg0.value {
+                    Payload::Reference(o) => o,
+                    _ => return Err(Halt::Unsupported("getOwnPropertyNames:non-object")),
+                };
+                if !self.is_ordinary_object(inst) {
+                    return Err(Halt::Unsupported("getOwnPropertyNames:exotic-object"));
+                }
+                let ids: Vec<u16> = self
+                    .own_property_slots(inst)
+                    .into_iter()
+                    .map(|p| self.slots.get(p).id)
+                    .filter(|&id| !self.is_symbol_key_id(id))
+                    .collect();
+                let n = ids.len() as u32;
+                self.meter.tick_raw(OBJECT_KEYS_FRAME_METERING);
+                self.meter.tick_raw(self.array_chunk_size_metering(n));
+                for _ in 0..n {
+                    self.meter.tick_slot_alloc();
+                }
+                let result = self.slots.alloc(Slot::instance(self.array_proto));
+                let mut data = ArrayData::default();
+                data.length = n;
+                for (i, id) in ids.into_iter().enumerate() {
+                    let name = self
+                        .symbol_names
+                        .get((id - 1) as usize)
+                        .cloned()
+                        .or_else(|| {
+                            self.symbol_ids
+                                .iter()
+                                .find_map(|(name, &key)| (key == id).then(|| name.clone()))
+                        })
+                        .ok_or(Halt::Unsupported("getOwnPropertyNames:unknown-key"))?;
+                    let off = self.alloc_str_text(name.as_bytes());
+                    data.items
+                        .insert(i as u32, Slot::of(Kind::String, Payload::String(off)));
+                }
+                self.arrays.insert(result, data);
+                Slot::of(Kind::Reference, Payload::Reference(result))
+            }
             // `Object.defineProperty(o, k, descriptor)`: define a **new** own
             // data property on an ordinary object from a full four-field data
             // descriptor. Covers the verifyProperty shape — `{value, writable,
@@ -11073,7 +11444,6 @@ impl Interp {
                     || self.array_buffers.contains_key(&inst)
                     || self.data_views.contains_key(&inst)
                     || self.wrapper_data.contains_key(&inst)
-                    || self.error_data.contains_key(&inst)
                 {
                     return Err(Halt::Unsupported("defineProperty:exotic-object"));
                 }
@@ -14843,7 +15213,6 @@ impl Interp {
         Ok(result)
     }
 
-
     /// Build an Array Iterator over `arr` with the given `kind` (0 values, 1
     /// keys, 2 entries): `fxNewIteratorInstance` — allocate the iterator
     /// instance (chained to `%Array Iterator.prototype%`) and its reused
@@ -15721,6 +16090,21 @@ impl Interp {
         Some(jump.target_pc)
     }
 
+    /// Raise an engine-created JavaScript value through the same jump-buffer
+    /// chain as the `throw` opcode.  Native semantic failures must use this
+    /// path so `try`/`catch`/`finally` can observe the realm-correct Error
+    /// object instead of seeing an uncatchable host-side `Unsupported` halt.
+    fn raise_js(&mut self, value: Slot) -> Result<usize, Halt> {
+        self.exception = value;
+        match self.unwind_to_jump() {
+            Some(target) => Ok(target),
+            None => {
+                self.meter_host_escape();
+                Err(Halt::Throw(self.render(&value)))
+            }
+        }
+    }
+
     /// Adjust the meter for an uncaught throw escaping to the host: the
     /// escaping opcode's dispatch metering (added at the top of the loop)
     /// is removed — XS never meters it, its `mxBreak` bypassed by the
@@ -16492,7 +16876,10 @@ impl Interp {
 
     /// Whether `inst` is an *ordinary* object — one whose whole own-property
     /// set lives in the slot-arena property chain, with no exotic side table
-    /// (array/typed-array/collection/buffer/view/wrapper/error). The Object
+    /// (array/typed-array/collection/buffer/view/wrapper). Error instances are
+    /// ordinary objects for MOP purposes: their `message`/`cause` properties
+    /// live entirely in this same slot chain; `error_data` only accelerates
+    /// Error.prototype.toString.
     /// statics and integrity operations are modeled only over ordinary
     /// receivers; an exotic one carries indices/`length`/internal names the
     /// slot chain does not enumerate, so the caller honest-skips.
@@ -16503,7 +16890,6 @@ impl Interp {
             || self.array_buffers.contains_key(&inst)
             || self.data_views.contains_key(&inst)
             || self.wrapper_data.contains_key(&inst)
-            || self.error_data.contains_key(&inst)
             || self.regexps.contains_key(&inst))
     }
 
@@ -16960,33 +17346,47 @@ impl Interp {
     // unsupported rather than producing a spurious `NaN`. (A reference
     // operand ToPrimitives to `NaN` for a plain object, which matches XS,
     // so it is left on the numeric path.)
-    fn binary_arith(&mut self, op: ArithOp) -> Result<(), ()> {
-        let b = self.pop();
-        let a = self.pop();
-        if a.kind == Kind::String || b.kind == Kind::String {
-            return Err(());
+    fn binary_arith(&mut self, code: &[u8], op: ArithOp) -> Result<(), Halt> {
+        let n = self.stack.len();
+        if n < 2 {
+            return Err(Halt::Unsupported("arithmetic:stack-underflow"));
         }
+        let a_value = self.stack[n - 2];
+        let b_value = self.stack[n - 1];
+        let a = self.to_number_value(code, a_value)?;
+        let b = self.to_number_value(code, b_value)?;
+        self.stack.truncate(n - 2);
         // BigInt `-`/`*` (both BigInt); `/`/`%` and any mixed BigInt/number
         // self-name (the caller reports the skip / TypeError).
         if a.kind == Kind::BigInt || b.kind == Kind::BigInt {
-            match self.try_bigint_binop(op, a, b)? {
+            match self
+                .try_bigint_binop(op, a, b)
+                .map_err(|_| Halt::Unsupported("to_numeric:mixed-bigint"))?
+            {
                 Some(r) => {
                     self.push(r);
                     return Ok(());
                 }
                 None => {}
             }
-            return Err(());
+            return Err(Halt::Unsupported("to_numeric:mixed-bigint"));
         }
         self.push(apply_arith(op, &a, &b));
         Ok(())
     }
 
-    fn binary_bit(&mut self, op: BitOp) -> Result<(), ()> {
-        let b = self.pop();
-        let a = self.pop();
-        if a.kind == Kind::String || b.kind == Kind::String {
-            return Err(());
+    fn binary_bit(&mut self, code: &[u8], op: BitOp) -> Result<(), Halt> {
+        let n = self.stack.len();
+        if n < 2 {
+            return Err(Halt::Unsupported("bitwise:stack-underflow"));
+        }
+        let a_value = self.stack[n - 2];
+        let b_value = self.stack[n - 1];
+        let a = self.to_number_value(code, a_value)?;
+        let b = self.to_number_value(code, b_value)?;
+        self.stack.truncate(n - 2);
+        if a.kind == Kind::BigInt || b.kind == Kind::BigInt {
+            return Err(Halt::Unsupported("to_numeric:bigint-bitwise"));
         }
         let ai = to_int32(to_number(&a));
         let bi = to_int32(to_number(&b));
@@ -17018,9 +17418,16 @@ impl Interp {
     /// string/numeric pair needs `ToNumber(string)` (or `ToPrimitive` of a
     /// reference), outside the covered subset, so it returns `Err` and the
     /// caller self-names unsupported.
-    fn relational(&mut self, op: RelOp) -> Result<(), ()> {
-        let b = self.pop();
-        let a = self.pop();
+    fn relational(&mut self, code: &[u8], op: RelOp) -> Result<(), Halt> {
+        let n = self.stack.len();
+        if n < 2 {
+            return Err(Halt::Unsupported("comparison:stack-underflow"));
+        }
+        let a_value = self.stack[n - 2];
+        let b_value = self.stack[n - 1];
+        let a = self.to_primitive(code, a_value, false)?;
+        let b = self.to_primitive(code, b_value, false)?;
+        self.stack.truncate(n - 2);
         if a.kind == Kind::String && b.kind == Kind::String {
             if let (Payload::String(x), Payload::String(y)) = (a.value, b.value) {
                 let r = {
@@ -17036,9 +17443,8 @@ impl Interp {
                 return Ok(());
             }
         }
-        if a.kind == Kind::String || b.kind == Kind::String {
-            return Err(());
-        }
+        // A mixed string/numeric comparison converts both operands to numbers
+        // after the primitive step below.
         // BigInt relational (`<`/`<=`/`>`/`>=` → `fxBigIntCompare` with the
         // less/equal/more flags). Both BigInt: sign+magnitude order, no residual
         // beyond dispatch (the compare neither allocates nor meters a digit
@@ -17059,10 +17465,10 @@ impl Interp {
                 self.push(Slot::boolean(r));
                 return Ok(());
             }
-            return Err(());
+            return Err(Halt::Unsupported("to_numeric:mixed-bigint"));
         }
-        let x = to_number(&a);
-        let y = to_number(&b);
+        let x = to_number(&self.to_number_value(code, a)?);
+        let y = to_number(&self.to_number_value(code, b)?);
         let r = if x.is_nan() || y.is_nan() {
             false
         } else {
@@ -17156,38 +17562,188 @@ impl Interp {
         Ok(())
     }
 
+    /// Invoke one of the callable methods selected by `ToPrimitive`.  User
+    /// functions re-enter the bytecode interpreter; the three intrinsic
+    /// conversion methods are evaluated directly with their real receiver.
+    fn call_primitive_method(
+        &mut self,
+        code: &[u8],
+        method: Slot,
+        receiver: Slot,
+        args: &[Slot],
+    ) -> Result<Slot, Halt> {
+        let f = match method.value {
+            Payload::Reference(f) if self.functions.contains_key(&f) => f,
+            _ => return Err(Halt::Unsupported("to_primitive:non-callable")),
+        };
+        match self.method_of(f) {
+            Some(NativeMethod::ObjectValueOf) => Ok(receiver),
+            Some(NativeMethod::ObjectToString) => {
+                self.meter.tick_raw(METHOD_OBJECT_TOSTRING_METERING);
+                self.meter.tick_chunk_new(b"[object Object]".len() as u64);
+                let off = self.alloc_str_text(b"[object Object]");
+                Ok(Slot::of(Kind::String, Payload::String(off)))
+            }
+            Some(NativeMethod::FunctionToString) => {
+                let name = self.functions.get(&f).map(|fi| fi.name.as_str()).unwrap_or("");
+                let text = format!("function [\"{name}\"] (){{[native code]}}");
+                self.meter.tick_raw(METHOD_FUNCTION_TOSTRING_METERING);
+                self.meter.tick_chunk_new(text.len() as u64);
+                let off = self.alloc_str_text(text.as_bytes());
+                Ok(Slot::of(Kind::String, Payload::String(off)))
+            }
+            Some(NativeMethod::WrapperValueOf) => match receiver.value {
+                Payload::Reference(r) => Ok(self.wrapper_data.get(&r).copied().unwrap_or(receiver)),
+                _ => Ok(receiver),
+            },
+            Some(NativeMethod::WrapperToString) => {
+                let prim = match receiver.value {
+                    Payload::Reference(r) => self.wrapper_data.get(&r).copied(),
+                    _ => None,
+                }
+                .unwrap_or(receiver);
+                let bytes = self.to_string_bytes_metered(prim);
+                let off = self.alloc_str_text(&bytes);
+                Ok(Slot::of(Kind::String, Payload::String(off)))
+            }
+            Some(NativeMethod::ErrorToString) => {
+                let text = self.render(&receiver);
+                let off = self.alloc_str_text(text.as_bytes());
+                Ok(Slot::of(Kind::String, Payload::String(off)))
+            }
+            Some(_) | None if self.functions[&f].native.is_some() => {
+                Err(Halt::Unsupported("to_primitive:native-method"))
+            }
+            None => self.run_callback(code, method, receiver, args),
+            Some(_) => Err(Halt::Unsupported("to_primitive:native-method")),
+        }
+    }
+
+    /// ECMAScript `ToPrimitive`, including `@@toPrimitive` and the ordinary
+    /// `valueOf`/`toString` fallback order.  The hint is `true` for string and
+    /// `false` for number/default.
+    fn to_primitive(&mut self, code: &[u8], value: Slot, string_hint: bool) -> Result<Slot, Halt> {
+        let inst = match value.value {
+            Payload::Reference(inst) if value.kind == Kind::Reference => inst,
+            _ => return Ok(value),
+        };
+
+        // Wrapper prototypes always supply `valueOf`, even when the source
+        // never spells that property name and link-time symbol pruning omits
+        // its method slot. The number/default hint selects it first.
+        if !string_hint {
+            if let Some(primitive) = self.wrapper_data.get(&inst).copied() {
+                return Ok(primitive);
+            }
+        }
+
+        if let Some((_, symbol)) = self
+            .well_known_symbols
+            .iter()
+            .find(|(name, _)| *name == "toPrimitive")
+            .copied()
+        {
+            if let Payload::Reference(desc) = symbol.value {
+                let id = self.intern_symbol_key(desc);
+                let exotic = self.instance_get(inst, id);
+                if exotic.kind != Kind::Undefined {
+                    let hint = if string_hint {
+                        b"string".as_slice()
+                    } else {
+                        b"number".as_slice()
+                    };
+                    let off = self.alloc_str_text(hint);
+                    let result = self.call_primitive_method(
+                        code,
+                        exotic,
+                        value,
+                        &[Slot::of(Kind::String, Payload::String(off))],
+                    )?;
+                    if result.kind != Kind::Reference {
+                        return Ok(result);
+                    }
+                    return Err(Halt::Unsupported("to_primitive:non-primitive-result"));
+                }
+            }
+        }
+
+        let names = if string_hint {
+            ["toString", "valueOf"]
+        } else {
+            ["valueOf", "toString"]
+        };
+        for name in names {
+            let Some(&id) = self.symbol_ids.get(name) else {
+                continue;
+            };
+            let method = self.instance_get(inst, id);
+            if method.kind == Kind::Undefined {
+                continue;
+            }
+            let result = self.call_primitive_method(code, method, value, &[])?;
+            if result.kind != Kind::Reference {
+                return Ok(result);
+            }
+        }
+        Err(Halt::Unsupported("to_primitive:no-primitive-result"))
+    }
+
+    /// `ToNumber` after `ToPrimitive`, retaining XS's integer fast kind where
+    /// possible and parsing a string as one complete ECMAScript number.
+    fn to_number_value(&mut self, code: &[u8], value: Slot) -> Result<Slot, Halt> {
+        let primitive = self.to_primitive(code, value, false)?;
+        match primitive.kind {
+            Kind::Integer | Kind::Number => Ok(primitive),
+            Kind::String => match primitive.value {
+                Payload::String(off) => Ok(math_to_integer(string_to_number(
+                    self.str_text(off).as_bytes(),
+                    true,
+                ))),
+                _ => unreachable!(),
+            },
+            Kind::Boolean | Kind::Null | Kind::Undefined => Ok(Slot::number(to_number(&primitive))),
+            Kind::BigInt => Ok(primitive),
+            Kind::Symbol => Err(Halt::Unsupported("to_numeric:type-error")),
+            _ => Err(Halt::Unsupported("to_numeric")),
+        }
+    }
+
     /// `XS_CODE_ADD` with the string/reference cases (xsRun.c's
     /// `XS_CODE_ADD_GENERAL`): a reference operand needs `ToPrimitive`
     /// (unsupported); a string operand means concatenation
     /// ([`Self::concat_add`]); otherwise the numeric fast path
     /// ([`Self::binary_arith`]).
-    fn op_add(&mut self) -> Result<(), ()> {
+    fn op_add(&mut self, code: &[u8]) -> Result<(), Halt> {
         let n = self.stack.len();
         if n < 2 {
-            return self.binary_arith(ArithOp::Add);
+            return Err(Halt::Unsupported("add:stack-underflow"));
         }
-        let a = self.stack[n - 2];
-        let b = self.stack[n - 1];
-        if a.kind == Kind::Reference || b.kind == Kind::Reference {
-            return Err(());
-        }
+        let a = self.to_primitive(code, self.stack[n - 2], false)?;
+        let b = self.to_primitive(code, self.stack[n - 1], false)?;
         // BigInt `+` (both BigInt); a BigInt mixed with a non-BigInt — including
         // a string, whose concat metering over a BigInt is not yet modeled —
         // self-names.
         if a.kind == Kind::BigInt || b.kind == Kind::BigInt {
-            if let Some(r) = self.try_bigint_binop(ArithOp::Add, a, b)? {
+            if let Some(r) = self
+                .try_bigint_binop(ArithOp::Add, a, b)
+                .map_err(|_| Halt::Unsupported("add"))?
+            {
                 self.stack.truncate(n - 2);
                 self.push(r);
                 return Ok(());
             }
-            return Err(());
+            return Err(Halt::Unsupported("add"));
         }
         if a.kind == Kind::String || b.kind == Kind::String {
             self.stack.truncate(n - 2);
             self.concat_add(a, b);
             Ok(())
         } else {
-            self.binary_arith(ArithOp::Add)
+            self.stack.truncate(n - 2);
+            self.push(a);
+            self.push(b);
+            self.binary_arith(code, ArithOp::Add)
+                .map_err(|_| Halt::Unsupported("add"))
         }
     }
 

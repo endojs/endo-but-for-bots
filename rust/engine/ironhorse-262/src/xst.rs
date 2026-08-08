@@ -394,6 +394,17 @@ fn assemble(harness_dir: &Path, src: &str, fm: &Frontmatter) -> Result<String, S
     Ok(out)
 }
 
+/// Assemble the strict variant of a normal test262 script.  The directive is
+/// inserted immediately before the test body, after the harness files, which
+/// is how the official runner keeps the harness itself out of the test's
+/// strict directive prologue.
+fn assemble_strict(harness_dir: &Path, src: &str, fm: &Frontmatter) -> Result<String, String> {
+    if fm.flags.iter().any(|f| f == "raw") {
+        return Ok(src.to_string());
+    }
+    assemble(harness_dir, &format!("\"use strict\";\n{src}"), fm)
+}
+
 struct Eval {
     outcome: Verdict,
     ironhorse_computrons: u64,
@@ -621,12 +632,14 @@ fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
 ///   forbidden one.
 fn evaluate_negative_early(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
     // A parse/resolution negative expects the oracle (XS) to reject the source
-    // at the PARSE phase — i.e. XS emitted no bytecode. This reads the oracle's
-    // own parse signal, NOT `!oracle_completed`: the assembled program's leading
-    // `$DONOTEVALUATE()` throws at run, so XS never "completes" even when it
-    // wrongly parsed (accepted) the source, which made the old `!completed`
-    // signal score an ironhorse over-rejection as covered.
-    let oracle_parse_rejected = !run.oracle_parsed;
+    // at the PARSE phase. Usually XS emits no bytecode, but some lexer-owned
+    // literals (notably a RegExp whose backreference is out of range) emit a
+    // small error stub while reporting the SyntaxError. Accept that explicit,
+    // expected constructor as the rejection signal too. This deliberately does
+    // NOT use bare `!oracle_completed`: the assembled program's leading
+    // `$DONOTEVALUATE()` throws a non-SyntaxError at run when XS wrongly parsed
+    // (accepted) the source, so it cannot turn an over-rejection into coverage.
+    let oracle_parse_rejected = !run.oracle_parsed || oracle_negative_ok(&neg.ty, run);
 
     match &run.ironhorse_compile {
         // ironhorse-compile reached a deferred/unimplemented path — it either
@@ -748,16 +761,14 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
         return preskip("structural:can-block");
     }
 
-    let (_run_sloppy, has_strict, only_strict) = strict_mode_status(&fm.flags);
-
-    // An `onlyStrict` test's sole mode is the not-yet-implemented strict
-    // mode — the whole test is a named strict skip.
-    if only_strict {
-        return CaseResult {
-            verdict: Verdict::PreSkip("onlyStrict:strict-mode-unimplemented".into()),
-            strict_skipped: true,
-            computron_gap: false,
-        };
+    let (mut run_sloppy, mut has_strict, _only_strict) = strict_mode_status(&fm.flags);
+    // The proprietary exact-meter corpus records the meter of the literal
+    // source file, not test262's synthetic second (`"use strict"`) variant.
+    // Preserve that byte/meter identity contract while official test262 files
+    // continue to execute every mode selected by their flags.
+    if fm.features.iter().any(|f| f == "ironhorse-meter-exact") {
+        run_sloppy = true;
+        has_strict = false;
     }
 
     // SES lockdown/compartment mode (`-l`/`-lc`/`-c`): the mode's guest
@@ -782,40 +793,73 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
     // (both engines drain the promise job queue — the fxRunLoop-equivalent —
     // per case), and layer the async completion verdict on the differential.
     if fm.flags.iter().any(|f| f == "async") {
-        return run_async_case(cfg, harness_dir, src, &fm, has_strict, meter_exact_gate);
+        let sloppy =
+            run_sloppy.then(|| run_async_case(cfg, harness_dir, src, &fm, false, meter_exact_gate));
+        let strict =
+            has_strict.then(|| run_async_case(cfg, harness_dir, src, &fm, true, meter_exact_gate));
+        return combine_mode_results(sloppy, strict);
     }
 
-    let source = match assemble(harness_dir, src, &fm) {
-        Ok(s) => s,
-        Err(reason) => {
-            return CaseResult {
-                verdict: Verdict::PreSkip(reason),
-                strict_skipped: has_strict,
-                computron_gap: false,
-            }
+    let run_mode = |source: &str| {
+        let eval = evaluate(cfg, source, &fm, meter_exact_gate);
+        let outcome = if cfg.repeat > 1
+            && determinism_violation(source, cfg.repeat, eval.ironhorse_computrons)
+        {
+            Verdict::Fail(format!(
+                "nondeterministic computrons across {} runs",
+                cfg.repeat
+            ))
+        } else {
+            eval.outcome
+        };
+        Eval {
+            outcome,
+            ironhorse_computrons: eval.ironhorse_computrons,
+            computron_gap: eval.computron_gap,
         }
     };
 
-    let eval = evaluate(cfg, &source, &fm, meter_exact_gate);
-
-    // The determinism gate (unconditional half of the doctrine) overrides a
-    // covered/skip verdict with a failure if ironhorse's computrons are not
-    // reproducible across runs of this same build.
-    let verdict = if cfg.repeat > 1
-        && determinism_violation(&source, cfg.repeat, eval.ironhorse_computrons)
-    {
-        Verdict::Fail(format!(
-            "nondeterministic computrons across {} runs",
-            cfg.repeat
-        ))
+    let sloppy = if run_sloppy {
+        match assemble(harness_dir, src, &fm) {
+            Ok(source) => Some(run_mode(&source)),
+            Err(reason) => return preskip(&reason),
+        }
     } else {
-        eval.outcome
+        None
+    };
+    let strict = if has_strict {
+        match assemble_strict(harness_dir, src, &fm) {
+            Ok(source) => Some(run_mode(&source)),
+            Err(reason) => return preskip(&reason),
+        }
+    } else {
+        None
+    };
+
+    let (verdict, computron_gap) = match (sloppy, strict) {
+        (Some(sloppy), Some(strict)) => {
+            let verdict = match (&sloppy.outcome, &strict.outcome) {
+                (Verdict::Covered, Verdict::Covered) => Verdict::Covered,
+                (Verdict::Fail(reason), _) => Verdict::Fail(reason.clone()),
+                (_, Verdict::Fail(reason)) => Verdict::Fail(format!("strict:{reason}")),
+                (Verdict::Covered, Verdict::RunSkip(reason)) => {
+                    Verdict::RunSkip(format!("strict:{reason}"))
+                }
+                (Verdict::Covered, Verdict::PreSkip(reason)) => {
+                    Verdict::PreSkip(format!("strict:{reason}"))
+                }
+                (other, _) => other.clone(),
+            };
+            (verdict, sloppy.computron_gap || strict.computron_gap)
+        }
+        (Some(eval), None) | (None, Some(eval)) => (eval.outcome, eval.computron_gap),
+        (None, None) => unreachable!("strict_mode_status always selects a mode"),
     };
 
     CaseResult {
         verdict,
-        strict_skipped: has_strict,
-        computron_gap: eval.computron_gap,
+        strict_skipped: false,
+        computron_gap,
     }
 }
 
@@ -831,15 +875,19 @@ fn run_async_case(
     harness_dir: &Path,
     src: &str,
     fm: &Frontmatter,
-    has_strict: bool,
+    strict_mode: bool,
     meter_exact_gate: bool,
 ) -> CaseResult {
-    let assembled = match assemble(harness_dir, src, fm) {
+    let assembled = match if strict_mode {
+        assemble_strict(harness_dir, src, fm)
+    } else {
+        assemble(harness_dir, src, fm)
+    } {
         Ok(s) => s,
         Err(reason) => {
             return CaseResult {
                 verdict: Verdict::PreSkip(reason),
-                strict_skipped: has_strict,
+                strict_skipped: false,
                 computron_gap: false,
             }
         }
@@ -851,7 +899,7 @@ fn run_async_case(
         None => {
             return CaseResult {
                 verdict: Verdict::RunSkip("oracle-machine-error".into()),
-                strict_skipped: has_strict,
+                strict_skipped: false,
                 computron_gap: false,
             }
         }
@@ -883,8 +931,38 @@ fn run_async_case(
 
     CaseResult {
         verdict,
-        strict_skipped: has_strict,
+        strict_skipped: false,
         computron_gap,
+    }
+}
+
+/// Fold the official sloppy/strict pair into one file verdict.  Full coverage
+/// requires both selected modes to be covered; a failure in either mode stays
+/// a failure, and a strict-only gap is labelled so reports retain the causal
+/// mode instead of silently treating the sloppy pass as file coverage.
+fn combine_mode_results(sloppy: Option<CaseResult>, strict: Option<CaseResult>) -> CaseResult {
+    match (sloppy, strict) {
+        (Some(sloppy), Some(strict)) => {
+            let verdict = match (&sloppy.verdict, &strict.verdict) {
+                (Verdict::Covered, Verdict::Covered) => Verdict::Covered,
+                (Verdict::Fail(reason), _) => Verdict::Fail(reason.clone()),
+                (_, Verdict::Fail(reason)) => Verdict::Fail(format!("strict:{reason}")),
+                (Verdict::Covered, Verdict::RunSkip(reason)) => {
+                    Verdict::RunSkip(format!("strict:{reason}"))
+                }
+                (Verdict::Covered, Verdict::PreSkip(reason)) => {
+                    Verdict::PreSkip(format!("strict:{reason}"))
+                }
+                (other, _) => other.clone(),
+            };
+            CaseResult {
+                verdict,
+                strict_skipped: false,
+                computron_gap: sloppy.computron_gap || strict.computron_gap,
+            }
+        }
+        (Some(result), None) | (None, Some(result)) => result,
+        (None, None) => unreachable!("strict_mode_status always selects a mode"),
     }
 }
 
@@ -1401,6 +1479,42 @@ mod tests {
         assert_eq!(
             evaluate_negative_early(&cfg, &run, &early_negative("resolution")),
             Verdict::Covered
+        );
+    }
+
+    #[test]
+    fn early_error_partial_oracle_code_with_expected_syntax_error_is_covered() {
+        // XS can emit an error stub when a lexer-owned literal (for example
+        // `/\\11/`) raises its SyntaxError. The explicit expected
+        // constructor is still authoritative evidence of parse rejection.
+        let mut run = synthetic_early(
+            Agreement::BothAbort,
+            true,
+            IronhorseCompile::Rejected("invalid reference number".into()),
+        );
+        run.oracle_error = "SyntaxError: invalid reference number".into();
+        let cfg = Config::default();
+        assert_eq!(
+            evaluate_negative_early(&cfg, &run, &early_negative("parse")),
+            Verdict::Covered
+        );
+    }
+
+    #[test]
+    fn early_error_runtime_abort_after_parse_is_not_a_rejection_signal() {
+        // A normally assembled early-negative starts with `$DONOTEVALUATE()`.
+        // If XS accepted the source, that helper aborts at run; a generic
+        // runtime Error must not be confused with the expected SyntaxError.
+        let mut run = synthetic_early(
+            Agreement::BothAbort,
+            true,
+            IronhorseCompile::Rejected("unexpected token".into()),
+        );
+        run.oracle_error = "Test262Error: This statement should not be evaluated.".into();
+        let cfg = Config::default();
+        assert_eq!(
+            evaluate_negative_early(&cfg, &run, &early_negative("parse")),
+            Verdict::RunSkip("negative-oracle-unexpected".into())
         );
     }
 

@@ -133,9 +133,11 @@ pub struct DualRun {
     /// needs the oracle's own parse signal reads [`Self::oracle_parsed`], never
     /// this field.
     pub bytecode: Vec<u8>,
-    /// Whether the XS **oracle** emitted bytecode — it parsed AND coded the
-    /// source. A parse-phase rejection yields empty oracle bytecode, so this is
-    /// the oracle's own parse signal, retained independently of
+    /// Whether the XS **oracle** emitted bytecode — normally evidence that it
+    /// parsed and coded the source. Some lexer-owned errors are represented by
+    /// a small bytecode stub that throws the reported SyntaxError, so an early-
+    /// error verdict also checks the oracle's explicit thrown constructor. This
+    /// signal is retained independently of
     /// [`Self::bytecode`] (which under the default runner holds *ironhorse's*
     /// bytes). The early-error negative verdict and the host-abort exclusion both
     /// read this to tell an oracle *parse rejection* (early error) apart from an
