@@ -40,11 +40,13 @@ Outputs land in `rust/engine/target/test262-report/` by default:
   command runs only what is missing.
 - **Per-case wall-clock bound.** Both the XS oracle and the ironhorse VM can
   *non-terminate* on a pathological source (e.g. `for (const i = 0; i < 1; i++)
-  {}`, where a missing assign-to-const `TypeError` spins the loop). Each case is
-  dispatched under a hard bound (`--case-timeout`, default 10s), so a hang is
-  recorded as an `ironhorse-hang` **failure** in bounded time instead of wedging
-  its whole per-directory batch process — the batch's other cases still run and
-  its JSON is still written, so resume never loses a directory to one bad case.
+  {}`). Each case is dispatched under a hard bound (`--case-timeout`, default
+  10s). A timeout is attributed with an Ironhorse-only rerun: an Ironhorse
+  non-terminator is an `ironhorse-hang` **failure**, while an oracle-only
+  non-terminator is an **infrastructure** skip. Either outcome is recorded in
+  bounded time instead of wedging its whole per-directory batch process — the
+  batch's other cases still run and its JSON is still written, so resume never
+  loses a directory to one bad case.
   `--case-timeout 0` disables the bound.
 - **Deterministic.** Discovery, batching, and aggregation are sorted, so the
   same corpus + engine produces byte-identical `report.json`.

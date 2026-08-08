@@ -31,9 +31,10 @@
 #   --jobs N           batch parallelism. Default: min(nproc/2, 8). This bounds
 #                      peak memory (concurrent oracle processes).
 #   --oracle on|off    gate on the XS oracle (default on).
-#   --case-timeout N   hard per-case wall-clock bound (seconds). A
-#                      non-terminating case becomes a recorded ironhorse-hang
-#                      failure instead of wedging its batch. Default 10; 0 = off.
+#   --case-timeout N   hard per-case wall-clock bound (seconds). An
+#                      Ironhorse-only non-terminator becomes an ironhorse-hang
+#                      failure; an oracle-only one is an infrastructure skip.
+#                      Default 10; 0 = off.
 #   --no-fetch         do not clone; require --test262-dir.
 #
 # NOTE: a whole-tree run is a MULTI-HOUR sweep. Publishing its output is a
@@ -58,10 +59,9 @@ out="$engine_dir/target/test262-report"
 jobs=""
 oracle="on"
 allow_fetch="yes"
-# Hard per-case wall-clock bound (seconds). A non-terminating case (e.g. an
-# assign-to-const `for` head the engine spins on) is recorded as an
-# `ironhorse-hang` failure instead of wedging its whole per-directory batch —
-# so one bad case no longer costs the sweep an entire directory. 0 disables it.
+# Hard per-case wall-clock bound (seconds). An Ironhorse-only non-terminator is
+# an `ironhorse-hang` failure; an oracle-only non-termination is an
+# infrastructure skip. Either outcome avoids wedging the batch. 0 disables it.
 case_timeout="10"
 
 while [ $# -gt 0 ]; do

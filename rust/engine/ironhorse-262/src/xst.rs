@@ -196,10 +196,12 @@ pub struct Config {
     /// oracle and the ironhorse VM can non-terminate on a pathological source
     /// (e.g. `for (const i = 0; i < 1; i++) {}`, where a missing
     /// assign-to-const `TypeError` spins the loop), so each case is dispatched
-    /// under this deadline and a hang is recorded as an `ironhorse-hang` failure
-    /// rather than wedging the whole per-directory batch process. `0` disables
-    /// the bound (an unbounded inline run), which is the **library default**: an
-    /// in-process caller runs exactly as it did before this field existed. The
+    /// under this deadline. An Ironhorse-only non-terminator is an
+    /// `ironhorse-hang` failure; an oracle-only one is an infrastructure skip.
+    /// Either outcome avoids wedging the whole per-directory batch process. `0`
+    /// disables the bound (an unbounded inline run), which is the **library
+    /// default**: an in-process caller runs exactly as it did before this field
+    /// existed. The
     /// bound is CLI *policy* — `ironhorse-xst` (and the sweep it drives) opts in
     /// to [`DEFAULT_CASE_TIMEOUT_SECONDS`], so a bound is never imposed on a
     /// caller that did not ask for one and a case's verdict never becomes
@@ -1059,10 +1061,12 @@ fn yaml_quote(s: &str) -> String {
 
 /// Run one case under a hard wall-clock bound (design § the per-case dispatch
 /// bound). The case is dispatched on its own thread and joined with `timeout`;
-/// a hang becomes a recorded `ironhorse-hang` **failure** instead of wedging the
-/// whole per-directory batch process — the batch's other cases still run and its
-/// JSON is still written atomically, so a resumable sweep never loses a
-/// directory to one non-terminating case. The thread is spawned fresh per case,
+/// a timeout becomes either a recorded `ironhorse-hang` **failure** (when
+/// Ironhorse also fails to terminate alone) or an `oracle-nontermination`
+/// infrastructure skip. This avoids wedging the whole per-directory batch
+/// process — the batch's other cases still run and its JSON is still written
+/// atomically, so a resumable sweep never loses a directory to one
+/// non-terminating case. The thread is spawned fresh per case,
 /// so the non-hanging path shares no engine state across cases (metering and
 /// determinism are identical to an unbounded run); only a genuine hang leaks its
 /// thread (stuck in C / a VM dispatch cycle, so uncancellable), reclaimed when

@@ -15,9 +15,9 @@ effort measures its regression invariant against it.
 > bound and the real early-error negative adjudication (`evaluate_negative_early`).
 > So a fresh whole-tree run **at this PR head** will differ from the frozen
 > snapshot in predictable ways, and that delta is expected, not a regression:
-> the three non-terminators are recorded with the shipped harness's spelling
-> (`ironhorse-hang: no verdict within {N}s (non-terminating dispatch)`), not the
-> hand-authored `engine-hang:…` string in `baseline.json`; and parse/resolution
+> the three non-terminators are now attributed to the oracle when Ironhorse
+> terminates alone (`oracle-nontermination:…`), rather than retaining the
+> hand-authored `engine-hang:…` strings in `baseline.json`; and parse/resolution
 > negatives that were blanket run-skips can now land as `covered`,
 > `compiler-unimplemented:*`, an over-acceptance `Fail`, or an
 > `oracle-gate-off:negative-over-acceptance` skip (the early-error verdict is
@@ -51,11 +51,12 @@ Exact pins (see [`provenance.json`](./provenance.json)):
 | skipped | 8,932 |
 | infrastructure | 1 |
 
-The 19 ironhorse-failures are the 16 `language/identifiers/start-unicode-*`
-identifier-start over-acceptances plus the 3 non-terminating
-`*-invalid-assignment-next-expression-for` cases (`await-using` / `const` /
-`using`), which the engine spins on because assigning to a `const`/`using`
-binding in a `for` update does not throw the required `TypeError`. The 1
+The frozen snapshot's 19 ironhorse-failures are the 16
+`language/identifiers/start-unicode-*` identifier-start over-acceptances plus
+the 3 non-terminating `*-invalid-assignment-next-expression-for` cases
+(`await-using` / `const` / `using`). The later oracle-only attribution fix
+demonstrates that those three are XS non-terminations, not Ironhorse defects;
+a fresh run at this head moves them to infrastructure. The snapshot's 1
 infrastructure case is `language/global-code/decl-lex-restricted-global.js`
 (see the re-audit note below).
 
@@ -63,9 +64,11 @@ infrastructure case is `language/global-code/decl-lex-restricted-global.js`
 
 1. **No covered case regresses.** Every path in [`baseline.json`](./baseline.json)
    `covered` must remain covered.
-2. **No new `ironhorse-failure` and no new `infrastructure`.** The `failures`
-   and `infrastructure` lists are the only permitted members of those
-   categories unless a child *removes* one by fixing it.
+2. **No new `ironhorse-failure`.** The `failures` list is the only permitted
+   member of that category unless a child removes one by fixing it. A documented
+   reattribution from failure to infrastructure is permitted when an oracle or
+   harness cause is demonstrated; it must preserve the case path and reason in
+   the comparison output.
 3. **The proprietary exact-metering / byte-identity corpus under `../cases/**`
    stays passing** with unchanged computron expectations
    (`ironhorse-xst --gate-meter-exact ...cases`).
