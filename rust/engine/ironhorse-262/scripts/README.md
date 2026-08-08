@@ -59,8 +59,8 @@ gitignored `rust/engine/target/`.
   reads **exactly the discovered plan** (never a directory glob), so a leftover
   batch from a different run can never leak into the report. This last property
   is a guarantee of `full-run.sh`, which always passes `--plan` and `--run-id`;
-  the bare `ironhorse-262-report aggregate`/`plan` CLI without those flags falls
-  back to the legacy directory-glob path and does not bind the run identity.
+  the library's legacy `aggregate` and `pending_batches` entry points remain
+  unbound, while the `aggregate` CLI always requires an exact `--plan`.
 - **Single-sourced partition cap.** The at-most-N-cases-per-batch cap lives in
   one place (the Rust `BATCH_CASE_LIMIT`); the orchestrator reads it back with
   `ironhorse-262-report batch-size` and passes it as `--batch-size`, so discovery
@@ -71,8 +71,9 @@ gitignored `rust/engine/target/`.
 - **Deterministic results.** Discovery, batching, and aggregation are sorted,
   so case ordering and totals are stable for the same corpus + engine;
   provenance timestamps intentionally differ between runs.
-- **Honest coverage.** Discovery walks the **entire** official `test/**` tree
-  (no curated-subtree filter, `staging/` excluded exactly as the runner does);
+- **Honest coverage.** Discovery walks the authoritative `test/**` case trees,
+  including `annexB/` and `intl402/`. It excludes non-authoritative `staging/`,
+  harness support files, and module cases, all named in the report lede;
   an unsupported language feature surfaces as a named `unsupported` gap, never
   hidden. The report distinguishes a genuine **Ironhorse failure** (a
   bar-forbidden divergence) and an **unsupported** language gap from an
@@ -83,7 +84,7 @@ gitignored `rust/engine/target/`.
 
 | Piece | What it does |
 | --- | --- |
-| `ironhorse-xst --direct-only --json FILE <directory>` | runs one directory's direct cases through the full oracle differential, writing the per-case JSON batch |
+| `ironhorse-xst --direct-only --batch-size N --batch-index I --json FILE <directory>` | runs one bounded directory batch through the full oracle differential, writing per-case JSON |
 | `ironhorse-262-report discover` | lists every case-count-capped batch under the tree |
 | `ironhorse-262-report plan` | lists the batches not yet completed (resume plan) |
 | `ironhorse-262-report validate` | verifies schema, run identity, and expected case count |
@@ -96,8 +97,9 @@ gitignored `rust/engine/target/`.
 
 `.github/workflows/ironhorse-full-test262.yml` is an **explicitly invokable**
 (`workflow_dispatch`) path — never on the PR/push matrix.
-A measured whole-tree run at `--jobs 16` took 16m30s; runner speed and lower
-parallelism increase that wall clock.
+An indicative run at `14f26d0a6` on a 32-vCPU host with `--jobs 16` and the XS
+oracle enabled took 16m30s. It predates the watchdog/quarantine changes; runner
+speed and lower parallelism increase that wall clock.
 It defaults to a bounded subtree (`built-ins/Proxy`) so a manual run is quick;
 pass `full` to sweep the whole tree.
 It uploads

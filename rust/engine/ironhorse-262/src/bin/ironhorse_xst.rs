@@ -197,9 +197,6 @@ fn main() {
         } else {
             Vec::new()
         };
-        if found.is_empty() {
-            eprintln!("warning: no test files under {}", sub);
-        }
         let found = match (batch_index, batch_size) {
             (Some(index), Some(size)) => {
                 if subtrees.len() != 1 {
@@ -213,6 +210,9 @@ fn main() {
             (None, None) => found,
             _ => fail("--batch-index and --batch-size must be used together"),
         };
+        if found.is_empty() {
+            eprintln!("warning: no test files under {}", sub);
+        }
         files.extend(found);
     }
     files.sort();

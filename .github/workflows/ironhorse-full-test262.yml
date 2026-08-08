@@ -1,7 +1,8 @@
-# The full-test262 Ironhorse conformance sweep (maintainer request,
-# https://github.com/kriscendobot/garden/issues/51). This is an EXPLICITLY INVOKABLE workflow only — it runs
-# the complete authoritative TC39 test262 corpus against the Ironhorse engine.
-# A measured jobs=16 run took 16m30s; it remains dispatch-only so ordinary
+# The full-test262 Ironhorse conformance sweep described in
+# designs/ironhorse-test262-convergence.md. This is an explicitly invokable workflow.
+# An indicative run at 14f26d0a6 on a 32-vCPU host with jobs=16 and the XS oracle
+# enabled took 16m30s; later watchdog/quarantine changes and slower runners can
+# change that wall clock. It remains dispatch-only so ordinary
 # PR/push CI does not absorb that cost. Dispatch it from the Actions tab; a bounded
 # subtree (e.g. built-ins/Proxy) is the default so a manual run is quick, and
 # `full` runs the whole tree.
@@ -61,16 +62,15 @@ jobs:
           # The XS oracle links the moddable C submodule.
           submodules: true
 
-      - name: Cache Cargo + target
+      - name: Cache Cargo downloads
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            rust/engine/target
-          key: ${{ runner.os }}-ih262-${{ hashFiles('rust/engine/Cargo.lock', 'rust/engine/ironhorse-262/**', 'c/moddable/**') }}
+          key: ${{ runner.os }}-ih262-cargo-${{ hashFiles('rust/engine/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-ih262-
+            ${{ runner.os }}-ih262-cargo-
 
       - name: Run the sweep
         env:

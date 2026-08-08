@@ -1,5 +1,5 @@
 //! `ironhorse-262-report`: the whole-tree sweep's orchestration + reporting CLI
-//! (maintainer request, https://github.com/kriscendobot/garden/issues/51). It is the deterministic,
+//! It is the deterministic,
 //! oracle-free half of the full run — every subcommand is pure filesystem work,
 //! unit-tested in [`ironhorse_262::report`] — leaving the heavy per-case oracle
 //! execution to `ironhorse-xst`, which the orchestrator (`scripts/full-run.sh`)
@@ -8,19 +8,19 @@
 
 use ironhorse_262::report::{
     aggregate_plan, batch_case_count, batch_case_limit, discover_batches, pending_batches_checked,
-    read_batch_full, read_provenance, to_html, CaseRecord, Outcome, Provenance, RunReport,
+    read_batch_with_run_id, read_provenance, to_html, CaseRecord, Provenance, RunReport, Verdict,
 };
 use ironhorse_262::test262::{collect_js_batch, locate_test262};
 use std::path::PathBuf;
 use std::process::exit;
 
 fn main() {
-    let mut args = std::env::args().skip(1);
-    let command = args.next().unwrap_or_else(|| {
+    let mut arguments = std::env::args().skip(1);
+    let command = arguments.next().unwrap_or_else(|| {
         eprintln!("{}", HELP);
         exit(2);
     });
-    let rest: Vec<String> = args.collect();
+    let rest: Vec<String> = arguments.collect();
     match command.as_str() {
         "discover" => command_discover(&rest),
         "plan" => command_plan(&rest),
@@ -85,7 +85,7 @@ fn command_quarantine(arguments: &[String]) {
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .into_owned(),
-            outcome: Outcome::RunSkip,
+            outcome: Verdict::RunSkip,
             reason: reason.clone(),
             features: Vec::new(),
             strict_skipped: false,
@@ -98,20 +98,21 @@ fn command_quarantine(arguments: &[String]) {
 
 /// Minimal `--flag value` / `--flag` option scan. Returns the value after
 /// `name`, or `None`.
-fn option_value(args: &[String], name: &str) -> Option<String> {
-    args.iter()
+fn option_value(arguments: &[String], name: &str) -> Option<String> {
+    arguments
+        .iter()
         .position(|a| a == name)
-        .and_then(|i| args.get(i + 1).cloned())
+        .and_then(|i| arguments.get(i + 1).cloned())
 }
 
 /// Resolve the test262 `test/` root: `--test262-dir DIR` (with `test/`), else
 /// the checked-in subset via [`locate_test262`].
-fn resolve_test_root(args: &[String]) -> PathBuf {
-    match option_value(args, "--test262-dir") {
-        Some(dir) => {
-            let root = PathBuf::from(&dir).join("test");
+fn resolve_test_root(arguments: &[String]) -> PathBuf {
+    match option_value(arguments, "--test262-dir") {
+        Some(directory) => {
+            let root = PathBuf::from(&directory).join("test");
             if !root.is_dir() {
-                fail(&format!("no test/ under --test262-dir {}", dir));
+                fail(&format!("no test/ under --test262-dir {}", directory));
             }
             root
         }
@@ -123,10 +124,10 @@ fn resolve_test_root(args: &[String]) -> PathBuf {
 }
 
 /// Discover the batch list, optionally restricted to a `--subtree` prefix.
-fn discover_scoped(args: &[String]) -> Vec<String> {
-    let root = resolve_test_root(args);
+fn discover_scoped(arguments: &[String]) -> Vec<String> {
+    let root = resolve_test_root(arguments);
     let mut batches = discover_batches(&root);
-    if let Some(prefix) = option_value(args, "--subtree") {
+    if let Some(prefix) = option_value(arguments, "--subtree") {
         let prefix = prefix.trim_end_matches('/');
         batches.retain(|batch| {
             let directory = batch
@@ -138,20 +139,26 @@ fn discover_scoped(args: &[String]) -> Vec<String> {
     batches
 }
 
-fn command_discover(args: &[String]) {
-    let batches = discover_scoped(args);
+fn command_discover(arguments: &[String]) {
+    let batches = discover_scoped(arguments);
     for b in &batches {
         println!("{}", b);
     }
     eprintln!("ironhorse-262-report: discovered {} batches", batches.len());
 }
 
-fn command_plan(args: &[String]) {
+fn command_plan(arguments: &[String]) {
     let results = PathBuf::from(
-        option_value(args, "--results").unwrap_or_else(|| fail("plan needs --results DIR")),
+        option_value(arguments, "--results").unwrap_or_else(|| fail("plan needs --results DIR")),
     );
-    let batches = discover_scoped(args);
-    let run_id = option_value(args, "--run-id");
+    let batches = discover_scoped(arguments);
+    let run_id = option_value(arguments, "--run-id");
+    if run_id
+        .as_deref()
+        .is_some_and(|identity| identity.trim().is_empty())
+    {
+        fail("--run-id must not be empty");
+    }
     let pending = pending_batches_checked(&results, &batches, run_id.as_deref());
     for b in &pending {
         println!("{}", b);
@@ -163,17 +170,20 @@ fn command_plan(args: &[String]) {
     );
 }
 
-fn command_validate(args: &[String]) {
+fn command_validate(arguments: &[String]) {
     let batch = PathBuf::from(
-        option_value(args, "--batch").unwrap_or_else(|| fail("validate needs --batch FILE")),
+        option_value(arguments, "--batch").unwrap_or_else(|| fail("validate needs --batch FILE")),
     );
-    match read_batch_full(&batch) {
+    match read_batch_with_run_id(&batch) {
         Err(error) => fail(&format!("invalid batch {}: {}", batch.display(), error)),
         Ok((run_id, cases)) => {
             // With `--run-id`, a batch stamped with a different identity is not
             // a valid completion of this run.
-            if let Some(expected) = option_value(args, "--run-id") {
-                if !expected.is_empty() && run_id != expected {
+            if let Some(expected) = option_value(arguments, "--run-id") {
+                if expected.trim().is_empty() {
+                    fail("--run-id must not be empty");
+                }
+                if run_id != expected {
                     fail(&format!(
                         "batch {} run_id {:?} != expected {:?}",
                         batch.display(),
@@ -182,7 +192,7 @@ fn command_validate(args: &[String]) {
                     ));
                 }
             }
-            if let Some(expected_count) = option_value(args, "--expected-count") {
+            if let Some(expected_count) = option_value(arguments, "--expected-count") {
                 let expected_count = expected_count
                     .parse::<usize>()
                     .unwrap_or_else(|_| fail("--expected-count needs a non-negative integer"));
@@ -199,21 +209,22 @@ fn command_validate(args: &[String]) {
     }
 }
 
-fn command_aggregate(args: &[String]) {
+fn command_aggregate(arguments: &[String]) {
     let results = PathBuf::from(
-        option_value(args, "--results").unwrap_or_else(|| fail("aggregate needs --results DIR")),
+        option_value(arguments, "--results")
+            .unwrap_or_else(|| fail("aggregate needs --results DIR")),
     );
     let json_out = PathBuf::from(
-        option_value(args, "--json").unwrap_or_else(|| fail("aggregate needs --json OUT")),
+        option_value(arguments, "--json").unwrap_or_else(|| fail("aggregate needs --json OUT")),
     );
-    let provenance: Provenance = match option_value(args, "--provenance") {
+    let provenance: Provenance = match option_value(arguments, "--provenance") {
         Some(path) => read_provenance(&PathBuf::from(&path))
             .unwrap_or_else(|error| fail(&format!("invalid provenance {}: {}", path, error))),
         None => fail("aggregate needs --provenance FILE"),
     };
     // Aggregate only the exact discovery plan, bound to the provenance identity.
     let plan_path =
-        option_value(args, "--plan").unwrap_or_else(|| fail("aggregate needs --plan FILE"));
+        option_value(arguments, "--plan").unwrap_or_else(|| fail("aggregate needs --plan FILE"));
     let report = {
         let text = std::fs::read_to_string(&plan_path)
             .unwrap_or_else(|e| fail(&format!("could not read plan {}: {}", plan_path, e)));
@@ -233,7 +244,7 @@ fn command_aggregate(args: &[String]) {
                     warnings.len()
                 ));
         }
-        if let Some(expected_total) = option_value(args, "--expected-total") {
+        if let Some(expected_total) = option_value(arguments, "--expected-total") {
             let expected_total = expected_total
                 .parse::<usize>()
                 .unwrap_or_else(|_| fail("--expected-total needs a non-negative integer"));
@@ -256,7 +267,7 @@ fn command_aggregate(args: &[String]) {
         json_out.display(),
         report.total()
     );
-    if let Some(html_out) = option_value(args, "--html") {
+    if let Some(html_out) = option_value(arguments, "--html") {
         let html_out = PathBuf::from(html_out);
         if let Err(e) = std::fs::write(&html_out, to_html(&report)) {
             fail(&format!("could not write {}: {}", html_out.display(), e));
@@ -288,7 +299,7 @@ USAGE:
     ironhorse-262-report <SUBCOMMAND> [OPTIONS]
 
 SUBCOMMANDS:
-    discover   --test262-dir DIR [--subtree PREFIX]
+    discover   [--test262-dir DIR] [--subtree PREFIX]
         Print every case-count-capped batch under the test262 test/ tree.
 
     plan       --results DIR --test262-dir DIR [--subtree PREFIX] [--run-id ID]
@@ -301,7 +312,7 @@ SUBCOMMANDS:
 
     aggregate  --results DIR --provenance FILE --plan FILE --json OUT [--html OUT] [--expected-total N]
         Merge per-batch JSON into the stable report.json (+ optional HTML).
-        With --plan, aggregate EXACTLY the batches the plan names, bound to the
+        Aggregate EXACTLY the batches the required plan names, bound to the
         provenance run identity — never a directory glob — and fail on any
         missing/mismatched batch. With --expected-total, fail unless the merged
         case count equals N (the discovery total).

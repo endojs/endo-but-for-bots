@@ -1,6 +1,6 @@
 //! `ironhorse-xst`: the xst-analogue test262 runner for the Rust engine
 //! (design [`designs/ironhorse-test262-convergence.md`] § Part 2,
-//! "Harness → `ironhorse-xst`"). It plays for ironhorse exactly the role
+//! "Harness -> `ironhorse-xst`"). It plays for ironhorse exactly the role
 //! `xs/tools/xst.c` + `xst262.c` (@ `48ee02d8cfe0`) play for XS, plus the
 //! one thing `xst` never had: a differential oracle.
 //!
@@ -300,7 +300,10 @@ fn looks_like_overflow(err: &str) -> bool {
 }
 
 fn ironhorse_completed(a: Agreement) -> bool {
-    matches!(a, Agreement::BothComplete | Agreement::IronhorseOnlyComplete)
+    matches!(
+        a,
+        Agreement::BothComplete | Agreement::IronhorseOnlyComplete
+    )
 }
 
 fn oracle_completed(a: Agreement) -> bool {
@@ -647,15 +650,16 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
     // The determinism gate (unconditional half of the doctrine) overrides a
     // covered/skip verdict with a failure if ironhorse's computrons are not
     // reproducible across runs of this same build.
-    let verdict =
-        if cfg.repeat > 1 && determinism_violation(&source, cfg.repeat, eval.ironhorse_computrons) {
-            Verdict::Fail(format!(
-                "nondeterministic computrons across {} runs",
-                cfg.repeat
-            ))
-        } else {
-            eval.outcome
-        };
+    let verdict = if cfg.repeat > 1
+        && determinism_violation(&source, cfg.repeat, eval.ironhorse_computrons)
+    {
+        Verdict::Fail(format!(
+            "nondeterministic computrons across {} runs",
+            cfg.repeat
+        ))
+    } else {
+        eval.outcome
+    };
 
     CaseResult {
         verdict,
@@ -703,8 +707,8 @@ fn run_async_case(
     };
 
     let base = verdict_for(cfg, &async_run.run, fm, meter_exact_gate);
-    let computron_gap =
-        matches!(base, Verdict::Covered) && async_run.run.oracle_computrons != async_run.run.ironhorse_computrons;
+    let computron_gap = matches!(base, Verdict::Covered)
+        && async_run.run.oracle_computrons != async_run.run.ironhorse_computrons;
 
     // A `Covered` differential means ironhorse reproduced the oracle's full
     // execution (script + microtask drain) — only then is the async completion
@@ -772,9 +776,9 @@ pub struct XstReport {
     pub strict_skipped: usize,
     /// `fail:` — real failures: `(path, detail)`. Must be empty to meet the bar.
     pub failures: Vec<(String, String)>,
-    /// `skip:` — pre-run feature/flag/structural skips → count.
+    /// `skip:` — pre-run feature/flag/structural skips -> count.
     pub pre_skips: BTreeMap<String, usize>,
-    /// `skip-detail:` — post-run honest named skips → count.
+    /// `skip-detail:` — post-run honest named skips -> count.
     pub run_skips: BTreeMap<String, usize>,
     /// `advisory:` — covered cases whose computrons drifted from the oracle.
     pub computron_advisories: usize,
@@ -1210,7 +1214,7 @@ mod tests {
     fn oracle_test262_error_with_divergent_ironhorse_throw_is_not_shared() {
         // Oracle throws the harness assertion error; ironhorse throws a
         // different value (a real divergence). Nothing is shared, so this must
-        // stay `abort-value-differs` (→ the Ironhorse backlog), never be
+        // stay `abort-value-differs` (-> the Ironhorse backlog), never be
         // laundered into `shared-test262-failure`.
         let mut run = synthetic_abort(
             Halt::Throw("TypeError: not a function".into()),
@@ -1297,17 +1301,26 @@ mod tests {
 
         // A synchronous success signals `AsyncTestComplete`.
         let s = done("$DONE();");
-        assert_eq!(s.ironhorse_signal.as_deref(), Some("Test262:AsyncTestComplete"));
+        assert_eq!(
+            s.ironhorse_signal.as_deref(),
+            Some("Test262:AsyncTestComplete")
+        );
         assert!(!s.ironhorse_unhandled_rejection);
 
         // An awaited primitive then `$DONE()` — the resume runs at the drain.
         let a = done("(async function(){ await 1; $DONE(); })();");
         assert_eq!(a.run.agreement, Agreement::BothComplete);
-        assert_eq!(a.ironhorse_signal.as_deref(), Some("Test262:AsyncTestComplete"));
+        assert_eq!(
+            a.ironhorse_signal.as_deref(),
+            Some("Test262:AsyncTestComplete")
+        );
 
         // A resolved-promise reaction feeding `$DONE` — drained the same way.
         let p = done("Promise.resolve(1).then(function(){ $DONE(); }, $DONE);");
-        assert_eq!(p.ironhorse_signal.as_deref(), Some("Test262:AsyncTestComplete"));
+        assert_eq!(
+            p.ironhorse_signal.as_deref(),
+            Some("Test262:AsyncTestComplete")
+        );
 
         // Never signals: the did-not-run latch reads `None`.
         assert_eq!(done("1 + 1;").ironhorse_signal, None);

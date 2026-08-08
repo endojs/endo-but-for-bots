@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # full-run.sh — the one-command, bounded, resumable, parallel full-test262
 # sweep of the Ironhorse engine, oracle-locked to XS (maintainer request,
-# https://github.com/kriscendobot/garden/issues/51). It runs the complete authoritative TC39 test262 corpus
+# designs/ironhorse-test262-convergence.md). It runs the authoritative test262 scope
 # against Ironhorse and emits both a stable machine-readable `report.json` and a
 # self-contained static `report.html` (drop-in for kriscendobot gh-pages).
 #
@@ -32,7 +32,8 @@
 #   --oracle on|off    gate on the XS oracle (default on).
 #   --no-fetch         do not clone; require --test262-dir.
 #
-# NOTE: a measured whole-tree run at jobs=16 took 16m30s; slower runners and
+# NOTE: an indicative run at 14f26d0a6 on a 32-vCPU host with jobs=16 and the
+# XS oracle enabled took 16m30s; later watchdog/quarantine changes and slower runners
 # lower parallelism take longer. Publishing its output is a
 # separate, deliberate act (a gh-pages commit); ordinary CI must not run it.
 set -euo pipefail
@@ -171,10 +172,12 @@ elif [ "$corpus_dirty" != "no" ] || [ "$test262_sha" = "unknown" ]; then
 fi
 if [ "$test262_sha" = "$TEST262_SHA" ]; then
   test262_ref="tc39/test262@${test262_sha:0:12}"
+  corpus_verified=true
 else
   # A clean, caller-supplied checkout is reproducible, but it is not evidence
   # that the corpus came from tc39 or is the configured corpus revision.
   test262_ref="unverified-corpus@${test262_sha:0:12}"
+  corpus_verified=false
 fi
 
 # Record provenance once; the report re-emits it verbatim.
@@ -248,7 +251,11 @@ echo "full-run: ${#all_batches[@]} batches total, ${#pending[@]} pending (resume
 logs="$output/logs"
 # `run_id` is deliberately descriptive and can exceed NAME_MAX for a deep
 # subtree.  Resume-state directory names need only be stable, not readable.
-run_key=$(printf '%s' "$run_id" | sha256sum | awk '{print $1}')
+if command -v sha256sum >/dev/null 2>&1; then
+  run_key=$(printf '%s' "$run_id" | sha256sum | awk '{print $1}')
+else
+  run_key=$(printf '%s' "$run_id" | shasum -a 256 | awk '{print $1}')
+fi
 attempts="$output/attempts/$run_key"
 quarantines="$output/quarantines/$run_key"
 mkdir -p "$logs" "$attempts" "$quarantines"
@@ -256,9 +263,9 @@ mkdir -p "$logs" "$attempts" "$quarantines"
 # this many times. The cap counts attempts ACROSS invocations (persisted in
 # `$attempts/<batch>`) AND is retried in-process within one invocation, so the
 # quarantine path is reachable from a single sweep run — the CI dispatch runs
-# this script once (see scripts/README.md § quarantine).
-MAX_BATCH_ATTEMPTS=3
-export MAX_BATCH_ATTEMPTS
+# this script once (see scripts/README.md, "CI").
+BATCH_ATTEMPT_LIMIT=3
+export BATCH_ATTEMPT_LIMIT
 
 run_one_batch() {
   batch="$1"
@@ -279,7 +286,7 @@ run_one_batch() {
   # quarantine path rather than leaving a permanently-pending batch that fails
   # the completeness gate. `attempt` accumulates across invocations, so a batch
   # already at the cap on entry skips straight to quarantine.
-  while [ "$attempt" -lt "$MAX_BATCH_ATTEMPTS" ]; do
+  while [ "$attempt" -lt "$BATCH_ATTEMPT_LIMIT" ]; do
     attempt=$((attempt + 1))
     printf '%s\n' "$attempt" > "$attempt_file"
     rm -f "$part"
@@ -291,7 +298,7 @@ run_one_batch() {
     (
       # timer starts EMPTY, never 0: a TERM that lands after the trap is installed
       # but before the first `sleep &` must not run `kill "$timer"` with an unset
-      # target — `kill 0` (or `kill ""` → the group) would TERM the whole sweep's
+      # target — `kill 0` (or `kill ""` -> the group) would TERM the whole sweep's
       # process group (full-run.sh, xargs, every sibling worker). The guard makes
       # the handler a no-op until a real timer PID exists.
       timer=""
@@ -307,7 +314,7 @@ run_one_batch() {
     wait "$worker" || status=$?
     kill "$watchdog" 2>/dev/null || true
     wait "$watchdog" 2>/dev/null || true
-    echo "exit-status: $status (attempt $attempt/$MAX_BATCH_ATTEMPTS)" >> "$log"
+    echo "exit-status: $status (attempt $attempt/$BATCH_ATTEMPT_LIMIT)" >> "$log"
     # The resume marker is validated by the SAME parser that consumes it and
     # bound to the run identity: only a complete, correctly-stamped batch is
     # promoted.
@@ -370,6 +377,7 @@ cat > "$provenance" <<EOF
   "config": $("$report_binary" json-string "$config"),
   "scope": $("$report_binary" json-string "$scope"),
   "oracle_mode": $("$report_binary" json-string "$oracle"),
+  "corpus_verified": $corpus_verified,
   "ses_mode": $("$report_binary" json-string "$ses_mode"),
   "completion": $("$report_binary" json-string "$completion"),
   "run_id": $("$report_binary" json-string "$run_id"),
