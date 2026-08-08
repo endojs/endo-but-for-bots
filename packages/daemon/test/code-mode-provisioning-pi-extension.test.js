@@ -5,6 +5,7 @@ import '@endo/init/debug.js';
 import test from 'ava';
 
 import { execFile } from 'node:child_process';
+import { stderr } from 'node:process';
 import { promisify } from 'node:util';
 
 import { E } from '@endo/eventual-send';
@@ -62,8 +63,12 @@ const makePiExtensionDriver = ({ cwd, sessionId, entries, flag, sockPath }) => {
       })
     );
   const extension = makeEndoCodeModePiExtension({
-    reconstructProvision: persistence =>
-      reconstructEndoCodeMode({ persistence, sockPath }),
+    reconstructProvision: (persistence, { onConnectionFailure }) =>
+      reconstructEndoCodeMode({
+        persistence,
+        sockPath,
+        onConnectionFailure,
+      }),
     startDaemon: async () => {
       throw Error('custom test daemon should already be running');
     },
@@ -170,6 +175,36 @@ test.serial(
         })
       ).stdout,
       '?? created-by-pi.txt\n',
+    );
+    /** @type {string[]} */
+    const rawDiagnostics = [];
+    const originalStderrWrite = stderr.write;
+    stderr.write = /** @type {typeof stderr.write} */ (
+      chunk => {
+        rawDiagnostics.push(String(chunk));
+        return true;
+      }
+    );
+    try {
+      await t.throwsAsync(
+        evaluate.execute(
+          'invalid-list-path',
+          {
+            source:
+              '(async () => { const wt = await E(git).worktree(); return E(wt).list([]); })()',
+          },
+          undefined,
+          undefined,
+        ),
+        { message: /Must be a string/ },
+      );
+    } finally {
+      stderr.write = originalStderrWrite;
+    }
+    t.deepEqual(
+      rawDiagnostics,
+      [],
+      'the awaited tool rejection is not also presented by CapTP',
     );
     await t.throwsAsync(
       evaluate.execute(

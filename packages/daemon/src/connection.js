@@ -131,23 +131,11 @@ export const makeMessageCapTP = (
       () => {},
       () => {},
     );
-    // Swallow rejections from writes that race with peer disconnect
-    // (e.g. CTP_DISCONNECT after the other side has already FIN'd).
-    // Without this, CapTP teardown produces "This socket has been
-    // ended by the other party" rejections that fail otherwise-clean
-    // test runs under AVA's strict unhandled-rejection policy.
-    writeP.catch(err => {
-      const msg = String((err && err.message) || err || '');
-      const isPostDisconnect =
-        msg.includes('socket has been ended') ||
-        msg.includes('write after end') ||
-        msg.includes('EPIPE') ||
-        msg.includes('ECONNRESET');
-      if (!isPostDisconnect) {
-        // Still log non-disconnect errors for visibility.
-        console.error(`CapTP ${name} send error:`, msg);
-      }
-    });
+    // Contain this direct branch without changing `writeP`: CapTP observes a
+    // rejected rawSend result, aborts the connection, and routes the failure
+    // through its onReject policy. Logging here would present the same write
+    // failure a second time and would bypass a caller's structured policy.
+    writeP.catch(() => {});
     return writeP;
   };
 
