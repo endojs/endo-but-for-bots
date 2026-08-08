@@ -24,7 +24,7 @@
 
 use crate::frontmatter::{self, Frontmatter, Negative};
 use crate::report::CaseRecord;
-use crate::{dual_run, dual_run_async, Agreement, AsyncDualRun, DualRun};
+use crate::{dual_run, dual_run_async, Agreement, AsyncDualRun, DualRun, IronhorseCompile};
 use ironhorse_vm::Halt;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -192,7 +192,20 @@ pub struct Config {
     /// ironhorse-xst's skip-list `--features-include`). Empty = no filter. Used
     /// to restrict a whole-tree walk to the `ses-xs-parity` axis.
     pub feature_filter: Vec<String>,
+    /// `--case-timeout SECS`: the hard per-case wall-clock bound. Both the XS
+    /// oracle and the ironhorse VM can non-terminate on a pathological source
+    /// (e.g. `for (const i = 0; i < 1; i++) {}`, where a missing
+    /// assign-to-const `TypeError` spins the loop), so each case is dispatched
+    /// under this deadline and a hang is recorded as an `ironhorse-hang` failure
+    /// rather than wedging the whole per-directory batch process. `0` disables
+    /// the bound (an unbounded inline run). Default [`DEFAULT_CASE_TIMEOUT_SECS`].
+    pub per_case_timeout_secs: u64,
 }
+
+/// The default per-case wall-clock bound (seconds). Comfortably above the
+/// millisecond a normal dual-run takes — a case that needs longer is
+/// non-terminating, not slow.
+pub const DEFAULT_CASE_TIMEOUT_SECS: u64 = 10;
 
 impl Default for Config {
     fn default() -> Self {
@@ -203,6 +216,7 @@ impl Default for Config {
             features_include: Vec::new(),
             ses_mode: SesMode::None,
             feature_filter: Vec::new(),
+            per_case_timeout_secs: DEFAULT_CASE_TIMEOUT_SECS,
         }
     }
 }
@@ -300,7 +314,10 @@ fn looks_like_overflow(err: &str) -> bool {
 }
 
 fn ironhorse_completed(a: Agreement) -> bool {
-    matches!(a, Agreement::BothComplete | Agreement::IronhorseOnlyComplete)
+    matches!(
+        a,
+        Agreement::BothComplete | Agreement::IronhorseOnlyComplete
+    )
 }
 
 fn oracle_completed(a: Agreement) -> bool {
@@ -473,11 +490,13 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
 }
 
 fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
-    // Parse/resolution-phase negatives need ironhorse's own compiler to mirror
-    // the reject; pre-stage-5 the oracle compiles, so they are named skips
-    // until `ironhorse-compile` lands (design § Part 2).
+    // Parse/resolution-phase negatives are *early errors*: the spec forbids the
+    // source before it ever runs. `ironhorse-compile` now IS ironhorse's own
+    // front end, so the runner executes it and reads its reaction
+    // (`run.ironhorse_compile`) directly rather than deferring with a blanket
+    // `pending-compiler` skip.
     if neg.phase == "parse" || neg.phase == "resolution" {
-        return Verdict::RunSkip(format!("negative-{}:pending-compiler", neg.phase));
+        return evaluate_negative_early(cfg, run, neg);
     }
     // A runtime negative ironhorse never reached (an unsupported opcode / decode
     // stop) is an honest opcode skip, not a verdict.
@@ -508,6 +527,83 @@ fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
         // ironhorse aborted with a value not of the expected type — its Error
         // surface is incomplete here, honestly named.
         Verdict::RunSkip(format!("negative-type-unmatched:{}", neg.ty))
+    }
+}
+
+/// Verdict for an **early-error** (parse/resolution-phase) negative: the spec
+/// forbids the source before it runs. The signal is ironhorse's own front-end
+/// reaction (`run.ironhorse_compile`), which the default runner now executes
+/// via `ironhorse-compile`; the XS oracle is the differential authority for
+/// whether the source really is an early error. The five outcomes the design
+/// asks us to keep distinct:
+///
+/// * **compiler rejection** — ironhorse-compile raised its own SyntaxError; when
+///   the oracle agrees the source is an early error, that is `Covered`.
+/// * **over-acceptance** — ironhorse-compile emitted bytecode AND ironhorse ran
+///   it to completion; a `Fail` the oracle differential catches (the bar-forbidden
+///   defect this instrument exists to surface).
+/// * **runtime throw** — ironhorse-compile accepted, then ironhorse aborted at
+///   run rather than at compile: it rejected at the wrong phase, an honest
+///   coverage gap (`negative-<phase>:runtime-reject`), not covered.
+/// * **oracle surprise** — the XS oracle did NOT reject a source test262 marks as
+///   an early error; the differential authority disagrees, so we do not claim
+///   coverage (`negative-oracle-unexpected`).
+/// * **harness assembly failure** — ironhorse-compile panicked; a harness defect
+///   (`harness-assembly:compile-panic`), never a language verdict.
+fn evaluate_negative_early(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
+    // A parse/resolution negative expects the oracle (XS) to reject the source
+    // at compile — i.e. XS did not complete.
+    let oracle_rejected = !oracle_completed(run.agreement);
+
+    match &run.ironhorse_compile {
+        // ironhorse-compile reached a deferred/unimplemented coder path and
+        // folded (panicked). That is an Ironhorse *compiler coverage gap* — a
+        // named `unsupported`, never a covered early error and never silently
+        // relabeled a pass. The panic message is a gap label the report groups
+        // on so the missing construct names itself.
+        IronhorseCompile::Panicked(_) => {
+            Verdict::RunSkip(format!("compiler-unimplemented:{}", neg.phase))
+        }
+
+        // ironhorse's own front end raised the early error.
+        IronhorseCompile::Rejected(_) => {
+            if !cfg.oracle || oracle_rejected {
+                Verdict::Covered
+            } else {
+                // ironhorse rejected but the oracle accepted — the differential
+                // authority disagrees the source is an early error.
+                Verdict::RunSkip("negative-oracle-unexpected".into())
+            }
+        }
+
+        // ironhorse-compile accepted the source.
+        IronhorseCompile::Accepted => {
+            if ironhorse_completed(run.agreement) {
+                // Emitted bytecode AND ran to completion: a genuine
+                // over-acceptance of a source the spec forbids.
+                if cfg.oracle && oracle_rejected {
+                    Verdict::Fail(format!(
+                        "negative over-acceptance: ironhorse compiled and ran a source expected to be a {}-phase early error",
+                        neg.phase
+                    ))
+                } else {
+                    // Oracle gate off, or the oracle also accepted (no
+                    // differential authority to fail on).
+                    Verdict::RunSkip("oracle-gate-off:negative-over-acceptance".into())
+                }
+            } else {
+                // Accepted at compile but aborted at run: rejected at the wrong
+                // phase (a runtime throw where an early error was due). An honest
+                // coverage gap, not a covered early-error reproduction.
+                Verdict::RunSkip(format!("negative-{}:runtime-reject", neg.phase))
+            }
+        }
+
+        // The oracle-compiler reference path does not exercise ironhorse's front
+        // end, so the early-error differential is unavailable there.
+        IronhorseCompile::NotAttempted => {
+            Verdict::RunSkip(format!("negative-{}:oracle-compiler-path", neg.phase))
+        }
     }
 }
 
@@ -633,15 +729,16 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
     // The determinism gate (unconditional half of the doctrine) overrides a
     // covered/skip verdict with a failure if ironhorse's computrons are not
     // reproducible across runs of this same build.
-    let verdict =
-        if cfg.repeat > 1 && determinism_violation(&source, cfg.repeat, eval.ironhorse_computrons) {
-            Verdict::Fail(format!(
-                "nondeterministic computrons across {} runs",
-                cfg.repeat
-            ))
-        } else {
-            eval.outcome
-        };
+    let verdict = if cfg.repeat > 1
+        && determinism_violation(&source, cfg.repeat, eval.ironhorse_computrons)
+    {
+        Verdict::Fail(format!(
+            "nondeterministic computrons across {} runs",
+            cfg.repeat
+        ))
+    } else {
+        eval.outcome
+    };
 
     CaseResult {
         verdict,
@@ -689,8 +786,8 @@ fn run_async_case(
     };
 
     let base = verdict_for(cfg, &async_run.run, fm, meter_exact_gate);
-    let computron_gap =
-        matches!(base, Verdict::Covered) && async_run.run.oracle_computrons != async_run.run.ironhorse_computrons;
+    let computron_gap = matches!(base, Verdict::Covered)
+        && async_run.run.oracle_computrons != async_run.run.ironhorse_computrons;
 
     // A `Covered` differential means ironhorse reproduced the oracle's full
     // execution (script + microtask drain) — only then is the async completion
@@ -890,6 +987,71 @@ fn yaml_quote(s: &str) -> String {
 /// Run a set of test262 files (absolute paths) against the harness in
 /// `harness_dir`, returning the xst-shaped report. `root` is stripped from
 /// each path for readable failure labels.
+/// Run one case under a hard wall-clock bound (design § the per-case dispatch
+/// bound). The case is dispatched on its own thread and joined with `timeout`;
+/// a hang becomes a recorded `ironhorse-hang` **failure** instead of wedging the
+/// whole per-directory batch process — the batch's other cases still run and its
+/// JSON is still written atomically, so a resumable sweep never loses a
+/// directory to one non-terminating case. The thread is spawned fresh per case,
+/// so the non-hanging path shares no engine state across cases (metering and
+/// determinism are identical to an unbounded run); only a genuine hang leaks its
+/// thread (stuck in C / a VM dispatch cycle, so uncancellable), reclaimed when
+/// the batch process exits.
+fn run_case_bounded(
+    cfg: &Config,
+    harness_dir: &Path,
+    src: &str,
+    timeout: std::time::Duration,
+) -> CaseResult {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let cfg_c = cfg.clone();
+    let hd_c = harness_dir.to_path_buf();
+    let src_c = src.to_string();
+    let spawn = std::thread::Builder::new()
+        .name("ironhorse-xst-case".into())
+        .spawn(move || {
+            // The receiver may already be gone (we timed out): a failed send is
+            // expected, never a panic.
+            let _ = tx.send(run_case(&cfg_c, &hd_c, &src_c));
+        });
+    let handle = match spawn {
+        Ok(h) => h,
+        // Thread exhaustion: fall back to an unbounded inline run so the case is
+        // never dropped (forfeits the bound for this one case only).
+        Err(_) => return run_case(cfg, harness_dir, src),
+    };
+    match rx.recv_timeout(timeout) {
+        Ok(r) => {
+            let _ = handle.join();
+            r
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            // Leak the worker (stuck in an uncancellable native dispatch cycle);
+            // it dies with the batch process. Record the hang as the bar-forbidden
+            // non-termination it is.
+            drop(handle);
+            CaseResult {
+                verdict: Verdict::Fail(format!(
+                    "ironhorse-hang: no verdict within {}s (non-terminating dispatch)",
+                    timeout.as_secs()
+                )),
+                strict_skipped: false,
+                computron_gap: false,
+            }
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            // The worker panicked before sending — a harness defect, not a
+            // language verdict, and never a reason to abort the batch.
+            let _ = handle.join();
+            CaseResult {
+                verdict: Verdict::RunSkip("harness-assembly:worker-crash".into()),
+                strict_skipped: false,
+                computron_gap: false,
+            }
+        }
+    }
+}
+
 pub fn run_files(cfg: &Config, harness_dir: &Path, root: &Path, files: &[PathBuf]) -> XstReport {
     let mut rep = XstReport::default();
     rep.ses_mode = cfg.ses_mode;
@@ -922,7 +1084,16 @@ pub fn run_files(cfg: &Config, harness_dir: &Path, root: &Path, files: &[PathBuf
                 continue;
             }
         }
-        let r = run_case(cfg, harness_dir, &src);
+        let r = if cfg.per_case_timeout_secs == 0 {
+            run_case(cfg, harness_dir, &src)
+        } else {
+            run_case_bounded(
+                cfg,
+                harness_dir,
+                &src,
+                std::time::Duration::from_secs(cfg.per_case_timeout_secs),
+            )
+        };
         rep.record_case(&rel, fm.features.clone(), r);
     }
     rep
@@ -1057,6 +1228,137 @@ mod tests {
         assert!(!ironhorse_negative_ok("RangeError", &thrown));
     }
 
+    fn early_negative(phase: &str) -> Negative {
+        Negative {
+            phase: phase.to_string(),
+            ty: "SyntaxError".to_string(),
+        }
+    }
+
+    #[test]
+    fn early_error_compiler_rejection_is_covered() {
+        // ironhorse-compile raised its own SyntaxError AND the oracle rejected
+        // the source: a real early-error reproduction — the covered outcome that
+        // replaces the old blanket `pending-compiler` skip.
+        let run = synthetic_early(
+            Agreement::BothAbort,
+            IronhorseCompile::Rejected("line 1: unexpected token".into()),
+        );
+        let cfg = Config::default();
+        assert_eq!(
+            evaluate_negative_early(&cfg, &run, &early_negative("parse")),
+            Verdict::Covered
+        );
+        assert_eq!(
+            evaluate_negative_early(&cfg, &run, &early_negative("resolution")),
+            Verdict::Covered
+        );
+    }
+
+    #[test]
+    fn early_error_over_acceptance_is_a_failure() {
+        // ironhorse-compile emitted bytecode AND ran it to completion for a
+        // source the spec forbids: the bar-forbidden over-acceptance the oracle
+        // differential exists to catch — never silently relabeled.
+        let run = synthetic_early(Agreement::IronhorseOnlyComplete, IronhorseCompile::Accepted);
+        let cfg = Config::default();
+        match evaluate_negative_early(&cfg, &run, &early_negative("parse")) {
+            Verdict::Fail(m) => assert!(m.contains("over-acceptance"), "got {m}"),
+            other => panic!("expected Fail, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn early_error_runtime_reject_is_a_named_gap_not_covered() {
+        // ironhorse-compile accepted, then ironhorse aborted at RUN: it rejected
+        // at the wrong phase (a runtime throw where an early error was due). An
+        // honest coverage gap, never counted as a covered early error.
+        let run = synthetic_early(Agreement::BothAbort, IronhorseCompile::Accepted);
+        let cfg = Config::default();
+        assert_eq!(
+            evaluate_negative_early(&cfg, &run, &early_negative("parse")),
+            Verdict::RunSkip("negative-parse:runtime-reject".into())
+        );
+    }
+
+    #[test]
+    fn early_error_oracle_surprise_is_not_covered() {
+        // ironhorse rejected but the oracle ACCEPTED the source: the differential
+        // authority disagrees it is an early error, so we do not claim coverage.
+        let run = synthetic_early(
+            Agreement::OracleOnlyComplete,
+            IronhorseCompile::Rejected("line 1: unexpected token".into()),
+        );
+        let cfg = Config::default();
+        assert_eq!(
+            evaluate_negative_early(&cfg, &run, &early_negative("parse")),
+            Verdict::RunSkip("negative-oracle-unexpected".into())
+        );
+    }
+
+    #[test]
+    fn early_error_compile_panic_is_a_named_compiler_gap() {
+        // A deferred/unimplemented coder path (a panic caught by the compile
+        // seam) is an Ironhorse compiler coverage gap — a named `unsupported`,
+        // never a covered early error and never silently a pass.
+        let run = synthetic_early(
+            Agreement::BothAbort,
+            IronhorseCompile::Panicked("static block with lexical declarations deferred".into()),
+        );
+        let cfg = Config::default();
+        let v = evaluate_negative_early(&cfg, &run, &early_negative("parse"));
+        assert_eq!(v, Verdict::RunSkip("compiler-unimplemented:parse".into()));
+        assert_eq!(
+            crate::report::classify(
+                crate::report::Outcome::RunSkip,
+                "compiler-unimplemented:parse"
+            ),
+            crate::report::Category::Unsupported
+        );
+    }
+
+    #[test]
+    fn early_error_no_oracle_trusts_ironhorse_rejection() {
+        // With the oracle gate off, ironhorse's own rejection stands as covered
+        // even though the oracle is not consulted as authority.
+        let run = synthetic_early(
+            Agreement::OracleOnlyComplete,
+            IronhorseCompile::Rejected("line 1: unexpected token".into()),
+        );
+        let cfg = Config {
+            oracle: false,
+            ..Config::default()
+        };
+        assert_eq!(
+            evaluate_negative_early(&cfg, &run, &early_negative("parse")),
+            Verdict::Covered
+        );
+    }
+
+    #[test]
+    fn per_case_bound_records_a_hang_without_wedging() {
+        // A source that would spin forever must yield an `ironhorse-hang` failure
+        // in bounded time (the timeout), never block. We simulate the shape with
+        // a tiny timeout and a source the engine runs quickly — the point under
+        // test is that `run_case_bounded` returns a verdict at all under a bound
+        // and that a genuine non-terminator would be classed a Fail.
+        let cfg = Config::default();
+        let td = crate::test262::locate_test262();
+        if let Some((_root, harness)) = td {
+            let r = run_case_bounded(&cfg, &harness, "1 + 1;", std::time::Duration::from_secs(10));
+            // A trivial program completes well within the bound.
+            assert!(!matches!(&r.verdict, Verdict::Fail(m) if m.contains("ironhorse-hang")));
+        }
+        // The hang verdict maps to the bar-forbidden ironhorse-failure category.
+        assert_eq!(
+            crate::report::classify(
+                crate::report::Outcome::Fail,
+                "ironhorse-hang: no verdict within 10s (non-terminating dispatch)"
+            ),
+            crate::report::Category::IronhorseFailure
+        );
+    }
+
     #[test]
     fn report_yaml_has_the_xst_sections() {
         let mut rep = XstReport::default();
@@ -1173,8 +1475,21 @@ mod tests {
             ironhorse_meter_raw: 0,
             ironhorse_dispatched: 0,
             ironhorse_halt,
+            ironhorse_compile: IronhorseCompile::NotAttempted,
             bytecode: Vec::new(),
         }
+    }
+
+    /// A `DualRun` shaped for the early-error (parse/resolution) negative
+    /// verdict: the caller supplies the four-valued `agreement` (whether each
+    /// engine completed) and ironhorse's own front-end reaction
+    /// (`ironhorse_compile`) — the two axes `evaluate_negative`'s early-error
+    /// arm reads.
+    fn synthetic_early(agreement: Agreement, compile: IronhorseCompile) -> DualRun {
+        let mut run = synthetic_abort(Halt::Decode("empty".into()), "");
+        run.agreement = agreement;
+        run.ironhorse_compile = compile;
+        run
     }
 
     /// An `AsyncDualRun` wrapping a trivially-agreeing dual-run with a chosen
@@ -1231,17 +1546,26 @@ mod tests {
 
         // A synchronous success signals `AsyncTestComplete`.
         let s = done("$DONE();");
-        assert_eq!(s.ironhorse_signal.as_deref(), Some("Test262:AsyncTestComplete"));
+        assert_eq!(
+            s.ironhorse_signal.as_deref(),
+            Some("Test262:AsyncTestComplete")
+        );
         assert!(!s.ironhorse_unhandled_rejection);
 
         // An awaited primitive then `$DONE()` — the resume runs at the drain.
         let a = done("(async function(){ await 1; $DONE(); })();");
         assert_eq!(a.run.agreement, Agreement::BothComplete);
-        assert_eq!(a.ironhorse_signal.as_deref(), Some("Test262:AsyncTestComplete"));
+        assert_eq!(
+            a.ironhorse_signal.as_deref(),
+            Some("Test262:AsyncTestComplete")
+        );
 
         // A resolved-promise reaction feeding `$DONE` — drained the same way.
         let p = done("Promise.resolve(1).then(function(){ $DONE(); }, $DONE);");
-        assert_eq!(p.ironhorse_signal.as_deref(), Some("Test262:AsyncTestComplete"));
+        assert_eq!(
+            p.ironhorse_signal.as_deref(),
+            Some("Test262:AsyncTestComplete")
+        );
 
         // Never signals: the did-not-run latch reads `None`.
         assert_eq!(done("1 + 1;").ironhorse_signal, None);

@@ -58,6 +58,12 @@ fn main() {
         match arg.as_str() {
             "--oracle" => cfg.oracle = true,
             "--no-oracle" => cfg.oracle = false,
+            "--case-timeout" => {
+                cfg.per_case_timeout_secs =
+                    args.next().and_then(|n| n.parse().ok()).unwrap_or_else(|| {
+                        fail("--case-timeout needs a non-negative integer (seconds; 0 = unbounded)")
+                    });
+            }
             "--gate-meter-exact" => cfg.gate_meter_exact = true,
             "--repeat" => {
                 cfg.repeat = args
@@ -246,8 +252,16 @@ fn main() {
     // exit status), and so an interrupted sweep can resume from what completed.
     if let Some(path) = &json_path {
         match std::fs::write(path, RunReport::to_batch_json(&rep.cases)) {
-            Ok(()) => eprintln!("wrote {} case records to {}", rep.cases.len(), path.display()),
-            Err(e) => fail(&format!("could not write json to {}: {}", path.display(), e)),
+            Ok(()) => eprintln!(
+                "wrote {} case records to {}",
+                rep.cases.len(),
+                path.display()
+            ),
+            Err(e) => fail(&format!(
+                "could not write json to {}: {}",
+                path.display(),
+                e
+            )),
         }
     }
 
@@ -282,6 +296,9 @@ SUBTREE:
 OPTIONS:
     --oracle                 gate on XS oracle agreement (default on)
     --no-oracle              do not gate on oracle agreement
+    --case-timeout SECS      hard per-case wall-clock bound; a non-terminating
+                             case is recorded as an ironhorse-hang failure
+                             instead of wedging the batch (default 10; 0 = off)
     --gate-meter-exact       fail ironhorse-meter-exact cases on a computron drift
     --repeat N               re-run ironhorse N times; require identical computrons
     --features-include F[,F] opt features OUT of the skip set (e.g. ses-xs-parity)

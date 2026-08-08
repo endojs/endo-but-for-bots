@@ -150,14 +150,18 @@ pub fn classify(outcome: Outcome, reason: &str) -> Category {
                 "negative-oracle-unexpected",
                 "oracle-shim-unsafe",
                 "oracle-gate-off",
+                // A crash INSIDE ironhorse-compile while assembling a case is a
+                // harness defect, not a language gap.
+                "harness-assembly",
             ];
             if INFRA.iter().any(|p| reason.starts_with(p)) {
                 Category::Infrastructure
             } else {
                 // unsupported-opcode:*, parse-or-decode, non-primitive-completion,
                 // builtin-coercion-computron-gap, abort-value-differs,
-                // ironhorse-aborted*, negative-*:pending-compiler,
-                // negative-type-unmatched:*, async:* — all Ironhorse coverage gaps.
+                // ironhorse-aborted*, negative-<phase>:runtime-reject,
+                // negative-<phase>:oracle-compiler-path, negative-type-unmatched:*,
+                // async:* — all Ironhorse coverage gaps.
                 Category::Unsupported
             }
         }

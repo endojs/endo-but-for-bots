@@ -31,6 +31,9 @@
 #   --jobs N           batch parallelism. Default: min(nproc/2, 8). This bounds
 #                      peak memory (concurrent oracle processes).
 #   --oracle on|off    gate on the XS oracle (default on).
+#   --case-timeout N   hard per-case wall-clock bound (seconds). A
+#                      non-terminating case becomes a recorded ironhorse-hang
+#                      failure instead of wedging its batch. Default 10; 0 = off.
 #   --no-fetch         do not clone; require --test262-dir.
 #
 # NOTE: a whole-tree run is a MULTI-HOUR sweep. Publishing its output is a
@@ -55,6 +58,11 @@ out="$engine_dir/target/test262-report"
 jobs=""
 oracle="on"
 allow_fetch="yes"
+# Hard per-case wall-clock bound (seconds). A non-terminating case (e.g. an
+# assign-to-const `for` head the engine spins on) is recorded as an
+# `ironhorse-hang` failure instead of wedging its whole per-directory batch —
+# so one bad case no longer costs the sweep an entire directory. 0 disables it.
+case_timeout="10"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -63,6 +71,7 @@ while [ $# -gt 0 ]; do
     --out) out="$2"; shift 2 ;;
     --jobs) jobs="$2"; shift 2 ;;
     --oracle) oracle="$2"; shift 2 ;;
+    --case-timeout) case_timeout="$2"; shift 2 ;;
     --no-fetch) allow_fetch="no"; shift ;;
     -h|--help) sed -n '2,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "full-run.sh: unknown argument: $1" >&2; exit 2 ;;
@@ -112,8 +121,8 @@ moddable_sha=$(git -C "$repo_root" rev-parse HEAD:c/moddable 2>/dev/null || echo
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 host=$(hostname 2>/dev/null || echo unknown)
 oracle_flag=""; [ "$oracle" = "off" ] && oracle_flag="--no-oracle"
-config="oracle=$oracle flat-per-directory-batches jobs=$jobs subtree=${subtree:-<all>}"
-command_line="full-run.sh --subtree ${subtree:-<all>} --jobs $jobs --oracle $oracle"
+config="oracle=$oracle flat-per-directory-batches jobs=$jobs case-timeout=${case_timeout}s subtree=${subtree:-<all>}"
+command_line="full-run.sh --subtree ${subtree:-<all>} --jobs $jobs --oracle $oracle --case-timeout $case_timeout"
 
 json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 provenance="$out/provenance.json"
@@ -134,12 +143,12 @@ run_one() {
   san=$(printf '%s' "$b" | sed 's|/|__|g')
   final="$results/$san.json"
   part="$results/$san.part"
-  "$xst" --flat $oracle_flag --json "$part" --test262-dir "$test262_dir" \
-    "$test_root/$b" >/dev/null 2>&1 || true
+  "$xst" --flat $oracle_flag --case-timeout "$case_timeout" --json "$part" \
+    --test262-dir "$test262_dir" "$test_root/$b" >/dev/null 2>&1 || true
   if [ -s "$part" ]; then mv -f "$part" "$final"; else rm -f "$part"; fi
 }
 export -f run_one
-export xst results test262_dir test_root oracle_flag
+export xst results test262_dir test_root oracle_flag case_timeout
 
 if [ "${#pending[@]}" -gt 0 ]; then
   printf '%s\n' "${pending[@]}" | xargs -P "$jobs" -I{} bash -c 'run_one "$@"' _ {}
